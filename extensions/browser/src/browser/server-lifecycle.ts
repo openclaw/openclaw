@@ -3,20 +3,30 @@
  */
 import { stopOpenClawChrome } from "./chrome.js";
 import type { ResolvedBrowserConfig } from "./config.js";
+import { ensureExtensionBridge, stopExtensionBridge } from "./extension-bridge-manager.js";
 import {
   type BrowserServerState,
   createBrowserRouteContext,
   listKnownProfileNames,
 } from "./server-context.js";
 
-/** Ensures extension relay compatibility hooks for configured profiles. */
-export async function ensureExtensionRelayForProfiles(_params: {
+/**
+ * Start the node-owned CDP bridge when any profile uses driver "extension".
+ * The bundled Chrome extension dials into the bridge and the profile attaches to
+ * it as a loopback existing-session, so the agent drives the user's real tab.
+ */
+export async function ensureExtensionRelayForProfiles(params: {
   resolved: ResolvedBrowserConfig;
   onWarn: (message: string) => void;
 }) {
-  // Intentional no-op: the Chrome extension relay path has been removed.
-  // runtime-lifecycle still calls this helper, so keep the stub until the next
-  // breaking cleanup rather than changing the call graph in a patch release.
+  const profiles = params.resolved.profiles ?? {};
+  const needsBridge = Object.values(profiles).some((p) => p?.driver === "extension");
+  if (!needsBridge) return;
+  try {
+    await ensureExtensionBridge({ onWarn: params.onWarn });
+  } catch (err) {
+    params.onWarn(`extension bridge failed to start: ${String(err)}`);
+  }
 }
 
 /** Stops every known Browser profile during runtime shutdown. */
@@ -24,6 +34,7 @@ export async function stopKnownBrowserProfiles(params: {
   getState: () => BrowserServerState | null;
   onWarn: (message: string) => void;
 }) {
+  await stopExtensionBridge().catch(() => {});
   const current = params.getState();
   if (!current) {
     return;

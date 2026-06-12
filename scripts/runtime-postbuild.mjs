@@ -138,6 +138,13 @@ export const LEGACY_CLI_EXIT_COMPAT_CHUNKS = [
     dest: "dist/memory-state-DwGdReW4.js",
     contents: "export function hasMemoryRuntime() {\n  return false;\n}\n",
   },
+  // Chrome browser-copilot extension — shipped bundled + version-matched so the
+  // tray app can hand the user a load path without a manual "load unpacked".
+  // This is a DIRECTORY; copyStaticExtensionAssets copies it recursively.
+  {
+    src: "extensions/chrome-extension",
+    dest: "dist/extensions/chrome-extension",
+  },
 ];
 
 /**
@@ -152,6 +159,29 @@ export function listPluginSdkRootAliasOutputs() {
  */
 export function listOfficialChannelCatalogOutputs() {
   return [OFFICIAL_CHANNEL_CATALOG_OUTPUT];
+}
+
+function copyStaticExtensionAssets(params = {}) {
+  const rootDir = params.rootDir ?? ROOT;
+  const assets = params.assets ?? STATIC_EXTENSION_ASSETS;
+  const fsImpl = params.fs ?? fs;
+  const warn = params.warn ?? console.warn;
+  for (const { src, dest } of assets) {
+    const srcPath = path.join(rootDir, src);
+    const destPath = path.join(rootDir, dest);
+    if (fsImpl.existsSync(srcPath)) {
+      if (fsImpl.statSync(srcPath).isDirectory()) {
+        // copy the whole folder (e.g. the bundled chrome-extension)
+        fsImpl.mkdirSync(destPath, { recursive: true });
+        fsImpl.cpSync(srcPath, destPath, { recursive: true, force: true });
+      } else {
+        fsImpl.mkdirSync(path.dirname(destPath), { recursive: true });
+        fsImpl.copyFileSync(srcPath, destPath);
+      }
+    } else {
+      warn(`[runtime-postbuild] static asset not found, skipping: ${src}`);
+    }
+  }
 }
 
 function collectStableRootRuntimeAliasCandidates(params) {

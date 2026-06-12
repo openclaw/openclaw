@@ -24,6 +24,23 @@ type BrowserProfileCapabilities = {
 export function getBrowserProfileCapabilities(
   profile: ResolvedBrowserProfile,
 ): BrowserProfileCapabilities {
+  if (profile.driver === "extension") {
+    // The user's real Chrome, reached through the bundled extension via a
+    // node-owned loopback CDP bridge. Driven by Playwright connectOverCDP like a
+    // remote endpoint (no managed launch, no Chrome MCP); the bridge serves
+    // /json/list so tab enumeration works over HTTP.
+    return {
+      mode: "remote-cdp",
+      isRemote: false,
+      usesChromeMcp: false,
+      usesPersistentPlaywright: true,
+      supportsPerTabWs: false,
+      supportsJsonTabEndpoints: true,
+      supportsReset: false,
+      supportsManagedTabLimit: false,
+    };
+  }
+
   if (profile.driver === "existing-session") {
     return {
       mode: "local-existing-session",

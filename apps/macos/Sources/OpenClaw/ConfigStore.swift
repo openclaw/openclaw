@@ -143,6 +143,58 @@ enum ConfigStore {
         _ = await self.loadFromGateway()
     }
 
+    /// Profile name used for the "Browser Control: My Browser" extension-driver mode.
+    static let myBrowserProfileName = "mybrowser"
+
+    /// Reads whether the "My Browser" extension-driver profile is currently the
+    /// default browser profile, i.e. whether My Browser mode is active.
+    @MainActor
+    static func loadMyBrowserEnabled() async -> Bool {
+        let root = await self.load()
+        let browser = root["browser"] as? [String: Any]
+        return (browser?["defaultProfile"] as? String) == self.myBrowserProfileName
+    }
+
+    /// Enables or disables "My Browser" mode (the agent drives the user's real
+    /// Chrome via the bundled extension), mirroring `buildAndSaveBrowserEnabled`.
+    ///
+    /// When enabled: ensures an `extension`-driver profile named `mybrowser`
+    /// exists, makes it the default profile, and enables the browser.
+    /// When disabled: reverts the default profile to the previously selected
+    /// profile (or `chrome`) without deleting the `mybrowser` profile.
+    @MainActor
+    static func buildAndSaveMyBrowserEnabled(_ enabled: Bool) async -> Bool {
+        var root = await self.load()
+        var browser = root["browser"] as? [String: Any] ?? [:]
+
+        if enabled {
+            // Remember the prior default so we can restore it when turning off.
+            if let priorDefault = browser["defaultProfile"] as? String,
+               priorDefault != self.myBrowserProfileName
+            {
+                browser["priorDefaultProfile"] = priorDefault
+            }
+            var profiles = browser["profiles"] as? [String: Any] ?? [:]
+            profiles[self.myBrowserProfileName] = ["driver": "extension"]
+            browser["profiles"] = profiles
+            browser["defaultProfile"] = self.myBrowserProfileName
+            browser["enabled"] = true
+        } else {
+            // Revert to the prior default (or "chrome") but keep the profile.
+            let restored = (browser["priorDefaultProfile"] as? String) ?? "chrome"
+            browser["defaultProfile"] = restored
+            browser.removeValue(forKey: "priorDefaultProfile")
+        }
+
+        root["browser"] = browser
+        do {
+            try await self.save(root)
+            return true
+        } catch {
+            return false
+        }
+    }
+
     #if DEBUG
     static func _testSetOverrides(_ overrides: Overrides) async {
         await self.overrideStore.setOverride(overrides)

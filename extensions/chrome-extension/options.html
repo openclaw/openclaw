@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OpenClaw Browser Copilot</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --accent: #ff5a36;
+        --panel: color-mix(in oklab, canvas 92%, canvasText 8%);
+        --border: color-mix(in oklab, canvasText 18%, transparent);
+        --muted: color-mix(in oklab, canvasText 70%, transparent);
+        --shadow: 0 10px 30px color-mix(in oklab, canvasText 18%, transparent);
+        font-family: ui-rounded, system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Rounded",
+          "SF Pro Display", "Segoe UI", sans-serif;
+        line-height: 1.4;
+      }
+      body {
+        margin: 0; min-height: 100vh;
+        background:
+          radial-gradient(1000px 500px at 10% 0%, color-mix(in oklab, var(--accent) 30%, transparent), transparent 70%),
+          radial-gradient(900px 450px at 90% 0%, color-mix(in oklab, var(--accent) 18%, transparent), transparent 75%),
+          canvas;
+        color: canvasText;
+      }
+      .wrap { max-width: 520px; margin: 36px auto; padding: 0 24px 48px 24px; }
+      header { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
+      .logo { width: 44px; height: 44px; border-radius: 14px; background: color-mix(in oklab, var(--accent) 18%, transparent); border: 1px solid color-mix(in oklab, var(--accent) 35%, transparent); box-shadow: var(--shadow); display: grid; place-items: center; }
+      .logo img { width: 28px; height: 28px; image-rendering: pixelated; }
+      h1 { font-size: 20px; margin: 0; letter-spacing: -0.01em; }
+      .subtitle { margin: 2px 0 0 0; color: var(--muted); font-size: 13px; }
+      .grid { display: grid; grid-template-columns: 1fr; gap: 14px; }
+      .card { background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 16px; box-shadow: var(--shadow); }
+      label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+      input { width: 100%; box-sizing: border-box; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border); background: color-mix(in oklab, canvas 92%, canvasText 8%); color: canvasText; outline: none; font-size: 14px; }
+      input:focus { border-color: color-mix(in oklab, var(--accent) 70%, transparent); box-shadow: 0 0 0 4px color-mix(in oklab, var(--accent) 20%, transparent); }
+      button { padding: 10px 14px; border-radius: 12px; border: 1px solid color-mix(in oklab, var(--accent) 55%, transparent); background: linear-gradient(180deg, color-mix(in oklab, var(--accent) 80%, white 20%), var(--accent)); color: white; font-weight: 650; letter-spacing: 0.01em; cursor: pointer; width: 100%; font-size: 14px; }
+      button:active { transform: translateY(1px); }
+      .hint { margin-top: 6px; font-size: 11px; color: var(--muted); }
+      .status { margin-top: 10px; font-size: 13px; min-height: 16px; text-align: center; }
+      .status[data-kind='ok'] { color: color-mix(in oklab, #16a34a 75%, canvasText 25%); }
+      .status[data-kind='error'] { color: color-mix(in oklab, #ef4444 75%, canvasText 25%); }
+      .status[data-kind='checking'] { color: var(--muted); }
+      .spacer { height: 10px; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header>
+        <div class="logo" aria-hidden="true"><img src="icons/icon128.png" alt="" /></div>
+        <div>
+          <h1>OpenClaw Browser Copilot</h1>
+          <p class="subtitle">Enter your gateway URL and token, then click Connect.</p>
+        </div>
+      </header>
+      <div class="grid">
+        <div class="card">
+          <label for="gateway-url">Gateway URL</label>
+          <input id="gateway-url" type="text" autocomplete="off" placeholder="https://desktop-kuuq6fp.tailc4dc52.ts.net" />
+          <div class="spacer"></div>
+          <label for="token">Gateway token</label>
+          <input id="token" type="password" autocomplete="off" placeholder="Paste your gateway token here" />
+          <div class="hint">Find this in your openclaw.json under gateway.auth.token</div>
+          <div class="spacer"></div>
+          <button id="save" type="button">Connect</button>
+          <div class="status" id="status"></div>
+        </div>
+      </div>
+      <script type="module" src="options.js"></script>
+    </div>
+  </body>
+</html>

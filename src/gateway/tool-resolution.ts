@@ -56,6 +56,14 @@ export function resolveGatewayScopedTools(params: {
   allowMediaInvokeCommands?: boolean;
   surface?: GatewayScopedToolSurface;
   excludeToolNames?: Iterable<string>;
+  /**
+   * When non-empty, restricts the FINAL returned tools to only these names
+   * (applied after the full policy pipeline + gatewayDenySet). This is a
+   * RESTRICTION-only intersection: it can never add a tool that the existing
+   * policy already removed, so it is safe even if the value originates from an
+   * untrusted client (e.g. a connecting client's self-reported client.id).
+   */
+  allowToolNames?: Iterable<string>;
   disablePluginTools?: boolean;
   gatewayRequestedTools?: string[];
 }) {
@@ -228,6 +236,14 @@ export function resolveGatewayScopedTools(params: {
   if (shouldInheritEffectiveToolAllowlist) {
     replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, tools);
   }
+
+  const denyFiltered = policyFiltered.filter((tool) => !gatewayDenySet.has(tool.name));
+
+  const allowSet = params.allowToolNames ? new Set(params.allowToolNames) : undefined;
+  const tools =
+    allowSet && allowSet.size > 0
+      ? denyFiltered.filter((tool) => allowSet.has(tool.name))
+      : denyFiltered;
 
   return {
     agentId,

@@ -459,6 +459,17 @@ export type GatewayToolsConfig = {
   deny?: string[];
   /** Tools to explicitly allow (removes from default deny list). */
   allow?: string[];
+  /**
+   * Per-client-id tool restrictions, keyed by the connecting gateway client's
+   * `client.id` (e.g. "openclaw-browser-copilot"). When an operator/webchat
+   * agent turn runs for a session whose operator connected with a matching
+   * client.id, the entry's `allow`/`deny` are applied as a RESTRICTION on top of
+   * the existing policy — they can only reduce the available tools, never
+   * escalate. This safely scopes untrusted surfaces (the Chrome browser
+   * extension) to browser + memory tools even though they share the webchat
+   * operator path that would otherwise expose the full node toolset.
+   */
+  byClientId?: Record<string, { allow?: string[]; deny?: string[] }>;
 };
 
 export type GatewayConfig = {

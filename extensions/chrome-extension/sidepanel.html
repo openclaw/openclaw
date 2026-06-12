@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpenClaw Browser Copilot</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --accent: #FF5A36;
+      --muted: color-mix(in oklab, canvasText 55%, transparent);
+      --bubble-user: color-mix(in oklab, var(--accent) 15%, canvas);
+      --bubble-assistant: color-mix(in oklab, canvas 88%, canvasText 12%);
+      --border: color-mix(in oklab, canvasText 12%, transparent);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      font-family: system-ui, -apple-system, sans-serif;
+      font-size: 13px;
+    }
+
+    /* Toolbar */
+    #toolbar {
+      height: 36px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 8px;
+      background: color-mix(in oklab, canvas 90%, canvasText 10%);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+      font-size: 11px;
+    }
+    .status-group { display: flex; align-items: center; gap: 5px; }
+    .dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+    .dot.ok { background: #22c55e; }
+    .dot.err { background: #ef4444; }
+    .dot.off { background: color-mix(in oklab, canvasText 25%, transparent); }
+    .lbl { color: var(--muted); }
+    #tab-lbl { max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .controls { display: flex; align-items: center; gap: 4px; }
+    .controls button {
+      padding: 2px 8px; border-radius: 6px; font-size: 10px; cursor: pointer;
+      border: 1px solid var(--border); background: color-mix(in oklab, canvas 85%, canvasText 15%); color: canvasText;
+    }
+    .controls select {
+      padding: 2px 4px; border-radius: 6px; font-size: 10px; cursor: pointer; max-width: 90px;
+      border: 1px solid var(--border); background: color-mix(in oklab, canvas 85%, canvasText 15%); color: canvasText;
+    }
+    .controls button:hover { background: color-mix(in oklab, var(--accent) 12%, canvas); }
+    .controls button.copied { background: color-mix(in oklab, #22c55e 18%, canvas); }
+
+    /* Messages */
+    #messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 10px 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .msg {
+      max-width: 92%;
+      padding: 8px 10px;
+      border-radius: 10px;
+      line-height: 1.45;
+      word-wrap: break-word;
+      white-space: pre-wrap;
+    }
+    .msg.user {
+      align-self: flex-end;
+      background: var(--bubble-user);
+      border: 1px solid color-mix(in oklab, var(--accent) 25%, transparent);
+    }
+    .msg.assistant {
+      align-self: flex-start;
+      background: var(--bubble-assistant);
+      border: 1px solid var(--border);
+    }
+    .msg.system {
+      align-self: center;
+      font-size: 11px;
+      color: var(--muted);
+      background: none;
+      border: none;
+      padding: 2px 0;
+    }
+    .msg code {
+      font-family: ui-monospace, Menlo, Monaco, Consolas, monospace;
+      font-size: 12px;
+      background: color-mix(in oklab, canvasText 8%, transparent);
+      padding: 1px 4px;
+      border-radius: 3px;
+    }
+    .msg pre {
+      font-family: ui-monospace, Menlo, Monaco, Consolas, monospace;
+      font-size: 11px;
+      background: color-mix(in oklab, canvasText 8%, transparent);
+      padding: 6px 8px;
+      border-radius: 6px;
+      overflow-x: auto;
+      margin: 4px 0;
+      white-space: pre;
+    }
+    .streaming::after {
+      content: '';
+      display: inline-block;
+      width: 6px; height: 14px;
+      background: var(--accent);
+      animation: blink 0.8s step-end infinite;
+      margin-left: 2px;
+      vertical-align: text-bottom;
+    }
+    @keyframes blink { 50% { opacity: 0; } }
+
+    /* Input */
+    #input-area {
+      display: flex;
+      align-items: flex-end;
+      gap: 6px;
+      padding: 8px;
+      border-top: 1px solid var(--border);
+      background: color-mix(in oklab, canvas 95%, canvasText 5%);
+      flex-shrink: 0;
+    }
+    #msg-input {
+      flex: 1;
+      min-height: 36px;
+      max-height: 120px;
+      padding: 8px 10px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: canvas;
+      color: canvasText;
+      font-family: inherit;
+      font-size: 13px;
+      resize: none;
+      outline: none;
+      line-height: 1.4;
+    }
+    #msg-input:focus { border-color: color-mix(in oklab, var(--accent) 60%, transparent); }
+    #send-btn {
+      height: 36px;
+      padding: 0 14px;
+      border-radius: 10px;
+      border: none;
+      background: var(--accent);
+      color: white;
+      font-weight: 600;
+      font-size: 13px;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    #send-btn:disabled { opacity: 0.5; cursor: default; }
+    #send-btn:hover:not(:disabled) { filter: brightness(1.1); }
+  </style>
+</head>
+<body>
+  <div id="toolbar">
+    <div class="status-group">
+      <span class="dot off" id="ws-dot"></span>
+      <span class="lbl" id="ws-lbl">Connecting</span>
+      <span class="dot off" id="tab-dot"></span>
+      <span class="lbl" id="tab-lbl">No tab</span>
+    </div>
+    <div class="controls">
+      <select id="session-picker" title="Session"><option value="new">New session</option></select>
+      <button id="ctx-btn" title="Copy page context to clipboard">Context</button>
+      <button id="opt-btn" title="Settings">&#9881;</button>
+    </div>
+  </div>
+  <div id="debug" style="font-size:9px;color:var(--muted);padding:2px 8px;border-bottom:1px solid var(--border);white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></div>
+  <div id="messages"></div>
+  <div id="input-area">
+    <textarea id="msg-input" rows="1" placeholder="Message..."></textarea>
+    <button id="send-btn">Send</button>
+  </div>
+  <script type="module" src="sidepanel.js"></script>
+</body>
+</html>

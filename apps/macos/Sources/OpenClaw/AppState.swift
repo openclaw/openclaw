@@ -256,6 +256,37 @@ final class AppState {
         }
     }
 
+    /// "Browser Control: My Browser (extension)" toggle.
+    ///
+    /// Source of truth is the openclaw config: this is on when the default
+    /// browser profile is the `extension`-driver `mybrowser` profile. The
+    /// `didSet` persists the change through `ConfigStore`, mirroring the
+    /// menu's `browserControlEnabled` save path. On failure we reload from
+    /// config to stay consistent.
+    var myBrowserEnabled: Bool {
+        didSet {
+            guard !self.isInitializing else { return }
+            self.ifNotPreview {
+                Task { @MainActor in
+                    let success = await ConfigStore.buildAndSaveMyBrowserEnabled(self.myBrowserEnabled)
+                    if !success {
+                        await self.reloadMyBrowserEnabled()
+                    }
+                }
+            }
+        }
+    }
+
+    /// Re-reads `myBrowserEnabled` from config without re-triggering a save.
+    @MainActor
+    func reloadMyBrowserEnabled() async {
+        let enabled = await ConfigStore.loadMyBrowserEnabled()
+        let wasInitializing = self.isInitializing
+        self.isInitializing = true
+        self.myBrowserEnabled = enabled
+        self.isInitializing = wasInitializing
+    }
+
     var remoteTarget: String {
         didSet {
             self.ifNotPreview { UserDefaults.standard.set(self.remoteTarget, forKey: remoteTargetKey) }
@@ -407,6 +438,11 @@ final class AppState {
         self.execApprovalMode = ExecApprovalQuickMode.from(security: execDefaults.security, ask: execDefaults.ask)
         self.peekabooBridgeEnabled = UserDefaults.standard
             .object(forKey: peekabooBridgeEnabledKey) as? Bool ?? true
+        // "My Browser" mode is on when the default browser profile is the
+        // extension-driver `mybrowser` profile (see ConfigStore).
+        let configBrowser = configRoot["browser"] as? [String: Any]
+        self.myBrowserEnabled =
+            (configBrowser?["defaultProfile"] as? String) == ConfigStore.myBrowserProfileName
         if !self.isPreview {
             Task.detached(priority: .utility) { [weak self] in
                 let current = await LaunchAgentManager.status()

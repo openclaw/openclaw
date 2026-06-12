@@ -17,7 +17,7 @@ type BrowserHeadlessSource =
 export type BrowserStatus = {
   enabled: boolean;
   profile?: string;
-  driver?: "openclaw" | "existing-session";
+  driver?: "openclaw" | "existing-session" | "extension";
   transport?: BrowserTransport;
   running: boolean;
   cdpReady?: boolean;

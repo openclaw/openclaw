@@ -107,7 +107,7 @@ export type ResolvedBrowserProfile = {
   mcpCommand?: string;
   mcpArgs?: string[];
   color: string;
-  driver: "openclaw" | "existing-session";
+  driver: "openclaw" | "existing-session" | "extension";
   executablePath?: string;
   headless: boolean;
   headlessSource?: "profile" | "config" | "default";
@@ -115,6 +115,10 @@ export type ResolvedBrowserProfile = {
 };
 
 const DEFAULT_BROWSER_CDP_PORT_RANGE_START = 18800;
+/** Loopback port the node-owned extension bridge listens on (both the extension
+ * relay /extension and the Playwright-facing /devtools live here). The bundled
+ * extension autodetects this port. */
+export const DEFAULT_EXTENSION_BRIDGE_PORT = 18792;
 const MAX_BROWSER_STARTUP_TIMEOUT_MS = 120_000;
 /** Environment variable that overrides managed Chrome headless mode. */
 export const OPENCLAW_BROWSER_HEADLESS_ENV = "OPENCLAW_BROWSER_HEADLESS";
@@ -513,8 +517,13 @@ export function resolveProfile(
   const rawProfileUrl = profile.cdpUrl?.trim() ?? "";
   let cdpHost = resolved.cdpHost;
   let cdpPort = profile.cdpPort ?? 0;
-  let cdpUrl;
-  const driver = profile.driver === "existing-session" ? "existing-session" : "openclaw";
+  let cdpUrl = "";
+  const driver =
+    profile.driver === "existing-session"
+      ? "existing-session"
+      : profile.driver === "extension"
+        ? "extension"
+        : "openclaw";
   const headless = profile.headless ?? resolved.headless;
   const headlessSource =
     typeof profile.headless === "boolean" ? "profile" : resolved.headlessSource;
@@ -531,6 +540,27 @@ export function resolveProfile(
       userDataDir: resolveUserPath(profile.userDataDir?.trim() || "") || undefined,
       mcpCommand: normalizeOptionalString(profile.mcpCommand),
       mcpArgs: normalizeStringList(profile.mcpArgs) ?? undefined,
+      color: profile.color,
+      driver,
+      executablePath,
+      headless,
+      headlessSource,
+      attachOnly: true,
+    };
+  }
+
+  if (driver === "extension") {
+    // The node launches a local CDP bridge the bundled extension dials into; this
+    // profile attaches to it as a loopback existing-session (Playwright
+    // connectOverCDP). attachOnly: we never launch a browser — the user's real
+    // Chrome is the browser, reached through the extension.
+    const bridgePort = DEFAULT_EXTENSION_BRIDGE_PORT;
+    return {
+      name: profileName,
+      cdpPort: bridgePort,
+      cdpUrl: `http://127.0.0.1:${bridgePort}`,
+      cdpHost: "127.0.0.1",
+      cdpIsLoopback: true,
       color: profile.color,
       driver,
       executablePath,
