@@ -106,6 +106,10 @@ function trimOutput(text: string, maxChars?: number): string {
   return trimmed.slice(0, maxChars).trim();
 }
 
+function isOutputTruncated(text: string, maxChars?: number): boolean {
+  return Boolean(maxChars && text.trim().length > maxChars);
+}
+
 function extractSherpaOnnxText(raw: string): { matched: boolean; text: string } {
   const noMatch = { matched: false, text: "" };
   const tryParse = (value: string): { matched: boolean; text: string } => {
@@ -814,12 +818,16 @@ export async function runProviderEntry(params: {
             execute: async (apiKey) => transcribeAudio(buildRequest({ kind: "api-key", apiKey })),
           })
         : await transcribeAudio(buildRequest({ kind: "none" }));
+    const truncated = result.truncated === true || isOutputTruncated(result.text, maxChars);
     return {
       kind: "audio.transcription",
       attachmentIndex: params.attachmentIndex,
       text: trimOutput(result.text, maxChars),
       provider: providerId,
       model: result.model ?? model,
+      ...(baseUrl ? { baseUrl } : {}),
+      ...(truncated ? { truncated } : {}),
+      trusted: result.trusted === true,
     };
   }
 

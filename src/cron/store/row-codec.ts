@@ -4,6 +4,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
 import { normalizeCronJobInput } from "../normalize.js";
+import { resolveCronPayloadAudit } from "../payload-audit.js";
 import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
 import { tryCronScheduleIdentity } from "../schedule-identity.js";
 import type { CronJob, CronJobState, CronSchedule, CronStoreFile } from "../types.js";
@@ -61,7 +62,7 @@ function bindScheduleColumns(
 }
 
 function stripJobRuntimeFields(job: CronStoreFile["jobs"][number]): Record<string, unknown> {
-  const { state: _state, updatedAtMs: _updatedAtMs, ...rest } = job;
+  const { audit: _audit, state: _state, updatedAtMs: _updatedAtMs, ...rest } = job;
   // job_json stores config shape only; runtime state lives in split columns and
   // state_json so state-only writes never rewrite public job config.
   return { ...rest, state: {} };
@@ -237,6 +238,7 @@ function rowToCronJob(row: CronJobRow): CronJob | null {
     sessionTarget: row.session_target as CronJob["sessionTarget"],
     wakeMode: row.wake_mode as CronJob["wakeMode"],
     payload,
+    audit: resolveCronPayloadAudit(payload),
     ...(delivery ? { delivery } : {}),
     ...(failureAlert !== undefined ? { failureAlert } : {}),
     state: stateFromRow(row),

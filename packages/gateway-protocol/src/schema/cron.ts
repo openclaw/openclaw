@@ -159,6 +159,29 @@ const CronRunDiagnosticsSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+const CronPayloadAuditExecutionKindSchema = Type.Union([
+  Type.Literal("system-event"),
+  Type.Literal("agent-turn"),
+  Type.Literal("deterministic-command"),
+]);
+const CronPayloadAuditWarningCodeSchema = Type.Literal("hidden-agent-turn-script");
+const CronPayloadAuditWarningSchema = Type.Object(
+  {
+    code: CronPayloadAuditWarningCodeSchema,
+    severity: Type.Literal("warn"),
+    message: Type.String(),
+    recommendation: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+export const CronPayloadAuditSchema = Type.Object(
+  {
+    executionKind: CronPayloadAuditExecutionKindSchema,
+    deterministic: Type.Boolean(),
+    warnings: Type.Array(CronPayloadAuditWarningSchema),
+  },
+  { additionalProperties: false },
+);
 const CronCommonOptionalFields = {
   agentId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   sessionKey: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
@@ -443,6 +466,7 @@ export const CronJobSchema = Type.Object(
     sessionTarget: CronSessionTargetSchema,
     wakeMode: CronWakeModeSchema,
     payload: CronPayloadSchema,
+    audit: Type.Optional(CronPayloadAuditSchema),
     delivery: Type.Optional(CronDeliverySchema),
     failureAlert: Type.Optional(Type.Union([Type.Literal(false), CronFailureAlertSchema])),
     state: CronJobStateSchema,

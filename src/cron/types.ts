@@ -3,6 +3,7 @@ import type { FailoverReason } from "../agents/embedded-agent-helpers/types.js";
 import type { EmbeddedAgentExecutionPhase } from "../agents/embedded-agent-runner/execution-phase.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { HookExternalContentSource } from "../security/external-content.js";
+import type { CronPayloadAuditMetadata } from "./payload-audit.js";
 import type { CronJobBase } from "./types-shared.js";
 
 /** Supported schedule forms persisted in cron job specs. */
@@ -325,6 +326,7 @@ export type CronJob = CronJobBase<
   CronDelivery,
   CronFailureAlert | false
 > & {
+  audit?: CronPayloadAuditMetadata;
   state: CronJobState;
 };
 
