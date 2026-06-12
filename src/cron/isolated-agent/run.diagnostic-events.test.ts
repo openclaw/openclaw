@@ -1,6 +1,10 @@
 // Run diagnostic event tests cover emitted diagnostics from isolated cron runs.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
+import {
+  onDiagnosticEvent,
+  onInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+} from "../../infra/diagnostic-events.js";
 import { resetDiagnosticStateForTest } from "../../logging/diagnostic.js";
 
 vi.mock("../../agents/auth-profiles/source-check.js", () => ({
@@ -181,5 +185,71 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
       { type: "session.state", state: "idle", sessionId: "persisted-run-session" },
       { type: "message.processed", sessionId: "persisted-run-session" },
     ]);
+  });
+
+  it("emits a model.usage diagnostic event for cron runs with nonzero usage", async () => {
+    const usageEvents: Array<{
+      type: string;
+      channel?: string;
+      provider?: string;
+      model?: string;
+      usage?: { input?: number; output?: number };
+    }> = [];
+    const unsubscribe = onInternalDiagnosticEvent((evt) => {
+      const e = evt as { type: string };
+      if (e.type === "model.usage") {
+        usageEvents.push(evt as (typeof usageEvents)[number]);
+      }
+    });
+
+    runWithModelFallbackMock.mockResolvedValue({
+      result: {
+        payloads: [{ text: "test output" }],
+        meta: {
+          agentMeta: {
+            sessionId: "cron-usage-session",
+            sessionFile: "/tmp/cron-usage-session.jsonl",
+            usage: { input: 50, output: 100 },
+          },
+        },
+      },
+      provider: "test-provider",
+      model: "test-model",
+    });
+
+    try {
+      const result = await runCronIsolatedAgentTurn(makeParams());
+      expect(result.status).toBe("ok");
+    } finally {
+      unsubscribe();
+    }
+
+    expect(usageEvents).toHaveLength(1);
+    expect(usageEvents[0]).toMatchObject({
+      type: "model.usage",
+      channel: "cron",
+      provider: "test-provider",
+      model: "test-model",
+      usage: { input: 50, output: 100 },
+    });
+  });
+
+  it("does not emit model.usage when usage is zero", async () => {
+    const usageEvents: Array<{ type: string }> = [];
+    const unsubscribe = onInternalDiagnosticEvent((evt) => {
+      const e = evt as { type: string };
+      if (e.type === "model.usage") {
+        usageEvents.push(e);
+      }
+    });
+
+    try {
+      const result = await runCronIsolatedAgentTurn(makeParams());
+      expect(result.status).toBe("ok");
+    } finally {
+      unsubscribe();
+    }
+
+    expect(usageEvents).toHaveLength(0);
   });
 });

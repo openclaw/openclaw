@@ -16,7 +16,7 @@ import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearAgentRunContext } from "../../infra/agent-events.js";
-import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
+import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import {
   createSourceDeliveryPlan,
   resolveSourceDeliveryOutcome,
@@ -1035,6 +1035,37 @@ async function finalizeCronRun(params: {
       provider: providerUsed,
       usage: telemetryUsage,
     };
+    if (isDiagnosticsEnabled(prepared.cfgWithAgentDefaults)) {
+      const cacheRead = usage.cacheRead ?? 0;
+      const cacheWrite = usage.cacheWrite ?? 0;
+      const usagePromptTokens = input + cacheRead + cacheWrite;
+      emitTrustedDiagnosticEvent({
+        type: "model.usage",
+        sessionKey: prepared.agentSessionKey,
+        sessionId: prepared.currentRunSessionId(),
+        channel: "cron",
+        agentId: prepared.agentId,
+        provider: providerUsed,
+        model: modelUsed,
+        usage: {
+          input,
+          output,
+          cacheRead,
+          cacheWrite,
+          promptTokens: usagePromptTokens,
+          total:
+            typeof totalTokens === "number" && totalTokens > 0
+              ? totalTokens
+              : usagePromptTokens + output,
+        },
+        lastCallUsage,
+        context: {
+          limit: contextTokens,
+        },
+        costUsd: runEstimatedCostUsd,
+        durationMs: Date.now() - execution.runStartedAt,
+      });
+    }
   } else {
     telemetry = { model: modelUsed, provider: providerUsed };
   }
