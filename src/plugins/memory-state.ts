@@ -305,7 +305,7 @@ function cloneMemoryPublicArtifact(
 ): MemoryPluginPublicArtifact {
   return {
     ...artifact,
-    agentIds: [...artifact.agentIds],
+    agentIds: Array.isArray(artifact.agentIds) ? [...artifact.agentIds] : [],
   };
 }
 
@@ -331,7 +331,9 @@ export async function listActiveMemoryPublicArtifacts(params: {
     if (contentTypeOrder !== 0) {
       return contentTypeOrder;
     }
-    const agentOrder = left.agentIds.join("\0").localeCompare(right.agentIds.join("\0"));
+    const agentOrder = (left.agentIds ?? [])
+      .join("\0")
+      .localeCompare((right.agentIds ?? []).join("\0"));
     if (agentOrder !== 0) {
       return agentOrder;
     }
