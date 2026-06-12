@@ -2,7 +2,6 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   clearAgentHarnesses,
   listRegisteredAgentHarnesses,
@@ -16,11 +15,6 @@ import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import {
-  DEFAULT_MEMORY_DREAMING_PLUGIN_ID,
-  resolveMemoryDreamingConfig,
-  resolveMemoryDreamingPluginConfig,
-} from "../memory-host-sdk/dreaming.js";
 import {
   clearDetachedTaskLifecycleRuntimeRegistration,
   getDetachedTaskLifecycleRuntimeRegistration,
@@ -46,6 +40,7 @@ import {
   applyTestPluginDefaults,
   createPluginActivationSource,
   normalizePluginsConfig,
+  resolveDreamingSidecarEngineId,
   resolveEffectiveEnableState,
   resolveEffectivePluginActivationState,
   resolveMemorySlotDecision,
@@ -248,25 +243,6 @@ const CLI_METADATA_ENTRY_BASENAMES = [
   "cli-metadata.mjs",
   "cli-metadata.cjs",
 ] as const;
-
-function resolveDreamingSidecarEngineId(params: {
-  cfg: OpenClawConfig;
-  memorySlot: string | null | undefined;
-}): string | null {
-  const normalizedMemorySlot = normalizeLowercaseStringOrEmpty(params.memorySlot);
-  if (
-    !normalizedMemorySlot ||
-    normalizedMemorySlot === "none" ||
-    normalizedMemorySlot === DEFAULT_MEMORY_DREAMING_PLUGIN_ID
-  ) {
-    return null;
-  }
-  const dreamingConfig = resolveMemoryDreamingConfig({
-    pluginConfig: resolveMemoryDreamingPluginConfig(params.cfg),
-    cfg: params.cfg,
-  });
-  return dreamingConfig.enabled ? DEFAULT_MEMORY_DREAMING_PLUGIN_ID : null;
-}
 
 export class PluginLoadFailureError extends Error {
   readonly pluginIds: string[];
@@ -2005,7 +1981,6 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         rootConfig: cfg,
         enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
         activationSource,
-        dreamingEngineId,
         autoEnabledReason: formatAutoEnabledActivationReason(autoEnabledReasons[pluginId]),
       });
       const existingOrigin = seenIds.get(pluginId);
@@ -2047,7 +2022,6 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         rootConfig: cfg,
         enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
         activationSource,
-        dreamingEngineId,
       });
       const entry = normalized.entries[pluginId];
       const record = createPluginRecord({
@@ -2967,7 +2941,6 @@ export async function loadOpenClawPluginCliRegistry(
       rootConfig: cfg,
       enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
       activationSource,
-      dreamingEngineId,
       autoEnabledReason: formatAutoEnabledActivationReason(autoEnabledReasons[pluginId]),
     });
     const existingOrigin = seenIds.get(pluginId);
@@ -3009,7 +2982,6 @@ export async function loadOpenClawPluginCliRegistry(
       rootConfig: cfg,
       enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
       activationSource,
-      dreamingEngineId,
     });
     const entry = normalized.entries[pluginId];
     const record = createPluginRecord({

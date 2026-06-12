@@ -229,11 +229,17 @@ export function resolvePluginActivationDecisionShared<TRootConfig>(params: {
   }
   // The dreaming engine is a runtime dependency of the selected memory-slot plugin.
   // When dreaming is enabled it must activate even if a restrictive `plugins.allow`
-  // omits it, otherwise dreaming sweeps silently never run. Placed after the deny,
-  // disabled-in-config, and workspace-default-off gates so an explicit opt-out still
-  // wins, and scoped to the resolved dreaming engine id so it cannot widen any other
-  // allowlist decision.
-  if (params.dreamingEngineId != null && params.id === params.dreamingEngineId) {
+  // omits it, otherwise dreaming sweeps silently never run. Denylist and
+  // `entries.<id>.enabled: false` still win (those gates return above). Scoped to the
+  // bundled resolved dreaming engine id, and only when the plugin would otherwise be
+  // rejected by the allowlist gate below, so no other activation decision changes.
+  if (
+    params.dreamingEngineId != null &&
+    params.id === params.dreamingEngineId &&
+    params.origin === "bundled" &&
+    params.config.allow.length > 0 &&
+    !explicitlyAllowed
+  ) {
     return {
       enabled: true,
       activated: true,
