@@ -310,6 +310,7 @@ jobs:
           PACKAGE_TAG: ${{ matrix.plugin.publishTag }}
           PACKAGE_DIR: ${{ matrix.plugin.packageDir }}
           DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
+          OPENCLAW_PLUGIN_NPM_RUNTIME_BUILD: "0"
         run: |
           set -euo pipefail
           if [[ "${DRY_RUN}" == "true" ]]; then

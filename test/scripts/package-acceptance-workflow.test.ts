@@ -1707,6 +1707,7 @@ describe("package artifact reuse", () => {
     expect(clawHubNewWorkflow).toContain("Usage: clawhub package trusted-publisher set");
     expect(clawHubNewWorkflow).toContain("Publish ClawHub bootstrap package");
     expect(clawHubNewWorkflow).toContain("bash scripts/plugin-clawhub-publish.sh --publish");
+    expect(clawHubNewWorkflow).toContain('OPENCLAW_PLUGIN_NPM_RUNTIME_BUILD: "0"');
     expect(clawHubNewWorkflow).toContain("trusted-publisher set");
     expect(clawHubNewWorkflow).toContain("--workflow-filename plugin-clawhub-release.yml");
     expect(clawHubNewWorkflow).not.toContain("--environment clawhub-plugin-release");
