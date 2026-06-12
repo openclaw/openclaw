@@ -532,6 +532,38 @@ describe("createTelegramDraftStream", () => {
     });
   });
 
+  it("falls back to parse_mode HTML when rich preview transport gets 404 Not Found", async () => {
+    const api = createMockDraftApi() as ReturnType<typeof createMockDraftApi> & {
+      raw: {
+        sendRichMessage: ReturnType<typeof vi.fn>;
+        editMessageText: ReturnType<typeof vi.fn>;
+      };
+    };
+    api.raw = {
+      sendRichMessage: vi
+        .fn()
+        .mockRejectedValueOnce(Object.assign(new Error("404: Not Found"), { error_code: 404 })),
+      editMessageText: vi
+        .fn()
+        .mockRejectedValueOnce(Object.assign(new Error("404: Not Found"), { error_code: 404 })),
+    };
+    const stream = createTelegramDraftStream({
+      api: api as unknown as Bot["api"],
+      chatId: 123,
+      renderText: (text) => ({ text: `<i>${text}</i>`, parseMode: "HTML" }),
+    });
+
+    stream.update("hello");
+    await stream.flush();
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "<i>hello</i>", { parse_mode: "HTML" });
+
+    stream.update("hello again");
+    await stream.flush();
+    expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "<i>hello again</i>", {
+      parse_mode: "HTML",
+    });
+  });
+
   it("supports rendered previews with parse_mode", async () => {
     const api = createMockDraftApi();
     const stream = createTelegramDraftStream({

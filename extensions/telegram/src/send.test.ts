@@ -780,9 +780,36 @@ describe("sendMessageTelegram", () => {
     );
   });
 
-  it("uses sendRichMessage when the raw Telegram Bot API exposes it", async () => {
+  it("uses sendRichMessage with markdown payload when the raw Telegram Bot API exposes it", async () => {
     const sendMessage = vi.fn().mockResolvedValue({ message_id: 41, chat: { id: "123" } });
     const sendRichMessage = vi.fn().mockResolvedValue({ message_id: 42, chat: { id: "123" } });
+    const api = {
+      sendMessage,
+      raw: { sendRichMessage },
+    } as unknown as {
+      sendMessage: typeof sendMessage;
+      raw: { sendRichMessage: typeof sendRichMessage };
+    };
+    const markdownText = "| Name | Value |\n| --- | --- |\n| hello | **world** |";
+
+    const res = await sendMessageTelegram("123", markdownText, {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      api,
+    });
+
+    expect(sendRichMessage).toHaveBeenCalledWith({
+      chat_id: "123",
+      rich_message: { markdown: markdownText },
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(res).toEqual({ messageId: "42", chatId: "123" });
+  });
+
+  it("falls back when sendRichMessage gets 404 Not Found from a lagging apiRoot", async () => {
+    const unavailableError = Object.assign(new Error("404: Not Found"), { error_code: 404 });
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 43, chat: { id: "123" } });
+    const sendRichMessage = vi.fn().mockRejectedValueOnce(unavailableError);
     const api = {
       sendMessage,
       raw: { sendRichMessage },
@@ -797,12 +824,11 @@ describe("sendMessageTelegram", () => {
       api,
     });
 
-    expect(sendRichMessage).toHaveBeenCalledWith({
-      chat_id: "123",
-      rich_message: { html: "hello <b>world</b>" },
+    expect(sendRichMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith("123", "hello <b>world</b>", {
+      parse_mode: "HTML",
     });
-    expect(sendMessage).not.toHaveBeenCalled();
-    expect(res).toEqual({ messageId: "42", chatId: "123" });
+    expect(res).toEqual({ messageId: "43", chatId: "123" });
   });
 
   it("falls back to plain text when Telegram rejects HTML and preserves send params", async () => {
@@ -3122,7 +3148,7 @@ describe("shared send behaviors", () => {
 });
 
 describe("editMessageTelegram", () => {
-  it("uses rich editMessageText when the raw Telegram Bot API exposes it", async () => {
+  it("uses rich editMessageText with markdown payload when the raw Telegram Bot API exposes it", async () => {
     const sendMessage = vi.fn();
     const richEditMessageText = vi.fn().mockResolvedValue({ message_id: 1, chat: { id: "123" } });
     const api = {
@@ -3134,8 +3160,9 @@ describe("editMessageTelegram", () => {
       raw: { editMessageText: typeof richEditMessageText };
       editMessageText: ReturnType<typeof vi.fn>;
     };
+    const markdownText = "hello **world**";
 
-    await editMessageTelegram("123", 1, "hello **world**", {
+    await editMessageTelegram("123", 1, markdownText, {
       token: "tok",
       cfg: {},
       api,
@@ -3144,9 +3171,33 @@ describe("editMessageTelegram", () => {
     expect(richEditMessageText).toHaveBeenCalledWith({
       chat_id: "123",
       message_id: 1,
-      rich_message: { html: "hello <b>world</b>" },
+      rich_message: { markdown: markdownText },
     });
     expect(api.editMessageText).not.toHaveBeenCalled();
+  });
+
+  it("falls back when rich editMessageText gets 404 Not Found from a lagging apiRoot", async () => {
+    const unavailableError = Object.assign(new Error("404: Not Found"), { error_code: 404 });
+    const legacyEditMessageText = vi.fn().mockResolvedValue({ message_id: 1, chat: { id: "123" } });
+    const richEditMessageText = vi.fn().mockRejectedValueOnce(unavailableError);
+    const api = {
+      raw: { editMessageText: richEditMessageText },
+      editMessageText: legacyEditMessageText,
+    } as unknown as {
+      raw: { editMessageText: typeof richEditMessageText };
+      editMessageText: typeof legacyEditMessageText;
+    };
+
+    await editMessageTelegram("123", 1, "hello **world**", {
+      token: "tok",
+      cfg: {},
+      api,
+    });
+
+    expect(richEditMessageText).toHaveBeenCalledTimes(1);
+    expect(legacyEditMessageText).toHaveBeenCalledWith("123", 1, "hello <b>world</b>", {
+      parse_mode: "HTML",
+    });
   });
 
   it.each([

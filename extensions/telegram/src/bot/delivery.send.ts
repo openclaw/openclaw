@@ -162,7 +162,7 @@ export async function sendTelegramText(
             (await sendTelegramRichMessage({
               api: bot.api,
               chatId,
-              richMessage: buildTelegramInputRichMessage(htmlText),
+              richMessage: buildTelegramInputRichMessage(text, textMode),
               requestParams: {
                 ...(opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
                 ...normalizeTelegramRichSendParams(effectiveParams),

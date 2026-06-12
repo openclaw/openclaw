@@ -178,6 +178,7 @@ async function deliverTextReply(params: {
 }): Promise<number | undefined> {
   let firstDeliveredMessageId: number | undefined;
   const chunks = filterEmptyTelegramTextChunks(params.chunkText(params.replyText));
+  const useSingleChunkMarkdownRichPath = chunks.length === 1;
   await sendChunkedTelegramReplyText({
     chunks,
     progress: params.progress,
@@ -190,7 +191,7 @@ async function deliverTextReply(params: {
       const messageId = await sendTelegramText(
         params.bot,
         params.chatId,
-        chunk.html,
+        useSingleChunkMarkdownRichPath ? params.replyText : chunk.html,
         params.runtime,
         {
           replyToMessageId,
@@ -199,7 +200,7 @@ async function deliverTextReply(params: {
           replyQuotePosition: params.replyQuotePosition,
           replyQuoteEntities: params.replyQuoteEntities,
           thread: params.thread,
-          textMode: "html",
+          textMode: useSingleChunkMarkdownRichPath ? "markdown" : "html",
           plainText: chunk.text,
           linkPreview: params.linkPreview,
           silent: params.silent,
@@ -229,6 +230,7 @@ async function sendPendingFollowUpText(params: {
   progress: DeliveryProgress;
 }): Promise<void> {
   const chunks = filterEmptyTelegramTextChunks(params.chunkText(params.text));
+  const useSingleChunkMarkdownRichPath = chunks.length === 1;
   await sendChunkedTelegramReplyText({
     chunks,
     progress: params.progress,
@@ -237,15 +239,21 @@ async function sendPendingFollowUpText(params: {
     replyMarkup: params.replyMarkup,
     markDelivered,
     sendChunk: async ({ chunk, replyToMessageId, replyMarkup }) => {
-      await sendTelegramText(params.bot, params.chatId, chunk.html, params.runtime, {
-        replyToMessageId,
-        thread: params.thread,
-        textMode: "html",
-        plainText: chunk.text,
-        linkPreview: params.linkPreview,
-        silent: params.silent,
-        replyMarkup,
-      });
+      await sendTelegramText(
+        params.bot,
+        params.chatId,
+        useSingleChunkMarkdownRichPath ? params.text : chunk.html,
+        params.runtime,
+        {
+          replyToMessageId,
+          thread: params.thread,
+          textMode: useSingleChunkMarkdownRichPath ? "markdown" : "html",
+          plainText: chunk.text,
+          linkPreview: params.linkPreview,
+          silent: params.silent,
+          replyMarkup,
+        },
+      );
     },
   });
 }
@@ -292,24 +300,31 @@ async function sendTelegramVoiceFallbackText(opts: {
 }): Promise<number | undefined> {
   let firstDeliveredMessageId: number | undefined;
   const chunks = filterEmptyTelegramTextChunks(opts.chunkText(opts.text));
+  const useSingleChunkMarkdownRichPath = chunks.length === 1;
   let appliedReplyTo = false;
   for (const chunk of chunks) {
     // Only apply reply reference, quote text, and buttons to the first chunk.
     const replyToForChunk = !appliedReplyTo ? opts.replyToId : undefined;
     const applyQuoteForChunk = !appliedReplyTo;
-    const messageId = await sendTelegramText(opts.bot, opts.chatId, chunk.html, opts.runtime, {
-      replyToMessageId: replyToForChunk,
-      replyQuoteMessageId: applyQuoteForChunk ? opts.replyQuoteMessageId : undefined,
-      replyQuoteText: applyQuoteForChunk ? opts.replyQuoteText : undefined,
-      replyQuotePosition: applyQuoteForChunk ? opts.replyQuotePosition : undefined,
-      replyQuoteEntities: applyQuoteForChunk ? opts.replyQuoteEntities : undefined,
-      thread: opts.thread,
-      textMode: "html",
-      plainText: chunk.text,
-      linkPreview: opts.linkPreview,
-      silent: opts.silent,
-      replyMarkup: !appliedReplyTo ? opts.replyMarkup : undefined,
-    });
+    const messageId = await sendTelegramText(
+      opts.bot,
+      opts.chatId,
+      useSingleChunkMarkdownRichPath ? opts.text : chunk.html,
+      opts.runtime,
+      {
+        replyToMessageId: replyToForChunk,
+        replyQuoteMessageId: applyQuoteForChunk ? opts.replyQuoteMessageId : undefined,
+        replyQuoteText: applyQuoteForChunk ? opts.replyQuoteText : undefined,
+        replyQuotePosition: applyQuoteForChunk ? opts.replyQuotePosition : undefined,
+        replyQuoteEntities: applyQuoteForChunk ? opts.replyQuoteEntities : undefined,
+        thread: opts.thread,
+        textMode: useSingleChunkMarkdownRichPath ? "markdown" : "html",
+        plainText: chunk.text,
+        linkPreview: opts.linkPreview,
+        silent: opts.silent,
+        replyMarkup: !appliedReplyTo ? opts.replyMarkup : undefined,
+      },
+    );
     if (firstDeliveredMessageId == null) {
       firstDeliveredMessageId = messageId;
     }

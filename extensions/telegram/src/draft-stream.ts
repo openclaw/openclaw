@@ -206,12 +206,12 @@ export function createTelegramDraftStream(params: {
       return true;
     }
     messageSendAttempted = true;
-    let sent: Awaited<ReturnType<typeof sendRenderedMessage>>;
+    let sent: { message_id?: number } | null | undefined;
     try {
-      sent = await sendRenderedMessage({
+      sent = (await sendRenderedMessage({
         renderedText,
         renderedParseMode,
-      });
+      })) as { message_id?: number } | null | undefined;
     } catch (err) {
       if (isSafeToRetrySendError(err) || isTelegramClientRejection(err)) {
         messageSendAttempted = false;

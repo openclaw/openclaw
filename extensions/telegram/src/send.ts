@@ -685,7 +685,8 @@ export async function sendMessageTelegram(
         label,
       );
     let result: unknown;
-    if (!chunk.htmlText) {
+    const htmlText = chunk.htmlText;
+    if (!htmlText) {
       result = await requestPlain("message");
     } else if (chunk.richMessage && canSendRichText) {
       try {
@@ -698,7 +699,7 @@ export async function sendMessageTelegram(
                 sendTelegramRichMessage({
                   api,
                   chatId,
-                  richMessage: chunk.richMessage ?? buildTelegramInputRichMessage(chunk.htmlText),
+                  richMessage: chunk.richMessage ?? buildTelegramInputRichMessage(htmlText),
                   requestParams: normalizeTelegramRichSendParams(plainParams),
                 }),
               label,
@@ -720,7 +721,7 @@ export async function sendMessageTelegram(
           requestHtml: (label) =>
             requestWithChatNotFound(
               () =>
-                api.sendMessage(chatId, chunk.htmlText ?? chunk.plainText, {
+                api.sendMessage(chatId, htmlText, {
                   parse_mode: "HTML" as const,
                   ...plainParams,
                 }),
@@ -736,7 +737,7 @@ export async function sendMessageTelegram(
         requestHtml: (label) =>
           requestWithChatNotFound(
             () =>
-              api.sendMessage(chatId, chunk.htmlText ?? chunk.plainText, {
+              api.sendMessage(chatId, htmlText, {
                 parse_mode: "HTML" as const,
                 ...plainParams,
               }),
@@ -773,13 +774,14 @@ export async function sendMessageTelegram(
         chunk,
         buildTextParams(index === chunks.length - 1),
       );
-      const messageId = resolveTelegramMessageIdOrThrow(res, context);
+      const message = res as TelegramMessageLike | null | undefined;
+      const messageId = resolveTelegramMessageIdOrThrow(message, context);
       recordSentMessage(chatId, messageId, cfg);
       await recordOutboundMessageForPromptContext({
         cfg,
         account,
         chatId,
-        message: res,
+        message: (message ?? {}) as TelegramMessageLike,
         messageId,
         text: chunk.plainText,
         ...(acceptedParams?.message_thread_id !== undefined
@@ -787,7 +789,7 @@ export async function sendMessageTelegram(
           : {}),
       });
       lastMessageId = String(messageId);
-      lastChatId = String(res?.chat?.id ?? chatId);
+      lastChatId = String(message?.chat?.id ?? chatId);
       lastAcceptedParams = acceptedParams;
       sentChunkCount += 1;
     }
@@ -830,11 +832,23 @@ export async function sendMessageTelegram(
       return fixedPlainTextChunks.map((plainText) => ({ plainText }));
     }
     const plainTextChunks = splitTelegramPlainTextFallback(fallbackText, htmlChunks.length, 4000);
-    return htmlChunks.map((htmlTextLocal, index) => ({
-      htmlText: htmlTextLocal,
-      richMessage: buildTelegramInputRichMessage(htmlTextLocal),
-      plainText: plainTextChunks[index] ?? htmlTextLocal,
-    }));
+    const chunks = htmlChunks.map((htmlTextLocal, index) => {
+      const chunk: TelegramTextChunk = {
+        htmlText: htmlTextLocal,
+        plainText: plainTextChunks[index] ?? htmlTextLocal,
+      };
+      if (textMode === "html") {
+        chunk.richMessage = buildTelegramInputRichMessage(htmlTextLocal);
+      }
+      return chunk;
+    });
+    if (textMode === "markdown" && chunks.length === 1) {
+      chunks[0] = {
+        ...chunks[0],
+        richMessage: buildTelegramInputRichMessage(rawText, "markdown"),
+      };
+    }
+    return chunks;
   };
 
   const sendChunkedText = async (rawText: string, context: string) =>
@@ -1554,7 +1568,7 @@ export async function editMessageTelegram(
               api,
               chatId,
               messageId,
-              richMessage: buildTelegramInputRichMessage(htmlText),
+              richMessage: buildTelegramInputRichMessage(text, textMode),
               requestParams: {
                 ...(textEditParams.link_preview_options
                   ? { link_preview_options: textEditParams.link_preview_options }

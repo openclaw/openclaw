@@ -64,6 +64,27 @@ describe("createNativeTelegramToolProgressDraft", () => {
     });
   });
 
+  it("falls back to sendMessageDraft when rich draft gets 404 Not Found", async () => {
+    const sendMessageDraft = createSendMessageDraftMock();
+    const sendRichMessageDraft = createSendRichMessageDraftMock(async () => {
+      throw Object.assign(new Error("404: Not Found"), { error_code: 404 });
+    });
+    const draft = createNativeTelegramToolProgressDraft({
+      api: { sendMessageDraft, raw: { sendRichMessageDraft } },
+      chatId: 123,
+      thread: { id: 456, scope: "dm" },
+    } as never);
+
+    expect(draft).toBeDefined();
+    await expect(draft?.update("Running command")).resolves.toBe(true);
+
+    expect(sendRichMessageDraft).toHaveBeenCalledTimes(1);
+    expect(sendMessageDraft).toHaveBeenCalledTimes(1);
+    expect(sendMessageDraft).toHaveBeenLastCalledWith(123, expect.any(Number), "Running command", {
+      message_thread_id: 456,
+    });
+  });
+
   it("stops after a Telegram rejection so callers can fall back silently", async () => {
     const sendMessageDraft = createSendMessageDraftMock(async () => {
       throw new Error("Bad Request: method is unavailable");

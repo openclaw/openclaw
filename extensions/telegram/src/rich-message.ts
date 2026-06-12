@@ -40,23 +40,32 @@ type TelegramRawEditRichMessageTextParams = {
 };
 
 type TelegramRawApi = {
-  sendRichMessage?: (params: TelegramRawSendRichMessageParams) => Promise<unknown>;
-  sendRichMessageDraft?: (params: TelegramRawSendRichMessageDraftParams) => Promise<unknown>;
+  sendRichMessage?: (
+    params: TelegramRawSendRichMessageParams,
+  ) => Promise<TelegramRichMessageResult>;
+  sendRichMessageDraft?: (
+    params: TelegramRawSendRichMessageDraftParams,
+  ) => Promise<TelegramRichMessageResult>;
   editMessageText?: (params: TelegramRawEditRichMessageTextParams) => Promise<unknown>;
+};
+
+export type TelegramRichMessageResult = {
+  message_id?: number;
+  chat?: { id?: string | number };
 };
 
 type TelegramDirectSendRichMessage = (
   chatId: number | string,
   richMessage: TelegramInputRichMessage,
   params?: Omit<TelegramRawSendRichMessageParams, "chat_id" | "rich_message">,
-) => Promise<unknown>;
+) => Promise<TelegramRichMessageResult>;
 
 type TelegramDirectSendRichMessageDraft = (
   chatId: number | string,
   draftId: number,
   richMessage: TelegramInputRichMessage,
   params?: Omit<TelegramRawSendRichMessageDraftParams, "chat_id" | "draft_id" | "rich_message">,
-) => Promise<unknown>;
+) => Promise<TelegramRichMessageResult>;
 
 type TelegramApiWithRichMethods = Bot["api"] & {
   raw?: TelegramRawApi;
@@ -65,7 +74,7 @@ type TelegramApiWithRichMethods = Bot["api"] & {
 };
 
 const TELEGRAM_RICH_METHOD_UNAVAILABLE_RE =
-  /\bmethod is unavailable\b|\bmethod not found\b|\bunknown method\b/i;
+  /\bmethod is unavailable\b|\bmethod not found\b|\bunknown method\b|\b404\b.*\bnot found\b|\bnot found\b.*\b404\b/i;
 
 function formatTelegramRichError(err: unknown): string {
   if (err instanceof Error) {
@@ -74,17 +83,60 @@ function formatTelegramRichError(err: unknown): string {
   return String(err);
 }
 
+function toStatusCode(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.trunc(value);
+  }
+  if (typeof value === "string" && /^\d+$/u.test(value.trim())) {
+    return Math.trunc(Number(value));
+  }
+  return undefined;
+}
+
+function isTelegramRichMethodUnavailableStatus(err: unknown, seen = new Set<unknown>()): boolean {
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+  if (seen.has(err)) {
+    return false;
+  }
+  seen.add(err);
+  const record = err as {
+    error_code?: unknown;
+    status?: unknown;
+    statusCode?: unknown;
+    error?: unknown;
+    response?: { status?: unknown; statusCode?: unknown };
+    cause?: unknown;
+  };
+  return (
+    toStatusCode(record.error_code) === 404 ||
+    toStatusCode(record.status) === 404 ||
+    toStatusCode(record.statusCode) === 404 ||
+    toStatusCode(record.response?.status) === 404 ||
+    toStatusCode(record.response?.statusCode) === 404 ||
+    (record.error !== undefined && isTelegramRichMethodUnavailableStatus(record.error, seen)) ||
+    (record.cause !== undefined && isTelegramRichMethodUnavailableStatus(record.cause, seen))
+  );
+}
+
 function resolveTelegramRawApi(api: Bot["api"]): TelegramRawApi | undefined {
   const raw = (api as TelegramApiWithRichMethods).raw;
   return raw && typeof raw === "object" ? raw : undefined;
 }
 
 export function isTelegramRichMethodUnavailableError(err: unknown): boolean {
-  return TELEGRAM_RICH_METHOD_UNAVAILABLE_RE.test(formatTelegramRichError(err));
+  return (
+    TELEGRAM_RICH_METHOD_UNAVAILABLE_RE.test(formatTelegramRichError(err)) ||
+    isTelegramRichMethodUnavailableStatus(err)
+  );
 }
 
-export function buildTelegramInputRichMessage(htmlText: string): TelegramInputRichMessage {
-  return { html: htmlText };
+export function buildTelegramInputRichMessage(
+  text: string,
+  textMode: "markdown" | "html" = "html",
+): TelegramInputRichMessage {
+  return textMode === "markdown" ? { markdown: text } : { html: text };
 }
 
 export function canSendTelegramRichMessage(params: {
@@ -135,7 +187,7 @@ export async function sendTelegramRichMessage(params: {
   chatId: number | string;
   richMessage: TelegramInputRichMessage;
   requestParams?: Omit<TelegramRawSendRichMessageParams, "chat_id" | "rich_message">;
-}): Promise<unknown> {
+}): Promise<TelegramRichMessageResult> {
   const sendRichMessage = resolveSendRichMessageApi(params.api);
   if (!sendRichMessage) {
     throw new Error("Telegram Bot API client does not expose sendRichMessage.");
@@ -152,7 +204,7 @@ export async function sendTelegramRichMessageDraft(params: {
     TelegramRawSendRichMessageDraftParams,
     "chat_id" | "draft_id" | "rich_message"
   >;
-}): Promise<unknown> {
+}): Promise<TelegramRichMessageResult> {
   const sendRichMessageDraft = resolveSendRichMessageDraftApi(params.api);
   if (!sendRichMessageDraft) {
     throw new Error("Telegram Bot API client does not expose sendRichMessageDraft.");
@@ -193,14 +245,15 @@ function resolveSendRichMessageApi(api: Bot["api"]): TelegramDirectSendRichMessa
     return richApi.sendRichMessage.bind(api as object);
   }
   const raw = resolveTelegramRawApi(api);
-  if (typeof raw?.sendRichMessage !== "function") {
+  const sendRichMessage = raw?.sendRichMessage;
+  if (typeof sendRichMessage !== "function") {
     return undefined;
   }
   return async (chatId, richMessage, requestParams) =>
-    await raw.sendRichMessage?.({
+    await sendRichMessage({
       chat_id: chatId,
       rich_message: richMessage,
-      ...(requestParams ?? {}),
+      ...requestParams,
     });
 }
 
@@ -212,21 +265,23 @@ function resolveSendRichMessageDraftApi(
     return richApi.sendRichMessageDraft.bind(api as object);
   }
   const raw = resolveTelegramRawApi(api);
-  if (typeof raw?.sendRichMessageDraft !== "function") {
+  const sendRichMessageDraft = raw?.sendRichMessageDraft;
+  if (typeof sendRichMessageDraft !== "function") {
     return undefined;
   }
   return async (chatId, draftId, richMessage, requestParams) =>
-    await raw.sendRichMessageDraft?.({
+    await sendRichMessageDraft({
       chat_id: chatId,
       draft_id: draftId,
       rich_message: richMessage,
-      ...(requestParams ?? {}),
+      ...requestParams,
     });
 }
 
 function resolveEditTelegramRichTextApi(api: Bot["api"]) {
   const raw = resolveTelegramRawApi(api);
-  if (typeof raw?.editMessageText !== "function") {
+  const editMessageText = raw?.editMessageText;
+  if (typeof editMessageText !== "function") {
     return undefined;
   }
   return async (
@@ -238,10 +293,10 @@ function resolveEditTelegramRichTextApi(api: Bot["api"]) {
       "chat_id" | "message_id" | "rich_message"
     >,
   ) =>
-    await raw.editMessageText?.({
+    await editMessageText({
       chat_id: chatId,
       message_id: messageId,
       rich_message: richMessage,
-      ...(requestParams ?? {}),
+      ...requestParams,
     });
 }

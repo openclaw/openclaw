@@ -215,14 +215,15 @@ describe("deliverReplies", () => {
     messageHookRunner.runMessageSent.mockReset();
   });
 
-  it("uses sendRichMessage when the raw Telegram Bot API exposes it", async () => {
+  it("uses sendRichMessage with markdown payload when the raw Telegram Bot API exposes it", async () => {
     const runtime = createRuntime(false);
     const sendMessage = vi.fn().mockResolvedValue({ message_id: 1, chat: { id: "123" } });
     const sendRichMessage = vi.fn().mockResolvedValue({ message_id: 2, chat: { id: "123" } });
     const bot = createBot({ sendMessage, raw: { sendRichMessage } });
+    const markdownText = "| Name | Value |\n| --- | --- |\n| hello | **world** |";
 
     await deliverWith({
-      replies: [{ text: "hello **world**" }],
+      replies: [{ text: markdownText }],
       runtime,
       bot,
     });
@@ -230,7 +231,7 @@ describe("deliverReplies", () => {
     expect(sendRichMessage).toHaveBeenCalledTimes(1);
     expect(sendRichMessage).toHaveBeenCalledWith({
       chat_id: "123",
-      rich_message: { html: "hello <b>world</b>" },
+      rich_message: { markdown: markdownText },
     });
     expect(sendMessage).not.toHaveBeenCalled();
   });
