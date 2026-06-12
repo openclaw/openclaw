@@ -1,25 +1,8 @@
-/** Audit metadata for deterministic command jobs and legacy agentTurn scripts. */
 import type { CronPayload } from "./types.js";
-
-export type CronPayloadAuditExecutionKind =
-  | "system-event"
-  | "agent-turn"
-  | "deterministic-command";
-
-export type CronPayloadAuditWarningCode = "hidden-agent-turn-script";
-
-export type CronPayloadAuditWarning = {
-  code: CronPayloadAuditWarningCode;
-  severity: "warn";
-  message: string;
-  recommendation?: string;
-};
-
-export type CronPayloadAuditMetadata = {
-  executionKind: CronPayloadAuditExecutionKind;
-  deterministic: boolean;
-  warnings: CronPayloadAuditWarning[];
-};
+import type {
+  CronPayloadAuditMetadata,
+  CronPayloadAuditWarning,
+} from "./types-shared.js";
 
 const SCRIPT_BLOCK_RE = /```(?:bash|sh|zsh|shell|js|ts|node|python|py)?\s+[\s\S]*?```/iu;
 const SHELL_COMMAND_RE =

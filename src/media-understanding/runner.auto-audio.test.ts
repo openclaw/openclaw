@@ -174,6 +174,7 @@ describe("runCapability auto audio entries", () => {
           provider: "mistral",
           model: "voxtral-mini-latest",
           text: "mistral:mistral-key",
+          trusted: false,
         });
         expect(openAiTranscribe).not.toHaveBeenCalled();
         expect(mistralTranscribe).toHaveBeenCalledTimes(1);
@@ -285,6 +286,7 @@ describe("runCapability auto audio entries", () => {
       provider: "openai",
       model: "gpt-4o-transcribe",
       text: "codex audio",
+      trusted: false,
     });
     expect(seenModel).toBe("gpt-4o-transcribe");
   });
