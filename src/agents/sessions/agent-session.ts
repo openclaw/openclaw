@@ -2263,7 +2263,7 @@ export class AgentSession {
   /**
    * Resolve the current model fresh from the session model registry.
    * Falls back to the snapshot if the registry has no entry for the current model.
-   * Ensures post-turn reads (contextWindow, reasoning, thinkingLevelMap) reflect
+   * Ensures post-turn reads (contextWindow, reasoning, thinkingBudgets) reflect
    * the latest registry state after a /model switch.
    */
   private resolveFreshModel(): Model | undefined {
