@@ -190,8 +190,18 @@ export function shouldRunSessionEntryMaintenance(params: {
 }
 
 export function isGatewayModelRunSessionKey(sessionKey: string): boolean {
+  if (
+    !/^agent:[^:]+:explicit:model-run-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      sessionKey,
+    )
+  ) {
+    return false;
+  }
   const parsed = parseAgentSessionKey(sessionKey);
-  const rest = normalizeLowercaseStringOrEmpty(parsed?.rest ?? sessionKey);
+  if (!parsed || !parsed.agentId.trim()) {
+    return false;
+  }
+  const rest = normalizeLowercaseStringOrEmpty(parsed.rest);
   return /^explicit:model-run-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(
     rest,
   );

@@ -278,6 +278,58 @@ describe("pruneStaleModelRunEntries", () => {
       ),
     ).toBe(false);
   });
+
+  it("rejects non-canonical session keys that do not parse as agent-scoped", () => {
+    // Unscoped: missing `agent:<id>:` prefix — parseAgentSessionKey returns null.
+    expect(
+      isGatewayModelRunSessionKey("explicit:model-run-123e4567-e89b-12d3-a456-426614174000"),
+    ).toBe(false);
+    // Empty agent id segment: not a canonical `agent:<id>:` scoped key.
+    expect(
+      isGatewayModelRunSessionKey("agent::explicit:model-run-123e4567-e89b-12d3-a456-426614174000"),
+    ).toBe(false);
+    // Extra colon segment between agent id and `explicit:` — rest starts
+    // with `extra:` and fails the predicate's regex.
+    expect(
+      isGatewayModelRunSessionKey(
+        "agent:main:extra:explicit:model-run-123e4567-e89b-12d3-a456-426614174000",
+      ),
+    ).toBe(false);
+    // Whitespace-padded keys are non-canonical even though parseAgentSessionKey
+    // trims before normalizing; the predicate intentionally checks the original
+    // key shape before accepting a model-run key.
+    expect(
+      isGatewayModelRunSessionKey(
+        "  agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174000",
+      ),
+    ).toBe(false);
+    expect(
+      isGatewayModelRunSessionKey(
+        "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174000  ",
+      ),
+    ).toBe(false);
+  });
+
+  it("matches canonical keys whose agent id begins with model-run-", () => {
+    // Guards against an over-tight fix that confuses the agent id segment
+    // with the `explicit:model-run-<uuid>` rest segment.
+    expect(
+      isGatewayModelRunSessionKey(
+        "agent:model-run-foo:explicit:model-run-123e4567-e89b-12d3-a456-426614174000",
+      ),
+    ).toBe(true);
+  });
+
+  it("preserves case-insensitive matching for canonical keys", () => {
+    // normalizeLowercaseStringOrEmpty + parseAgentSessionKey's normalization
+    // lower-case everything outside opaque peer IDs, so a mixed-case
+    // canonical key still matches.
+    expect(
+      isGatewayModelRunSessionKey(
+        "agent:Main:Explicit:Model-Run-123E4567-E89B-12D3-A456-426614174000",
+      ),
+    ).toBe(true);
+  });
 });
 
 describe("capEntryCount", () => {
