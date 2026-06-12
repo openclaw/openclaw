@@ -158,6 +158,10 @@ type SaveSessionStoreOptions = {
   takeCacheOwnership?: boolean;
   /** Active session key for warn-only maintenance. */
   activeSessionKey?: string;
+  /** Additional session keys that maintenance must preserve for safety-scoped cleanup. */
+  maintenancePreserveKeys?: Iterable<string | undefined>;
+  /** Skip orphan/artifact-only cleanup when the caller can only classify store entries safely. */
+  maintenanceSkipUnclassifiedArtifacts?: boolean;
   /** Optional callback for warn-only maintenance. */
   onWarn?: (warning: SessionMaintenanceWarning) => void | Promise<void>;
   /** Optional callback with maintenance stats after a save. */
@@ -551,6 +555,7 @@ async function saveSessionStoreUnlocked(
         activeSessionKey: opts?.activeSessionKey,
         maintenance,
         warnOnly: true,
+        skipUnclassifiedArtifacts: opts?.maintenanceSkipUnclassifiedArtifacts,
         log,
       });
       await opts?.onMaintenanceApplied?.({
@@ -562,7 +567,10 @@ async function saveSessionStoreUnlocked(
         diskBudget,
       });
     } else {
-      const preserveSessionKeys = collectSessionMaintenancePreserveKeys([opts?.activeSessionKey]);
+      const preserveSessionKeys = collectSessionMaintenancePreserveKeys([
+        opts?.activeSessionKey,
+        ...(opts?.maintenancePreserveKeys ?? []),
+      ]);
       // Prune stale entries and cap total count before serializing.
       const removedSessionFiles = new Map<string, string | undefined>();
       const pruned = pruneStaleEntries(store, maintenance.pruneAfterMs, {
@@ -637,6 +645,7 @@ async function saveSessionStoreUnlocked(
         preserveKeys: preserveSessionKeys,
         maintenance,
         warnOnly: false,
+        skipUnclassifiedArtifacts: opts?.maintenanceSkipUnclassifiedArtifacts,
         log,
       });
       maintenanceChangedStore = pruned > 0 || capped > 0 || (diskBudget?.removedEntries ?? 0) > 0;

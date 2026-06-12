@@ -110,6 +110,7 @@ Run maintenance now (instead of waiting for the next write cycle):
 openclaw sessions cleanup --dry-run
 openclaw sessions cleanup --agent work --dry-run
 openclaw sessions cleanup --all-agents --dry-run
+openclaw sessions cleanup --all-agents --synthetic-only --protect-main --dry-run --json
 openclaw sessions cleanup --enforce
 openclaw sessions cleanup --enforce --active-key "agent:main:telegram:direct:123"
 openclaw sessions cleanup --dry-run --fix-dm-scope
@@ -126,6 +127,13 @@ openclaw sessions cleanup --json
 - `--enforce`: apply maintenance even when `session.maintenance.mode` is `warn`.
 - `--fix-missing`: remove entries whose transcript files are missing or header-only/empty, even if they would not normally age/count out yet.
 - `--fix-dm-scope`: when `session.dmScope` is `main`, retire stale peer-keyed direct-DM rows left behind by earlier `per-peer`, `per-channel-peer`, or `per-account-channel-peer` routing. Use `--dry-run` first; applying the cleanup removes those rows from `sessions.json` and preserves their transcripts as deleted archives.
+- `--synthetic-only`: limit cleanup candidates to synthetic subagent, ACP, cron,
+  hook, node, or heartbeat-style sessions. Orphan artifact sweeping is skipped
+  in this mode because an unreferenced file has no reliable session-key
+  classification.
+- `--protect-main`: preserve main and direct customer sessions under age, count,
+  and disk-budget pressure. Use this with `--synthetic-only` for fleet-safe
+  dry-runs before replacing custom session archive cron jobs.
 - `--active-key <key>`: protect a specific active key from disk-budget eviction. Durable external conversation pointers, such as group sessions and thread-scoped chat sessions, are also kept by age/count/disk-budget maintenance.
 - `--agent <id>`: run cleanup for one configured agent store.
 - `--all-agents`: run cleanup for all configured agent stores.
@@ -152,7 +160,31 @@ traffic. Use `--store <path>` for explicit offline repair of a store file.
       "missing": 0,
       "dmScopeRetired": 0,
       "pruned": 40,
-      "capped": 0
+      "capped": 0,
+      "candidateCounts": {
+        "preserve": 80,
+        "archive_candidate": 40,
+        "blocked": 0,
+        "quarantine_review": 0
+      },
+      "candidateActionCounts": {
+        "prune-missing": 0,
+        "retire-dm-scope": 0,
+        "prune-stale": 40,
+        "cap-overflow": 0,
+        "evict-budget": 0,
+        "prune-unreferenced-artifact": 0
+      },
+      "safety": {
+        "syntheticOnly": true,
+        "protectMain": true,
+        "protectedMainCount": 1,
+        "protectedDirectCount": 2,
+        "protectedMainAgentIds": ["main"],
+        "syntheticOnlyPreservedCount": 37,
+        "blockedCount": 0,
+        "quarantineCount": 0
+      }
     },
     {
       "agentId": "work",
@@ -162,7 +194,31 @@ traffic. Use `--store <path>` for explicit offline repair of a store file.
       "missing": 0,
       "dmScopeRetired": 0,
       "pruned": 0,
-      "capped": 0
+      "capped": 0,
+      "candidateCounts": {
+        "preserve": 18,
+        "archive_candidate": 0,
+        "blocked": 0,
+        "quarantine_review": 0
+      },
+      "candidateActionCounts": {
+        "prune-missing": 0,
+        "retire-dm-scope": 0,
+        "prune-stale": 0,
+        "cap-overflow": 0,
+        "evict-budget": 0,
+        "prune-unreferenced-artifact": 0
+      },
+      "safety": {
+        "syntheticOnly": true,
+        "protectMain": true,
+        "protectedMainCount": 1,
+        "protectedDirectCount": 0,
+        "protectedMainAgentIds": ["work"],
+        "syntheticOnlyPreservedCount": 0,
+        "blockedCount": 0,
+        "quarantineCount": 0
+      }
     }
   ]
 }

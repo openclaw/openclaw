@@ -327,6 +327,8 @@ describe("registerStatusHealthSessionsCommands", () => {
       "--enforce",
       "--fix-missing",
       "--fix-dm-scope",
+      "--synthetic-only",
+      "--protect-main",
       "--active-key",
       "agent:main:main",
       "--json",
@@ -340,6 +342,8 @@ describe("registerStatusHealthSessionsCommands", () => {
       enforce: true,
       fixMissing: true,
       fixDmScope: true,
+      syntheticOnly: true,
+      protectMain: true,
       activeKey: "agent:main:main",
       json: true,
     });
