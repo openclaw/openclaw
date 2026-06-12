@@ -651,12 +651,6 @@ describe("processResponsesStream", () => {
   it("drops a repeated message snapshot without growing the text block", async () => {
     const output = createAssistantOutput();
     const stream = new AssistantMessageEventStream();
-    const collect = (async () => {
-      for await (const _event of stream) {
-        // drain
-      }
-    })();
-
     await processResponsesStream(
       responseEvents([
         {
@@ -692,7 +686,6 @@ describe("processResponsesStream", () => {
       nativeOpenAIModel,
     );
     stream.end();
-    await collect;
 
     expect(output.content).toEqual([
       {
@@ -706,12 +699,6 @@ describe("processResponsesStream", () => {
   it("keeps prefix-nested message items separated by a reasoning item as separate blocks", async () => {
     const output = createAssistantOutput();
     const stream = new AssistantMessageEventStream();
-    const collect = (async () => {
-      for await (const _event of stream) {
-        // drain
-      }
-    })();
-
     await processResponsesStream(
       responseEvents([
         {
@@ -752,7 +739,6 @@ describe("processResponsesStream", () => {
       nativeOpenAIModel,
     );
     stream.end();
-    await collect;
 
     // Collapsing across the reasoning block would orphan it for replay.
     expect(output.content.map((block) => block.type)).toEqual(["text", "thinking", "text"]);
@@ -762,12 +748,6 @@ describe("processResponsesStream", () => {
   it("keeps prefix-nested message items with different phases as separate blocks", async () => {
     const output = createAssistantOutput();
     const stream = new AssistantMessageEventStream();
-    const collect = (async () => {
-      for await (const _event of stream) {
-        // drain
-      }
-    })();
-
     await processResponsesStream(
       responseEvents([
         {
@@ -803,7 +783,6 @@ describe("processResponsesStream", () => {
       nativeOpenAIModel,
     );
     stream.end();
-    await collect;
 
     expect(output.content).toEqual([
       {
