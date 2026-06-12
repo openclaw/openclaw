@@ -330,6 +330,27 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
       await statusColumn(writable.page, "Todo").waitFor({ state: "visible" });
       await captureScreenshot(writable.page, artifacts, "01-empty-board");
 
+      const prioritySelect = writable.page
+        .locator(".workboard-toolbar__filters .workboard-select")
+        .nth(1);
+      const priorityTrigger = prioritySelect.locator(".workboard-select__trigger");
+      await priorityTrigger.focus();
+      await writable.page.keyboard.press("ArrowDown");
+      expect(await writable.page.locator(":focus").textContent()).toContain("All priorities");
+      await writable.page.keyboard.press("ArrowDown");
+      expect(await writable.page.locator(":focus").textContent()).toContain("Low");
+      await writable.page.keyboard.press("End");
+      expect(await writable.page.locator(":focus").textContent()).toContain("Urgent");
+      await writable.page.keyboard.press("h");
+      expect(await writable.page.locator(":focus").textContent()).toContain("High");
+      await writable.page.keyboard.press("Enter");
+      expect(await prioritySelect.getAttribute("open")).toBeNull();
+      await writable.page.keyboard.press("Home");
+      await writable.page.keyboard.press("Enter");
+      expect(await prioritySelect.locator(".workboard-select__value").textContent()).toBe(
+        "All priorities",
+      );
+
       await writableGateway.deferNext("workboard.cards.create");
       await writable.page
         .locator(".workboard-toolbar__actions")
