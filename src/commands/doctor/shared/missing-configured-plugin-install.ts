@@ -1,3 +1,4 @@
+// Doctor repair for configured plugins, runtimes, channels, and providers missing install records.
 import { existsSync } from "node:fs";
 import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
@@ -23,6 +24,7 @@ import {
 import { resolveConfiguredChannelPresencePolicy } from "../../../plugins/channel-plugin-ids.js";
 import { buildClawHubPluginInstallRecordFields } from "../../../plugins/clawhub-install-records.js";
 import { CLAWHUB_INSTALL_ERROR_CODE, installPluginFromClawHub } from "../../../plugins/clawhub.js";
+import { collectConfiguredMemoryEmbeddingProviderIds } from "../../../plugins/gateway-startup-plugin-ids.js";
 import {
   resolveClawHubInstallSpecsForUpdateChannel,
   resolveNpmInstallSpecsForUpdateChannel,
@@ -37,12 +39,16 @@ import { installPluginFromNpmSpec } from "../../../plugins/install.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../../plugins/installed-plugin-index-records.js";
 import { writePersistedInstalledPluginIndexInstallRecords } from "../../../plugins/installed-plugin-index-records.js";
 import { loadInstalledPluginIndex } from "../../../plugins/installed-plugin-index.js";
-import { buildNpmResolutionInstallFields } from "../../../plugins/installs.js";
+import {
+  buildNpmResolutionInstallFields,
+  resolveNpmInstallRecordSpec,
+} from "../../../plugins/installs.js";
 import { readLegacyNpmPluginDeclaration } from "../../../plugins/legacy-npm-declaration.js";
 import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
 import type { PluginPackageInstall } from "../../../plugins/manifest.js";
 import {
   listOfficialExternalPluginCatalogEntries,
+  getOfficialExternalPluginCatalogManifest,
   resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginInstall,
   resolveOfficialExternalPluginLabel,
@@ -129,6 +135,35 @@ function addConfiguredAgentRuntimePluginIds(ids: Set<string>, cfg: OpenClawConfi
   }
 }
 
+function addConfiguredMemoryEmbeddingProviderPluginIds(
+  ids: Set<string>,
+  cfg: OpenClawConfig,
+): void {
+  const configuredProviderIds = collectConfiguredMemoryEmbeddingProviderIds(cfg);
+  if (configuredProviderIds.size === 0) {
+    return;
+  }
+  for (const entry of listOfficialExternalPluginCatalogEntries()) {
+    const manifest = getOfficialExternalPluginCatalogManifest(entry);
+    const pluginId = resolveOfficialExternalPluginId(entry);
+    if (!pluginId) {
+      continue;
+    }
+    const ownedProviderIds = [
+      ...(manifest?.contracts?.embeddingProviders ?? []),
+      ...(manifest?.contracts?.memoryEmbeddingProviders ?? []),
+    ];
+    if (
+      ownedProviderIds.some((providerId) => {
+        const normalized = normalizeOptionalLowercaseString(providerId);
+        return normalized ? configuredProviderIds.has(normalized) : false;
+      })
+    ) {
+      ids.add(pluginId);
+    }
+  }
+}
+
 function collectConfiguredPluginIds(cfg: OpenClawConfig): Set<string> {
   const ids = new Set<string>();
   const plugins = asObjectRecord(cfg.plugins);
@@ -150,6 +185,7 @@ function collectConfiguredPluginIds(cfg: OpenClawConfig): Set<string> {
     }
   }
   addConfiguredAgentRuntimePluginIds(ids, cfg);
+  addConfiguredMemoryEmbeddingProviderPluginIds(ids, cfg);
   return ids;
 }
 
@@ -1028,7 +1064,11 @@ async function installCandidate(params: {
       ...params.records,
       [pluginId]: {
         source: "npm",
-        spec: npmSpecs?.recordSpec ?? npmInstallSpec,
+        spec: resolveNpmInstallRecordSpec({
+          requestedSpec: npmSpecs?.recordSpec ?? npmInstallSpec,
+          resolution: result.npmResolution,
+          pinResolvedRegistrySpec: candidate.trustedSourceLinkedOfficialInstall === true,
+        }),
         installPath: result.targetDir,
         version: result.version,
         installedAt: new Date().toISOString(),
@@ -1113,18 +1153,29 @@ async function adoptExistingNpmPackage(params: {
   warnings: string[];
 }> {
   const npmName = parseRegistryNpmSpec(params.npmInstallSpec)?.name;
+  const npmResolution = npmName
+    ? {
+        name: npmName,
+        version: params.version,
+        resolvedSpec: `${npmName}@${params.version}`,
+      }
+    : undefined;
   return {
     records: {
       ...params.records,
       [params.candidate.pluginId]: {
         source: "npm",
-        spec: params.npmRecordSpec,
+        spec: resolveNpmInstallRecordSpec({
+          requestedSpec: params.npmRecordSpec,
+          resolution: npmResolution,
+          pinResolvedRegistrySpec: params.candidate.trustedSourceLinkedOfficialInstall === true,
+        }),
         installPath: params.packagePath,
         installedAt: new Date().toISOString(),
         version: params.version,
         resolvedVersion: params.version,
         ...(npmName ? { resolvedName: npmName } : {}),
-        ...(npmName ? { resolvedSpec: `${npmName}@${params.version}` } : {}),
+        ...(npmResolution ? { resolvedSpec: npmResolution.resolvedSpec } : {}),
       },
     },
     changes: [
@@ -1135,8 +1186,11 @@ async function adoptExistingNpmPackage(params: {
 }
 
 export type RepairMissingPluginInstallsResult = {
+  /** User-facing repair notes for installed or recovered plugin records. */
   changes: string[];
+  /** User-facing warnings for failed or skipped plugin install repairs. */
   warnings: string[];
+  /** Plugin ids whose install repair failed and should be preserved from cleanup passes. */
   failedPluginIds?: string[];
   /**
    * The full install-record map after repair. Equal to the input
@@ -1150,6 +1204,7 @@ export type RepairMissingPluginInstallsResult = {
   records: Record<string, PluginInstallRecord>;
 };
 
+/** Repair missing installs inferred from the current OpenClaw config. */
 export async function repairMissingConfiguredPluginInstalls(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -1172,6 +1227,7 @@ export async function repairMissingConfiguredPluginInstalls(params: {
   });
 }
 
+/** Repair missing installs for an explicit plugin/channel id set. */
 export async function repairMissingPluginInstallsForIds(params: {
   cfg: OpenClawConfig;
   pluginIds: Iterable<string>;

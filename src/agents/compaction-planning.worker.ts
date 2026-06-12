@@ -1,3 +1,6 @@
+/**
+ * Worker-thread entrypoint for serializable compaction planning requests.
+ */
 import { parentPort, workerData } from "node:worker_threads";
 import {
   buildHistoryPrunePlan,
@@ -11,6 +14,7 @@ import {
 } from "./compaction-planning.js";
 import type { AgentMessage } from "./runtime/index.js";
 
+/** Serializable request accepted by the compaction planning worker. */
 export type CompactionPlanningWorkerInput =
   | {
       kind: "summaryChunks";
@@ -44,6 +48,7 @@ export type CompactionPlanningWorkerInput =
       contextWindow: number;
     };
 
+/** Serializable successful value returned by the compaction planning worker. */
 export type CompactionPlanningWorkerValue =
   | {
       kind: "summaryChunks";
@@ -63,6 +68,7 @@ export type CompactionPlanningWorkerValue =
       ratio: number;
     };
 
+/** Serializable success/failure envelope posted by the worker. */
 export type CompactionPlanningWorkerResult =
   | {
       status: "ok";
@@ -108,6 +114,7 @@ function isWorkerInput(value: unknown): value is CompactionPlanningWorkerInput {
   }
 }
 
+/** Run one compaction planning request and return a serializable result. */
 export function runCompactionPlanningWorkerInput(input: unknown): CompactionPlanningWorkerResult {
   if (!isWorkerInput(input)) {
     return {
@@ -173,6 +180,7 @@ export function runCompactionPlanningWorkerInput(input: unknown): CompactionPlan
 }
 
 if (parentPort) {
+  // Worker-thread mode: process the single workerData payload and post one result.
   const sendToParent: (message: CompactionPlanningWorkerResult) => void =
     parentPort.postMessage.bind(parentPort);
   sendToParent(runCompactionPlanningWorkerInput(workerData));

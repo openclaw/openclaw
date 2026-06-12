@@ -1,3 +1,5 @@
+// Gateway HTTP session history endpoint.
+// Serves JSON and SSE history snapshots backed by transcript files.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -9,6 +11,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
+import { DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS } from "./chat-display-projection.js";
 import {
   sendInvalidRequest,
   sendJson,
@@ -22,7 +25,6 @@ import {
   resolveSharedSecretHttpOperatorScopes,
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
-import { DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS } from "./server-methods/chat.js";
 import {
   buildSessionHistorySnapshot,
   resolveSessionHistoryTailReadOptions,
@@ -81,6 +83,7 @@ function sseWrite(res: ServerResponse, event: string, payload: unknown): void {
   res.write(`data: ${JSON.stringify(payload)}\n\n`);
 }
 
+/** Handle `/sessions/:sessionKey/history` JSON/SSE requests. */
 export async function handleSessionHistoryHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,

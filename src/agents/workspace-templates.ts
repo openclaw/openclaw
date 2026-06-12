@@ -1,3 +1,8 @@
+/**
+ * Workspace template directory discovery.
+ * Resolves source, docs, package, and fallback template locations with a small
+ * cache so setup flows can find templates in dev and packaged installs.
+ */
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
@@ -15,6 +20,7 @@ const FALLBACK_DOCS_TEMPLATE_DIR = path.resolve(
 let cachedTemplateDir: string | undefined;
 let resolvingTemplateDir: Promise<string> | undefined;
 
+/** Resolves the primary workspace-template directory from package, cwd, or fallback paths. */
 export async function resolveWorkspaceTemplateDir(opts?: {
   cwd?: string;
   argv1?: string;
@@ -58,6 +64,7 @@ export async function resolveWorkspaceTemplateDir(opts?: {
   }
 }
 
+/** Clears cached workspace-template directory resolution for tests or package moves. */
 export function resetWorkspaceTemplateDirCache() {
   cachedTemplateDir = undefined;
   resolvingTemplateDir = undefined;
@@ -89,6 +96,7 @@ async function resolveExistingTemplateDirs(candidates: readonly string[]): Promi
   return dirs;
 }
 
+/** Resolves all existing workspace-template search directories, including docs templates. */
 export async function resolveWorkspaceTemplateSearchDirs(opts?: {
   cwd?: string;
   argv1?: string;

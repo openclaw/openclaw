@@ -1,3 +1,5 @@
+// Node version mismatch tests protect local node identity/version checks so the
+// gateway accepts matching node hosts and rejects incompatible local runtimes.
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
@@ -74,7 +76,7 @@ describe("node host version mismatch guard", () => {
   });
 
   test("local node with dev/test version is allowed (not a released version)", async () => {
-    // "dev" does not match YYYY.M.D, so the guard skips
+    // "dev" does not match YYYY.M.PATCH, so the guard skips
     const client = await connectGatewayClient({
       url: `ws://127.0.0.1:${port}`,
       token: "secret",

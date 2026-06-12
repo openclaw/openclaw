@@ -1,3 +1,5 @@
+// sessions_spawn tool tests cover model-visible schema gating, ACP/subagent
+// dispatch, and result details for spawned child sessions.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => {
@@ -108,6 +110,8 @@ describe("sessions_spawn tool", () => {
   }
 
   it("hides ACP runtime affordances when no ACP backend is loaded", () => {
+    // The tool schema is generated from live runtime availability; stale ACP
+    // fields should not be advertised when no backend can handle them.
     const tool = createSessionsSpawnTool();
     const schema = tool.parameters as {
       properties?: {
@@ -570,7 +574,14 @@ describe("sessions_spawn tool", () => {
     const spawnContext = mockCallArg(hoisted.spawnAcpDirectMock, 0, 1, "spawnAcpDirect");
     expect(spawnContext.agentSessionKey).toBe("agent:main:main");
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
-    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
+    const registration = mockCallArg(hoisted.registerSubagentRunMock, 0, 0, "registerSubagentRun");
+    expect(registration.runId).toBe("run-acp");
+    expect(registration.childSessionKey).toBe("agent:codex:acp:1");
+    expect(registration.requesterSessionKey).toBe("agent:main:main");
+    expect(registration.task).toBe("investigate the failing CI run");
+    expect(registration.cleanup).toBe("keep");
+    expect(registration.spawnMode).toBe("session");
+    expect(registration.expectsCompletionMessage).toBe(true);
   });
 
   it("passes inherited tool denies to ACP spawns", async () => {

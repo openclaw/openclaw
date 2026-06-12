@@ -1,3 +1,4 @@
+// Runs the interactive TUI loop and coordinates backend, input, and rendering.
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
@@ -34,7 +35,11 @@ import { editorTheme, theme } from "./theme/theme.js";
 import type { TuiBackend } from "./tui-backend.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
-import { formatGoalFooter, formatTokens } from "./tui-formatters.js";
+import {
+  formatGoalFooter,
+  formatRemoteConnectionHostFooter,
+  formatTokens,
+} from "./tui-formatters.js";
 import {
   buildTuiLastSessionScopeKey,
   readTuiLastSessionKey,
@@ -168,6 +173,16 @@ export function resolveTuiSessionKey(params: {
     return normalizeLowercaseStringOrEmpty(trimmed);
   }
   return `agent:${params.currentAgentId}:${normalizeLowercaseStringOrEmpty(trimmed)}`;
+}
+
+export function resolveTuiFooterHostLabel(params: {
+  config: OpenClawConfig;
+  connectionUrl: string;
+}): string | null {
+  if (params.config.tui?.footer?.showRemoteHost !== true) {
+    return null;
+  }
+  return formatRemoteConnectionHostFooter(params.connectionUrl);
 }
 
 export function resolveInitialTuiAgentId(params: {
@@ -504,6 +519,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   let activeChatRunId: string | null = null;
   let pendingOptimisticUserMessage = false;
   let pendingChatRunId: string | null = null;
+  let pendingSubmitDraft: { runId: string; text: string } | null = null;
   let historyLoaded = false;
   let isConnected = false;
   let wasDisconnected = false;
@@ -593,6 +609,12 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     },
     set pendingChatRunId(value) {
       pendingChatRunId = value ?? null;
+    },
+    get pendingSubmitDraft() {
+      return pendingSubmitDraft;
+    },
+    set pendingSubmitDraft(value) {
+      pendingSubmitDraft = value ?? null;
     },
     get historyLoaded() {
       return historyLoaded;
@@ -1191,7 +1213,9 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     const reasoning = sessionInfo.reasoningLevel ?? "off";
     const reasoningLabel =
       reasoning === "on" ? "reasoning" : reasoning === "stream" ? "reasoning:stream" : null;
+    const hostLabel = resolveTuiFooterHostLabel({ config, connectionUrl: client.connection.url });
     const footerParts = [
+      hostLabel,
       `agent ${agentLabel}`,
       `session ${sessionLabel}`,
       modelLabel,
@@ -1260,6 +1284,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     pauseStreamingWatchdog,
     reconnectStreamingWatchdog,
     consumeCompletedRunForPendingSend,
+    isRunObserved,
     flushPendingHistoryRefreshIfIdle,
   } = createEventHandlers({
     chatLog,
@@ -1353,6 +1378,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       forgetLocalRunId,
       forgetLocalBtwRunId,
       consumeCompletedRunForPendingSend,
+      isRunObserved,
       flushPendingHistoryRefreshIfIdle,
       runAuthFlow,
       requestExit,

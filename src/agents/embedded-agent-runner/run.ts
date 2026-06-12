@@ -1,3 +1,6 @@
+/**
+ * Top-level embedded-agent run orchestration entrypoint.
+ */
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -50,6 +53,7 @@ import {
 } from "../command/session.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import {
+  classifyAssistantFailoverReason,
   classifyFailoverReason,
   extractObservedOverflowTokenCount,
   type FailoverReason,
@@ -85,6 +89,7 @@ import {
   resolveAuthProfileOrder,
   shouldPreferExplicitConfigApiKeyAuth,
 } from "../model-auth.js";
+import { resolveThinkingDefault } from "../model-thinking-default.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import {
   OPENAI_PROVIDER_ID,
@@ -148,9 +153,12 @@ import {
   resolveFinalAssistantVisibleText,
   resolveMaxRunRetryIterations,
   resolveReportedModelRef,
+  MAX_SAME_MODEL_RATE_LIMIT_RETRIES,
   resolveOverloadFailoverBackoffMs,
   resolveOverloadProfileRotationLimit,
   resolveRateLimitProfileRotationLimit,
+  resolveNextSameModelRateLimitRetryCount,
+  resolveSameModelRateLimitRetryDelayMs,
   type RuntimeAuthState,
   scrubAnthropicRefusalMagic,
 } from "./run/helpers.js";
@@ -224,6 +232,31 @@ function isNoRealConversationCompactionNoop(params: {
     params.compacted === false &&
     params.reason === NO_REAL_CONVERSATION_MESSAGES_REASON
   );
+}
+
+function resolveInitialThinkLevel(params: {
+  requested?: ThinkLevel;
+  config?: RunEmbeddedAgentParams["config"];
+  provider: string;
+  modelId: string;
+  model: { reasoning?: boolean };
+}): ThinkLevel {
+  if (params.requested) {
+    return params.requested;
+  }
+  return resolveThinkingDefault({
+    cfg: params.config ?? {},
+    provider: params.provider,
+    model: params.modelId,
+    catalog: [
+      {
+        provider: params.provider,
+        id: params.modelId,
+        name: params.modelId,
+        reasoning: params.model.reasoning,
+      },
+    ],
+  });
 }
 
 async function resetNoRealConversationTokenSnapshot(params: {
@@ -322,6 +355,7 @@ function normalizeEmbeddedRunAttemptResult(
     messagingToolSourceReplyPayloads?:
       | EmbeddedRunAttemptForRunner["messagingToolSourceReplyPayloads"]
       | null;
+    didDeliverSourceReplyViaMessageTool?: boolean | null;
     itemLifecycle?: EmbeddedRunAttemptForRunner["itemLifecycle"] | null;
   };
   return {
@@ -334,6 +368,7 @@ function normalizeEmbeddedRunAttemptResult(
     messagingToolSentMediaUrls: raw.messagingToolSentMediaUrls ?? [],
     messagingToolSentTargets: raw.messagingToolSentTargets ?? [],
     messagingToolSourceReplyPayloads: raw.messagingToolSourceReplyPayloads ?? [],
+    didDeliverSourceReplyViaMessageTool: raw.didDeliverSourceReplyViaMessageTool === true,
     itemLifecycle: raw.itemLifecycle ?? {
       startedCount: 0,
       completedCount: 0,
@@ -1024,8 +1059,16 @@ export async function runEmbeddedAgent(
       const profileFailureStore = pluginHarnessOwnsTransport ? attemptAuthProfileStore : authStore;
       let profileIndex = 0;
       const traceAttempts: TraceAttempt[] = [];
+      const traceAttemptUsesFallback = (attempt: TraceAttempt): boolean =>
+        attempt.result === "rotate_profile" || attempt.result === "fallback_model";
 
-      const initialThinkLevel = params.thinkLevel ?? "off";
+      const initialThinkLevel = resolveInitialThinkLevel({
+        requested: params.thinkLevel,
+        config: params.config,
+        provider,
+        modelId,
+        model: effectiveModel,
+      });
       let thinkLevel = initialThinkLevel;
       const attemptedThinking = new Set<ThinkLevel>();
       let apiKeyInfo: ApiKeyInfo | null = null;
@@ -1175,6 +1218,7 @@ export async function runEmbeddedAgent(
       let lastContextBudgetStatus: EmbeddedAgentMeta["contextBudgetStatus"];
       let runLoopIterations = 0;
       let overloadProfileRotations = 0;
+      let consecutiveSameModelRateLimitRetries = 0;
       let planningOnlyRetryAttempts = 0;
       let reasoningOnlyRetryAttempts = 0;
       let emptyResponseRetryAttempts = 0;
@@ -1334,6 +1378,35 @@ export async function runEmbeddedAgent(
           }
           throw err;
         }
+      };
+      const maybeRetrySameModelRateLimit = async (retry?: {
+        retryAfterSeconds?: number;
+      }): Promise<boolean> => {
+        if (consecutiveSameModelRateLimitRetries >= MAX_SAME_MODEL_RATE_LIMIT_RETRIES) {
+          return false;
+        }
+        const delayMs = resolveSameModelRateLimitRetryDelayMs({
+          retriesSoFar: consecutiveSameModelRateLimitRetries,
+          retryAfterSeconds: retry?.retryAfterSeconds,
+        });
+        log.warn(
+          `rate-limit same-model retry ${consecutiveSameModelRateLimitRetries + 1}/${MAX_SAME_MODEL_RATE_LIMIT_RETRIES} for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)}: delayMs=${delayMs}`,
+        );
+        try {
+          await sleepWithAbort(delayMs, params.abortSignal);
+        } catch (err) {
+          if (params.abortSignal?.aborted) {
+            const abortErr = new Error("Operation aborted", { cause: err });
+            abortErr.name = "AbortError";
+            throw abortErr;
+          }
+          throw err;
+        }
+        consecutiveSameModelRateLimitRetries = resolveNextSameModelRateLimitRetryCount({
+          retriesSoFar: consecutiveSameModelRateLimitRetries,
+          retriedSameModelRateLimit: true,
+        });
+        return true;
       };
       // Resolve the context engine once and reuse across retries to avoid
       // repeated initialization/connection overhead per attempt.
@@ -1559,6 +1632,7 @@ export async function runEmbeddedAgent(
             memoryFlushWritePath: params.memoryFlushWritePath,
             messageChannel: params.messageChannel,
             messageProvider: params.messageProvider,
+            chatType: params.chatType,
             agentAccountId: params.agentAccountId,
             messageTo: params.messageTo,
             messageThreadId: params.messageThreadId,
@@ -1719,6 +1793,11 @@ export async function runEmbeddedAgent(
             lastAssistant: sessionLastAssistant,
             currentAttemptAssistant,
           } = attempt;
+          const setTerminalLifecycleMeta: NonNullable<typeof attempt.setTerminalLifecycleMeta> = (
+            meta,
+          ) => {
+            attempt.setTerminalLifecycleMeta?.({ ...meta, aborted });
+          };
           const timedOutDuringToolExecution = attempt.timedOutDuringToolExecution ?? false;
           if (sessionIdUsed && sessionIdUsed !== activeSessionId) {
             activeSessionId = sessionIdUsed;
@@ -1916,6 +1995,7 @@ export async function runEmbeddedAgent(
                     sessionKey: params.sessionKey,
                     messageChannel: params.messageChannel,
                     messageProvider: params.messageProvider,
+                    chatType: params.chatType,
                     agentAccountId: params.agentAccountId,
                     currentChannelId: params.currentChannelId,
                     currentThreadTs: params.currentThreadTs,
@@ -2108,6 +2188,7 @@ export async function runEmbeddedAgent(
                     sessionKey: params.sessionKey,
                     messageChannel: params.messageChannel,
                     messageProvider: params.messageProvider,
+                    chatType: params.chatType,
                     agentAccountId: params.agentAccountId,
                     currentChannelId: params.currentChannelId,
                     currentThreadTs: params.currentThreadTs,
@@ -2335,7 +2416,7 @@ export async function runEmbeddedAgent(
               `[context-overflow-recovery] exhausted provider overflow recovery for ${provider}/${modelId}; ` +
                 `livenessState=blocked suggestedAction=reset_or_new kind=${kind}`,
             );
-            attempt.setTerminalLifecycleMeta?.({
+            setTerminalLifecycleMeta({
               replayInvalid: resolveReplayInvalidForAttempt(),
               livenessState: "blocked",
             });
@@ -2373,7 +2454,7 @@ export async function runEmbeddedAgent(
           if (promptErrorSource === "hook:before_agent_run" && !aborted) {
             const errorText = formatErrorMessage(promptError);
             const replayInvalid = resolveReplayInvalidForAttempt();
-            attempt.setTerminalLifecycleMeta?.({
+            setTerminalLifecycleMeta({
               replayInvalid,
               livenessState: "blocked",
             });
@@ -2478,7 +2559,7 @@ export async function runEmbeddedAgent(
             }
             // Handle role ordering errors with a user-friendly message
             if (/incorrect role information|roles must alternate/i.test(errorText)) {
-              attempt.setTerminalLifecycleMeta?.({
+              setTerminalLifecycleMeta({
                 replayInvalid: resolveReplayInvalidForAttempt(),
                 livenessState: "blocked",
               });
@@ -2519,7 +2600,7 @@ export async function runEmbeddedAgent(
               const maxMbLabel =
                 typeof maxMb === "number" && Number.isFinite(maxMb) ? `${maxMb}` : null;
               const maxBytesHint = maxMbLabel ? ` (max ${maxMbLabel}MB)` : "";
-              attempt.setTerminalLifecycleMeta?.({
+              setTerminalLifecycleMeta({
                 replayInvalid: resolveReplayInvalidForAttempt(),
                 livenessState: "blocked",
               });
@@ -2717,12 +2798,7 @@ export async function runEmbeddedAgent(
           const rateLimitFailure = isRateLimitAssistantError(assistantForFailover);
           const billingFailure = isBillingAssistantError(assistantForFailover);
           const failoverFailure = isFailoverAssistantError(assistantForFailover);
-          const assistantFailoverReason = classifyFailoverReason(
-            assistantForFailover?.errorMessage ?? "",
-            {
-              provider: assistantForFailover?.provider,
-            },
-          );
+          const assistantFailoverReason = classifyAssistantFailoverReason(assistantForFailover);
           const assistantProviderStarted =
             Boolean(currentAttemptAssistant?.provider) ||
             idleTimedOut ||
@@ -2820,6 +2896,7 @@ export async function runEmbeddedAgent(
               !fallbackConfigured &&
               canRestartForLiveSwitch &&
               sameModelIdleTimeoutRetries < MAX_SAME_MODEL_IDLE_TIMEOUT_RETRIES,
+            allowSameModelRateLimitRetry: rateLimitProfileRotations < rateLimitProfileRotationLimit,
             assistantProfileFailureReason,
             lastProfileId,
             modelId,
@@ -2840,28 +2917,42 @@ export async function runEmbeddedAgent(
             warn: (message) => log.warn(message),
             maybeMarkAuthProfileFailure,
             maybeEscalateRateLimitProfileFallback,
+            maybeRetrySameModelRateLimit,
             maybeBackoffBeforeOverloadFailover,
             advanceAuthProfile: advanceAttemptAuthProfile,
           });
           overloadProfileRotations = assistantFailoverOutcome.overloadProfileRotations;
           if (assistantFailoverOutcome.action === "retry") {
+            const retryTraceResult =
+              assistantFailoverOutcome.retryKind === "same_model_rate_limit"
+                ? "same_model_rate_limit"
+                : assistantFailoverOutcome.retryKind === "same_model_idle_timeout" ||
+                    assistantFailoverReason === "timeout"
+                  ? "timeout"
+                  : "rotate_profile";
             traceAttempts.push({
               provider: activeErrorContext.provider,
               model: activeErrorContext.model,
-              result:
-                assistantFailoverOutcome.retryKind === "same_model_idle_timeout" ||
-                assistantFailoverReason === "timeout"
-                  ? "timeout"
-                  : "rotate_profile",
+              result: retryTraceResult,
               ...(assistantFailoverReason ? { reason: assistantFailoverReason } : {}),
               stage: "assistant",
             });
             if (assistantFailoverOutcome.retryKind === "same_model_idle_timeout") {
               sameModelIdleTimeoutRetries += 1;
             }
+            if (assistantFailoverOutcome.retryKind !== "same_model_rate_limit") {
+              consecutiveSameModelRateLimitRetries = resolveNextSameModelRateLimitRetryCount({
+                retriesSoFar: consecutiveSameModelRateLimitRetries,
+                retriedSameModelRateLimit: false,
+              });
+            }
             lastRetryFailoverReason = assistantFailoverOutcome.lastRetryFailoverReason;
             continue;
           }
+          consecutiveSameModelRateLimitRetries = resolveNextSameModelRateLimitRetryCount({
+            retriesSoFar: consecutiveSameModelRateLimitRetries,
+            retriedSameModelRateLimit: false,
+          });
           if (assistantFailoverOutcome.action === "throw") {
             traceAttempts.push({
               provider: activeErrorContext.provider,
@@ -2921,12 +3012,14 @@ export async function runEmbeddedAgent(
 
           const payloads = buildEmbeddedRunPayloads({
             assistantTexts: attempt.assistantTexts,
+            assistantMessageIndex: attempt.lastAssistantTextMessageIndex,
             toolMetas: attempt.toolMetas,
             lastAssistant: attempt.lastAssistant,
             currentAssistant: currentAttemptAssistant ?? null,
             lastToolError: attempt.lastToolError,
             config: params.config,
             isCronTrigger: params.trigger === "cron",
+            isHeartbeatTrigger: params.trigger === "heartbeat",
             sessionKey: params.sessionKey ?? params.sessionId,
             provider: activeErrorContext.provider,
             model: activeErrorContext.model,
@@ -2937,6 +3030,8 @@ export async function runEmbeddedAgent(
             suppressToolErrorWarnings: params.suppressToolErrorWarnings,
             inlineToolResultsAllowed: false,
             didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+            didDeliverSourceReplyViaMessageTool:
+              attempt.didDeliverSourceReplyViaMessageTool === true,
             messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
             sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
             agentId: params.agentId,
@@ -3030,7 +3125,7 @@ export async function runEmbeddedAgent(
               });
             const timeoutPhase = attempt.promptTimeoutOutcome?.timeoutPhase ?? "provider";
             const providerStarted = attempt.promptTimeoutOutcome?.providerStarted ?? true;
-            attempt.setTerminalLifecycleMeta?.({
+            setTerminalLifecycleMeta({
               replayInvalid,
               livenessState,
               timeoutPhase,
@@ -3061,6 +3156,8 @@ export async function runEmbeddedAgent(
                 agentHarnessResultClassification: attempt.agentHarnessResultClassification,
               },
               didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+              didDeliverSourceReplyViaMessageTool:
+                attempt.didDeliverSourceReplyViaMessageTool === true,
               didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
               messagingToolSentTexts: attempt.messagingToolSentTexts,
               messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
@@ -3280,7 +3377,7 @@ export async function runEmbeddedAgent(
             // terminal.
             const replayInvalid = resolveReplayInvalidForAttempt(null);
             const livenessState: EmbeddedRunLivenessState = "blocked";
-            attempt.setTerminalLifecycleMeta?.({
+            setTerminalLifecycleMeta({
               replayInvalid,
               livenessState,
             });
@@ -3306,6 +3403,8 @@ export async function runEmbeddedAgent(
                 agentHarnessResultClassification: attempt.agentHarnessResultClassification,
               },
               didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+              didDeliverSourceReplyViaMessageTool:
+                attempt.didDeliverSourceReplyViaMessageTool === true,
               didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
               messagingToolSentTexts: attempt.messagingToolSentTexts,
               messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
@@ -3327,7 +3426,7 @@ export async function runEmbeddedAgent(
               attempt,
               incompleteTurnText: "⚠️ Agent couldn't generate a response. Please try again.",
             });
-            attempt.setTerminalLifecycleMeta?.({
+            setTerminalLifecycleMeta({
               replayInvalid,
               livenessState,
             });
@@ -3360,6 +3459,8 @@ export async function runEmbeddedAgent(
                 agentHarnessResultClassification: attempt.agentHarnessResultClassification,
               },
               didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+              didDeliverSourceReplyViaMessageTool:
+                attempt.didDeliverSourceReplyViaMessageTool === true,
               didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
               messagingToolSentTexts: attempt.messagingToolSentTexts,
               messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
@@ -3431,7 +3532,7 @@ export async function runEmbeddedAgent(
               attempt,
               incompleteTurnText,
             });
-            attempt.setTerminalLifecycleMeta?.({
+            setTerminalLifecycleMeta({
               replayInvalid,
               livenessState,
             });
@@ -3481,6 +3582,8 @@ export async function runEmbeddedAgent(
                 agentHarnessResultClassification: attempt.agentHarnessResultClassification,
               },
               didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+              didDeliverSourceReplyViaMessageTool:
+                attempt.didDeliverSourceReplyViaMessageTool === true,
               didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
               messagingToolSentTexts: attempt.messagingToolSentTexts,
               messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
@@ -3551,7 +3654,7 @@ export async function runEmbeddedAgent(
           const terminalPayloads = emptyAssistantReplyIsSilent
             ? [{ text: SILENT_REPLY_TOKEN }]
             : payloadsForTerminalPath;
-          attempt.setTerminalLifecycleMeta?.({
+          setTerminalLifecycleMeta({
             replayInvalid,
             livenessState,
             stopReason,
@@ -3603,7 +3706,7 @@ export async function runEmbeddedAgent(
                         },
                       ]
                     : undefined,
-                fallbackUsed: traceAttempts.length > 0,
+                fallbackUsed: traceAttempts.some(traceAttemptUsesFallback),
                 runner: "embedded",
               },
               requestShaping: {
@@ -3624,6 +3727,8 @@ export async function runEmbeddedAgent(
                 autoCompactionCount > 0 ? { lastTurnCompactions: autoCompactionCount } : undefined,
             },
             didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+            didDeliverSourceReplyViaMessageTool:
+              attempt.didDeliverSourceReplyViaMessageTool === true,
             didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
             messagingToolSentTexts: attempt.messagingToolSentTexts,
             messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,

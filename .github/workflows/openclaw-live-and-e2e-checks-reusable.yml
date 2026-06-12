@@ -563,7 +563,7 @@ jobs:
     needs: validate_selected_ref
     if: inputs.include_repo_e2e && inputs.live_suite_filter == ''
     continue-on-error: ${{ inputs.advisory }}
-    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
+    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: ${{ inputs.release_test_profile == 'full' && 90 || 60 }}
     env:
       OPENCLAW_VITEST_MAX_WORKERS: "2"
@@ -595,7 +595,7 @@ jobs:
     needs: validate_selected_ref
     if: inputs.include_repo_e2e && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'openshell-e2e')
     continue-on-error: ${{ inputs.advisory }}
-    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
+    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
       fail-fast: false
@@ -887,7 +887,7 @@ jobs:
           summary=".artifacts/docker-tests/release-${DOCKER_E2E_CHUNK}/summary.json"
           if [[ ! -f "$summary" ]]; then
             echo "Docker chunk summary missing: \`$summary\`" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
+            exit 1
           fi
           node .release-harness/scripts/docker-e2e.mjs summary "$summary" "Docker E2E chunk: ${DOCKER_E2E_CHUNK:-unknown}" >> "$GITHUB_STEP_SUMMARY"
 
@@ -897,7 +897,7 @@ jobs:
         with:
           name: docker-e2e-${{ matrix.chunk_id }}
           path: .artifacts/docker-tests/
-          if-no-files-found: ignore
+          if-no-files-found: error
 
   plan_docker_lane_groups:
     needs: validate_selected_ref
@@ -1147,7 +1147,7 @@ jobs:
           summary=".artifacts/docker-tests/targeted-${{ steps.plan.outputs.artifact_suffix }}/summary.json"
           if [[ ! -f "$summary" ]]; then
             echo "Docker targeted summary missing: \`$summary\`" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
+            exit 1
           fi
           node .release-harness/scripts/docker-e2e.mjs summary "$summary" "Docker E2E targeted lanes" >> "$GITHUB_STEP_SUMMARY"
 
@@ -1157,7 +1157,7 @@ jobs:
         with:
           name: docker-e2e-${{ steps.plan.outputs.artifact_suffix }}
           path: .artifacts/docker-tests/
-          if-no-files-found: ignore
+          if-no-files-found: error
 
   validate_docker_openwebui:
     needs: [validate_selected_ref, prepare_docker_e2e_image]
@@ -1274,7 +1274,7 @@ jobs:
           summary=".artifacts/docker-tests/release-openwebui/summary.json"
           if [[ ! -f "$summary" ]]; then
             echo "Docker Open WebUI summary missing: \`$summary\`" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
+            exit 1
           fi
           node .release-harness/scripts/docker-e2e.mjs summary "$summary" "Docker E2E chunk: openwebui" >> "$GITHUB_STEP_SUMMARY"
 
@@ -1284,7 +1284,7 @@ jobs:
         with:
           name: docker-e2e-openwebui
           path: .artifacts/docker-tests/
-          if-no-files-found: ignore
+          if-no-files-found: error
 
   prepare_docker_e2e_image:
     needs: validate_selected_ref
@@ -1497,37 +1497,72 @@ jobs:
 
       - name: Setup Docker builder
         if: steps.image_exists.outputs.needs_build == '1'
-        uses: useblacksmith/setup-docker-builder@722e97d12b1d06a961800dd6c05d79d951ad3c80 # v1
+        uses: useblacksmith/setup-docker-builder@ab5c1da94f53f5cd75c1038092aa276dddfccbba # v1
         with:
           max-cache-size-mb: 800000
 
       - name: Build and push bare Docker E2E image
         if: steps.plan.outputs.needs_bare_image == '1' && steps.image_exists.outputs.bare_exists != '1'
-        uses: useblacksmith/build-push-action@fb9e3e6a9299c78462bfadd0d93352c316adc9b8 # v2
-        with:
-          context: .
-          file: ./scripts/e2e/Dockerfile
-          target: bare
-          platforms: linux/amd64
-          tags: ${{ steps.image.outputs.bare_image }}
-          sbom: true
-          provenance: mode=max
-          push: true
+        shell: bash
+        env:
+          IMAGE_REF: ${{ steps.image.outputs.bare_image }}
+        run: |
+          set -euo pipefail
+          build_cmd=(
+            docker buildx build
+            --file ./scripts/e2e/Dockerfile
+            --target bare
+            --platform linux/amd64
+            --tag "$IMAGE_REF"
+            --sbom=true
+            --provenance=mode=max
+            --push
+            .
+          )
+          for attempt in 1 2 3 4; do
+            if "${build_cmd[@]}"; then
+              exit 0
+            fi
+            if [[ "$attempt" == "4" ]]; then
+              echo "::error::Failed to build Docker E2E bare image after ${attempt} attempts"
+              exit 1
+            fi
+            sleep_seconds=$((attempt * 20))
+            echo "Docker E2E bare image build failed; retrying in ${sleep_seconds}s (${attempt}/4)."
+            sleep "$sleep_seconds"
+          done
 
       - name: Build and push functional Docker E2E image
         if: steps.plan.outputs.needs_functional_image == '1' && steps.image_exists.outputs.functional_exists != '1'
-        uses: useblacksmith/build-push-action@fb9e3e6a9299c78462bfadd0d93352c316adc9b8 # v2
-        with:
-          context: .
-          file: ./scripts/e2e/Dockerfile
-          target: functional
-          build-contexts: |
-            openclaw_package=.artifacts/docker-e2e-package
-          platforms: linux/amd64
-          tags: ${{ steps.image.outputs.functional_image }}
-          sbom: true
-          provenance: mode=max
-          push: true
+        shell: bash
+        env:
+          IMAGE_REF: ${{ steps.image.outputs.functional_image }}
+        run: |
+          set -euo pipefail
+          build_cmd=(
+            docker buildx build
+            --file ./scripts/e2e/Dockerfile
+            --target functional
+            --build-context openclaw_package=.artifacts/docker-e2e-package
+            --platform linux/amd64
+            --tag "$IMAGE_REF"
+            --sbom=true
+            --provenance=mode=max
+            --push
+            .
+          )
+          for attempt in 1 2 3 4; do
+            if "${build_cmd[@]}"; then
+              exit 0
+            fi
+            if [[ "$attempt" == "4" ]]; then
+              echo "::error::Failed to build Docker E2E functional image after ${attempt} attempts"
+              exit 1
+            fi
+            sleep_seconds=$((attempt * 20))
+            echo "Docker E2E functional image build failed; retrying in ${sleep_seconds}s (${attempt}/4)."
+            sleep "$sleep_seconds"
+          done
 
   prepare_live_test_image:
     needs: validate_selected_ref
@@ -1558,8 +1593,11 @@ jobs:
         run: |
           set -euo pipefail
           repository="${GITHUB_REPOSITORY,,}"
-          live_image="ghcr.io/${repository}-live-test:${SELECTED_SHA}"
+          live_image_extensions="matrix,acpx"
+          live_image_tag_suffix="${live_image_extensions//,/-}"
+          live_image="ghcr.io/${repository}-live-test:${SELECTED_SHA}-${live_image_tag_suffix}"
           echo "live_image=${live_image}" >> "$GITHUB_OUTPUT"
+          echo "live_image_extensions=${live_image_extensions}" >> "$GITHUB_OUTPUT"
           echo "Shared live-test image: \`${live_image}\`" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Log in to GHCR
@@ -1582,7 +1620,7 @@ jobs:
 
       - name: Setup Docker builder
         if: steps.image_exists.outputs.exists != '1'
-        uses: useblacksmith/setup-docker-builder@722e97d12b1d06a961800dd6c05d79d951ad3c80 # v1
+        uses: useblacksmith/setup-docker-builder@ab5c1da94f53f5cd75c1038092aa276dddfccbba # v1
         with:
           max-cache-size-mb: 800000
 
@@ -1594,7 +1632,7 @@ jobs:
           file: ./Dockerfile
           target: build
           build-args: |
-            OPENCLAW_EXTENSIONS=matrix
+            OPENCLAW_EXTENSIONS=${{ steps.image.outputs.live_image_extensions }}
           platforms: linux/amd64
           tags: ${{ steps.image.outputs.live_image }}
           sbom: true
@@ -1918,7 +1956,7 @@ jobs:
             profiles: stable full
           - suite_id: native-live-src-gateway-core
             label: Native live gateway core
-            command: node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-core
+            command: OPENCLAW_LIVE_CODEX_HARNESS=1 OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-core
             timeout_minutes: 60
             profile_env_only: false
             profiles: beta minimum stable full
@@ -2038,7 +2076,7 @@ jobs:
             profiles: full
           - suite_id: native-live-src-gateway-backends
             label: Native live gateway backends
-            command: node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-backends
+            command: OPENCLAW_LIVE_CODEX_HARNESS=1 OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-backends
             timeout_minutes: 60
             profile_env_only: false
             profiles: stable full

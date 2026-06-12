@@ -1,3 +1,4 @@
+/** Executes isolated cron prompts with model fallbacks and interim-ack retries. */
 import { createHash } from "node:crypto";
 import type { BootstrapContextMode } from "../../agents/bootstrap-files.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
@@ -96,6 +97,8 @@ export function isCommandStyleCronMessage(message: string): boolean {
 function resolveCronBootstrapContextMode(
   payload: AgentTurnPayload,
 ): BootstrapContextMode | undefined {
+  // Command-like cron prompts benefit from lightweight bootstrap context so
+  // simple scheduled command tasks do not spend budget on full repo context.
   if (payload?.lightContext === true) {
     return "lightweight";
   }
@@ -138,10 +141,12 @@ export function createCronPromptExecutor(params: {
     to?: string;
     threadId?: string | number;
   };
+  deliveryRequested?: boolean;
   sourceDelivery: SourceDeliveryPlan;
   skillsSnapshot: SkillSnapshot;
   agentPayload: AgentTurnPayload;
   useSubagentFallbacks: boolean;
+  inheritDefaultFallbacksForAgentStringModel?: boolean;
   modelFallbacksOverride?: string[];
   liveSelection: CronLiveSelection;
   cronSession: MutableCronSession;
@@ -167,6 +172,7 @@ export function createCronPromptExecutor(params: {
       job: params.job,
       agentId: params.agentId,
       useSubagentFallbacks: params.useSubagentFallbacks,
+      inheritDefaultFallbacksForAgentStringModel: params.inheritDefaultFallbacksForAgentStringModel,
     });
   let runResult: CronPromptRunResult | undefined;
   let fallbackProvider = params.liveSelection.provider;
@@ -268,6 +274,8 @@ export function createCronPromptExecutor(params: {
           to: params.resolvedDelivery.to,
           threadId: params.resolvedDelivery.threadId,
         });
+        // Embedded runs receive both the explicit route and the current-channel
+        // id so message-tool policy can target the same chat as fallback delivery.
         const result = await runEmbeddedAgent({
           sessionId: params.cronSession.sessionEntry.sessionId,
           sessionKey: params.runSessionKey,
@@ -371,10 +379,12 @@ export async function executeCronRun(params: {
     to?: string;
     threadId?: string | number;
   };
+  deliveryRequested?: boolean;
   sourceDelivery: SourceDeliveryPlan;
   skillsSnapshot: SkillSnapshot;
   agentPayload: AgentTurnPayload;
   useSubagentFallbacks: boolean;
+  inheritDefaultFallbacksForAgentStringModel?: boolean;
   modelFallbacksOverride?: string[];
   agentVerboseDefault: AgentDefaultsConfig["verboseDefault"];
   liveSelection: CronLiveSelection;
@@ -421,10 +431,12 @@ export async function executeCronRun(params: {
     runTimeoutOverrideMs: params.runTimeoutOverrideMs,
     suppressExecNotifyOnExit: params.suppressExecNotifyOnExit,
     resolvedDelivery: params.resolvedDelivery,
+    deliveryRequested: params.deliveryRequested,
     sourceDelivery: params.sourceDelivery,
     skillsSnapshot: params.skillsSnapshot,
     agentPayload: params.agentPayload,
     useSubagentFallbacks: params.useSubagentFallbacks,
+    inheritDefaultFallbacksForAgentStringModel: params.inheritDefaultFallbacksForAgentStringModel,
     modelFallbacksOverride: params.modelFallbacksOverride,
     liveSelection: params.liveSelection,
     cronSession: params.cronSession,
@@ -492,7 +504,9 @@ export async function executeCronRun(params: {
       failureSignal: runResult.meta?.failureSignal,
       finalAssistantVisibleText: runResult.meta?.finalAssistantVisibleText,
       preferFinalAssistantVisibleText: (
-        await resolveCronChannelOutputPolicy(params.resolvedDelivery.channel)
+        await resolveCronChannelOutputPolicy(params.resolvedDelivery.channel, {
+          deliveryRequested: params.deliveryRequested,
+        })
       ).preferFinalAssistantVisibleText,
     });
     const interimText = interimOutputText?.trim() ?? "";

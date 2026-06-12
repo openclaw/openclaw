@@ -1,3 +1,4 @@
+// Agent Core module implements agent harness behavior.
 import type {
   AssistantMessage,
   ImageContent,
@@ -5,6 +6,7 @@ import type {
   UserMessage,
 } from "../../../llm-core/src/index.js";
 import { runAgentLoop } from "../agent-loop.js";
+import { resolveAgentReasoningOption } from "../reasoning.js";
 import { type AgentCoreRuntimeDeps, resolveAgentCoreStreamFn } from "../runtime-deps.js";
 import type {
   AgentContext,
@@ -53,6 +55,8 @@ import {
   toError,
 } from "./types.js";
 
+// CoreAgentHarness coordinates session state, resources, tools, compaction, and
+// streaming callbacks around the lower-level agent loop.
 function createUserMessage(text: string, images?: ImageContent[]): UserMessage {
   const content: Array<{ type: "text"; text: string } | ImageContent> = [{ type: "text", text }];
   if (images) {
@@ -209,6 +213,7 @@ interface AgentHarnessTurnState<
   activeTools: TTool[];
 }
 
+/** Stateful harness for running, steering, compacting, and navigating sessions. */
 export class CoreAgentHarness<
   TSkill extends Skill = Skill,
   TPromptTemplate extends PromptTemplate = PromptTemplate,
@@ -485,7 +490,8 @@ export class CoreAgentHarness<
     const turnState = getTurnState();
     return {
       model: turnState.model,
-      reasoning: turnState.thinkingLevel === "off" ? undefined : turnState.thinkingLevel,
+      thinkingLevel: turnState.thinkingLevel,
+      reasoning: resolveAgentReasoningOption(turnState.model, turnState.thinkingLevel),
       convertToLlm,
       transformContext: async (messages) => {
         const result = await this.emitHook({ type: "context", messages: [...messages] });

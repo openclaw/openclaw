@@ -1,3 +1,5 @@
+// OpenAI-compatible embeddings HTTP endpoint.
+// Bridges /v1/embeddings requests to configured OpenClaw memory providers.
 import { Buffer } from "node:buffer";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
@@ -32,6 +34,9 @@ import {
   resolveOpenAiCompatibleHttpOperatorScopes,
 } from "./http-utils.js";
 
+// OpenAI-compatible `/v1/embeddings` bridge. It maps OpenClaw agent/model
+// routing onto configured memory embedding providers while preserving the
+// response shape expected by OpenAI SDK clients.
 type OpenAiEmbeddingsHttpOptions = {
   auth: ResolvedGatewayAuth;
   maxBodyBytes?: number;
@@ -77,10 +82,13 @@ function resolveInputTexts(input: unknown): string[] | null {
 }
 
 function encodeEmbeddingBase64(embedding: number[]): string {
+  // OpenAI-compatible base64 embeddings are raw float32 bytes, not JSON.
   const float32 = Float32Array.from(embedding);
   return Buffer.from(float32.buffer).toString("base64");
 }
 
+// Keep request limits local to the HTTP bridge; provider adapters may support
+// more, but this endpoint must protect gateway memory and request latency.
 function validateInputTexts(texts: string[]): string | undefined {
   if (texts.length > MAX_EMBEDDING_INPUTS) {
     return `Too many inputs (max ${MAX_EMBEDDING_INPUTS}).`;
@@ -117,6 +125,8 @@ async function createConfiguredEmbeddingProvider(params: {
 }): Promise<MemoryEmbeddingProvider> {
   const providerId =
     params.provider === "auto" ? DEFAULT_MEMORY_EMBEDDING_PROVIDER : params.provider;
+  // Prefer memory-specific adapters because they understand query/document
+  // input types; generic embedding adapters are adapted only as a fallback.
   const createWithAdapter = async (adapter: MemoryEmbeddingProviderAdapter) => {
     const result = await adapter.create({
       config: params.cfg,
@@ -164,6 +174,8 @@ async function createConfiguredEmbeddingProvider(params: {
   return provider;
 }
 
+// Generic embedding providers expose one embed API; memory search expects
+// query/document methods so the HTTP endpoint can batch document-style inputs.
 function adaptGenericEmbeddingProvider(
   provider: GenericEmbeddingProvider,
 ): MemoryEmbeddingProvider {
@@ -187,6 +199,8 @@ function adaptGenericEmbeddingProvider(
   };
 }
 
+// Request model overrides are constrained to the configured memory provider so
+// a gateway client cannot select an arbitrary embedding provider by model name.
 function resolveEmbeddingsTarget(params: {
   requestModel: string;
   configuredProvider: EmbeddingProviderRequest;
@@ -216,6 +230,7 @@ function resolveEmbeddingsTarget(params: {
   return { provider: configuredProvider, model };
 }
 
+/** Handles OpenAI-compatible embeddings requests for the configured agent memory provider. */
 export async function handleOpenAiEmbeddingsHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,

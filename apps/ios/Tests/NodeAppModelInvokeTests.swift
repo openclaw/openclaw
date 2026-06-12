@@ -1,5 +1,6 @@
 import Foundation
 import OpenClawKit
+import OpenClawProtocol
 import Testing
 import UIKit
 import UserNotifications
@@ -212,6 +213,117 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
         appModel.setSelectedAgentId("agent-123")
         #expect(appModel.chatSessionKey == SessionKey.makeAgentSessionKey(agentId: "agent-123", baseKey: "main"))
         #expect(appModel.mainSessionKey == "agent:agent-123:main")
+    }
+
+    @Test @MainActor func sessionKeyExtractsCanonicalAgentID() {
+        #expect(SessionKey.agentId(from: "agent:rust-claw:mattermost:channel:w6g") == "rust-claw")
+        #expect(SessionKey.agentId(from: " agent:main:main ") == "main")
+        #expect(SessionKey.agentId(from: "main") == nil)
+        #expect(SessionKey.agentId(from: "agent::main") == nil)
+        #expect(SessionKey.agentId(from: nil) == nil)
+    }
+
+    @Test @MainActor func chatAgentNameUsesFocusedCanonicalSessionAgent() {
+        let appModel = NodeAppModel()
+        appModel.gatewayDefaultAgentId = "main"
+        appModel.gatewayAgents = [
+            AgentSummary(
+                id: "main",
+                name: "Joshtimus Prime",
+                identity: nil,
+                workspace: nil,
+                model: nil,
+                agentruntime: nil),
+            AgentSummary(
+                id: "rust-claw",
+                name: "Rust Claw",
+                identity: nil,
+                workspace: nil,
+                model: nil,
+                agentruntime: nil),
+        ]
+        appModel.setSelectedAgentId("main")
+
+        appModel.openChat(sessionKey: "agent:rust-claw:mattermost:channel:w6gjp6iz3fyp3fo15q4fwfpnno")
+
+        #expect(appModel.selectedAgentId == "main")
+        #expect(appModel.activeAgentName == "Joshtimus Prime")
+        #expect(appModel.chatAgentId == "rust-claw")
+        #expect(appModel.chatAgentName == "Rust Claw")
+    }
+
+    @Test @MainActor func chatAgentNameFallsBackToSelectedAgentForUnscopedSession() {
+        let appModel = NodeAppModel()
+        appModel.gatewayDefaultAgentId = "main"
+        appModel.gatewayAgents = [
+            AgentSummary(
+                id: "rust-claw",
+                name: "Rust Claw",
+                identity: nil,
+                workspace: nil,
+                model: nil,
+                agentruntime: nil),
+        ]
+        appModel.setSelectedAgentId("rust-claw")
+
+        appModel.openChat(sessionKey: "incident-42")
+
+        #expect(appModel.chatAgentId == "rust-claw")
+        #expect(appModel.chatAgentName == "Rust Claw")
+    }
+
+    @Test @MainActor func selectingAgentClearsExplicitChatFocus() {
+        let appModel = NodeAppModel()
+        appModel.gatewayDefaultAgentId = "main"
+        let rustSessionKey = SessionKey.makeAgentSessionKey(agentId: "rust-claw", baseKey: "main")
+
+        appModel.setSelectedAgentId("rust-claw")
+        #expect(appModel.chatSessionKey == rustSessionKey)
+        appModel.focusChatSession(rustSessionKey)
+
+        appModel.setSelectedAgentId("main")
+        #expect(appModel.defaultChatSessionKey == "main")
+        #expect(appModel.mainSessionKey == "main")
+        #expect(appModel.chatSessionKey == "main")
+    }
+
+    @Test @MainActor func sameSelectedAgentKeepsExplicitChatFocus() {
+        let appModel = NodeAppModel()
+        appModel.gatewayDefaultAgentId = "main"
+        appModel.setSelectedAgentId("main")
+        appModel.openChat(sessionKey: "incident-42")
+
+        appModel.setSelectedAgentId("main")
+        #expect(appModel.defaultChatSessionKey == "main")
+        #expect(appModel.chatSessionKey == "incident-42")
+    }
+
+    @Test @MainActor func defaultChatSessionKeyIgnoresExplicitChatFocus() {
+        let appModel = NodeAppModel()
+        appModel.gatewayDefaultAgentId = "main"
+        appModel.setSelectedAgentId("rust-claw")
+        appModel.openChat(sessionKey: "incident-42")
+
+        #expect(appModel.defaultChatSessionKey == SessionKey.makeAgentSessionKey(
+            agentId: "rust-claw",
+            baseKey: "main"))
+        #expect(appModel.chatSessionKey == "incident-42")
+    }
+
+    @Test @MainActor func openingNilChatSessionClearsExplicitChatFocus() {
+        let appModel = NodeAppModel()
+        appModel.gatewayDefaultAgentId = "main"
+        appModel.setSelectedAgentId("rust-claw")
+        appModel.openChat(sessionKey: "incident-42")
+
+        appModel.openChat(sessionKey: nil)
+
+        #expect(appModel.chatSessionKey == SessionKey.makeAgentSessionKey(
+            agentId: "rust-claw",
+            baseKey: "main"))
+
+        appModel.setSelectedAgentId("main")
+        #expect(appModel.chatSessionKey == "main")
     }
 
     @Test @MainActor func execApprovalPromptPresentationTracksLatestNotificationTap() throws {
@@ -623,13 +735,13 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
         #expect(appModel.screen.urlString.isEmpty)
     }
 
-    @Test @MainActor func handleInvokeA2UICommandsFailWhenHostMissing() async throws {
+    @Test @MainActor func handleInvokeA2UICommandsFailWhenLocalHostUnavailable() async throws {
         let appModel = NodeAppModel()
 
         let reset = BridgeInvokeRequest(id: "reset", command: OpenClawCanvasA2UICommand.reset.rawValue)
         let resetRes = await appModel._test_handleInvoke(reset)
         #expect(resetRes.ok == false)
-        #expect(resetRes.error?.message.contains("A2UI_HOST_NOT_CONFIGURED") == true)
+        #expect(resetRes.error?.message.contains("A2UI_HOST_UNAVAILABLE") == true)
 
         let jsonl = "{\"beginRendering\":{}}"
         let pushParams = OpenClawCanvasA2UIPushJSONLParams(jsonl: jsonl)
@@ -641,7 +753,7 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
             paramsJSON: pushJSON)
         let pushRes = await appModel._test_handleInvoke(push)
         #expect(pushRes.ok == false)
-        #expect(pushRes.error?.message.contains("A2UI_HOST_NOT_CONFIGURED") == true)
+        #expect(pushRes.error?.message.contains("A2UI_HOST_UNAVAILABLE") == true)
     }
 
     @Test @MainActor func handleInvokeUnknownCommandReturnsInvalidRequest() async {
@@ -911,6 +1023,38 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
         await appModel.handleDeepLink(url: url)
         #expect(appModel.pendingAgentDeepLinkPrompt == nil)
         #expect(appModel.openChatRequestID == 1)
+    }
+
+    @Test @MainActor func operatorAdminScopeCacheRefreshesFromStoredToken() throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let previousStateDir = ProcessInfo.processInfo.environment["OPENCLAW_STATE_DIR"]
+        setenv("OPENCLAW_STATE_DIR", tempDir.path, 1)
+        defer {
+            if let previousStateDir {
+                setenv("OPENCLAW_STATE_DIR", previousStateDir, 1)
+            } else {
+                unsetenv("OPENCLAW_STATE_DIR")
+            }
+            try? FileManager.default.removeItem(at: tempDir)
+        }
+
+        let appModel = NodeAppModel()
+        let identity = DeviceIdentityStore.loadOrCreate()
+        #expect(appModel.hasOperatorAdminScope == false)
+
+        _ = DeviceAuthStore.storeToken(
+            deviceId: identity.deviceId,
+            role: "operator",
+            token: "operator-token",
+            scopes: ["operator.read", "operator.admin"])
+        appModel._test_refreshOperatorAdminScopeFromStore()
+        #expect(appModel.hasOperatorAdminScope == true)
+
+        DeviceAuthStore.clearToken(deviceId: identity.deviceId, role: "operator")
+        appModel._test_refreshOperatorAdminScopeFromStore()
+        #expect(appModel.hasOperatorAdminScope == false)
     }
 
     @Test @MainActor func sendVoiceTranscriptThrowsWhenGatewayOffline() async {

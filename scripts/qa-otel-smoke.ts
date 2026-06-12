@@ -1,4 +1,5 @@
 #!/usr/bin/env -S node --import tsx
+// Qa Otel Smoke script supports OpenClaw repository automation.
 
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -78,6 +79,8 @@ type CapturedMetric = {
 
 type CapturedLogRecord = {
   body: string | number | boolean | string[];
+  spanId: string;
+  traceId: string;
 };
 
 const DEFAULT_SCENARIO_ID = "otel-trace-smoke";
@@ -404,13 +407,19 @@ class ProtoReader {
     return new TextDecoder().decode(this.bytes());
   }
 
-  fixed64(): number {
-    const end = this.offset + 8;
+  private advance(length: number, label: string): number {
+    const start = this.offset;
+    const end = this.offset + length;
     if (end > this.buffer.length) {
-      throw new Error("truncated protobuf fixed64");
+      throw new Error(`truncated protobuf ${label}`);
     }
-    const view = new DataView(this.buffer.buffer, this.buffer.byteOffset + this.offset, 8);
     this.offset = end;
+    return start;
+  }
+
+  fixed64(): number {
+    const start = this.advance(8, "fixed64");
+    const view = new DataView(this.buffer.buffer, this.buffer.byteOffset + start, 8);
     return view.getFloat64(0, true);
   }
 
@@ -418,11 +427,11 @@ class ProtoReader {
     if (wire === 0) {
       this.varint();
     } else if (wire === 1) {
-      this.offset += 8;
+      this.advance(8, "fixed64");
     } else if (wire === 2) {
       this.bytes();
     } else if (wire === 5) {
-      this.offset += 4;
+      this.advance(4, "fixed32");
     } else {
       throw new Error(`unsupported protobuf wire type ${wire}`);
     }
@@ -639,15 +648,21 @@ function decodeMetricRequest(body: Buffer): CapturedMetric[] {
 function decodeLogRecord(message: Uint8Array): CapturedLogRecord {
   const reader = new ProtoReader(message);
   let body: string | number | boolean | string[] = "";
+  let traceId = "";
+  let spanId = "";
   while (!reader.done()) {
     const { field, wire } = reader.tag();
     if (field === 5 && wire === 2) {
       body = normalizeOtlpValue(decodeAnyValue(reader.bytes()));
+    } else if (field === 9 && wire === 2) {
+      traceId = Buffer.from(reader.bytes()).toString("hex");
+    } else if (field === 10 && wire === 2) {
+      spanId = Buffer.from(reader.bytes()).toString("hex");
     } else {
       reader.skip(wire);
     }
   }
-  return { body };
+  return { body, spanId, traceId };
 }
 
 function decodeScopeLogs(message: Uint8Array): CapturedLogRecord[] {
@@ -698,6 +713,7 @@ function startLocalOtlpReceiver(disallowedBodyNeedlesLocal: string[] = []) {
   const capturedMetrics: CapturedMetric[] = [];
   const capturedLogRecords: CapturedLogRecord[] = [];
   const capturedBodyText: Partial<Record<OtlpSignal, string[]>> = {};
+  const sockets = new Set<Socket>();
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     void (async () => {
       if (req.method !== "POST" || !req.url) {
@@ -737,9 +753,42 @@ function startLocalOtlpReceiver(disallowedBodyNeedlesLocal: string[] = []) {
         res.end(error instanceof Error ? error.message : String(error));
         return;
       }
-      const spans = signal === "traces" ? decodeTraceRequest(body) : [];
-      const metrics = signal === "metrics" ? decodeMetricRequest(body) : [];
-      const logRecords = signal === "logs" ? decodeLogRequest(body) : [];
+      let spans: CapturedSpan[];
+      let metrics: CapturedMetric[];
+      let logRecords: CapturedLogRecord[];
+      try {
+        spans = signal === "traces" ? decodeTraceRequest(body) : [];
+        metrics = signal === "metrics" ? decodeMetricRequest(body) : [];
+        logRecords = signal === "logs" ? decodeLogRequest(body) : [];
+        appendCapturedBodyText(
+          capturedBodyText,
+          signal,
+          body,
+          undefined,
+          disallowedBodyNeedlesLocal,
+        );
+      } catch (error) {
+        appendCapturedBodyText(
+          capturedBodyText,
+          signal,
+          body,
+          undefined,
+          disallowedBodyNeedlesLocal,
+        );
+        capturedRequests.push({
+          path: requestPath,
+          signal,
+          bytes: body.length,
+          contentEncoding,
+          status: 400,
+          spanCount: 0,
+          metricCount: 0,
+          logCount: 0,
+        });
+        res.writeHead(400, { "content-type": "text/plain" });
+        res.end(error instanceof Error ? error.message : String(error));
+        return;
+      }
       if (spans.length > 0) {
         capturedSpans.push(...spans);
       }
@@ -749,7 +798,6 @@ function startLocalOtlpReceiver(disallowedBodyNeedlesLocal: string[] = []) {
       if (logRecords.length > 0) {
         capturedLogRecords.push(...logRecords);
       }
-      appendCapturedBodyText(capturedBodyText, signal, body, undefined, disallowedBodyNeedlesLocal);
       capturedRequests.push({
         path: requestPath,
         signal,
@@ -764,6 +812,13 @@ function startLocalOtlpReceiver(disallowedBodyNeedlesLocal: string[] = []) {
       res.end();
     })();
   });
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.once("close", () => {
+      sockets.delete(socket);
+    });
+  });
+  let closePromise: Promise<void> | undefined;
 
   return {
     capturedRequests,
@@ -782,11 +837,24 @@ function startLocalOtlpReceiver(disallowedBodyNeedlesLocal: string[] = []) {
       return address.port;
     },
     async close(): Promise<void> {
-      await new Promise<void>((resolve, reject) => {
+      closePromise ??= new Promise<void>((resolve, reject) => {
+        closeLocalOtlpReceiverConnections(server, sockets);
         server.close((err) => (err ? reject(err) : resolve()));
+        closeLocalOtlpReceiverConnections(server, sockets);
       });
+      await closePromise;
     },
   };
+}
+
+function closeLocalOtlpReceiverConnections(
+  server: ReturnType<typeof createServer>,
+  sockets: Set<Socket>,
+): void {
+  for (const socket of sockets) {
+    socket.destroy();
+  }
+  server.closeAllConnections();
 }
 
 async function reserveLocalPort(): Promise<number> {
@@ -847,14 +915,34 @@ async function waitForLocalPort(port: number, timeoutMs: number, readFailure: ()
   throw new Error(`timed out waiting for OpenTelemetry Collector on 127.0.0.1:${port}`);
 }
 
-function tailText(value: string, bytes: number): string {
-  const buffer = Buffer.from(value);
-  if (buffer.length <= bytes) {
-    return value;
-  }
-  return Buffer.concat([Buffer.from("...\n"), buffer.subarray(buffer.length - bytes)]).toString(
-    "utf8",
-  );
+function createBoundedTextAccumulator(maxBytes: number) {
+  let tail = Buffer.alloc(0);
+  let truncated = false;
+
+  return {
+    append(chunk: unknown): void {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), "utf8");
+      if (buffer.length >= maxBytes) {
+        tail = Buffer.from(buffer.subarray(buffer.length - maxBytes));
+        truncated = true;
+        return;
+      }
+      const nextTail = Buffer.concat([tail, buffer]);
+      if (nextTail.length > maxBytes) {
+        tail = Buffer.from(nextTail.subarray(nextTail.length - maxBytes));
+        truncated = true;
+        return;
+      }
+      tail = nextTail;
+    },
+    byteLength(): number {
+      return tail.byteLength;
+    },
+    text(): string {
+      const output = tail.toString("utf8");
+      return truncated ? `...\n${output}` : output;
+    },
+  };
 }
 
 async function stopDockerContainer(name: string): Promise<void> {
@@ -925,8 +1013,7 @@ service:
 `;
   await writeConfigFile(configPath, config, "utf8");
 
-  const stdout: string[] = [];
-  const stderr: string[] = [];
+  const output = createBoundedTextAccumulator(COLLECTOR_OUTPUT_TAIL_BYTES);
   let exitCode: number | null = null;
   const dockerArgs = [
     "run",
@@ -943,10 +1030,10 @@ service:
     "--config=/etc/otelcol/config.yaml",
   ];
   const child = spawnProcess("docker", dockerArgs, { stdio: ["ignore", "pipe", "pipe"] });
-  child.stdout?.on("data", (chunk) => stdout.push(String(chunk)));
-  child.stderr?.on("data", (chunk) => stderr.push(String(chunk)));
+  child.stdout?.on("data", (chunk) => output.append(chunk));
+  child.stderr?.on("data", (chunk) => output.append(chunk));
   child.on("error", (err) => {
-    stderr.push(err instanceof Error ? (err.stack ?? err.message) : String(err));
+    output.append(err instanceof Error ? (err.stack ?? err.message) : String(err));
     exitCode = 1;
   });
   child.on("close", (code) => {
@@ -958,8 +1045,8 @@ service:
       if (exitCode === null) {
         return "";
       }
-      const output = [...stdout, ...stderr].join("").trim();
-      return `OpenTelemetry Collector exited before readiness (code=${exitCode})${output ? `:\n${output}` : ""}`;
+      const collectorOutput = output.text().trim();
+      return `OpenTelemetry Collector exited before readiness (code=${exitCode})${collectorOutput ? `:\n${collectorOutput}` : ""}`;
     });
   } catch (error) {
     try {
@@ -975,7 +1062,7 @@ service:
     image: DEFAULT_DOCKER_COLLECTOR_IMAGE,
     network: useHostNetwork ? "host" : "bridge",
     output(): string {
-      return tailText([...stdout, ...stderr].join("").trim(), COLLECTOR_OUTPUT_TAIL_BYTES);
+      return output.text().trim();
     },
     async close(): Promise<void> {
       await stopContainer(containerName);
@@ -1321,6 +1408,9 @@ function assertSmoke(params: {
     if (emptyRequests.length > 0) {
       failures.push(`empty OTLP ${signal} request received`);
     }
+    for (const request of requests.filter((entry) => entry.status < 200 || entry.status >= 300)) {
+      failures.push(`OTLP ${signal} request ${request.path} returned status ${request.status}`);
+    }
   }
   if (params.spans.length === 0) {
     failures.push("no OTLP trace spans were decoded");
@@ -1356,6 +1446,12 @@ function assertSmoke(params: {
     .filter((body) => body !== "log");
   if (rawLogBodies.length > 0) {
     failures.push(`OTLP log records exported ${rawLogBodies.length} non-placeholder bodies`);
+  }
+  const correlatedLogRecords = params.logRecords.filter(
+    (record) => record.traceId && record.spanId,
+  );
+  if (correlatedLogRecords.length === 0) {
+    failures.push("no OTLP log records included trace/span correlation ids");
   }
 
   const attributeKeys = collectAttributeKeys(params.spans);
@@ -1486,6 +1582,9 @@ async function main() {
     spanCount: receiver.capturedSpans.length,
     metricCount: receiver.capturedMetrics.length,
     logRecordCount: receiver.capturedLogRecords.length,
+    logRecordsWithTraceContext: receiver.capturedLogRecords.filter(
+      (record) => record.traceId && record.spanId,
+    ).length,
     spanNames: assertion.spanNames,
     metricNames: assertion.metricNames,
     signalRequestCounts: assertion.signalRequestCounts,
@@ -1555,10 +1654,13 @@ async function main() {
 
 export const testing = {
   appendCapturedBodyText,
+  assertSmoke,
+  createBoundedTextAccumulator,
   decodeRequestBody,
   parseArgs,
   readPositiveIntegerEnv,
   readRequestBody,
+  startLocalOtlpReceiver,
   startDockerOtelCollector,
   terminateChildTree,
   waitForChild,

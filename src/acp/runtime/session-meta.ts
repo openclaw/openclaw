@@ -1,3 +1,4 @@
+/** SQLite-backed ACP session metadata storage keyed through session-store entries. */
 import type { DatabaseSync } from "node:sqlite";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { Insertable, Selectable } from "kysely";
@@ -26,6 +27,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { isRecord } from "../../utils.js";
 
+/** ACP metadata joined with its legacy session-store row and config context. */
 export type AcpSessionStoreEntry = {
   cfg: OpenClawConfig;
   storePath: string;
@@ -36,6 +38,7 @@ export type AcpSessionStoreEntry = {
   storeReadFailed?: boolean;
 };
 
+// ACP metadata lives in SQLite but is keyed through the legacy JSON session store.
 type AcpSessionsTable = OpenClawStateKyselyDatabase["acp_sessions"];
 type AcpSessionMetaDatabase = Pick<OpenClawStateKyselyDatabase, "acp_sessions">;
 type AcpSessionRow = Selectable<AcpSessionsTable>;
@@ -69,6 +72,7 @@ function resolveStoreSessionKey(store: Record<string, SessionEntry>, sessionKey:
   return lower;
 }
 
+/** Resolves the session store path that owns an ACP session key. */
 export function resolveSessionStorePathForAcp(params: {
   sessionKey: string;
   cfg?: OpenClawConfig;
@@ -153,7 +157,11 @@ function selectAcpSessionRow(db: DatabaseSync, sessionKey: string): AcpSessionRo
   );
 }
 
-function acpSessionRowMatchesEntry(row: AcpSessionRow, entry: SessionEntry | undefined): boolean {
+function acpSessionRowMatchesEntry(
+  row: AcpSessionRow,
+  entry: Pick<SessionEntry, "sessionId"> | undefined,
+): boolean {
+  // Rows tied to a specific sessionId are stale after the JSON session entry rotates.
   return row.session_id == null || row.session_id === entry?.sessionId;
 }
 
@@ -186,7 +194,7 @@ export function readAcpSessionMeta(params: {
 
 export function readAcpSessionMetaForEntry(params: {
   sessionKey: string;
-  entry: SessionEntry | undefined;
+  entry: Pick<SessionEntry, "sessionId"> | undefined;
   env?: NodeJS.ProcessEnv;
   databasePath?: string;
 }): SessionAcpMeta | undefined {
@@ -241,6 +249,83 @@ export function writeAcpSessionMetaForMigration(params: {
     },
     { env: params.env, path: params.databasePath },
   );
+}
+
+export function repairAcpSessionMetaKeyForMigration(params: {
+  sessionKey: string;
+  candidateSessionKeys?: Iterable<string | null | undefined>;
+  entry?: Pick<SessionEntry, "sessionId">;
+  env?: NodeJS.ProcessEnv;
+  databasePath?: string;
+  now?: () => number;
+}): boolean {
+  const sessionKey = params.sessionKey.trim();
+  if (!sessionKey) {
+    return false;
+  }
+
+  let repaired = false;
+  runOpenClawStateWriteTransaction(
+    (database) => {
+      const currentRow = selectAcpSessionRow(database.db, sessionKey);
+      if (currentRow && acpSessionRowMatchesEntry(currentRow, params.entry)) {
+        return;
+      }
+
+      const normalizedSessionKey = normalizeLowercaseStringOrEmpty(sessionKey);
+      const candidateKeys = new Set<string>();
+      candidateKeys.add(normalizedSessionKey);
+      for (const candidate of params.candidateSessionKeys ?? []) {
+        const trimmed = typeof candidate === "string" ? candidate.trim() : "";
+        if (
+          trimmed &&
+          trimmed !== sessionKey &&
+          normalizeLowercaseStringOrEmpty(trimmed) === normalizedSessionKey
+        ) {
+          candidateKeys.add(trimmed);
+        }
+      }
+
+      let row: AcpSessionRow | undefined;
+      for (const candidateKey of candidateKeys) {
+        const candidateRow = selectAcpSessionRow(database.db, candidateKey);
+        if (candidateRow && acpSessionRowMatchesEntry(candidateRow, params.entry)) {
+          row = candidateRow;
+          break;
+        }
+      }
+      row ??= executeSqliteQuerySync(
+        database.db,
+        getAcpSessionKysely(database.db)
+          .selectFrom("acp_sessions")
+          .selectAll()
+          .where((eb) => eb.fn<string>("lower", ["session_key"]), "=", normalizedSessionKey)
+          .orderBy("last_activity_at", "desc")
+          .orderBy("session_key", "asc"),
+      ).rows.find(
+        (candidate) =>
+          candidate.session_key !== sessionKey &&
+          acpSessionRowMatchesEntry(candidate, params.entry),
+      );
+      if (!row) {
+        return;
+      }
+      upsertAcpSessionMetaRow(database.db, {
+        ...row,
+        session_key: sessionKey,
+        updated_at: params.now?.() ?? Date.now(),
+      });
+      executeSqliteQuerySync(
+        database.db,
+        getAcpSessionKysely(database.db)
+          .deleteFrom("acp_sessions")
+          .where("session_key", "=", row.session_key),
+      );
+      repaired = true;
+    },
+    { env: params.env, path: params.databasePath },
+  );
+  return repaired;
 }
 
 function upsertAcpSessionMetaRow(db: DatabaseSync, row: Insertable<AcpSessionsTable>): void {

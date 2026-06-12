@@ -1,3 +1,8 @@
+/**
+ * Message-provider tool filtering.
+ * Channels can restrict tool names after runtime assembly when the active
+ * transport cannot safely render or execute a class of tools.
+ */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 
 const TOOL_DENY_BY_MESSAGE_PROVIDER: Readonly<Record<string, readonly string[]>> = {
@@ -9,6 +14,7 @@ const TOOL_ALLOW_BY_MESSAGE_PROVIDER: Readonly<Record<string, readonly string[]>
   node: ["canvas", "image", "pdf", "tts", "web_fetch", "web_search"],
 };
 
+/** Filters tool names by the active message-provider allow/deny policy. */
 export function filterToolNamesByMessageProvider(
   toolNames: readonly string[],
   messageProvider?: string,
@@ -30,6 +36,7 @@ export function filterToolNamesByMessageProvider(
   return toolNames.filter((toolName) => !deniedSet.has(toolName));
 }
 
+/** Applies message-provider filtering while preserving duplicate tool entries. */
 export function filterToolsByMessageProvider<TTool extends { name: string }>(
   tools: readonly TTool[],
   messageProvider?: string,
@@ -43,6 +50,8 @@ export function filterToolsByMessageProvider<TTool extends { name: string }>(
     remainingCounts.set(toolName, (remainingCounts.get(toolName) ?? 0) + 1);
   }
   return tools.filter((tool) => {
+    // Counted matching preserves the original order and duplicate instances
+    // after name-level policy filtering.
     const remaining = remainingCounts.get(tool.name) ?? 0;
     if (remaining <= 0) {
       return false;

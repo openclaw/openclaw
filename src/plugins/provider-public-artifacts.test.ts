@@ -1,3 +1,4 @@
+// Verifies provider public artifacts extracted from plugin metadata.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -42,6 +43,19 @@ describe("provider public artifacts", () => {
         providerConfig,
       }),
     ).toBe(providerConfig);
+  });
+
+  it("loads MiniMax thinking policy before runtime registration", () => {
+    const surface = resolveBundledProviderPolicySurface("minimax");
+
+    expect(
+      surface?.resolveThinkingProfile?.({ provider: "minimax", modelId: "MiniMax-M2.7" })
+        ?.defaultLevel,
+    ).toBe("off");
+    expect(
+      surface?.resolveThinkingProfile?.({ provider: "minimax", modelId: "MiniMax-M3" })
+        ?.defaultLevel,
+    ).toBe("adaptive");
   });
 
   it("resolves multi-provider policy artifacts by manifest-owned provider id", async () => {

@@ -1,3 +1,4 @@
+// Control UI module implements app chat behavior.
 import { setLastActiveSessionKey } from "./app-last-active-session.ts";
 import { scheduleChatScroll, resetChatScroll } from "./app-scroll.ts";
 import { resetToolStream } from "./app-tool-stream.ts";
@@ -25,7 +26,11 @@ import {
 import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
 import { executeSlashCommand } from "./chat/slash-command-executor.ts";
-import { parseSlashCommand, refreshSlashCommands } from "./chat/slash-commands.ts";
+import {
+  applyRemoteSlashCommandsResult,
+  parseSlashCommand,
+  refreshSlashCommands,
+} from "./chat/slash-commands.ts";
 import { formatConnectError } from "./connect-error.ts";
 import { resolveControlUiAuthHeader } from "./control-ui-auth.ts";
 import {
@@ -39,14 +44,17 @@ import {
   appendUserChatMessage,
   loadChatHistory,
   requestChatSend,
+  requestSkillWorkshopRevisionChatSend,
   sendDetachedChatMessage,
   sendSteerChatMessage,
   type ChatEventPayload,
   type ChatHistoryResult,
+  type ChatMetadataResult,
   type ChatSendAck,
   type ChatState,
+  isGatewayMethodAdvertised,
 } from "./controllers/chat.ts";
-import { loadModels } from "./controllers/models.ts";
+import { applyModelCatalogResult, loadModels } from "./controllers/models.ts";
 import {
   applyChatHistorySessionInfo,
   loadSessions,
@@ -75,7 +83,12 @@ import type {
   ModelCatalogEntry,
 } from "./types.ts";
 import type { SessionsListResult } from "./types.ts";
-import type { ChatAttachment, ChatQueueItem, ChatSessionRefreshTarget } from "./ui-types.ts";
+import type {
+  ChatAttachment,
+  ChatQueueItem,
+  ChatQueueSkillWorkshopRevision,
+  ChatSessionRefreshTarget,
+} from "./ui-types.ts";
 import { generateUUID } from "./uuid.ts";
 import { isRenderableControlUiAvatarUrl } from "./views/agents-utils.ts";
 
@@ -127,6 +140,11 @@ type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
   agents?: Array<{ id: string }>;
 };
 
+type ChatMetadataApplyResult = {
+  commands: boolean;
+  models: boolean;
+};
+
 function setChatError(host: ChatHost, error: string | null) {
   host.lastError = error;
   host.chatError = error;
@@ -135,6 +153,7 @@ function setChatError(host: ChatHost, error: string | null) {
 export type ChatSendOptions = {
   confirmReset?: boolean;
   restoreDraft?: boolean;
+  skillWorkshopRevision?: ChatQueueSkillWorkshopRevision;
 };
 
 export type ChatAbortOptions = {
@@ -411,6 +430,7 @@ function enqueuePendingSendMessage(
   sendState: ChatQueueItem["sendState"] = host.connected && host.client
     ? "sending"
     : "waiting-reconnect",
+  skillWorkshopRevision?: ChatQueueSkillWorkshopRevision,
 ): ChatQueueItem | null {
   const trimmed = text.trim();
   const hasAttachments = Boolean(attachments && attachments.length > 0);
@@ -429,11 +449,17 @@ function enqueuePendingSendMessage(
     sendSubmittedAtMs: submittedAtMs,
     sessionKey: host.sessionKey,
     agentId: scopedAgentIdForSession(host, host.sessionKey),
+    ...(skillWorkshopRevision ? { skillWorkshopRevision } : {}),
   };
   host.chatQueue = [...host.chatQueue, pending];
   recordChatSendTiming(host, pending, "pending-visible", submittedAtMs);
+  if (sendState === "waiting-model" || sendState === "waiting-reconnect") {
+    recordChatSendTiming(host, pending, sendState, submittedAtMs);
+  }
   schedulePendingSendPaintTiming(host, pending, submittedAtMs);
-  scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0], true);
+  scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0], true, false, {
+    source: "manual",
+  });
   return pending;
 }
 
@@ -582,6 +608,12 @@ type ChatSendTimingPhase =
   | "pending-painted"
   | "request-start"
   | "ack"
+  | "server-dispatch-started"
+  | "server-model-selected"
+  | "server-agent-run-started"
+  | "server-first-assistant-event"
+  | "server-dispatch-completed"
+  | "server-post-dispatch-completed"
   | "first-assistant-visible"
   | "terminal-before-delta"
   | "queued-busy"
@@ -601,6 +633,28 @@ type ChatSendTimingEntry = {
   ackStatus?: ChatSendAck["status"];
   firstAssistantVisibleRecorded?: boolean;
 };
+
+type ChatSendServerTimingPhase =
+  | "dispatch-started"
+  | "model-selected"
+  | "agent-run-started"
+  | "first-assistant-event"
+  | "dispatch-completed"
+  | "post-dispatch-completed";
+
+const CHAT_SEND_SERVER_TIMING_PHASES = new Set<ChatSendServerTimingPhase>([
+  "dispatch-started",
+  "model-selected",
+  "agent-run-started",
+  "first-assistant-event",
+  "dispatch-completed",
+  "post-dispatch-completed",
+]);
+const CHAT_SEND_SLOW_FIRST_ASSISTANT_MS = 1_500;
+
+function chatSendTimingOptions(slow: boolean) {
+  return { console: slow, warn: slow, maxBufferedEventsForType: 40 };
+}
 
 function recordChatSendTiming(
   host: ChatHost,
@@ -629,6 +683,81 @@ function recordChatSendTiming(
       ...extra,
     },
     { console: false, maxBufferedEventsForType: 40 },
+  );
+}
+
+function readChatSendServerTimingPhase(value: unknown): ChatSendServerTimingPhase | null {
+  return typeof value === "string" &&
+    (CHAT_SEND_SERVER_TIMING_PHASES as ReadonlySet<string>).has(value)
+    ? (value as ChatSendServerTimingPhase)
+    : null;
+}
+
+function readChatSendTimingNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+export function recordChatSendServerTiming(host: ChatHost, payload: unknown) {
+  if (!payload || typeof payload !== "object") {
+    return;
+  }
+  const record = payload as Record<string, unknown>;
+  const phase = readChatSendServerTimingPhase(record.phase);
+  const runId = typeof record.runId === "string" && record.runId.trim() ? record.runId.trim() : "";
+  if (!phase || !runId) {
+    return;
+  }
+  const entry = host.chatSendTimingsByRun?.get(runId);
+  const nowMs = controlUiNowMs();
+  const serverAckToPhaseMs = readChatSendTimingNumber(record.ackToPhaseMs);
+  const serverReceivedToPhaseMs = readChatSendTimingNumber(record.receivedToPhaseMs);
+  const serverDispatchStartedToPhaseMs = readChatSendTimingNumber(record.dispatchStartedToPhaseMs);
+  const serverPostDispatchMs = readChatSendTimingNumber(record.postDispatchMs);
+  const durationMs =
+    entry?.submittedAtMs !== undefined
+      ? roundedControlUiDurationMs(nowMs - entry.submittedAtMs)
+      : serverAckToPhaseMs;
+  if (durationMs === undefined) {
+    return;
+  }
+  const slow = phase === "first-assistant-event" && durationMs >= CHAT_SEND_SLOW_FIRST_ASSISTANT_MS;
+  recordControlUiPerformanceEvent(
+    host as Parameters<typeof recordControlUiPerformanceEvent>[0],
+    "control-ui.chat.send",
+    {
+      phase: `server-${phase}`,
+      durationMs,
+      runId,
+      sessionKey:
+        entry?.sessionKey ??
+        (typeof record.sessionKey === "string" && record.sessionKey.trim()
+          ? record.sessionKey.trim()
+          : undefined),
+      agentId:
+        entry?.agentId ??
+        (typeof record.agentId === "string" && record.agentId.trim()
+          ? record.agentId.trim()
+          : undefined),
+      sendAttempts: entry?.sendAttempts ?? 0,
+      sendState: entry?.sendState,
+      ackStatus: entry?.ackStatus,
+      serverPhase: phase,
+      ...(serverAckToPhaseMs !== undefined ? { serverAckToPhaseMs } : {}),
+      ...(serverReceivedToPhaseMs !== undefined ? { serverReceivedToPhaseMs } : {}),
+      ...(serverDispatchStartedToPhaseMs !== undefined ? { serverDispatchStartedToPhaseMs } : {}),
+      ...(serverPostDispatchMs !== undefined ? { serverPostDispatchMs } : {}),
+      ...(typeof record.provider === "string" && record.provider.trim()
+        ? { provider: record.provider.trim() }
+        : {}),
+      ...(typeof record.model === "string" && record.model.trim()
+        ? { model: record.model.trim() }
+        : {}),
+      ...(typeof record.agentRunId === "string" && record.agentRunId.trim()
+        ? { agentRunId: record.agentRunId.trim() }
+        : {}),
+      ...(slow ? { slow: true } : {}),
+    },
+    chatSendTimingOptions(slow),
   );
 }
 
@@ -696,6 +825,21 @@ function updateChatSendAckTiming(
   entries.set(ack.runId, next);
 }
 
+function chatSendAckServerTimingEventFields(ack: ChatSendAck): Record<string, number> {
+  const timing = ack.serverTiming;
+  return {
+    ...(typeof timing?.receivedToAckMs === "number"
+      ? { serverReceivedToAckMs: timing.receivedToAckMs }
+      : {}),
+    ...(typeof timing?.loadSessionMs === "number"
+      ? { serverLoadSessionMs: timing.loadSessionMs }
+      : {}),
+    ...(typeof timing?.prepareAttachmentsMs === "number"
+      ? { serverPrepareAttachmentsMs: timing.prepareAttachmentsMs }
+      : {}),
+  };
+}
+
 function chatEventHasVisibleTerminalPayload(payload: ChatEventPayload): boolean {
   if (payload.state === "error" && payload.errorMessage?.trim()) {
     return true;
@@ -747,12 +891,14 @@ export function recordFirstAssistantChatTiming(
   entry.firstAssistantVisibleRecorded = true;
   scheduleControlUiAfterPaint(host, () => {
     const paintedAtMs = controlUiNowMs();
+    const durationMs = roundedControlUiDurationMs(paintedAtMs - entry.submittedAtMs);
+    const slow = durationMs >= CHAT_SEND_SLOW_FIRST_ASSISTANT_MS;
     recordControlUiPerformanceEvent(
       host as Parameters<typeof recordControlUiPerformanceEvent>[0],
       "control-ui.chat.send",
       {
         phase,
-        durationMs: roundedControlUiDurationMs(paintedAtMs - entry.submittedAtMs),
+        durationMs,
         runId,
         sessionKey: entry.sessionKey ?? payload.sessionKey,
         agentId: entry.agentId ?? payload.agentId,
@@ -773,8 +919,9 @@ export function recordFirstAssistantChatTiming(
               ackToFirstAssistantEventMs: roundedControlUiDurationMs(eventAtMs - entry.ackAtMs),
             }
           : {}),
+        ...(slow ? { slow: true } : {}),
       },
-      { console: false, maxBufferedEventsForType: 40 },
+      chatSendTimingOptions(slow),
     );
     if (phase === "terminal-before-delta") {
       host.chatSendTimingsByRun?.delete(runId);
@@ -858,6 +1005,14 @@ async function sendQueuedChatMessage(
     removeQueuedMessageWithoutReleasing(host, id, prepared.sessionKey ?? host.sessionKey);
     return "sent";
   }
+  if (prepared.skillWorkshopRevision && hasAttachments) {
+    updateQueuedMessageForSession(host, prepared.sessionKey ?? host.sessionKey, id, (item) => ({
+      ...item,
+      sendError: "Skill Workshop revision requests do not support attachments.",
+      sendState: "failed",
+    }));
+    return "failed";
+  }
   const sessionKey = prepared.sessionKey ?? host.sessionKey;
   if (!host.connected || !host.client) {
     updateQueuedMessageForSession(host, sessionKey, id, (item) => ({
@@ -894,17 +1049,29 @@ async function sendQueuedChatMessage(
   }
 
   try {
-    const ack = await requestChatSend(host as unknown as ChatState, {
-      message,
-      attachments: hasAttachments ? attachments : undefined,
-      runId,
-      sessionKey,
-      agentId: prepared.agentId,
-    });
+    const ack = prepared.skillWorkshopRevision
+      ? await requestSkillWorkshopRevisionChatSend(host as unknown as ChatState, {
+          proposalId: prepared.skillWorkshopRevision.proposalId,
+          ...(prepared.skillWorkshopRevision.agentId
+            ? { agentId: prepared.skillWorkshopRevision.agentId }
+            : {}),
+          ...(prepared.agentId ? { targetAgentId: prepared.agentId } : {}),
+          instructions: message,
+          runId,
+          sessionKey,
+        })
+      : await requestChatSend(host as unknown as ChatState, {
+          message,
+          attachments: hasAttachments ? attachments : undefined,
+          runId,
+          sessionKey,
+          agentId: prepared.agentId,
+        });
     updateChatSendAckTiming(host, runId, ack, sendingItem, requestStartedAtMs);
     recordChatSendTiming(host, sendingItem, "ack", sendingItem.sendSubmittedAtMs, {
       ackStatus: ack.status,
       requestDurationMs: roundedControlUiDurationMs(controlUiNowMs() - requestStartedAtMs),
+      ...chatSendAckServerTimingEventFields(ack),
     });
     removeQueuedMessageWithoutReleasing(host, id, sessionKey);
     if (isVisibleSession()) {
@@ -918,6 +1085,7 @@ async function sendQueuedChatMessage(
         reconcileChatRunLifecycle(
           host as unknown as Parameters<typeof reconcileChatRunLifecycle>[0],
           {
+            outcome: "done",
             sessionStatus: "done",
             runId: ack.runId,
             sessionKey,
@@ -925,7 +1093,8 @@ async function sendQueuedChatMessage(
             clearChatStream: true,
             clearToolStream: true,
             clearSideResultTerminalRuns: true,
-            clearRunStatus: true,
+            publishRunStatus: false,
+            armLocalTerminalReconcile: true,
           },
         );
         void loadChatHistory(host as unknown as ChatState);
@@ -1077,11 +1246,14 @@ function chatSubmitKey(
   kind: "btw" | "message",
   message: string,
   attachments: ChatAttachment[],
+  skillWorkshopRevision?: ChatQueueSkillWorkshopRevision,
 ): string {
   return JSON.stringify([
     kind,
     host.sessionKey,
     message.trim(),
+    skillWorkshopRevision?.proposalId ?? "",
+    skillWorkshopRevision?.agentId ?? "",
     attachments.map(attachmentSubmitSignature),
   ]);
 }
@@ -1349,7 +1521,7 @@ function historyIdleProofIsStaleForSelectedRow(
   return selectedStartedAt >= historyUpdatedAt;
 }
 
-function flushChatQueueAfterIdleSessionReconciliation(
+export function flushChatQueueAfterIdleSessionReconciliation(
   host: ChatHost,
   sessionKey: string,
   historyRefresh: Promise<ChatHistoryResult | undefined>,
@@ -1531,6 +1703,8 @@ export async function handleSendChat(
   const attachments = host.chatAttachments ?? [];
   const attachmentsToSend = messageOverride == null ? snapshotChatAttachments(attachments) : [];
   const hasAttachments = attachmentsToSend.length > 0;
+  const skillWorkshopRevision = opts?.skillWorkshopRevision;
+  const shouldInterpretChatCommands = !skillWorkshopRevision;
 
   if (!message && !hasAttachments) {
     return;
@@ -1540,72 +1714,80 @@ export async function handleSendChat(
     return;
   }
 
-  if (isChatStopCommand(message)) {
-    if (messageOverride == null) {
-      recordNonTranscriptInputHistory(host, message);
-    }
-    await handleAbortChat(host);
-    return;
-  }
-
-  if (isBtwCommand(message)) {
-    const submitKey = chatSubmitKey(host, "btw", message, attachmentsToSend);
-    await withChatSubmitGuard(host, submitKey, async () => {
-      const modelSwitchReady = waitForPendingChatModelSwitch(host, submittedSessionKey);
-      if (modelSwitchReady !== true && !(await modelSwitchReady)) {
-        return;
-      }
-      if (host.sessionKey !== submittedSessionKey) {
-        return;
-      }
-      const cleared =
-        messageOverride == null
-          ? clearSubmittedComposerState(host, previousDraft, attachmentsToSend)
-          : {};
+  if (shouldInterpretChatCommands) {
+    if (isChatStopCommand(message)) {
       if (messageOverride == null) {
         recordNonTranscriptInputHistory(host, message);
       }
-      await sendDetachedBtwMessage(host, message, {
-        previousDraft: cleared.previousDraft,
-        attachments: hasAttachments ? attachmentsToSend : undefined,
-        previousAttachments: cleared.previousAttachments,
-      });
-    });
-    return;
-  }
+      await handleAbortChat(host);
+      return;
+    }
 
-  // Intercept local slash commands (/status, /model, /compact, etc.)
-  const parsed = parseSlashCommand(message);
-  if (parsed?.command.executeLocal) {
-    if (isChatBusy(host) && shouldQueueLocalSlashCommand(parsed.command.key)) {
+    if (isBtwCommand(message)) {
+      const submitKey = chatSubmitKey(host, "btw", message, attachmentsToSend);
+      await withChatSubmitGuard(host, submitKey, async () => {
+        const modelSwitchReady = waitForPendingChatModelSwitch(host, submittedSessionKey);
+        if (modelSwitchReady !== true && !(await modelSwitchReady)) {
+          return;
+        }
+        if (host.sessionKey !== submittedSessionKey) {
+          return;
+        }
+        const cleared =
+          messageOverride == null
+            ? clearSubmittedComposerState(host, previousDraft, attachmentsToSend)
+            : {};
+        if (messageOverride == null) {
+          recordNonTranscriptInputHistory(host, message);
+        }
+        await sendDetachedBtwMessage(host, message, {
+          previousDraft: cleared.previousDraft,
+          attachments: hasAttachments ? attachmentsToSend : undefined,
+          previousAttachments: cleared.previousAttachments,
+        });
+      });
+      return;
+    }
+
+    // Intercept local slash commands (/status, /model, /compact, etc.)
+    const parsed = parseSlashCommand(message);
+    if (parsed?.command.executeLocal) {
+      if (isChatBusy(host) && shouldQueueLocalSlashCommand(parsed.command.key)) {
+        if (messageOverride == null) {
+          recordNonTranscriptInputHistory(host, message);
+          host.chatMessage = "";
+          host.chatAttachments = [];
+          resetChatInputHistoryNavigation(host);
+        }
+        enqueueChatMessage(host, message, undefined, isChatResetCommand(message), {
+          args: parsed.args,
+          name: parsed.command.key,
+        });
+        return;
+      }
+      const prevDraft = messageOverride == null ? previousDraft : undefined;
       if (messageOverride == null) {
         recordNonTranscriptInputHistory(host, message);
         host.chatMessage = "";
         host.chatAttachments = [];
         resetChatInputHistoryNavigation(host);
       }
-      enqueueChatMessage(host, message, undefined, isChatResetCommand(message), {
-        args: parsed.args,
-        name: parsed.command.key,
+      await dispatchSlashCommand(host, parsed.command.key, parsed.args, {
+        previousDraft: prevDraft,
+        restoreDraft: Boolean(messageOverride && opts?.restoreDraft),
       });
       return;
     }
-    const prevDraft = messageOverride == null ? previousDraft : undefined;
-    if (messageOverride == null) {
-      recordNonTranscriptInputHistory(host, message);
-      host.chatMessage = "";
-      host.chatAttachments = [];
-      resetChatInputHistoryNavigation(host);
-    }
-    await dispatchSlashCommand(host, parsed.command.key, parsed.args, {
-      previousDraft: prevDraft,
-      restoreDraft: Boolean(messageOverride && opts?.restoreDraft),
-    });
-    return;
   }
 
-  const refreshSessions = isChatResetCommand(message);
-  const submitKey = chatSubmitKey(host, "message", message, attachmentsToSend);
+  const refreshSessions = shouldInterpretChatCommands && isChatResetCommand(message);
+  const submitKey = chatSubmitKey(
+    host,
+    "message",
+    message,
+    attachmentsToSend,
+    skillWorkshopRevision,
+  );
   await withChatSubmitGuard(host, submitKey, async () => {
     if (host.sessionKey !== submittedSessionKey) {
       return;
@@ -1627,6 +1809,7 @@ export async function handleSendChat(
       refreshSessions,
       submittedAtMs,
       waitingForModel ? "waiting-model" : undefined,
+      skillWorkshopRevision,
     );
     if (!queued) {
       return;
@@ -1819,6 +2002,8 @@ export async function refreshChat(
   opts?: { scheduleScroll?: boolean; awaitHistory?: boolean; startup?: boolean },
 ) {
   const refreshedSessionKey = host.sessionKey;
+  const refreshedClient = host.client;
+  const refreshedAgentId = resolveAgentIdForSession(host);
   const requestUpdate = () => host.requestUpdate?.();
   const previousSessionsResult = host.sessionsResult;
   const historyLoad = loadChatHistory(host as unknown as ChatState, {
@@ -1839,6 +2024,23 @@ export async function refreshChat(
       );
     }
   });
+  const startupMetadataRefresh =
+    opts?.startup === true
+      ? historyLoad.then((history) => {
+          if (!history?.metadata || !refreshedClient) {
+            return { commands: false, models: false };
+          }
+          if (
+            host.client !== refreshedClient ||
+            !host.connected ||
+            host.sessionKey !== refreshedSessionKey ||
+            resolveAgentIdForSession(host) !== refreshedAgentId
+          ) {
+            return { commands: false, models: false };
+          }
+          return applyChatMetadataResult(host, refreshedClient, refreshedAgentId, history.metadata);
+        })
+      : Promise.resolve({ commands: false, models: false });
   flushChatQueueAfterIdleSessionReconciliation(
     host,
     refreshedSessionKey,
@@ -1846,16 +2048,25 @@ export async function refreshChat(
     sessionsRefresh,
     previousSessionsResult,
   );
-  const secondaryRefresh = Promise.allSettled([sessionsRefresh]).finally(requestUpdate);
+  const secondaryRefresh = Promise.allSettled([sessionsRefresh, startupMetadataRefresh]).finally(
+    requestUpdate,
+  );
   scheduleChatMetadataRefresh(() => {
     if (host.sessionKey !== refreshedSessionKey || !host.connected) {
       return;
     }
-    void Promise.allSettled([
-      refreshChatAvatar(host),
-      refreshChatModels(host),
-      refreshChatCommands(host),
-    ]).finally(requestUpdate);
+    void startupMetadataRefresh
+      .catch(() => ({ commands: false, models: false }))
+      .then((metadataApplied) => {
+        const metadataRefresh =
+          opts?.startup === true && (metadataApplied.commands || metadataApplied.models)
+            ? metadataApplied.models
+              ? Promise.allSettled([])
+              : Promise.allSettled([refreshChatModels(host)])
+            : Promise.allSettled([refreshChatMetadata(host)]);
+        return Promise.allSettled([refreshChatAvatar(host), metadataRefresh]);
+      })
+      .finally(requestUpdate);
   });
   void historyRefresh;
   void secondaryRefresh;
@@ -1890,11 +2101,77 @@ async function refreshChatModels(host: ChatHost) {
   }
 }
 
-async function refreshChatCommands(host: ChatHost) {
+export async function refreshChatCommands(host: ChatHost) {
   await refreshSlashCommands({
     client: host.client,
     agentId: resolveAgentIdForSession(host),
   });
+}
+
+function applyChatMetadataResult(
+  host: ChatHost,
+  client: GatewayBrowserClient,
+  agentId: string | null | undefined,
+  result: ChatMetadataResult,
+): ChatMetadataApplyResult {
+  const models = applyModelCatalogResult(result.models);
+  if (models) {
+    host.chatModelCatalog = models;
+  }
+  const commandsApplied = applyRemoteSlashCommandsResult({
+    client,
+    agentId,
+    result,
+  });
+  return { commands: commandsApplied, models: Boolean(models) };
+}
+
+async function refreshChatMetadata(host: ChatHost) {
+  if (!host.client || !host.connected) {
+    host.chatModelsLoading = false;
+    host.chatModelCatalog = [];
+    return;
+  }
+  const client = host.client;
+  const sessionKey = host.sessionKey;
+  const agentId = resolveAgentIdForSession(host);
+  const metadataAdvertised = isGatewayMethodAdvertised(
+    host as unknown as ChatState,
+    "chat.metadata",
+  );
+  if (metadataAdvertised === false) {
+    await Promise.allSettled([refreshChatModels(host), refreshChatCommands(host)]);
+    return;
+  }
+
+  host.chatModelsLoading = true;
+  try {
+    const result = await client.request<ChatMetadataResult>(
+      "chat.metadata",
+      agentId ? { agentId } : {},
+    );
+    if (
+      host.client !== client ||
+      !host.connected ||
+      host.sessionKey !== sessionKey ||
+      resolveAgentIdForSession(host) !== agentId
+    ) {
+      return;
+    }
+    const metadataApplied = applyChatMetadataResult(host, client, agentId, result);
+    if (!metadataApplied.models || !metadataApplied.commands) {
+      await Promise.allSettled([
+        ...(metadataApplied.models ? [] : [refreshChatModels(host)]),
+        ...(metadataApplied.commands ? [] : [refreshChatCommands(host)]),
+      ]);
+    }
+  } catch {
+    await Promise.allSettled([refreshChatModels(host), refreshChatCommands(host)]);
+  } finally {
+    if (host.client === client) {
+      host.chatModelsLoading = false;
+    }
+  }
 }
 
 export const flushChatQueueForEvent = flushChatQueue;

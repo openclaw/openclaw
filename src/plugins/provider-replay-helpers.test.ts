@@ -1,3 +1,4 @@
+/** Tests provider replay helper normalization and deterministic ordering. */
 import { describe, expect, it } from "vitest";
 import {
   buildAnthropicReplayPolicyForModel,
@@ -62,7 +63,7 @@ describe("provider replay helpers", () => {
         modelId: "google/gemma-4-26b-a4b-it",
         dropReasoningFromHistory: false,
       }),
-    ).toHaveProperty("dropReasoningFromHistory", true);
+    ).not.toHaveProperty("dropReasoningFromHistory");
     expect(
       buildOpenAICompatibleReplayPolicy("openai-responses", {
         modelId: "google/gemma-4-26b-a4b-it",
@@ -117,6 +118,7 @@ describe("provider replay helpers", () => {
   it("preserves thinking blocks for Claude Opus 4.5+ and Sonnet 4.5+ models", () => {
     // These models should NOT drop thinking blocks
     for (const modelId of [
+      "claude-fable-5",
       "claude-opus-4-5-20251101",
       "claude-opus-4-6",
       "claude-sonnet-4-5-20250929",

@@ -1,3 +1,4 @@
+// Doctor health contribution helpers collect health checks from plugin manifests.
 import fs from "node:fs";
 import type { probeGatewayMemoryStatus } from "../commands/doctor-gateway-health.js";
 import type { DoctorOptions, DoctorPrompter } from "../commands/doctor-prompter.js";
@@ -40,6 +41,7 @@ type DoctorHealthFlowContext = {
   env?: NodeJS.ProcessEnv;
   gatewayDetails?: ReturnType<typeof buildGatewayConnectionDetails>;
   healthOk?: boolean;
+  gatewayHealthAuthenticated?: boolean;
   gatewayHealthSkipped?: boolean;
   gatewayStatus?: import("../commands/status.types.js").StatusSummary;
   gatewayMemoryProbe?: Awaited<ReturnType<typeof probeGatewayMemoryStatus>>;
@@ -553,8 +555,10 @@ async function runStartupChannelMaintenanceHealth(ctx: DoctorHealthFlowContext):
 }
 
 async function runSecurityHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { noteInstallPolicyHealth } = await import("../commands/doctor-install-policy.js");
   const { noteSecurityWarnings } = await import("../commands/doctor-security.js");
   await noteSecurityWarnings(ctx.cfg);
+  await noteInstallPolicyHealth(ctx.cfg, { deep: ctx.options.deep === true, env: ctx.env });
 }
 
 async function runBrowserHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -722,9 +726,62 @@ async function runSystemdLingerHealth(ctx: DoctorHealthFlowContext): Promise<voi
   });
 }
 
+async function hasActiveGatewayExecCredential(
+  ctx: DoctorHealthFlowContext,
+  mode: DoctorFlowMode = resolveDoctorMode(ctx.cfg),
+): Promise<boolean> {
+  const { resolveSecretInputRef } = await loadSecretTypesModule();
+  const { gatewaySecretInputPathCanWin } = await import("../gateway/credentials-secret-inputs.js");
+  const { ALL_GATEWAY_SECRET_INPUT_PATHS, readGatewaySecretInputValue } =
+    await import("../gateway/secret-input-paths.js");
+  return ALL_GATEWAY_SECRET_INPUT_PATHS.some((path) => {
+    if (
+      !gatewaySecretInputPathCanWin({
+        config: ctx.cfg,
+        env: process.env,
+        modeOverride: mode,
+        path,
+      })
+    ) {
+      return false;
+    }
+    const ref = resolveSecretInputRef({
+      value: readGatewaySecretInputValue(ctx.cfg, path),
+      defaults: ctx.cfg.secrets?.defaults,
+    }).ref;
+    return ref?.source === "exec";
+  });
+}
+
 async function runWorkspaceStatusHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  let pluginVersionDrift:
+    | import("../plugins/plugin-version-drift.js").PluginVersionDriftReport
+    | undefined;
+  if (ctx.cfg.gateway?.mode !== "remote") {
+    try {
+      const { gatherDaemonStatus } = await import("../cli/daemon-cli/status.gather.js");
+      const allowExecSecretRefs = ctx.options.allowExec === true;
+      const status = await gatherDaemonStatus({
+        rpc: {
+          timeout: ctx.options.nonInteractive === true ? "3000" : "10000",
+          json: true,
+        },
+        probe: true,
+        requireRpc: false,
+        deep: ctx.options.deep === true,
+        allowExecSecretRefs,
+      });
+      const hasProbedGatewayVersion =
+        typeof status.gateway?.version === "string" && status.gateway.version.trim() !== "";
+      if (status.pluginVersionDrift && hasProbedGatewayVersion && !status.rpc?.authWarning) {
+        pluginVersionDrift = status.pluginVersionDrift;
+      }
+    } catch {
+      // Best-effort diagnostic: doctor should keep running if daemon status is unavailable.
+    }
+  }
   const { noteWorkspaceStatus } = await import("../commands/doctor-workspace-status.js");
-  noteWorkspaceStatus(ctx.cfg);
+  noteWorkspaceStatus(ctx.cfg, { pluginVersionDrift });
 }
 
 async function runSkillsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -757,31 +814,8 @@ async function runShellCompletionHealth(ctx: DoctorHealthFlowContext): Promise<v
 }
 
 async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { resolveSecretInputRef } = await loadSecretTypesModule();
-  const { gatewaySecretInputPathCanWin } = await import("../gateway/credentials-secret-inputs.js");
-  const { readGatewaySecretInputValue } = await import("../gateway/secret-input-paths.js");
   const { note } = await loadNoteModule();
-  const credentialPaths = [
-    "gateway.auth.token",
-    "gateway.auth.password",
-    "gateway.remote.token",
-    "gateway.remote.password",
-  ] as const;
-  const activeSecretRefPaths = credentialPaths.filter((path) =>
-    gatewaySecretInputPathCanWin({
-      config: ctx.cfg,
-      env: process.env,
-      path,
-    }),
-  );
-  const hasActiveExecCredential = activeSecretRefPaths.some((path) => {
-    const ref = resolveSecretInputRef({
-      value: readGatewaySecretInputValue(ctx.cfg, path),
-      defaults: ctx.cfg.secrets?.defaults,
-    }).ref;
-    return ref?.source === "exec";
-  });
-  if (hasActiveExecCredential && ctx.options.allowExec !== true) {
+  if ((await hasActiveGatewayExecCredential(ctx)) && ctx.options.allowExec !== true) {
     note(
       "Gateway health probes skipped because gateway credentials use an exec SecretRef. Run `openclaw doctor --allow-exec` to verify Gateway health with exec SecretRefs.",
       "Gateway",
@@ -792,20 +826,21 @@ async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<voi
   }
   const { checkGatewayHealth, probeGatewayMemoryStatus } =
     await import("../commands/doctor-gateway-health.js");
-  const { healthOk, status } = await checkGatewayHealth({
+  const { healthOk, authenticated, status } = await checkGatewayHealth({
     runtime: ctx.runtime,
     cfg: ctx.cfg,
     timeoutMs: ctx.options.nonInteractive === true ? 3000 : 10_000,
   });
   ctx.gatewayHealthSkipped = false;
   ctx.healthOk = healthOk;
+  ctx.gatewayHealthAuthenticated = authenticated;
   ctx.gatewayStatus = status;
-  ctx.gatewayMemoryProbe = healthOk
+  ctx.gatewayMemoryProbe = authenticated
     ? await probeGatewayMemoryStatus({
         cfg: ctx.cfg,
         timeoutMs: ctx.options.nonInteractive === true ? 3000 : 10_000,
       })
-    : { checked: false, ready: false, skipped: false };
+    : { checked: false, ready: false, skipped: healthOk };
 }
 
 async function runWhatsappResponsivenessHealth(ctx: DoctorHealthFlowContext): Promise<void> {

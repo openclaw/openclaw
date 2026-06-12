@@ -1,3 +1,4 @@
+// Covers safe gateway restart preflight and requests.
 import { describe, expect, it, vi } from "vitest";
 import {
   createSafeGatewayRestartPreflight,
@@ -144,6 +145,7 @@ describe("safe gateway restart coordinator", () => {
     expect(result.preflight.safe).toBe(false);
     expect(scheduleGatewaySigusr1Restart).toHaveBeenCalledWith({
       delayMs: 0,
+      preservePendingEmitHooksOnDeferralBypass: true,
       reason: "test.skip-deferral",
       skipDeferral: true,
     });

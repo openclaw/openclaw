@@ -1,5 +1,7 @@
-import { AzureOpenAI } from "openai";
+// Azure OpenAI Responses provider adapts Azure deployments to Responses API streams.
+import OpenAI, { AzureOpenAI } from "openai";
 import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
+import { isOpenAICompatibleAzureResponsesBaseUrl } from "../../shared/azure-openai-responses-client-compat.js";
 import { getEnvApiKey } from "../env-api-keys.js";
 import type {
   Context,
@@ -202,6 +204,15 @@ function createClient(
 
   const { baseUrl, apiVersion } = resolveAzureConfig(model, options);
 
+  if (isOpenAICompatibleAzureResponsesBaseUrl(baseUrl)) {
+    return new OpenAI({
+      apiKey,
+      dangerouslyAllowBrowser: true,
+      defaultHeaders: headers,
+      baseURL: baseUrl,
+    });
+  }
+
   return new AzureOpenAI({
     apiKey,
     apiVersion,
@@ -233,3 +244,9 @@ function buildParams(
 
   return params;
 }
+
+export const testing = {
+  isOpenAICompatibleAzureResponsesBaseUrl,
+  normalizeAzureBaseUrl,
+  resolveAzureConfig,
+};

@@ -1,3 +1,4 @@
+// Tests ACP dispatch wiring, command bypass, and runtime event handling.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -193,6 +194,11 @@ vi.mock("./dispatch-acp-session.runtime.js", () => ({
 
 vi.mock("../../logging/diagnostic.js", () => ({
   markDiagnosticSessionProgress: diagnosticMocks.markDiagnosticSessionProgress,
+  isStuckSessionRecoveryEnabled: (config?: { diagnostics?: { enabled?: boolean } }) =>
+    config?.diagnostics?.enabled !== false,
+  requestStuckDiagnosticSessionRecovery: vi.fn(),
+  resolveStuckSessionWarnMs: () => 120_000,
+  resolveStuckSessionAbortMs: () => 360_000,
 }));
 
 vi.mock("./dispatch-acp-transcript.runtime.js", () => ({
@@ -304,6 +310,7 @@ async function runDispatch(params: {
   suppressUserDelivery?: boolean;
   suppressReplyLifecycle?: boolean;
   sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
+  toolsAllow?: string[];
 }) {
   const targetSessionKey = params.sessionKeyOverride ?? sessionKey;
   return tryDispatchAcpReply({
@@ -331,6 +338,7 @@ async function runDispatch(params: {
       : {}),
     shouldSendToolSummaries: true,
     bypassForCommand: false,
+    toolsAllow: params.toolsAllow,
     ...(params.onReplyStart ? { onReplyStart: params.onReplyStart } : {}),
     recordProcessed: vi.fn(),
     markIdle: vi.fn(),
@@ -1385,6 +1393,35 @@ describe("tryDispatchAcpReply", () => {
       "ACP dispatch is disabled by policy.",
     );
     expect(bindingServiceMocks.unbind).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when ACP dispatch cannot enforce restrictive runtime toolsAllow", async () => {
+    setReadyAcpResolution();
+    const { dispatcher } = createDispatcher();
+
+    await runDispatch({
+      bodyForAgent: "test",
+      dispatcher,
+      toolsAllow: ["message"],
+    });
+
+    expect(managerMocks.runTurn).not.toHaveBeenCalled();
+    expect(dispatcherCall(dispatcher.sendFinalReply).isError).toBe(true);
+    expect(dispatcherCall(dispatcher.sendFinalReply).text).toContain("runtime toolsAllow");
+  });
+
+  it("allows wildcard runtime toolsAllow through ACP dispatch", async () => {
+    setReadyAcpResolution();
+    const { dispatcher } = createDispatcher();
+
+    await runDispatch({
+      bodyForAgent: "test",
+      dispatcher,
+      toolsAllow: ["*"],
+    });
+
+    expect(managerMocks.runTurn).toHaveBeenCalledOnce();
+    expect(runTurnCall().text).toBe("test");
   });
 
   it("does not unbind stale bindings when ACP dispatch is disabled by policy", async () => {

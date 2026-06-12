@@ -1,3 +1,4 @@
+// OpenClaw SDK module implements transport behavior.
 import { GatewayClient } from "@openclaw/gateway-client";
 import { EventHub } from "./event-hub.js";
 import type {
@@ -7,6 +8,8 @@ import type {
   OpenClawTransport,
 } from "./types.js";
 
+// Gateway transport adapter that converts the lower-level GatewayClient into the
+// SDK transport interface and replays raw events for late subscribers.
 type GatewayClientLike = {
   request<T = unknown>(
     method: string,
@@ -18,6 +21,7 @@ type GatewayClientLike = {
 
 const RAW_EVENT_REPLAY_LIMIT = 1000;
 
+/** Options passed through to the Gateway websocket client. */
 export type GatewayClientTransportOptions = {
   url?: string;
   connectChallengeTimeoutMs?: number;
@@ -66,6 +70,7 @@ function toGatewayEvent(event: unknown): GatewayEvent {
   };
 }
 
+/** Connectable SDK transport backed by @openclaw/gateway-client. */
 export class GatewayClientTransport implements ConnectableOpenClawTransport {
   private readonly eventsHub = new EventHub<GatewayEvent>({
     replayLimit: RAW_EVENT_REPLAY_LIMIT,
@@ -147,6 +152,7 @@ export class GatewayClientTransport implements ConnectableOpenClawTransport {
   }
 }
 
+/** Narrow an SDK transport to one that supports explicit connect. */
 export function isConnectableTransport(
   transport: OpenClawTransport,
 ): transport is ConnectableOpenClawTransport {

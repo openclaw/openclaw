@@ -1,3 +1,4 @@
+/** Tests BTW side-question execution, session context, auth, and harness routing. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 
@@ -76,6 +77,8 @@ vi.mock("./model-auth.js", () => ({
 }));
 
 vi.mock("./model-runtime-aliases.js", () => ({
+  isCliRuntimeAliasForProvider: ({ runtime, provider }: { runtime?: string; provider?: string }) =>
+    runtime === "claude-cli" && provider === "anthropic",
   resolveCliRuntimeExecutionProvider: ({
     provider,
     cfg,
@@ -158,6 +161,8 @@ const DEFAULT_USAGE = {
 };
 
 function makeAsyncEvents(events: unknown[]) {
+  // Minimal async iterable that matches provider stream shape without loading
+  // real model/runtime infrastructure.
   return {
     async *[Symbol.asyncIterator]() {
       for (const event of events) {
@@ -177,6 +182,8 @@ function createSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry
 }
 
 function createAssistantDoneEvent(content: unknown[]) {
+  // Done events include usage/provider metadata because BTW persists the reply
+  // as a normal assistant turn.
   return {
     type: "done",
     reason: "stop",
@@ -635,6 +642,29 @@ describe("runBtwSideQuestion", () => {
 
     expect(result).toEqual({ text: "Direct fallback answer." });
     expect(streamSimpleMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed instead of using direct provider auth for CLI-runtime alias models", async () => {
+    await expect(
+      runSideQuestion({
+        cfg: {
+          agents: {
+            defaults: {
+              models: {
+                "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+              },
+            },
+          },
+        } as never,
+        model: "claude-opus-4-7",
+        sessionKey: DEFAULT_SESSION_KEY,
+      }),
+    ).rejects.toThrow(
+      "/btw is not yet supported for claude-cli-backed models. The selected model is routed through claude-cli; OpenClaw will not fall back to direct anthropic auth because that would use a different backend than the active session.",
+    );
+    expect(getApiKeyForModelMock).not.toHaveBeenCalled();
+    expect(streamSimpleMock).not.toHaveBeenCalled();
+    expect(registerProviderStreamForModelMock).not.toHaveBeenCalled();
   });
 
   it("does not let an auto-selected stale Anthropic profile suppress Claude CLI auth for BTW", async () => {

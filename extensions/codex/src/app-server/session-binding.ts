@@ -1,3 +1,8 @@
+/**
+ * Persists and normalizes the Codex app-server thread binding associated with
+ * an OpenClaw session file.
+ */
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
@@ -6,8 +11,9 @@ import {
   resolveProviderIdForAuth,
   type AuthProfileStore,
 } from "openclaw/plugin-sdk/agent-runtime";
+import { type FileLockOptions, withFileLock } from "openclaw/plugin-sdk/file-lock";
 import {
-  isCodexPluginsMarketplaceName,
+  CODEX_PLUGINS_MARKETPLACE_NAME,
   normalizeCodexServiceTier,
   type CodexAppServerApprovalPolicy,
   type CodexAppServerSandboxMode,
@@ -17,10 +23,30 @@ import type { CodexServiceTier } from "./protocol.js";
 
 const CODEX_APP_SERVER_NATIVE_AUTH_PROVIDER = "openai";
 const PUBLIC_OPENAI_MODEL_PROVIDER = "openai";
+export const CODEX_APP_SERVER_BINDING_GUARDED_REQUEST_TIMEOUT_MS = 60_000;
+const CODEX_APP_SERVER_BINDING_LOCK_RETRY_INTERVAL_MS = 1_000;
+const CODEX_APP_SERVER_BINDING_LOCK_MIN_WAIT_MS =
+  CODEX_APP_SERVER_BINDING_GUARDED_REQUEST_TIMEOUT_MS + 15_000;
+const CODEX_APP_SERVER_BINDING_LOCK_OPTIONS: FileLockOptions = {
+  // Guarded native compaction holds this lock while sending thread/compact/start.
+  // Wait beyond that bounded RPC so peer writes/clears block instead of timing out.
+  retries: {
+    retries: Math.ceil(
+      CODEX_APP_SERVER_BINDING_LOCK_MIN_WAIT_MS / CODEX_APP_SERVER_BINDING_LOCK_RETRY_INTERVAL_MS,
+    ),
+    factor: 1,
+    minTimeout: CODEX_APP_SERVER_BINDING_LOCK_RETRY_INTERVAL_MS,
+    maxTimeout: CODEX_APP_SERVER_BINDING_LOCK_RETRY_INTERVAL_MS,
+  },
+  stale: CODEX_APP_SERVER_BINDING_GUARDED_REQUEST_TIMEOUT_MS * 2,
+};
+const bindingMutationQueues = new Map<string, Promise<void>>();
+const bindingMutationContext = new AsyncLocalStorage<Set<string>>();
 
 type ProviderAuthAliasLookupParams = Parameters<typeof resolveProviderIdForAuth>[1];
 type ProviderAuthAliasConfig = NonNullable<ProviderAuthAliasLookupParams>["config"];
 
+/** Inputs needed to resolve whether a binding's auth profile is native Codex/OpenAI auth. */
 export type CodexAppServerAuthProfileLookup = {
   authProfileId?: string;
   authProfileStore?: AuthProfileStore;
@@ -28,6 +54,7 @@ export type CodexAppServerAuthProfileLookup = {
   config?: ProviderAuthAliasConfig;
 };
 
+/** Durable sidecar binding connecting an OpenClaw session file to a Codex thread. */
 export type CodexAppServerThreadBinding = {
   schemaVersion: 1;
   threadId: string;
@@ -53,6 +80,7 @@ export type CodexAppServerThreadBinding = {
   updatedAt: string;
 };
 
+/** Context-engine state persisted with a Codex app-server thread binding. */
 export type CodexAppServerContextEngineBinding = {
   schemaVersion: 1;
   engineId: string;
@@ -60,6 +88,7 @@ export type CodexAppServerContextEngineBinding = {
   projection?: CodexAppServerContextEngineProjectionBinding;
 };
 
+/** Context-engine projection metadata used to guard resumed native threads. */
 export type CodexAppServerContextEngineProjectionBinding = {
   schemaVersion: 1;
   mode: "thread_bootstrap";
@@ -67,10 +96,51 @@ export type CodexAppServerContextEngineProjectionBinding = {
   fingerprint?: string;
 };
 
+/** Returns the JSON sidecar path for the Codex app-server binding beside a session file. */
 export function resolveCodexAppServerBindingPath(sessionFile: string): string {
   return `${sessionFile}.codex-app-server.json`;
 }
 
+/** Serializes mutation of the Codex app-server binding sidecar for a session file. */
+export async function withCodexAppServerBindingLock<T>(
+  sessionFile: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  const bindingPath = resolveCodexAppServerBindingPath(sessionFile);
+  const ownedBindings = bindingMutationContext.getStore();
+  if (ownedBindings?.has(bindingPath)) {
+    return await withFileLock(bindingPath, CODEX_APP_SERVER_BINDING_LOCK_OPTIONS, run);
+  }
+  // The SDK file lock is process-reentrant, so pair it with a local queue.
+  // Nested writes from the same guarded mutation can proceed, but unrelated
+  // same-process tasks cannot slip between compare/clear/start.
+  const previous = bindingMutationQueues.get(bindingPath) ?? Promise.resolve();
+  let releaseCurrent!: () => void;
+  const current = new Promise<void>((resolve) => {
+    releaseCurrent = resolve;
+  });
+  const queued = previous.then(
+    () => current,
+    () => current,
+  );
+  bindingMutationQueues.set(bindingPath, queued);
+  await previous.catch(() => undefined);
+
+  const nestedOwnedBindings = new Set(ownedBindings);
+  nestedOwnedBindings.add(bindingPath);
+  try {
+    return await bindingMutationContext.run(nestedOwnedBindings, () =>
+      withFileLock(bindingPath, CODEX_APP_SERVER_BINDING_LOCK_OPTIONS, run),
+    );
+  } finally {
+    releaseCurrent();
+    if (bindingMutationQueues.get(bindingPath) === queued) {
+      bindingMutationQueues.delete(bindingPath);
+    }
+  }
+}
+
+/** Reads and normalizes a Codex app-server binding sidecar, returning undefined on stale data. */
 export async function readCodexAppServerBinding(
   sessionFile: string,
   lookup: Omit<CodexAppServerAuthProfileLookup, "authProfileId"> = {},
@@ -148,6 +218,7 @@ export async function readCodexAppServerBinding(
   }
 }
 
+/** Writes the Codex app-server binding sidecar with normalized provider/auth metadata. */
 export async function writeCodexAppServerBinding(
   sessionFile: string,
   binding: Omit<
@@ -158,39 +229,41 @@ export async function writeCodexAppServerBinding(
   },
   lookup: Omit<CodexAppServerAuthProfileLookup, "authProfileId"> = {},
 ): Promise<void> {
-  const now = new Date().toISOString();
-  const payload: CodexAppServerThreadBinding = {
-    schemaVersion: 1,
-    sessionFile,
-    threadId: binding.threadId,
-    cwd: binding.cwd,
-    authProfileId: binding.authProfileId,
-    model: binding.model,
-    modelProvider: normalizeCodexAppServerBindingModelProvider({
-      ...lookup,
+  await withCodexAppServerBindingLock(sessionFile, async () => {
+    const now = new Date().toISOString();
+    const payload: CodexAppServerThreadBinding = {
+      schemaVersion: 1,
+      sessionFile,
+      threadId: binding.threadId,
+      cwd: binding.cwd,
       authProfileId: binding.authProfileId,
-      modelProvider: binding.modelProvider,
-    }),
-    approvalPolicy: binding.approvalPolicy,
-    sandbox: binding.sandbox,
-    serviceTier: binding.serviceTier,
-    dynamicToolsFingerprint: binding.dynamicToolsFingerprint,
-    dynamicToolsContainDeferred: binding.dynamicToolsContainDeferred,
-    userMcpServersFingerprint: binding.userMcpServersFingerprint,
-    mcpServersFingerprint: binding.mcpServersFingerprint,
-    nativeHookRelayGeneration: binding.nativeHookRelayGeneration,
-    pluginAppsFingerprint: binding.pluginAppsFingerprint,
-    pluginAppsInputFingerprint: binding.pluginAppsInputFingerprint,
-    pluginAppPolicyContext: binding.pluginAppPolicyContext,
-    contextEngine: binding.contextEngine,
-    environmentSelectionFingerprint: binding.environmentSelectionFingerprint,
-    createdAt: binding.createdAt ?? now,
-    updatedAt: now,
-  };
-  await fs.writeFile(
-    resolveCodexAppServerBindingPath(sessionFile),
-    `${JSON.stringify(payload, null, 2)}\n`,
-  );
+      model: binding.model,
+      modelProvider: normalizeCodexAppServerBindingModelProvider({
+        ...lookup,
+        authProfileId: binding.authProfileId,
+        modelProvider: binding.modelProvider,
+      }),
+      approvalPolicy: binding.approvalPolicy,
+      sandbox: binding.sandbox,
+      serviceTier: binding.serviceTier,
+      dynamicToolsFingerprint: binding.dynamicToolsFingerprint,
+      dynamicToolsContainDeferred: binding.dynamicToolsContainDeferred,
+      userMcpServersFingerprint: binding.userMcpServersFingerprint,
+      mcpServersFingerprint: binding.mcpServersFingerprint,
+      nativeHookRelayGeneration: binding.nativeHookRelayGeneration,
+      pluginAppsFingerprint: binding.pluginAppsFingerprint,
+      pluginAppsInputFingerprint: binding.pluginAppsInputFingerprint,
+      pluginAppPolicyContext: binding.pluginAppPolicyContext,
+      contextEngine: binding.contextEngine,
+      environmentSelectionFingerprint: binding.environmentSelectionFingerprint,
+      createdAt: binding.createdAt ?? now,
+      updatedAt: now,
+    };
+    await fs.writeFile(
+      resolveCodexAppServerBindingPath(sessionFile),
+      `${JSON.stringify(payload, null, 2)}\n`,
+    );
+  });
 }
 
 function readContextEngineBinding(value: unknown): CodexAppServerContextEngineBinding | undefined {
@@ -257,8 +330,7 @@ function readPluginAppPolicyContext(value: unknown): PluginAppPolicyContext | un
     if (
       "appId" in entry ||
       typeof entry.configKey !== "string" ||
-      typeof entry.marketplaceName !== "string" ||
-      !isCodexPluginsMarketplaceName(entry.marketplaceName) ||
+      entry.marketplaceName !== CODEX_PLUGINS_MARKETPLACE_NAME ||
       typeof entry.pluginName !== "string" ||
       typeof entry.allowDestructiveActions !== "boolean" ||
       !Array.isArray(entry.mcpServerNames) ||
@@ -294,44 +366,74 @@ function readPluginAppPolicyContext(value: unknown): PluginAppPolicyContext | un
   };
 }
 
+/** Removes the Codex app-server binding sidecar if present. */
 export async function clearCodexAppServerBinding(
   sessionFile: string,
   _lookup: Omit<CodexAppServerAuthProfileLookup, "authProfileId"> = {},
 ): Promise<void> {
+  if (!(await codexAppServerBindingSidecarExists(sessionFile))) {
+    return;
+  }
+  await withCodexAppServerBindingLock(sessionFile, async () => {
+    await unlinkCodexAppServerBinding(sessionFile);
+  });
+}
+
+async function codexAppServerBindingSidecarExists(sessionFile: string): Promise<boolean> {
+  try {
+    await fs.access(resolveCodexAppServerBindingPath(sessionFile));
+    return true;
+  } catch (error) {
+    if (!isNotFound(error)) {
+      embeddedAgentLog.warn("failed to inspect codex app-server binding", { sessionFile, error });
+    }
+    return false;
+  }
+}
+
+async function unlinkCodexAppServerBinding(sessionFile: string): Promise<boolean> {
   try {
     await fs.unlink(resolveCodexAppServerBindingPath(sessionFile));
+    return true;
   } catch (error) {
     if (!isNotFound(error)) {
       embeddedAgentLog.warn("failed to clear codex app-server binding", { sessionFile, error });
     }
+    return false;
   }
 }
 
+/** Clears a binding only when it still points at the expected Codex thread id. */
 export async function clearCodexAppServerBindingForThread(
   sessionFile: string,
   threadId: string,
   lookup: Omit<CodexAppServerAuthProfileLookup, "authProfileId"> = {},
 ): Promise<boolean> {
-  const binding = await readCodexAppServerBinding(sessionFile, lookup);
-  if (!binding) {
+  if (!(await readCodexAppServerBinding(sessionFile, lookup))) {
     return false;
   }
-  if (binding.threadId !== threadId) {
-    embeddedAgentLog.debug("codex app-server binding points at a different thread; preserving", {
-      sessionFile,
-      threadId,
-      boundThreadId: binding.threadId,
-    });
-    return false;
-  }
-  await clearCodexAppServerBinding(sessionFile);
-  return true;
+  return await withCodexAppServerBindingLock(sessionFile, async () => {
+    const binding = await readCodexAppServerBinding(sessionFile, lookup);
+    if (!binding) {
+      return false;
+    }
+    if (binding.threadId !== threadId) {
+      embeddedAgentLog.debug("codex app-server binding points at a different thread; preserving", {
+        sessionFile,
+        threadId,
+        boundThreadId: binding.threadId,
+      });
+      return false;
+    }
+    return await unlinkCodexAppServerBinding(sessionFile);
+  });
 }
 
 function isNotFound(error: unknown): boolean {
   return Boolean(error && typeof error === "object" && "code" in error && error.code === "ENOENT");
 }
 
+/** Returns true when an auth profile uses native Codex/OpenAI app-server auth. */
 export function isCodexAppServerNativeAuthProfile(
   lookup: CodexAppServerAuthProfileLookup,
 ): boolean {
@@ -357,6 +459,7 @@ export function isCodexAppServerNativeAuthProfile(
   }
 }
 
+/** Hides redundant OpenAI provider attribution for native Codex auth bindings. */
 export function normalizeCodexAppServerBindingModelProvider(params: {
   authProfileId?: string;
   modelProvider?: string;

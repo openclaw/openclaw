@@ -1,3 +1,4 @@
+// Message hook mapper tests cover mapping runtime messages into hook payloads.
 import { beforeEach, describe, expect, it } from "vitest";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import type { ChannelMessagingAdapter } from "../channels/plugins/types.core.js";
@@ -131,50 +132,66 @@ describe("message hook mappers", () => {
     const canonical = deriveInboundMessageHookContext(
       makeInboundCtx({
         ReplyToId: "discord-message-42",
+        ReplyToIdFull: "discord:channel-1:discord-message-42",
         ReplyToBody: "quoted Discord reply body",
         ReplyToSender: "Ada",
+        ReplyToIsQuote: true,
       }),
     );
 
     expect(canonical.replyToId).toBe("discord-message-42");
+    expect(canonical.replyToIdFull).toBe("discord:channel-1:discord-message-42");
     expect(canonical.replyToBody).toBe("quoted Discord reply body");
     expect(canonical.replyToSender).toBe("Ada");
+    expect(canonical.replyToIsQuote).toBe(true);
 
     expect(toPluginMessageContext(canonical)).toMatchObject({
       replyToId: "discord-message-42",
+      replyToIdFull: "discord:channel-1:discord-message-42",
       replyToBody: "quoted Discord reply body",
       replyToSender: "Ada",
+      replyToIsQuote: true,
     });
 
     const claimContext = toPluginInboundClaimContext(canonical);
     expect(claimContext).toMatchObject({
       replyToId: "discord-message-42",
+      replyToIdFull: "discord:channel-1:discord-message-42",
       replyToBody: "quoted Discord reply body",
       replyToSender: "Ada",
+      replyToIsQuote: true,
     });
 
     const claimEvent = toPluginInboundClaimEvent(canonical);
     expect(claimEvent).toMatchObject({
       replyToId: "discord-message-42",
+      replyToIdFull: "discord:channel-1:discord-message-42",
       replyToBody: "quoted Discord reply body",
       replyToSender: "Ada",
+      replyToIsQuote: true,
     });
     expect(claimEvent.metadata).toMatchObject({
       replyToId: "discord-message-42",
+      replyToIdFull: "discord:channel-1:discord-message-42",
       replyToBody: "quoted Discord reply body",
       replyToSender: "Ada",
+      replyToIsQuote: true,
     });
 
     const receivedEvent = toPluginMessageReceivedEvent(canonical);
     expect(receivedEvent).toMatchObject({
       replyToId: "discord-message-42",
+      replyToIdFull: "discord:channel-1:discord-message-42",
       replyToBody: "quoted Discord reply body",
       replyToSender: "Ada",
+      replyToIsQuote: true,
     });
     expect(receivedEvent.metadata).toMatchObject({
       replyToId: "discord-message-42",
+      replyToIdFull: "discord:channel-1:discord-message-42",
       replyToBody: "quoted Discord reply body",
       replyToSender: "Ada",
+      replyToIsQuote: true,
     });
   });
 

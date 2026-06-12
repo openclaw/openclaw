@@ -1,3 +1,4 @@
+// Drains queued follow-up runs while preserving route and session identity.
 import { channelRouteCompactKey } from "../../../plugin-sdk/channel-route.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { resolveGlobalMap } from "../../../shared/global-singleton.js";
@@ -8,6 +9,7 @@ import {
   drainCollectQueueStep,
   drainNextQueueItem,
   hasCrossChannelItems,
+  removeQueuedItemsByRef,
   previewQueueSummaryPrompt,
   waitForQueueDebounce,
 } from "../../../utils/queue-helpers.js";
@@ -496,7 +498,7 @@ export function scheduleFollowupDrain(
             } else {
               await drainGroup();
             }
-            queue.items.splice(0, groupItems.length);
+            removeQueuedItemsByRef(queue.items, groupItems);
             if (pendingSummary) {
               clearFollowupQueueSummaryState(queue);
               pendingSummary = undefined;

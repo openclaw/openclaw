@@ -1,3 +1,6 @@
+/**
+ * Public parameter types for subscribing to embedded-agent sessions.
+ */
 import type {
   PartialReplyPayload,
   SourceReplyDeliveryMode,
@@ -38,6 +41,8 @@ export type SubscribeEmbeddedAgentSessionParams = {
   shouldEmitToolResult?: () => boolean;
   shouldEmitToolOutput?: () => boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  /** Attempt-owned delivery proof for message-tool-only source replies. */
+  hasDeliveredMessageToolOnlySourceReply?: () => boolean;
   onToolResult?: (payload: ReplyPayload) => void | Promise<void>;
   onReasoningStream?: (payload: {
     text?: string;
@@ -66,6 +71,8 @@ export type SubscribeEmbeddedAgentSessionParams = {
   }) => void | Promise<void>;
   onHeartbeatToolResponse?: (response: HeartbeatToolResponse) => void | Promise<void>;
   terminalLifecyclePhase?: "end" | "finishing";
+  /** Read immediately before terminal lifecycle emission. */
+  isTerminalAborted?: () => boolean | undefined;
   /** Gate final block delivery/lifecycle after the natural answer is known. */
   onBeforeTerminalDelivery?: (event: {
     messages: AgentMessage[];

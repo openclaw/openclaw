@@ -1,3 +1,4 @@
+// Memory Core plugin module implements tools behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
@@ -82,14 +83,26 @@ export const testing = {
 
 async function runMemorySearchToolWithDeadline<T>(params: {
   timeoutMs: number;
-  run: () => Promise<T>;
+  run: (signal: AbortSignal) => Promise<T>;
 }): Promise<{ status: "ok"; value: T } | { status: "unavailable"; error: string }> {
+  const timeoutError = () =>
+    new Error(`memory_search timed out after ${Math.round(params.timeoutMs / 1000)}s`);
+  // Abort the losing task when the deadline fires so in-flight embedding work
+  // is cancelled instead of retrying orphaned for minutes after the tool
+  // already returned "timed out" to the agent.
+  const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<"timeout">((resolve) => {
-    timer = setTimeout(() => resolve("timeout"), params.timeoutMs);
+    timer = setTimeout(() => {
+      // Resolve before aborting: abort listeners run synchronously and an
+      // abort-aware search could reject the task first, replacing the stable
+      // timeout result with a provider-wrapped abort error.
+      resolve("timeout");
+      controller.abort(timeoutError());
+    }, params.timeoutMs);
     timer.unref?.();
   });
-  const task = params.run();
+  const task = params.run(controller.signal);
   task.catch(() => undefined);
 
   try {
@@ -97,7 +110,7 @@ async function runMemorySearchToolWithDeadline<T>(params: {
     if (result === "timeout") {
       return {
         status: "unavailable",
-        error: `memory_search timed out after ${Math.round(params.timeoutMs / 1000)}s`,
+        error: timeoutError().message,
       };
     }
     return { status: "ok", value: result as T };
@@ -381,7 +394,7 @@ export function createMemorySearchTool(options: {
 
         const outcome = await runMemorySearchToolWithDeadline({
           timeoutMs: MEMORY_SEARCH_TOOL_TIMEOUT_MS,
-          run: async () => {
+          run: async (deadlineSignal) => {
             const { resolveMemoryBackendConfig } = await loadMemoryToolRuntime();
             const shouldQuerySupplements = requestedCorpus === "wiki" || requestedCorpus === "all";
             const shouldQueryMemory = requestedCorpus !== "wiki" && !cooldown;
@@ -453,6 +466,7 @@ export function createMemorySearchTool(options: {
                   minScore,
                   sessionKey: options.agentSessionKey,
                   qmdSearchModeOverride,
+                  signal: deadlineSignal,
                   onDebug: (debug: MemorySearchRuntimeDebug) => {
                     runtimeDebug.push(debug);
                   },

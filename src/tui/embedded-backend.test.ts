@@ -1,6 +1,8 @@
+// Covers embedded backend behavior used by the TUI runtime.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { isEmbeddedMode, setEmbeddedMode } from "../infra/embedded-mode.js";
 import { defaultRuntime } from "../runtime.js";
+import { withEnvAsync } from "../test-utils/env.js";
 
 const agentCommandFromIngressMock = vi.fn();
 const updateSessionStoreMock = vi.fn();
@@ -9,6 +11,7 @@ const createSessionGoalMock = vi.fn();
 const clearSessionGoalMock = vi.fn();
 const getSessionGoalMock = vi.fn();
 const updateSessionGoalStatusMock = vi.fn();
+const ensureRuntimePluginsLoadedMock = vi.fn();
 const listSessionsFromStoreAsyncMock = vi.fn(
   async (_options?: unknown): Promise<{ sessions: unknown[] }> => ({ sessions: [] }),
 );
@@ -85,11 +88,16 @@ vi.mock("../config/sessions.js", () => ({
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
+  resolveAgentWorkspaceDir: (_cfg: unknown, agentId: string) => `/tmp/openclaw-agent-${agentId}`,
   resolveDefaultAgentId: (cfg?: {
     agents?: { list?: Array<{ id?: string; default?: boolean }> };
   }) =>
     cfg?.agents?.list?.find((agent) => agent.default)?.id ?? cfg?.agents?.list?.[0]?.id ?? "main",
   resolveSessionAgentId: () => "main",
+}));
+
+vi.mock("../agents/runtime-plugins.js", () => ({
+  ensureRuntimePluginsLoaded: (...args: unknown[]) => ensureRuntimePluginsLoadedMock(...args),
 }));
 
 vi.mock("../agents/defaults.js", () => ({
@@ -228,6 +236,7 @@ describe("EmbeddedTuiBackend", () => {
       status,
       tokensUsed: 0,
     }));
+    ensureRuntimePluginsLoadedMock.mockReset();
     listSessionsFromStoreAsyncMock.mockReset();
     listSessionsFromStoreAsyncMock.mockResolvedValue({ sessions: [] });
     loadCombinedSessionStoreForGatewayMock.mockReset();
@@ -602,6 +611,48 @@ describe("EmbeddedTuiBackend", () => {
     expect(loadSessionEntryMock).toHaveBeenCalledWith("global", { agentId: "work" });
   });
 
+  it("loads runtime plugins for the send-path workspace before returning embedded history", async () => {
+    const cfg = { agents: { list: [{ id: "main" }] } };
+    loadSessionEntryMock.mockReturnValue({
+      cfg,
+      canonicalKey: "agent:main:main",
+      storePath: "/tmp/openclaw-sessions.json",
+      entry: { spawnedWorkspaceDir: "/tmp/openclaw-custom-workspace" },
+    });
+
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+
+    await expect(backend.loadHistory({ sessionKey: "agent:main:main" })).resolves.toMatchObject({
+      runtimePluginsPrewarm: { status: "warmed" },
+    });
+    expect(ensureRuntimePluginsLoadedMock).toHaveBeenCalledWith({
+      config: cfg,
+      workspaceDir: "/tmp/openclaw-agent-main",
+    });
+  });
+
+  it("returns embedded history when runtime plugin loading fails", async () => {
+    ensureRuntimePluginsLoadedMock.mockImplementationOnce(() => {
+      throw new Error("runtime unavailable");
+    });
+    loadSessionEntryMock.mockReturnValue({
+      cfg: {},
+      canonicalKey: "agent:main:main",
+      storePath: "/tmp/openclaw-sessions.json",
+      entry: {},
+    });
+
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+
+    await expect(backend.loadHistory({ sessionKey: "agent:main:main" })).resolves.toMatchObject({
+      sessionKey: "agent:main:main",
+      messages: [],
+      runtimePluginsPrewarm: { status: "failed", error: "Error: runtime unavailable" },
+    });
+  });
+
   it("passes selected-agent global scope into local chat turns", async () => {
     agentCommandFromIngressMock.mockResolvedValueOnce({
       payloads: [{ text: "done" }],
@@ -739,9 +790,7 @@ describe("EmbeddedTuiBackend", () => {
   });
 
   it("aborts local post-turn maintenance when stop grace elapses", async () => {
-    const previous = process.env.OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS;
-    process.env.OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS = "5";
-    try {
+    await withEnvAsync({ OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS: "5" }, async () => {
       const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
       const pending = deferred<{
         payloads: Array<{ text: string }>;
@@ -780,13 +829,7 @@ describe("EmbeddedTuiBackend", () => {
 
       expect(abortListener).toHaveBeenCalledTimes(1);
       expect(isEmbeddedMode()).toBe(false);
-    } finally {
-      if (previous === undefined) {
-        delete process.env.OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS;
-      } else {
-        process.env.OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS = previous;
-      }
-    }
+    });
   });
 
   it("queues same-session sends behind local post-turn maintenance", async () => {
@@ -845,9 +888,7 @@ describe("EmbeddedTuiBackend", () => {
   });
 
   it("queues same-session sends behind active local runs", async () => {
-    const previous = process.env.OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS;
-    process.env.OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS = "5";
-    try {
+    await withEnvAsync({ OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS: "5" }, async () => {
       const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
       const first = deferred<{
         payloads: Array<{ text: string }>;
@@ -897,13 +938,7 @@ describe("EmbeddedTuiBackend", () => {
 
       second.resolve({ payloads: [{ text: "second done" }], meta: {} });
       await flushMicrotasks();
-    } finally {
-      if (previous === undefined) {
-        delete process.env.OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS;
-      } else {
-        process.env.OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS = previous;
-      }
-    }
+    });
   });
 
   it("does not queue stop commands behind active local runs", async () => {
@@ -1270,9 +1305,7 @@ describe("EmbeddedTuiBackend", () => {
   });
 
   it("fails a queued local send when the previous finishing run does not settle", async () => {
-    const previous = process.env.OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS;
-    process.env.OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS = "5";
-    try {
+    await withEnvAsync({ OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS: "5" }, async () => {
       const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
       const first = deferred<{
         payloads: Array<{ text: string }>;
@@ -1325,19 +1358,11 @@ describe("EmbeddedTuiBackend", () => {
             ),
         ),
       ).toBe(true);
-    } finally {
-      if (previous === undefined) {
-        delete process.env.OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS;
-      } else {
-        process.env.OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS = previous;
-      }
-    }
+    });
   });
 
   it("fails a queued local send immediately when shutdown grace is zero", async () => {
-    const previous = process.env.OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS;
-    process.env.OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS = "0";
-    try {
+    await withEnvAsync({ OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS: "0" }, async () => {
       const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
       const first = deferred<{
         payloads: Array<{ text: string }>;
@@ -1383,13 +1408,7 @@ describe("EmbeddedTuiBackend", () => {
             ),
         ),
       ).toBe(true);
-    } finally {
-      if (previous === undefined) {
-        delete process.env.OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS;
-      } else {
-        process.env.OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS = previous;
-      }
-    }
+    });
   });
 
   it("clears local finishing state before surfacing a post-turn failure", async () => {

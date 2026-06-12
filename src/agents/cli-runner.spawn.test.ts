@@ -1,3 +1,4 @@
+/** Tests CLI runner process spawning, logging, diagnostics, and live-session paths. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -87,6 +88,8 @@ function buildPreparedCliRunContext(params: {
   workspaceDir?: string;
   timeoutMs?: number;
 }): PreparedCliRunContext {
+  // Produces a prepared context without invoking prepare.runtime, keeping spawn
+  // assertions focused on execute/runtime behavior.
   const workspaceDir = params.workspaceDir ?? "/tmp";
   const baseBackend =
     params.provider === "claude-cli"
@@ -198,6 +201,8 @@ async function expectRejectsWithFields(
   promise: Promise<unknown>,
   expected: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
+  // Failover errors carry structured fields; this helper verifies them while
+  // preserving the original object for deeper assertions.
   try {
     await promise;
   } catch (error) {
@@ -649,6 +654,8 @@ describe("runCliAgent spawn path", () => {
       currentChannelId: "telegram:-100123:topic:42",
       currentThreadTs: "42",
       currentMessageId: "reply-message-1",
+      senderId: "sender-1",
+      senderIsOwner: true,
     });
 
     expect(params.messageChannel).toBe("telegram");
@@ -656,6 +663,8 @@ describe("runCliAgent spawn path", () => {
     expect(params.currentChannelId).toBe("telegram:-100123:topic:42");
     expect(params.currentThreadTs).toBe("42");
     expect(params.currentMessageId).toBe("reply-message-1");
+    expect(params.senderId).toBe("sender-1");
+    expect(params.senderIsOwner).toBe(true);
     expect(params.cwd).toBe("/tmp/task-repo");
   });
 

@@ -1,3 +1,6 @@
+/**
+ * Browser tab listing, opening, labeling, and alias management for one profile.
+ */
 import { resolveBrowserNavigationProxyMode } from "./browser-proxy-mode.js";
 import { resolveCdpControlPolicy } from "./cdp-reachability-policy.js";
 import { isSelectableCdpBrowserTarget } from "./cdp-target-filter.js";
@@ -170,6 +173,7 @@ function assignTabAliases(profileState: ProfileRuntimeState, tabs: BrowserTab[])
   return tabs.map((tab) => assignTabAlias({ profileState, tab }));
 }
 
+/** Builds list/open/label tab operations for one resolved browser profile. */
 export function createProfileTabOps({
   profile,
   state,
@@ -227,15 +231,25 @@ export function createProfileTabOps({
         type?: string;
       }>
     >(appendCdpPath(cdpHttpBase, "/json/list"), undefined, undefined, getCdpControlPolicy());
-    return raw
-      .map((t) => ({
+    const cdpControlPolicy = getCdpControlPolicy();
+    const tabs: BrowserTab[] = [];
+    for (const t of raw) {
+      const tab: BrowserTab = {
         targetId: t.id ?? "",
         title: t.title ?? "",
         url: t.url ?? "",
         wsUrl: normalizeWsUrl(t.webSocketDebuggerUrl, profile.cdpUrl),
         type: t.type,
-      }))
-      .filter((t) => Boolean(t.targetId) && isSelectableCdpBrowserTarget(t));
+      };
+      if (!tab.targetId || !isSelectableCdpBrowserTarget(tab)) {
+        continue;
+      }
+      if (tab.wsUrl) {
+        await assertCdpEndpointAllowed(tab.wsUrl, cdpControlPolicy);
+      }
+      tabs.push(tab);
+    }
+    return tabs;
   };
 
   const listTabs = async (): Promise<BrowserTab[]> => {
@@ -396,6 +410,10 @@ export function createProfileTabOps({
     profileState.lastTargetId = created.id;
     const resolvedUrl = created.url ?? url;
     await assertBrowserNavigationResultAllowed({ url: resolvedUrl, ...ssrfPolicyOpts });
+    const wsUrl = normalizeWsUrl(created.webSocketDebuggerUrl, profile.cdpUrl);
+    if (wsUrl) {
+      await assertCdpEndpointAllowed(wsUrl, getCdpControlPolicy());
+    }
     triggerManagedTabLimit(created.id);
     return assignTabAlias({
       profileState,
@@ -404,7 +422,7 @@ export function createProfileTabOps({
         targetId: created.id,
         title: created.title ?? "",
         url: resolvedUrl,
-        wsUrl: normalizeWsUrl(created.webSocketDebuggerUrl, profile.cdpUrl),
+        wsUrl,
         type: created.type,
       },
     });

@@ -152,7 +152,7 @@ observation-only.
 - `gateway_start` / `gateway_stop` - start or stop plugin-owned services with the Gateway
 - `deactivate` - deprecated compatibility alias for `gateway_stop`; use `gateway_stop` in new plugins
 - `cron_changed` - observe gateway-owned cron lifecycle changes (added, updated, removed, started, finished, scheduled)
-- **`before_install`** - inspect skill or plugin install scans and optionally block
+- **`before_install`** - inspect skill or plugin install context and optionally block
 
 ## Debug runtime hooks
 
@@ -227,12 +227,17 @@ See [Plugin permission requests](/plugins/plugin-permission-requests) for
 approval routing, decision behavior, and when to use `requireApproval` instead
 of optional tools or exec approvals.
 
-Bundled plugins that need host-level policy can register trusted tool policies
-with `api.registerTrustedToolPolicy(...)`. These run before ordinary
-`before_tool_call` hooks and before external plugin decisions. Use them only
+Plugins that need host-level policy can register trusted tool policies with
+`api.registerTrustedToolPolicy(...)`. These run before ordinary
+`before_tool_call` hooks and before normal hook decisions. Bundled trusted
+policies run first; installed-plugin trusted policies run next in plugin-load
+order; ordinary `before_tool_call` hooks run after them. Bundled plugins keep
+the existing trusted-policy path. Installed plugins must be explicitly enabled
+and declare every policy id in `contracts.trustedToolPolicies`; undeclared ids
+are rejected before registration. Policy ids are scoped to the registering
+plugin, so different plugins may reuse the same local id. Use this tier only
 for host-trusted gates such as workspace policy, budget enforcement, or
-reserved workflow safety. External plugins should use normal `before_tool_call`
-hooks.
+reserved workflow safety.
 
 ### Exec environment hook
 
@@ -424,8 +429,9 @@ Message hook contexts expose stable correlation fields when available:
 `ctx.sessionKey`, `ctx.runId`, `ctx.messageId`, `ctx.senderId`, `ctx.trace`,
 `ctx.traceId`, `ctx.spanId`, `ctx.parentSpanId`, and `ctx.callDepth`. Inbound
 and `before_dispatch` contexts also expose reply metadata when the channel has
-visibility-filtered quoted message data: `replyToId`, `replyToBody`, and
-`replyToSender`. Prefer these first-class fields before reading legacy metadata.
+visibility-filtered quoted message data: `replyToId`, `replyToIdFull`,
+`replyToBody`, `replyToSender`, and `replyToIsQuote`. Prefer these first-class
+fields before reading legacy metadata.
 
 Prefer typed `threadId` and `replyToId` fields before using channel-specific
 metadata.
@@ -452,11 +458,14 @@ Decision rules:
 
 ## Install hooks
 
-`before_install` runs after the built-in scan for skill and plugin installs.
-Return additional findings or `{ block: true, blockReason }` to stop the
-install.
+`before_install` runs after the operator-owned `security.installPolicy` check
+when one is configured. The `builtinScan` field remains in the event payload for
+compatibility, but OpenClaw no longer runs built-in install-time dangerous-code
+blocking, so it is an empty `ok` result. Return additional findings or
+`{ block: true, blockReason }` to stop the install.
 
 `block: true` is terminal. `block: false` is treated as no decision.
+Handler failures block the install fail-closed.
 
 ## Gateway lifecycle
 

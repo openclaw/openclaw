@@ -1,3 +1,5 @@
+// Source reply mirroring records successful same-conversation message-tool
+// sends back into the owning session transcript.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -29,6 +31,7 @@ type MirrorableSourceReplyTranscriptParams = SourceReplyTranscriptMirrorParams &
   sessionKey: string;
 };
 
+// Mirror only enough delivered payload detail to preserve transcript context.
 function readStringArray(value: unknown): string[] | undefined {
   return normalizeOptionalTrimmedStringList(value);
 }
@@ -117,6 +120,7 @@ function isCurrentSourceConversation(
   );
 }
 
+/** Mirrors successful outbound source replies into the owning session transcript. */
 export async function mirrorDeliveredSourceReplyToTranscript(
   params: SourceReplyTranscriptMirrorParams,
 ): Promise<boolean> {

@@ -1,3 +1,8 @@
+/**
+ * Subagent registry coordinator.
+ *
+ * Owns registration, lifecycle, delivery retry, steering, orphan recovery, persistence, and cleanup for child runs.
+ */
 import type { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -69,6 +74,7 @@ import {
   type RegisterSubagentRunParams,
 } from "./subagent-registry-run-manager.js";
 import {
+  clearSubagentRunsReadCacheForTest,
   getSubagentRunsSnapshotForRead,
   persistSubagentRunsToDisk,
   persistSubagentRunsToDiskOrThrow,
@@ -1250,6 +1256,7 @@ export function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
   runtimePluginsLoader.clear();
   subagentAnnounceLoader.clear();
   browserCleanupLoader.clear();
+  clearSubagentRunsReadCacheForTest();
   stopSweeper();
   sweepInProgress = false;
   restoreAttempted = false;

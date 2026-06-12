@@ -1,3 +1,4 @@
+/** Main agent command orchestration for sessions, model selection, delivery, and attempts. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveInlineAgentImageAttachments } from "../auto-reply/reply/agent-turn-attachments.js";
@@ -655,12 +656,12 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
   const laneRaw = normalizeOptionalString(opts.lane) ?? "";
   const subagentLane: string = AGENT_LANE_SUBAGENT;
   const isSubagentLane = laneRaw === subagentLane;
-  const timeoutSecondsRaw =
-    opts.timeout !== undefined
-      ? (parseStrictNonNegativeInteger(opts.timeout) ?? Number.NaN)
-      : isSubagentLane
-        ? 0
-        : undefined;
+  const hasExplicitTimeoutOption = opts.timeout !== undefined;
+  const timeoutSecondsRaw = hasExplicitTimeoutOption
+    ? (parseStrictNonNegativeInteger(opts.timeout) ?? Number.NaN)
+    : isSubagentLane
+      ? 0
+      : undefined;
   if (
     timeoutSecondsRaw !== undefined &&
     (Number.isNaN(timeoutSecondsRaw) || timeoutSecondsRaw < 0)
@@ -671,6 +672,7 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
     cfg,
     overrideSeconds: timeoutSecondsRaw,
   });
+  const runTimeoutOverrideMs = hasExplicitTimeoutOption ? timeoutMs : undefined;
 
   const sessionResolution = resolveSession({
     cfg,
@@ -775,6 +777,7 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
     thinkOnce,
     verboseOverride,
     timeoutMs,
+    runTimeoutOverrideMs,
     sessionId,
     sessionKey,
     sessionEntry: sessionEntryRaw,
@@ -818,6 +821,7 @@ async function agentCommandInternal(
     thinkOnce,
     verboseOverride,
     timeoutMs,
+    runTimeoutOverrideMs,
     sessionId,
     sessionKey,
     sessionStore,
@@ -1775,6 +1779,7 @@ async function agentCommandInternal(
                 sessionEntry,
               }).enabled,
               timeoutMs,
+              runTimeoutOverrideMs,
               runId,
               opts,
               runContext,
@@ -2215,6 +2220,7 @@ async function agentCommandInternal(
   }
 }
 
+/** Runs an agent turn from CLI/runtime options against the resolved session and model policy. */
 export async function agentCommand(
   opts: AgentCommandOpts,
   runtime: RuntimeEnv = defaultRuntime,
@@ -2243,6 +2249,7 @@ export async function agentCommand(
   );
 }
 
+/** Runs an agent turn from an inbound channel/gateway ingress context. */
 export async function agentCommandFromIngress(
   opts: AgentCommandIngressOpts,
   runtime: RuntimeEnv = defaultRuntime,

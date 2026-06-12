@@ -1,9 +1,12 @@
+/**
+ * Wraps compaction calls with a safety timeout and abort cleanup.
+ */
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CompactResult, ContextEngine } from "../../context-engine/types.js";
 import { withTimeout } from "../../node-host/with-timeout.js";
 
-export const EMBEDDED_COMPACTION_TIMEOUT_MS = 900_000;
+export const EMBEDDED_COMPACTION_TIMEOUT_MS = 180_000;
 
 function createAbortError(signal: AbortSignal): Error {
   const reason = "reason" in signal ? signal.reason : undefined;

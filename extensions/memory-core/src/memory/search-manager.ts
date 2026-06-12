@@ -1,3 +1,4 @@
+// Memory Core plugin module implements search manager behavior.
 import fs from "node:fs/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -347,6 +348,7 @@ class BorrowedMemoryManager implements MemorySearchManager {
       qmdSearchModeOverride?: "query" | "search" | "vsearch";
       onDebug?: (debug: MemorySearchRuntimeDebug) => void;
       sources?: MemorySource[];
+      signal?: AbortSignal;
     },
   ) {
     return await this.inner.search(query, opts);

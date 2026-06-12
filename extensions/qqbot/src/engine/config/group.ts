@@ -1,13 +1,11 @@
+// Qqbot plugin module implements group behavior.
 import { asBoolean } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { asOptionalObjectRecord as asRecord } from "../utils/string-normalize.js";
 import { resolveAccountBase } from "./resolve.js";
 
-type GroupToolPolicy = "full" | "restricted" | "none";
-
 interface GroupConfig {
   requireMention: boolean;
   ignoreOtherMentions: boolean;
-  toolPolicy: GroupToolPolicy;
   name: string;
   prompt?: string;
   historyLimit: number;
@@ -21,7 +19,6 @@ export const DEFAULT_GROUP_PROMPT =
 const DEFAULT_GROUP_CONFIG: Readonly<Omit<GroupConfig, "prompt">> = {
   requireMention: true,
   ignoreOtherMentions: false,
-  toolPolicy: "restricted",
   name: "",
   historyLimit: DEFAULT_GROUP_HISTORY_LIMIT,
 };
@@ -54,11 +51,6 @@ function readString(obj: Record<string, unknown>, key: string): string | undefin
   return typeof v === "string" && v.length > 0 ? v : undefined;
 }
 
-function readToolPolicy(obj: Record<string, unknown>, key: string): GroupToolPolicy | undefined {
-  const v = obj[key];
-  return v === "full" || v === "restricted" || v === "none" ? v : undefined;
-}
-
 function readHistoryLimit(obj: Record<string, unknown>, key: string): number | undefined {
   const v = obj[key];
   if (typeof v !== "number" || !Number.isFinite(v)) {
@@ -72,23 +64,24 @@ export function resolveGroupConfig(
   groupOpenid?: string | null,
   accountId?: string | null,
 ): GroupConfig {
+  const account = resolveAccountBase(cfg, accountId);
   const groups = readGroupsMap(cfg, accountId);
   const wildcard = groups["*"] ?? {};
   const specific = groupOpenid ? (groups[groupOpenid] ?? {}) : {};
+
+  // 账户级默认值：defaultRequireMention 配置 > 默认 true
+  const accountDefaultRequireMention =
+    asBoolean(account.config.defaultRequireMention) ?? DEFAULT_GROUP_CONFIG.requireMention;
 
   return {
     requireMention:
       readBoolean(specific, "requireMention") ??
       readBoolean(wildcard, "requireMention") ??
-      DEFAULT_GROUP_CONFIG.requireMention,
+      accountDefaultRequireMention,
     ignoreOtherMentions:
       readBoolean(specific, "ignoreOtherMentions") ??
       readBoolean(wildcard, "ignoreOtherMentions") ??
       DEFAULT_GROUP_CONFIG.ignoreOtherMentions,
-    toolPolicy:
-      readToolPolicy(specific, "toolPolicy") ??
-      readToolPolicy(wildcard, "toolPolicy") ??
-      DEFAULT_GROUP_CONFIG.toolPolicy,
     name: readString(specific, "name") ?? readString(wildcard, "name") ?? DEFAULT_GROUP_CONFIG.name,
     prompt: readString(specific, "prompt") ?? readString(wildcard, "prompt"),
     historyLimit:
@@ -120,15 +113,6 @@ export function resolveIgnoreOtherMentions(
   accountId?: string | null,
 ): boolean {
   return resolveGroupConfig(cfg, groupOpenid, accountId).ignoreOtherMentions;
-}
-
-/** Resolve tool policy for a given group. */
-export function resolveGroupToolPolicy(
-  cfg: Record<string, unknown>,
-  groupOpenid?: string | null,
-  accountId?: string | null,
-): GroupToolPolicy {
-  return resolveGroupConfig(cfg, groupOpenid, accountId).toolPolicy;
 }
 
 /**

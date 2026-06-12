@@ -1,3 +1,4 @@
+/** Covers provider discovery runtime loading from plugin manifests and registries. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { ProviderPlugin } from "./types.js";
@@ -685,6 +686,25 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
     });
 
     const providers = resolvePluginDiscoveryProvidersRuntime({ discoveryEntriesOnly: true });
+
+    expect(providers).toStrictEqual([]);
+    expect(mocks.resolvePluginProviders).not.toHaveBeenCalled();
+  });
+
+  it("can omit manifest model catalogs from static discovery entries", () => {
+    mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["openai"]);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      index: { plugins: [] },
+      manifestRegistry: {
+        plugins: [createManifestPluginWithModelCatalog("openai")],
+        diagnostics: [],
+      },
+    });
+
+    const providers = resolvePluginDiscoveryProvidersRuntime({
+      discoveryEntriesOnly: true,
+      includeManifestModelCatalogProviders: false,
+    });
 
     expect(providers).toStrictEqual([]);
     expect(mocks.resolvePluginProviders).not.toHaveBeenCalled();

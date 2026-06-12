@@ -1,10 +1,14 @@
+// Verifies plugin manifest registry construction and lookups.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { collectChannelSchemaMetadata } from "../config/channel-config-metadata.js";
 import { collectBundledChannelConfigs } from "./bundled-channel-config-metadata.js";
 import type { PluginCandidate } from "./discovery.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import {
+  __testing as manifestRegistryTesting,
+  loadPluginManifestRegistry,
+} from "./manifest-registry.js";
 import type { OpenClawPackageManifest } from "./manifest.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
@@ -1981,6 +1985,46 @@ describe("loadPluginManifestRegistry", () => {
 
     expect(registry.plugins[0]?.contracts).toEqual({
       externalAuthProviders: ["acme-ai"],
+    });
+  });
+
+  it("preserves host-trusted plugin contracts from plugin manifests", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "workflow-harness",
+      contracts: {
+        agentToolResultMiddleware: ["openclaw", "codex"],
+        trustedToolPolicies: ["workflow-budget"],
+      },
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "workflow-harness",
+      rootDir: dir,
+      origin: "workspace",
+    });
+
+    expect(registry.plugins[0]?.contracts).toEqual({
+      agentToolResultMiddleware: ["openclaw", "codex"],
+      trustedToolPolicies: ["workflow-budget"],
+    });
+  });
+
+  it("preserves host-trusted plugin contracts from catalog overlays", () => {
+    const contracts = manifestRegistryTesting.mergeManifestContracts(
+      {
+        agentToolResultMiddleware: ["openclaw"],
+      },
+      {
+        agentToolResultMiddleware: ["codex"],
+        trustedToolPolicies: ["workflow-budget"],
+      },
+    );
+
+    expect(contracts).toEqual({
+      agentToolResultMiddleware: ["openclaw", "codex"],
+      trustedToolPolicies: ["workflow-budget"],
     });
   });
 

@@ -1,3 +1,4 @@
+// Session send policy helpers decide when session output can be sent to targets.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -7,8 +8,10 @@ import type { SessionChatType, SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { deriveSessionChatType } from "./session-chat-type.js";
 
+/** Session send-policy decision after config and per-session overrides are evaluated. */
 export type SessionSendPolicyDecision = "allow" | "deny";
 
+/** Normalizes raw send-policy text into a decision. */
 export function normalizeSendPolicy(raw?: string | null): SessionSendPolicyDecision | undefined {
   const value = normalizeOptionalLowercaseString(raw);
   if (value === "allow") {
@@ -43,7 +46,12 @@ function deriveChannelFromKey(key?: string) {
     return undefined;
   }
   const parts = normalizedKey.split(":").filter(Boolean);
-  if (parts.length >= 3 && (parts[1] === "group" || parts[1] === "channel")) {
+  // Canonical key layout is <channel>:<peerKind>:<peerId>; parts[0] is the channel
+  // for direct/dm peers too, so channel-scoped rules also fire for direct chats.
+  if (
+    parts.length >= 3 &&
+    (parts[1] === "group" || parts[1] === "channel" || parts[1] === "direct" || parts[1] === "dm")
+  ) {
     return normalizeMatchValue(parts[0]);
   }
   return undefined;
@@ -71,6 +79,7 @@ function deriveChatTypeFromKey(key?: string): SessionChatType | undefined {
   return undefined;
 }
 
+/** Resolves whether a session send is allowed by entry override and config rules. */
 export function resolveSendPolicy(params: {
   cfg: OpenClawConfig;
   entry?: SessionEntry;

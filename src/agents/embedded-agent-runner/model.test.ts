@@ -1,12 +1,15 @@
+// Broad coverage for embedded runner model resolution behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { discoverAuthStorage, discoverModels } from "../agent-model-discovery.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
+  saveAuthProfileStore,
 } from "../auth-profiles.js";
 import {
   PLUGIN_MODEL_CATALOG_FILE,
@@ -16,6 +19,7 @@ import { resetModelDiscoveryCacheForTest } from "./model-discovery-cache.js";
 import { createProviderRuntimeTestMock } from "./model.provider-runtime.test-support.js";
 
 const resolveBundledStaticCatalogModelMock = vi.hoisted(() => vi.fn());
+const resolveBundledProviderStaticCatalogModelMock = vi.hoisted(() => vi.fn());
 const resolveRuntimeSyntheticAuthProviderRefsMock = vi.hoisted(() => vi.fn((): string[] => []));
 const resolveRuntimeExternalAuthProviderRefsMock = vi.hoisted(() => vi.fn((): string[] => []));
 
@@ -131,6 +135,7 @@ vi.mock("./model.static-catalog.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./model.static-catalog.js")>();
   return {
     ...actual,
+    resolveBundledProviderStaticCatalogModel: resolveBundledProviderStaticCatalogModelMock,
     resolveBundledStaticCatalogModel: resolveBundledStaticCatalogModelMock,
   };
 });
@@ -184,13 +189,12 @@ beforeEach(() => {
   mockLoadOpenRouterModelCapabilities.mockReset();
   mockLoadOpenRouterModelCapabilities.mockResolvedValue();
   resolveBundledStaticCatalogModelMock.mockReset();
-});
-
-afterEach(() => {
-  vi.unstubAllEnvs();
+  resolveBundledProviderStaticCatalogModelMock.mockReset();
 });
 
 function createRuntimeHooks() {
+  // Runtime hooks emulate provider plugin model discovery, transport
+  // normalization, and OpenRouter capability loading without plugin imports.
   return createProviderRuntimeTestMock({
     handledDynamicProviders: [
       "openrouter",
@@ -214,6 +218,8 @@ function resolveModelForTest(
   agentDir?: string,
   cfg?: OpenClawConfig,
 ) {
+  // Most tests use fixed auth storage to keep assertions focused on model
+  // resolution rather than auth discovery.
   const resolvedAgentDir = agentDir ?? "/tmp/agent";
   return resolveModel(provider, modelId, agentDir, cfg, {
     authStorage: { mocked: true } as never,
@@ -355,9 +361,13 @@ describe("resolveModel", () => {
     const first = await resolveModelAsync("openai", "gpt-5.5", agentDir, cfg, {
       runtimeHooks: createRuntimeHooks(),
     });
-    fs.writeFileSync(
-      path.join(defaultAgentDir, "auth-profiles.json"),
-      JSON.stringify({ version: 1, profiles: { openai: { type: "api_key", key: "one" } } }),
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: { "openai:default": { type: "api_key", provider: "openai", key: "one" } },
+      },
+      defaultAgentDir,
+      { filterExternalAuthProfiles: false, syncExternalCli: false },
     );
     const second = await resolveModelAsync("openai", "gpt-5.5", agentDir, cfg, {
       runtimeHooks: createRuntimeHooks(),
@@ -402,35 +412,44 @@ describe("resolveModel", () => {
 
   it("invalidates agent discovery stores when implicit main auth changes without config", async () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-model-cache-state-"));
-    vi.stubEnv("OPENCLAW_STATE_DIR", rootDir);
     const agentDir = path.join(rootDir, "agents", "worker", "agent");
     const mainAgentDir = path.join(rootDir, "agents", "main", "agent");
     fs.mkdirSync(agentDir, { recursive: true });
     fs.mkdirSync(mainAgentDir, { recursive: true });
-    mockDiscoveredModel(discoverModels, {
-      provider: "openai",
-      modelId: "gpt-5.5",
-      templateModel: {
-        provider: "openai",
-        ...makeModel("gpt-5.5"),
-      },
-    });
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: rootDir }, async () => {
+        mockDiscoveredModel(discoverModels, {
+          provider: "openai",
+          modelId: "gpt-5.5",
+          templateModel: {
+            provider: "openai",
+            ...makeModel("gpt-5.5"),
+          },
+        });
 
-    const first = await resolveModelAsync("openai", "gpt-5.5", agentDir, undefined, {
-      runtimeHooks: createRuntimeHooks(),
-    });
-    fs.writeFileSync(
-      path.join(mainAgentDir, "auth-profiles.json"),
-      JSON.stringify({ version: 1, profiles: { openai: { type: "api_key", key: "one" } } }),
-    );
-    const second = await resolveModelAsync("openai", "gpt-5.5", agentDir, undefined, {
-      runtimeHooks: createRuntimeHooks(),
-    });
+        const first = await resolveModelAsync("openai", "gpt-5.5", agentDir, undefined, {
+          runtimeHooks: createRuntimeHooks(),
+        });
+        saveAuthProfileStore(
+          {
+            version: 1,
+            profiles: { "openai:default": { type: "api_key", provider: "openai", key: "one" } },
+          },
+          mainAgentDir,
+          { filterExternalAuthProfiles: false, syncExternalCli: false },
+        );
+        const second = await resolveModelAsync("openai", "gpt-5.5", agentDir, undefined, {
+          runtimeHooks: createRuntimeHooks(),
+        });
 
-    expectResolvedModel(first);
-    expectResolvedModel(second);
-    expect(discoverAuthStorage).toHaveBeenCalledTimes(2);
-    expect(discoverModels).toHaveBeenCalledTimes(2);
+        expectResolvedModel(first);
+        expectResolvedModel(second);
+        expect(discoverAuthStorage).toHaveBeenCalledTimes(2);
+        expect(discoverModels).toHaveBeenCalledTimes(2);
+      });
+    } finally {
+      fs.rmSync(rootDir, { recursive: true, force: true });
+    }
   });
 
   it("does not cache agent discovery stores while runtime auth snapshots are active", async () => {
@@ -549,6 +568,58 @@ describe("resolveModel", () => {
     expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledWith({
       provider: "mistral",
       modelId: "mistral-medium-3-5",
+      cfg: undefined,
+      workspaceDir: undefined,
+    });
+    expect(resolveBundledProviderStaticCatalogModelMock).not.toHaveBeenCalled();
+    expect(discoverAuthStorage).not.toHaveBeenCalled();
+    expect(discoverModels).not.toHaveBeenCalled();
+  });
+
+  it("resolves opt-in provider static catalog rows while skipping agent discovery", async () => {
+    resolveBundledProviderStaticCatalogModelMock.mockResolvedValueOnce({
+      provider: "google",
+      id: "gemini-3.1-pro-preview",
+      name: "Gemini 3.1 Pro Preview",
+      api: "google-generative-ai",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 2, output: 12, cacheRead: 0.5, cacheWrite: 0 },
+      contextWindow: 1_048_576,
+      maxTokens: 65_536,
+    });
+
+    const result = await resolveModelAsync(
+      "google",
+      "gemini-3.1-pro-preview",
+      "/tmp/agent",
+      undefined,
+      {
+        allowBundledStaticCatalogFallback: true,
+        runtimeHooks: createRuntimeHooks(),
+        skipAgentDiscovery: true,
+      },
+    );
+
+    expectRecordFields(expectResolvedModel(result), {
+      provider: "google",
+      id: "gemini-3.1-pro-preview",
+      api: "google-generative-ai",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      reasoning: true,
+      contextWindow: 1_048_576,
+      maxTokens: 65_536,
+    });
+    expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledWith({
+      provider: "google",
+      modelId: "gemini-3.1-pro-preview",
+      cfg: undefined,
+      workspaceDir: undefined,
+    });
+    expect(resolveBundledProviderStaticCatalogModelMock).toHaveBeenCalledWith({
+      provider: "google",
+      modelId: "gemini-3.1-pro-preview",
       cfg: undefined,
       workspaceDir: undefined,
     });
@@ -1072,6 +1143,374 @@ describe("resolveModel", () => {
     });
   });
 
+  it("inherits bundled static transport for configured provider fallback models", () => {
+    resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
+      provider: "deepseek",
+      id: "deepseek-v4-pro",
+      name: "DeepSeek V4 Pro",
+      api: "openai-completions",
+      baseUrl: "https://api.deepseek.com",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 1.74, output: 3.48, cacheRead: 0.145, cacheWrite: 0 },
+      contextWindow: 1_000_000,
+      maxTokens: 384_000,
+      compat: {
+        supportsUsageInStreaming: true,
+        supportsReasoningEffort: true,
+        maxTokensField: "max_tokens",
+      },
+    });
+    const cfg = {
+      models: {
+        providers: {
+          deepseek: {
+            baseUrl: "",
+            models: [
+              {
+                id: "deepseek-v4-pro",
+                name: "Custom DeepSeek V4 Pro",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 32_768,
+                maxTokens: 4_096,
+                compat: {
+                  supportsReasoningEffort: false,
+                },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("deepseek", "deepseek-v4-pro", "/tmp/agent", cfg);
+    const model = expectResolvedModel(result);
+
+    expectRecordFields(model, {
+      name: "Custom DeepSeek V4 Pro",
+      api: "openai-completions",
+      baseUrl: "https://api.deepseek.com",
+      reasoning: false,
+      contextWindow: 32_768,
+      maxTokens: 4_096,
+    });
+    expect(model.compat).toEqual(
+      expect.objectContaining({
+        supportsUsageInStreaming: true,
+        supportsReasoningEffort: false,
+        maxTokensField: "max_tokens",
+      }),
+    );
+    expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledWith({
+      provider: "deepseek",
+      modelId: "deepseek-v4-pro",
+      cfg,
+      workspaceDir: expect.any(String),
+      includeRuntimeDiscovery: true,
+    });
+  });
+
+  it("fills missing configured provider runtime transport from bundled static metadata", async () => {
+    resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
+      provider: "deepseek",
+      id: "deepseek-v4-pro",
+      name: "DeepSeek V4 Pro",
+      api: "openai-completions",
+      baseUrl: "https://api.deepseek.com",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 1.74, output: 3.48, cacheRead: 0.145, cacheWrite: 0 },
+      contextWindow: 1_000_000,
+      maxTokens: 384_000,
+      compat: {
+        supportsUsageInStreaming: true,
+        supportsReasoningEffort: true,
+        maxTokensField: "max_tokens",
+      },
+    });
+    const cfg = {
+      models: {
+        providers: {
+          deepseek: {
+            models: [
+              {
+                id: "deepseek-v4-pro",
+                name: "Custom DeepSeek V4 Pro",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 32_768,
+                maxTokens: 4_096,
+                thinkingLevelMap: { off: null },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const baseRuntimeHooks = createRuntimeHooks();
+    const runProviderDynamicModel = vi.fn(() => ({
+      provider: "deepseek",
+      id: "deepseek-v4-pro",
+      name: "Custom DeepSeek V4 Pro",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 32_768,
+      maxTokens: 4_096,
+    }));
+
+    const result = await resolveModelAsync("deepseek", "deepseek-v4-pro", "/tmp/agent", cfg, {
+      runtimeHooks: {
+        ...baseRuntimeHooks,
+        runProviderDynamicModel,
+      },
+      skipAgentDiscovery: true,
+    });
+    const model = expectResolvedModel(result);
+
+    expectRecordFields(model, {
+      api: "openai-completions",
+      baseUrl: "https://api.deepseek.com",
+      reasoning: false,
+      contextWindow: 32_768,
+      maxTokens: 4_096,
+    });
+    expect(model.compat).toEqual(
+      expect.objectContaining({
+        supportsUsageInStreaming: true,
+        supportsReasoningEffort: true,
+        maxTokensField: "max_tokens",
+      }),
+    );
+    expect(runProviderDynamicModel).toHaveBeenCalled();
+  });
+
+  it("resolves configured DeepSeek probe models through bundled static transport without agent discovery", async () => {
+    resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
+      provider: "deepseek",
+      id: "deepseek-v4-pro",
+      name: "DeepSeek V4 Pro",
+      api: "openai-completions",
+      baseUrl: "https://api.deepseek.com",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 1.74, output: 3.48, cacheRead: 0.145, cacheWrite: 0 },
+      contextWindow: 1_000_000,
+      maxTokens: 384_000,
+      compat: {
+        supportsUsageInStreaming: true,
+        supportsReasoningEffort: true,
+        maxTokensField: "max_tokens",
+      },
+    });
+    const cfg = {
+      models: {
+        providers: {
+          deepseek: {
+            models: [
+              {
+                id: "deepseek-v4-pro",
+                name: "Custom DeepSeek V4 Pro",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 32_768,
+                maxTokens: 4_096,
+                thinkingLevelMap: { off: null },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = await resolveModelAsync("deepseek", "deepseek-v4-pro", "/tmp/agent", cfg, {
+      runtimeHooks: createRuntimeHooks(),
+      skipAgentDiscovery: true,
+    });
+    const model = expectResolvedModel(result);
+
+    expectRecordFields(model, {
+      name: "Custom DeepSeek V4 Pro",
+      api: "openai-completions",
+      baseUrl: "https://api.deepseek.com",
+      reasoning: false,
+      contextWindow: 32_768,
+      maxTokens: 4_096,
+    });
+    expect(model.compat).toEqual(
+      expect.objectContaining({
+        supportsUsageInStreaming: true,
+        supportsReasoningEffort: true,
+        maxTokensField: "max_tokens",
+      }),
+    );
+    expect((model as { thinkingLevelMap?: unknown }).thinkingLevelMap).toEqual({ off: null });
+  });
+
+  it("keeps provider runtime transport ahead of bundled static fallback metadata", async () => {
+    resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
+      provider: "deepseek",
+      id: "deepseek-v4-pro",
+      name: "DeepSeek V4 Pro",
+      api: "openai-completions",
+      baseUrl: "https://api.deepseek.com",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 1.74, output: 3.48, cacheRead: 0.145, cacheWrite: 0 },
+      contextWindow: 1_000_000,
+      maxTokens: 384_000,
+    });
+    const cfg = {
+      models: {
+        providers: {
+          deepseek: {
+            models: [
+              {
+                id: "deepseek-v4-pro",
+                name: "Custom DeepSeek V4 Pro",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 32_768,
+                maxTokens: 4_096,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const baseRuntimeHooks = createRuntimeHooks();
+    const runProviderDynamicModel = vi.fn(() => ({
+      provider: "deepseek",
+      id: "deepseek-v4-pro",
+      name: "Runtime DeepSeek V4 Pro",
+      api: "openai-responses" as const,
+      baseUrl: "https://runtime.deepseek.example/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 32_768,
+      maxTokens: 4_096,
+    }));
+
+    const result = await resolveModelAsync("deepseek", "deepseek-v4-pro", "/tmp/agent", cfg, {
+      runtimeHooks: {
+        ...baseRuntimeHooks,
+        runProviderDynamicModel,
+      },
+      skipAgentDiscovery: true,
+    });
+    const model = expectResolvedModel(result);
+
+    expectRecordFields(model, {
+      api: "openai-responses",
+      baseUrl: "https://runtime.deepseek.example/v1",
+      reasoning: false,
+      contextWindow: 32_768,
+      maxTokens: 4_096,
+    });
+    expect(runProviderDynamicModel).toHaveBeenCalled();
+  });
+
+  it("keeps configured transport overrides ahead of bundled static fallback metadata", () => {
+    resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
+      provider: "deepseek",
+      id: "deepseek-v4-pro",
+      name: "DeepSeek V4 Pro",
+      api: "openai-completions",
+      baseUrl: "https://api.deepseek.com",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 1.74, output: 3.48, cacheRead: 0.145, cacheWrite: 0 },
+      contextWindow: 1_000_000,
+      maxTokens: 384_000,
+    });
+    const cfg = {
+      models: {
+        providers: {
+          deepseek: {
+            baseUrl: "https://deepseek-proxy.example.com/v1",
+            api: "openai-completions",
+            models: [
+              {
+                id: "deepseek-v4-pro",
+                name: "Custom DeepSeek V4 Pro",
+                baseUrl: "https://deepseek-model-proxy.example.com/v1",
+                api: "openai-responses",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 32_768,
+                maxTokens: 4_096,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("deepseek", "deepseek-v4-pro", "/tmp/agent", cfg);
+    const model = expectResolvedModel(result);
+
+    expectRecordFields(model, {
+      api: "openai-responses",
+      baseUrl: "https://deepseek-model-proxy.example.com/v1",
+      contextWindow: 32_768,
+      maxTokens: 4_096,
+    });
+  });
+
+  it("keeps bundled static baseUrl when provider api is configured without a baseUrl", () => {
+    resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
+      provider: "deepseek",
+      id: "deepseek-v4-pro",
+      name: "DeepSeek V4 Pro",
+      api: "openai-responses",
+      baseUrl: "https://api.deepseek.com",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 1.74, output: 3.48, cacheRead: 0.145, cacheWrite: 0 },
+      contextWindow: 1_000_000,
+      maxTokens: 384_000,
+    });
+    const cfg = {
+      models: {
+        providers: {
+          deepseek: {
+            api: "openai-completions",
+            models: [
+              {
+                id: "deepseek-v4-pro",
+                name: "Custom DeepSeek V4 Pro",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 32_768,
+                maxTokens: 4_096,
+                thinkingLevelMap: { off: null },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("deepseek", "deepseek-v4-pro", "/tmp/agent", cfg);
+    const model = expectResolvedModel(result);
+
+    expectRecordFields(model, {
+      api: "openai-completions",
+      baseUrl: "https://api.deepseek.com",
+      contextWindow: 32_768,
+      maxTokens: 4_096,
+    });
+    expect(model.thinkingLevelMap).toEqual({ off: null });
+  });
+
   it("keeps provider token overrides ahead of bundled static fallback metadata", () => {
     resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
       provider: "xiaomi-token-plan",
@@ -1207,11 +1646,39 @@ describe("resolveModel", () => {
     const claudeModel = expectResolvedModel(claude);
     expect(claudeModel.api).toBe("anthropic-messages");
     expect(claudeModel.baseUrl).toBe("http://localhost:8080");
+    expect(claudeModel.maxTokens).toBeUndefined();
 
     const gpt = resolveModelForTest("my-router", "my-router/gpt", "/tmp/agent", cfg);
     const gptModel = expectResolvedModel(gpt);
     expect(gptModel.api).toBe("openai-completions");
     expect(gptModel.baseUrl).toBe("http://localhost:8080/v1");
+  });
+
+  it("preserves normalized inline provider transport when static metadata is merged", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "my-gemini": {
+            api: "google-generative-ai",
+            baseUrl: "https://generativelanguage.googleapis.com",
+            models: [
+              {
+                id: "gemini-pro",
+                name: "Gemini Pro",
+                input: ["text"],
+                contextWindow: 32_768,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("my-gemini", "gemini-pro", "/tmp/agent", cfg);
+    const model = expectResolvedModel(result);
+
+    expect(model.api).toBe("google-generative-ai");
+    expect(model.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta");
   });
 
   it("defaults baseUrl-only local custom fallback models to chat completions", () => {
@@ -2261,7 +2728,7 @@ describe("resolveModel", () => {
     });
 
     expect(result.error).toBe(
-      'Unknown model: microsoft-foundry/Kimi-K2.6-1. Found agents.defaults.models["microsoft-foundry/Kimi-K2.6-1"], but no matching models.providers["microsoft-foundry"].models[] entry. Add { "id": "Kimi-K2.6-1" } to models.providers["microsoft-foundry"].models[] to register this provider model.',
+      'Unknown model: microsoft-foundry/Kimi-K2.6-1. Found agents.defaults.models["microsoft-foundry/Kimi-K2.6-1"], but no matching models.providers["microsoft-foundry"].models[] entry. Add { "id": "Kimi-K2.6-1", "name": "Kimi-K2.6-1" } to models.providers["microsoft-foundry"].models[] to register this provider model. For custom or proxy providers, also set api and baseUrl so requests route to the intended endpoint. See https://docs.openclaw.ai/concepts/model-providers.',
     );
   });
 

@@ -1,3 +1,4 @@
+// End-to-end auth-profile rotation coverage for embedded runner retries.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -6,6 +7,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { OpenClawConfig } from "../config/config.js";
 import { redactIdentifier } from "../logging/redact-identifier.js";
 import type { AuthProfileFailureReason } from "./auth-profiles.js";
+import { ensureAuthProfileStore, saveAuthProfileStore } from "./auth-profiles/store.js";
 import { buildAttemptReplayMetadata } from "./embedded-agent-runner/run/incomplete-turn.js";
 import type { EmbeddedRunAttemptResult } from "./embedded-agent-runner/run/types.js";
 import {
@@ -42,6 +44,8 @@ const installRunEmbeddedMocks = () => {
       };
     },
   });
+  // The model resolver stays deterministic so retry assertions only observe
+  // profile selection, cooldowns, and provider auth preparation.
   vi.doMock("./embedded-agent-runner/model.js", () => ({
     resolveModelAsync: async (provider: string, modelId: string) => ({
       model: {
@@ -330,56 +334,56 @@ const writeAuthStore = async (
     >;
   },
 ) => {
-  const authPath = path.join(agentDir, "auth-profiles.json");
-  const statePath = path.join(agentDir, "auth-state.json");
-  const authPayload = {
-    version: 1,
-    profiles: {
-      "openai:p1": { type: "api_key", provider: "openai", key: "sk-one" },
-      "openai:p2": { type: "api_key", provider: "openai", key: "sk-two" },
-      ...(opts?.includeAnthropic
-        ? { "anthropic:default": { type: "api_key", provider: "anthropic", key: "sk-anth" } }
-        : {}),
+  // Store order and usageStats are the persisted inputs the rotation picker
+  // uses to decide which profile should be cooled down or retried.
+  saveAuthProfileStore(
+    {
+      version: 1,
+      profiles: {
+        "openai:p1": { type: "api_key", provider: "openai", key: "sk-one" },
+        "openai:p2": { type: "api_key", provider: "openai", key: "sk-two" },
+        ...(opts?.includeAnthropic
+          ? { "anthropic:default": { type: "api_key", provider: "anthropic", key: "sk-anth" } }
+          : {}),
+      },
+      ...(opts?.order ? { order: opts.order } : {}),
+      usageStats:
+        opts?.usageStats ??
+        ({
+          "openai:p1": { lastUsed: 1 },
+          "openai:p2": { lastUsed: 2 },
+        } as Record<string, { lastUsed?: number }>),
     },
-  };
-  const statePayload = {
-    version: 1,
-    ...(opts?.order ? { order: opts.order } : {}),
-    usageStats:
-      opts?.usageStats ??
-      ({
-        "openai:p1": { lastUsed: 1 },
-        "openai:p2": { lastUsed: 2 },
-      } as Record<string, { lastUsed?: number }>),
-  };
-  await fs.writeFile(authPath, JSON.stringify(authPayload));
-  await fs.writeFile(statePath, JSON.stringify(statePayload));
+    agentDir,
+  );
 };
 
 const writeCopilotAuthStore = async (agentDir: string, token = "gh-token") => {
-  const authPath = path.join(agentDir, "auth-profiles.json");
-  const payload = {
-    version: 1,
-    profiles: {
-      "github-copilot:github": { type: "token", provider: "github-copilot", token },
+  saveAuthProfileStore(
+    {
+      version: 1,
+      profiles: {
+        "github-copilot:github": { type: "token", provider: "github-copilot", token },
+      },
     },
-  };
-  await fs.writeFile(authPath, JSON.stringify(payload));
+    agentDir,
+  );
 };
 
 const writeOpenAiCodexAuthStore = async (agentDir: string) => {
-  const authPath = path.join(agentDir, "auth-profiles.json");
-  const payload = {
-    version: 1,
-    profiles: {
-      "openai:work": {
-        type: "api_key",
-        provider: "openai",
-        key: "sk-codex",
+  saveAuthProfileStore(
+    {
+      version: 1,
+      profiles: {
+        "openai:work": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-codex",
+        },
       },
     },
-  };
-  await fs.writeFile(authPath, JSON.stringify(payload));
+    agentDir,
+  );
 };
 
 const buildCopilotAssistant = (overrides: Partial<AssistantMessage> = {}) =>
@@ -462,18 +466,7 @@ async function runAutoPinnedOpenAiTurn(params: {
 }
 
 async function readUsageStats(agentDir: string) {
-  const stored = JSON.parse(await fs.readFile(path.join(agentDir, "auth-state.json"), "utf-8")) as {
-    usageStats?: Record<
-      string,
-      {
-        lastUsed?: number;
-        cooldownUntil?: number;
-        disabledUntil?: number;
-        disabledReason?: AuthProfileFailureReason;
-      }
-    >;
-  };
-  return stored.usageStats ?? {};
+  return ensureAuthProfileStore(agentDir, { syncExternalCli: false }).usageStats ?? {};
 }
 
 async function expectProfileP2UsageUnchanged(agentDir: string) {
@@ -490,6 +483,8 @@ async function runAutoPinnedRotationCase(params: {
   runEmbeddedAttemptMock.mockReset();
   return withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
     await writeAuthStore(agentDir);
+    // First attempt fails on the auto-pinned profile; the second must use the
+    // next eligible profile without changing the caller-visible run contract.
     mockFailedThenSuccessfulAttempt(params.errorMessage);
     await runAutoPinnedOpenAiTurn({
       agentDir,
@@ -514,6 +509,8 @@ async function runAutoPinnedPromptErrorRotationCase(params: {
   runEmbeddedAttemptMock.mockReset();
   return withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
     await writeAuthStore(agentDir);
+    // Prompt construction errors still rotate credentials because providers can
+    // surface auth failures before the transport attempt is created.
     mockPromptErrorThenSuccessfulAttempt(params.errorMessage);
     await runAutoPinnedOpenAiTurn({
       agentDir,
@@ -1619,22 +1616,23 @@ describe("runEmbeddedAgent auth profile rotation", () => {
 
   it("skips profiles in cooldown when rotating after failure", async () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
-      const authPath = path.join(agentDir, "auth-profiles.json");
       const p2CooldownUntil = Date.now() + 60 * 60 * 1000;
-      const payload = {
-        version: 1,
-        profiles: {
-          "openai:p1": { type: "api_key", provider: "openai", key: "sk-one" },
-          "openai:p2": { type: "api_key", provider: "openai", key: "sk-two" },
-          "openai:p3": { type: "api_key", provider: "openai", key: "sk-three" },
+      saveAuthProfileStore(
+        {
+          version: 1,
+          profiles: {
+            "openai:p1": { type: "api_key", provider: "openai", key: "sk-one" },
+            "openai:p2": { type: "api_key", provider: "openai", key: "sk-two" },
+            "openai:p3": { type: "api_key", provider: "openai", key: "sk-three" },
+          },
+          usageStats: {
+            "openai:p1": { lastUsed: 1 },
+            "openai:p2": { cooldownUntil: p2CooldownUntil },
+            "openai:p3": { lastUsed: 3 },
+          },
         },
-        usageStats: {
-          "openai:p1": { lastUsed: 1 },
-          "openai:p2": { cooldownUntil: p2CooldownUntil }, // p2 in cooldown
-          "openai:p3": { lastUsed: 3 },
-        },
-      };
-      await fs.writeFile(authPath, JSON.stringify(payload));
+        agentDir,
+      );
 
       mockFailedThenSuccessfulAttempt("rate limit");
       await runAutoPinnedOpenAiTurn({

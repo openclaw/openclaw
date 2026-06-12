@@ -1,3 +1,4 @@
+// Tests reply payload construction and metadata propagation from agent runs.
 import { beforeEach, describe, expect, it } from "vitest";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
@@ -789,6 +790,205 @@ describe("buildReplyPayloads media filter integration", () => {
     });
 
     expect(replyPayloads).toHaveLength(0);
+  });
+
+  it("keeps only final media when the text was sent as a direct block", async () => {
+    const { createBlockReplyContentKey } = await import("./block-reply-pipeline.js");
+    const directlySentBlockKeys = new Set<string>([
+      createBlockReplyContentKey({ text: "response" }),
+    ]);
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      directlySentBlockKeys,
+      directlySentBlockPayloads: [{ text: "response" }],
+      payloads: [{ text: "response\n\nMEDIA:/tmp/generated.png" }],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expectFields(replyPayloads[0], {
+      text: undefined,
+      mediaUrl: "/tmp/generated.png",
+      mediaUrls: ["/tmp/generated.png"],
+    });
+  });
+
+  it("keeps only final media after a direct block without a streaming pipeline", async () => {
+    const { createBlockReplyContentKey } = await import("./block-reply-pipeline.js");
+    const directlySentBlockKeys = new Set<string>([
+      createBlockReplyContentKey({ text: "response" }),
+    ]);
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      blockStreamingEnabled: true,
+      directlySentBlockKeys,
+      directlySentBlockPayloads: [{ text: "response" }],
+      payloads: [{ text: "response\n\nMEDIA:/tmp/generated.png" }],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expectFields(replyPayloads[0], {
+      text: undefined,
+      mediaUrl: "/tmp/generated.png",
+      mediaUrls: ["/tmp/generated.png"],
+    });
+  });
+
+  it("keeps unmatched text finals when unrelated direct blocks were sent", async () => {
+    const { createBlockReplyContentKey } = await import("./block-reply-pipeline.js");
+    const directlySentBlockKeys = new Set<string>([
+      createBlockReplyContentKey({ mediaUrl: "/tmp/other.png" }),
+    ]);
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      blockStreamingEnabled: true,
+      directlySentBlockKeys,
+      payloads: [{ text: "new final response" }],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expectFields(replyPayloads[0], { text: "new final response" });
+  });
+
+  it("keeps only final media after multiple direct text blocks", async () => {
+    const { createBlockReplyContentKey } = await import("./block-reply-pipeline.js");
+    const directlySentBlockKeys = new Set<string>([
+      createBlockReplyContentKey({ text: "Preview" }),
+      createBlockReplyContentKey({ text: " below" }),
+    ]);
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      blockStreamingEnabled: true,
+      directlySentBlockKeys,
+      directlySentBlockPayloads: [{ text: "Preview" }, { text: " below" }],
+      payloads: [{ text: "Preview below\n\nMEDIA:/tmp/generated.png" }],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expectFields(replyPayloads[0], {
+      text: undefined,
+      mediaUrl: "/tmp/generated.png",
+      mediaUrls: ["/tmp/generated.png"],
+    });
+  });
+
+  it("keeps only final media after repeated identical direct text blocks", async () => {
+    const { createBlockReplyContentKey } = await import("./block-reply-pipeline.js");
+    const directlySentBlockKeys = new Set<string>([createBlockReplyContentKey({ text: "ha" })]);
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      blockStreamingEnabled: true,
+      directlySentBlockKeys,
+      directlySentBlockPayloads: [{ text: "ha" }, { text: "ha" }],
+      payloads: [{ text: "haha\n\nMEDIA:/tmp/generated.png" }],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expectFields(replyPayloads[0], {
+      text: undefined,
+      mediaUrl: "/tmp/generated.png",
+      mediaUrls: ["/tmp/generated.png"],
+    });
+  });
+
+  it("preserves final text when internal whitespace changed", async () => {
+    const directlySentBlockPayloads = [
+      setReplyPayloadMetadata({ text: "constx=1" }, { assistantMessageIndex: 1 }),
+    ];
+    const finalPayload = setReplyPayloadMetadata(
+      { text: "const x = 1\n\nMEDIA:/tmp/generated.png" },
+      { assistantMessageIndex: 1 },
+    );
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      blockStreamingEnabled: true,
+      directlySentBlockPayloads,
+      payloads: [finalPayload],
+    });
+
+    expectFields(replyPayloads[0], {
+      text: "const x = 1",
+      mediaUrls: ["/tmp/generated.png"],
+    });
+  });
+
+  it("keeps only media not already sent with a direct block", async () => {
+    const { createBlockReplyContentKey } = await import("./block-reply-pipeline.js");
+    const directlySentBlockKeys = new Set<string>([
+      createBlockReplyContentKey({ text: "response", mediaUrl: "/tmp/already.png" }),
+    ]);
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      blockStreamingEnabled: true,
+      directlySentBlockKeys,
+      directlySentBlockPayloads: [{ text: "response", mediaUrl: "/tmp/already.png" }],
+      payloads: [
+        {
+          text: "response",
+          mediaUrls: ["/tmp/already.png", "/tmp/new.png"],
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expectFields(replyPayloads[0], {
+      text: undefined,
+      mediaUrl: undefined,
+      mediaUrls: ["/tmp/new.png"],
+    });
+  });
+
+  it("ignores direct status notices when matching final text", async () => {
+    const { createBlockReplyContentKey } = await import("./block-reply-pipeline.js");
+    const directlySentBlockKeys = new Set<string>([
+      createBlockReplyContentKey({ text: "Compacting", isStatusNotice: true }),
+      createBlockReplyContentKey({ text: "response" }),
+    ]);
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      blockStreamingEnabled: true,
+      directlySentBlockKeys,
+      directlySentBlockPayloads: [{ text: "response" }],
+      payloads: [{ text: "response\n\nMEDIA:/tmp/generated.png" }],
+    });
+
+    expectFields(replyPayloads[0], {
+      text: undefined,
+      mediaUrls: ["/tmp/generated.png"],
+    });
+  });
+
+  it("matches direct fragments within each assistant message", async () => {
+    const firstDirect = setReplyPayloadMetadata({ text: "alpha" }, { assistantMessageIndex: 1 });
+    const secondDirect = setReplyPayloadMetadata({ text: "beta" }, { assistantMessageIndex: 2 });
+    const firstFinal = setReplyPayloadMetadata(
+      { text: "alpha\n\nMEDIA:/tmp/a.png" },
+      { assistantMessageIndex: 1 },
+    );
+    const secondFinal = setReplyPayloadMetadata(
+      { text: "beta\n\nMEDIA:/tmp/b.png" },
+      { assistantMessageIndex: 2 },
+    );
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      blockStreamingEnabled: true,
+      directlySentBlockPayloads: [firstDirect, secondDirect],
+      payloads: [firstFinal, secondFinal],
+    });
+
+    expect(replyPayloads.map((payload) => payload.text)).toEqual([undefined, undefined]);
+    expect(replyPayloads.map((payload) => payload.mediaUrls)).toEqual([
+      ["/tmp/a.png"],
+      ["/tmp/b.png"],
+    ]);
   });
 
   it("does not suppress same-target replies when accountId differs", async () => {

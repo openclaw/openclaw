@@ -1,3 +1,4 @@
+// Defines environment-variable config metadata and preservation rules.
 import {
   isDangerousHostEnvOverrideVarName,
   isDangerousHostEnvVarName,
@@ -30,6 +31,9 @@ function collectConfigEnvVarsByTarget(cfg?: OpenClawConfig): Record<string, stri
       if (isBlockedConfigEnvVar(key)) {
         continue;
       }
+      if (containsEnvVarReference(value)) {
+        continue;
+      }
       entries[key] = value;
     }
   }
@@ -48,20 +52,27 @@ function collectConfigEnvVarsByTarget(cfg?: OpenClawConfig): Record<string, stri
     if (isBlockedConfigEnvVar(key)) {
       continue;
     }
+    if (containsEnvVarReference(value)) {
+      continue;
+    }
     entries[key] = value;
   }
 
   return entries;
 }
 
+/** Collects config env vars safe to inject into runtime process environments. */
 export function collectConfigRuntimeEnvVars(cfg?: OpenClawConfig): Record<string, string> {
   return collectConfigEnvVarsByTarget(cfg);
 }
 
+/** Collects config env vars safe to persist into managed service environments. */
 export function collectConfigServiceEnvVars(cfg?: OpenClawConfig): Record<string, string> {
+  // Runtime and service envs intentionally share filtering until a target-specific contract exists.
   return collectConfigEnvVarsByTarget(cfg);
 }
 
+/** Builds a cloned environment with config env vars applied without mutating the base env. */
 export function createConfigRuntimeEnv(
   cfg: OpenClawConfig,
   baseEnv: NodeJS.ProcessEnv = process.env,
@@ -71,6 +82,7 @@ export function createConfigRuntimeEnv(
   return env;
 }
 
+/** Applies config env vars to an environment without overwriting existing non-empty values. */
 export function applyConfigEnvVars(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,

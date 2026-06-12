@@ -1,3 +1,4 @@
+/** Preflight compaction and memory flush helpers for agent runner sessions. */
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -46,6 +47,7 @@ import {
   buildEmbeddedRunExecutionParams,
   resolveModelFallbackOptions,
 } from "./agent-runner-utils.js";
+import type { CompactionNoticePhase } from "./compaction-notice.js";
 import {
   hasAlreadyFlushedForCurrentCompaction,
   resolveMaxActiveTranscriptBytes,
@@ -129,6 +131,7 @@ const memoryDeps = {
   now: () => Date.now(),
 };
 
+/** Overrides memory helper dependencies for tests. */
 export function setAgentRunnerMemoryTestDeps(overrides?: Partial<typeof memoryDeps>): void {
   Object.assign(memoryDeps, {
     runWithModelFallback,
@@ -325,6 +328,7 @@ function truncateMemoryFlushErrorMessage(err: unknown): string {
     : message;
 }
 
+/** Usage snapshot read from a session transcript before compaction. */
 export type SessionTranscriptUsageSnapshot = {
   promptTokens?: number;
   outputTokens?: number;
@@ -673,6 +677,7 @@ async function estimatePromptTokensFromSessionTranscript(params: {
   }
 }
 
+/** Runs preflight compaction when session state exceeds configured thresholds. */
 export async function runPreflightCompactionIfNeeded(params: {
   cfg: OpenClawConfig;
   followupRun: FollowupRun;
@@ -686,6 +691,7 @@ export async function runPreflightCompactionIfNeeded(params: {
   storePath?: string;
   isHeartbeat: boolean;
   replyOperation: ReplyOperation;
+  onCompactionNotice?: (phase: CompactionNoticePhase) => Promise<void> | void;
 }): Promise<SessionEntry | undefined> {
   const deps = {
     compactEmbeddedAgentSession: memoryDeps.compactEmbeddedAgentSession,
@@ -852,105 +858,136 @@ export async function runPreflightCompactionIfNeeded(params: {
   );
 
   params.replyOperation.setPhase("preflight_compacting");
-  const sessionFile = resolveSessionLogPath(
-    entry.sessionId,
-    entry.sessionFile ? entry : { ...entry, sessionFile: params.followupRun.run.sessionFile },
-    params.sessionKey ?? params.followupRun.run.sessionKey,
-    { storePath: params.storePath },
-  );
-  const result = await deps.compactEmbeddedAgentSession({
-    sessionId: entry.sessionId,
-    sessionKey: params.sessionKey,
-    sandboxSessionKey: params.runtimePolicySessionKey,
-    allowGatewaySubagentBinding: true,
-    messageChannel: params.followupRun.run.messageProvider,
-    groupId: entry.groupId ?? params.followupRun.run.groupId,
-    groupChannel: entry.groupChannel ?? params.followupRun.run.groupChannel,
-    groupSpace: entry.space ?? params.followupRun.run.groupSpace,
-    senderId: params.followupRun.run.senderId,
-    senderName: params.followupRun.run.senderName,
-    senderUsername: params.followupRun.run.senderUsername,
-    senderE164: params.followupRun.run.senderE164,
-    sessionFile: sessionFile ?? params.followupRun.run.sessionFile,
-    workspaceDir: params.followupRun.run.workspaceDir,
-    cwd: params.followupRun.run.cwd,
-    agentDir: params.followupRun.run.agentDir,
-    config: params.cfg,
-    skillsSnapshot: entry.skillsSnapshot ?? params.followupRun.run.skillsSnapshot,
-    provider: params.followupRun.run.provider,
-    model: params.followupRun.run.model,
-    authProfileId: params.followupRun.run.authProfileId,
-    agentHarnessId:
-      entry.sessionId === params.followupRun.run.sessionId ? entry.agentHarnessId : undefined,
-    thinkLevel: params.followupRun.run.thinkLevel,
-    bashElevated: params.followupRun.run.bashElevated,
-    trigger: "budget",
-    force: true,
-    forcePreflight: true,
-    preflightRequired: true,
-    preflightCompactionTrigger: compactionTrigger,
-    deferOwningContextEngineCompaction: false,
-    contextTokenBudget: contextWindowTokens,
-    currentTokenCount: tokenCountForCompaction ?? freshPersistedTokens,
-    ownerNumbers: params.followupRun.run.ownerNumbers,
-    abortSignal: params.replyOperation.abortSignal,
-  });
+  const notifyCompaction = async (phase: CompactionNoticePhase) => {
+    try {
+      await params.onCompactionNotice?.(phase);
+    } catch (err) {
+      logVerbose(`preflightCompaction notice delivery failed: ${String(err)}`);
+    }
+  };
+  let startedCompactionNotice = false;
+  let terminalCompactionNoticeSent = false;
+  const notifyStartCompaction = async () => {
+    startedCompactionNotice = true;
+    await notifyCompaction("start");
+  };
+  const notifyTerminalCompaction = async (phase: "end" | "incomplete" | "skipped") => {
+    terminalCompactionNoticeSent = true;
+    await notifyCompaction(phase);
+  };
+  try {
+    await notifyStartCompaction();
+    const sessionFile = resolveSessionLogPath(
+      entry.sessionId,
+      entry.sessionFile ? entry : { ...entry, sessionFile: params.followupRun.run.sessionFile },
+      params.sessionKey ?? params.followupRun.run.sessionKey,
+      { storePath: params.storePath },
+    );
+    const result = await deps.compactEmbeddedAgentSession({
+      sessionId: entry.sessionId,
+      sessionKey: params.sessionKey,
+      sandboxSessionKey: params.runtimePolicySessionKey,
+      allowGatewaySubagentBinding: true,
+      messageChannel: params.followupRun.run.messageProvider,
+      groupId: entry.groupId ?? params.followupRun.run.groupId,
+      groupChannel: entry.groupChannel ?? params.followupRun.run.groupChannel,
+      groupSpace: entry.space ?? params.followupRun.run.groupSpace,
+      senderId: params.followupRun.run.senderId,
+      senderName: params.followupRun.run.senderName,
+      senderUsername: params.followupRun.run.senderUsername,
+      senderE164: params.followupRun.run.senderE164,
+      sessionFile: sessionFile ?? params.followupRun.run.sessionFile,
+      workspaceDir: params.followupRun.run.workspaceDir,
+      cwd: params.followupRun.run.cwd,
+      agentDir: params.followupRun.run.agentDir,
+      config: params.cfg,
+      skillsSnapshot: entry.skillsSnapshot ?? params.followupRun.run.skillsSnapshot,
+      provider: params.followupRun.run.provider,
+      model: params.followupRun.run.model,
+      authProfileId: params.followupRun.run.authProfileId,
+      agentHarnessId:
+        entry.sessionId === params.followupRun.run.sessionId ? entry.agentHarnessId : undefined,
+      thinkLevel: params.followupRun.run.thinkLevel,
+      bashElevated: params.followupRun.run.bashElevated,
+      trigger: "budget",
+      force: true,
+      forcePreflight: true,
+      preflightRequired: true,
+      preflightCompactionTrigger: compactionTrigger,
+      deferOwningContextEngineCompaction: false,
+      contextTokenBudget: contextWindowTokens,
+      currentTokenCount: tokenCountForCompaction ?? freshPersistedTokens,
+      ownerNumbers: params.followupRun.run.ownerNumbers,
+      abortSignal: params.replyOperation.abortSignal,
+    });
 
-  if (!result?.ok) {
-    const reason = result?.reason ?? "not_compacted";
-    if (isPreflightCompactionSkipReason(reason)) {
-      logVerbose(`preflightCompaction skipped: sessionKey=${params.sessionKey} reason=${reason}`);
-      return entry ?? params.sessionEntry;
+    if (!result?.ok) {
+      const reason = result?.reason ?? "not_compacted";
+      if (isPreflightCompactionSkipReason(reason)) {
+        await notifyTerminalCompaction("skipped");
+        logVerbose(`preflightCompaction skipped: sessionKey=${params.sessionKey} reason=${reason}`);
+        return entry ?? params.sessionEntry;
+      }
+      await notifyTerminalCompaction("incomplete");
+      logVerbose(`preflightCompaction failed: sessionKey=${params.sessionKey} reason=${reason}`);
+      throw new Error(`Preflight compaction required but failed: ${reason}`);
     }
-    logVerbose(`preflightCompaction failed: sessionKey=${params.sessionKey} reason=${reason}`);
-    throw new Error(`Preflight compaction required but failed: ${reason}`);
-  }
 
-  if (!result.compacted) {
-    const reason = normalizeOptionalString(result.reason) ?? "not_compacted";
-    if (isPreflightCompactionSkipReason(reason)) {
-      logVerbose(`preflightCompaction skipped: sessionKey=${params.sessionKey} reason=${reason}`);
-      return entry ?? params.sessionEntry;
+    if (!result.compacted) {
+      const reason = normalizeOptionalString(result.reason) ?? "not_compacted";
+      if (isPreflightCompactionSkipReason(reason)) {
+        await notifyTerminalCompaction("skipped");
+        logVerbose(`preflightCompaction skipped: sessionKey=${params.sessionKey} reason=${reason}`);
+        return entry ?? params.sessionEntry;
+      }
+      await notifyTerminalCompaction("incomplete");
+      logVerbose(`preflightCompaction failed: sessionKey=${params.sessionKey} reason=${reason}`);
+      throw new Error(`Preflight compaction required but failed: ${reason}`);
     }
-    logVerbose(`preflightCompaction failed: sessionKey=${params.sessionKey} reason=${reason}`);
-    throw new Error(`Preflight compaction required but failed: ${reason}`);
-  }
 
-  await deps.incrementCompactionCount({
-    cfg: params.cfg,
-    sessionEntry: entry,
-    sessionStore: params.sessionStore,
-    sessionKey: params.sessionKey,
-    storePath: params.storePath,
-    tokensAfter: result.result?.tokensAfter,
-    newSessionId: result.result?.sessionId,
-    newSessionFile: result.result?.sessionFile,
-  });
-  await appendPostCompactionRefreshPrompt({
-    cfg: params.cfg,
-    followupRun: params.followupRun,
-  });
-  entry = params.sessionStore?.[params.sessionKey] ?? entry;
-  if (entry) {
-    const previousSessionId = params.followupRun.run.sessionId;
-    params.followupRun.run.sessionId = entry.sessionId;
-    params.replyOperation.updateSessionId(entry.sessionId);
-    if (entry.sessionFile) {
-      params.followupRun.run.sessionFile = entry.sessionFile;
+    await deps.incrementCompactionCount({
+      cfg: params.cfg,
+      sessionEntry: entry,
+      sessionStore: params.sessionStore,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+      tokensAfter: result.result?.tokensAfter,
+      newSessionId: result.result?.sessionId,
+      newSessionFile: result.result?.sessionFile,
+    });
+    await appendPostCompactionRefreshPrompt({
+      cfg: params.cfg,
+      followupRun: params.followupRun,
+    });
+    await notifyTerminalCompaction("end");
+    entry = params.sessionStore?.[params.sessionKey] ?? entry;
+    if (entry) {
+      const previousSessionId = params.followupRun.run.sessionId;
+      params.followupRun.run.sessionId = entry.sessionId;
+      params.replyOperation.updateSessionId(entry.sessionId);
+      if (entry.sessionFile) {
+        params.followupRun.run.sessionFile = entry.sessionFile;
+      }
+      const queueKey = params.followupRun.run.sessionKey ?? params.sessionKey;
+      if (queueKey) {
+        deps.refreshQueuedFollowupSession({
+          key: queueKey,
+          previousSessionId,
+          nextSessionId: entry.sessionId,
+          nextSessionFile: entry.sessionFile,
+        });
+      }
     }
-    const queueKey = params.followupRun.run.sessionKey ?? params.sessionKey;
-    if (queueKey) {
-      deps.refreshQueuedFollowupSession({
-        key: queueKey,
-        previousSessionId,
-        nextSessionId: entry.sessionId,
-        nextSessionFile: entry.sessionFile,
-      });
+    return entry ?? params.sessionEntry;
+  } catch (err) {
+    if (startedCompactionNotice && !terminalCompactionNoticeSent) {
+      await notifyCompaction("incomplete");
     }
+    throw err;
   }
-  return entry ?? params.sessionEntry;
 }
 
+/** Runs post-turn memory flush when transcript state warrants it. */
 export async function runMemoryFlushIfNeeded(params: {
   cfg: OpenClawConfig;
   followupRun: FollowupRun;

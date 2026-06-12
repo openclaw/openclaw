@@ -1,3 +1,8 @@
+/**
+ * Gateway-host exec approval and allowlist handling.
+ * Evaluates shell allowlists, auto-review, durable approvals, follow-up routing,
+ * and approved command execution for gateway-backed exec calls.
+ */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { describeInterpreterInlineEval } from "../infra/command-analysis/inline-eval.js";
@@ -56,6 +61,7 @@ import type {
 } from "./bash-tools.exec-types.js";
 import type { AgentToolResult } from "./runtime/index.js";
 
+/** Full input bundle for gateway-host allowlist and approval processing. */
 export type ProcessGatewayAllowlistParams = {
   command: string;
   workdir: string;
@@ -76,6 +82,10 @@ export type ProcessGatewayAllowlistParams = {
   trigger?: string;
   agentId?: string;
   sessionKey?: string;
+  /** Session UUID active when the approval was requested; pins the followup. */
+  sessionId?: string;
+  /** Session-store template, so the direct/denied followup can detect a rebind. */
+  sessionStore?: string;
   bashElevated?: ExecElevatedDefaults;
   turnSourceChannel?: string;
   turnSourceTo?: string;
@@ -93,6 +103,7 @@ export type ProcessGatewayAllowlistParams = {
   trustedSafeBinDirs?: ReadonlySet<string>;
 };
 
+/** Gateway allowlist outcome before command execution continues. */
 export type ProcessGatewayAllowlistResult = {
   execCommandOverride?: string;
   allowWithoutEnforcedCommand?: boolean;
@@ -333,6 +344,7 @@ async function resolveGatewayExecApprovalFollowupText(params: {
   }
 }
 
+/** Processes gateway exec policy and returns execution/approval/denial outcome. */
 export async function processGatewayAllowlist(
   params: ProcessGatewayAllowlistParams,
 ): Promise<ProcessGatewayAllowlistResult> {
@@ -694,6 +706,8 @@ export async function processGatewayAllowlist(
     const followupTarget = buildExecApprovalFollowupTarget({
       approvalId,
       sessionKey: params.notifySessionKey ?? params.sessionKey,
+      expectedSessionId: params.sessionId,
+      sessionStore: params.sessionStore,
       bashElevated: params.bashElevated,
       turnSourceChannel: params.turnSourceChannel,
       turnSourceTo: params.turnSourceTo,

@@ -1,3 +1,4 @@
+// Doctor config-flow tests cover config repair, migration, stripping, and validation orchestration.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
@@ -1697,6 +1698,38 @@ describe("doctor config flow", () => {
     expect(warning).toContain("move custom transforms there or remove hooks.transformsDir");
   });
 
+  it("warns when internal hook entries include unsupported loader keys", async () => {
+    const doctorWarnings = await collectDoctorWarnings({
+      hooks: {
+        internal: {
+          entries: {
+            "custom-hook": {
+              enabled: true,
+              handler: "./hooks/custom.ts",
+              extraDirs: ["./hooks"],
+              env: { OPENCLAW_CUSTOM_HOOK: "1" },
+            },
+            "valid-hook": {
+              enabled: true,
+              paths: ["./tracked"],
+            },
+            "null-hook": null,
+          },
+        },
+      },
+    });
+
+    const warning = doctorWarnings.join("\n");
+    expect(warning).toContain("hooks.internal.entries.custom-hook:");
+    expect(warning).toContain(
+      "unsupported loader keys handler, extraDirs will not load hook modules",
+    );
+    expect(warning).toContain("bootstrap-extra-files for session bootstrap content");
+    expect(warning).toContain("Doctor cannot rewrite this automatically");
+    expect(warning).not.toContain("hooks.internal.entries.valid-hook");
+    expect(warning).not.toContain("hooks.internal.entries.null-hook");
+  });
+
   it("does not warn about sender-based group allowlist for googlechat", async () => {
     const doctorWarnings = await collectDoctorWarnings({
       channels: {
@@ -2914,6 +2947,19 @@ describe("doctor config flow", () => {
                     voiceId: "voice-123",
                     modelId: "eleven_v3",
                   },
+                },
+                realtime: {
+                  provider: "openai",
+                  providers: {
+                    openai: {
+                      model: "gpt-realtime",
+                    },
+                  },
+                  model: "gpt-realtime",
+                  voice: "cedar",
+                  mode: "realtime",
+                  transport: "gateway-relay",
+                  brain: "agent-consult",
                 },
               },
             },

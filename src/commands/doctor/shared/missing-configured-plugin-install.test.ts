@@ -1,3 +1,4 @@
+// Missing configured plugin install tests cover doctor diagnostics for absent plugin installs.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -535,6 +536,64 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     });
     expect(result.changes).toEqual([
       `Installed missing configured plugin "diagnostics-otel" from ${expectedNpmInstallSpec("@openclaw/diagnostics-otel")}.`,
+    ]);
+  });
+
+  it("installs the official llama.cpp plugin for configured local memory embeddings", async () => {
+    mocks.installPluginFromNpmSpec.mockResolvedValueOnce({
+      ok: true,
+      pluginId: "llama-cpp",
+      targetDir: "/tmp/openclaw-plugins/llama-cpp",
+      version: "2026.6.2",
+      npmResolution: {
+        name: "@openclaw/llama-cpp-provider",
+        version: "2026.6.2",
+        resolvedSpec: "@openclaw/llama-cpp-provider@2026.6.2",
+        integrity: "sha512-llama",
+        resolvedAt: "2026-06-08T00:00:00.000Z",
+      },
+    });
+    mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
+      {
+        id: "llama-cpp",
+        label: "llama.cpp Provider",
+        openclaw: {
+          plugin: { id: "llama-cpp", label: "llama.cpp Provider" },
+          contracts: { embeddingProviders: ["local"] },
+          install: {
+            npmSpec: "@openclaw/llama-cpp-provider",
+            defaultChoice: "npm",
+          },
+        },
+        install: {
+          npmSpec: "@openclaw/llama-cpp-provider",
+          defaultChoice: "npm",
+        },
+      },
+    ]);
+
+    const { repairMissingConfiguredPluginInstalls } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingConfiguredPluginInstalls({
+      cfg: {
+        agents: {
+          defaults: {
+            memorySearch: {
+              provider: "local",
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(mocks.installPluginFromClawHub).not.toHaveBeenCalled();
+    expectRecordFields(mockCallArg(mocks.installPluginFromNpmSpec), {
+      spec: expectedNpmInstallSpec("@openclaw/llama-cpp-provider"),
+      expectedPluginId: "llama-cpp",
+    });
+    expect(result.changes).toEqual([
+      `Installed missing configured plugin "llama-cpp" from ${expectedNpmInstallSpec("@openclaw/llama-cpp-provider")}.`,
     ]);
   });
 
@@ -1749,7 +1808,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     const records = mockCallArg(mocks.writePersistedInstalledPluginIndexInstallRecords);
     expectRecordFields((records as Record<string, unknown>).codex, {
       source: "npm",
-      spec: "@openclaw/codex",
+      spec: "@openclaw/codex@2026.5.2",
       installPath: "/tmp/openclaw-plugins/codex",
       version: "2026.5.2",
     });
@@ -1850,7 +1909,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     ]);
     expectRecordFields(result.records.codex, {
       source: "npm",
-      spec: "@openclaw/codex",
+      spec: `@openclaw/codex@${VERSION}`,
       installPath: "/tmp/openclaw-plugins/codex",
       version: VERSION,
       resolvedName: "@openclaw/codex",
@@ -1949,7 +2008,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     ]);
     expectRecordFields(firstPass.records.codex, {
       source: "npm",
-      spec: "@openclaw/codex",
+      spec: `@openclaw/codex@${codexBetaVersion}`,
       installPath: installDir,
       version: codexBetaVersion,
       resolvedName: "@openclaw/codex",
@@ -2160,7 +2219,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     const records = mockCallArg(mocks.writePersistedInstalledPluginIndexInstallRecords);
     expectRecordFields((records as Record<string, unknown>).codex, {
       source: "npm",
-      spec: "@openclaw/codex",
+      spec: "@openclaw/codex@2026.5.2",
       installPath: "/tmp/openclaw-plugins/codex",
       version: "2026.5.2",
     });
@@ -2174,7 +2233,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(Object.keys(result.records)).toEqual(["codex"]);
     expectRecordFields(result.records.codex, {
       source: "npm",
-      spec: "@openclaw/codex",
+      spec: "@openclaw/codex@2026.5.2",
       installPath: "/tmp/openclaw-plugins/codex",
       version: "2026.5.2",
       resolvedName: "@openclaw/codex",
@@ -2678,6 +2737,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     });
     const persistedRecords = mockCallArg(mocks.writePersistedInstalledPluginIndexInstallRecords);
     expectRecordFields((persistedRecords as Record<string, unknown>).discord, {
+      spec: "@openclaw/discord@1.2.3",
       installPath: "/tmp/openclaw-plugins/discord",
     });
     expect(mockCallArg(mocks.writePersistedInstalledPluginIndexInstallRecords, 0, 1)).toEqual({
@@ -3041,7 +3101,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     ) as Record<string, unknown>;
     expectRecordFields(persistedRecords.brave, {
       source: "npm",
-      spec: "@openclaw/brave-plugin",
+      spec: "@openclaw/brave-plugin@2026.5.12",
       installPath: "/tmp/openclaw-plugins/brave",
       version: "2026.5.12",
     });
@@ -3528,7 +3588,9 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     const persistedRecords = mockCallArg(
       mocks.writePersistedInstalledPluginIndexInstallRecords,
     ) as Record<string, unknown>;
-    expectRecordFields(persistedRecords.brave, { spec: "@openclaw/brave-plugin" });
+    expectRecordFields(persistedRecords.brave, {
+      spec: "@openclaw/brave-plugin@2026.5.4-beta.1",
+    });
     expect(mockCallArg(mocks.writePersistedInstalledPluginIndexInstallRecords, 0, 1)).toEqual({
       env: {},
     });

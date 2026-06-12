@@ -1,3 +1,4 @@
+// Control UI English locale strings are the i18n source bundle.
 import type { TranslationMap } from "../lib/types.ts";
 
 export const en: TranslationMap = {
@@ -447,6 +448,14 @@ export const en: TranslationMap = {
     logs: "Live gateway logs.",
     dreams: "Memory dreaming, consolidation, and reflection.",
   },
+  skillWorkshop: {
+    header: {
+      useCurrentChat: "Use current chat",
+      useCurrentChatAria: "Use current chat for revision requests",
+      useCurrentChatTooltip:
+        "Send revision requests to the current chat session instead of the proposal's workshop session.",
+    },
+  },
   activity: {
     title: "Activity",
     subtitle: "Ephemeral tool activity derived from live session events.",
@@ -505,6 +514,8 @@ export const en: TranslationMap = {
     newCard: "New card",
     newCardHelp: "Queue work for an agent session.",
     archiveCard: "Archive card",
+    unarchiveCard: "Restore from archive",
+    archived: "Archived",
     deleteCard: "Delete card",
     viewDetails: "View details",
     detailTitle: "Card details",
@@ -529,10 +540,35 @@ export const en: TranslationMap = {
     openSession: "Open session",
     openLinkedSession: "Open linked session",
     defaultAgent: "Default agent",
+    allAgents: "All agents",
+    agentFilter: "Filter by agent",
+    agentLinked: "Linked to {agent}",
+    agentDefaultLinked: "Using default agent {agent}",
+    engineOpenAI: "OpenAI",
+    engineClaude: "Claude",
+    engineDisabledRuntime:
+      "{agent} uses the {runtime} ACP runtime. Use default start for that session.",
     runEngine: "Run {engine}",
     openEngine: "Open {engine}",
     runDefaultAgent: "Run default agent",
+    run: "Run",
+    open: "Open",
     start: "Start",
+    dependencies: "Dependencies",
+    dependenciesReady: "{count} ready",
+    dependenciesReadyTitle: "{count} dependencies are done.",
+    dependenciesBlocked: "{count} blocked",
+    dependenciesBlockedTitle: "Waiting on dependencies: {parents}.",
+    dependencyMissing: "{parent} (missing)",
+    dependencyStatusMissing: "Missing",
+    unknownStatus: "Unknown",
+    showArchived: "Show archived cards",
+    hideArchived: "Hide archived cards",
+    showArchivedShort: "Archived",
+    hideArchivedShort: "Hide archived",
+    layout: "Card layout",
+    layoutCompact: "Compact cards",
+    layoutComfortable: "Comfortable cards",
     dispatch: "Dispatch ready work",
     dispatchSummary:
       "Dispatch complete: started {started}, promoted {promoted}, blocked {blocked}, reclaimed {reclaimed}, orchestrated {orchestrated}, failures {failures}.",
@@ -1558,6 +1594,8 @@ export const en: TranslationMap = {
     },
     jobDetail: {
       system: "System",
+      command: "Command",
+      cwd: "CWD",
       prompt: "Prompt",
       delivery: "Delivery",
       agent: "Agent",

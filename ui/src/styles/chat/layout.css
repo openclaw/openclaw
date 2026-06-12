@@ -1014,7 +1014,8 @@
   color: var(--muted);
 }
 
-.agent-chat__talk-options input {
+.agent-chat__talk-options input,
+.agent-chat__talk-options select {
   width: 100%;
   min-width: 0;
   height: 34px;
@@ -1029,7 +1030,16 @@
   box-sizing: border-box;
 }
 
-.agent-chat__talk-options input:focus {
+.agent-chat__talk-options select {
+  appearance: none;
+  padding-right: 26px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%239ca3af' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-position: right 8px center;
+  background-repeat: no-repeat;
+}
+
+.agent-chat__talk-options input:focus,
+.agent-chat__talk-options select:focus {
   outline: none;
   box-shadow: var(--focus-ring);
 }
@@ -1364,6 +1374,59 @@
 
 .chat-send-btn--stop:hover:not(:disabled) {
   background: color-mix(in srgb, var(--danger) 85%, #fff);
+}
+
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .agent-chat__toolbar {
+    flex-wrap: wrap;
+    align-items: center;
+  }
+
+  .agent-chat__toolbar-left {
+    order: 1;
+    flex: 1 1 auto;
+  }
+
+  .agent-chat__toolbar-right {
+    order: 2;
+    flex: 0 0 auto;
+    margin-left: auto;
+  }
+
+  .agent-chat__composer-controls {
+    order: 3;
+    display: grid;
+    flex: 1 0 100%;
+    grid-template-columns: minmax(0, 1fr) 44px;
+    gap: 8px;
+    width: 100%;
+  }
+
+  .agent-chat__composer-controls .chat-controls__model,
+  .chat-composer-model-control {
+    min-width: 0;
+  }
+
+  .chat-settings-popover-wrapper {
+    width: 44px;
+    margin-left: 0;
+    justify-self: end;
+  }
+
+  .chat-settings-chip {
+    width: 44px;
+    min-width: 44px;
+    max-width: 44px;
+    height: 44px;
+    min-height: 44px;
+    justify-content: center;
+    padding: 0;
+  }
+
+  .chat-settings-chip__text,
+  .chat-settings-chip__chevron {
+    display: none;
+  }
 }
 
 .chat-queue__item--steered {
@@ -2478,6 +2541,10 @@
   .chat-bubble.has-copy {
     padding-top: 34px;
     padding-right: 12px;
+  }
+
+  .chat-bubble.has-copy.chat-bubble--has-actions {
+    padding-top: 8px;
   }
 }
 

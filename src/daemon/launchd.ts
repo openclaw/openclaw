@@ -1,3 +1,4 @@
+/** macOS LaunchAgent installer, runtime inspection, and lifecycle controls. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -61,6 +62,8 @@ function normalizeOpenClawUpdateLaunchdLabel(label: unknown): string | null {
   if (trimmed.startsWith(OPENCLAW_UPDATE_LAUNCHD_LABEL_PREFIX)) {
     return trimmed;
   }
+  // Manual update jobs include a timestamp-like suffix and should be cleaned up
+  // without matching arbitrary ai.openclaw labels.
   return OPENCLAW_MANUAL_UPDATE_LAUNCHD_LABEL_PATTERN.test(trimmed) ? trimmed : null;
 }
 
@@ -200,6 +203,8 @@ async function prepareLaunchAgentProgramArguments(params: {
     return { programArguments: params.programArguments };
   }
 
+  // Environment values with secrets live in an owner-only env file instead of
+  // inline plist XML, which can be harder to rotate and audit.
   const envDir = resolveLaunchAgentEnvDir(params.env);
   const envFilePath = resolveLaunchAgentEnvFilePath(params.env, params.label);
   const wrapperPath = resolveLaunchAgentEnvWrapperPath(params.env, params.label);
@@ -327,6 +332,8 @@ export async function findStaleOpenClawUpdateLaunchdJobs(
   if (result.code !== 0) {
     return [];
   }
+  // Never report the active gateway label as stale even when a wrapper exposes
+  // update-like launchd metadata through the current environment.
   return parseLaunchctlListOpenClawUpdateJobs(result.stdout).filter(
     (job) => !isCurrentGatewayLaunchdLabel(job.label, env),
   );
@@ -414,16 +421,22 @@ function throwBootstrapGuiSessionError(params: {
   domain: string;
   actionHint: string;
 }) {
-  throw new Error(
-    [
-      `launchctl bootstrap failed: ${params.detail}`,
-      `LaunchAgent ${params.actionHint} requires a logged-in macOS GUI session for this user (${params.domain}).`,
-      "This usually means you are running from SSH/headless context or as the wrong user (including sudo).",
-      `Fix: sign in to the macOS desktop as the target user and rerun \`${params.actionHint}\`.`,
-      "For headless VM setups, enable auto-login for the target user so macOS creates the GUI session after boot.",
-      "Headless deployments should use a dedicated logged-in user session or a custom LaunchDaemon (not shipped): https://docs.openclaw.ai/gateway",
-    ].join("\n"),
-  );
+  throw new Error(formatLaunchAgentGuiSessionError(params));
+}
+
+export function formatLaunchAgentGuiSessionError(params: {
+  detail: string;
+  domain: string;
+  actionHint: string;
+}): string {
+  return [
+    `launchctl bootstrap failed: ${params.detail}`,
+    `LaunchAgent ${params.actionHint} requires a logged-in macOS GUI session for this user (${params.domain}).`,
+    "This usually means you are running from SSH/headless context or as the wrong user (including sudo).",
+    `Fix: sign in to the macOS desktop as the target user and rerun \`${params.actionHint}\`.`,
+    "For headless VM setups, enable auto-login for the target user so macOS creates the GUI session after boot.",
+    "Headless deployments should use a dedicated logged-in user session or a custom LaunchDaemon (not shipped): https://docs.openclaw.ai/gateway",
+  ].join("\n");
 }
 
 function writeLaunchAgentActionLine(
@@ -566,10 +579,14 @@ export async function readLaunchAgentRuntime(
   const res = await execLaunchctl(["print", `${domain}/${label}`]);
   if (res.code !== 0) {
     const plistExists = await launchAgentPlistExists(env);
+    const detail = (res.stderr || res.stdout).trim() || undefined;
+    const missingGuiSession = plistExists && isUnsupportedGuiDomain(detail ?? "");
     return {
       status: "unknown",
-      detail: (res.stderr || res.stdout).trim() || undefined,
-      ...(plistExists ? { missingSupervision: true } : { missingUnit: true }),
+      detail,
+      ...(plistExists
+        ? { missingSupervision: true, ...(missingGuiSession ? { missingGuiSession } : {}) }
+        : { missingUnit: true }),
     };
   }
   const parsed = parseLaunchctlPrint(res.stdout || res.stderr || "");
@@ -588,7 +605,12 @@ export async function readLaunchAgentRuntime(
 
 type LaunchAgentBootstrapRepairResult =
   | { ok: true; status: "repaired" | "already-loaded" }
-  | { ok: false; status: "bootstrap-failed" | "kickstart-failed"; detail?: string };
+  | {
+      ok: false;
+      status: "bootstrap-failed" | "kickstart-failed";
+      detail?: string;
+    }
+  | { ok: false; status: "gui-session-unavailable"; detail: string; domain: string };
 
 function isLaunchctlAlreadyLoaded(res: { stdout: string; stderr: string; code: number }): boolean {
   const detail = normalizeLowercaseStringOrEmpty(res.stderr || res.stdout);
@@ -608,6 +630,14 @@ export async function repairLaunchAgentBootstrap(args: {
   let repairStatus: "repaired" | "already-loaded" = "repaired";
   if (boot.code !== 0) {
     const detail = (boot.stderr || boot.stdout).trim();
+    if (isUnsupportedGuiDomain(detail)) {
+      return {
+        ok: false,
+        status: "gui-session-unavailable",
+        detail,
+        domain,
+      };
+    }
     if (!isLaunchctlAlreadyLoaded(boot)) {
       return { ok: false, status: "bootstrap-failed", detail: detail || undefined };
     }
@@ -677,6 +707,7 @@ function isUnsupportedGuiDomain(detail: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(detail);
   return (
     normalized.includes("domain does not support specified action") ||
+    normalized.includes("could not find domain for user gui") ||
     normalized.includes("bootstrap failed: 125")
   );
 }
