@@ -1332,6 +1332,18 @@ function taskMatchesCard(task: WorkboardTaskSummary, card: WorkboardCard): boole
   return taskSessionMatches;
 }
 
+function taskMatchesCanonicalCardLink(task: WorkboardTaskSummary, card: WorkboardCard): boolean {
+  const cardTaskId = normalizeString(card.taskId);
+  if (cardTaskId && task.taskId !== cardTaskId && task.id !== cardTaskId) {
+    return false;
+  }
+  const cardRunId = workboardCardRunId(card);
+  if (cardRunId && task.runId !== cardRunId) {
+    return false;
+  }
+  return taskMatchesCard(task, card);
+}
+
 function selectWorkboardTaskPollIds(
   host: WorkboardHost,
   cards: readonly WorkboardCard[],
@@ -1343,7 +1355,7 @@ function selectWorkboardTaskPollIds(
   const seen = new Set<string>();
   for (const card of cards) {
     const previousTask = previousTasksByCardId.get(card.id);
-    const previousMatches = previousTask ? taskMatchesCard(previousTask, card) : false;
+    const previousMatches = previousTask ? taskMatchesCanonicalCardLink(previousTask, card) : false;
     let taskId: string | undefined;
     if (previousMatches && previousTask && taskIsActive(previousTask)) {
       taskId = previousTask.taskId;
@@ -1548,6 +1560,10 @@ export async function loadWorkboard(params: {
       state.statuses = normalized.statuses;
       state.tasksByCardId = new Map();
       if (state.cards.length > 0) {
+        const preparedTaskSummaries = state.cards.flatMap((card) => {
+          const task = previousTasksByCardId.get(card.id);
+          return task && taskMatchesCanonicalCardLink(task, card) ? [task] : [];
+        });
         try {
           const pollResult =
             params.taskRefresh === "linked"
@@ -1557,7 +1573,7 @@ export async function loadWorkboard(params: {
                 )
               : null;
           const taskSummaries = pollResult
-            ? [...pollResult.tasks, ...previousTasksByCardId.values()]
+            ? [...pollResult.tasks, ...preparedTaskSummaries]
             : await listWorkboardTasks(client);
           if (isCurrentWorkboardLoadGeneration(params.host, generation)) {
             applyTaskSummariesToState(state, taskSummaries);
@@ -1568,7 +1584,7 @@ export async function loadWorkboard(params: {
         } catch (error) {
           if (isCurrentWorkboardLoadGeneration(params.host, generation)) {
             if (params.taskRefresh === "linked") {
-              applyTaskSummariesToState(state, [...previousTasksByCardId.values()]);
+              applyTaskSummariesToState(state, preparedTaskSummaries);
             }
             state.lastRefreshError = formatError(error);
           }
@@ -2761,10 +2777,16 @@ async function findTaskForStartedRun(params: {
         setTimeout(resolve, delayMs);
       });
     }
-    const task =
-      (await listWorkboardTasks(params.client))
-        .filter((candidate) => taskMatchesCard(candidate, probeCard))
-        .toSorted((left, right) => taskUpdatedAtValue(right) - taskUpdatedAtValue(left))[0] ?? null;
+    let task: WorkboardTaskSummary | null = null;
+    try {
+      task =
+        (await listWorkboardTasks(params.client))
+          .filter((candidate) => taskMatchesCard(candidate, probeCard))
+          .toSorted((left, right) => taskUpdatedAtValue(right) - taskUpdatedAtValue(left))[0] ??
+        null;
+    } catch {
+      // Task registration/linkage is best effort after the run already started.
+    }
     if (task) {
       return task;
     }

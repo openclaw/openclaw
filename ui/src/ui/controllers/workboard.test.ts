@@ -368,6 +368,44 @@ describe("workboard controller", () => {
     expect(client.request).not.toHaveBeenCalled();
   });
 
+  it("polls a canonical replacement task instead of a stale session-matched task", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const replacementCard = {
+      ...sampleCard,
+      sessionKey: sampleTaskSessionKey,
+      runId: "run-2",
+      taskId: "task-2",
+    } satisfies WorkboardCard;
+    const replacementTask = {
+      ...sampleTask,
+      id: "task-2",
+      taskId: "task-2",
+      runId: "run-2",
+      updatedAt: 3,
+    };
+    state.tasksByCardId.set(sampleCard.id, sampleTask);
+    const client = createClient((method) => {
+      if (method === "workboard.cards.list") {
+        return { cards: [replacementCard], statuses: ["todo", "done"] };
+      }
+      if (method === "tasks.get") {
+        return { task: replacementTask };
+      }
+      return {};
+    });
+
+    await refreshWorkboard({ host, client: client as never, source: "poll" });
+
+    expect(client.request).toHaveBeenCalledWith("tasks.get", { taskId: "task-2" });
+    expect(client.request).not.toHaveBeenCalledWith("tasks.get", { taskId: "task-1" });
+    expect(state.cards[0]).toMatchObject({ taskId: "task-2", runId: "run-2" });
+    expect(state.tasksByCardId.get(sampleCard.id)).toMatchObject({
+      taskId: "task-2",
+      runId: "run-2",
+    });
+  });
+
   it("rotates bounded linked-task polling batches", async () => {
     const host = {};
     const state = getWorkboardState(host);
@@ -1900,6 +1938,48 @@ describe("workboard controller", () => {
         patch: expect.objectContaining({ taskId: "task-1" }),
       }),
     );
+  });
+
+  it("keeps a successfully started run when task lookup stays unavailable", async () => {
+    vi.useFakeTimers();
+    const host = {};
+    const running = {
+      ...sampleCard,
+      status: "running",
+      sessionKey: sampleTaskSessionKey,
+      runId: "run-1",
+    } satisfies WorkboardCard;
+    const client = createClient((method) => {
+      if (method === "agent") {
+        return { sessionKey: sampleTaskSessionKey, runId: "run-1" };
+      }
+      if (method === "tasks.list") {
+        throw new Error("task ledger unavailable");
+      }
+      return { card: running };
+    });
+
+    const started = startWorkboardCard({
+      host,
+      client: client as never,
+      card: sampleCard,
+    });
+    await vi.advanceTimersByTimeAsync(1000);
+    const sessionKey = await started;
+
+    expect(sessionKey).toBe(sampleTaskSessionKey);
+    expect(client.request).not.toHaveBeenCalledWith("chat.abort", expect.anything());
+    expect(client.request).toHaveBeenLastCalledWith(
+      "workboard.cards.update",
+      expect.objectContaining({
+        patch: expect.objectContaining({
+          sessionKey: sampleTaskSessionKey,
+          runId: "run-1",
+          taskId: null,
+        }),
+      }),
+    );
+    expect(getWorkboardState(host).error).toBeNull();
   });
 
   it("lets the gateway decide starts when cached parent dependencies are stale", async () => {
