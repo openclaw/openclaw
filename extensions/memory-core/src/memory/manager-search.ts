@@ -364,6 +364,27 @@ export async function searchKeyword(params: {
           params.limit,
         ) as typeof rows;
       usedMatch = true;
+      // If MATCH returned 0 rows, fall back to LIKE for better recall
+      if (rows.length === 0) {
+        const queryTokens = normalizeStringEntries(params.query.match(FTS_QUERY_TOKEN_RE) ?? []);
+        const allTerms = uniqueStrings([...queryTokens, ...plan.substringTerms]);
+        const fbLike = allTerms.map(() => " OR text LIKE ? ESCAPE '\'").join("");
+        const fbParams = allTerms.map((term) => `%${escapeLikePattern(term)}%`);
+        rows = params.db
+          .prepare(
+            `SELECT id, path, source, start_line, end_line, text,
+` +
+              `       0 AS rank
+` +
+              `  FROM ${params.ftsTable}
+` +
+              ` WHERE 1=0${fbLike}${liveChunkClause}${params.sourceFilter.sql}
+` +
+              ` LIMIT ?`,
+          )
+          .all(...fbParams, ...params.sourceFilter.params, params.limit) as typeof rows;
+        usedMatch = false;
+      }
     } catch (matchErr) {
       // FTS5 MATCH can fail on certain token patterns depending on the
       // Node.js sqlite runtime and tokenizer (e.g. unicode61 vs trigram).
