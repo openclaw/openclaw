@@ -5,7 +5,7 @@
  */
 import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
 import { Type } from "typebox";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   CLIENT_TOOL_NAME_CONFLICT_PREFIX,
   createClientToolNameConflictError,
@@ -48,6 +48,27 @@ async function executeTool(tool: AgentTool, callId: string) {
 }
 
 describe("agent tool definition adapter", () => {
+  it("preserves argument preparation and execution mode contracts", () => {
+    const prepareArguments = vi.fn((args: unknown) => args as Record<string, never>);
+    const tool = {
+      name: "serial_tool",
+      label: "Serial Tool",
+      description: "runs sequentially",
+      parameters: Type.Object({}),
+      prepareArguments,
+      executionMode: "sequential",
+      execute: async () => ({
+        content: [{ type: "text", text: "done" }],
+        details: {},
+      }),
+    } satisfies AgentTool;
+
+    const [definition] = toToolDefinitions([tool]);
+
+    expect(definition?.prepareArguments).toBe(prepareArguments);
+    expect(definition?.executionMode).toBe("sequential");
+  });
+
   it("wraps tool errors into a tool result", async () => {
     const result = await executeThrowingTool("boom", "call1");
 
