@@ -15,6 +15,7 @@ import {
   type EmbeddedRunAttemptResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
+import { buildMemorySystemPromptAddition } from "openclaw/plugin-sdk/core";
 import type { CodexDynamicToolSpec, JsonValue } from "./protocol.js";
 import { isJsonObject } from "./protocol.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
@@ -249,9 +250,11 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
         turnScopedDeveloperInstructionFiles,
       ),
       memoryCollaborationInstructions: shouldInjectCodexOpenClawPromptContext(params.params)
-        ? renderCodexWorkspaceMemoryReference({
+        ? renderCodexWorkspaceMemoryCollaborationInstructions({
             files: memoryReferenceFiles,
             toolNames: params.memoryToolNames,
+            memoryToolRouted: memoryToolsAvailable,
+            citationsMode: params.params.config?.memory?.citations,
           })
         : undefined,
       heartbeatCollaborationInstructions:
@@ -803,6 +806,26 @@ export function renderCodexWorkspaceMemoryReference(params: {
     lines.push(`- ${file.path}`);
   }
   return lines.join("\n").trim();
+}
+
+function renderCodexWorkspaceMemoryCollaborationInstructions(params: {
+  files: EmbeddedContextFile[];
+  toolNames: readonly string[];
+  memoryToolRouted: boolean;
+  citationsMode?: Parameters<typeof buildMemorySystemPromptAddition>[0]["citationsMode"];
+}): string | undefined {
+  const memoryRecallInstructions = params.memoryToolRouted
+    ? buildMemorySystemPromptAddition({
+        availableTools: new Set(params.toolNames),
+        citationsMode: params.citationsMode,
+      })
+    : undefined;
+  const memoryReferenceInstructions = renderCodexWorkspaceMemoryReference({
+    files: params.files,
+    toolNames: params.toolNames,
+  });
+  const sections = [memoryRecallInstructions, memoryReferenceInstructions].filter(isNonEmptyString);
+  return sections.length > 0 ? sections.join("\n\n") : undefined;
 }
 
 /** Returns whether the current dynamic tool list can serve workspace memory. */
