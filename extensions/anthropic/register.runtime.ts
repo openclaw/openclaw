@@ -29,6 +29,8 @@ import {
 import {
   cloneFirstTemplateModel,
   type ProviderPlugin,
+  resolveClaudeFable5ModelIdentity,
+  resolveClaudeModelIdentity,
   resolveClaudeThinkingProfile,
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeMaxEffort,
@@ -369,6 +371,10 @@ function isAnthropicOpus48Model(modelId: string): boolean {
   return [ANTHROPIC_OPUS_48_MODEL_ID, ANTHROPIC_OPUS_48_DOT_MODEL_ID].some((prefix) =>
     normalized.startsWith(prefix),
   );
+}
+
+function isAnthropicFable5Model(modelId: string): boolean {
+  return resolveClaudeFable5ModelIdentity({ id: modelId }) !== undefined;
 }
 
 function isAnthropicOpus47OrNewerModel(modelId: string): boolean {
