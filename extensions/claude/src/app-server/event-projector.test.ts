@@ -349,6 +349,88 @@ describe("finalize", () => {
   });
 });
 
+// ── token usage (thread/tokenUsage/updated → acc.usage) ─────────────────────
+//
+// Regression coverage for openclaw-rw4: the app-server runtime never captured
+// thread/tokenUsage/updated, so acc.usage stayed undefined, result.attemptUsage
+// was never set, and /status reported 0/200k. These pin that the projector
+// folds the latest token-usage notification into acc.usage at finalize().
+
+describe("token usage", () => {
+  it("captures camelCase tokenUsage.last and exposes it via finalize() → acc.usage", () => {
+    const acc = emptyAcc();
+    const projector = makeProjector(acc);
+    projector.processNotification(
+      notif("thread/tokenUsage/updated", {
+        turnId: TURN_ID,
+        tokenUsage: {
+          last: { inputTokens: 1000, outputTokens: 200, cachedInputTokens: 300 },
+        },
+      }),
+    );
+    projector.finalize();
+    // input is reported as the uncached remainder (1000 - 300 cache reads).
+    expect(acc.usage).toEqual({ input: 700, output: 200, cacheRead: 300 });
+  });
+
+  it("normalizes snake_case aliases at the top level of the payload", () => {
+    const acc = emptyAcc();
+    const projector = makeProjector(acc);
+    projector.processNotification(
+      notif("thread/tokenUsage/updated", {
+        turnId: TURN_ID,
+        last: {
+          input_tokens: 500,
+          output_tokens: 80,
+          cache_read_input_tokens: 100,
+          cache_creation_input_tokens: 40,
+        },
+      }),
+    );
+    projector.finalize();
+    expect(acc.usage).toEqual({ input: 400, output: 80, cacheRead: 100, cacheWrite: 40 });
+  });
+
+  it("keeps the latest token-usage update when several arrive in a turn", () => {
+    const acc = emptyAcc();
+    const projector = makeProjector(acc);
+    projector.processNotification(
+      notif("thread/tokenUsage/updated", {
+        turnId: TURN_ID,
+        tokenUsage: { last: { inputTokens: 100, outputTokens: 10 } },
+      }),
+    );
+    projector.processNotification(
+      notif("thread/tokenUsage/updated", {
+        turnId: TURN_ID,
+        tokenUsage: { last: { inputTokens: 2500, outputTokens: 400 } },
+      }),
+    );
+    projector.finalize();
+    expect(acc.usage).toEqual({ input: 2500, output: 400 });
+  });
+
+  it("leaves acc.usage undefined when no token-usage notification arrives", () => {
+    const acc = emptyAcc();
+    const projector = makeProjector(acc);
+    projector.processNotification(
+      notif("item/agentMessage/delta", { turnId: TURN_ID, itemId: "m", delta: "hi" }),
+    );
+    projector.finalize();
+    expect(acc.usage).toBeUndefined();
+  });
+
+  it("ignores a token-usage payload with no recognizable current-usage record", () => {
+    const acc = emptyAcc();
+    const projector = makeProjector(acc);
+    projector.processNotification(
+      notif("thread/tokenUsage/updated", { turnId: TURN_ID, tokenUsage: { cumulative: 42 } }),
+    );
+    projector.finalize();
+    expect(acc.usage).toBeUndefined();
+  });
+});
+
 // ── commentary-vs-final split ───────────────────────────────────────────────
 
 describe("commentary vs final agentMessage split", () => {
