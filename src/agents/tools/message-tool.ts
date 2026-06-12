@@ -459,6 +459,11 @@ function buildSendSchema(options: {
         description: "Media URL/path. data: use buffer.",
       }),
     ),
+    image: Type.Optional(
+      Type.String({
+        description: "Media URL/path (alias for media).",
+      }),
+    ),
     filename: Type.Optional(Type.String()),
     buffer: Type.Optional(
       Type.String({
@@ -473,6 +478,11 @@ function buildSendSchema(options: {
         Type.Object({
           type: Type.Optional(stringEnum(["image", "audio", "video", "file"])),
           media: Type.Optional(Type.String()),
+          image: Type.Optional(
+            Type.String({
+              description: "Media URL/path (alias for media).",
+            }),
+          ),
           name: Type.Optional(Type.String()),
           mimeType: Type.Optional(Type.String()),
         }),
