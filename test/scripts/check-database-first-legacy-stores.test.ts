@@ -3418,10 +3418,14 @@ describe("check-database-first-legacy-stores", () => {
     const violations = collectDatabaseFirstLegacyStoreViolations(
       `
         export const transcriptLocator = "sqlite-transcript://session";
+        export const dynamicLocator = \`sqlite-transcript://\${sessionId}\`;
       `,
       "src/runtime/transcript-bridge.ts",
     );
 
-    expect(violations).toEqual([{ kind: "legacy transcript bridge marker", line: 2 }]);
+    expect(violations).toEqual([
+      { kind: "legacy transcript bridge marker", line: 2 },
+      { kind: "legacy transcript bridge marker", line: 3 },
+    ]);
   });
 });

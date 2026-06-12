@@ -4458,7 +4458,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
     }
 
     if (
-      (ts.isStringLiteralLike(node) || ts.isIdentifier(node)) &&
+      (ts.isStringLiteralLike(node) || ts.isIdentifier(node) || ts.isTemplateExpression(node)) &&
       bridgeMarkerPattern.test(node.getText(sourceFile))
     ) {
       addViolation(node, "legacy transcript bridge marker");
