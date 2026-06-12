@@ -128,6 +128,27 @@ describe("mirror-dispatch", () => {
     );
   });
 
+  it("fails closed for a mirror-capable channel with no dispatcher for the target account", async () => {
+    resetMirrorDispatchForTest();
+    // Channel is mirror-capable but the target's account (acc-c) is not registered;
+    // with >1 account there is no single-dispatcher fallback, so resolve fails.
+    registerChannelMirrorDispatcher("telegram", "acc-a", vi.fn());
+    registerChannelMirrorDispatcher("telegram", "acc-b", vi.fn());
+    const target = { channel: "telegram", to: "telegram:-100", accountId: "acc-c", threadId: 1 };
+    const handle = await launchMirrorDispatch({
+      originRunId: "run-fc",
+      cfg,
+      sessionKey: "sk-fc",
+      sessionEntry: entryWith([target]),
+      originChannel: "webchat",
+      originTo: "",
+    });
+    // No native dispatch, but the target IS marked handled so the post-hoc echo is
+    // suppressed — it would bypass the channel's enablement/revocation checks.
+    expect(handle.count).toBe(0);
+    expect(consumeStreamingEchoHandled("sk-fc", target)).toBe(true);
+  });
+
   it("excludes the origin target (no self-mirror)", async () => {
     resetMirrorDispatchForTest();
     const dispatcher = vi.fn();

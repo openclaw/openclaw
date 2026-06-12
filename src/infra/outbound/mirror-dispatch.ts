@@ -151,6 +151,17 @@ export function registerChannelMirrorDispatcher(
  * routing. A single registered account is unambiguous (single-account install, or
  * a wildcard target with no pinned accountId), so it matches regardless.
  */
+/**
+ * Whether the channel supports native mirroring at all (any account registered a
+ * dispatcher). Used to fail closed: for a mirror-capable channel, the native mirror
+ * is the SOLE delivery authority — the post-hoc raw echo must not deliver there
+ * because it bypasses the channel's enablement/revocation checks.
+ */
+export function channelHasMirrorDispatcher(channel: string): boolean {
+  const byAccount = state.dispatchers.get(channel);
+  return byAccount !== undefined && byAccount.size > 0;
+}
+
 export function resolveChannelMirrorDispatcher(
   channel: string,
   accountId?: string,
@@ -204,11 +215,21 @@ export async function launchMirrorDispatch(params: {
   for (const target of targets) {
     const dispatcher = resolveChannelMirrorDispatcher(target.channel, target.accountId);
     if (!dispatcher) {
-      // No dispatcher for this channel+account — the post-hoc final mirror handles
-      // it (delivering via the target's own account routing).
-      log.warn(
-        `mirror: no dispatcher for ${target.channel}/${target.accountId ?? "default"}; falling back to post-hoc echo`,
-      );
+      if (channelHasMirrorDispatcher(target.channel)) {
+        // The channel supports native mirroring but no dispatcher resolved for this
+        // target's account (account not registered, or a brief post-restart race).
+        // FAIL CLOSED: mark handled so the post-hoc final echo does NOT deliver —
+        // that raw send bypasses the channel's enablement/revocation checks, so it
+        // could leak content to a now-disabled destination. The native mirror is the
+        // sole delivery authority for a mirror-capable channel.
+        markHandled(params.sessionKey, echoTargetKey(target));
+        log.warn(
+          `mirror: no dispatcher resolved for ${target.channel}/${target.accountId ?? "default"}; suppressing post-hoc echo (fail closed)`,
+        );
+        continue;
+      }
+      // Channel does not support native mirroring at all — the post-hoc final echo
+      // is its only delivery path.
       continue;
     }
     const label = `${target.channel}:${target.to}`;
