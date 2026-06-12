@@ -20,14 +20,12 @@ const log = createSubsystemLogger("outbound/mirror-dispatch");
  * per-channel rendering is reimplemented; each channel registers only a thin
  * dispatcher that re-homes the turn onto its inbound path.
  *
- * KNOWN LIMITATION (multiple pinned threads): a mirror turn runs the target's full
- * inbound pipeline, which emits `message:sent` and so re-enters the post-hoc echo
- * hook (echo-hook.ts). For a SINGLE pinned thread this is harmless — the mirror
- * turn's origin equals its only target, so resolveEchoTargets self-excludes it. But
- * with 2+ pinned threads, the mirror turn on thread B can post-hoc-re-deliver to
- * thread C (which the origin already mirrored natively), a bounded (not infinite —
- * fireEchoDeliveries is hook-suppressed) duplicate. A full fix marks the mirror
- * turn so the post-hoc hook skips it; tracked as follow-up.
+ * Loop/duplicate safety: a mirror turn is a render of an already-mirrored turn,
+ * not an origin turn. It must not re-enter echo. It skips the agent-run fan-out by
+ * construction (the replyResolver replaces the agent), AND the channel dispatch
+ * suppresses the mirror turn's `message:sent` internal hook (it carries a
+ * replyResolver), so it does not re-trigger the post-hoc echo and re-deliver to the
+ * other pinned threads.
  */
 export type MirrorDispatcher = (params: {
   cfg: OpenClawConfig;

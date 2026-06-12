@@ -1460,7 +1460,12 @@ export const dispatchTelegramMessage = async ({
   const deliveryBaseOptions = {
     chatId: String(chatId),
     accountId: route.accountId,
-    sessionKeyForInternalHooks: ctxPayload.SessionKey,
+    // A pin-from-here mirror turn (driven by a bus-sourced replyResolver) is a
+    // render of an already-mirrored turn, not an origin turn. Suppress its
+    // `message:sent` internal hook so it does NOT re-enter the post-hoc echo
+    // (echo-hook.ts) and re-deliver to the OTHER pinned threads — which would
+    // duplicate their native mirror. Same suppression fireEchoDeliveries uses.
+    sessionKeyForInternalHooks: replyResolver ? undefined : ctxPayload.SessionKey,
     mirrorIsGroup: isGroup,
     mirrorGroupId: isGroup ? String(chatId) : undefined,
     token: opts.token,
