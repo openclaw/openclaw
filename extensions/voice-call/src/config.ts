@@ -9,7 +9,7 @@ import {
 import { z } from "zod";
 import { TtsConfigSchema } from "../api.js";
 import { deepMergeDefined } from "./deep-merge.js";
-import { resolveGroupCallGateConfig } from "./group-call-gate.js";
+import { GROUP_CALL_GATE_DEFAULTS, resolveGroupCallGateConfig } from "./group-call-gate.js";
 import { DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS } from "./realtime-defaults.js";
 
 // -----------------------------------------------------------------------------
@@ -105,7 +105,7 @@ const MsteamsConfigSchema = z
     /**
      * Outbound calling: let OpenClaw ask the worker to place a 1:1 Teams call to
      * a user ("call me when the task is done"). The worker exposes an
-     * HMAC-authenticated `POST {workerBaseUrl}/api/calls/place`.
+     * HMAC-authenticated `POST {workerBaseUrl}/api/calls`.
      */
     outbound: z
       .object({
@@ -134,21 +134,26 @@ const MsteamsConfigSchema = z
     groupCall: z
       .object({
         /** Require the bot to be addressed by name before responding in a group call. Default true. */
-        requireAddress: z.boolean().default(true),
+        requireAddress: z.boolean().default(GROUP_CALL_GATE_DEFAULTS.requireAddress),
         /**
          * Phrases that count as addressing the bot (case-insensitive, boundary-aware), e.g. the
          * bot's display name. With the gate on and this empty, the gate is inert (the bot would
          * otherwise be muted forever). Set this to your bot's name. Default ["assistant"].
          */
-        wakePhrases: z.array(z.string().min(1)).default(["assistant"]),
+        wakePhrases: z.array(z.string().min(1)).default(GROUP_CALL_GATE_DEFAULTS.wakePhrases),
         /**
          * After an addressed turn, keep responding to follow-ups without re-addressing for this many
          * ms. Default 12000. 0 = the bot must be addressed on every turn.
          */
-        followUpWindowMs: z.number().int().nonnegative().default(12_000),
+        followUpWindowMs: z
+          .number()
+          .int()
+          .nonnegative()
+          .default(GROUP_CALL_GATE_DEFAULTS.followUpWindowMs),
       })
       .strict()
-      .default({ requireAddress: true, wakePhrases: ["assistant"], followUpWindowMs: 12_000 }),
+      // Same source of truth as the per-field defaults (group-call-gate.ts) — previously restated.
+      .default({ ...GROUP_CALL_GATE_DEFAULTS }),
     /**
      * CVI vision spend cap: max vision-model / frame consumptions per minute per call. Bounds the cost
      * of continuous perception across all three consumers — the `look_at_screen` tool (realtime), the

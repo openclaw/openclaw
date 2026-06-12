@@ -116,6 +116,17 @@ interface MsteamsCallState {
   pendingAnswered?: { from: string; to: string };
 }
 
+/**
+ * A call OpenClaw placed via the worker, awaiting its media WebSocket `session.start` to attach.
+ * Keyed by the worker/Graph callId in {@link MsteamsProvider.pendingOutbound}.
+ */
+interface PendingOutboundCall {
+  internalCallId: string;
+  from: string;
+  to: string;
+  message?: string;
+}
+
 /** Cap the pre-connect audio buffer at ~5 s of 20 ms frames to bound memory. */
 const MAX_PRECONNECT_FRAMES = 250;
 
@@ -192,10 +203,7 @@ export class MsteamsProvider implements VoiceCallProvider {
    * Calls OpenClaw placed via the worker, keyed by the worker/Graph callId it
    * returned, awaiting their media WebSocket `session.start` to attach.
    */
-  private readonly pendingOutbound = new Map<
-    string,
-    { internalCallId: string; from: string; to: string; message?: string }
-  >();
+  private readonly pendingOutbound = new Map<string, PendingOutboundCall>();
   /**
    * Outbound calls bridged via the realtime path (providerCallId -> internal
    * callId). Realtime calls don't otherwise touch CallManager, so this lets
@@ -492,10 +500,7 @@ export class MsteamsProvider implements VoiceCallProvider {
    * we wire STT/TTS state and emit `call.answered` — which drives the manager's
    * initial-message delivery (notify mode) or conversation start.
    */
-  private handleOutboundSessionStart(
-    session: MsteamsSession,
-    pending: { internalCallId: string; from: string; to: string; message?: string },
-  ): void {
+  private handleOutboundSessionStart(session: MsteamsSession, pending: PendingOutboundCall): void {
     const providerCallId = session.callId;
 
     // Realtime mode: bridge straight to the speech-to-speech model, opening the
@@ -551,7 +556,7 @@ export class MsteamsProvider implements VoiceCallProvider {
    */
   private handleOutboundRealtimeSessionStart(
     session: MsteamsSession,
-    pending: { internalCallId: string; from: string; to: string; message?: string },
+    pending: PendingOutboundCall,
   ): void {
     const providerCallId = session.callId;
     if (!this.realtimeDeps) {
@@ -728,7 +733,6 @@ export class MsteamsProvider implements VoiceCallProvider {
     return resolveGroupCallGateConfig(this.responseRuntime?.voiceConfig.msteams?.groupCall);
   }
 
-  /** Per-call vision spend cap (built once from config; 0 = unlimited). */
   /**
    * Buffer the latest inbound video frame per source so the agent can "look" at it on demand.
    * Recording-gated (Media Access API): video is media-derived data and must not be processed
@@ -980,16 +984,30 @@ export class MsteamsProvider implements VoiceCallProvider {
     const state = this.teardownCall(info.callId, { closeSession: false });
     const internalCallId = state?.internalCallId ?? outboundInternalId ?? pendingInternalId;
     // Inbound realtime calls never touch CallManager — no record to finalize.
-    if (!internalCallId || !this.manager) {
+    if (!internalCallId) {
       return;
     }
-    this.manager.processEvent({
-      id: `msteams-ended-${info.callId}-${Date.now()}`,
+    this.emitCallEnded("ended", internalCallId, info.callId, info.reason);
+  }
+
+  /**
+   * Finalize a call's CallRecord with the manager. Single construction for every end path
+   * (caller hangup, failed media setup, no-answer timeout) — the B5 leak hid in one of three
+   * hand-rolled copies of this event. (Review refactor)
+   */
+  private emitCallEnded(
+    kind: "ended" | "failed" | "noanswer",
+    internalCallId: string,
+    providerCallId: string,
+    reason: string,
+  ): void {
+    this.manager?.processEvent({
+      id: `msteams-${kind}-${providerCallId}-${Date.now()}`,
       type: "call.ended",
       callId: internalCallId,
-      providerCallId: info.callId,
+      providerCallId,
       timestamp: Date.now(),
-      reason: mapEndReason(info.reason),
+      reason: mapEndReason(reason),
     });
   }
 
@@ -1075,17 +1093,10 @@ export class MsteamsProvider implements VoiceCallProvider {
    */
   private failCall(providerCallId: string, reason: string): void {
     const state = this.teardownCall(providerCallId, { closeSession: true, reason });
-    if (!state || !this.manager) {
+    if (!state) {
       return;
     }
-    this.manager.processEvent({
-      id: `msteams-failed-${providerCallId}-${Date.now()}`,
-      type: "call.ended",
-      callId: state.internalCallId,
-      providerCallId,
-      timestamp: Date.now(),
-      reason: mapEndReason(reason),
-    });
+    this.emitCallEnded("failed", state.internalCallId, providerCallId, reason);
   }
 
   /** Clear (and forget) the no-answer timer for a placed outbound call. */
@@ -1131,16 +1142,12 @@ export class MsteamsProvider implements VoiceCallProvider {
     this.logger?.warn(
       `MsteamsProvider: outbound call ${providerCallId} did not connect within ${this.outbound?.answerTimeoutMs ?? OUTBOUND_ANSWER_TIMEOUT_DEFAULT_MS}ms; finalizing`,
     );
-    if (this.manager) {
-      this.manager.processEvent({
-        id: `msteams-noanswer-${providerCallId}-${Date.now()}`,
-        type: "call.ended",
-        callId: pending.internalCallId,
-        providerCallId,
-        timestamp: Date.now(),
-        reason: mapEndReason("outbound no-answer timeout"),
-      });
-    }
+    this.emitCallEnded(
+      "noanswer",
+      pending.internalCallId,
+      providerCallId,
+      "outbound no-answer timeout",
+    );
   }
 
   private buildEvent(

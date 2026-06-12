@@ -48,6 +48,25 @@ import {
   type MsteamsLogger,
   type MsteamsSession,
 } from "./msteams-media-stream.js";
+import {
+  MSTEAMS_AGENT_TASK_TOOL,
+  MSTEAMS_AGENT_TASK_TOOL_NAME,
+  MSTEAMS_ASYNC_TASK_ACK,
+  MSTEAMS_ASYNC_TASK_ACK_CALL,
+  MSTEAMS_ASYNC_TASK_NO_TARGET,
+  MSTEAMS_LOOK_BUDGETED,
+  MSTEAMS_LOOK_NO_FRAME,
+  MSTEAMS_LOOK_TOOL,
+  MSTEAMS_LOOK_TOOL_NAME,
+  MSTEAMS_MINUTES_TOOL,
+  MSTEAMS_MINUTES_TOOL_NAME,
+  MSTEAMS_REALTIME_CONSULT_SYSTEM_PROMPT,
+  MSTEAMS_REALTIME_LOOK_SYSTEM_PROMPT,
+  MSTEAMS_REALTIME_SHOW_SYSTEM_PROMPT,
+  MSTEAMS_RECORDING_BLOCKED,
+  MSTEAMS_SHOW_TOOL,
+  MSTEAMS_SHOW_TOOL_NAME,
+} from "./msteams-realtime-tools.js";
 import { describeMsteamsVideoFrameOwner, type MsteamsVideoFrame } from "./msteams-video-frame.js";
 import { resolveRealtimeFastContextConsult } from "./realtime-fast-context.js";
 import { resolveVoiceResponseModel } from "./response-model.js";
@@ -138,135 +157,6 @@ export function toTileCaption(text: string | undefined): string | undefined {
  */
 const REALTIME_VISION_PUSH_INTERVAL_MS = 6000;
 
-const MSTEAMS_REALTIME_CONSULT_SYSTEM_PROMPT = [
-  "You are the configured OpenClaw agent receiving delegated requests from a live Microsoft Teams voice call.",
-  "Act on behalf of the caller using the normal available tools when the caller asks you to do work.",
-  "Prioritize completing the caller's request and returning a fast, speakable result over exhaustive investigation.",
-  "Do not print secret values or dump environment variables; only check whether required configuration is present.",
-  "Be accurate, brief, and speakable.",
-].join(" ");
-
-const MSTEAMS_REALTIME_LOOK_SYSTEM_PROMPT = [
-  "You are the configured OpenClaw agent looking at a still frame captured from a live Microsoft Teams call —",
-  "the caller's shared screen or camera. Answer the caller's question about what is visible.",
-  "Read on-screen text verbatim when asked. Be concise and speakable (1-2 sentences);",
-  "if the image is unclear or the thing asked about is not visible, say so briefly.",
-].join(" ");
-
-/** Tool the realtime model calls to hand a long-running task to the background agent. */
-const MSTEAMS_AGENT_TASK_TOOL_NAME = "openclaw_agent_task";
-const MSTEAMS_AGENT_TASK_TOOL: RealtimeVoiceTool = {
-  type: "function",
-  name: MSTEAMS_AGENT_TASK_TOOL_NAME,
-  description:
-    "Hand a long-running task to the OpenClaw agent to complete in the background. " +
-    "Use this for work that may take more than a few seconds (multi-step actions, lengthy research). " +
-    "After calling it, tell the caller you are on it and will reach them on Microsoft Teams when it is done. " +
-    "Do NOT use this for quick questions or lookups — use openclaw_agent_consult and answer in-line for those. " +
-    'Do NOT use this when the caller wants to SEE an image on the call right now (e.g. "show me ...", ' +
-    '"take a screenshot and show me") — use show_to_caller for that, even if it must open a browser or screenshot first. ' +
-    'Set deliverVia to "call" when the caller asked to be CALLED back when done; otherwise it defaults to a Teams chat message.',
-  parameters: {
-    type: "object",
-    properties: {
-      task: {
-        type: "string",
-        description:
-          "The task to perform, described in full so the background agent can complete it unattended.",
-      },
-      deliverVia: {
-        type: "string",
-        enum: ["message", "call"],
-        description:
-          'How to deliver the result: "message" (default) sends a Teams chat message; "call" places a Teams call back to the caller and speaks the result.',
-      },
-    },
-    required: ["task"],
-  },
-};
-
-/** Tool the realtime model calls to "see" what the caller is showing (camera / screen-share). */
-const MSTEAMS_LOOK_TOOL_NAME = "look_at_screen";
-const MSTEAMS_LOOK_TOOL: RealtimeVoiceTool = {
-  type: "function",
-  name: MSTEAMS_LOOK_TOOL_NAME,
-  description:
-    "Look at what the caller is currently showing on the Teams call — their shared screen or " +
-    "camera — and answer a question about it. Use this whenever the caller refers to something " +
-    'visual ("what\'s on my screen?", "read this error", "what am I holding?"). ' +
-    "Defaults to the screen-share when present, otherwise the camera. " +
-    'Set scope to "history" when the caller asks about something shown EARLIER in the call ' +
-    '("what did the previous slide say?", "catch me up on what was shown") — you then see the ' +
-    "recent scene-change keyframes instead of only the live frame.",
-  parameters: {
-    type: "object",
-    properties: {
-      scope: {
-        type: "string",
-        enum: ["live", "history"],
-        description:
-          '"live" (default) looks at the current frame; "history" reviews keyframes from earlier in the call.',
-      },
-      question: {
-        type: "string",
-        description: "What the caller wants to know about what they are showing.",
-      },
-      source: {
-        type: "string",
-        enum: ["screenshare", "camera"],
-        description: "Which video to look at; defaults to screen-share, then camera.",
-      },
-    },
-    required: ["question"],
-  },
-};
-
-/** Tool: post minutes of the call so far to Teams chat, on request ("/summarize" by voice). */
-const MSTEAMS_MINUTES_TOOL_NAME = "post_meeting_minutes";
-const MSTEAMS_MINUTES_TOOL: RealtimeVoiceTool = {
-  type: "function",
-  name: MSTEAMS_MINUTES_TOOL_NAME,
-  description:
-    "Post written minutes of this call SO FAR (key points, decisions, action items) to the Teams " +
-    'chat. Use when the caller asks to "summarize the meeting", "post the minutes", or "send a ' +
-    'recap". Tell the caller the minutes are on their way; do not dictate them aloud.',
-  parameters: { type: "object", properties: {} },
-};
-
-const MSTEAMS_SHOW_TOOL_NAME = "show_to_caller";
-const MSTEAMS_SHOW_TOOL: RealtimeVoiceTool = {
-  type: "function",
-  name: MSTEAMS_SHOW_TOOL_NAME,
-  description:
-    "Show the caller an image on the video call — take a screenshot of your screen, or display an " +
-    'image you generated or found. Use this when the caller asks to SEE something ("show me your ' +
-    'screen", "show me that picture", "can I see it?", "show me the GitHub page"). The image appears ' +
-    "on your video tile for a few seconds; describe what you are showing in your spoken reply. " +
-    "This is the ONLY way to put an image on the call — use it even when producing the image first " +
-    "needs you to open a browser, take a screenshot, or generate it. Do NOT hand this to a background " +
-    "task and do NOT try to present it via canvas/a node; this tool displays it on the tile for you.",
-  parameters: {
-    type: "object",
-    properties: {
-      request: {
-        type: "string",
-        description:
-          "What to show the caller, e.g. 'a screenshot of your screen' or 'the chart you generated'.",
-      },
-    },
-    required: ["request"],
-  },
-};
-
-/** System prompt for the show_to_caller consult: produce ONE image; the bridge displays it on the tile. */
-const MSTEAMS_REALTIME_SHOW_SYSTEM_PROMPT =
-  "The caller is on a live video call and asked to SEE something. Produce exactly ONE image to show " +
-  "them — take a screenshot of your screen (use the browser to open a page first if needed), or " +
-  "generate/fetch the requested image — using your tools. Your ONLY job is to PRODUCE the image file; " +
-  "the call displays it on your video tile automatically. Do NOT try to present or display it yourself " +
-  "(no canvas, no connected node) and do NOT send it as a chat message. Return a brief spoken sentence " +
-  "describing what you're showing.";
-
 /** Max bytes for an agent-produced image we'll display (safety bound). */
 const MSTEAMS_MAX_DISPLAY_IMAGE_BYTES = 4_000_000;
 
@@ -300,45 +190,6 @@ function mimeForImageExtension(pathOrUrl: string): string | null {
       return null;
   }
 }
-
-/** Returned when look_at_screen is over the per-call vision budget (cost cap). */
-const MSTEAMS_LOOK_BUDGETED = {
-  text: "I've been looking quite a lot in the last minute — give me a few seconds and ask again.",
-};
-
-/** Returned when the caller asks the agent to look but no video frame has arrived yet. */
-const MSTEAMS_LOOK_NO_FRAME = {
-  text: "I can't see anything yet — make sure your camera or screen-share is on. It can take a few seconds after you start sharing; then ask again.",
-};
-
-/** Spoken acknowledgement returned to the model when a background task is accepted. */
-const MSTEAMS_ASYNC_TASK_ACK = {
-  text: "Got it — I'm on it and I'll message you on Microsoft Teams when it's done.",
-};
-
-/** Acknowledgement when the caller asked to be called back (deliverVia: "call"). */
-const MSTEAMS_ASYNC_TASK_ACK_CALL = {
-  text: "Got it — I'm on it and I'll call you back on Microsoft Teams when it's done.",
-};
-
-/**
- * Returned to the model when a background task is requested but the caller has no
- * AAD object id — there is no Teams chat to deliver the result to, so the task is
- * refused rather than acknowledging a delivery that cannot happen. The model
- * should offer to answer on the call instead.
- */
-const MSTEAMS_ASYNC_TASK_NO_TARGET = {
-  text: "I can't run that in the background — I don't have a Teams chat to send the result to. I can work on it right now on the call instead.",
-};
-
-/**
- * Returned to the model when the agent is asked to act but recording is not yet
- * active. The agent must not process/persist call audio before Graph
- * `updateRecordingStatus` (Media Access API), so consult + task are refused.
- */
-const MSTEAMS_RECORDING_BLOCKED = {
-  text: "I can't act on that yet — call recording isn't active. Please make sure recording is on and ask again.",
-};
 
 /**
  * Append the group-call gate as a model instruction. The realtime bridge owns turn-taking and
@@ -624,6 +475,10 @@ export function createMsteamsRealtimeCall(params: {
 
   const consultToolPolicy: RealtimeVoiceAgentConsultToolPolicy =
     deps.toolPolicy ?? deps.voiceConfig?.realtime.toolPolicy ?? "none";
+  // Consult agent identity, hoisted once per call — previously recomputed verbatim in five
+  // handlers (consult / look / show / background task / recap). (Review refactor)
+  const consultAgentId = deps.voiceConfig?.agentId ?? "main";
+  const consultSessionKey = `agent:${consultAgentId}:subagent:msteams:${sessionScopeId}`;
   // Async background tasks deliver their result via the agent's `message` tool,
   // which is only available under the "owner" tool policy.
   const asyncTasksEnabled =
@@ -829,36 +684,30 @@ export function createMsteamsRealtimeCall(params: {
         handleAsyncTask(event, rtSession);
         return;
       }
-      // The remaining tools keep the caller waiting — show a "thinking" face until the result lands
+      const handler =
+        event.name === MSTEAMS_MINUTES_TOOL_NAME
+          ? handleMinutes
+          : event.name === MSTEAMS_LOOK_TOOL_NAME
+            ? handleLook
+            : event.name === MSTEAMS_SHOW_TOOL_NAME
+              ? handleShow
+              : event.name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME
+                ? handleConsult
+                : undefined;
+      if (!handler) {
+        // An operator-configured custom tool (deps.tools) was advertised to the model but has no
+        // handler here. Answer SOMETHING — a tool call with no submitToolResult stalls the model's
+        // turn forever and the caller sits in silence. (Review B6)
+        logger?.warn(`MsteamsRealtime: no handler for tool '${event.name}' on ${callId}`);
+        rtSession.submitToolResult(event.callId, {
+          text: `The tool "${event.name}" is not available on this call.`,
+        });
+        return;
+      }
+      // These tools keep the caller waiting — show a "thinking" face until the result lands
       // (cleared via finally regardless of success/error; the result speech then re-cues the emotion).
       setThinking(true);
-      const clearThinking = (): void => setThinking(false);
-      if (event.name === MSTEAMS_MINUTES_TOOL_NAME) {
-        // Media Access API: minutes run the agent over media-derived transcript, so they are
-        // recording-gated like every other agent-running tool (consult / look / show / task) —
-        // this was the one path that skipped the gate. (Review B10)
-        if (recordingGateBlocks()) {
-          logger?.debug?.(`MsteamsRealtime: minutes refused for ${callId} — recording not active`);
-          rtSession.submitToolResult(event.callId, MSTEAMS_RECORDING_BLOCKED);
-          clearThinking();
-          return;
-        }
-        // Ack on the call, then write+post the minutes in the background (same run as call-end recap).
-        rtSession.submitToolResult(event.callId, {
-          text: "Minutes are being written and posted to the Teams chat now.",
-        });
-        void runMeetingRecap().finally(clearThinking);
-        return;
-      }
-      if (event.name === MSTEAMS_LOOK_TOOL_NAME) {
-        void handleLook(event, rtSession).finally(clearThinking);
-        return;
-      }
-      if (event.name === MSTEAMS_SHOW_TOOL_NAME) {
-        void handleShow(event, rtSession).finally(clearThinking);
-        return;
-      }
-      void handleToolCall(event, rtSession).finally(clearThinking);
+      void handler(event, rtSession).finally(() => setThinking(false));
     },
     onError: (error) => {
       logger?.warn(`MsteamsRealtime: bridge error — ${error.message}`);
@@ -970,46 +819,99 @@ export function createMsteamsRealtimeCall(params: {
     visionPushTimer.unref?.();
   }
 
+  /** Deps + identity every agent-running tool handler needs, resolved non-null by the guard. */
+  interface GuardedConsultDeps {
+    agentRuntime: CoreAgentDeps;
+    voiceConfig: VoiceCallConfig;
+    cfg: OpenClawConfig;
+    agentId: string;
+    sessionKey: string;
+    toolPolicy: RealtimeVoiceAgentConsultToolPolicy;
+  }
+
+  /**
+   * Shared guards for the agent-running tool handlers (consult / look_at_screen / show_to_caller /
+   * post_meeting_minutes): the Media-Access-API recording gate, the wired-deps check, and uniform
+   * error reporting live in ONE place — review B10 existed precisely because one handler restated
+   * (and partially missed) this boilerplate. The wrapped handler receives the resolved deps plus a
+   * sendWorkingFiller() it calls once its own cheap pre-checks (cache, budget, frame presence)
+   * pass, so the caller is not left in silence during a full agent run.
+   */
+  function withConsultGuards(opts: {
+    label: string;
+    unavailableText: string;
+    errorText: string;
+    /** Also require a frame source (look_at_screen). */
+    requireFrameSource?: boolean;
+    handler: (params: {
+      event: RealtimeVoiceToolCallEvent;
+      rtSession: RealtimeVoiceBridgeSession;
+      consult: GuardedConsultDeps;
+      sendWorkingFiller: () => void;
+    }) => Promise<void>;
+  }): (event: RealtimeVoiceToolCallEvent, rtSession: RealtimeVoiceBridgeSession) => Promise<void> {
+    return async (event, rtSession) => {
+      // Media Access API: never run the agent over call-derived audio/video before recording is active.
+      if (recordingGateBlocks()) {
+        logger?.debug?.(
+          `MsteamsRealtime: ${opts.label} refused for ${callId} — recording not active`,
+        );
+        rtSession.submitToolResult(event.callId, MSTEAMS_RECORDING_BLOCKED);
+        return;
+      }
+      const { agentRuntime, voiceConfig, cfg } = deps;
+      if (
+        !agentRuntime ||
+        !voiceConfig ||
+        !cfg ||
+        (opts.requireFrameSource && !deps.getLatestFrame)
+      ) {
+        rtSession.submitToolResult(event.callId, { text: opts.unavailableText });
+        return;
+      }
+      try {
+        await opts.handler({
+          event,
+          rtSession,
+          consult: {
+            agentRuntime,
+            voiceConfig,
+            cfg,
+            agentId: consultAgentId,
+            sessionKey: consultSessionKey,
+            toolPolicy: deps.toolPolicy ?? voiceConfig.realtime.toolPolicy,
+          },
+          sendWorkingFiller: () => {
+            if (rtSession.bridge?.supportsToolResultContinuation) {
+              rtSession.submitToolResult(
+                event.callId,
+                buildRealtimeVoiceAgentConsultWorkingResponse("caller"),
+                { willContinue: true },
+              );
+            }
+          },
+        });
+      } catch (err) {
+        logger?.warn(
+          `MsteamsRealtime: ${opts.label} failed for ${callId} — ${err instanceof Error ? err.message : String(err)}`,
+        );
+        rtSession.submitToolResult(event.callId, { text: opts.errorText });
+      }
+    };
+  }
+
   /** Run the OpenClaw agent for an openclaw_agent_consult call and speak the result. */
-  async function handleToolCall(
-    event: RealtimeVoiceToolCallEvent,
-    rtSession: RealtimeVoiceBridgeSession,
-  ): Promise<void> {
-    if (event.name !== REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
-      // An operator-configured custom tool (deps.tools) was advertised to the model but has no
-      // handler here. Answer SOMETHING — a tool call with no submitToolResult stalls the model's
-      // turn forever and the caller sits in silence. (Review B6)
-      logger?.warn(`MsteamsRealtime: no handler for tool '${event.name}' on ${callId}`);
-      rtSession.submitToolResult(event.callId, {
-        text: `The tool "${event.name}" is not available on this call.`,
-      });
-      return;
-    }
-    // Media Access API: refuse to run the agent on call audio until recording is active.
-    if (recordingGateBlocks()) {
-      logger?.debug?.(`MsteamsRealtime: consult refused for ${callId} — recording not active`);
-      rtSession.submitToolResult(event.callId, MSTEAMS_RECORDING_BLOCKED);
-      return;
-    }
-    const { agentRuntime, voiceConfig, cfg } = deps;
-    if (!agentRuntime || !voiceConfig || !cfg) {
-      rtSession.submitToolResult(event.callId, {
-        text: "The assistant agent is not available right now.",
-      });
-      return;
-    }
-
-    const agentId = voiceConfig.agentId ?? "main";
-    const sessionKey = `agent:${agentId}:subagent:msteams:${sessionScopeId}`;
-    const toolPolicy = deps.toolPolicy ?? voiceConfig.realtime.toolPolicy;
-
-    try {
+  const handleConsult = withConsultGuards({
+    label: "consult",
+    unavailableText: "The assistant agent is not available right now.",
+    errorText: "Sorry, I ran into a problem while working on that.",
+    handler: async ({ event, rtSession, consult, sendWorkingFiller }) => {
       // Fast path: answer from memory/session context without a full agent run.
       const fastContext = await resolveRealtimeFastContextConsult({
-        cfg,
-        agentId,
-        sessionKey,
-        config: voiceConfig.realtime.fastContext,
+        cfg: consult.cfg,
+        agentId: consult.agentId,
+        sessionKey: consult.sessionKey,
+        config: consult.voiceConfig.realtime.fastContext,
         args: event.args,
         logger: { debug: (message) => logger?.debug?.(message) },
       });
@@ -1018,110 +920,73 @@ export function createMsteamsRealtimeCall(params: {
         return;
       }
 
-      // Slower path: a full agent run. Emit a "working on it" filler first (if the
-      // provider supports tool-result continuation) so the caller is not left in
-      // silence while the agent works.
-      if (rtSession.bridge?.supportsToolResultContinuation) {
-        rtSession.submitToolResult(
-          event.callId,
-          buildRealtimeVoiceAgentConsultWorkingResponse("caller"),
-          { willContinue: true },
-        );
-      }
-
+      // Slower path: a full agent run.
+      sendWorkingFiller();
       const result = await runMsteamsConsult({
-        agentRuntime,
-        voiceConfig,
-        cfg,
-        agentId,
-        sessionKey,
+        ...consult,
         runIdPrefix: `voice-realtime-consult:${callId}`,
         args: event.args,
         surface: "a live Microsoft Teams call",
         extraSystemPrompt: MSTEAMS_REALTIME_CONSULT_SYSTEM_PROMPT,
-        toolPolicy,
-        timeoutMs: voiceConfig.responseTimeoutMs,
+        timeoutMs: consult.voiceConfig.responseTimeoutMs,
       });
       rtSession.submitToolResult(event.callId, result);
-    } catch (err) {
-      logger?.warn(
-        `MsteamsRealtime: consult failed for ${callId} — ${err instanceof Error ? err.message : String(err)}`,
-      );
+    },
+  });
+
+  /** post_meeting_minutes (#18/#22): ack on the call, then write+post the minutes detached. */
+  const handleMinutes = withConsultGuards({
+    label: "minutes",
+    unavailableText: "I can't post minutes from this call right now.",
+    errorText: "Sorry, I had trouble posting the minutes.",
+    handler: async ({ event, rtSession }) => {
       rtSession.submitToolResult(event.callId, {
-        text: "Sorry, I ran into a problem while working on that.",
+        text: "Minutes are being written and posted to the Teams chat now.",
       });
-    }
-  }
+      await runMeetingRecap();
+    },
+  });
 
   /** Run a vision-capable agent over the latest inbound video frame and speak the answer. */
-  async function handleLook(
-    event: RealtimeVoiceToolCallEvent,
-    rtSession: RealtimeVoiceBridgeSession,
-  ): Promise<void> {
-    // Media Access API: do not process call video before recording is active.
-    if (recordingGateBlocks()) {
-      logger?.debug?.(`MsteamsRealtime: look refused for ${callId} — recording not active`);
-      rtSession.submitToolResult(event.callId, MSTEAMS_RECORDING_BLOCKED);
-      return;
-    }
-    const { agentRuntime, voiceConfig, cfg } = deps;
-    if (!agentRuntime || !voiceConfig || !cfg || !deps.getLatestFrame) {
-      rtSession.submitToolResult(event.callId, {
-        text: "The assistant can't look at video right now.",
-      });
-      return;
-    }
-
-    const sourceArg = readArgText(event.args, "source");
-    const source = sourceArg === "camera" || sourceArg === "screenshare" ? sourceArg : undefined;
-    // Retroactive vision: scope "history" reviews the recent scene-change keyframes (oldest first)
-    // so the caller can ask about EARLIER shared content ("what did the previous slide say?").
-    const historyScope = readArgText(event.args, "scope") === "history";
-    const historyFrames = historyScope
-      ? (deps.getFrameHistory?.(MSTEAMS_LOOK_HISTORY_FRAMES) ?? [])
-      : [];
-    const frame = historyScope ? historyFrames.at(-1) : deps.getLatestFrame(source);
-    if (!frame) {
-      rtSession.submitToolResult(event.callId, MSTEAMS_LOOK_NO_FRAME);
-      return;
-    }
-
-    // Rate-limit: the same frame was already described → return the cached answer without a re-run.
-    // History runs skip the cache (the question targets different frames each time).
-    if (!historyScope && lastLookData === frame.dataBase64 && lastLookText) {
-      logger?.debug?.(`MsteamsRealtime: look cache hit for ${callId} (unchanged frame)`);
-      rtSession.submitToolResult(event.callId, { text: lastLookText });
-      return;
-    }
-
-    // Cost cap: a changed frame means a fresh (expensive) vision run — gate it on the vision budget.
-    if (deps.visionBudget && !deps.visionBudget.tryConsume(callId, Date.now())) {
-      logger?.debug?.(`MsteamsRealtime: look over vision budget for ${callId}`);
-      rtSession.submitToolResult(event.callId, MSTEAMS_LOOK_BUDGETED);
-      return;
-    }
-
-    const agentId = voiceConfig.agentId ?? "main";
-    const sessionKey = `agent:${agentId}:subagent:msteams:${sessionScopeId}`;
-    const toolPolicy = deps.toolPolicy ?? voiceConfig.realtime.toolPolicy;
-
-    try {
-      // Speak a short filler while the vision run completes (if the provider supports it).
-      if (rtSession.bridge?.supportsToolResultContinuation) {
-        rtSession.submitToolResult(
-          event.callId,
-          buildRealtimeVoiceAgentConsultWorkingResponse("caller"),
-          { willContinue: true },
-        );
+  const handleLook = withConsultGuards({
+    label: "look",
+    unavailableText: "The assistant can't look at video right now.",
+    errorText: "Sorry, I had trouble seeing that.",
+    requireFrameSource: true,
+    handler: async ({ event, rtSession, consult, sendWorkingFiller }) => {
+      const sourceArg = readArgText(event.args, "source");
+      const source = sourceArg === "camera" || sourceArg === "screenshare" ? sourceArg : undefined;
+      // Retroactive vision: scope "history" reviews the recent scene-change keyframes (oldest first)
+      // so the caller can ask about EARLIER shared content ("what did the previous slide say?").
+      const historyScope = readArgText(event.args, "scope") === "history";
+      const historyFrames = historyScope
+        ? (deps.getFrameHistory?.(MSTEAMS_LOOK_HISTORY_FRAMES) ?? [])
+        : [];
+      const frame = historyScope ? historyFrames.at(-1) : deps.getLatestFrame?.(source);
+      if (!frame) {
+        rtSession.submitToolResult(event.callId, MSTEAMS_LOOK_NO_FRAME);
+        return;
       }
 
+      // Rate-limit: the same frame was already described → return the cached answer without a re-run.
+      // History runs skip the cache (the question targets different frames each time).
+      if (!historyScope && lastLookData === frame.dataBase64 && lastLookText) {
+        logger?.debug?.(`MsteamsRealtime: look cache hit for ${callId} (unchanged frame)`);
+        rtSession.submitToolResult(event.callId, { text: lastLookText });
+        return;
+      }
+
+      // Cost cap: a changed frame means a fresh (expensive) vision run — gate it on the vision budget.
+      if (deps.visionBudget && !deps.visionBudget.tryConsume(callId, Date.now())) {
+        logger?.debug?.(`MsteamsRealtime: look over vision budget for ${callId}`);
+        rtSession.submitToolResult(event.callId, MSTEAMS_LOOK_BUDGETED);
+        return;
+      }
+
+      sendWorkingFiller();
       const lookFrames = historyScope ? historyFrames : [frame];
       const result = await runMsteamsConsult({
-        agentRuntime,
-        voiceConfig,
-        cfg,
-        agentId,
-        sessionKey,
+        ...consult,
         runIdPrefix: `voice-realtime-look:${callId}`,
         args: event.args,
         images: lookFrames.map((f) => ({
@@ -1144,8 +1009,7 @@ export function createMsteamsRealtimeCall(params: {
                 : "a live Microsoft Teams call (a participant is sharing video)";
             })(),
         extraSystemPrompt: MSTEAMS_REALTIME_LOOK_SYSTEM_PROMPT,
-        toolPolicy,
-        timeoutMs: voiceConfig.responseTimeoutMs,
+        timeoutMs: consult.voiceConfig.responseTimeoutMs,
       });
       // Cache only LIVE looks. A history run answers about EARLIER keyframes; caching it under the
       // current frame's bytes would make later live looks on a static screen return the history
@@ -1155,13 +1019,8 @@ export function createMsteamsRealtimeCall(params: {
         lastLookText = result.text;
       }
       rtSession.submitToolResult(event.callId, result);
-    } catch (err) {
-      logger?.warn(
-        `MsteamsRealtime: look failed for ${callId} — ${err instanceof Error ? err.message : String(err)}`,
-      );
-      rtSession.submitToolResult(event.callId, { text: "Sorry, I had trouble seeing that." });
-    }
-  }
+    },
+  });
 
   /** Load an agent-produced image — a local file (readFile) or a remote URL (SSRF-guarded fetch). */
   async function loadDisplayImage(
@@ -1284,30 +1143,12 @@ export function createMsteamsRealtimeCall(params: {
    * display it on the bot's video tile. Reuses the consult path; the produced trusted-local media is
    * read and sent as `display.image`. The agent is told not to also message it to chat.
    */
-  async function handleShow(
-    event: RealtimeVoiceToolCallEvent,
-    rtSession: RealtimeVoiceBridgeSession,
-  ): Promise<void> {
-    if (recordingGateBlocks()) {
-      logger?.debug?.(`MsteamsRealtime: show refused for ${callId} — recording not active`);
-      rtSession.submitToolResult(event.callId, MSTEAMS_RECORDING_BLOCKED);
-      return;
-    }
-    const { agentRuntime, voiceConfig, cfg } = deps;
-    if (!agentRuntime || !voiceConfig || !cfg) {
-      rtSession.submitToolResult(event.callId, { text: "I can't show images on this call." });
-      return;
-    }
-    const agentId = voiceConfig.agentId ?? "main";
-    const sessionKey = `agent:${agentId}:subagent:msteams:${sessionScopeId}`;
-    try {
-      if (rtSession.bridge?.supportsToolResultContinuation) {
-        rtSession.submitToolResult(
-          event.callId,
-          buildRealtimeVoiceAgentConsultWorkingResponse("caller"),
-          { willContinue: true },
-        );
-      }
+  const handleShow = withConsultGuards({
+    label: "show",
+    unavailableText: "I can't show images on this call.",
+    errorText: "Sorry, I had trouble showing that.",
+    handler: async ({ event, rtSession, consult, sendWorkingFiller }) => {
+      sendWorkingFiller();
       // show_to_caller sends { request }; the consult contract expects question/prompt/query/task,
       // so map request -> question (otherwise the consult throws "question required").
       const showRequest =
@@ -1317,18 +1158,14 @@ export function createMsteamsRealtimeCall(params: {
           ? (event.args as { request: string }).request
           : undefined;
       const result = await runMsteamsConsult({
-        agentRuntime,
-        voiceConfig,
-        cfg,
-        agentId,
-        sessionKey,
+        ...consult,
         runIdPrefix: `voice-realtime-show:${callId}`,
         args: showRequest ? { question: showRequest } : event.args,
         surface:
           "a live Microsoft Teams video call — show the caller an image on the bot's video tile",
         extraSystemPrompt: MSTEAMS_REALTIME_SHOW_SYSTEM_PROMPT,
         toolPolicy: "owner", // needs the screenshot / image-generation tools
-        timeoutMs: Math.max(voiceConfig.responseTimeoutMs, MSTEAMS_SHOW_TIMEOUT_MS),
+        timeoutMs: Math.max(consult.voiceConfig.responseTimeoutMs, MSTEAMS_SHOW_TIMEOUT_MS),
         // show is a controlled, single-image production run — trust the local image it produces
         // (general consults leave this false, so an arbitrary local path is never displayed).
         trustLocalMedia: true,
@@ -1340,13 +1177,8 @@ export function createMsteamsRealtimeCall(params: {
             ? result.text || "I'm showing it on your screen now."
             : result.text || "Sorry, I couldn't produce an image to show.",
       });
-    } catch (err) {
-      logger?.warn(
-        `MsteamsRealtime: show failed for ${callId} — ${err instanceof Error ? err.message : String(err)}`,
-      );
-      rtSession.submitToolResult(event.callId, { text: "Sorry, I had trouble showing that." });
-    }
-  }
+    },
+  });
 
   /**
    * A long task: acknowledge on the call immediately, then run the OpenClaw agent
@@ -1401,8 +1233,6 @@ export function createMsteamsRealtimeCall(params: {
     }
     const aadId = session.caller.aadId ?? undefined;
     const deliveryTarget = aadId ? `user:${aadId}` : undefined;
-    const agentId = voiceConfig.agentId ?? "main";
-    const sessionKey = `agent:${agentId}:subagent:msteams:${sessionScopeId}`;
 
     const deliveryInstruction = !deliveryTarget
       ? "This task was delegated from a Microsoft Teams voice call and runs in the background; deliver the final result to the caller when complete."
@@ -1415,8 +1245,8 @@ export function createMsteamsRealtimeCall(params: {
         agentRuntime,
         voiceConfig,
         cfg,
-        agentId,
-        sessionKey,
+        agentId: consultAgentId,
+        sessionKey: consultSessionKey,
         runIdPrefix: `voice-realtime-task:${callId}`,
         args: { question: task },
         surface: "a Microsoft Teams voice call (background task)",
@@ -1449,16 +1279,14 @@ export function createMsteamsRealtimeCall(params: {
     const lines = transcript
       .map((t) => `${t.role === "assistant" ? "Assistant" : "Caller side"}: ${t.text}`)
       .join("\n");
-    const agentId = voiceConfig.agentId ?? "main";
-    const sessionKey = `agent:${agentId}:subagent:msteams:${sessionScopeId}`;
     try {
       logger?.info(`MsteamsRealtime: posting meeting recap for ${callId}`);
       await runMsteamsConsult({
         agentRuntime,
         voiceConfig,
         cfg,
-        agentId,
-        sessionKey,
+        agentId: consultAgentId,
+        sessionKey: consultSessionKey,
         runIdPrefix: `voice-realtime-recap:${callId}`,
         args: {
           question:

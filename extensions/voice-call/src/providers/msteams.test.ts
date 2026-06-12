@@ -127,7 +127,7 @@ describe("MsteamsProvider (stub surface)", () => {
     );
   });
 
-  it("initiateCall (outbound enabled) signs + POSTs /api/calls/place and returns the worker callId", async () => {
+  it("initiateCall (outbound enabled) signs + POSTs /api/calls and returns the worker callId", async () => {
     fetchWithSsrFGuardMock.mockReset();
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: new Response(JSON.stringify({ callId: "graph-call-9" }), {

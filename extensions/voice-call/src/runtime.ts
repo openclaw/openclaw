@@ -374,7 +374,12 @@ export async function createVoiceCallRuntime(params: {
     agentRuntime,
     log,
   );
-  if (realtimeProvider) {
+  // Teams calls never arrive on the webhook plane (the worker owns the Graph notification endpoint
+  // and the media WebSocket is the transport), so the webhook-plane realtime handler — and the
+  // stream-session issuer that only the telephony providers read — would be dead weight for
+  // msteams: skip them, and with them the duplicate instructions build. The msteams realtime
+  // bridge is wired below via setRealtimeRuntime instead. (Review refactor)
+  if (realtimeProvider && provider.name !== "msteams") {
     const { RealtimeCallHandler } = await loadRealtimeHandler();
     const realtimeInstructions = await buildRealtimeVoiceInstructions({
       baseInstructions: config.realtime.instructions,

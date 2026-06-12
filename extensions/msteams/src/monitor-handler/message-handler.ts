@@ -104,6 +104,50 @@ import { resolveMSTeamsSenderAccess } from "./access.js";
 import { resolveMSTeamsInboundMedia } from "./inbound-media.js";
 import { resolveMSTeamsRouteSessionKey } from "./thread-session.js";
 
+/**
+ * Voice messages (#13): transcribe inbound audio attachments and fold the text into the body so
+ * the agent reads what was said instead of an opaque "<media:document>" placeholder. Opt-in via
+ * msteams.transcribeVoiceMessages (incurs an STT call); a failed clip keeps its placeholder and
+ * never blocks the reply. Returns the (possibly unchanged) body.
+ */
+async function applyMSTeamsVoiceTranscription(params: {
+  rawBody: string;
+  mediaList: Array<{ path: string; contentType?: string; placeholder: string }>;
+  cfg: MSTeamsMessageHandlerDeps["cfg"];
+  log: MSTeamsMessageHandlerDeps["log"];
+}): Promise<string> {
+  const { rawBody, mediaList, cfg, log } = params;
+  const audioMedia = mediaList.filter((m) => isAudioAttachment(m.contentType));
+  if (audioMedia.length === 0) {
+    return rawBody;
+  }
+  const transcribed = await Promise.all(
+    audioMedia.map(async (m) => {
+      try {
+        const result = await transcribeAudioFile({
+          filePath: m.path,
+          cfg,
+          mime: m.contentType,
+        });
+        return { transcript: result.text?.trim() ?? "", placeholder: m.placeholder };
+      } catch (err) {
+        log.debug?.("voice message transcription failed", {
+          contentType: m.contentType,
+          error: formatUnknownError(err),
+        });
+        return { transcript: "", placeholder: m.placeholder };
+      }
+    }),
+  );
+  const merged = applyVoiceTranscripts(rawBody, transcribed);
+  if (merged !== rawBody) {
+    log.debug?.("transcribed voice message(s)", {
+      count: transcribed.filter((t) => t.transcript).length,
+    });
+  }
+  return merged;
+}
+
 function formatMSTeamsSenderReason(params: {
   reasonCode: string;
   dmPolicy?: string;
@@ -622,38 +666,8 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         ?.preserveFilenames,
     });
 
-    // Voice messages (#13): transcribe audio attachments and fold the text into the body so the
-    // agent reads what was said instead of an opaque "<media:document>" placeholder. Opt-in
-    // (incurs an STT call); failures keep the placeholder and never block the reply.
     if (msteamsCfg?.transcribeVoiceMessages) {
-      const audioMedia = mediaList.filter((m) => isAudioAttachment(m.contentType));
-      if (audioMedia.length > 0) {
-        const transcribed = await Promise.all(
-          audioMedia.map(async (m) => {
-            try {
-              const result = await transcribeAudioFile({
-                filePath: m.path,
-                cfg,
-                mime: m.contentType,
-              });
-              return { transcript: result.text?.trim() ?? "", placeholder: m.placeholder };
-            } catch (err) {
-              log.debug?.("voice message transcription failed", {
-                contentType: m.contentType,
-                error: formatUnknownError(err),
-              });
-              return { transcript: "", placeholder: m.placeholder };
-            }
-          }),
-        );
-        const merged = applyVoiceTranscripts(rawBody, transcribed);
-        if (merged !== rawBody) {
-          log.debug?.("transcribed voice message(s)", {
-            count: transcribed.filter((t) => t.transcript).length,
-          });
-          rawBody = merged;
-        }
-      }
+      rawBody = await applyMSTeamsVoiceTranscription({ rawBody, mediaList, cfg, log });
     }
 
     const mediaPayload = buildMSTeamsMediaPayload(mediaList);
