@@ -16,7 +16,7 @@ export type PackageUpdateStepAdvisory = {
 export const PACKAGE_POST_INSTALL_DOCTOR_ADVISORY: PackageUpdateStepAdvisory = {
   kind: "package-post-install-doctor",
   message:
-    "Post-install doctor reported a recoverable update-time repair warning after the package install was verified; continuing with post-core plugin convergence and gateway restart.",
+    "Post-install doctor reported a recoverable update-time repair warning after the package install was verified; continuing with post-core plugin convergence.",
 };
 
 export type UpdatePostInstallDoctorResult = {

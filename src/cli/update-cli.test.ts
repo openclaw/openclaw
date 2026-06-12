@@ -2756,6 +2756,7 @@ describe("update-cli", () => {
       kind: "package-post-install-doctor",
       message: expect.stringContaining("recoverable update-time repair warning"),
     });
+    expect(doctorStep?.advisory?.message).not.toContain("gateway restart");
     expect(doctorStep?.stderrTail).toContain("doctor deferred configured plugin repair");
     expect(doctorStep?.stderrTail).toContain("deferred configured plugin repair");
   });
