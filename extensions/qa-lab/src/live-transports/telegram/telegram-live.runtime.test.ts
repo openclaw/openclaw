@@ -159,6 +159,65 @@ describe("telegram live qa runtime", () => {
     }
   });
 
+  it("normalizes Telegram repeated sample options", () => {
+    expect(testing.normalizeTelegramQaSampleOptions({})).toBeUndefined();
+    expect(
+      testing.normalizeTelegramQaSampleOptions({
+        count: 3,
+        timeoutMs: 45_000,
+      }),
+    ).toEqual({
+      count: 3,
+      maxFailures: 3,
+      scenarioIds: new Set(["telegram-mentioned-message-reply"]),
+      timeoutMs: 45_000,
+    });
+    expect(
+      testing.normalizeTelegramQaSampleOptions({
+        count: 3,
+        maxFailures: 1,
+        scenarioIds: ["telegram-mentioned-message-reply"],
+      }),
+    ).toEqual({
+      count: 3,
+      maxFailures: 1,
+      scenarioIds: new Set(["telegram-mentioned-message-reply"]),
+      timeoutMs: 30_000,
+    });
+  });
+
+  it("rejects unknown Telegram repeated sample scenarios", () => {
+    expect(() =>
+      testing.normalizeTelegramQaSampleOptions({
+        count: 1,
+        scenarioIds: ["telegram-sample-only"],
+      }),
+    ).toThrow("unknown Telegram QA sample scenario: telegram-sample-only");
+  });
+
+  it("summarizes Telegram repeated sample timing", () => {
+    expect(
+      testing.summarizeTelegramQaSamples([
+        { status: "pass", rttMs: 1000 },
+        { status: "pass", rttMs: 2000 },
+        { status: "pass", rttMs: 4000 },
+        { status: "fail" },
+      ]),
+    ).toEqual({
+      passed: 3,
+      failed: 1,
+      timing: {
+        rttMs: 2000,
+        avgMs: 2333,
+        p50Ms: 2000,
+        p95Ms: 4000,
+        maxMs: 4000,
+        samples: 4,
+        failedSamples: 1,
+      },
+    });
+  });
+
   it("sanitizes and truncates Telegram live progress details", () => {
     expect(testing.sanitizeTelegramQaProgressValue("scenario\nid\tvalue")).toBe(
       "scenario id value",
@@ -1311,6 +1370,38 @@ describe("telegram live qa runtime", () => {
         ],
       }),
     ).toContain("- RTT: 4321ms");
+  });
+
+  it("prints Telegram repeated sample timing in the Markdown report", () => {
+    const report = testing.renderTelegramQaMarkdown({
+      cleanupIssues: [],
+      credentialSource: "env",
+      groupId: "-100123",
+      redactMetadata: false,
+      startedAt: "2026-04-23T00:00:00.000Z",
+      finishedAt: "2026-04-23T00:00:10.000Z",
+      scenarios: [
+        {
+          id: "telegram-mentioned-message-reply",
+          title: "Telegram mentioned message gets a reply",
+          status: "pass",
+          details: "reply matched; 3/4 samples passed",
+          rttMs: 2000,
+          timing: {
+            avgMs: 2333,
+            p50Ms: 2000,
+            p95Ms: 4000,
+            maxMs: 4000,
+            samples: 4,
+            failedSamples: 1,
+          },
+        },
+      ],
+    });
+
+    expect(report).toContain("- Samples: 3/4");
+    expect(report).toContain("- P50: 2000ms");
+    expect(report).toContain("- P95: 4000ms");
   });
 
   it("formats phase-specific canary diagnostics with context", () => {

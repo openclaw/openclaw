@@ -226,6 +226,45 @@ describe("evidence summary", () => {
     ]);
   });
 
+  it("preserves aggregate live transport timing", () => {
+    const evidence = buildLiveTransportEvidenceSummary({
+      artifactPaths: [{ kind: "summary", path: QA_EVIDENCE_FILENAME }],
+      generatedAt: "2026-06-07T12:05:00.000Z",
+      primaryModel: "openai/gpt-5.5",
+      providerMode: "live-frontier",
+      checks: [
+        {
+          id: "telegram-mentioned-message-reply",
+          standardId: "mention-gating",
+          title: "Telegram mentioned message gets a reply",
+          status: "pass",
+          details: "5 samples collected.",
+          rttMs: 2000,
+          timing: {
+            rttMs: 1200,
+            avgMs: 1300,
+            p50Ms: 1200,
+            p95Ms: 1800,
+            maxMs: 2200,
+            samples: 5,
+            failedSamples: 1,
+          },
+        },
+      ],
+      transportId: "telegram",
+    });
+
+    expect(evidence.entries[0]?.result.timing).toEqual({
+      rttMs: 1200,
+      avgMs: 1300,
+      p50Ms: 1200,
+      p95Ms: 1800,
+      maxMs: 2200,
+      samples: 5,
+      failedSamples: 1,
+    });
+  });
+
   it("builds Vitest runner evidence entries", () => {
     const evidence = buildVitestEvidenceSummary({
       artifactPaths: [

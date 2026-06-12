@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
+  MAX_TIMER_TIMEOUT_MS,
   parseStrictPositiveInteger,
   resolveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
@@ -14,7 +15,11 @@ import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isRecord, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { z } from "zod";
-import { QA_EVIDENCE_FILENAME, buildLiveTransportEvidenceSummary } from "../../evidence-summary.js";
+import {
+  QA_EVIDENCE_FILENAME,
+  buildLiveTransportEvidenceSummary,
+  type QaEvidenceTiming,
+} from "../../evidence-summary.js";
 import { startQaGatewayChild } from "../../gateway-child.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "../../providers/index.js";
 import {
@@ -91,6 +96,7 @@ type TelegramQaScenarioRun = {
 
 type TelegramQaScenarioDefinition = LiveTransportScenarioDefinition<TelegramQaScenarioId> & {
   buildRun: (sutUsername: string) => TelegramQaScenarioRun;
+  buildSampleRun?: (params: { sampleIndex: number; sutUsername: string }) => TelegramQaScenarioRun;
   defaultEnabled?: boolean;
   defaultProviderModes?: readonly QaProviderMode[];
   regressionRefs?: readonly string[];
@@ -142,6 +148,7 @@ type TelegramQaScenarioResult = {
   title: string;
   status: "pass" | "fail";
   details: string;
+  timing?: QaEvidenceTiming;
   rttMs?: number;
   requestStartedAt?: string;
   responseObservedAt?: string;
@@ -153,6 +160,22 @@ type TelegramQaScenarioResult = {
   };
   sentMessageId?: number;
   responseMessageId?: number;
+};
+
+type TelegramQaSampleOptions = {
+  count: number;
+  timeoutMs: number;
+  maxFailures: number;
+  scenarioIds: Set<TelegramQaScenarioId>;
+};
+
+type TelegramQaScenarioSampleResult = {
+  details: string;
+  driverOffset: number;
+  failed: number;
+  latestSutMessageId?: number;
+  passed: number;
+  timing: QaEvidenceTiming;
 };
 
 type TelegramQaCanaryPhase = "sut_reply_timeout" | "sut_reply_not_threaded" | "sut_reply_empty";
@@ -428,6 +451,18 @@ const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
         input: `@${sutUsername} Telegram QA mention routing check. Reply with a short acknowledgement.`,
         replyToLatestSutMessage: true,
       }),
+    buildSampleRun: ({ sampleIndex, sutUsername }) => {
+      const marker = `QA-TELEGRAM-RTT-SAMPLE-${sampleIndex}-${randomUUID()
+        .slice(0, 8)
+        .toUpperCase()}`;
+      return telegramQaStepRun({
+        expectReply: true,
+        input: `@${sutUsername} Telegram RTT sample ${sampleIndex}. Reply exactly: ${marker}`,
+        expectedTextIncludes: [marker],
+        matchText: marker,
+        replyToLatestSutMessage: true,
+      });
+    },
   },
   {
     id: "telegram-reply-chain-exact-marker",
@@ -615,6 +650,68 @@ function resolveTelegramQaScenarioTimeoutMs(
   env: NodeJS.ProcessEnv = process.env,
 ) {
   return parsePositiveTelegramQaEnvMs(env, "OPENCLAW_QA_TELEGRAM_SCENARIO_TIMEOUT_MS", fallbackMs);
+}
+
+function normalizeTelegramQaSamplePositiveInteger(value: number | undefined) {
+  if (
+    typeof value !== "number" ||
+    !Number.isSafeInteger(value) ||
+    value <= 0 ||
+    value > MAX_TIMER_TIMEOUT_MS
+  ) {
+    return undefined;
+  }
+  return value;
+}
+
+function normalizeTelegramQaSampleOptions(params: {
+  count?: number;
+  maxFailures?: number;
+  scenarioIds?: readonly string[];
+  timeoutMs?: number;
+}): TelegramQaSampleOptions | undefined {
+  const count = normalizeTelegramQaSamplePositiveInteger(params.count);
+  if (count === undefined) {
+    return undefined;
+  }
+  const rawScenarioIds =
+    params.scenarioIds && params.scenarioIds.length > 0
+      ? params.scenarioIds
+      : ["telegram-mentioned-message-reply"];
+  const scenarioIds = new Set<TelegramQaScenarioId>();
+  const knownScenarioIds = new Set(TELEGRAM_QA_SCENARIOS.map((scenario) => scenario.id));
+  for (const scenarioId of rawScenarioIds) {
+    if (!knownScenarioIds.has(scenarioId as TelegramQaScenarioId)) {
+      throw new Error(`unknown Telegram QA sample scenario: ${scenarioId}`);
+    }
+    scenarioIds.add(scenarioId as TelegramQaScenarioId);
+  }
+  return {
+    count,
+    maxFailures: normalizeTelegramQaSamplePositiveInteger(params.maxFailures) ?? count,
+    scenarioIds,
+    timeoutMs: normalizeTelegramQaSamplePositiveInteger(params.timeoutMs) ?? 30_000,
+  };
+}
+
+function assertTelegramQaSampleScenarioSupport(params: {
+  sampleOptions?: TelegramQaSampleOptions;
+  scenarios: TelegramQaScenarioDefinition[];
+}) {
+  if (!params.sampleOptions) {
+    return;
+  }
+  const selectedScenarioIds = new Set(params.scenarios.map((scenario) => scenario.id));
+  for (const scenarioId of params.sampleOptions.scenarioIds) {
+    if (!selectedScenarioIds.has(scenarioId)) {
+      throw new Error(`Telegram QA sample scenario ${scenarioId} is not selected.`);
+    }
+  }
+  for (const scenario of params.scenarios) {
+    if (params.sampleOptions.scenarioIds.has(scenario.id) && !scenario.buildSampleRun) {
+      throw new Error(`Telegram QA scenario ${scenario.id} does not support repeated samples.`);
+    }
+  }
 }
 
 function formatTelegramQaTimeoutSeconds(timeoutMs: number) {
@@ -1277,6 +1374,23 @@ function renderTelegramQaMarkdown(params: {
     if (scenario.rttMs !== undefined) {
       lines.push(`- RTT: ${scenario.rttMs}ms`);
     }
+    if (scenario.timing?.samples !== undefined) {
+      lines.push(
+        `- Samples: ${scenario.timing.samples - (scenario.timing.failedSamples ?? 0)}/${scenario.timing.samples}`,
+      );
+      if (scenario.timing.avgMs !== undefined) {
+        lines.push(`- Avg: ${scenario.timing.avgMs}ms`);
+      }
+      if (scenario.timing.p50Ms !== undefined) {
+        lines.push(`- P50: ${scenario.timing.p50Ms}ms`);
+      }
+      if (scenario.timing.p95Ms !== undefined) {
+        lines.push(`- P95: ${scenario.timing.p95Ms}ms`);
+      }
+      if (scenario.timing.maxMs !== undefined) {
+        lines.push(`- Max: ${scenario.timing.maxMs}ms`);
+      }
+    }
     lines.push("");
   }
   if (params.gatewayDebugDirPath) {
@@ -1505,6 +1619,119 @@ async function runTelegramQaScenarioStep(params: {
     }
     throw error;
   }
+}
+
+function percentile(sortedValues: readonly number[], percentileValue: number) {
+  if (sortedValues.length === 0) {
+    return undefined;
+  }
+  const index = Math.ceil((percentileValue / 100) * sortedValues.length) - 1;
+  return sortedValues[Math.min(Math.max(index, 0), sortedValues.length - 1)];
+}
+
+function summarizeTelegramQaSamples(samples: ReadonlyArray<{ rttMs?: number; status: string }>) {
+  const passed = samples.filter((sample) => sample.status === "pass" && sample.rttMs !== undefined);
+  const sorted = passed.map((sample) => sample.rttMs as number).toSorted((a, b) => a - b);
+  const sum = sorted.reduce((total, value) => total + value, 0);
+  const timing: QaEvidenceTiming = {
+    rttMs: percentile(sorted, 50),
+    avgMs: sorted.length > 0 ? Math.round(sum / sorted.length) : undefined,
+    p50Ms: percentile(sorted, 50),
+    p95Ms: percentile(sorted, 95),
+    maxMs: sorted.at(-1),
+    samples: samples.length,
+    failedSamples: samples.length - passed.length,
+  };
+  return { passed: passed.length, failed: samples.length - passed.length, timing };
+}
+
+async function pauseTelegramQaSampleLoop() {
+  await new Promise((resolve) => {
+    setTimeout(resolve, 500);
+  });
+}
+
+async function runTelegramQaScenarioSamples(params: {
+  driverOffset: number;
+  driverToken: string;
+  groupId: string;
+  latestSutMessageId?: number;
+  observedMessages: TelegramObservedMessage[];
+  sampleOptions: TelegramQaSampleOptions;
+  scenario: TelegramQaScenarioDefinition;
+  sutBotId: number;
+  sutUsername: string;
+}): Promise<TelegramQaScenarioSampleResult> {
+  if (!params.scenario.buildSampleRun) {
+    throw new Error(
+      `Telegram QA scenario ${params.scenario.id} does not support repeated samples.`,
+    );
+  }
+  let driverOffset = params.driverOffset;
+  let latestSutMessageId = params.latestSutMessageId;
+  const samples: Array<{ details: string; rttMs?: number; status: "pass" | "fail" }> = [];
+  let failures = 0;
+  let passed = 0;
+  for (let index = 1; passed < params.sampleOptions.count; index += 1) {
+    const run = params.scenario.buildSampleRun({
+      sampleIndex: index,
+      sutUsername: params.sutUsername,
+    });
+    const steps = resolveTelegramQaScenarioSteps(run);
+    if (steps.length !== 1) {
+      throw new Error(`Telegram QA sample scenario ${params.scenario.id} must have one step.`);
+    }
+    try {
+      driverOffset = await flushTelegramUpdates(params.driverToken);
+      const stepResult = await runTelegramQaScenarioStep({
+        driverOffset,
+        driverToken: params.driverToken,
+        groupId: params.groupId,
+        latestSutMessageId,
+        observedMessages: params.observedMessages,
+        scenario: params.scenario,
+        step: {
+          ...steps[0],
+          timeoutMs: params.sampleOptions.timeoutMs,
+        },
+        sutBotId: params.sutBotId,
+      });
+      if (!stepResult.matched) {
+        throw new Error("sample did not expect a reply");
+      }
+      driverOffset = stepResult.matched.nextOffset;
+      latestSutMessageId = stepResult.matched.message.messageId;
+      const rttMs = stepResult.matched.observedAtMs - stepResult.requestStartedAtMs;
+      samples.push({
+        status: "pass",
+        details: `sample ${index} matched in ${rttMs}ms`,
+        rttMs,
+      });
+      passed += 1;
+    } catch (error) {
+      failures += 1;
+      samples.push({
+        status: "fail",
+        details: `sample ${index} failed: ${formatErrorMessage(error)}`,
+      });
+    }
+    if (failures >= params.sampleOptions.maxFailures) {
+      break;
+    }
+    if (passed < params.sampleOptions.count) {
+      await pauseTelegramQaSampleLoop();
+    }
+  }
+
+  const summary = summarizeTelegramQaSamples(samples);
+  return {
+    details: `${summary.passed}/${samples.length} samples passed`,
+    driverOffset,
+    failed: summary.failed,
+    latestSutMessageId,
+    passed: summary.passed,
+    timing: summary.timing,
+  };
 }
 
 function classifyCanaryReply(params: {
@@ -1749,6 +1976,10 @@ export async function runTelegramQaLive(params: {
   alternateModel?: string;
   fastMode?: boolean;
   scenarioIds?: string[];
+  sampleCount?: number;
+  sampleTimeoutMs?: number;
+  maxSampleFailures?: number;
+  sampleScenarioIds?: string[];
   sutAccountId?: string;
   credentialSource?: string;
   credentialRole?: string;
@@ -1766,10 +1997,17 @@ export async function runTelegramQaLive(params: {
   const alternateModel = params.alternateModel?.trim() || defaultQaModelForMode(providerMode, true);
   const sutAccountId = params.sutAccountId?.trim() || "sut";
   const scenarios = findScenario(params.scenarioIds, providerMode);
+  const sampleOptions = normalizeTelegramQaSampleOptions({
+    count: params.sampleCount,
+    maxFailures: params.maxSampleFailures,
+    scenarioIds: params.sampleScenarioIds,
+    timeoutMs: params.sampleTimeoutMs,
+  });
+  assertTelegramQaSampleScenarioSupport({ sampleOptions, scenarios });
   const progressEnabled = shouldLogTelegramQaLiveProgress();
   writeTelegramQaProgress(
     progressEnabled,
-    `run start: scenarios=${scenarios.length} providerMode=${providerMode} fastMode=${params.fastMode === true ? "on" : "off"}`,
+    `run start: scenarios=${scenarios.length} providerMode=${providerMode} fastMode=${params.fastMode === true ? "on" : "off"} samples=${sampleOptions?.count ?? 0}`,
   );
 
   const credentialLease = await acquireQaCredentialLease({
@@ -2021,30 +2259,58 @@ export async function runTelegramQaLive(params: {
                     : `; observed ${lastStep.expectedSutMessageCountRange[0]}-${lastStep.expectedSutMessageCountRange[1]} SUT message(s)`
                   : `; observed ${lastStep.expectedSutMessageCount} SUT message(s)`
                 : `; ${scenarioSteps.filter((step) => step.expectReply).length} command replies matched`;
+            let resultStatus: "pass" | "fail" = "pass";
+            let details = redactPublicMetadata
+              ? `reply matched in ${rttMs}ms${suffix}`
+              : `reply message ${lastMatched.message.messageId} matched in ${rttMs}ms${suffix}`;
+            let resultRttMs = rttMs;
+            let timing: QaEvidenceTiming | undefined;
+            if (sampleOptions?.scenarioIds.has(scenario.id)) {
+              const sampleResult = await runTelegramQaScenarioSamples({
+                driverOffset,
+                driverToken: runtimeEnv.driverToken,
+                groupId: runtimeEnv.groupId,
+                latestSutMessageId,
+                observedMessages,
+                sampleOptions,
+                scenario,
+                sutBotId: sutIdentity.id,
+                sutUsername,
+              });
+              driverOffset = sampleResult.driverOffset;
+              latestSutMessageId = sampleResult.latestSutMessageId ?? latestSutMessageId;
+              timing = sampleResult.timing;
+              resultRttMs = sampleResult.timing.p50Ms ?? resultRttMs;
+              details = `${details}; ${sampleResult.details}`;
+              if (sampleResult.passed < sampleOptions.count) {
+                resultStatus = "fail";
+              }
+            }
             const result = {
               id: scenario.id,
               standardId: scenario.standardId,
               title: scenario.title,
-              status: "pass",
-              details: redactPublicMetadata
-                ? `reply matched in ${rttMs}ms${suffix}`
-                : `reply message ${lastMatched.message.messageId} matched in ${rttMs}ms${suffix}`,
-              rttMs,
+              status: resultStatus,
+              details,
+              rttMs: resultRttMs,
+              timing,
               requestStartedAt: firstRequestStartedAt,
               responseObservedAt: new Date(lastMatched.observedAtMs).toISOString(),
-              rttMeasurement: {
-                finalMatchedReplyRttMs: rttMs,
-                requestStartedAt: new Date(lastRequestStartedAtMs).toISOString(),
-                responseObservedAt: new Date(lastMatched.observedAtMs).toISOString(),
-                source: "request-to-observed-message",
-              },
+              rttMeasurement: timing
+                ? undefined
+                : {
+                    finalMatchedReplyRttMs: rttMs,
+                    requestStartedAt: new Date(lastRequestStartedAtMs).toISOString(),
+                    responseObservedAt: new Date(lastMatched.observedAtMs).toISOString(),
+                    source: "request-to-observed-message",
+                  },
               sentMessageId: redactPublicMetadata ? undefined : lastSentMessageId,
               responseMessageId: redactPublicMetadata ? undefined : lastMatched.message.messageId,
             } satisfies TelegramQaScenarioResult;
             scenarioResults.push(result);
             writeTelegramQaProgress(
               progressEnabled,
-              `scenario pass ${scenarioIndexLabel}: ${scenarioIdForLog}`,
+              `scenario ${resultStatus} ${scenarioIndexLabel}: ${scenarioIdForLog}`,
             );
           } catch (error) {
             const result = {
@@ -2201,10 +2467,12 @@ export const testing = {
   normalizeTelegramObservedMessage,
   parseTelegramQaProgressBooleanEnv,
   parseTelegramQaCredentialPayload,
+  normalizeTelegramQaSampleOptions,
   resolveTelegramQaCanaryTimeoutMs,
   resolveTelegramQaScenarioTimeoutMs,
   resolveTelegramQaRuntimeEnv,
   sanitizeTelegramQaProgressValue,
+  summarizeTelegramQaSamples,
   shouldLogTelegramQaLiveProgress,
   formatTelegramQaProgressDetails,
   renderTelegramQaMarkdown,

@@ -218,6 +218,11 @@ inside every shard.
     `OPENCLAW_NPM_TELEGRAM_PACKAGE_TGZ=/path/to/openclaw-current.tgz` or
     `OPENCLAW_CURRENT_PACKAGE_TGZ` to test a resolved local tarball instead of
     installing from the registry.
+  - Set `OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES`,
+    `OPENCLAW_NPM_TELEGRAM_SAMPLE_TIMEOUT_MS`, and
+    `OPENCLAW_NPM_TELEGRAM_MAX_FAILURES` when the same installed-package
+    Telegram lane should emit repeated RTT sample timing in
+    `qa-evidence.json`.
   - Uses the same Telegram env credentials or Convex credential source as
     `pnpm openclaw qa telegram`. For CI/release automation, set
     `OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE=convex` plus

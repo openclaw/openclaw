@@ -17,12 +17,41 @@ function splitCsv(value: string | undefined) {
     .filter((entry) => entry.length > 0);
 }
 
+function parsePositiveIntegerEnv(env: NodeJS.ProcessEnv, name: string) {
+  const raw = env[name]?.trim();
+  if (!raw) {
+    return undefined;
+  }
+  if (!/^\d+$/u.test(raw)) {
+    throw new Error(`invalid ${name}: ${raw}`);
+  }
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`invalid ${name}: ${raw}`);
+  }
+  return value;
+}
+
 function resolveCredentialSource(env: NodeJS.ProcessEnv) {
   return env.OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE ?? env.OPENCLAW_QA_CREDENTIAL_SOURCE;
 }
 
 function resolveCredentialRole(env: NodeJS.ProcessEnv) {
   return env.OPENCLAW_NPM_TELEGRAM_CREDENTIAL_ROLE ?? env.OPENCLAW_QA_CREDENTIAL_ROLE;
+}
+
+function resolveSampleOptions(env: NodeJS.ProcessEnv) {
+  const sampleCount = parsePositiveIntegerEnv(env, "OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES");
+  if (sampleCount === undefined) {
+    return {};
+  }
+  return {
+    sampleCount,
+    sampleTimeoutMs: parsePositiveIntegerEnv(env, "OPENCLAW_NPM_TELEGRAM_SAMPLE_TIMEOUT_MS"),
+    maxSampleFailures:
+      parsePositiveIntegerEnv(env, "OPENCLAW_NPM_TELEGRAM_MAX_FAILURES") ?? sampleCount,
+    sampleScenarioIds: splitCsv(env.OPENCLAW_NPM_TELEGRAM_SAMPLE_SCENARIOS),
+  };
 }
 
 async function shouldFailPackageTelegramRun(
@@ -84,6 +113,7 @@ async function main() {
     alternateModel: process.env.OPENCLAW_NPM_TELEGRAM_ALT_MODEL,
     fastMode: parseBoolean(process.env.OPENCLAW_NPM_TELEGRAM_FAST),
     scenarioIds: splitCsv(process.env.OPENCLAW_NPM_TELEGRAM_SCENARIOS),
+    ...resolveSampleOptions(process.env),
     sutAccountId: process.env.OPENCLAW_NPM_TELEGRAM_SUT_ACCOUNT,
     credentialSource: resolveCredentialSource(process.env),
     credentialRole: resolveCredentialRole(process.env),
@@ -116,8 +146,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 }
 
 export const testing = {
+  parsePositiveIntegerEnv,
   resolveCredentialRole,
   resolveCredentialSource,
+  resolveSampleOptions,
   shouldFailPackageTelegramRun,
 };
 export { testing as __testing };

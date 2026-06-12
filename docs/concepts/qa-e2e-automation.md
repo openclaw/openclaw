@@ -377,24 +377,27 @@ Output artifacts:
 - `qa-evidence.json` - evidence entries for the live transport checks, including profile, coverage, provider, channel, artifacts, result, and RTT fields.
 - `telegram-qa-observed-messages.json` - bodies redacted unless `OPENCLAW_QA_TELEGRAM_CAPTURE_CONTENT=1`.
 
-Package RTT comparison uses the same Telegram credential contract while keeping
-its RTT sample controls on the RTT harness path:
+Package Telegram runs use the same Telegram credential contract. For repeated
+RTT samples, run the normal package Telegram live lane and set the sample
+controls; the samples are folded into `qa-evidence.json` under
+`result.timing` for the sampled Telegram scenario.
 
 ```bash
-pnpm rtt openclaw@beta \
-  --credential-source convex \
-  --credential-role maintainer \
-  --samples 20 \
-  --sample-timeout-ms 30000
+OPENCLAW_QA_CREDENTIAL_SOURCE=convex \
+OPENCLAW_QA_CREDENTIAL_ROLE=maintainer \
+OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC=openclaw@beta \
+OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES=20 \
+OPENCLAW_NPM_TELEGRAM_SAMPLE_TIMEOUT_MS=30000 \
+pnpm test:docker:npm-telegram-live
 ```
 
-When `--credential-source convex` is set, the RTT Docker wrapper leases a
-`kind: "telegram"` credential, exports the leased group/driver/SUT bot env into
-the installed-package run, heartbeats the lease, and releases it on shutdown.
-`--samples` and `--sample-timeout-ms` still feed
-`OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES` and
-`OPENCLAW_NPM_TELEGRAM_SAMPLE_TIMEOUT_MS`, so `result.json` remains comparable
-across env-backed and Convex-backed RTT runs.
+When `OPENCLAW_QA_CREDENTIAL_SOURCE=convex` is set, the package live wrapper
+leases a `kind: "telegram"` credential, exports the leased group/driver/SUT bot
+env into the installed-package run, heartbeats the lease, and releases it on
+shutdown. `OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES`,
+`OPENCLAW_NPM_TELEGRAM_SAMPLE_TIMEOUT_MS`, and
+`OPENCLAW_NPM_TELEGRAM_MAX_FAILURES` control repeated sampling without creating
+a separate RTT command or Telegram-specific summary format.
 
 ### Discord QA
 

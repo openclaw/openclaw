@@ -142,6 +142,15 @@ describe("package Telegram live Docker E2E", () => {
     );
   });
 
+  it("forwards repeated sample controls to the package Telegram live lane", () => {
+    const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
+
+    expect(script).toContain("OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES");
+    expect(script).toContain("OPENCLAW_NPM_TELEGRAM_SAMPLE_TIMEOUT_MS");
+    expect(script).toContain("OPENCLAW_NPM_TELEGRAM_MAX_FAILURES");
+    expect(script).toContain("OPENCLAW_NPM_TELEGRAM_SAMPLE_SCENARIOS");
+  });
+
   it("keeps private QA harness imports local while using the installed package dist", () => {
     const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
     const preparePackage = readFileSync(PREPARE_PACKAGE_PATH, "utf8");
@@ -193,6 +202,30 @@ describe("package Telegram live Docker E2E", () => {
         OPENCLAW_QA_CREDENTIAL_ROLE: "maintainer",
       }),
     ).toBe("ci");
+  });
+
+  it("maps repeated sample env onto package Telegram live options", () => {
+    expect(
+      testing.resolveSampleOptions({
+        OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES: "7",
+        OPENCLAW_NPM_TELEGRAM_SAMPLE_TIMEOUT_MS: "45000",
+        OPENCLAW_NPM_TELEGRAM_MAX_FAILURES: "2",
+        OPENCLAW_NPM_TELEGRAM_SAMPLE_SCENARIOS: "telegram-mentioned-message-reply",
+      }),
+    ).toEqual({
+      sampleCount: 7,
+      sampleTimeoutMs: 45_000,
+      maxSampleFailures: 2,
+      sampleScenarioIds: ["telegram-mentioned-message-reply"],
+    });
+  });
+
+  it("rejects invalid repeated sample env", () => {
+    expect(() =>
+      testing.resolveSampleOptions({
+        OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES: "7samples",
+      }),
+    ).toThrow("invalid OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES: 7samples");
   });
 
   it("gates package Telegram status on the summary artifact", async () => {
