@@ -878,7 +878,7 @@ describe("hasRuntimeAvailableProviderAuth", () => {
         },
       },
     } as unknown as OpenClawConfig;
-    setRuntimeConfigSnapshot(undefined, undefined);
+    clearRuntimeConfigSnapshot();
 
     expect(
       hasRuntimeAvailableProviderAuth({
@@ -1092,7 +1092,7 @@ describe("resolveApiKeyForProvider", () => {
         },
       },
     } as unknown as OpenClawConfig;
-    setRuntimeConfigSnapshot(undefined, undefined);
+    clearRuntimeConfigSnapshot();
 
     await expect(
       resolveApiKeyForProvider({
@@ -1162,7 +1162,7 @@ describe("resolveApiKeyForProvider", () => {
           "ollama-gpu1": providerConfig,
         },
       },
-    };
+    } as unknown as OpenClawConfig;
     const runtimeConfig = {
       models: {
         providers: {
@@ -1172,7 +1172,7 @@ describe("resolveApiKeyForProvider", () => {
           },
         },
       },
-    };
+    } as unknown as OpenClawConfig;
     setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
 
     const auth = await resolveApiKeyForProvider({
