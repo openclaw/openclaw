@@ -734,29 +734,26 @@ jobs:
             cat "${release_plan_path}"
 
             normal_plugins="$(jq -r '[.candidates[]?.packageName] | join(",")' "${release_plan_path}")"
-            bootstrap_plugins="$(jq -r '[.bootstrapCandidates[]?.packageName] | join(",")' "${release_plan_path}")"
+            bootstrap_plugins="$(jq -r '[.bootstrapCandidates[]?.packageName, .missingTrustedPublisher[]?.packageName] | join(",")' "${release_plan_path}")"
             missing_trusted_plugins="$(jq -r '[.missingTrustedPublisher[]?.packageName] | join(",")' "${release_plan_path}")"
             normal_plugin_count="$(jq -r '.candidates | length' "${release_plan_path}")"
-            bootstrap_plugin_count="$(jq -r '.bootstrapCandidates | length' "${release_plan_path}")"
+            bootstrap_plugin_count="$(jq -r '(.bootstrapCandidates | length) + (.missingTrustedPublisher | length)' "${release_plan_path}")"
             missing_trusted_plugin_count="$(jq -r '.missingTrustedPublisher | length' "${release_plan_path}")"
-
-            if [[ "${missing_trusted_plugin_count}" != "0" ]]; then
-              echo "One or more ClawHub packages exist but do not have trusted publishing configured. Configure trusted publishing before running a release publish." >&2
-              jq -r '.missingTrustedPublisher[]? | "- \(.packageName)@\(.version): configure trusted publishing for openclaw/openclaw, workflow plugin-clawhub-release.yml, without an environment pin"' "${release_plan_path}" >&2
-              exit 1
-            fi
 
             {
               echo "### ClawHub release plan"
               echo
               echo "- Normal OIDC candidates: \`${normal_plugin_count}\`"
-              echo "- Bootstrap candidates: \`${bootstrap_plugin_count}\`"
-              echo "- Missing trusted publisher candidates: \`${missing_trusted_plugin_count}\`"
+              echo "- Bootstrap/repair candidates: \`${bootstrap_plugin_count}\`"
+              echo "- Existing-package trusted-publisher repairs: \`${missing_trusted_plugin_count}\`"
               if [[ -n "${normal_plugins}" ]]; then
                 echo "- Normal plugins: \`${normal_plugins}\`"
               fi
               if [[ -n "${bootstrap_plugins}" ]]; then
-                echo "- Bootstrap plugins: \`${bootstrap_plugins}\`"
+                echo "- Bootstrap/repair plugins: \`${bootstrap_plugins}\`"
+              fi
+              if [[ -n "${missing_trusted_plugins}" ]]; then
+                echo "- Trusted-publisher repair plugins: \`${missing_trusted_plugins}\`"
               fi
             } >> "$GITHUB_STEP_SUMMARY"
           }

@@ -1623,8 +1623,6 @@ describe("package artifact reuse", () => {
     expect(clawHubWorkflow).toContain("verify_published_clawhub_package:");
     expect(clawHubWorkflow).toContain("inputs.dry_run != true");
     expect(clawHubWorkflow).toContain("Verify published ClawHub package");
-    expect(releaseWorkflow).toContain("without an environment pin");
-    expect(releaseWorkflow).not.toContain("environment clawhub-plugin-release");
     expect(clawHubWorkflow).not.toContain("bash scripts/plugin-clawhub-publish.sh --publish");
     expect(clawHubWorkflow).not.toContain("Write ClawHub token config");
     expect(clawHubWorkflow).not.toContain("Checkout ClawHub CLI source");
@@ -1643,6 +1641,11 @@ describe("package artifact reuse", () => {
     expect(releaseWorkflow).toContain("Plugin ClawHub bootstrap run ID");
     expect(releaseWorkflow).toContain("bootstrap_plugins");
     expect(releaseWorkflow).toContain("missing_trusted_plugins");
+    expect(releaseWorkflow).toContain(
+      "[.bootstrapCandidates[]?.packageName, .missingTrustedPublisher[]?.packageName]",
+    );
+    expect(releaseWorkflow).toContain("Bootstrap/repair candidates:");
+    expect(releaseWorkflow).toContain("Trusted-publisher repair plugins:");
     expect(releaseWorkflow).toContain(
       "Waiting for plugin-clawhub-new.yml bootstrap to finish before continuing release publish.",
     );
