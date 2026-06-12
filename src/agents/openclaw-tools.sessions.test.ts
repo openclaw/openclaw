@@ -188,6 +188,8 @@ type AgentCallParams = {
   inputProvenance?: {
     kind?: string;
     sourceSessionKey?: string;
+    sourceChannel?: string;
+    sourceTool?: string;
   };
 };
 
@@ -712,6 +714,18 @@ describe("sessions tools", () => {
         return {
           messages: [
             { role: "toolResult", content: [] },
+            {
+              role: "assistant",
+              provider: "openclaw",
+              model: "delivery-mirror",
+              content: [{ type: "text", text: "mirrored" }],
+            },
+            {
+              role: "assistant",
+              provider: "openclaw",
+              model: "gateway-injected",
+              content: [{ type: "text", text: "injected" }],
+            },
             { role: "assistant", content: [{ type: "text", text: "ok" }] },
           ],
         };
@@ -725,16 +739,27 @@ describe("sessions tools", () => {
     }
 
     const result = await tool.execute("call3", { sessionKey: "main" });
-    const details = result.details as { messages?: Array<{ role?: string }> };
-    expect(details.messages).toHaveLength(1);
-    expect(details.messages?.[0]?.role).toBe("assistant");
+    const details = result.details as { messages?: unknown[] };
+    expect(details.messages).toHaveLength(3);
+    expect(details.messages).toContainEqual(
+      expect.objectContaining({ provider: "openclaw", model: "gateway-injected" }),
+    );
+    expect(details.messages).toContainEqual(
+      expect.objectContaining({ provider: "openclaw", model: "delivery-mirror" }),
+    );
 
     const withTools = await tool.execute("call4", {
       sessionKey: "main",
       includeTools: true,
     });
     const withToolsDetails = withTools.details as { messages?: unknown[] };
-    expect(withToolsDetails.messages).toHaveLength(2);
+    expect(withToolsDetails.messages).toHaveLength(4);
+    expect(withToolsDetails.messages).toContainEqual(
+      expect.objectContaining({ provider: "openclaw", model: "delivery-mirror" }),
+    );
+    expect(withToolsDetails.messages).toContainEqual(
+      expect.objectContaining({ provider: "openclaw", model: "gateway-injected" }),
+    );
   });
 
   it("sessions_history caps oversized payloads and strips heavy fields", async () => {
@@ -1122,6 +1147,24 @@ describe("sessions tools", () => {
           ),
       ),
     ).toBe(true);
+    const initialAgentCall = agentCalls.find((call) =>
+      agentParams(call).extraSystemPrompt?.includes("Agent-to-agent message context"),
+    );
+    const initialAgentParams = agentParams(initialAgentCall ?? {});
+    expect(initialAgentParams.extraSystemPrompt).toContain(
+      "Agent 1 (requester) session: <REQUESTER_SESSION>.",
+    );
+    expect(initialAgentParams.extraSystemPrompt).toContain("Agent 1 (requester) channel: discord.");
+    expect(initialAgentParams.extraSystemPrompt).toContain(
+      "Agent 2 (target) session: <TARGET_SESSION>.",
+    );
+    expect(initialAgentParams.extraSystemPrompt).not.toContain(requesterKey);
+    expect(initialAgentParams.inputProvenance).toMatchObject({
+      kind: "inter_session",
+      sourceSessionKey: requesterKey,
+      sourceChannel: "discord",
+      sourceTool: "sessions_send",
+    });
     expect(
       agentCalls.some(
         (call) =>

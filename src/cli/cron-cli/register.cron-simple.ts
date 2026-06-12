@@ -229,7 +229,7 @@ export function registerCronSimpleCommands(cron: Command) {
   addGatewayClientOptions(
     cron
       .command("runs")
-      .description("Show cron run history (JSONL-backed)")
+      .description("Show cron run history")
       .requiredOption("--id <id>", "Job id")
       .option("--run-id <runId>", "Filter by cron run id")
       .option("--limit <n>", "Max entries (default 50)", "50")

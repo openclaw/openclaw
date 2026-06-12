@@ -26,6 +26,7 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
 import { drainFormattedSystemEvents } from "./session-updates.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
@@ -179,6 +180,38 @@ async function writeSessionStoreFast(
 ): Promise<void> {
   await fs.mkdir(path.dirname(storePath), { recursive: true });
   await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
+}
+
+async function writeTerminalTranscriptSessionStore(params: {
+  storePath: string;
+  sessionKey: string;
+  sessionId: string;
+  status?: SessionEntry["status"];
+  omitStatus?: boolean;
+  updatedAt: number;
+  endedAt: number;
+  transcriptMtimeMs: number;
+}): Promise<void> {
+  const sessionFile = `${params.sessionId}.jsonl`;
+  const transcriptPath = path.join(path.dirname(params.storePath), sessionFile);
+  await fs.writeFile(
+    transcriptPath,
+    `${JSON.stringify({ type: "session", id: params.sessionId })}\n`,
+    "utf-8",
+  );
+  await fs.utimes(transcriptPath, params.transcriptMtimeMs / 1000, params.transcriptMtimeMs / 1000);
+  const status = params.status ?? (params.omitStatus ? undefined : "done");
+  await writeSessionStoreFast(params.storePath, {
+    [params.sessionKey]: {
+      sessionId: params.sessionId,
+      sessionFile,
+      updatedAt: params.updatedAt,
+      startedAt: params.endedAt - 10_000,
+      endedAt: params.endedAt,
+      runtimeMs: 9_000,
+      ...(status ? { status } : {}),
+    },
+  });
 }
 
 function setMinimalCurrentConversationBindingRegistryForTests(): void {
@@ -881,6 +914,111 @@ describe("initSessionState RawBody", () => {
     expect(peekSystemEvents(existingSessionId)).toStrictEqual([]);
   });
 
+  it("preserves a user model override across an implicit daily stale rollover (#90119)", async () => {
+    // Regression: a user-set /model override persisted on a session that then
+    // goes stale at the daily reset boundary must survive the implicit
+    // rollover. Previously the carryover was gated on resetTriggered, so the
+    // next non-/new turn dropped the override and reverted to the default
+    // model despite the "Model set to ... for this session" ack.
+    const root = await makeCaseDir("openclaw-daily-rollover-model-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:discord:channel:daily-rollover";
+    const existingSessionId = "session-before-daily-reset";
+    // Stale under the default daily reset (atHour 4): started ~48h ago so
+    // sessionStartedAt < today's reset boundary.
+    const staleStartedAt = Date.now() - 48 * 60 * 60 * 1000;
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: staleStartedAt,
+        sessionStartedAt: staleStartedAt,
+        lastInteractionAt: staleStartedAt,
+        systemSent: true,
+        // User-driven override (the thing /model writes).
+        providerOverride: "minimax",
+        modelOverride: "m2.7",
+        modelOverrideSource: "user",
+      },
+    });
+
+    const cfg = {
+      session: { store: storePath },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        // Ordinary message — NOT a reset trigger.
+        RawBody: "hello again",
+        ChatType: "channel",
+        SessionKey: sessionKey,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    // The session rolled over implicitly (stale), not via /new.
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(false);
+    expect(result.sessionId).not.toBe(existingSessionId);
+    // The user override must survive.
+    expect(result.sessionEntry.providerOverride).toBe("minimax");
+    expect(result.sessionEntry.modelOverride).toBe("m2.7");
+    expect(result.sessionEntry.modelOverrideSource).toBe("user");
+
+    const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      { providerOverride?: string; modelOverride?: string; modelOverrideSource?: string }
+    >;
+    expect(store[sessionKey]?.modelOverride).toBe("m2.7");
+    expect(store[sessionKey]?.modelOverrideSource).toBe("user");
+  });
+
+  it("clears an auto-fallback model override on an implicit daily stale rollover (#90119)", async () => {
+    // Counterpart: auto-created fallback overrides must still be cleared on a
+    // daily rollover so stale sessions return to the configured default.
+    const root = await makeCaseDir("openclaw-daily-rollover-fallback-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:discord:channel:daily-rollover-fallback";
+    const existingSessionId = "session-before-daily-reset-fallback";
+    const staleStartedAt = Date.now() - 48 * 60 * 60 * 1000;
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: staleStartedAt,
+        sessionStartedAt: staleStartedAt,
+        lastInteractionAt: staleStartedAt,
+        systemSent: true,
+        // Auto-fallback override (rate-limit/auto-pin), not user-driven.
+        providerOverride: "minimax",
+        modelOverride: "m2.7",
+        modelOverrideFallbackOriginProvider: "openai",
+        modelOverrideFallbackOriginModel: "gpt-4o-mini",
+      },
+    });
+
+    const cfg = {
+      session: { store: storePath },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        RawBody: "hello again",
+        ChatType: "channel",
+        SessionKey: sessionKey,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(false);
+    expect(result.sessionEntry.modelOverride).toBeUndefined();
+    expect(result.sessionEntry.providerOverride).toBeUndefined();
+    expect(result.sessionEntry.modelOverrideSource).toBeUndefined();
+  });
+
   it("rotates local session state for /new on bound ACP sessions", async () => {
     const root = await makeCaseDir("openclaw-rawbody-acp-reset-");
     const storePath = path.join(root, "sessions.json");
@@ -1284,8 +1422,7 @@ describe("initSessionState RawBody", () => {
     const sessionFile = path.join(stateDir, "agents", agentId, "sessions", `${sessionId}.jsonl`);
     const storePath = path.join(stateDir, "agents", agentId, "sessions", "sessions.json");
 
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    try {
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       await fs.mkdir(path.dirname(storePath), { recursive: true });
       await writeSessionStoreFast(storePath, {
         [sessionKey]: {
@@ -1311,9 +1448,7 @@ describe("initSessionState RawBody", () => {
       expect(result.sessionEntry.sessionId).toBe(sessionId);
       expect(result.sessionEntry.sessionFile).toBe(sessionFile);
       expect(result.storePath).toBe(storePath);
-    } finally {
-      vi.unstubAllEnvs();
-    }
+    });
   });
 
   it.each([
@@ -1592,6 +1727,111 @@ describe("initSessionState reset policy", () => {
     expect(persisted[sessionKey]?.startedAt).toBe(Date.now() - 10_000);
     expect(persisted[sessionKey]?.endedAt).toBe(Date.now() - 1_000);
     expect(persisted[sessionKey]?.runtimeMs).toBe(9_000);
+  });
+
+  it.each([
+    {
+      name: "non-main terminal rows ignore transcript mtime",
+      sessionKey: "agent:main:whatsapp:dm:terminal-entry",
+      updatedAtOffsetMs: -5_000,
+      endedAtOffsetMs: -6_000,
+      transcriptMtimeOffsetMs: -3_000,
+      expectNewSession: false,
+    },
+    {
+      name: "main terminal rows rotate when transcript is newer than updatedAt",
+      sessionKey: "agent:main:main",
+      updatedAtOffsetMs: -10_000,
+      endedAtOffsetMs: -11_000,
+      transcriptMtimeOffsetMs: 0,
+      expectNewSession: true,
+    },
+    {
+      name: "main endedAt-only rows rotate when transcript is newer than updatedAt",
+      sessionKey: "agent:main:main",
+      updatedAtOffsetMs: -10_000,
+      endedAtOffsetMs: -11_000,
+      transcriptMtimeOffsetMs: 0,
+      omitStatus: true,
+      expectNewSession: true,
+    },
+    {
+      name: "failed main terminal rows reuse when the transcript exists",
+      sessionKey: "agent:main:main",
+      status: "failed" as const,
+      updatedAtOffsetMs: -10_000,
+      endedAtOffsetMs: -11_000,
+      transcriptMtimeOffsetMs: 0,
+      expectNewSession: false,
+    },
+    {
+      name: "main terminal rows reuse when updatedAt already reflects the transcript",
+      sessionKey: "agent:main:main",
+      updatedAtOffsetMs: -1_000,
+      endedAtOffsetMs: -6_000,
+      transcriptMtimeOffsetMs: -4_000,
+      expectNewSession: false,
+    },
+    {
+      name: "main terminal rows reuse when transcript mtime differs only by sub-millisecond precision",
+      sessionKey: "agent:main:main",
+      updatedAtOffsetMs: -4_000,
+      endedAtOffsetMs: -6_000,
+      transcriptMtimeOffsetMs: -3_999.5,
+      expectNewSession: false,
+    },
+    {
+      name: "main terminal rows reuse when transcript is not newer than updatedAt",
+      sessionKey: "agent:main:main",
+      updatedAtOffsetMs: -10_000,
+      endedAtOffsetMs: -11_000,
+      transcriptMtimeOffsetMs: -15_000,
+      expectNewSession: false,
+    },
+  ])("$name", async (scenario) => {
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
+    const root = await makeCaseDir("openclaw-reset-terminal-entry-");
+    const storePath = path.join(root, "sessions.json");
+    const existingSessionId = "terminal-entry-old";
+    const now = Date.now();
+    const terminalUpdatedAt = now + scenario.updatedAtOffsetMs;
+    const terminalEndedAt = now + scenario.endedAtOffsetMs;
+    await writeTerminalTranscriptSessionStore({
+      storePath,
+      sessionKey: scenario.sessionKey,
+      sessionId: existingSessionId,
+      status: scenario.status,
+      omitStatus: scenario.omitStatus,
+      updatedAt: terminalUpdatedAt,
+      endedAt: terminalEndedAt,
+      transcriptMtimeMs: now + scenario.transcriptMtimeOffsetMs,
+    });
+
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: { Body: "hello", SessionKey: scenario.sessionKey },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(scenario.expectNewSession);
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      SessionEntry
+    >;
+    const entry = persisted[scenario.sessionKey];
+    if (scenario.expectNewSession) {
+      expect(result.sessionId).not.toBe(existingSessionId);
+      expect(entry?.sessionId).not.toBe(existingSessionId);
+      expect(entry?.status).toBeUndefined();
+      expect(entry?.startedAt).toBeUndefined();
+      expect(entry?.endedAt).toBeUndefined();
+      expect(entry?.runtimeMs).toBeUndefined();
+    } else {
+      expect(result.sessionId).toBe(existingSessionId);
+      expect(entry?.status).toBe(scenario.status ?? "done");
+      expect(entry?.endedAt).toBe(terminalEndedAt);
+    }
   });
 
   it("keeps the existing stale session for /reset soft", async () => {
@@ -2596,6 +2836,64 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       expect(result.sessionEntry.modelOverrideFallbackOriginModel, testCase.name).toBeUndefined();
       expect(result.sessionEntry.verboseLevel, testCase.name).toBe(autoOverrides.verboseLevel);
     }
+  });
+
+  it("clears recovered Codex fallback metadata for Discord channel sessions on /new", async () => {
+    const storePath = await createStorePath("openclaw-reset-discord-codex-fallback-");
+    const sessionKey = "agent:main:discord:channel:1488013357016420522";
+    const existingSessionId = "existing-discord-codex-fallback";
+    await seedSessionStoreWithOverrides({
+      storePath,
+      sessionKey,
+      sessionId: existingSessionId,
+      overrides: {
+        providerOverride: "codex",
+        modelOverride: "gpt-5.4",
+        modelOverrideFallbackOriginProvider: "openai",
+        modelOverrideFallbackOriginModel: "gpt-5.5",
+        totalTokens: 231_980,
+        contextTokens: 272_000,
+        totalTokensFresh: true,
+      },
+    });
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "/new",
+        RawBody: "/new",
+        CommandBody: "/new",
+        From: "discord-user",
+        To: "discord-bot",
+        ChatType: "group",
+        SessionKey: sessionKey,
+        Provider: "discord",
+        Surface: "discord",
+      },
+      cfg: {
+        session: { store: storePath, idleMinutes: 999 },
+        agents: {
+          defaults: {
+            model: {
+              primary: "codex/gpt-5.5",
+              fallbacks: [],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(true);
+    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.sessionEntry.providerOverride).toBeUndefined();
+    expect(result.sessionEntry.modelOverride).toBeUndefined();
+    expect(result.sessionEntry.modelOverrideSource).toBeUndefined();
+    expect(result.sessionEntry.modelOverrideFallbackOriginProvider).toBeUndefined();
+    expect(result.sessionEntry.modelOverrideFallbackOriginModel).toBeUndefined();
+    expect(result.sessionEntry.totalTokens).toBeUndefined();
+    expect(result.sessionEntry.contextTokens).toBeUndefined();
+    expect(result.sessionEntry.totalTokensFresh).toBeUndefined();
   });
 
   it("preserves spawned session ownership metadata across /new and /reset", async () => {

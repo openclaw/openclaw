@@ -74,14 +74,14 @@ describe("resolveConfigOpenCommand", () => {
     });
   });
 
-  it("uses a quoted PowerShell literal on Windows", () => {
+  it("uses a quoted PowerShell FilePath on Windows", () => {
     expect(resolveConfigOpenCommand(String.raw`C:\tmp\o'hai & calc.json`, "win32")).toEqual({
       command: "powershell.exe",
       args: [
         "-NoProfile",
         "-NonInteractive",
         "-Command",
-        String.raw`Start-Process -LiteralPath 'C:\tmp\o''hai & calc.json'`,
+        String.raw`Start-Process -FilePath 'C:\tmp\o''hai & calc.json'`,
       ],
     });
   });

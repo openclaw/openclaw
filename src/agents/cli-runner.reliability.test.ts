@@ -16,6 +16,7 @@ import {
   createUserTurnTranscriptRecorder,
   type UserTurnTranscriptRecorder,
 } from "../sessions/user-turn-transcript.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { runPreparedCliAgent } from "./cli-runner.js";
 import {
   createManagedRun,
@@ -24,7 +25,10 @@ import {
   supervisorSpawnMock,
 } from "./cli-runner.test-support.js";
 import { executePreparedCliRun } from "./cli-runner/execute.js";
-import { resolveCliNoOutputTimeoutMs } from "./cli-runner/helpers.js";
+import {
+  resolveCliNoOutputTimeoutMs,
+  resolveCliRunTimeoutOverrideMs,
+} from "./cli-runner/helpers.js";
 import { prepareCliRunContext } from "./cli-runner/prepare.js";
 import * as sessionHistoryModule from "./cli-runner/session-history.js";
 import { MAX_CLI_SESSION_HISTORY_MESSAGES } from "./cli-runner/session-history.js";
@@ -40,6 +44,7 @@ vi.mock("../tts/tts.js", () => ({
 
 const mockGetGlobalHookRunner = vi.mocked(getGlobalHookRunner);
 const hookRunnerGlobalStateKey = Symbol.for("openclaw.plugins.hook-runner-global-state");
+let sessionFileEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
 
 type HookRunnerGlobalStateForTest = {
   hookRunner: unknown;
@@ -65,7 +70,8 @@ function createSessionFile(params?: { history?: Array<{ role: "user"; content: s
   // Session files use the real JSONL shape so transcript/history readers stay
   // covered without spinning up a full CLI process.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-hooks-"));
-  vi.stubEnv("OPENCLAW_STATE_DIR", dir);
+  sessionFileEnvSnapshot ??= captureEnv(["OPENCLAW_STATE_DIR"]);
+  setTestEnvValue("OPENCLAW_STATE_DIR", dir);
   const sessionFile = path.join(dir, "agents", "main", "sessions", "s1.jsonl");
   const storePath = path.join(path.dirname(sessionFile), "sessions.json");
   fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
@@ -274,6 +280,8 @@ describe("runCliAgent reliability", () => {
     mockGetGlobalHookRunner.mockReset();
     setHookRunnerForTest(null);
     vi.unstubAllEnvs();
+    sessionFileEnvSnapshot?.restore();
+    sessionFileEnvSnapshot = undefined;
   });
 
   it("fails with timeout when no-output watchdog trips", async () => {
@@ -1692,6 +1700,76 @@ describe("runCliAgent reliability", () => {
     }
   });
 
+  it("forwards channel identity context to CLI before_agent_run hooks", async () => {
+    supervisorSpawnMock.mockClear();
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "before_agent_run"),
+      runBeforeAgentRun: vi.fn(async () => ({
+        pluginId: "policy-plugin",
+        decision: {
+          outcome: "block" as const,
+          reason: "sender scoped policy",
+          message: "The agent cannot read this message.",
+        },
+      })),
+    };
+    setHookRunnerForTest(hookRunner);
+    const { dir, sessionFile } = createSessionFile();
+
+    try {
+      const context = buildPreparedContext({
+        sessionKey: "agent:main:telegram:chat-1",
+        runId: "run-cli-channel-before-agent-run",
+      });
+      const result = await runPreparedCliAgent({
+        ...context,
+        params: {
+          ...context.params,
+          agentId: "main",
+          sessionFile,
+          workspaceDir: dir,
+          prompt: "sender scoped prompt",
+          messageChannel: "telegram",
+          messageProvider: "telegram",
+          currentChannelId: "telegram:chat-1",
+          senderId: "user-42",
+          senderIsOwner: true,
+          userTurnTranscriptRecorder: createCliUserTurnRecorder({
+            text: "sender scoped prompt",
+            sessionFile,
+            sessionKey: "agent:main:telegram:chat-1",
+            workspaceDir: dir,
+          }),
+        },
+      });
+
+      expect(result.payloads).toEqual([
+        {
+          text: "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
+          isError: true,
+        },
+      ]);
+      expect(supervisorSpawnMock).not.toHaveBeenCalled();
+      const beforeRunEvent = requireRecord(
+        callArg(hookRunner.runBeforeAgentRun, 0, 0, "before_agent_run event"),
+        "before_agent_run event",
+      );
+      expect(beforeRunEvent.channelId).toBe("chat-1");
+      expect(beforeRunEvent.senderId).toBe("user-42");
+      expect(beforeRunEvent.senderIsOwner).toBe(true);
+      const beforeRunContext = requireRecord(
+        callArg(hookRunner.runBeforeAgentRun, 0, 1, "before_agent_run context"),
+        "before_agent_run context",
+      );
+      expect(beforeRunContext.channel).toBe("telegram");
+      expect(beforeRunContext.chatId).toBe("chat-1");
+      expect(beforeRunContext.channelId).toBe("chat-1");
+      expect(beforeRunContext.senderId).toBe("user-42");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("does not emit llm_output when the CLI run returns no assistant text", async () => {
     const hookRunner = {
       hasHooks: vi.fn((hookName: string) => hookName === "llm_output"),
@@ -2025,5 +2103,58 @@ describe("resolveCliNoOutputTimeoutMs", () => {
       trigger: "cron",
     });
     expect(timeoutMs).toBe(480_000);
+  });
+
+  it("lets explicit embedded run timeouts lift the default resume no-output ceiling", () => {
+    const timeoutMs = resolveCliNoOutputTimeoutMs({
+      backend: { command: "codex" },
+      timeoutMs: 600_000,
+      runTimeoutOverrideMs: 600_000,
+      useResume: true,
+      trigger: "user",
+    });
+    expect(timeoutMs).toBe(480_000);
+  });
+
+  it("lets configured agent default timeouts lift the default resume no-output ceiling", () => {
+    const timeoutMs = resolveCliNoOutputTimeoutMs({
+      backend: { command: "codex" },
+      timeoutMs: 600_000,
+      runTimeoutOverrideMs: 600_000,
+      useResume: true,
+      trigger: "user",
+    });
+    expect(timeoutMs).toBe(480_000);
+  });
+
+  it("keeps inherited user resume timeouts on the default resume no-output ceiling", () => {
+    const timeoutMs = resolveCliNoOutputTimeoutMs({
+      backend: { command: "codex" },
+      timeoutMs: 600_000,
+      useResume: true,
+      trigger: "user",
+    });
+    expect(timeoutMs).toBe(180_000);
+  });
+});
+
+describe("resolveCliRunTimeoutOverrideMs", () => {
+  it("preserves configured timeouts for normal channel runs", () => {
+    expect(
+      resolveCliRunTimeoutOverrideMs({
+        config: { agents: { defaults: { timeoutSeconds: 600 } } },
+        timeoutMs: 600_000,
+      }),
+    ).toBe(600_000);
+  });
+
+  it("does not treat configured timeouts as subagent overrides", () => {
+    expect(
+      resolveCliRunTimeoutOverrideMs({
+        config: { agents: { defaults: { timeoutSeconds: 600 } } },
+        lane: "subagent",
+        timeoutMs: 600_000,
+      }),
+    ).toBeUndefined();
   });
 });

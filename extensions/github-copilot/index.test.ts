@@ -1,3 +1,4 @@
+// Github Copilot tests cover index plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -211,6 +212,30 @@ describe("github-copilot plugin", () => {
     });
 
     expect(profile?.levels.map((level) => level.id)).toContain("xhigh");
+  });
+
+  it("exposes max thinking for catalog-supported Copilot reasoning efforts", () => {
+    const provider = registerProviderWithPluginConfig({});
+
+    const profile = provider.resolveThinkingProfile({
+      provider: "github-copilot",
+      modelId: "claude-fable-5",
+      compat: { supportedReasoningEfforts: ["low", "medium", "high", "max"] },
+    });
+
+    expect(profile?.levels.map((level) => level.id)).toContain("max");
+  });
+
+  it("does not expose max for non-adaptive Claude Copilot models", () => {
+    const provider = registerProviderWithPluginConfig({});
+
+    const profile = provider.resolveThinkingProfile({
+      provider: "github-copilot",
+      modelId: "claude-opus-4-5",
+      compat: { supportedReasoningEfforts: ["low", "medium", "high", "max"] },
+    });
+
+    expect(profile?.levels.map((level) => level.id)).not.toContain("max");
   });
 
   it("uses live plugin config to re-enable discovery after startup disable", async () => {

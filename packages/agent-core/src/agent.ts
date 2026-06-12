@@ -1,3 +1,4 @@
+// Agent Core module implements agent behavior.
 import type {
   ImageContent,
   Message,
@@ -8,6 +9,7 @@ import type {
   Transport,
 } from "../../llm-core/src/index.js";
 import { runAgentLoop, runAgentLoopContinue } from "./agent-loop.js";
+import { resolveAgentReasoningOption } from "./reasoning.js";
 import { type AgentCoreStreamRuntimeDeps, resolveAgentCoreStreamFn } from "./runtime-deps.js";
 import type {
   AfterToolCallContext,
@@ -469,8 +471,11 @@ export class Agent {
     let skipInitialSteeringPoll = options.skipInitialSteeringPoll === true;
     return {
       model: this.mutableState.model,
-      reasoning:
-        this.mutableState.thinkingLevel === "off" ? undefined : this.mutableState.thinkingLevel,
+      thinkingLevel: this.mutableState.thinkingLevel,
+      reasoning: resolveAgentReasoningOption(
+        this.mutableState.model,
+        this.mutableState.thinkingLevel,
+      ),
       sessionId: this.sessionId,
       onPayload: this.onPayload,
       onResponse: this.onResponse,

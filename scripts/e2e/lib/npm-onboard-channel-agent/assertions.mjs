@@ -1,3 +1,4 @@
+// Assertions for npm onboard channel-agent E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -5,6 +6,7 @@ import {
   assertAgentReplyContainsMarker,
   assertOpenAiRequestLogUsed,
 } from "../agent-turn-output.mjs";
+import { assertOpenAiEnvAuthProfileStore } from "../auth-profile-store-assertions.mjs";
 import { applyMockOpenAiModelConfig } from "../fixtures/mock-openai-config.mjs";
 
 const command = process.argv[2];
@@ -89,12 +91,11 @@ function assertOnboardState() {
   if (!authStoreText) {
     throw new Error("onboard did not persist auth profile store");
   }
-  if (!authStoreText.includes("OPENAI_API_KEY")) {
-    throw new Error("auth profile did not persist OPENAI_API_KEY env ref");
-  }
-  if (authStoreText.includes("sk-openclaw-npm-onboard-e2e")) {
-    throw new Error("auth profile persisted the raw OpenAI test key");
-  }
+  assertOpenAiEnvAuthProfileStore(authStoreText, {
+    envRefMessage: "auth profile did not persist OPENAI_API_KEY env ref",
+    rawKeyMessage: "auth profile persisted the raw OpenAI test key",
+    rawKeyNeedle: "sk-openclaw-npm-onboard-e2e",
+  });
 }
 
 function configureMockModel() {

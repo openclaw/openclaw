@@ -1,3 +1,4 @@
+// Memory Wiki tests cover lint plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -40,7 +41,7 @@ describe("lintMemoryWikiVault", () => {
           title: "Alpha",
           sourceIds: ["source.alpha"],
         },
-        body: "# Alpha\n\n[Alpha Source](sources/alpha.md)\n",
+        body: "# Alpha\n\n[Alpha Source](../sources/alpha.md)\n",
       }),
       "utf8",
     );

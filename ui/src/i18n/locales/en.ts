@@ -1,3 +1,4 @@
+// Control UI English locale strings are the i18n source bundle.
 import type { TranslationMap } from "../lib/types.ts";
 
 export const en: TranslationMap = {
@@ -1593,6 +1594,8 @@ export const en: TranslationMap = {
     },
     jobDetail: {
       system: "System",
+      command: "Command",
+      cwd: "CWD",
       prompt: "Prompt",
       delivery: "Delivery",
       agent: "Agent",

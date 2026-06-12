@@ -1,3 +1,4 @@
+// Control UI tests cover mount fallback behavior.
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
