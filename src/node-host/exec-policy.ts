@@ -17,7 +17,7 @@ type SystemRunPolicyDecision = {
     }
   | {
       allowed: false;
-      eventReason: "security=deny" | "approval-required" | "allowlist-miss";
+      eventReason: "security=deny" | "denylist-hit" | "approval-required" | "allowlist-miss";
       errorMessage: string;
     }
 );
@@ -50,6 +50,7 @@ export function evaluateSystemRunPolicy(params: {
   analysisOk: boolean;
   allowlistSatisfied: boolean;
   durableApprovalSatisfied?: boolean;
+  denylisted?: boolean;
   approvalDecision: ExecApprovalDecision;
   approved?: boolean;
   isWindows: boolean;
@@ -80,6 +81,23 @@ export function evaluateSystemRunPolicy(params: {
       shellWrapperBlocked,
       windowsShellWrapperBlocked,
       requiresAsk: false,
+      approvalDecision: params.approvalDecision,
+      approvedByAsk,
+    };
+  }
+
+  // Denylist (STOP-list) hits require a fresh explicit approval regardless of
+  // security mode; durable allow-always trust intentionally does not clear them.
+  if (params.denylisted === true && !approvedByAsk) {
+    return {
+      allowed: false,
+      eventReason: "denylist-hit",
+      errorMessage: "SYSTEM_RUN_DENIED: denylist match; approval required",
+      analysisOk,
+      allowlistSatisfied,
+      shellWrapperBlocked,
+      windowsShellWrapperBlocked,
+      requiresAsk: true,
       approvalDecision: params.approvalDecision,
       approvedByAsk,
     };

@@ -416,6 +416,62 @@ Each allowlist entry supports:
 | `lastUsedCommand`  | Last command that matched                            |
 | `lastResolvedPath` | Last resolved binary path                            |
 
+## Denylist (STOP list, per agent)
+
+The denylist is the inverse companion to the allowlist: a small STOP list
+that forces an explicit approval for matching commands **even when policy
+would otherwise auto-allow them** (including `security=full` with
+`ask="off"`). It enables a deny-by-exception posture: keep exec permissive,
+but interrupt the handful of commands you always want a human to confirm.
+
+```json
+{
+  "version": 1,
+  "agents": {
+    "*": {
+      "denylist": [
+        { "pattern": "git push*--force*", "reason": "history rewrite" },
+        { "pattern": "launchctl*" },
+        { "pattern": "rm -rf /*" }
+      ]
+    }
+  }
+}
+```
+
+Patterns are globs (`*`, `?`) matched against each analyzed command
+segment's argv text, joined with single spaces. Matching also covers:
+
+- a basename variant of the executable, so `git push --force*` still
+  matches `/usr/bin/git push --force`
+- every part of shell chains (`&&`, `||`, `;`)
+- payloads of POSIX inline shell wrappers such as `bash -c "..."`
+  (up to three nesting levels)
+
+Denylist semantics are intentionally stricter than allowlist semantics:
+
+- A hit always asks again. Durable allow-always trust never clears a hit;
+  approving a denylisted command applies to that invocation only.
+- Hits are excluded from exec auto-review; only a human approval proceeds.
+- If a command cannot be analyzed (for example line continuations) or uses
+  inline wrappers the analyzer cannot screen (`cmd.exe /c`,
+  `powershell -Command`), the command conservatively requires approval
+  while a denylist is configured.
+- Wildcard-agent (`agents.*`) entries merge with per-agent entries.
+
+The denylist is a guardrail against unintended high-risk commands, not a
+sandbox. A determined payload can still hide behind constructs the
+analyzer rejects (which prompt for approval) — use `security=allowlist`
+or `security=deny` when you need confinement.
+
+Each denylist entry supports:
+
+| Field     | Meaning                                              |
+| --------- | ---------------------------------------------------- |
+| `pattern` | Glob matched against analyzed segment argv text      |
+| `reason`  | Optional note shown with approval prompts and denials |
+| `id`      | Optional stable identifier for UI/tooling            |
+
 ## Auto-allow skill CLIs
 
 When **Auto-allow skill CLIs** (`autoAllowSkills`) is enabled, executables

@@ -68,6 +68,7 @@ type MockAllowlistResult = {
 type MockExecHostApprovalContext = {
   approvals: {
     allowlist: ExecAllowlistEntry[];
+    denylist?: { id?: string; pattern: string; reason?: string }[];
     file: ExecApprovalsFile;
     agent?: Required<ExecApprovalsDefaults>;
   };
@@ -1616,6 +1617,124 @@ describe("processGatewayAllowlist", () => {
     });
 
     expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
+  });
+
+  function mockDenylistContext(patterns: string[]) {
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: {
+        allowlist: [],
+        denylist: patterns.map((pattern) => ({ pattern })),
+        file: { version: 1, agents: {} },
+      },
+      hostSecurity: "full",
+      hostAsk: "off",
+      askFallback: "deny",
+    });
+  }
+
+  it("requires approval for denylist matches even in yolo mode", async () => {
+    mockDenylistContext(["git push*--force*"]);
+    evaluateShellAllowlistMock.mockReturnValue({
+      allowlistMatches: [],
+      analysisOk: true,
+      allowlistSatisfied: false,
+      segments: [{ resolution: null, argv: ["git", "push", "--force"] }],
+      segmentAllowlistEntries: [],
+    });
+
+    const result = await runGatewayAllowlist({
+      command: "git push --force",
+      security: "full",
+      ask: "off",
+    });
+
+    expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+  });
+
+  it("keeps denylist matches off the auto-review path", async () => {
+    const warnings: string[] = [];
+    mockDenylistContext(["git push*--force*"]);
+    evaluateShellAllowlistMock.mockReturnValue({
+      allowlistMatches: [],
+      analysisOk: true,
+      allowlistSatisfied: false,
+      segments: [{ resolution: null, argv: ["git", "push", "--force"] }],
+      segmentAllowlistEntries: [],
+    });
+
+    const result = await runGatewayAllowlist({
+      command: "git push --force",
+      security: "full",
+      ask: "off",
+      autoReview: true,
+      warnings,
+    });
+
+    expect(defaultExecAutoReviewerMock).not.toHaveBeenCalled();
+    expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
+    expect(warnings.some((warning) => warning.includes("git push*--force*"))).toBe(true);
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+  });
+
+  it("asks again for denylist matches despite durable allow-always trust", async () => {
+    mockDenylistContext(["git push*--force*"]);
+    hasDurableExecApprovalMock.mockReturnValue(true);
+    evaluateShellAllowlistMock.mockReturnValue({
+      allowlistMatches: [],
+      analysisOk: true,
+      allowlistSatisfied: false,
+      segments: [{ resolution: null, argv: ["git", "push", "--force"] }],
+      segmentAllowlistEntries: [],
+    });
+
+    const result = await runGatewayAllowlist({
+      command: "git push --force",
+      security: "full",
+      ask: "off",
+    });
+
+    expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+  });
+
+  it("does not require approval for commands that miss the denylist", async () => {
+    mockDenylistContext(["git push*--force*"]);
+    evaluateShellAllowlistMock.mockReturnValue({
+      allowlistMatches: [],
+      analysisOk: true,
+      allowlistSatisfied: false,
+      segments: [{ resolution: null, argv: ["git", "status"] }],
+      segmentAllowlistEntries: [],
+    });
+
+    await runGatewayAllowlist({
+      command: "git status",
+      security: "full",
+      ask: "off",
+    });
+
+    expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
+  });
+
+  it("requires approval for unanalyzable commands when a denylist is configured", async () => {
+    mockDenylistContext(["git push*--force*"]);
+    evaluateShellAllowlistMock.mockReturnValue({
+      allowlistMatches: [],
+      analysisOk: false,
+      allowlistSatisfied: false,
+      segments: [],
+      segmentAllowlistEntries: [],
+    });
+
+    const result = await runGatewayAllowlist({
+      command: "git push \\\n--force",
+      security: "full",
+      ask: "off",
+    });
+
+    expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
   });
 
   it("does not require suppression edit approval for read-only suppression inspection", async () => {

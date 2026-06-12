@@ -12,6 +12,8 @@ import {
   commitExecAuthorizationLocked,
   commandRequiresSecurityAuditSuppressionApproval,
   createExecApprovalPolicySnapshot,
+  evaluateExecDenylist,
+  formatExecDenylistDeniedMessage,
   hasDurableExecApproval,
   isExecApprovalPolicySnapshotCurrent,
   maxAsk,
@@ -81,6 +83,7 @@ type SystemRunInvokeResult = {
 
 type SystemRunDeniedReason =
   | "security=deny"
+  | "denylist-hit"
   | "approval-required"
   | "approval-state-write-failed"
   | "allowlist-miss"
@@ -179,6 +182,7 @@ function warnWritableTrustedDirOnce(message: string): void {
 function normalizeDeniedReason(reason: string | null | undefined): SystemRunDeniedReason {
   switch (reason) {
     case "security=deny":
+    case "denylist-hit":
     case "approval-required":
     case "allowlist-miss":
     case "execution-plan-miss":
@@ -625,6 +629,14 @@ async function evaluateSystemRunPolicyPhase(
     allowlist: approvals.allowlist,
     commandText: parsed.commandText,
   });
+  const denylistEvaluation = evaluateExecDenylist({
+    denylist: approvals.denylist,
+    segments,
+    analysisOk: allowlistEvaluation.analysisOk,
+    cwd: parsed.cwd,
+    env: parsed.env,
+    platform: process.platform,
+  });
   const inlineEvalExecutableTrusted =
     inlineEvalHit !== null &&
     segmentAllowlistEntries.some((entry) => entry?.source === "allow-always");
@@ -641,6 +653,7 @@ async function evaluateSystemRunPolicyPhase(
     analysisOk,
     allowlistSatisfied,
     durableApprovalSatisfied: durableApprovalSatisfied || inlineEvalExecutableTrusted,
+    denylisted: denylistEvaluation.matched,
     approvalDecision,
     approved: parsed.approved,
     isWindows,
@@ -715,7 +728,9 @@ async function evaluateSystemRunPolicyPhase(
       parsed.approvalPlan !== null &&
       inlineEvalHit === null &&
       !requiresSecurityAuditSuppressionApproval &&
-      policy.eventReason !== "security=deny";
+      policy.eventReason !== "security=deny" &&
+      // Denylist hits are reserved for explicit human approval.
+      policy.eventReason !== "denylist-hit";
     if (canAutoReviewApprovalMiss) {
       const reviewer = await resolveSystemRunAutoReviewer({
         opts,
@@ -752,6 +767,7 @@ async function evaluateSystemRunPolicyPhase(
           analysisOk,
           allowlistSatisfied,
           durableApprovalSatisfied: durableApprovalSatisfied || inlineEvalExecutableTrusted,
+          denylisted: denylistEvaluation.matched,
           approvalDecision,
           approved: true,
           isWindows,
@@ -765,9 +781,13 @@ async function evaluateSystemRunPolicyPhase(
   }
 
   if (!policy.allowed) {
+    const denylistDeniedMessage =
+      policy.eventReason === "denylist-hit"
+        ? formatExecDenylistDeniedMessage(denylistEvaluation)
+        : undefined;
     await sendSystemRunDenied(opts, parsed.execution, {
       reason: policy.eventReason,
-      message: autoReviewDeferredMessage ?? policy.errorMessage,
+      message: autoReviewDeferredMessage ?? denylistDeniedMessage ?? policy.errorMessage,
     });
     return null;
   }

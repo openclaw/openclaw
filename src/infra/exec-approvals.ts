@@ -22,7 +22,8 @@ import {
   resolveAllowAlwaysPatternEntries,
 } from "./exec-approvals-allowlist.js";
 import type { ExecCommandSegment } from "./exec-approvals-analysis.js";
-import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
+import { sanitizeExecDenylistEntries } from "./exec-approvals-denylist.js";
+import type { ExecAllowlistEntry, ExecDenylistEntry } from "./exec-approvals.types.js";
 import type { ExecAuthorizationPlan } from "./exec-authorization-plan.js";
 import {
   extractBindableShellWrapperInlineCommand,
@@ -41,8 +42,9 @@ import {
 import { isLockOwnerDefinitelyStale } from "./stale-lock-file.js";
 export * from "./exec-approvals-analysis.js";
 export * from "./exec-approvals-allowlist.js";
+export * from "./exec-approvals-denylist.js";
 export type { ExecApprovalPolicySnapshot } from "./exec-approval-policy-snapshot.js";
-export type { ExecAllowlistEntry } from "./exec-approvals.types.js";
+export type { ExecAllowlistEntry, ExecDenylistEntry } from "./exec-approvals.types.js";
 
 export type ExecHost = "sandbox" | "gateway" | "node";
 export type ExecTarget = "auto" | ExecHost;
@@ -270,6 +272,7 @@ export type ExecApprovalsDefaults = {
 
 export type ExecApprovalsAgent = ExecApprovalsDefaults & {
   allowlist?: ExecAllowlistEntry[];
+  denylist?: ExecDenylistEntry[];
 };
 
 export type ExecApprovalsFile = {
@@ -302,6 +305,7 @@ export type ExecApprovalsResolved = {
     askFallback: string | null;
   };
   allowlist: ExecAllowlistEntry[];
+  denylist: ExecDenylistEntry[];
   file: ExecApprovalsFile;
 };
 
@@ -985,9 +989,12 @@ export function normalizeExecApprovals(file: ExecApprovalsFile): ExecApprovalsFi
     const coerced = coerceAllowlistEntries(agent.allowlist);
     const withIds = ensureAllowlistIds(coerced);
     const allowlist = stripAllowlistCommandText(withIds);
+    const denylist =
+      agent.denylist === undefined ? undefined : sanitizeExecDenylistEntries(agent.denylist);
     const sanitizedPolicy = sanitizeExecApprovalPolicy(agent);
     const agentChanged =
       allowlist !== agent.allowlist ||
+      denylist !== agent.denylist ||
       sanitizedPolicy.security !== agent.security ||
       sanitizedPolicy.ask !== agent.ask ||
       sanitizedPolicy.askFallback !== agent.askFallback;
@@ -995,6 +1002,7 @@ export function normalizeExecApprovals(file: ExecApprovalsFile): ExecApprovalsFi
       agents[key] = {
         ...agent,
         allowlist,
+        denylist,
         security: sanitizedPolicy.security,
         ask: sanitizedPolicy.ask,
         askFallback: sanitizedPolicy.askFallback,
@@ -1740,6 +1748,10 @@ export function resolveExecApprovalsFromFile(params: {
     ...(Array.isArray(wildcard.allowlist) ? wildcard.allowlist : []),
     ...(Array.isArray(agent.allowlist) ? agent.allowlist : []),
   ];
+  const denylist = sanitizeExecDenylistEntries([
+    ...(Array.isArray(wildcard.denylist) ? wildcard.denylist : []),
+    ...(Array.isArray(agent.denylist) ? agent.denylist : []),
+  ]);
   return {
     path: params.path ?? resolveExecApprovalsPath(),
     socketPath: expandHomePrefix(
@@ -1754,6 +1766,7 @@ export function resolveExecApprovalsFromFile(params: {
       askFallback: resolvedAgentAskFallback.source,
     },
     allowlist,
+    denylist,
     file,
   };
 }

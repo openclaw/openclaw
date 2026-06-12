@@ -21,7 +21,9 @@ import {
   type ExecSecurity,
   type ExecSegmentSatisfiedBy,
   buildEnforcedShellCommand,
+  evaluateExecDenylist,
   evaluateShellAllowlistWithAuthorization,
+  formatExecDenylistWarning,
   hasDurableExecApproval,
   hasExactCommandDurableExecApproval,
   minSecurity,
@@ -667,6 +669,17 @@ export async function processGatewayAllowlist(
       env: params.env,
       segments: allowlistEval.segments,
     }) && !(hostSecurity === "full" && hostAsk === "off");
+  // Denylist hits intentionally have no yolo-mode escape: the STOP list exists
+  // to interrupt auto-allowed commands, and durable trust never clears a hit.
+  const denylistEvaluation = evaluateExecDenylist({
+    denylist: approvals.denylist,
+    segments: allowlistEval.segments,
+    analysisOk,
+    cwd: params.workdir,
+    env: params.env,
+    platform: process.platform,
+  });
+  const requiresDenylistApproval = denylistEvaluation.matched;
   const requiresAsk =
     requiresExecApproval({
       ask: hostAsk,
@@ -678,7 +691,8 @@ export async function processGatewayAllowlist(
     requiresAllowlistPlanApproval ||
     requiresHeredocApproval ||
     requiresInlineEvalApproval ||
-    requiresSecurityAuditSuppressionApproval;
+    requiresSecurityAuditSuppressionApproval ||
+    requiresDenylistApproval;
   if (requiresHeredocApproval) {
     params.warnings.push(
       "Warning: heredoc execution requires reviewer or explicit approval in allowlist mode.",
@@ -710,6 +724,9 @@ export async function processGatewayAllowlist(
     params.warnings.push(
       "Warning: security audit suppression changes require explicit approval unless exec is running in yolo mode.",
     );
+  }
+  if (requiresDenylistApproval) {
+    params.warnings.push(formatExecDenylistWarning(denylistEvaluation));
   }
   if (requiresAsk) {
     if (params.nonInteractiveApproval) {
@@ -752,12 +769,15 @@ export async function processGatewayAllowlist(
       params.autoReview === true &&
       hostAsk !== "always" &&
       autoReviewHasExecutableBinding &&
-      !requiresSecurityAuditSuppressionApproval;
+      !requiresSecurityAuditSuppressionApproval &&
+      // Denylist hits are reserved for explicit human approval.
+      !requiresDenylistApproval;
     let autoReviewRequiresHumanApproval =
       (params.autoReview === true && hostAsk !== "always" && !autoReviewHasExecutableBinding) ||
       requiresAllowlistPlanApproval ||
       requiresHeredocApproval ||
-      requiresSecurityAuditSuppressionApproval;
+      requiresSecurityAuditSuppressionApproval ||
+      requiresDenylistApproval;
     if (canAutoReviewApprovalMiss) {
       const reviewer = params.autoReviewer ?? defaultExecAutoReviewer;
       const decision = await reviewer({

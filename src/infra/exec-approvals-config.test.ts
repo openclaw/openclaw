@@ -138,6 +138,51 @@ describe("exec approvals node host allowlist check", () => {
   });
 });
 
+describe("exec approvals denylist config", () => {
+  it("merges wildcard denylist entries with agent entries", () => {
+    const resolved = resolveExecApprovalsFromFile({
+      file: {
+        version: 1,
+        agents: {
+          "*": { denylist: [{ pattern: "git push*--force*" }] },
+          main: { denylist: [{ pattern: "launchctl*" }] },
+        },
+      },
+      agentId: "main",
+    });
+    expect(resolved.denylist.map((entry) => entry.pattern)).toEqual([
+      "git push*--force*",
+      "launchctl*",
+    ]);
+  });
+
+  it("resolves an empty denylist when none is configured", () => {
+    const resolved = resolveExecApprovalsFromFile({ file: { version: 1 } });
+    expect(resolved.denylist).toEqual([]);
+  });
+
+  it("drops malformed denylist entries during normalization", () => {
+    const denylist = [
+      { pattern: "  rm -rf /*  " },
+      { pattern: "" },
+      "rm -rf /",
+    ] as unknown as NonNullable<ExecApprovalsAgent["denylist"]>;
+    const normalized = normalizeExecApprovals({
+      version: 1,
+      agents: { main: { denylist } },
+    });
+    expect(normalized.agents?.main?.denylist).toEqual([{ pattern: "rm -rf /*" }]);
+  });
+
+  it("keeps agents without denylist untouched during normalization", () => {
+    const normalized = normalizeExecApprovals({
+      version: 1,
+      agents: { main: { allowlist: [{ pattern: "/bin/hostname" }] } },
+    });
+    expect(normalized.agents?.main?.denylist).toBeUndefined();
+  });
+});
+
 describe("exec approvals default agent migration", () => {
   it("migrates legacy default agent entries to main", () => {
     const file: ExecApprovalsFile = {

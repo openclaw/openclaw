@@ -139,4 +139,50 @@ describe("evaluateSystemRunPolicy", () => {
     expect(allowed.analysisOk).toBe(true);
     expect(allowed.allowlistSatisfied).toBe(true);
   });
+
+  it("requires approval for denylist hits even when security=full and ask=off", () => {
+    const denied = expectDeniedDecision(
+      evaluateSystemRunPolicy(
+        buildPolicyParams({ security: "full", ask: "off", denylisted: true }),
+      ),
+    );
+    expect(denied.eventReason).toBe("denylist-hit");
+    expect(denied.requiresAsk).toBe(true);
+    expect(denied.errorMessage).toContain("denylist");
+  });
+
+  it("lets an explicit approval decision clear a denylist hit", () => {
+    const allowed = expectAllowedDecision(
+      evaluateSystemRunPolicy(
+        buildPolicyParams({
+          security: "full",
+          ask: "off",
+          denylisted: true,
+          approvalDecision: "allow-once",
+        }),
+      ),
+    );
+    expect(allowed.approvedByAsk).toBe(true);
+  });
+
+  it("does not let durable trust bypass a denylist hit", () => {
+    const denied = expectDeniedDecision(
+      evaluateSystemRunPolicy(
+        buildPolicyParams({
+          security: "full",
+          ask: "off",
+          denylisted: true,
+          durableApprovalSatisfied: true,
+        }),
+      ),
+    );
+    expect(denied.eventReason).toBe("denylist-hit");
+  });
+
+  it("keeps security=deny ahead of denylist hits", () => {
+    const denied = expectDeniedDecision(
+      evaluateSystemRunPolicy(buildPolicyParams({ security: "deny", denylisted: true })),
+    );
+    expect(denied.eventReason).toBe("security=deny");
+  });
 });
