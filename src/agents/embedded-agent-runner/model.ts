@@ -1624,6 +1624,35 @@ export function resolveModel(
   };
 }
 
+/**
+ * Check whether the user explicitly declared an `input` array for the given
+ * model id in `cfg.models.providers`.  Uses the same provider-scoped matching
+ * as `findInlineModelMatch` so it handles both bare ids and provider-scoped ids
+ * (e.g. "google/gemini-3.5-flash").  Returns true when a literal `input` field
+ * exists on the matching entry — i.e. the user intentionally set it.
+ */
+function hasExplicitModelInput(
+  cfg: OpenClawConfig | undefined,
+  provider: string,
+  modelId: string,
+): boolean {
+  const providers = cfg?.models?.providers;
+  if (!providers) return false;
+  // Exact key first, then normalized (same order as resolveConfiguredProviderConfig)
+  for (const key of [provider, ...Object.keys(providers).filter(
+    (k) => normalizeProviderId(k) === normalizeProviderId(provider) && k !== provider,
+  )]) {
+    const entry = providers[key];
+    if (entry?.models) {
+      const match = entry.models.find((m) =>
+        matchesProviderScopedModelId({ candidateId: m.id, provider: key, modelId }),
+      );
+      if (match && "input" in match && Array.isArray(match.input)) return true;
+    }
+  }
+  return false;
+}
+
 export async function resolveModelAsync(
   provider: string,
   modelId: string,
@@ -1826,11 +1855,25 @@ export async function resolveModelAsync(
     });
   }
   if (model && options?.allowBundledStaticCatalogFallback) {
-    const staticMediaInput = (await resolveStaticCatalogModel())?.mediaInput;
+    const staticModel = await resolveStaticCatalogModel();
+    const staticMediaInput = staticModel?.mediaInput;
     const resolvedMediaInput = (model as ProviderRuntimeModel).mediaInput;
     const mediaInput = mergeModelMediaInput(staticMediaInput, resolvedMediaInput);
     if (mediaInput) {
       model = { ...(model as ProviderRuntimeModel), mediaInput } as typeof model;
+    }
+    // When the user omits `input` from a models.providers entry,
+    // resolveProviderModelInput defaults to ["text"] and shadows the
+    // bundled catalog's correct image-capable metadata.  Merge the
+    // catalog's input only when the inline entry lacks an explicit
+    // `input` field.  Models resolved via the registry (bundled
+    // catalog or models.json) already carry the correct input. (#92104)
+    if (
+      !model.input?.includes("image") &&
+      staticModel?.input?.includes("image") &&
+      !hasExplicitModelInput(cfg, normalizedRef.provider, normalizedRef.model)
+    ) {
+      model = { ...model, input: staticModel.input };
     }
   }
   if (model) {

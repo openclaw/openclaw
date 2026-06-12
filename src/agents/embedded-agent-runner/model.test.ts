@@ -4168,4 +4168,89 @@ describe("resolveModel", () => {
       baseUrl: "https://api.x.ai/v1",
     });
   });
+
+  describe("resolveModelAsync input merge from bundled catalog (#92104)", () => {
+    const tagOptions = { allowBundledStaticCatalogFallback: true };
+
+    it("merges catalog image input when models.providers entry omits input", async () => {
+      const cfg = {
+        models: {
+          providers: {
+            google: {
+              api: "google-generative-ai",
+              models: [{ id: "gemini-3.5-flash" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
+        provider: "google",
+        id: "gemini-3.5-flash",
+        api: "google-generative-ai",
+        input: ["text", "image"],
+      });
+
+      const result = await resolveModelAsync(
+        "google", "gemini-3.5-flash", "/tmp/agent", cfg,
+        { ...tagOptions, runtimeHooks: createRuntimeHooks() },
+      );
+
+      expect(result.error).toBeUndefined();
+      expect(result.model?.input).toEqual(["text", "image"]);
+    });
+
+    it("preserves explicit input: ['text'] in models.providers", async () => {
+      const cfg = {
+        models: {
+          providers: {
+            google: {
+              api: "google-generative-ai",
+              models: [{ id: "gemini-3.5-flash", input: ["text"] }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
+        provider: "google",
+        id: "gemini-3.5-flash",
+        api: "google-generative-ai",
+        input: ["text", "image"],
+      });
+
+      const result = await resolveModelAsync(
+        "google", "gemini-3.5-flash", "/tmp/agent", cfg,
+        { ...tagOptions, runtimeHooks: createRuntimeHooks() },
+      );
+
+      expect(result.error).toBeUndefined();
+      expect(result.model?.input).toEqual(["text"]);
+    });
+
+    it("preserves explicit input with provider-scoped model id", async () => {
+      const cfg = {
+        models: {
+          providers: {
+            google: {
+              api: "google-generative-ai",
+              models: [{ id: "google/gemini-3.5-flash", input: ["text"] }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
+        provider: "google",
+        id: "gemini-3.5-flash",
+        api: "google-generative-ai",
+        input: ["text", "image"],
+      });
+
+      const result = await resolveModelAsync(
+        "google", "gemini-3.5-flash", "/tmp/agent", cfg,
+        { ...tagOptions, runtimeHooks: createRuntimeHooks() },
+      );
+
+      expect(result.error).toBeUndefined();
+      expect(result.model?.input).toEqual(["text"]);
+    });
+  });
 });
