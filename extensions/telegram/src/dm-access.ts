@@ -13,6 +13,12 @@ import {
   createTelegramIngressResolver,
   telegramAllowEntries,
 } from "./ingress.js";
+import {
+  buildTelegramInputRichMessage,
+  canSendTelegramRichMessage,
+  isTelegramRichMethodUnavailableError,
+  sendTelegramRichMessage,
+} from "./rich-message.js";
 
 type TelegramDmAccessLogger = {
   info: (obj: Record<string, unknown>, msg: string) => void;
@@ -156,9 +162,26 @@ export async function enforceTelegramDmAccess(params: {
         },
         sendPairingReply: async (text) => {
           const html = renderTelegramHtmlText(text);
+          const canSendRich = canSendTelegramRichMessage({ api: bot.api });
           await withTelegramApiErrorLogging({
-            operation: "sendMessage",
-            fn: () => bot.api.sendMessage(chatId, html, { parse_mode: "HTML" }),
+            operation: canSendRich ? "sendRichMessage" : "sendMessage",
+            fn: async () => {
+              if (canSendRich) {
+                try {
+                  await sendTelegramRichMessage({
+                    api: bot.api,
+                    chatId,
+                    richMessage: buildTelegramInputRichMessage(html),
+                  });
+                  return;
+                } catch (err) {
+                  if (!isTelegramRichMethodUnavailableError(err)) {
+                    throw err;
+                  }
+                }
+              }
+              await bot.api.sendMessage(chatId, html, { parse_mode: "HTML" });
+            },
           });
         },
         onReplyError: (err) => {

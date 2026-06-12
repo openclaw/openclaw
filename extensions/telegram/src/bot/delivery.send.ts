@@ -11,6 +11,13 @@ import {
   getTelegramNativeQuoteReplyMessageId,
   removeTelegramNativeQuoteParam,
 } from "../reply-parameters.js";
+import {
+  buildTelegramInputRichMessage,
+  canSendTelegramRichMessage,
+  isTelegramRichMethodUnavailableError,
+  normalizeTelegramRichSendParams,
+  sendTelegramRichMessage,
+} from "../rich-message.js";
 import { buildInlineKeyboard } from "../send.js";
 import type { TelegramThreadSpec } from "./helpers.js";
 
@@ -140,6 +147,38 @@ export async function sendTelegramText(
     return await sendPlainFallback();
   }
   try {
+    if (canSendTelegramRichMessage({ api: bot.api, linkPreview: opts?.linkPreview })) {
+      try {
+        const res = await sendTelegramWithThreadFallback({
+          operation: "sendRichMessage",
+          runtime,
+          thread: opts?.thread,
+          requestParams: baseParams,
+          shouldLog: (err) => {
+            const errText = formatErrorMessage(err);
+            return !PARSE_ERR_RE.test(errText) && !EMPTY_TEXT_ERR_RE.test(errText);
+          },
+          send: async (effectiveParams) =>
+            (await sendTelegramRichMessage({
+              api: bot.api,
+              chatId,
+              richMessage: buildTelegramInputRichMessage(htmlText),
+              requestParams: {
+                ...(opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
+                ...normalizeTelegramRichSendParams(effectiveParams),
+              },
+            })) as { message_id: number },
+        });
+        runtime.log?.(`telegram sendRichMessage ok chat=${chatId} message=${res.message_id}`);
+        return res.message_id;
+      } catch (err) {
+        if (!isTelegramRichMethodUnavailableError(err)) {
+          throw err;
+        }
+        runtime.log?.(`telegram sendRichMessage unavailable; retrying with HTML parse_mode`);
+      }
+    }
+
     const res = await sendTelegramWithThreadFallback({
       operation: "sendMessage",
       runtime,

@@ -498,6 +498,40 @@ describe("createTelegramDraftStream", () => {
     expect(warn).toHaveBeenCalledWith("telegram stream preview failed: read ECONNRESET");
   });
 
+  it("uses rich send/edit transports for rendered HTML previews when available", async () => {
+    const api = createMockDraftApi() as ReturnType<typeof createMockDraftApi> & {
+      raw: {
+        sendRichMessage: ReturnType<typeof vi.fn>;
+        editMessageText: ReturnType<typeof vi.fn>;
+      };
+    };
+    api.raw = {
+      sendRichMessage: vi.fn().mockResolvedValue({ message_id: 17 }),
+      editMessageText: vi.fn().mockResolvedValue(true),
+    };
+    const stream = createTelegramDraftStream({
+      api: api as unknown as Bot["api"],
+      chatId: 123,
+      renderText: (text) => ({ text: `<i>${text}</i>`, parseMode: "HTML" }),
+    });
+
+    stream.update("hello");
+    await stream.flush();
+    expect(api.raw.sendRichMessage).toHaveBeenCalledWith({
+      chat_id: 123,
+      rich_message: { html: "<i>hello</i>" },
+    });
+    expect(api.sendMessage).not.toHaveBeenCalled();
+
+    stream.update("hello again");
+    await stream.flush();
+    expect(api.raw.editMessageText).toHaveBeenCalledWith({
+      chat_id: 123,
+      message_id: 17,
+      rich_message: { html: "<i>hello again</i>" },
+    });
+  });
+
   it("supports rendered previews with parse_mode", async () => {
     const api = createMockDraftApi();
     const stream = createTelegramDraftStream({

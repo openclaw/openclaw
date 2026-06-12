@@ -215,6 +215,26 @@ describe("deliverReplies", () => {
     messageHookRunner.runMessageSent.mockReset();
   });
 
+  it("uses sendRichMessage when the raw Telegram Bot API exposes it", async () => {
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 1, chat: { id: "123" } });
+    const sendRichMessage = vi.fn().mockResolvedValue({ message_id: 2, chat: { id: "123" } });
+    const bot = createBot({ sendMessage, raw: { sendRichMessage } });
+
+    await deliverWith({
+      replies: [{ text: "hello **world**" }],
+      runtime,
+      bot,
+    });
+
+    expect(sendRichMessage).toHaveBeenCalledTimes(1);
+    expect(sendRichMessage).toHaveBeenCalledWith({
+      chat_id: "123",
+      rich_message: { html: "hello <b>world</b>" },
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it("skips audioAsVoice-only payloads without logging an error", async () => {
     const runtime = createRuntime(false);
 

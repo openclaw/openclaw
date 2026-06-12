@@ -15,6 +15,15 @@ import {
   readTelegramRetryAfterMs,
 } from "./network-errors.js";
 import { normalizeTelegramReplyToMessageId } from "./outbound-params.js";
+import {
+  buildTelegramInputRichMessage,
+  canEditTelegramRichMessage,
+  canSendTelegramRichMessage,
+  editTelegramRichMessageText,
+  isTelegramRichMethodUnavailableError,
+  normalizeTelegramRichSendParams,
+  sendTelegramRichMessage,
+} from "./rich-message.js";
 
 const TELEGRAM_STREAM_MAX_CHARS = 4096;
 const DEFAULT_THROTTLE_MS = 1000;
@@ -143,6 +152,20 @@ export function createTelegramDraftStream(params: {
     renderedText: string;
     renderedParseMode: "HTML" | undefined;
   }) => {
+    if (sendArgs.renderedParseMode === "HTML" && canSendTelegramRichMessage({ api: params.api })) {
+      try {
+        return await sendTelegramRichMessage({
+          api: params.api,
+          chatId,
+          richMessage: buildTelegramInputRichMessage(sendArgs.renderedText),
+          requestParams: normalizeTelegramRichSendParams(replyParams),
+        });
+      } catch (err) {
+        if (!isTelegramRichMethodUnavailableError(err)) {
+          throw err;
+        }
+      }
+    }
     const sendParams = sendArgs.renderedParseMode
       ? {
           ...replyParams,
@@ -159,6 +182,21 @@ export function createTelegramDraftStream(params: {
     if (typeof streamMessageId === "number") {
       streamVisibleSinceMs ??= Date.now();
       if (renderedParseMode) {
+        if (canEditTelegramRichMessage(params.api)) {
+          try {
+            await editTelegramRichMessageText({
+              api: params.api,
+              chatId,
+              messageId: streamMessageId,
+              richMessage: buildTelegramInputRichMessage(renderedText),
+            });
+            return true;
+          } catch (err) {
+            if (!isTelegramRichMethodUnavailableError(err)) {
+              throw err;
+            }
+          }
+        }
         await params.api.editMessageText(chatId, streamMessageId, renderedText, {
           parse_mode: renderedParseMode,
         });

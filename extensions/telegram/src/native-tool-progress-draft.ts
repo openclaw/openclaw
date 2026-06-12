@@ -2,6 +2,13 @@
 import type { Bot } from "grammy";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
+import { renderTelegramHtmlText } from "./format.js";
+import {
+  buildTelegramInputRichMessage,
+  canSendTelegramRichMessageDraft,
+  isTelegramRichMethodUnavailableError,
+  sendTelegramRichMessageDraft,
+} from "./rich-message.js";
 
 const TELEGRAM_NATIVE_DRAFT_MAX_CHARS = 4096;
 const TELEGRAM_DRAFT_ID_STATE_KEY = Symbol.for("openclaw.telegramNativeDraftIdState");
@@ -17,18 +24,64 @@ type TelegramSendMessageDraft = (
   },
 ) => Promise<unknown>;
 
+type NativeTelegramDraftSender = {
+  mode: "rich" | "plain";
+  send: (
+    chatId: Parameters<Bot["api"]["sendMessage"]>[0],
+    draftId: number,
+    text: string,
+    params?: {
+      message_thread_id?: number;
+    },
+  ) => Promise<unknown>;
+};
+
 export type NativeTelegramToolProgressDraft = {
   update: (text: string) => Promise<boolean>;
   stop: () => void;
 };
 
-function resolveSendMessageDraftApi(api: Bot["api"]): TelegramSendMessageDraft | undefined {
+function resolvePlainSendMessageDraftApi(api: Bot["api"]): TelegramSendMessageDraft | undefined {
   const sendMessageDraft = (api as Bot["api"] & { sendMessageDraft?: TelegramSendMessageDraft })
     .sendMessageDraft;
   if (typeof sendMessageDraft !== "function") {
     return undefined;
   }
   return sendMessageDraft.bind(api as object);
+}
+
+function resolveNativeTelegramDraftSender(api: Bot["api"]): NativeTelegramDraftSender | undefined {
+  const sendPlainDraft = resolvePlainSendMessageDraftApi(api);
+  if (canSendTelegramRichMessageDraft(api)) {
+    return {
+      mode: "rich",
+      send: async (chatId, draftId, text, params) => {
+        const htmlText = renderTelegramHtmlText(text, { textMode: "html" });
+        try {
+          return await sendTelegramRichMessageDraft({
+            api,
+            chatId,
+            draftId,
+            richMessage: buildTelegramInputRichMessage(htmlText),
+            requestParams: params,
+          });
+        } catch (err) {
+          if (!isTelegramRichMethodUnavailableError(err) || !sendPlainDraft) {
+            throw err;
+          }
+          return await sendPlainDraft(chatId, draftId, text, params);
+        }
+      },
+    };
+  }
+  if (!sendPlainDraft) {
+    return undefined;
+  }
+  return {
+    mode: "plain",
+    send: async (chatId, draftId, text, params) =>
+      await sendPlainDraft(chatId, draftId, text, params),
+  };
 }
 
 function allocateTelegramDraftId(): number {
@@ -54,8 +107,8 @@ export function createNativeTelegramToolProgressDraft(params: {
   thread?: TelegramThreadSpec | null;
   log?: (message: string) => void;
 }): NativeTelegramToolProgressDraft | undefined {
-  const sendMessageDraft = resolveSendMessageDraftApi(params.api);
-  if (!sendMessageDraft) {
+  const draftSender = resolveNativeTelegramDraftSender(params.api);
+  if (!draftSender) {
     return undefined;
   }
 
@@ -77,7 +130,7 @@ export function createNativeTelegramToolProgressDraft(params: {
         return true;
       }
       try {
-        await sendMessageDraft(
+        await draftSender.send(
           params.chatId,
           draftId,
           normalizedText,

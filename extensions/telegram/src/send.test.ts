@@ -780,6 +780,31 @@ describe("sendMessageTelegram", () => {
     );
   });
 
+  it("uses sendRichMessage when the raw Telegram Bot API exposes it", async () => {
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 41, chat: { id: "123" } });
+    const sendRichMessage = vi.fn().mockResolvedValue({ message_id: 42, chat: { id: "123" } });
+    const api = {
+      sendMessage,
+      raw: { sendRichMessage },
+    } as unknown as {
+      sendMessage: typeof sendMessage;
+      raw: { sendRichMessage: typeof sendRichMessage };
+    };
+
+    const res = await sendMessageTelegram("123", "hello **world**", {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      api,
+    });
+
+    expect(sendRichMessage).toHaveBeenCalledWith({
+      chat_id: "123",
+      rich_message: { html: "hello <b>world</b>" },
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(res).toEqual({ messageId: "42", chatId: "123" });
+  });
+
   it("falls back to plain text when Telegram rejects HTML and preserves send params", async () => {
     const parseErr = new Error(
       "400: Bad Request: can't parse entities: Can't find end of the entity starting at byte offset 9",
@@ -3097,6 +3122,33 @@ describe("shared send behaviors", () => {
 });
 
 describe("editMessageTelegram", () => {
+  it("uses rich editMessageText when the raw Telegram Bot API exposes it", async () => {
+    const sendMessage = vi.fn();
+    const richEditMessageText = vi.fn().mockResolvedValue({ message_id: 1, chat: { id: "123" } });
+    const api = {
+      sendMessage,
+      raw: { editMessageText: richEditMessageText },
+      editMessageText: vi.fn(),
+    } as unknown as {
+      sendMessage: typeof sendMessage;
+      raw: { editMessageText: typeof richEditMessageText };
+      editMessageText: ReturnType<typeof vi.fn>;
+    };
+
+    await editMessageTelegram("123", 1, "hello **world**", {
+      token: "tok",
+      cfg: {},
+      api,
+    });
+
+    expect(richEditMessageText).toHaveBeenCalledWith({
+      chat_id: "123",
+      message_id: 1,
+      rich_message: { html: "hello <b>world</b>" },
+    });
+    expect(api.editMessageText).not.toHaveBeenCalled();
+  });
+
   it.each([
     {
       name: "buttons undefined keeps existing keyboard",

@@ -127,6 +127,39 @@ describe("enforceTelegramDmAccess", () => {
     expect(createChannelPairingChallengeIssuerMock).not.toHaveBeenCalled();
   });
 
+  it("uses sendRichMessage for pairing replies when the Bot API exposes it", async () => {
+    const sendMessage = vi.fn(async () => undefined);
+    const sendRichMessage = vi.fn(async () => undefined);
+    createChannelPairingChallengeIssuerMock.mockReturnValueOnce(
+      ({
+        sendPairingReply,
+      }: Parameters<ReturnType<typeof createChannelPairingChallengeIssuer>>[0]) =>
+        (async () => {
+          await sendPairingReply("Pairing code: **123456**");
+        })(),
+    );
+
+    const allowed = await enforceTelegramDmAccess({
+      isGroup: false,
+      dmPolicy: "pairing",
+      msg: createDmMessage(),
+      chatId: 42,
+      effectiveDmAllow: normalizeAllowFrom([]),
+      accountId: "main",
+      bot: { api: { sendMessage, raw: { sendRichMessage } } } as never,
+      logger: { info: vi.fn() },
+      upsertPairingRequest: upsertChannelPairingRequestMock,
+    });
+
+    expect(allowed).toBe(false);
+    expect(sendRichMessage).toHaveBeenCalledTimes(1);
+    expect(sendRichMessage).toHaveBeenCalledWith({
+      chat_id: 42,
+      rich_message: { html: "Pairing code: <b>123456</b>" },
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it("issues a pairing challenge for unauthorized DMs under pairing policy", async () => {
     const sendMessage = vi.fn(async () => undefined);
     const logger = { info: vi.fn() };

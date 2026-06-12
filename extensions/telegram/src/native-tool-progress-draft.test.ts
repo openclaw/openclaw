@@ -12,6 +12,8 @@ describe("createNativeTelegramToolProgressDraft", () => {
         _params?: Record<string, unknown>,
       ) => implementation?.(),
     );
+  const createSendRichMessageDraftMock = (implementation?: () => Promise<unknown>) =>
+    vi.fn(async (_params?: Record<string, unknown>) => implementation?.());
 
   it("returns undefined when the Bot API client has no sendMessageDraft method", () => {
     const draft = createNativeTelegramToolProgressDraft({
@@ -20,6 +22,26 @@ describe("createNativeTelegramToolProgressDraft", () => {
     } as never);
 
     expect(draft).toBeUndefined();
+  });
+
+  it("uses sendRichMessageDraft when the Bot API exposes the raw rich draft method", async () => {
+    const sendRichMessageDraft = createSendRichMessageDraftMock();
+    const draft = createNativeTelegramToolProgressDraft({
+      api: { raw: { sendRichMessageDraft } },
+      chatId: 123,
+      thread: { id: 456, scope: "dm" },
+    } as never);
+
+    expect(draft).toBeDefined();
+    await draft?.update("Running command");
+
+    expect(sendRichMessageDraft).toHaveBeenCalledTimes(1);
+    expect(sendRichMessageDraft).toHaveBeenCalledWith({
+      chat_id: 123,
+      draft_id: expect.any(Number),
+      rich_message: { html: "Running command" },
+      message_thread_id: 456,
+    });
   });
 
   it("updates the same non-zero draft id for animated native progress", async () => {

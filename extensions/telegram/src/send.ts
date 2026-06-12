@@ -41,6 +41,16 @@ import {
   resolveTelegramSendThreadSpec,
 } from "./reply-parameters.js";
 import {
+  buildTelegramInputRichMessage,
+  canEditTelegramRichMessage,
+  canSendTelegramRichMessage,
+  editTelegramRichMessageText,
+  isTelegramRichMethodUnavailableError,
+  normalizeTelegramRichSendParams,
+  sendTelegramRichMessage,
+  type TelegramInputRichMessage,
+} from "./rich-message.js";
+import {
   buildOutboundMediaLoadOptions,
   getImageMetadata,
   isGifMedia,
@@ -645,7 +655,13 @@ export async function sendMessageTelegram(
   type TelegramTextChunk = {
     plainText: string;
     htmlText?: string;
+    richMessage?: TelegramInputRichMessage;
   };
+
+  const canSendRichText = canSendTelegramRichMessage({
+    api,
+    linkPreview: linkPreviewEnabled,
+  });
 
   const sendTelegramTextChunk = async (
     chunk: TelegramTextChunk,
@@ -668,9 +684,37 @@ export async function sendMessageTelegram(
             : api.sendMessage(chatId, chunk.plainText),
         label,
       );
-    const result = !chunk.htmlText
-      ? await requestPlain("message")
-      : await withTelegramHtmlParseFallback({
+    let result: unknown;
+    if (!chunk.htmlText) {
+      result = await requestPlain("message");
+    } else if (chunk.richMessage && canSendRichText) {
+      try {
+        result = await withTelegramHtmlParseFallback({
+          label: "sendRichMessage",
+          verbose: opts.verbose,
+          requestHtml: (label) =>
+            requestWithChatNotFound(
+              () =>
+                sendTelegramRichMessage({
+                  api,
+                  chatId,
+                  richMessage: chunk.richMessage ?? buildTelegramInputRichMessage(chunk.htmlText),
+                  requestParams: normalizeTelegramRichSendParams(plainParams),
+                }),
+              label,
+            ),
+          requestPlain,
+        });
+      } catch (err) {
+        if (!isTelegramRichMethodUnavailableError(err)) {
+          throw err;
+        }
+        if (opts.verbose) {
+          sendLogger.warn(
+            `telegram sendRichMessage unavailable, retrying with HTML parse_mode: ${formatErrorMessage(err)}`,
+          );
+        }
+        result = await withTelegramHtmlParseFallback({
           label: "message",
           verbose: opts.verbose,
           requestHtml: (label) =>
@@ -684,6 +728,23 @@ export async function sendMessageTelegram(
             ),
           requestPlain,
         });
+      }
+    } else {
+      result = await withTelegramHtmlParseFallback({
+        label: "message",
+        verbose: opts.verbose,
+        requestHtml: (label) =>
+          requestWithChatNotFound(
+            () =>
+              api.sendMessage(chatId, chunk.htmlText ?? chunk.plainText, {
+                parse_mode: "HTML" as const,
+                ...plainParams,
+              }),
+            label,
+          ),
+        requestPlain,
+      });
+    }
     return { result, acceptedParams: params };
   };
 
@@ -771,6 +832,7 @@ export async function sendMessageTelegram(
     const plainTextChunks = splitTelegramPlainTextFallback(fallbackText, htmlChunks.length, 4000);
     return htmlChunks.map((htmlTextLocal, index) => ({
       htmlText: htmlTextLocal,
+      richMessage: buildTelegramInputRichMessage(htmlTextLocal),
       plainText: plainTextChunks[index] ?? htmlTextLocal,
     }));
   };
@@ -1481,6 +1543,39 @@ export async function editMessageTelegram(
         ),
     });
 
+  const performRichTextEdit = () =>
+    withTelegramHtmlParseFallback({
+      label: "editRichMessageText",
+      verbose: opts.verbose,
+      requestHtml: (retryLabel) =>
+        requestWithEditShouldLog(
+          () =>
+            editTelegramRichMessageText({
+              api,
+              chatId,
+              messageId,
+              richMessage: buildTelegramInputRichMessage(htmlText),
+              requestParams: {
+                ...(textEditParams.link_preview_options
+                  ? { link_preview_options: textEditParams.link_preview_options }
+                  : {}),
+                ...(replyMarkup !== undefined ? { reply_markup: replyMarkup } : {}),
+              },
+            }),
+          retryLabel,
+          (err) => !isTelegramMessageNotModifiedError(err),
+        ),
+      requestPlain: (retryLabel) =>
+        requestWithEditShouldLog(
+          () =>
+            Object.keys(plainTextParams).length > 0
+              ? api.editMessageText(chatId, messageId, plainText, plainTextParams)
+              : api.editMessageText(chatId, messageId, plainText),
+          retryLabel,
+          (plainErr) => !isTelegramMessageNotModifiedError(plainErr),
+        ),
+    });
+
   const performCaptionEdit = () =>
     withTelegramHtmlParseFallback({
       label: "editMessageCaption",
@@ -1505,7 +1600,23 @@ export async function editMessageTelegram(
       await performCaptionEdit();
     } else {
       try {
-        await performTextEdit();
+        if (canEditTelegramRichMessage(api)) {
+          try {
+            await performRichTextEdit();
+          } catch (err) {
+            if (!isTelegramRichMethodUnavailableError(err)) {
+              throw err;
+            }
+            if (opts.verbose) {
+              sendLogger.warn(
+                `telegram rich editMessageText unavailable, retrying with HTML parse_mode: ${formatErrorMessage(err)}`,
+              );
+            }
+            await performTextEdit();
+          }
+        } else {
+          await performTextEdit();
+        }
       } catch (err) {
         if (editMode === "auto" && isTelegramMessageHasNoTextError(err)) {
           await performCaptionEdit();
