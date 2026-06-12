@@ -735,7 +735,7 @@ jobs:
 
             if [[ "${missing_trusted_plugin_count}" != "0" ]]; then
               echo "One or more ClawHub packages exist but do not have trusted publishing configured. Configure trusted publishing before running a release publish." >&2
-              jq -r '.missingTrustedPublisher[]? | "- \(.packageName)@\(.version): configure trusted publishing for openclaw/openclaw, workflow plugin-clawhub-release.yml, environment clawhub-plugin-release"' "${release_plan_path}" >&2
+              jq -r '.missingTrustedPublisher[]? | "- \(.packageName)@\(.version): configure trusted publishing for openclaw/openclaw, workflow plugin-clawhub-release.yml, without an environment pin"' "${release_plan_path}" >&2
               exit 1
             fi
 

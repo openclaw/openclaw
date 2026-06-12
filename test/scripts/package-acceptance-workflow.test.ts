@@ -1587,7 +1587,7 @@ describe("package artifact reuse", () => {
     expect(clawHubWorkflow).toContain("environment: clawhub-plugin-release");
     expect(clawHubWorkflow).toContain("inputs.dry_run != true");
     expect(clawHubWorkflow).toContain(
-      "always() && github.event_name == 'workflow_dispatch' && needs.preview_plugins_clawhub.outputs.has_candidates == 'true' && needs.pack_plugins_clawhub_artifacts.result == 'success' && needs.approve_plugins_clawhub_release.result == 'success'",
+      "always() && github.event_name == 'workflow_dispatch' && needs.preview_plugins_clawhub.outputs.has_candidates == 'true' && needs.pack_plugins_clawhub_artifacts.result == 'success' && (inputs.dry_run == true || needs.approve_plugins_clawhub_release.result == 'success')",
     );
     expect(clawHubWorkflow).toContain("package_artifact_name: ${{ matrix.plugin.artifactName }}");
     expect(clawHubWorkflow).toContain("source_repo: ${{ github.repository }}");
@@ -1615,6 +1615,8 @@ describe("package artifact reuse", () => {
     expect(clawHubWorkflow).toContain("verify_published_clawhub_package:");
     expect(clawHubWorkflow).toContain("inputs.dry_run != true");
     expect(clawHubWorkflow).toContain("Verify published ClawHub package");
+    expect(releaseWorkflow).toContain("without an environment pin");
+    expect(releaseWorkflow).not.toContain("environment clawhub-plugin-release");
     expect(clawHubWorkflow).not.toContain("bash scripts/plugin-clawhub-publish.sh --publish");
     expect(clawHubWorkflow).not.toContain("Write ClawHub token config");
     expect(clawHubWorkflow).not.toContain("Checkout ClawHub CLI source");
