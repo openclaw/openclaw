@@ -1878,6 +1878,7 @@ function renderRun(
       : usage && typeof usage.input_tokens === "number" && typeof usage.output_tokens === "number"
         ? `${usage.input_tokens} in / ${usage.output_tokens} out`
         : null;
+  const warnings = (entry.warnings ?? []).filter((warning) => warning.trim().length > 0);
   const bodySource = entry.summary || entry.error || t("cron.runEntry.noSummary");
   const showErrorInMeta = Boolean(entry.error) && Boolean(entry.summary);
   return html`
@@ -1893,6 +1894,7 @@ function renderRun(
             ${entry.model ? html`<span class="chip">${entry.model}</span>` : nothing}
             ${entry.provider ? html`<span class="chip">${entry.provider}</span>` : nothing}
             ${usageSummary ? html`<span class="chip">${usageSummary}</span>` : nothing}
+            ${warnings.map((warning) => html`<span class="chip chip-warn">${warning}</span>`)}
           </div>
         </div>
         <div class="list-meta cron-run-entry__meta">

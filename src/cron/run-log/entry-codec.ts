@@ -143,5 +143,13 @@ export function parseCronRunLogEntryObject(
   if (typeof entryObj.sessionKey === "string" && entryObj.sessionKey.trim().length > 0) {
     entry.sessionKey = entryObj.sessionKey;
   }
+  if (Array.isArray(entryObj.warnings)) {
+    const warnings = entryObj.warnings.filter(
+      (warning): warning is string => typeof warning === "string" && warning.trim().length > 0,
+    );
+    if (warnings.length > 0) {
+      entry.warnings = warnings;
+    }
+  }
   return entry;
 }

@@ -559,6 +559,7 @@ export const CronRunLogEntrySchema = Type.Object(
     runAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
     durationMs: Type.Optional(Type.Integer({ minimum: 0 })),
     nextRunAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    warnings: Type.Optional(Type.Array(Type.String(), { minItems: 1 })),
     model: Type.Optional(Type.String()),
     provider: Type.Optional(Type.String()),
     usage: Type.Optional(

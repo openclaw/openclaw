@@ -126,4 +126,9 @@ describe("cron protocol conformance", () => {
     expect(errorReason).toBeDefined();
     expect(extractConstUnionValues(errorReason ?? {})).toEqual(expectedReasons);
   });
+
+  it("cron run-log schema declares warning annotations", () => {
+    const properties = (CronRunLogEntrySchema as SchemaLike).properties ?? {};
+    expect(properties.warnings).toBeDefined();
+  });
 });

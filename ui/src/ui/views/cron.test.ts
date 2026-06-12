@@ -534,6 +534,31 @@ describe("cron view", () => {
     expect(container.querySelector(".cron-run-entry__body strong")?.textContent).toBe("markdown");
   });
 
+  it("renders cron run log warnings in history rows", () => {
+    const container = document.createElement("div");
+    render(
+      renderCron(
+        createProps({
+          runs: [
+            {
+              ts: 2,
+              jobId: "job-warning",
+              status: "ok",
+              summary: "handoff complete",
+              warnings: ["possible-main-next-heartbeat-ghost-run"],
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    const warningChip = Array.from(container.querySelectorAll(".cron-run-entry .chip-warn")).find(
+      (chip) => chip.textContent?.includes("possible-main-next-heartbeat-ghost-run"),
+    );
+    expect(warningChip?.textContent?.trim()).toBe("possible-main-next-heartbeat-ghost-run");
+  });
+
   it("treats empty run summaries as absent when an error exists", () => {
     const container = document.createElement("div");
     render(
