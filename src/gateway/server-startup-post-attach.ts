@@ -1046,17 +1046,6 @@ export async function startGatewaySidecars(params: {
     },
   });
 
-  schedulePostReadySidecarTask({
-    startupTrace: params.startupTrace,
-    name: "sidecars.main-session-recovery",
-    log: params.log,
-    run: async () => {
-      const { scheduleRestartAbortedMainSessionRecovery } =
-        await loadMainSessionRestartRecoveryModule();
-      scheduleRestartAbortedMainSessionRecovery({ cfg: params.cfg });
-    },
-  });
-
   const gmailWatcherOutcome = resolveGmailWatcherStartupOutcome(params.cfg);
   startupOutcomes.push(gmailWatcherOutcome);
   if (gmailWatcherOutcome.status === "scheduled") {
