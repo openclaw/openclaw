@@ -6030,37 +6030,45 @@ describe("openai transport stream", () => {
   });
 
   it("omits reasoning_effort for custom provider ids backed by Azure GPT-5.5 endpoints", () => {
-    const params = buildOpenAICompletionsParams(
-      {
-        id: "prod-spud",
-        name: "GPT-5.5 (Azure)",
-        api: "openai-completions",
-        provider: "corp-azure-openai",
-        baseUrl: "https://corp-resource.openai.azure.com/openai/v1",
-        reasoning: true,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 1000000,
-        maxTokens: 128000,
-      } satisfies Model<"openai-completions">,
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [
-          {
-            name: "lookup_weather",
-            description: "Get forecast",
-            parameters: { type: "object", properties: {}, additionalProperties: false },
-          },
-        ],
-      } as never,
-      {
-        reasoning: "medium",
-      } as never,
-    ) as { reasoning_effort?: unknown; tools?: unknown };
+    const azureBaseUrls = [
+      "https://corp-resource.openai.azure.com/openai/v1",
+      "https://corp-project.services.ai.azure.com/api/projects/demo/openai/v1",
+      "https://corp-resource.cognitiveservices.azure.com/openai/v1",
+    ];
 
-    expect(params.tools).toHaveLength(1);
-    expect(params).not.toHaveProperty("reasoning_effort");
+    for (const baseUrl of azureBaseUrls) {
+      const params = buildOpenAICompletionsParams(
+        {
+          id: "prod-spud",
+          name: "GPT-5.5 (Azure)",
+          api: "openai-completions",
+          provider: "corp-azure-openai",
+          baseUrl,
+          reasoning: true,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 1000000,
+          maxTokens: 128000,
+        } satisfies Model<"openai-completions">,
+        {
+          systemPrompt: "system",
+          messages: [],
+          tools: [
+            {
+              name: "lookup_weather",
+              description: "Get forecast",
+              parameters: { type: "object", properties: {}, additionalProperties: false },
+            },
+          ],
+        } as never,
+        {
+          reasoning: "medium",
+        } as never,
+      ) as { reasoning_effort?: unknown; tools?: unknown };
+
+      expect(params.tools).toHaveLength(1);
+      expect(params).not.toHaveProperty("reasoning_effort");
+    }
   });
 
   it("keeps reasoning_effort for custom gpt-5.5 Chat Completions providers with tool payloads", () => {

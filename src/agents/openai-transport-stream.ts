@@ -2555,6 +2555,14 @@ function isAzureOpenAICompatibleHost(hostname: string): boolean {
   );
 }
 
+function hasAzureOpenAICompatibleBaseUrl(model: Pick<Model, "baseUrl">): boolean {
+  try {
+    return isAzureOpenAICompatibleHost(new URL(model.baseUrl).hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
 function buildOpenAICompletionsClientConfig(
   model: Model,
   context: Context,
@@ -4283,11 +4291,13 @@ export function buildOpenAICompletionsParams(
     Array.isArray(rawCompat?.supportedReasoningEfforts) ||
     Boolean(rawCompat?.reasoningEffortMap && typeof rawCompat.reasoningEffortMap === "object");
   const endpointClass = resolveProviderEndpoint(model.baseUrl).endpointClass;
+  const isAzureChatCompletionsEndpoint =
+    endpointClass === "azure-openai" || hasAzureOpenAICompatibleBaseUrl(model);
   const omitChatCompletionsToolReasoningEffort =
     hasTools &&
     (isOpenAIGpt54MiniModel(model) ||
       (isOpenAIGpt55Model(model) &&
-        endpointClass === "azure-openai" &&
+        isAzureChatCompletionsEndpoint &&
         !hasExplicitReasoningEffortCompat));
   const handledQwenThinkingFormat = applyQwenOpenAICompletionsThinkingParams({
     compatThinkingFormat: compat.thinkingFormat,
