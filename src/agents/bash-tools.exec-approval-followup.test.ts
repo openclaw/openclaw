@@ -113,6 +113,20 @@ describe("exec approval followup", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("suppresses prompt persistence for session-resume followups", async () => {
+    await sendExecApprovalFollowup({
+      approvalId: "req-hidden-prompt",
+      sessionKey: "agent:main:main",
+      resultText: "Exec finished (gateway id=req-hidden-prompt, code 0)\nok",
+    });
+
+    expectGatewayAgentFollowup({
+      sessionKey: "agent:main:main",
+      suppressPromptPersistence: true,
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it("suppresses denied followups for normal sessions", async () => {
     await expect(
       sendExecApprovalFollowup({
