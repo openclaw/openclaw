@@ -42,6 +42,15 @@ const mocks = vi.hoisted(() => {
     resolveAgentExplicitModelPrimary: vi.fn().mockReturnValue(undefined),
     resolveAgentEffectiveModelPrimary: vi.fn().mockReturnValue(undefined),
     resolveAgentModelFallbacksOverride: vi.fn().mockReturnValue(undefined),
+    resolveSessionAgentIds: vi.fn(({ agentId }: { agentId?: string } = {}) => ({
+      defaultAgentId: "main",
+      sessionAgentId: agentId?.trim().toLowerCase() || "main",
+    })),
+    listAgentEntries: vi.fn((config?: { agents?: { list?: unknown[] } }) =>
+      Array.isArray(config?.agents?.list)
+        ? config.agents.list.filter((entry) => entry !== null && typeof entry === "object")
+        : [],
+    ),
     listAgentIds: vi.fn().mockReturnValue(["main", "jeremiah"]),
     ensureAuthProfileStore: vi.fn().mockReturnValue(store),
     listProfilesForProvider: vi.fn((s: typeof store, provider: string) => {
@@ -146,6 +155,8 @@ vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentExplicitModelPrimary: mocks.resolveAgentExplicitModelPrimary,
   resolveAgentEffectiveModelPrimary: mocks.resolveAgentEffectiveModelPrimary,
   resolveAgentModelFallbacksOverride: mocks.resolveAgentModelFallbacksOverride,
+  resolveSessionAgentIds: mocks.resolveSessionAgentIds,
+  listAgentEntries: mocks.listAgentEntries,
   listAgentIds: mocks.listAgentIds,
 }));
 vi.mock("../../agents/workspace.js", () => ({
@@ -501,6 +512,137 @@ describe("modelsStatusCommand auth overview", () => {
       const payload = parseFirstJsonLog(localRuntime);
       expect(payload.auth.missingProvidersInUse).toStrictEqual([]);
       expect(localRuntime.exit).not.toHaveBeenCalledWith(1);
+    } finally {
+      mocks.store.profiles = originalProfiles;
+      if (originalLoadConfig) {
+        mocks.loadConfig.mockImplementation(originalLoadConfig);
+      }
+      if (originalEnvImpl) {
+        mocks.resolveEnvApiKey.mockImplementation(originalEnvImpl);
+      } else if (defaultResolveEnvApiKeyImpl) {
+        mocks.resolveEnvApiKey.mockImplementation(defaultResolveEnvApiKeyImpl);
+      } else {
+        mocks.resolveEnvApiKey.mockImplementation(() => null);
+      }
+    }
+  });
+
+  it("reports selected canonical OpenAI routes as Codex subscription routes", async () => {
+    const localRuntime = createRuntime();
+    const originalLoadConfig = mocks.loadConfig.getMockImplementation();
+    const originalProfiles = { ...mocks.store.profiles };
+    const originalEnvImpl = mocks.resolveEnvApiKey.getMockImplementation();
+    mocks.loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5", fallbacks: ["openai/gpt-5.4"] },
+          models: {
+            "openai/gpt-5.5": {},
+            "openai/gpt-5.4": {},
+          },
+        },
+      },
+      models: { providers: {} },
+      env: { shellEnv: { enabled: false } },
+    });
+    mocks.store.profiles = {
+      "openai-codex:default": originalProfiles["openai-codex:default"],
+    };
+    mocks.resolveEnvApiKey.mockImplementation(() => null);
+
+    try {
+      await modelsStatusCommand({ json: true, check: true }, localRuntime as never);
+      const payload = parseFirstJsonLog(localRuntime);
+      expect(payload.auth.runtimeRoutes).toEqual([
+        {
+          source: "default",
+          index: 0,
+          rawModel: "openai/gpt-5.5",
+          resolvedModel: "openai/gpt-5.5",
+          provider: "openai",
+          model: "gpt-5.5",
+          runtime: "codex",
+          runtimeSource: "implicit",
+          runtimeFamily: "codex-subscription",
+          authProvider: "openai-codex",
+          status: "usable",
+        },
+        {
+          source: "fallback",
+          index: 0,
+          rawModel: "openai/gpt-5.4",
+          resolvedModel: "openai/gpt-5.4",
+          provider: "openai",
+          model: "gpt-5.4",
+          runtime: "codex",
+          runtimeSource: "implicit",
+          runtimeFamily: "codex-subscription",
+          authProvider: "openai-codex",
+          status: "usable",
+        },
+      ]);
+      expect(localRuntime.exit).not.toHaveBeenCalledWith(1);
+    } finally {
+      mocks.store.profiles = originalProfiles;
+      if (originalLoadConfig) {
+        mocks.loadConfig.mockImplementation(originalLoadConfig);
+      }
+      if (originalEnvImpl) {
+        mocks.resolveEnvApiKey.mockImplementation(originalEnvImpl);
+      } else if (defaultResolveEnvApiKeyImpl) {
+        mocks.resolveEnvApiKey.mockImplementation(defaultResolveEnvApiKeyImpl);
+      } else {
+        mocks.resolveEnvApiKey.mockImplementation(() => null);
+      }
+    }
+  });
+
+  it("reports direct OpenAI API routes distinctly and fails closed when auth is missing", async () => {
+    const localRuntime = createRuntime();
+    const originalLoadConfig = mocks.loadConfig.getMockImplementation();
+    const originalProfiles = { ...mocks.store.profiles };
+    const originalEnvImpl = mocks.resolveEnvApiKey.getMockImplementation();
+    mocks.loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5", fallbacks: [] },
+          models: { "openai/gpt-5.5": {} },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://proxy.example.test/v1",
+            agentRuntime: { id: "pi" },
+            models: [],
+          },
+        },
+      },
+      env: { shellEnv: { enabled: false } },
+    });
+    mocks.store.profiles = {};
+    mocks.resolveEnvApiKey.mockImplementation(() => null);
+
+    try {
+      await modelsStatusCommand({ json: true, check: true }, localRuntime as never);
+      const payload = parseFirstJsonLog(localRuntime);
+      expect(payload.auth.runtimeRoutes).toEqual([
+        {
+          source: "default",
+          index: 0,
+          rawModel: "openai/gpt-5.5",
+          resolvedModel: "openai/gpt-5.5",
+          provider: "openai",
+          model: "gpt-5.5",
+          runtime: "pi",
+          runtimeSource: "provider",
+          runtimeFamily: "direct-openai-api",
+          authProvider: "openai",
+          status: "missing",
+        },
+      ]);
+      expect(payload.auth.missingProvidersInUse).toEqual(["openai"]);
+      expect(localRuntime.exit).toHaveBeenCalledWith(1);
     } finally {
       mocks.store.profiles = originalProfiles;
       if (originalLoadConfig) {

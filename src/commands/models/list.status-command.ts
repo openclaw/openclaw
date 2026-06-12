@@ -16,6 +16,7 @@ import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles/paths
 import { ensureAuthProfileStoreWithoutExternalProfiles as ensureAuthProfileStore } from "../../agents/auth-profiles/store.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import { resolveProfileUnusableUntilForDisplay } from "../../agents/auth-profiles/usage.js";
+import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import {
   listProviderEnvAuthLookupKeys,
   resolveProviderEnvApiKeyCandidates,
@@ -104,6 +105,20 @@ type StatusSyntheticAuth = {
   credential?: string;
   mode?: ProviderSyntheticAuthResult["mode"];
   expiresAt?: number;
+};
+
+type StatusRuntimeRoute = {
+  source: "default" | "fallback";
+  index: number;
+  rawModel: string;
+  resolvedModel: string;
+  provider: string;
+  model: string;
+  runtime: string;
+  runtimeSource: string;
+  runtimeFamily: "codex-subscription" | "direct-openai-api" | "provider-runtime";
+  authProvider: string;
+  status: "usable" | "missing";
 };
 
 function loadProviderUsageRuntime(): Promise<ProviderUsageRuntime> {
@@ -579,6 +594,67 @@ export async function modelsStatusCommand(
         }),
       ).values(),
     ).toSorted((a, b) => a.provider.localeCompare(b.provider));
+    const resolveRuntimeRouteAuthProvider = (params: {
+      provider: string;
+      runtime: string;
+    }): string => {
+      if (
+        params.runtime === "codex" &&
+        openAIProviderUsesCodexRuntimeByDefault({ provider: params.provider, config: cfg })
+      ) {
+        return OPENAI_CODEX_PROVIDER_ID;
+      }
+      return resolveProviderAuthHealthId(params.provider);
+    };
+    const resolveRuntimeFamily = (params: {
+      provider: string;
+      runtime: string;
+    }): StatusRuntimeRoute["runtimeFamily"] => {
+      if (params.runtime === "codex") {
+        return "codex-subscription";
+      }
+      return normalizeProviderId(params.provider) === "openai"
+        ? "direct-openai-api"
+        : "provider-runtime";
+    };
+    const hasUsableRuntimeRouteAuth = (params: { authProvider: string }): boolean =>
+      hasUsableProviderAuth(params.authProvider);
+    const runtimeRouteInputs = [
+      { source: "default" as const, index: 0, raw: defaultLabel },
+      ...fallbacks.map((raw, index) => ({ source: "fallback" as const, index, raw })),
+    ];
+    const runtimeRoutes: StatusRuntimeRoute[] = runtimeRouteInputs.flatMap(
+      (entry): StatusRuntimeRoute[] => {
+        const ref = resolveStatusModelRef(entry.raw);
+        if (!ref?.provider || !ref.model) {
+          return [];
+        }
+        const provider = normalizeProviderId(ref.provider);
+        const policy = resolveAgentHarnessPolicy({
+          provider,
+          modelId: ref.model,
+          config: cfg,
+          agentId: workspaceAgentId,
+        });
+        const runtime = policy.runtime;
+        const authProvider = resolveRuntimeRouteAuthProvider({ provider, runtime });
+        return [
+          {
+            source: entry.source,
+            index: entry.index,
+            rawModel: entry.raw,
+            resolvedModel: modelKey(provider, ref.model),
+            provider,
+            model: ref.model,
+            runtime,
+            runtimeSource: policy.runtimeSource ?? "implicit",
+            runtimeFamily: resolveRuntimeFamily({ provider, runtime }),
+            authProvider,
+            status: hasUsableRuntimeRouteAuth({ authProvider }) ? "usable" : "missing",
+          },
+        ];
+      },
+    );
     const missingProvidersInUse = Array.from(
       new Set(
         providerUses
@@ -784,6 +860,7 @@ export async function modelsStatusCommand(
             enabled: shellFallbackEnabled,
             appliedKeys: applied,
           },
+          runtimeRoutes,
           providersWithOAuth: providersWithOauth,
           missingProvidersInUse,
           runtimeAuthRoutes,
@@ -989,6 +1066,20 @@ export async function modelsStatusCommand(
               route.effective.detail,
             )}`,
           )}${formatSeparator()}${formatKeyValue("status", route.status)}`,
+        );
+      }
+    }
+
+    if (runtimeRoutes.length > 0) {
+      runtime.log("");
+      runtime.log(colorize(rich, theme.heading, "Runtime routes"));
+      for (const route of runtimeRoutes) {
+        runtime.log(
+          `- ${theme.heading(route.source)} ${colorize(rich, theme.info, route.resolvedModel)} ` +
+            `${formatKeyValue("runtime", route.runtime)}${formatSeparator()}` +
+            `${formatKeyValue("family", route.runtimeFamily)}${formatSeparator()}` +
+            `${formatKeyValue("auth", route.authProvider)}${formatSeparator()}` +
+            `${formatKeyValue("status", route.status)}`,
         );
       }
     }
