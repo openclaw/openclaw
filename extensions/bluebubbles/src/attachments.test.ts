@@ -2,6 +2,10 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import type { BlueBubblesAttachment } from "./types.js";
 import { downloadBlueBubblesAttachment, sendBlueBubblesAttachment } from "./attachments.js";
 import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
+import {
+  restoreBlueBubblesOutboundEnv,
+  withBlueBubblesOutboundEnabled,
+} from "./test-outbound-env.js";
 
 vi.mock("./accounts.js", () => ({
   resolveBlueBubblesAccount: vi.fn(({ cfg, accountId }) => {
@@ -31,6 +35,7 @@ describe("downloadBlueBubblesAttachment", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    restoreBlueBubblesOutboundEnv();
   });
 
   it("throws when guid is missing", async () => {
@@ -270,25 +275,60 @@ describe("sendBlueBubblesAttachment", () => {
     expect(mockFetch).not.toHaveBeenCalled();
   }
 
-  it("marks voice memos when asVoice is true and mp3 is provided", async () => {
+  it("throws at outbound gate when flag unset", async () => {
     await expectAttachmentDisabled({
       to: "chat_guid:iMessage;-;+15551234567",
       buffer: new Uint8Array([1, 2, 3]),
-      filename: "voice.mp3",
-      contentType: "audio/mpeg",
-      asVoice: true,
+      filename: "photo.jpg",
+      contentType: "image/jpeg",
       opts: { serverUrl: "http://localhost:1234", password: "test" },
     });
   });
 
+  it("marks voice memos when asVoice is true and mp3 is provided", async () => {
+    await withBlueBubblesOutboundEnabled(async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        text: () => Promise.resolve(JSON.stringify({ messageId: "msg-1" })),
+      });
+
+      await sendBlueBubblesAttachment({
+        to: "chat_guid:iMessage;-;+15551234567",
+        buffer: new Uint8Array([1, 2, 3]),
+        filename: "voice.mp3",
+        contentType: "audio/mpeg",
+        asVoice: true,
+        opts: { serverUrl: "http://localhost:1234", password: "test" },
+      });
+
+      const body = mockFetch.mock.calls[0][1]?.body as Uint8Array;
+      const bodyText = decodeBody(body);
+      expect(bodyText).toContain('name="isAudioMessage"');
+      expect(bodyText).toContain("true");
+      expect(bodyText).toContain('filename="voice.mp3"');
+    });
+  });
+
   it("normalizes mp3 filenames for voice memos", async () => {
-    await expectAttachmentDisabled({
-      to: "chat_guid:iMessage;-;+15551234567",
-      buffer: new Uint8Array([1, 2, 3]),
-      filename: "voice",
-      contentType: "audio/mpeg",
-      asVoice: true,
-      opts: { serverUrl: "http://localhost:1234", password: "test" },
+    await withBlueBubblesOutboundEnabled(async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        text: () => Promise.resolve(JSON.stringify({ messageId: "msg-2" })),
+      });
+
+      await sendBlueBubblesAttachment({
+        to: "chat_guid:iMessage;-;+15551234567",
+        buffer: new Uint8Array([1, 2, 3]),
+        filename: "voice",
+        contentType: "audio/mpeg",
+        asVoice: true,
+        opts: { serverUrl: "http://localhost:1234", password: "test" },
+      });
+
+      const body = mockFetch.mock.calls[0][1]?.body as Uint8Array;
+      const bodyText = decodeBody(body);
+      expect(bodyText).toContain('filename="voice.mp3"');
+      expect(bodyText).toContain('name="voice.mp3"');
     });
   });
 
@@ -321,24 +361,49 @@ describe("sendBlueBubblesAttachment", () => {
   });
 
   it("sanitizes filenames before sending", async () => {
-    await expectAttachmentDisabled({
-      to: "chat_guid:iMessage;-;+15551234567",
-      buffer: new Uint8Array([1, 2, 3]),
-      filename: "../evil.mp3",
-      contentType: "audio/mpeg",
-      opts: { serverUrl: "http://localhost:1234", password: "test" },
+    await withBlueBubblesOutboundEnabled(async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        text: () => Promise.resolve(JSON.stringify({ messageId: "msg-3" })),
+      });
+
+      await sendBlueBubblesAttachment({
+        to: "chat_guid:iMessage;-;+15551234567",
+        buffer: new Uint8Array([1, 2, 3]),
+        filename: "../evil.mp3",
+        contentType: "audio/mpeg",
+        opts: { serverUrl: "http://localhost:1234", password: "test" },
+      });
+
+      const body = mockFetch.mock.calls[0][1]?.body as Uint8Array;
+      const bodyText = decodeBody(body);
+      expect(bodyText).toContain('filename="evil.mp3"');
+      expect(bodyText).toContain('name="evil.mp3"');
     });
   });
 
   it("downgrades attachment reply threading when private API is disabled", async () => {
-    vi.mocked(getCachedBlueBubblesPrivateApiStatus).mockReturnValueOnce(false);
-    await expectAttachmentDisabled({
-      to: "chat_guid:iMessage;-;+15551234567",
-      buffer: new Uint8Array([1, 2, 3]),
-      filename: "photo.jpg",
-      contentType: "image/jpeg",
-      replyToMessageGuid: "reply-guid-123",
-      opts: { serverUrl: "http://localhost:1234", password: "test" },
+    await withBlueBubblesOutboundEnabled(async () => {
+      vi.mocked(getCachedBlueBubblesPrivateApiStatus).mockReturnValueOnce(false);
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        text: () => Promise.resolve(JSON.stringify({ messageId: "msg-4" })),
+      });
+
+      await sendBlueBubblesAttachment({
+        to: "chat_guid:iMessage;-;+15551234567",
+        buffer: new Uint8Array([1, 2, 3]),
+        filename: "photo.jpg",
+        contentType: "image/jpeg",
+        replyToMessageGuid: "reply-guid-123",
+        opts: { serverUrl: "http://localhost:1234", password: "test" },
+      });
+
+      const body = mockFetch.mock.calls[0][1]?.body as Uint8Array;
+      const bodyText = decodeBody(body);
+      expect(bodyText).not.toContain('name="method"');
+      expect(bodyText).not.toContain('name="selectedMessageGuid"');
+      expect(bodyText).not.toContain('name="partIndex"');
     });
   });
 });

@@ -2,6 +2,10 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import type { BlueBubblesSendTarget } from "./types.js";
 import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
 import { sendMessageBlueBubbles, resolveChatGuidForTarget } from "./send.js";
+import {
+  restoreBlueBubblesOutboundEnv,
+  withBlueBubblesOutboundEnabled,
+} from "./test-outbound-env.js";
 
 vi.mock("./accounts.js", () => ({
   resolveBlueBubblesAccount: vi.fn(({ cfg, accountId }) => {
@@ -42,6 +46,7 @@ describe("send", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    restoreBlueBubblesOutboundEnv();
   });
 
   describe("resolveChatGuidForTarget", () => {
@@ -412,142 +417,545 @@ describe("send", () => {
       ).rejects.toThrow("password is required");
     });
 
-    it("throws when chatGuid cannot be resolved for non-handle targets", async () => {
-      await expectMessageSendDisabled("chat_id:999", "Hello", {
+    it("throws at outbound gate when flag unset", async () => {
+      await expectMessageSendDisabled("chat_guid:iMessage;-;direct-chat", "Hello", {
         serverUrl: "http://localhost:1234",
         password: "test",
+      });
+    });
+
+    it("throws when chatGuid cannot be resolved for non-handle targets", async () => {
+      await withBlueBubblesOutboundEnabled(async () => {
+        mockFetch.mockResolvedValue({
+          ok: true,
+          json: () => Promise.resolve({ data: [] }),
+        });
+
+        await expect(
+          sendMessageBlueBubbles("chat_id:999", "Hello", {
+            serverUrl: "http://localhost:1234",
+            password: "test",
+          }),
+        ).rejects.toThrow("chatGuid not found");
       });
     });
 
     it("sends message successfully", async () => {
-      await expectMessageSendDisabled("+15551234567", "Hello world!", {
-        serverUrl: "http://localhost:1234",
-        password: "test",
+      await withBlueBubblesOutboundEnabled(async () => {
+        mockFetch
+          .mockResolvedValueOnce({
+            ok: true,
+            json: () =>
+              Promise.resolve({
+                data: [
+                  {
+                    guid: "iMessage;-;+15551234567",
+                    participants: [{ address: "+15551234567" }],
+                  },
+                ],
+              }),
+          })
+          .mockResolvedValueOnce({
+            ok: true,
+            text: () =>
+              Promise.resolve(
+                JSON.stringify({
+                  data: { guid: "msg-uuid-123" },
+                }),
+              ),
+          });
+
+        const result = await sendMessageBlueBubbles("+15551234567", "Hello world!", {
+          serverUrl: "http://localhost:1234",
+          password: "test",
+        });
+
+        expect(result.messageId).toBe("msg-uuid-123");
+        expect(mockFetch).toHaveBeenCalledTimes(2);
+
+        const sendCall = mockFetch.mock.calls[1];
+        expect(sendCall[0]).toContain("/api/v1/message/text");
+        const body = JSON.parse(sendCall[1].body);
+        expect(body.chatGuid).toBe("iMessage;-;+15551234567");
+        expect(body.message).toBe("Hello world!");
+        expect(body.method).toBeUndefined();
       });
     });
 
     it("strips markdown formatting from outbound messages", async () => {
-      await expectMessageSendDisabled(
-        "+15551234567",
-        "**Bold** and *italic* with `code`\n## Header",
-        {
-          serverUrl: "http://localhost:1234",
-          password: "test",
-        },
-      );
+      await withBlueBubblesOutboundEnabled(async () => {
+        mockFetch
+          .mockResolvedValueOnce({
+            ok: true,
+            json: () =>
+              Promise.resolve({
+                data: [
+                  {
+                    guid: "iMessage;-;+15551234567",
+                    participants: [{ address: "+15551234567" }],
+                  },
+                ],
+              }),
+          })
+          .mockResolvedValueOnce({
+            ok: true,
+            text: () =>
+              Promise.resolve(
+                JSON.stringify({
+                  data: { guid: "msg-uuid-stripped" },
+                }),
+              ),
+          });
+
+        const result = await sendMessageBlueBubbles(
+          "+15551234567",
+          "**Bold** and *italic* with `code`\n## Header",
+          {
+            serverUrl: "http://localhost:1234",
+            password: "test",
+          },
+        );
+
+        expect(result.messageId).toBe("msg-uuid-stripped");
+
+        const sendCall = mockFetch.mock.calls[1];
+        const body = JSON.parse(sendCall[1].body);
+        expect(body.message).toBe("Bold and italic with code\nHeader");
+      });
     });
 
     it("strips markdown when creating a new chat", async () => {
-      await expectMessageSendDisabled("+15550009999", "**Welcome** to the _chat_!", {
-        serverUrl: "http://localhost:1234",
-        password: "test",
+      await withBlueBubblesOutboundEnabled(async () => {
+        mockFetch
+          .mockResolvedValueOnce({
+            ok: true,
+            json: () => Promise.resolve({ data: [] }),
+          })
+          .mockResolvedValueOnce({
+            ok: true,
+            text: () =>
+              Promise.resolve(
+                JSON.stringify({
+                  data: { guid: "new-msg-stripped" },
+                }),
+              ),
+          });
+
+        const result = await sendMessageBlueBubbles("+15550009999", "**Welcome** to the _chat_!", {
+          serverUrl: "http://localhost:1234",
+          password: "test",
+        });
+
+        expect(result.messageId).toBe("new-msg-stripped");
+
+        const createCall = mockFetch.mock.calls[1];
+        expect(createCall[0]).toContain("/api/v1/chat/new");
+        const body = JSON.parse(createCall[1].body);
+        expect(body.message).toBe("Welcome to the chat!");
       });
     });
 
     it("creates a new chat when handle target is missing", async () => {
-      await expectMessageSendDisabled("+15550009999", "Hello new chat", {
-        serverUrl: "http://localhost:1234",
-        password: "test",
+      await withBlueBubblesOutboundEnabled(async () => {
+        mockFetch
+          .mockResolvedValueOnce({
+            ok: true,
+            json: () => Promise.resolve({ data: [] }),
+          })
+          .mockResolvedValueOnce({
+            ok: true,
+            text: () =>
+              Promise.resolve(
+                JSON.stringify({
+                  data: { guid: "new-msg-guid" },
+                }),
+              ),
+          });
+
+        const result = await sendMessageBlueBubbles("+15550009999", "Hello new chat", {
+          serverUrl: "http://localhost:1234",
+          password: "test",
+        });
+
+        expect(result.messageId).toBe("new-msg-guid");
+        expect(mockFetch).toHaveBeenCalledTimes(2);
+
+        const createCall = mockFetch.mock.calls[1];
+        expect(createCall[0]).toContain("/api/v1/chat/new");
+        const body = JSON.parse(createCall[1].body);
+        expect(body.addresses).toEqual(["+15550009999"]);
+        expect(body.message).toBe("Hello new chat");
       });
     });
 
     it("throws when creating a new chat requires Private API", async () => {
-      await expectMessageSendDisabled("+15550008888", "Hello", {
-        serverUrl: "http://localhost:1234",
-        password: "test",
+      await withBlueBubblesOutboundEnabled(async () => {
+        mockFetch
+          .mockResolvedValueOnce({
+            ok: true,
+            json: () => Promise.resolve({ data: [] }),
+          })
+          .mockResolvedValueOnce({
+            ok: false,
+            status: 403,
+            text: () => Promise.resolve("Private API not enabled"),
+          });
+
+        await expect(
+          sendMessageBlueBubbles("+15550008888", "Hello", {
+            serverUrl: "http://localhost:1234",
+            password: "test",
+          }),
+        ).rejects.toThrow("Private API must be enabled");
       });
     });
 
     it("uses private-api when reply metadata is present", async () => {
-      await expectMessageSendDisabled("+15551234567", "Replying", {
-        serverUrl: "http://localhost:1234",
-        password: "test",
-        replyToMessageGuid: "reply-guid-123",
-        replyToPartIndex: 1,
+      await withBlueBubblesOutboundEnabled(async () => {
+        mockFetch
+          .mockResolvedValueOnce({
+            ok: true,
+            json: () =>
+              Promise.resolve({
+                data: [
+                  {
+                    guid: "iMessage;-;+15551234567",
+                    participants: [{ address: "+15551234567" }],
+                  },
+                ],
+              }),
+          })
+          .mockResolvedValueOnce({
+            ok: true,
+            text: () =>
+              Promise.resolve(
+                JSON.stringify({
+                  data: { guid: "msg-uuid-124" },
+                }),
+              ),
+          });
+
+        const result = await sendMessageBlueBubbles("+15551234567", "Replying", {
+          serverUrl: "http://localhost:1234",
+          password: "test",
+          replyToMessageGuid: "reply-guid-123",
+          replyToPartIndex: 1,
+        });
+
+        expect(result.messageId).toBe("msg-uuid-124");
+        expect(mockFetch).toHaveBeenCalledTimes(2);
+
+        const sendCall = mockFetch.mock.calls[1];
+        const body = JSON.parse(sendCall[1].body);
+        expect(body.method).toBe("private-api");
+        expect(body.selectedMessageGuid).toBe("reply-guid-123");
+        expect(body.partIndex).toBe(1);
       });
     });
 
     it("downgrades threaded reply to plain send when private API is disabled", async () => {
-      vi.mocked(getCachedBlueBubblesPrivateApiStatus).mockReturnValueOnce(false);
-      await expectMessageSendDisabled("+15551234567", "Reply fallback", {
-        serverUrl: "http://localhost:1234",
-        password: "test",
-        replyToMessageGuid: "reply-guid-123",
-        replyToPartIndex: 1,
+      await withBlueBubblesOutboundEnabled(async () => {
+        vi.mocked(getCachedBlueBubblesPrivateApiStatus).mockReturnValueOnce(false);
+        mockFetch
+          .mockResolvedValueOnce({
+            ok: true,
+            json: () =>
+              Promise.resolve({
+                data: [
+                  {
+                    guid: "iMessage;-;+15551234567",
+                    participants: [{ address: "+15551234567" }],
+                  },
+                ],
+              }),
+          })
+          .mockResolvedValueOnce({
+            ok: true,
+            text: () => Promise.resolve(JSON.stringify({ data: { guid: "msg-plain" } })),
+          });
+
+        await sendMessageBlueBubbles("+15551234567", "Reply fallback", {
+          serverUrl: "http://localhost:1234",
+          password: "test",
+          replyToMessageGuid: "reply-guid-123",
+          replyToPartIndex: 1,
+        });
+
+        const body = JSON.parse(mockFetch.mock.calls[1][1].body);
+        expect(body.method).toBeUndefined();
+        expect(body.selectedMessageGuid).toBeUndefined();
+        expect(body.partIndex).toBeUndefined();
       });
     });
 
     it("normalizes effect names and uses private-api for effects", async () => {
-      await expectMessageSendDisabled("+15551234567", "Hello", {
-        serverUrl: "http://localhost:1234",
-        password: "test",
-        effectId: "invisible ink",
+      await withBlueBubblesOutboundEnabled(async () => {
+        mockFetch
+          .mockResolvedValueOnce({
+            ok: true,
+            json: () =>
+              Promise.resolve({
+                data: [
+                  {
+                    guid: "iMessage;-;+15551234567",
+                    participants: [{ address: "+15551234567" }],
+                  },
+                ],
+              }),
+          })
+          .mockResolvedValueOnce({
+            ok: true,
+            text: () => Promise.resolve(JSON.stringify({ data: { guid: "msg-effect" } })),
+          });
+
+        await sendMessageBlueBubbles("+15551234567", "Hello", {
+          serverUrl: "http://localhost:1234",
+          password: "test",
+          effectId: "invisible ink",
+        });
+
+        const body = JSON.parse(mockFetch.mock.calls[1][1].body);
+        expect(body.method).toBe("private-api");
+        expect(body.effectId).toBe("com.apple.MobileSMS.expressivesend.invisibleink");
       });
     });
 
     it("sends message with chat_guid target directly", async () => {
-      await expectMessageSendDisabled(
-        "chat_guid:iMessage;-;direct-chat",
-        "Direct message",
-        {
-          serverUrl: "http://localhost:1234",
-          password: "test",
-        },
-      );
+      await withBlueBubblesOutboundEnabled(async () => {
+        mockFetch.mockResolvedValueOnce({
+          ok: true,
+          text: () => Promise.resolve(JSON.stringify({ data: { guid: "direct-msg" } })),
+        });
+
+        const result = await sendMessageBlueBubbles(
+          "chat_guid:iMessage;-;direct-chat",
+          "Direct message",
+          {
+            serverUrl: "http://localhost:1234",
+            password: "test",
+          },
+        );
+
+        expect(result.messageId).toBe("direct-msg");
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+        const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+        expect(body.chatGuid).toBe("iMessage;-;direct-chat");
+      });
     });
 
     it("handles send failure", async () => {
-      await expectMessageSendDisabled("+15551234567", "Hello", {
-        serverUrl: "http://localhost:1234",
-        password: "test",
+      await withBlueBubblesOutboundEnabled(async () => {
+        mockFetch
+          .mockResolvedValueOnce({
+            ok: true,
+            json: () =>
+              Promise.resolve({
+                data: [
+                  {
+                    guid: "iMessage;-;+15551234567",
+                    participants: [{ address: "+15551234567" }],
+                  },
+                ],
+              }),
+          })
+          .mockResolvedValueOnce({
+            ok: false,
+            status: 500,
+            text: () => Promise.resolve("Server error"),
+          });
+
+        await expect(
+          sendMessageBlueBubbles("+15551234567", "Hello", {
+            serverUrl: "http://localhost:1234",
+            password: "test",
+          }),
+        ).rejects.toThrow("send failed (500): Server error");
       });
     });
 
     it("handles empty response body", async () => {
-      await expectMessageSendDisabled("+15551234567", "Hello", {
-        serverUrl: "http://localhost:1234",
-        password: "test",
+      await withBlueBubblesOutboundEnabled(async () => {
+        mockFetch
+          .mockResolvedValueOnce({
+            ok: true,
+            json: () =>
+              Promise.resolve({
+                data: [
+                  {
+                    guid: "iMessage;-;+15551234567",
+                    participants: [{ address: "+15551234567" }],
+                  },
+                ],
+              }),
+          })
+          .mockResolvedValueOnce({
+            ok: true,
+            text: () => Promise.resolve(""),
+          });
+
+        const result = await sendMessageBlueBubbles("+15551234567", "Hello", {
+          serverUrl: "http://localhost:1234",
+          password: "test",
+        });
+
+        expect(result.messageId).toBe("ok");
       });
     });
 
     it("handles invalid JSON response body", async () => {
-      await expectMessageSendDisabled("+15551234567", "Hello", {
-        serverUrl: "http://localhost:1234",
-        password: "test",
+      await withBlueBubblesOutboundEnabled(async () => {
+        mockFetch
+          .mockResolvedValueOnce({
+            ok: true,
+            json: () =>
+              Promise.resolve({
+                data: [
+                  {
+                    guid: "iMessage;-;+15551234567",
+                    participants: [{ address: "+15551234567" }],
+                  },
+                ],
+              }),
+          })
+          .mockResolvedValueOnce({
+            ok: true,
+            text: () => Promise.resolve("{invalid json"),
+          });
+
+        const result = await sendMessageBlueBubbles("+15551234567", "Hello", {
+          serverUrl: "http://localhost:1234",
+          password: "test",
+        });
+
+        expect(result.messageId).toBe("ok");
       });
     });
 
     it("extracts messageId from various response formats", async () => {
-      await expectMessageSendDisabled("+15551234567", "Hello", {
-        serverUrl: "http://localhost:1234",
-        password: "test",
+      await withBlueBubblesOutboundEnabled(async () => {
+        mockFetch
+          .mockResolvedValueOnce({
+            ok: true,
+            json: () =>
+              Promise.resolve({
+                data: [
+                  {
+                    guid: "iMessage;-;+15551234567",
+                    participants: [{ address: "+15551234567" }],
+                  },
+                ],
+              }),
+          })
+          .mockResolvedValueOnce({
+            ok: true,
+            text: () => Promise.resolve(JSON.stringify({ messageId: "msg-id-456" })),
+          });
+
+        const result = await sendMessageBlueBubbles("+15551234567", "Hello", {
+          serverUrl: "http://localhost:1234",
+          password: "test",
+        });
+
+        expect(result.messageId).toBe("msg-id-456");
       });
     });
 
     it("extracts messageGuid from response payload", async () => {
-      await expectMessageSendDisabled("+15551234567", "Hello", {
-        serverUrl: "http://localhost:1234",
-        password: "test",
+      await withBlueBubblesOutboundEnabled(async () => {
+        mockFetch
+          .mockResolvedValueOnce({
+            ok: true,
+            json: () =>
+              Promise.resolve({
+                data: [
+                  {
+                    guid: "iMessage;-;+15551234567",
+                    participants: [{ address: "+15551234567" }],
+                  },
+                ],
+              }),
+          })
+          .mockResolvedValueOnce({
+            ok: true,
+            text: () => Promise.resolve(JSON.stringify({ data: { messageGuid: "msg-guid-789" } })),
+          });
+
+        const result = await sendMessageBlueBubbles("+15551234567", "Hello", {
+          serverUrl: "http://localhost:1234",
+          password: "test",
+        });
+
+        expect(result.messageId).toBe("msg-guid-789");
       });
     });
 
     it("resolves credentials from config", async () => {
-      await expectMessageSendDisabled("+15551234567", "Hello", {
-        cfg: {
-          channels: {
-            bluebubbles: {
-              serverUrl: "http://config-server:5678",
-              password: "config-pass",
+      await withBlueBubblesOutboundEnabled(async () => {
+        mockFetch
+          .mockResolvedValueOnce({
+            ok: true,
+            json: () =>
+              Promise.resolve({
+                data: [
+                  {
+                    guid: "iMessage;-;+15551234567",
+                    participants: [{ address: "+15551234567" }],
+                  },
+                ],
+              }),
+          })
+          .mockResolvedValueOnce({
+            ok: true,
+            text: () => Promise.resolve(JSON.stringify({ data: { guid: "msg-config" } })),
+          });
+
+        await sendMessageBlueBubbles("+15551234567", "Hello", {
+          cfg: {
+            channels: {
+              bluebubbles: {
+                serverUrl: "http://config-server:5678",
+                password: "config-pass",
+              },
             },
           },
-        },
+        });
+
+        const queryCall = mockFetch.mock.calls[0][0] as string;
+        const sendCall = mockFetch.mock.calls[1][0] as string;
+        expect(queryCall).toContain("config-server:5678");
+        expect(queryCall).toContain("password=config-pass");
+        expect(sendCall).toContain("config-server:5678");
+        expect(sendCall).toContain("password=config-pass");
       });
     });
 
     it("includes tempGuid in request payload", async () => {
-      await expectMessageSendDisabled("+15551234567", "Hello", {
-        serverUrl: "http://localhost:1234",
-        password: "test",
+      await withBlueBubblesOutboundEnabled(async () => {
+        mockFetch
+          .mockResolvedValueOnce({
+            ok: true,
+            json: () =>
+              Promise.resolve({
+                data: [
+                  {
+                    guid: "iMessage;-;+15551234567",
+                    participants: [{ address: "+15551234567" }],
+                  },
+                ],
+              }),
+          })
+          .mockResolvedValueOnce({
+            ok: true,
+            text: () => Promise.resolve(JSON.stringify({ data: { guid: "msg-temp" } })),
+          });
+
+        await sendMessageBlueBubbles("+15551234567", "Hello", {
+          serverUrl: "http://localhost:1234",
+          password: "test",
+        });
+
+        const body = JSON.parse(mockFetch.mock.calls[1][1].body);
+        expect(body.tempGuid).toEqual(expect.any(String));
       });
     });
   });

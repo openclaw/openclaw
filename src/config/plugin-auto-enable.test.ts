@@ -73,12 +73,110 @@ describe("applyPluginAutoEnable", () => {
     expect(result.changes).toEqual([]);
   });
 
+  it("does not auto-enable bluebubbles when the channel is disabled", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        channels: {
+          bluebubbles: {
+            enabled: false,
+            serverUrl: "http://localhost:1234",
+            password: "x",
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(result.config.plugins?.entries?.bluebubbles?.enabled).toBeUndefined();
+    expect(result.changes).toEqual([]);
+  });
+
+  it("does not auto-enable bluebubbles without explicit channel opt-in", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        channels: {
+          bluebubbles: {
+            serverUrl: "http://localhost:1234",
+            password: "x",
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(result.config.plugins?.entries?.bluebubbles?.enabled).toBeUndefined();
+    expect(result.changes).toEqual([]);
+  });
+
+  it("auto-enables bluebubbles only when explicitly opted in and configured", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        channels: {
+          bluebubbles: {
+            enabled: true,
+            serverUrl: "http://localhost:1234",
+            password: "x",
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(result.config.plugins?.entries?.bluebubbles?.enabled).toBe(true);
+    expect(result.changes.join("\n")).toContain("bluebubbles configured, enabled automatically.");
+  });
+
+  it("requires explicit bluebubbles account opt-in before auto-enable", () => {
+    const missingAccountOptIn = applyPluginAutoEnable({
+      config: {
+        channels: {
+          bluebubbles: {
+            enabled: true,
+            accounts: {
+              personal: {
+                serverUrl: "http://localhost:1234",
+                password: "x",
+              },
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(missingAccountOptIn.config.plugins?.entries?.bluebubbles?.enabled).toBeUndefined();
+
+    const optedIn = applyPluginAutoEnable({
+      config: {
+        channels: {
+          bluebubbles: {
+            enabled: true,
+            accounts: {
+              personal: {
+                enabled: true,
+                serverUrl: "http://localhost:1234",
+                password: "x",
+              },
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(optedIn.config.plugins?.entries?.bluebubbles?.enabled).toBe(true);
+  });
+
   describe("preferOver channel prioritization", () => {
     it("prefers bluebubbles: skips imessage auto-configure when both are configured", () => {
       const result = applyPluginAutoEnable({
         config: {
           channels: {
-            bluebubbles: { serverUrl: "http://localhost:1234", password: "x" },
+            bluebubbles: {
+              enabled: true,
+              serverUrl: "http://localhost:1234",
+              password: "x",
+            },
             imessage: { cliPath: "/usr/local/bin/imsg" },
           },
         },
@@ -97,7 +195,11 @@ describe("applyPluginAutoEnable", () => {
       const result = applyPluginAutoEnable({
         config: {
           channels: {
-            bluebubbles: { serverUrl: "http://localhost:1234", password: "x" },
+            bluebubbles: {
+              enabled: true,
+              serverUrl: "http://localhost:1234",
+              password: "x",
+            },
             imessage: { cliPath: "/usr/local/bin/imsg" },
           },
           plugins: { entries: { imessage: { enabled: true } } },
@@ -113,7 +215,11 @@ describe("applyPluginAutoEnable", () => {
       const result = applyPluginAutoEnable({
         config: {
           channels: {
-            bluebubbles: { serverUrl: "http://localhost:1234", password: "x" },
+            bluebubbles: {
+              enabled: true,
+              serverUrl: "http://localhost:1234",
+              password: "x",
+            },
             imessage: { cliPath: "/usr/local/bin/imsg" },
           },
           plugins: { entries: { bluebubbles: { enabled: false } } },
@@ -130,7 +236,11 @@ describe("applyPluginAutoEnable", () => {
       const result = applyPluginAutoEnable({
         config: {
           channels: {
-            bluebubbles: { serverUrl: "http://localhost:1234", password: "x" },
+            bluebubbles: {
+              enabled: true,
+              serverUrl: "http://localhost:1234",
+              password: "x",
+            },
             imessage: { cliPath: "/usr/local/bin/imsg" },
           },
           plugins: { deny: ["bluebubbles"] },

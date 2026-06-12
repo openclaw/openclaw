@@ -189,6 +189,29 @@ function isWhatsAppConfigured(cfg: OpenClawConfig): boolean {
   return recordHasKeys(entry);
 }
 
+function isBlueBubblesAccountConfigured(account: unknown): boolean {
+  return (
+    isRecord(account) &&
+    account.enabled === true &&
+    hasNonEmptyString(account.serverUrl) &&
+    hasNonEmptyString(account.password)
+  );
+}
+
+function isBlueBubblesConfigured(cfg: OpenClawConfig): boolean {
+  const entry = resolveChannelConfig(cfg, "bluebubbles");
+  if (!entry || entry.enabled !== true) {
+    return false;
+  }
+  if (hasNonEmptyString(entry.serverUrl) && hasNonEmptyString(entry.password)) {
+    return true;
+  }
+  if (!isRecord(entry.accounts)) {
+    return false;
+  }
+  return Object.values(entry.accounts).some(isBlueBubblesAccountConfigured);
+}
+
 function isGenericChannelConfigured(cfg: OpenClawConfig, channelId: string): boolean {
   const entry = resolveChannelConfig(cfg, channelId);
   return recordHasKeys(entry);
@@ -214,6 +237,8 @@ export function isChannelConfigured(
       return isSignalConfigured(cfg);
     case "imessage":
       return isIMessageConfigured(cfg);
+    case "bluebubbles":
+      return isBlueBubblesConfigured(cfg);
     default:
       return isGenericChannelConfigured(cfg, channelId);
   }
