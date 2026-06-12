@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedBlueBubblesAccount } from "./accounts.js";
 import {
   handleBlueBubblesWebhookRequest,
+  monitorBlueBubblesProvider,
   registerBlueBubblesWebhookTarget,
   resolveBlueBubblesMessageId,
   _resetBlueBubblesShortIdState,
@@ -316,6 +317,7 @@ describe("BlueBubbles webhook monitor", () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    mockDispatchReplyWithBufferedBlockDispatcher.mockImplementation(async () => undefined);
     // Reset short ID state between tests for predictable behavior
     _resetBlueBubblesShortIdState();
     mockReadAllowFromStore.mockResolvedValue([]);
@@ -1104,6 +1106,215 @@ describe("BlueBubbles webhook monitor", () => {
       expect(thread.status).toBe("pending");
     });
 
+    it("supervised_valid_resolution_enqueues_for_review", async () => {
+      const account = createMockAccount({
+        dmPolicy: "open",
+        supervisedReplies: {
+          enabled: true,
+        },
+      });
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const payload = {
+        type: "new-message",
+        data: {
+          text: "Please review me",
+          handle: { address: "+15559991111" },
+          isGroup: false,
+          isFromMe: false,
+          guid: "msg-supervised-valid-1",
+          date: Date.now(),
+        },
+      };
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await flushAsync();
+
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+      const latestPath = path.join(mockStateDir, "workspace", "sms-supervisor", "latest.json");
+      let latestRaw = "";
+      await vi.waitFor(async () => {
+        latestRaw = await fs.readFile(latestPath, "utf8");
+        expect(latestRaw).toContain("Please review me");
+      });
+      expect(latestRaw).toContain("Please review me");
+    });
+
+    it("supervised_null_resolution_drops_dm_and_does_not_dispatch_agent", async () => {
+      const account = createMockAccount({
+        dmPolicy: "open",
+        supervisedReplies: {
+          enabled: false,
+          notifyTo: "telegram:578430248",
+        },
+      });
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      const runtime = { log: vi.fn(), error: vi.fn() };
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime,
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const payload = {
+        type: "new-message",
+        data: {
+          text: "SENTINEL supervised disabled body",
+          handle: { address: "+15559999999" },
+          isGroup: false,
+          isFromMe: false,
+          guid: "msg-supervised-disabled-1",
+          date: Date.now(),
+        },
+      };
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await flushAsync();
+
+      const { sendMessageBlueBubbles } = await import("./send.js");
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+      expect(mockUpsertPairingRequest).not.toHaveBeenCalled();
+      expect(sendMessageBlueBubbles).not.toHaveBeenCalled();
+      expect(mockSendMessageTelegram).not.toHaveBeenCalled();
+      expect(JSON.stringify(runtime.log.mock.calls)).not.toContain("SENTINEL supervised disabled body");
+    });
+
+    it("audit_and_logs_never_contain_message_body", async () => {
+      const sentinel = "SENTINEL_BODY_SHOULD_NOT_APPEAR";
+      const account = createMockAccount({
+        dmPolicy: "open",
+        supervisedReplies: {
+          enabled: false,
+        },
+      });
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      const runtime = { log: vi.fn(), error: vi.fn() };
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime,
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const payload = {
+        type: "new-message",
+        data: {
+          text: sentinel,
+          handle: { address: "+15559992222" },
+          isGroup: false,
+          isFromMe: false,
+          guid: "msg-supervised-log-sentinel",
+          date: Date.now(),
+        },
+      };
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await flushAsync();
+
+      expect(JSON.stringify(runtime.log.mock.calls)).not.toContain(sentinel);
+      expect(JSON.stringify(runtime.error.mock.calls)).not.toContain(sentinel);
+    });
+
+    it("pairing_auto_reply_skipped_for_supervised_account", async () => {
+      const account = createMockAccount({
+        dmPolicy: "pairing",
+        supervisedReplies: {
+          enabled: true,
+          notifyTo: "telegram:578430248",
+        },
+      });
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const payload = {
+        type: "new-message",
+        data: {
+          text: "supervised should queue, not pair",
+          handle: { address: "+15558880000" },
+          isGroup: false,
+          isFromMe: false,
+          guid: "msg-supervised-pairing-1",
+          date: Date.now(),
+        },
+      };
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await flushAsync();
+
+      const { sendMessageBlueBubbles } = await import("./send.js");
+      await vi.waitFor(() => {
+        expect(mockSendMessageTelegram).toHaveBeenCalled();
+      });
+      expect(mockUpsertPairingRequest).not.toHaveBeenCalled();
+      expect(sendMessageBlueBubbles).not.toHaveBeenCalled();
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    });
+
+    it("start_refuses_supervised_account_when_disabled_or_pairing", async () => {
+      const config: OpenClawConfig = {};
+      const runtime = { log: vi.fn(), error: vi.fn() };
+      const abortController = new AbortController();
+      setBlueBubblesRuntime(createMockRuntime());
+
+      await expect(
+        monitorBlueBubblesProvider({
+          account: createMockAccount({ supervisedReplies: { enabled: false }, dmPolicy: "open" }),
+          config,
+          runtime,
+          abortSignal: abortController.signal,
+        }),
+      ).rejects.toThrow("supervisedReplies configured but it is not enabled");
+
+      await expect(
+        monitorBlueBubblesProvider({
+          account: createMockAccount({ supervisedReplies: { enabled: true }, dmPolicy: "pairing" }),
+          config,
+          runtime,
+          abortSignal: abortController.signal,
+        }),
+      ).rejects.toThrow("dmPolicy=pairing");
+    });
+
     it("blocks all DMs when dmPolicy=disabled", async () => {
       const account = createMockAccount({
         dmPolicy: "disabled",
@@ -1178,6 +1389,9 @@ describe("BlueBubbles webhook monitor", () => {
       await handleBlueBubblesWebhookRequest(req, res);
       await flushAsync();
 
+      await vi.waitFor(() => {
+        expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
+      });
       expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
     });
 
@@ -1460,6 +1674,9 @@ describe("BlueBubbles webhook monitor", () => {
       await handleBlueBubblesWebhookRequest(req, res);
       await flushAsync();
 
+      await vi.waitFor(() => {
+        expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
+      });
       expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
       const callArgs = mockDispatchReplyWithBufferedBlockDispatcher.mock.calls[0][0];
       expect(callArgs.ctx.GroupSubject).toBe("Family");
@@ -1856,6 +2073,9 @@ describe("BlueBubbles webhook monitor", () => {
       await handleBlueBubblesWebhookRequest(req, res);
       await flushAsync();
 
+      await vi.waitFor(() => {
+        expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
+      });
       expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
       const callArgs = mockDispatchReplyWithBufferedBlockDispatcher.mock.calls[0][0];
       expect(callArgs.ctx.RawBody).toBe("Loved this idea");
@@ -2349,6 +2569,48 @@ describe("BlueBubbles webhook monitor", () => {
   });
 
   describe("reaction events", () => {
+    it("processReaction_for_supervised_account_enqueues_no_agent_visible_body", async () => {
+      mockEnqueueSystemEvent.mockClear();
+      const account = createMockAccount({
+        supervisedReplies: {
+          enabled: true,
+        },
+      });
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      const runtime = { log: vi.fn(), error: vi.fn() };
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime,
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const payload = {
+        type: "message-reaction",
+        data: {
+          handle: { address: "+15551234567" },
+          isGroup: false,
+          isFromMe: false,
+          associatedMessageGuid: "msg-original-123",
+          associatedMessageType: 2000,
+          date: Date.now(),
+        },
+      };
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await flushAsync();
+
+      expect(mockEnqueueSystemEvent).not.toHaveBeenCalled();
+      expect(JSON.stringify(runtime.log.mock.calls)).not.toContain("reacted with");
+    });
+
     it("enqueues system event for reaction added", async () => {
       mockEnqueueSystemEvent.mockClear();
 

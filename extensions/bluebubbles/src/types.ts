@@ -106,6 +106,7 @@ export type BlueBubblesAttachment = {
 };
 
 const DEFAULT_TIMEOUT_MS = 10_000;
+export const BLUEBUBBLES_OUTBOUND_ENABLED_ENV = "OPENCLAW_BLUEBUBBLES_OUTBOUND_ENABLED";
 
 export function normalizeBlueBubblesServerUrl(raw: string): string {
   const trimmed = raw.trim();
@@ -141,4 +142,21 @@ export async function blueBubblesFetchWithTimeout(
   } finally {
     clearTimeout(timer);
   }
+}
+
+export function assertBlueBubblesOutboundEnabled(feature = "BlueBubbles outbound"): void {
+  if (process.env[BLUEBUBBLES_OUTBOUND_ENABLED_ENV] !== "1") {
+    throw new Error(
+      `${feature} is disabled: ${BLUEBUBBLES_OUTBOUND_ENABLED_ENV} must be set to 1.`,
+    );
+  }
+}
+
+export async function blueBubblesOutboundFetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+) {
+  assertBlueBubblesOutboundEnabled();
+  return blueBubblesFetchWithTimeout(url, init, timeoutMs);
 }

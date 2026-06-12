@@ -1,7 +1,11 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { resolveBlueBubblesAccount } from "./accounts.js";
 import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
-import { blueBubblesFetchWithTimeout, buildBlueBubblesApiUrl } from "./types.js";
+import {
+  assertBlueBubblesOutboundEnabled,
+  blueBubblesOutboundFetchWithTimeout,
+  buildBlueBubblesApiUrl,
+} from "./types.js";
 
 export type BlueBubblesReactionOpts = {
   serverUrl?: string;
@@ -167,6 +171,7 @@ export async function sendBlueBubblesReaction(params: {
       "BlueBubbles reaction requires Private API, but it is disabled on the BlueBubbles server.",
     );
   }
+  assertBlueBubblesOutboundEnabled("BlueBubbles reaction send");
   const url = buildBlueBubblesApiUrl({
     baseUrl,
     path: "/api/v1/message/react",
@@ -178,7 +183,7 @@ export async function sendBlueBubblesReaction(params: {
     reaction,
     partIndex: typeof params.partIndex === "number" ? params.partIndex : 0,
   };
-  const res = await blueBubblesFetchWithTimeout(
+  const res = await blueBubblesOutboundFetchWithTimeout(
     url,
     {
       method: "POST",

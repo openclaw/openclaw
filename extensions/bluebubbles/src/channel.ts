@@ -34,6 +34,7 @@ import {
   normalizeBlueBubblesMessagingTarget,
   parseBlueBubblesTarget,
 } from "./targets.js";
+import { assertBlueBubblesOutboundEnabled } from "./types.js";
 
 const meta = {
   id: "bluebubbles",
@@ -290,6 +291,7 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
     idLabel: "bluebubblesSenderId",
     normalizeAllowEntry: (entry) => normalizeBlueBubblesHandle(entry.replace(/^bluebubbles:/i, "")),
     notifyApproval: async ({ cfg, id }) => {
+      assertBlueBubblesOutboundEnabled("BlueBubbles pairing approval");
       await sendMessageBlueBubbles(id, PAIRING_APPROVED_MESSAGE, {
         cfg: cfg,
       });
@@ -309,6 +311,7 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
       return { ok: true, to: trimmed };
     },
     sendText: async ({ cfg, to, text, accountId, replyToId }) => {
+      assertBlueBubblesOutboundEnabled("BlueBubbles outbound adapter text");
       const rawReplyToId = typeof replyToId === "string" ? replyToId.trim() : "";
       // Resolve short ID (e.g., "5") to full UUID
       const replyToMessageGuid = rawReplyToId
@@ -322,6 +325,7 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
       return { channel: "bluebubbles", ...result };
     },
     sendMedia: async (ctx) => {
+      assertBlueBubblesOutboundEnabled("BlueBubbles outbound adapter media");
       const { cfg, to, text, mediaUrl, accountId, replyToId } = ctx;
       const { mediaPath, mediaBuffer, contentType, filename, caption } = ctx as {
         mediaPath?: string;

@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import { createHash } from "node:crypto";
 import {
   createReplyPrefixOptions,
   logAckFailure,
@@ -36,6 +37,7 @@ import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
 import { normalizeBlueBubblesReactionInput, sendBlueBubblesReaction } from "./reactions.js";
 import { resolveChatGuidForTarget, sendMessageBlueBubbles } from "./send.js";
 import {
+  isBlueBubblesAccountIntendedSupervised,
   queueSupervisedBlueBubblesMessage,
   resolveSupervisedBlueBubblesConfig,
 } from "./supervised.js";
@@ -44,6 +46,10 @@ import { formatBlueBubblesChatTarget, isAllowedBlueBubblesSender } from "./targe
 const DEFAULT_TEXT_LIMIT = 4000;
 const invalidAckReactions = new Set<string>();
 const REPLY_DIRECTIVE_TAG_RE = /\[\[\s*(?:reply_to_current|reply_to\s*:\s*[^\]\n]+)\s*\]\]/gi;
+
+function shortHash(value: string | undefined): string {
+  return createHash("sha256").update(value ?? "").digest("hex").slice(0, 12);
+}
 
 export function logVerbose(
   core: BlueBubblesCoreRuntime,
@@ -174,6 +180,38 @@ export async function processMessage(
     runtime,
     `msg sender=${message.senderId} group=${isGroup} textLen=${text.length} attachments=${attachments.length} chatGuid=${message.chatGuid ?? ""} chatId=${message.chatId ?? ""}`,
   );
+
+  const intendedSupervised = !isGroup && isBlueBubblesAccountIntendedSupervised(account);
+  if (intendedSupervised) {
+    const supervisedRepliesConfig = await resolveSupervisedBlueBubblesConfig({ core, account });
+    if (!supervisedRepliesConfig) {
+      logVerbose(
+        core,
+        runtime,
+        `drop: supervised disabled account=${account.accountId} senderHash=${shortHash(message.senderId)} bodyLen=${rawBody.length} bodyHash=${shortHash(rawBody)} attachments=${attachments.length}`,
+      );
+      return;
+    }
+    try {
+      const { rank } = await queueSupervisedBlueBubblesMessage({
+        core,
+        account,
+        message,
+        messageShortId,
+        supervisorConfig: supervisedRepliesConfig,
+      });
+      logVerbose(
+        core,
+        runtime,
+        `supervised inbox intercepted account=${account.accountId} senderHash=${shortHash(message.senderId)} bodyLen=${rawBody.length} bodyHash=${shortHash(rawBody)} rank=${rank}`,
+      );
+    } catch (err) {
+      runtime.error?.(
+        `[bluebubbles] supervised inbox failed account=${account.accountId} senderHash=${shortHash(message.senderId)}: ${String(err)}`,
+      );
+    }
+    return;
+  }
 
   const dmPolicy = account.config.dmPolicy ?? "pairing";
   const groupPolicy = account.config.groupPolicy ?? "allowlist";
@@ -406,29 +444,6 @@ export async function processMessage(
   // Cache allowed inbound messages so later replies can resolve sender/body without
   // surfacing dropped content (allowlist/mention/command gating).
   cacheInboundMessage();
-
-  const supervisedRepliesConfig = !isGroup
-    ? await resolveSupervisedBlueBubblesConfig({ core, account })
-    : null;
-  if (supervisedRepliesConfig) {
-    try {
-      const { rank } = await queueSupervisedBlueBubblesMessage({
-        core,
-        account,
-        message,
-        messageShortId,
-        supervisorConfig: supervisedRepliesConfig,
-      });
-      logVerbose(
-        core,
-        runtime,
-        `supervised inbox intercepted sender=${message.senderId} rank=${rank}`,
-      );
-    } catch (err) {
-      runtime.error?.(`[bluebubbles] supervised inbox failed sender=${message.senderId}: ${String(err)}`);
-    }
-    return;
-  }
 
   const baseUrl = account.config.serverUrl?.trim();
   const password = account.config.password?.trim();
@@ -933,6 +948,15 @@ export async function processReaction(
 ): Promise<void> {
   const { account, config, runtime, core } = target;
   if (reaction.fromMe) {
+    return;
+  }
+
+  if (!reaction.isGroup && isBlueBubblesAccountIntendedSupervised(account)) {
+    logVerbose(
+      core,
+      runtime,
+      `drop: supervised reaction account=${account.accountId} senderHash=${shortHash(reaction.senderId)} messageHash=${shortHash(reaction.messageId)} action=${reaction.action} emojiHash=${shortHash(reaction.emoji)}`,
+    );
     return;
   }
 

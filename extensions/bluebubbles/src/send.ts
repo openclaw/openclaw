@@ -9,7 +9,9 @@ import {
   parseBlueBubblesTarget,
 } from "./targets.js";
 import {
+  assertBlueBubblesOutboundEnabled,
   blueBubblesFetchWithTimeout,
+  blueBubblesOutboundFetchWithTimeout,
   buildBlueBubblesApiUrl,
   type BlueBubblesSendTarget,
 } from "./types.js";
@@ -326,6 +328,7 @@ async function createNewChatWithMessage(params: {
   message: string;
   timeoutMs?: number;
 }): Promise<BlueBubblesSendResult> {
+  assertBlueBubblesOutboundEnabled("BlueBubbles chat creation");
   const url = buildBlueBubblesApiUrl({
     baseUrl: params.baseUrl,
     path: "/api/v1/chat/new",
@@ -336,7 +339,7 @@ async function createNewChatWithMessage(params: {
     message: params.message,
     tempGuid: `temp-${crypto.randomUUID()}`,
   };
-  const res = await blueBubblesFetchWithTimeout(
+  const res = await blueBubblesOutboundFetchWithTimeout(
     url,
     {
       method: "POST",
@@ -398,6 +401,7 @@ export async function sendMessageBlueBubbles(
   if (!password) {
     throw new Error("BlueBubbles password is required");
   }
+  assertBlueBubblesOutboundEnabled("BlueBubbles message send");
   const privateApiStatus = getCachedBlueBubblesPrivateApiStatus(account.accountId);
 
   const target = resolveSendTarget(to);
@@ -458,7 +462,7 @@ export async function sendMessageBlueBubbles(
     path: "/api/v1/message/text",
     password,
   });
-  const res = await blueBubblesFetchWithTimeout(
+  const res = await blueBubblesOutboundFetchWithTimeout(
     url,
     {
       method: "POST",

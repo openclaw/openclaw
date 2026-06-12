@@ -63,10 +63,6 @@ function resolveLatestPath(core: BlueBubblesCoreRuntime): string {
   return path.join(resolveSmsSupervisorDir(core), "latest.json");
 }
 
-function resolveConfigPath(core: BlueBubblesCoreRuntime): string {
-  return path.join(resolveSmsSupervisorDir(core), "config.json");
-}
-
 function resolveThreadPath(core: BlueBubblesCoreRuntime, threadId: string): string {
   return path.join(resolveThreadsDir(core), `${threadId}.json`);
 }
@@ -133,9 +129,14 @@ function formatNotification(params: { item: SmsSupervisorLatestItem; message: No
     "Reply here in plain text, for example:",
     `\`show sms ${item.rank}\``,
     `\`draft sms ${item.rank}: Thanks — ...\``,
-    `\`send sms ${item.rank}\``,
     `\`hold sms ${item.rank}\``,
   ].join("\n");
+}
+
+export function isBlueBubblesAccountIntendedSupervised(
+  account: ResolvedBlueBubblesAccount,
+): boolean {
+  return Object.prototype.hasOwnProperty.call(account.config, "supervisedReplies");
 }
 
 export async function queueSupervisedBlueBubblesMessage(params: {
@@ -235,13 +236,6 @@ export async function resolveSupervisedBlueBubblesConfig(params: {
   core: BlueBubblesCoreRuntime;
   account: ResolvedBlueBubblesAccount;
 }): Promise<BlueBubblesSupervisedRepliesConfig | null> {
-  const { account, core } = params;
-  if (account.config.supervisedReplies) {
-    return account.config.supervisedReplies.enabled === true ? account.config.supervisedReplies : null;
-  }
-  const fileConfig = await readJsonFile<BlueBubblesSupervisedRepliesConfig>(resolveConfigPath(core));
-  if (!fileConfig || fileConfig.enabled !== true) {
-    return null;
-  }
-  return fileConfig;
+  const { account } = params;
+  return account.config.supervisedReplies?.enabled === true ? account.config.supervisedReplies : null;
 }

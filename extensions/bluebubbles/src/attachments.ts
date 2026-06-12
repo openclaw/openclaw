@@ -6,7 +6,9 @@ import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
 import { resolveChatGuidForTarget } from "./send.js";
 import { parseBlueBubblesTarget, normalizeBlueBubblesHandle } from "./targets.js";
 import {
+  assertBlueBubblesOutboundEnabled,
   blueBubblesFetchWithTimeout,
+  blueBubblesOutboundFetchWithTimeout,
   buildBlueBubblesApiUrl,
   type BlueBubblesAttachment,
   type BlueBubblesSendTarget,
@@ -205,6 +207,7 @@ export async function sendBlueBubblesAttachment(params: {
       "BlueBubbles attachment send failed: chatGuid not found for target. Use a chat_guid target or ensure the chat exists.",
     );
   }
+  assertBlueBubblesOutboundEnabled("BlueBubbles attachment send");
 
   const url = buildBlueBubblesApiUrl({
     baseUrl,
@@ -274,7 +277,7 @@ export async function sendBlueBubblesAttachment(params: {
     offset += part.length;
   }
 
-  const res = await blueBubblesFetchWithTimeout(
+  const res = await blueBubblesOutboundFetchWithTimeout(
     url,
     {
       method: "POST",

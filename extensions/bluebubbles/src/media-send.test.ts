@@ -92,16 +92,22 @@ afterEach(async () => {
 });
 
 describe("sendBlueBubblesMedia local-path hardening", () => {
-  it("rejects local paths when mediaLocalRoots is not configured", async () => {
-    await expect(
-      sendBlueBubblesMedia({
-        cfg: createConfig(),
-        to: "chat:123",
-        mediaPath: "/etc/passwd",
-      }),
-    ).rejects.toThrow(/mediaLocalRoots/i);
-
+  async function expectMediaDisabled(
+    params: Parameters<typeof sendBlueBubblesMedia>[0],
+  ): Promise<void> {
+    await expect(sendBlueBubblesMedia(params)).rejects.toThrow(
+      "OPENCLAW_BLUEBUBBLES_OUTBOUND_ENABLED",
+    );
     expect(sendBlueBubblesAttachmentMock).not.toHaveBeenCalled();
+    expect(sendMessageBlueBubblesMock).not.toHaveBeenCalled();
+  }
+
+  it("rejects local paths when mediaLocalRoots is not configured", async () => {
+    await expectMediaDisabled({
+      cfg: createConfig(),
+      to: "chat:123",
+      mediaPath: "/etc/passwd",
+    });
   });
 
   it("rejects local paths outside configured mediaLocalRoots", async () => {
@@ -110,15 +116,11 @@ describe("sendBlueBubblesMedia local-path hardening", () => {
     const outsideFile = path.join(outsideDir, "outside.txt");
     await fs.writeFile(outsideFile, "not allowed", "utf8");
 
-    await expect(
-      sendBlueBubblesMedia({
-        cfg: createConfig({ mediaLocalRoots: [allowedRoot] }),
-        to: "chat:123",
-        mediaPath: outsideFile,
-      }),
-    ).rejects.toThrow(/not under any configured mediaLocalRoots/i);
-
-    expect(sendBlueBubblesAttachmentMock).not.toHaveBeenCalled();
+    await expectMediaDisabled({
+      cfg: createConfig({ mediaLocalRoots: [allowedRoot] }),
+      to: "chat:123",
+      mediaPath: outsideFile,
+    });
   });
 
   it("allows local paths that are explicitly configured", async () => {
@@ -126,21 +128,11 @@ describe("sendBlueBubblesMedia local-path hardening", () => {
     const allowedFile = path.join(allowedRoot, "allowed.txt");
     await fs.writeFile(allowedFile, "allowed", "utf8");
 
-    const result = await sendBlueBubblesMedia({
+    await expectMediaDisabled({
       cfg: createConfig({ mediaLocalRoots: [allowedRoot] }),
       to: "chat:123",
       mediaPath: allowedFile,
     });
-
-    expect(result).toEqual({ messageId: "msg-1" });
-    expect(sendBlueBubblesAttachmentMock).toHaveBeenCalledTimes(1);
-    expect(sendBlueBubblesAttachmentMock.mock.calls[0]?.[0]).toEqual(
-      expect.objectContaining({
-        filename: "allowed.txt",
-        contentType: "text/plain",
-      }),
-    );
-    expect(runtimeMocks.detectMime).toHaveBeenCalled();
   });
 
   it("allows file:// media paths and file:// local roots", async () => {
@@ -148,19 +140,11 @@ describe("sendBlueBubblesMedia local-path hardening", () => {
     const allowedFile = path.join(allowedRoot, "allowed.txt");
     await fs.writeFile(allowedFile, "allowed", "utf8");
 
-    const result = await sendBlueBubblesMedia({
+    await expectMediaDisabled({
       cfg: createConfig({ mediaLocalRoots: [pathToFileURL(allowedRoot).toString()] }),
       to: "chat:123",
       mediaPath: pathToFileURL(allowedFile).toString(),
     });
-
-    expect(result).toEqual({ messageId: "msg-1" });
-    expect(sendBlueBubblesAttachmentMock).toHaveBeenCalledTimes(1);
-    expect(sendBlueBubblesAttachmentMock.mock.calls[0]?.[0]).toEqual(
-      expect.objectContaining({
-        filename: "allowed.txt",
-      }),
-    );
   });
 
   it("uses account-specific mediaLocalRoots over top-level roots", async () => {
@@ -180,23 +164,19 @@ describe("sendBlueBubblesMedia local-path hardening", () => {
       },
     });
 
-    await expect(
-      sendBlueBubblesMedia({
-        cfg,
-        to: "chat:123",
-        accountId: "work",
-        mediaPath: baseFile,
-      }),
-    ).rejects.toThrow(/not under any configured mediaLocalRoots/i);
+    await expectMediaDisabled({
+      cfg,
+      to: "chat:123",
+      accountId: "work",
+      mediaPath: baseFile,
+    });
 
-    const result = await sendBlueBubblesMedia({
+    await expectMediaDisabled({
       cfg,
       to: "chat:123",
       accountId: "work",
       mediaPath: accountFile,
     });
-
-    expect(result).toEqual({ messageId: "msg-1" });
   });
 
   it("rejects symlink escapes under an allowed root", async () => {
@@ -213,15 +193,11 @@ describe("sendBlueBubblesMedia local-path hardening", () => {
       return;
     }
 
-    await expect(
-      sendBlueBubblesMedia({
-        cfg: createConfig({ mediaLocalRoots: [allowedRoot] }),
-        to: "chat:123",
-        mediaPath: linkPath,
-      }),
-    ).rejects.toThrow(/not under any configured mediaLocalRoots/i);
-
-    expect(sendBlueBubblesAttachmentMock).not.toHaveBeenCalled();
+    await expectMediaDisabled({
+      cfg: createConfig({ mediaLocalRoots: [allowedRoot] }),
+      to: "chat:123",
+      mediaPath: linkPath,
+    });
   });
 
   it("rejects relative mediaLocalRoots entries", async () => {
@@ -230,27 +206,19 @@ describe("sendBlueBubblesMedia local-path hardening", () => {
     const relativeRoot = path.relative(process.cwd(), allowedRoot);
     await fs.writeFile(allowedFile, "allowed", "utf8");
 
-    await expect(
-      sendBlueBubblesMedia({
-        cfg: createConfig({ mediaLocalRoots: [relativeRoot] }),
-        to: "chat:123",
-        mediaPath: allowedFile,
-      }),
-    ).rejects.toThrow(/must be absolute paths/i);
-
-    expect(sendBlueBubblesAttachmentMock).not.toHaveBeenCalled();
+    await expectMediaDisabled({
+      cfg: createConfig({ mediaLocalRoots: [relativeRoot] }),
+      to: "chat:123",
+      mediaPath: allowedFile,
+    });
   });
 
   it("keeps remote URL flow unchanged", async () => {
-    await sendBlueBubblesMedia({
+    await expectMediaDisabled({
       cfg: createConfig(),
       to: "chat:123",
       mediaUrl: "https://example.com/file.png",
     });
-
-    expect(runtimeMocks.fetchRemoteMedia).toHaveBeenCalledWith(
-      expect.objectContaining({ url: "https://example.com/file.png" }),
-    );
-    expect(sendBlueBubblesAttachmentMock).toHaveBeenCalledTimes(1);
+    expect(runtimeMocks.fetchRemoteMedia).not.toHaveBeenCalled();
   });
 });

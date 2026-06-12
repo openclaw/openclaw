@@ -9,6 +9,7 @@ import { sendBlueBubblesAttachment } from "./attachments.js";
 import { resolveBlueBubblesMessageId } from "./monitor.js";
 import { getBlueBubblesRuntime } from "./runtime.js";
 import { sendMessageBlueBubbles } from "./send.js";
+import { assertBlueBubblesOutboundEnabled } from "./types.js";
 
 const HTTP_URL_RE = /^https?:\/\//i;
 const MB = 1024 * 1024;
@@ -219,6 +220,7 @@ export async function sendBlueBubblesMedia(params: {
     accountId,
     asVoice,
   } = params;
+  assertBlueBubblesOutboundEnabled("BlueBubbles media send");
   const core = getBlueBubblesRuntime();
   const maxBytes = resolveChannelMediaMaxBytes({
     cfg,

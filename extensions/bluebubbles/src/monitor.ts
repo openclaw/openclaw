@@ -20,6 +20,10 @@ import {
 } from "./monitor-shared.js";
 import { fetchBlueBubblesServerInfo } from "./probe.js";
 import { getBlueBubblesRuntime } from "./runtime.js";
+import {
+  isBlueBubblesAccountIntendedSupervised,
+  resolveSupervisedBlueBubblesConfig,
+} from "./supervised.js";
 
 /**
  * Entry type for debouncing inbound messages.
@@ -487,6 +491,20 @@ export async function monitorBlueBubblesProvider(
   const { account, config, runtime, abortSignal, statusSink } = options;
   const core = getBlueBubblesRuntime();
   const path = options.webhookPath?.trim() || DEFAULT_WEBHOOK_PATH;
+  if (isBlueBubblesAccountIntendedSupervised(account)) {
+    const supervisedConfig = await resolveSupervisedBlueBubblesConfig({ core, account });
+    if (!supervisedConfig) {
+      throw new Error(
+        `BlueBubbles account ${account.accountId} has supervisedReplies configured but it is not enabled.`,
+      );
+    }
+    const dmPolicy = account.config.dmPolicy ?? "pairing";
+    if (dmPolicy === "pairing") {
+      throw new Error(
+        `BlueBubbles account ${account.accountId} cannot start supervisedReplies with dmPolicy=pairing.`,
+      );
+    }
+  }
 
   // Fetch and cache server info (for macOS version detection in action gating)
   const serverInfo = await fetchBlueBubblesServerInfo({
