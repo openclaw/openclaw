@@ -146,7 +146,7 @@ export async function handleAssistantFailover(params: {
   previousRetryFailoverReason: FailoverReason | null;
   logAssistantFailoverDecision: (
     decision: "rotate_profile" | "fallback_model" | "surface_error",
-    extra?: { status?: number },
+    extra?: { status?: number; targetProvider?: string; targetModel?: string },
   ) => void;
   warn: (message: string) => void;
   maybeMarkAuthProfileFailure: (failure: {
@@ -157,11 +157,15 @@ export async function handleAssistantFailover(params: {
   maybeEscalateRateLimitProfileFallback: (params: {
     failoverProvider: string;
     failoverModel: string;
-    logFallbackDecision: (decision: "fallback_model", extra?: { status?: number }) => void;
+    logFallbackDecision: (
+      decision: "fallback_model",
+      extra?: { status?: number; targetProvider?: string; targetModel?: string },
+    ) => void;
   }) => void;
   maybeRetrySameModelRateLimit: (retry?: ShortWindowRateLimitRetry) => Promise<boolean>;
   maybeBackoffBeforeOverloadFailover: (reason: FailoverReason | null) => Promise<void>;
   advanceAuthProfile: () => Promise<boolean>;
+  nextFallbackCandidate?: { provider: string; model: string };
 }): Promise<AssistantFailoverOutcome> {
   let overloadProfileRotations = params.overloadProfileRotations;
   let decision = params.initialDecision;
@@ -221,7 +225,11 @@ export async function handleAssistantFailover(params: {
           `overload profile rotation cap reached for ${sanitizeForLog(params.provider)}/${sanitizeForLog(params.modelId)} after ${overloadProfileRotations} rotations; escalating to model fallback`,
         );
         await markFailedProfile();
-        params.logAssistantFailoverDecision("fallback_model", { status });
+        params.logAssistantFailoverDecision("fallback_model", {
+          status,
+          targetProvider: params.nextFallbackCandidate?.provider,
+          targetModel: params.nextFallbackCandidate?.model,
+        });
         return {
           action: "throw",
           overloadProfileRotations,
@@ -314,7 +322,11 @@ export async function handleAssistantFailover(params: {
     const message = resolveAssistantFailoverErrorMessage(params);
     const status =
       resolveFailoverStatus(decision.reason) ?? (isTimeoutErrorMessage(message) ? 408 : undefined);
-    params.logAssistantFailoverDecision("fallback_model", { status });
+    params.logAssistantFailoverDecision("fallback_model", {
+      status,
+      targetProvider: params.nextFallbackCandidate?.provider,
+      targetModel: params.nextFallbackCandidate?.model,
+    });
     const shouldSuspend =
       Boolean(params.sessionKey) &&
       (decision.reason === "rate_limit" || decision.reason === "billing");

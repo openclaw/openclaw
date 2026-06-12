@@ -2,7 +2,9 @@
  * Logs redacted failover decisions for embedded-agent attempts.
  */
 import { redactIdentifier } from "../../../logging/redact-identifier.js";
+import type { PluginHookModelFailoverEvent } from "../../../plugins/hook-types.js";
 import type { AuthProfileFailureReason } from "../../auth-profiles.js";
+import { shouldAllowCooldownProbeForReason } from "../../failover-policy.js";
 import {
   buildApiErrorObservationFields,
   sanitizeForConsole,
@@ -10,6 +12,15 @@ import {
 } from "../../embedded-agent-error-observation.js";
 import type { FailoverReason } from "../../embedded-agent-helpers.js";
 import { log } from "../logger.js";
+
+/** Minimal hook-runner interface needed for failover observation. */
+export type FailoverHookRunner = {
+  hasHooks: (hookName: "model_failover") => boolean;
+  runModelFailover: (
+    event: PluginHookModelFailoverEvent,
+    ctx: { runId?: string; agentId?: string; sessionId?: string; sessionKey?: string },
+  ) => Promise<void>;
+};
 
 /** Structured fields emitted whenever embedded run failover chooses an action. */
 export type FailoverDecisionLoggerInput = {
@@ -30,8 +41,22 @@ export type FailoverDecisionLoggerInput = {
   status?: number;
 };
 
-/** Stable context captured before a concrete failover decision is known. */
-export type FailoverDecisionLoggerBase = Omit<FailoverDecisionLoggerInput, "decision" | "status">;
+export type FailoverDecisionLoggerExtra = Pick<FailoverDecisionLoggerInput, "status"> & {
+  /** Selected fallback target for this decision, when it differs from the failed source. */
+  targetProvider?: string;
+  targetModel?: string;
+};
+
+export type FailoverDecisionLoggerBase = Omit<
+  FailoverDecisionLoggerInput,
+  "decision" | "status"
+> & {
+  /** Optional hook runner for emitting plugin hooks alongside logs. */
+  hookRunner?: FailoverHookRunner;
+  agentId?: string;
+  sessionId?: string;
+  sessionKey?: string;
+};
 
 /**
  * Derives timeout failure reasons for logs that were built from timeout state
@@ -56,21 +81,25 @@ export function createFailoverDecisionLogger(
   base: FailoverDecisionLoggerBase,
 ): (
   decision: FailoverDecisionLoggerInput["decision"],
-  extra?: Pick<FailoverDecisionLoggerInput, "status">,
+  extra?: FailoverDecisionLoggerExtra,
 ) => void {
   const normalizedBase = normalizeFailoverDecisionObservationBase(base);
   const safeProfileId = normalizedBase.profileId
     ? redactIdentifier(normalizedBase.profileId, { len: 12 })
     : undefined;
   const safeRunId = sanitizeForConsole(normalizedBase.runId) ?? "-";
-  const safeProvider = sanitizeForConsole(normalizedBase.provider) ?? "-";
-  const safeModel = sanitizeForConsole(normalizedBase.model) ?? "-";
-  const safeSourceProvider = sanitizeForConsole(normalizedBase.sourceProvider) ?? safeProvider;
-  const safeSourceModel = sanitizeForConsole(normalizedBase.sourceModel) ?? safeModel;
+  const baseSafeProvider = sanitizeForConsole(normalizedBase.provider) ?? "-";
+  const baseSafeModel = sanitizeForConsole(normalizedBase.model) ?? "-";
+  const safeSourceProvider = sanitizeForConsole(normalizedBase.sourceProvider) ?? baseSafeProvider;
+  const safeSourceModel = sanitizeForConsole(normalizedBase.sourceModel) ?? baseSafeModel;
   const profileText = safeProfileId ?? "-";
   const reasonText = normalizedBase.failoverReason ?? "none";
-  const sourceChanged = safeSourceProvider !== safeProvider || safeSourceModel !== safeModel;
   return (decision, extra) => {
+    const targetProvider = extra?.targetProvider ?? normalizedBase.provider;
+    const targetModel = extra?.targetModel ?? normalizedBase.model;
+    const safeProvider = sanitizeForConsole(targetProvider) ?? "-";
+    const safeModel = sanitizeForConsole(targetModel) ?? "-";
+    const sourceChanged = safeSourceProvider !== safeProvider || safeSourceModel !== safeModel;
     const observedError = buildApiErrorObservationFields(normalizedBase.rawError);
     const safeRawErrorPreview = sanitizeForConsole(observedError.rawErrorPreview);
     // Some provider/runtime failure kinds already have normalized detail fields.
@@ -89,8 +118,8 @@ export function createFailoverDecisionLogger(
       decision,
       failoverReason: normalizedBase.failoverReason,
       profileFailureReason: normalizedBase.profileFailureReason,
-      provider: normalizedBase.provider,
-      model: normalizedBase.model,
+      provider: targetProvider,
+      model: targetModel,
       sourceProvider: normalizedBase.sourceProvider ?? normalizedBase.provider,
       sourceModel: normalizedBase.sourceModel ?? normalizedBase.model,
       profileId: safeProfileId,
@@ -98,11 +127,44 @@ export function createFailoverDecisionLogger(
       timedOut: normalizedBase.timedOut,
       aborted: normalizedBase.aborted,
       status: extra?.status,
+      sourceRecoverable: shouldAllowCooldownProbeForReason(normalizedBase.failoverReason),
       ...observedError,
       consoleMessage:
         `embedded run failover decision: runId=${safeRunId} stage=${normalizedBase.stage} decision=${decision} ` +
         `reason=${reasonText} from=${safeSourceProvider}/${safeSourceModel}` +
         `${sourceChanged ? ` to=${safeProvider}/${safeModel}` : ""} profile=${profileText}${rawErrorConsoleSuffix}`,
     });
+
+    // Emit plugin hook (fire-and-forget). This fires alongside the log so plugins
+    // can react to failover decisions without polling gateway logs.
+    const hookRunner = normalizedBase.hookRunner;
+    if (hookRunner?.hasHooks("model_failover")) {
+      const hookEvent: PluginHookModelFailoverEvent = {
+        runId: normalizedBase.runId,
+        agentId: normalizedBase.agentId,
+        sessionId: normalizedBase.sessionId,
+        sessionKey: normalizedBase.sessionKey,
+        provider: targetProvider,
+        model: targetModel,
+        sourceProvider: normalizedBase.sourceProvider,
+        sourceModel: normalizedBase.sourceModel,
+        stage: normalizedBase.stage,
+        decision,
+        failoverReason: normalizedBase.failoverReason,
+        profileFailureReason: normalizedBase.profileFailureReason,
+        fallbackConfigured: normalizedBase.fallbackConfigured,
+        timedOut: normalizedBase.timedOut,
+        aborted: normalizedBase.aborted,
+        status: extra?.status,
+        sourceRecoverable: shouldAllowCooldownProbeForReason(normalizedBase.failoverReason),
+      };
+      const hookCtx = {
+        runId: normalizedBase.runId,
+        agentId: normalizedBase.agentId,
+        sessionId: normalizedBase.sessionId,
+        sessionKey: normalizedBase.sessionKey,
+      };
+      void hookRunner.runModelFailover(hookEvent, hookCtx);
+    }
   };
 }

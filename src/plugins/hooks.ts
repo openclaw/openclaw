@@ -92,6 +92,8 @@ import type {
   PluginHookBeforeInstallResult,
   PluginHookResolveExecEnvContext,
   PluginHookResolveExecEnvEvent,
+  PluginHookModelFailoverEvent,
+  PluginHookModelFailureTerminalEvent,
 } from "./hook-types.js";
 
 // Re-export types for consumers
@@ -165,6 +167,8 @@ export type {
   PluginHookBeforeInstallResult,
   PluginHookResolveExecEnvContext,
   PluginHookResolveExecEnvEvent,
+  PluginHookModelFailoverEvent,
+  PluginHookModelFailureTerminalEvent,
 };
 
 export type HookRunnerLogger = {
@@ -206,6 +210,10 @@ export type HookRunnerOptions = {
 
 const DEFAULT_VOID_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, number>> = {
   agent_end: 30_000,
+  // These hooks fire on failure paths. Keep handlers bounded by default so
+  // observability plugins cannot stall repeated provider-failure recovery.
+  model_failover: 30_000,
+  model_failure_terminal: 30_000,
   // Defensive default for the compaction lifecycle hooks. Without a budget an
   // unresponsive handler runs fully unbounded, and in the codex agent harness
   // these hooks fire on the serialized notification queue
@@ -942,6 +950,30 @@ export function createHookRunner(
   }
 
   /**
+   * Run model_failover hook.
+   * Fires whenever a failover decision is made during a run (rotate_profile, fallback_model,
+   * or surface_error). Runs in parallel (fire-and-forget).
+   */
+  async function runModelFailover(
+    event: PluginHookModelFailoverEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<void> {
+    return runVoidHook("model_failover", event, ctx);
+  }
+
+  /**
+   * Run model_failure_terminal hook.
+   * Fires when a run is about to fail before reply because no usable model remains.
+   * Runs in parallel (fire-and-forget).
+   */
+  async function runModelFailureTerminal(
+    event: PluginHookModelFailureTerminalEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<void> {
+    return runVoidHook("model_failure_terminal", event, ctx);
+  }
+
+  /**
    * Run llm_input hook.
    * Allows plugins to observe the exact input payload sent to the LLM.
    * Runs in parallel (fire-and-forget).
@@ -1634,6 +1666,8 @@ export function createHookRunner(
     runLlmOutput,
     runBeforeAgentFinalize,
     runAgentEnd,
+    runModelFailover,
+    runModelFailureTerminal,
     runBeforeCompaction,
     runAfterCompaction,
     runBeforeReset,
