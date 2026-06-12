@@ -1,7 +1,14 @@
 // Intentional Knip unused-file findings. These are dynamic entrypoints,
 // generated/build inputs, manifest-discovered plugin surfaces, live-test
 // helpers, or package bridge files that static production scanning cannot see.
-export const KNIP_UNUSED_FILE_ALLOWLIST = [];
+export const KNIP_UNUSED_FILE_ALLOWLIST = [
+  "src/security/security-matrix/before-tool-call.ts",
+  "src/security/security-matrix/default-policy.ts",
+  "src/security/security-matrix/evaluate.ts",
+  "src/security/security-matrix/facts.ts",
+  "src/security/security-matrix/tool-capability.ts",
+  "src/security/security-matrix/types.ts",
+];
 
 // Knip can disagree across supported local/CI platforms for files that are
 // only reachable through test-only import graphs, sparse-checkout proof
