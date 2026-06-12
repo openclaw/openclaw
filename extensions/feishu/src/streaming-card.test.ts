@@ -1,12 +1,57 @@
 // Feishu tests cover streaming card plugin behavior.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
+const { fetchWithSsrFGuardMock, mockRuntimeStores, mockOpenSyncKeyedStore } = vi.hoisted(() => {
+  const stores = new Map<string, Map<string, unknown>>();
+  const openSyncKeyedStore = vi.fn(({ namespace }: { namespace: string }) => {
+    let store = stores.get(namespace);
+    if (!store) {
+      store = new Map<string, unknown>();
+      stores.set(namespace, store);
+    }
+    return {
+      register: (key: string, value: unknown) => {
+        store.set(key, value);
+      },
+      registerIfAbsent: (key: string, value: unknown) => {
+        if (store.has(key)) {
+          return false;
+        }
+        store.set(key, value);
+        return true;
+      },
+      lookup: (key: string) => store.get(key),
+      consume: (key: string) => {
+        const value = store.get(key);
+        store.delete(key);
+        return value;
+      },
+      delete: (key: string) => store.delete(key),
+      entries: () =>
+        Array.from(store.entries()).map(([key, value]) => ({ key, value, createdAt: 0 })),
+      clear: () => store.clear(),
+    };
+  });
+  return {
+    fetchWithSsrFGuardMock: vi.fn(),
+    mockRuntimeStores: stores,
+    mockOpenSyncKeyedStore: openSyncKeyedStore,
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
+vi.mock("./runtime.js", () => ({
+  getFeishuRuntime: () => ({
+    state: {
+      openSyncKeyedStore: mockOpenSyncKeyedStore,
+    },
+  }),
+}));
+
+import { testingHooks as streamingCardContentIndexTestingHooks } from "./streaming-card-content-index.js";
 import {
   FeishuStreamingSession,
   mergeStreamingText,
@@ -16,6 +61,8 @@ import {
 type StreamingSessionState = {
   cardId: string;
   messageId: string;
+  accountId?: string;
+  chatId?: string;
   sequence: number;
   currentText: string;
   sentText: string;
@@ -42,12 +89,16 @@ function setStreamingSessionInternals(
 describe("FeishuStreamingSession", () => {
   afterAll(() => {
     vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
+    vi.doUnmock("./runtime.js");
     vi.resetModules();
   });
 
   beforeEach(() => {
     vi.useRealTimers();
     fetchWithSsrFGuardMock.mockReset();
+    mockRuntimeStores.clear();
+    mockOpenSyncKeyedStore.mockClear();
+    streamingCardContentIndexTestingHooks.resetFeishuStreamingCardContentIndexForTests();
   });
 
   afterEach(() => {
@@ -151,6 +202,106 @@ describe("FeishuStreamingSession", () => {
     } as unknown as ConstructorParameters<typeof FeishuStreamingSession>[0];
     return { authTokens, client };
   }
+
+  function streamingCardContentEntries(): Array<{
+    cardId?: unknown;
+    messageId?: unknown;
+    accountId?: unknown;
+    chatId?: unknown;
+    text?: unknown;
+  }> {
+    return Array.from(mockRuntimeStores.get("streaming-card-content")?.values() ?? []) as Array<{
+      cardId?: unknown;
+      messageId?: unknown;
+      accountId?: unknown;
+      chatId?: unknown;
+      text?: unknown;
+    }>;
+  }
+
+  it("records card identity with empty text when streaming start succeeds", async () => {
+    const { client } = mockStreamingTokenStart(() => ({
+      code: 0,
+      msg: "ok",
+      tenant_access_token: "token-start-index",
+      expire: 7200,
+    }));
+
+    await new FeishuStreamingSession(client, {
+      appId: "app_start_index",
+      appSecret: "secret",
+      accountId: "main",
+    }).start("oc_stream_start", "chat_id");
+
+    expect(streamingCardContentEntries()).toEqual([
+      {
+        cardId: "card-1",
+        messageId: "om_1",
+        accountId: "main",
+        chatId: "oc_stream_start",
+        text: "",
+        updatedAt: expect.any(Number),
+      },
+      {
+        cardId: "card-1",
+        messageId: "om_1",
+        accountId: "main",
+        chatId: "oc_stream_start",
+        text: "",
+        updatedAt: expect.any(Number),
+      },
+    ]);
+  });
+
+  it("records accepted update text and final close text", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(5_000);
+    const updateBodies: string[] = [];
+    const replaceBodies: string[] = [];
+    mockFetches(updateBodies, new Set<number>(), replaceBodies);
+
+    const session = new FeishuStreamingSession({} as never, {
+      appId: "app_update_index",
+      appSecret: "secret",
+    });
+    setStreamingSessionInternals(session, {
+      state: {
+        cardId: "card_update_index",
+        messageId: "om_update_index",
+        accountId: "main",
+        chatId: "oc_update_index",
+        sequence: 1,
+        currentText: "hello",
+        sentText: "hello",
+        hasNote: false,
+      },
+      lastUpdateTime: 3_000,
+    });
+
+    await session.update("hello world");
+    await session.close("final answer");
+
+    expect(updateBodies).toHaveLength(1);
+    expect(replaceBodies).toHaveLength(1);
+    expect(streamingCardContentEntries()).toEqual([
+      {
+        cardId: "card_update_index",
+        messageId: "om_update_index",
+        accountId: "main",
+        chatId: "oc_update_index",
+        text: "final answer",
+        updatedAt: expect.any(Number),
+      },
+      {
+        cardId: "card_update_index",
+        messageId: "om_update_index",
+        accountId: "main",
+        chatId: "oc_update_index",
+        text: "final answer",
+        updatedAt: expect.any(Number),
+      },
+    ]);
+  });
 
   it("flushes throttled pending text after the throttle window", async () => {
     vi.useFakeTimers();

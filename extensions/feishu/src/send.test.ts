@@ -12,18 +12,56 @@ const {
   mockResolveMarkdownTableMode,
   mockResolveFeishuAccount,
   mockRuntimeConvertMarkdownTables,
+  mockRuntimeLoggerWarn,
   mockRuntimeResolveMarkdownTableMode,
-} = vi.hoisted(() => ({
-  mockConvertMarkdownTables: vi.fn((text: string) => text),
-  mockClientGet: vi.fn(),
-  mockClientList: vi.fn(),
-  mockClientPatch: vi.fn(),
-  mockCreateFeishuClient: vi.fn(),
-  mockResolveMarkdownTableMode: vi.fn(() => "preserve"),
-  mockResolveFeishuAccount: vi.fn(),
-  mockRuntimeConvertMarkdownTables: vi.fn((text: string) => text),
-  mockRuntimeResolveMarkdownTableMode: vi.fn(() => "preserve"),
-}));
+  mockRuntimeStores,
+  mockOpenSyncKeyedStore,
+} = vi.hoisted(() => {
+  const stores = new Map<string, Map<string, unknown>>();
+  const openSyncKeyedStore = vi.fn(({ namespace }: { namespace: string }) => {
+    let store = stores.get(namespace);
+    if (!store) {
+      store = new Map<string, unknown>();
+      stores.set(namespace, store);
+    }
+    return {
+      register: (key: string, value: unknown) => {
+        store.set(key, value);
+      },
+      registerIfAbsent: (key: string, value: unknown) => {
+        if (store.has(key)) {
+          return false;
+        }
+        store.set(key, value);
+        return true;
+      },
+      lookup: (key: string) => store.get(key),
+      consume: (key: string) => {
+        const value = store.get(key);
+        store.delete(key);
+        return value;
+      },
+      delete: (key: string) => store.delete(key),
+      entries: () =>
+        Array.from(store.entries()).map(([key, value]) => ({ key, value, createdAt: 0 })),
+      clear: () => store.clear(),
+    };
+  });
+  return {
+    mockConvertMarkdownTables: vi.fn((text: string) => text),
+    mockClientGet: vi.fn(),
+    mockClientList: vi.fn(),
+    mockClientPatch: vi.fn(),
+    mockCreateFeishuClient: vi.fn(),
+    mockResolveMarkdownTableMode: vi.fn(() => "preserve"),
+    mockResolveFeishuAccount: vi.fn(),
+    mockRuntimeConvertMarkdownTables: vi.fn((text: string) => text),
+    mockRuntimeLoggerWarn: vi.fn(),
+    mockRuntimeResolveMarkdownTableMode: vi.fn(() => "preserve"),
+    mockRuntimeStores: stores,
+    mockOpenSyncKeyedStore: openSyncKeyedStore,
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/markdown-table-runtime", () => ({
   resolveMarkdownTableMode: mockResolveMarkdownTableMode,
@@ -54,6 +92,14 @@ vi.mock("./runtime.js", () => ({
         convertMarkdownTables: mockRuntimeConvertMarkdownTables,
       },
     },
+    state: {
+      openSyncKeyedStore: mockOpenSyncKeyedStore,
+    },
+    logging: {
+      getChildLogger: () => ({
+        warn: mockRuntimeLoggerWarn,
+      }),
+    },
   }),
 }));
 
@@ -61,6 +107,9 @@ let buildStructuredCard: typeof import("./send.js").buildStructuredCard;
 let editMessageFeishu: typeof import("./send.js").editMessageFeishu;
 let getMessageFeishu: typeof import("./send.js").getMessageFeishu;
 let listFeishuThreadMessages: typeof import("./send.js").listFeishuThreadMessages;
+let recordFeishuStreamingCardContent: typeof import("./streaming-card-content-index.js").recordFeishuStreamingCardContent;
+let resetFeishuStreamingCardContentMemoryForTests: typeof import("./streaming-card-content-index.js").testingHooks.resetFeishuStreamingCardContentMemoryForTests;
+let resetFeishuStreamingCardContentIndexForTests: typeof import("./streaming-card-content-index.js").testingHooks.resetFeishuStreamingCardContentIndexForTests;
 let resolveFeishuCardTemplate: typeof import("./send.js").resolveFeishuCardTemplate;
 let sendMarkdownCardFeishu: typeof import("./send.js").sendMarkdownCardFeishu;
 let sendMessageFeishu: typeof import("./send.js").sendMessageFeishu;
@@ -78,6 +127,13 @@ describe("getMessageFeishu", () => {
       sendMessageFeishu,
       sendStructuredCardFeishu,
     } = await import("./send.js"));
+    ({
+      recordFeishuStreamingCardContent,
+      testingHooks: {
+        resetFeishuStreamingCardContentIndexForTests,
+        resetFeishuStreamingCardContentMemoryForTests,
+      },
+    } = await import("./streaming-card-content-index.js"));
   });
 
   afterAll(() => {
@@ -95,6 +151,10 @@ describe("getMessageFeishu", () => {
     mockConvertMarkdownTables.mockImplementation((text: string) => text);
     mockRuntimeResolveMarkdownTableMode.mockReturnValue("preserve");
     mockRuntimeConvertMarkdownTables.mockImplementation((text: string) => text);
+    mockRuntimeLoggerWarn.mockReset();
+    mockRuntimeStores.clear();
+    mockOpenSyncKeyedStore.mockClear();
+    resetFeishuStreamingCardContentIndexForTests?.();
     mockResolveFeishuAccount.mockReturnValue({
       accountId: "default",
       configured: true,
@@ -285,7 +345,7 @@ describe("getMessageFeishu", () => {
     });
   });
 
-  it("extracts title and nested legacy text elements from interactive cards", async () => {
+  it("does not treat client-upgrade interactive fallback text as recovered card content", async () => {
     mockClientGet.mockResolvedValueOnce({
       code: 0,
       data: {
@@ -316,11 +376,190 @@ describe("getMessageFeishu", () => {
       messageId: "om_legacy_card",
     });
 
-    if (!result) {
-      throw new Error("expected interactive card result");
-    }
-    expect(result.content).toBe("saber\n请升级至最新版本客户端，以查看内容");
-    expect(result.contentType).toBe("interactive");
+    expect(result?.content).toBe("[Interactive Card]");
+    expect(result?.contentType).toBe("interactive");
+    expect(mockRuntimeLoggerWarn).toHaveBeenCalledWith("feishu streaming card content index miss", {
+      fallbackKind: "client-upgrade",
+      messageId: "om_legacy_card",
+      cardId: undefined,
+      accountId: "default",
+    });
+  });
+
+  it("hydrates card-reference interactive messages from the streaming card content index", async () => {
+    recordFeishuStreamingCardContent({
+      cardId: "card_ref_1",
+      messageId: "om_stream_ref",
+      accountId: "main",
+      chatId: "oc_stream_ref",
+      text: "real final streaming content",
+    });
+    mockResolveFeishuAccount.mockReturnValue({
+      accountId: "main",
+      configured: true,
+    });
+    mockClientGet.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: "om_stream_ref",
+            chat_id: "oc_stream_ref",
+            msg_type: "interactive",
+            body: {
+              content: JSON.stringify({ type: "card", data: { card_id: "card_ref_1" } }),
+            },
+          },
+        ],
+      },
+    });
+
+    const result = await getMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_stream_ref",
+      accountId: "main",
+    });
+
+    expect(result?.content).toBe("real final streaming content");
+  });
+
+  it("hydrates fallback-only interactive card text when the index has better content", async () => {
+    recordFeishuStreamingCardContent({
+      cardId: "card_legacy_1",
+      messageId: "om_legacy_card_indexed",
+      accountId: "default",
+      text: "真实的最终流式内容",
+    });
+    mockClientGet.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: "om_legacy_card_indexed",
+            chat_id: "oc_legacy_card",
+            msg_type: "interactive",
+            body: {
+              content: JSON.stringify({
+                title: "saber",
+                elements: [[{ tag: "text", text: "请升级至最新版本客户端，以查看内容" }]],
+              }),
+            },
+          },
+        ],
+      },
+    });
+
+    const result = await getMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_legacy_card_indexed",
+    });
+
+    expect(result?.content).toBe("真实的最终流式内容");
+  });
+
+  it("hydrates streaming card stubs from persisted plugin state after memory cache reset", async () => {
+    recordFeishuStreamingCardContent({
+      cardId: "card_persisted_ref",
+      messageId: "om_stream_persisted_ref",
+      accountId: "default",
+      chatId: "oc_stream_persisted_ref",
+      text: "persisted streaming content",
+    });
+    resetFeishuStreamingCardContentMemoryForTests?.();
+    mockClientGet.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: "om_stream_persisted_ref",
+            chat_id: "oc_stream_persisted_ref",
+            msg_type: "interactive",
+            body: {
+              content: JSON.stringify({
+                type: "card",
+                data: { card_id: "card_persisted_ref" },
+              }),
+            },
+          },
+        ],
+      },
+    });
+
+    const result = await getMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_stream_persisted_ref",
+    });
+
+    expect(result?.content).toBe("persisted streaming content");
+    expect(mockOpenSyncKeyedStore).toHaveBeenCalledWith({
+      namespace: "streaming-card-content",
+      maxEntries: 20_000,
+      defaultTtlMs: 7 * 24 * 60 * 60 * 1000,
+    });
+  });
+
+  it("keeps the safe interactive fallback when the streaming card content index misses", async () => {
+    mockClientGet.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: "om_stream_miss",
+            chat_id: "oc_stream_miss",
+            msg_type: "interactive",
+            body: {
+              content: JSON.stringify({ type: "card", data: { card_id: "card_missing" } }),
+            },
+          },
+        ],
+      },
+    });
+
+    const result = await getMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_stream_miss",
+    });
+
+    expect(result?.content).toBe("[Interactive Card]");
+    expect(mockRuntimeLoggerWarn).toHaveBeenCalledWith("feishu streaming card content index miss", {
+      fallbackKind: "card-reference",
+      messageId: "om_stream_miss",
+      cardId: "card_missing",
+      accountId: "default",
+    });
+  });
+
+  it("returns the safe fallback when client-upgrade interactive text is not indexed", async () => {
+    mockClientGet.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: "om_upgrade_miss",
+            chat_id: "oc_upgrade_miss",
+            msg_type: "interactive",
+            body: {
+              content: JSON.stringify({
+                elements: [[{ tag: "text", text: "请升级至最新版本客户端，以查看内容" }]],
+              }),
+            },
+          },
+        ],
+      },
+    });
+
+    const result = await getMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_upgrade_miss",
+    });
+
+    expect(result?.content).toBe("[Interactive Card]");
+    expect(mockRuntimeLoggerWarn).toHaveBeenCalledWith("feishu streaming card content index miss", {
+      fallbackKind: "client-upgrade",
+      messageId: "om_upgrade_miss",
+      cardId: undefined,
+      accountId: "default",
+    });
   });
 
   it("falls through empty interactive card element arrays and locale variants", async () => {

@@ -268,8 +268,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     return `> 💭 **Thinking**\n${lines.join("\n")}`;
   };
 
-  const hasMarkdownTable = (text: string): boolean =>
-    /\|.+\|[\r\n]+\|[-:| ]+\|/.test(text);
+  const hasMarkdownTable = (text: string): boolean => /\|.+\|[\r\n]+\|[-:| ]+\|/.test(text);
 
   const buildCombinedStreamText = (thinking: string, answer: string): string => {
     const parts: string[] = [];
@@ -357,7 +356,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     streamingStartPromise = (async () => {
       const creds =
         account.appId && account.appSecret
-          ? { appId: account.appId, appSecret: account.appSecret, domain: account.domain }
+          ? {
+              appId: account.appId,
+              appSecret: account.appSecret,
+              domain: account.domain,
+              accountId: account.accountId,
+            }
           : null;
       if (!creds) {
         return;
@@ -412,9 +416,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         statusLine = "";
         const text = buildCombinedStreamText(reasoningText, streamText);
         const finalNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
-        const contentVisible = await streaming.close(core.channel.text.convertMarkdownTables(text, tableMode), {
-          note: finalNote,
-        });
+        const contentVisible = await streaming.close(
+          core.channel.text.convertMarkdownTables(text, tableMode),
+          {
+            note: finalNote,
+          },
+        );
         // Track the raw streamed text so the duplicate-final check in deliver()
         // can skip the redundant text delivery that arrives after onIdle closes
         // the streaming card.

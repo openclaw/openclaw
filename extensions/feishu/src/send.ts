@@ -14,16 +14,19 @@ import { requestFeishuApi } from "./comment-shared.js";
 import type { MentionTarget } from "./mention-target.types.js";
 import { buildMentionedCardContent, buildMentionedMessage } from "./mention.js";
 import { parsePostContent } from "./post.js";
+import { getFeishuRuntime } from "./runtime.js";
 import {
   assertFeishuMessageApiSuccess,
   resolveFeishuReceiptKind,
   toFeishuSendResult,
 } from "./send-result.js";
 import { resolveFeishuSendTarget } from "./send-target.js";
+import { lookupFeishuStreamingCardContent } from "./streaming-card-content-index.js";
 import type { FeishuChatType, FeishuMessageInfo, FeishuSendResult } from "./types.js";
 
 const WITHDRAWN_REPLY_ERROR_CODES = new Set([230011, 231003]);
 const INTERACTIVE_CARD_FALLBACK_TEXT = "[Interactive Card]";
+const FEISHU_CLIENT_UPGRADE_FALLBACK_TEXT = "请升级至最新版本客户端，以查看内容";
 const POST_FALLBACK_TEXT = "[Rich text message]";
 const FEISHU_CARD_TEMPLATES = new Set([
   "blue",
@@ -335,9 +338,43 @@ function readInteractiveTitle(
   return undefined;
 }
 
-function parseInteractiveCardContent(parsed: unknown): string {
+type ParsedInteractiveCardContent = {
+  text: string;
+  fallbackKind?: "card-reference" | "client-upgrade";
+  cardId?: string;
+};
+
+function readStreamingCardReferenceId(parsed: unknown): string | undefined {
+  if (!isRecord(parsed) || parsed.type !== "card" || !isRecord(parsed.data)) {
+    return undefined;
+  }
+  const cardId = parsed.data.card_id;
+  return typeof cardId === "string" && cardId.trim() ? cardId.trim() : undefined;
+}
+
+function resolveFallbackOnlyInteractiveKind(
+  content: string,
+): ParsedInteractiveCardContent["fallbackKind"] | undefined {
+  const lines = content
+    .trim()
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  return lines.includes(FEISHU_CLIENT_UPGRADE_FALLBACK_TEXT) ? "client-upgrade" : undefined;
+}
+
+function parseInteractiveCardContent(parsed: unknown): ParsedInteractiveCardContent {
   if (!isRecord(parsed)) {
-    return INTERACTIVE_CARD_FALLBACK_TEXT;
+    return { text: INTERACTIVE_CARD_FALLBACK_TEXT };
+  }
+
+  const cardId = readStreamingCardReferenceId(parsed);
+  if (cardId) {
+    return {
+      text: INTERACTIVE_CARD_FALLBACK_TEXT,
+      fallbackKind: "card-reference",
+      cardId,
+    };
   }
 
   const variables = readCardTemplateVariables(parsed);
@@ -354,13 +391,74 @@ function parseInteractiveCardContent(parsed: unknown): string {
   }
   const combined = parts.join("\n").trim();
   if (combined) {
-    return combined;
+    return {
+      text: combined,
+      fallbackKind: resolveFallbackOnlyInteractiveKind(combined),
+    };
   }
 
-  return parseInteractivePostFallback(parsed) ?? INTERACTIVE_CARD_FALLBACK_TEXT;
+  const postFallback = parseInteractivePostFallback(parsed);
+  if (postFallback) {
+    return {
+      text: postFallback,
+      fallbackKind: resolveFallbackOnlyInteractiveKind(postFallback),
+    };
+  }
+  return { text: INTERACTIVE_CARD_FALLBACK_TEXT };
 }
 
-function parseFeishuMessageContent(rawContent: string, msgType: string): string {
+function logInteractiveCardHydrationMiss(context: {
+  fallbackKind: NonNullable<ParsedInteractiveCardContent["fallbackKind"]>;
+  messageId?: string;
+  cardId?: string;
+  accountId?: string;
+}): void {
+  try {
+    getFeishuRuntime()
+      .logging.getChildLogger(
+        { channel: "feishu", surface: "streaming-card-content" },
+        { level: "warn" },
+      )
+      .warn("feishu streaming card content index miss", {
+        fallbackKind: context.fallbackKind,
+        messageId: context.messageId,
+        cardId: context.cardId,
+        accountId: context.accountId,
+      });
+  } catch {
+    // Quoted-message parsing must stay best-effort when runtime logging is unavailable.
+  }
+}
+
+function hydrateInteractiveCardContent(
+  parsedContent: ParsedInteractiveCardContent,
+  context: { messageId?: string; accountId?: string },
+): string {
+  if (!parsedContent.fallbackKind) {
+    return parsedContent.text;
+  }
+  const indexed = lookupFeishuStreamingCardContent({
+    cardId: parsedContent.cardId,
+    messageId: context.messageId,
+    accountId: context.accountId,
+  });
+  if (indexed?.text.trim()) {
+    return indexed.text;
+  }
+  logInteractiveCardHydrationMiss({
+    fallbackKind: parsedContent.fallbackKind,
+    messageId: context.messageId,
+    cardId: parsedContent.cardId,
+    accountId: context.accountId,
+  });
+  return INTERACTIVE_CARD_FALLBACK_TEXT;
+}
+
+function parseFeishuMessageContent(
+  rawContent: string,
+  msgType: string,
+  context: { messageId?: string; accountId?: string } = {},
+): string {
   if (!rawContent) {
     return "";
   }
@@ -382,7 +480,7 @@ function parseFeishuMessageContent(rawContent: string, msgType: string): string 
   }
 
   if (msgType === "interactive") {
-    return parseInteractiveCardContent(parsed);
+    return hydrateInteractiveCardContent(parseInteractiveCardContent(parsed), context);
   }
 
   if (typeof parsed === "string") {
@@ -404,12 +502,14 @@ function parseFeishuMessageContent(rawContent: string, msgType: string): string 
 function parseFeishuMessageItem(
   item: FeishuMessageGetItem,
   fallbackMessageId?: string,
+  options: { accountId?: string } = {},
 ): FeishuMessageInfo {
   const msgType = item.msg_type ?? "text";
   const rawContent = item.body?.content ?? "";
+  const messageId = item.message_id ?? fallbackMessageId ?? "";
 
   return {
-    messageId: item.message_id ?? fallbackMessageId ?? "",
+    messageId,
     chatId: item.chat_id ?? "",
     chatType:
       item.chat_type === "group" ||
@@ -421,7 +521,10 @@ function parseFeishuMessageItem(
     senderId: item.sender?.id,
     senderOpenId: item.sender?.id_type === "open_id" ? item.sender?.id : undefined,
     senderType: item.sender?.sender_type,
-    content: parseFeishuMessageContent(rawContent, msgType),
+    content: parseFeishuMessageContent(rawContent, msgType, {
+      messageId,
+      accountId: options.accountId,
+    }),
     rawContent,
     contentType: msgType,
     createTime: parseStrictNonNegativeInteger(item.create_time),
@@ -466,7 +569,7 @@ export async function getMessageFeishu(params: {
       return null;
     }
 
-    return parseFeishuMessageItem(item, messageId);
+    return parseFeishuMessageItem(item, messageId, { accountId: account.accountId });
   } catch {
     return null;
   }
@@ -543,7 +646,7 @@ export async function listFeishuThreadMessages(params: {
       continue;
     }
 
-    const parsed = parseFeishuMessageItem(item);
+    const parsed = parseFeishuMessageItem(item, undefined, { accountId: account.accountId });
 
     results.push({
       messageId: parsed.messageId,

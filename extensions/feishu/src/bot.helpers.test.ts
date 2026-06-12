@@ -90,7 +90,7 @@ describe("parseMessageContent media placeholders", () => {
 });
 
 describe("parseMessageContent interactive cards", () => {
-  it("extracts title and nested legacy text elements from card payloads", () => {
+  it("does not treat Feishu client-upgrade fallback as recovered card content", () => {
     expect(
       parseMessageContent(
         JSON.stringify({
@@ -105,7 +105,7 @@ describe("parseMessageContent interactive cards", () => {
         }),
         "interactive",
       ),
-    ).toBe("saber\n请升级至最新版本客户端，以查看内容");
+    ).toBe("[Interactive Card]");
   });
 });
 

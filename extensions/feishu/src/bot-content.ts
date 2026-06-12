@@ -43,6 +43,8 @@ type GroupSessionScope = "group" | "group_sender" | "group_topic" | "group_topic
 
 type FeishuLogger = (...args: unknown[]) => void;
 
+const FEISHU_CLIENT_UPGRADE_FALLBACK_TEXT = "请升级至最新版本客户端，以查看内容";
+
 type ResolvedFeishuGroupSession = {
   peerId: string;
   parentPeer: { kind: "group"; id: string } | null;
@@ -222,6 +224,9 @@ function parseInteractiveMessageContent(parsed: unknown): string {
     seen.add(part);
     return true;
   });
+  if (unique.some((part) => part.trim() === FEISHU_CLIENT_UPGRADE_FALLBACK_TEXT)) {
+    return "[Interactive Card]";
+  }
   return unique.join("\n").trim() || "[Interactive Card]";
 }
 
