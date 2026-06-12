@@ -53,6 +53,11 @@ jobs:
           fi
           swift --version
 
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
       - name: Install iOS Swift tooling
         run: brew install xcodegen swiftformat swiftlint periphery
 
