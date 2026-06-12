@@ -793,10 +793,14 @@ vi.mock("../sandbox-info.js", () => ({
   resolveEmbeddedSandboxInfoExecPolicy: () => ({}),
 }));
 
-vi.mock("../thinking.js", () => ({
-  dropReasoningFromHistory: <T>(messages: T) => messages,
-  dropThinkingBlocks: <T>(messages: T) => messages,
-}));
+vi.mock("../thinking.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../thinking.js")>();
+  return {
+    ...actual,
+    dropReasoningFromHistory: <T>(messages: T) => messages,
+    dropThinkingBlocks: <T>(messages: T) => messages,
+  };
+});
 
 vi.mock("../tool-name-allowlist.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../tool-name-allowlist.js")>();
