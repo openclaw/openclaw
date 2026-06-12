@@ -82,6 +82,8 @@ describe("temporal decay", () => {
       results: [
         { path: "MEMORY.md", score: 1, source: "memory" },
         { path: "memory/projects.md", score: 0.75, source: "memory" },
+        // QMD reports lowercased paths on case-insensitive file systems.
+        { path: "memory.md", score: 0.9, source: "memory" },
       ],
       workspaceDir: dir,
       temporalDecay: { enabled: true, halfLifeDays: 30 },
@@ -90,6 +92,7 @@ describe("temporal decay", () => {
 
     expect(decayed[0]?.score).toBeCloseTo(1);
     expect(decayed[1]?.score).toBeCloseTo(0.75);
+    expect(decayed[2]?.score).toBeCloseTo(0.9);
   });
 
   it("applies decay in hybrid merging before ranking", async () => {

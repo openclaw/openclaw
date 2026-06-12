@@ -89,7 +89,9 @@ function parseMemoryDateFromPath(filePath: string): Date | null {
 
 function isEvergreenMemoryPath(filePath: string): boolean {
   const normalized = filePath.replaceAll("\\", "/").replace(/^\.\//, "");
-  if (normalized === "MEMORY.md") {
+  // QMD reports paths lowercased (and macOS file systems are typically
+  // case-insensitive), so match MEMORY.md case-insensitively.
+  if (normalized.toLowerCase() === "memory.md") {
     return true;
   }
   if (!normalized.startsWith("memory/")) {
