@@ -163,11 +163,16 @@ export function resolveMemoryIndexConcurrency(params: {
 export async function runEmbeddingOperationWithTimeout<T>(params: {
   timeoutMs: number;
   message: string;
+  /** Caller-owned cancellation, merged with the per-call watchdog abort. */
+  signal?: AbortSignal;
   run: (signal: AbortSignal) => Promise<T>;
 }): Promise<T> {
   const controller = new AbortController();
+  const signal = params.signal
+    ? AbortSignal.any([params.signal, controller.signal])
+    : controller.signal;
   if (!Number.isFinite(params.timeoutMs) || params.timeoutMs <= 0) {
-    return await params.run(controller.signal);
+    return await params.run(signal);
   }
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
   let timer: NodeJS.Timeout | null = null;
@@ -179,7 +184,7 @@ export async function runEmbeddingOperationWithTimeout<T>(params: {
     }, timeoutMs);
   });
   try {
-    const operation = params.run(controller.signal);
+    const operation = params.run(signal);
     return (await Promise.race([operation, timeoutPromise])) as T;
   } finally {
     if (timer) {
@@ -493,7 +498,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     });
   }
 
-  protected async embedQueryWithRetry(text: string): Promise<number[]> {
+  protected async embedQueryWithRetry(text: string, signal?: AbortSignal): Promise<number[]> {
     const provider = this.provider;
     if (!provider) {
       throw new Error("Cannot embed query in FTS-only mode (no embedding provider)");
@@ -501,14 +506,17 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     try {
       return await runMemoryEmbeddingRetryLoop({
         run: async () => {
+          signal?.throwIfAborted();
           const timeoutMs = this.resolveEmbeddingTimeout("query");
           log.debug("memory embeddings: query start", { provider: provider.id, timeoutMs });
           return await runEmbeddingOperationWithTimeout({
             timeoutMs,
             message: `memory embeddings query timed out after ${Math.round(timeoutMs / 1000)}s`,
-            run: async (signal) => await provider.embedQuery(text, { signal }),
+            signal,
+            run: async (opSignal) => await provider.embedQuery(text, { signal: opSignal }),
           });
         },
+        signal,
         isRetryable: isRetryableMemoryEmbeddingError,
         waitForRetry: async (delayMs) => {
           await this.waitForEmbeddingRetry(delayMs, "retrying query");

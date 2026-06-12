@@ -141,4 +141,30 @@ describe("runtime parity", () => {
       },
     ]);
   });
+
+  it("scopes process-global mock requests to the parent session prompt", () => {
+    const scoped = __testing.filterMockRequestsForParentPrompt(
+      [
+        {
+          allInputText: "Delegate one bounded QA task to a subagent.",
+          plannedToolName: "sessions_spawn",
+        },
+        {
+          allInputText: "Inspect the QA workspace and return one concise protocol note.",
+          plannedToolName: "read",
+        },
+        {
+          allInputText: "Delegate one bounded QA task to a subagent. Tool result: child accepted.",
+          toolOutput: "child accepted",
+        },
+      ],
+      "Delegate one bounded QA task to a subagent.",
+    );
+
+    expect(scoped).toHaveLength(2);
+    expect(scoped.map((request) => request.plannedToolName ?? "result")).toEqual([
+      "sessions_spawn",
+      "result",
+    ]);
+  });
 });

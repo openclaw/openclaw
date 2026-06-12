@@ -496,6 +496,28 @@ describe("loadModelCatalog", () => {
     });
   });
 
+  it("preserves runtime model params in the internal catalog", async () => {
+    mockAgentDiscoveryModels([
+      {
+        id: "company-fable",
+        name: "Company Fable",
+        provider: "amazon-bedrock",
+        params: { canonicalModelId: "claude-fable-5" },
+      },
+    ]);
+
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig });
+
+    expect(result).toEqual([
+      {
+        id: "company-fable",
+        name: "Company Fable",
+        provider: "amazon-bedrock",
+        params: { canonicalModelId: "claude-fable-5" },
+      },
+    ]);
+  });
+
   it("writes runtime discovery results under the refreshed models.json fingerprint", async () => {
     buildModelsJsonSourceFingerprintMock.mockResolvedValue({
       agentDir: "/tmp/openclaw",
@@ -943,6 +965,31 @@ describe("loadModelCatalog", () => {
     ]);
     expect(prepareOpenClawModelsJsonSourceMock).not.toHaveBeenCalled();
     expect(augmentCatalogMock).not.toHaveBeenCalled();
+  });
+
+  it("inherits provider API and canonical Fable reasoning in persisted rows", async () => {
+    readFileMock.mockResolvedValueOnce(
+      JSON.stringify({
+        providers: {
+          "microsoft-foundry": {
+            api: "anthropic-messages",
+            models: [
+              {
+                id: "company-fable",
+                reasoning: false,
+                params: { canonicalModelId: "claude-fable-5" },
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig, readOnly: true });
+    const entry = requireCatalogEntry(result, "microsoft-foundry", "company-fable");
+
+    expect(entry.api).toBe("anthropic-messages");
+    expect(entry.reasoning).toBe(true);
   });
 
   it("refreshes stale persisted read-only rows with manifest catalog metadata", async () => {
@@ -1752,6 +1799,7 @@ describe("loadModelCatalog", () => {
         provider: "xai",
         id: "grok-4.3",
         name: "Grok 4.3",
+        api: "openai-completions",
         reasoning: false,
         input: ["text"],
         contextWindow: 200_000,
@@ -1767,6 +1815,7 @@ describe("loadModelCatalog", () => {
           modelCatalog: {
             providers: {
               xai: {
+                api: "openai-responses",
                 models: [
                   {
                     id: "grok-4.3",
@@ -1787,6 +1836,7 @@ describe("loadModelCatalog", () => {
 
     const entry = requireCatalogEntry(result, "xai", "grok-4.3");
     expect(result.filter((entryValue) => entryValue.provider === "xai")).toHaveLength(1);
+    expect(entry.api).toBe("openai-responses");
     expect(entry.contextWindow).toBe(1_000_000);
     expect(entry.input).toEqual(["text", "image"]);
     expect(entry.reasoning).toBe(true);

@@ -1126,7 +1126,10 @@ describe("CLI attempt execution", () => {
       opts: {
         messageProvider: "discord-voice",
       } as Parameters<typeof runAgentAttempt>[0]["opts"],
-      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      runContext: {
+        currentChannelId: "channel:voice-room",
+        senderId: "sender-voice",
+      } as Parameters<typeof runAgentAttempt>[0]["runContext"],
       spawnedBy: undefined,
       messageChannel: "discord",
       skillsSnapshot: undefined,
@@ -1144,6 +1147,8 @@ describe("CLI attempt execution", () => {
       trigger: "user",
       messageChannel: "discord",
       messageProvider: "discord-voice",
+      currentChannelId: "channel:voice-room",
+      senderId: "sender-voice",
     });
   });
 

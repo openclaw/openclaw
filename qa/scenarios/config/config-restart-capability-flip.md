@@ -111,9 +111,6 @@ steps:
                             ref: originalImageGenerationModelPrimary
                   sessionKey:
                     ref: sessionKey
-                  deliveryContext:
-                    channel: qa-channel
-                    to: dm:qa-operator
                   note:
                     ref: wakeMarker
                   replacePaths:
@@ -126,13 +123,6 @@ steps:
               args:
                 - ref: env
                 - 60000
-            - call: waitForOutboundMessage
-              args:
-                - ref: state
-                - lambda:
-                    params: [candidate]
-                    expr: "candidate.conversation.id === 'qa-operator' && candidate.text.includes(wakeMarker)"
-                - expr: liveTurnTimeoutMs(env, config.imageTurnTimeoutMs)
             - call: waitForCondition
               saveAs: afterTools
               args:
@@ -148,15 +138,28 @@ steps:
               value: ""
             - set: imageReplyText
               value: ""
-            - call: runAgentPrompt
-              args:
-                - ref: env
-                - sessionKey:
-                    ref: sessionKey
-                  message:
-                    expr: config.imagePrompt
-                  timeoutMs:
-                    expr: liveTurnTimeoutMs(env, config.imageTurnTimeoutMs)
+            - set: imageReplyStartIndex
+              value:
+                expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+            - try:
+                actions:
+                  - call: runAgentPrompt
+                    args:
+                      - ref: env
+                      - sessionKey:
+                          ref: sessionKey
+                        message:
+                          expr: config.imagePrompt
+                        timeoutMs:
+                          expr: liveTurnTimeoutMs(env, config.imageTurnTimeoutMs)
+                catchAs: imageRunError
+                catch:
+                  - if:
+                      expr: "!env.mock || !/agent run aborted/i.test(formatErrorMessage(imageRunError))"
+                      then:
+                        - throw:
+                            message:
+                              expr: "formatErrorMessage(imageRunError)"
             - try:
                 actions:
                   - call: resolveGeneratedImagePath
@@ -184,6 +187,8 @@ steps:
                           params: [candidate]
                           expr: "candidate.conversation.id === 'qa-operator' && (String(candidate.text ?? '').includes('MEDIA:') || /media failed|image generation failed/i.test(String(candidate.text ?? '')))"
                       - expr: liveTurnTimeoutMs(env, config.imageTurnTimeoutMs)
+                      - sinceIndex:
+                          ref: imageReplyStartIndex
                   - set: imageReplyText
                     value:
                       expr: "String(imageReply.text ?? '')"

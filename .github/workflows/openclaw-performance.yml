@@ -527,6 +527,13 @@ jobs:
           cleanup_gateway
           trap - EXIT
 
+          if node -e "const fs=require('node:fs'); const scripts=require('./package.json').scripts||{}; process.exit(scripts['test:sqlite:perf:smoke'] && fs.existsSync('scripts/bench-sqlite-state.ts') ? 0 : 1)"; then
+            pnpm test:sqlite:perf:smoke
+            cp .artifacts/sqlite-perf/smoke.json "$SOURCE_PERF_DIR/sqlite-perf-smoke.json"
+          else
+            echo "SQLite state smoke probe is not available in ${TESTED_REF}; continuing with the remaining source probes." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
           summary_args=(node "$PERFORMANCE_HELPER_DIR/scripts/openclaw-performance-source-summary.mjs" \
             --source-dir "$SOURCE_PERF_DIR" \
             --output "$SOURCE_PERF_DIR/index.md")
@@ -604,7 +611,7 @@ jobs:
 
           ## Source probes
 
-          Additional gateway boot, memory, plugin pressure, mock hello-loop, and CLI startup numbers are in [source/index.md](source/index.md).
+          Additional gateway boot, memory, plugin pressure, mock hello-loop, CLI startup, and SQLite state smoke numbers are in [source/index.md](source/index.md).
           EOF
             fi
           fi

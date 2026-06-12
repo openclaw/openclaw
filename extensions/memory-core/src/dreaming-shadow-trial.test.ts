@@ -62,6 +62,7 @@ describe("dreaming shadow trial runner", () => {
       verdict: "neutral",
       workspaceDir,
       nowMs: Date.parse("2026-05-18T18:00:00.000Z"),
+      timezone: "UTC",
     });
 
     expect(report.recommendation).toBe("defer");
