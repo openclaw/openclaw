@@ -301,7 +301,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       if (state.deferBlockReplyDelivery) {
         state.deferredAssistantEvents.push({ data, emitPartialReply: true });
       } else {
-        void params.onPartialReply(data);
+        void params.onPartialReply!(data);
       }
     }
   };
@@ -314,7 +314,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     const deferred = state.deferredAssistantEvents.splice(0);
     for (const delivery of deferred) {
       if (delivery.emitPartialReply && params.onPartialReply && state.shouldEmitPartialReplies) {
-        void params.onPartialReply(delivery.data);
+        void params.onPartialReply!(delivery.data);
       }
     }
   };
