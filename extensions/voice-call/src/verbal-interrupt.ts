@@ -27,18 +27,53 @@ const INTERRUPT_PHRASES = new Set([
   "one second",
   "one sec",
   "give me a second",
+  // Arabic (bilingual #19): the deterministic cut must work in both call languages — the model
+  // mirrors Arabic, so the interrupt layer has to as well. Whole-utterance matching plus the
+  // normalizer's tashkeel stripping keep these as conservative as the English set.
+  "توقف", // stop
+  "قف", // halt
+  "اسكت", // be quiet
+  "اصمت", // silence
+  "انتظر", // wait
+  "انتظر لحظة", // wait a moment
+  "استنى", // wait (colloquial)
+  "استنا",
+  "لحظة", // one moment
+  "لحظه",
+  "لحظة واحدة", // just a moment
+  "ثانية", // one second
+  "ثانيه",
+  "ثانية واحدة",
+  "دقيقة", // one minute
+  "دقيقه",
+  "مهلا", // hold on
+  "خلاص", // enough / that's it
+  "كفى", // enough
+  "كفاية",
+  "كفايه",
+  "بس", // enough/stop (colloquial; safe only because matching is whole-utterance)
 ]);
 
-/** Leading/trailing filler tokens stripped before matching ("ok stop", "no wait", "stop please"). */
-const FILLER_TOKENS = new Set(["ok", "okay", "oh", "no", "hey", "please", "now"]);
+/**
+ * Leading/trailing filler tokens stripped before matching ("ok stop", "no wait", "stop please";
+ * Arabic: "طيب توقف" = "ok stop", "يا ⟨name⟩" = the vocative before a wake phrase).
+ */
+const FILLER_TOKENS = new Set(["ok", "okay", "oh", "no", "hey", "please", "now", "طيب", "لا", "يا"]);
 
 function normalizeWords(text: string | undefined): string[] {
-  return (text ?? "")
-    .toLowerCase()
-    .replace(/['’]/g, "") // "that's" -> "thats", not "that s"
-    .replace(/[^a-z\s]/g, " ")
-    .split(/\s+/)
-    .filter(Boolean);
+  return (
+    (text ?? "")
+      .toLowerCase()
+      .replace(/['’]/g, "") // "that's" -> "thats", not "that s"
+      // Combining marks (Arabic tashkeel, accents) and the Arabic tatweel attach INSIDE a word —
+      // delete them outright so "تَوَقَّف" normalizes to "توقف" instead of splitting apart.
+      .replace(/[\p{M}ـ]/gu, "")
+      // Letters in ANY script survive (bilingual #19 — an Arabic "توقف" must cut as instantly as
+      // "stop"; same \p{L} approach as group-call-gate.ts). Everything else separates words.
+      .replace(/[^\p{L}\s]/gu, " ")
+      .split(/\s+/)
+      .filter(Boolean)
+  );
 }
 
 function startsWithSeq(words: string[], seq: string[]): boolean {

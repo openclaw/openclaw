@@ -14,7 +14,8 @@ export type VisemeMark = { tMs: number; visemeId: number };
  * Coarse grapheme → Azure viseme id (the Microsoft viseme set, 0–21: 0 = silence, the rest are mouth
  * shapes grouped by phoneme — vowels, diphthongs, and consonant classes). Vowels carry the visible
  * shape; consonants approximate. The worker maps these ids to a small set of drawn mouth shapes.
- * Ref: Azure Speech "Viseme ID" table (mstts viseme events).
+ * Covers Latin AND Arabic graphemes (bilingual #19) — without the Arabic rows an Arabic reply fell
+ * back to RMS-only lip sync. Ref: Azure Speech "Viseme ID" table (mstts viseme events).
  */
 const CHAR_VISEME: Readonly<Record<string, number>> = {
   a: 2, // ɑ (open)
@@ -43,6 +44,48 @@ const CHAR_VISEME: Readonly<Record<string, number>> = {
   q: 20,
   h: 12,
   j: 16,
+  // Arabic — long vowels carry the visible shape; consonants by articulation class.
+  ا: 2, // alef (ā, open)
+  أ: 2,
+  إ: 2,
+  آ: 2,
+  ى: 2, // alef maqsura (final ā)
+  ة: 2, // ta marbuta (pause-form a)
+  و: 7, // waw (ū / w, round)
+  ي: 6, // ya (ī / y, wide)
+  ئ: 6,
+  م: 21, // closed lips
+  ب: 21,
+  ف: 18, // lip-teeth
+  ر: 13,
+  ل: 14,
+  س: 15, // sibilants
+  ص: 15,
+  ز: 15,
+  ش: 16, // ʃ / dʒ
+  ج: 16,
+  ت: 19, // dental / alveolar
+  د: 19,
+  ن: 19,
+  ط: 19,
+  ض: 19,
+  ث: 19,
+  ذ: 19,
+  ظ: 19,
+  ك: 20, // velar / uvular
+  ق: 20,
+  غ: 20,
+  خ: 20,
+  ه: 12, // h / pharyngeal / glottal
+  ح: 12,
+  ع: 12,
+  ء: 12,
+  ؤ: 12,
+  // Tashkeel short vowels (when the text carries them) are the truest mouth shapes; the other
+  // diacritics (sukun, shadda, tanween) stay unmapped and are skipped like punctuation.
+  "َ": 2, // fatha → a
+  "ُ": 7, // damma → u
+  "ِ": 6, // kasra → i
 };
 
 /**

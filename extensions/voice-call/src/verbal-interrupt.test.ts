@@ -51,4 +51,29 @@ describe("isVerbalInterrupt", () => {
       expect(isVerbalInterrupt(text), String(text)).toBe(false);
     }
   });
+
+  it("matches Arabic interrupts — bilingual #19, the cut must work in both call languages", () => {
+    for (const text of [
+      "توقف", // stop
+      "تَوَقَّف!", // stop, with tashkeel + punctuation
+      "خلاص", // enough
+      "اسكت", // be quiet
+      "لحظة", // one moment
+      "انتظر لحظة", // wait a moment
+      "طيب توقف", // "ok stop" (Arabic filler)
+      "لا انتظر", // "no wait"
+    ]) {
+      expect(isVerbalInterrupt(text), text).toBe(true);
+    }
+  });
+
+  it("strips Arabic wake phrases and rejects longer Arabic sentences", () => {
+    const wake = ["مساعد"];
+    // "يا مساعد توقف" = "hey assistant, stop" — the vocative + wake phrase strip away.
+    expect(isVerbalInterrupt("يا مساعد توقف", wake)).toBe(true);
+    // The wake word alone is an address, not an interrupt.
+    expect(isVerbalInterrupt("مساعد", wake)).toBe(false);
+    // "stop by the store on your way" (Arabic) — a sentence containing توقف must not cut.
+    expect(isVerbalInterrupt("توقف عند المتجر في طريقك")).toBe(false);
+  });
 });

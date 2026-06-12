@@ -45,6 +45,14 @@ describe("estimateVisemes", () => {
       expect(marks[i].tMs).toBeGreaterThanOrEqual(marks[i - 1].tMs);
     }
   });
+
+  it("maps Arabic graphemes to viseme classes — bilingual #19, not RMS-only", () => {
+    // "مرحبا" (marhaba): م(21 closed) ر(13) ح(12) ب(21) ا(2 open)
+    const marks = estimateVisemes("مرحبا", 1000);
+    expect(marks.map((m) => m.visemeId)).toEqual([21, 13, 12, 21, 2]);
+    // Tashkeel short vowels carry the truest mouth shape: "بُ" → b(21 closed) + damma(7 round).
+    expect(estimateVisemes("بُ", 200).map((m) => m.visemeId)).toEqual([21, 7]);
+  });
 });
 
 describe("visemesFromAlignment", () => {
@@ -74,5 +82,12 @@ describe("visemesFromAlignment", () => {
   it("tolerates ragged arrays and skips unmapped chars", () => {
     // '1' skipped; 'o' round(8) at 0.5s; extra time entry ignored.
     expect(visemesFromAlignment(["1", "o"], [0, 0.5, 0.9])).toEqual([{ tMs: 500, visemeId: 8 }]);
+  });
+
+  it("maps Arabic alignment characters via the same shared map (bilingual #19)", () => {
+    expect(visemesFromAlignment(["م", "ا"], [0.1, 0.3])).toEqual([
+      { tMs: 100, visemeId: 21 },
+      { tMs: 300, visemeId: 2 },
+    ]);
   });
 });
