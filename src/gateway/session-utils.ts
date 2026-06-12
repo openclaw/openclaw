@@ -2747,7 +2747,7 @@ export function listSessionsFromStore(params: {
       : undefined;
   const sharedRowContext =
     fullRowContext ??
-    (entries.length > 1 ? buildSessionListRowMetadataContext({ now }) : undefined);
+    (entries.length > 0 ? buildSessionListRowMetadataContext({ now }) : undefined);
 
   const sessions = entries.map(([key, entry], index) => {
     const includeTranscriptFields = index < sessionListTranscriptFieldRows;
@@ -2837,7 +2837,7 @@ export async function listSessionsFromStoreAsync(params: {
       : undefined;
   const sharedRowContext =
     fullRowContext ??
-    (entries.length > 1 ? buildSessionListRowMetadataContext({ now }) : undefined);
+    (entries.length > 0 ? buildSessionListRowMetadataContext({ now }) : undefined);
 
   const sessions: GatewaySessionRow[] = [];
   for (let i = 0; i < entries.length; i++) {
