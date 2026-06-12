@@ -152,13 +152,21 @@ type MemoryReindexRetryState = {
 };
 =======
 /**
+ * Stale-orphan threshold: files younger than this are considered potentially
+ * active and are left alone. Only artifacts older than this are cleaned up.
+ */
+const STALE_INDEX_AGE_MS = 5 * 60 * 1000; // 5 minutes
+
+/**
  * Remove stale backup (.backup-*) and temp (.tmp-*) SQLite files left behind
- * by interrupted atomic reindex swaps. These accumulate when the process is
- * killed during runMemoryAtomicReindex's file rename sequence.
+ * by interrupted atomic reindex swaps. Only removes artifacts older than
+ * STALE_INDEX_AGE_MS to avoid deleting a live temp DB belonging to another
+ * concurrent process (e.g., openclaw memory index --force).
  */
 function cleanupStaleIndexFiles(dbPath: string): void {
   const dir = path.dirname(dbPath);
   const baseName = path.basename(dbPath);
+  const now = Date.now();
   try {
     const entries = fsSync.readdirSync(dir);
     for (const entry of entries) {
@@ -169,8 +177,11 @@ function cleanupStaleIndexFiles(dbPath: string): void {
         !entry.endsWith("-shm")
       ) {
         const fullPath = path.join(dir, entry);
-        // Best-effort cleanup; don't fail the sync if a file is locked.
         try {
+          const stat = fsSync.statSync(fullPath);
+          // Only remove files older than the staleness threshold.
+          // This avoids racing with a concurrent reindex process.
+          if (now - stat.mtimeMs < STALE_INDEX_AGE_MS) continue;
           fsSync.unlinkSync(fullPath);
         } catch {
           // File may be locked on Windows — skip and try next sync.
