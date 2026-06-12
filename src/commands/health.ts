@@ -31,6 +31,7 @@ import {
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
   evaluateChannelHealth,
 } from "../gateway/channel-health-policy.js";
+import { isGatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import { getGatewayModelPricingHealth } from "../gateway/model-pricing-cache-state.js";
 import { isGatewayModelPricingEnabled } from "../gateway/model-pricing-config.js";
 import type { ChannelRuntimeSnapshot } from "../gateway/server-channel-runtime.types.js";
@@ -73,6 +74,52 @@ const debugHealth = (...args: unknown[]) => {
     console.warn("[health:debug]", ...args);
   }
 };
+
+function isGatewayHealthAuthUnavailableError(error: unknown): boolean {
+  return isGatewayCredentialsRequiredError(error) || isGatewaySecretRefUnavailableError(error);
+}
+
+export async function emitReachableGatewayAuthDiagnostic(params: {
+  error: unknown;
+  config: OpenClawConfig;
+  runtime: RuntimeEnv;
+  timeoutMs?: number;
+  token?: string;
+  password?: string;
+  json?: boolean;
+}): Promise<boolean> {
+  if (!isGatewayHealthAuthUnavailableError(params.error)) {
+    return false;
+  }
+  const details = await buildGatewayProbeConnectionDetails({
+    config: params.config,
+    token: params.token,
+    password: params.password,
+  });
+  const probe = await probeGatewayStatus({
+    url: details.url,
+    token: params.token,
+    password: params.password,
+    tlsFingerprint: details.tlsFingerprint,
+    preauthHandshakeTimeoutMs: details.preauthHandshakeTimeoutMs,
+    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    config: params.config,
+    json: params.json,
+  });
+  if (!gatewayProbeResultSawGateway(probe)) {
+    return false;
+  }
+  const diagnostic = buildCredentialsRequiredHealthDiagnostic();
+  if (params.json) {
+    writeRuntimeJson(params.runtime, diagnostic);
+    params.runtime.exit(1);
+    return true;
+  }
+  params.runtime.log(GATEWAY_HEALTH_REACHABLE_LINE);
+  params.runtime.log(diagnostic.error.message);
+  params.runtime.exit(1);
+  return true;
+}
 
 const loadConfigRuntime = async () => await import("../config/config.js");
 
@@ -664,34 +711,20 @@ export async function healthCommand(
         }),
     );
   } catch (error) {
-    if (isGatewayCredentialsRequiredError(error)) {
-      const details = await buildGatewayProbeConnectionDetails({
+    if (
+      await emitReachableGatewayAuthDiagnostic({
+        error,
         config: cfg,
+        runtime,
+        timeoutMs: opts.timeoutMs,
         token: opts.token,
         password: opts.password,
-      });
-      const probe = await probeGatewayStatus({
-        url: details.url,
-        token: opts.token,
-        password: opts.password,
-        tlsFingerprint: details.tlsFingerprint,
-        preauthHandshakeTimeoutMs: details.preauthHandshakeTimeoutMs,
-        timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-        config: cfg,
         json: opts.json,
-      });
-      if (gatewayProbeResultSawGateway(probe)) {
-        const diagnostic = buildCredentialsRequiredHealthDiagnostic();
-        if (opts.json) {
-          writeRuntimeJson(runtime, diagnostic);
-          runtime.exit(1);
-          return;
-        }
-        runtime.log(GATEWAY_HEALTH_REACHABLE_LINE);
-        runtime.log(diagnostic.error.message);
-        runtime.exit(1);
-        return;
-      }
+      })
+    ) {
+      return;
+    }
+    if (isGatewayHealthAuthUnavailableError(error)) {
       throw error;
     }
     if (opts.json) {

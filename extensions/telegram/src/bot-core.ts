@@ -28,6 +28,12 @@ import type { TelegramBotDeps } from "./bot-deps.js";
 import { registerTelegramHandlers } from "./bot-handlers.runtime.js";
 import { createTelegramMessageProcessor } from "./bot-message.js";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
+import {
+  getTelegramSpooledReplayDeferredParticipant,
+  isTelegramSpooledReplayUpdate,
+  runWithTelegramUpdateProcessingFrame,
+  TelegramSpooledReplayProcessingError,
+} from "./bot-processing-outcome.js";
 import { createTelegramUpdateTracker } from "./bot-update-tracker.js";
 import type { TelegramUpdateKeyContext } from "./bot-updates.js";
 import { resolveDefaultAgentId } from "./bot.agent.runtime.js";
@@ -212,7 +218,29 @@ export function createTelegramBotCore(
       return;
     }
     try {
-      await next();
+      const { result } = await runWithTelegramUpdateProcessingFrame(async () => {
+        await next();
+      });
+      const deferredWork = getTelegramSpooledReplayDeferredParticipant();
+      if (deferredWork) {
+        void deferredWork.task
+          .then((deferredResult) => {
+            updateTracker.finishUpdate(begin.update, {
+              completed: deferredResult.kind !== "failed-retryable",
+            });
+          })
+          .catch(() => {
+            updateTracker.finishUpdate(begin.update, { completed: false });
+          });
+        return;
+      }
+      if (result?.kind === "failed-retryable") {
+        if (isTelegramSpooledReplayUpdate(ctx.update)) {
+          throw new TelegramSpooledReplayProcessingError(result.error);
+        }
+        updateTracker.finishUpdate(begin.update, { completed: true });
+        return;
+      }
       updateTracker.finishUpdate(begin.update, { completed: true });
     } catch (error) {
       updateTracker.finishUpdate(begin.update, { completed: false });

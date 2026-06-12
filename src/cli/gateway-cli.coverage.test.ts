@@ -45,8 +45,18 @@ const { runtimeLogs, runtimeErrors, defaultRuntime } = mocks;
 vi.mock(
   new URL("../../gateway/call.ts", new URL("./gateway-cli/call.ts", import.meta.url)).href,
   () => ({
+    buildGatewayConnectionDetails: () => ({
+      message: "Gateway mode: local\nGateway target: ws://127.0.0.1:18789",
+      url: "ws://127.0.0.1:18789",
+    }),
+    buildGatewayProbeConnectionDetails: () => ({
+      preauthHandshakeTimeoutMs: 1000,
+      tlsFingerprint: undefined,
+      url: "ws://127.0.0.1:18789",
+    }),
     callGateway: (opts: unknown) => callGateway(opts),
     formatGatewayTransportErrorJson: (error: unknown) => formatGatewayTransportErrorJson(error),
+    isGatewayCredentialsRequiredError: () => false,
     randomIdempotencyKey: () => "rk_test",
   }),
 );
