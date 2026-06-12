@@ -73,7 +73,9 @@ describe("mirror-dispatch", () => {
       originTo: "",
     });
     // Let the rejected fire-and-forget promise settle.
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
     // Failure un-marked the target, so the post-hoc final echo still delivers.
     expect(consumeStreamingEchoHandled("sk-fail", TG)).toBe(false);
   });
