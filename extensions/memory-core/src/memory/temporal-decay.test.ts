@@ -8,6 +8,7 @@ import {
   applyTemporalDecayToHybridResults,
   applyTemporalDecayToScore,
   calculateTemporalDecayMultiplier,
+  resolveTemporalDecaySearchConfig,
 } from "./temporal-decay.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -155,5 +156,14 @@ describe("temporal decay", () => {
     });
 
     expect(decayed[0]?.score).toBeCloseTo(0.5, 2);
+  });
+
+  it("propagates config resolution errors instead of silently disabling decay", () => {
+    // resolveTemporalDecaySearchConfig must let resolveMemorySearchConfig
+    // errors propagate so canonical validation failures surface to callers
+    // rather than silently returning decay-disabled defaults.
+    const nullConfig =
+      null as unknown as import("openclaw/plugin-sdk/memory-core-host-engine-foundation").OpenClawConfig;
+    expect(() => resolveTemporalDecaySearchConfig(nullConfig, "test-agent")).toThrow();
   });
 });
