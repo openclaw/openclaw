@@ -2277,6 +2277,12 @@ describe("runCodexAppServerAttempt", () => {
     );
     expect(collaborationInstructions).toContain("memory_search");
     expect(collaborationInstructions).toContain("memory_get");
+    expect(collaborationInstructions).toContain(
+      "When the memory guidance above calls for memory recall, use an already-loaded memory tool directly.",
+    );
+    expect(collaborationInstructions).toContain(
+      "If the needed memory tool is deferred and not currently callable, use `tool_search` to load it, then call that memory tool.",
+    );
     expect(collaborationInstructions).not.toContain(memorySummary);
     expect(inputText).not.toContain("OpenClaw runtime context for this turn:");
     expect(inputText).not.toContain("does not override Codex system/developer instructions");

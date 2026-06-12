@@ -256,10 +256,13 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
     });
 
     expect(mocks.resolveActivatableProviderOwnerPluginIds).toHaveBeenCalledWith({
-      pluginIds: ["workspace-memory"],
+      pluginIds: ["openai"],
       config: expect.any(Object),
       workspaceDir: "/tmp/workspace",
     });
+    expect(mocks.resolveActivatableProviderOwnerPluginIds).not.toHaveBeenCalledWith(
+      expect.objectContaining({ pluginIds: ["workspace-memory"] }),
+    );
     expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith(
       expect.objectContaining({
         scope: "all",
@@ -352,7 +355,7 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
     );
   });
 
-  it("keeps a Codex scoped load narrow when the provider has no owner plugin", async () => {
+  it("keeps real bundled memory-core in a Codex scoped load when the provider has no owner plugin", async () => {
     mocks.resolveOwningPluginIdsForProvider.mockReturnValueOnce(undefined);
 
     await ensureSelectedAgentHarnessPlugin({
@@ -363,12 +366,7 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
     });
 
     expect(mocks.resolveBundledProviderCompatPluginIds).not.toHaveBeenCalled();
-    expect(mocks.resolveActivatableProviderOwnerPluginIds).toHaveBeenCalledTimes(1);
-    expect(mocks.resolveActivatableProviderOwnerPluginIds).toHaveBeenCalledWith({
-      pluginIds: ["memory-core"],
-      config: undefined,
-      workspaceDir: "/tmp/workspace",
-    });
+    expect(mocks.resolveActivatableProviderOwnerPluginIds).not.toHaveBeenCalled();
     expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith(
       expect.objectContaining({
         scope: "all",

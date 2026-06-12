@@ -3,7 +3,12 @@
  */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withActivatedPluginIds } from "../../plugins/activation-context.js";
-import { normalizePluginsConfig } from "../../plugins/config-state.js";
+import { resolveEffectivePluginActivationState } from "../../plugins/config-state.js";
+import { isPluginEnabledByDefaultForPlatform } from "../../plugins/default-enablement.js";
+import {
+  loadPluginRegistrySnapshot,
+  normalizePluginsConfigWithRegistry,
+} from "../../plugins/plugin-registry.js";
 import {
   resolveActivatableProviderOwnerPluginIds,
   resolveBundledProviderCompatPluginIds,
@@ -44,7 +49,12 @@ function resolveSelectedMemoryPluginIds(params: {
   config: OpenClawConfig | undefined;
   workspaceDir: string;
 }): string[] {
-  const memorySlot = normalizePluginsConfig(params.config?.plugins).slots.memory;
+  const registry = loadPluginRegistrySnapshot({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+  });
+  const plugins = normalizePluginsConfigWithRegistry(params.config?.plugins, registry);
+  const memorySlot = plugins.slots.memory;
   if (
     typeof memorySlot !== "string" ||
     memorySlot.trim().length === 0 ||
@@ -52,11 +62,18 @@ function resolveSelectedMemoryPluginIds(params: {
   ) {
     return [];
   }
-  return resolveActivatableProviderOwnerPluginIds({
-    pluginIds: [memorySlot],
-    config: params.config,
-    workspaceDir: params.workspaceDir,
+  const plugin = registry.plugins.find((entry) => entry.pluginId === memorySlot);
+  if (!plugin?.startup.memory) {
+    return [];
+  }
+  const activationState = resolveEffectivePluginActivationState({
+    id: plugin.pluginId,
+    origin: plugin.origin,
+    config: plugins,
+    rootConfig: params.config,
+    enabledByDefault: isPluginEnabledByDefaultForPlatform(plugin),
   });
+  return activationState.activated ? [plugin.pluginId] : [];
 }
 
 function resolveHarnessPluginIds(params: {
