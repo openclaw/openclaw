@@ -246,16 +246,6 @@ async function disposeCliAgentHarnesses(): Promise<void> {
   }
 }
 
-async function clearCliProviderAuthState(): Promise<void> {
-  try {
-    const { clearCurrentProviderAuthState } = await import("../agents/model-provider-auth.js");
-    clearCurrentProviderAuthState();
-  } catch {
-    // Best-effort teardown for short-lived CLI commands. Provider auth warmers
-    // may own worker threads, but cleanup must not hide the command's real outcome.
-  }
-}
-
 const UNCONFIGURED_CONFIG_IGNORED_KEYS = new Set(["$schema", "meta"]);
 
 function isUnconfiguredConfigSnapshot(
@@ -930,7 +920,6 @@ export async function runCli(argv: string[] = process.argv) {
     }
     await stopStartedProxy();
     await disposeCliAgentHarnesses();
-    await clearCliProviderAuthState();
     await closeCliMemoryManagers();
     pauseNonTtyStdinForCliExit();
   }
