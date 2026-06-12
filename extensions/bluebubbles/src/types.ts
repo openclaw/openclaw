@@ -25,7 +25,7 @@ export type BlueBubblesAccountConfig = {
   capabilities?: string[];
   /** Allow channel-initiated config writes (default: true). */
   configWrites?: boolean;
-  /** If false, do not start this BlueBubbles account. Default: true. */
+  /** Must be true to start this BlueBubbles account. */
   enabled?: boolean;
   /** Base URL for the BlueBubbles API. */
   serverUrl?: string;

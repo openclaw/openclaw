@@ -64,16 +64,17 @@ export function resolveBlueBubblesAccount(params: {
   accountId?: string | null;
 }): ResolvedBlueBubblesAccount {
   const accountId = normalizeAccountId(params.accountId);
-  const baseEnabled = params.cfg.channels?.bluebubbles?.enabled;
+  const channelEnabled = params.cfg.channels?.bluebubbles?.enabled === true;
+  const explicitAccount = resolveAccountConfig(params.cfg, accountId);
   const merged = mergeBlueBubblesAccountConfig(params.cfg, accountId);
-  const accountEnabled = merged.enabled !== false;
+  const accountEnabled = explicitAccount ? explicitAccount.enabled === true : channelEnabled;
   const serverUrl = merged.serverUrl?.trim();
   const password = merged.password?.trim();
   const configured = Boolean(serverUrl && password);
   const baseUrl = serverUrl ? normalizeBlueBubblesServerUrl(serverUrl) : undefined;
   return {
     accountId,
-    enabled: baseEnabled !== false && accountEnabled,
+    enabled: channelEnabled && accountEnabled,
     name: merged.name?.trim() || undefined,
     config: merged,
     configured,
