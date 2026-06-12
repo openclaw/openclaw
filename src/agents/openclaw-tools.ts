@@ -45,6 +45,7 @@ import { createCronTool } from "./tools/cron-tool.js";
 import { createEmbeddedCallGateway } from "./tools/embedded-gateway-stub.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import {
+  createClearGoalTool,
   createCreateGoalTool,
   createGetGoalTool,
   createUpdateGoalTool,
@@ -456,21 +457,18 @@ export function createOpenClawTools(
       runSessionKey: options?.runSessionKey,
       sessionAgentId,
       config: resolvedConfig,
-      workspaceDir,
     }),
     createClearGoalTool({
       agentSessionKey: options?.agentSessionKey,
       runSessionKey: options?.runSessionKey,
       sessionAgentId,
       config: resolvedConfig,
-      workspaceDir,
     }),
     createUpdateGoalTool({
       agentSessionKey: options?.agentSessionKey,
       runSessionKey: options?.runSessionKey,
       sessionAgentId,
       config: resolvedConfig,
-      workspaceDir,
     }),
     ...(options?.sandboxed
       ? []

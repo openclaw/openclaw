@@ -1,16 +1,18 @@
 /**
  * Model-facing thread goal tools.
  *
- * Provides create/get/update goal operations scoped to the current session store.
+ * Provides create/get/clear/update goal operations scoped to the current
+ * session store. All persistent state lives in the canonical session
+ * store (the same JSON file as the rest of the session state) — there
+ * is no sidecar archive file.
  */
 import { Type } from "typebox";
-import os from "node:os";
-import path from "node:path";
-import { appendFileSync, mkdirSync } from "node:fs";
 import {
+  ClearGoalRejectedError,
+  CLEARABLE_GOAL_STATUSES,
+  clearAndArchiveSessionGoal,
   createSessionGoal,
   getSessionGoal,
-  clearSessionGoal,
   MODEL_UPDATABLE_SESSION_GOAL_STATUSES,
   updateSessionGoalStatus,
 } from "../../config/sessions/goals.js";
@@ -31,8 +33,12 @@ type GoalToolOptions = {
   runSessionKey?: string;
   sessionAgentId?: string;
   config?: OpenClawConfig;
-  /** Resolved workspace dir; used to locate the goal-archive log. */
-  workspaceDir?: string;
+  /**
+   * Max retained cleared goals per session. Defaults to 50.
+   * Configurable per-call by the operator; mirrors
+   * `clearAndArchiveSessionGoal`'s `clearRetained` option.
+   */
+  clearedGoalsRetained?: number;
 };
 
 type GoalSessionScope = {
@@ -58,81 +64,16 @@ const UpdateGoalToolSchema = Type.Object({
   note: Type.Optional(Type.String({ description: "Short status note." })),
 });
 
-// Goals in any of these states can be replaced by a new create_goal call.
-// Mirrors the non-active states listed in resolveGoalCommandHint() in goals.ts.
-const GOAL_TERMINAL_STATUSES = new Set([
-  "complete",
-  "blocked",
-  "paused",
-  "usage_limited",
-  "budget_limited",
-]);
-
-function resolveGoalArchiveWorkspace(
-  options: GoalToolOptions,
-  config?: OpenClawConfig,
-): string {
-  // Prefer the workspaceDir that openclaw-tools.ts already resolved; fall back
-  // to the agent's configured workspace, then the env var, then ~/.openclaw/workspace.
-  if (options.workspaceDir) return options.workspaceDir;
-  const configured = (() => {
-    try {
-      return config?.agents?.defaults?.workspace;
-    } catch {
-      return undefined;
-    }
-  })();
-  if (configured) return configured;
-  if (process.env.OPENCLAW_WORKSPACE) return process.env.OPENCLAW_WORKSPACE;
-  return path.join(os.homedir(), ".openclaw", "workspace");
-}
-
-function archiveReplacedGoal(
-  workspaceDir: string,
-  sessionKey: string,
-  archivedGoal: { [k: string]: unknown },
-  note?: string,
-): void {
-  // Best-effort: archive failures must not block goal replacement.
-  try {
-    const logDir = path.join(workspaceDir, "memory");
-    mkdirSync(logDir, { recursive: true });
-    const logFile = path.join(logDir, "goal-archive.jsonl");
-    const record = {
-      sessionKey,
-      archivedAt: Date.now(),
-      id: archivedGoal.id,
-      objective: archivedGoal.objective,
-      status: archivedGoal.status,
-      createdAt: archivedGoal.createdAt,
-      updatedAt: archivedGoal.updatedAt,
-      completedAt: archivedGoal.completedAt ?? null,
-      blockedAt: archivedGoal.blockedAt ?? null,
-      tokensUsed: archivedGoal.tokensUsed ?? 0,
-      tokenBudget: archivedGoal.tokenBudget,
-      lastStatusNote: archivedGoal.lastStatusNote ?? null,
-      clearNote: note ?? null,
-      resumable: archivedGoal.status === "paused",
-    };
-    appendFileSync(logFile, JSON.stringify(record) + "\n", "utf8");
-  } catch {
-    // intentionally swallowed
-  }
-}
-
 const ClearGoalToolSchema = Type.Object({
-  archive: Type.Optional(
-    Type.Boolean({
-      description:
-        "If true (default), append the existing goal to memory/goal-archive.jsonl before clearing. If false, clear without archiving.",
-    }),
-  ),
   note: Type.Optional(
     Type.String({
-      description: "Optional free-form note to append to the archive entry (e.g. why the goal was cleared).",
+      description:
+        "Optional free-form note attached to the cleared-goal archive entry (e.g. why the goal was cleared).",
     }),
   ),
 });
+
+const CLEARABLE_STATUS_DESCRIPTION = Array.from(CLEARABLE_GOAL_STATUSES).join(", ");
 
 function resolveGoalSessionScope(options: GoalToolOptions): GoalSessionScope {
   const sessionKey = options.runSessionKey?.trim() || options.agentSessionKey?.trim();
@@ -171,14 +112,22 @@ export function createGetGoalTool(options: GoalToolOptions): AnyAgentTool {
   };
 }
 
-/** Creates the tool that starts a new thread goal when explicitly requested. */
+/**
+ * Creates the tool that starts a new thread goal when explicitly requested.
+ *
+ * Behavioral contract (v02): `create_goal` ALWAYS blocks on any existing
+ * goal, including terminal ones. To rotate a terminal goal, the model
+ * must first call `clear_goal`. This preserves the documented lifecycle
+ * (single goal per session, explicit operator-style clearing) and removes
+ * the silent auto-replace behavior that v01 introduced.
+ */
 export function createCreateGoalTool(options: GoalToolOptions): AnyAgentTool {
   return {
     label: "Create Goal",
     name: "create_goal",
     displaySummary: "Create a thread goal",
     description:
-      "Create a goal only when explicitly requested by the user or system instructions. If a goal already exists in a terminal state (complete, blocked, paused, usage_limited, budget_limited), it is archived to memory/goal-archive.jsonl and replaced. An active goal still blocks creation.",
+      "Create a goal only when explicitly requested by the user or system instructions. If a goal already exists in any state, creation fails with an error pointing at clear_goal. The model must clear the existing goal first (and only terminal goals can be cleared) before creating a new one in the same session.",
     parameters: CreateGoalToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -190,17 +139,20 @@ export function createCreateGoalTool(options: GoalToolOptions): AnyAgentTool {
       }
       const scope = resolveGoalSessionScope(options);
 
-      // Auto-archive + clear any existing terminal goal before creating the new one.
-      // Active goals still block (existing behavior), protecting in-flight work.
+      // Pre-flight: surface a clear, actionable error if a goal already exists.
+      // The previous auto-archive behavior is intentionally removed (v02 contract).
       const existing = await getSessionGoal({ ...scope, persist: false });
-      if (
-        existing.status === "found" &&
-        existing.goal &&
-        GOAL_TERMINAL_STATUSES.has(existing.goal.status)
-      ) {
-        const workspaceDir = resolveGoalArchiveWorkspace(options, options.config);
-        archiveReplacedGoal(workspaceDir, scope.sessionKey, existing.goal);
-        await clearSessionGoal(scope);
+      if (existing.status === "found" && existing.goal) {
+        if (CLEARABLE_GOAL_STATUSES.has(existing.goal.status)) {
+          throw new ToolInputError(
+            `a goal already exists for this session (status: ${existing.goal.status}). ` +
+              `Call clear_goal first to archive and remove it, then retry create_goal.`,
+          );
+        }
+        throw new ToolInputError(
+          `a goal already exists for this session in status '${existing.goal.status}'. ` +
+            `Active goals can only be cleared by the operator/session control.`,
+        );
       }
 
       const goal = await createSessionGoal({
@@ -213,30 +165,59 @@ export function createCreateGoalTool(options: GoalToolOptions): AnyAgentTool {
   };
 }
 
-/** Creates the tool that clears the current session goal (with optional archive). */
+/**
+ * Creates the tool that clears (and atomically archives) the current goal.
+ *
+ * Behavioral contract (v02):
+ * - Only terminal/clearable states are allowed (complete, blocked, paused,
+ *   usage_limited, budget_limited). Active goals are rejected.
+ * - The cleared goal is appended to `clearedGoals` on the session entry in
+ *   the same atomic write that removes it from `goal`. No sidecar file.
+ * - If the atomic transition fails, the goal is NOT cleared and the
+ *   error propagates to the caller.
+ */
 export function createClearGoalTool(options: GoalToolOptions): AnyAgentTool {
   return {
     label: "Clear Goal",
     name: "clear_goal",
-    displaySummary: "Clear (archive) the current session goal",
+    displaySummary: "Clear (atomically archive) the current thread goal",
     description:
-      "Clear the current session goal. If a goal exists, it is archived to memory/goal-archive.jsonl by default (set archive=false to skip). After clearing, a new goal can be created with create_goal. Use this to reset a stuck state or to manually rotate goals without completing them first.",
+      `Clear the current session goal. Only goals in a clearable state can be cleared: ${CLEARABLE_STATUS_DESCRIPTION}. ` +
+      `Active goals are rejected to preserve the documented lifecycle contract. ` +
+      `On success, the cleared goal is atomically appended to the session's clearedGoals history (no sidecar file). ` +
+      `After clearing, a new goal can be created with create_goal. ` +
+      `Use this to reset a stuck terminal state, or to manually rotate a paused/blocked goal.`,
     parameters: ClearGoalToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      const archive = params.archive !== false;
       const note = typeof params.note === "string" ? params.note : undefined;
       const scope = resolveGoalSessionScope(options);
-      const existing = await getSessionGoal({ ...scope, persist: false });
-      if (existing.status === "found" && existing.goal && archive) {
-        const workspaceDir = resolveGoalArchiveWorkspace(options, options.config);
-        archiveReplacedGoal(workspaceDir, scope.sessionKey, existing.goal, note);
+      try {
+        const result = await clearAndArchiveSessionGoal({
+          ...scope,
+          ...(note ? { note } : {}),
+          ...(options.clearedGoalsRetained !== undefined
+            ? { clearRetained: options.clearedGoalsRetained }
+            : {}),
+          rejectNonClearable: true,
+        });
+        if (!result.wasCleared) {
+          return jsonResult({ status: "no-op", reason: "no goal to clear" });
+        }
+        return jsonResult({
+          status: "cleared",
+          cleared: result.cleared,
+        });
+      } catch (err) {
+        if (err instanceof ClearGoalRejectedError) {
+          throw new ToolInputError(
+            `clear_goal rejected: current goal status is '${err.currentStatus}'. ` +
+              `Only ${CLEARABLE_STATUS_DESCRIPTION} can be cleared. Active goals must be ` +
+              `completed, blocked, paused, usage_limited, or budget_limited before clear_goal will accept them.`,
+          );
+        }
+        throw err;
       }
-      const cleared = await clearSessionGoal(scope);
-      return jsonResult({
-        status: cleared ? "cleared" : "no-op",
-        wasArchived: archive && existing.status === "found" && !!existing.goal,
-      });
     },
   };
 }

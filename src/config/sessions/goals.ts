@@ -2,7 +2,7 @@
 import crypto from "node:crypto";
 import { getSessionEntry, patchSessionEntry } from "./store.js";
 import { resolveFreshSessionTotalTokens } from "./types.js";
-import type { SessionEntry, SessionGoal, SessionGoalStatus } from "./types.js";
+import type { ClearedGoal, SessionEntry, SessionGoal, SessionGoalStatus } from "./types.js";
 
 export type SessionGoalSnapshot = {
   status: "missing" | "found";
@@ -319,4 +319,141 @@ export async function clearSessionGoal(options: SessionGoalStoreOptions): Promis
     },
   });
   return Boolean(result && removed);
+}
+
+/**
+ * Goals in any of these states can be cleared by an explicit `clear_goal` call.
+ * Mirrors the non-active states listed in resolveGoalCommandHint() in goals.ts.
+ * The set is intentionally a SUPERSET of `TERMINAL_GOAL_STATUSES` (which is
+ * `complete` only) because the model-controlled clear is allowed to rotate
+ * `paused`/`blocked`/`usage_limited`/`budget_limited` goals too, while
+ * `createSessionGoal` still treats them as a creation blocker.
+ */
+export const CLEARABLE_GOAL_STATUSES: ReadonlySet<SessionGoalStatus> = new Set<SessionGoalStatus>([
+  "complete",
+  "blocked",
+  "paused",
+  "usage_limited",
+  "budget_limited",
+]);
+
+/**
+ * Result of a clear-and-archive transition. The cleared snapshot is
+ * returned to the caller so the tool layer can echo it back in its
+ * `jsonResult` payload without an extra `getSessionGoal` round-trip.
+ */
+export type ClearAndArchiveResult = {
+  /** The cleared goal snapshot (frozen copy from the canonical store). */
+  cleared: ClearedGoal;
+  /** True if the goal was in a clearable state; false if nothing to clear. */
+  wasCleared: boolean;
+};
+
+/**
+ * Atomic clear-and-archive transition.
+ *
+ * Removes the current goal from `entry.goal` and appends a `ClearedGoal`
+ * snapshot to `entry.clearedGoals` in ONE `patchSessionEntry` call. The
+ * store is mutex-protected (`runExclusiveSessionStoreWrite`) and persisted
+ * via `persistResolvedSessionEntry` (write-temp-then-rename), so the
+ * transition is observably atomic from any other reader.
+ *
+ * Refuses to clear an `active` goal. Active goals are reserved for
+ * operator/session control per the documented lifecycle contract.
+ *
+ * `clearedGoals` is bounded to `clearRetained` (default 50) and pruned
+ * oldest-first on each insert. The default is configurable via the
+ * `clearedGoalsRetained` field on the session store config; this function
+ * reads it from the current entry's effective config (or uses the default).
+ */
+export type ClearAndArchiveOptions = SessionGoalStoreOptions & {
+  /** Optional caller-supplied note attached to the archive entry. */
+  note?: string;
+  /** Max retained cleared goals (default 50). Older entries are pruned. */
+  clearRetained?: number;
+  /**
+   * If true (default), throw on a non-clearable status. If false, return
+   * `{ wasCleared: false }` instead. The tool layer uses true to surface
+   * a clear error to the model.
+   */
+  rejectNonClearable?: boolean;
+};
+
+const DEFAULT_CLEAR_RETAINED = 50;
+
+export class ClearGoalRejectedError extends Error {
+  readonly currentStatus: SessionGoalStatus;
+  constructor(currentStatus: SessionGoalStatus) {
+    super(
+      `clear_goal refused: goal is in status '${currentStatus}'; only clearable states are ${Array.from(
+        CLEARABLE_GOAL_STATUSES,
+      ).join(", ")}`,
+    );
+    this.name = "ClearGoalRejectedError";
+    this.currentStatus = currentStatus;
+  }
+}
+
+export async function clearAndArchiveSessionGoal(
+  options: ClearAndArchiveOptions,
+): Promise<ClearAndArchiveResult> {
+  const clearRetained =
+    options.clearRetained && options.clearRetained > 0
+      ? Math.floor(options.clearRetained)
+      : DEFAULT_CLEAR_RETAINED;
+  const reject = options.rejectNonClearable !== false;
+  const now = nowMs(options.now);
+  let captured: ClearedGoal | undefined;
+  let nothingToClear = false;
+
+  const result = await patchSessionEntry({
+    sessionKey: options.sessionKey,
+    storePath: options.storePath,
+    update: (entry) => {
+      if (!entry.goal) {
+        nothingToClear = true;
+        return null;
+      }
+      if (!CLEARABLE_GOAL_STATUSES.has(entry.goal.status)) {
+        if (reject) {
+          throw new ClearGoalRejectedError(entry.goal.status);
+        }
+        nothingToClear = true;
+        return null;
+      }
+      const snapshot: ClearedGoal = {
+        id: entry.goal.id,
+        objective: entry.goal.objective,
+        clearedFromStatus: entry.goal.status,
+        clearedAt: now,
+        createdAt: entry.goal.createdAt,
+        updatedAt: entry.goal.updatedAt,
+        tokensUsed: entry.goal.tokensUsed,
+        ...(entry.goal.tokenBudget !== undefined ? { tokenBudget: entry.goal.tokenBudget } : {}),
+        ...(entry.goal.lastStatusNote !== undefined
+          ? { lastStatusNote: entry.goal.lastStatusNote }
+          : {}),
+        ...(options.note ? { clearNote: options.note } : {}),
+      };
+      captured = snapshot;
+      // Prune oldest-first to bound the array.
+      const existingCleared = entry.clearedGoals ?? [];
+      const merged = [...existingCleared, snapshot];
+      const pruned =
+        merged.length > clearRetained ? merged.slice(merged.length - clearRetained) : merged;
+      return {
+        goal: undefined,
+        clearedGoals: pruned,
+      };
+    },
+  });
+
+  if (!result) {
+    // Session entry itself is missing — nothing to clear.
+    return { cleared: undefined as unknown as ClearedGoal, wasCleared: false };
+  }
+  if (nothingToClear) {
+    return { cleared: undefined as unknown as ClearedGoal, wasCleared: false };
+  }
+  return { cleared: captured as ClearedGoal, wasCleared: true };
 }

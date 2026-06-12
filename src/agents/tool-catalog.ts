@@ -292,6 +292,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "clear_goal",
+    label: "clear_goal",
+    description: "Atomically clear (and archive) the current thread goal; terminal states only.",
+    sectionId: "agents",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "update_plan",
     label: "update_plan",
     description: UPDATE_PLAN_TOOL_DISPLAY_SUMMARY,

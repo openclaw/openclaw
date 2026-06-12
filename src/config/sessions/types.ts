@@ -201,6 +201,35 @@ export type SessionGoal = {
   budgetLimitedAt?: number;
 };
 
+/**
+ * Snapshot of a goal that was cleared from a session.
+ * Appended to `SessionEntry.clearedGoals` in the same atomic write that
+ * removes the goal from `SessionEntry.goal`, so the audit history is
+ * owned by the canonical session store (not a sidecar file).
+ */
+export type ClearedGoal = {
+  /** Stable id copied from the cleared goal. */
+  id: string;
+  /** Original objective at the time of clear. */
+  objective: string;
+  /** Status at the time of clear (one of: complete | blocked | paused | usage_limited | budget_limited). */
+  clearedFromStatus: SessionGoalStatus;
+  /** Wall-clock ms when the clear transition committed. */
+  clearedAt: number;
+  /** Original creation timestamp from the cleared goal. */
+  createdAt: number;
+  /** Original updatedAt from the cleared goal. */
+  updatedAt: number;
+  /** Token usage at the time of clear. */
+  tokensUsed: number;
+  /** Optional token budget from the cleared goal. */
+  tokenBudget?: number;
+  /** Optional last status note from the cleared goal. */
+  lastStatusNote?: string;
+  /** Free-form note supplied by the caller (e.g. why the goal was cleared). */
+  clearNote?: string;
+};
+
 export type SessionEntry = {
   /**
    * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
@@ -256,6 +285,13 @@ export type SessionEntry = {
   quotaSuspension?: QuotaSuspension;
   /** Core-owned durable goal state for this thread/session. */
   goal?: SessionGoal;
+  /**
+   * Append-only history of goals cleared from this session. Bounded by
+   * `clearedGoalsRetained` (default 50) — older entries are pruned on insert.
+   * Owned by the canonical session store so the audit trail cannot be lost
+   * by sidecar file write failures.
+   */
+  clearedGoals?: ClearedGoal[];
   /** Timestamp (ms) when the current sessionId first became active. */
   sessionStartedAt?: number;
   /** Stable usage lineage key for transcript-backed rollups across sessionId rotations. */
