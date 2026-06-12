@@ -358,18 +358,27 @@ function resolveConfiguredProviderDefaultApi(params: {
   if (explicit) {
     return explicit;
   }
-  if (!providerConfig?.baseUrl) {
+  const providerConfiguredBaseUrl = normalizeTransportBaseUrl(providerConfig?.baseUrl);
+  if (!providerConfiguredBaseUrl) {
     return undefined;
   }
   const normalized = resolveProviderTransport({
     provider: params.provider,
     api: undefined,
-    baseUrl: providerConfig.baseUrl,
+    baseUrl: providerConfiguredBaseUrl,
     cfg: params.cfg,
     workspaceDir: params.workspaceDir,
     runtimeHooks: params.runtimeHooks,
   });
   return normalized.api ?? "openai-completions";
+}
+
+function normalizeTransportBaseUrl(baseUrl: unknown): string | undefined {
+  if (typeof baseUrl !== "string") {
+    return undefined;
+  }
+  const trimmed = baseUrl.trim();
+  return trimmed ? trimmed : undefined;
 }
 
 function resolveProviderRequestTimeoutMs(timeoutSeconds: unknown): number | undefined {
@@ -481,6 +490,33 @@ function findConfiguredProviderModel(
       modelId,
     }),
   );
+}
+
+function mergeStaticCatalogInlineModel(
+  staticCatalogModel: StaticCatalogFallbackModel | undefined,
+  inlineModel: Model,
+): Model {
+  if (!staticCatalogModel) {
+    return inlineModel;
+  }
+  const compat = mergeModelCompat(staticCatalogModel.compat, inlineModel.compat);
+  const mediaInput = mergeModelMediaInput(staticCatalogModel.mediaInput, inlineModel.mediaInput);
+  const params = mergeModelParams(
+    readModelParams(staticCatalogModel.params),
+    readModelParams(inlineModel.params),
+  );
+  return {
+    ...staticCatalogModel,
+    ...inlineModel,
+    api: inlineModel.api ?? staticCatalogModel.api,
+    baseUrl:
+      normalizeTransportBaseUrl(inlineModel.baseUrl) ??
+      normalizeTransportBaseUrl(staticCatalogModel.baseUrl),
+    headers: inlineModel.headers ?? staticCatalogModel.headers,
+    ...(compat ? { compat } : {}),
+    ...(mediaInput ? { mediaInput } : {}),
+    ...(params ? { params } : {}),
+  } as Model;
 }
 
 function hasConfiguredFallbackSurface(params: {
@@ -620,6 +656,15 @@ function applyConfiguredProviderOverrides(params: {
     (discoveredModel.id !== modelId
       ? findConfiguredProviderModel(providerConfig, params.provider, discoveredModel.id)
       : undefined);
+  const configuredStaticCatalogModel = configuredModel
+    ? (resolveBundledStaticCatalogModel({
+        provider: params.provider,
+        modelId,
+        cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
+        includeRuntimeDiscovery: true,
+      }) as StaticCatalogFallbackModel | undefined)
+    : undefined;
   const metadataOverrideModel =
     params.preferDiscoveredModelMetadata && isModelsAddMetadataModel({ model: configuredModel })
       ? undefined
@@ -673,6 +718,7 @@ function applyConfiguredProviderOverrides(params: {
     };
   }
   const resolvedParams = mergeModelParams(
+    readModelParams(configuredStaticCatalogModel?.params),
     readModelParams(discoveredModel.params),
     providerParams,
     defaultModelParams,
@@ -692,16 +738,32 @@ function applyConfiguredProviderOverrides(params: {
     workspaceDir: params.workspaceDir,
     runtimeHooks: params.runtimeHooks,
   });
-  const resolvedTransportApi =
-    metadataOverrideModel?.api ??
-    (params.preferDiscoveredTransport
-      ? (discoveredModel.api ?? providerConfig.api ?? providerDefaultApi)
-      : (providerConfig.api ?? discoveredModel.api ?? providerDefaultApi));
-  const resolvedTransportBaseUrl =
-    metadataOverrideModel?.baseUrl ??
-    (params.preferDiscoveredTransport
-      ? (discoveredModel.baseUrl ?? providerConfig.baseUrl)
-      : (providerConfig.baseUrl ?? discoveredModel.baseUrl));
+  const metadataOverrideBaseUrl = normalizeTransportBaseUrl(metadataOverrideModel?.baseUrl);
+  const providerConfiguredBaseUrl = normalizeTransportBaseUrl(providerConfig.baseUrl);
+  const discoveredBaseUrl = normalizeTransportBaseUrl(discoveredModel.baseUrl);
+  const configuredStaticCatalogBaseUrl = normalizeTransportBaseUrl(
+    configuredStaticCatalogModel?.baseUrl,
+  );
+  const resolvedTransportApi = params.preferDiscoveredTransport
+    ? (discoveredModel.api ??
+      metadataOverrideModel?.api ??
+      providerConfig.api ??
+      configuredStaticCatalogModel?.api ??
+      providerDefaultApi)
+    : (metadataOverrideModel?.api ??
+      providerConfig.api ??
+      discoveredModel.api ??
+      configuredStaticCatalogModel?.api ??
+      providerDefaultApi);
+  const resolvedTransportBaseUrl = params.preferDiscoveredTransport
+    ? (discoveredBaseUrl ??
+      metadataOverrideBaseUrl ??
+      providerConfiguredBaseUrl ??
+      configuredStaticCatalogBaseUrl)
+    : (metadataOverrideBaseUrl ??
+      providerConfiguredBaseUrl ??
+      discoveredBaseUrl ??
+      configuredStaticCatalogBaseUrl);
 
   const resolvedTransport = resolveProviderTransport({
     provider: params.provider,
@@ -716,7 +778,16 @@ function applyConfiguredProviderOverrides(params: {
     metadataOverrideModel?.contextWindow ?? providerConfig.contextWindow;
   const resolvedMaxTokens =
     metadataOverrideModel?.maxTokens ?? providerConfig.maxTokens ?? discoveredModel.maxTokens;
-  const resolvedCompat = mergeModelCompat(discoveredModel.compat, metadataOverrideModel?.compat);
+  const normalizedResolvedMaxTokens =
+    typeof resolvedMaxTokens === "number" && Number.isFinite(resolvedMaxTokens)
+      ? typeof resolvedContextWindow === "number" && Number.isFinite(resolvedContextWindow)
+        ? Math.min(resolvedMaxTokens, resolvedContextWindow)
+        : resolvedMaxTokens
+      : undefined;
+  const resolvedCompat = mergeModelCompat(
+    mergeModelCompat(configuredStaticCatalogModel?.compat, discoveredModel.compat),
+    metadataOverrideModel?.compat,
+  );
   const resolvedReasoning = resolveMergedConfiguredModelReasoning({
     provider: params.provider,
     configuredCompat: metadataOverrideModel?.compat,
@@ -728,10 +799,12 @@ function applyConfiguredProviderOverrides(params: {
     provider: params.provider,
     api:
       resolvedTransport.api ??
+      normalizeResolvedTransportApi(configuredStaticCatalogModel?.api) ??
       normalizeResolvedTransportApi(discoveredModel.api) ??
       providerDefaultApi ??
       "openai-responses",
-    baseUrl: resolvedTransport.baseUrl ?? discoveredModel.baseUrl,
+    baseUrl:
+      resolvedTransport.baseUrl ?? configuredStaticCatalogModel?.baseUrl ?? discoveredModel.baseUrl,
     discoveredHeaders,
     providerHeaders,
     modelHeaders: configuredHeaders,
@@ -754,10 +827,9 @@ function applyConfiguredProviderOverrides(params: {
           metadataOverrideModel?.contextTokens ??
           providerConfig.contextTokens ??
           discoveredModel.contextTokens,
-        maxTokens:
-          typeof resolvedContextWindow === "number"
-            ? Math.min(resolvedMaxTokens, resolvedContextWindow)
-            : resolvedMaxTokens,
+        ...(normalizedResolvedMaxTokens !== undefined
+          ? { maxTokens: normalizedResolvedMaxTokens }
+          : {}),
         ...(resolvedParams ? { params: resolvedParams } : {}),
         ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
         headers: requestConfig.headers,
@@ -766,7 +838,10 @@ function applyConfiguredProviderOverrides(params: {
           : {}),
         compat: resolvedCompat,
         mediaInput: mergeModelMediaInput(
-          discoveredModel.mediaInput,
+          mergeModelMediaInput(
+            configuredStaticCatalogModel?.mediaInput,
+            discoveredModel.mediaInput,
+          ),
           metadataOverrideModel?.mediaInput,
         ),
       },
@@ -808,13 +883,13 @@ function resolveExplicitModelWithRegistry(params: {
     ) {
       return { kind: "suppressed" };
     }
-    const resolvedParams = mergeConfiguredRuntimeModelParams({
-      cfg,
+    const staticCatalogModel = resolveBundledStaticCatalogModel({
       provider,
       modelId,
-      providerParams: providerConfig?.params,
-      configuredParams: inlineMatch.params,
-    });
+      cfg,
+      workspaceDir,
+      includeRuntimeDiscovery: true,
+    }) as StaticCatalogFallbackModel | undefined;
     return {
       kind: "resolved",
       model: normalizeResolvedModel({
@@ -822,16 +897,16 @@ function resolveExplicitModelWithRegistry(params: {
         cfg,
         agentDir,
         workspaceDir,
-        model: {
-          ...inlineMatch,
-          reasoning: resolveConfiguredModelReasoning({
-            provider,
-            compat: inlineMatch.compat,
-            reasoning: inlineMatch.reasoning,
-          }),
-          ...(resolvedParams ? { params: resolvedParams } : {}),
-          ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
-        } as Model,
+        model: applyConfiguredProviderOverrides({
+          provider,
+          discoveredModel: mergeStaticCatalogInlineModel(staticCatalogModel, inlineMatch as Model),
+          providerConfig,
+          modelId,
+          cfg,
+          runtimeHooks,
+          workspaceDir,
+          preferDiscoveredTransport: true,
+        }),
         runtimeHooks,
       }),
     };
@@ -1045,37 +1120,48 @@ function resolveConfiguredFallbackModel(params: {
   if (!hasConfiguredFallbackSurface({ providerConfig, configuredModel, modelId })) {
     return undefined;
   }
-  const staticCatalogModel = configuredModel
-    ? undefined
-    : (resolveBundledStaticCatalogModel({
-        provider,
-        modelId,
-        cfg,
-        workspaceDir,
-        includeRuntimeDiscovery: true,
-      }) as StaticCatalogFallbackModel | undefined);
+  const staticCatalogModel = resolveBundledStaticCatalogModel({
+    provider,
+    modelId,
+    cfg,
+    workspaceDir,
+    includeRuntimeDiscovery: true,
+  }) as StaticCatalogFallbackModel | undefined;
   const metadataModel = configuredModel ?? staticCatalogModel;
-  const fallbackCompat = configuredModel?.compat ?? staticCatalogModel?.compat;
-  const fallbackMediaInput = configuredModel?.mediaInput ?? staticCatalogModel?.mediaInput;
+  const fallbackCompat = mergeModelCompat(staticCatalogModel?.compat, configuredModel?.compat);
+  const fallbackMediaInput = mergeModelMediaInput(
+    staticCatalogModel?.mediaInput,
+    configuredModel?.mediaInput,
+  );
   const providerHeaders = sanitizeModelHeaders(providerConfig?.headers, {
     stripSecretRefMarkers: true,
   });
   const providerRequest = sanitizeConfiguredModelProviderRequest(providerConfig?.request);
-  const modelHeaders = sanitizeModelHeaders(metadataModel?.headers, {
+  const staticCatalogHeaders = sanitizeModelHeaders(staticCatalogModel?.headers, {
+    stripSecretRefMarkers: true,
+  });
+  const modelHeaders = sanitizeModelHeaders(configuredModel?.headers, {
     stripSecretRefMarkers: true,
   });
   const resolvedParams = mergeConfiguredRuntimeModelParams({
     cfg,
     provider,
     modelId,
+    discoveredParams: staticCatalogModel?.params,
     providerParams: providerConfig?.params,
-    configuredParams: metadataModel?.params,
+    configuredParams: configuredModel?.params,
   });
+  const providerConfiguredApi = normalizeResolvedTransportApi(providerConfig?.api);
+  const configuredModelBaseUrl = normalizeTransportBaseUrl(configuredModel?.baseUrl);
+  const providerConfiguredBaseUrl = normalizeTransportBaseUrl(providerConfig?.baseUrl);
+  const staticCatalogBaseUrl = normalizeTransportBaseUrl(staticCatalogModel?.baseUrl);
   const fallbackTransport = resolveProviderTransport({
     provider,
     modelId,
     api:
       normalizeResolvedTransportApi(configuredModel?.api) ??
+      providerConfiguredApi ??
+      normalizeResolvedTransportApi(staticCatalogModel?.api) ??
       resolveConfiguredProviderDefaultApi({
         provider,
         providerConfig,
@@ -1083,9 +1169,8 @@ function resolveConfiguredFallbackModel(params: {
         workspaceDir,
         runtimeHooks,
       }) ??
-      normalizeResolvedTransportApi(staticCatalogModel?.api) ??
       "openai-responses",
-    baseUrl: configuredModel?.baseUrl ?? providerConfig?.baseUrl ?? staticCatalogModel?.baseUrl,
+    baseUrl: configuredModelBaseUrl ?? providerConfiguredBaseUrl ?? staticCatalogBaseUrl,
     cfg,
     workspaceDir,
     runtimeHooks,
@@ -1094,6 +1179,7 @@ function resolveConfiguredFallbackModel(params: {
     provider,
     api: fallbackTransport.api ?? "openai-responses",
     baseUrl: fallbackTransport.baseUrl,
+    discoveredHeaders: staticCatalogHeaders,
     providerHeaders,
     modelHeaders,
     authHeader: providerConfig?.authHeader,
@@ -1126,6 +1212,9 @@ function resolveConfiguredFallbackModel(params: {
             modelName: metadataModel?.name ?? modelId,
             input: metadataModel?.input,
           }),
+          ...(configuredModel?.thinkingLevelMap !== undefined
+            ? { thinkingLevelMap: configuredModel.thinkingLevelMap }
+            : {}),
           cost: metadataModel?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
           contextWindow:
             configuredModel?.contextWindow ??

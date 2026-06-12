@@ -1088,6 +1088,374 @@ describe("resolveModel", () => {
     });
   });
 
+  it("inherits bundled static transport for configured provider fallback models", () => {
+    resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
+      provider: "deepseek",
+      id: "deepseek-v4-pro",
+      name: "DeepSeek V4 Pro",
+      api: "openai-completions",
+      baseUrl: "https://api.deepseek.com",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 1.74, output: 3.48, cacheRead: 0.145, cacheWrite: 0 },
+      contextWindow: 1_000_000,
+      maxTokens: 384_000,
+      compat: {
+        supportsUsageInStreaming: true,
+        supportsReasoningEffort: true,
+        maxTokensField: "max_tokens",
+      },
+    });
+    const cfg = {
+      models: {
+        providers: {
+          deepseek: {
+            baseUrl: "",
+            models: [
+              {
+                id: "deepseek-v4-pro",
+                name: "Custom DeepSeek V4 Pro",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 32_768,
+                maxTokens: 4_096,
+                compat: {
+                  supportsReasoningEffort: false,
+                },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("deepseek", "deepseek-v4-pro", "/tmp/agent", cfg);
+    const model = expectResolvedModel(result);
+
+    expectRecordFields(model, {
+      name: "Custom DeepSeek V4 Pro",
+      api: "openai-completions",
+      baseUrl: "https://api.deepseek.com",
+      reasoning: false,
+      contextWindow: 32_768,
+      maxTokens: 4_096,
+    });
+    expect(model.compat).toEqual(
+      expect.objectContaining({
+        supportsUsageInStreaming: true,
+        supportsReasoningEffort: false,
+        maxTokensField: "max_tokens",
+      }),
+    );
+    expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledWith({
+      provider: "deepseek",
+      modelId: "deepseek-v4-pro",
+      cfg,
+      workspaceDir: expect.any(String),
+      includeRuntimeDiscovery: true,
+    });
+  });
+
+  it("fills missing configured provider runtime transport from bundled static metadata", async () => {
+    resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
+      provider: "deepseek",
+      id: "deepseek-v4-pro",
+      name: "DeepSeek V4 Pro",
+      api: "openai-completions",
+      baseUrl: "https://api.deepseek.com",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 1.74, output: 3.48, cacheRead: 0.145, cacheWrite: 0 },
+      contextWindow: 1_000_000,
+      maxTokens: 384_000,
+      compat: {
+        supportsUsageInStreaming: true,
+        supportsReasoningEffort: true,
+        maxTokensField: "max_tokens",
+      },
+    });
+    const cfg = {
+      models: {
+        providers: {
+          deepseek: {
+            models: [
+              {
+                id: "deepseek-v4-pro",
+                name: "Custom DeepSeek V4 Pro",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 32_768,
+                maxTokens: 4_096,
+                thinkingLevelMap: { off: null },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const baseRuntimeHooks = createRuntimeHooks();
+    const runProviderDynamicModel = vi.fn(() => ({
+      provider: "deepseek",
+      id: "deepseek-v4-pro",
+      name: "Custom DeepSeek V4 Pro",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 32_768,
+      maxTokens: 4_096,
+    }));
+
+    const result = await resolveModelAsync("deepseek", "deepseek-v4-pro", "/tmp/agent", cfg, {
+      runtimeHooks: {
+        ...baseRuntimeHooks,
+        runProviderDynamicModel,
+      },
+      skipAgentDiscovery: true,
+    });
+    const model = expectResolvedModel(result);
+
+    expectRecordFields(model, {
+      api: "openai-completions",
+      baseUrl: "https://api.deepseek.com",
+      reasoning: false,
+      contextWindow: 32_768,
+      maxTokens: 4_096,
+    });
+    expect(model.compat).toEqual(
+      expect.objectContaining({
+        supportsUsageInStreaming: true,
+        supportsReasoningEffort: true,
+        maxTokensField: "max_tokens",
+      }),
+    );
+    expect(runProviderDynamicModel).toHaveBeenCalled();
+  });
+
+  it("resolves configured DeepSeek probe models through bundled static transport without agent discovery", async () => {
+    resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
+      provider: "deepseek",
+      id: "deepseek-v4-pro",
+      name: "DeepSeek V4 Pro",
+      api: "openai-completions",
+      baseUrl: "https://api.deepseek.com",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 1.74, output: 3.48, cacheRead: 0.145, cacheWrite: 0 },
+      contextWindow: 1_000_000,
+      maxTokens: 384_000,
+      compat: {
+        supportsUsageInStreaming: true,
+        supportsReasoningEffort: true,
+        maxTokensField: "max_tokens",
+      },
+    });
+    const cfg = {
+      models: {
+        providers: {
+          deepseek: {
+            models: [
+              {
+                id: "deepseek-v4-pro",
+                name: "Custom DeepSeek V4 Pro",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 32_768,
+                maxTokens: 4_096,
+                thinkingLevelMap: { off: null },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = await resolveModelAsync("deepseek", "deepseek-v4-pro", "/tmp/agent", cfg, {
+      runtimeHooks: createRuntimeHooks(),
+      skipAgentDiscovery: true,
+    });
+    const model = expectResolvedModel(result);
+
+    expectRecordFields(model, {
+      name: "Custom DeepSeek V4 Pro",
+      api: "openai-completions",
+      baseUrl: "https://api.deepseek.com",
+      reasoning: false,
+      contextWindow: 32_768,
+      maxTokens: 4_096,
+    });
+    expect(model.compat).toEqual(
+      expect.objectContaining({
+        supportsUsageInStreaming: true,
+        supportsReasoningEffort: true,
+        maxTokensField: "max_tokens",
+      }),
+    );
+    expect((model as { thinkingLevelMap?: unknown }).thinkingLevelMap).toEqual({ off: null });
+  });
+
+  it("keeps provider runtime transport ahead of bundled static fallback metadata", async () => {
+    resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
+      provider: "deepseek",
+      id: "deepseek-v4-pro",
+      name: "DeepSeek V4 Pro",
+      api: "openai-completions",
+      baseUrl: "https://api.deepseek.com",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 1.74, output: 3.48, cacheRead: 0.145, cacheWrite: 0 },
+      contextWindow: 1_000_000,
+      maxTokens: 384_000,
+    });
+    const cfg = {
+      models: {
+        providers: {
+          deepseek: {
+            models: [
+              {
+                id: "deepseek-v4-pro",
+                name: "Custom DeepSeek V4 Pro",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 32_768,
+                maxTokens: 4_096,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const baseRuntimeHooks = createRuntimeHooks();
+    const runProviderDynamicModel = vi.fn(() => ({
+      provider: "deepseek",
+      id: "deepseek-v4-pro",
+      name: "Runtime DeepSeek V4 Pro",
+      api: "openai-responses" as const,
+      baseUrl: "https://runtime.deepseek.example/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 32_768,
+      maxTokens: 4_096,
+    }));
+
+    const result = await resolveModelAsync("deepseek", "deepseek-v4-pro", "/tmp/agent", cfg, {
+      runtimeHooks: {
+        ...baseRuntimeHooks,
+        runProviderDynamicModel,
+      },
+      skipAgentDiscovery: true,
+    });
+    const model = expectResolvedModel(result);
+
+    expectRecordFields(model, {
+      api: "openai-responses",
+      baseUrl: "https://runtime.deepseek.example/v1",
+      reasoning: false,
+      contextWindow: 32_768,
+      maxTokens: 4_096,
+    });
+    expect(runProviderDynamicModel).toHaveBeenCalled();
+  });
+
+  it("keeps configured transport overrides ahead of bundled static fallback metadata", () => {
+    resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
+      provider: "deepseek",
+      id: "deepseek-v4-pro",
+      name: "DeepSeek V4 Pro",
+      api: "openai-completions",
+      baseUrl: "https://api.deepseek.com",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 1.74, output: 3.48, cacheRead: 0.145, cacheWrite: 0 },
+      contextWindow: 1_000_000,
+      maxTokens: 384_000,
+    });
+    const cfg = {
+      models: {
+        providers: {
+          deepseek: {
+            baseUrl: "https://deepseek-proxy.example.com/v1",
+            api: "openai-completions",
+            models: [
+              {
+                id: "deepseek-v4-pro",
+                name: "Custom DeepSeek V4 Pro",
+                baseUrl: "https://deepseek-model-proxy.example.com/v1",
+                api: "openai-responses",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 32_768,
+                maxTokens: 4_096,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("deepseek", "deepseek-v4-pro", "/tmp/agent", cfg);
+    const model = expectResolvedModel(result);
+
+    expectRecordFields(model, {
+      api: "openai-responses",
+      baseUrl: "https://deepseek-model-proxy.example.com/v1",
+      contextWindow: 32_768,
+      maxTokens: 4_096,
+    });
+  });
+
+  it("keeps bundled static baseUrl when provider api is configured without a baseUrl", () => {
+    resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
+      provider: "deepseek",
+      id: "deepseek-v4-pro",
+      name: "DeepSeek V4 Pro",
+      api: "openai-responses",
+      baseUrl: "https://api.deepseek.com",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 1.74, output: 3.48, cacheRead: 0.145, cacheWrite: 0 },
+      contextWindow: 1_000_000,
+      maxTokens: 384_000,
+    });
+    const cfg = {
+      models: {
+        providers: {
+          deepseek: {
+            api: "openai-completions",
+            models: [
+              {
+                id: "deepseek-v4-pro",
+                name: "Custom DeepSeek V4 Pro",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 32_768,
+                maxTokens: 4_096,
+                thinkingLevelMap: { off: null },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("deepseek", "deepseek-v4-pro", "/tmp/agent", cfg);
+    const model = expectResolvedModel(result);
+
+    expectRecordFields(model, {
+      api: "openai-completions",
+      baseUrl: "https://api.deepseek.com",
+      contextWindow: 32_768,
+      maxTokens: 4_096,
+    });
+    expect(model.thinkingLevelMap).toEqual({ off: null });
+  });
+
   it("keeps provider token overrides ahead of bundled static fallback metadata", () => {
     resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
       provider: "xiaomi-token-plan",
@@ -1223,11 +1591,39 @@ describe("resolveModel", () => {
     const claudeModel = expectResolvedModel(claude);
     expect(claudeModel.api).toBe("anthropic-messages");
     expect(claudeModel.baseUrl).toBe("http://localhost:8080");
+    expect(claudeModel.maxTokens).toBeUndefined();
 
     const gpt = resolveModelForTest("my-router", "my-router/gpt", "/tmp/agent", cfg);
     const gptModel = expectResolvedModel(gpt);
     expect(gptModel.api).toBe("openai-completions");
     expect(gptModel.baseUrl).toBe("http://localhost:8080/v1");
+  });
+
+  it("preserves normalized inline provider transport when static metadata is merged", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "my-gemini": {
+            api: "google-generative-ai",
+            baseUrl: "https://generativelanguage.googleapis.com",
+            models: [
+              {
+                id: "gemini-pro",
+                name: "Gemini Pro",
+                input: ["text"],
+                contextWindow: 32_768,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("my-gemini", "gemini-pro", "/tmp/agent", cfg);
+    const model = expectResolvedModel(result);
+
+    expect(model.api).toBe("google-generative-ai");
+    expect(model.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta");
   });
 
   it("defaults baseUrl-only local custom fallback models to chat completions", () => {
