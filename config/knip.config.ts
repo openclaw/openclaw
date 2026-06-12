@@ -79,6 +79,7 @@ const rootBundledPluginRuntimeDependencies = [
 
 const config = {
   ignoreFiles: [
+    ".artifacts/**",
     "scripts/**",
     "packages/*/dist/**",
     "**/__tests__/**",
