@@ -516,7 +516,7 @@ describe("runMessageAction core send routing", () => {
     });
 
     expect(sendText).toHaveBeenCalledOnce();
-    const call = sendText.mock.calls[0]!;
+    const call = sendText.mock.calls[0];
     const payload = call[0] as Record<string, unknown>;
     expect(payload.text).toBe("[Nexus] Hello!");
   });
@@ -545,7 +545,7 @@ describe("runMessageAction core send routing", () => {
     });
 
     expect(sendText).toHaveBeenCalledOnce();
-    const call = sendText.mock.calls[0]!;
+    const call = sendText.mock.calls[0];
     const payload = call[0] as Record<string, unknown>;
     expect(payload.text).toBe("[Nexus] Hello!");
   });
@@ -573,7 +573,7 @@ describe("runMessageAction core send routing", () => {
     });
 
     expect(sendText).toHaveBeenCalledOnce();
-    const call = sendText.mock.calls[0]!;
+    const call = sendText.mock.calls[0];
     const payload = call[0] as Record<string, unknown>;
     expect(payload.text).toBe("Hello!");
   });
