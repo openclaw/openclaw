@@ -6,7 +6,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { modelKey, parseModelRef, resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { createModelVisibilityPolicy } from "../agents/model-visibility-policy.js";
 import { getRuntimeConfig } from "../config/io.js";
@@ -37,6 +37,23 @@ export {
 export const OPENCLAW_MODEL_ID = "openclaw";
 /** Default OpenAI-compatible model alias that targets the default OpenClaw agent. */
 export const OPENCLAW_DEFAULT_MODEL_ID = "openclaw/default";
+
+export class UnknownGatewayAgentError extends Error {
+  constructor(readonly agentId: string) {
+    super(`Unknown agent '${agentId}'.`);
+    this.name = "UnknownGatewayAgentError";
+  }
+}
+
+export function isUnknownGatewayAgentError(err: unknown): err is UnknownGatewayAgentError {
+  return err instanceof UnknownGatewayAgentError;
+}
+
+function assertKnownAgentId(agentId: string, cfg = getRuntimeConfig()): void {
+  if (!listAgentIds(cfg).includes(agentId)) {
+    throw new UnknownGatewayAgentError(agentId);
+  }
+}
 
 function resolveAgentIdFromHeader(req: IncomingMessage): string | undefined {
   const raw =
@@ -140,11 +157,17 @@ export function resolveAgentIdForRequest(params: {
   const cfg = getRuntimeConfig();
   const fromHeader = resolveAgentIdFromHeader(params.req);
   if (fromHeader) {
+    assertKnownAgentId(fromHeader, cfg);
     return fromHeader;
   }
 
   const fromModel = resolveAgentIdFromModel(params.model, cfg);
-  return fromModel ?? resolveDefaultAgentId(cfg);
+  if (fromModel) {
+    assertKnownAgentId(fromModel, cfg);
+    return fromModel;
+  }
+
+  return resolveDefaultAgentId(cfg);
 }
 
 function resolveSessionKey(params: {

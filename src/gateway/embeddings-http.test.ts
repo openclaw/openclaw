@@ -278,21 +278,48 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
   });
 
   it("supports base64 encoding and agent-scoped auth/config resolution", async () => {
-    const res = await postEmbeddings(
-      {
-        model: "openclaw/beta",
-        input: "hello",
-        encoding_format: "base64",
-      },
-      { "x-openclaw-agent-id": "beta" },
-    );
-    expect(res.status).toBe(200);
-    const json = (await res.json()) as { data?: Array<{ embedding?: string }> };
-    expect(typeof json.data?.[0]?.embedding).toBe("string");
-    expect(createEmbeddingProviderMock).toHaveBeenCalled();
-    const lastCall = latestCreateEmbeddingProviderOptions();
-    expect(typeof lastCall.model).toBe("string");
-    expect(lastCall.agentDir).toBe(resolveAgentDir({}, "beta"));
+    try {
+      testState.agentsConfig = { list: [{ id: "main" }, { id: "beta" }] };
+      resetConfigRuntimeState();
+
+      const res = await postEmbeddings(
+        {
+          model: "openclaw/beta",
+          input: "hello",
+          encoding_format: "base64",
+        },
+        { "x-openclaw-agent-id": "beta" },
+      );
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as { data?: Array<{ embedding?: string }> };
+      expect(typeof json.data?.[0]?.embedding).toBe("string");
+      expect(createEmbeddingProviderMock).toHaveBeenCalled();
+      const lastCall = latestCreateEmbeddingProviderOptions();
+      expect(typeof lastCall.model).toBe("string");
+      expect(lastCall.agentDir).toBe(resolveAgentDir({}, "beta"));
+    } finally {
+      testState.agentsConfig = undefined;
+      resetConfigRuntimeState();
+    }
+  });
+
+  it("rejects explicit unknown agent ids", async () => {
+    try {
+      testState.agentsConfig = { list: [{ id: "main" }, { id: "beta" }] };
+      resetConfigRuntimeState();
+
+      const header = await postEmbeddings(
+        { model: "openclaw/default", input: "hello" },
+        { "x-openclaw-agent-id": "missing-agent" },
+      );
+      await expectInvalidEmbeddingRequest(header, "Unknown agent 'missing-agent'.");
+
+      const model = await postEmbeddings({ model: "openclaw/missing-agent", input: "hello" });
+      await expectInvalidEmbeddingRequest(model, "Unknown agent 'missing-agent'.");
+    } finally {
+      testState.agentsConfig = undefined;
+      resetConfigRuntimeState();
+    }
   });
 
   it("rejects invalid input shapes", async () => {
