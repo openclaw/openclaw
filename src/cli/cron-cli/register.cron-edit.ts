@@ -243,26 +243,26 @@ export function registerCronEditCommand(cron: Command) {
             tz: opts.tz,
           });
           if (scheduleRequest.kind === "direct") {
-            const existing = await loadCronJobForEditSchedulePatch(opts, String(id));
-            if (!existing) {
-              throw new Error(`unknown cron job id: ${id}`);
-            }
-            if (
-              scheduleRequest.schedule.kind === "cron" &&
-              existing.schedule.kind === "cron"
-            ) {
+            if (scheduleRequest.schedule.kind === "cron") {
               // When changing the cron expression without --tz/--stagger,
               // preserve the existing tz and staggerMs so they aren't
-              // silently stripped. This matches the merge behaviour of
-              // the "patch-existing-cron" path. See #92291.
-              patch.schedule = {
-                ...scheduleRequest.schedule,
-                tz: scheduleRequest.schedule.tz ?? existing.schedule.tz,
-                staggerMs:
-                  scheduleRequest.schedule.staggerMs !== undefined
-                    ? scheduleRequest.schedule.staggerMs
-                    : existing.schedule.staggerMs,
-              };
+              // silently stripped. See #92291.
+              const existing = await loadCronJobForEditSchedulePatch(opts, String(id));
+              if (!existing) {
+                throw new Error(`unknown cron job id: ${id}`);
+              }
+              if (existing.schedule.kind === "cron") {
+                patch.schedule = {
+                  ...scheduleRequest.schedule,
+                  tz: scheduleRequest.schedule.tz ?? existing.schedule.tz,
+                  staggerMs:
+                    scheduleRequest.schedule.staggerMs !== undefined
+                      ? scheduleRequest.schedule.staggerMs
+                      : existing.schedule.staggerMs,
+                };
+              } else {
+                patch.schedule = scheduleRequest.schedule;
+              }
             } else {
               patch.schedule = scheduleRequest.schedule;
             }
