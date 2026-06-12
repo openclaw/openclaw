@@ -654,6 +654,36 @@ function isManagedSecretRefApiKeyMarker(apiKey: string | undefined): boolean {
   return apiKey?.trim() === NON_ENV_SECRETREF_MARKER;
 }
 
+/**
+ * Resolves a custom provider API key from the active runtime snapshot when the
+ * source config only stores the managed SecretRef placeholder. This keeps the
+ * fast availability check consistent with final credential resolution.
+ */
+function resolveManagedSecretRefCustomProviderApiKey(params: {
+  cfg: OpenClawConfig | undefined;
+  provider: string;
+}): ResolvedCustomProviderApiKey | null {
+  const providerConfig = resolveProviderConfig(params.cfg, params.provider);
+  const sourceApiKey = providerConfig?.apiKey;
+  if (typeof sourceApiKey !== "string" || !isManagedSecretRefApiKeyMarker(sourceApiKey)) {
+    return null;
+  }
+  const runtimeConfig = getRuntimeConfigSnapshot();
+  if (!runtimeConfig || runtimeConfig === params.cfg) {
+    return null;
+  }
+  const runtimeProviderConfig = resolveProviderConfig(runtimeConfig, params.provider);
+  const runtimeApiKey = runtimeProviderConfig?.apiKey;
+  if (
+    typeof runtimeApiKey !== "string" ||
+    !runtimeApiKey.trim() ||
+    isNonSecretApiKeyMarker(runtimeApiKey)
+  ) {
+    return null;
+  }
+  return { apiKey: runtimeApiKey, source: `models.providers.${params.provider}` };
+}
+
 /** True when a custom local provider can use a synthetic no-auth placeholder. */
 export function hasSyntheticLocalProviderAuthConfig(params: {
   cfg: OpenClawConfig | undefined;
@@ -753,7 +783,10 @@ export function hasRuntimeAvailableProviderAuth(params: {
   ) {
     return true;
   }
-  if (resolveUsableCustomProviderApiKey({ cfg: params.cfg, provider, env: params.env })) {
+  if (
+    resolveUsableCustomProviderApiKey({ cfg: params.cfg, provider, env: params.env }) ||
+    resolveManagedSecretRefCustomProviderApiKey({ cfg: params.cfg, provider })
+  ) {
     return true;
   }
   if (hasSyntheticLocalProviderAuthConfig({ cfg: params.cfg, provider })) {
@@ -828,19 +861,31 @@ function resolveProviderSyntheticRuntimeAuth(params: {
     return { auth: directAuth };
   }
 
-  const runtimeConfig = getRuntimeConfigSnapshot();
-  if (!runtimeConfig || runtimeConfig === params.cfg) {
-    return { blockedOnManagedSecretRef: true };
+  const managedRuntimeAuth = resolveManagedSecretRefCustomProviderApiKey({
+    cfg: params.cfg,
+    provider: params.provider,
+  });
+  if (managedRuntimeAuth) {
+    return {
+      auth: {
+        apiKey: managedRuntimeAuth.apiKey,
+        source: managedRuntimeAuth.source,
+        mode: "api-key" as const,
+      },
+    };
   }
 
-  const runtimeAuth = resolveFromConfig(runtimeConfig);
-  const runtimeApiKey = runtimeAuth?.apiKey;
-  if (!runtimeAuth || !runtimeApiKey || isNonSecretApiKeyMarker(runtimeApiKey)) {
-    return { blockedOnManagedSecretRef: true };
+  // Preserve plugin-side SecretRef runtime snapshot fallback when the source
+  // config stores the managed marker inside a plugin config rather than a
+  // models.providers entry.
+  const runtimeConfig = getRuntimeConfigSnapshot();
+  if (runtimeConfig && runtimeConfig !== params.cfg) {
+    const runtimeAuth = resolveFromConfig(runtimeConfig);
+    if (runtimeAuth && runtimeAuth.apiKey && !isNonSecretApiKeyMarker(runtimeAuth.apiKey)) {
+      return { auth: runtimeAuth };
+    }
   }
-  return {
-    auth: runtimeAuth,
-  };
+  return { blockedOnManagedSecretRef: true };
 }
 
 function resolveSyntheticLocalProviderAuth(params: {

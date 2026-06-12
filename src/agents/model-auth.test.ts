@@ -138,6 +138,7 @@ let hasUsableCustomProviderApiKey: typeof import("./model-auth.js").hasUsableCus
 let hasSyntheticLocalProviderAuthConfig: typeof import("./model-auth.js").hasSyntheticLocalProviderAuthConfig;
 let requireApiKey: typeof import("./model-auth.js").requireApiKey;
 let getApiKeyForModel: typeof import("./model-auth.js").getApiKeyForModel;
+let hasRuntimeAvailableProviderAuth: typeof import("./model-auth.js").hasRuntimeAvailableProviderAuth;
 let resolveApiKeyForProvider: typeof import("./model-auth.js").resolveApiKeyForProvider;
 let resolveAwsSdkEnvVarName: typeof import("./model-auth.js").resolveAwsSdkEnvVarName;
 let resolveModelAuthMode: typeof import("./model-auth.js").resolveModelAuthMode;
@@ -155,6 +156,7 @@ beforeAll(async () => {
     applyLocalNoAuthHeaderOverride,
     createRuntimeProviderAuthLookup,
     formatMissingAuthError,
+    hasRuntimeAvailableProviderAuth,
     hasSyntheticLocalProviderAuthConfig,
     getApiKeyForModel,
     hasUsableCustomProviderApiKey,
@@ -798,6 +800,60 @@ describe("resolveUsableCustomProviderApiKey", () => {
         process.env.OPENAI_API_KEY = previous;
       }
     }
+  });
+});
+
+describe("hasRuntimeAvailableProviderAuth", () => {
+  it("returns true for custom providers with a managed SecretRef apiKey resolved in the runtime snapshot", () => {
+    const sourceConfig = {
+      models: {
+        providers: {
+          cliproxyapi: {
+            api: "openai-responses",
+            apiKey: NON_ENV_SECRETREF_MARKER,
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const runtimeConfig = {
+      models: {
+        providers: {
+          cliproxyapi: {
+            api: "openai-responses",
+            apiKey: "resolved-secretref-key", // pragma: allowlist secret
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+
+    expect(
+      hasRuntimeAvailableProviderAuth({
+        provider: "cliproxyapi",
+        cfg: sourceConfig,
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false for custom providers with a managed SecretRef apiKey when the runtime snapshot has no real key", () => {
+    const sourceConfig = {
+      models: {
+        providers: {
+          cliproxyapi: {
+            api: "openai-responses",
+            apiKey: NON_ENV_SECRETREF_MARKER,
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    setRuntimeConfigSnapshot(sourceConfig, sourceConfig);
+
+    expect(
+      hasRuntimeAvailableProviderAuth({
+        provider: "cliproxyapi",
+        cfg: sourceConfig,
+      }),
+    ).toBe(false);
   });
 });
 

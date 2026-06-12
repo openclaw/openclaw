@@ -1,9 +1,9 @@
-import { resolveApiKeyForProvider } from "../../src/agents/model-auth.js";
-import {
-  setRuntimeConfigSnapshot,
-  clearRuntimeConfigSnapshot,
-} from "../../src/config/config.js";
 import { NON_ENV_SECRETREF_MARKER } from "../../src/agents/model-auth-markers.js";
+import {
+  hasRuntimeAvailableProviderAuth,
+  resolveApiKeyForProvider,
+} from "../../src/agents/model-auth.js";
+import { setRuntimeConfigSnapshot, clearRuntimeConfigSnapshot } from "../../src/config/config.js";
 
 const sourceConfig = {
   models: {
@@ -36,6 +36,12 @@ async function main() {
   setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
 
   try {
+    const available = hasRuntimeAvailableProviderAuth({
+      provider: "cliproxyapi",
+      cfg: sourceConfig,
+    });
+    console.log("Runtime available auth:", available);
+
     const resolved = await resolveApiKeyForProvider({
       provider: "cliproxyapi",
       cfg: sourceConfig,
@@ -44,10 +50,17 @@ async function main() {
 
     console.log("Resolved auth:", resolved);
 
-    if (resolved?.apiKey === "resolved-secretref-key") {
-      console.log("\nPASS: Custom provider secretref-managed apiKey correctly resolved from runtime snapshot.");
+    if (available && resolved?.apiKey === "resolved-secretref-key") {
+      console.log(
+        "\nPASS: Custom provider secretref-managed apiKey is available and correctly resolved from runtime snapshot.",
+      );
     } else {
-      console.error("\nFAIL: Expected apiKey 'resolved-secretref-key', got:", resolved?.apiKey);
+      console.error(
+        "\nFAIL: Expected available=true and apiKey 'resolved-secretref-key', got available=",
+        available,
+        "apiKey=",
+        resolved?.apiKey,
+      );
       process.exitCode = 1;
     }
   } catch (err) {
