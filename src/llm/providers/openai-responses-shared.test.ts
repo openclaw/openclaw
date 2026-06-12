@@ -640,7 +640,7 @@ describe("processResponsesStream", () => {
       {
         type: "text",
         text: snapshot3,
-        textSignature: JSON.stringify({ v: 1, id: "msg_1", phase: "final_answer" }),
+        textSignature: JSON.stringify({ v: 1, id: "msg_3", phase: "final_answer" }),
       },
     ]);
     const textEnds = events.filter((event) => event.type === "text_end");
@@ -648,7 +648,10 @@ describe("processResponsesStream", () => {
     expect(textEnds.at(-1)?.content).toBe(snapshot3);
   });
 
-  it("drops a repeated message snapshot without growing the text block", async () => {
+  it.each([
+    ["identical", "Hello world.", "Hello world."],
+    ["shrinking", "Step one. Step two.", "Step one."],
+  ])("keeps %s adjacent same-phase message items as distinct blocks", async (_label, a, b) => {
     const output = createAssistantOutput();
     const stream = new AssistantMessageEventStream();
     await processResponsesStream(
@@ -663,7 +666,7 @@ describe("processResponsesStream", () => {
             type: "message",
             id: "msg_1",
             phase: "final_answer",
-            content: [{ type: "output_text", text: "Hello world." }],
+            content: [{ type: "output_text", text: a }],
           },
         },
         {
@@ -676,7 +679,7 @@ describe("processResponsesStream", () => {
             type: "message",
             id: "msg_2",
             phase: "final_answer",
-            content: [{ type: "output_text", text: "Hello world." }],
+            content: [{ type: "output_text", text: b }],
           },
         },
         { type: "response.completed", response: { id: "resp_1", status: "completed" } },
@@ -687,11 +690,18 @@ describe("processResponsesStream", () => {
     );
     stream.end();
 
+    // Only strict extensions collapse; equal or shrinking items are real,
+    // independently identified messages and must never be removed.
     expect(output.content).toEqual([
       {
         type: "text",
-        text: "Hello world.",
+        text: a,
         textSignature: JSON.stringify({ v: 1, id: "msg_1", phase: "final_answer" }),
+      },
+      {
+        type: "text",
+        text: b,
+        textSignature: JSON.stringify({ v: 1, id: "msg_2", phase: "final_answer" }),
       },
     ]);
   });

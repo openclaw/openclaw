@@ -480,7 +480,7 @@ describe("openai transport stream", () => {
       {
         type: "text",
         text: snapshot3,
-        textSignature: '{"v":1,"id":"msg_1","phase":"final_answer"}',
+        textSignature: '{"v":1,"id":"msg_3","phase":"final_answer"}',
       },
     ]);
   });
@@ -574,11 +574,18 @@ describe("openai transport stream", () => {
       model,
     );
 
+    // msg_2 strictly extends msg_1 and collapses into it; msg_3 shrinks back
+    // and is an independently identified message, so it stays a real block.
     expect(output.content).toEqual([
       {
         type: "text",
         text: "The answer is 42.",
-        textSignature: '{"v":1,"id":"msg_1"}',
+        textSignature: '{"v":1,"id":"msg_2"}',
+      },
+      {
+        type: "text",
+        text: "The answer",
+        textSignature: '{"v":1,"id":"msg_3"}',
       },
     ]);
   });

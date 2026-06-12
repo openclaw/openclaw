@@ -792,7 +792,20 @@ export async function processResponsesStream<TApi extends Api>(
           nextText: currentBlock.text,
           nextPhase: phase,
         });
-        if (collapse.kind === "keep") {
+        if (collapse.kind === "extend" && lastTextBlock) {
+          // Cumulative snapshot of the prior message item: replace its text
+          // instead of appending another copy. The newest item's signature is
+          // kept so replay carries the item that produced this content (#91959).
+          blocks.pop();
+          lastTextBlock.block.text = collapse.text;
+          lastTextBlock.block.textSignature = encodeTextSignatureV1(item.id, phase);
+          stream.push({
+            type: "text_end",
+            contentIndex: lastTextBlock.index,
+            content: collapse.text,
+            partial: output,
+          });
+        } else {
           currentBlock.textSignature = encodeTextSignatureV1(item.id, phase);
           lastTextBlock = { block: currentBlock, index: blockIndex(), phase };
           stream.push({
@@ -801,20 +814,6 @@ export async function processResponsesStream<TApi extends Api>(
             content: currentBlock.text,
             partial: output,
           });
-        } else if (lastTextBlock) {
-          // Cumulative snapshot of the prior message item: replace its text
-          // instead of appending another copy. The first item's signature is
-          // kept so replay and stream-item identity stay stable (#91959).
-          blocks.pop();
-          if (collapse.kind === "extend") {
-            lastTextBlock.block.text = collapse.text;
-            stream.push({
-              type: "text_end",
-              contentIndex: lastTextBlock.index,
-              content: collapse.text,
-              partial: output,
-            });
-          }
         }
         currentBlock = null;
       } else if (item.type === "function_call") {
