@@ -498,6 +498,17 @@ describe("resolveUsableCustomProviderApiKey", () => {
     // and stores the actual API key in the runtime config snapshot.  Before
     // the fix, resolveUsableCustomProviderApiKey returned null for
     // secretref-managed without consulting the snapshot.
+    const sourceConfig = {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "https://example.com/v1",
+            apiKey: NON_ENV_SECRETREF_MARKER,
+            models: [],
+          },
+        },
+      },
+    };
     const runtimeConfig = {
       models: {
         providers: {
@@ -509,8 +520,47 @@ describe("resolveUsableCustomProviderApiKey", () => {
         },
       },
     };
-    setRuntimeConfigSnapshot(runtimeConfig);
+    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
 
+    const resolved = resolveUsableCustomProviderApiKey({
+      cfg: sourceConfig,
+      provider: "custom",
+    });
+    expect(resolved).toEqual({
+      apiKey: "sk-resolved-by-secrets-runtime",
+      source: "models.json (runtime snapshot)",
+    });
+  });
+
+  it("does not use runtime snapshot when source config has a different provider key", () => {
+    // If a different config with the same provider id created the snapshot,
+    // the resolved credential should not leak across config boundaries.
+    const unrelatedSource = {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "https://other.example.com/v1",
+            apiKey: "sk-unrelated-literal-key", // pragma: allowlist secret
+            models: [],
+          },
+        },
+      },
+    };
+    const runtimeConfig = {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "https://other.example.com/v1",
+            apiKey: "sk-resolved-from-other-config", // pragma: allowlist secret
+            models: [],
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(runtimeConfig, unrelatedSource);
+
+    // This config uses a different apiKey (secretref-managed marker), but
+    // the source snapshot has a literal key — they are not the same config.
     const resolved = resolveUsableCustomProviderApiKey({
       cfg: {
         models: {
@@ -525,10 +575,7 @@ describe("resolveUsableCustomProviderApiKey", () => {
       },
       provider: "custom",
     });
-    expect(resolved).toEqual({
-      apiKey: "sk-resolved-by-secrets-runtime",
-      source: "models.json (runtime snapshot)",
-    });
+    expect(resolved).toBeNull();
   });
 
   it("does not treat the Vertex ADC marker as a usable models.json credential", () => {

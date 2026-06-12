@@ -10,7 +10,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { formatCliCommand } from "../cli/command-format.js";
-import { getRuntimeConfigSnapshot } from "../config/config.js";
+import { getRuntimeConfigSnapshot, getRuntimeConfigSourceSnapshot } from "../config/config.js";
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
@@ -341,11 +341,22 @@ export function resolveUsableCustomProviderApiKey(params: {
   // openclaw-config-secrets.json, prepared by the secrets runtime).  Without
   // this fallback, custom providers using file-backed SecretRefs get 503
   // auth_unavailable after the snapshot replaces the raw marker (issue #92097).
+  //
+  // Only use the snapshot when the source config that produced it has the
+  // same non-secret marker for this provider — this prevents the process-global
+  // snapshot from leaking a resolved credential across unrelated configs that
+  // happen to share the same provider id.
   const runtimeConfig = getRuntimeConfigSnapshot();
   if (runtimeConfig && runtimeConfig !== params.cfg) {
-    const runtimeCustomKey = getCustomProviderApiKey(runtimeConfig, params.provider);
-    if (runtimeCustomKey && !isNonSecretApiKeyMarker(runtimeCustomKey)) {
-      return { apiKey: runtimeCustomKey, source: "models.json (runtime snapshot)" };
+    const sourceSnapshot = getRuntimeConfigSourceSnapshot();
+    if (sourceSnapshot) {
+      const sourceCustomKey = getCustomProviderApiKey(sourceSnapshot, params.provider);
+      if (sourceCustomKey && isNonSecretApiKeyMarker(sourceCustomKey)) {
+        const runtimeCustomKey = getCustomProviderApiKey(runtimeConfig, params.provider);
+        if (runtimeCustomKey && !isNonSecretApiKeyMarker(runtimeCustomKey)) {
+          return { apiKey: runtimeCustomKey, source: "models.json (runtime snapshot)" };
+        }
+      }
     }
   }
   return null;
