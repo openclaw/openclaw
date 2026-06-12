@@ -575,6 +575,36 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMediaFeishuMock).not.toHaveBeenCalled();
   });
 
+  it("suppresses Feishu SOP internal-noise final text", async () => {
+    const options = setupNonStreamingAutoDispatcher();
+
+    await options.deliver(
+      {
+        text: "sender view: lark-cli --profile wteam raw_params open_id=ou_secret",
+      },
+      { kind: "final" },
+    );
+
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps short memory governance probe answers visible", async () => {
+    const options = setupNonStreamingAutoDispatcher();
+
+    await options.deliver(
+      {
+        text: "不能。记忆治理要求 true @ 必须回读 mentions，纯文本 @ 不算。",
+      },
+      { kind: "final" },
+    );
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expect(firstMockArg(sendMessageFeishuMock, "send message params")).toMatchObject({
+      text: "不能。记忆治理要求 true @ 必须回读 mentions，纯文本 @ 不算。",
+    });
+  });
+
   it("disables block streaming by default to prevent silent reply drops", () => {
     const result = createFeishuReplyDispatcher({
       cfg: {} as never,

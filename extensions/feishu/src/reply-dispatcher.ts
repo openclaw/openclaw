@@ -33,6 +33,60 @@ function shouldUseCard(text: string): boolean {
   return /```[\s\S]*?```/.test(text) || /\|.+\|[\r\n]+\|[-:| ]+\|/.test(text);
 }
 
+function normalizeFeishuSopOutboundText(text: string | undefined): string {
+  return String(text ?? "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isFeishuSopEmptyShellText(text: string | undefined): boolean {
+  const normalized = normalizeFeishuSopOutboundText(text);
+  if (!normalized) {
+    return true;
+  }
+  const compact = normalized.replace(/\s+/g, "");
+  if (/^[。．.·,，、;；:：!！?？/\\|_~\-—=+*#`'"“”‘’()[\]{}<>《》【】]+$/.test(compact)) {
+    return true;
+  }
+  if (/^[A-Za-z0-9]{1,2}$/.test(compact)) {
+    return true;
+  }
+  return ["收到", "好的", "ok", "已收到", "处理中", "格式", "下"].includes(
+    normalized.toLowerCase(),
+  );
+}
+
+function hasFeishuSopInternalNoise(text: string | undefined): boolean {
+  const raw = String(text ?? "");
+  const normalized = normalizeFeishuSopOutboundText(text);
+  const looksLikeMemoryProbeAnswer =
+    normalized.length <= 500 &&
+    /(记忆治理|true\s*@|mentions|mention|纯文本\s*@|不算|缺少\s*mentions)/i.test(normalized);
+  const hasHardSecretOrStackNoise =
+    /\b(?:open_id|app_id|target_id|target id)\s*[:=]|cli_|api key|access_token|tenant_access_token|user_access_token|raw_params|stack trace|Traceback|```json/i.test(
+      normalized,
+    );
+  if (looksLikeMemoryProbeAnswer && !hasHardSecretOrStackNoise) {
+    return false;
+  }
+  const joined = `${raw}\n${normalized}`;
+  return /<on_receive|<\/on_receive|message tool|sender view|open_id|cli_|app_id|target_id|target id|mapping|映射|工具补丁|本地 memory|memory\/daily|Apply Patch|Agent:|Model:|Provider:|Model Fallback|assistant turn failed|lark-cli|keychain|profile|api key|access_token|tenant_access_token|user_access_token|raw_params|stack trace|Traceback|```json/i.test(
+    joined,
+  );
+}
+
+function shouldSuppressFeishuSopOutboundText(text: string | undefined): string | null {
+  if (isFeishuSopEmptyShellText(text)) {
+    return "empty_shell";
+  }
+  if (hasFeishuSopInternalNoise(text)) {
+    return "internal_noise";
+  }
+  return null;
+}
+
 /** Maximum age (ms) for a message to receive a typing indicator reaction.
  * Messages older than this are likely replays after context compaction (#30418). */
 const TYPING_INDICATOR_MAX_AGE_MS = 2 * 60_000;
@@ -635,6 +689,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           );
         const finalTextExceedsStreamingLimit =
           info?.kind === "final" && hasText && text.length > textChunkLimit;
+        const suppressedTextReason = hasText ? shouldSuppressFeishuSopOutboundText(text) : null;
         const useStaticCard =
           hasText &&
           (renderMode === "card" ||
@@ -658,6 +713,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           finalTextWouldUseStreamingCard;
         const shouldDeliverText =
           hasText &&
+          suppressedTextReason === null &&
           !hasVoiceMedia &&
           !skipTextForDuplicateFinal &&
           !skipTextForClosedStreamingFinal;
