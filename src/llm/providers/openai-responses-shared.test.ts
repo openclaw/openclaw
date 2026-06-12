@@ -53,6 +53,14 @@ const nativeOpenAIModel = {
   maxTokens: 8192,
 } satisfies Model<"openai-responses">;
 
+const bedrockMantleGpt5Model = {
+  ...nativeOpenAIModel,
+  id: "openai.gpt-5.5",
+  name: "Bedrock Mantle GPT-5.5",
+  provider: "amazon-bedrock-mantle",
+  baseUrl: "https://bedrock-mantle.us-east-2.api.aws/openai/v1",
+} satisfies Model<"openai-responses">;
+
 const proxyOpenAIModel = {
   ...nativeOpenAIModel,
   id: "custom-model",
@@ -60,12 +68,12 @@ const proxyOpenAIModel = {
   baseUrl: "https://proxy.example.com/v1",
 } satisfies Model<"openai-responses">;
 
-function createAssistantOutput(): AssistantMessage {
+function createAssistantOutput(model: Model = nativeOpenAIModel): AssistantMessage {
   return {
     role: "assistant",
-    api: nativeOpenAIModel.api,
-    provider: nativeOpenAIModel.provider,
-    model: nativeOpenAIModel.id,
+    api: model.api,
+    provider: model.provider,
+    model: model.id,
     usage: {
       input: 0,
       output: 0,
@@ -453,6 +461,267 @@ describe("convertResponsesMessages", () => {
 });
 
 describe("processResponsesStream", () => {
+  it("collapses cumulative message snapshots from Bedrock Mantle GPT-5 Responses streams", async () => {
+    const output = createAssistantOutput(bedrockMantleGpt5Model);
+    const { stream, events } = createCapturedAssistantMessageEventStream();
+
+    await processResponsesStream(
+      responseEvents([
+        {
+          type: "response.output_item.added",
+          item: {
+            type: "message",
+            id: "msg_prefix_1",
+            role: "assistant",
+            content: [],
+            status: "in_progress",
+          },
+        },
+        {
+          type: "response.content_part.added",
+          part: { type: "output_text", text: "" },
+        },
+        {
+          type: "response.output_text.delta",
+          delta: "Transformer attention starts with Q/K/V.",
+        },
+        {
+          type: "response.output_item.done",
+          item: {
+            type: "message",
+            id: "msg_prefix_1",
+            role: "assistant",
+            content: [
+              {
+                type: "output_text",
+                text: "Transformer attention starts with Q/K/V.",
+                annotations: [],
+              },
+            ],
+            phase: "final_answer",
+            status: "completed",
+          },
+        },
+        {
+          type: "response.output_item.added",
+          item: { type: "reasoning", id: "rs_boundary", summary: [] },
+        },
+        {
+          type: "response.reasoning_text.delta",
+          delta: "checking structure",
+        },
+        {
+          type: "response.output_item.done",
+          item: {
+            type: "reasoning",
+            id: "rs_boundary",
+            summary: [{ type: "summary_text", text: "checking structure" }],
+          },
+        },
+        {
+          type: "response.output_item.added",
+          item: {
+            type: "message",
+            id: "msg_prefix_2",
+            role: "assistant",
+            content: [],
+            status: "in_progress",
+          },
+        },
+        {
+          type: "response.content_part.added",
+          part: { type: "output_text", text: "" },
+        },
+        {
+          type: "response.output_text.delta",
+          delta: "Transformer attention starts with Q/K/V. The final answer continues once.",
+        },
+        {
+          type: "response.output_item.done",
+          item: {
+            type: "message",
+            id: "msg_prefix_2",
+            role: "assistant",
+            content: [
+              {
+                type: "output_text",
+                text: "Transformer attention starts with Q/K/V. The final answer continues once.",
+                annotations: [],
+              },
+            ],
+            phase: "final_answer",
+            status: "completed",
+          },
+        },
+        {
+          type: "response.completed",
+          response: {
+            id: "resp_prefix",
+            status: "completed",
+          },
+        },
+      ]),
+      output,
+      stream,
+      bedrockMantleGpt5Model,
+    );
+
+    const textBlocks = output.content.filter((block) => block.type === "text");
+    expect(textBlocks).toEqual([
+      {
+        type: "text",
+        text: "Transformer attention starts with Q/K/V. The final answer continues once.",
+        textSignature: expect.any(String),
+      },
+    ]);
+    expect(
+      events.filter((event) => event.type === "text_end").map((event) => event.content),
+    ).toEqual([
+      "Transformer attention starts with Q/K/V.",
+      "Transformer attention starts with Q/K/V. The final answer continues once.",
+    ]);
+  });
+
+  it("keeps native OpenAI Responses prefix-sharing message items separate", async () => {
+    const output = createAssistantOutput(nativeOpenAIModel);
+    const { stream } = createCapturedAssistantMessageEventStream();
+
+    await processResponsesStream(
+      responseEvents([
+        {
+          type: "response.output_item.added",
+          item: {
+            type: "message",
+            id: "msg_first",
+            role: "assistant",
+            content: [],
+            status: "in_progress",
+          },
+        },
+        { type: "response.content_part.added", part: { type: "output_text", text: "" } },
+        { type: "response.output_text.delta", delta: "The safe prefix." },
+        {
+          type: "response.output_item.done",
+          item: {
+            type: "message",
+            id: "msg_first",
+            role: "assistant",
+            content: [{ type: "output_text", text: "The safe prefix.", annotations: [] }],
+            phase: "final_answer",
+            status: "completed",
+          },
+        },
+        {
+          type: "response.output_item.added",
+          item: {
+            type: "message",
+            id: "msg_second",
+            role: "assistant",
+            content: [],
+            status: "in_progress",
+          },
+        },
+        { type: "response.content_part.added", part: { type: "output_text", text: "" } },
+        {
+          type: "response.output_text.delta",
+          delta: "The safe prefix. A separate answer can intentionally share it.",
+        },
+        {
+          type: "response.output_item.done",
+          item: {
+            type: "message",
+            id: "msg_second",
+            role: "assistant",
+            content: [
+              {
+                type: "output_text",
+                text: "The safe prefix. A separate answer can intentionally share it.",
+                annotations: [],
+              },
+            ],
+            phase: "final_answer",
+            status: "completed",
+          },
+        },
+      ]),
+      output,
+      stream,
+      nativeOpenAIModel,
+    );
+
+    expect(
+      output.content
+        .filter((block) => block.type === "text")
+        .map((block) => ("text" in block ? block.text : "")),
+    ).toEqual([
+      "The safe prefix.",
+      "The safe prefix. A separate answer can intentionally share it.",
+    ]);
+  });
+
+  it("keeps separate Responses message items when they are not a prefix chain", async () => {
+    const output = createAssistantOutput();
+    const { stream } = createCapturedAssistantMessageEventStream();
+
+    await processResponsesStream(
+      responseEvents([
+        {
+          type: "response.output_item.added",
+          item: {
+            type: "message",
+            id: "msg_first",
+            role: "assistant",
+            content: [],
+            status: "in_progress",
+          },
+        },
+        { type: "response.content_part.added", part: { type: "output_text", text: "" } },
+        { type: "response.output_text.delta", delta: "First independent answer." },
+        {
+          type: "response.output_item.done",
+          item: {
+            type: "message",
+            id: "msg_first",
+            role: "assistant",
+            content: [{ type: "output_text", text: "First independent answer.", annotations: [] }],
+            status: "completed",
+          },
+        },
+        {
+          type: "response.output_item.added",
+          item: {
+            type: "message",
+            id: "msg_second",
+            role: "assistant",
+            content: [],
+            status: "in_progress",
+          },
+        },
+        { type: "response.content_part.added", part: { type: "output_text", text: "" } },
+        { type: "response.output_text.delta", delta: "Second independent answer." },
+        {
+          type: "response.output_item.done",
+          item: {
+            type: "message",
+            id: "msg_second",
+            role: "assistant",
+            content: [{ type: "output_text", text: "Second independent answer.", annotations: [] }],
+            status: "completed",
+          },
+        },
+      ]),
+      output,
+      stream,
+      nativeOpenAIModel,
+    );
+
+    expect(
+      output.content
+        .filter((block) => block.type === "text")
+        .map((block) => ("text" in block ? block.text : "")),
+    ).toEqual(["First independent answer.", "Second independent answer."]);
+  });
+
   it.each([
     ["omits arguments", undefined],
     ["sends empty arguments", ""],

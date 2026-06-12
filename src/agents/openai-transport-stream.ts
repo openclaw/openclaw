@@ -38,6 +38,7 @@ import { isOpenAICompatibleAzureResponsesBaseUrl } from "../shared/azure-openai-
 import {
   isResponsesTextContentPartType,
   isResponsesTextDeltaEventType,
+  shouldCollapseResponsesCumulativeTextSnapshot,
 } from "../shared/openai-responses-stream-compat.js";
 import { createReasoningTagTextPartitioner } from "../shared/text/reasoning-tag-text-partitioner.js";
 import { CHARS_PER_TOKEN_ESTIMATE, estimateStringChars } from "../utils/cjk-chars.js";
@@ -1453,29 +1454,74 @@ async function processResponsesStream(
   const eventTypes = new Map<string, number>();
   const sseDebugMode = resolveModelSseDebugMode();
   const blockIndex = () => output.content.length - 1;
+  let lastCompletedMessageTextBlock:
+    | {
+        index: number;
+        text: string;
+      }
+    | undefined;
+  const replacePriorCumulativeTextSnapshot = (
+    currentTextBlock: Record<string, unknown>,
+    text: string,
+    textSignature: string,
+  ): number | undefined => {
+    if (!lastCompletedMessageTextBlock) {
+      return undefined;
+    }
+    const previousBlock = output.content[lastCompletedMessageTextBlock.index];
+    if (
+      !isRecord(previousBlock) ||
+      previousBlock.type !== "text" ||
+      !shouldCollapseResponsesCumulativeTextSnapshot(
+        model,
+        lastCompletedMessageTextBlock.text,
+        text,
+      )
+    ) {
+      return undefined;
+    }
+    previousBlock.text = text;
+    previousBlock.textSignature = textSignature;
+    const currentIndex = output.content.indexOf(currentTextBlock);
+    if (currentIndex >= 0) {
+      output.content.splice(currentIndex, 1);
+    }
+    lastCompletedMessageTextBlock = {
+      index: lastCompletedMessageTextBlock.index,
+      text,
+    };
+    return lastCompletedMessageTextBlock.index;
+  };
   const appendCompletedResponseTextItem = (item: Record<string, unknown>) => {
     const text = readResponsesOutputMessageText(item);
     if (!text) {
       return;
     }
+    const textSignature = encodeTextSignatureV1(
+      stringifyUnknown(item.id),
+      (item.phase as "commentary" | "final_answer" | undefined) ?? undefined,
+    );
     const block: Record<string, unknown> = {
       type: "text",
       text,
-      textSignature: encodeTextSignatureV1(
-        stringifyUnknown(item.id),
-        (item.phase as "commentary" | "final_answer" | undefined) ?? undefined,
-      ),
+      textSignature,
     };
     output.content.push(block);
-    stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
+    const contentIndex =
+      replacePriorCumulativeTextSnapshot(block, text, textSignature) ?? blockIndex();
+    if (contentIndex === blockIndex()) {
+      lastCompletedMessageTextBlock = { index: contentIndex, text };
+    }
+    stream.push({ type: "text_start", contentIndex, partial: output });
     stream.push({
       type: "text_end",
-      contentIndex: blockIndex(),
+      contentIndex,
       content: text,
       partial: output,
     });
   };
   const appendCompletedResponseToolCallItem = (item: Record<string, unknown>) => {
+    lastCompletedMessageTextBlock = undefined;
     const args = parseStreamingJson(stringifyJsonLike(item.arguments, "{}"));
     const block = {
       type: "toolCall",
@@ -1554,6 +1600,7 @@ async function processResponsesStream(
         output.content.push(currentBlock);
         stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
       } else if (item.type === "function_call") {
+        lastCompletedMessageTextBlock = undefined;
         currentItem = item;
         currentBlock = {
           type: "toolCall",
@@ -1624,7 +1671,7 @@ async function processResponsesStream(
         currentBlock = null;
       } else if (item.type === "message" && currentBlock?.type === "text") {
         const content = Array.isArray(item.content) ? item.content : [];
-        currentBlock.text = content
+        const text = content
           .map((part) => {
             const contentPart = part as { type?: string; text?: string; refusal?: string };
             return isResponsesTextContentPartType(contentPart.type)
@@ -1632,18 +1679,27 @@ async function processResponsesStream(
               : (contentPart.refusal ?? "");
           })
           .join("");
-        currentBlock.textSignature = encodeTextSignatureV1(
+        const textSignature = encodeTextSignatureV1(
           stringifyUnknown(item.id),
           (item.phase as "commentary" | "final_answer" | undefined) ?? undefined,
         );
+        currentBlock.text = text;
+        currentBlock.textSignature = textSignature;
+        // Bedrock Mantle GPT-5.x can emit each final-answer message item as a
+        // from-the-start snapshot. Keep the latest snapshot instead of appending
+        // every prefix copy to the final assistant content.
+        const contentIndex =
+          replacePriorCumulativeTextSnapshot(currentBlock, text, textSignature) ?? blockIndex();
+        lastCompletedMessageTextBlock = { index: contentIndex, text };
         stream.push({
           type: "text_end",
-          contentIndex: blockIndex(),
-          content: stringifyUnknown(currentBlock.text),
+          contentIndex,
+          content: text,
           partial: output,
         });
         currentBlock = null;
       } else if (item.type === "function_call") {
+        lastCompletedMessageTextBlock = undefined;
         const args =
           currentBlock?.type === "toolCall" && currentBlock.partialJson
             ? parseStreamingJson(stringifyJsonLike(currentBlock.partialJson, "{}"))

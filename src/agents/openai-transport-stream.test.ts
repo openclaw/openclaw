@@ -68,7 +68,7 @@ function createAssistantOutput(model: Model<"openai-completions">): OpenAIComple
 }
 
 function createResponsesAssistantOutput(
-  model: Model<"azure-openai-responses">,
+  model: Model<"azure-openai-responses"> | Model<"openai-responses">,
 ): OpenAIResponsesOutput {
   return {
     role: "assistant" as const,
@@ -96,6 +96,21 @@ function createAzureResponsesModel(): Model<"azure-openai-responses"> {
     api: "azure-openai-responses",
     provider: "azure-openai-responses-devdiv",
     baseUrl: "https://example.openai.azure.com/openai/responses",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 200_000,
+    maxTokens: 8192,
+  };
+}
+
+function createBedrockMantleGpt5ResponsesModel(): Model<"openai-responses"> {
+  return {
+    id: "openai.gpt-5.5",
+    name: "Bedrock Mantle GPT-5.5",
+    api: "openai-responses",
+    provider: "amazon-bedrock-mantle",
+    baseUrl: "https://bedrock-mantle.us-east-2.api.aws/openai/v1",
     reasoning: true,
     input: ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -2056,6 +2071,137 @@ describe("openai transport stream", () => {
       totalTokens: 7,
     });
     expect(output.responseId).toBe("resp_azure_text");
+  });
+
+  it("collapses cumulative Bedrock Mantle GPT-5 message snapshots from completed Responses output", async () => {
+    const model = createBedrockMantleGpt5ResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+
+    await testing.processResponsesStream(
+      streamChunks([
+        {
+          type: "response.completed",
+          response: {
+            id: "resp_prefix_backfill",
+            status: "completed",
+            output: [
+              {
+                type: "message",
+                id: "msg_prefix_1",
+                role: "assistant",
+                phase: "final_answer",
+                content: [
+                  {
+                    type: "output_text",
+                    text: "Transformer attention starts with Q/K/V.",
+                  },
+                ],
+              },
+              {
+                type: "message",
+                id: "msg_prefix_2",
+                role: "assistant",
+                phase: "final_answer",
+                content: [
+                  {
+                    type: "output_text",
+                    text: "Transformer attention starts with Q/K/V. The final answer continues once.",
+                  },
+                ],
+              },
+            ],
+            usage: {
+              input_tokens: 4,
+              output_tokens: 8,
+              total_tokens: 12,
+            },
+          },
+        },
+      ]),
+      output,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+      model,
+    );
+
+    expect(output.content).toMatchObject([
+      {
+        type: "text",
+        text: "Transformer attention starts with Q/K/V. The final answer continues once.",
+      },
+    ]);
+    expect(
+      events.filter((event) => event.type === "text_end").map((event) => event.content),
+    ).toEqual([
+      "Transformer attention starts with Q/K/V.",
+      "Transformer attention starts with Q/K/V. The final answer continues once.",
+    ]);
+    expect(output.responseId).toBe("resp_prefix_backfill");
+  });
+
+  it("keeps Azure completed Responses output items that intentionally share a prefix", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+
+    await testing.processResponsesStream(
+      streamChunks([
+        {
+          type: "response.completed",
+          response: {
+            id: "resp_azure_prefix_backfill",
+            status: "completed",
+            output: [
+              {
+                type: "message",
+                id: "msg_prefix_1",
+                role: "assistant",
+                phase: "final_answer",
+                content: [
+                  {
+                    type: "output_text",
+                    text: "Transformer attention starts with Q/K/V.",
+                  },
+                ],
+              },
+              {
+                type: "message",
+                id: "msg_prefix_2",
+                role: "assistant",
+                phase: "final_answer",
+                content: [
+                  {
+                    type: "output_text",
+                    text: "Transformer attention starts with Q/K/V. A separate answer can share the prefix.",
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      ]),
+      output,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+      model,
+    );
+
+    expect(output.content).toMatchObject([
+      {
+        type: "text",
+        text: "Transformer attention starts with Q/K/V.",
+      },
+      {
+        type: "text",
+        text: "Transformer attention starts with Q/K/V. A separate answer can share the prefix.",
+      },
+    ]);
+    expect(
+      events.filter((event) => event.type === "text_end").map((event) => event.content),
+    ).toEqual([
+      "Transformer attention starts with Q/K/V.",
+      "Transformer attention starts with Q/K/V. A separate answer can share the prefix.",
+    ]);
+    expect(output.responseId).toBe("resp_azure_prefix_backfill");
   });
 
   it("skips null and non-object OpenAI-compatible stream chunks", async () => {
@@ -10183,9 +10329,7 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
   });
 
   it("preserves reasoning_content replay for Gemma 4 openai-completions models", () => {
-    const assistant = getAssistantMessage(
-      buildReplayParams(gemma4Model, "reasoning_content"),
-    );
+    const assistant = getAssistantMessage(buildReplayParams(gemma4Model, "reasoning_content"));
 
     expect(assistant.reasoning_content).toBe("Need to answer politely.");
     expect(assistant).not.toHaveProperty("reasoning_details");

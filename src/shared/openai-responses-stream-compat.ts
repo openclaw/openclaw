@@ -49,3 +49,53 @@ export function isAzureResponsesTextDeltaEvent(event: {
 }): event is AzureResponsesTextDeltaEvent {
   return isAzureResponsesTextDeltaEventType(event.type) && typeof event.delta === "string";
 }
+
+export function shouldCollapseResponsesCumulativeTextSnapshot(
+  model: { api?: unknown; provider?: unknown; id?: unknown; baseUrl?: unknown },
+  previousText: string,
+  nextText: string,
+): boolean {
+  if (!isBedrockMantleGpt5OpenAIResponsesModel(model)) {
+    return false;
+  }
+  if (!previousText || !nextText) {
+    return false;
+  }
+  if (nextText === previousText || nextText.startsWith(previousText)) {
+    return true;
+  }
+  const previousTrimmed = previousText.trimEnd();
+  const nextTrimmed = nextText.trimEnd();
+  return (
+    previousTrimmed.length > 0 &&
+    (nextTrimmed === previousTrimmed || nextTrimmed.startsWith(previousTrimmed))
+  );
+}
+
+function isBedrockMantleGpt5OpenAIResponsesModel(model: {
+  api?: unknown;
+  provider?: unknown;
+  id?: unknown;
+  baseUrl?: unknown;
+}): boolean {
+  const api = normalizeCompatToken(model.api);
+  if (api !== "openai-responses") {
+    return false;
+  }
+  const provider = normalizeCompatToken(model.provider);
+  const baseUrl = normalizeCompatToken(model.baseUrl);
+  const isMantleProvider =
+    provider === "amazon-bedrock-mantle" ||
+    provider === "bedrock-mantle" ||
+    provider.includes("bedrock-mantle") ||
+    baseUrl.includes("bedrock-mantle");
+  if (!isMantleProvider) {
+    return false;
+  }
+  const modelId = normalizeCompatToken(model.id);
+  return /(?:^|[./:_-])gpt-5(?:[./:_-]|$)/.test(modelId);
+}
+
+function normalizeCompatToken(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}

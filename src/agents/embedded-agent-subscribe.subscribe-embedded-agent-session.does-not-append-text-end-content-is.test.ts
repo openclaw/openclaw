@@ -7,6 +7,7 @@ import {
   emitAssistantTextDelta,
   emitAssistantTextEnd,
 } from "./embedded-agent-subscribe.e2e-harness.js";
+import { createOpenAiResponsesTextEvent } from "./embedded-agent-subscribe.openai-responses.test-helpers.js";
 
 describe("subscribeEmbeddedAgentSession", () => {
   function setupTextEndSubscription() {
@@ -107,6 +108,45 @@ describe("subscribeEmbeddedAgentSession", () => {
       "Let me grab actual eBay prices:",
       "Let me grab actual prices from eBay:",
       "eBay blocks live pricing:",
+    ]);
+  });
+
+  it("sends only the suffix when OpenAI Responses text_end snapshots grow on one text block", async () => {
+    const onBlockReply = vi.fn();
+    const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
+
+    const emitResponsesSnapshot = (text: string) => {
+      emit(
+        createOpenAiResponsesTextEvent({
+          type: "text_end",
+          text,
+          id: "msg_cumulative_snapshot",
+          signaturePhase: "final_answer",
+          partialPhase: "final_answer",
+          messagePhase: "final_answer",
+        }),
+      );
+    };
+
+    emitResponsesSnapshot("Transformer attention starts with Q/K/V.");
+    await vi.waitFor(() => {
+      expect(onBlockReply).toHaveBeenCalledTimes(1);
+    });
+
+    emitResponsesSnapshot(
+      "Transformer attention starts with Q/K/V. Multi-head attention projects the sequence once.",
+    );
+    await vi.waitFor(() => {
+      expect(onBlockReply).toHaveBeenCalledTimes(2);
+    });
+
+    expect(extractTextPayloads(onBlockReply.mock.calls)).toEqual([
+      "Transformer attention starts with Q/K/V.",
+      " Multi-head attention projects the sequence once.",
+    ]);
+    expect(subscription.assistantTexts).toEqual([
+      "Transformer attention starts with Q/K/V.",
+      " Multi-head attention projects the sequence once.",
     ]);
   });
 

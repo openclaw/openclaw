@@ -20,6 +20,7 @@ import {
   type AzureResponsesTextDeltaEvent,
   isAzureResponsesTextDeltaEvent,
   isResponsesTextContentPartType,
+  shouldCollapseResponsesCumulativeTextSnapshot,
 } from "../../shared/openai-responses-stream-compat.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import type {
@@ -578,6 +579,44 @@ export async function processResponsesStream<TApi extends Api>(
     null;
   const blocks = output.content;
   const blockIndex = () => blocks.length - 1;
+  let lastCompletedMessageTextBlock:
+    | {
+        index: number;
+        text: string;
+      }
+    | undefined;
+
+  const replacePriorCumulativeTextSnapshot = (
+    currentTextBlock: TextContent,
+    text: string,
+    textSignature: string,
+  ): number | undefined => {
+    if (!lastCompletedMessageTextBlock) {
+      return undefined;
+    }
+    const previousBlock = blocks[lastCompletedMessageTextBlock.index];
+    if (
+      previousBlock?.type !== "text" ||
+      !shouldCollapseResponsesCumulativeTextSnapshot(
+        model,
+        lastCompletedMessageTextBlock.text,
+        text,
+      )
+    ) {
+      return undefined;
+    }
+    previousBlock.text = text;
+    previousBlock.textSignature = textSignature;
+    const currentIndex = blocks.indexOf(currentTextBlock);
+    if (currentIndex >= 0) {
+      blocks.splice(currentIndex, 1);
+    }
+    lastCompletedMessageTextBlock = {
+      index: lastCompletedMessageTextBlock.index,
+      text,
+    };
+    return lastCompletedMessageTextBlock.index;
+  };
 
   for await (const event of openaiStream) {
     if (event.type === "response.created") {
@@ -766,18 +805,27 @@ export async function processResponsesStream<TApi extends Api>(
         currentBlock = null;
       } else if (item.type === "message" && currentBlock?.type === "text") {
         // Support both OpenAI "output_text" and Azure "text" content types
-        currentBlock.text = item.content
+        const text = item.content
           .map((c) => (c.type === "output_text" || c.type === "text" ? c.text : c.refusal))
           .join("");
-        currentBlock.textSignature = encodeTextSignatureV1(item.id, item.phase ?? undefined);
+        const textSignature = encodeTextSignatureV1(item.id, item.phase ?? undefined);
+        currentBlock.text = text;
+        currentBlock.textSignature = textSignature;
+        // Bedrock Mantle GPT-5.x can emit each final-answer message item as a
+        // from-the-start snapshot. Keep the latest snapshot instead of appending
+        // every prefix copy to the final assistant content.
+        const contentIndex =
+          replacePriorCumulativeTextSnapshot(currentBlock, text, textSignature) ?? blockIndex();
+        lastCompletedMessageTextBlock = { index: contentIndex, text };
         stream.push({
           type: "text_end",
-          contentIndex: blockIndex(),
-          content: currentBlock.text,
+          contentIndex,
+          content: text,
           partial: output,
         });
         currentBlock = null;
       } else if (item.type === "function_call") {
+        lastCompletedMessageTextBlock = undefined;
         const args =
           currentBlock?.type === "toolCall" && currentBlock.partialJson
             ? parseStreamingJson(currentBlock.partialJson)
