@@ -5,46 +5,44 @@ on:
 
 jobs:
   build-project:
-    # 1. 升级到 macos-15 镜像，以支持更高版本的 Xcode
     runs-on: macos-15
     
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # 2. 自动寻找并切换到最新的稳定版 Xcode（解决 Swift 工具链版本过低问题）
+      # 1. 自动寻找并切换到最新的稳定版 Xcode
       - name: Setup Xcode Version
         uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: 'latest-stable'
 
-      # 3. 强制安装 Node.js v22
+      # 2. 强制安装 Node.js v22
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
 
-      # 4. 通过 Homebrew 安装苹果项目生成工具 xcodegen
+      # 3. 通过 Homebrew 安装苹果项目生成工具 xcodegen
       - name: Install xcodegen
         run: brew install xcodegen
 
-      # 5. 用 npx 强行驱动 pnpm v11.2.2 安装 Monorepo 依赖
+      # 4. 用 npx 强行驱动 pnpm v11.2.2 安装 Monorepo 依赖
       - name: Install Monorepo Dependencies
         run: npx pnpm@11.2.2 install
 
-      # 6. 进入 iOS 目录并动态生成 Xcode 工程文件
+      # 5. 进入 iOS 目录并动态生成 Xcode 工程文件
       - name: Generate Xcode Project
         run: |
           cd apps/ios
           xcodegen generate
 
-      # 7. 编译代码（强制关闭代码签名）
+      # 6. 编译代码（已修复：移除 -sdk iphoneos 以支持内置的 WatchApp 联合编译）
       - name: Compile Code (Disable Code Signing)
         run: |
           xcodebuild clean build \
             -project apps/ios/OpenClaw.xcodeproj \
             -scheme OpenClaw \
-            -sdk iphoneos \
             -configuration Release \
             -derivedDataPath build_output \
             CODE_SIGNING_ALLOWED=NO \
@@ -52,14 +50,14 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             PROVISIONING_PROFILE_SPECIFIER=""
 
-      # 8. 将编译出的 .app 文件夹打包为标准的 .ipa 安装包
+      # 7. 将编译出的 .app 文件夹打包为标准的 .ipa 安装包
       - name: Package to IPA
         run: |
           mkdir -p Payload
           cp -r build_output/Build/Products/Release-iphoneos/OpenClaw.app Payload/
           zip -r OpenClaw_Unsigned.ipa Payload
 
-      # 9. 将打包好的成品上传到 GitHub Actions 产物中供下载
+      # 8. 将打包好的成品上传到 GitHub Actions 产物中供下载
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
