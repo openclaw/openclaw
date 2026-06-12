@@ -28,6 +28,11 @@ export type TelephonyTtsRuntime = {
     fallbackFrom?: string;
     attemptedProviders?: string[];
     error?: string;
+    /**
+     * Per-character timing when the provider returned alignment (e.g. ElevenLabs
+     * with-timestamps). Wall-clock seconds, so resampling does not invalidate it.
+     */
+    alignment?: { characters: string[]; startTimesSeconds: number[] };
   }>;
 };
 

@@ -197,6 +197,8 @@ export type TtsTelephonyResult = {
   attempts?: TtsProviderAttempt[];
   outputFormat?: string;
   sampleRate?: number;
+  /** Per-character timing when the provider returned alignment (e.g. ElevenLabs with-timestamps). */
+  alignment?: { characters: string[]; startTimesSeconds: number[] };
 };
 
 type TtsStatusEntry = {
@@ -1862,6 +1864,7 @@ export async function textToSpeechTelephony(params: {
         attempts,
         outputFormat: synthesis.outputFormat,
         sampleRate: synthesis.sampleRate,
+        alignment: synthesis.alignment,
       };
     } catch (err) {
       const errorMsg = formatTtsProviderError(provider, err);
