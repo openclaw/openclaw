@@ -175,7 +175,7 @@ function resolveOpencodeZenTransport(modelId: string): OpencodeZenTransport {
   if (lower.startsWith("gpt-")) {
     return { api: "openai-responses", baseUrl: OPENCODE_ZEN_OPENAI_BASE_URL };
   }
-  if (lower.startsWith("claude-") || lower.startsWith("minimax-")) {
+  if (lower.startsWith("claude-") || lower.startsWith("qwen")) {
     return { api: "anthropic-messages", baseUrl: OPENCODE_ZEN_ANTHROPIC_BASE_URL };
   }
   if (lower.startsWith("gemini-")) {

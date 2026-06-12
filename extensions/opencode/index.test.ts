@@ -169,6 +169,10 @@ describe("opencode provider plugin", () => {
       baseUrl: "https://opencode.ai/zen/v1",
     });
     expect(requireMapEntry(models, "minimax-m2.7")).toMatchObject({
+      api: "openai-completions",
+      baseUrl: "https://opencode.ai/zen/v1",
+    });
+    expect(requireMapEntry(models, "qwen3.6-plus")).toMatchObject({
       api: "anthropic-messages",
       baseUrl: "https://opencode.ai/zen",
     });
@@ -205,6 +209,18 @@ describe("opencode provider plugin", () => {
     );
     expect(manifestOpus48.api).toBe("anthropic-messages");
     expect(manifestOpus48.baseUrl).toBe("https://opencode.ai/zen");
+    const manifestMiniMax = requireRecord(
+      manifestModels.find((model) => requireRecord(model, "manifest model").id === "minimax-m2.7"),
+      "manifest minimax-m2.7",
+    );
+    expect(manifestMiniMax.api).toBe("openai-completions");
+    expect(manifestMiniMax.baseUrl).toBe("https://opencode.ai/zen/v1");
+    const manifestQwen = requireRecord(
+      manifestModels.find((model) => requireRecord(model, "manifest model").id === "qwen3.6-plus"),
+      "manifest qwen3.6-plus",
+    );
+    expect(manifestQwen.api).toBe("anthropic-messages");
+    expect(manifestQwen.baseUrl).toBe("https://opencode.ai/zen");
   });
 
   it("loads OpenCode Zen model discovery through the provider runtime", () => {
