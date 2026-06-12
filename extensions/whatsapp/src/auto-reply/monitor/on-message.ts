@@ -1,6 +1,10 @@
 // Whatsapp plugin module implements on message behavior.
 import type { AckReactionHandle } from "openclaw/plugin-sdk/channel-feedback";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  ensureConfiguredBindingRouteReady,
+  resolveConfiguredBindingRoute,
+} from "openclaw/plugin-sdk/conversation-binding-runtime";
 import type { getReplyFromConfig } from "openclaw/plugin-sdk/reply-runtime";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -138,20 +142,13 @@ export function createWebOnMessageHandler(params: {
         id: peerId,
       },
     });
-    const route =
+    const baseConversationRoute =
       msg.chatType === "group" ? resolveWhatsAppGroupSessionRoute(baseRoute) : baseRoute;
-    const groupHistoryKey =
-      msg.chatType === "group"
-        ? buildGroupHistoryKey({
-            channel: "whatsapp",
-            accountId: route.accountId,
-            peerKind: "group",
-            peerId,
-          })
-        : route.sessionKey;
+    const routeAccountId =
+      baseConversationRoute.accountId ?? msg.accountId ?? params.account.accountId ?? "default";
     const account = resolveWhatsAppAccount({
       cfg,
-      accountId: route.accountId ?? msg.accountId ?? params.account.accountId,
+      accountId: routeAccountId,
     });
     const baseMentionConfig = buildMentionConfig(cfg);
 
@@ -166,6 +163,36 @@ export function createWebOnMessageHandler(params: {
       params.echoTracker.forget(msg.payload.body);
       return;
     }
+
+    const configuredRoute = resolveConfiguredBindingRoute({
+      cfg,
+      route: baseConversationRoute,
+      channel: "whatsapp",
+      accountId: routeAccountId,
+      conversationId: peerId,
+    });
+    const route = configuredRoute.route;
+    if (configuredRoute.bindingResolution) {
+      const ensured = await ensureConfiguredBindingRouteReady({
+        cfg,
+        bindingResolution: configuredRoute.bindingResolution,
+      });
+      if (!ensured.ok) {
+        params.replyLogger.warn(
+          `whatsapp: configured ACP binding unavailable for conversation ${configuredRoute.bindingResolution.record.conversation.conversationId}: ${ensured.error}`,
+        );
+        return;
+      }
+    }
+    const groupHistoryKey =
+      msg.chatType === "group"
+        ? buildGroupHistoryKey({
+            channel: "whatsapp",
+            accountId: route.accountId,
+            peerKind: "group",
+            peerId,
+          })
+        : route.sessionKey;
 
     // Preflight audio transcription: run once before broadcast fan-out so all
     // agents share the same transcript instead of each making a separate STT call.
