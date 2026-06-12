@@ -22,7 +22,9 @@ import {
 import type { HealthCheck, HealthFinding } from "./health-checks.js";
 
 const mocks = vi.hoisted(() => ({
-  loadModelCatalog: vi.fn(async () => []),
+  loadModelCatalog: vi.fn(
+    async (): Promise<import("../agents/model-catalog.types.js").ModelCatalogEntry[]> => [],
+  ),
 }));
 
 vi.mock("../agents/model-catalog.js", () => ({
@@ -731,7 +733,9 @@ describe("registerCoreHealthChecks", () => {
       models: {
         providers: {
           anthropic: {
+            baseUrl: "https://api.anthropic.com",
             apiKey: "test-key",
+            models: [],
           },
         },
       },
@@ -781,7 +785,7 @@ describe("registerCoreHealthChecks", () => {
 
   it("reports no findings when default model is in catalog", async () => {
     mocks.loadModelCatalog.mockResolvedValue([
-      { provider: "openai", id: "gpt-4o" },
+      { provider: "openai", id: "gpt-4o", name: "GPT-4o" },
     ]);
     const cfg: OpenClawConfig = {
       agents: {
@@ -813,5 +817,4 @@ describe("registerCoreHealthChecks", () => {
 
     expect(findings).toEqual([]);
   });
-
 });
