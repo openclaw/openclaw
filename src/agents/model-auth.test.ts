@@ -1045,6 +1045,102 @@ describe("resolveApiKeyForProvider", () => {
     ).rejects.toThrow('No API key found for provider "mismatch-provider"');
   });
 
+  it("does not share file SecretRef runtime credentials across caller configs with the same provider id", async () => {
+    const sourceConfig = {
+      models: {
+        providers: {
+          "shared-provider": {
+            api: "openai-responses",
+            baseUrl: "https://source.example/v1",
+            apiKey: { source: "file", provider: "vault", id: "/shared/api-key" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const runtimeConfig = {
+      models: {
+        providers: {
+          "shared-provider": {
+            api: "openai-responses",
+            baseUrl: "https://source.example/v1",
+            apiKey: "resolved-for-source-config", // pragma: allowlist secret
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+
+    const differentConfig = {
+      models: {
+        providers: {
+          "shared-provider": {
+            api: "openai-responses",
+            baseUrl: "https://other.example/v1",
+            apiKey: { source: "file", provider: "vault", id: "/shared/api-key" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    await expect(
+      resolveApiKeyForProvider({
+        provider: "shared-provider",
+        cfg: differentConfig,
+        store: { version: 1, profiles: {} },
+      }),
+    ).rejects.toThrow('No API key found for provider "shared-provider"');
+  });
+
+  it("resolves normalized managed markers from the active runtime snapshot even when source identity drifts", async () => {
+    const preparedSourceConfig = {
+      models: {
+        providers: {
+          "normalized-provider": {
+            api: "openai-responses",
+            baseUrl: "https://normalized.example/v1",
+            apiKey: NON_ENV_SECRETREF_MARKER,
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const runtimeConfig = {
+      models: {
+        providers: {
+          "normalized-provider": {
+            api: "openai-responses",
+            baseUrl: "https://normalized.example/v1",
+            apiKey: "resolved-normalized-marker", // pragma: allowlist secret
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    setRuntimeConfigSnapshot(runtimeConfig, preparedSourceConfig);
+
+    const driftedConfig = {
+      models: {
+        providers: {
+          "normalized-provider": {
+            api: "openai-responses",
+            baseUrl: "https://drifted.example/v1",
+            apiKey: NON_ENV_SECRETREF_MARKER,
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const resolved = await resolveApiKeyForProvider({
+      provider: "normalized-provider",
+      cfg: driftedConfig,
+      store: { version: 1, profiles: {} },
+    });
+
+    expectAuthFields(resolved, {
+      apiKey: "resolved-normalized-marker",
+      source: "models.providers.normalized-provider",
+      mode: "api-key",
+    });
+  });
+
   it("resolves custom provider file SecretRef apiKey from runtime snapshot", async () => {
     const sourceConfig = {
       models: {
