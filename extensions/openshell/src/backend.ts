@@ -366,21 +366,33 @@ class OpenShellSandboxBackendImpl {
       script: 'mkdir -p -- "$(dirname -- "$1")"',
       args: [remotePath],
     });
-    const result = await runOpenShellCli({
-      context: this.params.execContext,
-      args: [
-        "sandbox",
-        "upload",
-        "--no-git-ignore",
-        this.params.execContext.sandboxName,
-        localPath,
-        path.posix.dirname(remotePath),
-      ],
-      cwd: this.params.createParams.workspaceDir,
-    });
-    if (result.code !== 0) {
-      throw new Error(result.stderr.trim() || "openshell sandbox upload failed");
-    }
+    // Stage the file to a flat temp directory (basename only) so that tar
+    // does not try to recreate directory components that already exist on
+    // the remote sandbox. Upload the flat file directly to the exact remote
+    // path to avoid inserting a random temp-directory basename into the
+    // destination (OpenShell preserves the source directory basename).
+    await withTempWorkspace(
+      { rootDir: resolveOpenShellTmpRoot(), prefix: "openclaw-openshell-upload-" },
+      async ({ dir: tmpDir }) => {
+        const stagedPath = path.join(tmpDir, path.basename(localPath));
+        await fs.copyFile(localPath, stagedPath);
+        const result = await runOpenShellCli({
+          context: this.params.execContext,
+          args: [
+            "sandbox",
+            "upload",
+            "--no-git-ignore",
+            this.params.execContext.sandboxName,
+            stagedPath,
+            remotePath,
+          ],
+          cwd: this.params.createParams.workspaceDir,
+        });
+        if (result.code !== 0) {
+          throw new Error(result.stderr.trim() || "openshell sandbox upload failed");
+        }
+      },
+    );
   }
 
   private async ensureSandboxExists(): Promise<void> {
