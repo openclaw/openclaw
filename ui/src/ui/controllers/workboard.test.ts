@@ -341,6 +341,40 @@ describe("workboard controller", () => {
     expect(client.request).toHaveBeenCalledWith("workboard.cards.dispatch", {});
   });
 
+  it("blocks dispatch while a card draft write is in flight", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const update = createDeferred<unknown>();
+    state.cards = [sampleCard];
+    state.draftTitle = "Move out of ready";
+    state.draftStatus = "backlog";
+    state.editingCardId = sampleCard.id;
+    const client = createClient((method) => {
+      if (method === "workboard.cards.update") {
+        return update.promise;
+      }
+      if (method === "workboard.cards.dispatch") {
+        return { promoted: [], reclaimed: [], blocked: [], orchestrated: [] };
+      }
+      if (method === "workboard.cards.list") {
+        return { cards: [sampleCard], statuses: ["todo", "done"] };
+      }
+      if (method === "tasks.list") {
+        return { tasks: [] };
+      }
+      return {};
+    });
+
+    const save = saveWorkboardCardDraft({ host, client: client as never });
+    await Promise.resolve();
+    await dispatchWorkboard({ host, client: client as never });
+
+    expect(client.request).not.toHaveBeenCalledWith("workboard.cards.dispatch", {});
+
+    update.resolve({ card: sampleCard });
+    await save;
+  });
+
   it("clears stale task summaries when dispatch task refresh fails", async () => {
     const host = {};
     const state = getWorkboardState(host);
@@ -728,6 +762,53 @@ describe("workboard controller", () => {
       missingProof: 1,
       failedAttempts: 3,
     });
+  });
+
+  it("does not count a terminal linked task already recorded as a failed attempt", () => {
+    const represented = {
+      ...sampleCard,
+      id: "represented",
+      metadata: {
+        failureCount: 1,
+        attempts: [
+          {
+            id: "run-1",
+            runId: "run-1",
+            sessionKey: sampleTaskSessionKey,
+            status: "blocked",
+            startedAt: 1,
+          },
+        ],
+      },
+    } satisfies WorkboardCard;
+    const unrepresented = {
+      ...sampleCard,
+      id: "unrepresented",
+      metadata: {
+        failureCount: 1,
+        attempts: [
+          {
+            id: "run-old",
+            runId: "run-old",
+            sessionKey: sampleTaskSessionKey,
+            status: "blocked",
+            startedAt: 1,
+          },
+        ],
+      },
+    } satisfies WorkboardCard;
+    const tasksByCardId = new Map<string, WorkboardTaskSummary>([
+      ["represented", { ...sampleTask, status: "failed" }],
+      ["unrepresented", { ...sampleTask, status: "failed" }],
+    ]);
+
+    expect(
+      summarizeWorkboardHealth({
+        cards: [represented, unrepresented],
+        tasksByCardId,
+        sessions: [],
+      }).failedAttempts,
+    ).toBe(3);
   });
 
   it("filters built-in Workboard view presets", () => {

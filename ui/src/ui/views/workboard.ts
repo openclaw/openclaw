@@ -23,6 +23,7 @@ import {
   summarizeWorkboardHealth,
   syncWorkboardLifecycle,
   workboardCardMatchesHealthKey,
+  workboardHasActiveWrites,
   WORKBOARD_PRIORITIES,
   type WorkboardAutoRefreshIntervalMs,
   type WorkboardDependencyState,
@@ -743,6 +744,16 @@ function handleWorkboardSelectDocumentPointer(event: PointerEvent) {
   closeWorkboardSelectMenus(document);
 }
 
+// Fixed menus must close when their anchor can move; menu scrolling itself
+// remains available for long option lists.
+function handleWorkboardSelectViewportChange(event: Event) {
+  const target = event.target;
+  if (target instanceof Element && target.closest(".workboard-select__menu")) {
+    return;
+  }
+  closeWorkboardSelectMenus(document);
+}
+
 function syncWorkboardSelectDocumentCloser() {
   if (typeof document === "undefined") {
     return;
@@ -750,11 +761,15 @@ function syncWorkboardSelectDocumentCloser() {
   const shouldInstall = hasOpenWorkboardSelectMenus(document);
   if (shouldInstall && !workboardSelectDocumentCloserInstalled) {
     document.addEventListener("pointerdown", handleWorkboardSelectDocumentPointer, true);
+    window.addEventListener("scroll", handleWorkboardSelectViewportChange, true);
+    window.addEventListener("resize", handleWorkboardSelectViewportChange);
     workboardSelectDocumentCloserInstalled = true;
     return;
   }
   if (!shouldInstall && workboardSelectDocumentCloserInstalled) {
     document.removeEventListener("pointerdown", handleWorkboardSelectDocumentPointer, true);
+    window.removeEventListener("scroll", handleWorkboardSelectViewportChange, true);
+    window.removeEventListener("resize", handleWorkboardSelectViewportChange);
     workboardSelectDocumentCloserInstalled = false;
   }
 }
@@ -2564,7 +2579,7 @@ export function renderWorkboard(props: WorkboardProps) {
                     class="btn"
                     type="button"
                     title=${t("workboard.dispatch")}
-                    ?disabled=${state.dispatching}
+                    ?disabled=${state.dispatching || workboardHasActiveWrites(state)}
                     @click=${() =>
                       dispatchWorkboard({
                         host: props.host,

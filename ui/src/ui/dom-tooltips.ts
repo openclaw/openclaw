@@ -11,6 +11,7 @@ type FloatingTooltipTrigger = "focus" | "pointer";
 // Pointer and focus activation can overlap. Restore native title state only
 // after the last active trigger leaves the element.
 const activeFloatingTooltipTriggers = new WeakMap<HTMLElement, Set<FloatingTooltipTrigger>>();
+let activeFloatingTooltipOwner: HTMLElement | null = null;
 
 function tooltipRootContains(root: ParentNode, element: Element): boolean {
   return root instanceof Node && root.contains(element);
@@ -132,6 +133,7 @@ export function clearActiveFloatingTooltips(root: ParentNode = document): void {
     }
     restorePromotedTooltipAccessibleName(element);
   }
+  activeFloatingTooltipOwner = null;
   hideFloatingTooltip();
 }
 
@@ -162,23 +164,30 @@ export function promoteNativeTitleTooltip(
   triggers.add(trigger);
   activeFloatingTooltipTriggers.set(element, triggers);
   element.setAttribute(ACTIVE_FLOATING_TOOLTIP_ATTR, "true");
+  activeFloatingTooltipOwner = element;
   showFloatingTooltip(element, tooltipText);
   return element;
 }
 
 export function refreshActiveFloatingTooltip(root: ParentNode): HTMLElement | null {
-  const element = root.querySelector<HTMLElement>(`[${ACTIVE_FLOATING_TOOLTIP_ATTR}]`);
+  const owner = activeFloatingTooltipOwner;
+  const element =
+    owner && tooltipRootContains(root, owner) && owner.hasAttribute(ACTIVE_FLOATING_TOOLTIP_ATTR)
+      ? owner
+      : root.querySelector<HTMLElement>(`[${ACTIVE_FLOATING_TOOLTIP_ATTR}]`);
   if (!element) {
+    activeFloatingTooltipOwner = null;
     hideFloatingTooltip();
     return null;
   }
+  activeFloatingTooltipOwner = element;
   const tooltipText = getTooltipText(element);
   if (!tooltipText) {
     element.removeAttribute(PROMOTED_TITLE_ATTR);
     element.removeAttribute(ACTIVE_FLOATING_TOOLTIP_ATTR);
     activeFloatingTooltipTriggers.delete(element);
-    hideFloatingTooltip();
-    return null;
+    activeFloatingTooltipOwner = null;
+    return refreshActiveFloatingTooltip(root);
   }
   const title = element.getAttribute("title");
   if (title) {
@@ -216,6 +225,7 @@ export function restoreNativeTitleTooltip(
     return null;
   }
   activeFloatingTooltipTriggers.delete(element);
+  const wasOwner = activeFloatingTooltipOwner === element;
   const title = element.getAttribute(PROMOTED_TITLE_ATTR);
   if (title) {
     element.setAttribute("title", title);
@@ -227,6 +237,9 @@ export function restoreNativeTitleTooltip(
     element.removeAttribute(GENERATED_TOOLTIP_ATTR);
   }
   restorePromotedTooltipAccessibleName(element);
-  hideFloatingTooltip();
+  if (wasOwner) {
+    activeFloatingTooltipOwner = null;
+    refreshActiveFloatingTooltip(root);
+  }
   return element;
 }

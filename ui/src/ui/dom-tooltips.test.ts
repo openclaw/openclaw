@@ -296,6 +296,36 @@ describe("native title tooltip promotion", () => {
     },
   );
 
+  it("restores the remaining active tooltip owner", () => {
+    const root = document.createElement("div");
+    const focused = document.createElement("button");
+    focused.className = "btn";
+    focused.title = "Focused";
+    const hovered = document.createElement("button");
+    hovered.className = "btn";
+    hovered.title = "Hovered";
+    root.append(focused, hovered);
+
+    promoteNativeTitleTooltip(focused, root, "focus");
+    promoteNativeTitleTooltip(hovered, root, "pointer");
+    refreshActiveFloatingTooltip(root);
+
+    expect(document.querySelector(".control-ui-floating-tooltip")?.textContent).toBe("Hovered");
+
+    restoreNativeTitleTooltip(hovered, root, "pointer");
+
+    expect(document.querySelector(".control-ui-floating-tooltip")?.textContent).toBe("Focused");
+    expect(document.querySelector<HTMLElement>(".control-ui-floating-tooltip")?.dataset.open).toBe(
+      "true",
+    );
+
+    restoreNativeTitleTooltip(focused, root, "focus");
+
+    expect(document.querySelector<HTMLElement>(".control-ui-floating-tooltip")?.dataset.open).toBe(
+      "false",
+    );
+  });
+
   it("clears active floating tooltips and restores promoted titles", () => {
     const root = document.createElement("div");
     const button = document.createElement("button");

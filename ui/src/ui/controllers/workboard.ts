@@ -392,6 +392,7 @@ export type WorkboardUiState = {
   pollRefreshInProgress: boolean;
   suppressNextLifecycleSync: boolean;
   draftOpen: boolean;
+  draftSaving: boolean;
   editingCardId: string | null;
   draftTitle: string;
   draftNotes: string;
@@ -475,6 +476,7 @@ function createDefaultState(): WorkboardUiState {
     pollRefreshInProgress: false,
     suppressNextLifecycleSync: false,
     draftOpen: false,
+    draftSaving: false,
     editingCardId: null,
     draftTitle: "",
     draftNotes: "",
@@ -503,6 +505,15 @@ export function getWorkboardState(host: WorkboardHost): WorkboardUiState {
   return state;
 }
 
+export function workboardHasActiveWrites(state: WorkboardUiState): boolean {
+  return Boolean(
+    state.draftSaving ||
+    state.busyCardId ||
+    state.syncingCardIds.size ||
+    state.capturingSessionKeys.size,
+  );
+}
+
 export function consumeWorkboardLifecycleSyncSuppression(state: WorkboardUiState): boolean {
   if (state.pollRefreshInProgress) {
     return true;
@@ -524,6 +535,36 @@ function hasWorkboardProofEvidence(card: WorkboardCard): boolean {
 
 function taskFailedTerminal(task: WorkboardTaskSummary | undefined): boolean {
   return task?.status === "failed" || task?.status === "cancelled" || task?.status === "timed_out";
+}
+
+function taskFailureRepresentedByCard(
+  card: WorkboardCard,
+  task: WorkboardTaskSummary | undefined,
+): boolean {
+  if (!task || !taskFailedTerminal(task)) {
+    return false;
+  }
+  const taskSessionKeys = [task.sessionKey, task.childSessionKey, task.ownerKey];
+  return Boolean(
+    card.metadata?.attempts?.some((attempt) => {
+      if (
+        attempt.status !== "failed" &&
+        attempt.status !== "blocked" &&
+        attempt.status !== "stopped"
+      ) {
+        return false;
+      }
+      if (task.runId || attempt.runId) {
+        return Boolean(task.runId && attempt.runId === task.runId);
+      }
+      return Boolean(
+        attempt.sessionKey &&
+        taskSessionKeys.some((sessionKey) =>
+          taskSessionKeyMatchesCardSession(attempt.sessionKey ?? "", sessionKey),
+        ),
+      );
+    }),
+  );
 }
 
 function countCardFailedAttempts(card: WorkboardCard): number {
@@ -577,7 +618,7 @@ export function summarizeWorkboardHealth(params: {
       summary.missingProof += 1;
     }
     summary.failedAttempts += countCardFailedAttempts(card);
-    if (taskFailedTerminal(task)) {
+    if (taskFailedTerminal(task) && !taskFailureRepresentedByCard(card, task)) {
       summary.failedAttempts += 1;
     }
   }
@@ -1468,7 +1509,7 @@ function shouldDeferWorkboardPoll(state: WorkboardUiState): boolean {
   return Boolean(
     state.draftOpen ||
     state.editingCardId ||
-    state.busyCardId ||
+    workboardHasActiveWrites(state) ||
     state.draggedCardId ||
     state.dispatching ||
     state.detailCommentBody.trim() ||
@@ -2224,6 +2265,7 @@ export async function createWorkboardCard(params: {
     return;
   }
   invalidateWorkboardLoads(params.host);
+  state.draftSaving = true;
   state.loading = true;
   state.error = null;
   params.requestUpdate?.();
@@ -2234,6 +2276,7 @@ export async function createWorkboardCard(params: {
   } catch (error) {
     state.error = formatError(error);
   } finally {
+    state.draftSaving = false;
     state.loading = false;
     params.requestUpdate?.();
   }
@@ -2253,6 +2296,7 @@ export async function saveWorkboardCardDraft(params: {
     return;
   }
   invalidateWorkboardLoads(params.host);
+  state.draftSaving = true;
   state.loading = true;
   state.error = null;
   const cardId = state.editingCardId;
@@ -2273,6 +2317,7 @@ export async function saveWorkboardCardDraft(params: {
     state.error = formatError(error);
   } finally {
     clearPendingStatusTransition(params.host, cardId, pendingStatusRecorded);
+    state.draftSaving = false;
     state.loading = false;
     params.requestUpdate?.();
   }
@@ -2412,7 +2457,7 @@ export async function dispatchWorkboard(params: {
   requestUpdate?: () => void;
 }) {
   const state = getWorkboardState(params.host);
-  if (!params.client || state.dispatching) {
+  if (!params.client || state.dispatching || workboardHasActiveWrites(state)) {
     return;
   }
   invalidateWorkboardLoads(params.host);

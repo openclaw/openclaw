@@ -56,7 +56,7 @@ describe("renderWorkboard", () => {
     );
   });
 
-  it("keeps dispatch available during refresh and only disables it while dispatching", () => {
+  it("keeps dispatch available during refresh and disables it during writes", () => {
     const host = {};
     const state = getWorkboardState(host);
     state.loaded = true;
@@ -80,6 +80,14 @@ describe("renderWorkboard", () => {
     );
     expect(dispatchButton?.disabled).toBe(false);
 
+    state.draftSaving = true;
+    render(renderWorkboard(props), container);
+
+    expect(
+      container.querySelector<HTMLButtonElement>('button[title="Dispatch ready work"]')?.disabled,
+    ).toBe(true);
+
+    state.draftSaving = false;
     state.dispatching = true;
     render(renderWorkboard(props), container);
 
@@ -2336,6 +2344,50 @@ describe("renderWorkboard", () => {
     expect(menu?.style.getPropertyValue("--workboard-select-menu-top")).toBe("162px");
     expect(menu?.style.getPropertyValue("--workboard-select-menu-width")).toBe("240px");
     expect(menu?.style.getPropertyValue("--workboard-select-menu-max-height")).toBe("320px");
+  });
+
+  it("closes fixed dropdown menus when their anchor container scrolls or resizes", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.draftOpen = true;
+    state.draftTitle = "New task";
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    try {
+      render(
+        renderWorkboard({
+          host,
+          client: null,
+          connected: true,
+          pluginEnabled: true,
+          agentsList: null,
+          sessions: [],
+          onOpenSession: () => undefined,
+        }),
+        container,
+      );
+
+      const body = container.querySelector<HTMLElement>(".workboard-draft__body");
+      const select = container.querySelector<HTMLDetailsElement>(
+        ".workboard-draft .workboard-select",
+      );
+      expect(body).toBeTruthy();
+      expect(select).toBeTruthy();
+
+      select!.open = true;
+      select!.dispatchEvent(new Event("toggle"));
+      body!.dispatchEvent(new Event("scroll"));
+      expect(select?.open).toBe(false);
+
+      select!.open = true;
+      select!.dispatchEvent(new Event("toggle"));
+      window.dispatchEvent(new Event("resize"));
+      expect(select?.open).toBe(false);
+    } finally {
+      container.remove();
+    }
   });
 
   it("closes the details drawer when the selected card is clicked again", () => {
