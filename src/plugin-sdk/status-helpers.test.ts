@@ -77,6 +77,9 @@ const adapterAccount = {
 const adapterRuntime = {
   accountId: "default",
   running: true,
+  busy: true,
+  activeRuns: 1,
+  lastRunActivityAt: 42,
 };
 
 const adapterProbe = { ok: true };
@@ -88,6 +91,9 @@ function expectedAdapterAccountSnapshot() {
       configured: true,
       running: true,
       probe: adapterProbe,
+      busy: true,
+      activeRuns: 1,
+      lastRunActivityAt: 42,
     }),
     profileUrl: adapterAccount.profileUrl,
     connected: true,
@@ -332,6 +338,9 @@ describe("buildRuntimeAccountStatusSnapshot", () => {
           lastTransportActivityAt: 14,
           healthState: "healthy",
           running: true,
+          busy: true,
+          activeRuns: 2,
+          lastRunActivityAt: 15,
         },
       },
       extra: undefined,
@@ -346,6 +355,9 @@ describe("buildRuntimeAccountStatusSnapshot", () => {
         lastEventAt: 13,
         lastTransportActivityAt: 14,
         healthState: "healthy",
+        busy: true,
+        activeRuns: 2,
+        lastRunActivityAt: 15,
         probe: undefined,
       },
     },

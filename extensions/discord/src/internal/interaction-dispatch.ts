@@ -44,12 +44,12 @@ type DispatchClient = Parameters<typeof createInteraction>[0] & {
 export async function dispatchInteraction(
   client: DispatchClient,
   rawData: APIInteraction,
-): Promise<void> {
+): Promise<boolean> {
   const interaction = createInteraction(client, rawData as RawInteraction);
   if (rawData.type === InteractionType.ApplicationCommandAutocomplete) {
     const command = client.commands.find((entry) => entry.name === readInteractionName(rawData));
     if (!command) {
-      return;
+      return false;
     }
     const autocompleteInteraction = interaction as AutocompleteInteraction;
     const optionAutocomplete = resolveFocusedCommandOptionAutocompleteHandler(
@@ -58,14 +58,15 @@ export async function dispatchInteraction(
     );
     if (optionAutocomplete) {
       await optionAutocomplete(autocompleteInteraction);
-      return;
+      return true;
     }
     if ("autocomplete" in command) {
       await (
         command as { autocomplete: (interaction: AutocompleteInteraction) => Promise<void> }
       ).autocomplete(autocompleteInteraction);
+      return true;
     }
-    return;
+    return false;
   }
   if (rawData.type === InteractionType.ApplicationCommand) {
     const command = client.commands.find((entry) => entry.name === readInteractionName(rawData));
@@ -74,13 +75,14 @@ export async function dispatchInteraction(
       await (command as { run: (interaction: CommandInteraction) => Promise<void> }).run(
         interaction as CommandInteraction,
       );
+      return true;
     }
-    return;
+    return false;
   }
   if (rawData.type === InteractionType.MessageComponent) {
     const customId = readCustomId(rawData);
     if (!customId) {
-      return;
+      return false;
     }
     const componentInteraction = interaction as BaseComponentInteraction;
     if (
@@ -92,7 +94,7 @@ export async function dispatchInteraction(
       })
     ) {
       await componentInteraction.acknowledge();
-      return;
+      return true;
     }
     const component = client.componentHandler.resolve(customId, {
       componentType: (rawData as { data?: { component_type?: number } }).data?.component_type,
@@ -100,19 +102,23 @@ export async function dispatchInteraction(
     if (component) {
       await deferComponentInteractionIfNeeded(component, componentInteraction);
       await component.run(componentInteraction, parseComponentInteractionData(component, customId));
+      return true;
     }
-    return;
+    return false;
   }
   if (rawData.type === InteractionType.ModalSubmit) {
     const customId = readCustomId(rawData);
     if (!customId) {
-      return;
+      return false;
     }
     const modal = client.modalHandler.resolve(customId);
     if (modal) {
       await modal.run(interaction as ModalInteraction, modal.customIdParser(customId).data);
+      return true;
     }
+    return false;
   }
+  return false;
 }
 
 function resolveConditionalComponentOption(

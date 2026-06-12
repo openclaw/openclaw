@@ -254,10 +254,15 @@ export function registerDiscordMonitorListeners(params: {
   logger: NonNullable<ConstructorParameters<typeof DiscordMessageListener>[1]>;
   messageHandler: ConstructorParameters<typeof DiscordMessageListener>[0];
   trackInboundEvent?: () => void;
+  trackAcceptedInboundEvent?: () => void;
 }) {
   registerDiscordListener(
     params.client.listeners,
-    new DiscordInteractionListener(params.logger, params.trackInboundEvent),
+    new DiscordInteractionListener(
+      params.logger,
+      params.trackInboundEvent,
+      params.trackAcceptedInboundEvent,
+    ),
   );
   registerDiscordListener(
     params.client.listeners,
@@ -280,6 +285,7 @@ export function registerDiscordMonitorListeners(params: {
       guildEntries: params.guildEntries,
       logger: params.logger,
       onEvent: params.trackInboundEvent,
+      onAcceptedEvent: params.trackAcceptedInboundEvent,
     };
     registerDiscordListener(
       params.client.listeners,

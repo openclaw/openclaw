@@ -330,13 +330,21 @@ describe("runReplyAgent runtime config", () => {
     expect(metadata?.deliverDespiteSourceReplySuppression).toBe(true);
   });
 
-  it("does not resolve secrets before the enqueue-followup queue path", async () => {
+  it("returns queued acknowledgement without resolving secrets before the enqueue-followup path", async () => {
     const { followupRun, resolvedQueue, replyParams } = createDirectRuntimeReplyParams({
       shouldFollowup: true,
       isActive: true,
     });
 
-    await expect(runReplyAgent(replyParams)).resolves.toBeUndefined();
+    const result = await runReplyAgent(replyParams);
+
+    expect(result).toEqual({
+      text: "I'm still working on the previous request, so I queued this follow-up.",
+    });
+    if (!result || Array.isArray(result)) {
+      throw new Error("expected a single queued acknowledgement payload");
+    }
+    expect(getReplyPayloadMetadata(result)?.deliverDespiteSourceReplySuppression).toBe(true);
 
     expect(resolveQueuedReplyExecutionConfigMock).not.toHaveBeenCalled();
     expect(enqueueFollowupRunMock).toHaveBeenCalledTimes(1);

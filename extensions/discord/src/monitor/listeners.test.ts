@@ -39,6 +39,9 @@ function createDeferred() {
 async function flushAsyncWork() {
   await Promise.resolve();
   await Promise.resolve();
+  // Third tick: the interaction listener chains an extra .then for accepted
+  // events, so rejections reach .catch one microtask later.
+  await Promise.resolve();
 }
 
 describe("DiscordMessageListener", () => {
@@ -206,5 +209,18 @@ describe("DiscordInteractionListener", () => {
     await listener.handle({ id: "interaction-2" } as never, { handleInteraction } as never);
 
     expect(onEvent).toHaveBeenCalledTimes(2);
+  });
+
+  it("calls accepted event callback only after handled interactions", async () => {
+    const handleInteraction = vi.fn(async () => true);
+    const onEvent = vi.fn();
+    const onAcceptedEvent = vi.fn();
+    const listener = new DiscordInteractionListener(undefined, onEvent, onAcceptedEvent);
+
+    await listener.handle({ id: "interaction-1" } as never, { handleInteraction } as never);
+    await flushAsyncWork();
+
+    expect(onEvent).toHaveBeenCalledTimes(1);
+    expect(onAcceptedEvent).toHaveBeenCalledTimes(1);
   });
 });

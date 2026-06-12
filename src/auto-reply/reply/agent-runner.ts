@@ -124,6 +124,27 @@ import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
+const ACTIVE_TURN_ACK_CHANNELS = new Set(["discord", "telegram"]);
+
+function buildActiveTurnAck(
+  sessionCtx: TemplateContext,
+  isHeartbeat: boolean,
+  mode: "queued" | "steered",
+): ReplyPayload | undefined {
+  if (isHeartbeat) {
+    return undefined;
+  }
+  const channel = (sessionCtx.Provider ?? sessionCtx.Surface ?? "").trim().toLowerCase();
+  if (!ACTIVE_TURN_ACK_CHANNELS.has(channel)) {
+    return undefined;
+  }
+  return markReplyPayloadForSourceSuppressionDelivery({
+    text:
+      mode === "steered"
+        ? "I'm still working on the current request and added this message to that run."
+        : "I'm still working on the previous request, so I queued this follow-up.",
+  });
+}
 
 function markBeforeAgentRunBlockedPayloads(payloads: ReplyPayload[]): ReplyPayload[] {
   return payloads.map((payload) =>
@@ -1250,7 +1271,7 @@ export async function runReplyAgent(params: {
     if (steerOutcome.queued) {
       await touchActiveSessionEntry();
       typing.cleanup();
-      return undefined;
+      return buildActiveTurnAck(sessionCtx, isHeartbeat, "steered");
     }
     const summary = formatEmbeddedAgentQueueFailureSummary(steerOutcome);
     logVerbose(`queue: active session ${steerSessionId} rejected steering injection: ${summary}`);
@@ -1303,7 +1324,7 @@ export async function runReplyAgent(params: {
     } else {
       typing.cleanup();
     }
-    return undefined;
+    return buildActiveTurnAck(sessionCtx, isHeartbeat, "queued");
   }
 
   followupRun.run.config = await resolveQueuedReplyExecutionConfig(followupRun.run.config, {

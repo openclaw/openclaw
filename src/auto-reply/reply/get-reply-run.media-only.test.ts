@@ -1386,6 +1386,49 @@ describe("runPreparedReply media-only handling", () => {
       activeOperation.complete();
     }
   });
+
+  it("recomputes queued lane size after reset clears an interrupted lane", async () => {
+    const queueSettings = await import("./queue/settings-runtime.js");
+    const embeddedAgentRuntime = await import("../../agents/embedded-agent.runtime.js");
+    const commandQueue = await import("../../process/command-queue.js");
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "collect" });
+    vi.mocked(commandQueue.getQueueSize).mockReturnValueOnce(1).mockReturnValue(0);
+    vi.mocked(commandQueue.clearCommandLane).mockReturnValueOnce(1);
+    vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId).mockReturnValue(undefined);
+    vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunActive).mockReturnValue(false);
+
+    const result = await runPreparedReply(
+      baseParams({
+        resetTriggered: true,
+        isNewSession: true,
+        sessionId: "session-reset-clears-lane",
+      }),
+    );
+
+    expect(result).toEqual({ text: "ok" });
+    expect(commandQueue.clearCommandLane).toHaveBeenCalledWith("session:session-key");
+    const call = requireRunReplyAgentCall();
+    expect(call?.isActive).toBe(false);
+    expect(call?.resetTriggered).toBe(true);
+  });
+
+  it("treats queued session-lane work as active even without an active embedded run", async () => {
+    const queueSettings = await import("./queue/settings-runtime.js");
+    const embeddedAgentRuntime = await import("../../agents/embedded-agent.runtime.js");
+    const commandQueue = await import("../../process/command-queue.js");
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "collect" });
+    vi.mocked(commandQueue.getQueueSize).mockReturnValueOnce(1).mockReturnValueOnce(1);
+    vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId).mockReturnValue(undefined);
+    vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunActive).mockReturnValue(false);
+
+    const result = await runPreparedReply(baseParams());
+
+    expect(result).toEqual({ text: "ok" });
+    const call = requireRunReplyAgentCall();
+    expect(call.isActive).toBe(true);
+    expect(call.shouldFollowup).toBe(true);
+  });
+
   it("does not enable steering for active heartbeat runs", async () => {
     const queueSettings = await import("./queue/settings-runtime.js");
     const embeddedAgentRuntime = await import("../../agents/embedded-agent.runtime.js");
