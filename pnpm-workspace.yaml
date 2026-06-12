@@ -56,6 +56,8 @@ minimumReleaseAgeExclude:
   - "oxfmt"
   - "axios@1.15.0"
   - "discord-api-types"
+  - "esbuild"
+  - "@esbuild/*"
   - "rolldown"
   - "sqlite-vec"
   - "sqlite-vec-*"

@@ -1947,7 +1947,7 @@
     "@types/ws": "8.18.1",
     "@typescript/native-preview": "7.0.0-dev.20260527.2",
     "@vitest/coverage-v8": "4.1.7",
-    "esbuild": "0.28.0",
+    "esbuild": "0.28.1",
     "jscpd": "4.2.4",
     "jsdom": "29.1.1",
     "lit": "3.3.3",
