@@ -4932,4 +4932,101 @@ describe("deliverSubagentAnnouncement requester session backfill (issue #86034)"
       await fs.rm(storePath, { force: true });
     }
   });
+
+  // Cross-channel safety regression: a stale lastChannel that differs from
+  // the completion origin's channel must not leak its lastTo into the
+  // telegram delivery. mergeDeliveryContext.channelsConflict (delivery-context.shared.ts:233-260)
+  // is the structural guard; this test locks it.
+  it("does not import a cross-channel lastTo when the completion origin's channel differs from lastChannel (cross-channel guard regression)", async () => {
+    const agentId = `xchan-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const sessionKey = `agent:${agentId}:telegram:5866004662`;
+    const storeTemplate = path.join(
+      os.tmpdir(),
+      `openclaw-86034-xchan-session-${agentId}-{agentId}.json`,
+    );
+    const storePath = storeTemplate.replaceAll("{agentId}", agentId);
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          [sessionKey]: {
+            sessionId: "telegram-session-xchan",
+            updatedAt: Date.now(),
+            channel: "telegram",
+            lastChannel: "signal",
+            lastTo: "signal-stale-target",
+            lastAccountId: "signal-bot-1",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    try {
+      const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
+        result: { payloads: [{ text: "requester voice completion" }] },
+      });
+      testing.setDepsForTest({
+        dispatchGatewayMethodInProcess,
+        getRequesterSessionActivity: () => ({
+          sessionId: "telegram-session-xchan",
+          isActive: false,
+        }),
+        getRuntimeConfig: () => ({ session: { store: storeTemplate } }) as never,
+      });
+
+      const result = await deliverSubagentAnnouncement({
+        requesterSessionKey: sessionKey,
+        targetRequesterSessionKey: sessionKey,
+        triggerMessage: "image done",
+        steerMessage: "image done",
+        requesterOrigin: { channel: "telegram", accountId: "telegram-bot-1" },
+        requesterSessionOrigin: { channel: "telegram", accountId: "telegram-bot-1" },
+        completionDirectOrigin: { channel: "telegram", accountId: "telegram-bot-1" },
+        directOrigin: { channel: "telegram", accountId: "telegram-bot-1" },
+        requesterIsSubagent: false,
+        expectsCompletionMessage: true,
+        bestEffortDeliver: true,
+        directIdempotencyKey: "announce-86034-cross-channel",
+        sourceTool: "image_generate",
+      });
+
+      // Structural assertion: the stale signal `to` must not have leaked into
+      // any in-process gateway dispatch, regardless of whether the call ended
+      // up routed (path: "direct") or short-circuited (delivered: false /
+      // path: "none"). The guard is "no cross-channel `to` ever reaches the
+      // gateway", not a specific terminal path.
+      expect(dispatchGatewayMethodInProcess).not.toHaveBeenCalledWith(
+        "agent",
+        expect.objectContaining({ to: "signal-stale-target" }),
+        expect.anything(),
+      );
+      expect(dispatchGatewayMethodInProcess).not.toHaveBeenCalledWith(
+        "agent",
+        expect.objectContaining({ channel: "signal" }),
+        expect.anything(),
+      );
+      for (const call of asMock(dispatchGatewayMethodInProcess).mock.calls) {
+        const params = call[1] as Record<string, unknown> | undefined;
+        if (!params) continue;
+        expect(params.to).not.toBe("signal-stale-target");
+        expect(params.channel).not.toBe("signal");
+      }
+
+      // Result-shape assertion: if the dispatcher was invoked at all on the
+      // direct path, it must not have been with the stale signal target.
+      if (
+        (result as { path?: string }).path === "direct" &&
+        (result as { delivered?: boolean }).delivered === true
+      ) {
+        const params = mockCallArg(dispatchGatewayMethodInProcess, 0, 1) as Record<string, unknown>;
+        expect(params.to).not.toBe("signal-stale-target");
+        expect(params.channel).not.toBe("signal");
+      }
+    } finally {
+      await fs.rm(storePath, { force: true });
+    }
+  });
 });
