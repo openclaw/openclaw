@@ -5,6 +5,7 @@ import {
   canonicalizeConfiguredMcpServer,
   normalizeConfiguredMcpServers,
 } from "./mcp-config-normalize.js";
+import { formatBlockedMcpStdioEnvError, listBlockedMcpStdioEnvKeys } from "./mcp-env-policy.js";
 import { replaceConfigFile } from "./mutate.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
@@ -46,6 +47,11 @@ function normalizeToolSelectionList(value: readonly string[] | undefined): strin
     new Set(value.map((entry) => entry.trim()).filter((entry) => entry.length > 0)),
   ).toSorted((a, b) => a.localeCompare(b));
   return normalized.length > 0 ? normalized : undefined;
+}
+
+function getBlockedMcpStdioEnvWriteError(server: Record<string, unknown>): string | undefined {
+  const blockedEnvKeys = listBlockedMcpStdioEnvKeys(server);
+  return blockedEnvKeys.length > 0 ? formatBlockedMcpStdioEnvError(blockedEnvKeys) : undefined;
 }
 
 export async function listConfiguredMcpServers(): Promise<ConfigMcpReadResult> {
@@ -107,6 +113,14 @@ export async function updateConfiguredMcpServerTools(params: {
       delete server.toolFilter;
     }
   }
+  const blockedEnvError = getBlockedMcpStdioEnvWriteError(server);
+  if (blockedEnvError) {
+    return {
+      ok: false,
+      path: loaded.path,
+      error: blockedEnvError,
+    };
+  }
   servers[name] = server;
   next.mcp = {
     ...next.mcp,
@@ -160,7 +174,16 @@ export async function updateConfiguredMcpServer(params: {
 
   const next = structuredClone(loaded.config);
   const servers = normalizeConfiguredMcpServers(next.mcp?.servers);
-  servers[name] = canonicalizeConfiguredMcpServer(params.update({ ...servers[name] }));
+  const server = canonicalizeConfiguredMcpServer(params.update({ ...servers[name] }));
+  const blockedEnvError = getBlockedMcpStdioEnvWriteError(server);
+  if (blockedEnvError) {
+    return {
+      ok: false,
+      path: loaded.path,
+      error: blockedEnvError,
+    };
+  }
+  servers[name] = server;
   next.mcp = {
     ...next.mcp,
     servers,
@@ -207,7 +230,16 @@ export async function setConfiguredMcpServer(params: {
 
   const next = structuredClone(loaded.config);
   const servers = normalizeConfiguredMcpServers(next.mcp?.servers);
-  servers[name] = canonicalizeConfiguredMcpServer(params.server);
+  const server = canonicalizeConfiguredMcpServer(params.server);
+  const blockedEnvError = getBlockedMcpStdioEnvWriteError(server);
+  if (blockedEnvError) {
+    return {
+      ok: false,
+      path: loaded.path,
+      error: blockedEnvError,
+    };
+  }
+  servers[name] = server;
   next.mcp = {
     ...next.mcp,
     servers,

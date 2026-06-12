@@ -48,6 +48,10 @@ type ResolvedHttpMcpTransportConfig = ResolvedBaseMcpTransportConfig & {
 
 type ResolvedMcpTransportConfig = ResolvedStdioMcpTransportConfig | ResolvedHttpMcpTransportConfig;
 
+type ResolveMcpTransportConfigOptions = {
+  onBlockedStdioEnv?: (key: string) => void;
+};
+
 const DEFAULT_CONNECTION_TIMEOUT_MS = 30_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
 
@@ -199,6 +203,7 @@ function resolveHttpTransportConfig(
 export function resolveMcpTransportConfig(
   serverName: string,
   rawServer: unknown,
+  options?: ResolveMcpTransportConfigOptions,
 ): ResolvedMcpTransportConfig | null {
   const logServerName = sanitizeForLog(serverName);
   const requestedTransport = getRequestedTransport(rawServer);
@@ -206,9 +211,7 @@ export function resolveMcpTransportConfig(
   const effectiveTransport = requestedTransport || requestedTransportAlias;
   const stdioLaunch = resolveStdioMcpServerLaunchConfig(rawServer, {
     onDroppedEnv: (key) => {
-      logWarn(
-        `bundle-mcp: server "${logServerName}": env "${sanitizeForLog(key)}" is blocked for stdio startup safety and was ignored.`,
-      );
+      options?.onBlockedStdioEnv?.(key);
     },
   });
   if (stdioLaunch.ok) {

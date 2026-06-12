@@ -49,24 +49,26 @@ describe("resolveMcpTransportConfig", () => {
   });
 
   it("drops dangerous env overrides from stdio config", () => {
-    // Stdio env is inherited executable process input. Block loader/shell hook
-    // variables and child-process config pivots while preserving explicit MCP
-    // credentials and ordinary scalar env values.
-    const resolved = resolveMcpTransportConfig("probe", {
-      command: "node",
-      env: {
-        SAFE_VALUE: "ok",
-        PORT: 3000,
-        ENABLED: true,
-        GITHUB_TOKEN: "token",
-        HTTP_PROXY: "http://proxy.example",
-        NODE_OPTIONS: "--require=./evil.js",
-        LD_PRELOAD: "/tmp/pwn.so",
-        BASH_ENV: "/tmp/pwn.sh",
-        ANSIBLE_CONFIG: "/tmp/evil-ansible.cfg",
-        TF_CLI_CONFIG_FILE: "/tmp/evil-terraform.rc",
+    const blockedEnvKeys: string[] = [];
+    const resolved = resolveMcpTransportConfig(
+      "probe",
+      {
+        command: "node",
+        env: {
+          SAFE_VALUE: "ok",
+          PORT: 3000,
+          ENABLED: true,
+          GITHUB_TOKEN: "token",
+          HTTP_PROXY: "http://proxy.example",
+          NODE_OPTIONS: "--require=./evil.js",
+          LD_PRELOAD: "/tmp/pwn.so",
+          BASH_ENV: "/tmp/pwn.sh",
+          ANSIBLE_CONFIG: "/tmp/evil-ansible.cfg",
+          TF_CLI_CONFIG_FILE: "/tmp/evil-terraform.rc",
+        },
       },
-    });
+      { onBlockedStdioEnv: (key) => blockedEnvKeys.push(key) },
+    );
 
     expect(resolved).toEqual({
       kind: "stdio",
@@ -86,21 +88,14 @@ describe("resolveMcpTransportConfig", () => {
       requestTimeoutMs: 60_000,
       supportsParallelToolCalls: false,
     });
-    expect(logWarn).toHaveBeenCalledWith(
-      'bundle-mcp: server "probe": env "NODE_OPTIONS" is blocked for stdio startup safety and was ignored.',
-    );
-    expect(logWarn).toHaveBeenCalledWith(
-      'bundle-mcp: server "probe": env "LD_PRELOAD" is blocked for stdio startup safety and was ignored.',
-    );
-    expect(logWarn).toHaveBeenCalledWith(
-      'bundle-mcp: server "probe": env "BASH_ENV" is blocked for stdio startup safety and was ignored.',
-    );
-    expect(logWarn).toHaveBeenCalledWith(
-      'bundle-mcp: server "probe": env "ANSIBLE_CONFIG" is blocked for stdio startup safety and was ignored.',
-    );
-    expect(logWarn).toHaveBeenCalledWith(
-      'bundle-mcp: server "probe": env "TF_CLI_CONFIG_FILE" is blocked for stdio startup safety and was ignored.',
-    );
+    expect(blockedEnvKeys).toEqual([
+      "NODE_OPTIONS",
+      "LD_PRELOAD",
+      "BASH_ENV",
+      "ANSIBLE_CONFIG",
+      "TF_CLI_CONFIG_FILE",
+    ]);
+    expect(logWarn).not.toHaveBeenCalled();
   });
 
   it("uses an explicit empty stdio env when all configured env keys are blocked", () => {
@@ -126,17 +121,22 @@ describe("resolveMcpTransportConfig", () => {
     });
   });
 
-  it("sanitizes config-controlled names in stdio env warnings", () => {
-    resolveMcpTransportConfig("probe\nWARN forged\u001b[31m", {
-      command: "node",
-      env: {
-        "LD_PRELOAD\nWARN forged\u001b[31m": "/tmp/pwn.so",
-      },
-    });
+  it("reports blocked stdio env keys through callback without logging", () => {
+    const blockedEnvKeys: string[] = [];
 
-    expect(logWarn).toHaveBeenCalledWith(
-      'bundle-mcp: server "probeWARN forged": env "LD_PRELOADWARN forged" is blocked for stdio startup safety and was ignored.',
+    resolveMcpTransportConfig(
+      "probe\nWARN forged\u001b[31m",
+      {
+        command: "node",
+        env: {
+          "LD_PRELOAD\nWARN forged\u001b[31m": "/tmp/pwn.so",
+        },
+      },
+      { onBlockedStdioEnv: (key) => blockedEnvKeys.push(key) },
     );
+
+    expect(blockedEnvKeys).toEqual(["LD_PRELOAD\nWARN forged\u001b[31m"]);
+    expect(logWarn).not.toHaveBeenCalled();
   });
 
   it("resolves SSE config by default", () => {

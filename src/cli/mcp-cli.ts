@@ -29,6 +29,11 @@ import {
   updateConfiguredMcpServer,
   updateConfiguredMcpServerTools,
 } from "../config/mcp-config.js";
+import {
+  formatBlockedMcpStdioEnvDiagnostic,
+  formatBlockedMcpStdioEnvError,
+  listBlockedMcpStdioEnvKeys,
+} from "../config/mcp-env-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { serveOpenClawChannelMcp } from "../mcp/channel-server.js";
@@ -168,6 +173,7 @@ type McpStatusEntry = {
   authStatus?: McpOAuthCredentialsStatus;
   toolFilter?: unknown;
   codex?: unknown;
+  issues?: McpDoctorIssue[];
 };
 
 type McpDoctorIssue = {
@@ -200,6 +206,31 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function issue(level: McpDoctorIssue["level"], message: string): McpDoctorIssue {
   return { level, message };
+}
+
+function formatMcpIssuePrefix(level: McpDoctorIssue["level"]): string {
+  if (level === "error") {
+    return "!";
+  }
+  if (level === "warning") {
+    return "-";
+  }
+  return "i";
+}
+
+function collectBlockedMcpStdioEnvIssues(server: Record<string, unknown>): McpDoctorIssue[] {
+  const blockedEnvKeys = listBlockedMcpStdioEnvKeys(server);
+  if (blockedEnvKeys.length === 0) {
+    return [];
+  }
+  return [issue("error", formatBlockedMcpStdioEnvDiagnostic(blockedEnvKeys))];
+}
+
+function failOnBlockedMcpStdioEnv(server: Record<string, unknown>): void {
+  const blockedEnvKeys = listBlockedMcpStdioEnvKeys(server);
+  if (blockedEnvKeys.length > 0) {
+    fail(formatBlockedMcpStdioEnvError(blockedEnvKeys));
+  }
 }
 
 function hasSensitiveKey(name: string): boolean {
@@ -312,6 +343,7 @@ async function collectMcpDoctorIssues(params: {
   if (server.enabled === false) {
     issues.push(issue("warning", "server is disabled"));
   }
+  issues.push(...collectBlockedMcpStdioEnvIssues(server));
   if (!disabled) {
     if (!resolved) {
       issues.push(issue("error", "server transport is invalid"));
@@ -441,11 +473,13 @@ async function buildMcpStatusEntries(
     entries.map(async ([name, server]) => {
       const resolved = resolveMcpTransportConfig(name, server);
       const enabled = server.enabled !== false;
+      const issues = collectBlockedMcpStdioEnvIssues(server);
+      const hasErrorIssues = issues.some((issueEntry) => issueEntry.level === "error");
       const entry: McpStatusEntry = {
         name,
         configured: true,
         enabled,
-        ok: enabled && Boolean(resolved),
+        ok: enabled && Boolean(resolved) && !hasErrorIssues,
         transport: resolved?.transportType,
         launch: resolved?.description,
         requestTimeoutMs: resolved?.requestTimeoutMs,
@@ -454,6 +488,9 @@ async function buildMcpStatusEntries(
         toolFilter: server.toolFilter,
         codex: server.codex,
       };
+      if (issues.length > 0) {
+        entry.issues = issues;
+      }
       if (server.auth) {
         entry.auth = server.auth;
       }
@@ -689,6 +726,10 @@ export function registerMcpCli(program: Command) {
         const filters = entry.toolFilter ? " tool-filtered" : "";
         const parallel = entry.supportsParallelToolCalls ? " parallel" : "";
         defaultRuntime.log(`- ${entry.name}: ${transport}${auth}${oauth}${filters}${parallel}`);
+        for (const statusIssue of entry.issues ?? []) {
+          const prefix = formatMcpIssuePrefix(statusIssue.level);
+          defaultRuntime.log(`  ${prefix} ${statusIssue.level}: ${statusIssue.message}`);
+        }
         if (opts.verbose) {
           defaultRuntime.log(`  launch: ${entry.launch ?? "n/a"}`);
           defaultRuntime.log(
@@ -948,6 +989,7 @@ export function registerMcpCli(program: Command) {
             ...(exclude ? { exclude } : {}),
           };
         }
+        failOnBlockedMcpStdioEnv(server);
 
         const loaded = await listConfiguredMcpServers();
         if (!loaded.ok) {
@@ -1178,6 +1220,7 @@ export function registerMcpCli(program: Command) {
         }
         setOptionalField(next, "clientCert", normalizeStringifiedOptionalString(opts.clientCert));
         setOptionalField(next, "clientKey", normalizeStringifiedOptionalString(opts.clientKey));
+        failOnBlockedMcpStdioEnv(next);
         if (opts.probe && next.enabled !== false && next.auth !== "oauth") {
           await probeMcpServersOrFail({
             config: loaded.config,

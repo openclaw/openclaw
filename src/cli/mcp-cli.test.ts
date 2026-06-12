@@ -116,6 +116,53 @@ describe("mcp cli", () => {
     });
   });
 
+  it("rejects blocked stdio env keys when setting an MCP server", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async () => {
+      const workspaceDir = await createWorkspace();
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+
+      await expect(
+        runMcpCommand([
+          "mcp",
+          "set",
+          "docs",
+          '{"command":"node","env":{"PYTHONPATH":"/tmp/mcp-shadow","PYTHONUNBUFFERED":"1"}}',
+        ]),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(lastErrorLine()).toBe(
+        'MCP stdio env key "PYTHONPATH" is blocked by startup safety policy and cannot be saved. Remove it from the server env config.',
+      );
+
+      mockLog.mockClear();
+      await runMcpCommand(["mcp", "list", "--json"]);
+      expect(JSON.parse(lastLogLine())).toEqual({});
+    });
+  });
+
+  it("rejects blocked stdio env keys before probing an added MCP server", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async () => {
+      const workspaceDir = await createWorkspace();
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+
+      await expect(
+        runMcpCommand([
+          "mcp",
+          "add",
+          "docs",
+          "--command",
+          "./missing-mcp",
+          "--env",
+          "PYTHONPATH=/tmp/mcp-shadow",
+        ]),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(lastErrorLine()).toBe(
+        'MCP stdio env key "PYTHONPATH" is blocked by startup safety policy and cannot be saved. Remove it from the server env config.',
+      );
+    });
+  });
+
   it("adds a configured MCP server from flags without replacing operator knobs", async () => {
     await withTempHome("openclaw-cli-mcp-home-", async () => {
       const workspaceDir = await createWorkspace();
@@ -244,6 +291,117 @@ describe("mcp cli", () => {
           supportsParallelToolCalls: false,
         },
       ]);
+    });
+  });
+
+  it("reports legacy blocked stdio env keys in MCP status and doctor", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async (home) => {
+      const workspaceDir = await createWorkspace();
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify(
+          {
+            mcp: {
+              servers: {
+                docs: {
+                  command: "node",
+                  env: {
+                    PYTHONPATH: "/tmp/mcp-shadow",
+                    PYTHONUNBUFFERED: "1",
+                  },
+                },
+              },
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      await runMcpCommand(["mcp", "status", "--json"]);
+
+      expect(JSON.parse(lastLogLine()).servers).toEqual([
+        {
+          name: "docs",
+          configured: true,
+          enabled: true,
+          ok: false,
+          transport: "stdio",
+          launch: "node",
+          requestTimeoutMs: 60_000,
+          connectionTimeoutMs: 30_000,
+          supportsParallelToolCalls: false,
+          issues: [
+            {
+              level: "error",
+              message:
+                'MCP stdio env key "PYTHONPATH" is blocked by startup safety policy and ignored at runtime.',
+            },
+          ],
+        },
+      ]);
+
+      mockLog.mockClear();
+      await expect(runMcpCommand(["mcp", "doctor", "--json"])).rejects.toThrow("__exit__:1");
+
+      expect(lastErrorLine()).toBe("MCP doctor found errors.");
+      expect(JSON.parse(lastLogLine())).toMatchObject({
+        ok: false,
+        servers: [
+          {
+            name: "docs",
+            ok: false,
+            issues: [
+              {
+                level: "error",
+                message:
+                  'MCP stdio env key "PYTHONPATH" is blocked by startup safety policy and ignored at runtime.',
+              },
+            ],
+          },
+        ],
+      });
+    });
+  });
+
+  it("rejects legacy blocked stdio env keys before probing MCP configure updates", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async (home) => {
+      const workspaceDir = await createWorkspace();
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify(
+          {
+            mcp: {
+              servers: {
+                docs: {
+                  command: "./missing-mcp",
+                  env: {
+                    PYTHONPATH: "/tmp/mcp-shadow",
+                  },
+                },
+              },
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      await expect(
+        runMcpCommand(["mcp", "configure", "docs", "--timeout", "5", "--probe"]),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(lastErrorLine()).toBe(
+        'MCP stdio env key "PYTHONPATH" is blocked by startup safety policy and cannot be saved. Remove it from the server env config.',
+      );
     });
   });
 
