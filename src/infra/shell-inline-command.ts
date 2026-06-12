@@ -257,7 +257,7 @@ export function isPowerShellInlineFileCommandFlag(token: string): boolean {
 
 /** Detect POSIX interactive startup before an inline command flag. */
 export function hasPosixInteractiveStartupBeforeInlineCommand(
-  argv: string[],
+  argv: readonly string[],
   flags: ReadonlySet<string>,
 ): boolean {
   let sawInteractiveMode = false;
@@ -286,7 +286,7 @@ export function hasPosixInteractiveStartupBeforeInlineCommand(
 
 /** Detect POSIX login startup before an inline command flag. */
 export function hasPosixLoginStartupBeforeInlineCommand(
-  argv: string[],
+  argv: readonly string[],
   flags: ReadonlySet<string>,
 ): boolean {
   let sawLoginMode = false;

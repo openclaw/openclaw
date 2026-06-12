@@ -1629,7 +1629,7 @@ export type AllowAlwaysPersistenceReason =
   | "unplanned";
 
 export type AllowAlwaysPersistenceDecision =
-  | { kind: "patterns"; patterns: AllowAlwaysPattern[]; commandText?: string }
+  | { kind: "patterns"; patterns: readonly AllowAlwaysPattern[]; commandText?: string }
   | { kind: "exact-command"; commandText: string; cwd: string }
   | { kind: "one-shot"; reasons: AllowAlwaysPersistenceReason[] };
 

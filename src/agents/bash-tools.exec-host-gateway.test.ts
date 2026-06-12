@@ -798,7 +798,7 @@ describe("processGatewayAllowlist", () => {
     );
   });
 
-  it("keeps shell-wrapper allowlist misses one-shot when gateway enforcement cannot reuse them", async () => {
+  it("offers allow-always for shell-wrapper misses with reusable executable patterns", async () => {
     if (process.platform === "win32") {
       return;
     }
@@ -841,11 +841,15 @@ describe("processGatewayAllowlist", () => {
     expect(result.pendingResult?.details.status).toBe("approval-pending");
     expect(resolveExecApprovalAllowedDecisionsMock).toHaveBeenCalledWith({
       ask: "on-miss",
-      allowAlwaysPersistence: { kind: "one-shot", reasons: ["no-reusable-pattern"] },
+      allowAlwaysPersistence: {
+        kind: "patterns",
+        commandText: "sh -c 'git status'",
+        patterns: [{ pattern: "/usr/bin/git", argPattern: undefined }],
+      },
     });
     expect(buildExecApprovalPendingToolResultMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        allowedDecisions: ["allow-once", "deny"],
+        allowedDecisions: ["allow-once", "allow-always", "deny"],
       }),
     );
     expect(approvalsFile.agents).toEqual({});

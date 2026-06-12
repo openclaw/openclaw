@@ -3,6 +3,7 @@
  * Covers node target resolution, remote prepare/invoke payloads, approvals,
  * auto-review, and follow-up execution paths.
  */
+import crypto from "node:crypto";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecAllowlistEntry } from "../infra/exec-approvals.types.js";
 import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../utils/timer-delay.js";
@@ -81,6 +82,12 @@ const preparedPlan = vi.hoisted(() => ({
   },
 }));
 const nodeCommandMarker = vi.hoisted(() => "=node-command:test");
+const exactCommandMarker = (cwd: string, commandText: string): string =>
+  `=command:${crypto
+    .createHash("sha256")
+    .update(`${cwd}\x00${commandText}`)
+    .digest("hex")
+    .slice(0, 16)}`;
 
 const callGatewayToolMock = vi.hoisted(() => vi.fn());
 const listNodesMock = vi.hoisted(() => vi.fn());
@@ -979,7 +986,7 @@ describe("executeNodeHostCommand", () => {
     resolveExecApprovalsFromFileMock.mockReturnValue({
       allowlist: [
         {
-          pattern: "=command:placeholder",
+          pattern: exactCommandMarker(wrapperPlan.cwd, wrapperPlan.commandText),
           source: "allow-always",
           commandText: wrapperPlan.commandText,
         },
@@ -1842,10 +1849,11 @@ describe("executeNodeHostCommand", () => {
       },
     });
     resolveAllowAlwaysPersistenceDecisionMock.mockImplementationOnce((params) => {
+      const commandText = params.commandText?.trim();
       return params.preparedCoverage?.complete === true && params.preparedCoverage.patterns.length
         ? {
             kind: "patterns",
-            commandText: params.commandText,
+            ...(commandText ? { commandText } : {}),
             patterns: params.preparedCoverage.patterns,
           }
         : {
