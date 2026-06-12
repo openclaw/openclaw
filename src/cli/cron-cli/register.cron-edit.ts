@@ -243,7 +243,22 @@ export function registerCronEditCommand(cron: Command) {
             tz: opts.tz,
           });
           if (scheduleRequest.kind === "direct") {
-            patch.schedule = scheduleRequest.schedule;
+            // When replacing the expression via --cron, preserve tz and staggerMs
+            // from the existing job unless explicitly overridden by --tz / --stagger.
+            if (scheduleRequest.schedule.kind === "cron") {
+              const existing = await loadCronJobForEditSchedulePatch(opts, String(id));
+              if (existing?.schedule.kind === "cron") {
+                patch.schedule = {
+                  ...scheduleRequest.schedule,
+                  tz: scheduleRequest.schedule.tz ?? existing.schedule.tz,
+                  staggerMs: scheduleRequest.schedule.staggerMs ?? existing.schedule.staggerMs,
+                };
+              } else {
+                patch.schedule = scheduleRequest.schedule;
+              }
+            } else {
+              patch.schedule = scheduleRequest.schedule;
+            }
           } else if (scheduleRequest.kind === "patch-existing-cron") {
             const existing = await loadCronJobForEditSchedulePatch(opts, String(id));
             if (!existing) {

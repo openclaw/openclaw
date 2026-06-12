@@ -75,6 +75,81 @@ describe("cron edit command", () => {
     );
   });
 
+  it("preserves tz and staggerMs when --cron replaces expression (#92291)", async () => {
+    callGatewayFromCli.mockImplementation(async (method: string) => {
+      if (method === "cron.list") {
+        return {
+          jobs: [
+            {
+              id: "job-1",
+              schedule: {
+                kind: "cron",
+                expr: "0 4 * * *",
+                tz: "America/Phoenix",
+                staggerMs: 5000,
+              },
+            },
+          ],
+        };
+      }
+      return { ok: true };
+    });
+    const program = createCronProgram();
+
+    await program.parseAsync(["edit", "job-1", "--cron", "0 5 * * *"], { from: "user" });
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.update", expect.anything(), {
+      id: "job-1",
+      patch: {
+        schedule: {
+          kind: "cron",
+          expr: "0 5 * * *",
+          tz: "America/Phoenix",
+          staggerMs: 5000,
+        },
+      },
+    });
+  });
+
+  it("allows --tz override when --cron replaces expression (#92291)", async () => {
+    callGatewayFromCli.mockImplementation(async (method: string) => {
+      if (method === "cron.list") {
+        return {
+          jobs: [
+            {
+              id: "job-1",
+              schedule: {
+                kind: "cron",
+                expr: "0 4 * * *",
+                tz: "America/Phoenix",
+                staggerMs: 5000,
+              },
+            },
+          ],
+        };
+      }
+      return { ok: true };
+    });
+    const program = createCronProgram();
+
+    await program.parseAsync(
+      ["edit", "job-1", "--cron", "0 5 * * *", "--tz", "UTC", "--stagger", "10s"],
+      { from: "user" },
+    );
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.update", expect.anything(), {
+      id: "job-1",
+      patch: {
+        schedule: {
+          kind: "cron",
+          expr: "0 5 * * *",
+          tz: "UTC",
+          staggerMs: 10000,
+        },
+      },
+    });
+  });
+
   it("preserves command payload kind for timeout-only edits", async () => {
     callGatewayFromCli.mockImplementation(async (method: string) => {
       if (method === "cron.list") {
