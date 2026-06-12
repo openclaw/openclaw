@@ -50,6 +50,8 @@ async function runQaSuite(opts: {
   repoRoot?: string;
   outputDir?: string;
   transportId?: string;
+  channelDriver?: string;
+  channel?: string;
   providerMode?: QaProviderModeInput;
   primaryModel?: string;
   alternateModel?: string;
@@ -300,6 +302,8 @@ export function registerQaLabCli(program: Command) {
     .option("--output-dir <path>", "Suite artifact directory")
     .option("--runner <kind>", "Execution runner: host or multipass", "host")
     .option("--transport <id>", "QA transport id", "qa-channel")
+    .option("--channel-driver <id>", "Channel SDK driver id; currently crabline")
+    .option("--channel <id>", "Channel id for --channel-driver; currently telegram")
     .option("--provider-mode <mode>", formatQaProviderModeHelp(), DEFAULT_QA_LIVE_PROVIDER_MODE)
     .option("--model <ref>", "Primary provider/model ref")
     .option("--alt-model <ref>", "Alternate provider/model ref")
@@ -351,6 +355,8 @@ export function registerQaLabCli(program: Command) {
         repoRoot?: string;
         outputDir?: string;
         transport?: string;
+        channelDriver?: string;
+        channel?: string;
         runner?: string;
         providerMode?: QaProviderModeInput;
         model?: string;
@@ -376,6 +382,8 @@ export function registerQaLabCli(program: Command) {
           repoRoot: opts.repoRoot,
           outputDir: opts.outputDir,
           transportId: opts.transport,
+          channelDriver: opts.channelDriver,
+          channel: opts.channel,
           runner: opts.runner,
           providerMode: opts.providerMode,
           primaryModel: opts.model,

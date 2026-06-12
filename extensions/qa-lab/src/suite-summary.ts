@@ -1,6 +1,7 @@
 // Qa Lab plugin module implements suite summary behavior.
 import fs from "node:fs/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import type { QaCrablineChannelDriverSelection } from "./crabline-channel-driver.js";
 import type { QaProviderMode } from "./model-selection.js";
 import type { RuntimeId, RuntimeParityResult } from "./runtime-parity.js";
 
@@ -52,6 +53,11 @@ export type QaSuiteSummaryJson = {
     alternateModelName: string | null;
     fastMode: boolean;
     concurrency: number;
+    channelDriver: QaCrablineChannelDriverSelection["channelDriver"] | null;
+    channel: QaCrablineChannelDriverSelection["channel"] | null;
+    channelLive: boolean | null;
+    channelDriverId: QaCrablineChannelDriverSelection["channelDriverId"] | null;
+    channelCapabilityMatrixPath: string | null;
     scenarioIds: string[] | null;
     runtimePair?: [RuntimeId, RuntimeId] | null;
   };

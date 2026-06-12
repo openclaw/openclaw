@@ -26,6 +26,7 @@ import {
   renderQaCoverageMarkdownReport,
   renderQaScenarioMatchesMarkdownReport,
 } from "./coverage-report.js";
+import { resolveQaCrablineChannelDriverSelection } from "./crabline-channel-driver.js";
 import { buildQaDockerHarnessImage, writeQaDockerHarnessFiles } from "./docker-harness.js";
 import { runQaDockerUp } from "./docker-up.runtime.js";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
@@ -553,6 +554,8 @@ export async function runQaSuiteCommand(opts: {
   repoRoot?: string;
   outputDir?: string;
   transportId?: string;
+  channelDriver?: string;
+  channel?: string;
   runner?: string;
   providerMode?: QaProviderModeInput;
   primaryModel?: string;
@@ -576,6 +579,10 @@ export async function runQaSuiteCommand(opts: {
 }) {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const transportId = normalizeQaTransportId(opts.transportId);
+  const channelDriverSelection = resolveQaCrablineChannelDriverSelection({
+    channel: opts.channel,
+    channelDriver: opts.channelDriver,
+  });
   const runner = (opts.runner ?? "host").trim().toLowerCase();
   const explicitScenarioIds = resolveQaScenarioPackScenarioIds({
     pack: opts.pack,
@@ -600,6 +607,9 @@ export async function runQaSuiteCommand(opts: {
   const alternateModel = normalizeQaOptionalModelRef(opts.alternateModel);
   if (opts.preflight === true && runner !== "host") {
     throw new Error("--preflight requires --runner host.");
+  }
+  if (channelDriverSelection && runner !== "host") {
+    throw new Error("--channel-driver crabline requires --runner host.");
   }
   if (
     runner === "host" &&
@@ -666,6 +676,7 @@ export async function runQaSuiteCommand(opts: {
     repoRoot,
     outputDir: resolveRepoRelativeOutputDir(repoRoot, opts.outputDir),
     transportId,
+    ...(channelDriverSelection ? { channelDriverSelection } : {}),
     providerMode,
     primaryModel,
     alternateModel,
