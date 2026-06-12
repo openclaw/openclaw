@@ -82,7 +82,9 @@ async function main() {
       resolved,
       mode: "full",
     });
-    if (!manager) throw new Error("manager creation returned null");
+    if (!manager) {
+      throw new Error("manager creation returned null");
+    }
     await manager.sync({ reason: "proof", force: true }).catch((e: unknown) => {
       console.log(`  [sync] ${String(e)}`);
     });
@@ -130,7 +132,7 @@ async function main() {
   await fs.rm(tmpRoot, { recursive: true, force: true });
 }
 
-main().catch((err) => {
+main().catch((err: unknown) => {
   console.error(err);
   process.exit(1);
 });
