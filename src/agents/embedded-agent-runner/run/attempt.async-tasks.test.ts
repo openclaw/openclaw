@@ -93,8 +93,39 @@ describe("waitForCompletionRequiredAsyncTasks", () => {
       requiresCompletionRequiredAsyncTaskWait({
         sessionKey,
         toolMetas: [],
+        yieldDetected: false,
       }),
     ).toBe(true);
+  });
+
+  it("skips the wait when the run yielded, even with an active tracked media task", () => {
+    // sessions_yield ends the run and defers continuation to the media task's
+    // completion wake; waiting on the yield-tripped abort signal would fail
+    // the run with AbortError instead (#92120).
+    resetTaskRegistryForTests();
+    const sessionKey = "agent:main:cron:daily-media:run:run-123";
+    createRunningTaskRun({
+      runtime: "cli",
+      taskKind: "image_generation",
+      sourceId: "image_generate:openai",
+      requesterSessionKey: sessionKey,
+      ownerKey: sessionKey,
+      scopeKind: "session",
+      runId: "tool:image_generate:run-123",
+      task: "daily image",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+      startedAt: 1,
+      lastEventAt: 1,
+    });
+
+    expect(
+      requiresCompletionRequiredAsyncTaskWait({
+        sessionKey,
+        toolMetas: [],
+        yieldDetected: true,
+      }),
+    ).toBe(false);
   });
 
   it("waits for active cron media tasks from the task registry", async () => {

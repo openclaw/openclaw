@@ -4,7 +4,7 @@ import { loadSessionStore } from "../config/sessions/store-load.js";
 import { archiveRemovedSessionTranscripts, updateSessionStore } from "../config/sessions/store.js";
 import type { CronConfig } from "../config/types.cron.js";
 import { cleanupArchivedSessionTranscripts } from "../gateway/session-utils.fs.js";
-import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
+import { isCronRunSessionKey, isCronSessionKey } from "../sessions/session-key-utils.js";
 import type { Logger } from "./service/state.js";
 
 const DEFAULT_RETENTION_MS = 24 * 3_600_000; // 24 hours
@@ -36,7 +36,8 @@ type ReaperResult = {
 };
 
 /**
- * Sweeps completed isolated cron run sessions while preserving base cron sessions.
+ * Sweeps completed isolated cron run sessions while preserving base cron
+ * sessions, except base entries marked `cronDeleteAfterRun` by a yielded run.
  *
  * Must run outside the cron service `locked()` section because this acquires
  * the session-store file lock; reversing that order can deadlock timer ticks.
@@ -61,22 +62,36 @@ export async function sweepCronRunSessions(params: {
   }
 
   const retentionMs = resolveRetentionMs(params.cronConfig);
+  // deleteAfterRun is explicit per-job deletion intent, so marked entries get
+  // deferred cleanup (default grace window) even when general retention is off.
+  const markedCutoff = now - (retentionMs ?? DEFAULT_RETENTION_MS);
   if (retentionMs === null) {
-    lastSweepAtMsByStore.set(storePath, now);
-    return { swept: false, pruned: 0 };
+    const snapshot = loadSessionStore(storePath);
+    const hasMarkedEntry = Object.entries(snapshot).some(
+      ([key, entry]) => entry?.cronDeleteAfterRun === true && isCronSessionKey(key),
+    );
+    if (!hasMarkedEntry) {
+      lastSweepAtMsByStore.set(storePath, now);
+      return { swept: false, pruned: 0 };
+    }
   }
 
   let pruned = 0;
   const prunedSessions = new Map<string, string | undefined>();
   try {
     await updateSessionStore(storePath, (store) => {
-      const cutoff = now - retentionMs;
+      const runCutoff = retentionMs === null ? null : now - retentionMs;
       for (const key of Object.keys(store)) {
-        if (!isCronRunSessionKey(key)) {
-          continue;
-        }
         const entry = store[key];
         if (!entry) {
+          continue;
+        }
+        // Marked entries carry a deferred delete-after-run from a yielded cron
+        // run; their cutoff doubles as the grace window for the media-callback
+        // wake to resume the session before the entry is deleted.
+        const deferredDeleteAfterRun = entry.cronDeleteAfterRun === true && isCronSessionKey(key);
+        const cutoff = deferredDeleteAfterRun ? markedCutoff : runCutoff;
+        if (cutoff === null || (!isCronRunSessionKey(key) && !deferredDeleteAfterRun)) {
           continue;
         }
         const updatedAt = entry.updatedAt ?? 0;
@@ -116,7 +131,7 @@ export async function sweepCronRunSessions(params: {
       if (archivedDirs.size > 0) {
         await cleanupArchivedSessionTranscripts({
           directories: [...archivedDirs],
-          olderThanMs: retentionMs,
+          olderThanMs: retentionMs ?? DEFAULT_RETENTION_MS,
           reason: "deleted",
           nowMs: now,
         });

@@ -240,6 +240,7 @@ function makeBaseParams(overrides: {
     deliveryBestEffort: overrides.deliveryBestEffort ?? false,
     deliveryPayloadHasStructuredContent: false,
     deliveryPayloads: overrides.synthesizedText ? [{ text: overrides.synthesizedText }] : [],
+    runYielded: false,
     synthesizedText: overrides.synthesizedText ?? "on it",
     summary: overrides.synthesizedText ?? "on it",
     outputText: overrides.synthesizedText ?? "on it",
@@ -1135,6 +1136,28 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       },
       timeoutMs: 10_000,
     });
+  });
+
+  it("keeps the session for a yielded run even when deleteAfterRun is enabled", async () => {
+    // A yielded run must stay resumable so the pending media task's completion
+    // wake can continue the workflow in the same session (#92120).
+    const params = makeBaseParams({ synthesizedText: SILENT_REPLY_TOKEN });
+    params.agentSessionKey = "agent:main:cron:test-job";
+    (params.job as { deleteAfterRun?: boolean }).deleteAfterRun = true;
+    params.runYielded = true;
+
+    const state = await dispatchCronDelivery(params);
+
+    expectResultFields(state.result, {
+      status: "ok",
+      delivered: false,
+    });
+    expect(callGateway).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "sessions.delete",
+      }),
+    );
+    expect(retireSessionMcpRuntime).not.toHaveBeenCalled();
   });
 
   it("retires the MCP runtime directly when deleteAfterRun gateway cleanup fails", async () => {

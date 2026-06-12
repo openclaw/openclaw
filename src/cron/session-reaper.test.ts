@@ -137,6 +137,103 @@ describe("sweepCronRunSessions", () => {
     });
   });
 
+  it("prunes expired base cron sessions marked cronDeleteAfterRun, preserving fresh ones", async () => {
+    // Yielded delete-after-run jobs defer their cleanup to the reaper; the
+    // retention window gives the media-callback wake time to resume first.
+    const now = Date.now();
+    const store = {
+      "agent:main:cron:job-yielded-old": {
+        sessionId: "yielded-old",
+        updatedAt: now - 25 * 3_600_000,
+        cronDeleteAfterRun: true,
+      },
+      "agent:main:cron:job-yielded-fresh": {
+        sessionId: "yielded-fresh",
+        updatedAt: now - 1 * 3_600_000,
+        cronDeleteAfterRun: true,
+      },
+      "agent:main:cron:job-unmarked-old": {
+        sessionId: "unmarked-old",
+        updatedAt: now - 100 * 3_600_000,
+      },
+      "agent:main:telegram:dm:123": {
+        sessionId: "regular-session",
+        updatedAt: now - 100 * 3_600_000,
+        cronDeleteAfterRun: true,
+      },
+    };
+    fs.writeFileSync(storePath, JSON.stringify(store));
+
+    const result = await sweepCronRunSessions({
+      sessionStorePath: storePath,
+      nowMs: now,
+      log,
+      force: true,
+    });
+
+    expect(result.swept).toBe(true);
+    expect(result.pruned).toBe(1);
+
+    const updated = JSON.parse(fs.readFileSync(storePath, "utf-8"));
+    expect(Object.keys(updated).toSorted()).toEqual([
+      "agent:main:cron:job-unmarked-old",
+      "agent:main:cron:job-yielded-fresh",
+      "agent:main:telegram:dm:123",
+    ]);
+  });
+
+  it("honors deferred delete-after-run markers even when sessionRetention is disabled", async () => {
+    // deleteAfterRun is explicit per-job deletion intent; the retention opt-out
+    // only disables general run-session pruning, not the deferred deletion.
+    const now = Date.now();
+    const store = {
+      "agent:main:cron:job-yielded-old": {
+        sessionId: "yielded-old",
+        updatedAt: now - 25 * 3_600_000,
+        cronDeleteAfterRun: true,
+      },
+      "agent:main:cron:job1:run:old-run": {
+        sessionId: "old-run",
+        updatedAt: now - 100 * 3_600_000,
+      },
+    };
+    fs.writeFileSync(storePath, JSON.stringify(store));
+
+    const result = await sweepCronRunSessions({
+      cronConfig: { sessionRetention: false },
+      sessionStorePath: storePath,
+      nowMs: now,
+      log,
+      force: true,
+    });
+
+    expect(result.pruned).toBe(1);
+    const updated = JSON.parse(fs.readFileSync(storePath, "utf-8"));
+    expect(Object.keys(updated)).toEqual(["agent:main:cron:job1:run:old-run"]);
+  });
+
+  it("skips the sweep entirely when retention is disabled and nothing is marked", async () => {
+    const now = Date.now();
+    const store = {
+      "agent:main:cron:job1:run:old-run": {
+        sessionId: "old-run",
+        updatedAt: now - 100 * 3_600_000,
+      },
+    };
+    fs.writeFileSync(storePath, JSON.stringify(store));
+
+    const result = await sweepCronRunSessions({
+      cronConfig: { sessionRetention: false },
+      sessionStorePath: storePath,
+      nowMs: now,
+      log,
+      force: true,
+    });
+
+    expect(result).toEqual({ swept: false, pruned: 0 });
+    expect(JSON.parse(fs.readFileSync(storePath, "utf-8"))).toEqual(store);
+  });
+
   it("archives transcript files for pruned run sessions that are no longer referenced", async () => {
     const now = Date.now();
     const runSessionId = "old-run";

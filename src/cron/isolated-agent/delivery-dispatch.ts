@@ -114,6 +114,7 @@ type DispatchCronDeliveryParams = {
   deliveryBestEffort: boolean;
   deliveryPayloadHasStructuredContent: boolean;
   deliveryPayloads: ReplyPayload[];
+  runYielded: boolean;
   synthesizedText?: string;
   ttsAuto?: TtsAutoMode;
   summary?: string;
@@ -793,7 +794,10 @@ export async function dispatchCronDelivery(
       ...params.telemetry,
     });
   const cleanupDirectCronSessionIfNeeded = async (): Promise<void> => {
-    if (directCronSessionDeleted) {
+    // A yielded run resumes in this same session when the pending task's
+    // completion wake arrives; deletion is deferred to the cron session
+    // reaper via the entry's cronDeleteAfterRun marker.
+    if (params.runYielded || directCronSessionDeleted) {
       return;
     }
     directCronSessionDeleted = true;

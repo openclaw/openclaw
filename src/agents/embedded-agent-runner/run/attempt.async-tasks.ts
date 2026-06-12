@@ -140,7 +140,13 @@ function findTerminalTasks(runIds: readonly string[]): {
 export function requiresCompletionRequiredAsyncTaskWait(params: {
   sessionKey: string | undefined;
   toolMetas: readonly AsyncStartedToolMeta[];
+  yieldDetected: boolean;
 }): boolean {
+  // sessions_yield hands continuation to the task-completion wake of this same
+  // session; waiting here would abort-fail on the already-tripped run signal.
+  if (params.yieldDetected) {
+    return false;
+  }
   const sessionKey = params.sessionKey?.trim();
   if (!sessionKey || !isCronRunSessionKey(sessionKey)) {
     return false;

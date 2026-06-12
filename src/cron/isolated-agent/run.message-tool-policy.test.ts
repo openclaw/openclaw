@@ -894,6 +894,51 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     });
   });
 
+  it("defers deleteAfterRun for yielded runs via the cronDeleteAfterRun marker", async () => {
+    // The media-callback wake must resume this session, so immediate cleanup
+    // is skipped and the session reaper owns the deferred deletion.
+    mockRunCronFallbackPassthrough();
+    runEmbeddedAgentMock.mockResolvedValue({
+      payloads: [],
+      meta: { agentMeta: { usage: { input: 10, output: 20 } }, yielded: true },
+    });
+    const cronSession = makeCronSession();
+    resolveCronSessionMock.mockReturnValue(cronSession);
+    const yieldedJob = makeAnnounceMessageToolJob({
+      id: "yielded-delete-after-run",
+      name: "Yielded Delete After Run",
+    }) as unknown as Record<string, unknown>;
+    yieldedJob.deleteAfterRun = true;
+
+    await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: yieldedJob as never,
+    });
+
+    expect(cronSession.sessionEntry.cronDeleteAfterRun).toBe(true);
+    expect(dispatchCronDeliveryMock).toHaveBeenCalledWith(
+      expect.objectContaining({ runYielded: true }),
+    );
+    expect(cleanupDirectCronSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("does not mark yielded runs without deleteAfterRun for deferred deletion", async () => {
+    mockRunCronFallbackPassthrough();
+    runEmbeddedAgentMock.mockResolvedValue({
+      payloads: [],
+      meta: { agentMeta: { usage: { input: 10, output: 20 } }, yielded: true },
+    });
+    const cronSession = makeCronSession();
+    resolveCronSessionMock.mockReturnValue(cronSession);
+
+    await runCronIsolatedAgentTurn(makeParams());
+
+    expect(cronSession.sessionEntry.cronDeleteAfterRun).toBeUndefined();
+    expect(dispatchCronDeliveryMock).toHaveBeenCalledWith(
+      expect.objectContaining({ runYielded: true }),
+    );
+  });
+
   it("skips cron fallback delivery when the message tool already sent to the same target", async () => {
     await expectCronFallbackSkippedForMessageToolDelivery({
       sentTargets: [{ tool: "message", provider: "messagechat", to: "123" }],

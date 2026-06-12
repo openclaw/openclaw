@@ -27,6 +27,7 @@ import {
 import { createDiagnosticMessageLifecycle } from "../../logging/message-lifecycle.js";
 import { isCommandLaneTaskTimeoutError } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
+import { isCronSessionKey } from "../../sessions/session-key-utils.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveCronSkillsSnapshot } from "../../skills/runtime/cron-snapshot.js";
 import type { SkillSnapshot } from "../../skills/types.js";
@@ -1038,6 +1039,17 @@ async function finalizeCronRun(params: {
   } else {
     telemetry = { model: modelUsed, provider: providerUsed };
   }
+  const runYielded = finalRunResult.meta?.yielded === true;
+  if (
+    runYielded &&
+    prepared.input.job.deleteAfterRun === true &&
+    isCronSessionKey(prepared.agentSessionKey)
+  ) {
+    // Immediate delete-after-run cleanup is skipped for yielded runs so the
+    // media-callback wake can resume this session; the cron session reaper
+    // deletes marked entries once they age past sessionRetention.
+    prepared.cronSession.sessionEntry.cronDeleteAfterRun = true;
+  }
   await prepared.persistSessionEntry();
 
   if (params.isAborted()) {
@@ -1157,6 +1169,7 @@ async function finalizeCronRun(params: {
     deliveryBestEffort: resolveCronDeliveryBestEffort(prepared.input.job),
     deliveryPayloadHasStructuredContent,
     deliveryPayloads,
+    runYielded,
     synthesizedText,
     ttsAuto: prepared.cronSession.sessionEntry.ttsAuto,
     summary,

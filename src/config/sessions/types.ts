@@ -296,6 +296,8 @@ export type SessionEntry = {
   execSecurity?: string;
   execAsk?: string;
   execNode?: string;
+  /** Deferred delete-after-run from a yielded cron run; the cron session reaper deletes marked entries after retention. */
+  cronDeleteAfterRun?: boolean;
   responseUsage?: "on" | "off" | "tokens" | "full";
   providerOverride?: string;
   modelOverride?: string;
