@@ -91,6 +91,8 @@ export type RunCliAgentParams = {
   currentMessageId?: string | number;
   currentInboundAudio?: boolean;
   agentAccountId?: string;
+  /** Sender identity for channel-originated runs when available. */
+  senderId?: string | null;
   /** Trusted sender identity bit for channel action auth. */
   senderIsOwner?: boolean;
   /** Runtime tool allow-list. CLI harnesses fail closed when this is set. */
@@ -107,7 +109,6 @@ export type RunCliAgentParams = {
     firstModelCallStarted?: boolean;
   }) => void;
   replyOperation?: ReplyOperation;
-  classifyCommentaryText?: boolean;
   emitCommentaryText?: boolean;
   /**
    * Close any long-lived CLI live session created for this run after the run
