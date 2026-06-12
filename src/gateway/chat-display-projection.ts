@@ -1595,6 +1595,44 @@ function projectSessionsSendInterSessionMessages(
   return changed ? projected : messages;
 }
 
+function isRecentChatDisplayToolCallOnlyAssistant(message: Record<string, unknown>): boolean {
+  if (message.role !== "assistant" || !Array.isArray(message.content)) {
+    return false;
+  }
+  let hasToolCallBlock = false;
+  for (const block of message.content) {
+    const entry = readRecord(block);
+    if (!entry) {
+      return false;
+    }
+    const type = normalizeToolHistoryType(entry.type);
+    if (type === "toolcall" || type === "tooluse") {
+      hasToolCallBlock = true;
+      continue;
+    }
+    if (type === "text") {
+      if (typeof entry.text === "string" && entry.text.trim()) {
+        return false;
+      }
+      continue;
+    }
+    if (type === "thinking") {
+      continue;
+    }
+    return false;
+  }
+  return hasToolCallBlock;
+}
+
+function filterRecentChatDisplayMessages(
+  messages: Array<Record<string, unknown>>,
+): Array<Record<string, unknown>> {
+  if (!messages.some(isRecentChatDisplayToolCallOnlyAssistant)) {
+    return messages;
+  }
+  return messages.filter((message) => !isRecentChatDisplayToolCallOnlyAssistant(message));
+}
+
 export function projectChatDisplayMessages(
   messages: unknown[],
   options?: { maxChars?: number; stripEnvelope?: boolean },
@@ -1630,10 +1668,12 @@ export function projectRecentChatDisplayMessages(
   messages: unknown[],
   options?: { maxChars?: number; maxMessages?: number; stripEnvelope?: boolean },
 ): Array<Record<string, unknown>> {
-  return limitChatDisplayMessages(
-    projectChatDisplayMessages(messages, options),
-    options?.maxMessages,
-  );
+  const projected = projectChatDisplayMessages(messages, options);
+  const recentDisplayMessages =
+    typeof options?.maxMessages === "number"
+      ? filterRecentChatDisplayMessages(projected)
+      : projected;
+  return limitChatDisplayMessages(recentDisplayMessages, options?.maxMessages);
 }
 
 export function projectChatDisplayMessage(

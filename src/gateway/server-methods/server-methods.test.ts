@@ -1282,6 +1282,39 @@ describe("projectRecentChatDisplayMessages", () => {
     });
   });
 
+  it("does not let toolCall-only assistant messages hide recent user context", () => {
+    const result = projectRecentChatDisplayMessages(
+      [
+        {
+          role: "user",
+          content: [{ type: "text", text: "please keep my last prompt visible" }],
+          timestamp: 1,
+        },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call-read-only",
+              name: "read",
+              arguments: { path: "AGENTS.md" },
+            },
+          ],
+          timestamp: 2,
+        },
+      ],
+      { maxMessages: 1 },
+    );
+
+    expect(result).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "please keep my last prompt visible" }],
+        timestamp: 1,
+      },
+    ]);
+  });
+
   it("keeps pure commentary assistant messages hidden", () => {
     const result = projectRecentChatDisplayMessages([
       {
