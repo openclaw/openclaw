@@ -78,7 +78,7 @@ jobs:
 
       - name: Validate ref is on a trusted publish branch
         env:
-          WORKFLOW_REF: ${{ github.ref }}
+          TRUSTED_PUBLISH_BRANCH: ${{ inputs.release_publish_branch || github.ref_name }}
         run: |
           set -euo pipefail
           if git merge-base --is-ancestor HEAD origin/main; then
@@ -89,8 +89,8 @@ jobs:
               exit 0
             fi
           done < <(git for-each-ref --format='%(refname)' refs/remotes/origin/release)
-          if [[ "${WORKFLOW_REF}" =~ ^refs/heads/tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
-            alpha_branch="${WORKFLOW_REF#refs/heads/}"
+          if [[ "${TRUSTED_PUBLISH_BRANCH}" =~ ^tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
+            alpha_branch="${TRUSTED_PUBLISH_BRANCH}"
             git fetch --no-tags origin "+refs/heads/${alpha_branch}:refs/remotes/origin/${alpha_branch}"
             if git merge-base --is-ancestor HEAD "refs/remotes/origin/${alpha_branch}"; then
               exit 0
@@ -195,9 +195,13 @@ jobs:
           ' .local/plugin-clawhub-release-plan.json
 
       - name: Validate Tideclaw alpha plugin channels
-        if: startsWith(github.ref, 'refs/heads/tideclaw/alpha/')
+        env:
+          TRUSTED_PUBLISH_BRANCH: ${{ inputs.release_publish_branch || github.ref_name }}
         run: |
           set -euo pipefail
+          if [[ ! "${TRUSTED_PUBLISH_BRANCH}" =~ ^tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
+            exit 0
+          fi
           invalid="$(
             jq -r '
               (.bootstrapCandidates[]?, .missingTrustedPublisher[]?)

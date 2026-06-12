@@ -1592,6 +1592,9 @@ describe("package artifact reuse", () => {
     expect(clawHubWorkflow).toContain("inputs.dry_run != true");
     expect(clawHubWorkflow).toContain("release_publish_branch:");
     expect(clawHubWorkflow).toContain(
+      "TRUSTED_PUBLISH_BRANCH: ${{ inputs.release_publish_branch || github.ref_name }}",
+    );
+    expect(clawHubWorkflow).toContain(
       "EXPECTED_WORKFLOW_BRANCH: ${{ inputs.release_publish_branch || github.ref_name }}",
     );
     expect(clawHubWorkflow).toContain(
@@ -1728,6 +1731,9 @@ describe("package artifact reuse", () => {
     );
     expect(clawHubNewWorkflow).toContain(
       "EXPECTED_WORKFLOW_BRANCH: ${{ inputs.release_publish_branch || github.ref_name }}",
+    );
+    expect(clawHubNewWorkflow).toContain(
+      "TRUSTED_PUBLISH_BRANCH: ${{ inputs.release_publish_branch || github.ref_name }}",
     );
     expect(clawHubNewWorkflow).toContain('OPENCLAW_PLUGIN_NPM_RUNTIME_BUILD: "0"');
     expect(clawHubNewWorkflow).toContain("trusted-publisher set");
