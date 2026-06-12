@@ -931,14 +931,17 @@ export function buildToolSchemaDirectoryPrompt(
   return formatToolSearchCatalogDirectory(runtime.all(options));
 }
 
-/** Resolve an exact hidden catalog tool name/id without exposing fuzzy search. */
+/** Resolve an exact hidden catalog tool name without exposing fuzzy search or catalog ids. */
 export function resolveToolSearchCatalogTool(
   ctx: ToolSearchToolContext,
-  id: string,
+  name: string,
   options?: CatalogVisibilityOptions,
 ): AnyAgentTool | undefined {
   try {
-    return findEntry(resolveCatalog(ctx), id, options).tool as AnyAgentTool;
+    const needle = name.trim();
+    return visibleCatalogEntries(resolveCatalog(ctx), options).find(
+      (entry) => entry.name === needle,
+    )?.tool as AnyAgentTool | undefined;
   } catch (error) {
     if (error instanceof ToolInputError) {
       return undefined;

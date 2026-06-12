@@ -1753,7 +1753,6 @@ export async function runEmbeddedAttempt(
           : undefined,
       explicitAllowlistSources: explicitToolAllowlistSources,
     });
-    const allowedToolNames = toolSearchRunPlan.visibleAllowedToolNames;
     const replayAllowedToolNames = toolSearchRunPlan.replayAllowedToolNames;
     const liveAllowedToolNames = toolSearchRunPlan.liveAllowedToolNames;
     const emptyExplicitToolAllowlistError = buildEmptyExplicitToolAllowlistError({
@@ -2894,7 +2893,7 @@ export async function runEmbeddedAttempt(
       );
       activeSession.agent.streamFn = wrapStreamFnPromoteStandaloneTextToolCalls(
         activeSession.agent.streamFn,
-        allowedToolNames,
+        liveAllowedToolNames,
       );
       activeSession.agent.streamFn = wrapStreamFnTrimToolCallNames(
         activeSession.agent.streamFn,
