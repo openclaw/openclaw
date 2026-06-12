@@ -17,21 +17,22 @@ jobs:
         with:
           xcode-version: '16'
 
-      # 2. 安装 Node.js（升级到 Node 22）
+      # 2. 强制安装 Node.js v22
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
 
-      # 3. 安装 pnpm（自动适配项目的 pnpm v11）
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+      # 3. 彻底解决报错：放弃 pnpm/action-setup，直接用 npm 全局钉死 pnpm 版本
+      # 这里的 11.2.2 严格对应你项目 package.json 里的锁定版本
+      - name: Install pnpm globally via npm
+        run: npm install -g pnpm@11.2.2
 
       # 4. 通过 Homebrew 安装苹果项目生成工具 xcodegen
       - name: Install xcodegen
         run: brew install xcodegen
 
-      # 5. 安装 Monorepo 根目录依赖
+      # 5. 安装 Monorepo 根目录依赖（此时 pnpm 绝对运行在 Node 22 下）
       - name: Install Monorepo Dependencies
         run: pnpm install
 
