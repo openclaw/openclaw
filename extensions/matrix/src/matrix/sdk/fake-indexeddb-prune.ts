@@ -18,7 +18,7 @@ type FakeIndexedDbDatabaseConnection = {
 };
 
 type FakeIndexedDbDatabasePrototype = FakeIndexedDbDatabaseConnection & {
-  transaction?: (...args: unknown[]) => unknown;
+  transaction?: IDBDatabase["transaction"];
   [PRUNER_INSTALLED]?: true;
 };
 
@@ -50,11 +50,12 @@ function isMatrixCryptoDatabase(rawDatabase: FakeIndexedDbRawDatabase | undefine
 }
 
 export function pruneFinishedFakeIndexedDbTransactions(rawDatabase: unknown): number {
-  if (!isMatrixCryptoDatabase(rawDatabase as FakeIndexedDbRawDatabase | undefined)) {
+  const matrixRawDatabase = rawDatabase as FakeIndexedDbRawDatabase | undefined;
+  if (!isMatrixCryptoDatabase(matrixRawDatabase)) {
     return 0;
   }
 
-  const transactions = rawDatabase.transactions;
+  const transactions = matrixRawDatabase.transactions;
   const activeTransactions = transactions.filter((transaction) => transaction?._state !== "finished");
   const removed = transactions.length - activeTransactions.length;
   if (removed > 0) {
@@ -77,13 +78,13 @@ export function installFakeIndexedDbTransactionPruner(): void {
     value: true,
   });
 
-  databasePrototype.transaction = function patchedMatrixFakeIndexedDbTransaction(
-    this: FakeIndexedDbDatabaseConnection,
-    ...args: unknown[]
-  ): unknown {
+  const patchedTransaction = function patchedMatrixFakeIndexedDbTransaction(
+    this: IDBDatabase & FakeIndexedDbDatabaseConnection,
+    ...args: Parameters<IDBDatabase["transaction"]>
+  ): ReturnType<IDBDatabase["transaction"]> {
     pruneFinishedFakeIndexedDbTransactions(getRawDatabase(this));
 
-    const transaction = originalTransaction.apply(this, args) as FakeIndexedDbTransaction;
+    const transaction = originalTransaction.apply(this, args) as IDBTransaction & FakeIndexedDbTransaction;
     const rawDatabase = getRawDatabase(transaction?.db) ?? getRawDatabase(this);
     if (isMatrixCryptoDatabase(rawDatabase) && typeof transaction?.addEventListener === "function") {
       const prune = (): void => {
@@ -94,5 +95,7 @@ export function installFakeIndexedDbTransactionPruner(): void {
     }
 
     return transaction;
-  };
+  } as IDBDatabase["transaction"];
+
+  databasePrototype.transaction = patchedTransaction;
 }
