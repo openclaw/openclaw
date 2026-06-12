@@ -949,6 +949,8 @@ export async function sendMessageIMessage(
   }
   const echoText = resolveOutboundEchoText(message, filePath ? mediaContentType : undefined);
   const resolvedReplyToId =
+    // When actions.reply is explicitly false, suppress reply_to to avoid
+    // SIP injection failures on macOS (#92142).
     account.config.actions?.reply !== false ? sanitizeReplyToId(opts.replyToId) : undefined;
   const runCliJson =
     opts.runCliJson ??
