@@ -298,6 +298,10 @@ export function handleAgentEnd(
   const suppressTerminalDelivery = () => {
     ctx.clearDeferredAssistantEvents();
     ctx.clearDeferredBlockReplies();
+    // Mark that the second attempt's first assistant text event should
+    // carry replace=true so the gateway projector clears the stale
+    // buffer from the first (suppressed) attempt.
+    ctx.state.assistantTextReplace = true;
     finalizeAgentEnd();
   };
 

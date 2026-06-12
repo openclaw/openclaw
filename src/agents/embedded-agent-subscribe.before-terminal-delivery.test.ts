@@ -262,4 +262,72 @@ describe("subscribeEmbeddedAgentSession before terminal delivery", () => {
       expect.objectContaining({ text: "Accepted answer." }),
     );
   });
+
+  it("carries replace flag on the second attempt after a suppressed terminal delivery", async () => {
+    const onAgentEvent = vi.fn();
+    const onBeforeTerminalDelivery = vi.fn(async () => ({
+      suppressTerminalDelivery: true,
+    }));
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run-before-terminal-replace",
+      onAgentEvent,
+      onBeforeTerminalDelivery,
+      blockReplyBreak: "message_end",
+    });
+
+    // First attempt: text streams immediately.
+    emitAssistantTextDeltaAndEnd({
+      emit,
+      text: "First try.",
+    });
+    expect(hasAssistantEvent(onAgentEvent.mock.calls)).toBe(true);
+
+    // Record call count before hook suppression.
+    const callCountBeforeSuppress = onAgentEvent.mock.calls.length;
+
+    // Hook suppresses terminal delivery, which sets assistantTextReplace.
+    emit({
+      type: "agent_end",
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "First try." }],
+          stopReason: "stop",
+        },
+      ],
+      willRetry: false,
+    });
+    await vi.waitFor(() => expect(onBeforeTerminalDelivery).toHaveBeenCalledTimes(1));
+
+    // Second attempt: the first text delta after suppress must carry replace=true
+    // so the gateway projector clears the stale first-attempt buffer.
+    emitAssistantTextDeltaAndEnd({
+      emit,
+      text: "Revised answer.",
+    });
+
+    await subscription.waitForPendingEvents();
+
+    // Only consider events emitted after the suppress.
+    const postSuppressEvents = onAgentEvent.mock.calls
+      .slice(callCountBeforeSuppress)
+      .map((call) => call[0])
+      .filter((e) => e?.stream === "assistant");
+
+    const firstPostSuppressWithText = postSuppressEvents.find(
+      (e) =>
+        typeof (e as { data?: { text?: string } }).data?.text === "string" &&
+        (e as { data?: { text?: string } }).data!.text!.length > 0,
+    );
+    expect(firstPostSuppressWithText).toBeDefined();
+    expect((firstPostSuppressWithText as { data?: { replace?: boolean } }).data?.replace).toBe(
+      true,
+    );
+
+    // Subsequent events should not carry replace (flag was cleared).
+    const subsequentReplaceEvents = postSuppressEvents
+      .slice(1)
+      .filter((e) => (e as { data?: { replace?: boolean } }).data?.replace === true);
+    expect(subsequentReplaceEvents).toHaveLength(0);
+  });
 });

@@ -615,10 +615,10 @@ export function createAgentEventHandler({
     seq: number,
     text: string,
     delta?: unknown,
-    opts?: { controlUiVisible?: boolean },
+    opts?: { controlUiVisible?: boolean; replace?: boolean },
   ) => {
     const cleaned = normalizeLiveAssistantEventText({ text, delta });
-    const previousRawText = chatRunState.rawBuffers.get(clientRunId) ?? "";
+    const previousRawText = opts?.replace ? "" : (chatRunState.rawBuffers.get(clientRunId) ?? "");
     const mergedRawText = resolveMergedAssistantText({
       previousText: previousRawText,
       nextText: cleaned.text,
@@ -1224,6 +1224,7 @@ export function createAgentEventHandler({
           evt.data.delta,
           {
             controlUiVisible: isControlUiVisible,
+            replace: (evt.data as { replace?: boolean }).replace === true,
           },
         );
       }
