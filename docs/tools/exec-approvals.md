@@ -466,11 +466,11 @@ or `security=deny` when you need confinement.
 
 Each denylist entry supports:
 
-| Field     | Meaning                                              |
-| --------- | ---------------------------------------------------- |
-| `pattern` | Glob matched against analyzed segment argv text      |
+| Field     | Meaning                                               |
+| --------- | ----------------------------------------------------- |
+| `pattern` | Glob matched against analyzed segment argv text       |
 | `reason`  | Optional note shown with approval prompts and denials |
-| `id`      | Optional stable identifier for UI/tooling            |
+| `id`      | Optional stable identifier for UI/tooling             |
 
 ## Auto-allow skill CLIs
 
