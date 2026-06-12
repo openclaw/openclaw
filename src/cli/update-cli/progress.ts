@@ -219,6 +219,11 @@ export function printResult(result: UpdateRunResult, opts: PrintResultOptions): 
     if (local.recoveryDir) {
       defaultRuntime.log(`  Local recovery: ${theme.muted(local.recoveryDir)}`);
     }
+    for (const conflict of local.conflicts) {
+      defaultRuntime.log(
+        `  Local conflict: ${theme.muted(`${conflict.path} (${conflict.reason})`)}`,
+      );
+    }
     for (const warning of local.warnings) {
       defaultRuntime.log(`  ${theme.warn(warning)}`);
     }

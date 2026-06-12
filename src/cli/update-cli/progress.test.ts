@@ -1,7 +1,17 @@
 // Update progress tests cover progress event formatting for update operations.
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
-import { inferUpdateFailureHints } from "./progress.js";
+
+const runtimeMocks = vi.hoisted(() => ({
+  log: vi.fn(),
+  writeJson: vi.fn(),
+}));
+
+vi.mock("../../runtime.js", () => ({
+  defaultRuntime: runtimeMocks,
+}));
+
+import { inferUpdateFailureHints, printResult } from "./progress.js";
 
 function makeResult(
   stepName: string,
@@ -27,6 +37,11 @@ function makeResult(
 }
 
 describe("inferUpdateFailureHints", () => {
+  beforeEach(() => {
+    runtimeMocks.log.mockClear();
+    runtimeMocks.writeJson.mockClear();
+  });
+
   it("returns a package-manager bootstrap hint for pnpm npm-bootstrap failures", () => {
     const result = {
       status: "error",
@@ -94,5 +109,31 @@ describe("inferUpdateFailureHints", () => {
       "pnpm",
     );
     expect(inferUpdateFailureHints(result)).toStrictEqual([]);
+  });
+
+  it("prints local override conflict paths in human output", () => {
+    const result = {
+      status: "ok",
+      mode: "npm",
+      steps: [],
+      durationMs: 1,
+      localOverrides: {
+        status: "conflict",
+        added: 0,
+        modified: 1,
+        deleted: 0,
+        applied: 0,
+        recoveryDir: "/tmp/openclaw-local-overrides",
+        warnings: [],
+        conflicts: [{ path: "dist/index.js", reason: "target-changed" }],
+      },
+    } satisfies UpdateRunResult;
+
+    printResult(result, { json: false });
+
+    const output = runtimeMocks.log.mock.calls.map((call) => String(call[0])).join("\n");
+    expect(output).toContain("Local conflict:");
+    expect(output).toContain("dist/index.js");
+    expect(output).toContain("target-changed");
   });
 });

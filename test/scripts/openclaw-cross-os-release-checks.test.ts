@@ -187,9 +187,9 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
 
     const result = await verifyDashboardAssetUrls(
       ["http://127.0.0.1:18789/assets/index.css", "http://127.0.0.1:18789/assets/index.js"],
-      async (url) =>
+      async (url: string) =>
         new Response("", {
-          status: String(url).endsWith(".js") ? 404 : 200,
+          status: url.endsWith(".js") ? 404 : 200,
         }),
     );
 
@@ -1733,7 +1733,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
   });
 
   it.runIf(process.platform !== "win32")(
-    "rejects symlinked dist files before candidate content inventory generation",
+    "omits symlinked dist files omitted from the candidate package",
     async () => {
       const packageRoot = mkdtempSync(join(tmpdir(), "openclaw-cross-os-content-symlink-"));
       try {
@@ -1746,12 +1746,14 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         writeFileSync(join(packageRoot, "dist", "target.js"), "export const target = true;\n");
         symlinkSync("target.js", join(packageRoot, "dist", "index.js"));
 
-        await expect(
-          writePackageDistInventoryForCandidate({
-            sourceDir: packageRoot,
-            logPath: join(packageRoot, "npm-pack-dry-run.log"),
-          }),
-        ).rejects.toThrow("unsafe package dist symlink: dist/index.js");
+        await writePackageDistInventoryForCandidate({
+          sourceDir: packageRoot,
+          logPath: join(packageRoot, "npm-pack-dry-run.log"),
+        });
+
+        expect(
+          JSON.parse(readFileSync(join(packageRoot, "dist", "postinstall-inventory.json"), "utf8")),
+        ).toEqual(["dist/target.js"]);
       } finally {
         rmSync(packageRoot, { recursive: true, force: true });
       }
@@ -1759,7 +1761,48 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
   );
 
   it.runIf(process.platform !== "win32")(
-    "rejects a symlinked dist root before candidate content inventory generation",
+    "ignores symlinked dist files omitted from the candidate package",
+    async () => {
+      const packageRoot = mkdtempSync(join(tmpdir(), "openclaw-cross-os-omitted-symlink-"));
+      try {
+        mkdirSync(join(packageRoot, "dist", "extensions", "demo", "node_modules"), {
+          recursive: true,
+        });
+        writeFileSync(
+          join(packageRoot, "package.json"),
+          JSON.stringify({
+            name: "openclaw-fixture",
+            version: "0.0.0",
+            files: ["dist/index.js"],
+          }),
+          "utf8",
+        );
+        writeFileSync(join(packageRoot, "dist", "index.js"), "export {};\n");
+        writeFileSync(
+          join(packageRoot, "dist", "extensions", "demo", "node_modules", "target.js"),
+          "export const target = true;\n",
+        );
+        symlinkSync(
+          "target.js",
+          join(packageRoot, "dist", "extensions", "demo", "node_modules", "linked.js"),
+        );
+
+        await writePackageDistInventoryForCandidate({
+          sourceDir: packageRoot,
+          logPath: join(packageRoot, "npm-pack-dry-run.log"),
+        });
+
+        expect(
+          JSON.parse(readFileSync(join(packageRoot, "dist", "postinstall-inventory.json"), "utf8")),
+        ).toEqual(["dist/index.js"]);
+      } finally {
+        rmSync(packageRoot, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "omits a symlinked dist root omitted from the candidate package",
     async () => {
       const packageRoot = mkdtempSync(join(tmpdir(), "openclaw-cross-os-content-dist-symlink-"));
       try {
@@ -1772,12 +1815,14 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         writeFileSync(join(packageRoot, "real-dist", "index.js"), "export {};\n");
         symlinkSync("real-dist", join(packageRoot, "dist"));
 
-        await expect(
-          writePackageDistInventoryForCandidate({
-            sourceDir: packageRoot,
-            logPath: join(packageRoot, "npm-pack-dry-run.log"),
-          }),
-        ).rejects.toThrow("unsafe package dist symlink: dist");
+        await writePackageDistInventoryForCandidate({
+          sourceDir: packageRoot,
+          logPath: join(packageRoot, "npm-pack-dry-run.log"),
+        });
+
+        expect(
+          JSON.parse(readFileSync(join(packageRoot, "dist", "postinstall-inventory.json"), "utf8")),
+        ).toEqual([]);
       } finally {
         rmSync(packageRoot, { recursive: true, force: true });
       }

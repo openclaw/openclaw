@@ -755,44 +755,33 @@ function collectLegacyPluginDependencyStagingDebrisPaths(packageRoot) {
   return debris.toSorted((left, right) => left.localeCompare(right));
 }
 
-function collectPackageDistSymlinkPaths(packageRoot) {
-  const distRoot = join(packageRoot, "dist");
+function collectPackagedDistSymlinkPaths(packageRoot, inventory) {
   const symlinks = [];
-  let distRootStats;
-  try {
-    distRootStats = lstatSync(distRoot);
-  } catch (error) {
-    if (isNotFoundError(error)) {
-      return symlinks;
-    }
-    throw error;
-  }
-  if (distRootStats.isSymbolicLink() || !distRootStats.isDirectory()) {
-    symlinks.push("dist");
-    return symlinks;
-  }
-  const visit = (dir) => {
-    let entries;
-    try {
-      entries = readdirSync(dir, { withFileTypes: true });
-    } catch (error) {
-      if (isNotFoundError(error)) {
-        return;
-      }
-      throw error;
-    }
-    for (const entry of entries) {
-      const entryPath = join(dir, entry.name);
-      if (entry.isSymbolicLink()) {
-        symlinks.push(normalizeRelativePath(relative(packageRoot, entryPath)));
+  const seen = new Set();
+  for (const relativePath of inventory) {
+    const parts = normalizeRelativePath(relativePath).split("/");
+    let current = packageRoot;
+    for (const part of parts) {
+      current = join(current, part);
+      const symlinkPath = normalizeRelativePath(relative(packageRoot, current));
+      if (seen.has(symlinkPath)) {
         continue;
       }
-      if (entry.isDirectory()) {
-        visit(entryPath);
+      seen.add(symlinkPath);
+      try {
+        const stats = lstatSync(current);
+        if (stats.isSymbolicLink()) {
+          symlinks.push(symlinkPath);
+          break;
+        }
+      } catch (error) {
+        if (isNotFoundError(error)) {
+          break;
+        }
+        throw error;
       }
     }
-  };
-  visit(distRoot);
+  }
   return symlinks.toSorted((left, right) => left.localeCompare(right));
 }
 
@@ -806,8 +795,8 @@ function assertNoLegacyPluginDependencyStagingDebris(packageRoot) {
   );
 }
 
-function assertNoPackageDistSymlinks(packageRoot) {
-  const symlinks = collectPackageDistSymlinkPaths(packageRoot);
+function assertNoPackagedDistSymlinks(packageRoot, inventory) {
+  const symlinks = collectPackagedDistSymlinkPaths(packageRoot, inventory);
   if (symlinks.length === 0) {
     return;
   }
@@ -859,7 +848,6 @@ function buildPackageDistContentInventory(packageRoot, inventory) {
 
 export async function writePackageDistInventoryForCandidate(params) {
   assertNoLegacyPluginDependencyStagingDebris(params.sourceDir);
-  assertNoPackageDistSymlinks(params.sourceDir);
   const dryRun = await runCommand(
     npmCommand(),
     ["pack", "--dry-run", "--ignore-scripts", "--json"],
@@ -883,6 +871,7 @@ export async function writePackageDistInventoryForCandidate(params) {
       return isPackagedDistPath(relativePath) ? [relativePath] : [];
     })
     .toSorted((left, right) => left.localeCompare(right));
+  assertNoPackagedDistSymlinks(params.sourceDir, inventory);
   const inventoryPath = join(params.sourceDir, PACKAGE_DIST_INVENTORY_RELATIVE_PATH);
   mkdirSync(dirname(inventoryPath), { recursive: true });
   writeFileSync(inventoryPath, `${JSON.stringify(inventory, null, 2)}\n`, "utf8");
