@@ -107,6 +107,19 @@ sync_platform_tree() {
   rsync -a --delete "$src/" "$dest/"
 }
 
+remove_retired_platform_skill_artifacts() {
+  local home_dir="${1:?home directory required}"
+  local retired_skill
+  for retired_skill in gpu-spend queue-refill scheduled-notes; do
+    rm -rf \
+      "$home_dir/.claude/skills/$retired_skill" \
+      "$home_dir/.codex/skills/$retired_skill"
+    rm -f \
+      "$home_dir/.claude/commands/$retired_skill.md" \
+      "$home_dir/.codex/commands/$retired_skill.md"
+  done
+}
+
 # Tenant volumes mount over $HOME, so image-baked ~/.claude and ~/.codex
 # content is invisible at runtime. Hydrate only platform-owned overlay paths
 # from the immutable image bundle. Tenant files such as settings.json,
@@ -144,6 +157,8 @@ hydrate_platform_home_bundle() {
     sync_named_children "$bundle_codex/skills" "$codex_home/skills"
     sync_named_children "$bundle_codex/commands" "$codex_home/commands"
   fi
+
+  remove_retired_platform_skill_artifacts "$home_dir"
 
   local claude_skill_count=0 codex_skill_count=0
   if [ -d "$claude_home/skills" ]; then

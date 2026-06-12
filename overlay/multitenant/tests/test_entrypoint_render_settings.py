@@ -122,6 +122,7 @@ def _run_hydrate(tmp_path: Path) -> subprocess.CompletedProcess[str]:
     for name in (
         "sync_named_children",
         "sync_platform_tree",
+        "remove_retired_platform_skill_artifacts",
         "hydrate_platform_home_bundle",
     ):
         script_parts.append(f"{name}() {{\n{_extract_function(name)}}}")
@@ -397,6 +398,49 @@ def test_hydrate_syncs_platform_paths_without_overwriting_tenant_data(tmp_path: 
     assert (home / ".claude" / "mcp.json").read_text(encoding="utf-8") == '{"custom":true}\n'
     assert (home / ".claude" / "backups" / "keep.txt").read_text(encoding="utf-8") == "backup\n"
     assert (home / ".claude" / "unknown" / "keep.txt").read_text(encoding="utf-8") == "unknown\n"
+
+
+def test_hydrate_removes_only_retired_platform_skill_artifacts(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    bundle = tmp_path / "bundle"
+
+    _write(bundle / ".claude" / "skills" / "inference-engineer" / "SKILL.md", "platform\n")
+    _write(bundle / ".claude" / "commands" / "inference-engineer.md", "command\n")
+    _write(bundle / ".codex" / "skills" / "inference-engineer" / "SKILL.md", "codex\n")
+    _write(bundle / ".codex" / "commands" / "inference-engineer.md", "codex command\n")
+
+    for retired in ("gpu-spend", "queue-refill", "scheduled-notes"):
+        _write(home / ".claude" / "skills" / retired / "SKILL.md", "stale\n")
+        _write(home / ".claude" / "commands" / f"{retired}.md", "stale command\n")
+        _write(home / ".codex" / "skills" / retired / "SKILL.md", "stale\n")
+        _write(home / ".codex" / "commands" / f"{retired}.md", "stale command\n")
+
+    _write(home / ".claude" / "skills" / "tenant-owned" / "SKILL.md", "tenant\n")
+    _write(home / ".claude" / "commands" / "tenant-owned.md", "tenant command\n")
+    _write(home / ".codex" / "skills" / "tenant-owned" / "SKILL.md", "tenant\n")
+    _write(home / ".codex" / "commands" / "tenant-owned.md", "tenant command\n")
+
+    result = _run_hydrate(tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    for retired in ("gpu-spend", "queue-refill", "scheduled-notes"):
+        assert not (home / ".claude" / "skills" / retired).exists()
+        assert not (home / ".claude" / "commands" / f"{retired}.md").exists()
+        assert not (home / ".codex" / "skills" / retired).exists()
+        assert not (home / ".codex" / "commands" / f"{retired}.md").exists()
+
+    assert (home / ".claude" / "skills" / "tenant-owned" / "SKILL.md").read_text(
+        encoding="utf-8"
+    ) == "tenant\n"
+    assert (home / ".claude" / "commands" / "tenant-owned.md").read_text(
+        encoding="utf-8"
+    ) == "tenant command\n"
+    assert (home / ".codex" / "skills" / "tenant-owned" / "SKILL.md").read_text(
+        encoding="utf-8"
+    ) == "tenant\n"
+    assert (home / ".codex" / "commands" / "tenant-owned.md").read_text(
+        encoding="utf-8"
+    ) == "tenant command\n"
 
 
 def test_hydrate_missing_bundle_is_non_fatal(tmp_path: Path) -> None:
