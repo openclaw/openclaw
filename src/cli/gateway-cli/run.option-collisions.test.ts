@@ -33,6 +33,15 @@ const configState = vi.hoisted(() => ({
   cfg: {} as Record<string, unknown>,
   snapshot: { exists: false } as Record<string, unknown>,
 }));
+const execApprovalsState = vi.hoisted(() => ({
+  snapshot: {
+    path: "/tmp/openclaw-exec-approvals.json",
+    exists: false,
+    raw: null,
+    hash: "",
+    file: { version: 1, agents: {} },
+  } as Record<string, unknown>,
+}));
 const readBestEffortConfig = vi.fn(async () => configState.cfg);
 const readConfigFileSnapshotWithPluginMetadata = vi.fn(async () => ({
   snapshot: configState.snapshot,
@@ -152,6 +161,14 @@ vi.mock("../../infra/gateway-lock.js", () => ({
   GatewayLockError: class GatewayLockError extends Error {},
 }));
 
+vi.mock("../../infra/exec-approvals.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../infra/exec-approvals.js")>();
+  return {
+    ...actual,
+    readExecApprovalsSnapshot: () => execApprovalsState.snapshot,
+  };
+});
+
 vi.mock("../../infra/ports.js", () => ({
   formatPortDiagnostics: () => [],
   inspectPortUsage: async () => ({ status: "free" }),
@@ -224,6 +241,13 @@ describe("gateway run option collisions", () => {
     resetRuntimeCapture();
     configState.cfg = {};
     configState.snapshot = { exists: false };
+    execApprovalsState.snapshot = {
+      path: "/tmp/openclaw-exec-approvals.json",
+      exists: false,
+      raw: null,
+      hash: "",
+      file: { version: 1, agents: {} },
+    };
     netState.autoBindHost = "127.0.0.1";
     netState.container = false;
     readBestEffortConfig.mockClear();
@@ -458,6 +482,34 @@ describe("gateway run option collisions", () => {
     expect(gatewayLogMessages).toContain(
       "Control UI assets are missing; first startup may spend a few seconds building them before the gateway binds. `pnpm gateway:watch` does not rebuild Control UI assets, so rerun `pnpm ui:build` after UI changes or use `pnpm ui:dev` while developing the Control UI. For a full local dist, run `pnpm build && pnpm ui:build`.",
     );
+  });
+
+  it("warns once when global exec security is clamped by host approvals", async () => {
+    configState.snapshot = {
+      exists: true,
+      valid: true,
+      config: { tools: { exec: { security: "full" } } },
+      parsed: { tools: { exec: { security: "full" } } },
+    };
+    execApprovalsState.snapshot = {
+      path: "/tmp/openclaw-exec-approvals.json",
+      exists: true,
+      raw: '{"version":1}',
+      hash: "hash",
+      file: {
+        version: 1,
+        defaults: { security: "allowlist", ask: "off" },
+        agents: {},
+      },
+    };
+
+    await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
+
+    expect(
+      gatewayLogMessages.filter((message) =>
+        message.includes("tools.exec.security=full is clamped to allowlist"),
+      ),
+    ).toHaveLength(1);
   });
 
   it("does not write startup failure bundles for expected gateway lock conflicts", async () => {
