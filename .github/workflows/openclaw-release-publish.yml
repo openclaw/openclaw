@@ -373,7 +373,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TARGET_SHA: ${{ needs.resolve_release_target.outputs.sha }}
           CHILD_WORKFLOW_REF: ${{ github.ref_name }}
-          CLAWHUB_WORKFLOW_REF: ${{ inputs.tag }}
           RELEASE_TAG: ${{ inputs.tag }}
           PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
@@ -863,7 +862,7 @@ jobs:
               --dist-tag "${RELEASE_NPM_DIST_TAG}"
               --repo "${GITHUB_REPOSITORY}"
               --workflow-ref "${CHILD_WORKFLOW_REF}"
-              --clawhub-workflow-ref "${CLAWHUB_WORKFLOW_REF}"
+              --clawhub-workflow-ref "${RELEASE_TAG}"
               --full-release-validation-run "${FULL_RELEASE_VALIDATION_RUN_ID}"
               --plugin-npm-run "${plugin_npm_run_id}"
               --openclaw-npm-run "${openclaw_npm_run_id}"
@@ -990,7 +989,7 @@ jobs:
             echo "### Publish sequence"
             echo
             echo "- Workflow ref: \`${CHILD_WORKFLOW_REF}\`"
-            echo "- ClawHub workflow ref: \`${CLAWHUB_WORKFLOW_REF}\`"
+            echo "- ClawHub workflow ref: release tag \`${RELEASE_TAG}\`"
             echo "- Release tag: \`${RELEASE_TAG}\`"
             echo "- Release SHA: \`${TARGET_SHA}\`"
             echo "- Release approval: this workflow job"
@@ -1020,7 +1019,7 @@ jobs:
           plugin_clawhub_run_id=""
           if [[ "${normal_plugin_count}" != "0" ]]; then
             clawhub_args=(-f publish_scope="selected" -f plugins="${normal_plugins}" -f release_publish_run_id="${GITHUB_RUN_ID}" -f release_publish_branch="${CHILD_WORKFLOW_REF}")
-            plugin_clawhub_run_id="$(dispatch_workflow_at_ref "${CLAWHUB_WORKFLOW_REF}" plugin-clawhub-release.yml "${clawhub_args[@]}")"
+            plugin_clawhub_run_id="$(dispatch_workflow_at_ref "${RELEASE_TAG}" plugin-clawhub-release.yml "${clawhub_args[@]}")"
           else
             echo "- plugin-clawhub-release.yml: no normal OIDC candidates" >> "$GITHUB_STEP_SUMMARY"
           fi
@@ -1028,7 +1027,7 @@ jobs:
           plugin_clawhub_bootstrap_completed="false"
           if [[ "${bootstrap_plugin_count}" != "0" ]]; then
             bootstrap_args=(-f plugins="${bootstrap_plugins}" -f release_publish_run_id="${GITHUB_RUN_ID}" -f release_publish_branch="${CHILD_WORKFLOW_REF}")
-            plugin_clawhub_bootstrap_run_id="$(dispatch_workflow_at_ref "${CLAWHUB_WORKFLOW_REF}" plugin-clawhub-new.yml "${bootstrap_args[@]}")"
+            plugin_clawhub_bootstrap_run_id="$(dispatch_workflow_at_ref "${RELEASE_TAG}" plugin-clawhub-new.yml "${bootstrap_args[@]}")"
           else
             echo "- plugin-clawhub-new.yml: no bootstrap candidates" >> "$GITHUB_STEP_SUMMARY"
           fi

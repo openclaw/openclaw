@@ -525,7 +525,12 @@ export async function collectPluginClawHubReleasePlan(params?: {
         : false;
 
       return {
-        ...plugin,
+        extensionId: plugin.extensionId,
+        packageDir: plugin.packageDir,
+        packageName: plugin.packageName,
+        version: plugin.version,
+        channel: plugin.channel,
+        publishTag: plugin.publishTag,
         packageExists,
         hasTrustedPublisher,
         alreadyPublished,

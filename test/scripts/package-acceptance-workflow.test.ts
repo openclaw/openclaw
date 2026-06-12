@@ -1749,15 +1749,14 @@ describe("package artifact reuse", () => {
     expect(clawHubNewWorkflow).toContain('trustedPublisher?.repository !== "openclaw/openclaw"');
     expect(openclawNpmWorkflow).toContain("environment: npm-release");
     expect(releaseWorkflow).toContain("default: from-validation");
-    expect(releaseWorkflow).toContain("CLAWHUB_WORKFLOW_REF: ${{ inputs.tag }}");
     expect(releaseWorkflow).toContain('-f release_publish_branch="${CHILD_WORKFLOW_REF}"');
     expect(releaseWorkflow).toContain(
-      'dispatch_workflow_at_ref "${CLAWHUB_WORKFLOW_REF}" plugin-clawhub-release.yml',
+      'dispatch_workflow_at_ref "${RELEASE_TAG}" plugin-clawhub-release.yml',
     );
     expect(releaseWorkflow).toContain(
-      'dispatch_workflow_at_ref "${CLAWHUB_WORKFLOW_REF}" plugin-clawhub-new.yml',
+      'dispatch_workflow_at_ref "${RELEASE_TAG}" plugin-clawhub-new.yml',
     );
-    expect(releaseWorkflow).toContain('--clawhub-workflow-ref "${CLAWHUB_WORKFLOW_REF}"');
+    expect(releaseWorkflow).toContain('--clawhub-workflow-ref "${RELEASE_TAG}"');
     expect(releaseWorkflow).toContain(
       'if [[ "$EXPECTED_RELEASE_PROFILE" != "from-validation" && "$release_profile" != "$EXPECTED_RELEASE_PROFILE" ]]; then',
     );
