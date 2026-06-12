@@ -6,11 +6,25 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
-import { isSafeToRetrySendError, isTelegramClientRejection } from "./network-errors.js";
+import {
+  isRecoverableTelegramNetworkError,
+  isSafeToRetrySendError,
+  isTelegramClientRejection,
+  isTelegramMessageNotModifiedError,
+  isTelegramRateLimitError,
+  readTelegramRetryAfterMs,
+} from "./network-errors.js";
 import { normalizeTelegramReplyToMessageId } from "./outbound-params.js";
 
 const TELEGRAM_STREAM_MAX_CHARS = 4096;
 const DEFAULT_THROTTLE_MS = 1000;
+// Retryable preview failures keep the latest text pending for the next throttle
+// tick; cap consecutive misses so a persistent outage stops the preview instead
+// of warn-spamming for the rest of the run.
+const MAX_CONSECUTIVE_PREVIEW_FAILURES = 3;
+// Flood waits beyond this freeze the preview longer than it is useful; clamp so
+// a large retry_after cannot park the suspension past the run's lifetime.
+const MAX_PREVIEW_FLOOD_SUSPEND_MS = 60_000;
 
 export type TelegramDraftStream = {
   update: (text: string) => void;
@@ -109,6 +123,8 @@ export function createTelegramDraftStream(params: {
 
   const streamState = { stopped: false, final: false };
   let messageSendAttempted = false;
+  let suspendedUntilMs = 0;
+  let consecutivePreviewFailures = 0;
   let streamMessageId: number | undefined;
   let streamVisibleSinceMs: number | undefined;
   let lastSentText = "";
@@ -198,6 +214,12 @@ export function createTelegramDraftStream(params: {
     if (streamState.stopped && !streamState.final) {
       return false;
     }
+    // Flood-control suspension: returning false keeps the newest text pending,
+    // so the first tick after retry_after delivers it. Final flushes still try
+    // so the last text has a chance to land.
+    if (!streamState.final && Date.now() < suspendedUntilMs) {
+      return false;
+    }
     const trimmed = text.trimEnd();
     if (!trimmed) {
       return false;
@@ -262,6 +284,8 @@ export function createTelegramDraftStream(params: {
       }
     }
 
+    const previousSentText = lastSentText;
+    const previousSentParseMode = lastSentParseMode;
     lastSentText = renderedText;
     lastSentParseMode = renderedParseMode;
     try {
@@ -273,9 +297,40 @@ export function createTelegramDraftStream(params: {
       if (sent) {
         previewRevision += 1;
         lastDeliveredText = trimmed;
+        consecutivePreviewFailures = 0;
+        suspendedUntilMs = 0;
       }
       return sent;
     } catch (err) {
+      const isEdit = typeof streamMessageId === "number";
+      if (isEdit && isTelegramMessageNotModifiedError(err)) {
+        // Telegram already shows exactly this text; count the edit as delivered.
+        consecutivePreviewFailures = 0;
+        lastDeliveredText = trimmed;
+        return true;
+      }
+      // Roll back the dedupe snapshot so the retried tick is not skipped as a no-op.
+      lastSentText = previousSentText;
+      lastSentParseMode = previousSentParseMode;
+      // Flood control is always retryable: Telegram rejected the call outright.
+      // Beyond that, edits retry on any transient network error (re-editing the
+      // same content is idempotent) while an unsent first preview retries only
+      // on provably pre-connect failures — anything ambiguous could duplicate
+      // the preview message.
+      const retryable =
+        isTelegramRateLimitError(err) ||
+        (isEdit ? isRecoverableTelegramNetworkError(err) : isSafeToRetrySendError(err));
+      consecutivePreviewFailures += 1;
+      if (retryable && consecutivePreviewFailures <= MAX_CONSECUTIVE_PREVIEW_FAILURES) {
+        const retryAfterMs = readTelegramRetryAfterMs(err);
+        if (retryAfterMs !== undefined) {
+          suspendedUntilMs = Date.now() + Math.min(retryAfterMs, MAX_PREVIEW_FLOOD_SUSPEND_MS);
+        }
+        params.warn?.(
+          `telegram stream preview ${isEdit ? "edit" : "send"} failed (retrying): ${formatErrorMessage(err)}`,
+        );
+        return false;
+      }
       streamState.stopped = true;
       params.warn?.(`telegram stream preview failed: ${formatErrorMessage(err)}`);
       return false;

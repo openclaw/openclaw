@@ -3,6 +3,7 @@ import type { AutoFallbackPrimaryProbe } from "../../../agents/agent-scope.js";
 import type { ExecToolDefaults } from "../../../agents/bash-tools.js";
 import type { CurrentInboundPromptContext } from "../../../agents/embedded-agent-runner/run/params.js";
 import type { SilentReplyPromptMode } from "../../../agents/system-prompt.types.js";
+import type { ChatType } from "../../../channels/chat-type.js";
 import type { InboundEventKind } from "../../../channels/inbound-event/kind.js";
 import type { SessionEntry } from "../../../config/sessions.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -89,6 +90,7 @@ export type FollowupRun = {
     sessionKey?: string;
     runtimePolicySessionKey?: string;
     messageProvider?: string;
+    chatType?: ChatType;
     agentAccountId?: string;
     groupId?: string;
     groupChannel?: string;
@@ -124,6 +126,7 @@ export type FollowupRun = {
       defaultLevel: ElevatedLevel;
     };
     timeoutMs: number;
+    runTimeoutOverrideMs?: number;
     blockReplyBreak: "text_end" | "message_end";
     ownerNumbers?: string[];
     inputProvenance?: InputProvenance;

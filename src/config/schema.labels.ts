@@ -420,6 +420,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "skills.load.allowSymlinkTargets": "Allowed Skill Symlink Targets",
   "skills.load.watch": "Watch Skills",
   "skills.load.watchDebounceMs": "Skills Watch Debounce (ms)",
+  "skills.workshop.allowSymlinkTargetWrites": "Allow Skill Workshop Symlink Writes",
   "agents.defaults.skills": "Skills",
   "agents.defaults.subagents.delegationMode": "Sub-agent Delegation Mode",
   "agents.list[].subagents.delegationMode": "Sub-agent Delegation Mode",
