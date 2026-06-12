@@ -356,6 +356,20 @@ import UIKit
         #expect(!appModel._test_hasGatewayLoopTasks().operator)
     }
 
+    @Test @MainActor func foregroundStaleConnectionRestartReappliesActiveGatewayConfig() async {
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+
+        let config = Self.makeGatewayConnectConfig()
+        appModel.applyGatewayConnectConfig(config)
+        await appModel._test_restartGatewaySessionsAfterForegroundStaleConnection()
+
+        #expect(appModel.gatewayStatusText == "Reconnecting…")
+        #expect(appModel.activeGatewayConnectConfig?.hasSameConnectionInputs(as: config) == true)
+        #expect(appModel._test_hasGatewayLoopTasks().node)
+        #expect(appModel._test_hasGatewayLoopTasks().operator)
+    }
+
     @Test @MainActor func loadLastConnectionReadsSavedValues() {
         let prior = KeychainStore.loadString(service: "ai.openclaw.gateway", account: "lastConnection")
         defer {

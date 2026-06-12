@@ -188,6 +188,7 @@ final class NodeAppModel {
     @ObservationIgnored private var backgroundGraceTaskTimer: Task<Void, Never>?
     private var backgroundReconnectSuppressed = false
     private var backgroundReconnectLeaseUntil: Date?
+    @ObservationIgnored private var foregroundGatewayResumeCheckInFlight = false
     private var lastSignificantLocationWakeAt: Date?
     @ObservationIgnored private let watchReplyCoordinator = WatchReplyCoordinator()
     private var watchExecApprovalPromptsByID: [String: ExecApprovalPrompt] = [:]
@@ -214,6 +215,7 @@ final class NodeAppModel {
     private static let watchExecApprovalBridgeStateKey = "watch.execApproval.bridge.state.v1"
     private static let backgroundAliveLastSuccessAtMsKey = "gateway.backgroundAlive.lastSuccessAtMs"
     private static let backgroundAliveLastTriggerKey = "gateway.backgroundAlive.lastTrigger"
+    private static let foregroundResumeHealthTimeoutSeconds = 1
 
     var cameraHUDText: String?
     var cameraHUDKind: CameraHUDKind?
@@ -417,9 +419,7 @@ final class NodeAppModel {
             self.isBackgrounded = false
             self.endBackgroundConnectionGracePeriod(reason: "scene_foreground")
             self.clearBackgroundReconnectSuppression(reason: "scene_foreground")
-            if self.operatorConnected {
-                self.startGatewayHealthMonitor()
-            }
+            var shouldStartGatewayHealthMonitor = self.operatorConnected
             if phase == .active {
                 self.voiceWake.resumeAfterExternalAudioCapture(wasSuspended: self.backgroundVoiceWakeSuspended)
                 self.backgroundVoiceWakeSuspended = false
@@ -444,6 +444,8 @@ final class NodeAppModel {
                 // iOS may suspend network sockets in background without a clean close.
                 // On foreground, force a fresh handshake to avoid "connected but dead" states.
                 if backgroundedFor >= 3.0 {
+                    shouldStartGatewayHealthMonitor = false
+                    self.foregroundGatewayResumeCheckInFlight = true
                     Task { [weak self] in
                         guard let self else { return }
                         let operatorWasConnected = await MainActor.run { self.operatorConnected }
@@ -452,30 +454,25 @@ final class NodeAppModel {
                             let healthy = await (try? self.operatorGateway.request(
                                 method: "health",
                                 paramsJSON: nil,
-                                timeoutSeconds: 2)) != nil
+                                timeoutSeconds: Self.foregroundResumeHealthTimeoutSeconds)) != nil
                             if healthy {
-                                await MainActor.run { self.startGatewayHealthMonitor() }
+                                await MainActor.run {
+                                    self.foregroundGatewayResumeCheckInFlight = false
+                                    self.startGatewayHealthMonitor()
+                                }
                                 return
                             }
                         }
 
-                        await self.operatorGateway.disconnect()
-                        await self.nodeGateway.disconnect()
                         await MainActor.run {
-                            guard !self.isAppleReviewDemoModeEnabled else { return }
-                            self.setOperatorConnected(false)
-                            self.gatewayConnected = false
-                            // Foreground recovery must actively restart the saved gateway config.
-                            // Disconnecting stale sockets alone can leave us idle if the old
-                            // reconnect tasks were suppressed or otherwise got stuck in background.
-                            self.gatewayStatusText = "Reconnecting…"
-                            self.talkMode.updateGatewayConnected(false)
-                            if let cfg = self.activeGatewayConnectConfig {
-                                self.applyGatewayConnectConfig(cfg)
-                            }
+                            self.foregroundGatewayResumeCheckInFlight = false
                         }
+                        await self.restartGatewaySessionsAfterForegroundStaleConnection()
                     }
                 }
+            }
+            if shouldStartGatewayHealthMonitor {
+                self.startGatewayHealthMonitor()
             }
         @unknown default:
             self.isBackgrounded = false
@@ -786,6 +783,12 @@ final class NodeAppModel {
 
     func refreshGatewayOverviewIfConnected() async {
         guard await self.isOperatorConnected() else { return }
+        if self.foregroundGatewayResumeCheckInFlight {
+            GatewayDiagnostics.log("gateway overview refresh deferred reason=foreground_resume_check")
+            try? await Task.sleep(
+                nanoseconds: UInt64(Self.foregroundResumeHealthTimeoutSeconds) * 1_000_000_000)
+            guard await self.isOperatorConnected(), !self.foregroundGatewayResumeCheckInFlight else { return }
+        }
         await self.refreshBrandingFromGateway()
         await self.refreshAgentsFromGateway()
     }
@@ -1986,12 +1989,33 @@ extension NodeAppModel {
     }
 
     func resetGatewaySessionsForForcedReconnect() async {
-        self.nodeGatewayTask?.cancel()
+        let nodeGatewayTask = self.nodeGatewayTask
+        let operatorGatewayTask = self.operatorGatewayTask
+        nodeGatewayTask?.cancel()
         self.nodeGatewayTask = nil
-        self.operatorGatewayTask?.cancel()
+        operatorGatewayTask?.cancel()
         self.operatorGatewayTask = nil
         await self.operatorGateway.disconnect()
         await self.nodeGateway.disconnect()
+        // Foreground recovery reuses the same config immediately after reset.
+        // Wait for canceled loops so their shutdown cleanup cannot clobber the new reconnect state.
+        if let operatorGatewayTask {
+            await operatorGatewayTask.value
+        }
+        if let nodeGatewayTask {
+            await nodeGatewayTask.value
+        }
+    }
+
+    private func restartGatewaySessionsAfterForegroundStaleConnection() async {
+        await self.resetGatewaySessionsForForcedReconnect()
+        guard !self.isAppleReviewDemoModeEnabled else { return }
+        self.setOperatorConnected(false)
+        self.gatewayConnected = false
+        self.gatewayStatusText = "Reconnecting…"
+        self.talkMode.updateGatewayConnected(false)
+        guard let cfg = self.activeGatewayConnectConfig else { return }
+        self.applyGatewayConnectConfig(cfg, forceReconnect: true)
     }
 
     func disconnectGateway() {
@@ -4824,6 +4848,10 @@ extension NodeAppModel {
 
     func _test_hasGatewayLoopTasks() -> (node: Bool, operator: Bool) {
         (self.nodeGatewayTask != nil, self.operatorGatewayTask != nil)
+    }
+
+    func _test_restartGatewaySessionsAfterForegroundStaleConnection() async {
+        await self.restartGatewaySessionsAfterForegroundStaleConnection()
     }
 
     func _test_handleSuccessfulBootstrapGatewayOnboarding() async {
