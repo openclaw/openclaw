@@ -48,8 +48,8 @@ const SessionStartSchema = z.object({
   recordingStatus: RecordingStatusSchema.optional(),
   /**
    * "inbound" (caller dialed the bot) or "outbound" (the bot placed this call via
-   * /api/calls/place). OpenClaw correlates outbound calls by callId regardless, but
-   * this makes the media-plane self-describing. Defaults to inbound when absent.
+   * the worker's /api/calls). OpenClaw correlates outbound calls by callId regardless,
+   * but this makes the media-plane self-describing. Defaults to inbound when absent.
    */
   direction: z.enum(["inbound", "outbound"]).optional(),
 });

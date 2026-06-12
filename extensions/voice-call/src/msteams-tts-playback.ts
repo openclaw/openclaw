@@ -75,9 +75,10 @@ export async function playTtsToCall(
     throw new Error("MsteamsProvider.playTts: TTS produced no audio");
   }
 
-  // CVI Phase 5 (spike): send an estimated viseme timeline just ahead of the audio so the avatar can
-  // shape its mouth per sound (blended over RMS openness). 16-bit mono @ 16 kHz → 2 bytes/sample.
-  // Best-effort/cosmetic — the worker falls back to RMS-only if this is absent or it's an older worker.
+  // CVI Phase 5 (spike): send an estimated viseme timeline just ahead of the audio. 16-bit mono
+  // @ 16 kHz → 2 bytes/sample. Forward-compat hint only: CURRENT workers ignore speech.marks
+  // entirely (their lip-sync is RMS-openness-driven); a future viseme-capable worker blends these
+  // into per-sound mouth shapes. Best-effort/cosmetic either way.
   try {
     const durationMs = (pcm16k.length / BYTES_PER_SAMPLE / MSTEAMS_SAMPLE_RATE_HZ) * 1000;
     const marks = estimateVisemes(text, durationMs);

@@ -10,8 +10,8 @@
 
 export type AvatarEmotion = "neutral" | "happy" | "sad" | "surprised";
 
-/** "!!", "?!", "!?" — emphatic punctuation that reads as surprise regardless of wording. */
-const SURPRISED_PUNCT = /[?!]{2,}|\?!|!\?/;
+/** "!!", "?!", "!?" — any run of 2+ emphatic marks reads as surprise regardless of wording. */
+const SURPRISED_PUNCT = /[?!]{2,}/;
 const SURPRISED_WORDS =
   /\b(wow|whoa|woah|oh no|oh my|no way|unbelievable|incredible|astonish\w*|surpris\w*)\b/;
 const SAD_WORDS =
