@@ -726,4 +726,42 @@ describe("task-registry maintenance issue #60299", () => {
     }
     expect(hookNow).toBeGreaterThanOrEqual(beforeMaintenance);
   });
+
+  it("reconciles stale subagent tasks whose backing CLI child is already terminal (regresses #92285)", async () => {
+    const staleAt = Date.now() - 45 * 60_000;
+    const sharedRunId = "run-shared-subagent-child";
+    const childTask = makeStaleTask({
+      runtime: "cli",
+      runId: sharedRunId,
+      status: "lost",
+      error: "backing session missing",
+      createdAt: staleAt,
+      startedAt: staleAt,
+      lastEventAt: staleAt,
+      endedAt: staleAt,
+    });
+    const parentSubagentTask = makeStaleTask({
+      runtime: "subagent",
+      runId: sharedRunId,
+      status: "running",
+      createdAt: staleAt,
+      startedAt: staleAt,
+      lastEventAt: staleAt,
+      // No childSessionKey — this is the case where hasBackingSession
+      // falls through to the childless-codex-native guard and returns true,
+      // preventing standard shouldMarkLost reconciliation.
+    });
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [childTask, parentSubagentTask],
+    });
+
+    expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 1 });
+    expectTaskStatus(currentTasks, parentSubagentTask.taskId, "lost");
+    expect(requireTaskRecord(currentTasks, parentSubagentTask.taskId).error).toBe(
+      "backing session missing",
+    );
+    // The already-terminal child task should not be double-reconciled.
+    expectTaskStatus(currentTasks, childTask.taskId, "lost");
+  });
 });

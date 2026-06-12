@@ -1096,6 +1096,15 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
   const cronRecoveryContext = createCronRecoveryContext();
   const backingSessionContext = createBackingSessionLookupContext();
   const recoveryHookRegistered = hasDetachedTaskRecoveryHook();
+  // Pre-compute terminal runIds so subagent reconciliation can cheaply detect when a
+  // backing CLI child task is already terminal while the parent subagent task is still
+  // running (fixes #92285).
+  const terminalRunIds = new Set<string>();
+  for (const task of tasks) {
+    if (task.runId && isTerminalTask(task)) {
+      terminalRunIds.add(task.runId);
+    }
+  }
   let processed = 0;
   for (const task of tasks) {
     const current = taskRegistryMaintenanceRuntime.getTaskById(task.taskId);
@@ -1158,6 +1167,31 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
       if (processed % SWEEP_YIELD_BATCH_SIZE === 0) {
         await yieldToEventLoop();
       }
+      continue;
+    }
+    // Reconcile stale subagent tasks whose backing CLI child task is already terminal.
+    // A subagent task without a childSessionKey is invisible to the standard
+    // hasBackingSession check (it falls through to the childless-codex-native guard
+    // which returns true for runtime "subagent"). When the backing child shares the
+    // same runId and is terminal, the parent subagent should be marked lost.
+    if (
+      current.runtime === "subagent" &&
+      current.status === "running" &&
+      !current.childSessionKey?.trim() &&
+      current.runId &&
+      hasLostGraceExpired(current, now) &&
+      terminalRunIds.has(current.runId)
+    ) {
+      const next = markTaskLost(current, now, backingSessionContext);
+      if (next.status === "lost") {
+        reconciled += 1;
+      }
+      processed += 1;
+      if (processed % SWEEP_YIELD_BATCH_SIZE === 0) {
+        await yieldToEventLoop();
+      }
+      // markTaskLost already calls syncFlowFromTaskAfterTaskMutation via
+      // updateTask, so the task_mirrored flow will be terminalized.
       continue;
     }
     await cleanupTerminalAcpSession(current);
