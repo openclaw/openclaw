@@ -243,7 +243,29 @@ export function registerCronEditCommand(cron: Command) {
             tz: opts.tz,
           });
           if (scheduleRequest.kind === "direct") {
-            patch.schedule = scheduleRequest.schedule;
+            const existing = await loadCronJobForEditSchedulePatch(opts, String(id));
+            if (!existing) {
+              throw new Error(`unknown cron job id: ${id}`);
+            }
+            if (
+              scheduleRequest.schedule.kind === "cron" &&
+              existing.schedule.kind === "cron"
+            ) {
+              // When changing the cron expression without --tz/--stagger,
+              // preserve the existing tz and staggerMs so they aren't
+              // silently stripped. This matches the merge behaviour of
+              // the "patch-existing-cron" path. See #92291.
+              patch.schedule = {
+                ...scheduleRequest.schedule,
+                tz: scheduleRequest.schedule.tz ?? existing.schedule.tz,
+                staggerMs:
+                  scheduleRequest.schedule.staggerMs !== undefined
+                    ? scheduleRequest.schedule.staggerMs
+                    : existing.schedule.staggerMs,
+              };
+            } else {
+              patch.schedule = scheduleRequest.schedule;
+            }
           } else if (scheduleRequest.kind === "patch-existing-cron") {
             const existing = await loadCronJobForEditSchedulePatch(opts, String(id));
             if (!existing) {
