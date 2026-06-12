@@ -297,7 +297,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     const deferred = state.deferredAssistantEvents.splice(0);
     for (const delivery of deferred) {
       if (delivery.emitPartialReply && params.onPartialReply && state.shouldEmitPartialReplies) {
-        void params.onPartialReply!(delivery.data);
+        void params.onPartialReply(delivery.data);
       }
     }
   };

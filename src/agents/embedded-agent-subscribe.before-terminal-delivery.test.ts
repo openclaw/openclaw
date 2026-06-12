@@ -8,7 +8,7 @@ import {
 } from "./embedded-agent-subscribe.e2e-harness.js";
 
 function hasAssistantEvent(calls: Array<unknown[]>): boolean {
-  // The gate buffers assistant stream events; tests use this helper to assert
+  // The gate buffers channel partial replies; gateway SSE events stream immediately.
   // nothing leaks before the terminal decision resolves.
   return calls.some((call) => {
     const event = call[0] as { stream?: string } | undefined;
@@ -123,7 +123,7 @@ describe("subscribeEmbeddedAgentSession before terminal delivery", () => {
     expect(onBlockReply).not.toHaveBeenCalled();
   });
 
-  it("defers assistant stream and partial replies until the terminal gate continues", async () => {
+  it("defers channel partial replies but streams gateway SSE until the terminal gate continues", async () => {
     const onAgentEvent = vi.fn();
     const onPartialReply = vi.fn();
     const onBeforeTerminalDelivery = vi.fn(async () => undefined);
