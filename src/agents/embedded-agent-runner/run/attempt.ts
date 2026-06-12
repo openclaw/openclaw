@@ -1317,6 +1317,10 @@ export async function runEmbeddedAttempt(
             currentThreadTs: params.currentThreadTs,
             currentMessageId: params.currentMessageId,
             currentInboundAudio: params.currentInboundAudio,
+            isFallbackRun: params.isFallback === true,
+            completionAnnounceTriggered:
+              params.inputProvenance?.kind === "inter_session" &&
+              params.inputProvenance.sourceTool === "subagent_announce",
             includeCoreTools: toolConstructionPlan.includeCoreTools,
             includeToolSearchControls: toolSearchControlsEnabledForRun,
             toolSearchCatalogExecutor: (toolParams) => {

@@ -121,6 +121,10 @@ export function createOpenClawTools(
     currentMessageId?: string | number;
     /** True when the current inbound turn carried audio media. */
     currentInboundAudio?: boolean;
+    /** True when this run executes a non-primary fallback model candidate. */
+    isFallbackRun?: boolean;
+    /** True when the current turn was triggered by an internal completion announcement. */
+    completionAnnounceTriggered?: boolean;
     /** Reply-to mode for auto-threading. */
     replyToMode?: "off" | "first" | "all" | "batched";
     /** Mutable ref to track if a reply was sent (for "first" mode). */
@@ -518,6 +522,8 @@ export function createOpenClawTools(
           createSessionsSpawnTool({
             agentSessionKey: options?.agentSessionKey,
             completionOwnerKey: options?.runSessionKey,
+            isFallbackRun: options?.isFallbackRun,
+            completionAnnounceTriggered: options?.completionAnnounceTriggered,
             agentChannel: options?.agentChannel,
             agentAccountId: options?.agentAccountId,
             agentTo: options?.agentTo,

@@ -322,6 +322,7 @@ export function buildEmbeddedRunExecutionParams(params: {
   runId: string;
   promptCacheKey?: string;
   allowTransientCooldownProbe?: boolean;
+  isFallback?: boolean;
 }) {
   const authProfile = resolveRunAuthProfile(params.run, params.provider);
   const embeddedContext = buildEmbeddedContextFromTemplate({
@@ -339,6 +340,7 @@ export function buildEmbeddedRunExecutionParams(params: {
     promptCacheKey: params.promptCacheKey,
     authProfile,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
+    isFallback: params.isFallback,
   });
   return {
     embeddedContext,

@@ -277,6 +277,12 @@ export type RunEmbeddedAgentParams = {
    * where transient service pressure is often model-scoped.
    */
   allowTransientCooldownProbe?: boolean;
+  /**
+   * True when this run executes a non-primary fallback candidate. Combined
+   * with completion-announce provenance it restricts work-spawning tools so a
+   * fallback takeover cannot re-execute reported work (#92271).
+   */
+  isFallback?: boolean;
   suppressNextUserMessagePersistence?: boolean;
   suppressTranscriptOnlyAssistantPersistence?: boolean;
   suppressAssistantErrorPersistence?: boolean;

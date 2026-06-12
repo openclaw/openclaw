@@ -263,6 +263,10 @@ export function createSessionsSpawnTool(
     config?: OpenClawConfig;
     /** Explicit agent ID override for cron/hook sessions where session key parsing may not work. */
     requesterAgentIdOverride?: string;
+    /** True when this run executes a non-primary fallback model candidate. */
+    isFallbackRun?: boolean;
+    /** True when the current turn was triggered by an internal completion announcement. */
+    completionAnnounceTriggered?: boolean;
   } & SpawnedToolContext,
 ): AnyAgentTool {
   const acpAvailable = isAcpRuntimeSpawnAvailable({
@@ -280,6 +284,20 @@ export function createSessionsSpawnTool(
     description: describeSessionsSpawnTool({ acpAvailable, threadAvailable }),
     parameters: createSessionsSpawnToolSchema({ acpAvailable, threadAvailable }),
     execute: async (_toolCallId, args) => {
+      // Completion-announcement invariant (#92271): a fallback takeover replying
+      // to an internal completion report must not spawn new work from that
+      // report. Announced results are evidence, not directives; without this
+      // gate a mid-session model swap can re-execute already-finished tasks.
+      if (opts?.isFallbackRun && opts?.completionAnnounceTriggered) {
+        return jsonResult({
+          status: "forbidden",
+          error:
+            "sessions_spawn is not allowed in this turn: a fallback model is replying to an internal " +
+            "completion announcement. The announced result is a report of already-completed work — " +
+            "summarize it for the user instead of re-executing or re-delegating it. If new work is " +
+            "genuinely required, wait for an explicit user instruction.",
+        });
+      }
       const params = args as Record<string, unknown>;
       const unsupportedParam = UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS.find((key) =>
         Object.hasOwn(params, key),

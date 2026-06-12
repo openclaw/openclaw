@@ -1667,7 +1667,9 @@ async function runWithModelFallbackInternal<T>(
       options: {
         ...runOptions,
         isFinalFallbackAttempt: i + 1 === candidates.length,
-        isFallback: i > 0,
+        // Only fallback takeovers (non-primary candidates) carry isFallback, so
+        // primary-attempt option shapes stay unchanged.
+        ...(i > 0 ? { isFallback: true } : {}),
       },
       // Only the outer fallback loop knows another candidate remains. Carry
       // that fact through this attempt so the embedded runner does not freeze
@@ -1919,7 +1921,7 @@ export async function runWithImageModelFallback<T>(params: {
       run: params.run,
       ...candidate,
       attempts,
-      options: { isFallback: i > 0 },
+      options: i > 0 ? { isFallback: true } : undefined,
       attempt: i + 1,
       total: candidates.length,
     });

@@ -343,6 +343,75 @@ describe("sessions_spawn tool", () => {
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
   });
 
+  it("forbids spawning when a fallback turn replies to a completion announcement", async () => {
+    // Completion-announcement invariant (#92271): announced results are
+    // evidence, not directives. A fallback takeover must not convert them
+    // into new spawned work.
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      isFallbackRun: true,
+      completionAnnounceTriggered: true,
+    });
+
+    const result = await tool.execute("call-fallback-announce", {
+      task: "finalize the PR again",
+    });
+
+    expectDetailFields(result.details, { status: "forbidden" });
+    const details = requireRecord(result.details, "forbidden details");
+    expect(String(details.error)).toContain("completion announcement");
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+  });
+
+  it("forbids ACP spawns equally when the fallback announce gate trips", async () => {
+    registerAcpBackendForTest();
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      isFallbackRun: true,
+      completionAnnounceTriggered: true,
+    });
+
+    const result = await tool.execute("call-fallback-announce-acp", {
+      task: "finalize the PR again",
+      runtime: "acp",
+    });
+
+    expectDetailFields(result.details, { status: "forbidden" });
+    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
+
+  it("allows spawning on fallback turns not triggered by an announcement", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      isFallbackRun: true,
+      completionAnnounceTriggered: false,
+    });
+
+    const result = await tool.execute("call-fallback-user-turn", {
+      task: "build feature",
+    });
+
+    expectDetailFields(result.details, { status: "accepted" });
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows spawning on primary turns triggered by an announcement", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      isFallbackRun: false,
+      completionAnnounceTriggered: true,
+    });
+
+    const result = await tool.execute("call-primary-announce", {
+      task: "follow up on remaining steps",
+    });
+
+    expectDetailFields(result.details, { status: "accepted" });
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+  });
+
   it("passes inherited tool denies to subagent spawns", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",

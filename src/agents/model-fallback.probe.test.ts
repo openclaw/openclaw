@@ -178,6 +178,7 @@ function expectPrimarySkippedForReason(
   expect(run).toHaveBeenCalledTimes(1);
   expect(run).toHaveBeenCalledWith("anthropic", "claude-haiku-3-5", {
     isFinalFallbackAttempt: true,
+    isFallback: true,
   });
   expect(result.attempts[0]?.reason).toBe(reason);
 }
@@ -259,6 +260,7 @@ async function expectProbeFailureFallsBack({
   expect(run).toHaveBeenNthCalledWith(2, "anthropic", "claude-haiku-3-5", {
     allowTransientCooldownProbe: true,
     isFinalFallbackAttempt: false,
+    isFallback: true,
   });
 }
 
@@ -538,6 +540,7 @@ describe("runWithModelFallback – probe logic", () => {
     });
     expect(fallbackRun).toHaveBeenNthCalledWith(2, "anthropic", "claude-haiku-3-5", {
       isFinalFallbackAttempt: false,
+      isFallback: true,
     });
 
     const decisionPayloads = logCapture.records
@@ -702,9 +705,11 @@ describe("runWithModelFallback – probe logic", () => {
     });
     expect(run).toHaveBeenNthCalledWith(2, "anthropic", "claude-haiku-3-5", {
       isFinalFallbackAttempt: false,
+      isFallback: true,
     });
     expect(run).toHaveBeenNthCalledWith(3, "deepseek", "deepseek-chat", {
       isFinalFallbackAttempt: true,
+      isFallback: true,
     });
   });
 

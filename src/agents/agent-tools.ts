@@ -478,6 +478,10 @@ export function createOpenClawCodingTools(options?: {
   currentMessageId?: string | number;
   /** True when the current inbound turn carried audio media. */
   currentInboundAudio?: boolean;
+  /** True when this run executes a non-primary fallback model candidate. */
+  isFallbackRun?: boolean;
+  /** True when the current turn was triggered by an internal completion announcement. */
+  completionAnnounceTriggered?: boolean;
   /** Group id for channel-level tool policy resolution. */
   groupId?: string | null;
   /** Group channel label (e.g. #general) for channel-level tool policy resolution. */
@@ -1047,6 +1051,8 @@ export function createOpenClawCodingTools(options?: {
           currentThreadTs: options?.currentThreadTs,
           currentMessageId: options?.currentMessageId,
           currentInboundAudio: options?.currentInboundAudio,
+          isFallbackRun: options?.isFallbackRun,
+          completionAnnounceTriggered: options?.completionAnnounceTriggered,
           modelProvider: options?.modelProvider,
           modelId: options?.modelId,
           replyToMode: options?.replyToMode,
