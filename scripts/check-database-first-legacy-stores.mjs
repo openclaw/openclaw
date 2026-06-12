@@ -29,6 +29,7 @@ const helperWriteCallees = new Set([
   "appendRegularFileSync",
   "replaceFileAtomic",
   "replaceFileAtomicSync",
+  "saveJsonFile",
   "writeJson",
   "writeJsonAtomic",
   "writeJsonFileAtomically",
@@ -62,7 +63,7 @@ const fsSafeStoreWriteMethods = new Set([
 const fsSafeJsonStoreWriteMethods = new Set(["update", "updateOr", "write"]);
 
 const helperWriteModulePattern =
-  /(?:^|\/)(?:fs-safe|json-files|private-file-store|replace-file)(?:\.[cm]?[jt]s)?$/u;
+  /(?:^|\/)(?:fs-safe|json-files|json-store|private-file-store|replace-file)(?:\.[cm]?[jt]s)?$/u;
 const fsSafePackageModulePattern = /^@openclaw\/fs-safe(?:\/(?:root|store))?$/u;
 
 const bridgeMarkerPattern = /\btranscriptLocator\b|sqlite-transcript:\/\//u;
@@ -104,6 +105,7 @@ const allowedCurrentLegacyWritePaths = new Set([
   "src/memory-host-sdk/events.ts",
   "src/infra/restart-sentinel.ts",
   "src/infra/restart.ts",
+  "extensions/matrix/src/matrix/client/storage.ts",
 ]);
 
 const sourceFileExtensions = new Set([".cjs", ".cts", ".js", ".mjs", ".mts", ".ts", ".tsx"]);
@@ -136,6 +138,27 @@ const sourceTestSuffixes = [
   ".test.js",
   ".test.mjs",
   ".test.ts",
+  "test-fixtures.js",
+  "test-fixtures.mjs",
+  "test-fixtures.ts",
+  "test-helper.js",
+  "test-helper.mjs",
+  "test-helper.ts",
+  "test-helpers.js",
+  "test-helpers.mjs",
+  "test-helpers.ts",
+  "test-harness.js",
+  "test-harness.mjs",
+  "test-harness.ts",
+  "test-mocks.js",
+  "test-mocks.mjs",
+  "test-mocks.ts",
+  "test-support.js",
+  "test-support.mjs",
+  "test-support.ts",
+  "test-utils.js",
+  "test-utils.mjs",
+  "test-utils.ts",
 ];
 
 function isAllowedLegacyOwnerPath(relativePath) {
@@ -1779,6 +1802,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
       });
     }
     if (
+      name === "saveJsonFile" ||
       name === "writeJson" ||
       name === "writeJsonAtomic" ||
       name === "writeJsonFileAtomically" ||

@@ -17,6 +17,9 @@ describe("check-database-first-legacy-stores", () => {
       await fs.writeFile(path.join(root, "src", "worker.mjs"), "export {};\n");
       await fs.writeFile(path.join(root, "src", "types.ts"), "export {};\n");
       await fs.writeFile(path.join(root, "src", "runtime.test.js"), "export {};\n");
+      await fs.writeFile(path.join(root, "src", "test-helpers.ts"), "export {};\n");
+      await fs.writeFile(path.join(root, "src", "test-support.ts"), "export {};\n");
+      await fs.writeFile(path.join(root, "src", "worker.test-helpers.ts"), "export {};\n");
 
       const files = await collectDatabaseFirstLegacyStoreSourceFiles([path.join(root, "src")]);
       const relativeFiles = files
@@ -1241,17 +1244,22 @@ describe("check-database-first-legacy-stores", () => {
       `
         import { writeJson, writeTextAtomic } from "../infra/json-files.js";
         import { replaceFileAtomicSync } from "../infra/replace-file.js";
+        import { saveJsonFile, writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
         await writeJson("restart-sentinel.json", {});
         await writeTextAtomic("gateway-restart-intent.json", "{}\\n");
         replaceFileAtomicSync({ filePath: "plugin-state/state.sqlite", content: "" });
+        await writeJsonFileAtomically("thread-bindings.json", {});
+        saveJsonFile("plugin-binding-approvals.json", {});
       `,
       "src/runtime/write-helper-regressions.ts",
     );
 
     expect(violations).toEqual([
-      { kind: "legacy store filesystem write", line: 4 },
       { kind: "legacy store filesystem write", line: 5 },
       { kind: "legacy store filesystem write", line: 6 },
+      { kind: "legacy store filesystem write", line: 7 },
+      { kind: "legacy store filesystem write", line: 8 },
+      { kind: "legacy store filesystem write", line: 9 },
     ]);
   });
 
