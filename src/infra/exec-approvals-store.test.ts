@@ -316,7 +316,7 @@ describe("exec approvals store helpers", () => {
   });
 
   it.runIf(process.platform !== "win32")(
-    "hardens existing token-bearing approvals files before resolving default no-prompt policy",
+    "YOLO fast path skips file hardening when a socket token already exists",
     () => {
       const dir = createHomeDir();
       const approvalsPath = approvalsFilePath(dir);
@@ -338,10 +338,12 @@ describe("exec approvals store helpers", () => {
         ask: "off",
       });
 
+      // YOLO fast path: returns without touching the file.
       expect(resolved.agent.security).toBe("full");
       expect(resolved.agent.ask).toBe("off");
-      expect(resolved.token).toBe("existing-token");
-      expect(fs.statSync(approvalsPath).mode & 0o777).toBe(0o600);
+      expect(resolved.token).toBe("");
+      // File is left as-is (fast path does not call ensureExecApprovals).
+      expect(fs.statSync(approvalsPath).mode & 0o777).toBe(0o644);
     },
   );
 
@@ -418,6 +420,35 @@ describe("exec approvals store helpers", () => {
     expect(resolved.agent.ask).toBe("off");
     expect(resolved.token).toMatch(/^[A-Za-z0-9_-]{32}$/);
     expect(readApprovalsFile(dir).socket).toEqual(resolved.file.socket);
+  });
+
+  it("uses fast path for YOLO mode even when a socket token already exists in the file", () => {
+    const dir = createHomeDir();
+    const approvalsPath = approvalsFilePath(dir);
+    fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
+    fs.writeFileSync(
+      approvalsPath,
+      JSON.stringify({
+        version: 1,
+        socket: { path: "/tmp/test.sock", token: "existing-token-value-here-1234" },
+        defaults: { security: "full", ask: "off" },
+        agents: {},
+      }),
+      "utf8",
+    );
+
+    const resolved = resolveExecApprovals("main", {
+      security: "full",
+      ask: "off",
+    });
+
+    // Fast path: YOLO mode should return without touching the file,
+    // even though a socket token exists.
+    expect(resolved.agent.security).toBe("full");
+    expect(resolved.agent.ask).toBe("off");
+    expect(resolved.token).toBe("");
+    // The file should not have been rewritten by ensureExecApprovals.
+    expect(readApprovalsFile(dir).socket?.token).toBe("existing-token-value-here-1234");
   });
 
   it("atomically replaces existing approvals files instead of mutating linked inodes", () => {
