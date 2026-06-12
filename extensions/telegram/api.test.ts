@@ -1,6 +1,6 @@
 // Telegram tests cover api plugin behavior.
 import { describe, expect, it } from "vitest";
-import { escapeTelegramHtml, markdownToTelegramHtml } from "./api.js";
+import { escapeTelegramHtml, markdownToTelegramHtml, normalizeInputRichMessage } from "./api.js";
 
 describe("@openclaw/telegram api re-exports", () => {
   it("re-exports markdownToTelegramHtml as a working function", () => {
@@ -13,5 +13,12 @@ describe("@openclaw/telegram api re-exports", () => {
   it("re-exports escapeTelegramHtml that escapes Telegram-reserved characters", () => {
     expect(typeof escapeTelegramHtml).toBe("function");
     expect(escapeTelegramHtml("<b>x & y</b>")).toBe("&lt;b&gt;x &amp; y&lt;/b&gt;");
+  });
+
+  it("re-exports rich message helpers", () => {
+    expect(normalizeInputRichMessage({ markdown: "**ok**", skip_entity_detection: true })).toEqual({
+      markdown: "**ok**",
+      skip_entity_detection: true,
+    });
   });
 });

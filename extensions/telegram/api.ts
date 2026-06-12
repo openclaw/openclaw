@@ -140,6 +140,12 @@ export {
   parseTelegramThreadId,
 } from "./src/outbound-params.js";
 export {
+  type InputRichMessage,
+  normalizeInputRichMessage,
+  sendTelegramRichMessage,
+  sendTelegramRichMessageDraft,
+} from "./src/rich-message.js";
+export {
   probeTelegram,
   resetTelegramProbeFetcherCacheForTests,
   type TelegramProbe,
