@@ -697,9 +697,7 @@ export async function handleOpenResponsesHttpRequest(
     .filter(Boolean)
     .join("\n\n");
 
-  // Image-only input is a valid user turn; require text only when no image accompanies it,
-  // matching the /v1/chat/completions guard (openai-http.ts).
-  if (!prompt.message && images.length === 0) {
+  if (!prompt.message) {
     sendJson(res, 400, {
       error: {
         message: "Missing user message in `input`.",
