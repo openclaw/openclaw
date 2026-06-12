@@ -1146,7 +1146,9 @@ export function createOpenClawCodingTools(options?: {
     auditLogLevel: options?.toolPolicyAuditLogLevel,
   });
   if (shouldInheritEffectiveToolAllowlist) {
-    replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, subagentFiltered);
+    replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, subagentFiltered, {
+      preserveRuntimeToolAllowlistEntries: pluginToolAllowlist,
+    });
   }
   options?.recordToolPrepStage?.("authorization-policy");
   // Always normalize tool JSON Schemas before handing them to OpenClaw model runtime.

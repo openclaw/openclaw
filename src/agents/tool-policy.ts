@@ -5,6 +5,7 @@
  */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { TOOL_NAME_SEPARATOR } from "./agent-bundle-mcp-names.js";
 import { IMPLICIT_ALLOW_ALL_FROM_ALSO_ALLOW } from "./sandbox-tool-policy.js";
 import { expandToolGroups, normalizeToolList, normalizeToolName } from "./tool-policy-shared.js";
 export {
@@ -55,16 +56,42 @@ export function hasRestrictiveAllowPolicy(policy?: { allow?: string[] }): boolea
   );
 }
 
+function isRuntimeMaterializationAllowlistEntry(normalized: string): boolean {
+  return (
+    normalized === "bundle-mcp" ||
+    normalized === "group:plugins" ||
+    normalized.includes(TOOL_NAME_SEPARATOR) ||
+    normalized.startsWith("lsp_")
+  );
+}
+
 /** Replaces an allowlist with the normalized names of an effective tool array. */
 export function replaceWithEffectiveToolAllowlist(
   target: string[],
   tools: Array<{ name: string }>,
+  options?: {
+    preserveRuntimeToolAllowlistEntries?: string[];
+  },
 ): void {
   target.length = 0;
   const seen = new Set<string>();
   for (const tool of tools) {
     const normalized = normalizeToolName(tool.name);
     if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    target.push(normalized);
+  }
+  // Runtime-materialized tools are not always present in the parent tool array.
+  // Preserve their policy tokens so spawned child attempts can build those runtimes.
+  for (const entry of options?.preserveRuntimeToolAllowlistEntries ?? []) {
+    const normalized = normalizeToolName(entry);
+    if (
+      !normalized ||
+      seen.has(normalized) ||
+      !isRuntimeMaterializationAllowlistEntry(normalized)
+    ) {
       continue;
     }
     seen.add(normalized);

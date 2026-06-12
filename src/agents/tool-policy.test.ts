@@ -13,6 +13,7 @@ import {
   DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
   expandToolGroups,
   normalizeToolName,
+  replaceWithEffectiveToolAllowlist,
   resolveToolProfilePolicy,
   TOOL_GROUPS,
 } from "./tool-policy.js";
@@ -77,6 +78,30 @@ describe("tool-policy", () => {
     expect(collectExplicitAllowlist([pickSandboxToolPolicy({ alsoAllow: ["*"] })])).toEqual(["*"]);
     expect(collectExplicitAllowlist([pickSandboxToolPolicy({ alsoAllow: [" * "] })])).toEqual([
       "*",
+    ]);
+  });
+
+  it("preserves runtime materialization tokens when replacing an effective allowlist", () => {
+    const target = ["stale"];
+
+    replaceWithEffectiveToolAllowlist(target, [{ name: "read" }, { name: "read" }], {
+      preserveRuntimeToolAllowlistEntries: [
+        "bundle-mcp",
+        "group:plugins",
+        "Probe__Search",
+        "lsp_hover_typescript",
+        "exec",
+        "*",
+        "",
+      ],
+    });
+
+    expect(target).toEqual([
+      "read",
+      "bundle-mcp",
+      "group:plugins",
+      "probe__search",
+      "lsp_hover_typescript",
     ]);
   });
 });

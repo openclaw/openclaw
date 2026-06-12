@@ -708,6 +708,36 @@ describe("createOpenClawCodingTools", () => {
     expect(inheritedAllow?.includes("process")).toBe(false);
   });
 
+  it("keeps runtime-materialized policy tokens in spawned session allowlists", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      config: {
+        tools: {
+          allow: [
+            "read",
+            "sessions_spawn",
+            "bundle-mcp",
+            "probe__search",
+            "lsp_hover_typescript",
+            "custom_plugin_tool",
+          ],
+        },
+      },
+    });
+
+    expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
+    const inheritedAllow = latestCreateOpenClawToolsOptions().inheritedToolAllowlist;
+    expect(inheritedAllow).toEqual([
+      "read",
+      "sessions_spawn",
+      "bundle-mcp",
+      "probe__search",
+      "lsp_hover_typescript",
+    ]);
+  });
+
   it("records core tool-prep stages for hot-path diagnostics", () => {
     const stages: string[] = [];
 

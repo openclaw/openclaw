@@ -5,7 +5,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 type CreateOpenClawToolsArg = {
+  inheritedToolAllowlist?: string[];
   inheritedToolDenylist?: string[];
+  pluginToolAllowlist?: string[];
   pluginToolDenylist?: string[];
 };
 
@@ -56,7 +58,9 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
   });
 
   function readCreateToolsArgs(): {
+    inheritedToolAllowlist?: string[];
     inheritedToolDenylist?: string[];
+    pluginToolAllowlist?: string[];
     pluginToolDenylist?: string[];
   } {
     const args = hoisted.createOpenClawToolsMock.mock.calls[0]?.[0];
@@ -64,7 +68,9 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
       throw new Error("expected createOpenClawTools args");
     }
     return args as {
+      inheritedToolAllowlist?: string[];
       inheritedToolDenylist?: string[];
+      pluginToolAllowlist?: string[];
       pluginToolDenylist?: string[];
     };
   }
@@ -117,5 +123,45 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     const args = readCreateToolsArgs();
     expect(args.pluginToolDenylist).toEqual(["exec"]);
     expect(args.inheritedToolDenylist).toEqual(["exec"]);
+  });
+
+  it("preserves runtime materialization allow tokens for spawned subagents", () => {
+    resolveGatewayScopedTools({
+      cfg: {
+        tools: {
+          subagents: {
+            tools: {
+              allow: [
+                "read",
+                "sessions_spawn",
+                "bundle-mcp",
+                "probe__search",
+                "lsp_hover_typescript",
+                "custom_plugin_tool",
+              ],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      sessionKey: "agent:main:subagent:worker",
+      surface: "loopback",
+    });
+
+    const args = readCreateToolsArgs();
+    expect(args.pluginToolAllowlist).toEqual([
+      "read",
+      "sessions_spawn",
+      "bundle-mcp",
+      "probe__search",
+      "lsp_hover_typescript",
+      "custom_plugin_tool",
+    ]);
+    expect(args.inheritedToolAllowlist).toEqual([
+      "read",
+      "sessions_spawn",
+      "bundle-mcp",
+      "probe__search",
+      "lsp_hover_typescript",
+    ]);
   });
 });
