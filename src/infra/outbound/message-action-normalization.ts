@@ -10,7 +10,32 @@ import {
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
 import { applyTargetToParams } from "./channel-target.js";
-import { actionHasTarget, actionRequiresTarget } from "./message-action-spec.js";
+import {
+  actionHasTarget,
+  actionRequiresTarget,
+  MESSAGE_ACTION_TARGET_MODE,
+} from "./message-action-spec.js";
+
+function hasExplicitTargetPrefix(value: string): boolean {
+  return /^[a-z][a-z0-9+.-]*:/i.test(value);
+}
+
+function normalizeLegacyChannelIdTarget(params: {
+  action: ChannelMessageActionName;
+  channel: string;
+  channelId: string;
+}): string {
+  if (MESSAGE_ACTION_TARGET_MODE[params.action] !== "to") {
+    return params.channelId;
+  }
+  if (hasExplicitTargetPrefix(params.channelId)) {
+    return params.channelId;
+  }
+  if (params.channel !== "discord") {
+    return params.channelId;
+  }
+  return `channel:${params.channelId}`;
+}
 
 /** Normalizes message-action args before target validation and dispatch. */
 export function normalizeMessageActionInput(params: {
@@ -52,9 +77,16 @@ export function normalizeMessageActionInput(params: {
   if (!explicitTarget && actionRequiresTarget(action) && hasLegacyTarget) {
     const legacyTo = normalizeOptionalString(normalizedArgs.to) ?? "";
     const legacyChannelId = normalizeOptionalString(normalizedArgs.channelId) ?? "";
-    const legacyTarget = legacyTo || legacyChannelId;
-    if (legacyTarget) {
-      normalizedArgs.target = legacyTarget;
+    if (legacyTo) {
+      normalizedArgs.target = legacyTo;
+      delete normalizedArgs.to;
+      delete normalizedArgs.channelId;
+    } else if (legacyChannelId) {
+      normalizedArgs.target = normalizeLegacyChannelIdTarget({
+        action,
+        channel: inferredChannel,
+        channelId: legacyChannelId,
+      });
       delete normalizedArgs.to;
       delete normalizedArgs.channelId;
     }
