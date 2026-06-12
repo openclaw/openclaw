@@ -19,6 +19,7 @@ import {
   buildEnforcedShellCommand,
   evaluateShellAllowlistWithAuthorization,
   hasDurableExecApproval,
+  hasExactCommandDurableExecApproval,
   persistAllowAlwaysDecision,
   recordAllowlistMatchesUse,
   resolveApprovalAuditTrustPath,
@@ -529,10 +530,20 @@ export async function processGatewayAllowlist(
   const requiresHeredocApproval =
     hostSecurity === "allowlist" && analysisOk && allowlistSatisfied && hasHeredocSegment;
   const requiresInlineEvalApproval = inlineEvalHit !== null;
+  // Exact-command durable trust must bypass plan approval: allow-always here
+  // persists an `=command:` grant for the raw command text, so unenforceability
+  // is moot and re-prompting would make that grant permanently ineffective.
+  // Pattern-based durable trust stays gated because enforcement cannot pin the
+  // resolved executables for an unenforceable plan.
+  const exactCommandDurableApprovalSatisfied = hasExactCommandDurableExecApproval({
+    allowlist: approvals.allowlist,
+    commandText: params.command,
+  });
   const requiresAllowlistPlanApproval =
     hostSecurity === "allowlist" &&
     analysisOk &&
     allowlistSatisfied &&
+    !exactCommandDurableApprovalSatisfied &&
     !enforcedCommand &&
     allowlistPlanUnavailableReason !== null;
   const requiresSecurityAuditSuppressionApproval =

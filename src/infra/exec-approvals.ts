@@ -1370,7 +1370,7 @@ export function hasNodeCommandAllowAlwaysMarker(params: {
   );
 }
 
-function hasExactCommandDurableExecApproval(params: {
+export function hasExactCommandDurableExecApproval(params: {
   allowlist?: readonly ExecAllowlistEntry[];
   commandText?: string | null;
 }): boolean {
