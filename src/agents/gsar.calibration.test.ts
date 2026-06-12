@@ -91,7 +91,7 @@ describe("sensitivity — τ_regenerate threshold", () => {
 describe("sensitivity — complementary weight w(K)", () => {
   it("score increases monotonically as w(K) rises from 0 to 1", () => {
     const partition = p(3, 2, 0, 2);
-    const scores = [0.0, 0.1, 0.2, 0.3, 0.5, 0.7, 1.0].map((wk) => {
+    const scores = [0, 0.1, 0.2, 0.3, 0.5, 0.7, 1].map((wk) => {
       const w: EvidenceWeights = { ...DEFAULT_WEIGHTS, complementary: wk };
       return computeGroundednessScore(partition, w);
     });
@@ -108,17 +108,17 @@ describe("sensitivity — complementary weight w(K)", () => {
   });
 
   it("w(K)=1 makes complementary equivalent to grounded — score approaches grounded-only value", () => {
-    const w1: EvidenceWeights = { ...DEFAULT_WEIGHTS, complementary: 1.0 };
+    const w1: EvidenceWeights = { ...DEFAULT_WEIGHTS, complementary: 1 };
     // p(2,0,0,2) with w(K)=1: S = (2+2)/(2+0+0+2) = 1.0 — same as p(4,0,0,0)
-    expect(computeGroundednessScore(p(2, 0, 0, 2), w1)).toBe(1.0);
-    expect(computeGroundednessScore(p(4, 0, 0, 0), w1)).toBe(1.0);
+    expect(computeGroundednessScore(p(2, 0, 0, 2), w1)).toBe(1);
+    expect(computeGroundednessScore(p(4, 0, 0, 0), w1)).toBe(1);
   });
 });
 
 describe("sensitivity — contradiction penalty ρ", () => {
   it("score decreases monotonically as ρ rises from 0 to 2", () => {
     const partition = p(4, 0, 2, 0);
-    const scores = [0.0, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0].map((rho) =>
+    const scores = [0, 0.25, 0.5, 0.75, 1, 1.5, 2].map((rho) =>
       computeGroundednessScore(partition, DEFAULT_WEIGHTS, rho),
     );
     for (let i = 1; i < scores.length; i++) {
@@ -133,7 +133,7 @@ describe("sensitivity — contradiction penalty ρ", () => {
     // ρ=0 inflates S artificially (P5 violation)
     expect(withRho0).toBeGreaterThan(withRho1);
     // ρ=0 with no ungrounded: S = (3)/(3+0+0+0) = 1.0 — ignores 5 contradictions
-    expect(withRho0).toBe(1.0);
+    expect(withRho0).toBe(1);
   });
 
   it("default ρ=1.0 is the neutral point — neither amplifying nor suppressing contradictions", () => {
@@ -181,7 +181,7 @@ describe("derivability — calibrateThresholds() recovers paper defaults", () =>
   it("calibrated thresholds correctly classify all labeled examples", () => {
     const calibrated = calibrateThresholds(labeledDataset);
     const accuracy = measureThresholdAccuracy(labeledDataset, calibrated);
-    expect(accuracy).toBe(1.0); // should perfectly classify training examples
+    expect(accuracy).toBe(1); // should perfectly classify training examples
   });
 
   it("calibrated τ_proceed is in the same range as the paper default (0.75–0.90)", () => {
@@ -227,22 +227,22 @@ describe("derivability — calibrateThresholds() recovers paper defaults", () =>
 
 describe("domain tuning — evidence-source weight maps", () => {
   const UNIFORM: EvidenceWeights = {
-    grounded: 1.0,
-    complementary: 1.0,
-    ungrounded: 1.0,
-    contradicted: 1.0,
+    grounded: 1,
+    complementary: 1,
+    ungrounded: 1,
+    contradicted: 1,
   };
   const TOOL_MATCH: EvidenceWeights = {
-    grounded: 1.0,
+    grounded: 1,
     complementary: 0.5,
-    ungrounded: 1.0,
-    contradicted: 1.0,
+    ungrounded: 1,
+    contradicted: 1,
   };
   const WEB: EvidenceWeights = {
     grounded: 0.85,
     complementary: 0.4,
-    ungrounded: 1.0,
-    contradicted: 1.0,
+    ungrounded: 1,
+    contradicted: 1,
   };
 
   // Labeled examples from shell-grounded OpenClaw tasks

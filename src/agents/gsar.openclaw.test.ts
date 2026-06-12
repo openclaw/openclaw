@@ -25,24 +25,24 @@ import { MaxIterations, TextMention, TimeLimit, type TerminationCondition } from
 // ─── weight maps ─────────────────────────────────────────────────────────────
 
 const TOOL_MATCH_WEIGHTS: EvidenceWeights = {
-  grounded: 1.0,
+  grounded: 1,
   complementary: 0.5,
-  ungrounded: 1.0,
-  contradicted: 1.0,
+  ungrounded: 1,
+  contradicted: 1,
 };
 
 const WEB_WEIGHTS: EvidenceWeights = {
   grounded: 0.85,
   complementary: 0.4,
-  ungrounded: 1.0,
-  contradicted: 1.0,
+  ungrounded: 1,
+  contradicted: 1,
 };
 
 const INFERENCE_WEIGHTS: EvidenceWeights = {
   grounded: 0.4,
   complementary: 0.2,
-  ungrounded: 1.0,
-  contradicted: 1.0,
+  ungrounded: 1,
+  contradicted: 1,
 };
 
 // ─── harness ─────────────────────────────────────────────────────────────────
@@ -309,7 +309,7 @@ describe("A2A delegation — shell-grounded system metrics", () => {
 
   it("shell-grounded answer (turn 2) proceeds immediately", () => {
     const s = computeGroundednessScore(turns[1].partition, TOOL_MATCH_WEIGHTS);
-    expect(s).toBe(1.0);
+    expect(s).toBe(1);
   });
 
   it("GSAR exits at turn 2 when shell evidence grounds all claims", async () => {

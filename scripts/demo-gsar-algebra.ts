@@ -79,7 +79,9 @@ function agentLabel(name: string): string {
 }
 
 async function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
+  return new Promise((r) => {
+    setTimeout(r, ms);
+  });
 }
 
 // ─── Mock provider ───────────────────────────────────────────────────────────
@@ -453,7 +455,7 @@ async function main(): Promise<void> {
 `);
 }
 
-main().catch((err) => {
+main().catch((err: unknown) => {
   console.error(err);
   process.exit(1);
 });
