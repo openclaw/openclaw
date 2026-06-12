@@ -1279,7 +1279,7 @@ async function runDiscordThreadReplyFilePathAttachmentScenario(params: {
     return {
       id: params.scenario.id,
       title: params.scenario.title,
-      ...(params.scenario.standardId ? { standardId: params.scenario.standardId } : {}),
+      standardId: params.scenario.standardId,
       status,
       details:
         status === "pass"
@@ -1669,7 +1669,7 @@ export async function runDiscordQaLive(params: {
             scenarioResults.push({
               id: scenario.id,
               title: scenario.title,
-              ...(scenario.standardId ? { standardId: scenario.standardId } : {}),
+              standardId: scenario.standardId,
               status: "pass",
               details: redactPublicMetadata
                 ? "native command registered"
@@ -1691,7 +1691,7 @@ export async function runDiscordQaLive(params: {
             scenarioResults.push({
               id: scenario.id,
               title: scenario.title,
-              ...(scenario.standardId ? { standardId: scenario.standardId } : {}),
+              standardId: scenario.standardId,
               status: "pass",
               details: redactPublicMetadata
                 ? "SUT bot joined voice channel"
@@ -1746,7 +1746,7 @@ export async function runDiscordQaLive(params: {
             scenarioResults.push({
               id: scenario.id,
               title: scenario.title,
-              ...(scenario.standardId ? { standardId: scenario.standardId } : {}),
+              standardId: scenario.standardId,
               status: missing.length === 0 ? "pass" : "fail",
               details:
                 missing.length === 0
@@ -1792,7 +1792,7 @@ export async function runDiscordQaLive(params: {
           scenarioResults.push({
             id: scenario.id,
             title: scenario.title,
-            ...(scenario.standardId ? { standardId: scenario.standardId } : {}),
+            standardId: scenario.standardId,
             status: "pass",
             details: redactPublicMetadata
               ? "reply matched"
@@ -1820,7 +1820,7 @@ export async function runDiscordQaLive(params: {
               scenarioResults.push({
                 id: scenario.id,
                 title: scenario.title,
-                ...(scenario.standardId ? { standardId: scenario.standardId } : {}),
+                standardId: scenario.standardId,
                 status: "pass",
                 details: "no reply",
               });
@@ -1830,7 +1830,7 @@ export async function runDiscordQaLive(params: {
           scenarioResults.push({
             id: scenario.id,
             title: scenario.title,
-            ...(scenario.standardId ? { standardId: scenario.standardId } : {}),
+            standardId: scenario.standardId,
             status: "fail",
             details: formatErrorMessage(error),
           });

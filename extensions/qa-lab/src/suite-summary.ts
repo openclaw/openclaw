@@ -5,6 +5,23 @@ import type { QaEvidenceSummaryJson } from "./evidence-summary.js";
 import type { QaProviderMode } from "./model-selection.js";
 import type { RuntimeId, RuntimeParityResult } from "./runtime-parity.js";
 
+export type QaSuiteArtifactErrorCode =
+  | "report_missing"
+  | "summary_read_failed"
+  | "summary_parse_failed"
+  | "summary_failure_count_missing"
+  | "summary_blocking_count_missing";
+
+export class QaSuiteArtifactError extends Error {
+  readonly code: QaSuiteArtifactErrorCode;
+
+  constructor(code: QaSuiteArtifactErrorCode, message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "QaSuiteArtifactError";
+    this.code = code;
+  }
+}
+
 type QaSuiteSummaryScenario = {
   name: string;
   status: "pass" | "fail" | "skip" | "skipped";
@@ -179,7 +196,8 @@ export async function readQaSuiteFailedScenarioCountFromFile(summaryPath: string
   try {
     summaryText = await fs.readFile(summaryPath, "utf8");
   } catch (error) {
-    throw new Error(
+    throw new QaSuiteArtifactError(
+      "summary_read_failed",
       `Could not read QA summary JSON at ${summaryPath}: ${formatErrorMessage(error)}`,
       { cause: error },
     );
@@ -188,7 +206,8 @@ export async function readQaSuiteFailedScenarioCountFromFile(summaryPath: string
   try {
     payload = JSON.parse(summaryText) as unknown;
   } catch (error) {
-    throw new Error(
+    throw new QaSuiteArtifactError(
+      "summary_parse_failed",
       `Could not parse QA summary JSON at ${summaryPath}: ${formatErrorMessage(error)}`,
       { cause: error },
     );
@@ -197,7 +216,8 @@ export async function readQaSuiteFailedScenarioCountFromFile(summaryPath: string
   if (failedScenarioCount !== null) {
     return failedScenarioCount;
   }
-  throw new Error(
+  throw new QaSuiteArtifactError(
+    "summary_failure_count_missing",
     `QA summary at ${summaryPath} did not include counts.failed, scenarios[].status, or entries[].result.status.`,
   );
 }
@@ -209,7 +229,8 @@ export async function readQaSuiteFailedOrSkippedScenarioCountFromFile(
   try {
     summaryText = await fs.readFile(summaryPath, "utf8");
   } catch (error) {
-    throw new Error(
+    throw new QaSuiteArtifactError(
+      "summary_read_failed",
       `Could not read QA summary JSON at ${summaryPath}: ${formatErrorMessage(error)}`,
       { cause: error },
     );
@@ -218,7 +239,8 @@ export async function readQaSuiteFailedOrSkippedScenarioCountFromFile(
   try {
     payload = JSON.parse(summaryText) as unknown;
   } catch (error) {
-    throw new Error(
+    throw new QaSuiteArtifactError(
+      "summary_parse_failed",
       `Could not parse QA summary JSON at ${summaryPath}: ${formatErrorMessage(error)}`,
       { cause: error },
     );
@@ -227,7 +249,8 @@ export async function readQaSuiteFailedOrSkippedScenarioCountFromFile(
   if (blockingScenarioCount !== null) {
     return blockingScenarioCount;
   }
-  throw new Error(
+  throw new QaSuiteArtifactError(
+    "summary_blocking_count_missing",
     `QA summary at ${summaryPath} did not include counts.failed, counts.skipped, scenarios[].status, or entries[].result.status.`,
   );
 }

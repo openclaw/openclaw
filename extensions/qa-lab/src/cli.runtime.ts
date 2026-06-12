@@ -67,8 +67,12 @@ import {
   type QaRuntimeParityTier,
 } from "./scenario-catalog.js";
 import { resolveQaScenarioPackScenarioIds } from "./scenario-packs.js";
+import { QaSuiteInfraError } from "./suite-infra-error.js";
 import { runQaSuiteFromRuntime } from "./suite-launch.runtime.js";
-import { readQaSuiteFailedOrSkippedScenarioCountFromFile } from "./suite-summary.js";
+import {
+  QaSuiteArtifactError,
+  readQaSuiteFailedOrSkippedScenarioCountFromFile,
+} from "./suite-summary.js";
 import {
   buildTokenEfficiencyReport,
   renderTokenEfficiencyMarkdownReport,
@@ -81,6 +85,13 @@ import {
 } from "./tool-coverage-report.js";
 
 const QA_SUITE_INFRA_RETRY_LIMIT = 1;
+const QA_SUITE_INFRA_RETRY_NETWORK_ERROR_CODES = new Set([
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "EPIPE",
+  "ETIMEDOUT",
+  "UND_ERR_SOCKET",
+]);
 
 type InterruptibleServer = {
   baseUrl: string;
@@ -244,29 +255,36 @@ function resolveQaRuntimeParityTierScenarioIds(params: {
 }
 
 function isQaSuiteInfraRetryableError(error: unknown) {
-  const message = formatErrorMessage(error).toLowerCase();
-  return (
-    message.includes("agent.wait timeout") ||
-    message.includes("qa cli timed out") ||
-    message.includes("readyz") ||
-    message.includes("gateway healthy") ||
-    message.includes("transport ready") ||
-    message.includes("waiting for qa-channel ready") ||
-    message.includes("econnreset") ||
-    message.includes("econnrefused") ||
-    message.includes("socket hang up") ||
-    message.includes("could not read qa summary json") ||
-    message.includes("could not parse qa summary json") ||
-    message.includes("did not include counts.failed, counts.skipped, scenarios[].status") ||
-    message.includes("did not produce report artifact")
-  );
+  if (error instanceof QaSuiteArtifactError || error instanceof QaSuiteInfraError) {
+    return true;
+  }
+  return hasQaSuiteRetryableNetworkCode(error);
+}
+
+function hasQaSuiteRetryableNetworkCode(error: unknown) {
+  let current: unknown = error;
+  for (let depth = 0; depth < 4 && current; depth += 1) {
+    if (typeof current !== "object") {
+      return false;
+    }
+    const record = current as { cause?: unknown; code?: unknown };
+    if (
+      typeof record.code === "string" &&
+      QA_SUITE_INFRA_RETRY_NETWORK_ERROR_CODES.has(record.code.toUpperCase())
+    ) {
+      return true;
+    }
+    current = record.cause;
+  }
+  return false;
 }
 
 async function assertQaSuiteArtifacts(result: { reportPath: string; summaryPath: string }) {
   try {
     await fs.access(result.reportPath);
   } catch (error) {
-    throw new Error(
+    throw new QaSuiteArtifactError(
+      "report_missing",
       `QA suite did not produce report artifact at ${result.reportPath}: ${formatErrorMessage(error)}`,
       { cause: error },
     );

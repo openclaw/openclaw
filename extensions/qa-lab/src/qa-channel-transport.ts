@@ -12,6 +12,7 @@ import type {
   QaTransportReportParams,
 } from "./qa-transport.js";
 import { qaChannelPlugin } from "./runtime-api.js";
+import { QaSuiteInfraError } from "./suite-infra-error.js";
 
 const QA_CHANNEL_ID = "qa-channel";
 const QA_CHANNEL_ACCOUNT_ID = "default";
@@ -65,7 +66,8 @@ async function waitForQaChannelReady(params: {
     await sleep(pollIntervalMs);
   }
 
-  throw new Error(
+  throw new QaSuiteInfraError(
+    "transport_ready_timeout",
     [
       `timed out after ${timeoutMs}ms waiting for qa-channel ready`,
       `last status: ${lastAccountStatus}`,

@@ -1896,7 +1896,7 @@ export async function runTelegramQaLive(params: {
             if (!lastMatched || !firstRequestStartedAt || lastSentMessageId === undefined) {
               const result = {
                 id: scenario.id,
-                ...(scenario.standardId ? { standardId: scenario.standardId } : {}),
+                standardId: scenario.standardId,
                 title: scenario.title,
                 status: "pass",
                 details: "no reply",
@@ -1920,7 +1920,7 @@ export async function runTelegramQaLive(params: {
                 : `; ${scenarioSteps.filter((step) => step.expectReply).length} command replies matched`;
             const result = {
               id: scenario.id,
-              ...(scenario.standardId ? { standardId: scenario.standardId } : {}),
+              standardId: scenario.standardId,
               title: scenario.title,
               status: "pass",
               details: redactPublicMetadata
@@ -1946,7 +1946,7 @@ export async function runTelegramQaLive(params: {
           } catch (error) {
             const result = {
               id: scenario.id,
-              ...(scenario.standardId ? { standardId: scenario.standardId } : {}),
+              standardId: scenario.standardId,
               title: scenario.title,
               status: "fail",
               details: formatErrorMessage(error),

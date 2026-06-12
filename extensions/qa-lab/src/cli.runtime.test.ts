@@ -86,6 +86,7 @@ import { QA_EVIDENCE_SUMMARY_FILENAME } from "./evidence-summary.js";
 import { runQaTelegramCommand } from "./live-transports/telegram/cli.runtime.js";
 import { defaultQaModelForMode as defaultQaProviderModelForMode } from "./model-selection.js";
 import type { QaProviderModeInput } from "./run-config.js";
+import { QaSuiteInfraError } from "./suite-infra-error.js";
 
 function mockFirstObjectArg(mock: unknown): Record<string, unknown> {
   const calls = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls ?? [];
@@ -617,7 +618,9 @@ describe("qa cli runtime", () => {
 
   it("retries host suite runs once for retryable infra failures", async () => {
     runQaSuiteFromRuntime
-      .mockRejectedValueOnce(new Error("agent.wait timeout while waiting for transport ready"))
+      .mockRejectedValueOnce(
+        new QaSuiteInfraError("agent_wait_failed", "agent.wait failed: gateway call timed out"),
+      )
       .mockResolvedValueOnce({
         watchUrl: "http://127.0.0.1:43124",
         reportPath: suiteReportPath,
@@ -630,13 +633,14 @@ describe("qa cli runtime", () => {
     });
 
     expect(runQaSuiteFromRuntime).toHaveBeenCalledTimes(2);
-    expectWriteContains(stderrWrite, "[qa-suite] infra retry 1/1: agent.wait timeout");
+    expectWriteContains(stderrWrite, "[qa-suite] infra retry 1/1: agent.wait failed");
   });
 
   it("retries host suite runs once for qa-channel readiness timeouts", async () => {
     runQaSuiteFromRuntime
       .mockRejectedValueOnce(
-        new Error(
+        new QaSuiteInfraError(
+          "transport_ready_timeout",
           "timed out after 180000ms waiting for qa-channel ready; last status: no qa-channel accounts reported",
         ),
       )

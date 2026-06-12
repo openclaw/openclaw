@@ -2603,7 +2603,7 @@ async function runWhatsAppScenario(params: {
       return {
         id: params.scenario.id,
         title: params.scenario.title,
-        ...(params.scenario.standardId ? { standardId: params.scenario.standardId } : {}),
+        standardId: params.scenario.standardId,
         status: "pass" as const,
         details: `${scenarioRun.approvalKind} approval ${approval.approvalId} resolved ${scenarioRun.decision} in ${approval.rttMs}ms`,
         rttMs: approval.rttMs,
@@ -2707,7 +2707,7 @@ async function runWhatsAppScenario(params: {
       return {
         id: params.scenario.id,
         title: params.scenario.title,
-        ...(params.scenario.standardId ? { standardId: params.scenario.standardId } : {}),
+        standardId: params.scenario.standardId,
         status: "pass" as const,
         details: "no reply",
       };
@@ -2741,7 +2741,7 @@ async function runWhatsAppScenario(params: {
     return {
       id: params.scenario.id,
       title: params.scenario.title,
-      ...(params.scenario.standardId ? { standardId: params.scenario.standardId } : {}),
+      standardId: params.scenario.standardId,
       status: "pass" as const,
       details: [`reply matched in ${rttMs}ms`, afterSendDetails, afterReplyDetails, batchDetails]
         .filter(Boolean)
@@ -2921,7 +2921,7 @@ function createMissingGroupJidScenarioResult(params: {
   return {
     id: params.scenario.id,
     title: params.scenario.title,
-    ...(params.scenario.standardId ? { standardId: params.scenario.standardId } : {}),
+    standardId: params.scenario.standardId,
     status: params.explicitScenarioSelection ? "fail" : "skip",
     details: params.explicitScenarioSelection
       ? "requested scenario requires groupJid in the WhatsApp QA credential payload"
@@ -2944,7 +2944,7 @@ function appendPreScenarioFailureResults(params: {
     params.scenarioResults.push({
       id: scenario.id,
       title: scenario.title,
-      ...(scenario.standardId ? { standardId: scenario.standardId } : {}),
+      standardId: scenario.standardId,
       status: "fail",
       details: params.details,
     });
@@ -3133,7 +3133,7 @@ export async function runWhatsAppQaLive(params: {
           const result: WhatsAppQaScenarioResult = {
             id: scenario.id,
             title: scenario.title,
-            ...(scenario.standardId ? { standardId: scenario.standardId } : {}),
+            standardId: scenario.standardId,
             status: "fail",
             details:
               driverAttempt > 1

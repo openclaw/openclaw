@@ -49,6 +49,7 @@ import { stageQaMockAuthProfiles } from "./providers/shared/mock-auth.js";
 import { seedQaAgentWorkspace } from "./qa-agent-workspace.js";
 import { buildQaGatewayConfig, type QaThinkingLevel } from "./qa-gateway-config.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
+import { QaSuiteInfraError } from "./suite-infra-error.js";
 
 export type { QaCliBackendAuthMode } from "./providers/env.js";
 const QA_GATEWAY_CHILD_STARTUP_MAX_ATTEMPTS = 5;
@@ -180,6 +181,12 @@ function appendQaGatewayTempRoot(details: string, tempRoot: string) {
   return details.includes(tempRoot)
     ? details
     : `${details}\nQA gateway temp root preserved at ${tempRoot}`;
+}
+
+function wrapQaGatewayChildStartupError(error: unknown, message: string) {
+  return error instanceof QaSuiteInfraError
+    ? new QaSuiteInfraError(error.code, message, { cause: error })
+    : new Error(message, { cause: error });
 }
 
 export function resolveQaGatewayChildProviderMode(providerMode?: QaProviderMode): QaProviderMode {
@@ -470,7 +477,8 @@ async function waitForGatewayReady(params: {
   const startedAt = Date.now();
   while (Date.now() - startedAt < (params.timeoutMs ?? 60_000)) {
     if (params.child.exitCode !== null || params.child.signalCode !== null) {
-      throw new Error(
+      throw new QaSuiteInfraError(
+        "gateway_startup_unhealthy",
         `gateway exited before becoming healthy (exitCode=${String(params.child.exitCode)}, signal=${String(params.child.signalCode)}):\n${params.logs()}`,
       );
     }
@@ -485,7 +493,10 @@ async function waitForGatewayReady(params: {
     }
     await sleep(250);
   }
-  throw new Error(`gateway failed to become healthy:\n${params.logs()}`);
+  throw new QaSuiteInfraError(
+    "gateway_startup_unhealthy",
+    `gateway failed to become healthy:\n${params.logs()}`,
+  );
 }
 
 function isRetryableRpcStartupError(error: unknown) {
@@ -1031,13 +1042,11 @@ export async function startQaGatewayChild(params: {
         stagedBundledPluginsRoot,
       });
     }
-    throw new Error(
+    throw wrapQaGatewayChildStartupError(
+      error,
       keepTemp
         ? appendQaGatewayTempRoot(formatErrorMessage(error), tempRoot)
         : formatErrorMessage(error),
-      {
-        cause: error,
-      },
     );
   }
 }

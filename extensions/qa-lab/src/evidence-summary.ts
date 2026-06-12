@@ -214,6 +214,7 @@ type QaEvidenceScenarioResultInput = {
 };
 
 type QaEvidenceLiveTransportCheckInput = {
+  artifactPaths?: Readonly<Record<string, string>>;
   id?: string;
   name?: string;
   standardId?: string;
@@ -334,6 +335,14 @@ function inferQaEvidenceArtifactKind(path: string) {
 function buildQaEvidenceArtifacts(paths: readonly string[], source: string) {
   return paths.map((artifactPath) => ({
     kind: inferQaEvidenceArtifactKind(artifactPath),
+    path: artifactPath,
+    source,
+  }));
+}
+
+function buildQaEvidenceNamedArtifacts(paths: Readonly<Record<string, string>>, source: string) {
+  return Object.entries(paths).map(([kind, artifactPath]) => ({
+    kind,
     path: artifactPath,
     source,
   }));
@@ -756,10 +765,13 @@ export function buildLiveTransportEvidenceSummary(
           driver: channelDriver.id,
         },
         packageSource,
-        artifacts: buildQaEvidenceArtifacts(
-          params.artifactPaths,
-          `${params.transportId}-live-transport`,
-        ),
+        artifacts: [
+          ...buildQaEvidenceArtifacts(params.artifactPaths, `${params.transportId}-live-transport`),
+          ...buildQaEvidenceNamedArtifacts(
+            check.artifactPaths ?? {},
+            `${params.transportId}-live-transport:${testId}`,
+          ),
+        ],
       },
       result: {
         status: normalizeQaEvidenceStatus(check.status),

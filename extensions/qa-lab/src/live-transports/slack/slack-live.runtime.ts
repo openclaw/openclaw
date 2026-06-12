@@ -1891,7 +1891,7 @@ export async function runSlackQaLive(params: {
               approval: approval.artifact,
               id: scenario.id,
               title: scenario.title,
-              ...(scenario.standardId ? { standardId: scenario.standardId } : {}),
+              standardId: scenario.standardId,
               status: "pass",
               details: [
                 `${scenarioRun.approvalKind} approval resolved ${scenarioRun.decision} in ${approval.rttMs}ms`,
@@ -1948,7 +1948,7 @@ export async function runSlackQaLive(params: {
             scenarioResults.push({
               id: scenario.id,
               title: scenario.title,
-              ...(scenario.standardId ? { standardId: scenario.standardId } : {}),
+              standardId: scenario.standardId,
               status: "pass",
               details: [
                 `reply matched in ${rttMs}ms`,
@@ -1983,7 +1983,7 @@ export async function runSlackQaLive(params: {
             scenarioResults.push({
               id: scenario.id,
               title: scenario.title,
-              ...(scenario.standardId ? { standardId: scenario.standardId } : {}),
+              standardId: scenario.standardId,
               status: "pass",
               details:
                 scenarioAttempt > 1 ? `no reply; retried ${scenarioAttempt - 1}x` : "no reply",
@@ -2001,7 +2001,7 @@ export async function runSlackQaLive(params: {
           scenarioResults.push({
             id: scenario.id,
             title: scenario.title,
-            ...(scenario.standardId ? { standardId: scenario.standardId } : {}),
+            standardId: scenario.standardId,
             status: "fail",
             details:
               scenarioAttempt > 1

@@ -537,4 +537,39 @@ describe("evidence summary", () => {
       spec: "/tmp/openclaw.tgz",
     });
   });
+
+  it("keeps live transport check artifacts on the owning entry", () => {
+    const evidence = buildLiveTransportEvidenceSummary({
+      artifactPaths: [QA_EVIDENCE_SUMMARY_FILENAME, "discord-qa-report.md"],
+      generatedAt: "2026-06-07T12:20:00.000Z",
+      primaryModel: "openai/gpt-5.5",
+      providerMode: "live-frontier",
+      checks: [
+        {
+          artifactPaths: {
+            screenshot: ".artifacts/discord/status.png",
+            video: ".artifacts/discord/status.mp4",
+          },
+          id: "discord-status-reactions-tool-only",
+          status: "pass",
+        },
+      ],
+      transportId: "discord",
+    });
+
+    expect(evidence.entries[0]?.execution.artifacts).toEqual(
+      expect.arrayContaining([
+        {
+          kind: "screenshot",
+          path: ".artifacts/discord/status.png",
+          source: "discord-live-transport:discord-status-reactions-tool-only",
+        },
+        {
+          kind: "video",
+          path: ".artifacts/discord/status.mp4",
+          source: "discord-live-transport:discord-status-reactions-tool-only",
+        },
+      ]),
+    );
+  });
 });
