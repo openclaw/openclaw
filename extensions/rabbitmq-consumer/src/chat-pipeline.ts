@@ -477,9 +477,18 @@ export async function processChatMessage(
       // the streamed reply and never blocks the pipeline.
       void mercure.pushText(mercureTopic, "正在处理，请稍候…", chatMsg.historyId);
 
+      // When the caller opts out of memory (use_memory:false), instruct the agent
+      // to skip long-term recall for this turn. Memory tools (memory_search /
+      // memory_get) are registered at the agent level and cannot be removed
+      // per-run, so this is a prompt-level suppression, not a hard tool gate.
+      const memoryDirective = !chatMsg.useMemory
+        ? "[no-memory] Do not call memory_search or memory_get this turn; " +
+          "answer only from the current conversation and the data provided. "
+        : "";
+
       const runResult = await runtime.subagent.run({
         sessionKey,
-        message: `[userId:${userId}]${topicContext} ${userMessage}`,
+        message: `${memoryDirective}[userId:${userId}]${topicContext} ${userMessage}`,
         deliver: false,
       });
 

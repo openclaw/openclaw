@@ -699,6 +699,60 @@ describe("processChatMessage", () => {
     expect(taskArg.topicId).toBe(305);
   });
 
+  it("does not alter the subagent message when use_memory is true (default)", async () => {
+    // Regression guard: the memory directive must be empty on the default path so
+    // recall (and the existing message format) stays intact.
+    let capturedMessage = "";
+    const runtime = createRuntimeMock({
+      workspaceDir,
+      onRun: () => {},
+      onRunArgs: (args) => {
+        capturedMessage = args.message;
+      },
+      sessionMessages: [{ role: "assistant", content: "ok" }],
+    });
+    const { historyManager } = createHistoryManagerMock();
+
+    await processChatMessage(
+      { ...createChatMessage(), useMemory: true },
+      historyManager,
+      mercureConfig,
+      runtime,
+      logger,
+    );
+
+    expect(capturedMessage).toBe(`[userId:${USER_ID}] hi there`);
+    expect(capturedMessage).not.toContain("no-memory");
+  });
+
+  it("prefixes a no-memory directive when use_memory is false", async () => {
+    // use_memory:false must reach the agent: memory tools are agent-level and
+    // cannot be removed per-run, so we suppress recall via a prompt directive.
+    let capturedMessage = "";
+    const runtime = createRuntimeMock({
+      workspaceDir,
+      onRun: () => {},
+      onRunArgs: (args) => {
+        capturedMessage = args.message;
+      },
+      sessionMessages: [{ role: "assistant", content: "ok" }],
+    });
+    const { historyManager } = createHistoryManagerMock();
+
+    await processChatMessage(
+      { ...createChatMessage(), useMemory: false },
+      historyManager,
+      mercureConfig,
+      runtime,
+      logger,
+    );
+
+    expect(capturedMessage).toContain("[no-memory]");
+    expect(capturedMessage).toContain("memory_search");
+    // The directive prefixes — it never replaces — the user payload.
+    expect(capturedMessage).toContain(`[userId:${USER_ID}] hi there`);
+  });
+
   it("falls through to normal chat when the templateId does not resolve", async () => {
     // A deleted / disabled / foreign templateId must not silently drop the
     // turn: it degrades to ordinary chat handling.
