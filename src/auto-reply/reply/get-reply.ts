@@ -22,7 +22,11 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { defaultRuntime } from "../../runtime.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import {
+  createLazyImportLoader,
+  isDistRotationError,
+  type LazyPromiseLoader,
+} from "../../shared/lazy-promise.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
@@ -95,28 +99,58 @@ const linkUnderstandingApplyRuntimeLoader = createLazyImportLoader(
 );
 
 const replyResolverTimingLog = createSubsystemLogger("auto-reply/reply-resolver-timing");
+const replyLoaderLog = createSubsystemLogger("auto-reply/reply-loader");
+
+/**
+ * Load a lazy runtime module with dist-rotation guard.
+ *
+ * After an in-place `npm install -g` update or rollback, dist chunk hashes
+ * rotate while the gateway process is still running.  A dynamic `import()` of
+ * a lazy module that transitively references an old hash hits
+ * `ERR_MODULE_NOT_FOUND`.  Without a guard this failure is swallowed silently
+ * and inbound messages disappear.  This wrapper catches the dist-rotation
+ * case, clears the stale loader cache, emits an operator-visible warning, and
+ * re-throws so the inbound delivery fails visibly instead of silently.
+ */
+async function guardedLoad<T>(loader: LazyPromiseLoader<T>, label: string): Promise<T> {
+  try {
+    return await loader.load();
+  } catch (err) {
+    if (isDistRotationError(err)) {
+      loader.clear();
+      replyLoaderLog.error(
+        `bundled module changed under running gateway after update/rollback — ` +
+          `restart required (lazy module "${label}" failed: ${formatErrorMessage(err)})`,
+      );
+      replyLoaderLog.warn(
+        `run "systemctl --user restart openclaw-gateway.service" (or equivalent) to reload dist modules`,
+      );
+    }
+    throw err;
+  }
+}
 const commandsCoreRuntimeLoader = createLazyImportLoader(
   () => import("./commands-core.runtime.js"),
 );
 
 function loadSessionResetModelRuntime() {
-  return sessionResetModelRuntimeLoader.load();
+  return guardedLoad(sessionResetModelRuntimeLoader, "session-reset-model");
 }
 
 function loadStageSandboxMediaRuntime() {
-  return stageSandboxMediaRuntimeLoader.load();
+  return guardedLoad(stageSandboxMediaRuntimeLoader, "stage-sandbox-media");
 }
 
 function loadMediaUnderstandingApplyRuntime() {
-  return mediaUnderstandingApplyRuntimeLoader.load();
+  return guardedLoad(mediaUnderstandingApplyRuntimeLoader, "media-understanding-apply");
 }
 
 function loadLinkUnderstandingApplyRuntime() {
-  return linkUnderstandingApplyRuntimeLoader.load();
+  return guardedLoad(linkUnderstandingApplyRuntimeLoader, "link-understanding-apply");
 }
 
 function loadCommandsCoreRuntime() {
-  return commandsCoreRuntimeLoader.load();
+  return guardedLoad(commandsCoreRuntimeLoader, "commands-core");
 }
 
 const hookRunnerGlobalLoader = createLazyImportLoader(
@@ -125,11 +159,11 @@ const hookRunnerGlobalLoader = createLazyImportLoader(
 const originRoutingLoader = createLazyImportLoader(() => import("./origin-routing.js"));
 
 function loadHookRunnerGlobal() {
-  return hookRunnerGlobalLoader.load();
+  return guardedLoad(hookRunnerGlobalLoader, "hook-runner-global");
 }
 
 function loadOriginRouting() {
-  return originRoutingLoader.load();
+  return guardedLoad(originRoutingLoader, "origin-routing");
 }
 
 function mergeSkillFilters(channelFilter?: string[], agentFilter?: string[]): string[] | undefined {

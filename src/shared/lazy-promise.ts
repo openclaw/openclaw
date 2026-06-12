@@ -1,3 +1,21 @@
+/**
+ * Returns true when `err` matches a synthetic ESM failure triggered by an
+ * in-place package upgrade or rollback: the dist tree hash rotated while the
+ * gateway process is still running.  Dynamic `import()` resolves to
+ * `ERR_MODULE_NOT_FOUND` for old hashed chunk names that no longer exist on
+ * disk.
+ */
+export function isDistRotationError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const obj = err as Record<string, unknown>;
+  const code = typeof obj.code === "string" ? obj.code : undefined;
+  if (code !== "ERR_MODULE_NOT_FOUND" && code !== "MODULE_NOT_FOUND") return false;
+  const msg = typeof obj.message === "string" ? obj.message : "";
+  // Only classify as dist rotation when the missing module is inside the
+  // openclaw dist tree (bundled chunk hashes are the tell).
+  return /openclaw[/\\]dist[/\\]/i.test(msg);
+}
+
 /** Manual-control promise cache for lazy runtime resources. */
 export type LazyPromiseLoader<T> = {
   /** Resolves the cached value, creating one load promise when needed. */
