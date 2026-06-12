@@ -4,9 +4,16 @@ import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../agent-events.js";
 import { createMirrorReplyResolver } from "./echo-mirror-resolver.js";
 
-vi.mock("../../logging/subsystem.js", () => ({
-  createSubsystemLogger: () => ({ warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn() }),
-}));
+vi.mock("../../logging/subsystem.js", () => {
+  const logger = {
+    warn: vi.fn(),
+    info: vi.fn(),
+    debug: vi.fn(),
+    error: vi.fn(),
+    child: () => logger,
+  };
+  return { createSubsystemLogger: () => logger };
+});
 
 function emitLifecycleEnd(runId: string) {
   emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
@@ -157,5 +164,70 @@ describe("createMirrorReplyResolver", () => {
     emitLifecycleEnd("r1");
     await flush();
     expect(await done).toBeUndefined();
+  });
+
+  it("renders a durable tool summary from start+result tool events via onToolResult", async () => {
+    const { resolver } = createMirrorReplyResolver({
+      originRunId: "r1",
+      toolProgressDetail: "raw",
+    });
+    const toolStarts: unknown[] = [];
+    const toolResults: ReplyPayload[] = [];
+    const done = resolver({} as never, {
+      onToolStart: (p) => void toolStarts.push(p),
+      onToolResult: (p) => void toolResults.push(p),
+    });
+
+    emitAgentEvent({
+      runId: "r1",
+      stream: "tool",
+      data: { phase: "start", name: "bash", toolCallId: "c1", args: { command: "date -u" } },
+    });
+    emitAgentEvent({
+      runId: "r1",
+      stream: "tool",
+      data: {
+        phase: "result",
+        name: "bash",
+        toolCallId: "c1",
+        isError: false,
+        result: "Fri Jun 12",
+      },
+    });
+    emitLifecycleEnd("r1");
+    await flush();
+    await done;
+
+    // "start" drives the live status (onToolStart); "result" drives the durable 🛠️
+    // summary (onToolResult) and must NOT be re-routed to onToolStart.
+    expect(toolStarts).toHaveLength(1);
+    expect(toolResults).toHaveLength(1);
+    expect(typeof toolResults[0].text).toBe("string");
+    expect((toolResults[0].text ?? "").length).toBeGreaterThan(0);
+  });
+
+  it("propagates a tool error to onToolResult", async () => {
+    const { resolver } = createMirrorReplyResolver({ originRunId: "r1" });
+    const toolResults: ReplyPayload[] = [];
+    const done = resolver({} as never, {
+      onToolResult: (p) => void toolResults.push(p),
+    });
+
+    emitAgentEvent({
+      runId: "r1",
+      stream: "tool",
+      data: { phase: "start", name: "bash", toolCallId: "c1", args: { command: "false" } },
+    });
+    emitAgentEvent({
+      runId: "r1",
+      stream: "tool",
+      data: { phase: "result", name: "bash", toolCallId: "c1", isError: true, result: "boom" },
+    });
+    emitLifecycleEnd("r1");
+    await flush();
+    await done;
+
+    expect(toolResults).toHaveLength(1);
+    expect(toolResults[0].isError).toBe(true);
   });
 });

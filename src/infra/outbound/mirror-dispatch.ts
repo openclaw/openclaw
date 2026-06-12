@@ -114,7 +114,10 @@ export function consumeStreamingEchoHandled(
  * ownership contract of the channel registry: a channel plugin registers the
  * dispatcher for its OWN channel id, exactly once.
  */
-export function registerChannelMirrorDispatcher(channel: string, dispatcher: MirrorDispatcher): void {
+export function registerChannelMirrorDispatcher(
+  channel: string,
+  dispatcher: MirrorDispatcher,
+): void {
   const existing = state.dispatchers.get(channel);
   if (existing && existing !== dispatcher) {
     log.warn(`mirror dispatcher already registered for ${channel}; ignoring re-registration`);
@@ -170,6 +173,9 @@ export async function launchMirrorDispatch(params: {
     const { resolver, dispose } = createMirrorReplyResolver({
       originRunId: params.originRunId,
       targetLabel: label,
+      ...(params.cfg.agents?.defaults?.toolProgressDetail
+        ? { toolProgressDetail: params.cfg.agents.defaults.toolProgressDetail }
+        : {}),
     });
     // Mark synchronously so the post-hoc final echo skips this target (the mirror
     // renders it) — the post-hoc fires after the origin run, so the mark must be

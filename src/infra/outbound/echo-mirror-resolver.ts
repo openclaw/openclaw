@@ -3,6 +3,10 @@ import type {
   PartialReplyPayload,
 } from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import {
+  type CliToolEventPayload,
+  createCliToolSummaryTracker,
+} from "../../auto-reply/reply/agent-runner-cli-dispatch.js";
 import type { GetReplyFromConfig } from "../../auto-reply/reply/get-reply.types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { type AgentEventPayload, onAgentEvent } from "../agent-events.js";
@@ -45,6 +49,8 @@ export function createMirrorReplyResolver(params: {
   originRunId: string;
   /** Optional label for diagnostics (e.g. "telegram:123"). */
   targetLabel?: string;
+  /** Tool-arg detail for the durable tool summary; mirrors the origin config. */
+  toolProgressDetail?: "explain" | "raw";
 }): MirrorReplyResolver {
   const { originRunId } = params;
   const queue: AgentEventPayload[] = [];
@@ -63,6 +69,22 @@ export function createMirrorReplyResolver(params: {
   // Serial drain: bus notifies synchronously, but on* callbacks are async and
   // order-sensitive. Enqueue + drain one-at-a-time.
   let draining = false;
+
+  // The bus carries RAW tool start/result events (cli-runner emits both under
+  // stream:"tool"); the durable "🛠️" summary is a render, not a bus payload. Reuse
+  // the exact tracker the native CLI dispatch uses so the mirror's tool summaries
+  // are byte-identical: "start" captures args-meta by toolCallId, "result" formats
+  // the aggregate and delivers it through the target dispatch's onToolResult. The
+  // target dispatch still gates the actual send on verbose (shouldSuppress…), so we
+  // can forward unconditionally here.
+  const toolSummary = createCliToolSummaryTracker({
+    ...(params.toolProgressDetail ? { detailMode: params.toolProgressDetail } : {}),
+    shouldEmitToolResult: () => true,
+    shouldEmitToolOutput: () => false,
+    deliver: async ({ text, isError }) => {
+      await attachedOpts?.onToolResult?.({ text, ...(isError ? { isError: true } : {}) });
+    },
+  });
 
   const unsubscribe = onAgentEvent((evt) => {
     if (evt.runId !== originRunId || disposed) {
@@ -132,11 +154,21 @@ export function createMirrorReplyResolver(params: {
           data as Parameters<NonNullable<GetReplyOptions["onItemEvent"]>>[0],
         );
         return;
-      case "tool":
+      case "tool": {
+        const toolEvt = data as unknown as CliToolEventPayload;
+        // Feed every phase to the summary tracker: "start" captures the args-meta,
+        // "result" emits the durable 🛠️ summary via onToolResult. A "result" event
+        // is NOT a start — routing it to onToolStart (as before) mis-rendered it and
+        // dropped the verbose tool record from the mirror.
+        await toolSummary.noteToolEvent(toolEvt);
+        if (toolEvt.phase === "result") {
+          return;
+        }
         await opts.onToolStart?.(
           data as Parameters<NonNullable<GetReplyOptions["onToolStart"]>>[0],
         );
         return;
+      }
       case "thinking":
       case "reasoning": {
         const phase = asString(data.phase);
