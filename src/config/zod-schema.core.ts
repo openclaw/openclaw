@@ -216,6 +216,13 @@ const ModelCompatSchema = z
     supportsDeveloperRole: z.boolean().optional(),
     supportsReasoningEffort: z.boolean().optional(),
     supportsUsageInStreaming: z.boolean().optional(),
+    // Consumed at runtime by getCompat()/detectCompat and the OpenAI-compat
+    // and Anthropic providers (session_id / x-client-request-id /
+    // x-session-affinity headers for prompt-cache routing, e.g. Fireworks,
+    // Cloudflare AI Gateway). Declared in the ModelCompat type but missing
+    // from this strict schema, so a valid config was rejected (same drift
+    // class as issue #89660).
+    sendSessionAffinityHeaders: z.boolean().optional(),
     supportsTools: z.boolean().optional(),
     supportsStrictMode: z.boolean().optional(),
     requiresStringContent: z.boolean().optional(),
