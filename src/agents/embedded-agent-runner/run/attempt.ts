@@ -183,6 +183,7 @@ import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js"
 import { sanitizeToolUseResultPairing } from "../../session-transcript-repair.js";
 import { acquireSessionWriteLock } from "../../session-write-lock.js";
 import { createAgentSession, SessionManager } from "../../sessions/index.js";
+import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
 import { detectRuntimeShell } from "../../shell-utils.js";
 import { buildActiveSubagentSystemPromptAddition } from "../../subagent-active-context.js";
 import {
@@ -2377,10 +2378,11 @@ export async function runEmbeddedAttempt(
                 const definition = tool
                   ? toToolDefinitions([tool], catalogToolHookContext)[0]
                   : undefined;
-                if (definition) {
+                const hydratedTool = definition ? wrapToolDefinition(definition) : undefined;
+                if (hydratedTool) {
                   log.info(`tool-search: hydrated deferred directory tool ${toolCall.name}`);
                 }
-                return definition;
+                return hydratedTool;
               }
             : undefined,
           withSessionWriteLock: (operation) =>
