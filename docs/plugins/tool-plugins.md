@@ -216,8 +216,8 @@ answer to deliver.
 
 There are two supported surfaces:
 
-- Return an `AgentToolResult` with `terminalSummary` when the executed result
-  already has a short, public, user-facing summary.
+- Return a `toolResult(...)`-wrapped `AgentToolResult` with `terminalSummary`
+  when the executed result already has a short, public, user-facing summary.
 - Set `terminalResultFallback` on the tool definition when OpenClaw should
   derive a bounded fallback from a successful tool result.
 

@@ -84,14 +84,15 @@ describe("defineToolPlugin", () => {
           name: "status",
           description: "Return status.",
           parameters: Type.Object({}),
-          execute: () => ({
-            content: [{ type: "text", text: "healthy" }],
-            details: { ok: true },
-            terminalSummary: {
-              privacy: "public",
-              text: "Status: healthy",
-            },
-          }),
+          execute: () =>
+            toolResult({
+              content: [{ type: "text", text: "healthy" }],
+              details: { ok: true },
+              terminalSummary: {
+                privacy: "public",
+                text: "Status: healthy",
+              },
+            }),
         }),
       ],
     });
@@ -108,6 +109,49 @@ describe("defineToolPlugin", () => {
         text: "Status: healthy",
       },
     });
+  });
+
+  it("wraps bare terminal-summary-shaped JSON instead of treating it as a tool result", async () => {
+    const entry = defineToolPlugin({
+      id: "terminal-summary-json",
+      name: "Terminal Summary JSON",
+      description: "Terminal summary JSON tool.",
+      tools: (tool) => [
+        tool({
+          name: "terminal_summary_json",
+          description: "Return terminal-summary-shaped JSON.",
+          parameters: Type.Object({}),
+          execute: () => ({
+            content: [{ type: "text", text: "ordinary payload" }],
+            details: { status: "ok" },
+            terminalSummary: {
+              privacy: "public",
+              text: "Status: healthy",
+            },
+          }),
+        }),
+      ],
+    });
+    const captured = createCapturedPluginRegistration({ id: "terminal-summary-json" });
+
+    entry.register(captured.api);
+
+    const payload = {
+      content: [{ type: "text", text: "ordinary payload" }],
+      details: { status: "ok" },
+      terminalSummary: {
+        privacy: "public",
+        text: "Status: healthy",
+      },
+    };
+    const result = await captured.tools[0].execute("call-1", {});
+    expect(result.details).toEqual(payload);
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: JSON.stringify(payload, null, 2),
+      },
+    ]);
   });
 
   it("preserves text-only agent tool results with structured details", async () => {
