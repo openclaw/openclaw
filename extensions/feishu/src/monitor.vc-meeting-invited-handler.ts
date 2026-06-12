@@ -108,7 +108,6 @@ function parseInviteTimestamp(value: string | undefined): number {
 }
 
 function buildSyntheticMessageEvent(turn: VcMeetingInvitedTurn): FeishuMessageEvent {
-  const replyTarget = `user:${turn.inviter.senderId}`;
   return {
     sender: {
       sender_id: {
@@ -119,7 +118,7 @@ function buildSyntheticMessageEvent(turn: VcMeetingInvitedTurn): FeishuMessageEv
     },
     message: {
       message_id: turn.turnId,
-      chat_id: replyTarget,
+      chat_id: turn.inviter.senderId,
       chat_type: "p2p",
       message_type: "text",
       content: JSON.stringify({ text: turn.prompt }),
