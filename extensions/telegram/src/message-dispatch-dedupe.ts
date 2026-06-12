@@ -19,6 +19,32 @@ export type TelegramMessageDispatchClaim =
   | { kind: "duplicate" }
   | { kind: "invalid" };
 
+export type TelegramMessageDispatchReplayForgetFailure = {
+  key: string;
+  error?: unknown;
+};
+
+export class TelegramMessageDispatchReplayForgetError extends Error {
+  readonly failures: TelegramMessageDispatchReplayForgetFailure[];
+  override readonly cause: unknown;
+
+  constructor(failures: readonly TelegramMessageDispatchReplayForgetFailure[]) {
+    const count = failures.length;
+    super(`telegram message dispatch dedupe rollback failed for ${count} key(s)`, {
+      cause: failures.find((failure) => failure.error !== undefined)?.error,
+    });
+    this.name = "TelegramMessageDispatchReplayForgetError";
+    this.failures = [...failures];
+    this.cause = failures.find((failure) => failure.error !== undefined)?.error;
+  }
+}
+
+export function isTelegramMessageDispatchReplayForgetError(
+  error: unknown,
+): error is TelegramMessageDispatchReplayForgetError {
+  return error instanceof TelegramMessageDispatchReplayForgetError;
+}
+
 function sanitizeFileSegment(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -137,11 +163,23 @@ export async function forgetTelegramMessageDispatchReplay(params: {
   keys?: readonly string[];
 }): Promise<void> {
   const keys = normalizeReplayKeys(params.keys);
-  await Promise.all(
-    keys.map((key) =>
-      params.guard.forget(key, { namespace: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE }),
-    ),
-  );
+  const failures = (
+    await Promise.all(
+      keys.map(async (key): Promise<TelegramMessageDispatchReplayForgetFailure | null> => {
+        try {
+          const forgotten = await params.guard.forget(key, {
+            namespace: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE,
+          });
+          return forgotten ? null : { key };
+        } catch (error) {
+          return { key, error };
+        }
+      }),
+    )
+  ).filter((failure): failure is TelegramMessageDispatchReplayForgetFailure => Boolean(failure));
+  if (failures.length > 0) {
+    throw new TelegramMessageDispatchReplayForgetError(failures);
+  }
 }
 
 export function releaseTelegramMessageDispatchReplay(params: {

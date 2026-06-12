@@ -26,6 +26,7 @@ import {
 } from "./bot-processing-outcome.js";
 import { createTelegramBot } from "./bot.js";
 import type { TelegramTransport } from "./fetch.js";
+import { isTelegramMessageDispatchReplayForgetError } from "./message-dispatch-dedupe.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 import { TelegramPollingLivenessTracker } from "./polling-liveness.js";
 import { createTelegramPollingStatusPublisher } from "./polling-status.js";
@@ -141,7 +142,7 @@ function normalizeTelegramAccountId(accountId?: string | null): string {
 }
 
 type NonRetryableSpooledUpdateFailure = {
-  reason: "missing-agent-harness";
+  reason: "missing-agent-harness" | "dispatch-dedupe-rollback-failed";
   message: string;
 };
 
@@ -153,6 +154,11 @@ function resolveNonRetryableSpooledUpdateFailure(
     current.error,
   ])) {
     const message = formatErrorMessage(candidate);
+    if (isTelegramMessageDispatchReplayForgetError(candidate)) {
+      // A committed dispatch key that cannot be rolled back makes retry unsafe:
+      // the next replay can be duplicate-suppressed and then deleted.
+      return { reason: "dispatch-dedupe-rollback-failed", message };
+    }
     if (
       readErrorName(candidate) === MISSING_AGENT_HARNESS_ERROR_NAME ||
       MISSING_AGENT_HARNESS_MESSAGE_RE.test(message)

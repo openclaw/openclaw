@@ -1221,8 +1221,13 @@ export const registerTelegramHandlers = ({
     dispatchDedupeKeys?: string[];
   }): Promise<TelegramMessageProcessingResult> => {
     let dispatchDedupeCommitted = false;
+    let dispatchDedupeRollbackAttempted = false;
     const spooledReplay =
       params.options?.spooledReplay === true || isTelegramSpooledReplayUpdate(params.ctx.update);
+    const forgetCommittedDispatchDedupeKeys = async () => {
+      dispatchDedupeRollbackAttempted = true;
+      await forgetDispatchDedupeKeys(params.dispatchDedupeKeys ?? []);
+    };
     try {
       const replyChainNodes = await buildReplyChainForMessage(params.msg);
       const { replyMedia, replyChain } = await resolveReplyMediaForChain(
@@ -1252,14 +1257,14 @@ export const registerTelegramHandlers = ({
       if (result.kind === "completed" && !dispatchDedupeCommitted) {
         await commitDispatchDedupeKeys(params.dispatchDedupeKeys ?? []);
       } else if (result.kind === "failed-retryable" && dispatchDedupeCommitted && spooledReplay) {
-        await forgetDispatchDedupeKeys(params.dispatchDedupeKeys ?? []);
+        await forgetCommittedDispatchDedupeKeys();
       } else if (result.kind !== "completed" && !dispatchDedupeCommitted) {
         releaseDispatchDedupeKeys(params.dispatchDedupeKeys ?? []);
       }
       return result;
     } catch (err) {
-      if (dispatchDedupeCommitted && spooledReplay) {
-        await forgetDispatchDedupeKeys(params.dispatchDedupeKeys ?? []);
+      if (dispatchDedupeCommitted && spooledReplay && !dispatchDedupeRollbackAttempted) {
+        await forgetCommittedDispatchDedupeKeys();
       } else if (!dispatchDedupeCommitted) {
         releaseDispatchDedupeKeys(params.dispatchDedupeKeys ?? [], err);
       }
