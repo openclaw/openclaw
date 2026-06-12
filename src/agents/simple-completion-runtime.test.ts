@@ -476,6 +476,17 @@ describe("prepareSimpleCompletionModel", () => {
   });
 
   it("can preserve asynchronous provider model discovery", async () => {
+    hoisted.resolveModelAsyncMock.mockResolvedValueOnce({
+      model: {
+        provider: "anthropic",
+        id: "claude-opus-4-6",
+      },
+      authStorage: {
+        setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
+      },
+      modelRegistry: {},
+    });
+
     const result = await prepareSimpleCompletionModel({
       cfg: undefined,
       provider: "anthropic",

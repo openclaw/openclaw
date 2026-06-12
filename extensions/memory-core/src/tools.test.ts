@@ -157,8 +157,10 @@ describe("memory_search unavailable payloads", () => {
     vi.useFakeTimers();
     try {
       let searchCalls = 0;
-      setMemorySearchImpl(async () => {
+      let searchSignal: AbortSignal | undefined;
+      setMemorySearchImpl(async (opts) => {
         searchCalls += 1;
+        searchSignal = opts?.signal;
         return await new Promise(() => {});
       });
       const tool = createMemorySearchToolOrThrow();
@@ -172,6 +174,8 @@ describe("memory_search unavailable payloads", () => {
         warning: "Memory search is unavailable due to an embedding/provider error.",
         action: "Check embedding provider configuration and retry memory_search.",
       });
+      // The deadline must abort the orphaned search, not just race past it.
+      expect(searchSignal?.aborted).toBe(true);
       const cooldownResult = await tool.execute("search-cooldown", { query: "hello again" });
       expectUnavailableMemorySearchDetails(cooldownResult.details, {
         error: "memory_search timed out after 15s",
@@ -179,6 +183,35 @@ describe("memory_search unavailable payloads", () => {
         action: "Check embedding provider configuration and retry memory_search.",
       });
       expect(searchCalls).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the timeout result when an abort-aware search rejects on abort", async () => {
+    vi.useFakeTimers();
+    try {
+      setMemorySearchImpl(
+        async (opts) =>
+          await new Promise((_resolve, reject) => {
+            opts?.signal?.addEventListener(
+              "abort",
+              () => reject(new Error("openai-compatible embeddings query failed: aborted")),
+              { once: true },
+            );
+          }),
+      );
+      const tool = createMemorySearchToolOrThrow();
+
+      const resultPromise = tool.execute("abort-aware-timeout", { query: "hello" });
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      const result = await resultPromise;
+      expectUnavailableMemorySearchDetails(result.details, {
+        error: "memory_search timed out after 15s",
+        warning: "Memory search is unavailable due to an embedding/provider error.",
+        action: "Check embedding provider configuration and retry memory_search.",
+      });
     } finally {
       vi.useRealTimers();
     }
