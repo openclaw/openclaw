@@ -238,12 +238,15 @@ function mergeRoles(...items: Array<string | string[] | undefined>): string[] | 
     }
     if (Array.isArray(item)) {
       for (const role of item) {
+        if (typeof role !== "string") {
+          continue;
+        }
         const trimmed = role.trim();
         if (trimmed) {
           roles.add(trimmed);
         }
       }
-    } else {
+    } else if (typeof item === "string") {
       const trimmed = item.trim();
       if (trimmed) {
         roles.add(trimmed);
@@ -315,6 +318,9 @@ function mergeScopes(...items: Array<string[] | undefined>): string[] | undefine
     }
     sawExplicitScopeList = true;
     for (const scope of item) {
+      if (typeof scope !== "string") {
+        continue;
+      }
       const trimmed = scope.trim();
       if (trimmed) {
         scopes.add(trimmed);
