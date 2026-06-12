@@ -603,11 +603,15 @@ describe("foreground reply freshness", () => {
     });
     // Both messages deliver independently: newer via queued final,
     // older via primary queued final + fresh-settled fallback hook.
-    expect(deliveries).toEqual([
-      { kind: "final", text: "old rewritten final" },
-      { kind: "final", text: "new final" },
-      { kind: "final", text: "old settled fallback" },
-    ]);
+    // Delivery order depends on event loop scheduling, so use arrayContaining.
+    expect(deliveries).toEqual(
+      expect.arrayContaining([
+        { kind: "final", text: "new final" },
+        { kind: "final", text: "old rewritten final" },
+        { kind: "final", text: "old settled fallback" },
+      ]),
+    );
+    expect(deliveries).toHaveLength(3);
   });
 
   it("runs the settled delivery hook when dispatch fails after queueing a reply", async () => {
