@@ -9,10 +9,15 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveWhatsAppAccount } from "../../accounts.js";
 import { resolveWhatsAppGroupSessionRoute } from "../../group-session-key.js";
 import { getPrimaryIdentityId, getSenderIdentity } from "../../identity.js";
+import {
+  normalizeWebInboundMessage,
+  withDeprecatedWebInboundMessageFlatAliases,
+} from "../../inbound/message-aliases.js";
+import type { WebInboundMessageInput } from "../../inbound/types.js";
+import type { WebInboundMessage } from "../../inbound/types.js";
 import { normalizeE164 } from "../../text-runtime.js";
 import { buildMentionConfig } from "../mentions.js";
 import type { MentionConfig } from "../mentions.js";
-import type { WebInboundMsg } from "../types.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
 import { maybeBroadcastMessage } from "./broadcast.js";
 import type { EchoTracker } from "./echo.js";
@@ -42,9 +47,32 @@ export function createWebOnMessageHandler(params: {
   baseMentionConfig: MentionConfig;
   account: { authDir?: string; accountId?: string; selfChatMode?: boolean };
 }) {
+  const withDirectSenderPeer = (msg: WebInboundMessage, peerId: string): WebInboundMessage => {
+    if (
+      msg.chatType === "group" ||
+      msg.platform.sender?.e164 ||
+      msg.platform.senderE164 ||
+      !peerId.startsWith("+")
+    ) {
+      return msg;
+    }
+    const normalized = normalizeE164(peerId);
+    if (!normalized) {
+      return msg;
+    }
+    return withDeprecatedWebInboundMessageFlatAliases({
+      ...msg,
+      platform: {
+        ...msg.platform,
+        sender: { ...msg.platform.sender, e164: normalized },
+        senderE164: normalized,
+      },
+    });
+  };
+
   const processForRoute = async (
     cfg: OpenClawConfig,
-    msg: WebInboundMsg,
+    msg: WebInboundMessage,
     route: ReturnType<typeof resolveAgentRoute>,
     groupHistoryKey: string,
     opts?: {
@@ -95,10 +123,12 @@ export function createWebOnMessageHandler(params: {
     return processMessage(processParams);
   };
 
-  return async (msg: WebInboundMsg) => {
+  return async (rawMsg: WebInboundMessageInput) => {
+    const normalizedMsg = normalizeWebInboundMessage(rawMsg);
     const cfg = params.loadConfig?.() ?? params.cfg;
+    const peerId = resolvePeerId(normalizedMsg);
+    const msg = withDirectSenderPeer(normalizedMsg, peerId);
     const conversationId = msg.conversationId ?? msg.from;
-    const peerId = resolvePeerId(msg);
     const baseRoute = resolveAgentRoute({
       cfg,
       channel: "whatsapp",
@@ -126,14 +156,14 @@ export function createWebOnMessageHandler(params: {
     const baseMentionConfig = buildMentionConfig(cfg);
 
     // Same-phone mode logging retained
-    if (msg.from === msg.to) {
+    if (msg.from === msg.platform.recipientJid) {
       logVerbose(`📱 Same-phone mode detected (from === to: ${msg.from})`);
     }
 
     // Skip if this is a message we just sent (echo detection)
-    if (params.echoTracker.has(msg.body)) {
+    if (params.echoTracker.has(msg.payload.body)) {
       logVerbose("Skipping auto-reply: detected echo (message matches recently sent text)");
-      params.echoTracker.forget(msg.body);
+      params.echoTracker.forget(msg.payload.body);
       return;
     }
 
@@ -146,7 +176,8 @@ export function createWebOnMessageHandler(params: {
     // undefined = preflight was not attempted (non-audio message).
     let preflightAudioTranscript: string | null | undefined;
     const hasAudioBody =
-      msg.mediaType?.startsWith("audio/") === true && msg.body === "<media:audio>";
+      msg.payload.media?.type?.startsWith("audio/") === true &&
+      msg.payload.body === "<media:audio>";
     const canRunEarlyAudioPreflight = msg.chatType === "group" || msg.accessControlPassed === true;
     let ackAlreadySent = false;
     let ackReaction: AckReactionHandle | null = null;
@@ -156,7 +187,7 @@ export function createWebOnMessageHandler(params: {
         preflightAudioTranscript !== undefined ||
         !canRunEarlyAudioPreflight ||
         !hasAudioBody ||
-        !msg.mediaPath
+        !msg.payload.media?.path
       ) {
         return;
       }
@@ -194,10 +225,10 @@ export function createWebOnMessageHandler(params: {
         preflightAudioTranscript =
           (await transcribeFirstAudio({
             ctx: {
-              MediaPaths: [msg.mediaPath],
-              MediaTypes: msg.mediaType ? [msg.mediaType] : undefined,
+              MediaPaths: [msg.payload.media?.path],
+              MediaTypes: msg.payload.media?.type ? [msg.payload.media?.type] : undefined,
               From: msg.from,
-              To: msg.to,
+              To: msg.platform.recipientJid,
               Provider: "whatsapp",
               Surface: "whatsapp",
               OriginatingChannel: "whatsapp",
@@ -216,12 +247,12 @@ export function createWebOnMessageHandler(params: {
       const sender = getSenderIdentity(msg);
       const metaCtx = {
         From: msg.from,
-        To: msg.to,
+        To: msg.platform.recipientJid,
         SessionKey: route.sessionKey,
         AccountId: route.accountId,
         ChatType: msg.chatType,
         ConversationLabel: conversationId,
-        GroupSubject: msg.groupSubject,
+        GroupSubject: msg.group?.subject,
         SenderName: sender.name ?? undefined,
         SenderId: getPrimaryIdentityId(sender) ?? undefined,
         SenderE164: sender.e164 ?? undefined,
@@ -245,7 +276,7 @@ export function createWebOnMessageHandler(params: {
       let gating = await applyGroupGating({
         cfg,
         msg,
-        deferMissingMention: hasAudioBody && Boolean(msg.mediaPath),
+        deferMissingMention: hasAudioBody && Boolean(msg.payload.media?.path),
         conversationId,
         groupHistoryKey,
         agentId: route.agentId,
@@ -289,13 +320,6 @@ export function createWebOnMessageHandler(params: {
       }
       if (!gating.shouldProcess) {
         return;
-      }
-    } else if (!msg.sender?.e164 && !msg.senderE164 && peerId && peerId.startsWith("+")) {
-      // Ensure `peerId` for DMs is stable and stored as E.164 when possible.
-      const normalized = normalizeE164(peerId);
-      if (normalized) {
-        msg.sender = { ...msg.sender, e164: normalized };
-        msg.senderE164 = normalized;
       }
     }
 

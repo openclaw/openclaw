@@ -218,7 +218,12 @@ export type CronWakeMode = "now" | "next-heartbeat";
 /** Lightweight service status returned to gateway/control surfaces. */
 export type CronStatusSummary = {
   enabled: boolean;
+  /** @deprecated Legacy partition key; actual storage is SQLite. Use `sqlitePath`. */
   storePath: string;
+  /** Storage backend identifier. */
+  storage: "sqlite";
+  /** Resolved path to the shared state SQLite database. */
+  sqlitePath: string;
   jobs: number;
   nextWakeAtMs: number | null;
 };
