@@ -12,11 +12,11 @@ export type SecurityMatrixToolFacts = {
   readonly toolName: string;
   readonly toolSource?: string;
   readonly toolOwner?: string;
-  readonly actor?: SecurityMatrixActor | string;
+  readonly actor?: SecurityMatrixActor;
   readonly influencedBy?: readonly string[];
   readonly capability?: string;
-  readonly approvalState?: SecurityMatrixApprovalState | string;
-  readonly operatorPolicy?: SecurityMatrixOperatorPolicy | string;
+  readonly approvalState?: SecurityMatrixApprovalState;
+  readonly operatorPolicy?: SecurityMatrixOperatorPolicy;
 };
 
 export type SecurityMatrixAuditEvent = {

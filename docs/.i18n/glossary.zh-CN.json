@@ -1178,5 +1178,41 @@
   {
     "source": "Z.AI (GLM)",
     "target": "Z.AI (GLM)"
+  },
+  {
+    "source": "Gateway integrations for external apps",
+    "target": "Gateway integrations for external apps"
+  },
+  {
+    "source": "Gateway protocol",
+    "target": "Gateway protocol"
+  },
+  {
+    "source": "CLI agent command",
+    "target": "CLI agent command"
+  },
+  {
+    "source": "CLI message command",
+    "target": "CLI message command"
+  },
+  {
+    "source": "Background tasks",
+    "target": "Background tasks"
+  },
+  {
+    "source": "llama.cpp Provider",
+    "target": "llama.cpp Provider"
+  },
+  {
+    "source": "llama-cpp plugin",
+    "target": "llama-cpp plugin"
+  },
+  {
+    "source": "Microsoft Foundry plugin",
+    "target": "Microsoft Foundry plugin"
+  },
+  {
+    "source": "Security Matrix",
+    "target": "Security Matrix"
   }
 ]
