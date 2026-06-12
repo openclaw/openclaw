@@ -1722,14 +1722,14 @@ export class AgentSession {
     if (!this.model) {
       return THINKING_LEVELS;
     }
-    return getSupportedThinkingLevels(this.model) as ThinkingLevel[];
+    return getSupportedThinkingLevels(this.resolveFreshModel() ?? this.model) as ThinkingLevel[];
   }
 
   /**
    * Check if current model supports thinking/reasoning.
    */
   supportsThinking(): boolean {
-    return Boolean(this.model?.reasoning);
+    return Boolean(this.resolveFreshModel()?.reasoning);
   }
 
   private getThinkingLevelForModelSwitch(explicitLevel?: ThinkingLevel): ThinkingLevel {
@@ -1743,7 +1743,9 @@ export class AgentSession {
   }
 
   private clampThinkingLevel(level: ThinkingLevel): ThinkingLevel {
-    return this.model ? (clampThinkingLevel(this.model, level) as ThinkingLevel) : "off";
+    return this.model
+      ? (clampThinkingLevel(this.resolveFreshModel() ?? this.model, level) as ThinkingLevel)
+      : "off";
   }
 
   // =========================================================================
@@ -1923,7 +1925,7 @@ export class AgentSession {
     compactionResult ??= unwrapCoreResult(
       await compact(
         preparation,
-        this.model,
+        this.resolveFreshModel() ?? this.model,
         auth.apiKey,
         auth.headers,
         options.customInstructions,
@@ -1988,7 +1990,7 @@ export class AgentSession {
       return false;
     }
 
-    const contextWindow = this.model?.contextWindow ?? 0;
+    const contextWindow = this.resolveFreshModel()?.contextWindow ?? 0;
 
     // Skip overflow check if the message came from a different model.
     // This handles the case where user switched from a smaller-context model (e.g. opus)
@@ -2256,6 +2258,20 @@ export class AgentSession {
     }
 
     this.agent.state.model = refreshedModel;
+  }
+
+  /**
+   * Resolve the current model fresh from the session model registry.
+   * Falls back to the snapshot if the registry has no entry for the current model.
+   * Ensures post-turn reads (contextWindow, reasoning, thinkingLevelMap) reflect
+   * the latest registry state after a /model switch.
+   */
+  private resolveFreshModel(): Model | undefined {
+    const current = this.model;
+    if (!current) {
+      return undefined;
+    }
+    return this.sessionModelRegistry.find(current.provider, current.id) ?? current;
   }
 
   private bindExtensionCore(runner: ExtensionRunner): void {
@@ -2570,7 +2586,7 @@ export class AgentSession {
     }
 
     // Context overflow is handled by compaction, not retry
-    const contextWindow = this.model?.contextWindow ?? 0;
+    const contextWindow = this.resolveFreshModel()?.contextWindow ?? 0;
     if (isContextOverflow(message, contextWindow)) {
       return false;
     }
@@ -2897,7 +2913,7 @@ export class AgentSession {
       let summaryText: string | undefined;
       let summaryDetails: unknown;
       if (options.summarize && entriesToSummarize.length > 0 && !extensionSummary) {
-        const model = this.model!;
+        const model = this.resolveFreshModel() ?? this.model!;
         const { apiKey, headers } = await this.getRequiredRequestAuth(model);
         const branchSummarySettings = this.settingsManager.getBranchSummarySettings();
         const result = normalizeBranchSummaryResult(
@@ -3088,7 +3104,7 @@ export class AgentSession {
   }
 
   getContextUsage(): ContextUsage | undefined {
-    const model = this.model;
+    const model = this.resolveFreshModel();
     if (!model) {
       return undefined;
     }
