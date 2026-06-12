@@ -101,13 +101,13 @@ mcporter itself uses:
 
 1. `MCPORTER_CONFIG` environment variable, if set.
 2. `$XDG_CONFIG_HOME/mcporter/mcporter.json` (falls back to `~/.mcporter/mcporter.json`).
-3. `\u003cworkspaceDir\u003e/config/mcporter.json` (project-scoped).
+3. `<workspaceDir>/config/mcporter.json` (project-scoped).
 
 If your existing `qmd` server entry has any custom material -- environment
 variables, auth headers, relative paths, or `logging.daemon.enabled` -- OpenClaw
 treats it as **external** and routes the daemon through your original mcporter
 config. Otherwise OpenClaw generates a per-agent config under
-`~/.openclaw/agents/\u003cid\u003e/qmd/mcporter/mcporter.json` with the default QMD
+`~/.openclaw/agents/<id>/qmd/mcporter/mcporter.json` with the default QMD
 stdio shape (`command: "qmd", args: ["mcp"]`).
 
 The per-agent generated config is rewritten only when its contents actually

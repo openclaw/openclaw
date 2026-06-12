@@ -160,6 +160,8 @@ type ConfiguredMcporterServer =
 type RawMcporterEntry = {
   lifecycle?: unknown;
   logging?: unknown;
+  cwd?: unknown;
+  path?: unknown;
 };
 
 const MCPORTER_REMOTE_AUTH_KEYS = new Set(
@@ -217,10 +219,13 @@ function isMcporterAuthLikeKey(key: string): boolean {
     normalized.includes("credential") ||
     normalized.includes("header") ||
     normalized.includes("jwt") ||
+    normalized.includes("password") ||
+    normalized.includes("passwd") ||
     normalized.includes("secret") ||
     normalized.includes("signature") ||
     normalized.includes("token") ||
     normalized === "key" ||
+    normalized === "pwd" ||
     normalized === "sig"
   );
 }
@@ -335,7 +340,7 @@ function parseMcporterResponseJson(stdout: string): unknown {
   try {
     return JSON.parse(trimmed) as unknown;
   } catch (err) {
-    const payload = extractFirstJsonValue(trimmed);
+    const payload = extractLastJsonValue(trimmed);
     if (payload.found) {
       return payload.value;
     }
@@ -343,19 +348,30 @@ function parseMcporterResponseJson(stdout: string): unknown {
   }
 }
 
-function extractFirstJsonValue(raw: string): JsonExtractionResult {
-  for (let start = 0; start < raw.length; start += 1) {
-    const opening = raw[start];
-    if (opening !== "{" && opening !== "[") {
+// Scan stdout for the last syntactically valid top-level JSON value.
+// mcporter/daemon log lines can themselves be valid JSON objects; the actual
+// response is the final top-level value in the stream, so a preceding log
+// line must not shadow it. We walk the text at root depth and parse each
+// complete top-level value, keeping the last one that successfully parses.
+function extractLastJsonValue(raw: string): JsonExtractionResult {
+  let lastResult: JsonExtractionResult = { found: false };
+  let i = 0;
+  const len = raw.length;
+  while (i < len) {
+    const ch = raw[i];
+    if (ch !== "{" && ch !== "[") {
+      i += 1;
       continue;
     }
+    const opening = ch;
     const closing = opening === "{" ? "}" : "]";
     let depth = 0;
     let inString = false;
     let escaped = false;
-    for (let index = start; index < raw.length; index += 1) {
-      const char = raw[index];
-      if (char === undefined) {
+    let closed = -1;
+    for (let index = i; index < len; index += 1) {
+      const c = raw[index];
+      if (c === undefined) {
         break;
       }
       if (inString) {
@@ -363,32 +379,42 @@ function extractFirstJsonValue(raw: string): JsonExtractionResult {
           escaped = false;
           continue;
         }
-        if (char === "\\") {
+        if (c === "\\") {
           escaped = true;
-        } else if (char === '"') {
+        } else if (c === '"') {
           inString = false;
         }
         continue;
       }
-      if (char === '"') {
+      if (c === '"') {
         inString = true;
         continue;
       }
-      if (char === opening) {
+      if (c === opening) {
         depth += 1;
-      } else if (char === closing) {
+      } else if (c === closing) {
         depth -= 1;
         if (depth === 0) {
-          try {
-            return { found: true, value: JSON.parse(raw.slice(start, index + 1)) as unknown };
-          } catch {
-            break;
-          }
+          closed = index;
+          break;
         }
       }
     }
+    if (closed === -1) {
+      // Unbalanced; no more complete top-level values to find.
+      return lastResult;
+    }
+    try {
+      lastResult = {
+        found: true,
+        value: JSON.parse(raw.slice(i, closed + 1)) as unknown,
+      };
+    } catch {
+      // Skip this malformed candidate and look for the next top-level value.
+    }
+    i = closed + 1;
   }
-  return { found: false };
+  return lastResult;
 }
 
 function expandMcporterHome(input: string): string {
@@ -405,77 +431,155 @@ function expandMcporterHome(input: string): string {
   return input;
 }
 
-function resolveMcporterConfigCandidates(env: NodeJS.ProcessEnv): string[] {
+function resolveMcporterConfigCandidates(env: NodeJS.ProcessEnv, workspaceDir: string): string[] {
+  // Match mcporter's config discovery precedence (mcporter source:
+  // src/config/path-discovery.ts): explicit override -> XDG/home -> project ->
+  // legacy home fallback. Project config must be checked before the legacy home
+  // fallback so workspace-scoped lifecycle/logging settings win.
   const candidates: string[] = [];
+
   const explicitConfig = env.MCPORTER_CONFIG;
   if (explicitConfig && explicitConfig.trim().length > 0) {
     candidates.push(path.resolve(expandMcporterHome(explicitConfig.trim())));
   }
 
   const xdgConfigHome = env.XDG_CONFIG_HOME;
-  let baseDir: string;
   if (xdgConfigHome && xdgConfigHome.trim().length > 0) {
     const resolved = expandMcporterHome(xdgConfigHome.trim());
     if (path.isAbsolute(resolved)) {
-      baseDir = path.join(resolved, "mcporter");
-    } else {
-      baseDir = path.join(os.homedir(), ".mcporter");
+      candidates.push(path.join(resolved, "mcporter", "mcporter.json"));
+      candidates.push(path.join(resolved, "mcporter", "mcporter.jsonc"));
     }
-  } else {
-    baseDir = path.join(os.homedir(), ".mcporter");
   }
-  candidates.push(path.join(baseDir, "mcporter.json"));
-  candidates.push(path.join(baseDir, "mcporter.jsonc"));
+  candidates.push(path.join(os.homedir(), ".mcporter", "mcporter.json"));
+  candidates.push(path.join(os.homedir(), ".mcporter", "mcporter.jsonc"));
+
+  const projectConfigDir = path.resolve(workspaceDir, "config");
+  candidates.push(path.join(projectConfigDir, "mcporter.json"));
+  candidates.push(path.join(projectConfigDir, "mcporter.jsonc"));
+
   return candidates;
 }
 
-function resolveMcporterProjectConfigCandidates(workspaceDir: string): string[] {
-  const projectConfigDir = path.resolve(workspaceDir, "config");
-  return [
-    path.join(projectConfigDir, "mcporter.json"),
-    path.join(projectConfigDir, "mcporter.jsonc"),
-  ];
+function extractMcporterSourcePath(serialized: Record<string, unknown>): string | undefined {
+  const source = serialized.source;
+  if (!source || typeof source !== "object" || Array.isArray(source)) {
+    return undefined;
+  }
+  const sourceRecord = source as Record<string, unknown>;
+  if (typeof sourceRecord.path === "string") {
+    return sourceRecord.path;
+  }
+  return undefined;
+}
+
+// String-aware JSONC comment and trailing-comma stripper. Walks the source
+// respecting string boundaries so URLs containing "//" and similar tokens
+// are not mistaken for line comments. Used only for the read-only probe of
+// raw mcporter entries; mcporter itself is the source of truth for runtime
+// config loading.
+function stripJsoncCommentsAndTrailingCommas(text: string): string {
+  let out = "";
+  let i = 0;
+  const len = text.length;
+  while (i < len) {
+    const ch = text[i];
+    if (ch === '"') {
+      // Copy the entire string literal verbatim, honoring backslash escapes.
+      let j = i + 1;
+      while (j < len) {
+        if (text[j] === "\\") {
+          j += 2;
+          continue;
+        }
+        if (text[j] === '"') {
+          j += 1;
+          break;
+        }
+        j += 1;
+      }
+      out += text.slice(i, j);
+      i = j;
+      continue;
+    }
+    if (ch === "/" && text[i + 1] === "/") {
+      const newline = text.indexOf("\n", i);
+      i = newline === -1 ? len : newline;
+      continue;
+    }
+    if (ch === "/" && text[i + 1] === "*") {
+      const close = text.indexOf("*/", i + 2);
+      i = close === -1 ? len : close + 2;
+      continue;
+    }
+    out += ch;
+    i += 1;
+  }
+  // Strip trailing commas before closing brackets/braces. The preceding
+  // comment pass already removed any "//" inside string values, so the
+  // remaining "," characters only appear in structural positions.
+  return out.replace(/,(\s*[}\]])/g, "$1");
+}
+
+async function readRawMcporterEntryFromFile(
+  serverName: string,
+  filePath: string,
+): Promise<RawMcporterEntry | null> {
+  let text: string;
+  try {
+    text = await fs.readFile(filePath, "utf8");
+  } catch (err) {
+    if (isFileMissingError(err)) {
+      return null;
+    }
+    throw err;
+  }
+  // Try strict JSON first; only fall back to JSONC cleanup for ".jsonc" files
+  // that need comment/trailing-comma removal. The cleanup is string-aware so
+  // URLs containing "//" inside string values are not mistaken for comments.
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text) as unknown;
+  } catch {
+    if (!filePath.endsWith(".jsonc")) {
+      return null;
+    }
+    try {
+      parsed = JSON.parse(stripJsoncCommentsAndTrailingCommas(text)) as unknown;
+    } catch {
+      return null;
+    }
+  }
+  const record = asRecord(parsed);
+  const servers = record ? asRecord(record.mcpServers) : null;
+  const entry = servers ? asRecord(servers[serverName]) : null;
+  if (entry) {
+    return entry as RawMcporterEntry;
+  }
+  return null;
 }
 
 async function readRawMcporterEntry(
   serverName: string,
   env: NodeJS.ProcessEnv,
   workspaceDir: string,
+  sourcePath?: string,
 ): Promise<RawMcporterEntry | null> {
-  const allCandidates = [
-    ...resolveMcporterConfigCandidates(env),
-    ...resolveMcporterProjectConfigCandidates(workspaceDir),
-  ];
-  for (const candidate of allCandidates) {
-    let text: string;
-    try {
-      text = await fs.readFile(candidate, "utf8");
-    } catch (err) {
-      if (isFileMissingError(err)) {
-        continue;
-      }
-      throw err;
-    }
-    // Strip trailing commas and comments for JSONC files; mcporter accepts
-    // both JSON and JSONC. A minimal cleanup is enough for our read-only
-    // lifecycle/logging probe.
-    const cleaned = candidate.endsWith(".jsonc")
-      ? text
-          .replace(/\/\*[\s\S]*?\*\//g, "")
-          .replace(/\/\/.*$/gm, "")
-          .replace(/,(\s*[}\]])/g, "$1")
-      : text;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(cleaned) as unknown;
-    } catch {
-      continue;
-    }
-    const record = asRecord(parsed);
-    const servers = record ? asRecord(record.mcpServers) : null;
-    const entry = servers ? asRecord(servers[serverName]) : null;
+  // Prefer the file mcporter actually reported via source.path; it is the
+  // authoritative layer for this server. Fall back to enumerating layers in
+  // mcporter's documented precedence order.
+  if (sourcePath) {
+    const resolved = path.resolve(expandMcporterHome(sourcePath.trim()));
+    const entry = await readRawMcporterEntryFromFile(serverName, resolved);
     if (entry) {
-      return entry as RawMcporterEntry;
+      return entry;
+    }
+  }
+
+  for (const candidate of resolveMcporterConfigCandidates(env, workspaceDir)) {
+    const entry = await readRawMcporterEntryFromFile(serverName, candidate);
+    if (entry) {
+      return entry;
     }
   }
   return null;
@@ -489,19 +593,32 @@ function hasMcporterStdioLifecycleOrLogging(server: RawMcporterEntry): boolean {
     typeof server.logging === "object" && server.logging !== null
       ? (server.logging as Record<string, unknown>)
       : null;
-  if (!logging) {
-    return false;
+  if (logging) {
+    // Detect top-level logging.enabled (mcporter legacy shape) and nested
+    // logging.daemon.enabled (mcporter current shape: src/config-schema.ts:39-49).
+    if (logging.enabled === true) {
+      return true;
+    }
+    const daemon =
+      typeof logging.daemon === "object" && logging.daemon !== null
+        ? (logging.daemon as Record<string, unknown>)
+        : null;
+    if (daemon?.enabled === true) {
+      return true;
+    }
   }
-  // Detect top-level logging.enabled (mcporter legacy shape) and nested
-  // logging.daemon.enabled (mcporter current shape: src/config-schema.ts:39-49).
-  if (logging.enabled === true) {
+  // A user-set cwd or path is context-dependent and must not be copied into
+  // the per-agent generated config under OpenClaw state, where it would
+  // resolve against a different working directory. Check the raw entry so
+  // mcporter's normalized default cwd (added to "config get --json" output)
+  // does not force every bare qmd server into external mode.
+  if (typeof server.cwd === "string" && server.cwd.length > 0) {
     return true;
   }
-  const daemon =
-    typeof logging.daemon === "object" && logging.daemon !== null
-      ? (logging.daemon as Record<string, unknown>)
-      : null;
-  return daemon?.enabled === true;
+  if (typeof server.path === "string" && server.path.length > 0) {
+    return true;
+  }
+  return false;
 }
 
 function getQmdEmbedQueueState(): QmdEmbedQueueState {
@@ -2738,7 +2855,12 @@ export class QmdMemoryManager implements MemorySearchManager {
       throw new Error(`mcporter server "${serverName}" returned an invalid JSON definition`);
     }
 
-    const rawEntry = await readRawMcporterEntry(serverName, this.mcporterEnv, this.workspaceDir);
+    const rawEntry = await readRawMcporterEntry(
+      serverName,
+      this.mcporterEnv,
+      this.workspaceDir,
+      extractMcporterSourcePath(serialized),
+    );
     const server = this.toMcporterRawServerEntry(serialized, rawEntry);
     if (!server) {
       if (serverName === "qmd") {
@@ -2761,7 +2883,13 @@ export class QmdMemoryManager implements MemorySearchManager {
       server[key] = value;
     }
 
-    if (typeof server.command === "string" && server.command.length > 0) {
+    if (server.command !== undefined && server.command !== null) {
+      // mcporter accepts stdio commands as strings, arrays, or executable
+      // objects. We can only regenerate the string form, so preserve anything
+      // else as external and let mcporter handle the invocation directly.
+      if (typeof server.command !== "string" || server.command.length === 0) {
+        return { mode: "external" };
+      }
       if (
         !isGeneratedMcporterQmdStdioServer(server) ||
         hasMcporterStdioUserOwnedMaterial(server) ||
