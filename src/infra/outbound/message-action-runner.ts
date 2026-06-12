@@ -520,6 +520,7 @@ function collectMessageAttachmentMediaHints(value: unknown): string[] {
     pushMedia(record.filePath);
     pushMedia(record.fileUrl);
     pushMedia(record.url);
+    pushMedia(record.image);
   }
   return mediaUrls;
 }
@@ -939,7 +940,8 @@ async function buildSendPayloadParts(params: {
     readStringParam(actionParams, "mediaUrl", { trim: false }) ??
     readStringParam(actionParams, "path", { trim: false }) ??
     readStringParam(actionParams, "filePath", { trim: false }) ??
-    readStringParam(actionParams, "fileUrl", { trim: false });
+    readStringParam(actionParams, "fileUrl", { trim: false }) ??
+    readStringParam(actionParams, "image", { trim: false });
   const mediaUrlHints = readStringArrayParam(actionParams, "mediaUrls") ?? [];
   const attachmentMediaHints = collectMessageAttachmentMediaHints(actionParams.attachments);
   const hasMediaHint =
