@@ -339,9 +339,11 @@ describe("getMemorySearchManager caching", () => {
       errorMessage: "qmd query failed",
     });
 
-    const fallbackResults = await firstManager.search("hello");
+    const controller = new AbortController();
+    const fallbackResults = await firstManager.search("hello", { signal: controller.signal });
     expect(fallbackResults).toHaveLength(1);
     expect(fallbackResults[0]?.path).toBe("MEMORY.md");
+    expect(fallbackSearch).toHaveBeenCalledWith("hello", { signal: controller.signal });
 
     const second = await getMemorySearchManager({ cfg, agentId: retryAgentId });
     requireManager(second);

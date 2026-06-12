@@ -1,6 +1,6 @@
 // Covers process respawn behavior across supervisors.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { captureFullEnv } from "../test-utils/env.js";
+import { captureFullEnv, deleteTestEnvValue } from "../test-utils/env.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "./supervisor-markers.js";
 
@@ -50,7 +50,7 @@ afterEach(() => {
 
 function clearSupervisorHints() {
   for (const key of SUPERVISOR_HINT_ENV_VARS) {
-    delete process.env[key];
+    deleteTestEnvValue(key);
   }
 }
 
