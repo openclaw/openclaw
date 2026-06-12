@@ -31,11 +31,19 @@ const LOCAL_REFERENCE_PREFIXES = ["file:", "link:", "portal:", "workspace:"];
 // GitHub's GHSA-3q49-cfcf-g5fm feed includes an overbroad ">=0" range alongside
 // the compromised @mistralai/mistralai versions. Keep the production audit
 // blocking for the compromised releases while allowing pinned safe locks.
+// GHSA-gv7w-rqvm-qjhr only affects esbuild's Deno module binary download path.
+// OpenClaw uses the Node package path, and the workspace release-age guard blocks
+// the patched package until it matures or receives a maintainer override.
 const AUDIT_ADVISORY_VERSION_OVERRIDES = [
   {
     packageName: "@mistralai/mistralai",
     advisoryIds: new Set(["1118204", "GHSA-3q49-cfcf-g5fm"]),
     unaffectedVersions: new Set(["2.2.1", "2.2.5"]),
+  },
+  {
+    packageName: "esbuild",
+    advisoryIds: new Set(["1120679", "GHSA-gv7w-rqvm-qjhr"]),
+    unaffectedVersions: new Set(["0.28.0"]),
   },
 ];
 
