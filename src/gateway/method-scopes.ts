@@ -1,7 +1,7 @@
 // Gateway method authorization scope resolver.
 // Maps static and plugin-defined gateway methods to operator scopes.
 import { normalizeOptionalString as normalizeSessionActionParam } from "@openclaw/normalization-core/string-coerce";
-import { getPluginRegistryState } from "../plugins/runtime-state.js";
+import { getActivePluginChannelRegistryFromState } from "../plugins/runtime-state.js";
 import { resolveReservedGatewayMethodScope } from "../shared/gateway-method-policy.js";
 import {
   isCoreGatewayMethodClassified,
@@ -51,9 +51,13 @@ function resolveScopedMethod(method: string): OperatorScope | undefined {
   if (reservedScope) {
     return reservedScope;
   }
-  const pluginDescriptor = getPluginRegistryState()?.activeRegistry?.gatewayMethodDescriptors?.find(
-    (descriptor) => descriptor.name === method,
-  );
+  // In gateway mode plugins are pinned to the channel/httpRoute surfaces, not
+  // activeRegistry. Use the channel-surface helper, which returns
+  // channel.registry ?? activeRegistry and so covers gateway + standalone/test.
+  const pluginDescriptor =
+    getActivePluginChannelRegistryFromState()?.gatewayMethodDescriptors?.find(
+      (descriptor) => descriptor.name === method,
+    );
   const pluginScope = pluginDescriptor?.scope;
   return pluginScope === "node" || pluginScope === "dynamic" ? undefined : pluginScope;
 }
@@ -102,7 +106,7 @@ function resolveSessionActionRegisteredScopes(params: unknown): OperatorScope[] 
   if (!pluginId || !actionId) {
     return undefined;
   }
-  const registration = getPluginRegistryState()?.activeRegistry?.sessionActions?.find(
+  const registration = getActivePluginChannelRegistryFromState()?.sessionActions?.find(
     (entry) => entry.pluginId === pluginId && entry.action.id === actionId,
   );
   if (!registration) {

@@ -3,7 +3,11 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  pinActivePluginChannelRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 import {
   authorizeOperatorScopesForMethod,
   isGatewayMethodClassified,
@@ -224,6 +228,60 @@ describe("method scope resolution", () => {
     expect(resolveLeastPrivilegeOperatorScopesForMethod(RESERVED_ADMIN_PLUGIN_METHOD)).toEqual([
       "operator.admin",
     ]);
+  });
+});
+
+describe("plugin scope resolution in gateway (channel-pinned) mode", () => {
+  // Regression: in gateway mode the plugin registry is installed via
+  // pinActivePluginChannelRegistry (channel surface) and `activeRegistry` is
+  // never set. Scope resolution must read the channel-pinned registry; otherwise
+  // every plugin-registered gateway method falls through to the admin default
+  // and rejects operator.write clients (e.g. a bridge plugin's own gateway
+  // method registered with operator.write).
+  afterEach(() => {
+    resetPluginRuntimeStateForTest();
+  });
+
+  it("resolves a plugin gateway method scope from the channel-pinned registry", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.gatewayHandlers["plugin.bridge.register"] = pluginHandler;
+    registry.gatewayMethodDescriptors.push(
+      createPluginGatewayMethodDescriptor({
+        pluginId: "bridge",
+        name: "plugin.bridge.register",
+        handler: pluginHandler,
+        scope: "operator.write",
+      }),
+    );
+    pinActivePluginChannelRegistry(registry);
+
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("plugin.bridge.register")).toEqual([
+      "operator.write",
+    ]);
+  });
+
+  it("resolves a plugin session action scope from the channel-pinned registry", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.sessionActions = [
+      {
+        pluginId: "scope-plugin",
+        pluginName: "Scope Plugin",
+        source: "test",
+        action: {
+          id: "view",
+          requiredScopes: ["operator.read"],
+          handler: () => ({ result: { ok: true } }),
+        },
+      },
+    ];
+    pinActivePluginChannelRegistry(registry);
+
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("plugins.sessionAction", {
+        pluginId: "scope-plugin",
+        actionId: "view",
+      }),
+    ).toEqual(["operator.read"]);
   });
 });
 
