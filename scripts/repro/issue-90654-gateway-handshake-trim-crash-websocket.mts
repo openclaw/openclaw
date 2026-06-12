@@ -11,6 +11,7 @@ import {
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
 } from "../../src/infra/device-identity.js";
+import { rawDataToString } from "../../src/infra/ws.js";
 
 async function getFreePort(): Promise<number> {
   const net = await import("node:net");
@@ -101,7 +102,7 @@ async function main() {
     );
 
     ws.on("message", (data) => {
-      const text = String(data);
+      const text = rawDataToString(data);
       console.log("[ws] message:", text.slice(0, 500));
       let frame: unknown;
       try {
