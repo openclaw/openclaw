@@ -55,11 +55,11 @@ type EvidenceSummaryForTest = {
       title: string;
     };
     mapping: {
-      profile: { id: string };
+      profile: string;
       coverage: [];
     };
     execution: {
-      runner: { id: string };
+      runner: string;
       environment: { ref: null; os: string; nodeVersion: string };
       provider: {
         id: string;
@@ -114,9 +114,9 @@ function makeTelegramRttEvidenceSummary(
         id,
         title,
       },
-      mapping: { profile: { id: "release" }, coverage: [] },
+      mapping: { profile: "release", coverage: [] },
       execution: {
-        runner: { id: "docker" },
+        runner: "docker",
         environment: { ref: null, os: "linux", nodeVersion: "v24.0.0" },
         provider: {
           id: "openai",

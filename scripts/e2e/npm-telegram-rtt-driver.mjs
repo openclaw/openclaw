@@ -409,11 +409,11 @@ function buildEvidenceSummary(params) {
           title: scenario.title,
         },
         mapping: {
-          profile: { id: "release" },
+          profile: "release",
           coverage: buildScenarioCoverage(scenario.id),
         },
         execution: {
-          runner: { id: "docker" },
+          runner: "docker",
           environment: {
             ref: process.env.OPENCLAW_QA_REF?.trim() || process.env.GITHUB_SHA?.trim() || null,
             os: process.platform,

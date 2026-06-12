@@ -85,11 +85,11 @@ function legacyTelegramSummaryToEvidenceSummary(summary) {
         title: scenario?.title ?? scenario?.id ?? "Legacy Telegram scenario",
       },
       mapping: {
-        profile: { id: "release" },
+        profile: "release",
         coverage: [],
       },
       execution: {
-        runner: { id: "legacy-telegram-qa" },
+        runner: "legacy-telegram-qa",
         environment: {
           ref: null,
           os: "unknown",

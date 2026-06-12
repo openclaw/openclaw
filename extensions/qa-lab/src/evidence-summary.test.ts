@@ -58,56 +58,35 @@ describe("evidence summary", () => {
         },
       },
       mapping: {
-        profile: {
-          id: "smoke-ci",
-        },
+        profile: "smoke-ci",
         coverage: [
           {
             id: "channels.dm",
             role: "primary",
-            sourcePath: "qa/scenarios/channels/dm-chat-baseline.md",
             surfaceIds: ["dm"],
             categoryIds: ["channels.dm"],
-            refIds: [
-              "code:extensions/qa-channel/src/gateway.ts",
-              "docs:docs/channels/qa-channel.md",
-            ],
           },
           {
             id: "channels.qa-channel",
             role: "secondary",
-            sourcePath: "qa/scenarios/channels/dm-chat-baseline.md",
             surfaceIds: ["dm"],
             categoryIds: [],
-            refIds: [
-              "code:extensions/qa-channel/src/gateway.ts",
-              "docs:docs/channels/qa-channel.md",
-            ],
           },
         ],
         refs: [
           {
-            id: "docs:docs/channels/qa-channel.md",
             kind: "docs",
             path: "docs/channels/qa-channel.md",
-            sourcePath: "qa/scenarios/channels/dm-chat-baseline.md",
           },
           {
-            id: "code:extensions/qa-channel/src/gateway.ts",
             kind: "code",
             path: "extensions/qa-channel/src/gateway.ts",
-            sourcePath: "qa/scenarios/channels/dm-chat-baseline.md",
           },
         ],
-        runtimeParity: {
-          id: "standard",
-          sourcePath: "qa/scenarios/channels/dm-chat-baseline.md",
-        },
+        runtimeParityTier: "standard",
       },
       execution: {
-        runner: {
-          id: "host",
-        },
+        runner: "host",
         provider: {
           id: "openai",
           live: false,
@@ -184,9 +163,7 @@ describe("evidence summary", () => {
           title: "Telegram canary",
         },
         mapping: {
-          profile: {
-            id: "release",
-          },
+          profile: "release",
           coverage: [
             {
               id: "channels.telegram.live",
@@ -203,9 +180,7 @@ describe("evidence summary", () => {
           ],
         },
         execution: expect.objectContaining({
-          runner: {
-            id: "crabbox",
-          },
+          runner: "crabbox",
           provider: {
             id: "openai",
             live: true,
@@ -294,40 +269,30 @@ describe("evidence summary", () => {
           },
         },
         mapping: {
-          profile: {
-            id: "smoke-ci",
-          },
+          profile: "smoke-ci",
           coverage: [
             {
               id: "runtime.agent-runner",
               role: "primary",
-              sourcePath: "src/agents/agent-runner.e2e.test.ts",
               surfaceIds: ["agent-runtime-and-provider-execution"],
               categoryIds: ["agent-runtime-and-provider-execution.agent-turn-execution"],
-              refIds: ["code:src/agents/agent-runner.ts"],
             },
             {
               id: "runtime.delivery",
               role: "primary",
-              sourcePath: "src/agents/agent-runner.e2e.test.ts",
               surfaceIds: ["agent-runtime-and-provider-execution"],
               categoryIds: ["agent-runtime-and-provider-execution.agent-turn-execution"],
-              refIds: ["code:src/agents/agent-runner.ts"],
             },
           ],
           refs: [
             {
-              id: "code:src/agents/agent-runner.ts",
               kind: "code",
               path: "src/agents/agent-runner.ts",
-              sourcePath: "src/agents/agent-runner.e2e.test.ts",
             },
           ],
         },
         execution: expect.objectContaining({
-          runner: {
-            id: "vitest",
-          },
+          runner: "vitest",
           provider: expect.objectContaining({
             live: false,
             fixture: "mock-openai",
@@ -399,31 +364,23 @@ describe("evidence summary", () => {
           {
             id: "control-ui.browser",
             role: "primary",
-            sourcePath: "ui/control-ui.e2e.test.ts",
             surfaceIds: ["browser-control-ui-and-webchat"],
             categoryIds: ["browser-control-ui-and-webchat.browser-ui"],
-            refIds: ["code:ui/", "docs:docs/concepts/qa-e2e-automation.md"],
           },
         ],
         refs: [
           {
-            id: "docs:docs/concepts/qa-e2e-automation.md",
             kind: "docs",
             path: "docs/concepts/qa-e2e-automation.md",
-            sourcePath: "ui/control-ui.e2e.test.ts",
           },
           {
-            id: "code:ui/",
             kind: "code",
             path: "ui/",
-            sourcePath: "ui/control-ui.e2e.test.ts",
           },
         ],
       },
       execution: {
-        runner: {
-          id: "playwright",
-        },
+        runner: "playwright",
         artifacts: [
           {
             kind: "runner-result",
@@ -472,7 +429,7 @@ describe("evidence summary", () => {
       scenarioResults: [{ name: "DM baseline conversation", status: "pass" }],
     });
 
-    expect(evidence.entries[0]?.mapping.profile.id).toBe("experimental-profile");
+    expect(evidence.entries[0]?.mapping.profile).toBe("experimental-profile");
   });
 
   it("keeps mock non-OpenAI model refs attributed to their model provider", () => {

@@ -10,14 +10,8 @@ export const QA_EVIDENCE_SUMMARY_SCHEMA_VERSION = 2;
 const qaEvidenceStatusSchema = z.enum(["pass", "fail", "blocked", "skipped"]);
 const nonEmptyStringSchema = z.string().trim().min(1);
 const nullableStringSchema = nonEmptyStringSchema.nullable();
-const optionalSourcePathShape = {
-  sourcePath: nonEmptyStringSchema.optional(),
-} as const;
 const qaEvidenceProfileIdSchema = nonEmptyStringSchema;
 const qaEvidenceIdSchema = z.object({ id: nonEmptyStringSchema });
-const qaEvidenceIdWithSourcePathSchema = qaEvidenceIdSchema
-  .extend(optionalSourcePathShape)
-  .strict();
 
 const qaEvidenceProviderSchema = z
   .object({
@@ -92,34 +86,27 @@ const qaEvidenceTestSchema = z
   })
   .strict();
 
-const qaEvidenceRefSchema = qaEvidenceIdWithSourcePathSchema
-  .extend({
+const qaEvidenceRefSchema = z
+  .object({
     kind: nonEmptyStringSchema,
     path: nonEmptyStringSchema,
   })
   .strict();
 
-const qaEvidenceCoverageSchema = qaEvidenceIdWithSourcePathSchema
+const qaEvidenceCoverageSchema = qaEvidenceIdSchema
   .extend({
     role: nonEmptyStringSchema,
     surfaceIds: z.array(nonEmptyStringSchema),
     categoryIds: z.array(nonEmptyStringSchema),
-    refIds: z.array(nonEmptyStringSchema).optional(),
   })
   .strict();
 
 const qaEvidenceMappingSchema = z
   .object({
-    profile: qaEvidenceIdWithSourcePathSchema,
-    taxonomy: z
-      .object({
-        sourcePath: nonEmptyStringSchema,
-      })
-      .strict()
-      .optional(),
+    profile: qaEvidenceProfileIdSchema,
     coverage: z.array(qaEvidenceCoverageSchema),
     refs: z.array(qaEvidenceRefSchema).optional(),
-    runtimeParity: qaEvidenceIdWithSourcePathSchema.optional(),
+    runtimeParityTier: nonEmptyStringSchema.optional(),
   })
   .strict();
 
@@ -133,11 +120,7 @@ const qaEvidenceArtifactSchema = z
 
 const qaEvidenceExecutionSchema = z
   .object({
-    runner: z
-      .object({
-        id: nonEmptyStringSchema,
-      })
-      .strict(),
+    runner: nonEmptyStringSchema,
     environment: qaEvidenceEnvironmentSchema,
     provider: qaEvidenceProviderSchema,
     channel: qaEvidenceChannelSchema.optional(),
@@ -258,14 +241,11 @@ type QaEvidenceBuildBase = {
 function buildQaEvidenceRefs(params: {
   docsRefs?: readonly string[];
   codeRefs?: readonly string[];
-  sourcePath?: string;
 }) {
   const buildRef = (kind: "docs" | "code", refPath: string) => {
     const ref = {
-      id: `${kind}:${refPath}`,
       kind,
       path: refPath,
-      sourcePath: params.sourcePath,
     };
     return ref;
   };
@@ -273,7 +253,7 @@ function buildQaEvidenceRefs(params: {
     ...(params.docsRefs ?? []).map((path) => buildRef("docs", path)),
     ...(params.codeRefs ?? []).map((path) => buildRef("code", path)),
   ];
-  return [...new Map(refs.map((ref) => [ref.id, ref])).values()];
+  return [...new Map(refs.map((ref) => [`${ref.kind}:${ref.path}`, ref])).values()];
 }
 
 function buildQaEvidenceCoverage(params: {
@@ -281,19 +261,14 @@ function buildQaEvidenceCoverage(params: {
   secondaryIds?: readonly string[];
   surfaceIds?: readonly string[];
   categoryIds?: readonly string[];
-  refIds?: readonly string[];
-  sourcePath?: string;
 }) {
   const surfaceIds = uniqueSortedStrings(params.surfaceIds ?? []);
   const categoryIds = uniqueSortedStrings(params.categoryIds ?? []);
-  const refIds = uniqueSortedStrings(params.refIds ?? []);
   const buildCoverage = (id: string, role: "primary" | "secondary") => ({
     id,
     role,
-    sourcePath: params.sourcePath,
     surfaceIds,
     categoryIds: role === "primary" ? categoryIds : [],
-    refIds: refIds.length > 0 ? refIds : undefined,
   });
   return [
     ...uniqueSortedStrings(params.primaryIds ?? []).map((id) => buildCoverage(id, "primary")),
@@ -508,14 +483,12 @@ export function buildQaSuiteEvidenceSummary(
       ...(scenario?.coverage?.secondary ?? []),
     ]);
     const surfaceIds = uniqueSortedStrings([...(scenario?.surfaces ?? []), scenario?.surface]);
-    const runtimeParity = scenario?.runtimeParity ?? scenario?.runtimeParityTier;
+    const runtimeParityTier = scenario?.runtimeParityTier ?? scenario?.runtimeParity;
     const testId = scenario?.id ?? result.id ?? result.name ?? `scenario-${index + 1}`;
     const refs = buildQaEvidenceRefs({
       docsRefs: scenario?.docsRefs,
       codeRefs: scenario?.codeRefs,
-      sourcePath: scenario?.sourcePath,
     });
-    const refIds = refs.map((ref) => ref.id);
     const timing = timingForLiveTransportCheck(result);
     return {
       test: {
@@ -525,9 +498,7 @@ export function buildQaSuiteEvidenceSummary(
         source: scenario?.sourcePath ? { path: scenario.sourcePath } : undefined,
       },
       mapping: {
-        profile: {
-          id: profile,
-        },
+        profile,
         coverage: buildQaEvidenceCoverage({
           primaryIds: primaryCoverageIds,
           secondaryIds: coverageIds.filter(
@@ -535,21 +506,12 @@ export function buildQaSuiteEvidenceSummary(
           ),
           surfaceIds,
           categoryIds: uniqueSortedStrings([scenario?.category, ...primaryCoverageIds]),
-          refIds,
-          sourcePath: scenario?.sourcePath,
         }),
         refs: refs.length > 0 ? refs : undefined,
-        runtimeParity: runtimeParity
-          ? {
-              id: runtimeParity,
-              sourcePath: scenario?.sourcePath,
-            }
-          : undefined,
+        runtimeParityTier,
       },
       execution: {
-        runner: {
-          id: runner,
-        },
+        runner,
         environment,
         provider,
         channel: {
@@ -599,7 +561,6 @@ function buildTestRunnerEvidenceSummary(
     const refs = buildQaEvidenceRefs({
       docsRefs: target?.docsRefs,
       codeRefs: target?.codeRefs,
-      sourcePath: target?.sourcePath,
     });
     const timing = timingForTestResult(result);
     return {
@@ -610,22 +571,16 @@ function buildTestRunnerEvidenceSummary(
         source: sourcePath ? { path: sourcePath } : undefined,
       },
       mapping: {
-        profile: {
-          id: profile,
-        },
+        profile,
         coverage: buildQaEvidenceCoverage({
           primaryIds: target?.coverageIds ?? [],
           surfaceIds: target?.surfaceIds ?? [],
           categoryIds: target?.categoryIds ?? [],
-          refIds: refs.map((ref) => ref.id),
-          sourcePath: target?.sourcePath,
         }),
         refs: refs.length > 0 ? refs : undefined,
       },
       execution: {
-        runner: {
-          id: runner,
-        },
+        runner,
         environment,
         provider,
         packageSource,
@@ -713,15 +668,11 @@ export function buildLiveTransportEvidenceSummary(
         title: check.title ?? check.name ?? testId,
       },
       mapping: {
-        profile: {
-          id: profile,
-        },
+        profile,
         coverage,
       },
       execution: {
-        runner: {
-          id: runner,
-        },
+        runner,
         environment,
         provider,
         channel: {

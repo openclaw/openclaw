@@ -36,11 +36,11 @@ function makeTelegramOutput({ includeReport = true, summary = {} } = {}) {
             title: "Telegram status command reply",
           },
           mapping: {
-            profile: { id: "release" },
+            profile: "release",
             coverage: [],
           },
           execution: {
-            runner: { id: "host" },
+            runner: "host",
             environment: {
               ref: null,
               os: "darwin",
