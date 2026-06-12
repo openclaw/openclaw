@@ -195,9 +195,25 @@ export function startExtensionBridgeServer(opts: {
 
   // ---- HTTP (discovery + /whoami intake) ------------------------------------
   const server = http.createServer((req, res) => {
+    // Browser-extension service workers reach this loopback intake cross-origin
+    // (chrome-extension:// -> http://127.0.0.1) and across a private-network
+    // boundary. Current Chrome enforces Private Network Access: without CORS +
+    // an Access-Control-Allow-Private-Network ack it silently blocks the
+    // discovery probe (the fetch hangs) and the relay never connects. Node-side
+    // callers (Playwright connectOverCDP, curl) are not subject to PNA, so this
+    // only bites the extension path.
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "*");
+    res.setHeader("Access-Control-Allow-Private-Network", "true");
+    if (req.method === "OPTIONS") {
+      res.writeHead(204);
+      return res.end();
+    }
     if (req.method === "HEAD" || (req.method === "GET" && req.url === "/")) {
       res.writeHead(200);
-      return res.end("cdp-bridge up");
+      // HEAD must not carry a body or clients wait on the framing.
+      return res.end(req.method === "HEAD" ? undefined : "cdp-bridge up");
     }
     if (req.method === "GET" && req.url === "/whoami") {
       res.writeHead(200, { "content-type": "application/json" });
