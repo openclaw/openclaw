@@ -99,11 +99,11 @@ describeLive("moonshot plugin live", () => {
   }, 180_000);
 });
 
-function resolveKimiK27CodeModels(): Model<"openai-completions">[] {
+function resolveMoonshotModels(modelId: string): Model<"openai-completions">[] {
   const provider = buildMoonshotProvider();
-  const model = provider.models.find((entry) => entry.id === "kimi-k2.7-code");
+  const model = provider.models.find((entry) => entry.id === modelId);
   if (!model) {
-    throw new Error("Moonshot catalog does not include kimi-k2.7-code");
+    throw new Error(`Moonshot catalog does not include ${modelId}`);
   }
   const defaultModel = {
     provider: "moonshot",
@@ -128,17 +128,104 @@ async function collectDoneMessage(
   let doneMessage: AssistantMessage | undefined;
   for await (const event of stream) {
     if (event.type === "error") {
-      throw new Error(event.error?.errorMessage || "Moonshot K2.7 live request failed");
+      throw new Error(event.error?.errorMessage || "Moonshot live request failed");
     }
     if (event.type === "done") {
       doneMessage = event.message;
     }
   }
   if (!doneMessage) {
-    throw new Error("Moonshot K2.7 live stream ended without a done message");
+    throw new Error("Moonshot live stream ended without a done message");
   }
   return doneMessage;
 }
+
+describeModelLive("moonshot K2.6 replay live", () => {
+  it("accepts a cross-model tool-call replay after backfilling reasoning_content", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const wrappedStream = provider.wrapStreamFn?.({
+      provider: "moonshot",
+      modelId: "kimi-k2.6",
+      thinkingLevel: "low",
+      streamFn: streamSimple,
+    } as never);
+    if (!wrappedStream) {
+      throw new Error("Moonshot provider did not register a stream wrapper");
+    }
+
+    const tool = createNoopTool();
+    const replayContext: Context = {
+      messages: [
+        {
+          role: "user",
+          content: "Call the noop tool.",
+          timestamp: Date.now(),
+        },
+        {
+          role: "assistant",
+          api: "openai-responses",
+          provider: "openai",
+          model: "gpt-5.5",
+          stopReason: "toolUse",
+          content: [{ type: "toolCall", id: "call_cross_model", name: "noop", arguments: {} }],
+          timestamp: Date.now(),
+        } as AssistantMessage,
+        {
+          role: "toolResult",
+          toolCallId: "call_cross_model",
+          toolName: "noop",
+          content: [{ type: "text", text: "ok" }],
+          isError: false,
+          timestamp: Date.now(),
+        },
+        {
+          role: "user",
+          content: "The tool returned ok. Reply with exactly: ok",
+          timestamp: Date.now(),
+        },
+      ],
+      tools: [tool],
+    };
+
+    const runScenario = async (model: Model<"openai-completions">) => {
+      let payload: Record<string, unknown> | undefined;
+      const response = await collectDoneMessage(
+        wrappedStream(model, replayContext, {
+          apiKey: MOONSHOT_API_KEY,
+          maxTokens: 256,
+          onPayload: (value) => {
+            payload = value as Record<string, unknown>;
+          },
+        }) as AsyncIterable<{
+          type: string;
+          message?: AssistantMessage;
+          error?: AssistantMessage;
+        }>,
+      );
+
+      const messages = payload?.messages as Array<Record<string, unknown>> | undefined;
+      const replayedAssistant = messages?.find(
+        (message) => message.role === "assistant" && Array.isArray(message.tool_calls),
+      );
+      expect(replayedAssistant?.reasoning_content).toBe("");
+      expect(response.stopReason).not.toBe("error");
+    };
+
+    let lastAuthError: unknown;
+    for (const model of resolveMoonshotModels("kimi-k2.6")) {
+      try {
+        await runScenario(model);
+        return;
+      } catch (error) {
+        if (!isMoonshotAuthDrift(error)) {
+          throw error;
+        }
+        lastAuthError = error;
+      }
+    }
+    throw toLintErrorObject(lastAuthError, "Moonshot K2.6 rejected the API key in both regions");
+  }, 180_000);
+});
 
 describeModelLive("moonshot K2.7 Code live", () => {
   it("omits thinking controls and completes a replayed tool turn", async () => {
@@ -244,7 +331,7 @@ describeModelLive("moonshot K2.7 Code live", () => {
     };
 
     let lastAuthError: unknown;
-    for (const model of resolveKimiK27CodeModels()) {
+    for (const model of resolveMoonshotModels("kimi-k2.7-code")) {
       try {
         await runScenario(model);
         return;
