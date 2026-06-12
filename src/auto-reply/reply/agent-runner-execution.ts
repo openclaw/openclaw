@@ -2265,6 +2265,7 @@ export async function runAgentTurnWithFallback(params: {
                 runId,
                 promptCacheKey: params.opts?.promptCacheKey,
                 allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
+                isFallback: runOptions?.isFallback,
                 model,
               });
             const agentHarnessPolicy = sessionRuntimeOverride

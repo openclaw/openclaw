@@ -1525,7 +1525,7 @@ export async function runWithModelFallback<T>(
       run: params.run,
       ...candidate,
       attempts,
-      options: { ...runOptions, isFallback: i > 0 },
+      options: i > 0 ? { ...runOptions, isFallback: true } : runOptions,
       classifyResult: params.classifyResult,
       attempt: i + 1,
       total: candidates.length,
@@ -1738,7 +1738,7 @@ export async function runWithImageModelFallback<T>(params: {
       run: params.run,
       ...candidate,
       attempts,
-      options: { isFallback: i > 0 },
+      options: i > 0 ? { isFallback: true } : undefined,
       attempt: i + 1,
       total: candidates.length,
     });
