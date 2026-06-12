@@ -781,7 +781,7 @@ export async function sendMessageTelegram(
         cfg,
         account,
         chatId,
-        message: (message ?? {}) as TelegramMessageLike,
+        message: message ?? {},
         messageId,
         text: chunk.plainText,
         ...(acceptedParams?.message_thread_id !== undefined
