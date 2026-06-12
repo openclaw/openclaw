@@ -70,10 +70,10 @@ export type GSARResult = {
  * calibrateWeights() if your evidence sources have different reliability.
  */
 export const DEFAULT_WEIGHTS: EvidenceWeights = {
-  grounded: 1.0,
+  grounded: 1,
   complementary: 0.5,
-  ungrounded: 1.0,
-  contradicted: 1.0,
+  ungrounded: 1,
+  contradicted: 1,
 };
 
 /**
@@ -110,7 +110,7 @@ export const DEFAULT_THRESHOLDS: GSARThresholds = {
 export function computeGroundednessScore(
   partition: ClaimPartition,
   weights: EvidenceWeights = DEFAULT_WEIGHTS,
-  rho = 1.0,
+  rho = 1,
 ): number {
   const wG = partition.grounded * weights.grounded;
   const wU = partition.ungrounded * weights.ungrounded;
@@ -142,7 +142,7 @@ export function evaluateGroundedness(
   partition: ClaimPartition,
   weights: EvidenceWeights = DEFAULT_WEIGHTS,
   thresholds: GSARThresholds = DEFAULT_THRESHOLDS,
-  rho = 1.0,
+  rho = 1,
 ): GSARResult {
   const score = computeGroundednessScore(partition, weights, rho);
   const decision = gsarDecision(score, thresholds);
@@ -271,7 +271,7 @@ export class GroundednessCondition extends TerminationCondition {
     private readonly scorer: GSARScorerFn,
     private readonly weights: EvidenceWeights = DEFAULT_WEIGHTS,
     private readonly thresholds: GSARThresholds = DEFAULT_THRESHOLDS,
-    private readonly rho = 1.0,
+    private readonly rho = 1,
   ) {
     super();
   }
@@ -319,7 +319,7 @@ export type LabeledExample = {
 export function calibrateThresholds(
   examples: LabeledExample[],
   weights: EvidenceWeights = DEFAULT_WEIGHTS,
-  rho = 1.0,
+  rho = 1,
 ): GSARThresholds {
   const scored = examples.map((e) => ({
     score: computeGroundednessScore(e.partition, weights, rho),
@@ -356,7 +356,7 @@ export function measureThresholdAccuracy(
   examples: LabeledExample[],
   thresholds: GSARThresholds,
   weights: EvidenceWeights = DEFAULT_WEIGHTS,
-  rho = 1.0,
+  rho = 1,
 ): number {
   if (examples.length === 0) {
     return 0;

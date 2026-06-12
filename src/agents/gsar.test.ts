@@ -132,7 +132,7 @@ describe("P4 — Complementary value: K contributes positively but ≤ equivalen
 
 describe("P5 — Contradiction non-suppression: X stays in denominator with ρ", () => {
   it("score with contradiction < score without contradiction (same other claims)", async () => {
-    const withX = computeGroundednessScore(p(3, 0, 1, 0), DEFAULT_WEIGHTS, 1.0);
+    const withX = computeGroundednessScore(p(3, 0, 1, 0), DEFAULT_WEIGHTS, 1);
     const withoutX = computeGroundednessScore(p(3, 0, 0, 0));
     expect(withX).toBeLessThan(withoutX);
   });
@@ -147,16 +147,16 @@ describe("P5 — Contradiction non-suppression: X stays in denominator with ρ",
 describe("P6 — Inference-observation asymmetry: w(inference) < w(tool_match) decreases S", () => {
   it("replacing tool_match weights with inference weights strictly decreases S", async () => {
     const toolMatchWeights: EvidenceWeights = {
-      grounded: 1.0,
+      grounded: 1,
       complementary: 0.5,
-      ungrounded: 1.0,
-      contradicted: 1.0,
+      ungrounded: 1,
+      contradicted: 1,
     };
     const inferenceWeights: EvidenceWeights = {
       grounded: 0.7, // inference is weaker than tool_match
       complementary: 0.3,
-      ungrounded: 1.0,
-      contradicted: 1.0,
+      ungrounded: 1,
+      contradicted: 1,
     };
     const partition = p(3, 1, 0, 1);
     const toolScore = computeGroundednessScore(partition, toolMatchWeights);
@@ -171,7 +171,7 @@ describe("three-tier decision function δ(S)", () => {
   it("proceed at S ≥ 0.80", async () => {
     expect(gsarDecision(0.8)).toBe("proceed");
     expect(gsarDecision(0.95)).toBe("proceed");
-    expect(gsarDecision(1.0)).toBe("proceed");
+    expect(gsarDecision(1)).toBe("proceed");
   });
 
   it("regenerate at 0.65 ≤ S < 0.80", async () => {
@@ -181,7 +181,7 @@ describe("three-tier decision function δ(S)", () => {
   });
 
   it("replan at S < 0.65", async () => {
-    expect(gsarDecision(0.0)).toBe("replan");
+    expect(gsarDecision(0)).toBe("replan");
     expect(gsarDecision(0.5)).toBe("replan");
     expect(gsarDecision(0.649)).toBe("replan");
   });
@@ -399,11 +399,11 @@ describe("joint improvement — GSAR × termination algebra", () => {
   it("joint improvement summary: GSAR+algebra wins on both efficiency and quality", async () => {
     const providers: Provider[] = ["claude", "gpt", "hallucinator", "recovering"];
     const results = await Promise.all(
-      providers.map(async (p) => ({
-        provider: p,
-        flat: await run(p, "flat"),
-        algebra: await run(p, "algebra_only"),
-        joint: await run(p, "gsar_algebra"),
+      providers.map(async (provider) => ({
+        provider,
+        flat: await run(provider, "flat"),
+        algebra: await run(provider, "algebra_only"),
+        joint: await run(provider, "gsar_algebra"),
       })),
     );
 
