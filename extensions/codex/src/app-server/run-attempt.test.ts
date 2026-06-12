@@ -2363,12 +2363,12 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).not.toContain(datedMemory);
   });
 
-  it("falls back to Codex memory recall guidance when the memory prompt builder is absent", async () => {
+  it("does not synthesize memory recall guidance without a registered memory prompt builder", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    const datedMemory = "User avoids Chase cards while over 5/24.";
-    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
-    await fs.writeFile(path.join(workspaceDir, "memory/2026-06-09.md"), datedMemory);
+    const memorySummary = "User avoids Chase cards while over 5/24.";
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), memorySummary);
     testing.setOpenClawCodingToolsFactoryForTests(() => [
       createRuntimeDynamicTool("memory_search"),
       createRuntimeDynamicTool("memory_get"),
@@ -2383,13 +2383,12 @@ describe("runCodexAppServerAttempt", () => {
       workspaceDir,
     );
 
-    expect(collaborationInstructions).toContain("## Memory Recall");
-    expect(collaborationInstructions).toContain("run memory_search");
-    expect(collaborationInstructions).toContain("then use memory_get");
-    expect(collaborationInstructions).toContain("Use `tool_search` first");
-    expect(collaborationInstructions).not.toContain(datedMemory);
+    expect(collaborationInstructions).not.toContain("## Memory Recall");
+    expect(collaborationInstructions).toContain("OpenClaw Workspace Memory");
+    expect(collaborationInstructions).not.toContain("Use `tool_search` first");
+    expect(collaborationInstructions).not.toContain(memorySummary);
     expect(inputText).toBe("hello");
-    expect(inputText).not.toContain(datedMemory);
+    expect(inputText).not.toContain(memorySummary);
   });
 
   it("sends workspace bootstrap instructions through Codex app-server payloads", async () => {

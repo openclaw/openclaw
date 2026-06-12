@@ -35,7 +35,10 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
       ({ onlyPluginIds }: { onlyPluginIds?: readonly string[] }) =>
         (onlyPluginIds ?? []).filter((pluginId) => pluginId === "openai"),
     );
-    mocks.resolveActivatableProviderOwnerPluginIds.mockReturnValue([]);
+    mocks.resolveActivatableProviderOwnerPluginIds.mockImplementation(
+      ({ pluginIds }: { pluginIds: readonly string[] }) =>
+        pluginIds.filter((pluginId) => pluginId === "memory-core"),
+    );
     vi.resetModules();
     ({ ensureSelectedAgentHarnessPlugin } = await import("./runtime-plugin.js"));
   });
@@ -62,7 +65,7 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
       expect.objectContaining({
         scope: "all",
         workspaceDir: "/tmp/workspace",
-        onlyPluginIds: ["codex", "openai"],
+        onlyPluginIds: ["codex", "openai", "memory-core"],
       }),
     );
   });
@@ -88,7 +91,7 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
       expect.objectContaining({
         scope: "all",
         workspaceDir: "/tmp/workspace",
-        onlyPluginIds: ["codex", "openai"],
+        onlyPluginIds: ["codex", "openai", "memory-core"],
       }),
     );
   });
@@ -116,10 +119,10 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
       expect.objectContaining({
         scope: "all",
         workspaceDir: "/tmp/workspace",
-        onlyPluginIds: ["copilot"],
+        onlyPluginIds: ["copilot", "memory-core"],
         config: expect.objectContaining({
           plugins: expect.objectContaining({
-            allow: ["copilot"],
+            allow: ["copilot", "memory-core"],
             entries: expect.objectContaining({
               copilot: expect.objectContaining({ enabled: true }),
             }),
@@ -198,6 +201,74 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
             entries: expect.objectContaining({
               codex: expect.objectContaining({ enabled: true }),
               openai: expect.objectContaining({ enabled: true }),
+            }),
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("keeps an allowed memory slot plugin in Codex harness scoped loads", async () => {
+    await ensureSelectedAgentHarnessPlugin({
+      provider: "openai",
+      modelId: "gpt-5.5-pro",
+      config: {
+        plugins: {
+          allow: ["codex", "openai", "memory-core"],
+          entries: {
+            codex: { enabled: true },
+            openai: { enabled: true },
+          },
+        },
+      } as OpenClawConfig,
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: "all",
+        workspaceDir: "/tmp/workspace",
+        onlyPluginIds: ["codex", "openai", "memory-core"],
+        config: expect.objectContaining({
+          plugins: expect.objectContaining({
+            allow: ["codex", "openai", "memory-core"],
+            entries: expect.objectContaining({
+              codex: expect.objectContaining({ enabled: true }),
+              openai: expect.objectContaining({ enabled: true }),
+              "memory-core": expect.objectContaining({ enabled: true }),
+            }),
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("does not auto-activate an untrusted workspace memory slot plugin", async () => {
+    await ensureSelectedAgentHarnessPlugin({
+      provider: "openai",
+      modelId: "gpt-5.5-pro",
+      config: {
+        plugins: {
+          slots: { memory: "workspace-memory" },
+        },
+      } as OpenClawConfig,
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(mocks.resolveActivatableProviderOwnerPluginIds).toHaveBeenCalledWith({
+      pluginIds: ["workspace-memory"],
+      config: expect.any(Object),
+      workspaceDir: "/tmp/workspace",
+    });
+    expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: "all",
+        workspaceDir: "/tmp/workspace",
+        onlyPluginIds: ["codex", "openai"],
+        config: expect.objectContaining({
+          plugins: expect.objectContaining({
+            entries: expect.not.objectContaining({
+              "workspace-memory": expect.anything(),
             }),
           }),
         }),
@@ -292,12 +363,17 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
     });
 
     expect(mocks.resolveBundledProviderCompatPluginIds).not.toHaveBeenCalled();
-    expect(mocks.resolveActivatableProviderOwnerPluginIds).not.toHaveBeenCalled();
+    expect(mocks.resolveActivatableProviderOwnerPluginIds).toHaveBeenCalledTimes(1);
+    expect(mocks.resolveActivatableProviderOwnerPluginIds).toHaveBeenCalledWith({
+      pluginIds: ["memory-core"],
+      config: undefined,
+      workspaceDir: "/tmp/workspace",
+    });
     expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith(
       expect.objectContaining({
         scope: "all",
         workspaceDir: "/tmp/workspace",
-        onlyPluginIds: ["codex"],
+        onlyPluginIds: ["codex", "memory-core"],
       }),
     );
   });

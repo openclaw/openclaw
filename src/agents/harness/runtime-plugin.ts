@@ -3,6 +3,7 @@
  */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withActivatedPluginIds } from "../../plugins/activation-context.js";
+import { normalizePluginsConfig } from "../../plugins/config-state.js";
 import {
   resolveActivatableProviderOwnerPluginIds,
   resolveBundledProviderCompatPluginIds,
@@ -37,6 +38,25 @@ function dedupePluginIds(values: readonly string[]): string[] {
 function restrictiveAllowlistOmitsPlugin(config: OpenClawConfig | undefined, pluginId: string) {
   const allow = config?.plugins?.allow ?? [];
   return allow.length > 0 && !allow.includes(pluginId);
+}
+
+function resolveSelectedMemoryPluginIds(params: {
+  config: OpenClawConfig | undefined;
+  workspaceDir: string;
+}): string[] {
+  const memorySlot = normalizePluginsConfig(params.config?.plugins).slots.memory;
+  if (
+    typeof memorySlot !== "string" ||
+    memorySlot.trim().length === 0 ||
+    restrictiveAllowlistOmitsPlugin(params.config, memorySlot)
+  ) {
+    return [];
+  }
+  return resolveActivatableProviderOwnerPluginIds({
+    pluginIds: [memorySlot],
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+  });
 }
 
 function resolveHarnessPluginIds(params: {
@@ -140,15 +160,20 @@ export async function ensureSelectedAgentHarnessPlugin(params: {
     config: params.config,
     workspaceDir: params.workspaceDir,
   });
+  const memoryPluginIds = resolveSelectedMemoryPluginIds({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+  });
+  const scopedPluginIds = dedupePluginIds([...pluginIds, ...memoryPluginIds]);
   const configWithAllowedRuntimePlugins = withRuntimePluginIdsAllowed({
     config: params.config,
     requiredPluginId: runtime,
-    pluginIds,
+    pluginIds: scopedPluginIds,
   });
   const activatedConfig =
     withActivatedPluginIds({
       config: configWithAllowedRuntimePlugins,
-      pluginIds,
+      pluginIds: scopedPluginIds,
     }) ?? configWithAllowedRuntimePlugins;
   ensurePluginRegistryLoaded({
     scope: "all",
@@ -159,6 +184,6 @@ export async function ensureSelectedAgentHarnessPlugin(params: {
         }
       : {}),
     workspaceDir: params.workspaceDir,
-    onlyPluginIds: pluginIds,
+    onlyPluginIds: scopedPluginIds,
   });
 }
