@@ -45,6 +45,7 @@ const STRUCTURED_ATTACHMENT_MEDIA_SOURCE_PARAM_KEYS = [
   "filePath",
   "fileUrl",
   "url",
+  "image",
 ] as const;
 const STRUCTURED_ATTACHMENT_FILE_SOURCE_PARAM_KEYS = new Set(["path", "filePath", "fileUrl"]);
 const SEND_BUFFER_DRY_RUN_MEDIA_URL = "buffer://message-send/attachment";

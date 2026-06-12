@@ -293,6 +293,20 @@ describe("message action media helpers", () => {
     ).toEqual([" /workspace/uploads/photo.png "]);
   });
 
+  it("collects the image param as a structured attachment source", () => {
+    expect(
+      collectActionMediaSourceHints({
+        attachments: [
+          {
+            image: "https://example.com/photo.jpg",
+            mimeType: "image/jpeg",
+            name: "photo.jpg",
+          },
+        ],
+      }),
+    ).toEqual(["https://example.com/photo.jpg"]);
+  });
+
   it("does not collect ignored structured attachments when top-level media wins", () => {
     expect(
       collectActionMediaSourceHints({
