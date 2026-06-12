@@ -488,7 +488,7 @@ describe("resolveOutboundSessionRoute", () => {
       resolvedTarget: {
         to: "wxid_abc123@im.test",
         kind: "group" as const,
-        source: "plugin" as const,
+        source: "directory" as const,
         resolutionSource: "plugin" as const,
       },
       expected: {
