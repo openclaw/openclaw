@@ -325,3 +325,12 @@ describe("FeishuConfigSchema defaultAccount", () => {
     }
   });
 });
+
+describe("FeishuConfigSchema markdown.tableMode", () => {
+  // tableMode is a retained (now inert) field: legacy configs must still load even though
+  // outbound tables always render natively via tag:md (AC-M2-R1).
+  it("accepts markdown.tableMode without error", () => {
+    const result = FeishuConfigSchema.safeParse({ markdown: { tableMode: "ascii" } });
+    expect(result.success).toBe(true);
+  });
+});

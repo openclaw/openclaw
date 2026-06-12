@@ -11,8 +11,6 @@ const {
   mockCreateFeishuClient,
   mockResolveMarkdownTableMode,
   mockResolveFeishuAccount,
-  mockRuntimeConvertMarkdownTables,
-  mockRuntimeResolveMarkdownTableMode,
 } = vi.hoisted(() => ({
   mockConvertMarkdownTables: vi.fn((text: string) => text),
   mockClientGet: vi.fn(),
@@ -21,10 +19,9 @@ const {
   mockCreateFeishuClient: vi.fn(),
   mockResolveMarkdownTableMode: vi.fn(() => "preserve"),
   mockResolveFeishuAccount: vi.fn(),
-  mockRuntimeConvertMarkdownTables: vi.fn((text: string) => text),
-  mockRuntimeResolveMarkdownTableMode: vi.fn(() => "preserve"),
 }));
 
+// The send path no longer calls these helpers; mocks back the "never downgrades" regression guard.
 vi.mock("openclaw/plugin-sdk/markdown-table-runtime", () => ({
   resolveMarkdownTableMode: mockResolveMarkdownTableMode,
 }));
@@ -44,17 +41,6 @@ vi.mock("./client.js", () => ({
 vi.mock("./accounts.js", () => ({
   resolveFeishuAccount: mockResolveFeishuAccount,
   resolveFeishuRuntimeAccount: mockResolveFeishuAccount,
-}));
-
-vi.mock("./runtime.js", () => ({
-  getFeishuRuntime: () => ({
-    channel: {
-      text: {
-        resolveMarkdownTableMode: mockRuntimeResolveMarkdownTableMode,
-        convertMarkdownTables: mockRuntimeConvertMarkdownTables,
-      },
-    },
-  }),
 }));
 
 let buildStructuredCard: typeof import("./send.js").buildStructuredCard;
@@ -124,7 +110,6 @@ describe("getMessageFeishu", () => {
     vi.doUnmock("openclaw/plugin-sdk/text-chunking");
     vi.doUnmock("./client.js");
     vi.doUnmock("./accounts.js");
-    vi.doUnmock("./runtime.js");
     vi.resetModules();
   });
 
@@ -132,8 +117,6 @@ describe("getMessageFeishu", () => {
     vi.clearAllMocks();
     mockResolveMarkdownTableMode.mockReturnValue("preserve");
     mockConvertMarkdownTables.mockImplementation((text: string) => text);
-    mockRuntimeResolveMarkdownTableMode.mockReturnValue("preserve");
-    mockRuntimeConvertMarkdownTables.mockImplementation((text: string) => text);
     mockResolveFeishuAccount.mockReturnValue({
       accountId: "default",
       configured: true,
@@ -150,13 +133,7 @@ describe("getMessageFeishu", () => {
     });
   });
 
-  it("sends text without requiring Feishu runtime text helpers", async () => {
-    mockRuntimeResolveMarkdownTableMode.mockImplementation(() => {
-      throw new Error("Feishu runtime not initialized");
-    });
-    mockRuntimeConvertMarkdownTables.mockImplementation(() => {
-      throw new Error("Feishu runtime not initialized");
-    });
+  it("sends text through the tag:md post path", async () => {
     mockClientPatch.mockResolvedValueOnce({ code: 0 });
     mockCreateFeishuClient.mockReturnValue({
       im: {
@@ -176,11 +153,6 @@ describe("getMessageFeishu", () => {
       text: "hello",
     });
 
-    expect(mockResolveMarkdownTableMode).toHaveBeenCalledWith({
-      cfg: {},
-      channel: "feishu",
-    });
-    expect(mockConvertMarkdownTables).toHaveBeenCalledWith("hello", "preserve");
     expect(typeof result.receipt.sentAt).toBe("number");
     expect(result).toEqual({
       messageId: "om_send",
@@ -237,10 +209,6 @@ describe("getMessageFeishu", () => {
       mentions: [{ openId: "ou_target", name: "Target User", key: "@_user_1" }],
     });
 
-    expect(mockConvertMarkdownTables).toHaveBeenCalledWith(
-      'body <at user_id="ou_body">Body User</at>',
-      "preserve",
-    );
     expect(create).toHaveBeenCalledWith({
       params: { receive_id_type: "chat_id" },
       data: {
@@ -290,6 +258,38 @@ describe("getMessageFeishu", () => {
           },
         ],
       },
+    });
+  });
+
+  it("sends table markdown verbatim to tag:md post without downgrade (AC-M2-H3)", async () => {
+    const createMock = vi.fn().mockResolvedValue({ code: 0, data: { message_id: "om_table" } });
+    mockCreateFeishuClient.mockReturnValue({
+      im: {
+        message: {
+          create: createMock,
+          reply: vi.fn(),
+          get: mockClientGet,
+          list: mockClientList,
+          patch: mockClientPatch,
+        },
+      },
+    });
+
+    const table = "| a | b |\n|---|---|\n| 1 | 2 |";
+    await sendMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      to: "oc_table",
+      text: table,
+    });
+
+    // Table markdown enters the tag:md post payload verbatim; downgrade helpers are no longer called.
+    expect(mockResolveMarkdownTableMode).not.toHaveBeenCalled();
+    expect(mockConvertMarkdownTables).not.toHaveBeenCalled();
+    const sentContent = createMock.mock.calls[0]?.[0]?.data?.content as string;
+    expect(sentContent).toContain("| a | b |");
+    expect(sentContent).toContain("|---|---|");
+    expect(JSON.parse(sentContent)).toEqual({
+      zh_cn: { content: [[{ tag: "md", text: table }]] },
     });
   });
 
@@ -680,12 +680,6 @@ describe("editMessageFeishu", () => {
   });
 
   it("patches post content for text edits", async () => {
-    mockRuntimeResolveMarkdownTableMode.mockImplementation(() => {
-      throw new Error("Feishu runtime not initialized");
-    });
-    mockRuntimeConvertMarkdownTables.mockImplementation(() => {
-      throw new Error("Feishu runtime not initialized");
-    });
     mockClientPatch.mockResolvedValueOnce({ code: 0 });
 
     const result = await editMessageFeishu({
