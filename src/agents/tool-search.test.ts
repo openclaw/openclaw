@@ -356,6 +356,23 @@ describe("Tool Search", () => {
     );
   });
 
+  it("falls back to direct tools when directory search is unavailable", () => {
+    const describeTool = fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "describe");
+    const callTool = fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call");
+    const target = pluginTool("fake_lookup_direct", "Lookup fake records directly");
+
+    const compacted = applyToolSchemaDirectoryCatalog({
+      tools: [describeTool, callTool, target],
+      config: { tools: { toolSearch: { enabled: true, mode: "directory" } } } as never,
+      sessionId: "session-directory-search-denied",
+    });
+
+    expect(compacted.tools).toEqual([target]);
+    expect(compacted.compacted).toBe(false);
+    expect(compacted.catalogRegistered).toBe(false);
+    expect(compacted.catalogToolCount).toBe(0);
+  });
+
   it("bounds the directory prompt and keeps omitted tools searchable", () => {
     const sessionId = "session-bounded-schema-directory";
     const catalogTools = Array.from({ length: 200 }, (_, index) =>
@@ -389,13 +406,14 @@ describe("Tool Search", () => {
   });
 
   it("resolves exact deferred directory tools without fuzzy lookup", () => {
+    const searchTool = fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "search");
     const describeTool = fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "describe");
     const callTool = fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call");
     const target = pluginTool("fake_exact_hidden", "Hidden directory target");
     const config = { tools: { toolSearch: { enabled: true, mode: "directory" } } } as never;
 
     applyToolSchemaDirectoryCatalog({
-      tools: [describeTool, callTool, target],
+      tools: [searchTool, describeTool, callTool, target],
       config,
       sessionId: "session-directory-resolve",
     });
@@ -427,6 +445,7 @@ describe("Tool Search", () => {
   });
 
   it("hydrates likely directory tool schemas while cataloging the rest", () => {
+    const directorySearchTool = fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "search");
     const describeTool = fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "describe");
     const callTool = fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call");
     const searchTool = pluginTool("searxng_search", "Search the web for current facts");
@@ -442,7 +461,7 @@ describe("Tool Search", () => {
     expect(hydrated).toEqual(["message", "searxng_search"]);
 
     const compacted = applyToolSchemaDirectoryCatalog({
-      tools: [describeTool, callTool, messageTool, searchTool, cronTool],
+      tools: [directorySearchTool, describeTool, callTool, messageTool, searchTool, cronTool],
       config: { tools: { toolSearch: { enabled: true, mode: "directory" } } } as never,
       sessionId: "session-schema-directory-hydrated",
       hydrateToolNames: hydrated,
@@ -450,6 +469,7 @@ describe("Tool Search", () => {
 
     expect(compacted.catalogToolCount).toBe(3);
     expect(compacted.tools.map((tool) => tool.name)).toEqual([
+      TOOL_SEARCH_RAW_TOOL_NAME,
       TOOL_DESCRIBE_RAW_TOOL_NAME,
       TOOL_CALL_RAW_TOOL_NAME,
       "message",

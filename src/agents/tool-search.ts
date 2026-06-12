@@ -909,6 +909,15 @@ export function applyToolSchemaDirectoryCatalog(params: {
   catalogRegistered: boolean;
   catalogReused: boolean;
 } {
+  if (!params.tools.some((tool) => tool.name === TOOL_SEARCH_RAW_TOOL_NAME)) {
+    return {
+      tools: params.tools.filter((tool) => !TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name)),
+      compacted: false,
+      catalogToolCount: 0,
+      catalogRegistered: false,
+      catalogReused: false,
+    };
+  }
   const hydrateToolNames = new Set(
     normalizeStringEntries(Array.from(params.hydrateToolNames ?? [])),
   );
