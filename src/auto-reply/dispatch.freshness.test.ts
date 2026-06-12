@@ -92,7 +92,7 @@ describe("foreground reply freshness", () => {
     resetGlobalHookRunner();
   });
 
-  it("suppresses an older foreground final after a newer inbound event starts for the same session target", async () => {
+  it("allows independent foreground finals for different inbound messages on the same session target", async () => {
     const deliveries: Delivery[] = [];
     const olderStarted = createDeferred<void>();
     const releaseOlderFinal = createDeferred<void>();
@@ -127,15 +127,19 @@ describe("foreground reply freshness", () => {
     releaseOlderFinal.resolve();
     const olderResult = await olderDispatch;
 
+    // Different inbound messages get independent foreground fences (#92186).
     expect(newerResult).toEqual({
       queuedFinal: true,
       counts: { tool: 0, block: 0, final: 1 },
     });
     expect(olderResult).toEqual({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 1 },
     });
-    expect(deliveries).toEqual([{ kind: "final", text: "new final" }]);
+    expect(deliveries).toEqual([
+      { kind: "final", text: "new final" },
+      { kind: "final", text: "old final" },
+    ]);
   });
 
   it("keeps an older foreground final when a newer inbound has no visible delivery while beforeDeliver is pending", async () => {
@@ -190,7 +194,7 @@ describe("foreground reply freshness", () => {
     expect(deliveries).toEqual([{ kind: "final", text: "old rewritten final" }]);
   });
 
-  it("keeps an older foreground final fenced while a newer visible delivery is unresolved", async () => {
+  it("allows independent older foreground final while a newer visible delivery from a different message is unresolved", async () => {
     const deliveries: Delivery[] = [];
     const beforeDeliverStarted = createDeferred<void>();
     const releaseBeforeDeliver = createDeferred<ReplyPayload | null>();
@@ -244,15 +248,19 @@ describe("foreground reply freshness", () => {
     const olderResult = await olderDispatch;
 
     expect(beforeDeliver).toHaveBeenCalledTimes(1);
+    // Different inbound messages get independent fences (#92186).
     expect(newerResult).toEqual({
       queuedFinal: true,
       counts: { tool: 0, block: 0, final: 1 },
     });
     expect(olderResult).toEqual({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 1 },
     });
-    expect(deliveries).toEqual([{ kind: "final", text: "new final" }]);
+    expect(deliveries).toEqual([
+      { kind: "final", text: "new final" },
+      { kind: "final", text: "old rewritten final" },
+    ]);
   });
 
   it("keeps an older foreground final when a newer visible delivery fails", async () => {
@@ -311,7 +319,7 @@ describe("foreground reply freshness", () => {
     expect(deliveries).toEqual([{ kind: "final", text: "old rewritten final" }]);
   });
 
-  it("suppresses an older foreground final when a newer delivery partially sends before failing", async () => {
+  it("allows older foreground final when a newer delivery for a different message partially sends before failing", async () => {
     const deliveries: Delivery[] = [];
     const beforeDeliverStarted = createDeferred<void>();
     const releaseBeforeDeliver = createDeferred<ReplyPayload | null>();
@@ -359,16 +367,20 @@ describe("foreground reply freshness", () => {
     const olderResult = await olderDispatch;
 
     expect(beforeDeliver).toHaveBeenCalledTimes(1);
+    // Different inbound messages get independent fences (#92186).
     expect(newerResult).toEqual({
       queuedFinal: false,
       counts: { tool: 0, block: 0, final: 0 },
       failedCounts: { tool: 0, block: 0, final: 1 },
     });
     expect(olderResult).toEqual({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 1 },
     });
-    expect(deliveries).toEqual([{ kind: "final", text: "new final" }]);
+    expect(deliveries).toEqual([
+      { kind: "final", text: "new final" },
+      { kind: "final", text: "old rewritten final" },
+    ]);
   });
 
   it("keeps an older foreground final when a newer adapter reports non-visible delivery", async () => {
@@ -424,7 +436,7 @@ describe("foreground reply freshness", () => {
     expect(deliveries).toEqual([{ kind: "final", text: "old rewritten final" }]);
   });
 
-  it("suppresses an older foreground final when a newer settled hook reports visible delivery", async () => {
+  it("allows older foreground final when a newer settled hook from a different message reports visible delivery", async () => {
     const deliveries: Delivery[] = [];
     const beforeDeliverStarted = createDeferred<void>();
     const releaseBeforeDeliver = createDeferred<ReplyPayload | null>();
@@ -467,18 +479,19 @@ describe("foreground reply freshness", () => {
     const olderResult = await olderDispatch;
 
     expect(beforeDeliver).toHaveBeenCalledTimes(1);
+    // Different inbound messages get independent fences (#92186).
     expect(newerResult).toEqual({
       queuedFinal: true,
       counts: { tool: 0, block: 0, final: 1 },
     });
     expect(olderResult).toEqual({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 1 },
     });
-    expect(deliveries).toEqual([]);
+    expect(deliveries).toEqual([{ kind: "final", text: "old rewritten final" }]);
   });
 
-  it("still runs stale generic settled hooks after a newer visible reply", async () => {
+  it("still runs settled hooks for different inbound messages independently after a newer visible reply", async () => {
     const deliveries: Delivery[] = [];
     const beforeDeliverStarted = createDeferred<void>();
     const releaseBeforeDeliver = createDeferred<ReplyPayload | null>();
@@ -519,18 +532,22 @@ describe("foreground reply freshness", () => {
 
     expect(beforeDeliver).toHaveBeenCalledTimes(1);
     expect(olderSettled).toHaveBeenCalledTimes(1);
+    // Different inbound messages get independent fences (#92186).
     expect(newerResult).toEqual({
       queuedFinal: true,
       counts: { tool: 0, block: 0, final: 1 },
     });
     expect(olderResult).toEqual({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 1 },
     });
-    expect(deliveries).toEqual([{ kind: "final", text: "new final" }]);
+    expect(deliveries).toEqual([
+      { kind: "final", text: "new final" },
+      { kind: "final", text: "old rewritten final" },
+    ]);
   });
 
-  it("suppresses an older fresh settled delivery after a newer visible reply", async () => {
+  it("allows fresh settled delivery for older message independent of newer visible reply", async () => {
     const deliveries: Delivery[] = [];
     const beforeDeliverStarted = createDeferred<void>();
     const releaseBeforeDeliver = createDeferred<ReplyPayload | null>();
@@ -573,16 +590,24 @@ describe("foreground reply freshness", () => {
     const olderResult = await olderDispatch;
 
     expect(beforeDeliver).toHaveBeenCalledTimes(1);
-    expect(olderFreshDelivery).not.toHaveBeenCalled();
+    // Different inbound messages get independent fences (#92186) —
+    // the older reply delivers independently via the fresh-settled path.
+    expect(olderFreshDelivery).toHaveBeenCalledTimes(1);
     expect(newerResult).toEqual({
       queuedFinal: true,
       counts: { tool: 0, block: 0, final: 1 },
     });
     expect(olderResult).toEqual({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 1 },
     });
-    expect(deliveries).toEqual([{ kind: "final", text: "new final" }]);
+    // Both messages deliver independently: newer via queued final,
+    // older via primary queued final + fresh-settled fallback hook.
+    expect(deliveries).toEqual([
+      { kind: "final", text: "old rewritten final" },
+      { kind: "final", text: "new final" },
+      { kind: "final", text: "old settled fallback" },
+    ]);
   });
 
   it("runs the settled delivery hook when dispatch fails after queueing a reply", async () => {
