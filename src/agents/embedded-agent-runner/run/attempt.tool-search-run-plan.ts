@@ -115,7 +115,9 @@ export function buildToolSearchRunPlan(params: {
     tools: params.uncompactedTools,
     clientTools: params.clientTools,
   });
-  const capabilityToolNames = collectAllowedToolNames({ tools: params.uncompactedTools });
+  const capabilityToolNames = collectAllowedToolNames({
+    tools: params.deferredToolsCallable ? params.uncompactedTools : params.visibleTools,
+  });
   if (params.controlsEnabled) {
     // A control that was visible in the compacted prompt must remain allowed
     // during replay even when the uncompacted tool set would otherwise omit it.

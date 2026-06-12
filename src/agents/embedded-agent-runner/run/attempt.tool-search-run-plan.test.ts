@@ -94,6 +94,7 @@ describe("buildToolSearchRunPlan", () => {
       "client_pick_file",
     ]);
     expect(plan.liveAllowedToolNames).toBe(plan.visibleAllowedToolNames);
+    expect([...plan.capabilityToolNames]).toEqual(["tool_search_code"]);
     expect(plan.emptyAllowlistCallableNames).toEqual(["tool-search:0", "tool-search:1"]);
   });
 
@@ -133,6 +134,7 @@ describe("buildToolSearchRunPlan", () => {
 
     expect([...plan.visibleAllowedToolNames]).toEqual(["exec", "wait"]);
     expect([...plan.replayAllowedToolNames]).toEqual(["fake_plugin_tool", "exec", "wait"]);
+    expect([...plan.capabilityToolNames]).toEqual(["exec", "wait"]);
     expect(plan.emptyAllowlistCallableNames).toEqual(["tool-search:0"]);
   });
 
