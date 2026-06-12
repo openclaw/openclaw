@@ -1678,6 +1678,24 @@ describe("runReplyAgent typing (heartbeat)", () => {
     );
   });
 
+  it("does not report completed side-effect progress for an attempted message send", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      didSendViaMessagingTool: true,
+      meta: {},
+    });
+
+    const { run } = createMinimalRun({
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        MessageSid: "1503645939964055592",
+      },
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+  });
+
   it("does not add a terminal acknowledgement when side-effect progress was visibly delivered", async () => {
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "NO_REPLY" }],

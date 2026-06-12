@@ -282,7 +282,6 @@ function buildSideEffectProgressPayload(params: {
   messagingToolSentTexts?: string[];
   messagingToolSentMediaUrls?: string[];
   messagingToolSentTargets?: unknown[];
-  didSendViaMessagingTool?: boolean;
   allowEmptyAssistantReplyAsSilent?: boolean;
   silentExpected?: boolean;
 }): ReplyPayload | undefined {
@@ -306,10 +305,7 @@ function buildSideEffectProgressPayload(params: {
       text: `${subject}, but the agent did not provide a final response.`,
     });
   }
-  if (
-    params.didSendViaMessagingTool === true ||
-    hasCommittedMessagingTargetDeliveryEvidence(params.messagingToolSentTargets)
-  ) {
+  if (hasCommittedMessagingTargetDeliveryEvidence(params.messagingToolSentTargets)) {
     return markReplyPayloadForSourceSuppressionDelivery({
       text: "An external action completed, but the agent did not provide a final response.",
     });
@@ -1934,7 +1930,6 @@ export async function runReplyAgent(params: {
         messagingToolSentTexts: runResult.messagingToolSentTexts,
         messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
         messagingToolSentTargets: runResult.messagingToolSentTargets,
-        didSendViaMessagingTool: runResult.didSendViaMessagingTool,
         allowEmptyAssistantReplyAsSilent: followupRun.run.allowEmptyAssistantReplyAsSilent,
         silentExpected: followupRun.run.silentExpected,
       });
