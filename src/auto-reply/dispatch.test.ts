@@ -710,7 +710,7 @@ describe("withReplyDispatcher", () => {
     expect(dispatcherOptions.silentReplyContext?.conversationType).toBe("direct");
   });
 
-  it("composes custom beforeDeliver with reply_payload_sending hooks", async () => {
+  it("composes custom beforeDeliver with reply_payload_sending and message_sending hooks", async () => {
     const customBeforeDeliver = vi.fn(async (payload: { text?: string }) => ({
       text: `${payload.text ?? ""} [custom]`,
     }));
@@ -755,7 +755,18 @@ describe("withReplyDispatcher", () => {
 
     expect(customBeforeDeliver).toHaveBeenCalledTimes(2);
     expect(customBeforeDeliver).toHaveBeenCalledWith({ text: "original" }, { kind: "final" });
-    expect(runMessageSending).not.toHaveBeenCalled();
+    expect(runMessageSending).toHaveBeenCalledTimes(2);
+    expect(runMessageSending).toHaveBeenCalledWith(
+      {
+        content: "original [custom] [plugin]",
+        to: "conv-1",
+      },
+      {
+        accountId: "acct-1",
+        channelId: "threads",
+        conversationId: "conv-1",
+      },
+    );
     expect(runReplyPayloadSending).toHaveBeenCalledTimes(2);
     expect(runReplyPayloadSending).toHaveBeenCalledWith(
       {
@@ -772,7 +783,7 @@ describe("withReplyDispatcher", () => {
         runId: undefined,
       },
     );
-    expect(payload).toEqual({ text: "original [custom] [plugin]" });
+    expect(payload).toEqual({ text: "message hook" });
     expect(payloadWithMetadata ? getReplyPayloadMetadata(payloadWithMetadata) : undefined).toEqual({
       assistantMessageIndex: 5,
     });
