@@ -1721,7 +1721,9 @@ describe("doctor config flow", () => {
 
     const warning = doctorWarnings.join("\n");
     expect(warning).toContain("hooks.internal.entries.custom-hook:");
-    expect(warning).toContain("unsupported loader keys handler, extraDirs will not load hook modules");
+    expect(warning).toContain(
+      "unsupported loader keys handler, extraDirs will not load hook modules",
+    );
     expect(warning).toContain("bootstrap-extra-files for session bootstrap content");
     expect(warning).toContain("Doctor cannot rewrite this automatically");
     expect(warning).not.toContain("hooks.internal.entries.valid-hook");

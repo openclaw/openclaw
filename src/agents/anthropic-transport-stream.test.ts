@@ -2122,7 +2122,7 @@ describe("anthropic transport stream", () => {
     const payload = latestAnthropicRequest().payload;
     expect(payload.thinking).toEqual({ type: "adaptive" });
     expect(payload.output_config).toEqual({ effort: "high" });
-    expect(payload.tool_choice).toBeUndefined();
+    expect(payload).not.toHaveProperty("tool_choice");
   });
 
   it("does not infer adaptive thinking from forward-compatible effort maps", async () => {
