@@ -1376,7 +1376,6 @@
                   "clawhub/publishing",
                   "clawhub/plugin-validation-fixes",
                   "clawhub/skill-format",
-                  "clawhub/soul-format",
                   "clawhub/auth",
                   "clawhub/telemetry",
                   "clawhub/troubleshooting"
