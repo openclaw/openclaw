@@ -798,11 +798,14 @@ function visibleRecoveryShouldKeepWaiting(outcome: StuckSessionRecoveryOutcome):
   );
 }
 
-function sourceReplyTranscriptMirrorForDeliveredPayload(
+function transcriptMirrorForDeliveredPayload(
   metadata: SourceReplyTranscriptMirror,
   payload: ReplyPayload,
-): SourceReplyTranscriptMirror {
+): SourceReplyTranscriptMirror | undefined {
   const sendable = resolveSendableOutboundReplyParts(payload);
+  if (!sendable.text && sendable.mediaUrls.length === 0) {
+    return undefined;
+  }
   return {
     ...metadata,
     text: sendable.text,
@@ -810,35 +813,38 @@ function sourceReplyTranscriptMirrorForDeliveredPayload(
   };
 }
 
-function captureDeliveredSourceReplyTranscriptMirror(params: {
+function captureDeliveredTranscriptMirror(params: {
   dispatcher: ReplyDispatcher;
   metadata?: SourceReplyTranscriptMirror;
 }): () => SourceReplyTranscriptMirror | undefined {
   if (!params.metadata || !params.dispatcher.appendBeforeDeliver) {
     return () => params.metadata;
   }
+  const metadata = params.metadata;
   let deliveredMetadata: SourceReplyTranscriptMirror | undefined;
-  const { idempotencyKey, sessionKey } = params.metadata;
+  let observedFinal = false;
+  const { idempotencyKey, sessionKey } = metadata;
   params.dispatcher.appendBeforeDeliver((payload, info) => {
     if (info.kind !== "final") {
       return payload;
     }
+    observedFinal = true;
     const payloadMetadata = getReplyPayloadMetadata(payload)?.sourceReplyTranscriptMirror;
-    if (!payloadMetadata) {
-      return payload;
-    }
     if (
+      payloadMetadata &&
       payloadMetadata.idempotencyKey === idempotencyKey &&
       payloadMetadata.sessionKey === sessionKey
     ) {
-      deliveredMetadata = sourceReplyTranscriptMirrorForDeliveredPayload(payloadMetadata, payload);
+      deliveredMetadata = transcriptMirrorForDeliveredPayload(payloadMetadata, payload);
+    } else if (!payloadMetadata && !idempotencyKey) {
+      deliveredMetadata = transcriptMirrorForDeliveredPayload(metadata, payload);
     }
     return payload;
   });
-  return () => deliveredMetadata;
+  return () => (observedFinal ? deliveredMetadata : metadata);
 }
 
-async function mirrorInternalSourceReplyAfterDispatcherDelivery(params: {
+async function mirrorTranscriptAfterDispatcherDelivery(params: {
   dispatcher: ReplyDispatcher;
   before: { cancelled: number; failed: number };
   metadata: () => SourceReplyTranscriptMirror | undefined;
@@ -2236,6 +2242,19 @@ export async function dispatchReplyFromConfig(
       throwIfFinalDeliveryAborted();
       const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
       throwIfFinalDeliveryAborted();
+      const transcriptMirrorSessionKey =
+        acpDispatchSessionKey ?? sessionStoreEntry.sessionKey ?? sessionKey;
+      const transcriptMirror =
+        sourceReplyTranscriptMirror ??
+        (!isInternalWebchatTurn && hasVisibleFinalContent && transcriptMirrorSessionKey
+          ? transcriptMirrorForDeliveredPayload(
+              {
+                sessionKey: transcriptMirrorSessionKey,
+                agentId: sessionAgentId,
+              },
+              normalizedPayload,
+            )
+          : undefined);
       const result = await routeReplyToOriginating(normalizedPayload, {
         abortSignal,
         kind: "final",
@@ -2260,16 +2279,16 @@ export async function dispatchReplyFromConfig(
       throwIfFinalDeliveryAborted();
       markInboundDedupeReplayUnsafe();
       const finalOutcomeBefore = getDispatcherFinalOutcomeCounts(dispatcher);
-      const deliveredSourceReplyTranscriptMirror = captureDeliveredSourceReplyTranscriptMirror({
+      const deliveredTranscriptMirror = captureDeliveredTranscriptMirror({
         dispatcher,
-        metadata: sourceReplyTranscriptMirror,
+        metadata: transcriptMirror,
       });
       const queuedFinal = dispatcher.sendFinalReply(normalizedPayload);
       if (queuedFinal) {
-        await mirrorInternalSourceReplyAfterDispatcherDelivery({
+        await mirrorTranscriptAfterDispatcherDelivery({
           dispatcher,
           before: finalOutcomeBefore,
-          metadata: deliveredSourceReplyTranscriptMirror,
+          metadata: deliveredTranscriptMirror,
           cfg,
         });
       }

@@ -1229,6 +1229,115 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
+  it("mirrors same-channel Slack final replies into the session transcript", async () => {
+    setNoAbort();
+    mocks.routeReply.mockClear();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      Surface: "slack",
+      OriginatingChannel: "slack",
+      OriginatingTo: "channel:C123",
+      ChatType: "group",
+      SessionKey: "agent:main:slack:channel:C123",
+    });
+
+    const replyResolver = vi.fn(
+      async () => ({ text: "Slack channel reply" }) satisfies ReplyPayload,
+    );
+    transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
+
+    const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(result.queuedFinal).toBe(true);
+    expect(mocks.routeReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "Slack channel reply" });
+    expect(transcriptMocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
+      sessionKey: "agent:main:slack:channel:C123",
+      agentId: "main",
+      text: "Slack channel reply",
+      mediaUrls: undefined,
+      idempotencyKey: undefined,
+      updateMode: "inline",
+      config: cfg,
+    });
+  });
+
+  it("mirrors same-channel Slack final replies after dispatcher hook rewrites", async () => {
+    setNoAbort();
+    mocks.routeReply.mockClear();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    dispatcher.appendBeforeDeliver?.((payload, info) => {
+      if (info.kind !== "final") {
+        return payload;
+      }
+      return { ...payload, text: "Redacted Slack reply" };
+    });
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      Surface: "slack",
+      OriginatingChannel: "slack",
+      OriginatingTo: "channel:C123",
+      ChatType: "group",
+      SessionKey: "agent:main:slack:channel:C123",
+    });
+
+    const replyResolver = vi.fn(
+      async () => ({ text: "Secret Slack reply" }) satisfies ReplyPayload,
+    );
+    transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
+
+    const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(result.queuedFinal).toBe(true);
+    expect(mocks.routeReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "Secret Slack reply" });
+    expect(transcriptMocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
+      sessionKey: "agent:main:slack:channel:C123",
+      agentId: "main",
+      text: "Redacted Slack reply",
+      mediaUrls: undefined,
+      idempotencyKey: undefined,
+      updateMode: "inline",
+      config: cfg,
+    });
+  });
+
+  it("does not mirror same-channel Slack final replies stripped by dispatcher hooks", async () => {
+    setNoAbort();
+    mocks.routeReply.mockClear();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    dispatcher.appendBeforeDeliver?.((payload, info) => {
+      if (info.kind !== "final") {
+        return payload;
+      }
+      return { ...payload, text: "", mediaUrl: undefined, mediaUrls: undefined };
+    });
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      Surface: "slack",
+      OriginatingChannel: "slack",
+      OriginatingTo: "channel:C123",
+      ChatType: "group",
+      SessionKey: "agent:main:slack:channel:C123",
+    });
+
+    const replyResolver = vi.fn(
+      async () => ({ text: "Secret Slack reply" }) satisfies ReplyPayload,
+    );
+    transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
+
+    const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(result.queuedFinal).toBe(true);
+    expect(mocks.routeReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "Secret Slack reply" });
+    expect(transcriptMocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+  });
+
   it("records routed Slack thread id on dispatch-owned reply operations", async () => {
     setNoAbort();
     const cfg = emptyConfig;
