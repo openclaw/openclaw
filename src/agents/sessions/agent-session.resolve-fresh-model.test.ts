@@ -92,4 +92,27 @@ describe("resolveFreshModel", () => {
       high: "3000",
     });
   });
+
+  it("returns registry model even when provider/id differ from snapshot", () => {
+    const snapshot = makeModel({ provider: "openai", id: "gpt-4o" });
+    const fresh = makeModel({ provider: "openai", id: "gpt-4o-mini" });
+    const find = vi.fn().mockReturnValue(fresh);
+
+    const result = resolveFreshModel(snapshot, find);
+    expect(result).toBe(fresh);
+    expect(result?.id).toBe("gpt-4o-mini");
+  });
+
+  it("uses fresh contextWindow for compaction threshold check", () => {
+    const snapshot = makeModel({ contextWindow: 200_000 });
+    const fresh = makeModel({ contextWindow: 1_000_000 });
+    const find = vi.fn().mockReturnValue(fresh);
+
+    const resolved = resolveFreshModel(snapshot, find);
+    const contextWindow = resolved?.contextWindow ?? 0;
+
+    const usageRatio = 180_000 / contextWindow;
+    expect(contextWindow).toBe(1_000_000);
+    expect(usageRatio).toBeLessThan(0.8);
+  });
 });
