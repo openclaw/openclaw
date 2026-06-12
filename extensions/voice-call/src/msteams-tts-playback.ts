@@ -76,9 +76,9 @@ export async function playTtsToCall(
   }
 
   // CVI Phase 5 (spike): send an estimated viseme timeline just ahead of the audio. 16-bit mono
-  // @ 16 kHz → 2 bytes/sample. Forward-compat hint only: CURRENT workers ignore speech.marks
-  // entirely (their lip-sync is RMS-openness-driven); a future viseme-capable worker blends these
-  // into per-sound mouth shapes. Best-effort/cosmetic either way.
+  // @ 16 kHz → 2 bytes/sample. A viseme-capable worker layers these as coarse mouth shapes
+  // (open/wide/round/closed) over its RMS-driven openness; an older worker ignores the message and
+  // stays RMS-only. Best-effort/cosmetic either way.
   try {
     const durationMs = (pcm16k.length / BYTES_PER_SAMPLE / MSTEAMS_SAMPLE_RATE_HZ) * 1000;
     const marks = estimateVisemes(text, durationMs);
