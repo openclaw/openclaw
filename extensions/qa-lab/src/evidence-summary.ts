@@ -176,15 +176,12 @@ type QaEvidenceScenarioDefinitionInput = {
     secondary?: readonly string[];
   };
   runtimeParityTier?: string;
-  runtimeParity?: string;
   docsRefs?: readonly string[];
   codeRefs?: readonly string[];
 };
 
-type QaEvidenceTimedResultInput = {
-  id?: string;
-  name?: string;
-  title?: string;
+type QaEvidenceScenarioResultInput = {
+  name: string;
   status: QaEvidenceStatusInput;
   details?: string;
   rttMs?: number;
@@ -193,13 +190,21 @@ type QaEvidenceTimedResultInput = {
   };
 };
 
-type QaEvidenceScenarioResultInput = QaEvidenceTimedResultInput;
-
-type QaEvidenceLiveTransportCheckInput = QaEvidenceTimedResultInput & {
+type QaEvidenceLiveTransportCheckInput = {
+  id: string;
+  title: string;
+  status: QaEvidenceStatusInput;
+  details: string;
+  rttMs?: number;
+  rttMeasurement?: {
+    finalMatchedReplyRttMs?: number;
+  };
   // Here "standard" means a taxonomy-backed requirement standard, not the default lane.
   standardId?: string;
   artifactPaths?: Readonly<Record<string, string>>;
 };
+
+type QaEvidenceRttInput = Pick<QaEvidenceScenarioResultInput, "rttMeasurement" | "rttMs">;
 
 type QaEvidenceTestTargetInput = {
   id: string;
@@ -413,7 +418,7 @@ function failureForResult(result: {
   };
 }
 
-function timingForLiveTransportCheck(check: QaEvidenceLiveTransportCheckInput) {
+function timingForRttResult(check: QaEvidenceRttInput) {
   const rttMs = check.rttMeasurement?.finalMatchedReplyRttMs ?? check.rttMs;
   return typeof rttMs === "number" && Number.isFinite(rttMs) && rttMs > 0 ? { rttMs } : undefined;
 }
@@ -427,9 +432,7 @@ function timingForTestResult(result: QaEvidenceTestResultInput) {
 }
 
 function resultForEvidence(
-  result: Pick<QaEvidenceTimedResultInput, "details" | "status"> & {
-    failureMessage?: string;
-  },
+  result: { details?: string; failureMessage?: string; status: QaEvidenceStatusInput },
   timing?: QaEvidenceTiming,
 ) {
   return {
@@ -482,19 +485,21 @@ export function buildQaSuiteEvidenceSummary(
       ...(scenario?.coverage?.primary ?? []),
       ...(scenario?.coverage?.secondary ?? []),
     ]);
-    const surfaceIds = uniqueSortedStrings([...(scenario?.surfaces ?? []), scenario?.surface]);
-    const runtimeParityTier = scenario?.runtimeParityTier ?? scenario?.runtimeParity;
-    const testId = scenario?.id ?? result.id ?? result.name ?? `scenario-${index + 1}`;
+    const surfaceIds = uniqueSortedStrings(
+      scenario?.surfaces && scenario.surfaces.length > 0 ? scenario.surfaces : [scenario?.surface],
+    );
+    const runtimeParityTier = scenario?.runtimeParityTier;
+    const testId = scenario?.id ?? `scenario-${index + 1}`;
     const refs = buildQaEvidenceRefs({
       docsRefs: scenario?.docsRefs,
       codeRefs: scenario?.codeRefs,
     });
-    const timing = timingForLiveTransportCheck(result);
+    const timing = timingForRttResult(result);
     return {
       test: {
         kind: "qa-scenario",
         id: testId,
-        title: scenario?.title ?? result.title ?? result.name ?? `Scenario ${index + 1}`,
+        title: scenario?.title ?? result.name,
         source: scenario?.sourcePath ? { path: scenario.sourcePath } : undefined,
       },
       mapping: {
@@ -639,8 +644,8 @@ export function buildLiveTransportEvidenceSummary(
     env: params.env,
     fallback: params.channelDriver ?? "native",
   }) ?? { id: "native" };
-  const entries = params.checks.map((check, index): QaEvidenceSummaryEntry => {
-    const testId = check.id ?? check.name ?? `live-transport-check-${index + 1}`;
+  const entries = params.checks.map((check): QaEvidenceSummaryEntry => {
+    const testId = check.id;
     const standardCoverageId = check.standardId
       ? `channels.${params.transportId}.${check.standardId}`
       : undefined;
@@ -660,12 +665,12 @@ export function buildLiveTransportEvidenceSummary(
         categoryIds: [`channels.${params.transportId}.live`],
       });
     }
-    const timing = timingForLiveTransportCheck(check);
+    const timing = timingForRttResult(check);
     return {
       test: {
         kind: "live-transport-check",
         id: testId,
-        title: check.title ?? check.name ?? testId,
+        title: check.title,
       },
       mapping: {
         profile,

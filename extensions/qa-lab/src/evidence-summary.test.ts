@@ -480,7 +480,15 @@ describe("evidence summary", () => {
       },
       primaryModel: "openai/gpt-5.5",
       providerMode: "live-frontier",
-      checks: [{ id: "telegram-canary", standardId: "canary", status: "pass" }],
+      checks: [
+        {
+          id: "telegram-canary",
+          title: "Telegram canary",
+          details: "Canary passed.",
+          standardId: "canary",
+          status: "pass",
+        },
+      ],
       transportId: "telegram",
     });
 
@@ -502,7 +510,15 @@ describe("evidence summary", () => {
       generatedAt: "2026-06-07T12:15:00.000Z",
       primaryModel: "openai/gpt-5.5",
       providerMode: "live-frontier",
-      checks: [{ id: "telegram-canary", standardId: "canary", status: "pass" }],
+      checks: [
+        {
+          id: "telegram-canary",
+          title: "Telegram canary",
+          details: "Canary passed.",
+          standardId: "canary",
+          status: "pass",
+        },
+      ],
       transportId: "telegram",
     });
 
@@ -522,7 +538,15 @@ describe("evidence summary", () => {
       generatedAt: "2026-06-07T12:16:00.000Z",
       primaryModel: "openai/gpt-5.5",
       providerMode: "live-frontier",
-      checks: [{ id: "telegram-canary", standardId: "canary", status: "pass" }],
+      checks: [
+        {
+          id: "telegram-canary",
+          title: "Telegram canary",
+          details: "Canary passed.",
+          standardId: "canary",
+          status: "pass",
+        },
+      ],
       transportId: "telegram",
     });
 
@@ -549,6 +573,8 @@ describe("evidence summary", () => {
             video: ".artifacts/discord/status.mp4",
           },
           id: "discord-status-reactions-tool-only",
+          title: "Discord status reactions",
+          details: "Status reaction observed.",
           status: "pass",
         },
       ],
