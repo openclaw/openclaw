@@ -37,13 +37,13 @@ const BACKTICKED_INTERNAL = new RegExp(
 const BARE_INTERNAL_PATH = new RegExp("(?<![\\w/:.\\-])(?:" + DIR_ALT + ")/[\\w./\\-]+", "g");
 
 /** The runtime root itself, e.g. "~/.openclaw/credentials" or ".openclaw/openclaw.json". */
-const OPENCLAW_ROOT = /~?\/?\.openclaw\/[\w./\-]+/g;
+const OPENCLAW_ROOT = /~?\/?\.openclaw\/[\w./-]+/g;
 
 /** The chat pipeline injects these context prefixes; a confused model may echo them. */
 const INJECTED_CONTEXT = /\[(?:userId|topicId|topicName|useSlaveTopic|allTopics)[^\]]*\]/g;
 
 /** Per-user agent session keys / agent ids, e.g. `agent:rabbitmq-126:rabbitmq:126:…` or `rabbitmq-126`. */
-const AGENT_SESSION_KEY = /\bagent:[\w.\-]+(?::[\w.\-]+)+/g;
+const AGENT_SESSION_KEY = /\bagent:[\w.-]+(?::[\w.-]+)+/g;
 const AGENT_ID = /\brabbitmq-\d+\b/g;
 
 /**

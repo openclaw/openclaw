@@ -51,6 +51,21 @@
           "jwtSecret": { "type": "string" }
         },
         "required": ["hubUrl", "jwtSecret"]
+      },
+      "oss": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "accessKeyId": { "type": "string" },
+          "accessKeySecret": { "type": "string" },
+          "bucket": { "type": "string", "default": "leadingnews" },
+          "endpoint": { "type": "string", "default": "oss-cn-beijing.aliyuncs.com" },
+          "customDomain": { "type": "string", "default": "https://oss.ibtai.com" },
+          "pathPrefix": { "type": "string", "default": "ibtai/assistant-agent/outputs" },
+          "maxFileSizeMb": { "type": "number", "default": 100 },
+          "allowedExtensions": { "type": "array", "items": { "type": "string" } }
+        },
+        "required": ["accessKeyId", "accessKeySecret"]
       }
     },
     "required": ["rabbitmq", "historyDb", "mercure"]

@@ -17,6 +17,7 @@ import { createAgentsListTool } from "./tools/agents-list-tool.js";
 import { createCanvasTool } from "./tools/canvas-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { createCronTool } from "./tools/cron-tool.js";
+import { createFileShareTool } from "./tools/file-share-tool.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import { createImageGenerateTool } from "./tools/image-generate-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
@@ -30,6 +31,7 @@ import { createSessionsListTool } from "./tools/sessions-list-tool.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
+import { createSkillListTool, createSkillSaveTool } from "./tools/skill-tool.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTtsTool } from "./tools/tts-tool.js";
 import { createUpdatePlanTool } from "./tools/update-plan-tool.js";
@@ -243,6 +245,24 @@ export function createOpenClawTools(
       agentSessionKey: options?.agentSessionKey,
       config: options?.config,
     }),
+    createSkillSaveTool({
+      agentSessionKey: options?.agentSessionKey,
+      workspaceDir,
+      agentId: sessionAgentId,
+      config: resolvedConfig,
+    }),
+    createSkillListTool({
+      agentSessionKey: options?.agentSessionKey,
+      workspaceDir,
+      agentId: sessionAgentId,
+      config: resolvedConfig,
+    }),
+    ...collectPresentOpenClawTools([
+      createFileShareTool({
+        agentSessionKey: options?.agentSessionKey,
+        workspaceDir,
+      }),
+    ]),
     createAgentsListTool({
       agentSessionKey: options?.agentSessionKey,
       requesterAgentIdOverride: options?.requesterAgentIdOverride,

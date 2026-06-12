@@ -461,6 +461,21 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Agents",
       detailKeys: [],
     },
+    skill_save: {
+      emoji: "📋",
+      title: "Save skill",
+      detailKeys: ["name"],
+    },
+    skill_list: {
+      emoji: "📋",
+      title: "List skills",
+      detailKeys: [],
+    },
+    file_share: {
+      emoji: "📤",
+      title: "Share file",
+      detailKeys: ["filename"],
+    },
     memory_search: {
       emoji: "🧠",
       title: "Memory Search",

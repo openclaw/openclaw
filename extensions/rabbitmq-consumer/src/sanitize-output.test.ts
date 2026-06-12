@@ -44,6 +44,16 @@ describe("sanitizeInternalRefs", () => {
     expect(sanitizeInternalRefs(url)).toBe(url);
   });
 
+  it("does NOT mangle an OSS file delivery link (file_share output)", () => {
+    // The file_share tool's whole purpose is putting this URL in the reply;
+    // sanitization must never strip or truncate it.
+    const reply =
+      "文件已生成，点击下载：\n" +
+      "https://oss.ibtai.com/ibtai/assistant-agent/outputs/2026/6/12/1781234567_a3f8c21e.docx\n" +
+      "（链接长期有效）";
+    expect(sanitizeInternalRefs(reply)).toBe(reply);
+  });
+
   it("leaves ordinary prose untouched", () => {
     const prose = "本周舆情整体平稳，负面提及 12 条，建议持续关注。";
     expect(sanitizeInternalRefs(prose)).toBe(prose);
