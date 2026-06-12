@@ -227,6 +227,50 @@ describe("memory hybrid helpers", () => {
       expect(merged[0]?.path).toBe("memory/a.md");
     });
 
+    it("primary provider absent + fallbackReranker → fallback called; score order from fallback", async () => {
+      const fallbackReranker = vi.fn(
+        async (items: Array<{ id: string; score: number; content: string }>, _lambda: number) => {
+          const sorted = [...items].toSorted((a, b) => b.score - a.score);
+          return sorted;
+        },
+      );
+
+      const merged = await mergeHybridResults({
+        vectorWeight: 0.7,
+        textWeight: 0.3,
+        vector: [
+          {
+            id: "a",
+            path: "memory/a.md",
+            startLine: 1,
+            endLine: 2,
+            source: "memory",
+            snippet: "vec-a",
+            vectorScore: 0.9,
+          },
+          {
+            id: "b",
+            path: "memory/b.md",
+            startLine: 3,
+            endLine: 4,
+            source: "memory",
+            snippet: "vec-b",
+            vectorScore: 0.8,
+          },
+        ],
+        keyword: [],
+        mmr: { enabled: true, lambda: 0.7, provider: "memory-mmr", fallback: "memory-mmr" },
+        // No primary reranker adapter: simulates primary provider not registered
+        fallbackReranker,
+      });
+
+      expect(mockReranker).not.toHaveBeenCalled();
+      expect(fallbackReranker).toHaveBeenCalledTimes(1);
+      expect(merged).toHaveLength(2);
+      expect(merged[0]?.path).toBe("memory/a.md");
+      expect(merged[1]?.path).toBe("memory/b.md");
+    });
+
     it("reranker throws + no fallback → fail-open; returns score-ordered results (no throw)", async () => {
       const errorReranker = vi.fn(async () => {
         throw new Error("Primary reranker failed");

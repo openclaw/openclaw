@@ -178,20 +178,23 @@ export async function mergeHybridResults(params: {
   const sorted = decayed.toSorted((a, b) => b.score - a.score);
 
   // Apply MMR re-ranking if enabled
-  if (params.mmr?.enabled && params.reranker) {
+  if (params.mmr?.enabled && (params.reranker || params.fallbackReranker)) {
     const lambda = params.mmr.lambda ?? 0.7;
-    try {
-      return await runReranker(params.reranker, sorted, lambda);
-    } catch {
-      if (params.fallbackReranker) {
-        try {
-          return await runReranker(params.fallbackReranker, sorted, lambda);
-        } catch {
-          return sorted;
-        }
+    if (params.reranker) {
+      try {
+        return await runReranker(params.reranker, sorted, lambda);
+      } catch {
+        // primary failed; fall through to fallback
       }
-      return sorted;
     }
+    if (params.fallbackReranker) {
+      try {
+        return await runReranker(params.fallbackReranker, sorted, lambda);
+      } catch {
+        return sorted;
+      }
+    }
+    return sorted;
   }
 
   return sorted;
