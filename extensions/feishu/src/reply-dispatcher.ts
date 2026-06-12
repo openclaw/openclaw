@@ -412,7 +412,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         statusLine = "";
         const text = buildCombinedStreamText(reasoningText, streamText);
         const finalNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
-        const contentVisible = await streaming.close(convertTablesForFeishuCard(text), {
+        const contentVisible = await streaming.close(core.channel.text.convertMarkdownTables(text, tableMode), {
           note: finalNote,
         });
         // Track the raw streamed text so the duplicate-final check in deliver()
@@ -467,9 +467,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     sendChunk: (params: { chunk: string; isFirst: boolean }) => Promise<void>;
   }) => {
     const chunkSource = core.channel.text.convertMarkdownTables(paramsLocal.text, tableMode);
-    const chunkText = paramsLocal.useCard
-      ? core.channel.text.chunkMarkdownTextWithMode
-      : core.channel.text.chunkTextWithMode;
+    const chunkText =
+      paramsLocal.useCard && typeof core.channel.text.chunkMarkdownTextWithMode === "function"
+        ? core.channel.text.chunkMarkdownTextWithMode
+        : core.channel.text.chunkTextWithMode;
     const chunks = resolveTextChunksWithFallback(
       chunkSource,
       chunkText(chunkSource, textChunkLimit, chunkMode),

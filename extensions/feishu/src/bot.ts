@@ -988,7 +988,8 @@ export async function handleFeishuMessage(params: {
       audioTranscript === undefined
         ? -1
         : mediaList.findIndex((media) => media.contentType?.startsWith("audio/"));
-    const inboundMedia = toInboundMediaFacts(mediaList, {
+    let mediaPayload = buildAgentMediaPayload(mediaList);
+    let inboundMedia = toInboundMediaFacts(mediaList, {
       transcribed: (_media, index) => index === preflightAudioIndex,
     });
     const agentFacingContent = audioTranscript ?? ctx.content;
@@ -1088,6 +1089,10 @@ export async function handleFeishuMessage(params: {
             });
             if (quotedMediaList.length > 0) {
               mediaList.push(...quotedMediaList);
+              mediaPayload = buildAgentMediaPayload(mediaList);
+              inboundMedia = toInboundMediaFacts(mediaList, {
+                transcribed: (_media, index) => index === preflightAudioIndex,
+              });
               log(
                 `feishu[${account.accountId}]: attached ${quotedMediaList.length} quoted media item(s) to agent context`,
               );
@@ -1403,6 +1408,8 @@ export async function handleFeishuMessage(params: {
           RootMessageId: ctx.rootId,
           Transcript: audioTranscript,
           GroupSubject: isGroup ? groupName || ctx.chatId : undefined,
+          ...mediaPayload,
+          ...(preflightAudioIndex >= 0 ? { MediaTranscribedIndexes: [preflightAudioIndex] } : {}),
         },
       });
     };

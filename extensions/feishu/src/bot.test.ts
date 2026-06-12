@@ -2591,11 +2591,17 @@ describe("handleFeishuMessage command authorization", () => {
     );
     expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
       expect.objectContaining({
-        ReplyToBody: "[file message]",
+        SupplementalContext: expect.objectContaining({
+          quote: expect.objectContaining({
+            body: "[file message]",
+            id: "om_parent_file",
+          }),
+        }),
         MediaPath: "/tmp/quoted.docx",
         MediaPaths: ["/tmp/quoted.docx"],
         MediaTypes: ["application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
       }),
+      undefined,
     );
   });
 
