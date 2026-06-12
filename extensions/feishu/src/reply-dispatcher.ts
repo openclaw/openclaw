@@ -29,11 +29,6 @@ import { FeishuStreamingSession, mergeStreamingText } from "./streaming-card.js"
 import { resolveReceiveIdType } from "./targets.js";
 import { addTypingIndicator, removeTypingIndicator, type TypingIndicatorState } from "./typing.js";
 
-/** Detect if text contains markdown elements that benefit from card rendering */
-function shouldUseCard(text: string): boolean {
-  return /```[\s\S]*?```/.test(text) || /\|.+\|[\r\n]+\|[-:| ]+\|/.test(text);
-}
-
 function mergeStreamingFinalText(
   previousText: string,
   nextText: string,
@@ -671,8 +666,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         const useStaticCard =
           hasText &&
           (renderMode === "card" ||
-            (info?.kind === "block" && coreBlockStreamingEnabled && renderMode !== "raw") ||
-            (renderMode === "auto" && shouldUseCard(text)));
+            (info?.kind === "block" && coreBlockStreamingEnabled && renderMode !== "raw"));
         const useStreamingCard =
           hasText &&
           streamingEnabled &&
