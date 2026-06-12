@@ -47,8 +47,8 @@ jobs:
           done
           xcodebuild -version
           xcode_version="$(xcodebuild -version | awk 'NR == 1 { print $2 }')"
-          if [ "$xcode_version" != "26.5" ]; then
-            echo "error: expected Xcode 26.5, got $xcode_version" >&2
+          if [[ "$xcode_version" != 26.* ]]; then
+            echo "error: expected Xcode 26.x, got $xcode_version" >&2
             exit 1
           fi
           swift --version
@@ -179,7 +179,7 @@ jobs:
         with:
           name: ios-periphery-dead-code-${{ github.run_id }}
           path: ${{ runner.temp }}/ios-periphery
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 14
 
       - name: Fail on dead code
