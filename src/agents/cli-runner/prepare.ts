@@ -17,6 +17,7 @@ import {
   resolveMcpLoopbackBearerToken,
 } from "../../gateway/mcp-http.loopback-runtime.js";
 import { resolveMcpLoopbackScopedTools } from "../../gateway/mcp-http.runtime.js";
+import { buildMcpToolSchema, type McpLoopbackTool } from "../../gateway/mcp-http.schema.js";
 import { isClaudeCliProvider } from "../../plugin-sdk/anthropic-cli.js";
 import type {
   CliBackendAuthEpochMode,
@@ -65,6 +66,7 @@ import { composeSystemPromptWithHookContext } from "../embedded-agent-runner/run
 import { buildCurrentInboundPrompt } from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
+import type { AgentTool } from "../runtime/index.js";
 import { ensureSystemPromptCacheBoundary } from "../system-prompt-cache-boundary.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt, buildModelIdentityPromptLine } from "../system-prompt.js";
@@ -110,6 +112,21 @@ const CLAUDE_CLI_CONTEXT_MODEL_ALIASES: Record<string, string> = {
   "sonnet-4.6": "claude-sonnet-4-6",
   "sonnet-4-6": "claude-sonnet-4-6",
 };
+
+const cliPromptToolExecute: AgentTool["execute"] = async () => ({
+  content: [],
+  details: undefined,
+});
+
+function sanitizeCliPromptTools(tools: readonly unknown[]): AgentTool[] {
+  return buildMcpToolSchema(tools as McpLoopbackTool[]).map((tool) => ({
+    name: tool.name,
+    label: tool.name,
+    description: tool.description ?? "",
+    parameters: tool.inputSchema as AgentTool["parameters"],
+    execute: cliPromptToolExecute,
+  }));
+}
 
 function resolveClaudeCliContextModelId(modelId: string): string {
   const trimmed = modelId.trim();
@@ -363,7 +380,7 @@ export async function prepareCliRunContext(
     ...(preparedBackendEnv ? { env: preparedBackendEnv } : {}),
     ...(preparedCleanup ? { cleanup: preparedCleanup } : {}),
   };
-  const promptTools =
+  const promptToolsRaw =
     bundleMcpEnabled && mcpLoopbackRuntime
       ? prepareDeps.resolveMcpLoopbackScopedTools({
           cfg: params.config ?? getRuntimeConfig(),
@@ -379,6 +396,7 @@ export async function prepareCliRunContext(
           senderIsOwner: params.senderIsOwner,
         }).tools
       : [];
+  const promptTools = sanitizeCliPromptTools(promptToolsRaw);
   const promptToolNamesHash =
     bundleMcpEnabled && mcpLoopbackRuntime
       ? hashCliSessionText(JSON.stringify(promptTools.map((tool) => tool.name).toSorted()))

@@ -1296,6 +1296,112 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     }
   });
 
+  it("ignores malformed loopback prompt tools during CLI preparation", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      registerMemoryPromptSection(({ availableTools }) =>
+        availableTools.has("memory_search")
+          ? ["## Memory Recall", `tools=${[...availableTools].toSorted().join(",")}`, ""]
+          : [],
+      );
+      const unreadableNameTool = Object.defineProperty({}, "name", {
+        get() {
+          throw new Error("loopback tool name getter exploded");
+        },
+      });
+      const unreadableDescriptionTool = {
+        name: "memory_search",
+        label: "Memory Search",
+        parameters: { type: "object", properties: {} },
+        execute: vi.fn(),
+      };
+      Object.defineProperty(unreadableDescriptionTool, "description", {
+        get() {
+          throw new Error("loopback tool description getter exploded");
+        },
+      });
+      const unreadableParametersTool = {
+        name: "memory_lookup",
+        label: "Memory Lookup",
+        description: "Lookup memory",
+        execute: vi.fn(),
+      };
+      Object.defineProperty(unreadableParametersTool, "parameters", {
+        get() {
+          throw new Error("loopback tool parameters getter exploded");
+        },
+      });
+      const getActiveMcpLoopbackRuntime = vi.fn(() => ({
+        port: 31783,
+        ownerToken: "loopback-owner-token",
+        nonOwnerToken: "loopback-non-owner-token",
+      }));
+      const ensureMcpLoopbackServer = vi.fn(createTestMcpLoopbackServer);
+      const createMcpLoopbackServerConfig = vi.fn(createTestMcpLoopbackServerConfig);
+      const resolveMcpLoopbackScopedTools = vi.fn(() => ({
+        agentId: "main",
+        tools: [unreadableNameTool, unreadableDescriptionTool, unreadableParametersTool] as never,
+      }));
+      setCliRunnerPrepareTestDeps({
+        getActiveMcpLoopbackRuntime,
+        ensureMcpLoopbackServer,
+        createMcpLoopbackServerConfig,
+        resolveMcpLoopbackScopedTools,
+      });
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [
+          {
+            id: "native-cli",
+            pluginId: "native-plugin",
+            bundleMcp: true,
+            bundleMcpMode: "claude-config-file",
+            config: {
+              command: "native-cli",
+              args: ["--print"],
+              systemPromptArg: "--system-prompt",
+              systemPromptWhen: "first",
+              output: "text",
+              input: "arg",
+              sessionMode: "existing",
+            },
+          },
+        ],
+      });
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "native-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-loopback-malformed-prompt-tools",
+        config: createCliBackendConfig({ bundleMcp: true }),
+        cliSessionBinding: {
+          sessionId: "cli-session",
+          promptToolNamesHash: "old-tool-surface",
+        },
+      });
+
+      expect(context.systemPrompt).toContain("## Memory Recall");
+      expect(context.systemPrompt).toContain("tools=memory_search");
+      expect(context.systemPromptReport.tools.entries.map((entry) => entry.name)).toEqual([
+        "memory_search",
+      ]);
+      expect(context.systemPromptReport.tools.entries.map((entry) => entry.summaryChars)).toEqual([
+        "memory_search".length,
+      ]);
+      expect(context.promptToolNamesHash).toBe(
+        hashCliSessionText(JSON.stringify(["memory_search"])),
+      );
+      expect(context.reusableCliSession).toEqual({ invalidatedReason: "system-prompt" });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("does not advertise loopback prompt tools when the runtime is unavailable", async () => {
     const { dir, sessionFile } = createSessionFile();
     try {
