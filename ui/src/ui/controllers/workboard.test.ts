@@ -165,7 +165,7 @@ describe("workboard controller", () => {
     });
   });
 
-  it("clears absent persisted task ids during authoritative full loads", async () => {
+  it("preserves persisted task ids when a live paginated task listing omits them", async () => {
     const host = {};
     const linked = {
       ...sampleCard,
@@ -180,7 +180,7 @@ describe("workboard controller", () => {
 
     await loadWorkboard({ host, client: client as never, force: true });
 
-    expect(getWorkboardState(host).cards[0]).not.toHaveProperty("taskId");
+    expect(getWorkboardState(host).cards[0]).toMatchObject({ taskId: sampleTask.taskId });
   });
 
   it("records poll refresh state until the final reconciliation render", async () => {

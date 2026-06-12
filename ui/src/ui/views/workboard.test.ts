@@ -1,7 +1,7 @@
 // Control UI tests cover workboard behavior.
 import { nothing, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import { getWorkboardState } from "../controllers/workboard.ts";
+import { getWorkboardState, stopWorkboardPolling } from "../controllers/workboard.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import { renderWorkboard } from "./workboard.ts";
 
@@ -54,6 +54,45 @@ describe("renderWorkboard", () => {
     expect(container.querySelector(".workboard-toolbar__actions")?.textContent).not.toContain(
       "Refreshing",
     );
+  });
+
+  it("stops and does not rearm auto-refresh while disconnected", async () => {
+    vi.useFakeTimers();
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.lifecycleTasksPrepared = true;
+    state.autoRefreshIntervalMs = 5000;
+    const request = vi.fn(async () => ({ cards: [], statuses: [] }));
+    const client = { request } as unknown as GatewayBrowserClient;
+    const container = document.createElement("div");
+    const props = {
+      host,
+      client,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+    } satisfies WorkboardRenderProps;
+
+    try {
+      renderInto(container, props);
+      renderInto(container, { ...props, connected: false });
+      await vi.advanceTimersByTimeAsync(5000);
+
+      expect(request).not.toHaveBeenCalled();
+
+      const interval = container.querySelector<HTMLSelectElement>(".workboard-auto-refresh select");
+      interval!.value = "15000";
+      interval!.dispatchEvent(new Event("change", { bubbles: true }));
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(request).not.toHaveBeenCalled();
+    } finally {
+      stopWorkboardPolling(host);
+      vi.useRealTimers();
+    }
   });
 
   it("keeps dispatch available during refresh and disables it during writes", () => {

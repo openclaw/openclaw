@@ -1557,7 +1557,6 @@ function applyTaskSummariesToState(
   state: WorkboardUiState,
   tasks: readonly WorkboardTaskSummary[],
   options: {
-    clearMissingTaskIds?: boolean;
     missingTaskIds?: ReadonlySet<string>;
   } = {},
 ) {
@@ -1567,7 +1566,7 @@ function applyTaskSummariesToState(
     const task = findLatestTaskForCard(taskIndex, card);
     if (!task) {
       const taskId = normalizeString(card.taskId);
-      if (taskId && (options.clearMissingTaskIds === true || options.missingTaskIds?.has(taskId))) {
+      if (taskId && options.missingTaskIds?.has(taskId)) {
         const { taskId: _, ...unlinkedCard } = card;
         return unlinkedCard;
       }
@@ -1678,9 +1677,7 @@ export async function loadWorkboard(params: {
             applyTaskSummariesToState(
               state,
               taskSummaries,
-              pollResult
-                ? { missingTaskIds: pollResult.missingTaskIds }
-                : { clearMissingTaskIds: true },
+              pollResult ? { missingTaskIds: pollResult.missingTaskIds } : undefined,
             );
             if (pollResult?.error) {
               state.lastRefreshError = pollResult.error;
@@ -2445,7 +2442,7 @@ export async function syncWorkboardLifecycle(params: {
       ) {
         return;
       }
-      applyTaskSummariesToState(state, taskSummaries, { clearMissingTaskIds: true });
+      applyTaskSummariesToState(state, taskSummaries);
     } catch (error) {
       if (
         !isCurrentWorkboardLoadGeneration(params.host, generation) ||
@@ -2781,9 +2778,7 @@ export async function dispatchWorkboard(params: {
     state.lastDispatchSummary = normalizeDispatchSummary(dispatchResult);
     state.tasksByCardId = new Map();
     try {
-      applyTaskSummariesToState(state, await listWorkboardTasks(params.client), {
-        clearMissingTaskIds: true,
-      });
+      applyTaskSummariesToState(state, await listWorkboardTasks(params.client));
     } catch (error) {
       state.lastRefreshError = formatError(error);
     }

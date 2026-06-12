@@ -2462,7 +2462,7 @@ export function renderWorkboard(props: WorkboardProps) {
   configureWorkboardPolling({
     host: props.host,
     client: props.client,
-    enabled: props.pluginEnabled === true && state.autoRefreshIntervalMs > 0,
+    enabled: props.connected && props.pluginEnabled === true && state.autoRefreshIntervalMs > 0,
     requestUpdate: props.onRequestUpdate,
   });
   if (props.pluginEnabled === true) {
@@ -2728,7 +2728,10 @@ export function renderWorkboard(props: WorkboardProps) {
                   configureWorkboardPolling({
                     host: props.host,
                     client: props.client,
-                    enabled: props.pluginEnabled === true && state.autoRefreshIntervalMs > 0,
+                    enabled:
+                      props.connected &&
+                      props.pluginEnabled === true &&
+                      state.autoRefreshIntervalMs > 0,
                     requestUpdate: props.onRequestUpdate,
                   });
                   props.onRequestUpdate?.();
