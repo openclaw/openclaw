@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   annotateInterSessionPromptText,
   isAgentMediatedCompletionSourceTool,
+  isCompletionAnnounceInputProvenance,
   shouldPreserveUserFacingSessionStateForInputProvenance,
   stripInterSessionPromptPrefixForDisplay,
 } from "./input-provenance.js";
@@ -127,5 +128,48 @@ describe("shouldPreserveUserFacingSessionStateForInputProvenance", () => {
         sourceTool: "sessions_send",
       }),
     ).toBe(false);
+  });
+});
+
+describe("isCompletionAnnounceInputProvenance", () => {
+  it.each([
+    "subagent_announce",
+    "agent_harness_task",
+    "image_generate",
+    "music_generate",
+    "video_generate",
+  ])("detects internal %s completion announcements", (sourceTool) => {
+    expect(
+      isCompletionAnnounceInputProvenance({
+        kind: "inter_session",
+        sourceTool,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not flag interrupted-run resumes as completion announcements", () => {
+    // Resuming interrupted work is the task itself, not a finished report.
+    expect(
+      isCompletionAnnounceInputProvenance({
+        kind: "inter_session",
+        sourceTool: "subagent_interrupted_resume",
+      }),
+    ).toBe(false);
+  });
+
+  it("does not flag user-directed or external turns", () => {
+    expect(
+      isCompletionAnnounceInputProvenance({
+        kind: "external_user",
+        sourceTool: "subagent_announce",
+      }),
+    ).toBe(false);
+    expect(
+      isCompletionAnnounceInputProvenance({
+        kind: "inter_session",
+        sourceTool: "sessions_send",
+      }),
+    ).toBe(false);
+    expect(isCompletionAnnounceInputProvenance(undefined)).toBe(false);
   });
 });

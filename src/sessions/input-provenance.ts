@@ -94,6 +94,27 @@ const USER_FACING_SESSION_STATE_PRESERVING_SOURCE_TOOLS: ReadonlySet<string> = n
   "subagent_interrupted_resume",
 ]);
 
+// Completion announcements report finished work. "subagent_interrupted_resume"
+// is intentionally excluded: resuming interrupted work is the task itself.
+const COMPLETION_ANNOUNCE_SOURCE_TOOLS: ReadonlySet<string> = new Set([
+  ...AGENT_MEDIATED_COMPLETION_SOURCE_TOOLS,
+  "subagent_announce",
+]);
+
+/**
+ * True when a turn was triggered by an internal completion announcement.
+ * Announced results are evidence of finished work; combined with a fallback
+ * takeover they must not seed new spawned work (#92271).
+ */
+export function isCompletionAnnounceInputProvenance(value: unknown): boolean {
+  const provenance = normalizeInputProvenance(value);
+  if (provenance?.kind !== "inter_session") {
+    return false;
+  }
+  const sourceTool = normalizeOptionalString(provenance.sourceTool)?.toLowerCase();
+  return sourceTool ? COMPLETION_ANNOUNCE_SOURCE_TOOLS.has(sourceTool) : false;
+}
+
 export function shouldPreserveUserFacingSessionStateForInputProvenance(value: unknown): boolean {
   const provenance = normalizeInputProvenance(value);
   if (provenance?.kind !== "inter_session") {
