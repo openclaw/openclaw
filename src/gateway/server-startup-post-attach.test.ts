@@ -1182,15 +1182,59 @@ describe("startGatewayPostAttachRuntime", () => {
       });
 
       await sidecar.stop();
+      expect(hoisted.clearCurrentProviderAuthState).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(1_000);
       expect(hoisted.warmCurrentProviderAuthStateOffMainThread).not.toHaveBeenCalled();
 
       const hook = hoisted.setAuthProfileFailureHook.mock.calls[0]?.[0] as (() => void) | undefined;
       hook?.();
       await vi.dynamicImportSettled();
-      expect(hoisted.clearCurrentProviderAuthState).not.toHaveBeenCalled();
+      expect(hoisted.clearCurrentProviderAuthState).toHaveBeenCalledTimes(1);
       expect(hoisted.warmCurrentProviderAuthStateOffMainThread).not.toHaveBeenCalled();
     } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels active provider auth prewarm when the sidecar stops", async () => {
+    vi.useFakeTimers();
+    const log = { info: vi.fn(), warn: vi.fn() };
+    let resolveWarm: (() => void) | undefined;
+    const warmStarted = new Promise<void>((resolve) => {
+      hoisted.warmCurrentProviderAuthStateOffMainThread.mockImplementationOnce(
+        async (_cfg: unknown, _options: unknown) => {
+          resolve();
+          await new Promise<void>((finish) => {
+            resolveWarm = finish;
+          });
+        },
+      );
+    });
+
+    try {
+      const sidecar = testing.scheduleProviderAuthStatePrewarm({
+        getConfig: () => ({ marker: "current" }) as never,
+        log,
+        delayMs: 0,
+      });
+      await vi.dynamicImportSettled();
+      await vi.waitFor(() => {
+        expect(hoisted.setAuthProfileFailureHook).toHaveBeenCalledTimes(1);
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      await warmStarted;
+      const options = hoisted.warmCurrentProviderAuthStateOffMainThread.mock.calls[0]?.[1] as
+        | { isCancelled?: () => boolean }
+        | undefined;
+      expect(options?.isCancelled?.()).toBe(false);
+
+      await sidecar.stop();
+      expect(hoisted.clearCurrentProviderAuthState).toHaveBeenCalledTimes(1);
+      expect(options?.isCancelled?.()).toBe(true);
+      resolveWarm?.();
+      await vi.dynamicImportSettled();
+    } finally {
+      resolveWarm?.();
       vi.useRealTimers();
     }
   });

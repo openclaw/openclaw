@@ -229,13 +229,16 @@ function scheduleProviderAuthStatePrewarm(params: {
   let rewarmTimer: ReturnType<typeof setTimeout> | undefined;
   let rewarmInFlight = false;
   let pendingRewarmReason: string | undefined;
+  let clearProviderAuthStateOnStop: (() => void) | undefined;
   const isStopped = () => stopped;
   const delayMs = params.delayMs ?? PROVIDER_AUTH_PREWARM_START_DELAY_MS;
   void (async () => {
-    const [{ setAuthProfileFailureHook }, { clearCurrentProviderAuthState }] = await Promise.all([
+    const [{ setAuthProfileFailureHook }, providerAuthStateModule] = await Promise.all([
       import("../agents/auth-profiles/failure-hook.js"),
       import("../agents/model-provider-auth-state.js"),
     ]);
+    const { clearCurrentProviderAuthState } = providerAuthStateModule;
+    clearProviderAuthStateOnStop = clearCurrentProviderAuthState;
     const loadProviderAuthWarmModule = () => import("../agents/model-provider-auth.js");
     const runRewarm = async (reason: string) => {
       if (isStopped()) {
@@ -331,6 +334,7 @@ function scheduleProviderAuthStatePrewarm(params: {
         clearTimeout(rewarmTimer);
         rewarmTimer = undefined;
       }
+      clearProviderAuthStateOnStop?.();
     },
   };
 }
