@@ -2422,6 +2422,25 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
+  it("does not return retryable after spooled replay already showed visible output", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "partial answer" }, { kind: "block" });
+      dispatcherOptions.onSkip?.({ text: "final answer" }, { kind: "final", reason: "empty" });
+      return { queuedFinal: false };
+    });
+
+    const result = await dispatchWithContext({
+      context: createContext(),
+      retryDispatchErrors: true,
+      suppressFailureFallback: true,
+    });
+
+    expect(result).toEqual({ kind: "completed" });
+    expect(answerDraftStream.update).toHaveBeenCalledWith("partial answer");
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
   it("keeps tool progress visible after a partial-streamed intermediate block", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
