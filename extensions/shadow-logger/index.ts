@@ -56,7 +56,7 @@ export class ShadowLoggerPlugin {
 
     try {
       const payload = this.extractPayload(event);
-      const { error } = await this.supabase.from("dialogues").insert(payload);
+      const { error } = await this.supabase.schema("shadow_log").from("dialogues").insert(payload);
 
       if (error) {
         this.logger.error(`Shadow Logger: Supabase insert error [${event.type}:${event.action}]: ${error.message}`);
