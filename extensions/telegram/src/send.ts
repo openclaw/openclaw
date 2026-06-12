@@ -29,6 +29,8 @@ import { buildInlineKeyboard } from "./inline-keyboard.js";
 import {
   isRecoverableTelegramNetworkError,
   isSafeToRetrySendError,
+  isTelegramMessageHasNoTextError,
+  isTelegramMessageNotModifiedError,
   isTelegramRateLimitError,
   isTelegramServerError,
 } from "./network-errors.js";
@@ -230,9 +232,6 @@ function logTelegramOutboundSendOk(params: TelegramOutboundSuccessLogParams): vo
 }
 
 const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
-const MESSAGE_NOT_MODIFIED_RE =
-  /400:\s*Bad Request:\s*message is not modified|MESSAGE_NOT_MODIFIED/i;
-const MESSAGE_HAS_NO_TEXT_RE = /400:\s*Bad Request:\s*there is no text in the message to edit/i;
 const MESSAGE_DELETE_NOOP_RE =
   /message to delete not found|message can't be deleted|MESSAGE_ID_INVALID|MESSAGE_DELETE_FORBIDDEN/i;
 const CHAT_NOT_FOUND_RE = /400: Bad Request: chat not found/i;
@@ -420,14 +419,6 @@ function normalizeMessageId(raw: string | number): number {
     }
   }
   throw new Error("Message id is required for Telegram actions");
-}
-
-function isTelegramMessageNotModifiedError(err: unknown): boolean {
-  return MESSAGE_NOT_MODIFIED_RE.test(formatErrorMessage(err));
-}
-
-function isTelegramMessageHasNoTextError(err: unknown): boolean {
-  return MESSAGE_HAS_NO_TEXT_RE.test(formatErrorMessage(err));
 }
 
 function isTelegramMessageDeleteNoopError(err: unknown): boolean {

@@ -171,6 +171,7 @@ import {
   type DiagnosticEventPrivateData,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import {
+  emitDiagnosticEventWithTrustedTraceContext,
   emitInternalDiagnosticEventForTest,
   logMessageDispatchStarted,
   logMessageProcessed,
@@ -362,7 +363,11 @@ function histogramCreateOptions(name: string) {
 
 async function emitAndCaptureLog(
   event: Omit<Extract<Parameters<typeof emitDiagnosticEvent>[0], { type: "log.record" }>, "type">,
-  options: { captureContent?: OtelContextFlags["captureContent"]; trusted?: boolean } = {},
+  options: {
+    captureContent?: OtelContextFlags["captureContent"];
+    trusted?: boolean;
+    trustedTraceContext?: boolean;
+  } = {},
 ) {
   const service = createDiagnosticsOtelService();
   const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {
@@ -370,7 +375,11 @@ async function emitAndCaptureLog(
     ...(options.captureContent !== undefined ? { captureContent: options.captureContent } : {}),
   });
   await service.start(ctx);
-  const emit = options.trusted ? emitTrustedDiagnosticEvent : emitDiagnosticEvent;
+  const emit = options.trusted
+    ? emitTrustedDiagnosticEvent
+    : options.trustedTraceContext
+      ? emitDiagnosticEventWithTrustedTraceContext
+      : emitDiagnosticEvent;
   emit({
     type: "log.record",
     ...event,
@@ -1389,6 +1398,28 @@ describe("diagnostics-otel service", () => {
     expect(Object.hasOwn(emitCall?.attributes ?? {}, "openclaw.traceFlags")).toBe(false);
     expect(telemetryState.tracer.setSpanContext).not.toHaveBeenCalled();
     expect(emitCall?.context).toBeUndefined();
+  });
+
+  test("attaches trace-only trusted context to exported logs", async () => {
+    const emitCall = await emitAndCaptureLog(
+      {
+        level: "INFO",
+        message: "traceable log",
+        trace: {
+          traceId: TRACE_ID,
+          spanId: SPAN_ID,
+          traceFlags: "01",
+        },
+      },
+      { trustedTraceContext: true },
+    );
+
+    expect(emitCall?.body).toBe("log");
+    expect(telemetryState.tracer.setSpanContext).toHaveBeenCalledTimes(1);
+    const emitContext = emitCall?.context as { spanContext?: Record<string, unknown> } | undefined;
+    const emitSpanContext = emitContext?.spanContext;
+    expect(emitSpanContext?.traceId).toBe(TRACE_ID);
+    expect(emitSpanContext?.spanId).toBe(SPAN_ID);
   });
 
   test("attaches trusted diagnostic trace context to exported logs", async () => {

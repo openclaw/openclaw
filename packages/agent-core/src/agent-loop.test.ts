@@ -1,4 +1,5 @@
 // Agent Core tests cover agent loop behavior.
+import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import { agentLoop, agentLoopContinue, runAgentLoop } from "./agent-loop.js";
 import {
@@ -406,6 +407,146 @@ describe("runAgentLoop deferred tool hydration", () => {
     expect(resolveDeferredTool).toHaveBeenCalledTimes(1);
     expect(execute).toHaveBeenCalledTimes(2);
     expect(maxActiveExecutions).toBe(1);
+  });
+});
+
+describe("agentLoop tool termination", () => {
+  function makeAssistantMessage(content: AssistantMessage["content"]): AssistantMessage {
+    return {
+      role: "assistant",
+      content,
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: content.some((item) => item.type === "toolCall") ? "toolUse" : "stop",
+      timestamp: 1,
+    };
+  }
+
+  function makeTool(name: string, executed: string[]): AgentTool {
+    return {
+      name,
+      label: name,
+      description: name,
+      parameters: Type.Object({}, { additionalProperties: false }),
+      execute: async () => {
+        executed.push(name);
+        return {
+          content: [{ type: "text", text: `${name} result` }],
+          details: { name },
+        };
+      },
+    };
+  }
+
+  it("continues after a side-effect tool result when afterToolCall records it without terminate", async () => {
+    const executed: string[] = [];
+    let turn = 0;
+    const streamFn: StreamFn = () => {
+      turn += 1;
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message =
+          turn === 1
+            ? makeAssistantMessage([
+                { type: "toolCall", id: "call-message", name: "message", arguments: {} },
+              ])
+            : turn === 2
+              ? makeAssistantMessage([
+                  { type: "toolCall", id: "call-exec", name: "exec", arguments: {} },
+                ])
+              : makeAssistantMessage([{ type: "text", text: "done" }]);
+        stream.push({
+          type: "done",
+          reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
+          message,
+        });
+        stream.end();
+      });
+      return stream;
+    };
+    let recordedSideEffect = false;
+
+    const stream = agentLoop(
+      [{ role: "user", content: "hello", timestamp: 1 }],
+      {
+        systemPrompt: "",
+        messages: [],
+        tools: [makeTool("message", executed), makeTool("exec", executed)],
+      },
+      {
+        ...config,
+        afterToolCall: async ({ toolCall }) => {
+          if (toolCall.name === "message") {
+            recordedSideEffect = true;
+          }
+          return undefined;
+        },
+      },
+      undefined,
+      streamFn,
+    );
+
+    const events = await collectEvents(stream);
+
+    expect(recordedSideEffect).toBe(true);
+    expect(turn).toBe(3);
+    expect(executed).toEqual(["message", "exec"]);
+    expect(events.filter((event) => event.type === "tool_execution_start")).toHaveLength(2);
+    expect(events.at(-1)).toMatchObject({ type: "agent_end" });
+  });
+
+  it("stops after a tool result only when the finalized result explicitly terminates", async () => {
+    const executed: string[] = [];
+    let turn = 0;
+    const streamFn: StreamFn = () => {
+      turn += 1;
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message =
+          turn === 1
+            ? makeAssistantMessage([
+                { type: "toolCall", id: "call-message", name: "message", arguments: {} },
+              ])
+            : makeAssistantMessage([
+                { type: "toolCall", id: "call-exec", name: "exec", arguments: {} },
+              ]);
+        stream.push({ type: "done", reason: "toolUse", message });
+        stream.end();
+      });
+      return stream;
+    };
+
+    const stream = agentLoop(
+      [{ role: "user", content: "hello", timestamp: 1 }],
+      {
+        systemPrompt: "",
+        messages: [],
+        tools: [makeTool("message", executed), makeTool("exec", executed)],
+      },
+      {
+        ...config,
+        afterToolCall: async ({ toolCall }) =>
+          toolCall.name === "message" ? { terminate: true } : undefined,
+      },
+      undefined,
+      streamFn,
+    );
+
+    const events = await collectEvents(stream);
+
+    expect(turn).toBe(1);
+    expect(executed).toEqual(["message"]);
+    expect(events.filter((event) => event.type === "tool_execution_start")).toHaveLength(1);
+    expect(events.at(-1)).toMatchObject({ type: "agent_end" });
   });
 });
 
