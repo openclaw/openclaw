@@ -1988,7 +1988,7 @@ describe("runGlobalPackageUpdateSteps", () => {
       );
       const realMkdtemp = fs.mkdtemp.bind(fs);
       const mkdtempSpy = vi.spyOn(fs, "mkdtemp").mockImplementation(async (prefixArg, options) => {
-        if (String(prefixArg).endsWith(`${path.sep}rollback-`)) {
+        if (prefixArg.endsWith(`${path.sep}rollback-`)) {
           throw createFsError("EACCES", "rollback setup failed");
         }
         return await realMkdtemp(prefixArg, options);
