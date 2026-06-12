@@ -1147,7 +1147,7 @@ describe("RealtimeCallHandler path routing", () => {
         });
         expect(submitToolResult).toHaveBeenCalledTimes(1);
 
-        await vi.advanceTimersByTimeAsync(7000);
+        await vi.advanceTimersByTimeAsync(3000);
         await waitForRealtimeTest(() => {
           expect(submitToolResult).toHaveBeenCalledTimes(2);
           expect(submitToolResult).toHaveBeenLastCalledWith(
@@ -1280,7 +1280,7 @@ describe("RealtimeCallHandler path routing", () => {
             'Briefly tell the caller in their language that you are checking, for example: "Alles klar, ich schaue ganz kurz." Then wait for the final OpenClaw result before answering with the actual result.',
           ]);
         });
-        expect(handleBargeIn).toHaveBeenCalledWith({ audioPlaybackActive: true, force: true });
+        expect(handleBargeIn).toHaveBeenCalledWith({ audioPlaybackActive: false, force: false });
         expect(handleBargeIn.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER).toBeLessThan(
           sendUserMessage.mock.invocationCallOrder[0] ?? 0,
         );
@@ -1292,7 +1292,7 @@ describe("RealtimeCallHandler path routing", () => {
         expect(JSON.stringify(args)).not.toContain("openclaw_agent_consult");
         expect(callId).toBe("call-1");
         expect(context).toEqual({});
-        await vi.advanceTimersByTimeAsync(7000);
+        await vi.advanceTimersByTimeAsync(3000);
         await waitForRealtimeTest(() => {
           expect(sendUserMessage).toHaveBeenCalledTimes(2);
           expect(sendUserMessage).toHaveBeenLastCalledWith(
@@ -1308,6 +1308,10 @@ describe("RealtimeCallHandler path routing", () => {
           );
         });
         expect(handleBargeIn).toHaveBeenCalledTimes(2);
+        expect(handleBargeIn).toHaveBeenLastCalledWith({
+          audioPlaybackActive: true,
+          force: true,
+        });
         const callsAfterFinalResult = sendUserMessage.mock.calls.length;
         await vi.advanceTimersByTimeAsync(24000);
         expect(sendUserMessage).toHaveBeenCalledTimes(callsAfterFinalResult);

@@ -60,8 +60,8 @@ const FORCED_CONSULT_RESULT_MAX_CHARS = 1800;
 const FORCED_CONSULT_REASON = "provider_final_transcript_without_openclaw_agent_consult";
 const CONSULT_TRANSCRIPT_SETTLE_MS = 350;
 const CONSULT_TRANSCRIPT_SETTLE_MAX_MS = 1_000;
-const CONSULT_PROGRESS_INITIAL_DELAY_MS = 7_000;
-const CONSULT_PROGRESS_INTERVAL_MS = 12_000;
+const CONSULT_PROGRESS_INITIAL_DELAY_MS = 3_000;
+const CONSULT_PROGRESS_INTERVAL_MS = 6_000;
 const CONSULT_PROGRESS_MAX_UPDATES = 3;
 const MAX_PARTIAL_USER_TRANSCRIPT_CHARS = 1_200;
 const RECENT_TALK_EVENT_TEXT_MAX_CHARS = 500;
@@ -1157,7 +1157,11 @@ export class RealtimeCallHandler {
       `[voice-call] realtime forced agent consult starting callId=${params.callId} providerCallId=${params.callSid} chars=${params.handle.question.length}`,
     );
     const interruptProviderOutput = (stage: "working" | "final"): void => {
-      params.session.handleBargeIn({ audioPlaybackActive: true, force: true });
+      const shouldForceInterrupt = stage === "final";
+      params.session.handleBargeIn({
+        audioPlaybackActive: shouldForceInterrupt,
+        force: shouldForceInterrupt,
+      });
       params.clearAudio();
       console.log(
         `[voice-call] realtime forced agent consult interrupted provider output callId=${params.callId} providerCallId=${params.callSid} stage=${stage}`,
