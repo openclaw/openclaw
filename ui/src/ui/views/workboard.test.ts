@@ -104,6 +104,65 @@ describe("renderWorkboard", () => {
     );
   });
 
+  it("disables card-write controls while dispatch is running", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.dispatching = true;
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Dispatch-safe card",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    const container = document.createElement("div");
+    const props: WorkboardRenderProps = {
+      host,
+      client: null,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+    };
+
+    render(renderWorkboard(props), container);
+
+    expect(container.querySelector<HTMLButtonElement>('button[title="New card"]')?.disabled).toBe(
+      true,
+    );
+    expect(container.querySelector<HTMLButtonElement>('button[title="Edit card"]')?.disabled).toBe(
+      true,
+    );
+    expect(
+      container.querySelector<HTMLButtonElement>('button[title="Archive card"]')?.disabled,
+    ).toBe(true);
+    expect(
+      container.querySelector<HTMLButtonElement>('button[title="Delete card"]')?.disabled,
+    ).toBe(true);
+    expect(
+      container.querySelector<HTMLSelectElement>(".workboard-card__move-select")?.disabled,
+    ).toBe(true);
+    expect(container.querySelector<HTMLElement>(".workboard-card")?.getAttribute("draggable")).toBe(
+      "false",
+    );
+
+    state.draftOpen = true;
+    state.editingCardId = "card-1";
+    state.draftTitle = "Dispatch-safe card";
+    render(renderWorkboard(props), container);
+
+    expect(
+      container.querySelector<HTMLButtonElement>(".workboard-draft .btn.primary")?.disabled,
+    ).toBe(true);
+  });
+
   it("renders stable card action slots and top updated timestamps", () => {
     const host = {};
     const state = getWorkboardState(host);
@@ -1735,7 +1794,7 @@ describe("renderWorkboard", () => {
     const host = {};
     const state = getWorkboardState(host);
     state.loaded = true;
-    state.busyCardId = "card-1";
+    state.busyCardIds.add("card-1");
     state.cards = [
       {
         id: "card-1",
@@ -2824,7 +2883,7 @@ describe("renderWorkboard", () => {
     state.editingCardId = "card-1";
     state.draftTitle = "Rename me";
     state.draftCommentBody = "Ship after CI";
-    state.busyCardId = "card-1";
+    state.busyCardIds.add("card-1");
     state.cards = [
       {
         id: "card-1",

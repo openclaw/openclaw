@@ -405,7 +405,7 @@ export type WorkboardUiState = {
   draftCommentBody: string;
   detailCardId: string | null;
   detailCommentBody: string;
-  busyCardId: string | null;
+  busyCardIds: Set<string>;
   draggedCardId: string | null;
   syncingCardIds: Set<string>;
   capturingSessionKeys: Set<string>;
@@ -489,7 +489,7 @@ function createDefaultState(): WorkboardUiState {
     draftCommentBody: "",
     detailCardId: null,
     detailCommentBody: "",
-    busyCardId: null,
+    busyCardIds: new Set(),
     draggedCardId: null,
     syncingCardIds: new Set(),
     capturingSessionKeys: new Set(),
@@ -508,7 +508,7 @@ export function getWorkboardState(host: WorkboardHost): WorkboardUiState {
 export function workboardHasActiveWrites(state: WorkboardUiState): boolean {
   return Boolean(
     state.draftSaving ||
-    state.busyCardId ||
+    state.busyCardIds.size ||
     state.syncingCardIds.size ||
     state.capturingSessionKeys.size,
   );
@@ -1379,6 +1379,7 @@ export async function loadWorkboard(params: {
   requestUpdate?: () => void;
   force?: boolean;
   refreshDiagnostics?: boolean;
+  refreshTasks?: boolean;
 }): Promise<boolean> {
   const state = getWorkboardState(params.host);
   if (!params.client || (!params.force && (state.loaded || state.loadAttempted))) {
@@ -1413,8 +1414,15 @@ export async function loadWorkboard(params: {
       }
       state.cards = normalized.cards;
       state.statuses = normalized.statuses;
-      state.tasksByCardId = new Map();
-      if (normalized.cards.length > 0) {
+      if (params.refreshTasks === false) {
+        const cardIds = new Set(normalized.cards.map((card) => card.id));
+        state.tasksByCardId = new Map(
+          [...state.tasksByCardId].filter(([cardId]) => cardIds.has(cardId)),
+        );
+      } else {
+        state.tasksByCardId = new Map();
+      }
+      if (params.refreshTasks !== false && normalized.cards.length > 0) {
         try {
           const tasks = await listWorkboardTasks(client);
           if (isCurrentWorkboardLoadGeneration(params.host, generation)) {
@@ -1485,6 +1493,7 @@ export async function refreshWorkboard(params: {
       requestUpdate: params.requestUpdate,
       force: true,
       refreshDiagnostics: params.refreshDiagnostics,
+      refreshTasks: params.source !== "poll",
     });
     state.lastRefreshSource = params.source;
     if (state.error) {
@@ -2261,7 +2270,7 @@ export async function createWorkboardCard(params: {
   requestUpdate?: () => void;
 }) {
   const state = getWorkboardState(params.host);
-  if (!params.client || !state.draftTitle.trim() || state.dispatching) {
+  if (!params.client || !state.draftTitle.trim() || state.dispatching || state.draftSaving) {
     return;
   }
   invalidateWorkboardLoads(params.host);
@@ -2292,7 +2301,13 @@ export async function saveWorkboardCardDraft(params: {
     await createWorkboardCard(params);
     return;
   }
-  if (!params.client || !state.draftTitle.trim() || state.dispatching) {
+  if (
+    !params.client ||
+    !state.draftTitle.trim() ||
+    state.dispatching ||
+    state.draftSaving ||
+    state.busyCardIds.has(state.editingCardId)
+  ) {
     return;
   }
   invalidateWorkboardLoads(params.host);
@@ -2333,11 +2348,11 @@ export async function addWorkboardCardComment(params: {
   const state = getWorkboardState(params.host);
   const cardId = params.cardId ?? state.editingCardId;
   const body = (params.body ?? state.draftCommentBody).trim();
-  if (!cardId || !params.client || !body || state.dispatching) {
+  if (!cardId || !params.client || !body || state.dispatching || state.busyCardIds.has(cardId)) {
     return;
   }
   invalidateWorkboardLoads(params.host);
-  state.busyCardId = cardId;
+  state.busyCardIds.add(cardId);
   state.error = null;
   params.requestUpdate?.();
   try {
@@ -2354,7 +2369,7 @@ export async function addWorkboardCardComment(params: {
   } catch (error) {
     state.error = formatError(error);
   } finally {
-    state.busyCardId = null;
+    state.busyCardIds.delete(cardId);
     params.requestUpdate?.();
   }
 }
@@ -2368,11 +2383,11 @@ export async function moveWorkboardCard(params: {
   requestUpdate?: () => void;
 }) {
   const state = getWorkboardState(params.host);
-  if (!params.client || state.dispatching) {
+  if (!params.client || state.dispatching || state.busyCardIds.has(params.cardId)) {
     return;
   }
   invalidateWorkboardLoads(params.host);
-  state.busyCardId = params.cardId;
+  state.busyCardIds.add(params.cardId);
   state.error = null;
   const pendingStatusRecorded = recordPendingStatusTransition(
     params.host,
@@ -2391,7 +2406,7 @@ export async function moveWorkboardCard(params: {
     state.error = formatError(error);
   } finally {
     clearPendingStatusTransition(params.host, params.cardId, pendingStatusRecorded);
-    state.busyCardId = null;
+    state.busyCardIds.delete(params.cardId);
     state.draggedCardId = null;
     params.requestUpdate?.();
   }
@@ -2404,11 +2419,11 @@ export async function deleteWorkboardCard(params: {
   requestUpdate?: () => void;
 }) {
   const state = getWorkboardState(params.host);
-  if (!params.client || state.dispatching) {
+  if (!params.client || state.dispatching || state.busyCardIds.has(params.cardId)) {
     return;
   }
   invalidateWorkboardLoads(params.host);
-  state.busyCardId = params.cardId;
+  state.busyCardIds.add(params.cardId);
   state.error = null;
   params.requestUpdate?.();
   try {
@@ -2417,7 +2432,7 @@ export async function deleteWorkboardCard(params: {
   } catch (error) {
     state.error = formatError(error);
   } finally {
-    state.busyCardId = null;
+    state.busyCardIds.delete(params.cardId);
     params.requestUpdate?.();
   }
 }
@@ -2430,11 +2445,11 @@ export async function archiveWorkboardCard(params: {
   requestUpdate?: () => void;
 }) {
   const state = getWorkboardState(params.host);
-  if (!params.client || state.dispatching) {
+  if (!params.client || state.dispatching || state.busyCardIds.has(params.cardId)) {
     return;
   }
   invalidateWorkboardLoads(params.host);
-  state.busyCardId = params.cardId;
+  state.busyCardIds.add(params.cardId);
   state.error = null;
   params.requestUpdate?.();
   try {
@@ -2446,7 +2461,7 @@ export async function archiveWorkboardCard(params: {
   } catch (error) {
     state.error = formatError(error);
   } finally {
-    state.busyCardId = null;
+    state.busyCardIds.delete(params.cardId);
     params.requestUpdate?.();
   }
 }
@@ -2661,7 +2676,7 @@ export async function startWorkboardCard(params: {
   requestUpdate?: () => void;
 }): Promise<string | null> {
   const state = getWorkboardState(params.host);
-  if (!params.client || state.dispatching) {
+  if (!params.client || state.dispatching || state.busyCardIds.has(params.card.id)) {
     return null;
   }
   const engine = params.engine;
@@ -2673,7 +2688,7 @@ export async function startWorkboardCard(params: {
     return null;
   }
   invalidateWorkboardLoads(params.host);
-  state.busyCardId = params.card.id;
+  state.busyCardIds.add(params.card.id);
   params.requestUpdate?.();
   let preflightCard: WorkboardCard | null = null;
   let createdSessionKey: string | null = null;
@@ -2800,7 +2815,7 @@ export async function startWorkboardCard(params: {
     state.error = formatError(error);
     return null;
   } finally {
-    state.busyCardId = null;
+    state.busyCardIds.delete(params.card.id);
     params.requestUpdate?.();
   }
 }
@@ -2815,11 +2830,16 @@ export async function stopWorkboardCard(params: {
   const sessionKey = workboardCardSessionKey(params.card);
   const task = state.tasksByCardId.get(params.card.id);
   const taskId = params.card.taskId ?? task?.taskId;
-  if (!params.client || state.dispatching || (!sessionKey && !taskId)) {
+  if (
+    !params.client ||
+    state.dispatching ||
+    state.busyCardIds.has(params.card.id) ||
+    (!sessionKey && !taskId)
+  ) {
     return;
   }
   invalidateWorkboardLoads(params.host);
-  state.busyCardId = params.card.id;
+  state.busyCardIds.add(params.card.id);
   state.error = null;
   params.requestUpdate?.();
   try {
@@ -2870,7 +2890,7 @@ export async function stopWorkboardCard(params: {
   } catch (error) {
     state.error = formatError(error);
   } finally {
-    state.busyCardId = null;
+    state.busyCardIds.delete(params.card.id);
     params.requestUpdate?.();
   }
 }

@@ -264,6 +264,7 @@ describe("workboard controller", () => {
     });
     const state = getWorkboardState(host);
     state.autoRefreshIntervalMs = 5000;
+    state.tasksByCardId.set(sampleCard.id, sampleTask);
 
     configureWorkboardPolling({
       host,
@@ -278,6 +279,8 @@ describe("workboard controller", () => {
       expect.anything(),
     );
     expect(client.request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
+    expect(client.request).not.toHaveBeenCalledWith("tasks.list", expect.anything());
+    expect(state.tasksByCardId.get(sampleCard.id)).toEqual(sampleTask);
     vi.clearAllMocks();
     stopWorkboardPolling(host);
     await vi.advanceTimersByTimeAsync(5000);
@@ -373,6 +376,65 @@ describe("workboard controller", () => {
 
     update.resolve({ card: sampleCard });
     await save;
+  });
+
+  it("keeps concurrent card writes busy until each write finishes", async () => {
+    const host = {};
+    const first = createDeferred<unknown>();
+    const second = createDeferred<unknown>();
+    const secondCard = { ...sampleCard, id: "card-2", title: "Second card" };
+    const client = createClient((method, params) => {
+      if (method === "workboard.cards.move") {
+        return (params as { id: string }).id === sampleCard.id ? first.promise : second.promise;
+      }
+      if (method === "workboard.cards.dispatch") {
+        return { promoted: [], reclaimed: [], blocked: [], orchestrated: [] };
+      }
+      return {};
+    });
+
+    const firstMove = moveWorkboardCard({
+      host,
+      client: client as never,
+      cardId: sampleCard.id,
+      status: "review",
+      position: 1000,
+    });
+    const secondMove = moveWorkboardCard({
+      host,
+      client: client as never,
+      cardId: secondCard.id,
+      status: "review",
+      position: 2000,
+    });
+    await Promise.resolve();
+
+    expect(getWorkboardState(host).busyCardIds).toEqual(new Set([sampleCard.id, secondCard.id]));
+    await moveWorkboardCard({
+      host,
+      client: client as never,
+      cardId: sampleCard.id,
+      status: "blocked",
+      position: 3000,
+    });
+    expect(
+      client.request.mock.calls.filter(
+        ([method, params]) =>
+          method === "workboard.cards.move" &&
+          (params as { id?: string } | undefined)?.id === sampleCard.id,
+      ),
+    ).toHaveLength(1);
+
+    first.resolve({ card: { ...sampleCard, status: "review" } });
+    await firstMove;
+
+    expect(getWorkboardState(host).busyCardIds).toEqual(new Set([secondCard.id]));
+    await dispatchWorkboard({ host, client: client as never });
+    expect(client.request).not.toHaveBeenCalledWith("workboard.cards.dispatch", {});
+
+    second.resolve({ card: { ...secondCard, status: "review" } });
+    await secondMove;
+    expect(getWorkboardState(host).busyCardIds.size).toBe(0);
   });
 
   it("clears stale task summaries when dispatch task refresh fails", async () => {

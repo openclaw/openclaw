@@ -966,7 +966,13 @@ function moveCardToStatus(
   status: WorkboardStatus,
   state: WorkboardUiState,
 ) {
-  if (status === card.status || state.busyCardId === card.id || !props.connected || !props.client) {
+  if (
+    status === card.status ||
+    state.busyCardIds.has(card.id) ||
+    state.dispatching ||
+    !props.connected ||
+    !props.client
+  ) {
     return;
   }
   void moveWorkboardCard({
@@ -1004,7 +1010,12 @@ function renderCardMoveControl(props: WorkboardProps, card: WorkboardCard, busy:
           if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
             return;
           }
-          if (state.busyCardId === card.id || !props.connected || !props.client) {
+          if (
+            state.busyCardIds.has(card.id) ||
+            state.dispatching ||
+            !props.connected ||
+            !props.client
+          ) {
             event.preventDefault();
             return;
           }
@@ -1142,7 +1153,8 @@ function renderCardModal(props: WorkboardProps) {
     ? (state.cards.find((card) => card.id === state.editingCardId) ?? null)
     : null;
   const comments = editingCard?.metadata?.comments ?? [];
-  const draftCommentBusy = editing && state.busyCardId === state.editingCardId;
+  const draftCommentBusy = editing && state.busyCardIds.has(state.editingCardId ?? "");
+  const draftActionsBusy = state.loading || state.dispatching || draftCommentBusy;
   return html`
     <div
       class="workboard-modal"
@@ -1167,7 +1179,7 @@ function renderCardModal(props: WorkboardProps) {
           handleWorkboardDialogKeydown(event, props, () => resetDraft(state))}
         @submit=${(event: SubmitEvent) => {
           event.preventDefault();
-          if (state.loading || draftCommentBusy) {
+          if (draftActionsBusy) {
             return;
           }
           void saveWorkboardCardDraft({
@@ -1329,9 +1341,7 @@ function renderCardModal(props: WorkboardProps) {
                     <button
                       class="btn"
                       type="button"
-                      ?disabled=${state.loading ||
-                      draftCommentBusy ||
-                      !state.draftCommentBody.trim()}
+                      ?disabled=${draftActionsBusy || !state.draftCommentBody.trim()}
                       @click=${() => {
                         void addWorkboardCardComment({
                           host: props.host,
@@ -1348,10 +1358,7 @@ function renderCardModal(props: WorkboardProps) {
             : nothing}
         </div>
         <div class="workboard-modal__actions">
-          <button
-            class="btn primary"
-            ?disabled=${state.loading || draftCommentBusy || !state.draftTitle.trim()}
-          >
+          <button class="btn primary" ?disabled=${draftActionsBusy || !state.draftTitle.trim()}>
             ${editing ? t("common.save") : t("common.create")}
           </button>
           <button
@@ -1573,7 +1580,7 @@ function renderStartExecutionButton(
   options: { iconOnly?: boolean } = {},
 ) {
   const state = getWorkboardState(props.host);
-  const busy = state.busyCardId === card.id;
+  const busy = state.busyCardIds.has(card.id) || state.dispatching;
   const runtimeBlock = engineBlockedByRuntime(props, card, engine);
   const disabled =
     busy || !props.connected || Boolean(runtimeBlock) || Boolean(card.metadata?.archivedAt);
@@ -1696,7 +1703,7 @@ function renderCardDetailsPanel(props: WorkboardProps) {
   const workerProtocol = card.metadata?.workerProtocol;
   const automation = card.metadata?.automation;
   const events = (card.events ?? []).slice(-6).toReversed();
-  const busy = state.busyCardId === card.id;
+  const busy = state.busyCardIds.has(card.id) || state.dispatching;
   const showStartControls = writable && cardCanStart(state, props.sessions, card);
   const dependencies = getWorkboardDependencyState(card, state.cards);
   return html`
@@ -2035,7 +2042,7 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
   const state = getWorkboardState(props.host);
   const task = state.tasksByCardId.get(card.id);
   const session = findWorkboardSession(card, props.sessions);
-  const busy = state.busyCardId === card.id;
+  const busy = state.busyCardIds.has(card.id) || state.dispatching;
   const syncing = state.syncingCardIds.has(card.id);
   const activeTask = taskIsActive(task);
   const live =
@@ -2062,6 +2069,7 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
             title=${t("workboard.editCard")}
             aria-label=${t("workboard.editCard")}
             aria-haspopup="dialog"
+            ?disabled=${state.dispatching}
             @click=${(event: MouseEvent) => {
               rememberWorkboardReturnFocus(event.currentTarget);
               openEditModal(state, card);
@@ -2176,7 +2184,7 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
       aria-haspopup="dialog"
       aria-expanded=${state.detailCardId === card.id ? "true" : "false"}
       aria-controls=${workboardCardDetailDrawerId}
-      draggable=${writable ? "true" : "false"}
+      draggable=${writable && !state.dispatching ? "true" : "false"}
       @click=${(event: MouseEvent) => {
         if (!isCardActionTarget(event)) {
           rememberWorkboardReturnFocus(event.currentTarget);
@@ -2194,7 +2202,7 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
         event.preventDefault();
       }}
       @dragstart=${(event: DragEvent) => {
-        if (!writable) {
+        if (!writable || state.dispatching) {
           event.preventDefault();
           return;
         }
@@ -2600,6 +2608,7 @@ export function renderWorkboard(props: WorkboardProps) {
                     aria-haspopup="dialog"
                     aria-expanded=${state.draftOpen ? "true" : "false"}
                     aria-controls=${workboardCardModalId}
+                    ?disabled=${state.dispatching}
                     @click=${(event: MouseEvent) => {
                       rememberWorkboardReturnFocus(event.currentTarget);
                       openCreateModal(state);
