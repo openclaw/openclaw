@@ -40,6 +40,7 @@ const quarantineStore = createRuntimeHealthStore<PersistedRuntimeToolSchemaQuara
       reason: value.reason,
       failedAtMs: value.failedAtMs,
       processId: value.processId,
+      processToken: value.processToken,
       processStartTime: value.processStartTime,
       ...(isNonEmptyString(value.owner) ? { owner: value.owner } : {}),
     };

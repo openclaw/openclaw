@@ -1,15 +1,23 @@
 // Shared mechanics for cross-process runtime health records persisted in the
 // core plugin-state store: envelope validation, process-liveness hygiene, and
 // per-process cleanup. Domain modules own record fields and display keys.
+import { randomUUID } from "node:crypto";
 import { getProcessStartTime } from "../shared/pid-alive.js";
 import { createCorePluginStateSyncKeyedStore } from "./plugin-state-store.js";
 
 /** Envelope persisted with every cross-process runtime health record. */
 export type RuntimeHealthRecordEnvelope = {
   processId: number;
+  /** Random per-process identity; proves incarnation for own-PID records. */
+  processToken: string;
+  /** Linux /proc starttime for sibling verification; null when unavailable. */
   processStartTime: number | null;
   failedAtMs: number;
 };
+
+// One token per process lifetime: a restarted process (even with a recycled
+// PID) can never match records written by its predecessor.
+const currentProcessToken = randomUUID();
 
 export type RuntimeHealthStoreOptions<T extends RuntimeHealthRecordEnvelope> = {
   ownerId: `core:${string}`;
@@ -45,6 +53,8 @@ function hasValidEnvelope(
     typeof record.processId === "number" &&
     Number.isInteger(record.processId) &&
     record.processId > 0 &&
+    typeof record.processToken === "string" &&
+    record.processToken.length > 0 &&
     (record.processStartTime === null ||
       (typeof record.processStartTime === "number" &&
         Number.isFinite(record.processStartTime) &&
@@ -58,35 +68,24 @@ function hasValidEnvelope(
 export function createRuntimeHealthRecordEnvelope(failedAt: Date): RuntimeHealthRecordEnvelope {
   return {
     processId: process.pid,
+    processToken: currentProcessToken,
     processStartTime: getProcessStartTime(process.pid),
     failedAtMs: failedAt.getTime(),
   };
 }
 
-function processIdentityMatches(record: RuntimeHealthRecordEnvelope): boolean {
-  if (record.processStartTime === null) {
-    return true;
-  }
-  const currentStartTime = getProcessStartTime(record.processId);
-  return currentStartTime === null || currentStartTime === record.processStartTime;
-}
-
-// Liveness keeps health output actionable across restarts: a dead recorder's
-// failures disappear instead of lingering as stale state, and start-time identity
-// prevents a recycled PID from keeping old failures alive.
+// Records surface only with a positive incarnation match; unverifiable
+// identity fails closed so a recycled PID can never keep stale failures alive.
+// Own PID: the per-process token proves incarnation on every platform.
+// Sibling PIDs: the Linux /proc starttime must match; where it is unavailable
+// (non-Linux, /proc read failure) sibling visibility is sacrificed instead of
+// trusting a bare kill(0) liveness probe.
 function processLooksLive(record: RuntimeHealthRecordEnvelope): boolean {
   if (record.processId === process.pid) {
-    return processIdentityMatches(record);
+    return record.processToken === currentProcessToken;
   }
-  if (!processIdentityMatches(record)) {
-    return false;
-  }
-  try {
-    process.kill(record.processId, 0);
-    return true;
-  } catch (error) {
-    return error instanceof Error && "code" in error && error.code === "EPERM";
-  }
+  const currentStartTime = getProcessStartTime(record.processId);
+  return currentStartTime !== null && currentStartTime === record.processStartTime;
 }
 
 /** Opens a SQLite-backed health record namespace shared across runtime processes. */

@@ -9,9 +9,9 @@ import {
   createCorePluginStateSyncKeyedStore,
   resetPluginStateStoreForTests,
 } from "../plugin-state/plugin-state-store.js";
+import { createRuntimeHealthRecordEnvelope } from "../plugin-state/runtime-health-store.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import { getProcessStartTime } from "../shared/pid-alive.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { collectRuntimePluginHealthSnapshot } from "./status-plugin-health.runtime.js";
 
@@ -47,6 +47,7 @@ function seedPersistedToolQuarantineForTest(record: {
   reason: string;
   failedAtMs: number;
   processId: number;
+  processToken: string;
   processStartTime: number | null;
 }): void {
   createCorePluginStateSyncKeyedStore<typeof record>({
@@ -127,22 +128,22 @@ describe("runtime plugin health snapshot", () => {
     });
   });
 
-  it("drops runtime tool quarantines recorded by dead processes", async () => {
+  it("drops runtime tool quarantines from dead or unverifiable recorder processes", async () => {
     await withStateDirEnv("openclaw-status-tool-quarantine-liveness-", async () => {
       setActivePluginRegistry(createEmptyPluginRegistry(), "empty", "default", "/tmp/ws");
+      // Dead sibling: no current start time exists, so the record fails closed.
       seedPersistedToolQuarantineForTest({
         toolName: "stale_tool",
         reason: "unsupported schema",
         failedAtMs: 123,
         processId: await deadProcessId(),
+        processToken: "dead-process-token",
         processStartTime: null,
       });
       seedPersistedToolQuarantineForTest({
         toolName: "live_tool",
         reason: "unsupported schema",
-        failedAtMs: 456,
-        processId: process.pid,
-        processStartTime: getProcessStartTime(process.pid),
+        ...createRuntimeHealthRecordEnvelope(new Date(456)),
       });
 
       expect(collectRuntimePluginHealthSnapshot().runtimeToolQuarantines).toEqual([
@@ -155,19 +156,14 @@ describe("runtime plugin health snapshot", () => {
     });
   });
 
-  it("drops runtime tool quarantines recorded by a reused PID", async () => {
-    const currentStartTime = getProcessStartTime(process.pid);
-    if (currentStartTime === null) {
-      return;
-    }
+  it("drops runtime tool quarantines from a previous incarnation of this PID", async () => {
     await withStateDirEnv("openclaw-status-tool-quarantine-pid-reuse-", async () => {
       setActivePluginRegistry(createEmptyPluginRegistry(), "empty", "default", "/tmp/ws");
       seedPersistedToolQuarantineForTest({
         toolName: "reused_pid_tool",
         reason: "unsupported schema",
-        failedAtMs: 123,
-        processId: process.pid,
-        processStartTime: currentStartTime + 1,
+        ...createRuntimeHealthRecordEnvelope(new Date(123)),
+        processToken: "stale-incarnation-token",
       });
 
       expect(collectRuntimePluginHealthSnapshot().runtimeToolQuarantines).toEqual([]);

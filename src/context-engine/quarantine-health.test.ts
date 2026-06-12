@@ -5,6 +5,7 @@ import {
   createCorePluginStateSyncKeyedStore,
   resetPluginStateStoreForTests,
 } from "../plugin-state/plugin-state-store.js";
+import { createRuntimeHealthRecordEnvelope } from "../plugin-state/runtime-health-store.js";
 import { getProcessStartTime } from "../shared/pid-alive.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import {
@@ -21,6 +22,10 @@ import {
 const CONTEXT_ENGINE_QUARANTINE_OWNER_ID = "core:context-engine-quarantine-health";
 const CONTEXT_ENGINE_QUARANTINE_NAMESPACE = "runtime-quarantines";
 
+// Sibling records need a verifiable /proc starttime, so sibling-visibility
+// coverage only runs where that identity source exists.
+const hasProcessStartTimes = process.platform === "linux";
+
 type ContextEngineQuarantineTestRecord = {
   engineId: string;
   owner?: string;
@@ -28,6 +33,7 @@ type ContextEngineQuarantineTestRecord = {
   reason: string;
   failedAtMs: number;
   processId: number;
+  processToken: string;
   processStartTime: number | null;
 };
 
@@ -53,6 +59,21 @@ function seedPersistedContextEngineQuarantineForTest(
     namespace: CONTEXT_ENGINE_QUARANTINE_NAMESPACE,
     maxEntries: 64,
   }).register(JSON.stringify([record.engineId, record.processId]), record);
+}
+
+function seedSiblingQuarantineForTest(params: {
+  engineId: string;
+  owner?: string;
+  operation: string;
+  reason: string;
+  failedAtMs: number;
+  processId: number;
+  processStartTime: number | null;
+}): void {
+  seedPersistedContextEngineQuarantineForTest({
+    ...params,
+    processToken: "sibling-process-token",
+  });
 }
 
 afterEach(() => {
@@ -83,105 +104,144 @@ describe("context engine quarantine health", () => {
     });
   });
 
-  it("clears only the current process record while preserving live sibling quarantines", async () => {
-    await withStateDirEnv("openclaw-context-engine-quarantine-", async () => {
-      await withLiveSiblingProcess(async (siblingProcessId) => {
-        seedPersistedContextEngineQuarantineForTest({
-          engineId: "lossless-claw",
-          owner: "plugin:lossless-claw",
-          operation: "bootstrap",
-          reason: "current process failure",
-          failedAtMs: 123,
-          processId: process.pid,
-          processStartTime: getProcessStartTime(process.pid),
-        });
-        seedPersistedContextEngineQuarantineForTest({
-          engineId: "lossless-claw",
-          owner: "plugin:lossless-claw",
-          operation: "bootstrap",
-          reason: "sibling process failure",
-          failedAtMs: 789,
-          processId: siblingProcessId,
-          processStartTime: getProcessStartTime(siblingProcessId),
-        });
-
-        clearPersistedContextEngineQuarantineForProcess("lossless-claw", process.pid);
-
-        expect(listContextEngineQuarantines()).toEqual([
-          {
+  it.runIf(hasProcessStartTimes)(
+    "clears only the current process record while preserving live sibling quarantines",
+    async () => {
+      await withStateDirEnv("openclaw-context-engine-quarantine-", async () => {
+        await withLiveSiblingProcess(async (siblingProcessId) => {
+          seedPersistedContextEngineQuarantineForTest({
+            engineId: "lossless-claw",
+            owner: "plugin:lossless-claw",
+            operation: "bootstrap",
+            reason: "current process failure",
+            ...createRuntimeHealthRecordEnvelope(new Date(123)),
+          });
+          seedSiblingQuarantineForTest({
             engineId: "lossless-claw",
             owner: "plugin:lossless-claw",
             operation: "bootstrap",
             reason: "sibling process failure",
-            failedAt: new Date(789),
-          },
-        ]);
+            failedAtMs: 789,
+            processId: siblingProcessId,
+            processStartTime: getProcessStartTime(siblingProcessId),
+          });
+
+          clearPersistedContextEngineQuarantineForProcess("lossless-claw", process.pid);
+
+          expect(listContextEngineQuarantines()).toEqual([
+            {
+              engineId: "lossless-claw",
+              owner: "plugin:lossless-claw",
+              operation: "bootstrap",
+              reason: "sibling process failure",
+              failedAt: new Date(789),
+            },
+          ]);
+        });
       });
-    });
-  });
+    },
+  );
 
-  it("clears all current process records while preserving live sibling quarantines", async () => {
-    await withStateDirEnv("openclaw-context-engine-quarantine-", async () => {
-      await withLiveSiblingProcess(async (siblingProcessId) => {
-        seedPersistedContextEngineQuarantineForTest({
-          engineId: "local-a",
-          operation: "bootstrap",
-          reason: "current process failure a",
-          failedAtMs: 123,
-          processId: process.pid,
-          processStartTime: getProcessStartTime(process.pid),
-        });
-        seedPersistedContextEngineQuarantineForTest({
-          engineId: "local-b",
-          operation: "assemble",
-          reason: "current process failure b",
-          failedAtMs: 234,
-          processId: process.pid,
-          processStartTime: getProcessStartTime(process.pid),
-        });
-        seedPersistedContextEngineQuarantineForTest({
-          engineId: "lossless-claw",
-          owner: "plugin:lossless-claw",
-          operation: "bootstrap",
-          reason: "sibling process failure",
-          failedAtMs: 789,
-          processId: siblingProcessId,
-          processStartTime: getProcessStartTime(siblingProcessId),
-        });
-
-        clearContextEngineRuntimeQuarantine();
-
-        expect(listContextEngineQuarantines()).toEqual([
-          {
+  it.runIf(hasProcessStartTimes)(
+    "clears all current process records while preserving live sibling quarantines",
+    async () => {
+      await withStateDirEnv("openclaw-context-engine-quarantine-", async () => {
+        await withLiveSiblingProcess(async (siblingProcessId) => {
+          seedPersistedContextEngineQuarantineForTest({
+            engineId: "local-a",
+            operation: "bootstrap",
+            reason: "current process failure a",
+            ...createRuntimeHealthRecordEnvelope(new Date(123)),
+          });
+          seedPersistedContextEngineQuarantineForTest({
+            engineId: "local-b",
+            operation: "assemble",
+            reason: "current process failure b",
+            ...createRuntimeHealthRecordEnvelope(new Date(234)),
+          });
+          seedSiblingQuarantineForTest({
             engineId: "lossless-claw",
             owner: "plugin:lossless-claw",
             operation: "bootstrap",
             reason: "sibling process failure",
-            failedAt: new Date(789),
-          },
-        ]);
-      });
-    });
-  });
+            failedAtMs: 789,
+            processId: siblingProcessId,
+            processStartTime: getProcessStartTime(siblingProcessId),
+          });
 
-  it("drops persisted quarantine records when a PID has been reused", async () => {
-    const currentStartTime = getProcessStartTime(process.pid);
-    if (currentStartTime === null) {
-      return;
-    }
-    await withStateDirEnv("openclaw-context-engine-quarantine-pid-reuse-", async () => {
+          clearContextEngineRuntimeQuarantine();
+
+          expect(listContextEngineQuarantines()).toEqual([
+            {
+              engineId: "lossless-claw",
+              owner: "plugin:lossless-claw",
+              operation: "bootstrap",
+              reason: "sibling process failure",
+              failedAt: new Date(789),
+            },
+          ]);
+        });
+      });
+    },
+  );
+
+  it("drops records from a previous incarnation of this PID", async () => {
+    await withStateDirEnv("openclaw-context-engine-quarantine-incarnation-", async () => {
       clearContextEngineRuntimeQuarantine();
       seedPersistedContextEngineQuarantineForTest({
         engineId: "lossless-claw",
         owner: "plugin:lossless-claw",
         operation: "bootstrap",
-        reason: "stale process failure",
-        failedAtMs: 123,
-        processId: process.pid,
-        processStartTime: currentStartTime + 1,
+        reason: "stale pre-restart failure",
+        ...createRuntimeHealthRecordEnvelope(new Date(123)),
+        processToken: "stale-incarnation-token",
       });
 
       expect(listContextEngineQuarantines()).toEqual([]);
+    });
+  });
+
+  it.runIf(hasProcessStartTimes)(
+    "drops persisted quarantine records when a sibling PID has been reused",
+    async () => {
+      await withStateDirEnv("openclaw-context-engine-quarantine-pid-reuse-", async () => {
+        await withLiveSiblingProcess(async (siblingProcessId) => {
+          clearContextEngineRuntimeQuarantine();
+          const siblingStartTime = getProcessStartTime(siblingProcessId);
+          seedSiblingQuarantineForTest({
+            engineId: "lossless-claw",
+            owner: "plugin:lossless-claw",
+            operation: "bootstrap",
+            reason: "stale process failure",
+            failedAtMs: 123,
+            processId: siblingProcessId,
+            processStartTime: siblingStartTime === null ? 1 : siblingStartTime + 1,
+          });
+
+          expect(listContextEngineQuarantines()).toEqual([]);
+        });
+      });
+    },
+  );
+
+  it("drops sibling records whose process identity cannot be verified", async () => {
+    await withStateDirEnv("openclaw-context-engine-quarantine-unverified-", async () => {
+      await withLiveSiblingProcess(async (siblingProcessId) => {
+        clearContextEngineRuntimeQuarantine();
+        // A null recorded start time (non-Linux recorder or /proc read failure)
+        // must fail closed instead of trusting bare PID liveness.
+        seedSiblingQuarantineForTest({
+          engineId: "lossless-claw",
+          owner: "plugin:lossless-claw",
+          operation: "bootstrap",
+          reason: "unverifiable recorder identity",
+          failedAtMs: 123,
+          processId: siblingProcessId,
+          processStartTime: null,
+        });
+
+        expect(listContextEngineQuarantines()).toEqual([]);
+      });
     });
   });
 
