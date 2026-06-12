@@ -259,6 +259,40 @@ describe("stuck session recovery", () => {
     expect(mocks.resetCommandLane).not.toHaveBeenCalled();
   });
 
+  it("releases the session lane when abort+drain succeeds but the lane task is still executing", async () => {
+    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue("session-1");
+    mocks.abortEmbeddedAgentRun.mockReturnValue(true);
+    mocks.waitForEmbeddedAgentRunEnd.mockResolvedValue(true);
+    mocks.resetCommandLane.mockReturnValue(1);
+    mocks.getCommandLaneActiveTaskIds.mockReturnValue([101]).mockReturnValue([101]);
+    mocks.getCommandLaneSnapshot.mockReturnValue({
+      lane: "session:agent:main:main",
+      queuedCount: 0,
+      activeCount: 1,
+      maxConcurrent: 1,
+      draining: false,
+      generation: 0,
+    });
+
+    const outcome = await recoverStuckDiagnosticSession({
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+      ageMs: 720_000,
+      queueDepth: 0,
+      allowActiveAbort: true,
+    });
+
+    expect(outcome).toMatchObject({
+      status: "aborted",
+      action: "abort_embedded_run",
+      aborted: true,
+      drained: true,
+      forceCleared: false,
+      released: 1,
+    });
+    expect(mocks.resetCommandLane).toHaveBeenCalledWith("session:agent:main:main");
+  });
+
   it("keeps the lane when a fresh turn started during the abort even with lane-queued work", async () => {
     mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue("session-fresh-queued");
     mocks.abortEmbeddedAgentRun.mockReturnValue(true);

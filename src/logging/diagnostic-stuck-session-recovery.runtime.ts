@@ -252,7 +252,8 @@ export async function recoverStuckDiagnosticSession(
       }
     }
 
-    const queuedCount = sessionLane ? getCommandLaneSnapshot(sessionLane).queuedCount : 0;
+    const postAbortLaneSnapshot = sessionLane ? getCommandLaneSnapshot(sessionLane) : undefined;
+    const queuedCount = postAbortLaneSnapshot?.queuedCount ?? 0;
     // A task id active now but not before the abort means the lane already
     // unwedged and pumped fresh work; resetting it would double-run the lane.
     const laneStartedFreshTask =
@@ -261,10 +262,23 @@ export async function recoverStuckDiagnosticSession(
     // Queued turns ride the session queue (params.queueDepth), not only the lane
     // queue; without this signal a cleanly aborted wedged lane never resets.
     const hasQueuedSessionWork = (params.queueDepth ?? 0) > 0;
+    // A run may have been aborted+drained from the embedded-run registry while its
+    // underlying command-lane task is still executing (e.g. waitForCompactionRetry
+    // or in-flight tool execution). If the lane is still blocked by pre-existing
+    // active tasks we must reset it so queued work can drain.
+    const laneStillBlockedByPreExistingTask =
+      !laneStartedFreshTask &&
+      postAbortLaneSnapshot !== undefined &&
+      postAbortLaneSnapshot.activeCount > 0;
     const released =
       sessionLane &&
       !laneStartedFreshTask &&
-      (queuedCount > 0 || hasQueuedSessionWork || !activeSessionId || !aborted || !drained)
+      (queuedCount > 0 ||
+        hasQueuedSessionWork ||
+        !activeSessionId ||
+        !aborted ||
+        !drained ||
+        laneStillBlockedByPreExistingTask)
         ? resetCommandLane(sessionLane)
         : 0;
 
