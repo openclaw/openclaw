@@ -1030,6 +1030,8 @@ describe("createFollowupRunner runtime config", () => {
           provider: "anthropic",
           model: "claude-opus-4-7",
           messageProvider: "telegram",
+          senderId: "sender-42",
+          senderIsOwner: true,
           cwd: "/tmp/task-repo",
           inputProvenance: {
             kind: "internal_system",
@@ -1051,6 +1053,8 @@ describe("createFollowupRunner runtime config", () => {
     expect(call.currentChannelId).toBe("telegram:-100123:topic:42");
     expect(call.currentThreadTs).toBe("42");
     expect(call.currentMessageId).toBe("reply-42");
+    expect(call.senderId).toBe("sender-42");
+    expect(call.senderIsOwner).toBe(true);
     expect(call).toMatchObject({
       sessionId: "session-cli-followup",
       sessionKey: "main",
@@ -1119,6 +1123,7 @@ describe("createFollowupRunner runtime config", () => {
           model: "claude-opus-4-7",
           suppressNextUserMessagePersistence: true,
           sourceReplyDeliveryMode: "message_tool_only",
+          allowEmptyAssistantReplyAsSilent: true,
         },
       }),
     );
@@ -1129,6 +1134,8 @@ describe("createFollowupRunner runtime config", () => {
     expect(call.currentInboundEventKind).toBe("room_event");
     expect(call.currentInboundAudio).toBe(true);
     expect(call.suppressNextUserMessagePersistence).toBe(true);
+    expect(call.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(call.allowEmptyAssistantReplyAsSilent).toBe(true);
     expect(call.cliSessionId).toBe("cli-session-1");
     expect(call.cliSessionBinding).toEqual({ sessionId: "cli-session-1" });
   });
@@ -1378,6 +1385,77 @@ describe("createFollowupRunner runtime config", () => {
     );
 
     expect(onToolStart).not.toHaveBeenCalled();
+  });
+
+  it("bridges queued CLI inter-tool commentary into onItemEvent for live preview", async () => {
+    const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+      "../../infra/agent-events.js",
+    );
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": { command: "claude" },
+          },
+          models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    };
+    const onItemEvent = vi.fn(async () => {});
+    runCliAgentMock.mockImplementationOnce(
+      async (params: { runId: string; emitCommentaryText?: boolean }) => {
+        expect(params.emitCommentaryText).toBe(true);
+        realAgentEvents.emitAgentEvent({
+          runId: params.runId,
+          stream: "item",
+          data: {
+            kind: "preamble",
+            itemId: "commentary-1",
+            progressText: "Let me check the files.",
+          },
+        });
+        return {
+          payloads: [{ text: "final" }],
+          meta: {
+            agentMeta: {
+              provider: "claude-cli",
+              model: "claude-opus-4-7",
+            },
+          },
+        };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      opts: { onItemEvent, commentaryProgressEnabled: true },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-7",
+    });
+
+    await runner(
+      createQueuedRun({
+        originatingChannel: "telegram",
+        run: {
+          config: runtimeConfig,
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+          messageProvider: "telegram",
+          sourceReplyDeliveryMode: "message_tool_only",
+          verboseLevel: "off",
+        },
+      }),
+    );
+
+    expect(onItemEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "preamble",
+        progressText: "Let me check the files.",
+        itemId: "commentary-1",
+      }),
+    );
   });
 
   it("defers queued CLI attempt terminal lifecycle events until fallback settles", async () => {
@@ -3419,6 +3497,274 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     expect(routeArg.replyKind).toBe("final");
     expect(routeArg.runId).toEqual(expect.any(String));
     expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("routes queued compaction notices through the durable origin path", async () => {
+    runPreflightCompactionIfNeededMock.mockImplementationOnce(
+      async (params: {
+        onCompactionNotice?: (phase: "start" | "end") => Promise<void> | void;
+        sessionEntry?: SessionEntry;
+      }) => {
+        await params.onCompactionNotice?.("start");
+        await params.onCompactionNotice?.("end");
+        return params.sessionEntry;
+      },
+    );
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {},
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "openai/gpt-5.5",
+    });
+    const queued = createQueuedRun({
+      originatingChannel: "discord",
+      originatingTo: "channel:C1",
+      originatingAccountId: "work",
+      originatingThreadId: "1739142736.000100",
+      messageId: "current-msg-1",
+      originatingReplyToId: "quoted-parent-1",
+      run: {
+        config: {
+          channels: { discord: { replyToMode: "all" } },
+          agents: { defaults: { compaction: { notifyUser: true } } },
+        },
+        messageProvider: "discord",
+      },
+    });
+
+    await runner(queued);
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(2);
+    const startRoute = requireMockCallArg(routeReplyMock, 0);
+    const endRoute = requireMockCallArg(routeReplyMock, 1);
+    expect(startRoute).toMatchObject({
+      channel: "discord",
+      to: "channel:C1",
+      accountId: "work",
+      threadId: "1739142736.000100",
+      replyKind: "block",
+      mirror: false,
+    });
+    expect(requireRecord(startRoute.payload, "start payload")).toMatchObject({
+      text: "🧹 Compacting context...",
+      replyToId: "current-msg-1",
+      replyToCurrent: true,
+      isCompactionNotice: true,
+    });
+    expect(endRoute.replyKind).toBe("block");
+    expect(endRoute.mirror).toBe(false);
+    expect(requireRecord(endRoute.payload, "end payload")).toMatchObject({
+      text: "🧹 Compaction complete",
+      replyToId: "current-msg-1",
+      replyToCurrent: true,
+      isCompactionNotice: true,
+    });
+  });
+
+  it("routes queued compaction hook messages alongside notifyUser notices (#90185)", async () => {
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (args: {
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
+      }) => {
+        await args.onAgentEvent?.({
+          stream: "compaction",
+          data: { phase: "start", messages: ["Hook before"] },
+        });
+        await args.onAgentEvent?.({
+          stream: "compaction",
+          data: { phase: "end", completed: true, messages: ["Hook after"] },
+        });
+        return { payloads: [], meta: {} };
+      },
+    );
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "openai/gpt-5.5",
+    });
+
+    await runner(
+      createQueuedRun({
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        messageId: "current-msg-1",
+        run: {
+          config: {
+            channels: { discord: { replyToMode: "all" } },
+            agents: { defaults: { compaction: { notifyUser: true } } },
+          },
+          messageProvider: "discord",
+        },
+      }),
+    );
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(4);
+    expect(
+      requireRecord(requireMockCallArg(routeReplyMock, 0).payload, "hook start"),
+    ).toMatchObject({
+      text: "Hook before",
+      replyToId: "current-msg-1",
+      replyToCurrent: true,
+      isCompactionNotice: true,
+    });
+    expect(
+      requireRecord(requireMockCallArg(routeReplyMock, 1).payload, "notice start"),
+    ).toMatchObject({
+      text: "🧹 Compacting context...",
+      replyToId: "current-msg-1",
+      replyToCurrent: true,
+      isCompactionNotice: true,
+    });
+    expect(requireRecord(requireMockCallArg(routeReplyMock, 2).payload, "hook end")).toMatchObject({
+      text: "Hook after",
+      replyToId: "current-msg-1",
+      replyToCurrent: true,
+      isCompactionNotice: true,
+    });
+    expect(
+      requireRecord(requireMockCallArg(routeReplyMock, 3).payload, "notice end"),
+    ).toMatchObject({
+      text: "🧹 Compaction complete",
+      replyToId: "current-msg-1",
+      replyToCurrent: true,
+      isCompactionNotice: true,
+    });
+  });
+
+  it("applies reply-to mode filtering to queued compaction notices", async () => {
+    runPreflightCompactionIfNeededMock.mockImplementationOnce(
+      async (params: {
+        onCompactionNotice?: (phase: "start") => Promise<void> | void;
+        sessionEntry?: SessionEntry;
+      }) => {
+        await params.onCompactionNotice?.("start");
+        return params.sessionEntry;
+      },
+    );
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {},
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "openai/gpt-5.5",
+    });
+
+    await runner(
+      createQueuedRun({
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        originatingReplyToId: "reply-msg-1",
+        run: {
+          config: {
+            channels: { discord: { replyToMode: "off" } },
+            agents: { defaults: { compaction: { notifyUser: true } } },
+          },
+          messageProvider: "discord",
+        },
+      }),
+    );
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    const payload = requireRecord(requireMockCallArg(routeReplyMock, 0).payload, "notice payload");
+    expect(payload).toMatchObject({
+      text: "🧹 Compacting context...",
+      isCompactionNotice: true,
+    });
+    expect(payload.replyToId).toBeUndefined();
+  });
+
+  it("plans queued compaction notices with the active fallback candidate", async () => {
+    runWithModelFallbackMock.mockImplementationOnce(
+      async (params: {
+        run: (provider: string, model: string) => Promise<{ payloads: unknown[]; meta: object }>;
+      }) => ({
+        result: await params.run("google", "gemini-2.5-flash"),
+        provider: "google",
+        model: "gemini-2.5-flash",
+      }),
+    );
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (args: {
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
+      }) => {
+        await args.onAgentEvent?.({ stream: "compaction", data: { phase: "start" } });
+        return { payloads: [], meta: {} };
+      },
+    );
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "openai/gpt-5.5",
+    });
+
+    await runner(
+      createQueuedRun({
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        run: {
+          config: { agents: { defaults: { compaction: { notifyUser: true } } } },
+          provider: "anthropic",
+          model: "claude",
+          messageProvider: "discord",
+        },
+      }),
+    );
+
+    const routeArg = requireMockCallArg(resolveProviderFollowupFallbackRouteMock, 0);
+    expect(routeArg.provider).toBe("google");
+    const context = requireRecord(routeArg.context, "provider fallback context");
+    expect(context.provider).toBe("google");
+    expect(context.modelId).toBe("gemini-2.5-flash");
+    expect(requireRecord(context.payload, "provider fallback payload")).toMatchObject({
+      text: "🧹 Compacting context...",
+      isCompactionNotice: true,
+    });
+  });
+
+  it("suppresses queued compaction completion notices while compaction will retry", async () => {
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (args: {
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
+      }) => {
+        await args.onAgentEvent?.({
+          stream: "compaction",
+          data: {
+            phase: "end",
+            completed: true,
+            willRetry: true,
+            messages: ["compaction hook says done"],
+          },
+        });
+        return { payloads: [], meta: {} };
+      },
+    );
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "openai/gpt-5.5",
+    });
+
+    await runner(
+      createQueuedRun({
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        originatingReplyToId: "reply-msg-1",
+        run: {
+          config: {
+            channels: { discord: { replyToMode: "all" } },
+            agents: { defaults: { compaction: { notifyUser: true } } },
+          },
+          messageProvider: "discord",
+        },
+      }),
+    );
+
+    expect(routeReplyMock).not.toHaveBeenCalled();
   });
 });
 

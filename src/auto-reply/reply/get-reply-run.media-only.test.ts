@@ -2428,6 +2428,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(groupContextParams?.sessionCtx?.Surface).toBe("discord");
     expect(groupContextParams?.sessionCtx?.ChatType).toBe("channel");
     expect(groupContextParams?.sessionCtx?.GroupChannel).toBe("#ops");
+    expect(call?.followupRun.run.chatType).toBe("channel");
     expect(call?.followupRun.run.extraSystemPromptStatic).toBe("group:discord:channel:#ops");
   });
 

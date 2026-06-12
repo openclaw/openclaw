@@ -131,14 +131,22 @@ function normalizeReplyTextForComparison(text: string): string {
 function shouldIncludeToolErrorDetails(params: {
   lastToolError: ToolErrorSummary;
   isCronTrigger?: boolean;
+  isHeartbeatTrigger?: boolean;
   sessionKey: string;
   verboseLevel?: VerboseLevel;
 }): boolean {
   if (isVerboseToolDetailEnabled(params.verboseLevel)) {
     return true;
   }
+  if (!isExecLikeToolName(params.lastToolError.toolName)) {
+    return false;
+  }
+  // Heartbeat runs usually have no assistant reply to carry the command
+  // output, so keep exec details in the warning instead of a generic label.
+  if (params.isHeartbeatTrigger === true) {
+    return true;
+  }
   return (
-    isExecLikeToolName(params.lastToolError.toolName) &&
     params.lastToolError.timedOut === true &&
     (params.isCronTrigger === true || isCronSessionKey(params.sessionKey))
   );
@@ -161,6 +169,7 @@ function resolveToolErrorWarningPolicy(params: {
   suppressToolErrors: boolean;
   suppressToolErrorWarnings?: boolean | (() => boolean | undefined);
   isCronTrigger?: boolean;
+  isHeartbeatTrigger?: boolean;
   sessionKey: string;
   verboseLevel?: VerboseLevel;
 }): ToolErrorWarningPolicy {
@@ -215,12 +224,14 @@ function resolveToolErrorWarningPolicy(params: {
  */
 export function buildEmbeddedRunPayloads(params: {
   assistantTexts: string[];
+  assistantMessageIndex?: number;
   toolMetas: ToolMetaEntry[];
   lastAssistant: AssistantMessage | undefined;
   currentAssistant?: AssistantMessage | null;
   lastToolError?: ToolErrorSummary;
   config?: OpenClawConfig;
   isCronTrigger?: boolean;
+  isHeartbeatTrigger?: boolean;
   sessionKey: string;
   provider?: string;
   model?: string;
@@ -521,6 +532,7 @@ export function buildEmbeddedRunPayloads(params: {
       suppressToolErrors: Boolean(params.config?.messages?.suppressToolErrors),
       suppressToolErrorWarnings: params.suppressToolErrorWarnings,
       isCronTrigger: params.isCronTrigger,
+      isHeartbeatTrigger: params.isHeartbeatTrigger,
       sessionKey: params.sessionKey,
       verboseLevel: params.verboseLevel,
     });
@@ -579,6 +591,11 @@ export function buildEmbeddedRunPayloads(params: {
       if (item.nonTerminalToolErrorWarning) {
         setReplyPayloadMetadata(payload, {
           nonTerminalToolErrorWarning: true,
+        });
+      }
+      if (!item.isError && !item.isReasoning && params.assistantMessageIndex !== undefined) {
+        setReplyPayloadMetadata(payload, {
+          assistantMessageIndex: params.assistantMessageIndex,
         });
       }
       if (item.replyToId) {

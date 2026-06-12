@@ -29,6 +29,7 @@ const VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS";
 const VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS";
 const UI_VITEST_CONFIG = "test/vitest/vitest.ui.config.ts";
 const UNIT_UI_VITEST_CONFIG = "test/vitest/vitest.unit-ui.config.ts";
+const TOOLING_DOCKER_VITEST_CONFIG = "test/vitest/vitest.tooling-docker.config.ts";
 const TOOLING_VITEST_CONFIG = "test/vitest/vitest.tooling.config.ts";
 const GATEWAY_VITEST_CONFIG = "test/vitest/vitest.gateway.config.ts";
 const LONG_RUNNING_VITEST_CONFIGS = new Set([
@@ -40,6 +41,7 @@ const LONG_RUNNING_VITEST_CONFIGS = new Set([
 ]);
 const TOOLING_EXCLUDED_TESTS = new Set([
   ...boundaryTestFiles,
+  "test/scripts/docker-build-helper.test.ts",
   "test/scripts/openclaw-e2e-instance.test.ts",
 ]);
 const EXPLICIT_FILE_TARGET_RE = /\.(?:[cm]?[jt]sx?)$/u;
@@ -677,6 +679,10 @@ function isToolingTestTarget(target) {
   );
 }
 
+function isToolingDockerTestTarget(target) {
+  return target === "test/scripts/docker-build-helper.test.ts";
+}
+
 /**
  * Resolves config defaults and explicit-file handling for wrapper-inferred runs.
  */
@@ -687,6 +693,9 @@ export function resolveImplicitVitestArgs(argv, cwd = process.cwd()) {
   const testTargets = argv
     .filter((arg) => !arg.startsWith("-") && arg.endsWith(".test.ts"))
     .map((arg) => toRepoRelativeArg(arg, cwd));
+  if (testTargets.length > 0 && testTargets.every(isToolingDockerTestTarget)) {
+    return withImplicitVitestConfig(argv, TOOLING_DOCKER_VITEST_CONFIG);
+  }
   if (testTargets.length > 0 && testTargets.every(isToolingTestTarget)) {
     return withImplicitVitestConfig(argv, TOOLING_VITEST_CONFIG);
   }
