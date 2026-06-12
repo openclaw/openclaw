@@ -8,6 +8,7 @@ import {
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { saveCronStore } from "../store.js";
+import type { CronJob, CronStoreFile } from "../types.js";
 import { runMissedJobs } from "./timer.js";
 
 const fixtures = setupCronRegressionFixtures({
@@ -17,6 +18,12 @@ const fixtures = setupCronRegressionFixtures({
 /** Returns a timestamp for a given UTC date-time string. */
 function ts(iso: string) {
   return Date.parse(iso);
+}
+
+/** Narrows the store type back after state.store = null + re-load. */
+function storeJobs(state: { store?: CronStoreFile | null }): CronJob[] {
+  const s = state.store as CronStoreFile | null;
+  return s?.jobs ?? [];
 }
 
 describe("cron update catch-up guard (#91944)", () => {
@@ -68,7 +75,7 @@ describe("cron update catch-up guard (#91944)", () => {
     await runMissedJobs(state);
 
     // Job must NOT have been classified as missed and must NOT have run.
-    const reloaded = state.store?.jobs?.find((j) => j.id === "updated-cron");
+    const reloaded = storeJobs(state).find((j) => j.id === "updated-cron");
     expect(reloaded).toBeDefined();
     expect(reloaded?.state.runningAtMs).toBeUndefined();
     expect(reloaded?.state.nextRunAtMs).toBe(CORRECT_NEXT_RUN);
@@ -110,7 +117,7 @@ describe("cron update catch-up guard (#91944)", () => {
     await runMissedJobs(state);
 
     // Job SHOULD have been classified as missed and queued for execution.
-    const reloaded = state.store?.jobs?.find((j) => j.id === "missed-cron");
+    const reloaded = storeJobs(state).find((j) => j.id === "missed-cron");
     expect(reloaded).toBeDefined();
     // nextRunAtMs advanced past the missed slot, or job is marked running.
     const wasMissed =
@@ -153,7 +160,7 @@ describe("cron update catch-up guard (#91944)", () => {
     state.store = null;
     await runMissedJobs(state);
 
-    const reloaded = state.store?.jobs?.find((j) => j.id === "backoff-updated-cron");
+    const reloaded = storeJobs(state).find((j) => j.id === "backoff-updated-cron");
     expect(reloaded).toBeDefined();
     // nextRunAtMs must NOT have been clobbered to backoffUntilMs for a
     // pre-update slot.
@@ -197,7 +204,7 @@ describe("cron update catch-up guard (#91944)", () => {
     state.store = null;
     await runMissedJobs(state);
 
-    const reloaded = state.store?.jobs?.find((j) => j.id === "legacy-cron");
+    const reloaded = storeJobs(state).find((j) => j.id === "legacy-cron");
     expect(reloaded).toBeDefined();
     // Legacy jobs without scheduleUpdatedAtMs must still be caught up.
     const wasMissed =
