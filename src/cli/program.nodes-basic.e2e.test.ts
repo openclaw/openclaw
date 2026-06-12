@@ -410,6 +410,48 @@ describe("cli program (nodes basics)", () => {
         "canvas",
       ],
     },
+    {
+      label: "pending first node approval",
+      node: {
+        nodeId: "pending-node",
+        displayName: "Pending Node",
+        caps: [],
+        commands: [],
+        approvalState: "pending-approval",
+        pendingRequestId: "request-approval",
+        pendingDeclaredCaps: ["system"],
+        pendingDeclaredCommands: ["system.run"],
+        paired: true,
+        connected: true,
+      },
+      expectedOutput: [
+        "Pending Node",
+        "approval pending",
+        "Approval pending for Pending Node",
+        "openclaw nodes approve request-approval",
+      ],
+    },
+    {
+      label: "pending node reapproval",
+      node: {
+        nodeId: "pending-reapproval-node",
+        displayName: "Pending Reapproval Node",
+        caps: ["camera"],
+        commands: ["camera.snap"],
+        approvalState: "pending-reapproval",
+        pendingRequestId: "request-reapproval",
+        pendingDeclaredCaps: ["camera", "system"],
+        pendingDeclaredCommands: ["camera.snap", "system.run"],
+        paired: true,
+        connected: true,
+      },
+      expectedOutput: [
+        "Pending Reapproval Node",
+        "reapproval pending",
+        "Reapproval pending for Pending Reapproval Node",
+        "openclaw nodes approve request-reapproval",
+      ],
+    },
   ])("runs nodes status and renders $label", async ({ node, expectedOutput }) => {
     callGateway.mockResolvedValue({
       ts: Date.now(),
@@ -430,8 +472,13 @@ describe("cli program (nodes basics)", () => {
       ts: Date.now(),
       nodeId: "ios-node",
       displayName: "iOS Node",
-      caps: ["canvas", "camera"],
-      commands: ["canvas.eval", "canvas.snapshot", "camera.snap"],
+      caps: ["camera"],
+      commands: ["camera.snap"],
+      approvalState: "pending-reapproval",
+      pendingRequestId: "request-approval",
+      pendingDeclaredCaps: ["camera", "canvas"],
+      pendingDeclaredCommands: ["camera.snap", "canvas.eval\u001b[2K", "canvas.snapshot"],
+      pendingDeclaredPermissions: { camera: true },
       connected: true,
     });
 
@@ -447,7 +494,70 @@ describe("cli program (nodes basics)", () => {
 
     const out = getRuntimeOutput();
     expect(out).toContain("Commands");
+    expect(out).toContain("camera.snap");
+    expect(out).toContain("Approval");
+    expect(out).toContain("reapproval pending");
+    expect(out).toContain("Pending request");
+    expect(out).toContain("request-approval");
+    expect(out).toContain("Pending caps");
+    expect(out).toContain("canvas");
+    expect(out).toContain("Pending commands");
     expect(out).toContain("canvas.eval");
+    expect(out).toContain("openclaw nodes approve request-approval");
+    expect(out).not.toContain("\u001b");
+    expect(out).not.toContain("[2K");
+  });
+
+  it("keeps explicit gateway options in node reapproval guidance without leaking auth", async () => {
+    callGateway.mockResolvedValue({
+      ts: Date.now(),
+      nodes: [
+        {
+          nodeId: "pending-node",
+          displayName: "Pending Node",
+          approvalState: "pending-reapproval",
+          pendingRequestId: "request-reapproval",
+          paired: true,
+          connected: true,
+        },
+      ],
+    });
+
+    await runProgram([
+      "nodes",
+      "status",
+      "--url",
+      "ws://gateway.example:18789/openclaw?cluster=qa lab",
+      "--timeout",
+      "3000",
+      "--token",
+      "secret-token",
+    ]);
+
+    const output = getRuntimeOutput();
+    expect(output).toContain(
+      "openclaw nodes approve request-reapproval --url 'ws://gateway.example:18789/openclaw?cluster=qa lab' --timeout 3000",
+    );
+    expect(output).toContain("Reuse the same --token option when rerunning.");
+    expect(output).not.toContain("secret-token");
+  });
+
+  it("does not recommend approval from a stale pending request id alone", async () => {
+    mockGatewayWithIosNodeListAnd("node.describe", {
+      nodeId: "ios-node",
+      displayName: "iOS Node",
+      approvalState: "approved",
+      pendingRequestId: "stale-request",
+      connected: true,
+    });
+
+    await runProgram(["nodes", "describe", "--node", "ios-node", "--token", "secret-token"]);
+
+    const output = getRuntimeOutput();
+    expect(output).toContain("stale-request");
+    expect(output).not.toContain("openclaw nodes approve stale-request");
+    expect(output).not.toContain("Reuse the same --token option when rerunning.");
+    expect(output).not.toContain("secret-token");
   });
 
   it("runs nodes approve with the pending request approval scopes", async () => {

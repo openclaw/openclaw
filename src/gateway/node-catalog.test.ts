@@ -12,6 +12,7 @@ import {
 type CatalogInput = Parameters<typeof createKnownNodeCatalog>[0];
 type TestPairedDevice = CatalogInput["pairedDevices"][number];
 type TestPairedNode = NonNullable<CatalogInput["pairedNodes"]>[number];
+type TestPendingNode = NonNullable<CatalogInput["pendingNodes"]>[number];
 
 function pairedDevice(overrides: Partial<TestPairedDevice> = {}): TestPairedDevice {
   return {
@@ -45,6 +46,19 @@ function pairedNode(overrides: Partial<TestPairedNode> = {}): TestPairedNode {
     commands: ["system.run"],
     createdAtMs: 1,
     approvedAtMs: 100,
+    ...overrides,
+  };
+}
+
+function pendingNode(overrides: Partial<TestPendingNode> = {}): TestPendingNode {
+  return {
+    requestId: "request-1",
+    nodeId: "mac-1",
+    platform: "macos",
+    caps: ["camera", "screen"],
+    commands: ["screen.snapshot", "system.run"],
+    permissions: { camera: true, screen: true },
+    ts: 200,
     ...overrides,
   };
 }
@@ -231,6 +245,64 @@ describe("gateway/node-catalog", () => {
     expect(node?.caps).toEqual(["canvas"]);
     expect(node?.commands).toEqual(["canvas.snapshot"]);
     expect(node?.connected).toBe(true);
+  });
+
+  it("reports pending first approval without making declarations effective", () => {
+    const catalog = createKnownNodeCatalog({
+      pairedDevices: [pairedDevice({ deviceId: "new-node" })],
+      pairedNodes: [],
+      pendingNodes: [pendingNode({ nodeId: "new-node" })],
+      connectedNodes: [],
+    });
+
+    const node = getKnownNode(catalog, "new-node");
+    expect(node?.approvalState).toBe("pending-approval");
+    expect(node?.pendingRequestId).toBe("request-1");
+    expect(node?.pendingDeclaredCaps).toEqual(["camera", "screen"]);
+    expect(node?.pendingDeclaredCommands).toEqual(["screen.snapshot", "system.run"]);
+    expect(node?.pendingDeclaredPermissions).toEqual({ camera: true, screen: true });
+    expect(node?.caps).toEqual([]);
+    expect(node?.commands).toEqual([]);
+    expect(node?.permissions).toBeUndefined();
+  });
+
+  it("reports pending reapproval without making declarations effective", () => {
+    const catalog = createKnownNodeCatalog({
+      pairedDevices: [pairedDevice()],
+      pairedNodes: [
+        pairedNode({
+          caps: ["camera"],
+          commands: ["screen.snapshot"],
+          permissions: { camera: true },
+        }),
+      ],
+      pendingNodes: [pendingNode()],
+      connectedNodes: [
+        {
+          nodeId: "mac-1",
+          connId: "conn-1",
+          client: {} as never,
+          displayName: "Mac",
+          platform: "macos",
+          declaredCaps: ["camera", "screen"],
+          caps: ["camera"],
+          declaredCommands: ["screen.snapshot", "system.run"],
+          commands: ["screen.snapshot"],
+          permissions: { camera: true },
+          connectedAtMs: 1,
+        },
+      ],
+    });
+
+    const node = getKnownNode(catalog, "mac-1");
+    expect(node?.approvalState).toBe("pending-reapproval");
+    expect(node?.pendingRequestId).toBe("request-1");
+    expect(node?.pendingDeclaredCaps).toEqual(["camera", "screen"]);
+    expect(node?.pendingDeclaredCommands).toEqual(["screen.snapshot", "system.run"]);
+    expect(node?.pendingDeclaredPermissions).toEqual({ camera: true, screen: true });
+    expect(node?.caps).toEqual(["camera"]);
+    expect(node?.commands).toEqual(["screen.snapshot"]);
+    expect(node?.permissions).toEqual({ camera: true });
   });
 
   it("ignores malformed node capability entries instead of throwing", () => {

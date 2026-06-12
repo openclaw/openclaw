@@ -111,10 +111,18 @@ async function expectRePairingRequest(params: {
     });
     const connectedControlWs = controlWs;
 
-    let lastNodes: Array<{ nodeId: string; connected?: boolean; commands?: string[] }> = [];
+    type NodeDiagnostics = {
+      nodeId: string;
+      connected?: boolean;
+      commands?: string[];
+      approvalState?: string;
+      pendingRequestId?: string;
+      pendingDeclaredCommands?: string[];
+    };
+    let lastNodes: NodeDiagnostics[] = [];
     await vi.waitFor(async () => {
       const list = await rpcReq<{
-        nodes?: Array<{ nodeId: string; connected?: boolean; commands?: string[] }>;
+        nodes?: NodeDiagnostics[];
       }>(connectedControlWs, "node.list", {});
       lastNodes = list.payload?.nodes ?? [];
       const node = lastNodes.find(
@@ -140,6 +148,23 @@ async function expectRePairingRequest(params: {
     const pending = pairing.pending?.find((entry) => entry.nodeId === pairedNode.identity.deviceId);
     expect(pending?.nodeId).toBe(pairedNode.identity.deviceId);
     expect(pending?.commands).toEqual(params.reconnectCommands);
+    const listedNode = lastNodes.find((entry) => entry.nodeId === pairedNode.identity.deviceId);
+    expect(listedNode).toMatchObject({
+      approvalState: "pending-reapproval",
+      pendingRequestId: pending?.requestId,
+      pendingDeclaredCommands: params.reconnectCommands,
+      commands: params.expectedVisibleCommands,
+    });
+
+    const described = await rpcReq<NodeDiagnostics>(connectedControlWs, "node.describe", {
+      nodeId: pairedNode.identity.deviceId,
+    });
+    expect(described.payload).toMatchObject({
+      approvalState: "pending-reapproval",
+      pendingRequestId: pending?.requestId,
+      pendingDeclaredCommands: params.reconnectCommands,
+      commands: params.expectedVisibleCommands,
+    });
   } finally {
     controlWs?.close();
     await firstClient?.stopAndWait();

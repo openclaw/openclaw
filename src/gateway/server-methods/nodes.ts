@@ -949,6 +949,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
       const catalog = createKnownNodeCatalog({
         pairedDevices: devicePairing.paired,
         pairedNodes: nodePairing.paired,
+        pendingNodes: nodePairing.pending,
         connectedNodes: context.nodeRegistry.listConnected(),
       });
       const nodes = listKnownNodes(catalog);
@@ -978,6 +979,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
       const catalog = createKnownNodeCatalog({
         pairedDevices: devicePairing.paired,
         pairedNodes: nodePairing.paired,
+        pendingNodes: nodePairing.pending,
         connectedNodes: context.nodeRegistry.listConnected(),
       });
       const node = getKnownNode(catalog, id);
