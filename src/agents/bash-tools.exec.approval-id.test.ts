@@ -867,7 +867,6 @@ describe("exec approvals", () => {
           params: { command: ["/bin/sh", "-lc", "cd ."], cwd: process.cwd() },
         }) as { payload?: { plan?: { commandText?: string } } };
         const commandText = prepared.payload?.plan?.commandText ?? "";
-        const cwd = process.cwd();
         return {
           file: {
             version: 1,
