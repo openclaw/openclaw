@@ -1701,6 +1701,57 @@ describe("runReplyAgent typing (heartbeat)", () => {
     await expect(run()).resolves.toBeUndefined();
   });
 
+  it.each([
+    {
+      name: "presentation",
+      target: {
+        tool: "message",
+        provider: "discord",
+        to: "channel:C1",
+        presentation: { title: "Deployment ready", blocks: [] },
+      },
+    },
+    {
+      name: "interactive",
+      target: {
+        tool: "message",
+        provider: "discord",
+        to: "channel:C1",
+        interactive: { blocks: [{ type: "button", label: "Open", value: "open" }] },
+      },
+    },
+    {
+      name: "channelData",
+      target: {
+        tool: "message",
+        provider: "discord",
+        to: "channel:C1",
+        channelData: { embeds: [{ title: "Deployment ready" }] },
+      },
+    },
+  ])(
+    "does not add a terminal acknowledgement when rich $name side-effect progress was visibly delivered",
+    async ({ target }) => {
+      state.runEmbeddedAgentMock.mockResolvedValueOnce({
+        payloads: [{ text: "NO_REPLY" }],
+        didSendViaMessagingTool: true,
+        messagingToolSentTargets: [target],
+        meta: {},
+      });
+
+      const { run } = createMinimalRun({
+        sessionCtx: {
+          Provider: "discord",
+          OriginatingChannel: "discord",
+          OriginatingTo: "channel:C1",
+          MessageSid: "1503645939964055592",
+        },
+      });
+
+      await expect(run()).resolves.toBeUndefined();
+    },
+  );
+
   it("keeps explicit silent turns silent after side-effect progress", async () => {
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "NO_REPLY" }],

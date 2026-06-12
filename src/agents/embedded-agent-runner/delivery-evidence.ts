@@ -35,7 +35,7 @@ function hasNonEmptyStringArray(value: unknown): boolean {
   return Array.isArray(value) && value.some(hasNonEmptyString);
 }
 
-function hasVisibleReplyShape(value: unknown): boolean {
+export function hasVisibleReplyShape(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return false;
   }

@@ -10,7 +10,10 @@ import {
 } from "../../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
-import { hasVisibleAgentPayload } from "../../agents/embedded-agent-runner/delivery-evidence.js";
+import {
+  hasVisibleAgentPayload,
+  hasVisibleReplyShape,
+} from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import {
   formatEmbeddedAgentQueueFailureSummary,
   queueEmbeddedAgentMessageWithOutcomeAsync,
@@ -237,17 +240,7 @@ function hasVisibleMessagingTargetDeliveryEvidence(value: unknown): boolean {
   if (!Array.isArray(value)) {
     return false;
   }
-  return value.some((entry) => {
-    if (!entry || typeof entry !== "object") {
-      return false;
-    }
-    const record = entry as { text?: unknown; mediaUrl?: unknown; mediaUrls?: unknown };
-    return (
-      (typeof record.text === "string" && record.text.trim().length > 0) ||
-      (typeof record.mediaUrl === "string" && record.mediaUrl.trim().length > 0) ||
-      hasNonEmptyStringArray(record.mediaUrls)
-    );
-  });
+  return value.some(hasVisibleReplyShape);
 }
 
 function hasSuccessfulSourceReplyDelivery(params: {
