@@ -2887,7 +2887,7 @@ export async function runEmbeddedAttempt(
       // names on the live response stream before tool execution.
       activeSession.agent.streamFn = wrapStreamFnSanitizeMalformedToolCalls(
         activeSession.agent.streamFn,
-        allowedToolNames,
+        replayAllowedToolNames,
         transcriptPolicy,
         params.provider,
       );
