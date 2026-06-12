@@ -1248,7 +1248,7 @@ describe("agent event handler", () => {
 
   it("broadcasts a replace-only chat delta to clear the Control UI on before_agent_finalize revision", () => {
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => 11_700);
-    const { broadcast, nodeSendToSession, chatRunState, handler } = createHarness();
+    const { broadcast, chatRunState, handler } = createHarness();
     chatRunState.registry.add("run-revision-replace", {
       sessionKey: "session-revision-replace",
       clientRunId: "client-revision-replace",
