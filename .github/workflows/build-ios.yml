@@ -17,32 +17,27 @@ jobs:
         with:
           xcode-version: '16'
 
-      # 2. 强制安装 Node.js v22
+      # 2. 强制安装 Node.js v22（此时系统变量中 node 已经是 v22）
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
 
-      # 3. 彻底解决报错：放弃 pnpm/action-setup，直接用 npm 全局钉死 pnpm 版本
-      # 这里的 11.2.2 严格对应你项目 package.json 里的锁定版本
-      - name: Install pnpm globally via npm
-        run: npm install -g pnpm@11.2.2
-
-      # 4. 通过 Homebrew 安装苹果项目生成工具 xcodegen
+      # 3. 通过 Homebrew 安装苹果项目生成工具 xcodegen
       - name: Install xcodegen
         run: brew install xcodegen
 
-      # 5. 安装 Monorepo 根目录依赖（此时 pnpm 绝对运行在 Node 22 下）
+      # 4. 核心修正：用 npx 强行驱动 pnpm v11.2.2，彻底绕过系统 Node 20 污染
       - name: Install Monorepo Dependencies
-        run: pnpm install
+        run: npx pnpm@11.2.2 install
 
-      # 6. 进入 iOS 目录并动态生成 Xcode 工程文件
+      # 5. 进入 iOS 目录并动态生成 Xcode 工程文件
       - name: Generate Xcode Project
         run: |
           cd apps/ios
           xcodegen generate
 
-      # 7. 编译代码（强制关闭代码签名）
+      # 6. 编译代码（强制关闭代码签名）
       - name: Compile Code (Disable Code Signing)
         run: |
           xcodebuild clean build \
@@ -56,14 +51,14 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             PROVISIONING_PROFILE_SPECIFIER=""
 
-      # 8. 将编译出的 .app 文件夹打包为标准的 .ipa 安装包
+      # 7. 将编译出的 .app 文件夹打包为标准的 .ipa 安装包
       - name: Package to IPA
         run: |
           mkdir -p Payload
           cp -r build_output/Build/Products/Release-iphoneos/OpenClaw.app Payload/
           zip -r OpenClaw_Unsigned.ipa Payload
 
-      # 9. 将打包好的成品上传到 GitHub Actions 产物中供下载
+      # 8. 将打包好的成品上传到 GitHub Actions 产物中供下载
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
