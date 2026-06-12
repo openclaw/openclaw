@@ -93,6 +93,9 @@ const OPENAI_REALTIME_NO_ACTIVE_RESPONSE_CANCEL_ERROR =
   "Cancellation failed: no active response found";
 const OPENAI_REALTIME_MAX_SESSION_DURATION_FRAGMENT = "maximum duration";
 const OPENAI_REALTIME_DEFAULT_MIN_BARGE_IN_AUDIO_END_MS = 250;
+type PendingResponseCreateRequest = {
+  allowContinuingToolCalls: boolean;
+};
 const OPENAI_REALTIME_VOICES = [
   "alloy",
   "ash",
@@ -419,8 +422,9 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private responseStartTimestamp: number | null = null;
   private responseActive = false;
   private responseCreateInFlight = false;
+  private responseCreateInFlightRequest: PendingResponseCreateRequest | null = null;
   private responseCancelInFlight = false;
-  private responseCreatePending = false;
+  private responseCreateQueue: PendingResponseCreateRequest[] = [];
   private continuingToolCallIds = new Set<string>();
   private latestMediaTimestamp = 0;
   private lastAssistantItemId: string | null = null;
@@ -493,8 +497,8 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       },
     });
     if (options?.willContinue === true) {
-      this.requestResponseCreate();
       this.continuingToolCallIds.add(callId);
+      this.requestResponseCreate({ allowContinuingToolCalls: true });
       return;
     }
     this.continuingToolCallIds.delete(callId);
@@ -961,6 +965,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       case "response.created":
         this.responseActive = true;
         this.responseCreateInFlight = false;
+        this.responseCreateInFlightRequest = null;
         return;
 
       case "conversation.output_audio.delta":
@@ -1026,6 +1031,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       case "response.done":
         this.responseActive = false;
         this.responseCreateInFlight = false;
+        this.responseCreateInFlightRequest = null;
         this.responseCancelInFlight = false;
         this.flushPendingResponseCreate();
         return;
@@ -1074,9 +1080,13 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       case "error": {
         const detail = readRealtimeErrorDetail(event.error);
         if (detail.startsWith(OPENAI_REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX)) {
+          const retryRequest = this.responseCreateInFlightRequest ?? {
+            allowContinuingToolCalls: false,
+          };
           this.responseActive = true;
           this.responseCreateInFlight = false;
-          this.responseCreatePending = true;
+          this.responseCreateInFlightRequest = null;
+          this.responseCreateQueue.unshift(retryRequest);
           return;
         }
         if (detail === OPENAI_REALTIME_NO_ACTIVE_RESPONSE_CANCEL_ERROR) {
@@ -1175,27 +1185,39 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     });
   }
 
-  private requestResponseCreate(): void {
-    if (
-      this.responseActive ||
-      this.responseCreateInFlight ||
-      this.responseCancelInFlight ||
-      this.continuingToolCallIds.size > 0
-    ) {
-      this.responseCreatePending = true;
-      return;
-    }
-    this.responseCreatePending = false;
+  private canStartResponseCreate(request: PendingResponseCreateRequest): boolean {
+    return (
+      !this.responseActive &&
+      !this.responseCreateInFlight &&
+      !this.responseCancelInFlight &&
+      (request.allowContinuingToolCalls || this.continuingToolCallIds.size === 0)
+    );
+  }
+
+  private startResponseCreate(request: PendingResponseCreateRequest): void {
     this.responseCreateInFlight = true;
+    this.responseCreateInFlightRequest = request;
     this.sendEvent({ type: "response.create" });
   }
 
-  private flushPendingResponseCreate(): void {
-    if (!this.responseCreatePending) {
+  private requestResponseCreate(options?: { allowContinuingToolCalls?: boolean }): void {
+    const request: PendingResponseCreateRequest = {
+      allowContinuingToolCalls: options?.allowContinuingToolCalls === true,
+    };
+    if (this.responseCreateQueue.length > 0 || !this.canStartResponseCreate(request)) {
+      this.responseCreateQueue.push(request);
       return;
     }
-    this.responseCreatePending = false;
-    this.requestResponseCreate();
+    this.startResponseCreate(request);
+  }
+
+  private flushPendingResponseCreate(): void {
+    const request = this.responseCreateQueue[0];
+    if (!request || !this.canStartResponseCreate(request)) {
+      return;
+    }
+    this.responseCreateQueue.shift();
+    this.startResponseCreate(request);
   }
 
   private resetRealtimeSessionState(): void {
@@ -1203,8 +1225,9 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.responseStartTimestamp = null;
     this.responseActive = false;
     this.responseCreateInFlight = false;
+    this.responseCreateInFlightRequest = null;
     this.responseCancelInFlight = false;
-    this.responseCreatePending = false;
+    this.responseCreateQueue = [];
     this.continuingToolCallIds.clear();
     this.lastAssistantItemId = null;
     this.toolCallBuffers.clear();
