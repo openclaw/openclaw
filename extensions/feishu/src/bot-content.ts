@@ -415,6 +415,7 @@ export async function resolveFeishuMediaList(params: {
           path: saved.path,
           contentType: saved.contentType,
           placeholder: "<media:image>",
+          sourceKey: imageKey,
         });
         log?.(`feishu: downloaded embedded image ${imageKey}, saved to ${saved.path}`);
       } catch (err) {
