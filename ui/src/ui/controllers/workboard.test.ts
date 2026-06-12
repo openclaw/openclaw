@@ -1,5 +1,6 @@
 // Control UI tests cover workboard behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { GatewayRequestError } from "../gateway.ts";
 import type { GatewaySessionRow } from "../types.ts";
 import {
   addWorkboardCardComment,
@@ -281,6 +282,41 @@ describe("workboard controller", () => {
     expect(state.lastRefreshError).toBe("tasks unavailable");
   });
 
+  it("removes terminal task links after authoritative task pruning", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const linkedCard = {
+      ...sampleCard,
+      taskId: sampleTask.taskId,
+      sessionKey: sampleTaskSessionKey,
+      runId: "run-1",
+    } satisfies WorkboardCard;
+    state.tasksByCardId.set(sampleCard.id, { ...sampleTask, status: "completed" });
+    const client = createClient((method) => {
+      if (method === "workboard.cards.list") {
+        return { cards: [linkedCard], statuses: ["todo", "done"] };
+      }
+      if (method === "tasks.get") {
+        throw new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: `task not found: ${sampleTask.taskId}`,
+        });
+      }
+      return {};
+    });
+
+    await refreshWorkboard({
+      host,
+      client: client as never,
+      source: "poll",
+    });
+
+    expect(client.request).toHaveBeenCalledWith("tasks.get", { taskId: sampleTask.taskId });
+    expect(state.cards[0]).not.toHaveProperty("taskId");
+    expect(state.tasksByCardId.has(sampleCard.id)).toBe(false);
+    expect(state.lastRefreshError).toBeNull();
+  });
+
   it("keeps canonical task unlinks during bounded poll refreshes", async () => {
     const host = {};
     const state = getWorkboardState(host);
@@ -443,7 +479,7 @@ describe("workboard controller", () => {
       ...sampleCard,
       id: `card-${index}`,
       status: "running" as const,
-      sessionKey: `subagent:workboard-default-card-${index}`,
+      sessionKey: `agent:worker-${index}:subagent:workboard-default-card-${index}`,
       runId: `run-${index}`,
     }));
     const client = createClient((method, params) => {
@@ -474,7 +510,7 @@ describe("workboard controller", () => {
     );
     expect(firstDiscoveryCalls).toHaveLength(4);
     expect(firstDiscoveryCalls[0]?.[1]).toMatchObject({
-      sessionKey: "subagent:workboard-default-card-0",
+      sessionKey: "agent:worker-0:subagent:workboard-default-card-0",
       limit: 500,
     });
 
@@ -485,6 +521,32 @@ describe("workboard controller", () => {
     );
     expect(secondDiscoveryCalls).toHaveLength(2);
     expect(getWorkboardState(host).cards.every((card) => Boolean(card.taskId))).toBe(true);
+  });
+
+  it("rediscovers default-agent task links from an unfiltered bounded page", async () => {
+    const host = {};
+    const linkedCard = {
+      ...sampleCard,
+      status: "running",
+      sessionKey: sampleTaskSessionKey,
+      runId: "run-1",
+    } satisfies WorkboardCard;
+    const client = createClient((method) => {
+      if (method === "workboard.cards.list") {
+        return { cards: [linkedCard], statuses: ["todo", "running", "done"] };
+      }
+      if (method === "tasks.list") {
+        return {
+          tasks: [{ ...sampleTask, childSessionKey: `agent:main:${sampleTaskSessionKey}` }],
+        };
+      }
+      return {};
+    });
+
+    await refreshWorkboard({ host, client: client as never, source: "poll" });
+
+    expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
+    expect(getWorkboardState(host).cards[0]).toMatchObject({ taskId: sampleTask.taskId });
   });
 
   it("defers polling while a card is being dragged", async () => {
@@ -1527,7 +1589,7 @@ describe("workboard controller", () => {
     await loading;
   });
 
-  it("blocks stale lifecycle status writes while edit-modal status saves are in flight", async () => {
+  it("does not start lifecycle writes while edit-modal saves are in flight", async () => {
     const host = {};
     const state = getWorkboardState(host);
     const linked = {
@@ -1571,19 +1633,8 @@ describe("workboard controller", () => {
       ],
     } satisfies WorkboardCard;
     const saveResponse = createDeferred<{ card: WorkboardCard }>();
-    let updateCalls = 0;
     const client = createClient((method) => {
       if (method === "workboard.cards.update") {
-        updateCalls += 1;
-        if (updateCalls > 1) {
-          return {
-            card: {
-              ...linked,
-              execution: { ...linked.execution, status: "succeeded", updatedAt: 3 },
-              updatedAt: 3,
-            },
-          };
-        }
         return saveResponse.promise;
       }
       return {};
@@ -1597,12 +1648,7 @@ describe("workboard controller", () => {
       sessions: [{ ...sampleSession, hasActiveRun: false, status: "done", updatedAt: 1 }],
     });
 
-    expect(client.request).toHaveBeenCalledTimes(2);
-    expect(client.request.mock.calls[1]?.[1]).toMatchObject({
-      id: "card-1",
-      patch: { execution: expect.objectContaining({ status: "review" }) },
-    });
-    expect(requestPatch(client, 1)).not.toHaveProperty("status");
+    expect(client.request).toHaveBeenCalledOnce();
     saveResponse.resolve({ card: saved });
     await saving;
     expect(state.cards[0]).toMatchObject({ status: "running" });
@@ -2765,7 +2811,7 @@ describe("workboard controller", () => {
     expect(state.cards[0]).toMatchObject({ status: "running", position: 2000 });
   });
 
-  it("blocks stale lifecycle status writes while dragged status changes are in flight", async () => {
+  it("does not start lifecycle writes while dragged status changes are in flight", async () => {
     const host = {};
     const state = getWorkboardState(host);
     const linked = {
@@ -2801,17 +2847,9 @@ describe("workboard controller", () => {
     state.loaded = true;
     state.cards = [linked];
     const moveResponse = createDeferred<{ card: WorkboardCard }>();
-    let updateCalls = 0;
     const client = createClient((method) => {
       if (method === "workboard.cards.move") {
         return moveResponse.promise;
-      }
-      if (method === "workboard.cards.update") {
-        updateCalls += 1;
-        if (updateCalls > 1) {
-          throw new Error("expected lifecycle sync to skip pending drag");
-        }
-        return { card: { ...moved, status: "review", updatedAt: 3 } };
       }
       return {};
     });
@@ -2830,12 +2868,7 @@ describe("workboard controller", () => {
       sessions: [{ ...sampleSession, hasActiveRun: false, status: "done", updatedAt: 1 }],
     });
 
-    expect(client.request).toHaveBeenCalledTimes(2);
-    expect(client.request.mock.calls[1]?.[1]).toMatchObject({
-      id: "card-1",
-      patch: { execution: expect.objectContaining({ status: "review" }) },
-    });
-    expect(requestPatch(client, 1)).not.toHaveProperty("status");
+    expect(client.request).toHaveBeenCalledOnce();
     moveResponse.resolve({ card: moved });
     await moving;
     expect(state.cards[0]).toMatchObject({ status: "running", position: 2000 });
@@ -2908,6 +2941,48 @@ describe("workboard controller", () => {
       position: 2000,
     });
     expect(state.cards[0]).toMatchObject({ status: "running", position: 2000 });
+  });
+
+  it("ignores lifecycle responses after a newer comment write", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const linked = { ...sampleCard, sessionKey: sampleSession.key } satisfies WorkboardCard;
+    const commented = {
+      ...linked,
+      updatedAt: 2,
+      metadata: {
+        comments: [{ id: "comment-1", body: "Keep this", createdAt: 2 }],
+      },
+    } satisfies WorkboardCard;
+    const lifecycleResponse = createDeferred<{ card: WorkboardCard }>();
+    state.loaded = true;
+    state.cards = [linked];
+    const client = createClient((method) => {
+      if (method === "workboard.cards.update") {
+        return lifecycleResponse.promise;
+      }
+      if (method === "workboard.cards.comment") {
+        return { card: commented };
+      }
+      return {};
+    });
+
+    const syncing = syncWorkboardLifecycle({
+      host,
+      client: client as never,
+      sessions: [{ ...sampleSession, hasActiveRun: false, status: "done", updatedAt: 1 }],
+    });
+    await Promise.resolve();
+    await addWorkboardCardComment({
+      host,
+      client: client as never,
+      cardId: linked.id,
+      body: "Keep this",
+    });
+    lifecycleResponse.resolve({ card: { ...linked, status: "review", updatedAt: 3 } });
+    await syncing;
+
+    expect(state.cards[0]?.metadata?.comments?.[0]?.body).toBe("Keep this");
   });
 
   it("ignores lifecycle responses without provenance when dragged status changes while sync is in flight", async () => {
@@ -3422,6 +3497,55 @@ describe("workboard controller", () => {
     await syncing;
 
     expect(client.request).toHaveBeenCalledOnce();
+    expect(client.request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
+  });
+
+  it("does not apply lifecycle task refresh after a newer card write", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const linked = {
+      ...sampleCard,
+      status: "running",
+      sessionKey: sampleTaskSessionKey,
+      runId: "run-1",
+      taskId: "task-1",
+    } satisfies WorkboardCard;
+    const commented = {
+      ...linked,
+      updatedAt: 2,
+      metadata: { comments: [{ id: "comment-1", body: "Keep this", createdAt: 2 }] },
+    } satisfies WorkboardCard;
+    const taskList = createDeferred<unknown>();
+    state.loaded = true;
+    state.cards = [linked];
+    state.tasksByCardId.set("card-1", sampleTask);
+    const client = createClient((method) => {
+      if (method === "tasks.list") {
+        return taskList.promise;
+      }
+      if (method === "workboard.cards.comment") {
+        return { card: commented };
+      }
+      return {};
+    });
+
+    const syncing = syncWorkboardLifecycle({
+      host,
+      client: client as never,
+      sessions: [],
+    });
+    await Promise.resolve();
+    await addWorkboardCardComment({
+      host,
+      client: client as never,
+      cardId: linked.id,
+      body: "Keep this",
+    });
+    taskList.resolve({ tasks: [{ ...sampleTask, status: "completed" }] });
+    await syncing;
+
+    expect(state.cards[0]?.metadata?.comments?.[0]?.body).toBe("Keep this");
+    expect(state.tasksByCardId.get("card-1")).toEqual(sampleTask);
     expect(client.request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
   });
 
