@@ -11,38 +11,37 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # 1. 自动寻找并切换到最新的 Xcode 16 版本（已修复路径报错问题）
+      # 1. 自动寻找并切换到最新的 Xcode 16 版本
       - name: Setup Xcode Version
         uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: '16'
 
-      # 2. 安装 Node.js 和 项目指定包管理器 pnpm
+      # 2. 安装 Node.js
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
 
+      # 3. 安装 pnpm（已修复：移除硬编码版本，自动适配项目的 pnpm v11）
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: 9
 
-      # 3. 通过 Homebrew 安装苹果项目生成工具 xcodegen
+      # 4. 通过 Homebrew 安装苹果项目生成工具 xcodegen
       - name: Install xcodegen
         run: brew install xcodegen
 
-      # 4. 安装 Monorepo 根目录依赖
+      # 5. 安装 Monorepo 根目录依赖
       - name: Install Monorepo Dependencies
         run: pnpm install
 
-      # 5. 进入 iOS 目录并动态生成 Xcode 工程文件
+      # 6. 进入 iOS 目录并动态生成 Xcode 工程文件
       - name: Generate Xcode Project
         run: |
           cd apps/ios
           xcodegen generate
 
-      # 6. 编译代码（强制关闭代码签名）
+      # 7. 编译代码（强制关闭代码签名）
       - name: Compile Code (Disable Code Signing)
         run: |
           xcodebuild clean build \
@@ -56,14 +55,14 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             PROVISIONING_PROFILE_SPECIFIER=""
 
-      # 7. 将编译出的 .app 文件夹打包为标准的 .ipa 安装包
+      # 8. 将编译出的 .app 文件夹打包为标准的 .ipa 安装包
       - name: Package to IPA
         run: |
           mkdir -p Payload
           cp -r build_output/Build/Products/Release-iphoneos/OpenClaw.app Payload/
           zip -r OpenClaw_Unsigned.ipa Payload
 
-      # 8. 将打包好的成品上传到 GitHub Actions 产物中供下载
+      # 9. 将打包好的成品上传到 GitHub Actions 产物中供下载
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
