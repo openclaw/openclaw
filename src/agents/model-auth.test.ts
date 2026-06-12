@@ -835,23 +835,56 @@ describe("hasRuntimeAvailableProviderAuth", () => {
     ).toBe(true);
   });
 
-  it("returns false for custom providers with a managed SecretRef apiKey when the runtime snapshot has no real key", () => {
+  it("returns true for custom providers with a file SecretRef apiKey resolved in the runtime snapshot", () => {
     const sourceConfig = {
       models: {
         providers: {
           cliproxyapi: {
             api: "openai-responses",
-            apiKey: NON_ENV_SECRETREF_MARKER,
+            apiKey: { source: "file", provider: "vault", id: "/cliproxy/api-key" },
           },
         },
       },
     } as unknown as OpenClawConfig;
-    setRuntimeConfigSnapshot(sourceConfig, sourceConfig);
+    const runtimeConfig = {
+      models: {
+        providers: {
+          cliproxyapi: {
+            api: "openai-responses",
+            apiKey: "resolved-file-secretref-key", // pragma: allowlist secret
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
 
     expect(
       hasRuntimeAvailableProviderAuth({
         provider: "cliproxyapi",
         cfg: sourceConfig,
+        allowPluginSyntheticAuth: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false for custom providers with a file SecretRef apiKey without a runtime snapshot", () => {
+    const sourceConfig = {
+      models: {
+        providers: {
+          cliproxyapi: {
+            api: "openai-responses",
+            apiKey: { source: "file", provider: "vault", id: "/cliproxy/api-key" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    setRuntimeConfigSnapshot(undefined, undefined);
+
+    expect(
+      hasRuntimeAvailableProviderAuth({
+        provider: "cliproxyapi",
+        cfg: sourceConfig,
+        allowPluginSyntheticAuth: false,
       }),
     ).toBe(false);
   });
@@ -1010,6 +1043,149 @@ describe("resolveApiKeyForProvider", () => {
         store: { version: 1, profiles: {} },
       }),
     ).rejects.toThrow('No API key found for provider "mismatch-provider"');
+  });
+
+  it("resolves custom provider file SecretRef apiKey from runtime snapshot", async () => {
+    const sourceConfig = {
+      models: {
+        providers: {
+          cliproxyapi: {
+            api: "openai-responses",
+            apiKey: { source: "file", provider: "vault", id: "/cliproxy/api-key" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const runtimeConfig = {
+      models: {
+        providers: {
+          cliproxyapi: {
+            api: "openai-responses",
+            apiKey: "resolved-file-secretref-key", // pragma: allowlist secret
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+
+    const resolved = await resolveApiKeyForProvider({
+      provider: "cliproxyapi",
+      cfg: sourceConfig,
+      store: { version: 1, profiles: {} },
+    });
+
+    expectAuthFields(resolved, {
+      apiKey: "resolved-file-secretref-key",
+      source: "models.providers.cliproxyapi",
+      mode: "api-key",
+    });
+  });
+
+  it("does not treat a managed SecretRef marker as auth without a runtime snapshot", async () => {
+    const sourceConfig = {
+      models: {
+        providers: {
+          cliproxyapi: {
+            api: "openai-responses",
+            apiKey: NON_ENV_SECRETREF_MARKER,
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    setRuntimeConfigSnapshot(undefined, undefined);
+
+    await expect(
+      resolveApiKeyForProvider({
+        provider: "cliproxyapi",
+        cfg: sourceConfig,
+        store: { version: 1, profiles: {} },
+      }),
+    ).rejects.toThrow('No API key found for provider "cliproxyapi"');
+  });
+
+  it("prefers explicit api-key provider SecretRef config over ambient auth profiles", async () => {
+    const sourceConfig = {
+      models: {
+        providers: {
+          cliproxyapi: {
+            api: "openai-responses",
+            auth: "api-key",
+            apiKey: { source: "file", provider: "vault", id: "/cliproxy/api-key" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const runtimeConfig = {
+      models: {
+        providers: {
+          cliproxyapi: {
+            api: "openai-responses",
+            auth: "api-key",
+            apiKey: "sk-runtime-cliproxy", // pragma: allowlist secret
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+
+    const resolved = await resolveApiKeyForProvider({
+      provider: "cliproxyapi",
+      cfg: sourceConfig,
+      store: {
+        version: 1,
+        profiles: {
+          "cliproxyapi:default": {
+            type: "api_key",
+            provider: "cliproxyapi",
+            key: "sk-profile-stale", // pragma: allowlist secret
+          },
+        },
+      },
+    });
+
+    expectAuthFields(resolved, {
+      apiKey: "sk-runtime-cliproxy",
+      source: "models.providers.cliproxyapi",
+      mode: "api-key",
+    });
+  });
+
+  it("prefers a custom Ollama provider SecretRef runtime key over plugin synthetic auth", async () => {
+    const providerConfig = {
+      ...createCustomProviderConfig("http://192.168.178.122:11435", "qwen3:14b", "Qwen 3 14B"),
+      api: "ollama",
+      apiKey: { source: "file", provider: "vault", id: "/ollama/api-key" },
+    };
+    const sourceConfig = {
+      models: {
+        providers: {
+          "ollama-gpu1": providerConfig,
+        },
+      },
+    };
+    const runtimeConfig = {
+      models: {
+        providers: {
+          "ollama-gpu1": {
+            ...providerConfig,
+            apiKey: "sk-runtime-ollama", // pragma: allowlist secret
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+
+    const auth = await resolveApiKeyForProvider({
+      provider: "ollama-gpu1",
+      cfg: sourceConfig,
+      store: { version: 1, profiles: {} },
+    });
+
+    expectAuthFields(auth, {
+      apiKey: "sk-runtime-ollama",
+      source: "models.providers.ollama-gpu1",
+      mode: "api-key",
+    });
   });
 
   it("does not reuse plugin fallback auth when the plugin is disabled", async () => {
