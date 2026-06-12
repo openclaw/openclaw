@@ -175,6 +175,21 @@ function ensureUniqueName(base: string, existing: Set<string>): string {
   return unique;
 }
 
+/**
+ * Detect Windows absolute paths that must bypass POSIX shell argument parsing.
+ * Matches drive-letter paths (C:\..., C:/...) and UNC paths (\\server\...).
+ * The check is intentionally loose — it only guards against the specific
+ * backslash-stripping bug in splitShellArgs and does not attempt full Windows
+ * path validation.
+ */
+function looksLikeWindowsAbsolutePath(raw: string): boolean {
+  // Drive letter: X:\ or X:/
+  if (/^[A-Za-z]:[\\/]/.test(raw)) return true;
+  // UNC: \\server\share
+  if (raw.startsWith("\\\\")) return true;
+  return false;
+}
+
 function resolvePath(raw: string, workspaceDir: string): string {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -439,8 +454,13 @@ export function resolveMemoryBackendConfig(params: {
   ];
 
   const rawCommand = qmdCfg?.command?.trim() || "qmd";
-  const parsedCommand = splitShellArgs(rawCommand);
-  const command = parsedCommand?.[0] || rawCommand.split(/\s+/)[0] || "qmd";
+  // Windows absolute paths (C:\..., \\server\...) must not be parsed through
+  // splitShellArgs because the POSIX escape handling strips backslashes that
+  // are path separators on Windows.  Detect the pattern early and use the raw
+  // value directly.
+  const command = looksLikeWindowsAbsolutePath(rawCommand)
+    ? rawCommand
+    : splitShellArgs(rawCommand)?.[0] || rawCommand.split(/\s+/)[0] || "qmd";
   const resolved: ResolvedQmdConfig = {
     command,
     mcporter: resolveMcporterConfig(qmdCfg?.mcporter),
