@@ -867,6 +867,7 @@ describe("exec approvals", () => {
           params: { command: ["/bin/sh", "-lc", "cd ."], cwd: process.cwd() },
         }) as { payload?: { plan?: { commandText?: string } } };
         const commandText = prepared.payload?.plan?.commandText ?? "";
+        const cwd = process.cwd();
         return {
           file: {
             version: 1,
@@ -876,7 +877,7 @@ describe("exec approvals", () => {
                   {
                     pattern: `=command:${crypto
                       .createHash("sha256")
-                      .update(commandText)
+                      .update(`${cwd}\x00${commandText}`)
                       .digest("hex")
                       .slice(0, 16)}`,
                     source: "allow-always",

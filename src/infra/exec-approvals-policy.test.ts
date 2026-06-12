@@ -1,4 +1,5 @@
 // Tests execution approval policy matching and persistence.
+import crypto from "node:crypto";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
@@ -324,6 +325,36 @@ describe("exec approvals policy helpers", () => {
         commandText: 'powershell -NoProfile -Command "Write-Output hi"',
       }),
     ).toBe(true);
+  });
+
+  it("scopes exact-command allow-always approvals to the approved cwd", () => {
+    const commandText = "sh -c './scripts/run.sh'";
+    const approvedCwd = "/tmp/openclaw-approved";
+    const pattern = `=command:${crypto
+      .createHash("sha256")
+      .update(`${approvedCwd}\x00${commandText}`)
+      .digest("hex")
+      .slice(0, 16)}`;
+
+    const allowlist = [{ pattern, source: "allow-always" as const }];
+    expect(
+      hasDurableExecApproval({
+        analysisOk: false,
+        segmentAllowlistEntries: [],
+        allowlist,
+        commandText,
+        cwd: approvedCwd,
+      }),
+    ).toBe(true);
+    expect(
+      hasDurableExecApproval({
+        analysisOk: false,
+        segmentAllowlistEntries: [],
+        allowlist,
+        commandText,
+        cwd: "/tmp/openclaw-other",
+      }),
+    ).toBe(false);
   });
 
   it("treats fully allow-always-matched segments as durable trust", () => {

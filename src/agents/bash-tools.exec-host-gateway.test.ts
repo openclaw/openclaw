@@ -747,7 +747,7 @@ describe("processGatewayAllowlist", () => {
     });
   });
 
-  it("omits allow-always when allowlist execution still needs approval every run", async () => {
+  it("offers exact-command allow-always when allowlist execution needs exact approval", async () => {
     const command = "ls *.ts";
     const authorizationPlan = await planShellAuthorization({
       command,
@@ -762,7 +762,9 @@ describe("processGatewayAllowlist", () => {
       allowlistMatches: [],
       analysisOk: true,
       allowlistSatisfied: true,
-      segments: [{ raw: command, resolution: null, argv: ["ls", "*.ts"] }],
+      segments: authorizationPlan.groups.flatMap((group) =>
+        group.candidates.map((candidate) => candidate.sourceSegment),
+      ),
       segmentAllowlistEntries: [{ pattern: "/usr/bin/ls", source: "allow-always" }],
       segmentSatisfiedBy: ["allowlist"],
       authorizationPlan,
@@ -783,11 +785,15 @@ describe("processGatewayAllowlist", () => {
     expect(result.pendingResult?.details.status).toBe("approval-pending");
     expect(resolveExecApprovalAllowedDecisionsMock).toHaveBeenCalledWith({
       ask: "on-miss",
-      allowAlwaysPersistence: { kind: "one-shot", reasons: ["no-reusable-pattern"] },
+      allowAlwaysPersistence: {
+        kind: "exact-command",
+        commandText: command,
+        cwd: process.cwd(),
+      },
     });
     expect(buildExecApprovalPendingToolResultMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        allowedDecisions: ["allow-once", "deny"],
+        allowedDecisions: ["allow-once", "allow-always", "deny"],
       }),
     );
   });

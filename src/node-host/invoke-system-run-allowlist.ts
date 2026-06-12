@@ -133,7 +133,7 @@ export function resolvePlannedAllowlistArgv(params: {
   return plannedAllowlistArgv && plannedAllowlistArgv.length > 0 ? plannedAllowlistArgv : null;
 }
 
-/** Resolve final argv after safe-bin shell rewriting and allowlist revalidation. */
+/** Resolve final argv after safe-bin shell rewriting. */
 export async function resolveSystemRunExecArgv(params: {
   plannedAllowlistArgv: string[] | undefined;
   argv: string[];

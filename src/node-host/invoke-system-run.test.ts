@@ -1921,7 +1921,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
               {
                 pattern: `=command:${crypto
                   .createHash("sha256")
-                  .update(prepared.plan.commandText)
+                  .update(`${tempDir}\x00${prepared.plan.commandText}`)
                   .digest("hex")
                   .slice(0, 16)}`,
                 source: "allow-always",

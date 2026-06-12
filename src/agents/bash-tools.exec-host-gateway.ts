@@ -165,6 +165,24 @@ function createOneShotAllowAlwaysDecision(): AllowAlwaysPersistenceDecision {
   return { kind: "one-shot", reasons: ["no-reusable-pattern"] };
 }
 
+function resolveGatewayEffectiveAllowAlwaysPersistence(params: {
+  command: string;
+  cwd?: string;
+  allowAlwaysPersistence: AllowAlwaysPersistenceDecision;
+  requiresAllowlistPlanApproval: boolean;
+}): AllowAlwaysPersistenceDecision {
+  if (!params.requiresAllowlistPlanApproval) {
+    return params.allowAlwaysPersistence;
+  }
+  if (params.allowAlwaysPersistence.kind !== "patterns") {
+    return params.allowAlwaysPersistence;
+  }
+  const commandText = params.command.trim();
+  return commandText && params.cwd
+    ? { kind: "exact-command", commandText, cwd: params.cwd }
+    : createOneShotAllowAlwaysDecision();
+}
+
 function resolveGatewayEnforcedCommand(params: {
   command: string;
   segments: ExecCommandSegment[];
@@ -457,6 +475,7 @@ export async function processGatewayAllowlist(
     segmentAllowlistEntries: allowlistEval.segmentAllowlistEntries,
     allowlist: approvals.allowlist,
     commandText: params.command,
+    cwd: params.workdir,
   });
   const inlineEvalHit =
     params.strictInlineEval === true ? detectPolicyInlineEval(allowlistEval.segments) : null;
@@ -549,17 +568,15 @@ export async function processGatewayAllowlist(
       `Warning: allowlist auto-execution is unavailable on ${process.platform}; reviewer or explicit approval is required.`,
     );
   }
-  const effectiveAllowAlwaysPersistence =
-    allowAlwaysPersistence.kind === "patterns" &&
-    gatewayEnforcedCommand !== null &&
-    (!gatewayEnforcedCommand.ok || !gatewayEnforcedCommand.command)
-      ? createOneShotAllowAlwaysDecision()
-      : allowAlwaysPersistence;
+  const effectiveAllowAlwaysPersistence = resolveGatewayEffectiveAllowAlwaysPersistence({
+    command: params.command,
+    cwd: params.workdir,
+    allowAlwaysPersistence,
+    requiresAllowlistPlanApproval,
+  });
   const approvalAllowedDecisions = resolveExecApprovalAllowedDecisions({
     ask: hostAsk,
-    allowAlwaysPersistence: requiresAllowlistPlanApproval
-      ? createOneShotAllowAlwaysDecision()
-      : effectiveAllowAlwaysPersistence,
+    allowAlwaysPersistence: effectiveAllowAlwaysPersistence,
   });
   if (requiresSecurityAuditSuppressionApproval) {
     params.warnings.push(

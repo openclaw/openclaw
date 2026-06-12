@@ -12,6 +12,9 @@ type StrictInlineEvalBoundary =
 type ExecAutoReviewer = typeof import("../infra/exec-auto-review.js").defaultExecAutoReviewer;
 type ExecAsk = import("../infra/exec-approvals.js").ExecAsk;
 type ExecSecurity = import("../infra/exec-approvals.js").ExecSecurity;
+type MockAllowAlwaysPersistenceInput = Parameters<
+  typeof import("../infra/exec-approvals.js").resolveAllowAlwaysPersistenceDecision
+>[0];
 type MockAllowAlwaysPersistenceDecision =
   import("../infra/exec-approvals.js").AllowAlwaysPersistenceDecision;
 type MockExecApprovalDecision = import("../infra/exec-approvals.js").ExecApprovalDecision;
@@ -128,7 +131,7 @@ const requiresExecApprovalMock = vi.hoisted(() =>
 const hasDurableExecApprovalMock = vi.hoisted(() => vi.fn(() => false));
 const resolveAllowAlwaysPersistenceDecisionMock = vi.hoisted(() =>
   vi.fn(
-    (_raw: unknown): MockAllowAlwaysPersistenceDecision => ({
+    (_raw: MockAllowAlwaysPersistenceInput): MockAllowAlwaysPersistenceDecision => ({
       kind: "patterns",
       patterns: [{ pattern: "/trusted/bin/tool" }],
     }),
@@ -1838,9 +1841,17 @@ describe("executeNodeHostCommand", () => {
         patterns: [{ pattern: "/node/bin/git" }],
       },
     });
-    resolveAllowAlwaysPersistenceDecisionMock.mockReturnValue({
-      kind: "one-shot",
-      reasons: ["no-reusable-pattern"],
+    resolveAllowAlwaysPersistenceDecisionMock.mockImplementationOnce((params) => {
+      return params.preparedCoverage?.complete === true && params.preparedCoverage.patterns.length
+        ? {
+            kind: "patterns",
+            commandText: params.commandText,
+            patterns: params.preparedCoverage.patterns,
+          }
+        : {
+            kind: "one-shot",
+            reasons: ["no-reusable-pattern"],
+          };
     });
     resolveExecHostApprovalContextMock.mockReturnValue({
       approvals: { allowlist: [], file: { version: 1, agents: {} } },
@@ -1864,6 +1875,15 @@ describe("executeNodeHostCommand", () => {
     });
 
     expect(result.details?.status).toBe("approval-pending");
+    expect(resolveAllowAlwaysPersistenceDecisionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commandText: '/bin/sh -lc "git status"',
+        preparedCoverage: {
+          complete: true,
+          patterns: [{ pattern: "/node/bin/git" }],
+        },
+      }),
+    );
     expect(resolveExecApprovalAllowedDecisionsMock).toHaveBeenCalledWith({
       ask: "on-miss",
       allowAlwaysPersistence: {

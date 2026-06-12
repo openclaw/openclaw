@@ -540,6 +540,7 @@ async function evaluateSystemRunPolicyPhase(
     segmentAllowlistEntries,
     allowlist: approvals.allowlist,
     commandText: parsed.commandText,
+    cwd: parsed.cwd,
   });
   const inlineEvalExecutableTrusted =
     inlineEvalHit !== null &&

@@ -37,7 +37,32 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
     });
   });
 
-  it("keeps shell wrappers without reusable patterns one-shot", async () => {
+  it("uses exact-command fallback for shell wrappers without reusable patterns", async () => {
+    const cwd = makeTempDir();
+    const command = "sh -c './scripts/run.sh'";
+    const plan = await planShellAuthorization({ command, cwd });
+
+    const decision = resolveAllowAlwaysPersistenceDecision({
+      segments: plannedSegments(plan),
+      commandText: command,
+      cwd,
+      platform: process.platform,
+      authorizationPlan: plan,
+    });
+
+    expect(decision).toEqual({
+      kind: "exact-command",
+      commandText: command,
+      cwd,
+    });
+    expect(resolveExecApprovalAllowedDecisions({ allowAlwaysPersistence: decision })).toEqual([
+      "allow-once",
+      "allow-always",
+      "deny",
+    ]);
+  });
+
+  it("keeps exact-command shell wrappers one-shot without an approved cwd", async () => {
     const command = "sh -c './scripts/run.sh'";
     const plan = await planShellAuthorization({ command });
 

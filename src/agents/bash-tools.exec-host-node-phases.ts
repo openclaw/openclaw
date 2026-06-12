@@ -114,26 +114,25 @@ type NodeAllowAlwaysCoverage = {
   patterns: AllowAlwaysPattern[];
 };
 
-type AllowAlwaysPersistenceInput = Parameters<typeof resolveAllowAlwaysPersistenceDecision>[0];
-
 function hasExactCommandDurableApproval(params: {
   allowlist: readonly ExecAllowlistEntry[];
   commandText: string;
+  cwd?: string;
 }): boolean {
   const normalizedCommand = params.commandText.trim();
-  if (!normalizedCommand) {
+  const normalizedCwd = params.cwd?.trim();
+  if (!normalizedCommand || !normalizedCwd) {
     return false;
   }
   const commandPattern = `=command:${crypto
     .createHash("sha256")
-    .update(normalizedCommand)
+    .update(`${normalizedCwd}\x00${normalizedCommand}`)
     .digest("hex")
     .slice(0, 16)}`;
   return params.allowlist.some(
     (entry) =>
       entry.source === "allow-always" &&
-      (entry.pattern === commandPattern ||
-        (typeof entry.commandText === "string" && entry.commandText.trim() === normalizedCommand)),
+      entry.pattern === commandPattern,
   );
 }
 
@@ -209,40 +208,6 @@ function hasNodeAllowAlwaysCommandApproval(params: {
     return false;
   }
   return expectedPatterns.every((pattern) => matchingEntries.has(pattern));
-}
-
-function resolveNodeAllowAlwaysPersistenceDecision(params: {
-  fallbackSegments: ExecCommandSegment[];
-  commandText: string;
-  cwd?: string;
-  env: NodeJS.ProcessEnv;
-  platform?: string | null;
-  strictInlineEval?: boolean;
-  authorizationPlan?: AllowAlwaysPersistenceInput["authorizationPlan"];
-  runtimePayload: boolean;
-  nodeCoverage?: NodeAllowAlwaysCoverage;
-}): AllowAlwaysPersistenceDecision {
-  if (
-    !params.runtimePayload &&
-    params.nodeCoverage?.complete === true &&
-    params.nodeCoverage.patterns.length > 0
-  ) {
-    return {
-      kind: "patterns",
-      patterns: params.nodeCoverage.patterns,
-      commandText: params.commandText,
-    };
-  }
-  return resolveAllowAlwaysPersistenceDecision({
-    segments: params.fallbackSegments,
-    commandText: params.commandText,
-    cwd: params.cwd,
-    env: params.env,
-    platform: params.platform,
-    strictInlineEval: params.strictInlineEval,
-    authorizationPlan: params.authorizationPlan,
-    runtimePayload: params.runtimePayload,
-  });
 }
 
 /** Returns true when local policy allows direct node invoke without prepare/approval. */
@@ -668,6 +633,7 @@ export async function analyzeNodeApprovalRequirement(params: {
               exactDurableApprovalSatisfied: hasExactCommandDurableApproval({
                 allowlist: resolved.allowlist,
                 commandText: entry.command,
+                cwd: entry.cwd,
               }),
               nodeCommandDurableApprovalSatisfied: hasNodeAllowAlwaysCommandApproval({
                 allowlist: resolved.allowlist,
@@ -685,6 +651,7 @@ export async function analyzeNodeApprovalRequirement(params: {
                 segmentAllowlistEntries: allowlistEval.segmentAllowlistEntries,
                 allowlist: resolved.allowlist,
                 commandText: entry.command,
+                cwd: entry.cwd,
               }),
             };
           }),
@@ -713,8 +680,8 @@ export async function analyzeNodeApprovalRequirement(params: {
     nodeAsk: params.prepared.execPolicy?.ask,
     inlineEvalHit,
     requiresSecurityAuditSuppressionApproval,
-    allowAlwaysPersistence: resolveNodeAllowAlwaysPersistenceDecision({
-      fallbackSegments: baseAllowlistEval.segments,
+    allowAlwaysPersistence: resolveAllowAlwaysPersistenceDecision({
+      segments: baseAllowlistEval.segments,
       commandText: approvalCommand,
       cwd: approvalCwd,
       env: analysisEnv,
@@ -722,7 +689,7 @@ export async function analyzeNodeApprovalRequirement(params: {
       strictInlineEval: params.request.strictInlineEval,
       authorizationPlan: baseAllowlistEval.authorizationPlan,
       runtimePayload: inlineEvalHit !== null,
-      nodeCoverage: params.prepared.allowAlwaysCoverage,
+      preparedCoverage: params.prepared.allowAlwaysCoverage,
     }),
     autoReviewArgv:
       autoReviewBindingEval.segments.length === 1 &&
