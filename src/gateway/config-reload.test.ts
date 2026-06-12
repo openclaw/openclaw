@@ -200,6 +200,13 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.hotReasons).toStrictEqual([]);
   });
 
+  it("does not restart the gateway for browser.profiles config changes", () => {
+    const plan = buildGatewayReloadPlan(["browser.profiles.default.cdpUrl"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartReasons).toStrictEqual([]);
+    expect(plan.hotReasons).toStrictEqual([]);
+  });
+
   it("restarts the Gmail watcher for hooks.gmail changes", () => {
     const plan = buildGatewayReloadPlan(["hooks.gmail.account"]);
     expect(plan.restartGateway).toBe(false);
