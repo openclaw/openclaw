@@ -678,6 +678,8 @@ export function buildAgentSystemPrompt(params: {
   ownerDisplaySecret?: string;
   reasoningTagHint?: boolean;
   toolNames?: string[];
+  /** Callable tool names used for capability guidance without listing them as visible tools. */
+  capabilityToolNames?: string[];
   toolSummaries?: Record<string, string>;
   modelAliasLines?: string[];
   userTimezone?: string;
@@ -824,7 +826,11 @@ export function buildAgentSystemPrompt(params: {
     canonicalByNormalized.get(normalized) ?? normalized;
 
   const normalizedTools = canonicalToolNames.map((tool) => tool.toLowerCase());
-  const availableTools = new Set(normalizedTools);
+  const visibleTools = new Set(normalizedTools);
+  const availableTools = new Set([
+    ...visibleTools,
+    ...normalizeStringEntriesLower(params.capabilityToolNames),
+  ]);
   const hasSessionsSpawn = availableTools.has("sessions_spawn");
   const acpHarnessSpawnAllowed = hasSessionsSpawn && acpSpawnRuntimeEnabled;
   const nativeCommandGuidanceLines = normalizeUniqueStringEntries(
@@ -841,7 +847,7 @@ export function buildAgentSystemPrompt(params: {
   const extraTools = Array.from(
     new Set(normalizedTools.filter((tool) => !toolOrder.includes(tool))),
   );
-  const enabledTools = toolOrder.filter((tool) => availableTools.has(tool));
+  const enabledTools = toolOrder.filter((tool) => visibleTools.has(tool));
   const toolLines = enabledTools.map((tool) => {
     const summary = coreToolSummaries[tool] ?? externalToolSummaries.get(tool);
     const name = resolveToolName(tool);
@@ -984,6 +990,7 @@ export function buildAgentSystemPrompt(params: {
     promptSurface,
     toolLines,
     toolSchemaDirectoryPrompt,
+    capabilityToolNames: [...availableTools].toSorted(),
     renderOpenClawToolWorkflowHints,
     hasGateway,
     readToolName,

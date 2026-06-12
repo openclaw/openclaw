@@ -97,6 +97,7 @@ import {
   createClientToolNameConflictError,
   findClientToolNameConflicts,
   toClientToolDefinitions,
+  toToolDefinitions,
 } from "../../agent-tool-definition-adapter.js";
 import {
   createOpenClawCodingTools,
@@ -1968,6 +1969,7 @@ export async function runEmbeddedAttempt(
         messageToolHints,
         toolSchemaDirectoryPrompt,
         sandboxInfo,
+        capabilityToolNames: [...liveAllowedToolNames].toSorted(),
         tools: effectiveTools,
         userTimezone,
         userTime,
@@ -2372,10 +2374,13 @@ export async function runEmbeddedAttempt(
                   },
                   toolCall.name,
                 );
-                if (tool) {
+                const definition = tool
+                  ? toToolDefinitions([tool], catalogToolHookContext)[0]
+                  : undefined;
+                if (definition) {
                   log.info(`tool-search: hydrated deferred directory tool ${toolCall.name}`);
                 }
-                return tool;
+                return definition;
               }
             : undefined,
           withSessionWriteLock: (operation) =>

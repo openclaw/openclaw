@@ -73,6 +73,8 @@ export function buildEmbeddedSystemPrompt(params: {
   messageToolHints?: string[];
   toolSchemaDirectoryPrompt?: string;
   sandboxInfo?: EmbeddedSandboxInfo;
+  /** Callable tool names used for capability guidance without adding them to the visible tool list. */
+  capabilityToolNames?: string[];
   tools: AgentTool[];
   modelAliasLines?: string[];
   userTimezone: string;
@@ -116,6 +118,7 @@ export function buildEmbeddedSystemPrompt(params: {
     toolSchemaDirectoryPrompt: params.toolSchemaDirectoryPrompt,
     sandboxInfo: params.sandboxInfo,
     toolNames: params.tools.map((tool) => tool.name),
+    capabilityToolNames: params.capabilityToolNames,
     modelAliasLines: params.modelAliasLines,
     userTimezone: params.userTimezone,
     userTime: params.userTime,
