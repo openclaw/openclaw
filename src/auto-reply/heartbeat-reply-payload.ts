@@ -17,7 +17,10 @@ export function resolveHeartbeatReplyPayload(
     return undefined;
   }
   if (!Array.isArray(replyResult)) {
-    return replyResult;
+    // Scalar results can be reasoning-only too; without this guard a scalar
+    // reasoning payload becomes the user-visible reply while the array path
+    // filters it, so the leak depends on the result shape.
+    return replyResult.isReasoning === true ? undefined : replyResult;
   }
   for (let idx = replyResult.length - 1; idx >= 0; idx -= 1) {
     const payload = replyResult[idx];

@@ -35,4 +35,12 @@ describe("resolveHeartbeatReplyPayload", () => {
     };
     expect(resolveHeartbeatReplyPayload([reasoning])).toBeUndefined();
   });
+
+  it("returns undefined for a scalar reasoning payload", () => {
+    const reasoning: ReplyPayload = {
+      text: "Considering whether the heartbeat needs a reply...",
+      isReasoning: true,
+    };
+    expect(resolveHeartbeatReplyPayload(reasoning)).toBeUndefined();
+  });
 });
