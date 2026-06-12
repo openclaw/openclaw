@@ -197,6 +197,11 @@ export default definePluginEntry({
             typeof params.agentId === "string" && params.agentId ? params.agentId : undefined;
           const streamPusher = new StreamingMercurePusher(mercurePusher, streamTopic, task.id);
 
+          // First-byte ack: the user sees a reaction the moment the task is
+          // claimed, before template loading / query planning emit their
+          // first progress line. Fire-and-forget: never blocks generation.
+          void mercurePusher.pushReportProgress(streamTopic, "已接到报告任务，正在准备数据…", task.id);
+
           try {
             if (!dateScope.start || !dateScope.end) {
               throw new Error(`Invalid dateScope in task params: ${task.params}`);

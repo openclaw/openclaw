@@ -45,6 +45,42 @@ interface GenerateOptions {
   onActivity?: (message: string) => void;
 }
 
+/**
+ * The report-writing run needs no tools: every number it may cite is
+ * pre-queried and embedded in the prompt. Tool phases (file writes, docx
+ * conversion attempts) emit no text deltas — they starve the frontend stream
+ * and routinely blow the run deadline (Task #13624) — so ban them outright.
+ */
+const PURE_WRITING_SYSTEM_PROMPT = [
+  "本次运行是纯写作任务：报告所需的全部数据已在用户消息中提供。",
+  "禁止调用任何工具（exec、read、write、edit、file_share、feed_query 等一律不得使用）。",
+  "禁止读写任何文件，禁止生成或转换 Word/PDF 等附件文件。",
+  "直接以文本输出完整的 Markdown 报告正文，从标题行（# 开头）开始。",
+].join("\n");
+
+/** Query planning only emits a JSON plan — equally tool-free. */
+const PURE_PLANNING_SYSTEM_PROMPT =
+  "本次运行是纯文本任务：直接输出 JSON 查询计划，禁止调用任何工具、禁止读写文件。";
+
+/** Minimum salvageable report length after a run timeout (chars). */
+const MIN_SALVAGE_LENGTH = 200;
+
+/**
+ * Salvage a report from streamed deltas after a run timeout: the body often
+ * finishes streaming long before the run ends (the agent may linger on
+ * follow-up chores). Returns the text from the first markdown heading onward
+ * when it looks substantive, "" otherwise (treated as a real timeout).
+ */
+export function salvageStreamedReport(streamedText: string): string {
+  const text = streamedText.trim();
+  const headingIndex = text.search(/^#{1,6}\s/m);
+  if (headingIndex < 0) {
+    return "";
+  }
+  const report = text.slice(headingIndex).trim();
+  return report.length >= MIN_SALVAGE_LENGTH ? report : "";
+}
+
 function extractAssistantDelta(data: Record<string, unknown>): string {
   const delta = data.delta;
   const text = data.text;
@@ -173,6 +209,7 @@ export class ReportGenerator {
         sessionKey,
         message: reportPrompt,
         deliver: false,
+        extraSystemPrompt: PURE_WRITING_SYSTEM_PROMPT,
       });
 
       const waitResult = await this.runtime.subagent.waitForRun({
@@ -185,57 +222,66 @@ export class ReportGenerator {
         throw new Error(waitResult.error ?? "Report generation failed");
       }
 
+      let generatedText = "";
       if (waitResult.status === "timeout") {
-        throw new Error("Report generation timed out");
-      }
+        // A timeout with a complete-looking streamed report is a delivery,
+        // not a failure: salvage it instead of discarding the whole task.
+        generatedText = salvageStreamedReport(streamedText);
+        if (!generatedText) {
+          throw new Error("Report generation timed out");
+        }
+        logger.warn(
+          "[REPORT_GENERATOR] Run timed out after streaming a report body; salvaging streamed text",
+        );
+      } else {
+        // Get the generated report from session messages
+        // Autonomous sessions interleave tool calls/results with assistant
+        // messages, so fetch a wider tail than the simple-session default.
+        const sessionMessages = await this.runtime.subagent.getSessionMessages({
+          sessionKey,
+          limit: 20,
+        });
 
-      // Get the generated report from session messages
-      // Autonomous sessions interleave tool calls/results with assistant
-      // messages, so fetch a wider tail than the simple-session default.
-      const sessionMessages = await this.runtime.subagent.getSessionMessages({
-        sessionKey,
-        limit: 20,
-      });
-
-      // Collect every non-empty assistant message text. In autonomous mode the
-      // model often appends a short closing remark ("报告已生成，请查收") as a
-      // separate, NEWER assistant message after the report, so "newest" is the
-      // wrong pick — the report is the substantive body, not the chatter.
-      const assistantTexts: string[] = [];
-      if (sessionMessages.messages && Array.isArray(sessionMessages.messages)) {
-        for (const msg of sessionMessages.messages.toReversed()) {
-          const m = msg as { role?: string; content?: unknown };
-          if (m.role !== "assistant") {
-            continue;
-          }
-          const text = extractMessageText(m.content).trim();
-          if (text) {
-            assistantTexts.push(text);
+        // Collect every non-empty assistant message text. In autonomous mode the
+        // model often appends a short closing remark ("报告已生成，请查收") as a
+        // separate, NEWER assistant message after the report, so "newest" is the
+        // wrong pick — the report is the substantive body, not the chatter.
+        const assistantTexts: string[] = [];
+        if (sessionMessages.messages && Array.isArray(sessionMessages.messages)) {
+          for (const msg of sessionMessages.messages.toReversed()) {
+            const m = msg as { role?: string; content?: unknown };
+            if (m.role !== "assistant") {
+              continue;
+            }
+            const text = extractMessageText(m.content).trim();
+            if (text) {
+              assistantTexts.push(text);
+            }
           }
         }
-      }
 
-      // Pick the longest message that carries a markdown heading of ANY level
-      // (`#`..`######`) — older logic required a top-level `# ` and silently
-      // fell back to the closing remark when the report opened with `## `.
-      // The report dwarfs any remark in length, so longest-with-heading is a
-      // robust selector; degrade to the longest assistant text, then to the
-      // streamed text.
-      const byLengthDesc = (a: string, b: string) => b.length - a.length;
-      const withHeading = assistantTexts.filter((t) => /^#{1,6}\s/m.test(t));
-      let generatedText =
-        withHeading.toSorted(byLengthDesc)[0] ?? assistantTexts.toSorted(byLengthDesc)[0] ?? "";
+        // Pick the longest message that carries a markdown heading of ANY level
+        // (`#`..`######`) — older logic required a top-level `# ` and silently
+        // fell back to the closing remark when the report opened with `## `.
+        // The report dwarfs any remark in length, so longest-with-heading is a
+        // robust selector; degrade to the longest assistant text, then to the
+        // streamed text.
+        const byLengthDesc = (a: string, b: string) => b.length - a.length;
+        const withHeading = assistantTexts.filter((t) => /^#{1,6}\s/m.test(t));
+        generatedText =
+          withHeading.toSorted(byLengthDesc)[0] ?? assistantTexts.toSorted(byLengthDesc)[0] ?? "";
 
-      // Fallback: use the streamed text we collected ourselves, trimmed to the
-      // last heading so working narration ("先查询数据库…") that precedes the
-      // report body is dropped.
-      if (!generatedText && streamedText.trim()) {
-        const headings = [...streamedText.matchAll(/^#{1,6}\s/gm)];
-        const lastHeading = headings.length > 0 ? headings[headings.length - 1].index : -1;
-        generatedText = lastHeading >= 0 ? streamedText.slice(lastHeading) : streamedText;
-        logger.warn(
-          "[REPORT_GENERATOR] Session messages yielded no text; falling back to streamed text",
-        );
+        // Fallback: use the streamed text we collected ourselves, trimmed to the
+        // last heading so working narration ("先查询数据库…") that precedes the
+        // report body is dropped.
+        if (!generatedText && streamedText.trim()) {
+          const headings = [...streamedText.matchAll(/^#{1,6}\s/gm)];
+          const lastHeading = headings.length > 0 ? headings[headings.length - 1].index : -1;
+          generatedText = lastHeading >= 0 ? streamedText.slice(lastHeading) : streamedText;
+          logger.warn(
+            "[REPORT_GENERATOR] Session messages yielded no text; falling back to streamed text",
+          );
+        }
       }
 
       if (!generatedText) {
@@ -277,6 +323,7 @@ export class ReportGenerator {
         sessionKey,
         message: buildPlanPrompt(template),
         deliver: false,
+        extraSystemPrompt: PURE_PLANNING_SYSTEM_PROMPT,
       });
       const waitResult = await this.runtime.subagent.waitForRun({
         runId: runResult.runId,
