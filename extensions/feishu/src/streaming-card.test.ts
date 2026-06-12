@@ -487,6 +487,175 @@ describe("FeishuStreamingSession", () => {
     );
   });
 
+  it("redacts audit-sensitive contact info in streaming card payloads", async () => {
+    fetchWithSsrFGuardMock.mockImplementation(
+      async ({ url }: { url: string; init?: { body?: string } }) => {
+        const release = vi.fn(async () => {});
+        if (url.includes("/auth/")) {
+          return {
+            response: {
+              ok: true,
+              json: async () => ({
+                code: 0,
+                msg: "ok",
+                tenant_access_token: "token",
+                expire: 7200,
+              }),
+            },
+            release,
+          };
+        }
+        if (url.includes("/cardkit/v1/cards") && !url.includes("/cards/card_1/")) {
+          return {
+            response: {
+              ok: true,
+              json: async () => ({ code: 0, msg: "ok", data: { card_id: "card_1" } }),
+            },
+            release,
+          };
+        }
+        return {
+          response: {
+            ok: true,
+            json: async () => ({ code: 0, msg: "ok" }),
+          },
+          release,
+        };
+      },
+    );
+    const create = vi.fn().mockResolvedValue({ code: 0, data: { message_id: "om_1" } });
+    const client = {
+      im: {
+        message: {
+          create,
+        },
+      },
+    } as unknown as ConstructorParameters<typeof FeishuStreamingSession>[0];
+    const session = new FeishuStreamingSession(client, {
+      appId: "app_stream_redaction",
+      appSecret: "secret",
+    });
+
+    await session.start("oc_1", "chat_id", {
+      header: { title: "Owner bob@example.com 13812345678" },
+      note: "Hotline 95530",
+    });
+    await session.update("Reach alice@example.com via 400-123-4567");
+    await session.close("Final call 13912345678 or 95530", {
+      note: "cc billing@example.com",
+    });
+
+    const guardCalls = fetchWithSsrFGuardMock.mock.calls.map(
+      (call) => call[0] as { auditContext?: string; init?: { body?: string } },
+    );
+    const getGuardCall = (auditContext: string) =>
+      guardCalls.find((call) => call.auditContext === auditContext);
+
+    const createCall = getGuardCall("feishu.streaming-card.create");
+    const createBody = JSON.parse(createCall?.init?.body ?? "{}") as { data?: string };
+    const cardJson = JSON.parse(createBody.data ?? "{}") as {
+      header: { title: { content: string } };
+      body: { elements: Array<{ content?: string }> };
+    };
+    expect(cardJson.header.title.content).toBe("Owner [email redacted] [phone redacted]");
+    expect(cardJson.body.elements[2]?.content).toBe(
+      "<font color='grey'>Hotline [phone redacted]</font>",
+    );
+
+    const updateCall = getGuardCall("feishu.streaming-card.update");
+    const updateBody = JSON.parse(updateCall?.init?.body ?? "{}") as { content?: string };
+    expect(updateBody.content).toBe("Reach [email redacted] via [phone redacted]");
+
+    const replaceCall = getGuardCall("feishu.streaming-card.replace");
+    const replaceBody = JSON.parse(replaceCall?.init?.body ?? "{}") as { element?: string };
+    const replaceElement = JSON.parse(replaceBody.element ?? "{}") as { content?: string };
+    expect(replaceElement.content).toBe("Final call [phone redacted] or [phone redacted]");
+
+    const noteCall = getGuardCall("feishu.streaming-card.note-update");
+    const noteBody = JSON.parse(noteCall?.init?.body ?? "{}") as { content?: string };
+    expect(noteBody.content).toBe("<font color='grey'>cc [email redacted]</font>");
+
+    const closeCall = getGuardCall("feishu.streaming-card.close");
+    const closeBody = JSON.parse(closeCall?.init?.body ?? "{}") as { settings?: string };
+    const closeSettings = JSON.parse(closeBody.settings ?? "{}") as {
+      config?: { summary?: { content?: string } };
+    };
+    expect(closeSettings.config?.summary?.content).toBe(
+      "Final call [phone redacted] or [phone redacted]",
+    );
+  });
+
+  it("redacts streaming close summaries before truncation", async () => {
+    const updateBodies: string[] = [];
+    mockFetches(updateBodies);
+    const session = new FeishuStreamingSession({} as never, {
+      appId: "app_stream_summary_redaction",
+      appSecret: "secret",
+    });
+    setStreamingSessionInternals(session, {
+      state: {
+        cardId: "card_summary",
+        messageId: "om_summary",
+        sequence: 1,
+        currentText: "",
+        sentText: "",
+        hasNote: false,
+      },
+      lastUpdateTime: 0,
+    });
+
+    await session.close(`${".".repeat(43)} 400-123-4567 after the cutoff`);
+
+    const closeCall = fetchWithSsrFGuardMock.mock.calls
+      .map((call) => call[0] as { auditContext?: string; init?: { body?: string } })
+      .find((call) => call.auditContext === "feishu.streaming-card.close");
+    const closeBody = JSON.parse(closeCall?.init?.body ?? "{}") as { settings?: string };
+    const closeSettings = JSON.parse(closeBody.settings ?? "{}") as {
+      config?: { summary?: { content?: string } };
+    };
+    const summary = closeSettings.config?.summary?.content ?? "";
+
+    expect(summary).not.toContain("400");
+    expect(summary).not.toContain("123");
+  });
+
+  it("keeps streaming merge state unredacted while redacting outbound payloads", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(5_000);
+    const updateBodies: string[] = [];
+    mockFetches(updateBodies);
+    const session = new FeishuStreamingSession({} as never, {
+      appId: "app_stream_merge_redaction",
+      appSecret: "secret",
+    });
+    setStreamingSessionInternals(session, {
+      state: {
+        cardId: "card_merge",
+        messageId: "om_merge",
+        sequence: 1,
+        currentText: "",
+        sentText: "",
+        hasNote: false,
+      },
+      lastUpdateTime: 0,
+    });
+
+    await session.update("Reach alice@example.com");
+    await session.update("Reach alice@example.com now with invoice context");
+
+    const updateContents = updateBodies.map((body) => {
+      const parsed = JSON.parse(body) as { content?: string };
+      return parsed.content;
+    });
+    expect(updateContents).toEqual([
+      "Reach [email redacted]",
+      "Reach [email redacted] now with invoice context",
+    ]);
+    const internals = session as unknown as { state: StreamingSessionState | null };
+    expect(internals.state?.currentText).toBe("Reach alice@example.com now with invoice context");
+    expect(internals.state?.sentText).toBe("Reach alice@example.com now with invoice context");
+  });
+
   it("bounds streaming token cache lifetime when token expiry overflows", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-29T12:00:00.000Z"));

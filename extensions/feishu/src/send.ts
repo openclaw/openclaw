@@ -9,6 +9,7 @@ import {
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
+import { redactFeishuAuditSensitiveText, redactFeishuCardVisibleText } from "./audit-redaction.js";
 import { createFeishuClient } from "./client.js";
 import { requestFeishuApi } from "./comment-shared.js";
 import type { MentionTarget } from "./mention-target.types.js";
@@ -583,7 +584,7 @@ export function buildFeishuPostMessagePayload(params: {
     ...buildFeishuPostMentionElements(mentions),
     {
       tag: "md",
-      text: messageText,
+      text: redactFeishuAuditSensitiveText(messageText),
     },
   ];
   return {
@@ -647,7 +648,7 @@ export async function sendCardFeishu(params: SendFeishuCardParams): Promise<Feis
   const { cfg, to, card, replyToMessageId, replyInThread, allowTopLevelReplyFallback, accountId } =
     params;
   const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({ cfg, to, accountId });
-  const content = JSON.stringify(card);
+  const content = JSON.stringify(redactFeishuCardVisibleText(card));
 
   const directParams = { receiveId, receiveIdType, content, msgType: "interactive" };
   return sendReplyOrFallbackDirect(client, {
@@ -684,7 +685,7 @@ export async function editMessageFeishu(params: {
   const client = createFeishuClient(account);
 
   if (card) {
-    const content = JSON.stringify(card);
+    const content = JSON.stringify(redactFeishuCardVisibleText(card));
     const response = await client.im.message.patch({
       path: { message_id: messageId },
       data: { content },
