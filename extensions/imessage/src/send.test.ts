@@ -1165,4 +1165,33 @@ describe("sendMessageIMessage receipts", () => {
 
     expect(runCliJson).not.toHaveBeenCalled();
   });
+
+  it("does not pass replyToId to receipt when actions.reply is false (#92142)", async () => {
+    const client = createClient({ guid: "p:0/imsg-noreply" });
+    const cfgWithReplyDisabled = {
+      channels: {
+        imessage: {
+          accounts: {
+            default: { actions: { reply: false } },
+          },
+        },
+      },
+    };
+
+    const result = await sendMessageIMessage("chat_id:42", "hello", {
+      config: cfgWithReplyDisabled,
+      client,
+      replyToId: "should-be-suppressed",
+    });
+
+    expect(result.messageId).toBe("p:0/imsg-noreply");
+    // When actions.reply is false, replyToId must not appear in the receipt.
+    expect(result.receipt.replyToId).toBeUndefined();
+    // The client RPC must not receive a reply_to parameter.
+    const clientMocks = getClientMocks(client);
+    expect(clientMocks.request).not.toHaveBeenCalledWith(
+      "message_send",
+      expect.objectContaining({ reply_to: expect.anything() }),
+    );
+  });
 });
