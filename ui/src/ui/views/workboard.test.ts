@@ -756,9 +756,10 @@ describe("renderWorkboard", () => {
         container,
       );
 
-      const select = container.querySelector<HTMLDetailsElement>(
-        ".workboard-toolbar__filters .workboard-select",
-      );
+      const select = container
+        .querySelector(".workboard-toolbar__filters")
+        ?.querySelectorAll<HTMLDetailsElement>(".workboard-select")
+        .item(1);
       const board = container.querySelector<HTMLElement>(".workboard-board");
       expect(select).toBeTruthy();
       expect(board).toBeTruthy();
@@ -772,6 +773,69 @@ describe("renderWorkboard", () => {
       const escape = dispatchKey(select!, "Escape");
       expect(escape.defaultPrevented).toBe(true);
       expect(select?.open).toBe(false);
+    } finally {
+      container.remove();
+    }
+  });
+
+  it("supports keyboard navigation and restores dropdown trigger focus", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    try {
+      render(
+        renderWorkboard({
+          host,
+          client: null,
+          connected: true,
+          pluginEnabled: true,
+          agentsList: null,
+          sessions: [],
+          onOpenSession: () => undefined,
+        }),
+        container,
+      );
+
+      const select = container
+        .querySelector(".workboard-toolbar__filters")
+        ?.querySelectorAll<HTMLDetailsElement>(".workboard-select")
+        .item(1);
+      const trigger = select?.querySelector<HTMLElement>(".workboard-select__trigger");
+      const options = [
+        ...(select?.querySelectorAll<HTMLButtonElement>(".workboard-select__option") ?? []),
+      ];
+      expect(select).toBeTruthy();
+      expect(trigger).toBeTruthy();
+      expect(options.length).toBeGreaterThan(2);
+      options[1].disabled = true;
+
+      trigger!.focus();
+      dispatchKey(trigger!, "ArrowDown");
+      expect(select?.open).toBe(true);
+      expect(document.activeElement).toBe(options[0]);
+
+      dispatchKey(options[0], "ArrowDown");
+      expect(document.activeElement).toBe(options[2]);
+
+      dispatchKey(options[2], "End");
+      expect(document.activeElement).toBe(options.at(-1));
+
+      dispatchKey(options.at(-1)!, "h");
+      expect(document.activeElement?.textContent).toContain("High");
+      expect(dispatchKey(document.activeElement!, " ").defaultPrevented).toBe(false);
+
+      (document.activeElement as HTMLButtonElement).click();
+      expect(select?.open).toBe(false);
+      expect(document.activeElement).toBe(trigger);
+
+      dispatchKey(trigger!, " ");
+      expect(select?.open).toBe(true);
+      dispatchKey(document.activeElement!, "Escape");
+      expect(select?.open).toBe(false);
+      expect(document.activeElement).toBe(trigger);
     } finally {
       container.remove();
     }
@@ -3195,6 +3259,33 @@ describe("renderWorkboard", () => {
     expect(container.textContent).toContain("Loading panel");
     expect(container.textContent).not.toContain("Workboard is disabled");
     expect(container.querySelector(".workboard-column")).toBeNull();
+  });
+
+  it("shows config load failures with a retry action", () => {
+    const container = document.createElement("div");
+    const onReloadConfig = vi.fn();
+
+    render(
+      renderWorkboard({
+        host: {},
+        client: null,
+        connected: true,
+        pluginEnabled: null,
+        pluginEnablementError: "config.get failed",
+        agentsList: null,
+        sessions: [],
+        onOpenSession: () => undefined,
+        onReloadConfig,
+      }),
+      container,
+    );
+
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("config.get failed");
+    expect(container.textContent).not.toContain("Loading panel");
+    [...container.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.trim() === "Retry")
+      ?.click();
+    expect(onReloadConfig).toHaveBeenCalledOnce();
   });
 
   it("does not retry a failed initial load on every render", async () => {

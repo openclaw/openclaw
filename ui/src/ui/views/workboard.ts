@@ -70,9 +70,11 @@ type WorkboardProps = {
   canWrite?: boolean;
   canModelOverride?: boolean;
   pluginEnabled: boolean | null;
+  pluginEnablementError?: string | null;
   agentsList: AgentsListResult | null;
   sessions: GatewaySessionRow[];
   onOpenSession: (sessionKey: string) => void;
+  onReloadConfig?: () => void;
   onRequestUpdate?: () => void;
 };
 
@@ -730,6 +732,10 @@ function normalizeActiveAgentFilter(
 }
 
 let workboardSelectDocumentCloserInstalled = false;
+const workboardSelectTypeahead = new WeakMap<
+  HTMLDetailsElement,
+  { query: string; resetTimer: number }
+>();
 
 function hasOpenWorkboardSelectMenus(root: ParentNode = document): boolean {
   return Boolean(root.querySelector(".workboard-select[open]"));
@@ -781,12 +787,27 @@ function closeOtherWorkboardSelectMenus(details: HTMLDetailsElement) {
   closeWorkboardSelectMenus(root, details);
 }
 
+function closeWorkboardSelectMenu(details: HTMLDetailsElement, restoreFocus = false) {
+  const typeahead = workboardSelectTypeahead.get(details);
+  if (typeahead) {
+    window.clearTimeout(typeahead.resetTimer);
+    workboardSelectTypeahead.delete(details);
+  }
+  details.open = false;
+  if (restoreFocus) {
+    const trigger = details.querySelector<HTMLElement>(".workboard-select__trigger");
+    if (trigger) {
+      focusElement(trigger);
+    }
+  }
+}
+
 function closeWorkboardSelectMenus(root: ParentNode, except?: HTMLDetailsElement) {
   for (const select of root.querySelectorAll<HTMLDetailsElement>(".workboard-select[open]")) {
     if (select === except) {
       continue;
     }
-    select.open = false;
+    closeWorkboardSelectMenu(select, select.contains(document.activeElement));
   }
   syncWorkboardSelectDocumentCloser();
 }
@@ -833,6 +854,122 @@ function positionWorkboardSelectMenu(details: HTMLDetailsElement) {
   menu.style.setProperty("--workboard-select-menu-max-height", `${maxHeight}px`);
 }
 
+function getEnabledWorkboardSelectOptions(details: HTMLDetailsElement): HTMLButtonElement[] {
+  return [
+    ...details.querySelectorAll<HTMLButtonElement>(".workboard-select__option:not(:disabled)"),
+  ];
+}
+
+function focusWorkboardSelectOption(details: HTMLDetailsElement, option: HTMLButtonElement) {
+  if (!details.open) {
+    details.open = true;
+    closeOtherWorkboardSelectMenus(details);
+    positionWorkboardSelectMenu(details);
+    syncWorkboardSelectDocumentCloser();
+  }
+  focusElement(option);
+  option.scrollIntoView?.({ block: "nearest" });
+}
+
+function focusRelativeWorkboardSelectOption(
+  details: HTMLDetailsElement,
+  direction: "first" | "last" | "next" | "previous",
+) {
+  const options = getEnabledWorkboardSelectOptions(details);
+  if (options.length === 0) {
+    return;
+  }
+  const activeIndex = options.indexOf(document.activeElement as HTMLButtonElement);
+  const selectedIndex = options.findIndex(
+    (option) => option.getAttribute("aria-selected") === "true",
+  );
+  let nextIndex = Math.max(selectedIndex, 0);
+  if (direction === "first") {
+    nextIndex = 0;
+  } else if (direction === "last") {
+    nextIndex = options.length - 1;
+  } else if (activeIndex >= 0) {
+    nextIndex =
+      direction === "next"
+        ? (activeIndex + 1) % options.length
+        : (activeIndex - 1 + options.length) % options.length;
+  }
+  focusWorkboardSelectOption(details, options[nextIndex] ?? options[0]);
+}
+
+function focusWorkboardSelectTypeaheadOption(details: HTMLDetailsElement, key: string) {
+  const previous = workboardSelectTypeahead.get(details);
+  if (previous) {
+    window.clearTimeout(previous.resetTimer);
+  }
+  const normalizedKey = key.toLocaleLowerCase();
+  const accumulatedQuery = `${previous?.query ?? ""}${normalizedKey}`;
+  const query =
+    accumulatedQuery === normalizedKey.repeat(accumulatedQuery.length)
+      ? normalizedKey
+      : accumulatedQuery;
+  const resetTimer = window.setTimeout(() => workboardSelectTypeahead.delete(details), 500);
+  workboardSelectTypeahead.set(details, { query, resetTimer });
+
+  const options = getEnabledWorkboardSelectOptions(details);
+  const activeIndex = options.indexOf(document.activeElement as HTMLButtonElement);
+  const ordered = [...options.slice(activeIndex + 1), ...options.slice(0, activeIndex + 1)];
+  const match = ordered.find((option) =>
+    option
+      .querySelector(".workboard-select__label")
+      ?.textContent?.trim()
+      .toLocaleLowerCase()
+      .startsWith(query),
+  );
+  if (match) {
+    focusWorkboardSelectOption(details, match);
+  }
+}
+
+function handleWorkboardSelectKeydown(event: KeyboardEvent) {
+  const details = event.currentTarget as HTMLDetailsElement;
+  const target = event.target;
+  const trigger = details.querySelector<HTMLElement>(".workboard-select__trigger");
+  if (event.key === "Escape") {
+    closeWorkboardSelectMenu(details, true);
+    event.preventDefault();
+    event.stopPropagation();
+    return;
+  }
+  if (target === trigger && (event.key === "Enter" || event.key === " ")) {
+    event.preventDefault();
+    if (details.open) {
+      closeWorkboardSelectMenu(details, true);
+    } else {
+      focusRelativeWorkboardSelectOption(details, "next");
+    }
+    return;
+  }
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    event.preventDefault();
+    focusRelativeWorkboardSelectOption(details, event.key === "ArrowDown" ? "next" : "previous");
+    return;
+  }
+  if (event.key === "Home" || event.key === "End") {
+    event.preventDefault();
+    focusRelativeWorkboardSelectOption(details, event.key === "Home" ? "first" : "last");
+    return;
+  }
+  if (target instanceof HTMLButtonElement && event.key === " ") {
+    return;
+  }
+  if (
+    event.key.length === 1 &&
+    !event.altKey &&
+    !event.ctrlKey &&
+    !event.metaKey &&
+    !event.isComposing
+  ) {
+    event.preventDefault();
+    focusWorkboardSelectTypeaheadOption(details, event.key);
+  }
+}
+
 function renderWorkboardSelect<Value extends string>(params: {
   value: Value;
   options: readonly WorkboardSelectOption<Value>[];
@@ -853,17 +990,19 @@ function renderWorkboardSelect<Value extends string>(params: {
         positionWorkboardSelectMenu(details);
         syncWorkboardSelectDocumentCloser();
       }}
-      @keydown=${(event: KeyboardEvent) => {
-        if (event.key !== "Escape") {
-          return;
-        }
+      @keydown=${handleWorkboardSelectKeydown}
+      @focusout=${(event: FocusEvent) => {
         const details = event.currentTarget as HTMLDetailsElement;
-        details.open = false;
-        event.preventDefault();
-        event.stopPropagation();
+        if (!(event.relatedTarget instanceof Node) || !details.contains(event.relatedTarget)) {
+          closeWorkboardSelectMenu(details);
+        }
       }}
     >
-      <summary class="input workboard-select__trigger" aria-label=${params.label}>
+      <summary
+        class="input workboard-select__trigger"
+        aria-label=${params.label}
+        aria-haspopup="listbox"
+      >
         <span class="workboard-select__value">${selectedLabel}</span>
         <span class="workboard-select__chevron" aria-hidden="true">${icons.chevronDown}</span>
       </summary>
@@ -875,6 +1014,7 @@ function renderWorkboardSelect<Value extends string>(params: {
               class="workboard-select__option ${optionSelected ? "is-selected" : ""}"
               type="button"
               role="option"
+              tabindex="-1"
               aria-selected=${optionSelected}
               aria-disabled=${option.disabled === true}
               ?disabled=${option.disabled}
@@ -885,7 +1025,7 @@ function renderWorkboardSelect<Value extends string>(params: {
                 params.onChange(option.value);
                 const details = (event.currentTarget as HTMLElement).closest("details");
                 if (details) {
-                  details.open = false;
+                  closeWorkboardSelectMenu(details, true);
                 }
                 params.requestUpdate?.();
               }}
@@ -2344,6 +2484,18 @@ export function renderWorkboard(props: WorkboardProps) {
   }
 
   if (props.pluginEnabled === null) {
+    if (props.pluginEnablementError) {
+      return html`
+        <section class="workboard">
+          <div class="callout danger" role="alert">${props.pluginEnablementError}</div>
+          ${props.onReloadConfig
+            ? html`<button class="btn" type="button" @click=${props.onReloadConfig}>
+                ${t("lazyView.retry")}
+              </button>`
+            : nothing}
+        </section>
+      `;
+    }
     return html`
       <section class="card lazy-view-state lazy-view-state--loading">
         <div class="card-title">${t("lazyView.loadingTitle")}</div>
