@@ -1817,6 +1817,60 @@ describe("memory index", () => {
     }
   });
 
+  it("preserves keyword-only hybrid hits alongside strict vector results", async () => {
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, "index-hybrid-keyword-with-strict-vector.sqlite"),
+      minScore: 0.35,
+      hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
+    });
+    const manager = await getFreshManager(cfg);
+    try {
+      const vectorResult = {
+        path: "memory/vector.md",
+        startLine: 1,
+        endLine: 1,
+        source: "memory" as const,
+        snippet: "alpha vector",
+        score: 0.63,
+        vectorScore: 0.9,
+        textScore: 0,
+      };
+      const keywordOnlyResult = {
+        path: "memory/keyword.md",
+        startLine: 2,
+        endLine: 2,
+        source: "memory" as const,
+        snippet: "zebra keyword",
+        score: 0.3,
+        vectorScore: 0,
+        textScore: 1,
+      };
+      const selectHybridSearchResults = Reflect.get(manager, "selectHybridSearchResults") as (
+        merged: Array<typeof vectorResult>,
+        keywordResults: Array<typeof keywordOnlyResult & { id: string }>,
+        maxResults: number,
+        minScore: number,
+      ) => Array<typeof vectorResult>;
+
+      const results = selectHybridSearchResults.call(
+        manager,
+        [vectorResult, keywordOnlyResult],
+        [{ ...keywordOnlyResult, id: "keyword-only" }],
+        10,
+        0.35,
+      );
+
+      expect(results.map((result) => result.path)).toStrictEqual([
+        "memory/vector.md",
+        "memory/keyword.md",
+      ]);
+      expect(results[1]?.vectorScore).toBe(0);
+      expect(results[1]?.textScore).toBe(1);
+    } finally {
+      await manager.close?.();
+    }
+  });
+
   it("reports vector availability after probe", async () => {
     const cfg = createCfg({ vectorEnabled: true });
     const manager = await getPersistentManager(cfg);
