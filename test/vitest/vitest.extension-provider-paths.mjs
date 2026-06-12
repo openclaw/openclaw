@@ -22,6 +22,7 @@ export const providerExtensionIds = [
   "mistral",
   "qwen",
   "moonshot",
+  "neosantara",
   "nvidia",
   "ollama",
   "openrouter",
