@@ -2,6 +2,7 @@
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isRecord } from "./comment-shared.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
+import { extractMarkdownImageKeys } from "./post-image-inline.js";
 
 const FALLBACK_POST_TEXT = "[Rich text message]";
 const MARKDOWN_SPECIAL_CHARS = /([\\`*_{}[\]()#+\-!|>~])/g;
@@ -25,32 +26,6 @@ function toStringOrEmpty(value: unknown): string {
 
 function escapeMarkdownText(text: string): string {
   return text.replace(MARKDOWN_SPECIAL_CHARS, "\\$1");
-}
-
-// content_v2 tag:md text carries inline images as ![alt](image_key) (raw image_key
-// in the parens). Same-shaped text inside code blocks is a literal example and must
-// be skipped: mask fenced/inline code spans before matching. Mirror this exact
-// boundary in post-image-inline.ts so extraction and replacement never drift.
-const MARKDOWN_IMAGE_RE = /!\[[^\]]*\]\(([^)\s]+)\)/g;
-
-function maskCodeSpans(text: string): string {
-  // Replace fenced ```...``` and inline `...` with equal-length spaces so the
-  // remaining character offsets stay aligned with the original text.
-  return text
-    .replace(/```[\s\S]*?```/g, (m) => " ".repeat(m.length))
-    .replace(/`[^`]*`/g, (m) => " ".repeat(m.length));
-}
-
-function extractMarkdownImageKeys(text: string): string[] {
-  const masked = maskCodeSpans(text);
-  const keys: string[] = [];
-  for (const match of masked.matchAll(MARKDOWN_IMAGE_RE)) {
-    const key = normalizeFeishuExternalKey(match[1]);
-    if (key) {
-      keys.push(key);
-    }
-  }
-  return keys;
 }
 
 function toBoolean(value: unknown): boolean {
@@ -311,7 +286,10 @@ export function parsePostContent(content: string): PostParseResult {
 
     return {
       textContent: textContent || FALLBACK_POST_TEXT,
-      imageKeys,
+      // One image referenced twice (common in content_v2 markdown) is one download
+      // and one dedupe-key part; order-preserving dedup keeps content/content_v2 key
+      // sets identical so the message dedupe key stays stable.
+      imageKeys: [...new Set(imageKeys)],
       mediaKeys,
       mentionedOpenIds,
     };
