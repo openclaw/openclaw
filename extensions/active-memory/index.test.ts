@@ -6437,6 +6437,51 @@ describe("active-memory plugin", () => {
     expect(testing.normalizePluginConfig({ setupGraceTimeoutMs: -1 }).setupGraceTimeoutMs).toBe(0);
   });
 
+  it("defaults to all configured agents when no active-memory agent allowlist is set", () => {
+    const config = testing.normalizePluginConfig(
+      {},
+      {
+        agents: {
+          list: [{ id: "main" }, { id: "support" }],
+        },
+      },
+    );
+    expect(config.agents).toEqual(["main", "support"]);
+  });
+
+  it("defaults an empty active-memory agent allowlist to all configured agents", () => {
+    const config = testing.normalizePluginConfig(
+      {
+        agents: [],
+      },
+      {
+        agents: {
+          list: [{ id: "main" }, { id: "support" }],
+        },
+      },
+    );
+    expect(config.agents).toEqual(["main", "support"]);
+  });
+
+  it("defaults to the implicit main agent when no agent list is configured", () => {
+    expect(testing.normalizePluginConfig({}).agents).toEqual(["main"]);
+    expect(testing.normalizePluginConfig({ agents: [] }).agents).toEqual(["main"]);
+  });
+
+  it("keeps an explicit active-memory agent allowlist", () => {
+    const config = testing.normalizePluginConfig(
+      {
+        agents: ["main"],
+      },
+      {
+        agents: {
+          list: [{ id: "main" }, { id: "support" }],
+        },
+      },
+    );
+    expect(config.agents).toEqual(["main"]);
+  });
+
   it("clamps circuit breaker config within valid ranges", () => {
     const config = testing.normalizePluginConfig({
       circuitBreakerMaxTimeouts: 0,

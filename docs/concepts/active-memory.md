@@ -63,7 +63,10 @@ To inspect it live in a conversation:
 What the key fields do:
 
 - `plugins.entries.active-memory.enabled: true` turns the plugin on
-- `config.agents: ["main"]` opts only the `main` agent in
+- `config.agents: ["main"]` opts only the `main` agent into active memory
+- omit `config.agents` to target every configured agent, or the default `main`
+  agent when no agent list is configured
+- set `config.agents: []` only when you intentionally want no targeted agents
 - `config.allowedChatTypes: ["direct"]` scopes it to direct-message sessions (opt in groups/channels explicitly)
 - `config.model` (optional) pins a dedicated recall model; unset inherits the current session model
 - `config.modelFallback` is used only when no explicit or inherited model resolves
@@ -109,7 +112,11 @@ personalization would be surprising.
 
 Two gates must both pass:
 
-1. **Config opt-in** — the plugin is enabled and the current agent id is in `config.agents`.
+1. **Config opt-in** — the plugin is enabled and the current agent id is
+   targeted. Omit `config.agents` to target every configured agent in
+   `agents.list`, falling back to the default `main` agent when no agent list is
+   configured; set a non-empty list to scope active memory to specific agents.
+   An explicit `agents: []` targets no agents.
 2. **Runtime eligibility** — the session is an eligible interactive persistent chat session, its chat type is allowed, and its conversation id is not filtered out.
 
 ```text
@@ -565,7 +572,7 @@ All active memory configuration lives under `plugins.entries.active-memory`.
 | Key                          | Type                                                                                                 | Meaning                                                                                                                                                                                                                                           |
 | ---------------------------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `enabled`                    | `boolean`                                                                                            | Enables the plugin itself                                                                                                                                                                                                                         |
-| `config.agents`              | `string[]`                                                                                           | Agent ids that may use active memory                                                                                                                                                                                                              |
+| `config.agents`              | `string[]`                                                                                           | Agent ids that may use active memory. When omitted, active memory targets every configured agent in `agents.list`, or `main` when no agent list is configured; set a non-empty list to scope it to specific agents. An explicit empty list targets no agents. |
 | `config.model`               | `string`                                                                                             | Optional blocking sub-agent model ref; when unset, inherits the current session model                                                                                                                                                             |
 | `config.allowedChatTypes`    | `("direct" \| "group" \| "channel" \| "explicit")[]`                                                 | Session types that may run active memory; defaults to `["direct"]`                                                                                                                                                                                |
 | `config.allowedChatIds`      | `string[]`                                                                                           | Optional per-conversation allowlist applied after `allowedChatTypes`; non-empty lists fail closed                                                                                                                                                 |
@@ -674,7 +681,10 @@ while warm-up finishes.
 If active memory is not showing up where you expect:
 
 1. Confirm the plugin is enabled under `plugins.entries.active-memory.enabled`.
-2. Confirm the current agent id is listed in `config.agents`.
+2. Confirm the current agent id is targeted: either omit `config.agents` to use
+   every configured agent, or include the id in a non-empty `config.agents`
+   allowlist. An explicit empty list targets no agents. Configs without
+   `agents.list` target `main` only when `config.agents` is omitted.
 3. Confirm you are testing through an interactive persistent chat session.
 4. Turn on `config.logging: true` and watch the gateway logs.
 5. Verify memory search itself works with `openclaw status --deep`.
