@@ -16,6 +16,7 @@ type PostParseResult = {
 type PostPayload = {
   title: string;
   content: unknown[];
+  contentV2?: unknown[];
 };
 
 function toStringOrEmpty(value: unknown): string {
@@ -24,6 +25,32 @@ function toStringOrEmpty(value: unknown): string {
 
 function escapeMarkdownText(text: string): string {
   return text.replace(MARKDOWN_SPECIAL_CHARS, "\\$1");
+}
+
+// content_v2 tag:md text carries inline images as ![alt](image_key) (raw image_key
+// in the parens). Same-shaped text inside code blocks is a literal example and must
+// be skipped: mask fenced/inline code spans before matching. Mirror this exact
+// boundary in post-image-inline.ts so extraction and replacement never drift.
+const MARKDOWN_IMAGE_RE = /!\[[^\]]*\]\(([^)\s]+)\)/g;
+
+function maskCodeSpans(text: string): string {
+  // Replace fenced ```...``` and inline `...` with equal-length spaces so the
+  // remaining character offsets stay aligned with the original text.
+  return text
+    .replace(/```[\s\S]*?```/g, (m) => " ".repeat(m.length))
+    .replace(/`[^`]*`/g, (m) => " ".repeat(m.length));
+}
+
+function extractMarkdownImageKeys(text: string): string[] {
+  const masked = maskCodeSpans(text);
+  const keys: string[] = [];
+  for (const match of masked.matchAll(MARKDOWN_IMAGE_RE)) {
+    const key = normalizeFeishuExternalKey(match[1]);
+    if (key) {
+      keys.push(key);
+    }
+  }
+  return keys;
 }
 
 function toBoolean(value: unknown): boolean {
@@ -193,6 +220,9 @@ function toPostPayload(candidate: unknown): PostPayload | null {
   return {
     title: toStringOrEmpty(candidate.title),
     content: candidate.content,
+    // content_v2 is a sibling array carrying native markdown (tag:md). Non-array
+    // shapes are treated as absent so parsePostContent falls back to content.
+    contentV2: Array.isArray(candidate.content_v2) ? candidate.content_v2 : undefined,
   };
 }
 
@@ -249,13 +279,28 @@ export function parsePostContent(content: string): PostParseResult {
     const mentionedOpenIds: string[] = [];
     const paragraphs: string[] = [];
 
-    for (const paragraph of payload.content) {
+    // Prefer the parallel content_v2 (native markdown) when present; an empty or
+    // absent content_v2 falls back to content with byte-identical behavior.
+    const useV2 = Array.isArray(payload.contentV2) && payload.contentV2.length > 0;
+    const source = useV2 ? (payload.contentV2 as unknown[]) : payload.content;
+
+    for (const paragraph of source) {
       if (!Array.isArray(paragraph)) {
         continue;
       }
       let renderedParagraph = "";
       for (const element of paragraph) {
         renderedParagraph += renderElement(element, imageKeys, mediaKeys, mentionedOpenIds);
+        // content_v2 md elements: collect non-code-block image_key from the native
+        // markdown text (content-path tag:img is already collected by renderElement;
+        // md inline images need this separate scan).
+        if (useV2 && isRecord(element)) {
+          const tag = normalizeLowercaseStringOrEmpty(toStringOrEmpty(element.tag));
+          if (tag === "md" || tag === "lark_md") {
+            const mdText = toStringOrEmpty(element.text) || toStringOrEmpty(element.content);
+            imageKeys.push(...extractMarkdownImageKeys(mdText));
+          }
+        }
       }
       paragraphs.push(renderedParagraph);
     }
