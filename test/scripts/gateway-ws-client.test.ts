@@ -48,12 +48,22 @@ async function listen(handler: (ws: WebSocket) => void): Promise<string> {
 async function listenStalledUpgrade(): Promise<{ close: () => Promise<void>; url: string }> {
   const stalledServer = createServer();
   const sockets = new Set<import("node:net").Socket>();
-  stalledServer.on("upgrade", (_req, socket) => {
-    // Keep the socket open without completing the websocket handshake.
+  let closing = false;
+  stalledServer.on("connection", (socket) => {
     sockets.add(socket);
     socket.once("close", () => {
       sockets.delete(socket);
     });
+    if (closing) {
+      socket.destroy();
+    }
+  });
+  stalledServer.on("upgrade", (_req, socket) => {
+    // Keep the socket open without completing the websocket handshake.
+    sockets.add(socket);
+    if (closing) {
+      socket.destroy();
+    }
   });
   await new Promise<void>((resolve) => {
     stalledServer.listen(0, "127.0.0.1", resolve);
@@ -64,6 +74,7 @@ async function listenStalledUpgrade(): Promise<{ close: () => Promise<void>; url
   }
   return {
     close: async () => {
+      closing = true;
       for (const socket of sockets) {
         socket.destroy();
       }

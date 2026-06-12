@@ -125,6 +125,8 @@ export async function runMemoryEmbeddingRetryLoop<T>(params: {
   waitForRetry: (delayMs: number) => Promise<void>;
   maxAttempts: number;
   baseDelayMs: number;
+  /** Caller-owned cancellation; an aborted caller stops the retry loop. */
+  signal?: AbortSignal;
 }): Promise<T> {
   const attempts = Math.max(1, params.maxAttempts);
   for (const attempt of Array.from({ length: attempts }, (_, index) => index + 1)) {
@@ -132,6 +134,12 @@ export async function runMemoryEmbeddingRetryLoop<T>(params: {
     try {
       return await params.run();
     } catch (err) {
+      // Abort must win over retryable-looking failures: abort reasons often
+      // carry "timed out" messages that match the retryable transport
+      // patterns and would otherwise keep retrying for an absent caller.
+      if (params.signal?.aborted) {
+        throw err;
+      }
       const message = formatErrorMessage(err);
       if (!params.isRetryable(message) || attempt >= params.maxAttempts) {
         throw err;
