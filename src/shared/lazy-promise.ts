@@ -4,6 +4,10 @@
  * gateway process is still running.  Dynamic `import()` resolves to
  * `ERR_MODULE_NOT_FOUND` for old hashed chunk names that no longer exist on
  * disk.
+ *
+ * Only classifies as dist rotation when the *missing module itself* is under
+ * the openclaw dist tree — a third-party package whose importer happens to be
+ * under openclaw/dist/ is not a rotation error.
  */
 export function isDistRotationError(err: unknown): boolean {
   if (!err || typeof err !== "object") {
@@ -15,8 +19,18 @@ export function isDistRotationError(err: unknown): boolean {
     return false;
   }
   const msg = typeof obj.message === "string" ? obj.message : "";
-  // Only classify as dist rotation when the missing module is inside the
-  // openclaw dist tree (bundled chunk hashes are the tell).
+  // Node.js ESM errors use the format:
+  //   Cannot find module 'MISSING_TARGET' imported from IMPORTER_PATH
+  // We must verify that the *missing target* is under the dist tree, not
+  // merely that the importer happens to be there (otherwise a missing
+  // third-party dependency imported from openclaw/dist/ would be mislabeled).
+  const missingMatch = msg.match(
+    /cannot find (?:module|package)\s+'([^']+)'/i,
+  );
+  if (missingMatch) {
+    return /openclaw[/\\]dist[/\\]/i.test(missingMatch[1]);
+  }
+  // Fallback: if we cannot parse the message format, check the full text.
   return /openclaw[/\\]dist[/\\]/i.test(msg);
 }
 

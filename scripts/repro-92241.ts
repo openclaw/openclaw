@@ -69,20 +69,33 @@ assert(
   !isDistRotationError(err4),
 );
 
-// Case 5: Other error code
-const err5 = Object.assign(new Error("ENOENT: no such file"), { code: "ENOENT" });
+// Case 5: Third-party package missing, importer under openclaw/dist/ (not rotation)
+const err5 = Object.assign(
+  new Error(
+    "Cannot find package 'optional-dep'" +
+      " imported from /usr/lib/node_modules/openclaw/dist/chunks/get-reply.js",
+  ),
+  { code: "ERR_MODULE_NOT_FOUND" },
+);
 assert(
-  "ENOENT error → false",
+  "third-party dep missing (importer in dist) → false",
   !isDistRotationError(err5),
 );
 
-// Case 6: No code property
+// Case 6: Other error code
+const err6 = Object.assign(new Error("ENOENT: no such file"), { code: "ENOENT" });
+assert(
+  "ENOENT error → false",
+  !isDistRotationError(err6),
+);
+
+// Case 7: No code property
 assert(
   "Error without code → false",
   !isDistRotationError(new Error("plain")),
 );
 
-// Case 7: Non-object inputs
+// Case 8: Non-object inputs
 assert("null → false", !isDistRotationError(null));
 assert("undefined → false", !isDistRotationError(undefined));
 assert("string → false", !isDistRotationError("ERR_MODULE_NOT_FOUND"));

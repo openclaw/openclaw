@@ -65,23 +65,46 @@ describe("createLazyImportLoader", () => {
 
 describe("isDistRotationError", () => {
   it("detects ERR_MODULE_NOT_FOUND inside the openclaw dist tree", () => {
-    const err = Object.assign(new Error("Cannot find module '/usr/lib/node_modules/openclaw/dist/cleanup-DlVQZQex.js'"), {
-      code: "ERR_MODULE_NOT_FOUND",
-    });
+    const err = Object.assign(
+      new Error(
+        "Cannot find module '/usr/lib/node_modules/openclaw/dist/cleanup-DlVQZQex.js'" +
+          " imported from /usr/lib/node_modules/openclaw/dist/chunks/get-reply.js",
+      ),
+      { code: "ERR_MODULE_NOT_FOUND" },
+    );
     expect(isDistRotationError(err)).toBe(true);
   });
 
   it("detects MODULE_NOT_FOUND inside the openclaw dist tree (Windows path)", () => {
-    const err = Object.assign(new Error("Cannot find module 'C:\\Users\\app\\openclaw\\dist\\chunk-abc123.js'"), {
-      code: "MODULE_NOT_FOUND",
-    });
+    const err = Object.assign(
+      new Error(
+        "Cannot find module 'C:\\Users\\app\\openclaw\\dist\\chunk-abc123.js'" +
+          " imported from C:\\Users\\app\\openclaw\\dist\\chunks\\index.js",
+      ),
+      { code: "MODULE_NOT_FOUND" },
+    );
     expect(isDistRotationError(err)).toBe(true);
   });
 
+  it("returns false when a third-party package is missing but importer is under openclaw/dist/", () => {
+    // Regression: the missing target is a third-party dependency, not a
+    // dist chunk.  The importer path contains openclaw/dist/ but that
+    // alone does not make this a rotation error.
+    const err = Object.assign(
+      new Error(
+        "Cannot find package 'optional-dep'" +
+          " imported from /usr/lib/node_modules/openclaw/dist/chunks/get-reply.js",
+      ),
+      { code: "ERR_MODULE_NOT_FOUND" },
+    );
+    expect(isDistRotationError(err)).toBe(false);
+  });
+
   it("returns false for ERR_MODULE_NOT_FOUND outside the dist tree", () => {
-    const err = Object.assign(new Error("Cannot find module '/usr/lib/node_modules/other-pkg/index.js'"), {
-      code: "ERR_MODULE_NOT_FOUND",
-    });
+    const err = Object.assign(
+      new Error("Cannot find module '/usr/lib/node_modules/other-pkg/index.js'"),
+      { code: "ERR_MODULE_NOT_FOUND" },
+    );
     expect(isDistRotationError(err)).toBe(false);
   });
 
