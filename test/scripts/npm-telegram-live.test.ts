@@ -193,12 +193,14 @@ describe("package Telegram live Docker E2E", () => {
   });
 
   it("gates package Telegram status on the summary artifact", async () => {
-    const summaryPath = path.join(mkTempRoot(), "telegram-qa-summary.json");
+    const summaryPath = path.join(mkTempRoot(), "qa-evidence-summary.json");
     writeFileSync(
       summaryPath,
       JSON.stringify({
-        counts: { total: 1, passed: 1, failed: 0 },
-        scenarios: [{ status: "fail" }],
+        kind: "openclaw.qa.evidence-summary",
+        schemaVersion: 2,
+        generatedAt: "2026-05-01T00:00:00.000Z",
+        entries: [{ result: { status: "fail" } }],
       }),
       "utf8",
     );

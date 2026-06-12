@@ -26,17 +26,87 @@ import {
 import { testing as cliTesting } from "../../scripts/rtt.ts";
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
-const FIXTURE_PATH = path.resolve(TEST_DIR, "../fixtures/telegram-qa-summary-rtt.json");
 const DOCKER_SCRIPT_PATH = path.resolve(TEST_DIR, "../../scripts/e2e/npm-telegram-rtt-docker.sh");
 const CREDENTIAL_SCRIPT_PATH = path.resolve(
   TEST_DIR,
   "../../scripts/e2e/npm-telegram-rtt-credentials.mjs",
 );
 const CONFIG_SCRIPT_PATH = path.resolve(TEST_DIR, "../../scripts/e2e/npm-telegram-rtt-config.mjs");
-const LEGACY_TELEGRAM_RTT_SUMMARY_FILENAME = "telegram-qa-summary.json";
 const CHUNKED_PAYLOAD_MARKER = "__openclawQaCredentialPayloadChunksV1";
 const execFileAsync = promisify(execFile);
 const tempDirs: string[] = [];
+
+type EvidenceStatus = QaEvidenceSummaryJson["entries"][number]["result"]["status"];
+type EvidenceTiming = QaEvidenceSummaryJson["entries"][number]["result"]["timing"] | undefined;
+
+function makeTelegramRttEvidenceSummary(
+  options: {
+    canaryStatus?: EvidenceStatus;
+    canaryTiming?: EvidenceTiming;
+    mentionStatus?: EvidenceStatus;
+    mentionTiming?: EvidenceTiming;
+  } = {},
+): QaEvidenceSummaryJson {
+  const canaryStatus = options.canaryStatus ?? "pass";
+  const canaryTiming = Object.hasOwn(options, "canaryTiming")
+    ? options.canaryTiming
+    : { rttMs: 1234 };
+  const mentionStatus = options.mentionStatus ?? "pass";
+  const mentionTiming = Object.hasOwn(options, "mentionTiming")
+    ? options.mentionTiming
+    : {
+        rttMs: 6000,
+        avgMs: 5333,
+        p50Ms: 5000,
+        p95Ms: 7000,
+        maxMs: 7000,
+        samples: 3,
+        failedSamples: 0,
+      };
+  const entry = (
+    id: string,
+    title: string,
+    status: EvidenceStatus,
+    timing: EvidenceTiming,
+  ): QaEvidenceSummaryJson["entries"][number] => {
+    const result = timing === undefined ? { status } : { status, timing };
+    return {
+      test: {
+        kind: "live-transport-check",
+        id,
+        title,
+      },
+      mapping: { profile: { id: "release" }, coverage: [] },
+      execution: {
+        runner: { id: "docker" },
+        environment: { ref: null, os: "linux", nodeVersion: "v24.0.0" },
+        provider: {
+          id: "openai",
+          live: false,
+          model: { name: null, ref: null },
+          fixture: "mock-openai",
+        },
+        packageSource: { kind: "npm-package", spec: "openclaw@beta" },
+        artifacts: [],
+      },
+      result,
+    };
+  };
+  return {
+    kind: "openclaw.qa.evidence-summary",
+    schemaVersion: 2,
+    generatedAt: "2026-05-01T00:00:00.000Z",
+    entries: [
+      entry("telegram-canary", "Telegram canary", canaryStatus, canaryTiming),
+      entry(
+        "telegram-mentioned-message-reply",
+        "Telegram normal reply",
+        mentionStatus,
+        mentionTiming,
+      ),
+    ],
+  };
+}
 
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
@@ -482,81 +552,8 @@ describe("RTT harness", () => {
     expect(config.messages.groupChat.visibleReplies).toBe("automatic");
   });
 
-  it("extracts RTT values from Telegram QA summaries", async () => {
-    const summary = await readTelegramSummary(FIXTURE_PATH);
-    expect(extractRtt(summary)).toEqual({
-      canaryMs: 1234,
-      mentionReplyMs: 5000,
-      warmSamples: [4000, 5000, 7000],
-      avgMs: 5333,
-      p50Ms: 5000,
-      p95Ms: 7000,
-      maxMs: 7000,
-      failedSamples: 0,
-    });
-  });
-
   it("extracts RTT values from normalized evidence summaries", () => {
-    const summary: QaEvidenceSummaryJson = {
-      kind: "openclaw.qa.evidence-summary",
-      schemaVersion: 2,
-      generatedAt: "2026-05-01T00:00:00.000Z",
-      entries: [
-        {
-          test: {
-            kind: "live-transport-check",
-            id: "telegram-canary",
-            title: "Telegram canary",
-          },
-          mapping: { profile: { id: "release" }, coverage: [] },
-          execution: {
-            runner: { id: "docker" },
-            environment: { ref: null, os: "linux", nodeVersion: "v24.0.0" },
-            provider: {
-              id: "openai",
-              live: false,
-              model: { name: null, ref: null },
-              fixture: "mock-openai",
-            },
-            packageSource: { kind: "npm-package", spec: "openclaw@beta" },
-            artifacts: [],
-          },
-          result: { status: "pass", timing: { rttMs: 1234 } },
-        },
-        {
-          test: {
-            kind: "live-transport-check",
-            id: "telegram-mentioned-message-reply",
-            title: "Telegram normal reply",
-          },
-          mapping: { profile: { id: "release" }, coverage: [] },
-          execution: {
-            runner: { id: "docker" },
-            environment: { ref: null, os: "linux", nodeVersion: "v24.0.0" },
-            provider: {
-              id: "openai",
-              live: false,
-              model: { name: null, ref: null },
-              fixture: "mock-openai",
-            },
-            packageSource: { kind: "npm-package", spec: "openclaw@beta" },
-            artifacts: [],
-          },
-          result: {
-            status: "pass",
-            timing: {
-              rttMs: 6000,
-              avgMs: 5333,
-              p50Ms: 5000,
-              p95Ms: 7000,
-              maxMs: 7000,
-              samples: 3,
-              failedSamples: 0,
-            },
-          },
-        },
-      ],
-    };
+    const summary = makeTelegramRttEvidenceSummary();
 
     expect(extractRtt(summary)).toEqual({
       canaryMs: 1234,
@@ -569,28 +566,22 @@ describe("RTT harness", () => {
     });
   });
 
-  it("prefers normalized evidence summaries when resolving Telegram RTT artifacts", async () => {
+  it("resolves the normalized evidence summary path for Telegram RTT artifacts", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-rtt-summary-test-"));
     tempDirs.push(tempDir);
-    await fs.writeFile(path.join(tempDir, LEGACY_TELEGRAM_RTT_SUMMARY_FILENAME), "{}\n");
 
-    await expect(resolveTelegramSummaryPath(tempDir)).resolves.toBe(
-      path.join(tempDir, LEGACY_TELEGRAM_RTT_SUMMARY_FILENAME),
-    );
-
-    await fs.writeFile(path.join(tempDir, QA_EVIDENCE_SUMMARY_FILENAME), "{}\n");
     await expect(resolveTelegramSummaryPath(tempDir)).resolves.toBe(
       path.join(tempDir, QA_EVIDENCE_SUMMARY_FILENAME),
     );
   });
 
   it("builds normalized result JSON", async () => {
-    const summary = await readTelegramSummary(FIXTURE_PATH);
+    const summary = makeTelegramRttEvidenceSummary();
     const result = buildRttResult({
       artifacts: {
         rawObservedMessagesPath: "runs/run/raw/telegram-qa-observed-messages.json",
         rawReportPath: "runs/run/raw/telegram-qa-report.md",
-        rawSummaryPath: "runs/run/raw/telegram-qa-summary.json",
+        rawSummaryPath: "runs/run/raw/qa-evidence-summary.json",
         resultPath: "runs/run/result.json",
       },
       finishedAt: new Date("2026-05-01T00:00:12.000Z"),
@@ -607,7 +598,7 @@ describe("RTT harness", () => {
       artifacts: {
         rawObservedMessagesPath: "runs/run/raw/telegram-qa-observed-messages.json",
         rawReportPath: "runs/run/raw/telegram-qa-report.md",
-        rawSummaryPath: "runs/run/raw/telegram-qa-summary.json",
+        rawSummaryPath: "runs/run/raw/qa-evidence-summary.json",
         resultPath: "runs/run/result.json",
       },
       package: { spec: "openclaw@beta", version: "2026.4.30-beta.1" },
@@ -630,7 +621,6 @@ describe("RTT harness", () => {
         p95Ms: 7000,
         maxMs: 7000,
         failedSamples: 0,
-        warmSamples: [4000, 5000, 7000],
       },
     });
   });
@@ -640,17 +630,16 @@ describe("RTT harness", () => {
       artifacts: {
         rawObservedMessagesPath: "runs/run/raw/telegram-qa-observed-messages.json",
         rawReportPath: "runs/run/raw/telegram-qa-report.md",
-        rawSummaryPath: "runs/run/raw/telegram-qa-summary.json",
+        rawSummaryPath: "runs/run/raw/qa-evidence-summary.json",
         resultPath: "runs/run/result.json",
       },
       finishedAt: new Date("2026-05-01T00:00:12.000Z"),
       providerMode: "mock-openai",
-      rawSummary: {
-        scenarios: [
-          { id: "telegram-canary", rttMs: 5948, status: "pass" },
-          { id: "telegram-mentioned-message-reply", status: "fail" },
-        ],
-      },
+      rawSummary: makeTelegramRttEvidenceSummary({
+        canaryTiming: { rttMs: 5948 },
+        mentionStatus: "fail",
+        mentionTiming: undefined,
+      }),
       runId: "run",
       scenarios: ["telegram-mentioned-message-reply"],
       spec: "openclaw@latest",
@@ -662,12 +651,12 @@ describe("RTT harness", () => {
     expect(result.rtt).toEqual({ canaryMs: 5948, mentionReplyMs: undefined });
   });
 
-  it("marks malformed RTT summaries as failed results", () => {
+  it("marks incomplete normalized RTT summaries as failed results", () => {
     const baseParams = {
       artifacts: {
         rawObservedMessagesPath: "runs/run/raw/telegram-qa-observed-messages.json",
         rawReportPath: "runs/run/raw/telegram-qa-report.md",
-        rawSummaryPath: "runs/run/raw/telegram-qa-summary.json",
+        rawSummaryPath: "runs/run/raw/qa-evidence-summary.json",
         resultPath: "runs/run/result.json",
       },
       finishedAt: new Date("2026-05-01T00:00:12.000Z"),
@@ -678,34 +667,15 @@ describe("RTT harness", () => {
       startedAt: new Date("2026-05-01T00:00:00.000Z"),
       version: "2026.4.29",
     };
+    const emptySummary = { ...makeTelegramRttEvidenceSummary(), entries: [] };
+    const canaryOnlySummary = makeTelegramRttEvidenceSummary();
+    canaryOnlySummary.entries = canaryOnlySummary.entries.slice(0, 1);
 
     for (const rawSummary of [
-      { scenarios: [] },
-      { scenarios: [{ id: "telegram-canary", rttMs: 5948, status: "pass" }] },
-      {
-        scenarios: [
-          { id: "telegram-canary", rttMs: 5948, status: "pass" },
-          { id: "telegram-mentioned-message-reply", status: "skipped" },
-        ],
-      },
-      {
-        scenarios: [
-          { id: "telegram-canary", rttMs: 5948, status: "pass" },
-          {
-            id: "telegram-mentioned-message-reply",
-            samples: [],
-            stats: { failed: 0, passed: 0, total: 0 },
-            status: "pass",
-          },
-        ],
-      },
-      {
-        kind: "openclaw.qa.evidence-summary",
-        entries: [
-          { test: { id: "telegram-canary" }, result: { status: "pass" } },
-          { test: { id: "telegram-mentioned-message-reply" }, result: { status: "pass" } },
-        ],
-      },
+      emptySummary,
+      canaryOnlySummary,
+      makeTelegramRttEvidenceSummary({ mentionStatus: "skipped" }),
+      makeTelegramRttEvidenceSummary({ mentionTiming: undefined }),
     ]) {
       expect(buildRttResult({ ...baseParams, rawSummary }).run.status).toBe("fail");
     }

@@ -70,6 +70,8 @@ function evidenceCredentialSource(summary) {
   );
 }
 
+// Historical fallback only: new Telegram QA producers write qa-evidence-summary.json.
+// This adapter lets Mantis render old uploaded artifacts without making them gate inputs.
 function legacyTelegramSummaryToEvidenceSummary(summary) {
   const scenarios = Array.isArray(summary.scenarios) ? summary.scenarios : [];
   return {
