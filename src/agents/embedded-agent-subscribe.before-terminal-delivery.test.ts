@@ -263,7 +263,10 @@ describe("subscribeEmbeddedAgentSession before terminal delivery", () => {
     );
   });
 
-  it("carries replace flag on the second attempt after a suppressed terminal delivery", async () => {
+  it("emits a replace signal when the terminal gate suppresses delivery for revision", async () => {
+    // suppressTerminalDelivery must directly emit a replace event (not via
+    // subscription state) because production revision creates a new
+    // subscription with fresh state for the second attempt.
     const onAgentEvent = vi.fn();
     const onBeforeTerminalDelivery = vi.fn(async () => ({
       suppressTerminalDelivery: true,
@@ -282,10 +285,9 @@ describe("subscribeEmbeddedAgentSession before terminal delivery", () => {
     });
     expect(hasAssistantEvent(onAgentEvent.mock.calls)).toBe(true);
 
-    // Record call count before hook suppression.
-    const callCountBeforeSuppress = onAgentEvent.mock.calls.length;
-
-    // Hook suppresses terminal delivery, which sets assistantTextReplace.
+    // Hook suppresses terminal delivery. The lifecycle handler must emit
+    // a replace event so the gateway projector clears the stale buffer
+    // from the first attempt before the second attempt starts.
     emit({
       type: "agent_end",
       messages: [
@@ -298,36 +300,19 @@ describe("subscribeEmbeddedAgentSession before terminal delivery", () => {
       willRetry: false,
     });
     await vi.waitFor(() => expect(onBeforeTerminalDelivery).toHaveBeenCalledTimes(1));
-
-    // Second attempt: the first text delta after suppress must carry replace=true
-    // so the gateway projector clears the stale first-attempt buffer.
-    emitAssistantTextDeltaAndEnd({
-      emit,
-      text: "Revised answer.",
-    });
-
     await subscription.waitForPendingEvents();
 
-    // Only consider events emitted after the suppress.
-    const postSuppressEvents = onAgentEvent.mock.calls
-      .slice(callCountBeforeSuppress)
+    // The suppressTerminalDelivery path must emit a replace-only event
+    // (no text) so the gateway clears rawBuffers for this runId.
+    const replaceEvent = onAgentEvent.mock.calls
       .map((call) => call[0])
-      .filter((e) => e?.stream === "assistant");
-
-    const firstPostSuppressWithText = postSuppressEvents.find(
-      (e) =>
-        typeof (e as { data?: { text?: string } }).data?.text === "string" &&
-        (e as { data?: { text?: string } }).data!.text!.length > 0,
-    );
-    expect(firstPostSuppressWithText).toBeDefined();
-    expect((firstPostSuppressWithText as { data?: { replace?: boolean } }).data?.replace).toBe(
-      true,
-    );
-
-    // Subsequent events should not carry replace (flag was cleared).
-    const subsequentReplaceEvents = postSuppressEvents
-      .slice(1)
-      .filter((e) => (e as { data?: { replace?: boolean } }).data?.replace === true);
-    expect(subsequentReplaceEvents).toHaveLength(0);
+      .find(
+        (e) =>
+          e?.stream === "assistant" &&
+          (e as { data?: { replace?: boolean } }).data?.replace === true,
+      );
+    expect(replaceEvent).toBeDefined();
+    // No lifecycle end because the run continues with a revision attempt.
+    expect(hasLifecycleEndEvent(onAgentEvent.mock.calls)).toBe(false);
   });
 });

@@ -298,10 +298,19 @@ export function handleAgentEnd(
   const suppressTerminalDelivery = () => {
     ctx.clearDeferredAssistantEvents();
     ctx.clearDeferredBlockReplies();
-    // Mark that the second attempt's first assistant text event should
-    // carry replace=true so the gateway projector clears the stale
-    // buffer from the first (suppressed) attempt.
-    ctx.state.assistantTextReplace = true;
+    // The first attempt's SSE text was already emitted to the gateway
+    // projector. Emit a replace signal now (before the subscription is
+    // discarded) so the gateway clears the raw buffer for this runId.
+    // The second attempt's fresh subscription will then fill a clean buffer.
+    emitAgentEvent({
+      runId: ctx.params.runId,
+      stream: "assistant",
+      data: { replace: true },
+    });
+    void ctx.params.onAgentEvent?.({
+      stream: "assistant",
+      data: { replace: true },
+    });
     finalizeAgentEnd();
   };
 

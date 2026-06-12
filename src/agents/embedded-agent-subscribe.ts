@@ -194,10 +194,6 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     deferBlockReplyDelivery: typeof params.onBeforeTerminalDelivery === "function",
     deferredBlockReplies: [],
     deferredAssistantEvents: [],
-    // When a before_agent_finalize hook requests a revision, the first
-    // attempt's SSE text was already emitted. Set a replace flag so the
-    // second attempt signals the gateway projector to clear the stale buffer.
-    assistantTextReplace: false,
     toolExecutionSinceLastBlockReply: false,
     reasoningStreamOpen: false,
     assistantMessageIndex: 0,
@@ -273,20 +269,14 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     // works even when a before_agent_finalize hook is registered.
     // Only channel partial replies (Telegram/Discord live preview) are
     // deferred until the terminal gate resolves.
-    const hasText = typeof (data as { text?: string }).text === "string";
-    const withReplace =
-      state.assistantTextReplace && hasText ? { ...data, replace: true as const } : data;
-    if (state.assistantTextReplace && hasText) {
-      state.assistantTextReplace = false;
-    }
     emitAgentEvent({
       runId: params.runId,
       stream: "assistant",
-      data: withReplace,
+      data,
     });
     void params.onAgentEvent?.({
       stream: "assistant",
-      data: withReplace,
+      data,
     });
     const emitPartialReply =
       options?.emitPartialReply === true && params.onPartialReply && state.shouldEmitPartialReplies;

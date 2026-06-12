@@ -615,10 +615,10 @@ export function createAgentEventHandler({
     seq: number,
     text: string,
     delta?: unknown,
-    opts?: { controlUiVisible?: boolean; replace?: boolean },
+    opts?: { controlUiVisible?: boolean },
   ) => {
     const cleaned = normalizeLiveAssistantEventText({ text, delta });
-    const previousRawText = opts?.replace ? "" : (chatRunState.rawBuffers.get(clientRunId) ?? "");
+    const previousRawText = chatRunState.rawBuffers.get(clientRunId) ?? "";
     const mergedRawText = resolveMergedAssistantText({
       previousText: previousRawText,
       nextText: cleaned.text,
@@ -1211,6 +1211,15 @@ export function createAgentEventHandler({
       if (
         !isAborted &&
         evt.stream === "assistant" &&
+        (evt.data as { replace?: boolean }).replace === true
+      ) {
+        // before_agent_finalize revision clears the first attempt's
+        // streamed SSE so the second attempt starts with a fresh buffer.
+        clearBufferedChatState(clientRunId);
+      }
+      if (
+        !isAborted &&
+        evt.stream === "assistant" &&
         typeof evt.data?.text === "string" &&
         !shouldSuppressAssistantEventForLiveChat(evt.data)
       ) {
@@ -1224,7 +1233,6 @@ export function createAgentEventHandler({
           evt.data.delta,
           {
             controlUiVisible: isControlUiVisible,
-            replace: (evt.data as { replace?: boolean }).replace === true,
           },
         );
       }
