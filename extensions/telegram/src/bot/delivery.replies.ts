@@ -35,6 +35,7 @@ import { renderTelegramHtmlText } from "../format.js";
 import { resolveTelegramInteractiveTextFallback } from "../interactive-fallback.js";
 import { splitTelegramRichMarkdownChunks, TELEGRAM_RICH_TEXT_LIMIT } from "../rich-message.js";
 import { buildInlineKeyboard } from "../send.js";
+import { recordSentMessage } from "../sent-message-cache.js";
 import { resolveTelegramVoiceSend } from "../voice.js";
 import {
   buildTelegramSendParams,
@@ -881,6 +882,13 @@ export async function deliverReplies(params: {
 
       if (progress.deliveredCount > deliveredCountBeforeReply && transcriptMirror) {
         deliveredContents.push({ text: contentForSentHook, mediaUrls: mediaList });
+      }
+
+      // Append the delivered message to the sent-message ledger in lockstep with
+      // the message_sent hook below. wasSentByBot, reply-to routing, and reaction
+      // filters depend on this entry; without it self-sent messages look foreign.
+      if (progress.deliveredCount > deliveredCountBeforeReply && firstDeliveredMessageId != null) {
+        recordSentMessage(params.chatId, firstDeliveredMessageId, params.cfg);
       }
 
       emitMessageSentHooks({
