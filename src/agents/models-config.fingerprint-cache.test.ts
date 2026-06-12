@@ -154,7 +154,9 @@ describe("ensureOpenClawModelsJson fingerprint cache", () => {
     // Simulate an OAuth token refresh: access/refresh/expires fields
     // rotate, but the set of providers the user can use does not change.
     // These fields stay in AUTH_PROFILE_VOLATILE_FIELDS.
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 10);
+    });
     writeAuthProfiles(agentDir, {
       version: 1,
       profiles: {
@@ -198,7 +200,9 @@ describe("ensureOpenClawModelsJson fingerprint cache", () => {
     const firstCount = resolveImplicitProvidersCallCount;
     expect(firstCount).toBe(1);
 
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 10);
+    });
     writeAuthProfiles(agentDir, {
       version: 1,
       profiles: {

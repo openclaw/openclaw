@@ -259,7 +259,7 @@ async function main(): Promise<void> {
   console.log("\nAll runtime assertions passed.");
 }
 
-main().catch((e) => {
+main().catch((e: unknown) => {
   console.error(e);
   process.exit(1);
 });

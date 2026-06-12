@@ -319,7 +319,7 @@ async function scenarioPluginCatalogOnlyWritePreservesRoot(): Promise<void> {
 
   // Cold plan: writes root models.json (providers: {}) and the catalog sidecar.
   const cold = await ensureOpenClawModelsJson(cfg, agentDir, { pluginMetadataSnapshot: snapshot });
-  assert(cold.wrote === true, "cold plan should write (root + sidecar)");
+  assert(cold.wrote, "cold plan should write (root + sidecar)");
   assert(await exists(rootPath), "root models.json should exist after the cold plan");
   assert(await exists(sidecarPath), "plugin catalog sidecar should exist after the cold plan");
   const rootJson = JSON.parse(await fsPromises.readFile(rootPath, "utf8")) as {
@@ -344,7 +344,7 @@ async function scenarioPluginCatalogOnlyWritePreservesRoot(): Promise<void> {
 
   // The sidecar was rewritten (so the call reconciled real state)...
   assert(await exists(sidecarPath), "catalog sidecar must be (re)written by the plan");
-  assert(reconcile.wrote === true, "wrote must be true because the sidecar was reconciled");
+  assert(reconcile.wrote, "wrote must be true because the sidecar was reconciled");
   // ...but the root models.json must NOT have been rewritten: same inode,
   // same mtime, identical bytes. This is the round-2 byte-equality guard.
   const warmRootStat = await fsPromises.stat(rootPath);
@@ -492,7 +492,7 @@ async function main(): Promise<void> {
   console.log("\nAll runtime assertions passed.");
 }
 
-main().catch((e) => {
+main().catch((e: unknown) => {
   console.error(e);
   process.exit(1);
 });
