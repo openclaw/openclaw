@@ -153,6 +153,7 @@ struct GatewayChannelConnectTests {
         _ = try await t2.value
 
         #expect(session.snapshotMakeCount() == 1)
+        await channel.shutdown()
     }
 
     @Test func `connect advertises compatible protocol range`() async throws {
@@ -168,13 +169,29 @@ struct GatewayChannelConnectTests {
         let channel = try GatewayChannelActor(
             url: #require(URL(string: "ws://example.invalid")),
             token: nil,
-            session: WebSocketSessionBox(session: session))
+            session: WebSocketSessionBox(session: session),
+            connectOptions: GatewayConnectOptions(
+                role: "operator",
+                scopes: [],
+                caps: [],
+                commands: [],
+                permissions: [:],
+                clientId: "openclaw-macos-test",
+                clientMode: "test",
+                clientDisplayName: "OpenClaw macOS Test",
+                includeDeviceIdentity: false))
 
-        try await channel.connect()
+        do {
+            try await channel.connect()
 
-        let params = try #require(recorder.snapshot())
-        #expect(params["minProtocol"] as? Int == GATEWAY_MIN_PROTOCOL_VERSION)
-        #expect(params["maxProtocol"] as? Int == GATEWAY_PROTOCOL_VERSION)
+            let params = try #require(recorder.snapshot())
+            #expect(params["minProtocol"] as? Int == GATEWAY_MIN_PROTOCOL_VERSION)
+            #expect(params["maxProtocol"] as? Int == GATEWAY_PROTOCOL_VERSION)
+        } catch {
+            await channel.shutdown()
+            throw error
+        }
+        await channel.shutdown()
     }
 
     @Test func `concurrent connect shares failure`() async throws {
@@ -224,6 +241,7 @@ struct GatewayChannelConnectTests {
                 "operator.approvals",
                 "operator.pairing",
             ])
+            await channel.shutdown()
         }
     }
 
@@ -250,6 +268,7 @@ struct GatewayChannelConnectTests {
             "operator.read",
             "operator.write",
         ])
+        await channel.shutdown()
     }
 
     @Test func `stored device token connect scopes reuse cached scopes`() async throws {
@@ -277,6 +296,7 @@ struct GatewayChannelConnectTests {
             try await channel.connect()
 
             #expect(capture.snapshot() == storedEntry.scopes)
+            await channel.shutdown()
         }
     }
 
@@ -316,6 +336,7 @@ struct GatewayChannelConnectTests {
             try await channel.connect()
 
             #expect(capture.snapshot() == requestedScopes)
+            await channel.shutdown()
         }
     }
 
