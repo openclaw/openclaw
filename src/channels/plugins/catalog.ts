@@ -1,3 +1,8 @@
+/**
+ * Channel plugin catalog builder.
+ *
+ * Combines bundled, installed, and official external channel metadata for UI/setup surfaces.
+ */
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -57,7 +62,10 @@ type CatalogOptions = {
   catalogPaths?: string[];
   officialCatalogPaths?: string[];
   env?: NodeJS.ProcessEnv;
+  extraPaths?: string[];
   excludeWorkspace?: boolean;
+  excludeOrigins?: PluginOrigin[];
+  excludePluginRefs?: Array<{ pluginId: string; origin?: PluginOrigin }>;
   installRecords?: Record<string, PluginInstallRecord>;
   discovery?: PluginDiscoveryResult;
 };
@@ -68,6 +76,31 @@ const ORIGIN_PRIORITY: Record<PluginOrigin, number> = {
   global: 2,
   bundled: 3,
 };
+
+function shouldExcludeCatalogOrigin(options: CatalogOptions, origin: PluginOrigin): boolean {
+  if (options.excludeWorkspace && origin === "workspace") {
+    return true;
+  }
+  return options.excludeOrigins?.includes(origin) ?? false;
+}
+
+function shouldExcludeCatalogPlugin(
+  options: CatalogOptions,
+  pluginId?: string,
+  origin?: PluginOrigin,
+): boolean {
+  const normalizedPluginId = normalizeOptionalString(pluginId);
+  if (!normalizedPluginId) {
+    return false;
+  }
+  return (
+    options.excludePluginRefs?.some(
+      (entry) =>
+        entry.pluginId === normalizedPluginId &&
+        (entry.origin === undefined || entry.origin === origin),
+    ) ?? false
+  );
+}
 
 const EXTERNAL_CATALOG_PRIORITY = ORIGIN_PRIORITY.bundled + 1;
 const FALLBACK_CATALOG_PRIORITY = EXTERNAL_CATALOG_PRIORITY + 1;
@@ -433,13 +466,17 @@ export function listRawChannelPluginCatalogEntries(
   const manifestEntries = listChannelCatalogEntries({
     workspaceDir: options.workspaceDir,
     env: options.env,
+    extraPaths: options.extraPaths,
     installRecords: options.installRecords,
     discovery: options.discovery,
   });
   const resolved = new Map<string, { entry: ChannelPluginCatalogEntry; priority: number }>();
 
   for (const candidate of manifestEntries) {
-    if (options.excludeWorkspace && candidate.origin === "workspace") {
+    if (
+      shouldExcludeCatalogOrigin(options, candidate.origin) ||
+      shouldExcludeCatalogPlugin(options, candidate.pluginId, candidate.origin)
+    ) {
       continue;
     }
     const entry = buildCatalogEntryFromManifest({

@@ -1,7 +1,9 @@
+// Backup test support provides temp config/state fixtures and mocked backup runtime helpers.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
+import { deleteTestEnvValue } from "../test-utils/env.js";
 import * as backupShared from "./backup-shared.js";
 import { resolveBackupPlanFromPaths } from "./backup-shared.js";
 
@@ -31,7 +33,7 @@ export function createBackupTestRuntime(): RuntimeEnv {
 export async function resetBackupTempHome(tempHome: { home: string }) {
   await fs.rm(tempHome.home, { recursive: true, force: true });
   await fs.mkdir(path.join(tempHome.home, ".openclaw"), { recursive: true });
-  delete process.env.OPENCLAW_CONFIG_PATH;
+  deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
 }
 
 export async function mockStateOnlyBackupPlan(stateDir: string) {

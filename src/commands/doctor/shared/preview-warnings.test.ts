@@ -1,3 +1,4 @@
+// Preview warning tests cover doctor warnings for preview or experimental config state.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -35,7 +36,26 @@ const activeToolSchemaState = vi.hoisted(() => ({
   warnings: [] as string[],
 }));
 
+const commandSecretState = vi.hoisted(() => ({
+  targetIds: new Set<string>(),
+  resolvedConfig: undefined as OpenClawConfig | undefined,
+  diagnostics: [] as string[],
+}));
+
 const tempRoots = new Set<string>();
+
+vi.mock("../../../cli/command-secret-gateway.js", () => ({
+  resolveCommandSecretRefsViaGateway: vi.fn(async (params: { config: OpenClawConfig }) => ({
+    resolvedConfig: commandSecretState.resolvedConfig ?? params.config,
+    diagnostics: commandSecretState.diagnostics,
+    targetStatesByPath: {},
+    hadUnresolvedTargets: false,
+  })),
+}));
+
+vi.mock("../../../cli/command-secret-targets.js", () => ({
+  getConfiguredChannelsCommandSecretTargetIds: vi.fn(() => commandSecretState.targetIds),
+}));
 
 vi.mock("../channel-capabilities.js", () => {
   const fallback = {
@@ -227,6 +247,9 @@ describe("doctor preview warnings", () => {
     manifestState.diagnostics = [];
     staleOAuthShadowState.warnings = [];
     activeToolSchemaState.warnings = [];
+    commandSecretState.targetIds = new Set<string>();
+    commandSecretState.resolvedConfig = undefined;
+    commandSecretState.diagnostics = [];
   });
 
   afterEach(() => {
@@ -261,7 +284,7 @@ describe("doctor preview warnings", () => {
             },
           },
         },
-      } as OpenClawConfig,
+      } as unknown as OpenClawConfig,
       doctorFixCommand: "openclaw doctor --fix",
       env: { CODEX_HOME: codexHome, HOME: root },
     });
@@ -294,6 +317,109 @@ describe("doctor preview warnings", () => {
     expect(
       warnings.some((warning) => warning.includes('channels.signal.allowFrom: set to ["*"]')),
     ).toBe(true);
+  });
+
+  it("resolves configured channel SecretRefs before collecting channel preview warnings", async () => {
+    const rawConfig = {
+      channels: {
+        telegram: {
+          botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const resolvedConfig = {
+      channels: {
+        telegram: {
+          botToken: "resolved-token",
+          allowFrom: ["@alice"],
+        },
+      },
+    } as unknown as OpenClawConfig;
+    commandSecretState.targetIds = new Set(["channels.telegram.botToken"]);
+    commandSecretState.resolvedConfig = resolvedConfig;
+    commandSecretState.diagnostics = [
+      "doctor preview: gateway secrets.resolve unavailable (gateway closed); resolved command secrets locally.",
+    ];
+
+    const { resolveCommandSecretRefsViaGateway } =
+      await import("../../../cli/command-secret-gateway.js");
+    const notes = await collectDoctorPreviewNotes({
+      cfg: rawConfig,
+      doctorFixCommand: "openclaw doctor --fix",
+      env: {},
+    });
+
+    expect(resolveCommandSecretRefsViaGateway).toHaveBeenCalledWith({
+      config: rawConfig,
+      commandName: "doctor preview",
+      targetIds: commandSecretState.targetIds,
+      mode: "read_only_status",
+      allowLocalExecSecretRefs: false,
+      scrubUnresolvedSecretRefs: false,
+    });
+    expect(notes.warningNotes).toContain(commandSecretState.diagnostics[0]);
+    expect(
+      notes.warningNotes.some(
+        (warning) =>
+          warning.includes("Telegram allowFrom contains 1") && warning.includes("(e.g. @alice)"),
+      ),
+    ).toBe(true);
+  });
+
+  it("allows doctor preview to opt into local exec SecretRef resolution", async () => {
+    commandSecretState.targetIds = new Set(["channels.telegram.botToken"]);
+    const { resolveCommandSecretRefsViaGateway } =
+      await import("../../../cli/command-secret-gateway.js");
+
+    await collectDoctorPreviewNotes({
+      cfg: {
+        channels: {
+          telegram: {
+            botToken: { source: "exec", provider: "default", id: "telegram/bot-token" },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      doctorFixCommand: "openclaw doctor --fix",
+      env: {},
+      allowExec: true,
+    });
+
+    expect(resolveCommandSecretRefsViaGateway).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        allowLocalExecSecretRefs: true,
+        scrubUnresolvedSecretRefs: false,
+      }),
+    );
+  });
+
+  it("warns when a normalized legacy Codex provider cannot be auto-merged", async () => {
+    const warnings = await collectDoctorPreviewWarnings({
+      cfg: {
+        models: {
+          providers: {
+            openai: {
+              api: "openai-chatgpt-responses",
+              baseUrl: "https://api.openai.com/v1",
+              params: { store: true },
+              models: [{ id: "text-embedding-3-small" }],
+            },
+            "openai-codex": {
+              api: "openai-chatgpt-responses",
+              baseUrl: "https://chatgpt.com/backend-api",
+              models: [{ id: "gpt-5.5", api: "openai-chatgpt-responses" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    const warning = expectSingleWarningContaining(
+      warnings,
+      "models.providers.openai-codex cannot be merged automatically",
+    );
+    expect(warning).toContain("models.providers.openai.params");
+    expect(warning).toContain("Move the affected model/provider defaults manually");
   });
 
   it("sanitizes empty-allowlist warning paths before returning preview output", async () => {

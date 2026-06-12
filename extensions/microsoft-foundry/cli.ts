@@ -1,3 +1,4 @@
+// Microsoft Foundry plugin module implements cli behavior.
 import { execFile, execFileSync, spawn } from "node:child_process";
 import {
   normalizeOptionalString,
@@ -112,19 +113,19 @@ function parseAzJson(raw: string, label: string): unknown {
 }
 
 type AccessTokenParams = {
+  scope?: string;
   subscriptionId?: string;
   tenantId?: string;
 };
 
 function buildAccessTokenArgs(params?: AccessTokenParams): string[] {
-  const args = [
-    "account",
-    "get-access-token",
-    "--resource",
-    COGNITIVE_SERVICES_RESOURCE,
-    "--output",
-    "json",
-  ];
+  const args = ["account", "get-access-token"];
+  if (params?.scope) {
+    args.push("--scope", params.scope);
+  } else {
+    args.push("--resource", COGNITIVE_SERVICES_RESOURCE);
+  }
+  args.push("--output", "json");
   if (params?.subscriptionId) {
     args.push("--subscription", params.subscriptionId);
   } else if (params?.tenantId) {

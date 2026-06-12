@@ -1,3 +1,4 @@
+// Shared gateway RPC command options and progress-wrapped CLI call helper.
 import type { Command } from "commander";
 import {
   GATEWAY_CLIENT_MODES,
@@ -29,8 +30,11 @@ export const gatewayCallOpts = (cmd: Command) =>
     .option("--expect-final", "Wait for final response (agent)", false)
     .option("--json", "Output JSON", false);
 
-export const callGatewayCli = async (method: string, opts: GatewayRpcOpts, params?: unknown) =>
-  withProgress(
+export const callGatewayCli = async (method: string, opts: GatewayRpcOpts, params?: unknown) => {
+  const timeoutMs = parseTimeoutMsWithFallback(opts.timeout, DEFAULT_GATEWAY_RPC_TIMEOUT_MS, {
+    invalidType: "error",
+  });
+  return await withProgress(
     {
       label: `Gateway ${method}`,
       indeterminate: true,
@@ -45,8 +49,9 @@ export const callGatewayCli = async (method: string, opts: GatewayRpcOpts, param
         method,
         params,
         expectFinal: Boolean(opts.expectFinal),
-        timeoutMs: parseTimeoutMsWithFallback(opts.timeout, DEFAULT_GATEWAY_RPC_TIMEOUT_MS),
+        timeoutMs,
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
       }),
   );
+};

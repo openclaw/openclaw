@@ -50,6 +50,9 @@ describe("official external plugin catalog", () => {
         minHostVersion: ">=2026.5.27",
       },
     );
+    expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("llama-cpp"))?.npmSpec).toBe(
+      "@openclaw/llama-cpp-provider",
+    );
   });
 
   it("allows invalid-config recovery for externalized stock plugins", () => {

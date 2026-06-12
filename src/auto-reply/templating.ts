@@ -1,3 +1,4 @@
+/** Shared inbound message context types used by prompt templating and reply dispatch. */
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type {
   MediaUnderstandingDecision,
@@ -39,6 +40,7 @@ type UntrustedStructuredContextEntry = {
   payload: unknown;
 };
 
+/** Structured supplemental facts projected into prompt context by inbound finalization. */
 export type SupplementalContextFacts = {
   quote?: {
     id?: string;
@@ -69,6 +71,7 @@ export type SupplementalContextFacts = {
   groupSystemPrompt?: string;
 };
 
+/** Raw inbound message context accepted from channels before finalization. */
 export type MsgContext = {
   Body?: string;
   InboundEventKind?: InboundEventKind;
@@ -306,6 +309,11 @@ export type MsgContext = {
    * OriginatingChannel/OriginatingTo, rather than inheriting stale session route metadata.
    */
   ExplicitDeliverRoute?: boolean;
+  /**
+   * Internal flag for channels that emit message_received through a channel-specific
+   * privacy gate before entering the shared reply dispatcher.
+   */
+  SuppressMessageReceivedHooks?: boolean;
   /**
    * Provider-specific parent conversation id for threaded contexts.
    * For Discord threads, this is the parent channel id.

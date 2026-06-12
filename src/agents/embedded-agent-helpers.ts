@@ -1,3 +1,4 @@
+/** Embedded-agent helper barrel for bootstrap, provider error, media, and turn sanitizers. */
 export {
   buildBootstrapContextFiles,
   DEFAULT_BOOTSTRAP_MAX_CHARS,
@@ -11,6 +12,7 @@ export {
 } from "./embedded-agent-helpers/bootstrap.js";
 export {
   BILLING_ERROR_USER_MESSAGE,
+  classifyAssistantFailoverReason,
   classifyProviderRuntimeFailureKind,
   formatBillingErrorMessage,
   formatRateLimitOrOverloadedErrorCopy,

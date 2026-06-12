@@ -1,3 +1,4 @@
+// Coverage for building compaction runtime context from active runner state.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { addSession, resetProcessRegistryForTests } from "../bash-process-registry.js";
@@ -17,6 +18,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       sessionKey: "agent:main:thread:1",
       messageChannel: "slack",
       messageProvider: "slack",
+      chatType: "channel",
       agentAccountId: "acct-1",
       currentChannelId: "C123",
       currentThreadTs: "thread-9",
@@ -38,6 +40,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.sessionKey).toBe("agent:main:thread:1");
     expect(result.messageChannel).toBe("slack");
     expect(result.messageProvider).toBe("slack");
+    expect(result.chatType).toBe("channel");
     expect(result.agentAccountId).toBe("acct-1");
     expect(result.currentChannelId).toBe("C123");
     expect(result.currentThreadTs).toBe("thread-9");
@@ -57,6 +60,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       sessionKey: null,
       messageChannel: null,
       messageProvider: null,
+      chatType: null,
       agentAccountId: null,
       currentChannelId: null,
       currentThreadTs: null,
@@ -71,6 +75,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.sessionKey).toBeUndefined();
     expect(result.messageChannel).toBeUndefined();
     expect(result.messageProvider).toBeUndefined();
+    expect(result.chatType).toBeUndefined();
     expect(result.agentAccountId).toBeUndefined();
     expect(result.currentChannelId).toBeUndefined();
     expect(result.currentThreadTs).toBeUndefined();
@@ -94,7 +99,8 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     });
     expect(result.provider).toBe("anthropic");
     expect(result.model).toBe("claude-opus-4-6");
-    // Auth profile dropped because provider changed
+    // Auth profile must be dropped when provider changes; otherwise compaction
+    // could send a stale credential to the override provider.
     expect(result.authProfileId).toBeUndefined();
   });
 
@@ -130,6 +136,8 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
   });
 
   it("preserves scoped active process session references for compaction", () => {
+    // Only sessions tied to the same scope are summarized; cross-session process
+    // state would leak unrelated task context into the compaction prompt.
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-02T03:04:05.000Z"));
     const active = createProcessSessionFixture({

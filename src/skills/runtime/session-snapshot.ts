@@ -1,3 +1,4 @@
+// Session snapshot helpers capture and restore runtime skill state for sessions.
 import crypto from "node:crypto";
 import { stableStringify } from "../../agents/stable-stringify.js";
 import { redactConfigObject } from "../../config/redact-snapshot.js";
@@ -12,6 +13,7 @@ import { hydrateResolvedSkills } from "./snapshot-hydration.js";
 const resolvedSkillsCache = new Map<string, SkillSnapshot["resolvedSkills"]>();
 const RESOLVED_SKILLS_CACHE_MAX = 10;
 
+/** Inputs that make a resolved skill snapshot reusable within a process. */
 export type ReusableSkillSnapshotParams = {
   workspaceDir: string;
   config: OpenClawConfig;

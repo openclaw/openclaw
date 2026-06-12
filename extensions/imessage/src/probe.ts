@@ -1,3 +1,4 @@
+// Imessage plugin module implements probe behavior.
 import path from "node:path";
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import {
@@ -236,6 +237,9 @@ export async function probeIMessagePrivateApi(
     const rpcMethods = payload ? rpcMethodsFromPayload(payload) : [];
     const advancedFeatures = payload?.advanced_features === true;
     const v2Ready = payload?.v2_ready === true;
+    // imsg explains an unavailable bridge here (SIP, library validation, macOS
+    // 26 AMFI gate). Carry it forward so blocked actions can show the reason.
+    const statusMessage = typeof payload?.message === "string" ? payload.message : undefined;
     // Probe `imsg send-rich --help` for the `--file` flag added by
     // openclaw/imsg#114. We do this even when the bridge is unavailable
     // because the help output ships with the CLI binary itself, and the
@@ -249,6 +253,7 @@ export async function probeIMessagePrivateApi(
       selectors,
       rpcMethods,
       cliCapabilities: { sendRichSupportsAttachment },
+      ...(statusMessage ? { statusMessage } : {}),
       ...(result.code === 0
         ? !payload && firstLineSnippet
           ? {

@@ -1,3 +1,4 @@
+// Memory Core tests cover manager embedding policy plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   buildMemoryEmbeddingBatches,
@@ -72,6 +73,30 @@ describe("memory embedding policy", () => {
     expect(result).toBe("ok");
     expect(run).toHaveBeenCalledTimes(3);
     expect(waits).toEqual([500, 1000]);
+  });
+
+  it("stops retrying after the caller signal aborts, even for retryable-looking errors", async () => {
+    const controller = new AbortController();
+    const run = vi.fn(async () => {
+      controller.abort(new Error("memory_search timed out after 15s"));
+      // "timed out" matches the retryable transport pattern; abort must still win.
+      throw new Error("memory embeddings query timed out after 60s");
+    });
+    const waitForRetry = vi.fn(async () => {});
+
+    await expect(
+      runMemoryEmbeddingRetryLoop({
+        run,
+        isRetryable: isRetryableMemoryEmbeddingError,
+        waitForRetry,
+        maxAttempts: 3,
+        baseDelayMs: 500,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("memory embeddings query timed out after 60s");
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(waitForRetry).not.toHaveBeenCalled();
   });
 
   it("retries transient socket/network embedding errors", () => {

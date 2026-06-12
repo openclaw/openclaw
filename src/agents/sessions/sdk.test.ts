@@ -1,5 +1,15 @@
+// Agent session SDK tests cover default tool wiring, prompt preservation, and
+// session write-lock behavior.
 import { Type } from "typebox";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const thinkingMocks = vi.hoisted(() => ({
+  resolveThinkingDefaultForModel: vi.fn(() => "medium"),
+}));
+
+vi.mock("../../auto-reply/thinking.js", () => ({
+  resolveThinkingDefaultForModel: thinkingMocks.resolveThinkingDefaultForModel,
+}));
 import type { Model } from "../../llm/types.js";
 import { AuthStorage } from "./auth-storage.js";
 import { createExtensionRuntime } from "./extensions/loader.js";
@@ -86,6 +96,8 @@ describe("createAgentSession tool defaults", () => {
   });
 
   it("keeps custom tools active when only builtin tools are disabled", async () => {
+    // `noTools: "builtin"` removes stock tools only; extension/custom tools are
+    // still explicitly supplied session capabilities.
     const customTool: ToolDefinition = {
       name: "custom_lookup",
       label: "Custom Lookup",
@@ -165,6 +177,8 @@ describe("createAgentSession tool defaults", () => {
   });
 
   it("runs session message persistence under the configured write lock", async () => {
+    // Transcript writes share the caller-provided lock so concurrent event
+    // handlers cannot interleave JSONL persistence.
     const events: string[] = [];
     const sessionManager = SessionManager.inMemory();
     const { session } = await createAgentSession({
@@ -261,6 +275,8 @@ describe("createAgentSession tool defaults", () => {
   });
 
   it("fences tool execution when no extension hook is registered", async () => {
+    // Write-capable tools still enter the lock even without hooks; the lock is
+    // about shared session state, not just extension execution.
     const events: string[] = [];
     const { session } = await createAgentSession({
       model: testModel,
@@ -306,5 +322,135 @@ describe("createAgentSession tool defaults", () => {
     });
 
     expect(events).toEqual(["lock:start", "lock:end"]);
+  });
+});
+
+describe("createAgentSession thinking level defaults", () => {
+  beforeEach(() => {
+    thinkingMocks.resolveThinkingDefaultForModel.mockReset();
+    thinkingMocks.resolveThinkingDefaultForModel.mockReturnValue("medium");
+  });
+
+  it("uses the provider-specific thinking default for new sessions", async () => {
+    thinkingMocks.resolveThinkingDefaultForModel.mockReturnValue("off");
+
+    const ollamaModel = {
+      ...testModel,
+      provider: "ollama",
+      reasoning: true,
+      params: { canonicalModelId: "qwen3:8b" },
+      compat: { thinkingFormat: "qwen" },
+    } satisfies Model;
+    const { session } = await createAgentSession({
+      model: ollamaModel,
+      resourceLoader: createEmptyResourceLoader(),
+      sessionManager: SessionManager.inMemory(),
+      settingsManager: SettingsManager.inMemory(),
+      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
+    });
+
+    expect(session.thinkingLevel).toBe("off");
+    expect(thinkingMocks.resolveThinkingDefaultForModel).toHaveBeenCalledWith({
+      provider: "ollama",
+      model: testModel.id,
+      catalog: [
+        {
+          provider: "ollama",
+          id: testModel.id,
+          api: ollamaModel.api,
+          reasoning: true,
+          params: { canonicalModelId: "qwen3:8b" },
+          compat: { thinkingFormat: "qwen" },
+        },
+      ],
+    });
+  });
+
+  it("settings default overrides provider thinking default", async () => {
+    thinkingMocks.resolveThinkingDefaultForModel.mockReturnValue("off");
+
+    const { session } = await createAgentSession({
+      model: { ...testModel, provider: "ollama", reasoning: true },
+      resourceLoader: createEmptyResourceLoader(),
+      sessionManager: SessionManager.inMemory(),
+      settingsManager: SettingsManager.inMemory({ defaultThinkingLevel: "low" }),
+      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
+    });
+
+    // User-configured settings default beats provider default
+    expect(session.thinkingLevel).toBe("low");
+  });
+
+  it("uses Ollama policy for custom providers backed by the Ollama API", async () => {
+    thinkingMocks.resolveThinkingDefaultForModel.mockReturnValue("off");
+    const customOllamaModel = {
+      ...testModel,
+      provider: "ollama-spark",
+      api: "ollama",
+      reasoning: true,
+    } satisfies Model;
+
+    const { session } = await createAgentSession({
+      model: customOllamaModel,
+      resourceLoader: createEmptyResourceLoader(),
+      sessionManager: SessionManager.inMemory(),
+      settingsManager: SettingsManager.inMemory(),
+      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
+    });
+
+    expect(session.thinkingLevel).toBe("off");
+    expect(thinkingMocks.resolveThinkingDefaultForModel).toHaveBeenCalledWith({
+      provider: "ollama",
+      model: testModel.id,
+      catalog: [
+        {
+          provider: "ollama",
+          id: testModel.id,
+          api: "ollama",
+          reasoning: true,
+        },
+      ],
+    });
+  });
+
+  it("falls back to DEFAULT_THINKING_LEVEL for non-off provider defaults", async () => {
+    // Non-off provider defaults (adaptive, high, low) preserve prior SDK behaviour
+    // to avoid silent cost changes for DeepSeek, OpenRouter, xAI, and Anthropic users.
+    for (const nonOffDefault of ["adaptive", "high", "low"] as const) {
+      thinkingMocks.resolveThinkingDefaultForModel.mockReturnValue(nonOffDefault);
+
+      const { session } = await createAgentSession({
+        model: { ...testModel, reasoning: true },
+        resourceLoader: createEmptyResourceLoader(),
+        sessionManager: SessionManager.inMemory(),
+        settingsManager: SettingsManager.inMemory(),
+        modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
+      });
+
+      expect(session.thinkingLevel).toBe("medium");
+    }
+  });
+
+  it("uses provider default for legacy sessions that have no thinking entry", async () => {
+    // Sessions created before thinking-level tracking (no thinking_level_change entry)
+    // should inherit the provider default, not the hard-coded global "medium".
+    thinkingMocks.resolveThinkingDefaultForModel.mockReturnValue("off");
+
+    const sessionManager = SessionManager.inMemory();
+    sessionManager.appendMessage({
+      role: "user",
+      content: "hello",
+      timestamp: Date.now(),
+    });
+
+    const { session } = await createAgentSession({
+      model: { ...testModel, provider: "ollama", reasoning: true },
+      resourceLoader: createEmptyResourceLoader(),
+      sessionManager,
+      settingsManager: SettingsManager.inMemory(),
+      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
+    });
+
+    expect(session.thinkingLevel).toBe("off");
   });
 });

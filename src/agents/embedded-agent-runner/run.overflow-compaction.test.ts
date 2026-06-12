@@ -1,3 +1,4 @@
+// Coverage for overflow compaction routing, runtime context, and failover.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -49,6 +50,8 @@ type RuntimePlanOverrides = Partial<Omit<AgentRuntimePlan, "auth" | "resolvedRef
   resolvedRef?: Partial<AgentRuntimePlan["resolvedRef"]>;
 };
 function makeForwardingCase(internalEvents: AgentInternalEvent[]) {
+  // Forwarding cases prove request-scoped flags survive the overflow-compaction
+  // route into the eventual embedded attempt.
   return {
     runId: "forward-attempt-params",
     params: {
@@ -58,6 +61,7 @@ function makeForwardingCase(internalEvents: AgentInternalEvent[]) {
       disableMessageTool: true,
       forceMessageTool: true,
       requireExplicitMessageTarget: true,
+      chatType: "channel",
       internalEvents,
     },
     expected: {
@@ -67,6 +71,7 @@ function makeForwardingCase(internalEvents: AgentInternalEvent[]) {
       disableMessageTool: true,
       forceMessageTool: true,
       requireExplicitMessageTarget: true,
+      chatType: "channel",
     },
   } satisfies {
     runId: string;
@@ -84,6 +89,8 @@ function codexHarnessSupportsKnownProviders(
 }
 
 function makeForwardedRuntimePlan(overrides: RuntimePlanOverrides = {}): AgentRuntimePlan {
+  // Runtime plan fixture includes every runner seam that can alter auth,
+  // delivery, transcript policy, transport, and tool handling.
   const transcriptPolicy = {
     sanitizeMode: "full",
     sanitizeToolCallIds: true,
@@ -206,6 +213,8 @@ function expectRuntimePlanFields(
     resolvedRef?: Record<string, unknown>;
   },
 ): void {
+  // Tests care about the resolved refs and auth handoff, not the entire plan
+  // object produced by runtime selection.
   const plan = expectRecordFields(runtimePlan, {});
   if (expected.resolvedRef) {
     expectRecordFields(plan.resolvedRef, expected.resolvedRef);

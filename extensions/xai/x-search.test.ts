@@ -1,3 +1,4 @@
+// Xai tests cover x search plugin behavior.
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createXSearchTool } from "./x-search.js";
@@ -72,6 +73,34 @@ afterEach(() => {
 });
 
 describe("xai x_search tool", () => {
+  it("describes query as the required instruction for the Grok X-search agent", () => {
+    const tool = createXSearchTool({
+      config: {
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                webSearch: {
+                  apiKey: "xai-plugin-key", // pragma: allowlist secret
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const parameters = tool?.parameters as
+      | { properties?: { query?: { description?: string } } }
+      | undefined;
+    const queryDescription = parameters?.properties?.query?.description;
+
+    expect(queryDescription).toContain("Natural-language instruction");
+    expect(queryDescription).toContain("Grok X-search agent");
+    expect(queryDescription).toContain("meaningful and non-empty");
+    expect(queryDescription).not.toContain("allowed_x_handles");
+  });
+
   it("enables x_search when runtime config carries the shared xAI key", () => {
     const tool = createXSearchTool({
       config: {},

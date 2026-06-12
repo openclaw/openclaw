@@ -1,3 +1,6 @@
+/**
+ * Shared metadata and result types for embedded-agent runner surfaces.
+ */
 import type { HeartbeatToolResponse } from "../../auto-reply/heartbeat-tool-response.js";
 import type {
   CliSessionBinding,
@@ -71,6 +74,7 @@ export type TraceAttempt = {
     | "surface_error"
     | "candidate_failed"
     | "rotate_profile"
+    | "same_model_rate_limit"
     | "fallback_model"
     | "aborted"
     | "error";
@@ -193,6 +197,8 @@ export type EmbeddedAgentRunResult = {
   // True if a messaging tool successfully sent a message.
   // Used to suppress agent's confirmation text.
   didSendViaMessagingTool?: boolean;
+  // True if message_tool_only delivered a visible reply to the current source conversation.
+  didDeliverSourceReplyViaMessageTool?: boolean;
   // True if a deterministic approval prompt was sent through the tool-result channel.
   didSendDeterministicApprovalPrompt?: boolean;
   // Texts successfully sent via messaging tools during the run.

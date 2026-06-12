@@ -1,3 +1,4 @@
+// Covers session cost and usage summary loading.
 import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -1406,6 +1407,78 @@ describe("session cost usage", () => {
       });
       expect(summary.totals.totalTokens).toBe(10);
       expect(summary.cacheStatus?.status).toBe("fresh");
+    });
+  });
+
+  it("throttles cache writes during a large stale refresh and skips writes when nothing changed", async () => {
+    const root = await makeSessionCostRoot("cost-cache-throttle");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
+
+    const sessionCount = 300; // > USAGE_COST_CACHE_CHECKPOINT_FILES (256)
+    const baseTimestamp = "2026-02-05T12:00:00.000Z";
+    const makeEntry = (totalTokens: number, timestamp: string) =>
+      JSON.stringify({
+        type: "message",
+        timestamp,
+        message: {
+          role: "assistant",
+          provider: "openai",
+          model: "gpt-5.4",
+          usage: {
+            input: totalTokens,
+            output: 0,
+            totalTokens,
+            cost: { total: totalTokens / 1000 },
+          },
+        },
+      });
+
+    for (let index = 0; index < sessionCount; index += 1) {
+      const sessionId = `sess-throttle-${index}`;
+      await fs.writeFile(
+        path.join(sessionsDir, `${sessionId}.jsonl`),
+        `${JSON.stringify({ type: "session", version: 1, id: sessionId })}\n${makeEntry(1, baseTimestamp)}\n`,
+        "utf-8",
+      );
+    }
+
+    await withStateDir(root, async () => {
+      const renameSpy = vi.spyOn(fs, "rename");
+      const cacheRenamesBefore = renameSpy.mock.calls.length;
+      try {
+        await refreshCostUsageCache();
+        const cacheRenamesAfterCold = renameSpy.mock.calls.filter(
+          ([, dest]) => dest === cachePath,
+        ).length;
+
+        // Without throttling this cold refresh would rewrite once per file plus a final flush.
+        // With checkpointing it must be far fewer than the file count.
+        expect(cacheRenamesAfterCold).toBeGreaterThan(0);
+        expect(cacheRenamesAfterCold).toBeLessThan(sessionCount / 4);
+
+        const summary = await loadCostUsageSummaryFromCache({
+          startMs: Date.UTC(2026, 1, 5),
+          endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
+          requestRefresh: false,
+        });
+        expect(summary.totals.totalTokens).toBe(sessionCount);
+        expect(summary.cacheStatus?.status).toBe("fresh");
+
+        // No-op refresh: nothing stale, nothing deleted -> no cache rewrite.
+        const renamesBeforeNoOp = renameSpy.mock.calls.filter(
+          ([, dest]) => dest === cachePath,
+        ).length;
+        await refreshCostUsageCache();
+        const renamesAfterNoOp = renameSpy.mock.calls.filter(
+          ([, dest]) => dest === cachePath,
+        ).length;
+        expect(renamesAfterNoOp).toBe(renamesBeforeNoOp);
+      } finally {
+        renameSpy.mockRestore();
+        void cacheRenamesBefore;
+      }
     });
   });
 

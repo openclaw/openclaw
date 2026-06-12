@@ -1,3 +1,4 @@
+// Covers provider error text classifiers used by live model validation.
 import { describe, expect, it } from "vitest";
 import {
   isMiniMaxModelNotFoundErrorMessage,
@@ -6,6 +7,8 @@ import {
 
 describe("live model error helpers", () => {
   it("detects generic model-not-found messages", () => {
+    // Providers wrap 404/model-missing failures in inconsistent plain text and
+    // JSON strings; keep matching broad enough without classifying all 404s.
     const openRouterJson404Payload =
       '{"error":{"message":"Healer Alpha was a stealth model revealed on March 18th as an early testing version of MiMo-V2-Omni. Find it here: https://openrouter.ai/xiaomi/mimo-v2-omni","code":404},"user_id":"user_33GTyP8uDSYYbaeBO48AGHXyuMC"}';
 
@@ -30,6 +33,12 @@ describe("live model error helpers", () => {
     ).toBe(true);
     expect(
       isModelNotFoundErrorMessage(
+        '{"error":{"code":"400","message":"Param Incorrect","param":"Not supported model some-model-id"}}',
+      ),
+    ).toBe(true);
+    expect(isModelNotFoundErrorMessage("Not supported model some-model-id")).toBe(true);
+    expect(
+      isModelNotFoundErrorMessage(
         "404 The free model has been deprecated. Transition to qwen/qwen3.6-plus for continued paid access.",
       ),
     ).toBe(true);
@@ -42,6 +51,13 @@ describe("live model error helpers", () => {
       isModelNotFoundErrorMessage("The deployment does not exist or you do not have access."),
     ).toBe(false);
     expect(isModelNotFoundErrorMessage('{"error":{"message":"Resource missing","code":404}}')).toBe(
+      false,
+    );
+    expect(isModelNotFoundErrorMessage("This model is not supported for tool calling.")).toBe(
+      false,
+    );
+    expect(isModelNotFoundErrorMessage("This model does not support image inputs.")).toBe(false);
+    expect(isModelNotFoundErrorMessage("Reasoning effort is not supported for this model.")).toBe(
       false,
     );
     expect(isModelNotFoundErrorMessage("request ended without sending any chunks")).toBe(false);

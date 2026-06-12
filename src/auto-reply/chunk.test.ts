@@ -1,3 +1,4 @@
+/** Tests text chunking helpers used by auto-reply delivery. */
 import { describe, expect, it, vi } from "vitest";
 import * as fences from "../../packages/markdown-core/src/fences.js";
 import { hasBalancedFences } from "../test-utils/chunk-test-helpers.js";
@@ -617,6 +618,25 @@ describe("resolveChunkMode", () => {
     { cfg: providerCfg, provider: "discord", accountId: undefined, expected: "length" },
     { cfg: accountCfg, provider: "slack", accountId: "primary", expected: "newline" },
     { cfg: accountCfg, provider: "slack", accountId: "other", expected: "length" },
+    {
+      cfg: { channels: { imessage: { streaming: { chunkMode: "newline" as const } } } },
+      provider: "imessage",
+      accountId: undefined,
+      expected: "newline",
+    },
+    {
+      cfg: {
+        channels: {
+          imessage: {
+            streaming: { chunkMode: "length" as const },
+            accounts: { personal: { streaming: { chunkMode: "newline" as const } } },
+          },
+        },
+      },
+      provider: "imessage",
+      accountId: "personal",
+      expected: "newline",
+    },
     {
       cfg: { channels: { webchat: { chunkMode: "newline" as const } } },
       provider: "webchat",

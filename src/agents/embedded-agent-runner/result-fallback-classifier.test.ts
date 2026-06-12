@@ -1,8 +1,11 @@
+// Coverage for deciding when embedded run results should trigger model fallback.
 import { describe, expect, it } from "vitest";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./result-fallback-classifier.js";
 
 describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
   it("does not fallback when sessions_spawn accepted a child session", () => {
+    // Accepted child sessions mean the turn made progress even if the parent did
+    // not emit a normal assistant reply.
     expect(
       classifyEmbeddedAgentRunResultForModelFallback({
         provider: "mock-openai",
@@ -47,6 +50,8 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
   });
 
   it("preserves hook block results with auth-like error payload text", () => {
+    // Hook policy blocks are intentional local decisions, not provider failures
+    // that should rotate models.
     const result = classifyEmbeddedAgentRunResultForModelFallback({
       provider: "custom",
       model: "gpt-5.5",
@@ -63,6 +68,23 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
             kind: "hook_block",
             message: "Access denied by policy",
           },
+        },
+      },
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("does not fallback on deliberate silent terminal replies after payload filtering", () => {
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "openai",
+      model: "gpt-5.5",
+      result: {
+        payloads: [],
+        meta: {
+          durationMs: 42,
+          finalAssistantRawText: "NO_REPLY",
+          finalAssistantVisibleText: "NO_REPLY",
         },
       },
     });

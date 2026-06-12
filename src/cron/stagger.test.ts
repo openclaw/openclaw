@@ -1,3 +1,4 @@
+// Cron stagger tests cover deterministic schedule spreading across jobs.
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_TOP_OF_HOUR_STAGGER_MS,
@@ -11,8 +12,17 @@ describe("cron stagger helpers", () => {
     expect(isRecurringTopOfHourCronExpr("0 * * * *")).toBe(true);
     expect(isRecurringTopOfHourCronExpr("0 */2 * * *")).toBe(true);
     expect(isRecurringTopOfHourCronExpr("0 0 */3 * * *")).toBe(true);
+    expect(isRecurringTopOfHourCronExpr("0 */2,3 * * *")).toBe(true);
+    expect(isRecurringTopOfHourCronExpr("0 */2,? * * *")).toBe(true);
     expect(isRecurringTopOfHourCronExpr("0 7 * * *")).toBe(false);
     expect(isRecurringTopOfHourCronExpr("15 * * * *")).toBe(false);
+  });
+
+  it("rejects malformed hour fields that merely contain a wildcard", () => {
+    expect(isRecurringTopOfHourCronExpr("0 5* * * *")).toBe(false);
+    expect(isRecurringTopOfHourCronExpr("0 *5 * * *")).toBe(false);
+    expect(isRecurringTopOfHourCronExpr("0 1-*/2 * * *")).toBe(false);
+    expect(isRecurringTopOfHourCronExpr("0 0 5* * * *")).toBe(false);
   });
 
   it("normalizes explicit stagger values", () => {

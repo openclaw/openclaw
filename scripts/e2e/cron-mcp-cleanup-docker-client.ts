@@ -1,3 +1,4 @@
+// Cron Mcp Cleanup Docker Client script supports OpenClaw repository automation.
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
@@ -6,32 +7,32 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
+import { readPositiveIntEnv } from "./lib/env-limits.mjs";
 import type { GatewayRpcClient } from "./mcp-channels-harness.ts";
 
 const execFileAsync = promisify(execFile);
-const PROBE_PID_WAIT_MS = readPositiveInt(
-  process.env.OPENCLAW_CRON_MCP_CLEANUP_PID_WAIT_MS,
-  120_000,
-);
+const PROBE_PID_WAIT_MS = readCronMcpCleanupProbePidWaitMs();
 type McpChannelsHarness = typeof import("./mcp-channels-harness.ts");
 let mcpChannelsHarness: McpChannelsHarness | undefined;
 
 type CronJob = { id?: string };
 type CronRunResult = { ok?: boolean; enqueued?: boolean; runId?: string };
 type AgentRunResult = { runId?: string; status?: string };
+type CronFinishedPayload = { status?: unknown };
 
 async function loadMcpChannelsHarness(): Promise<McpChannelsHarness> {
   mcpChannelsHarness ??= await import("./mcp-channels-harness.ts");
   return mcpChannelsHarness;
 }
 
-function readPositiveInt(raw: string | undefined, fallback: number): number {
-  const text = (raw ?? "").trim();
-  if (!/^\d+$/u.test(text)) {
-    return fallback;
+export function readCronMcpCleanupProbePidWaitMs(env: NodeJS.ProcessEnv = process.env): number {
+  return readPositiveIntEnv("OPENCLAW_CRON_MCP_CLEANUP_PID_WAIT_MS", 120_000, env);
+}
+
+export function assertCronFinishedOk(finished: CronFinishedPayload | undefined): void {
+  if (finished?.status !== "ok") {
+    throw new Error(`cron cleanup run did not finish ok: ${JSON.stringify(finished)}`);
   }
-  const parsed = Number(text);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 async function readProbePid(pidPath: string): Promise<number | undefined> {
@@ -220,6 +221,7 @@ async function runCronCleanupScenario(params: {
     240_000,
   );
   assert(finished, "missing cron finished event");
+  assertCronFinishedOk(finished);
 
   await waitForProbeExit({ pid, label: "cron" });
   return {

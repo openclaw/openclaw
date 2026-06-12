@@ -1,3 +1,4 @@
+// Whatsapp tests cover connection controller plugin behavior.
 import { EventEmitter } from "node:events";
 import { DisconnectReason } from "baileys";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -7,8 +8,9 @@ import {
   waitForWhatsAppLoginResult,
   WhatsAppConnectionController,
 } from "./connection-controller.js";
-import type { WhatsAppSendKind, WhatsAppSendResult } from "./inbound/send-result.js";
+import { createAcceptedWhatsAppSendResult } from "./inbound/send-result.test-helper.js";
 import { createWaSocket, waitForWaConnection } from "./session.js";
+import { DEFAULT_WHATSAPP_SOCKET_TIMING } from "./socket-timing.js";
 
 vi.mock("./session.js", async () => {
   const actual = await vi.importActual<typeof import("./session.js")>("./session.js");
@@ -22,20 +24,11 @@ vi.mock("./session.js", async () => {
 const createWaSocketMock = vi.mocked(createWaSocket);
 const waitForWaConnectionMock = vi.mocked(waitForWaConnection);
 
-function acceptedSendResult(kind: WhatsAppSendKind, id: string): WhatsAppSendResult {
-  return {
-    kind,
-    messageId: id,
-    keys: [{ id }],
-    providerAccepted: true,
-  };
-}
-
 function createListenerStub(messageId = "ok") {
   return {
-    sendMessage: vi.fn(async () => acceptedSendResult("text", messageId)),
-    sendPoll: vi.fn(async () => acceptedSendResult("poll", messageId)),
-    sendReaction: vi.fn(async () => acceptedSendResult("reaction", messageId)),
+    sendMessage: vi.fn(async () => createAcceptedWhatsAppSendResult("text", messageId)),
+    sendPoll: vi.fn(async () => createAcceptedWhatsAppSendResult("poll", messageId)),
+    sendReaction: vi.fn(async () => createAcceptedWhatsAppSendResult("reaction", messageId)),
     sendComposingTo: vi.fn(async () => {}),
   };
 }
@@ -130,6 +123,9 @@ describe("WhatsAppConnectionController", () => {
     });
 
     expect(callOrder).toEqual(["create", "wait-for-connection"]);
+    expect(waitForWaConnectionMock).toHaveBeenCalledWith(expect.anything(), {
+      timeoutMs: DEFAULT_WHATSAPP_SOCKET_TIMING.connectTimeoutMs,
+    });
   });
 
   it("restarts login once on status 408 and preserves replacement socket options", async () => {
@@ -180,6 +176,8 @@ describe("WhatsAppConnectionController", () => {
     });
     expect(onQr).toHaveBeenCalledWith("qr-after-timeout");
     expect(onSocketReplaced).toHaveBeenCalledWith(replacementSock);
+    expect(waitForConnection).toHaveBeenNthCalledWith(1, initialSock, { timeout: "none" });
+    expect(waitForConnection).toHaveBeenNthCalledWith(2, replacementSock, { timeout: "none" });
   });
 
   it("still honors the post-pairing 515 restart after a status 408 recovery", async () => {
@@ -213,6 +211,11 @@ describe("WhatsAppConnectionController", () => {
     });
     expect(createSocket).toHaveBeenCalledTimes(2);
     expect(waitForConnection).toHaveBeenCalledTimes(3);
+    expect(waitForConnection).toHaveBeenNthCalledWith(1, initialSock, { timeout: "none" });
+    expect(waitForConnection).toHaveBeenNthCalledWith(2, afterTimeoutSock, { timeout: "none" });
+    expect(waitForConnection).toHaveBeenNthCalledWith(3, afterPairingRestartSock, {
+      timeout: "none",
+    });
     expect(initialSock.end).toHaveBeenCalledOnce();
     expect(afterTimeoutSock.end).toHaveBeenCalledOnce();
   });
