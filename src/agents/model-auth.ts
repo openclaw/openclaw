@@ -818,7 +818,7 @@ function resolveProviderSyntheticRuntimeAuth(params: {
     const runtimeConfig = getRuntimeConfigSnapshot();
     if (runtimeConfig && runtimeConfig !== params.cfg) {
       const runtimeAuth = resolveFromConfig(runtimeConfig);
-      if (runtimeAuth && !isNonSecretApiKeyMarker(runtimeAuth.apiKey)) {
+      if (runtimeAuth && runtimeAuth.apiKey && !isNonSecretApiKeyMarker(runtimeAuth.apiKey)) {
         return { auth: runtimeAuth };
       }
     }

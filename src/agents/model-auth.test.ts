@@ -1,7 +1,7 @@
 // Verifies provider auth resolution, synthetic auth, and auth header behavior.
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ModelProviderConfig } from "../config/config.js";
+import type { ModelProviderConfig, OpenClawConfig } from "../config/config.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import {
   CUSTOM_LOCAL_AUTH_MARKER,
@@ -884,7 +884,7 @@ describe("resolveApiKeyForProvider", () => {
           },
         },
       },
-    };
+    } as unknown as OpenClawConfig;
     const runtimeConfig = {
       models: {
         providers: {
@@ -894,7 +894,7 @@ describe("resolveApiKeyForProvider", () => {
           },
         },
       },
-    };
+    } as unknown as OpenClawConfig;
     setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
 
     const resolved = await resolveApiKeyForProvider({
