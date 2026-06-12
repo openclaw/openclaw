@@ -1930,6 +1930,42 @@ describe("capability cli", () => {
     expect(mocks.generateImage).not.toHaveBeenCalled();
   });
 
+  it("forwards --file from image generate to runImageGenerate", async () => {
+    const inputPath = path.join(os.tmpdir(), `openclaw-image-gen-input-${Date.now()}.png`);
+    await fs.writeFile(inputPath, Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+
+    mocks.generateImage.mockResolvedValue({
+      provider: "openai",
+      model: "gpt-image-1",
+      attempts: [],
+      images: [],
+    });
+
+    try {
+      await runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: [
+          "capability",
+          "image",
+          "generate",
+          "--prompt",
+          "branded cover",
+          "--file",
+          inputPath,
+          "--json",
+        ],
+      });
+    } finally {
+      await fs.unlink(inputPath).catch(() => undefined);
+    }
+
+    const call = firstImageGenerationCall();
+    const inputImages = call?.inputImages as Array<Record<string, unknown>>;
+    expect(call?.prompt).toBe("branded cover");
+    expect(inputImages).toHaveLength(1);
+    expect(inputImages[0]?.fileName).toBe(path.basename(inputPath));
+  });
+
   it("rejects partial image generate timeout before provider dispatch", async () => {
     await expect(
       runRegisteredCli({

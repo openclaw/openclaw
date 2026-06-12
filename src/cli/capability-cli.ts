@@ -197,6 +197,7 @@ const CAPABILITY_METADATA: CapabilityMetadata[] = [
     description: "Generate raster images with configured image providers.",
     transports: ["local"],
     flags: [
+      "--file",
       "--prompt",
       "--model",
       "--count",
@@ -2230,10 +2231,12 @@ export function registerCapabilityCli(program: Command) {
     .option("--background <value>", "Background hint: transparent, opaque, or auto")
     .option("--openai-background <value>", "OpenAI background hint: transparent, opaque, or auto")
     .option("--timeout-ms <ms>", "Provider request timeout in milliseconds")
+    .option("--file <path>", "Input file", collectOption, [])
     .option("--output <path>", "Output path")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
+        const files = Array.isArray(opts.file) ? (opts.file as string[]) : [String(opts.file)];
         const result = await runImageGenerate({
           capability: "image.generate",
           prompt: String(opts.prompt),
@@ -2248,6 +2251,7 @@ export function registerCapabilityCli(program: Command) {
             opts.openaiBackground as string | undefined,
             "--openai-background",
           ),
+          file: files.length > 0 ? files : undefined,
           timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs),
           output: opts.output as string | undefined,
         });
