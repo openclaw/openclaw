@@ -2245,18 +2245,19 @@ export async function runEmbeddedAttempt(
           return name ? [name] : [];
         }),
       );
-      // Admission-time conflict check only against non-plugin core tools, to
-      // preserve prior behavior where client tools may coexist with unrelated
-      // plugin tool names. MEDIA passthrough is still gated by the raw-name
-      // set above, so a client tool that normalize-collides with a plugin
-      // tool cannot inherit the plugin's local-media trust.
       const coreBuiltinToolNames = collectCoreBuiltinToolNames(uncompactedEffectiveTools, {
         isPluginTool: (tool) =>
           Boolean(getPluginToolMeta(tool as Parameters<typeof getPluginToolMeta>[0])),
       });
+      // Directory exact-name hydration cannot distinguish a hidden catalog tool
+      // from a visible client tool that shadows it. Other modes preserve the
+      // existing client/plugin coexistence behavior and use core conflicts only.
+      const clientConflictToolNames = deferredDirectoryToolsCallable
+        ? builtinToolNames
+        : coreBuiltinToolNames;
       const clientToolNameConflicts = findClientToolNameConflicts({
         tools: clientTools ?? [],
-        existingToolNames: [...coreBuiltinToolNames, ...AGENT_RESERVED_TOOL_NAMES],
+        existingToolNames: [...clientConflictToolNames, ...AGENT_RESERVED_TOOL_NAMES],
       });
       if (clientToolNameConflicts.length > 0) {
         throw createClientToolNameConflictError(clientToolNameConflicts);

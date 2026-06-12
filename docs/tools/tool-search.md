@@ -154,6 +154,8 @@ bounded set of likely or required catalog tool schemas directly for the current
 turn. If the bounded directory omits entries, use `tool_search` to find them. If
 the model requests an exact hidden directory tool name directly, OpenClaw
 hydrates it from the authorized catalog before normal execution.
+Directory-mode client tool names must not collide with OpenClaw, plugin, or MCP
+tool names because exact deferred dispatch uses those names.
 
 ## Runtime boundary
 
