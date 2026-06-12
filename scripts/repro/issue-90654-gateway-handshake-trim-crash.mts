@@ -14,13 +14,7 @@ function main() {
   console.log("  normal:", formatAuditList(["  b  ", "a", "c "]));
 
   // Before fix: this would crash with TypeError
-  const malformed = [
-    "valid",
-    undefined,
-    null,
-    42,
-    "also-valid",
-  ] as unknown as string[];
+  const malformed = ["valid", undefined, null, 42, "also-valid"] as unknown as string[];
 
   console.log("\nMalformed input (contains non-string items):");
   console.log("  Input:", malformed);
@@ -30,8 +24,8 @@ function main() {
     result = formatAuditList(malformed);
     console.log("  Result:", result);
   } catch (err) {
-    console.error("\nFAIL: formatAuditList threw on non-string items:");
-    console.error(" ", err);
+    console.error("FAIL: formatAuditList threw on non-string items:");
+    console.error(err);
     process.exitCode = 1;
     return;
   }
