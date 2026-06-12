@@ -78,17 +78,16 @@ function parseUpdatePostInstallDoctorResult(value: unknown): UpdatePostInstallDo
     return null;
   }
   const advisoryRecord = advisory as Record<string, unknown>;
+  const details = advisoryRecord.details;
   if (
     advisoryRecord.kind !== "package-post-install-doctor" ||
     advisoryRecord.reason !== "deferred-configured-plugin-repair" ||
     typeof advisoryRecord.message !== "string" ||
-    !Array.isArray(advisoryRecord.details)
+    !Array.isArray(details) ||
+    !details.every((entry): entry is string => typeof entry === "string")
   ) {
     return null;
   }
-  const details = advisoryRecord.details.filter(
-    (entry): entry is string => typeof entry === "string",
-  );
   return {
     status: "advisory",
     advisory: {

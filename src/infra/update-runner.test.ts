@@ -2118,6 +2118,71 @@ describe("runGatewayUpdate", () => {
     expect(lastStep?.stderrTail).toBe("doctor refused migration");
   });
 
+  it("fails global npm updates when post-update doctor writes a malformed advisory result", async () => {
+    const nodeModules = path.join(tempDir, "node_modules");
+    const pkgRoot = path.join(nodeModules, "openclaw");
+    await seedGlobalPackageRoot(pkgRoot);
+
+    const { calls, runCommand } = createGlobalInstallHarness({
+      pkgRoot,
+      npmRootOutput: nodeModules,
+      installCommand: npmGlobalInstallCommand("openclaw@latest"),
+      onInstall: async () => {
+        await writeGlobalPackageVersion(pkgRoot);
+        await writeGatewayEntrypoint(pkgRoot);
+      },
+    });
+    const doctorNodePath = await resolveStableNodePath(process.execPath);
+    const doctorCommand = `${doctorNodePath} ${path.join(
+      pkgRoot,
+      "dist",
+      "index.js",
+    )} doctor --non-interactive --fix`;
+    const runCommandWithDoctor = async (argv: string[], options?: { env?: NodeJS.ProcessEnv }) => {
+      const key = argv.join(" ");
+      if (key === doctorCommand) {
+        calls.push(key);
+        const resultPath = options?.env?.[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV];
+        if (!resultPath) {
+          throw new Error("missing doctor result path");
+        }
+        await fs.writeFile(
+          resultPath,
+          JSON.stringify({
+            status: "advisory",
+            advisory: {
+              kind: "package-post-install-doctor",
+              reason: "deferred-configured-plugin-repair",
+              message: "deferred configured plugin repair",
+              details: ["deferred configured plugin repair", 42],
+            },
+          }),
+          "utf8",
+        );
+        return {
+          stdout: "",
+          stderr: "doctor wrote malformed advisory result",
+          code: UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
+          signal: null,
+          killed: false,
+          termination: "exit" as const,
+        };
+      }
+      return runCommand(argv, options);
+    };
+
+    const result = await runWithCommand(runCommandWithDoctor, { cwd: pkgRoot });
+
+    expect(result.status).toBe("error");
+    expect(result.reason).toBe("doctor-failed");
+    expect(calls).toContain(doctorCommand);
+    const lastStep = result.steps.at(-1);
+    expect(lastStep?.name).toBe("openclaw doctor");
+    expect(lastStep?.exitCode).toBe(UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE);
+    expect(lastStep?.advisory).toBeUndefined();
+    expect(lastStep?.stderrTail).toBe("doctor wrote malformed advisory result");
+  });
+
   it("fails global npm updates when the post-update doctor times out with a nonzero code", async () => {
     const nodeModules = path.join(tempDir, "node_modules");
     const pkgRoot = path.join(nodeModules, "openclaw");
