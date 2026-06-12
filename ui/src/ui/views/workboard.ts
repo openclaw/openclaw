@@ -2550,7 +2550,9 @@ export function renderWorkboard(props: WorkboardProps) {
                     class="btn"
                     type="button"
                     title=${t("common.refresh")}
-                    ?disabled=${state.loading || state.dispatching}
+                    ?disabled=${state.loading ||
+                    state.dispatching ||
+                    workboardHasActiveWrites(state)}
                     @click=${() =>
                       refreshWorkboard({
                         host: props.host,

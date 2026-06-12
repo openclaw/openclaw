@@ -1546,7 +1546,7 @@ export async function refreshWorkboard(params: {
   refreshDiagnostics?: boolean;
 }) {
   const state = getWorkboardState(params.host);
-  if (state.dispatching) {
+  if (state.dispatching || workboardHasActiveWrites(state)) {
     return;
   }
   const startedAt = Date.now();
@@ -2171,7 +2171,7 @@ export async function captureSessionToWorkboard(params: {
   requestUpdate?: () => void;
 }): Promise<WorkboardCard | null> {
   const state = getWorkboardState(params.host);
-  if (!params.client || params.session.kind === "global") {
+  if (!params.client || params.session.kind === "global" || state.dispatching) {
     return null;
   }
   if (state.capturingSessionKeys.has(params.session.key)) {

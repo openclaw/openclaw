@@ -522,6 +522,24 @@ describe("workboard controller", () => {
     expect(getWorkboardState(host).draggedCardId).toBeNull();
   });
 
+  it("does not refresh while a card write is active", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.busyCardIds.add(sampleCard.id);
+    const client = createClient({
+      "workboard.cards.list": { cards: [sampleCard], statuses: ["todo", "done"] },
+      "tasks.list": { tasks: [] },
+    });
+
+    await refreshWorkboard({
+      host,
+      client: client as never,
+      source: "manual",
+    });
+
+    expect(client.request).not.toHaveBeenCalled();
+  });
+
   it("clears stale task summaries when dispatch task refresh fails", async () => {
     const host = {};
     const state = getWorkboardState(host);
@@ -1577,6 +1595,22 @@ describe("workboard controller", () => {
     });
 
     expect(card).toBe(existing);
+    expect(client.request).not.toHaveBeenCalled();
+  });
+
+  it("does not capture sessions while dispatch is active", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.dispatching = true;
+    const client = createClient({});
+
+    const card = await captureSessionToWorkboard({
+      host,
+      client: client as never,
+      session: sampleSession,
+    });
+
+    expect(card).toBeNull();
     expect(client.request).not.toHaveBeenCalled();
   });
 

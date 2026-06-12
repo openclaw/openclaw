@@ -87,6 +87,14 @@ describe("renderWorkboard", () => {
       container.querySelector<HTMLButtonElement>('button[title="Dispatch ready work"]')?.disabled,
     ).toBe(true);
 
+    state.loading = false;
+    state.autoRefreshIntervalMs = 0;
+    render(renderWorkboard(props), container);
+
+    expect(container.querySelector<HTMLButtonElement>('button[title="Refresh"]')?.disabled).toBe(
+      true,
+    );
+
     state.draftSaving = false;
     state.dispatching = true;
     render(renderWorkboard(props), container);
@@ -95,8 +103,6 @@ describe("renderWorkboard", () => {
       container.querySelector<HTMLButtonElement>('button[title="Dispatch ready work"]')?.disabled,
     ).toBe(true);
 
-    state.loading = false;
-    state.autoRefreshIntervalMs = 0;
     render(renderWorkboard(props), container);
 
     expect(container.querySelector<HTMLButtonElement>('button[title="Refresh"]')?.disabled).toBe(
