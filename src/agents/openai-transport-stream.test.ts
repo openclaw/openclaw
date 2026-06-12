@@ -10056,6 +10056,15 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
     maxTokens: 32_000,
   } satisfies Model<"openai-completions">;
 
+  const staleKimiK27Model = {
+    ...customKimiProxyModel,
+    id: "kimi-k2.7-code",
+    name: "Kimi K2.7 Code",
+    provider: "moonshot",
+    baseUrl: "https://api.moonshot.ai/v1",
+    reasoning: false,
+  } satisfies Model<"openai-completions">;
+
   const customQwenReasoningModel = {
     id: "Qwen3.6-35B-A3B",
     name: "Qwen3.6 35B",
@@ -10312,6 +10321,17 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
   it("preserves reasoning_content replay for custom Kimi K2 proxy routes", () => {
     const assistant = getAssistantMessage(
       buildReplayParams(customKimiProxyModel, "reasoning_content"),
+    );
+
+    expect(assistant.reasoning_content).toBe("Need to answer politely.");
+    expect(assistant).not.toHaveProperty("reasoning_details");
+    expect(assistant).not.toHaveProperty("reasoning");
+    expect(assistant).not.toHaveProperty("reasoning_text");
+  });
+
+  it("preserves Kimi K2.7 reasoning_content replay with stale reasoning metadata", () => {
+    const assistant = getAssistantMessage(
+      buildReplayParams(staleKimiK27Model, "reasoning_content"),
     );
 
     expect(assistant.reasoning_content).toBe("Need to answer politely.");

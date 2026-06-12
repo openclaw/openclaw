@@ -1,11 +1,25 @@
 // Moonshot tests cover moonshot plugin behavior.
+import {
+  streamSimple,
+  type AssistantMessage,
+  type Context,
+  type Model,
+  type Tool,
+} from "openclaw/plugin-sdk/llm";
+import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-env";
+import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
+import plugin from "./index.js";
+import { buildMoonshotProvider } from "./provider-catalog.js";
 import { createKimiWebSearchProvider } from "./src/kimi-web-search-provider.js";
 
 const KIMI_SEARCH_KEY =
   process.env.KIMI_API_KEY?.trim() || process.env.MOONSHOT_API_KEY?.trim() || "";
+const MOONSHOT_API_KEY = process.env.MOONSHOT_API_KEY?.trim() || "";
 const describeLive = isLiveTestEnabled() && KIMI_SEARCH_KEY.length > 0 ? describe : describe.skip;
+const describeModelLive =
+  isLiveTestEnabled() && MOONSHOT_API_KEY.length > 0 ? describe : describe.skip;
 const KIMI_LIVE_SEARCH_TIMEOUT_SECONDS = 60;
 
 function isTransientKimiSearchError(error: unknown): boolean {
@@ -68,6 +82,138 @@ describeLive("moonshot plugin live", () => {
     expect(typeof result?.content).toBe("string");
     expect((result!.content as string).length).toBeGreaterThan(20);
     expect(Array.isArray(result?.citations)).toBe(true);
+  }, 180_000);
+});
+
+function resolveKimiK27CodeModel(): Model<"openai-completions"> {
+  const provider = buildMoonshotProvider();
+  const model = provider.models.find((entry) => entry.id === "kimi-k2.7-code");
+  if (!model) {
+    throw new Error("Moonshot catalog does not include kimi-k2.7-code");
+  }
+  return {
+    provider: "moonshot",
+    baseUrl: provider.baseUrl,
+    ...model,
+    api: "openai-completions",
+  } as Model<"openai-completions">;
+}
+
+function createNoopTool(): Tool {
+  return {
+    name: "noop",
+    description: "Return ok.",
+    parameters: Type.Object({}, { additionalProperties: false }),
+  };
+}
+
+async function collectDoneMessage(
+  stream: AsyncIterable<{ type: string; message?: AssistantMessage }>,
+): Promise<AssistantMessage> {
+  let doneMessage: AssistantMessage | undefined;
+  for await (const event of stream) {
+    if (event.type === "done") {
+      doneMessage = event.message;
+    }
+  }
+  if (!doneMessage) {
+    throw new Error("Moonshot K2.7 live stream ended without a done message");
+  }
+  return doneMessage;
+}
+
+describeModelLive("moonshot K2.7 Code live", () => {
+  it("omits thinking controls and completes a replayed tool turn", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const wrappedStream = provider.wrapStreamFn?.({
+      provider: "moonshot",
+      modelId: "kimi-k2.7-code",
+      thinkingLevel: "off",
+      extraParams: { thinking: { type: "disabled", keep: "all" } },
+      streamFn: streamSimple,
+    } as never);
+    if (!wrappedStream) {
+      throw new Error("Moonshot provider did not register a stream wrapper");
+    }
+
+    const model = resolveKimiK27CodeModel();
+    const tool = createNoopTool();
+    const firstUser = {
+      role: "user" as const,
+      content: "Call the noop tool with {}. Do not answer directly.",
+      timestamp: Date.now(),
+    };
+    let firstPayload: Record<string, unknown> | undefined;
+    const first = await collectDoneMessage(
+      wrappedStream(
+        model,
+        { messages: [firstUser], tools: [tool] },
+        {
+          apiKey: MOONSHOT_API_KEY,
+          maxTokens: 16_000,
+          temperature: 0,
+          onPayload: (payload) => {
+            firstPayload = payload as Record<string, unknown>;
+          },
+        },
+      ) as AsyncIterable<{ type: string; message?: AssistantMessage }>,
+    );
+
+    expect(firstPayload).toBeDefined();
+    expect(firstPayload).not.toHaveProperty("thinking");
+    expect(firstPayload).not.toHaveProperty("reasoning_effort");
+    expect(firstPayload).not.toHaveProperty("temperature");
+    const reasoning = first.content.find((block) => block.type === "thinking");
+    if (!reasoning || reasoning.type !== "thinking" || reasoning.thinking.length === 0) {
+      throw new Error("Moonshot K2.7 Code did not return captured reasoning");
+    }
+    const toolCall = first.content.find((block) => block.type === "toolCall");
+    if (!toolCall || toolCall.type !== "toolCall") {
+      throw new Error(`Moonshot K2.7 Code did not call noop: ${first.stopReason}`);
+    }
+    expect(toolCall.name).toBe("noop");
+
+    let secondPayload: Record<string, unknown> | undefined;
+    const replayContext: Context = {
+      messages: [
+        firstUser,
+        first,
+        {
+          role: "toolResult",
+          toolCallId: toolCall.id,
+          toolName: toolCall.name,
+          content: [{ type: "text", text: "ok" }],
+          isError: false,
+          timestamp: Date.now(),
+        },
+        {
+          role: "user",
+          content: "Reply with exactly: ok",
+          timestamp: Date.now(),
+        },
+      ],
+      tools: [tool],
+    };
+    const second = await collectDoneMessage(
+      wrappedStream(model, replayContext, {
+        apiKey: MOONSHOT_API_KEY,
+        maxTokens: 16_000,
+        temperature: 0,
+        onPayload: (payload) => {
+          secondPayload = payload as Record<string, unknown>;
+        },
+      }) as AsyncIterable<{ type: string; message?: AssistantMessage }>,
+    );
+
+    expect(secondPayload).toBeDefined();
+    expect(secondPayload).not.toHaveProperty("thinking");
+    expect(secondPayload).not.toHaveProperty("reasoning_effort");
+    expect(secondPayload).not.toHaveProperty("temperature");
+    const text = second.content
+      .filter((block) => block.type === "text")
+      .map((block) => block.text.trim())
+      .join(" ");
+    expect(text).toMatch(/^ok[.!]?$/i);
   }, 180_000);
 });
 
