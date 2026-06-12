@@ -5,18 +5,17 @@ on:
 
 jobs:
   build-project:
-    # 使用 macos-14 或更高版本以确保支持 Xcode 16
     runs-on: macos-14
     
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # 1. 明确切换到 Xcode 16 版本
+      # 1. 自动寻找并切换到最新的 Xcode 16 版本（已修复路径报错问题）
       - name: Setup Xcode Version
-        run: |
-          sudo xcode-select -s /Applications/Xcode_16.0.app
-          xcodebuild -version
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '16'
 
       # 2. 安装 Node.js 和 项目指定包管理器 pnpm
       - name: Setup Node.js
