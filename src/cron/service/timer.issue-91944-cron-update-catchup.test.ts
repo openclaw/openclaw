@@ -123,7 +123,7 @@ describe("cron update catch-up guard (#91944)", () => {
     const wasMissed =
       typeof reloaded?.state.runningAtMs === "number" ||
       (typeof reloaded?.state.nextRunAtMs === "number" &&
-        (reloaded?.state.nextRunAtMs as number) > missedNextRun);
+        reloaded.state.nextRunAtMs > missedNextRun);
     expect(wasMissed).toBe(true);
   });
 
@@ -210,7 +210,7 @@ describe("cron update catch-up guard (#91944)", () => {
     const wasMissed =
       typeof reloaded?.state.runningAtMs === "number" ||
       (typeof reloaded?.state.nextRunAtMs === "number" &&
-        (reloaded?.state.nextRunAtMs as number) > missedNextRun);
+        reloaded.state.nextRunAtMs > missedNextRun);
     expect(wasMissed).toBe(true);
   });
 
@@ -259,7 +259,7 @@ describe("cron update catch-up guard (#91944)", () => {
     const wasMissed =
       typeof reloaded?.state.runningAtMs === "number" ||
       (typeof reloaded?.state.nextRunAtMs === "number" &&
-        (reloaded?.state.nextRunAtMs as number) > missedNextRun);
+        reloaded.state.nextRunAtMs > missedNextRun);
     expect(wasMissed).toBe(true);
   });
 });
