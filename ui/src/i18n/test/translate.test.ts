@@ -16,6 +16,7 @@ import { ko } from "../locales/ko.ts";
 import { nl } from "../locales/nl.ts";
 import { pl } from "../locales/pl.ts";
 import { pt_BR } from "../locales/pt-BR.ts";
+import { sv } from "../locales/sv.ts";
 import { th } from "../locales/th.ts";
 import { tr } from "../locales/tr.ts";
 import { uk } from "../locales/uk.ts";
@@ -36,6 +37,7 @@ const shippedLocales = {
   nl,
   pl,
   pt_BR,
+  sv,
   th,
   tr,
   uk,
@@ -184,6 +186,7 @@ describe("i18n", () => {
       nl,
       pl,
       pt_BR,
+      sv,
       th,
       tr,
       uk,

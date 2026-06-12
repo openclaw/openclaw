@@ -622,7 +622,7 @@ describe("detectChangedScope", () => {
 
   it("runs control-ui locale check only for control-ui i18n surfaces", () => {
     expect(detectChangedScope(["ui/src/i18n/locales/en.ts"])).toEqual({
-      runNode: true,
+      runNode: false,
       runMacos: false,
       runAndroid: false,
       runWindows: false,
@@ -632,13 +632,47 @@ describe("detectChangedScope", () => {
     });
 
     expect(detectChangedScope(["scripts/control-ui-i18n.ts"])).toEqual({
-      runNode: true,
+      runNode: false,
       runMacos: false,
       runAndroid: false,
       runWindows: false,
       runSkillsPython: false,
       runChangedSmoke: false,
       runControlUiI18n: true,
+    });
+
+    expect(detectChangedScope(["scripts/control-ui-i18n-report.ts"])).toEqual({
+      runNode: false,
+      runMacos: false,
+      runAndroid: false,
+      runWindows: false,
+      runSkillsPython: false,
+      runChangedSmoke: false,
+      runControlUiI18n: true,
+    });
+
+    expect(detectChangedScope(["src/i18n/registry.test.ts"])).toEqual({
+      runNode: false,
+      runMacos: false,
+      runAndroid: false,
+      runWindows: false,
+      runSkillsPython: false,
+      runChangedSmoke: false,
+      runControlUiI18n: true,
+    });
+  });
+
+  it("keeps CI routing changes fast when paired with control-ui i18n surfaces", () => {
+    expect(
+      detectNodeFastScope([
+        "scripts/ci-changed-scope.mjs",
+        "src/scripts/ci-changed-scope.test.ts",
+        "ui/src/i18n/locales/sv.ts",
+      ]),
+    ).toEqual({
+      runFastOnly: true,
+      runPluginContracts: false,
+      runCiRouting: true,
     });
   });
 

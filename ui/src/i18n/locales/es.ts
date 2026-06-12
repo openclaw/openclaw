@@ -1368,6 +1368,7 @@ export const es: TranslationMap = {
     uk: "Українська (ucraniano)",
     id: "Bahasa Indonesia (indonesio)",
     pl: "Polski (polaco)",
+    sv: "Sueco (Svenska)",
     th: "ไทย (tailandés)",
     vi: "Tiếng Việt (vietnamita)",
     nl: "Nederlands (neerlandés)",

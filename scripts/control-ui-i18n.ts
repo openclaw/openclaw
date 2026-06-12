@@ -5,7 +5,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { completeSimple, type AssistantMessage, type Model } from "openclaw/plugin-sdk/llm";
+import type { AssistantMessage, Model } from "openclaw/plugin-sdk/llm";
 import * as ts from "typescript";
 import { formatErrorMessage } from "../src/infra/errors.ts";
 
@@ -111,6 +111,14 @@ const ENV_PROMPT_TIMEOUT = "OPENCLAW_CONTROL_UI_I18N_PROMPT_TIMEOUT";
 const ENV_AUTH_OPTIONAL = "OPENCLAW_CONTROL_UI_I18N_AUTH_OPTIONAL";
 
 type TranslationProvider = "openai" | "anthropic";
+type CompleteSimple = typeof import("openclaw/plugin-sdk/llm")["completeSimple"];
+
+let completeSimpleImport: Promise<CompleteSimple> | null = null;
+
+async function loadCompleteSimple(): Promise<CompleteSimple> {
+  completeSimpleImport ??= import("openclaw/plugin-sdk/llm").then((module) => module.completeSimple);
+  return await completeSimpleImport;
+}
 
 const TRANSLATION_PROVIDER_DEFAULTS: Record<TranslationProvider, Omit<Model, "id" | "name">> = {
   openai: {
@@ -136,6 +144,7 @@ const TRANSLATION_PROVIDER_DEFAULTS: Record<TranslationProvider, Omit<Model, "id
 };
 
 const LOCALE_ENTRIES: readonly LocaleEntry[] = [
+  { locale: "sv", fileName: "sv.ts", exportName: "sv", languageKey: "sv" },
   { locale: "zh-CN", fileName: "zh-CN.ts", exportName: "zh_CN", languageKey: "zhCN" },
   { locale: "zh-TW", fileName: "zh-TW.ts", exportName: "zh_TW", languageKey: "zhTW" },
   { locale: "pt-BR", fileName: "pt-BR.ts", exportName: "pt_BR", languageKey: "ptBR" },
@@ -784,6 +793,13 @@ function collectRawCopyFromSource(params: {
 }
 
 async function collectControlUiRawCopyFindings(): Promise<RawCopyFinding[]> {
+  if (!existsSync(CONTROL_UI_SOURCE_DIR)) {
+    logProgress(
+      `raw-copy: source dir unavailable at ${toRepoPath(CONTROL_UI_SOURCE_DIR)}; skipping baseline scan`,
+    );
+    return [];
+  }
+
   const files = await walkControlUiSourceFiles(CONTROL_UI_SOURCE_DIR);
   const findings: RawCopyFinding[] = [];
   for (const filePath of files.toSorted((left, right) => left.localeCompare(right))) {
@@ -872,6 +888,13 @@ function formatRawCopyBaselineDiff(
 }
 
 async function syncControlUiRawCopyBaseline(options: { checkOnly: boolean; write: boolean }) {
+  if (!existsSync(CONTROL_UI_SOURCE_DIR)) {
+    logProgress(
+      `raw-copy: source dir unavailable at ${toRepoPath(CONTROL_UI_SOURCE_DIR)}; skipping baseline scan`,
+    );
+    return;
+  }
+
   const findings = await collectControlUiRawCopyFindings();
   const entries = summarizeRawCopyFindings(findings);
   const expected = formatRawCopyBaseline(entries);
@@ -1292,6 +1315,7 @@ class TranslationClient {
       const timeoutMs = resolvePromptTimeoutMs();
       const startedAt = Date.now();
       const controller = new AbortController();
+      const completeSimple = await loadCompleteSimple();
 
       return await new Promise<string>((resolve, reject) => {
         const heartbeat = setInterval(() => {

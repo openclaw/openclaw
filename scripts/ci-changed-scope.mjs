@@ -44,7 +44,7 @@ const WINDOWS_TEST_SCOPE_RE =
 const TEST_ONLY_PATH_RE =
   /(^test\/|\/test\/|\/tests\/|(?:^|\/)[^/]+\.(?:test|spec|test-utils|test-support|test-harness|e2e-harness)\.[cm]?[jt]sx?$)/;
 const CONTROL_UI_I18N_SCOPE_RE =
-  /^(ui\/src\/i18n\/|scripts\/control-ui-i18n\.ts$|\.github\/workflows\/control-ui-locale-refresh\.yml$)/;
+  /^(ui\/src\/i18n\/|src\/i18n\/|scripts\/control-ui-i18n(?:-report)?\.ts$|\.github\/workflows\/control-ui-locale-refresh\.yml$)/;
 const NATIVE_ONLY_RE =
   /^(apps\/android\/|apps\/ios\/|apps\/macos\/|apps\/macos-mlx-tts\/|apps\/shared\/|apps\/swabble\/|Swabble\/|appcast\.xml$)/;
 const FAST_INSTALL_SMOKE_SCOPE_RE =
@@ -89,6 +89,7 @@ export function detectChangedScope(changedPaths) {
   let runChangedSmoke = false;
   let runControlUiI18n = false;
   let hasNonDocs = false;
+  let hasNonDocsNonControlUiI18n = false;
   let hasNonNativeNonDocs = false;
 
   for (const rawPath of changedPaths) {
@@ -102,6 +103,7 @@ export function detectChangedScope(changedPaths) {
     }
 
     hasNonDocs = true;
+    const isControlUiI18nPath = CONTROL_UI_I18N_SCOPE_RE.test(path);
 
     if (SKILLS_PYTHON_SCOPE_RE.test(path)) {
       runSkillsPython = true;
@@ -119,7 +121,7 @@ export function detectChangedScope(changedPaths) {
       runAndroid = true;
     }
 
-    if (NODE_SCOPE_RE.test(path)) {
+    if (NODE_SCOPE_RE.test(path) && !isControlUiI18nPath) {
       runNode = true;
     }
 
@@ -134,16 +136,20 @@ export function detectChangedScope(changedPaths) {
       runChangedSmoke = true;
     }
 
-    if (CONTROL_UI_I18N_SCOPE_RE.test(path)) {
+    if (isControlUiI18nPath) {
       runControlUiI18n = true;
     }
 
     if (!NATIVE_ONLY_RE.test(path)) {
       hasNonNativeNonDocs = true;
     }
+
+    if (!isControlUiI18nPath) {
+      hasNonDocsNonControlUiI18n = true;
+    }
   }
 
-  if (!runNode && hasNonDocs && hasNonNativeNonDocs) {
+  if (!runNode && hasNonDocs && hasNonDocsNonControlUiI18n && hasNonNativeNonDocs) {
     runNode = true;
   }
 
@@ -177,6 +183,9 @@ export function detectNodeFastScope(changedPaths) {
   for (const rawPath of changedPaths) {
     const path = rawPath.trim();
     if (!path || DOCS_PATH_RE.test(path)) {
+      continue;
+    }
+    if (CONTROL_UI_I18N_SCOPE_RE.test(path)) {
       continue;
     }
 
