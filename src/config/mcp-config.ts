@@ -49,8 +49,14 @@ function normalizeToolSelectionList(value: readonly string[] | undefined): strin
   return normalized.length > 0 ? normalized : undefined;
 }
 
-/** Returns blocked env keys found in a server config's env record. */
+/** Returns blocked env keys found in a stdio server config's env record. */
 function findBlockedStdioEnvKeys(server: Record<string, unknown>): string[] {
+  // Only stdio servers (those with a command) are subject to the stdio
+  // startup safety blocklist.  URL/SSE/streamable-HTTP servers that carry
+  // extra env data for other purposes must not be rejected.
+  if (typeof server.command !== "string" || server.command.trim().length === 0) {
+    return [];
+  }
   const env = server.env;
   if (!isRecord(env)) {
     return [];
