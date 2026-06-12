@@ -1503,11 +1503,18 @@ export async function loadWorkboard(params: {
             params.taskRefresh === "recent"
               ? await listRecentWorkboardTasks(client)
               : await listWorkboardTasks(client);
+          // Task transitions become recent, while omitted long-running links
+          // must retain their prepared state so Start/Stop stays correct.
+          const taskSummaries =
+            params.taskRefresh === "recent" ? [...tasks, ...previousTasksByCardId.values()] : tasks;
           if (isCurrentWorkboardLoadGeneration(params.host, generation)) {
-            applyTaskSummariesToState(state, tasks);
+            applyTaskSummariesToState(state, taskSummaries);
           }
         } catch (error) {
           if (isCurrentWorkboardLoadGeneration(params.host, generation)) {
+            if (params.taskRefresh === "recent") {
+              applyTaskSummariesToState(state, [...previousTasksByCardId.values()]);
+            }
             state.lastRefreshError = formatError(error);
           }
         }

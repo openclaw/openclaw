@@ -255,13 +255,39 @@ describe("workboard controller", () => {
     expect(state.lastRefreshAt).toEqual(expect.any(Number));
   });
 
+  it("keeps prepared task summaries when bounded poll enrichment fails", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.tasksByCardId.set(sampleCard.id, sampleTask);
+    const client = createClient((method) => {
+      if (method === "workboard.cards.list") {
+        return { cards: [sampleCard], statuses: ["todo", "done"] };
+      }
+      if (method === "tasks.list") {
+        throw new Error("tasks unavailable");
+      }
+      return {};
+    });
+
+    await refreshWorkboard({
+      host,
+      client: client as never,
+      source: "poll",
+    });
+
+    expect(state.tasksByCardId.get(sampleCard.id)).toEqual(sampleTask);
+    expect(state.lastRefreshError).toBe("tasks unavailable");
+  });
+
   it("polls through the read refresh path without write methods", async () => {
     vi.useFakeTimers();
     const host = {};
     const completedTask = { ...sampleTask, status: "completed" as const };
+    const olderCard = { ...sampleCard, id: "card-2", title: "Older running card" };
+    const olderTask = { ...sampleTask, id: "task-2", taskId: "task-2", updatedAt: 1 };
     const client = createClient((method, params) => {
       if (method === "workboard.cards.list") {
-        return { cards: [sampleCard], statuses: ["todo", "done"] };
+        return { cards: [sampleCard, olderCard], statuses: ["todo", "done"] };
       }
       if (method === "tasks.list" && !(params as { cursor?: string }).cursor) {
         return { tasks: [completedTask], nextCursor: "500" };
@@ -271,6 +297,7 @@ describe("workboard controller", () => {
     const state = getWorkboardState(host);
     state.autoRefreshIntervalMs = 5000;
     state.tasksByCardId.set(sampleCard.id, sampleTask);
+    state.tasksByCardId.set(olderCard.id, olderTask);
 
     configureWorkboardPolling({
       host,
@@ -292,6 +319,7 @@ describe("workboard controller", () => {
     });
     expect(client.request).not.toHaveBeenCalledWith("tasks.get", expect.anything());
     expect(state.tasksByCardId.get(sampleCard.id)).toEqual(completedTask);
+    expect(state.tasksByCardId.get(olderCard.id)).toEqual(olderTask);
     vi.clearAllMocks();
     stopWorkboardPolling(host);
     await vi.advanceTimersByTimeAsync(5000);
