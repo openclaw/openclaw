@@ -530,7 +530,7 @@ describe("workboard tools", () => {
     );
 
     const card = await store.create({ title: "Claimed card" });
-    const claimed = await store.claim(card.id, { ownerId: "main" });
+    await store.claim(card.id, { ownerId: "main" });
 
     await expect(
       otherTools.get("workboard_delete")?.execute("call-del", { id: card.id }),
