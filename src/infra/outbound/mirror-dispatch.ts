@@ -206,6 +206,9 @@ export async function launchMirrorDispatch(params: {
     if (!dispatcher) {
       // No dispatcher for this channel+account — the post-hoc final mirror handles
       // it (delivering via the target's own account routing).
+      log.warn(
+        `mirror: no dispatcher for ${target.channel}/${target.accountId ?? "default"}; falling back to post-hoc echo`,
+      );
       continue;
     }
     const label = `${target.channel}:${target.to}`;
