@@ -491,4 +491,90 @@ describe("runMessageAction core send routing", () => {
     );
     expect(sendText).toHaveBeenCalledOnce();
   });
+
+  it("applies responsePrefix to message tool send", async () => {
+    const sendText = registerSlackTextPlugin();
+
+    await runMessageAction({
+      cfg: {
+        channels: {
+          slack: {
+            enabled: true,
+          },
+        },
+        messages: {
+          responsePrefix: "[Nexus]",
+        },
+      } as OpenClawConfig,
+      action: "send",
+      params: {
+        channel: "slack",
+        target: "channel:C123",
+        message: "Hello!",
+      },
+      agentId: "main",
+    });
+
+    expect(sendText).toHaveBeenCalledOnce();
+    const call = sendText.mock.calls[0]!;
+    const payload = call[0] as Record<string, unknown>;
+    expect(payload.text).toBe("[Nexus] Hello!");
+  });
+
+  it("does not double-prefix when message already starts with responsePrefix", async () => {
+    const sendText = registerSlackTextPlugin();
+
+    await runMessageAction({
+      cfg: {
+        channels: {
+          slack: {
+            enabled: true,
+          },
+        },
+        messages: {
+          responsePrefix: "[Nexus]",
+        },
+      } as OpenClawConfig,
+      action: "send",
+      params: {
+        channel: "slack",
+        target: "channel:C123",
+        message: "[Nexus] Hello!",
+      },
+      agentId: "main",
+    });
+
+    expect(sendText).toHaveBeenCalledOnce();
+    const call = sendText.mock.calls[0]!;
+    const payload = call[0] as Record<string, unknown>;
+    expect(payload.text).toBe("[Nexus] Hello!");
+  });
+
+  it("skips responsePrefix when no agentId is provided", async () => {
+    const sendText = registerSlackTextPlugin();
+
+    await runMessageAction({
+      cfg: {
+        channels: {
+          slack: {
+            enabled: true,
+          },
+        },
+        messages: {
+          responsePrefix: "[Nexus]",
+        },
+      } as OpenClawConfig,
+      action: "send",
+      params: {
+        channel: "slack",
+        target: "channel:C123",
+        message: "Hello!",
+      },
+    });
+
+    expect(sendText).toHaveBeenCalledOnce();
+    const call = sendText.mock.calls[0]!;
+    const payload = call[0] as Record<string, unknown>;
+    expect(payload.text).toBe("Hello!");
+  });
 });

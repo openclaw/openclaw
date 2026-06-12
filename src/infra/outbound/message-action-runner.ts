@@ -7,6 +7,7 @@ import {
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveResponsePrefix } from "../../agents/identity.js";
 import type { AgentToolResult } from "../../agents/runtime/index.js";
 import {
   readPositiveIntegerParam,
@@ -1026,6 +1027,19 @@ async function buildSendPayloadParts(params: {
     throw new Error("send requires text or media");
   }
   actionParams.message = message;
+
+  // Apply responsePrefix from config to outbound message tool sends.
+  if (params.agentId && message) {
+    const prefix = resolveResponsePrefix(params.cfg, params.agentId, {
+      channel: params.channel,
+      accountId: params.accountId ?? undefined,
+    });
+    if (prefix && !message.startsWith(prefix)) {
+      message = `${prefix} ${message}`;
+      actionParams.message = message;
+    }
+  }
+
   const gifPlayback = readBooleanParam(actionParams, "gifPlayback") ?? false;
   const forceDocument =
     readBooleanParam(actionParams, "forceDocument") ??
