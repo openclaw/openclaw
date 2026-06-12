@@ -1802,6 +1802,8 @@ export async function runEmbeddedAttempt(
       workspaceDir: effectiveWorkspace,
       cwd: effectiveCwd,
       runtime: {
+        sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
         host: machineName,
         os: `${os.type()} ${os.release()}`,
         arch: os.arch(),
