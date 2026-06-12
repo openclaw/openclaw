@@ -1350,8 +1350,64 @@ const KITCHEN_SINK_TOOL_INVOKES = [
   },
 ];
 
+const READ_ONLY_RPC_PROBES = [
+  { method: "gateway.identity.get", params: {} },
+  { method: "config.get", params: {} },
+  { method: "config.schema", params: {} },
+  { method: "config.schema.lookup", params: { path: "gateway" } },
+  { method: "models.list", params: {} },
+  { method: "models.authStatus", params: {} },
+  { method: "skills.status", params: {} },
+  { method: "agents.list", params: {} },
+  { method: "sessions.list", params: {} },
+  { method: "cron.status", params: {} },
+  { method: "cron.list", params: { includeDisabled: true } },
+  { method: "tasks.list", params: {} },
+  { method: "usage.status", params: {} },
+  { method: "usage.cost", params: {} },
+  { method: "voicewake.get", params: {} },
+  { method: "voicewake.routing.get", params: {} },
+  { method: "tts.personas", params: {} },
+  { method: "talk.catalog", params: {} },
+  { method: "talk.config", params: {} },
+  { method: "update.status", params: {} },
+  { method: "node.list", params: {} },
+  { method: "node.pair.list", params: {} },
+  { method: "device.pair.list", params: {} },
+  { method: "exec.approvals.get", params: {} },
+  { method: "environments.list", params: {} },
+  { method: "environments.status", params: { environmentId: "gateway" } },
+];
+
+const AUTHORIZATION_RPC_PROBES = [{ method: "skills.bins", params: {} }];
+
 export function listKitchenSinkToolInvokeNames() {
   return KITCHEN_SINK_TOOL_INVOKES.map((entry) => entry.name);
+}
+
+export function listKitchenSinkReadOnlyRpcProbeNames() {
+  return READ_ONLY_RPC_PROBES.map((entry) => entry.method);
+}
+
+export function listKitchenSinkAuthorizationRpcProbeNames() {
+  return AUTHORIZATION_RPC_PROBES.map((entry) => entry.method);
+}
+
+export async function assertOperatorRpcDenied(probe, call) {
+  try {
+    await call(probe.method, probe.params);
+  } catch (error) {
+    const gatewayCode = error?.gatewayCode;
+    const message = String(error?.message ?? "");
+    if (
+      (gatewayCode === undefined || gatewayCode === "INVALID_REQUEST") &&
+      message.includes("unauthorized role: operator")
+    ) {
+      return;
+    }
+    throw error;
+  }
+  throw new Error(`${probe.method} unexpectedly allowed operator access`);
 }
 
 export function assertCreatedKitchenSinkSession(payload, expectedKey = SESSION_KEY) {
@@ -1366,12 +1422,16 @@ export function assertCreatedKitchenSinkSession(payload, expectedKey = SESSION_K
   return created;
 }
 
-export function assertKitchenSinkUiDescriptors(payload) {
+export function assertKitchenSinkUiDescriptors(payload, options = {}) {
+  const expectDescriptor = options.expectDescriptor !== false;
   const descriptorPayload = assertObjectPayload(payload, "plugins.uiDescriptors");
   if (descriptorPayload.ok !== true || !Array.isArray(descriptorPayload.descriptors)) {
     throw new Error(
       `plugins.uiDescriptors returned invalid payload: ${boundedJsonPreview(payload)}`,
     );
+  }
+  if (!expectDescriptor) {
+    return undefined;
   }
   const descriptor = descriptorPayload.descriptors.find((entry) => entry?.pluginId === PLUGIN_ID);
   if (!descriptor) {
@@ -2165,13 +2225,30 @@ export async function main() {
       toolInvoke.assertResult(invoked);
     }
 
+    const readOnlyRpcSurfaces = [];
+    for (const probe of READ_ONLY_RPC_PROBES) {
+      await retryRpcCall(probe.method, probe.params, rpcOptions);
+      readOnlyRpcSurfaces.push(probe.method);
+    }
+    await retryRpcCall("artifacts.list", { sessionKey: createdSession.key }, rpcOptions);
+    readOnlyRpcSurfaces.push("artifacts.list");
+    const authorizationBoundaries = [];
+    for (const probe of AUTHORIZATION_RPC_PROBES) {
+      await assertOperatorRpcDenied(probe, (method, params) =>
+        retryRpcCall(method, params, rpcOptions),
+      );
+      authorizationBoundaries.push(probe.method);
+    }
+
     const ttsProviders = await retryRpcCall("tts.providers", {}, rpcOptions);
     const ttsStatus = await retryRpcCall("tts.status", {}, rpcOptions);
     assertTtsProviderCoverage(ttsProviders, "providers");
     assertTtsProviderCoverage(ttsStatus, "status");
 
     const uiDescriptors = await retryRpcCall("plugins.uiDescriptors", {}, rpcOptions);
-    assertKitchenSinkUiDescriptors(uiDescriptors);
+    assertKitchenSinkUiDescriptors(uiDescriptors, {
+      expectDescriptor: env.OPENCLAW_KITCHEN_SINK_PERSONALITY !== "conformance",
+    });
     const stability = await retryRpcCall("diagnostics.stability", {}, rpcOptions);
     assertDiagnosticStabilityClean(stability);
     await sampleInFlight?.catch(() => {});
@@ -2190,6 +2267,8 @@ export async function main() {
           pluginId: PLUGIN_ID,
           commands: commandNames,
           catalogTools: catalogToolIds.filter((id) => EXPECTED_TOOLS.includes(id)),
+          readOnlyRpcSurfaces,
+          authorizationBoundaries,
           channelAccount,
           commandPeakSample,
           initialSample,

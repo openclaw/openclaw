@@ -1567,6 +1567,8 @@ export const zh_TW: TranslationMap = {
     },
     jobDetail: {
       system: "系統",
+      command: "Command",
+      cwd: "CWD",
       prompt: "提示",
       delivery: "傳送",
       agent: "代理",

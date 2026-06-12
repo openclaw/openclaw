@@ -31,11 +31,13 @@ import { runClaudeLiveSessionTurn, shouldUseClaudeLiveSession } from "./claude-l
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
 import {
   buildCliSupervisorScopeKey,
+  buildClaudeOwnerKey,
   buildCliArgs,
   resolveCliRunQueueKey,
   enqueueCliRun,
   prepareCliPromptImagePayload,
   resolveCliNoOutputTimeoutMs,
+  resolveCliRunTimeoutOverrideMs,
   resolvePromptInput,
   resolveSessionIdToSend,
   resolveSystemPromptUsage,
@@ -373,6 +375,13 @@ export async function executePreparedCliRun(
     runId: params.runId,
     workspaceDir: context.workspaceDir,
     cliSessionId: useResume ? resolvedSessionId : undefined,
+    ownerKey: buildClaudeOwnerKey({
+      agentAccountId: params.agentAccountId,
+      agentId: params.agentId,
+      authProfileId: context.effectiveAuthProfileId,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+    }),
   });
 
   try {
@@ -449,9 +458,16 @@ export async function executePreparedCliRun(
           }
         }
 
+        const runTimeoutOverrideMs = resolveCliRunTimeoutOverrideMs({
+          config: params.config,
+          lane: params.lane,
+          timeoutMs: params.timeoutMs,
+          runTimeoutOverrideMs: params.runTimeoutOverrideMs,
+        });
         const noOutputTimeoutMs = resolveCliNoOutputTimeoutMs({
           backend,
           timeoutMs: params.timeoutMs,
+          runTimeoutOverrideMs,
           useResume,
           trigger: params.trigger,
         });
@@ -491,6 +507,26 @@ export async function executePreparedCliRun(
               toolCallId: event.toolCallId,
               isError: event.isError,
               result: sanitizeToolResult(event.result),
+            },
+          });
+        };
+        let commentaryCounter = 0;
+        const emitCliCommentaryText = (text: string) => {
+          commentaryCounter += 1;
+          const transformedText = applyPluginTextReplacements(
+            text,
+            context.backendResolved.textTransforms?.output,
+          );
+          emitAgentEvent({
+            runId: params.runId,
+            stream: "item",
+            data: {
+              kind: "preamble",
+              itemId: `commentary-${params.runId}-${commentaryCounter}`,
+              phase: "update",
+              title: "commentary",
+              status: "running",
+              progressText: transformedText,
             },
           });
         };
@@ -536,6 +572,7 @@ export async function executePreparedCliRun(
             },
             onToolUseStart: emitCliToolUseStart,
             onToolResult: emitCliToolResult,
+            onCommentaryText: context.params.emitCommentaryText ? emitCliCommentaryText : undefined,
             cleanup: async () => {
               try {
                 await fallbackClaudeSkillsPlugin?.cleanup();
@@ -580,6 +617,9 @@ export async function executePreparedCliRun(
               },
               onToolUseStart: emitCliToolUseStart,
               onToolResult: emitCliToolResult,
+              onCommentaryText: context.params.emitCommentaryText
+                ? emitCliCommentaryText
+                : undefined,
             })
           : null;
         const supervisor = executeDeps.getProcessSupervisor();

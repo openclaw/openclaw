@@ -86,6 +86,19 @@ function hasTerminalRunStatus(status: ChatRunUiStatus | null | undefined): boole
   return status?.phase === "done" || status?.phase === "interrupted";
 }
 
+function isCurrentSessionSubmittedProgress(
+  item: ChatQueueItem,
+  sessionKey: string,
+  status: ChatRunUiStatus | null | undefined,
+): boolean {
+  return (
+    item.sessionKey === sessionKey &&
+    !item.pendingRunId &&
+    (item.sendState === "sending" || item.sendState === "waiting-model") &&
+    (status == null || item.sendRunId !== status.runId)
+  );
+}
+
 export type ChatProps = {
   sessionKey: string;
   onSessionKeyChange: (next: string) => void;
@@ -153,6 +166,7 @@ export type ChatProps = {
   onDraftChange: (next: string) => void;
   onRequestUpdate?: () => void;
   onHistoryKeydown?: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
+  onSlashIntent?: () => void | Promise<void>;
   onSend: () => void;
   onCompact?: () => void | Promise<void>;
   onOpenSessionCheckpoints?: () => void | Promise<void>;
@@ -454,6 +468,7 @@ interface ChatEphemeralState {
   slashMenuCommand: SlashCommandDef | null;
   slashMenuArgItems: string[];
   slashMenuExpanded: boolean;
+  slashCommandRefreshPending: boolean;
   searchOpen: boolean;
   searchQuery: string;
   pinnedExpanded: boolean;
@@ -479,6 +494,7 @@ function createChatEphemeralState(): ChatEphemeralState {
     slashMenuCommand: null,
     slashMenuArgItems: [],
     slashMenuExpanded: false,
+    slashCommandRefreshPending: false,
     searchOpen: false,
     searchQuery: "",
     pinnedExpanded: false,
@@ -1106,10 +1122,44 @@ function closeSlashMenuIfNeeded(requestUpdate: () => void): void {
   requestUpdate();
 }
 
-function updateSlashMenu(value: string, requestUpdate: () => void): void {
+function requestSlashCommandRefresh(
+  value: string,
+  props: ChatProps,
+  requestUpdate: () => void,
+  getCurrentValue?: () => string,
+): void {
+  if (!props.onSlashIntent || vs.slashCommandRefreshPending) {
+    return;
+  }
+  const refresh = props.onSlashIntent();
+  if (!refresh || typeof refresh.then !== "function") {
+    return;
+  }
+  vs.slashCommandRefreshPending = true;
+  void Promise.resolve(refresh).finally(() => {
+    vs.slashCommandRefreshPending = false;
+    const nextValue = getCurrentValue?.() ?? props.getDraft?.() ?? value;
+    if (!nextValue.startsWith("/")) {
+      closeSlashMenuIfNeeded(requestUpdate);
+      return;
+    }
+    updateSlashMenu(nextValue, requestUpdate, props, { skipSlashIntent: true });
+  });
+}
+
+function updateSlashMenu(
+  value: string,
+  requestUpdate: () => void,
+  props: ChatProps,
+  opts: { skipSlashIntent?: boolean } = {},
+  getCurrentValue?: () => string,
+): void {
   // Arg mode: /command <partial-arg>
   const argMatch = value.match(/^\/(\S+)\s(.*)$/);
   if (argMatch) {
+    if (!opts.skipSlashIntent) {
+      requestSlashCommandRefresh(value, props, requestUpdate, getCurrentValue);
+    }
     const cmdName = argMatch[1].toLowerCase();
     const argFilter = argMatch[2].toLowerCase();
     const cmd = SLASH_COMMANDS.find((c) => c.name === cmdName);
@@ -1135,6 +1185,9 @@ function updateSlashMenu(value: string, requestUpdate: () => void): void {
   // Command mode: /partial-command
   const match = value.match(/^\/(\S*)$/);
   if (match) {
+    if (!opts.skipSlashIntent) {
+      requestSlashCommandRefresh(value, props, requestUpdate, getCurrentValue);
+    }
     const items = getSlashCommandCompletions(match[1], { showAll: vs.slashMenuExpanded });
     vs.slashMenuItems = items;
     vs.slashMenuOpen = items.length > 0;
@@ -1512,7 +1565,7 @@ function renderSlashMenu(
               e.preventDefault();
               e.stopPropagation();
               vs.slashMenuExpanded = true;
-              updateSlashMenu(draft, requestUpdate);
+              updateSlashMenu(draft, requestUpdate, props);
             }}
           >
             Show ${hiddenCount} more command${hiddenCount !== 1 ? "s" : ""}
@@ -1529,8 +1582,15 @@ export function renderChat(props: ChatProps) {
   const canCompose = props.connected;
   const isBusy = props.sending || props.stream !== null;
   const canAbort = Boolean(props.canAbort && props.onAbort);
-  const showAbortableUi = canAbort && !hasTerminalRunStatus(props.runStatus);
-  const composerRunStatus = showAbortableUi ? { phase: "in-progress" as const } : props.runStatus;
+  const hasTerminalStatus = hasTerminalRunStatus(props.runStatus);
+  const showAbortableUi = canAbort && !hasTerminalStatus;
+  const showSubmittedProgressUi = props.queue.some((item) =>
+    isCurrentSessionSubmittedProgress(item, props.sessionKey, props.runStatus),
+  );
+  const composerRunStatus =
+    showAbortableUi || showSubmittedProgressUi
+      ? { phase: "in-progress" as const }
+      : props.runStatus;
   const compactBusy =
     props.compactionStatus?.phase === "active" || props.compactionStatus?.phase === "retrying";
   const activeSession = props.sessions?.sessions?.find((row) => row.key === props.sessionKey);
@@ -1941,7 +2001,7 @@ export function renderChat(props: ChatProps) {
     if (hostDraftNeeded || target.value.startsWith("/") || hasVisibleSlashMenuState()) {
       commitComposerDraft(props, target.value);
     }
-    updateSlashMenu(target.value, requestUpdate);
+    updateSlashMenu(target.value, requestUpdate, props, {}, () => target.value);
   };
   const handleBlur = (e: FocusEvent) => {
     const target = e.target as HTMLTextAreaElement;

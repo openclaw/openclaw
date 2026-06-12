@@ -264,6 +264,7 @@ export async function buildModelsListResult(params: {
   context: GatewayRequestContext;
   agentId?: string;
   params: Record<string, unknown>;
+  preloadedCatalog?: ModelCatalogEntry[];
 }): Promise<{ models: ModelsListEntry[] }> {
   const cfg = params.context.getRuntimeConfig();
   const agentId = params.agentId ?? resolveDefaultAgentId(cfg);
@@ -272,7 +273,13 @@ export async function buildModelsListResult(params: {
   const catalog = await loadModelCatalogForBrowse({
     cfg,
     view,
-    loadCatalog: params.context.loadGatewayModelCatalog,
+    loadCatalog: async (loadParams) => {
+      const readOnlyLoad = loadParams.readOnly ?? true;
+      if (params.preloadedCatalog && readOnlyLoad) {
+        return params.preloadedCatalog;
+      }
+      return await params.context.loadGatewayModelCatalog(loadParams);
+    },
     onTimeout: (timeoutMs) => {
       if (loggedSlowModelsListCatalog) {
         return;

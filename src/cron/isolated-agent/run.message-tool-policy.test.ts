@@ -395,6 +395,52 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     expect(embeddedRun.messageTo).toBeUndefined();
   });
 
+  it("uses final assistant text to recover tool warnings for bare no-deliver runs", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: false,
+      mode: "none",
+    });
+    resolveCronPayloadOutcomeMock.mockReturnValue({
+      summary: "Final cron report from the agent.",
+      outputText: "Final cron report from the agent.",
+      synthesizedText: "Final cron report from the agent.",
+      deliveryPayload: { text: "Final cron report from the agent." },
+      deliveryPayloads: [{ text: "Final cron report from the agent." }],
+      deliveryPayloadHasStructuredContent: false,
+      hasFatalErrorPayload: false,
+      hasFatalStructuredErrorPayload: false,
+      embeddedRunError: undefined,
+    });
+    runEmbeddedAgentMock.mockResolvedValue({
+      payloads: [{ text: "⚠️ 🛠️ show > (agent) failed", isError: true }],
+      meta: {
+        finalAssistantVisibleText: "Final cron report from the agent.",
+        agentMeta: { usage: { input: 10, output: 20 } },
+      },
+    });
+
+    const result = await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: makeMessageToolPolicyJob({ mode: "none" }),
+    });
+
+    expect(result.status).toBe("ok");
+    expect(result.error).toBeUndefined();
+    expect(result.summary).toBe("Final cron report from the agent.");
+    expect(result.outputText).toBe("Final cron report from the agent.");
+    expect(resolveCronPayloadOutcomeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        finalAssistantVisibleText: "Final cron report from the agent.",
+        preferFinalAssistantVisibleText: true,
+      }),
+    );
+    expectDispatchFields({
+      deliveryRequested: false,
+      deliveryPayloads: [{ text: "Final cron report from the agent." }],
+    });
+  });
+
   it('suppresses automatic exec completion notifications when delivery.mode is "none"', async () => {
     mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue({

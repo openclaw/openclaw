@@ -428,6 +428,23 @@ describe("launchd runtime state", () => {
     expect(runtime.detail).toBe("Could not find service");
   });
 
+  it.each([
+    "Bootstrap failed: 125: Domain does not support specified action",
+    "Could not find domain for user gui: 999999",
+  ])("marks installed LaunchAgents unavailable when launchd reports %s", async (detail) => {
+    const env = createDefaultLaunchdEnv();
+    state.files.set(resolveLaunchAgentPlistPath(env), "<plist/>");
+    state.printError = detail;
+    state.printFailuresRemaining = 1;
+
+    const runtime = await readLaunchAgentRuntime(env);
+
+    expect(runtime.status).toBe("unknown");
+    expect(runtime.missingSupervision).toBe(true);
+    expect(runtime.missingGuiSession).toBe(true);
+    expect(runtime.detail).toBe(detail);
+  });
+
   it("marks a missing unit when launchd has no job and no plist exists", async () => {
     const env = createDefaultLaunchdEnv();
     state.serviceLoaded = false;
@@ -776,6 +793,24 @@ describe("launchd bootstrap repair", () => {
     }
     expect(repair.status).toBe("bootstrap-failed");
     expect(repair.detail).toContain("Could not find specified service");
+    expect(launchctlCommandNames()).not.toContain("kickstart");
+  });
+
+  it.each([
+    "Bootstrap failed: 125: Domain does not support specified action",
+    "Could not find domain for user gui: 999999",
+  ])("classifies %s separately from generic not-loaded repair", async (detail) => {
+    state.bootstrapError = detail;
+    const env = createDefaultLaunchdEnv();
+
+    const repair = await repairLaunchAgentBootstrap({ env });
+
+    expect(repair).toEqual({
+      ok: false,
+      status: "gui-session-unavailable",
+      detail,
+      domain: typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501",
+    });
     expect(launchctlCommandNames()).not.toContain("kickstart");
   });
 

@@ -15,7 +15,10 @@ import {
   type DiagnosticMemoryUsage,
   emitTrustedDiagnosticEventWithPrivateData,
 } from "../../../infra/diagnostic-events.js";
-import type { DiagnosticModelContentCapturePolicy } from "../../../infra/diagnostic-llm-content.js";
+import {
+  cloneDiagnosticContentValue,
+  type DiagnosticModelContentCapturePolicy,
+} from "../../../infra/diagnostic-llm-content.js";
 import {
   createChildDiagnosticTraceContext,
   freezeDiagnosticTraceContext,
@@ -146,19 +149,6 @@ function responseStreamChunkByteLength(chunk: unknown): number | undefined {
     return responseStreamChunkByteLengthUnchecked(chunk);
   } catch {
     return undefined;
-  }
-}
-
-function cloneDiagnosticContentValue(value: unknown): unknown {
-  try {
-    return structuredClone(value);
-  } catch {
-    try {
-      const serialized = JSON.stringify(value);
-      return serialized === undefined ? null : (JSON.parse(serialized) as unknown);
-    } catch {
-      return String(value);
-    }
   }
 }
 
