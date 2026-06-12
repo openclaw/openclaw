@@ -1,0 +1,38 @@
+// Heartbeat reply payload selector tests.
+import { describe, expect, it } from "vitest";
+import { resolveHeartbeatReplyPayload } from "./heartbeat-reply-payload.js";
+import type { ReplyPayload } from "./types.js";
+
+describe("resolveHeartbeatReplyPayload", () => {
+  it("returns a single non-array payload unchanged", () => {
+    const payload: ReplyPayload = { text: "HEARTBEAT_OK" };
+    expect(resolveHeartbeatReplyPayload(payload)).toBe(payload);
+  });
+
+  it("returns undefined for undefined input", () => {
+    expect(resolveHeartbeatReplyPayload(undefined)).toBeUndefined();
+  });
+
+  it("returns the last outbound payload when none are reasoning", () => {
+    const first: ReplyPayload = { text: "first" };
+    const second: ReplyPayload = { text: "second" };
+    expect(resolveHeartbeatReplyPayload([first, second])).toBe(second);
+  });
+
+  it("skips a trailing reasoning payload and returns the assistant answer", () => {
+    const answer: ReplyPayload = { text: "HEARTBEAT_OK" };
+    const reasoning: ReplyPayload = {
+      text: "The message is an OpenClaw heartbeat poll. I should check recent chat...",
+      isReasoning: true,
+    };
+    expect(resolveHeartbeatReplyPayload([answer, reasoning])).toBe(answer);
+  });
+
+  it("returns undefined when every outbound payload is reasoning", () => {
+    const reasoning: ReplyPayload = {
+      text: "Deliberating about whether to respond...",
+      isReasoning: true,
+    };
+    expect(resolveHeartbeatReplyPayload([reasoning])).toBeUndefined();
+  });
+});
