@@ -1,10 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(__dirname, "../..");
+const repoRoot = path.resolve(import.meta.dirname, "../..");
 
 // Dynamic import of the production code to avoid static resolution issues
 const { resolveAgentWorkspaceDir } = await import(

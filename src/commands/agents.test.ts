@@ -49,7 +49,7 @@ describe("agents helpers", () => {
     const main = requireAgentSummary(summaries, "main");
     const work = requireAgentSummary(summaries, "work");
 
-    expect(main.workspace).toBe(path.resolve("/main-ws/main"));
+    expect(main.workspace).toBe(path.resolve("/main-ws-main"));
     expect(main.bindings).toBe(1);
     expect(main.model).toBe("anthropic/claude");
     expect(main.agentDir.endsWith(path.join("agents", "main", "agent"))).toBe(true);
