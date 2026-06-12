@@ -2,12 +2,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
-  createSubsystemLogger,
   resolveMemorySearchConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-
-const log = createSubsystemLogger("memory");
 
 export type TemporalDecayConfig = {
   enabled: boolean;
