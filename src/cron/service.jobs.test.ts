@@ -845,6 +845,33 @@ describe("cron stagger defaults", () => {
     }
   });
 
+  it("preserves existing cron timezone when editing expression and stagger", () => {
+    const now = Date.now();
+    const job: CronJob = {
+      id: "job-keep-tz-with-stagger",
+      name: "job-keep-tz-with-stagger",
+      enabled: true,
+      createdAtMs: now,
+      updatedAtMs: now,
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "America/Phoenix" },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+      state: {},
+    };
+
+    applyJobPatch(job, {
+      schedule: { kind: "cron", expr: "0 */2 * * *", staggerMs: 30_000 },
+    });
+
+    expect(job.schedule.kind).toBe("cron");
+    if (job.schedule.kind === "cron") {
+      expect(job.schedule.expr).toBe("0 */2 * * *");
+      expect(job.schedule.tz).toBe("America/Phoenix");
+      expect(job.schedule.staggerMs).toBe(30_000);
+    }
+  });
+
   it("applies default stagger when switching from every to top-of-hour cron", () => {
     const now = Date.now();
     const job: CronJob = {
