@@ -732,6 +732,49 @@ describe("workboard controller", () => {
     expect(state.loaded).toBe(true);
   });
 
+  it("queues a forced full refresh behind an in-flight bounded poll load", async () => {
+    const host = {};
+    const pollList = createDeferred<unknown>();
+    const forcedCard = { ...sampleCard, title: "Forced full refresh" };
+    let cardListCalls = 0;
+    const client = createClient((method) => {
+      if (method === "workboard.cards.list") {
+        cardListCalls += 1;
+        return cardListCalls === 1
+          ? pollList.promise
+          : { cards: [forcedCard], statuses: ["todo", "done"] };
+      }
+      if (method === "tasks.list") {
+        return { tasks: [] };
+      }
+      return {};
+    });
+
+    const poll = loadWorkboard({
+      host,
+      client: client as never,
+      force: true,
+      taskRefresh: "recent",
+    });
+    await Promise.resolve();
+    const forced = loadWorkboard({
+      host,
+      client: client as never,
+      force: true,
+      refreshDiagnostics: true,
+      taskRefresh: "all",
+    });
+    pollList.resolve({ cards: [sampleCard], statuses: ["todo", "done"] });
+    await Promise.all([poll, forced]);
+
+    expect(client.request).toHaveBeenCalledWith("workboard.cards.diagnostics.refresh", {});
+    expect(
+      client.request.mock.calls.filter(([method]) => method === "workboard.cards.list"),
+    ).toHaveLength(2);
+    expect(client.request.mock.calls.filter(([method]) => method === "tasks.list")).toHaveLength(2);
+    expect(getWorkboardState(host).cards).toMatchObject([{ title: "Forced full refresh" }]);
+  });
+
   it("does not mark a load successful when task enrichment is invalidated by a write", async () => {
     const host = {};
     const taskList = createDeferred<unknown>();

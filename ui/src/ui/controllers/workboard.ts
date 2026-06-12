@@ -1462,7 +1462,10 @@ export async function loadWorkboard(params: {
   const client = params.client;
   const existingLoad = workboardLoadPromises.get(params.host);
   if (existingLoad) {
-    return await existingLoad;
+    const result = await existingLoad;
+    // Forced callers carry their own diagnostics/task-refresh contract, so a
+    // weaker in-flight load cannot satisfy them.
+    return params.force ? await loadWorkboard(params) : result;
   }
   const generation = nextWorkboardLoadGeneration(params.host);
   state.loadAttempted = true;
