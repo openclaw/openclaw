@@ -70,6 +70,7 @@ const VECTOR_TABLE = "chunks_vec";
 const FTS_TABLE = "chunks_fts";
 const EMBEDDING_CACHE_TABLE = "embedding_cache";
 const MEMORY_INDEX_MANAGER_CACHE_KEY = Symbol.for("openclaw.memoryIndexManagerCache");
+const MEMORY_INDEX_METADATA_RECOVERY_DELAY_MS = 500;
 export const EMBEDDING_PROBE_CACHE_TTL_MS = 30_000;
 const log = createSubsystemLogger("memory");
 type MemoryIndexManagerPurpose = "default" | "status" | "cli";
@@ -290,6 +291,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   private readonlyRecoverySuccesses = 0;
   private readonlyRecoveryFailures = 0;
   private readonlyRecoveryLastError?: string;
+  private metadataRecoveryAttempts = 0;
+  private metadataRecoverySuccesses = 0;
+  private metadataRecoveryFailures = 0;
+  private metadataRecoveryLastError?: string;
   private indexIdentityState: MemoryIndexIdentityState = {
     status: "missing",
     reason: "index metadata is missing",
@@ -582,7 +587,97 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     return state;
   }
 
+  private isRecoverableMissingIndexMetadata(
+    state: MemoryIndexIdentityState,
+  ): state is Extract<MemoryIndexIdentityState, { status: "missing" }> {
+    return state.status === "missing" && state.reason === "index metadata is missing";
+  }
+
+  private async waitForMetadataRecovery(signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) {
+      throw signal.reason instanceof Error ? signal.reason : new Error("memory search aborted");
+    }
+    await new Promise<void>((resolve, reject) => {
+      let timer: NodeJS.Timeout;
+      const recoverySignal = signal;
+      const onAbort = () => {
+        clearTimeout(timer);
+        reject(
+          recoverySignal?.reason instanceof Error
+            ? recoverySignal.reason
+            : new Error("memory search aborted"),
+        );
+      };
+      timer = setTimeout(() => {
+        recoverySignal?.removeEventListener("abort", onAbort);
+        resolve();
+      }, MEMORY_INDEX_METADATA_RECOVERY_DELAY_MS);
+      if (!recoverySignal) {
+        return;
+      }
+      recoverySignal.addEventListener("abort", onAbort, { once: true });
+      void Promise.resolve().then(() => {
+        if (recoverySignal.aborted) {
+          onAbort();
+        }
+      });
+    });
+  }
+
+  private reopenDatabaseForMetadataRecovery(): void {
+    const previousVectorDims = this.vector.dims;
+    try {
+      closeMemoryDatabase(this.db);
+    } catch {}
+    this.db = this.openDatabase();
+    this.resetVectorState();
+    this.ensureSchema();
+    const meta = this.readMeta();
+    this.vector.dims = meta?.vectorDims ?? previousVectorDims;
+  }
+
   async search(
+    query: string,
+    opts?: {
+      maxResults?: number;
+      minScore?: number;
+      sessionKey?: string;
+      qmdSearchModeOverride?: "query" | "search" | "vsearch";
+      onDebug?: (debug: MemorySearchRuntimeDebug) => void;
+      /** When set, only these chunk sources are considered (must be enabled for this manager). */
+      sources?: MemorySource[];
+      /** Caller-owned cancellation; aborts in-flight embedding work when the caller stops waiting. */
+      signal?: AbortSignal;
+    },
+  ): Promise<MemorySearchResult[]> {
+    const result = await this.searchOnce(query, opts);
+    if (!this.isRecoverableMissingIndexMetadata(this.indexIdentityState)) {
+      return result;
+    }
+    const reason = this.indexIdentityState.reason;
+    this.metadataRecoveryAttempts += 1;
+    this.metadataRecoveryLastError = reason;
+    log.warn("memory search metadata missing; reopening sqlite connection after retry delay", {
+      reason,
+    });
+    try {
+      await this.waitForMetadataRecovery(opts?.signal);
+      this.reopenDatabaseForMetadataRecovery();
+      const retryResult = await this.searchOnce(query, opts);
+      const retryIdentityState = this.indexIdentityState as MemoryIndexIdentityState;
+      if (retryIdentityState.status === "valid") {
+        this.metadataRecoverySuccesses += 1;
+      } else {
+        this.metadataRecoveryFailures += 1;
+      }
+      return retryResult;
+    } catch (err) {
+      this.metadataRecoveryFailures += 1;
+      throw err;
+    }
+  }
+
+  private async searchOnce(
     query: string,
     opts?: {
       maxResults?: number;
@@ -1174,6 +1269,12 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
           successes: this.readonlyRecoverySuccesses,
           failures: this.readonlyRecoveryFailures,
           lastError: this.readonlyRecoveryLastError,
+        },
+        metadataRecovery: {
+          attempts: this.metadataRecoveryAttempts,
+          successes: this.metadataRecoverySuccesses,
+          failures: this.metadataRecoveryFailures,
+          lastError: this.metadataRecoveryLastError,
         },
       },
     };
