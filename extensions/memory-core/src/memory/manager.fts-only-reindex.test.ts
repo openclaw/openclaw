@@ -105,6 +105,18 @@ describe("memory manager FTS-only reindex", () => {
     }
   }
 
+  function countMetaRows(): number {
+    const db = new DatabaseSync(indexPath);
+    try {
+      const row = db
+        .prepare(`SELECT COUNT(*) as c FROM meta WHERE key = 'memory_index_meta_v1'`)
+        .get() as { c: number } | undefined;
+      return row?.c ?? 0;
+    } finally {
+      db.close();
+    }
+  }
+
   function writeExistingMeta(memoryManager: MemoryIndexManager, model: string): void {
     const metaWriter = memoryManager as unknown as {
       writeMeta(meta: MemoryIndexMeta): void;
@@ -130,6 +142,19 @@ describe("memory manager FTS-only reindex", () => {
     const secondStatus = memoryManager.status();
     expect(secondStatus.chunks).toBeGreaterThan(0);
     expect(countChunksContaining("Alpha topic")).toBeGreaterThan(0);
+  });
+
+  it("writes unchanged metadata into the fresh database during safe reindex", async () => {
+    const memoryManager = await createManager({ provider: "none", vectorEnabled: false });
+
+    await memoryManager.sync({ force: true });
+    expect(memoryManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+    expect(countMetaRows()).toBe(1);
+
+    await memoryManager.sync({ force: true });
+
+    expect(countMetaRows()).toBe(1);
+    expect(memoryManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
   });
 
   it("syncs explicit provider-none memory without resolving an embedding provider", async () => {
