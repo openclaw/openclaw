@@ -96,6 +96,7 @@ import { isFallbackSummaryError, runWithModelFallback } from "../model-fallback.
 import { supportsModelTools } from "../model-tool-support.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import { wrapStreamFnTextTransforms } from "../plugin-text-transforms.js";
+import { applyPreparedRuntimeAuthToModel } from "../provider-request-config.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "../prompt-surface.js";
 import { registerProviderStreamForModel } from "../provider-stream.js";
 import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
@@ -160,6 +161,10 @@ import { sanitizeSessionHistory, validateReplayTurns } from "./replay-history.js
 import { createEmbeddedAgentResourceLoader } from "./resource-loader.js";
 import { resolveAttemptSpawnWorkspaceDir } from "./run/attempt.thread-helpers.js";
 import { buildEmbeddedSandboxInfo, resolveEmbeddedSandboxInfoExecPolicy } from "./sandbox-info.js";
+import {
+  mapSandboxSkillEntriesForPrompt,
+  resolveSandboxSkillRuntimeInputs,
+} from "./sandbox-skills.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "./session-manager-cache.js";
 import {
   resolveEmbeddedAgentBaseStreamFn,
@@ -206,6 +211,18 @@ function prepareCompactionSessionAgent(params: {
   effectiveWorkspace: string;
   agentDir: string;
   runtimePlan?: AgentRuntimePlan;
+  sessionKey?: string;
+  sandboxToolPolicy?: { allow?: string[]; deny?: string[] };
+  messageProvider?: string;
+  agentAccountId?: string | null;
+  groupId?: string | null;
+  groupChannel?: string | null;
+  groupSpace?: string | null;
+  spawnedBy?: string | null;
+  senderId?: string | null;
+  senderName?: string | null;
+  senderUsername?: string | null;
+  senderE164?: string | null;
 }) {
   params.session.agent.streamFn = resolveEmbeddedAgentStreamFn({
     currentStreamFn: resolveEmbeddedAgentBaseStreamFn({ session: params.session as never }),
@@ -248,7 +265,25 @@ function prepareCompactionSessionAgent(params: {
     params.effectiveModel,
     params.agentDir,
     undefined,
-    preparedRuntimeExtraParams ? { preparedExtraParams: preparedRuntimeExtraParams } : undefined,
+    {
+      ...(preparedRuntimeExtraParams ? { preparedExtraParams: preparedRuntimeExtraParams } : {}),
+      nativeWebSearchPolicyContext: {
+        // Compaction rebuilds the provider stream wrapper, so preserve the
+        // session-scoped policy inputs that can suppress provider-native search.
+        sessionKey: params.sessionKey,
+        sandboxToolPolicy: params.sandboxToolPolicy,
+        messageProvider: params.messageProvider,
+        agentAccountId: params.agentAccountId,
+        groupId: params.groupId,
+        groupChannel: params.groupChannel,
+        groupSpace: params.groupSpace,
+        spawnedBy: params.spawnedBy,
+        senderId: params.senderId,
+        senderName: params.senderName,
+        senderUsername: params.senderUsername,
+        senderE164: params.senderE164,
+      },
+    },
   );
 }
 
@@ -637,9 +672,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
           profileId: apiKeyInfo.profileId,
         },
       });
-      if (preparedAuth?.baseUrl) {
-        runtimeModel = { ...runtimeModel, baseUrl: preparedAuth.baseUrl };
-      }
+      runtimeModel = applyPreparedRuntimeAuthToModel(runtimeModel, preparedAuth);
       const runtimeApiKey = preparedAuth?.apiKey ?? apiKeyInfo.apiKey;
       hasRuntimeAuthExchange = Boolean(preparedAuth?.apiKey);
       if (!runtimeApiKey) {
@@ -685,13 +718,24 @@ async function compactEmbeddedAgentSessionDirectOnce(
   let checkpointSnapshot: CapturedCompactionCheckpointSnapshot | null = null;
   let checkpointSnapshotRetained = false;
   try {
-    const skillsSnapshotForRun =
-      sandbox?.enabled && sandbox.workspaceAccess !== "rw" ? undefined : params.skillsSnapshot;
+    const {
+      skillsEligibility,
+      skillsPromptWorkspaceDir: effectiveSkillsPromptWorkspace,
+      skillsSnapshot: skillsSnapshotForRun,
+      skillsWorkspaceDir: effectiveSkillsWorkspace,
+      workspaceOnly: loadSkillsWorkspaceOnly,
+    } = resolveSandboxSkillRuntimeInputs({
+      sandbox,
+      effectiveWorkspace,
+      skillsSnapshot: params.skillsSnapshot,
+    });
     const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
-      workspaceDir: effectiveWorkspace,
+      workspaceDir: effectiveSkillsWorkspace,
       config: params.config,
       agentId: effectiveSkillAgentId,
+      eligibility: skillsEligibility,
       skillsSnapshot: skillsSnapshotForRun,
+      workspaceOnly: loadSkillsWorkspaceOnly,
     });
     restoreSkillEnv = skillsSnapshotForRun
       ? applySkillEnvOverridesFromSnapshot({
@@ -702,12 +746,18 @@ async function compactEmbeddedAgentSessionDirectOnce(
           skills: skillEntries ?? [],
           config: params.config,
         });
+    const promptSkillEntries = mapSandboxSkillEntriesForPrompt({
+      entries: shouldLoadSkillEntries ? skillEntries : undefined,
+      skillsWorkspaceDir: effectiveSkillsWorkspace,
+      skillsPromptWorkspaceDir: effectiveSkillsPromptWorkspace,
+    });
     const skillsPrompt = resolveSkillsPromptForRun({
       skillsSnapshot: skillsSnapshotForRun,
-      entries: shouldLoadSkillEntries ? skillEntries : undefined,
+      entries: promptSkillEntries,
       config: params.config,
-      workspaceDir: effectiveWorkspace,
+      workspaceDir: effectiveSkillsPromptWorkspace,
       agentId: effectiveSkillAgentId,
+      eligibility: skillsEligibility,
     });
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
@@ -971,6 +1021,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
       model: `${provider}/${modelId}`,
       shell: detectRuntimeShell(),
       channel: runtimeChannel,
+      chatType: params.chatType,
       capabilities: runtimeCapabilities,
       channelActions,
       activeProcessSessions: listActiveProcessSessionReferences({
@@ -1238,6 +1289,18 @@ async function compactEmbeddedAgentSessionDirectOnce(
             effectiveWorkspace,
             agentDir,
             runtimePlan,
+            sessionKey: sandboxSessionKey,
+            sandboxToolPolicy: sandbox?.tools,
+            messageProvider: resolvedMessageProvider,
+            agentAccountId: params.agentAccountId,
+            groupId: params.groupId,
+            groupChannel: params.groupChannel,
+            groupSpace: params.groupSpace,
+            spawnedBy: params.spawnedBy,
+            senderId: params.senderId,
+            senderName: params.senderName,
+            senderUsername: params.senderUsername,
+            senderE164: params.senderE164,
           });
 
           const prior = await sanitizeSessionHistory({

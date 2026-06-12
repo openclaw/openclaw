@@ -273,8 +273,10 @@ const RUNTIME_CONFIG_VITEST_CONFIG = "test/vitest/vitest.runtime-config.config.t
 const SECRETS_VITEST_CONFIG = "test/vitest/vitest.secrets.config.ts";
 const SHARED_CORE_VITEST_CONFIG = "test/vitest/vitest.shared-core.config.ts";
 const TASKS_VITEST_CONFIG = "test/vitest/vitest.tasks.config.ts";
+const TOOLING_DOCKER_VITEST_CONFIG = "test/vitest/vitest.tooling-docker.config.ts";
 const TOOLING_ISOLATED_VITEST_CONFIG = "test/vitest/vitest.tooling-isolated.config.ts";
 const TOOLING_VITEST_CONFIG = "test/vitest/vitest.tooling.config.ts";
+const TOOLING_DOCKER_TEST_TARGET = "test/scripts/docker-build-helper.test.ts";
 const TOOLING_ISOLATED_TEST_TARGET = "test/scripts/openclaw-e2e-instance.test.ts";
 const TUI_VITEST_CONFIG = "test/vitest/vitest.tui.config.ts";
 const TUI_PTY_VITEST_CONFIG = "test/vitest/vitest.tui-pty.config.ts";
@@ -367,6 +369,7 @@ const VITEST_CONFIG_BY_KIND = {
   secrets: SECRETS_VITEST_CONFIG,
   sharedCore: SHARED_CORE_VITEST_CONFIG,
   tasks: TASKS_VITEST_CONFIG,
+  toolingDocker: TOOLING_DOCKER_VITEST_CONFIG,
   toolingIsolated: TOOLING_ISOLATED_VITEST_CONFIG,
   tooling: TOOLING_VITEST_CONFIG,
   tui: TUI_VITEST_CONFIG,
@@ -407,6 +410,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   [
     ".github/workflows/crabbox-hydrate.yml",
     ["test/scripts/ci-workflow-guards.test.ts", "test/scripts/package-acceptance-workflow.test.ts"],
+  ],
+  [
+    ".github/workflows/openclaw-release-checks.yml",
+    ["test/scripts/package-acceptance-workflow.test.ts"],
   ],
   ["scripts/build-all.mjs", ["test/scripts/build-all.test.ts"]],
   ["scripts/crabbox-wrapper.mjs", ["test/scripts/crabbox-wrapper.test.ts"]],
@@ -523,6 +530,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/lib/format-generated-module.mjs", ["test/scripts/format-generated-module.test.ts"]],
   ["scripts/lib/live-docker-stage.sh", ["test/scripts/live-docker-stage.test.ts"]],
   ["scripts/lib/local-heavy-check-runtime.mjs", ["test/scripts/local-heavy-check-runtime.test.ts"]],
+  ["scripts/lib/kova-report-gate.mjs", ["test/scripts/kova-report-gate.test.ts"]],
   ["scripts/lib/managed-child-process.mjs", ["test/scripts/managed-child-process.test.ts"]],
   ["scripts/lib/npm-verify-exec.ts", ["test/scripts/npm-verify-exec.test.ts"]],
   ["scripts/lib/openclaw-test-state.mjs", ["test/scripts/openclaw-test-state.test.ts"]],
@@ -1786,6 +1794,10 @@ function resolvePreciseChangedTestTargets(changedPath, options) {
   return null;
 }
 
+function isDeletedChangedTestTarget(changedPath, cwd) {
+  return isTestFileTarget(changedPath) && !fs.existsSync(path.join(cwd, changedPath));
+}
+
 /**
  * Maps changed repo paths to the smallest useful Vitest target plan.
  */
@@ -1794,17 +1806,20 @@ export function resolveChangedTestTargetPlan(changedPaths, options = {}) {
     return { mode: "none", targets: [] };
   }
   const cwd = options.cwd ?? process.cwd();
-  const toolingTargets = resolveToolingChangedTestTargets(changedPaths, cwd);
+  const executableChangedPaths = changedPaths.filter(
+    (changedPath) => !isDeletedChangedTestTarget(changedPath, cwd),
+  );
+  const toolingTargets = resolveToolingChangedTestTargets(executableChangedPaths, cwd);
   if (toolingTargets) {
     return { mode: "targets", targets: toolingTargets };
   }
-  const changedLanes = detectChangedLanes(changedPaths);
+  const changedLanes = detectChangedLanes(executableChangedPaths);
   const env = options.env ?? {};
   const useBroadFallback = options.broad ?? shouldUseBroadChangedTargets(env);
   const skipImportGraph = changedLanes.lanes.all && !useBroadFallback;
   const targets = [];
   const skippedBroadFallbackPaths = [];
-  for (const changedPath of changedPaths) {
+  for (const changedPath of executableChangedPaths) {
     const preciseTargets = resolvePreciseChangedTestTargets(changedPath, {
       ...options,
       skipImportGraph,
@@ -1998,6 +2013,9 @@ function classifyTarget(arg, cwd) {
   }
   if (relative === TOOLING_ISOLATED_TEST_TARGET) {
     return "toolingIsolated";
+  }
+  if (relative === TOOLING_DOCKER_TEST_TARGET) {
+    return "toolingDocker";
   }
   if (
     relative.startsWith("test/") ||
@@ -2229,6 +2247,20 @@ export function buildVitestRunPlans(
     !watchMode &&
     toolingTargets.some((targetArg) =>
       includePatternMatchesAnyFile(toScopedIncludePattern(targetArg, cwd), [
+        TOOLING_DOCKER_TEST_TARGET,
+      ]),
+    )
+  ) {
+    const current = groupedTargets.get("toolingDocker") ?? [];
+    if (!current.includes(TOOLING_DOCKER_TEST_TARGET)) {
+      current.push(TOOLING_DOCKER_TEST_TARGET);
+      groupedTargets.set("toolingDocker", current);
+    }
+  }
+  if (
+    !watchMode &&
+    toolingTargets.some((targetArg) =>
+      includePatternMatchesAnyFile(toScopedIncludePattern(targetArg, cwd), [
         TOOLING_ISOLATED_TEST_TARGET,
       ]),
     )
@@ -2251,6 +2283,7 @@ export function buildVitestRunPlans(
     "unitFastFakeTimers",
     "default",
     "boundary",
+    "toolingDocker",
     "toolingIsolated",
     "tooling",
     "contractsChannelSurface",

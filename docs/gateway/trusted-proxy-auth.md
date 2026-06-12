@@ -53,24 +53,23 @@ Use `trusted-proxy` auth mode when:
 
 When `gateway.auth.mode = "trusted-proxy"` is active and the request passes trusted-proxy checks, Control UI WebSocket sessions can connect without device pairing identity.
 
+Scope implications:
+
+- Device-less Control UI WebSocket sessions connect but receive no operator scopes by default. OpenClaw clears the requested scope list to `[]` so a session that is not bound to an approved paired device/token cannot self-declare permissions.
+- If methods fail with `missing scope` after a successful WebSocket connect, use HTTPS so the browser can generate device identity and complete pairing. See [Control UI insecure HTTP](/web/control-ui#insecure-http).
+- Break-glass only: `gateway.controlUi.dangerouslyDisableDeviceAuth=true` preserves requested scopes even without device identity. This is a severe security downgrade; revert quickly. See [Control UI insecure HTTP](/web/control-ui#insecure-http).
+
+Reverse-proxy scope capping:
+
+- If your proxy sends `x-openclaw-scopes` on the Control UI WebSocket upgrade request, OpenClaw caps the session scopes to the intersection of the requested scopes and the declared scopes. This header does not grant scopes; it only narrows what the session can hold.
+
 Implications:
 
 - Pairing is no longer the primary gate for Control UI access in this mode.
 - Your reverse proxy auth policy and `allowUsers` become the effective access control.
 - Keep gateway ingress locked to trusted proxy IPs only (`gateway.trustedProxies` + firewall).
 
-**Scope clearing without device identity:** Because the browser over plain HTTP
-cannot create the device identity that OpenClaw uses to bind operator scopes,
-trusted-proxy WebSocket connections that lack device identity have their
-self-declared scopes cleared to an empty set. The connection is allowed, but
-scope-gated methods (`operator.read`, `operator.write`, etc.) fail with
-`missing scope`.
-
-To preserve operator scopes on trusted-proxy WebSocket connections without
-device identity, set `gateway.controlUi.dangerouslyDisableDeviceAuth: true`.
-This is a break-glass flag (`openclaw security audit` reports it as critical).
-Use it only when the reverse proxy is the sole path to the Gateway and device
-identity cannot be established.
+Custom WebSocket clients are not Control UI sessions. `gateway.controlUi.dangerouslyDisableDeviceAuth` does not grant scopes to arbitrary `client.mode: "backend"` or CLI-shaped clients. Custom automation should use device identity/pairing, the reserved direct-local `client.id: "gateway-client"` backend helper path, or the [admin HTTP RPC plugin](/plugins/admin-http-rpc) when an HTTP request/response surface is a better fit.
 
 ## Configuration
 
@@ -322,12 +321,9 @@ Loopback trusted-proxy identity headers still fail closed: same-host callers are
 
 ## Operator scopes header
 
-Trusted-proxy auth is an **identity-bearing** HTTP mode, so callers may optionally declare operator scopes with `x-openclaw-scopes`.
+Trusted-proxy auth is an **identity-bearing** HTTP mode, so callers may optionally declare operator scopes with `x-openclaw-scopes` on HTTP API requests.
 
-Note: `x-openclaw-scopes` applies to HTTP endpoints only. WebSocket scopes are
-determined by the Gateway protocol handshake and device identity binding. For
-WebSocket scope behavior with trusted-proxy, see
-[Control UI pairing behavior](#control-ui-pairing-behavior).
+Note: WebSocket scopes are determined by the Gateway protocol handshake and device identity binding. On Control UI WebSocket upgrade requests, `x-openclaw-scopes` is only a cap on the negotiated session scopes, not a grant. For WebSocket scope behavior with trusted-proxy, see [Control UI pairing behavior](#control-ui-pairing-behavior).
 
 Examples:
 
@@ -342,6 +338,7 @@ Behavior:
 - When the header is absent, normal identity-bearing HTTP APIs fall back to the standard operator default scope set.
 - Gateway-auth **plugin HTTP routes** are narrower by default: when `x-openclaw-scopes` is absent, their runtime scope falls back to `operator.write`.
 - Browser-origin HTTP requests still have to pass `gateway.controlUi.allowedOrigins` (or deliberate Host-header fallback mode) even after trusted-proxy auth succeeds.
+- For Control UI WebSocket sessions, `x-openclaw-scopes` is a scope cap when present on the upgrade request. An empty value yields no scopes.
 
 Practical rule: send `x-openclaw-scopes` explicitly when you want a trusted-proxy request to be narrower than the defaults, or when a gateway-auth plugin route needs something stronger than write scope.
 
@@ -427,17 +424,20 @@ The audit checks for:
 
   </Accordion>
   <Accordion title="Connection succeeds but methods report missing scope">
-    The WebSocket connects, but `chat.history` or `sessions.list` fails with
-    `missing scope: operator.read`.
+    The WebSocket connects, but `chat.history`, `sessions.list`, or
+    `models.list` fails with `missing scope: operator.read`.
 
-    This is expected for trusted-proxy WebSocket connections without device
-    identity. Connections lacking device identity have their scopes cleared. The
-    browser cannot generate device identity over plain HTTP.
+    Common causes:
+
+    - Device-less Control UI session: trusted-proxy auth can admit the WebSocket connection without device identity, but OpenClaw clears scopes on device-less sessions by design.
+    - Custom backend client: `gateway.controlUi.dangerouslyDisableDeviceAuth` is Control UI scoped and does not grant scopes to arbitrary backend or CLI-shaped WebSocket clients.
+    - Overly narrow `x-openclaw-scopes`: if your proxy injects this header on the Control UI WebSocket upgrade request, the session scopes are capped to that set. An empty header value yields no scopes.
 
     Fix:
 
-    - Set `gateway.controlUi.dangerouslyDisableDeviceAuth: true` to preserve operator scopes on trusted-proxy WebSocket connections, or
-    - Use device identity pairing so scopes are bound to the device token.
+    - For Control UI, use HTTPS so the browser can generate device identity and complete pairing.
+    - For custom automation, use device identity/pairing, the reserved direct-local `gateway-client` backend helper path, or [admin HTTP RPC](/plugins/admin-http-rpc).
+    - Use `gateway.controlUi.dangerouslyDisableDeviceAuth: true` only as a temporary Control UI break-glass path.
 
   </Accordion>
   <Accordion title="WebSocket still failing">

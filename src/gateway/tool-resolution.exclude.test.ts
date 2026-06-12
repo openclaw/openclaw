@@ -23,6 +23,24 @@ const hoisted = vi.hoisted(() => ({
       parameters: { type: "object", properties: {} },
       execute: vi.fn(),
     },
+    {
+      name: "cron",
+      description: "Manage schedules",
+      parameters: { type: "object", properties: {} },
+      execute: vi.fn(),
+    },
+    {
+      name: "gateway",
+      description: "Manage gateway",
+      parameters: { type: "object", properties: {} },
+      execute: vi.fn(),
+    },
+    {
+      name: "nodes",
+      description: "Manage nodes",
+      parameters: { type: "object", properties: {} },
+      execute: vi.fn(),
+    },
   ]),
 }));
 
@@ -59,10 +77,31 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
       excludeToolNames: ["read", "apply_patch"],
     });
 
-    expect(result.tools.map((tool) => tool.name)).toEqual(["sessions_spawn"]);
+    expect(result.tools.map((tool) => tool.name)).toEqual([
+      "sessions_spawn",
+      "cron",
+      "gateway",
+      "nodes",
+    ]);
     const args = readCreateToolsArgs();
     expect(args.pluginToolDenylist).toEqual([]);
     expect(args.inheritedToolDenylist).toEqual([]);
+  });
+
+  it("filters owner-only core tools from non-owner loopback callers", () => {
+    const result = resolveGatewayScopedTools({
+      cfg: {
+        gateway: { tools: { allow: ["gateway"] } },
+      } as OpenClawConfig,
+      sessionKey: "agent:main:direct:test",
+      surface: "loopback",
+      senderIsOwner: false,
+    });
+
+    expect(result.tools.map((tool) => tool.name)).toEqual(["read", "sessions_spawn"]);
+    const args = readCreateToolsArgs();
+    expect(args.pluginToolDenylist).toEqual(["cron", "gateway", "nodes"]);
+    expect(args.inheritedToolDenylist).toEqual(["cron", "gateway", "nodes"]);
   });
 
   it("keeps real gateway deny policy inheritable while excluding native dedup tools", () => {

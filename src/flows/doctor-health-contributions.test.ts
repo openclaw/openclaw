@@ -30,6 +30,8 @@ const mocks = vi.hoisted(() => ({
   }),
   checkGatewayHealth: vi.fn(),
   probeGatewayMemoryStatus: vi.fn(),
+  gatherDaemonStatus: vi.fn(),
+  noteWorkspaceStatus: vi.fn(),
   applyWizardMetadata: vi.fn((cfg: unknown) => cfg),
   logConfigUpdated: vi.fn(),
   isRecord: vi.fn(
@@ -98,6 +100,14 @@ vi.mock("../commands/doctor-gateway-health.js", () => ({
   probeGatewayMemoryStatus: mocks.probeGatewayMemoryStatus,
 }));
 
+vi.mock("../cli/daemon-cli/status.gather.js", () => ({
+  gatherDaemonStatus: mocks.gatherDaemonStatus,
+}));
+
+vi.mock("../commands/doctor-workspace-status.js", () => ({
+  noteWorkspaceStatus: mocks.noteWorkspaceStatus,
+}));
+
 vi.mock("../commands/onboard-helpers.js", () => ({
   applyWizardMetadata: mocks.applyWizardMetadata,
 }));
@@ -106,7 +116,8 @@ vi.mock("../config/logging.js", () => ({
   logConfigUpdated: mocks.logConfigUpdated,
 }));
 
-vi.mock("../utils.js", () => ({
+vi.mock("../utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../utils.js")>()),
   isRecord: mocks.isRecord,
   shortenHomePath: mocks.shortenHomePath,
 }));
@@ -194,6 +205,9 @@ describe("doctor health contributions", () => {
     });
     mocks.checkGatewayHealth.mockReset();
     mocks.probeGatewayMemoryStatus.mockReset();
+    mocks.gatherDaemonStatus.mockReset();
+    mocks.gatherDaemonStatus.mockResolvedValue({});
+    mocks.noteWorkspaceStatus.mockReset();
   });
 
   afterEach(() => {
@@ -235,6 +249,93 @@ describe("doctor health contributions", () => {
     expect(ctx.gatewayHealthAuthenticated).toBe(false);
     expect(ctx.gatewayMemoryProbe).toEqual({ checked: false, ready: false, skipped: true });
     expect(mocks.probeGatewayMemoryStatus).not.toHaveBeenCalled();
+  });
+
+  it("skips remote gateway health probes for local fallback exec SecretRefs", async () => {
+    mocks.checkGatewayHealth.mockResolvedValue({
+      authenticated: false,
+      healthOk: true,
+    });
+    const contribution = requireDoctorContribution(DOCTOR_GATEWAY_HEALTH_ID);
+    const cfg = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "wss://gateway.example",
+        },
+        auth: {
+          mode: "token",
+          token: { source: "exec", provider: "vault", id: "gateway/token" },
+        },
+      },
+      secrets: {
+        providers: {
+          vault: { source: "exec", command: "/bin/false" },
+        },
+      },
+    };
+    const ctx = {
+      cfg,
+      configResult: { cfg },
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(false),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: {},
+      cfgForPersistence: cfg,
+      configPath: "/tmp/fake-openclaw.json",
+      env: {},
+    } as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(mocks.checkGatewayHealth).not.toHaveBeenCalled();
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("Gateway health probes skipped"),
+      "Gateway",
+    );
+    expect(ctx.gatewayHealthSkipped).toBe(true);
+    expect(ctx.gatewayMemoryProbe).toEqual({ checked: false, ready: false, skipped: true });
+  });
+
+  it("skips local gateway health probes for remote fallback exec SecretRefs", async () => {
+    const contribution = requireDoctorContribution(DOCTOR_GATEWAY_HEALTH_ID);
+    const cfg = {
+      gateway: {
+        mode: "local",
+        auth: {
+          mode: "token",
+        },
+        remote: {
+          token: { source: "exec", provider: "vault", id: "gateway/remote-token" },
+        },
+      },
+      secrets: {
+        providers: {
+          vault: { source: "exec", command: "/bin/false" },
+        },
+      },
+    };
+    const ctx = {
+      cfg,
+      configResult: { cfg },
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(false),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: {},
+      cfgForPersistence: cfg,
+      configPath: "/tmp/fake-openclaw.json",
+      env: {},
+    } as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(mocks.checkGatewayHealth).not.toHaveBeenCalled();
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("Gateway health probes skipped"),
+      "Gateway",
+    );
+    expect(ctx.gatewayHealthSkipped).toBe(true);
+    expect(ctx.gatewayMemoryProbe).toEqual({ checked: false, ready: false, skipped: true });
   });
 
   it("keeps release configured plugin installs repair-only", async () => {
@@ -322,6 +423,202 @@ describe("doctor health contributions", () => {
 
     expect(ids.indexOf("doctor:skills")).toBeGreaterThan(-1);
     expect(ids.indexOf("doctor:skills")).toBeLessThan(ids.indexOf("doctor:write-config"));
+  });
+
+  it("passes daemon-context plugin drift into the workspace status note", async () => {
+    const contribution = requireDoctorContribution("doctor:workspace-status");
+    const pluginVersionDrift = {
+      gatewayVersion: "2026.6.1",
+      drifts: [
+        {
+          pluginId: "codex",
+          installedVersion: "2026.5.30-beta.1",
+          gatewayVersion: "2026.6.1",
+          source: "npm",
+        },
+      ],
+    };
+    mocks.gatherDaemonStatus.mockResolvedValueOnce({
+      gateway: { version: "2026.6.1" },
+      pluginVersionDrift,
+    });
+    const cfg = { plugins: { entries: { codex: { enabled: true } } } };
+
+    await contribution.run({
+      cfg,
+      options: { nonInteractive: true },
+    } as unknown as Parameters<(typeof contribution)["run"]>[0]);
+
+    expect(mocks.gatherDaemonStatus).toHaveBeenCalledWith({
+      rpc: {
+        timeout: "3000",
+        json: true,
+      },
+      probe: true,
+      requireRpc: false,
+      deep: false,
+      allowExecSecretRefs: false,
+    });
+    expect(mocks.noteWorkspaceStatus).toHaveBeenCalledWith(cfg, { pluginVersionDrift });
+  });
+
+  it("omits daemon-context plugin drift when gateway version used the fallback", async () => {
+    const contribution = requireDoctorContribution("doctor:workspace-status");
+    const pluginVersionDrift = {
+      gatewayVersion: "2026.5.2-test",
+      drifts: [
+        {
+          pluginId: "codex",
+          installedVersion: "2026.5.30-beta.1",
+          gatewayVersion: "2026.5.2-test",
+          source: "npm",
+        },
+      ],
+    };
+    mocks.gatherDaemonStatus.mockResolvedValueOnce({
+      gateway: { version: null },
+      pluginVersionDrift,
+    });
+    const cfg = { plugins: { entries: { codex: { enabled: true } } } };
+
+    await contribution.run({
+      cfg,
+      options: { nonInteractive: true },
+    } as unknown as Parameters<(typeof contribution)["run"]>[0]);
+
+    expect(mocks.noteWorkspaceStatus).toHaveBeenCalledWith(cfg, {
+      pluginVersionDrift: undefined,
+    });
+  });
+
+  it("omits daemon-context plugin drift when probe auth was skipped", async () => {
+    const contribution = requireDoctorContribution("doctor:workspace-status");
+    const pluginVersionDrift = {
+      gatewayVersion: "2026.6.1",
+      drifts: [
+        {
+          pluginId: "codex",
+          installedVersion: "2026.5.30-beta.1",
+          gatewayVersion: "2026.6.1",
+          source: "npm",
+        },
+      ],
+    };
+    mocks.gatherDaemonStatus.mockResolvedValueOnce({
+      gateway: {},
+      rpc: { authWarning: "exec SecretRef probe auth skipped" },
+      pluginVersionDrift,
+    });
+    const cfg = { plugins: { entries: { codex: { enabled: true } } } };
+
+    await contribution.run({
+      cfg,
+      options: { nonInteractive: true },
+    } as unknown as Parameters<(typeof contribution)["run"]>[0]);
+
+    expect(mocks.noteWorkspaceStatus).toHaveBeenCalledWith(cfg, {
+      pluginVersionDrift: undefined,
+    });
+  });
+
+  it("skips daemon-context plugin drift probes for remote gateway mode", async () => {
+    const contribution = requireDoctorContribution("doctor:workspace-status");
+    const cfg = {
+      gateway: { mode: "remote" },
+      plugins: { entries: { codex: { enabled: true } } },
+    };
+
+    await contribution.run({
+      cfg,
+      options: { nonInteractive: true },
+    } as unknown as Parameters<(typeof contribution)["run"]>[0]);
+
+    expect(mocks.gatherDaemonStatus).not.toHaveBeenCalled();
+    expect(mocks.noteWorkspaceStatus).toHaveBeenCalledWith(cfg, {
+      pluginVersionDrift: undefined,
+    });
+  });
+
+  it("lets daemon status decide exec SecretRef probing from daemon config", async () => {
+    const contribution = requireDoctorContribution("doctor:workspace-status");
+    const pluginVersionDrift = {
+      gatewayVersion: "2026.6.1",
+      drifts: [
+        {
+          pluginId: "codex",
+          installedVersion: "2026.5.30-beta.1",
+          gatewayVersion: "2026.6.1",
+          source: "npm",
+        },
+      ],
+    };
+    mocks.gatherDaemonStatus.mockResolvedValueOnce({
+      gateway: { version: "2026.6.1" },
+      pluginVersionDrift,
+    });
+    const cfg = {
+      gateway: {
+        auth: {
+          mode: "token",
+          token: {
+            source: "exec",
+            provider: "vault",
+            id: "gateway/token",
+          },
+        },
+      },
+    };
+
+    await contribution.run({
+      cfg,
+      options: { nonInteractive: true },
+    } as unknown as Parameters<(typeof contribution)["run"]>[0]);
+
+    expect(mocks.gatherDaemonStatus).toHaveBeenCalledWith({
+      rpc: {
+        timeout: "3000",
+        json: true,
+      },
+      probe: true,
+      requireRpc: false,
+      deep: false,
+      allowExecSecretRefs: false,
+    });
+    expect(mocks.noteWorkspaceStatus).toHaveBeenCalledWith(cfg, { pluginVersionDrift });
+  });
+
+  it("ignores remote-only exec SecretRefs for local daemon-context plugin drift probes", async () => {
+    const contribution = requireDoctorContribution("doctor:workspace-status");
+    const cfg = {
+      gateway: {
+        auth: {
+          mode: "token",
+        },
+        remote: {
+          token: {
+            source: "exec",
+            provider: "vault",
+            id: "gateway/remote-token",
+          },
+        },
+      },
+    };
+
+    await contribution.run({
+      cfg,
+      options: { nonInteractive: true },
+    } as unknown as Parameters<(typeof contribution)["run"]>[0]);
+
+    expect(mocks.gatherDaemonStatus).toHaveBeenCalledWith({
+      rpc: {
+        timeout: "3000",
+        json: true,
+      },
+      probe: true,
+      requireRpc: false,
+      deep: false,
+      allowExecSecretRefs: false,
+    });
   });
 
   it("uses the read-only model catalog for hooks.gmail.model warnings", async () => {

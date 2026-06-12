@@ -19,7 +19,7 @@ attribution.
 
 ## Inputs
 
-- Target base version: `YYYY.M.D`, without beta suffix.
+- Target base version: `YYYY.M.PATCH`, without beta suffix.
 - Base tag: last reachable shipped release tag, usually the previous stable or
   the previous beta train requested by the operator.
 - Target ref: exact branch/SHA being released.
@@ -37,7 +37,7 @@ attribution.
 3. Read linked PRs/issues or diffs for ambiguous commits. Direct commits matter;
    infer notes from subject, body, touched files, tests, and nearby commits.
 4. Rewrite one stable-base section only:
-   - use `## YYYY.M.D`
+   - use `## YYYY.M.PATCH`
    - do not create beta-specific headings
    - do not leave a stale `## Unreleased` section above the target release
    - if `Unreleased` contains release-bound notes, fold them into the target
@@ -93,7 +93,7 @@ attribution.
 10. Validate and ship:
    - `git diff --check`
    - for docs/changelog-only changes, no broad tests are required
-   - commit with `scripts/committer "docs(changelog): refresh YYYY.M.D notes" CHANGELOG.md`
+   - commit with `scripts/committer "docs(changelog): refresh YYYY.M.PATCH notes" CHANGELOG.md`
    - push, pull/rebase if needed, then branch/rebase release from latest `main`
 
 ## Quota / API Outage Rule

@@ -21,6 +21,7 @@ import {
   agentOutputHasExpectedOkMarker,
   agentTurnUsedEmbeddedFallback,
   buildCrossOsReleaseSmokePluginAllowlist,
+  buildCrossOsReleaseSmokeMemorySlotConfigArgs,
   buildDiscordFetchInit,
   buildPackagedUpgradeUpdateArgs,
   buildReleaseOnboardArgs,
@@ -33,6 +34,7 @@ import {
   canConnectToLoopbackPort,
   buildDiscordSmokeGuildsConfig,
   buildRealUpdateEnv,
+  dashboardHtmlMarkerStatus,
   CROSS_OS_FETCH_BODY_MAX_CHARS,
   CROSS_OS_GATEWAY_READY_TIMEOUT_MS,
   CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS,
@@ -61,6 +63,7 @@ import {
   readInstalledVersion,
   readBoundedCrossOsResponseText,
   readRunnerOverrideEnv,
+  resolveDashboardAssetUrls,
   resolveCrossOsAgentTurnOptional,
   runCommand,
   resolveCommandSpawnInvocation,
@@ -85,6 +88,7 @@ import {
   shouldSkipOptionalCrossOsAgentTurnError,
   shouldUseManagedGatewayForInstallerRuntime,
   shouldUseManagedGatewayService,
+  verifyDashboardAssetUrls,
   verifyDevUpdateStatus,
   verifyPackagedUpgradeUpdateResult,
   verifyWindowsPackagedUpgradeFallbackInstall,
@@ -157,6 +161,40 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(text).toContain("[truncated]");
     expect(text).not.toContain(tail);
     expect(CROSS_OS_FETCH_BODY_MAX_CHARS).toBeGreaterThan(1024);
+  });
+
+  it("requires dashboard root markers and same-origin asset URLs", () => {
+    const html = [
+      "<title>OpenClaw Control</title>",
+      "<openclaw-app></openclaw-app>",
+      '<link rel="stylesheet" href="/assets/index.css">',
+      '<script type="module" src="assets/index.js"></script>',
+      '<script type="module" src="https://example.com/assets/ignored.js"></script>',
+    ].join("\n");
+
+    expect(dashboardHtmlMarkerStatus(html)).toEqual({ app: true, ready: true, title: true });
+    expect(resolveDashboardAssetUrls("http://127.0.0.1:18789/", html)).toEqual([
+      "http://127.0.0.1:18789/assets/index.css",
+      "http://127.0.0.1:18789/assets/index.js",
+    ]);
+  });
+
+  it("fails dashboard readiness when assets are missing or unreachable", async () => {
+    await expect(verifyDashboardAssetUrls([])).resolves.toEqual({
+      failures: ["no dashboard asset URLs found"],
+      ok: false,
+    });
+
+    const result = await verifyDashboardAssetUrls(
+      ["http://127.0.0.1:18789/assets/index.css", "http://127.0.0.1:18789/assets/index.js"],
+      async (url) =>
+        new Response("", {
+          status: String(url).endsWith(".js") ? 404 : 200,
+        }),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.failures).toEqual(["http://127.0.0.1:18789/assets/index.js status=404"]);
   });
 
   it("keeps gateway RPC status probes patient enough for live release startup", () => {
@@ -305,6 +343,20 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(
       shouldRetryCrossOsAgentTurnError(
         new Error("Agent turn used embedded fallback instead of gateway."),
+      ),
+    ).toBe(true);
+    expect(
+      shouldRetryCrossOsAgentTurnError(
+        new Error(
+          "GatewayClientRequestError: FailoverError: Rate limit reached for gpt-5.5: code=rate_limit_exceeded",
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      shouldRetryCrossOsAgentTurnError(
+        new Error(
+          "OpenAI image generation failed (HTTP 503): upstream connect error or disconnect/reset before headers. reset reason: connection timeout",
+        ),
       ),
     ).toBe(true);
   });
@@ -495,6 +547,14 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       "phone-control",
       "talk-voice",
     ]);
+    expect(allowlist).not.toContain("memory-core");
+    expect(buildCrossOsReleaseSmokeMemorySlotConfigArgs()).toEqual([
+      "config",
+      "set",
+      "plugins.slots.memory",
+      JSON.stringify("none"),
+      "--strict-json",
+    ]);
   });
 
   it("can stage packaged-upgrade baselines without npm lifecycle scripts", () => {
@@ -546,6 +606,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(source).toContain('agentRuntime: { id: "openclaw" }');
     expect(source).toContain('"--merge"');
     expect(source).toContain(providerOverride);
+    expect(source.match(/args: buildCrossOsReleaseSmokeMemorySlotConfigArgs\(\)/g)).toHaveLength(2);
     expect(source).not.toContain("models.providers.${params.providerConfig.extensionId}.baseUrl");
     expect(source).toContain('"--timeout",\n    String(CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS)');
     const agentTurnArgCalls = source.match(/buildReleaseAgentTurnArgs\(sessionId\)/g) ?? [];
@@ -870,6 +931,31 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     }
   });
 
+  it("flushes static release artifact logs before close resolves", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-static-server-log-flush-"));
+    const filePath = join(dir, "openclaw-2026.4.14.tgz");
+    const logPath = join(dir, "server.log");
+    let server: Awaited<ReturnType<typeof startStaticFileServer>> | undefined;
+
+    try {
+      writeFileSync(filePath, Buffer.alloc(128, "x"));
+      server = await startStaticFileServer({ filePath, logPath });
+      const marker = `flush-${"x".repeat(512)}-done`;
+
+      for (let index = 0; index < 8; index += 1) {
+        const response = await fetch(`${server.url}?${marker}-${index}`);
+        await response.text();
+      }
+      await server.close();
+      server = undefined;
+
+      expect(readFileSync(logPath, "utf8")).toContain(`${marker}-7`);
+    } finally {
+      await server?.close().catch(() => {});
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("does not preload static release artifacts before serving them", () => {
     const source = readFileSync("scripts/openclaw-cross-os-release-checks.ts", "utf8");
     const serverSource = source.slice(
@@ -1081,6 +1167,35 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       const log = readFileSync(logPath, "utf8");
       expect(log).toContain("old-middle-recent");
       expect(log).toContain("err-old-err-recent");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("flushes command logs before resolving", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-run-command-flush-"));
+    try {
+      const logPath = join(dir, "flush.log");
+      const marker = `flush-start-${"x".repeat(128 * 1024)}-flush-end`;
+
+      await runCommand(
+        process.execPath,
+        [
+          "-e",
+          [
+            "const marker = `flush-start-${'x'.repeat(128 * 1024)}-flush-end`;",
+            "process.stdout.write(marker);",
+          ].join(""),
+        ],
+        {
+          cwd: dir,
+          env: process.env,
+          logPath,
+          maxOutputBytes: 64,
+        },
+      );
+
+      expect(readFileSync(logPath, "utf8")).toContain(marker);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -53,6 +53,11 @@ export type RunCliAgentParams = {
   model?: string;
   thinkLevel?: ThinkLevel;
   timeoutMs: number;
+  /**
+   * Explicit run timeout, in milliseconds, when the caller can distinguish a
+   * deliberate timeout override from the inherited agent default.
+   */
+  runTimeoutOverrideMs?: number;
   runId: string;
   lane?: string;
   jobId?: string;
@@ -86,6 +91,8 @@ export type RunCliAgentParams = {
   currentMessageId?: string | number;
   currentInboundAudio?: boolean;
   agentAccountId?: string;
+  /** Sender identity for channel-originated runs when available. */
+  senderId?: string | null;
   /** Trusted sender identity bit for channel action auth. */
   senderIsOwner?: boolean;
   /** Runtime tool allow-list. CLI harnesses fail closed when this is set. */
@@ -102,6 +109,7 @@ export type RunCliAgentParams = {
     firstModelCallStarted?: boolean;
   }) => void;
   replyOperation?: ReplyOperation;
+  emitCommentaryText?: boolean;
   /**
    * Close any long-lived CLI live session created for this run after the run
    * finishes. Intended for temporary helper calls that should not keep process

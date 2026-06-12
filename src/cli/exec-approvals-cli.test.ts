@@ -1,9 +1,10 @@
 // Exec approvals CLI tests cover approval command registration and output handling.
+import { Readable } from "node:stream";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as execApprovals from "../infra/exec-approvals.js";
 import type { ExecApprovalsFile } from "../infra/exec-approvals.js";
-import { registerExecApprovalsCli } from "./exec-approvals-cli.js";
+import { registerExecApprovalsCli, testing } from "./exec-approvals-cli.js";
 
 const mocks = vi.hoisted(() => {
   const runtimeErrors: string[] = [];
@@ -499,8 +500,8 @@ describe("exec approvals CLI", () => {
       requireRecord(toolsScope.askFallback, "tools.exec askFallback"),
       "tools.exec askFallback",
       {
-        effective: "full",
-        source: "OpenClaw default (full)",
+        effective: "deny",
+        source: "OpenClaw default (deny)",
       },
     );
 
@@ -516,8 +517,8 @@ describe("exec approvals CLI", () => {
       effective: "always",
     });
     expectFields(requireRecord(agentScope.askFallback, "agent askFallback"), "agent askFallback", {
-      effective: "allowlist",
-      source: "OpenClaw default (full)",
+      effective: "deny",
+      source: "OpenClaw default (deny)",
     });
   });
 
@@ -559,5 +560,12 @@ describe("exec approvals CLI", () => {
       agents: undefined,
     });
     expect(runtimeErrors).toHaveLength(0);
+  });
+
+  it("bounds approvals JSON read from stdin", async () => {
+    await expect(testing.readStdin(Readable.from(["12345"]), 5)).resolves.toBe("12345");
+    await expect(testing.readStdin(Readable.from(["12345", "6"]), 5)).rejects.toThrow(
+      "Exec approvals stdin exceeds 5 bytes.",
+    );
   });
 });

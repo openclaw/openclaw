@@ -13,7 +13,11 @@ import type { StreamFn } from "../agents/runtime/index.js";
 import { streamWithPayloadPatch } from "../llm/providers/stream-wrappers/stream-payload-utils.js";
 import { streamSimple } from "../llm/stream.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
-import type { ProviderWrapStreamFnContext } from "./plugin-entry.js";
+export { applyAnthropicRefusal } from "../shared/anthropic-refusal.js";
+export { createDeferredEventBuffer } from "../shared/deferred-event-buffer.js";
+export { notifyLlmRequestActivity, onLlmRequestActivity } from "../shared/llm-request-activity.js";
+
+type ProviderWrapStreamFnContext = import("../plugins/types.js").ProviderWrapStreamFnContext;
 
 /** Optional provider stream decorator factory used by shared provider wrappers. */
 export type ProviderStreamWrapperFactory =

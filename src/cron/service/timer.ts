@@ -13,6 +13,7 @@ import {
   normalizeAgentId,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
+import { registerActiveCronTaskRun } from "../../tasks/cron-task-cancel.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { clearCronJobActive, markCronJobActive } from "../active-jobs.js";
@@ -121,67 +122,113 @@ type StartupCatchupPlan = {
 export async function executeJobCoreWithTimeout(
   state: CronServiceState,
   job: CronJob,
+  opts?: { runId?: string },
 ): Promise<Awaited<ReturnType<typeof executeJobCore>>> {
-  const jobTimeoutMs = resolveCronJobTimeoutMs(job);
-  if (typeof jobTimeoutMs !== "number") {
-    return await executeJobCore(state, job);
-  }
-
   const runAbortController = new AbortController();
-  let timeoutReason: string | undefined;
-  const timeoutMarker = Symbol("cron-timeout");
-  let resolveTimeout: ((value: typeof timeoutMarker) => void) | undefined;
-  const timeoutPromise = new Promise<typeof timeoutMarker>((resolve) => {
-    resolveTimeout = resolve;
+  const operatorCancellationMarker = Symbol("cron-operator-cancelled");
+  let resolveOperatorCancellation: ((value: typeof operatorCancellationMarker) => void) | undefined;
+  const operatorCancellationPromise = new Promise<typeof operatorCancellationMarker>((resolve) => {
+    resolveOperatorCancellation = resolve;
   });
-
-  // Detached agent runs report setup phases separately; defer the wall-clock
-  // timeout until the runner starts so cold setup gets a clearer failure reason.
-  const deferTimeoutUntilExecutionStart =
-    job.sessionTarget !== "main" && job.payload.kind === "agentTurn";
-  const triggerTimeout = (reason: string) => {
-    if (runAbortController.signal.aborted) {
-      return;
-    }
-    timeoutReason = reason;
-    runAbortController.abort(reason);
-    resolveTimeout?.(timeoutMarker);
-  };
-  const watchdog = createCronAgentWatchdog({
-    deferUntilRunner: deferTimeoutUntilExecutionStart,
-    jobTimeoutMs,
-    triggerTimeout,
-  });
-  const corePromise = executeJobCore(state, job, runAbortController.signal, {
-    onExecutionStarted: deferTimeoutUntilExecutionStart ? watchdog.noteRunnerStarted : undefined,
-    onExecutionPhase: deferTimeoutUntilExecutionStart ? watchdog.notePhase : undefined,
-  });
-  watchdog.start();
-  void corePromise.catch((err: unknown) => {
-    if (runAbortController.signal.aborted) {
-      state.deps.log.warn(
-        { jobId: job.id, err: String(err) },
-        "cron: job core rejected after timeout abort",
-      );
-    }
-  });
-  try {
-    const first = await Promise.race([corePromise, timeoutPromise]);
-    if (first !== timeoutMarker) {
-      return first;
-    }
-    const activeExecution = watchdog.activeExecution();
-    await cleanupTimedOutCronAgentRun(state, job, jobTimeoutMs, activeExecution);
-    const error = timeoutReason ?? timeoutErrorMessage(activeExecution);
+  const createOperatorCancellationOutcome = () => {
+    const error = abortErrorMessage(runAbortController.signal);
     return {
-      status: "error",
+      status: "error" as const,
       error,
       diagnostics: createCronRunDiagnosticsFromError("cron-setup", error, {
         nowMs: state.deps.nowMs,
       }),
     };
+  };
+  // Main-session cron jobs enqueue work into a downstream child session. The
+  // cron wrapper does not own that queued run, so it must not expose a task
+  // cancellation handle that could make the wrapper row lie about child state.
+  const releaseCronTaskRun =
+    job.sessionTarget !== "main"
+      ? registerActiveCronTaskRun({
+          runId: opts?.runId,
+          controller: runAbortController,
+          onCancel: () => resolveOperatorCancellation?.(operatorCancellationMarker),
+        })
+      : undefined;
+  const jobTimeoutMs = resolveCronJobTimeoutMs(job);
+  try {
+    if (typeof jobTimeoutMs !== "number") {
+      const corePromise = executeJobCore(state, job, runAbortController.signal);
+      void corePromise.catch((err: unknown) => {
+        if (runAbortController.signal.aborted) {
+          state.deps.log.warn(
+            { jobId: job.id, err: String(err) },
+            "cron: job core rejected after cancellation abort",
+          );
+        }
+      });
+      const first = await Promise.race([corePromise, operatorCancellationPromise]);
+      if (first !== operatorCancellationMarker) {
+        return first;
+      }
+      return createOperatorCancellationOutcome();
+    }
+
+    let timeoutReason: string | undefined;
+    const timeoutMarker = Symbol("cron-timeout");
+    let resolveTimeout: ((value: typeof timeoutMarker) => void) | undefined;
+    const timeoutPromise = new Promise<typeof timeoutMarker>((resolve) => {
+      resolveTimeout = resolve;
+    });
+
+    // Detached agent runs report setup phases separately; defer the wall-clock
+    // timeout until the runner starts so cold setup gets a clearer failure reason.
+    const deferTimeoutUntilExecutionStart =
+      job.sessionTarget !== "main" && job.payload.kind === "agentTurn";
+    const triggerTimeout = (reason: string) => {
+      timeoutReason = reason;
+      if (!runAbortController.signal.aborted) {
+        runAbortController.abort(reason);
+      }
+      resolveTimeout?.(timeoutMarker);
+    };
+    const watchdog = createCronAgentWatchdog({
+      deferUntilRunner: deferTimeoutUntilExecutionStart,
+      jobTimeoutMs,
+      triggerTimeout,
+    });
+    const corePromise = executeJobCore(state, job, runAbortController.signal, {
+      onExecutionStarted: deferTimeoutUntilExecutionStart ? watchdog.noteRunnerStarted : undefined,
+      onExecutionPhase: deferTimeoutUntilExecutionStart ? watchdog.notePhase : undefined,
+    });
+    watchdog.start();
+    void corePromise.catch((err: unknown) => {
+      if (runAbortController.signal.aborted) {
+        state.deps.log.warn(
+          { jobId: job.id, err: String(err) },
+          "cron: job core rejected after timeout abort",
+        );
+      }
+    });
+    try {
+      const first = await Promise.race([corePromise, timeoutPromise, operatorCancellationPromise]);
+      if (first === operatorCancellationMarker) {
+        return createOperatorCancellationOutcome();
+      }
+      if (first !== timeoutMarker) {
+        return first;
+      }
+      const activeExecution = watchdog.activeExecution();
+      await cleanupTimedOutCronAgentRun(state, job, jobTimeoutMs, activeExecution);
+      const error = timeoutReason ?? timeoutErrorMessage(activeExecution);
+      return {
+        status: "error",
+        error,
+        diagnostics: createCronRunDiagnosticsFromError("cron-setup", error, {
+          nowMs: state.deps.nowMs,
+        }),
+      };
+    } finally {
+      watchdog.dispose();
+    }
   } finally {
-    watchdog.dispose();
+    releaseCronTaskRun?.();
   }
 }
 
@@ -844,7 +891,7 @@ export async function onTimer(state: CronServiceState) {
       const taskRunId = tryCreateCronTaskRun({ state, job, startedAt });
 
       try {
-        const result = await executeJobCoreWithTimeout(state, job);
+        const result = await executeJobCoreWithTimeout(state, job, { runId: taskRunId });
         return {
           jobId: id,
           job,
@@ -1238,7 +1285,7 @@ async function runStartupCatchupCandidate(
     runAtMs: startedAt,
   });
   try {
-    const result = await executeJobCoreWithTimeout(state, candidate.job);
+    const result = await executeJobCoreWithTimeout(state, candidate.job, { runId: taskRunId });
     return {
       jobId: candidate.jobId,
       job: candidate.job,
@@ -1516,8 +1563,45 @@ async function executeDetachedCronJob(
       delivery?: CronDeliveryTrace;
     }
 > {
+  if (job.payload.kind === "command") {
+    if (!state.deps.runCommandJob) {
+      const error = "cron command runner is not configured";
+      return {
+        status: "skipped",
+        error,
+        diagnostics: createCronRunDiagnosticsFromError("cron-preflight", error, {
+          severity: "warn",
+          nowMs: state.deps.nowMs,
+        }),
+      };
+    }
+    const res = await state.deps.runCommandJob({
+      job,
+      abortSignal,
+    });
+    if (abortSignal?.aborted) {
+      const error = abortErrorMessage(abortSignal);
+      return {
+        status: "error",
+        error,
+        diagnostics: createCronRunDiagnosticsFromError("cron-setup", error, {
+          nowMs: state.deps.nowMs,
+        }),
+      };
+    }
+    return {
+      status: res.status,
+      error: res.error,
+      summary: res.summary,
+      delivered: res.delivered,
+      deliveryAttempted: res.deliveryAttempted,
+      delivery: res.delivery,
+      diagnostics: res.diagnostics,
+    };
+  }
+
   if (job.payload.kind !== "agentTurn") {
-    const error = "isolated job requires payload.kind=agentTurn";
+    const error = 'isolated job requires payload.kind="agentTurn" or "command"';
     return {
       status: "skipped",
       error,
