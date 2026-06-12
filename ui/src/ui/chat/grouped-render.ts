@@ -438,7 +438,9 @@ export function renderMessageGroup(
     name: opts.userName ?? null,
     avatar: opts.userAvatar ?? null,
   });
-  const userLabel = group.senderLabel?.trim();
+  // Normalize empty string to null so ?? falls back to the resolved name
+  // ("" ?? "fallback") returns "", not "fallback" (#92327).
+  const userLabel = group.senderLabel?.trim() || null;
   const who =
     normalizedRole === "user"
       ? (userLabel ?? resolvedUserName)
