@@ -1003,7 +1003,7 @@ describe("runGlobalPackageUpdateSteps", () => {
     });
   });
 
-  it("does not reapply deleted overrides when the updated package lacks content inventory", async () => {
+  it("does not reapply deleted overrides when a legacy updated package lacks content inventory", async () => {
     await withTempDir(
       { prefix: "openclaw-package-update-deleted-no-content-inventory-" },
       async (base) => {
@@ -1026,7 +1026,7 @@ describe("runGlobalPackageUpdateSteps", () => {
               throw new Error("missing staged prefix");
             }
             const stagedPackageRoot = path.join(stagePrefix, "lib", "node_modules", "openclaw");
-            await writePackageRoot(stagedPackageRoot, "2.0.0");
+            await writePackageRoot(stagedPackageRoot, "2026.6.5");
             await fs.rm(path.join(stagedPackageRoot, "dist", "postinstall-content-inventory.json"));
             return {
               name,
@@ -1040,7 +1040,7 @@ describe("runGlobalPackageUpdateSteps", () => {
 
         const result = await runGlobalPackageUpdateSteps({
           installTarget: createNpmTarget(globalRoot),
-          installSpec: "openclaw@2.0.0",
+          installSpec: "openclaw@2026.6.5",
           packageName: "openclaw",
           packageRoot,
           runCommand: createRootRunner(globalRoot),
@@ -1057,6 +1057,60 @@ describe("runGlobalPackageUpdateSteps", () => {
         await expect(fs.readFile(path.join(packageRoot, "dist", "index.js"), "utf8")).resolves.toBe(
           "export {};\n",
         );
+      },
+    );
+  });
+
+  it("rejects updated packages that require content inventory before package swap", async () => {
+    await withTempDir(
+      { prefix: "openclaw-package-update-missing-content-inventory-" },
+      async (base) => {
+        const prefix = path.join(base, "prefix");
+        const globalRoot = path.join(prefix, "lib", "node_modules");
+        const packageRoot = path.join(globalRoot, "openclaw");
+        await writePackageRoot(packageRoot, "1.0.0");
+
+        const runStep = vi.fn(
+          async ({ name, argv, cwd, timeoutMs }): Promise<PackageUpdateStepResult> => {
+            expect(timeoutMs).toBe(1000);
+            if (name !== "global update") {
+              throw new Error(`unexpected step ${name}`);
+            }
+            const prefixIndex = argv.indexOf("--prefix");
+            expect(prefixIndex).toBeGreaterThan(0);
+            const stagePrefix = argv[prefixIndex + 1];
+            if (!stagePrefix) {
+              throw new Error("missing staged prefix");
+            }
+            const stagedPackageRoot = path.join(stagePrefix, "lib", "node_modules", "openclaw");
+            await writePackageRoot(stagedPackageRoot, "2026.6.6");
+            await fs.rm(path.join(stagedPackageRoot, "dist", "postinstall-content-inventory.json"));
+            return {
+              name,
+              command: argv.join(" "),
+              cwd: cwd ?? process.cwd(),
+              durationMs: 1,
+              exitCode: 0,
+            };
+          },
+        );
+
+        const result = await runGlobalPackageUpdateSteps({
+          installTarget: createNpmTarget(globalRoot),
+          installSpec: "openclaw@2026.6.6",
+          packageName: "openclaw",
+          packageRoot,
+          runCommand: createRootRunner(globalRoot),
+          runStep,
+          timeoutMs: 1000,
+        });
+
+        expect(result.failedStep?.name).toBe("global install verify");
+        expect(result.failedStep?.stderrTail).toContain("missing package dist content inventory");
+        expect(result.steps.map((step) => step.name)).not.toContain("global install swap");
+        await expect(
+          fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
+        ).resolves.toContain('"version":"1.0.0"');
       },
     );
   });

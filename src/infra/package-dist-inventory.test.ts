@@ -99,6 +99,50 @@ describe("package dist inventory", () => {
     });
   });
 
+  it("requires content inventory for post-cutover package versions", async () => {
+    await withTempDir(
+      { prefix: "openclaw-dist-content-inventory-required-" },
+      async (packageRoot) => {
+        const currentFile = path.join(packageRoot, "dist", "current.js");
+        await fs.mkdir(path.dirname(currentFile), { recursive: true });
+        await fs.writeFile(currentFile, "export const value = 1;\n", "utf8");
+        await fs.writeFile(
+          path.join(packageRoot, "package.json"),
+          JSON.stringify({ name: "openclaw", version: "2026.6.6" }),
+          "utf8",
+        );
+        await writePackageDistInventory(packageRoot);
+        await fs.rm(path.join(packageRoot, "dist", "postinstall-content-inventory.json"));
+
+        await expect(collectPackageDistContentInventoryErrors(packageRoot)).resolves.toStrictEqual([
+          "missing package dist content inventory dist/postinstall-content-inventory.json",
+        ]);
+      },
+    );
+  });
+
+  it("allows already-published package versions without content inventory", async () => {
+    await withTempDir(
+      { prefix: "openclaw-dist-content-inventory-legacy-" },
+      async (packageRoot) => {
+        const currentFile = path.join(packageRoot, "dist", "current.js");
+        await fs.mkdir(path.dirname(currentFile), { recursive: true });
+        await fs.writeFile(currentFile, "export const value = 1;\n", "utf8");
+        await fs.writeFile(
+          path.join(packageRoot, "package.json"),
+          JSON.stringify({ name: "openclaw", version: "2026.6.5" }),
+          "utf8",
+        );
+        await writePackageDistInventory(packageRoot);
+        await fs.rm(path.join(packageRoot, "dist", "postinstall-content-inventory.json"));
+
+        await expect(collectPackageDistContentInventoryErrors(packageRoot)).resolves.toStrictEqual(
+          [],
+        );
+      },
+    );
+  });
+
   it("keeps npm-omitted dist artifacts out of the inventory", async () => {
     await withTempDir({ prefix: "openclaw-dist-inventory-pack-" }, async (packageRoot) => {
       const packagedQaChannelRuntime = path.join(
