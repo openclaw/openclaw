@@ -218,7 +218,7 @@ describe("createFeishuVcMeetingInvitedHandler", () => {
     expect(params.event?.message).toEqual(
       expect.objectContaining({
         message_id: "vc-invited:event:evt_vc_123",
-        chat_id: "user:ou_inviter_1",
+        chat_id: "ou_inviter_1",
         chat_type: "p2p",
         message_type: "text",
         create_time: "1712345678000",
@@ -251,7 +251,7 @@ describe("createFeishuVcMeetingInvitedHandler", () => {
         sender?: { sender_id?: { user_id?: string; open_id?: string } };
       };
     };
-    expect(params.event?.message?.chat_id).toBe("user:u_inviter_1");
+    expect(params.event?.message?.chat_id).toBe("u_inviter_1");
     expect(params.event?.sender?.sender_id).toEqual({ user_id: "u_inviter_1" });
   });
 
