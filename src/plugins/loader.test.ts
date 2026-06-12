@@ -7884,6 +7884,74 @@ module.exports = {
         },
       },
       {
+        label:
+          "loads dreaming engine when a restrictive allowlist omits it but dreaming is enabled",
+        loadRegistry: () => {
+          const bundledDir = makeTempDir();
+          const memoryCoreDir = path.join(bundledDir, "memory-core");
+          const memoryLanceDir = path.join(bundledDir, "memory-lancedb");
+          mkdirSafe(memoryCoreDir);
+          mkdirSafe(memoryLanceDir);
+          writePlugin({
+            id: "memory-core",
+            dir: memoryCoreDir,
+            filename: "index.cjs",
+            body: memoryPluginBody("memory-core"),
+          });
+          writePlugin({
+            id: "memory-lancedb",
+            dir: memoryLanceDir,
+            filename: "index.cjs",
+            body: memoryPluginBody("memory-lancedb"),
+          });
+          const openSchema = { type: "object", additionalProperties: true };
+          fs.writeFileSync(
+            path.join(memoryCoreDir, "openclaw.plugin.json"),
+            JSON.stringify(
+              { id: "memory-core", kind: "memory", configSchema: EMPTY_PLUGIN_SCHEMA },
+              null,
+              2,
+            ),
+            "utf-8",
+          );
+          fs.writeFileSync(
+            path.join(memoryLanceDir, "openclaw.plugin.json"),
+            JSON.stringify(
+              { id: "memory-lancedb", kind: "memory", configSchema: openSchema },
+              null,
+              2,
+            ),
+            "utf-8",
+          );
+          process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+
+          // Restrictive allowlist that omits the dreaming engine (memory-core) while a
+          // third-party plugin holds the memory slot with dreaming enabled. Without the
+          // sidecar exemption memory-core is rejected as "not-in-allowlist" and dreaming
+          // sweeps silently never run.
+          return loadOpenClawPlugins({
+            cache: false,
+            config: {
+              plugins: {
+                allow: ["memory-lancedb"],
+                slots: { memory: "memory-lancedb" },
+                entries: {
+                  "memory-lancedb": { enabled: true, config: { dreaming: { enabled: true } } },
+                },
+              },
+            },
+          });
+        },
+        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+          const core = registry.plugins.find((entry) => entry.id === "memory-core");
+          const lance = registry.plugins.find((entry) => entry.id === "memory-lancedb");
+          expect(core?.status).toBe("loaded");
+          expect(lance?.status).toBe("loaded");
+          expect(lance?.memorySlotSelected).toBe(true);
+          expect(core?.memorySlotSelected).not.toBe(true);
+        },
+      },
+      {
         label: "excludes dreaming engine when dreaming is disabled and it is not the slot",
         loadRegistry: () => {
           const bundledDir = makeTempDir();

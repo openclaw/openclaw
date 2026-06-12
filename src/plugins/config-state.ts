@@ -164,6 +164,7 @@ export function resolvePluginActivationState(params: {
   enabledByDefault?: boolean;
   activationSource?: PluginActivationConfigSource;
   autoEnabledReason?: string;
+  dreamingEngineId?: string | null;
 }): PluginActivationState {
   return toPluginActivationState(
     resolvePluginActivationDecisionShared({
@@ -194,6 +195,7 @@ type EffectiveActivationParams = {
   rootConfig?: OpenClawConfig;
   enabledByDefault?: boolean;
   activationSource?: PluginActivationConfigSource;
+  dreamingEngineId?: string | null;
 };
 
 export const resolveEffectiveEnableState =
@@ -209,6 +211,7 @@ export function resolveEffectivePluginActivationState(params: {
   enabledByDefault?: EffectiveActivationParams["enabledByDefault"];
   activationSource?: EffectiveActivationParams["activationSource"];
   autoEnabledReason?: string;
+  dreamingEngineId?: string | null;
 }): PluginActivationState {
   return resolvePluginActivationState(params);
 }

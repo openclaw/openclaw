@@ -2005,6 +2005,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         rootConfig: cfg,
         enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
         activationSource,
+        dreamingEngineId,
         autoEnabledReason: formatAutoEnabledActivationReason(autoEnabledReasons[pluginId]),
       });
       const existingOrigin = seenIds.get(pluginId);
@@ -2046,6 +2047,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         rootConfig: cfg,
         enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
         activationSource,
+        dreamingEngineId,
       });
       const entry = normalized.entries[pluginId];
       const record = createPluginRecord({
@@ -2965,6 +2967,7 @@ export async function loadOpenClawPluginCliRegistry(
       rootConfig: cfg,
       enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
       activationSource,
+      dreamingEngineId,
       autoEnabledReason: formatAutoEnabledActivationReason(autoEnabledReasons[pluginId]),
     });
     const existingOrigin = seenIds.get(pluginId);
@@ -3006,6 +3009,7 @@ export async function loadOpenClawPluginCliRegistry(
       rootConfig: cfg,
       enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
       activationSource,
+      dreamingEngineId,
     });
     const entry = normalized.entries[pluginId];
     const record = createPluginRecord({
