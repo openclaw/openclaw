@@ -49,8 +49,19 @@ function normalizeToolSelectionList(value: readonly string[] | undefined): strin
   return normalized.length > 0 ? normalized : undefined;
 }
 
-function getBlockedMcpStdioEnvWriteError(server: Record<string, unknown>): string | undefined {
-  const blockedEnvKeys = listBlockedMcpStdioEnvKeys(server);
+function getBlockedMcpStdioEnvWriteError(
+  server: Record<string, unknown>,
+  previous?: Record<string, unknown>,
+): string | undefined {
+  let blockedEnvKeys = listBlockedMcpStdioEnvKeys(server);
+  if (previous) {
+    const previousBlockedEnvKeys = new Set(listBlockedMcpStdioEnvKeys(previous));
+    const previousEnv = isRecord(previous.env) ? previous.env : {};
+    const serverEnv = isRecord(server.env) ? server.env : {};
+    blockedEnvKeys = blockedEnvKeys.filter(
+      (key) => !previousBlockedEnvKeys.has(key) || !Object.is(previousEnv[key], serverEnv[key]),
+    );
+  }
   return blockedEnvKeys.length > 0 ? formatBlockedMcpStdioEnvError(blockedEnvKeys) : undefined;
 }
 
@@ -98,7 +109,8 @@ export async function updateConfiguredMcpServerTools(params: {
 
   const next = structuredClone(loaded.config);
   const servers = normalizeConfiguredMcpServers(next.mcp?.servers);
-  const server = { ...servers[name] };
+  const previousServer = structuredClone(servers[name]);
+  const server = { ...previousServer };
   if (params.tools === null) {
     delete server.toolFilter;
   } else {
@@ -113,7 +125,7 @@ export async function updateConfiguredMcpServerTools(params: {
       delete server.toolFilter;
     }
   }
-  const blockedEnvError = getBlockedMcpStdioEnvWriteError(server);
+  const blockedEnvError = getBlockedMcpStdioEnvWriteError(server, previousServer);
   if (blockedEnvError) {
     return {
       ok: false,
@@ -174,8 +186,9 @@ export async function updateConfiguredMcpServer(params: {
 
   const next = structuredClone(loaded.config);
   const servers = normalizeConfiguredMcpServers(next.mcp?.servers);
-  const server = canonicalizeConfiguredMcpServer(params.update({ ...servers[name] }));
-  const blockedEnvError = getBlockedMcpStdioEnvWriteError(server);
+  const previousServer = structuredClone(servers[name]);
+  const server = canonicalizeConfiguredMcpServer(params.update(structuredClone(previousServer)));
+  const blockedEnvError = getBlockedMcpStdioEnvWriteError(server, previousServer);
   if (blockedEnvError) {
     return {
       ok: false,

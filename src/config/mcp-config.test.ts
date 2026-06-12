@@ -203,7 +203,7 @@ describe("config mcp config", () => {
     });
   });
 
-  it("rejects updates that would keep blocked stdio env keys", async () => {
+  it("allows unrelated updates when blocked stdio env keys are legacy", async () => {
     await withMcpConfigHome(
       {
         mcp: {
@@ -223,24 +223,70 @@ describe("config mcp config", () => {
           update: (server) => ({ ...server, timeout: 5 }),
         });
 
-        expect(configureResult.ok).toBe(false);
-        if (configureResult.ok) {
-          throw new Error("expected blocked stdio env update to fail");
+        expect(configureResult.ok).toBe(true);
+        if (!configureResult.ok) {
+          throw new Error("expected unrelated MCP config update to succeed");
         }
-        expect(configureResult.error).toBe(
-          'MCP stdio env key "PYTHONPATH" is blocked by startup safety policy and cannot be saved. Remove it from the server env config.',
-        );
+        expect(configureResult.mcpServers.docs).toEqual({
+          command: "node",
+          env: {
+            PYTHONPATH: "/tmp/mcp-shadow",
+          },
+          timeout: 5,
+        });
 
         const toolsResult = await updateConfiguredMcpServerTools({
           name: "docs",
           tools: { include: ["search"] },
         });
 
-        expect(toolsResult.ok).toBe(false);
-        if (toolsResult.ok) {
-          throw new Error("expected blocked stdio env tool update to fail");
+        expect(toolsResult.ok).toBe(true);
+        if (!toolsResult.ok) {
+          throw new Error("expected unrelated MCP tool update to succeed");
         }
-        expect(toolsResult.error).toBe(
+        expect(toolsResult.mcpServers.docs).toEqual({
+          command: "node",
+          env: {
+            PYTHONPATH: "/tmp/mcp-shadow",
+          },
+          timeout: 5,
+          toolFilter: { include: ["search"] },
+        });
+      },
+    );
+  });
+
+  it("rejects updates that introduce blocked stdio env keys", async () => {
+    await withMcpConfigHome(
+      {
+        mcp: {
+          servers: {
+            docs: {
+              command: "node",
+              env: {
+                PYTHONUNBUFFERED: "1",
+              },
+            },
+          },
+        },
+      },
+      async () => {
+        const configureResult = await updateConfiguredMcpServer({
+          name: "docs",
+          update: (server) => ({
+            ...server,
+            env: {
+              ...(server.env as Record<string, unknown>),
+              PYTHONPATH: "/tmp/mcp-shadow",
+            },
+          }),
+        });
+
+        expect(configureResult.ok).toBe(false);
+        if (configureResult.ok) {
+          throw new Error("expected introduced blocked stdio env update to fail");
+        }
+        expect(configureResult.error).toBe(
           'MCP stdio env key "PYTHONPATH" is blocked by startup safety policy and cannot be saved. Remove it from the server env config.',
         );
       },

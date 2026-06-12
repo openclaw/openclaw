@@ -368,6 +368,63 @@ describe("mcp cli", () => {
     });
   });
 
+  it("updates and clears legacy blocked stdio env keys", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async (home) => {
+      const workspaceDir = await createWorkspace();
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify(
+          {
+            mcp: {
+              servers: {
+                docs: {
+                  command: "node",
+                  env: {
+                    PYTHONPATH: "/tmp/mcp-shadow",
+                    PYTHONUNBUFFERED: "1",
+                  },
+                },
+              },
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      await runMcpCommand(["mcp", "tools", "docs", "--include", "search"]);
+      expect(lastLogLine()).toBe(`Updated MCP tool selection for "docs" in ${configPath}.`);
+
+      mockLog.mockClear();
+      await runMcpCommand(["mcp", "show", "docs", "--json"]);
+      expect(JSON.parse(lastLogLine())).toEqual({
+        command: "node",
+        env: {
+          PYTHONPATH: "/tmp/mcp-shadow",
+          PYTHONUNBUFFERED: "1",
+        },
+        toolFilter: { include: ["search"] },
+      });
+
+      await runMcpCommand(["mcp", "configure", "docs", "--clear-blocked-env"]);
+      expect(lastLogLine()).toBe(`Updated MCP server "docs" in ${configPath}.`);
+
+      mockLog.mockClear();
+      await runMcpCommand(["mcp", "show", "docs", "--json"]);
+      expect(JSON.parse(lastLogLine())).toEqual({
+        command: "node",
+        env: {
+          PYTHONUNBUFFERED: "1",
+        },
+        toolFilter: { include: ["search"] },
+      });
+    });
+  });
+
   it("rejects legacy blocked stdio env keys before probing MCP configure updates", async () => {
     await withTempHome("openclaw-cli-mcp-home-", async (home) => {
       const workspaceDir = await createWorkspace();

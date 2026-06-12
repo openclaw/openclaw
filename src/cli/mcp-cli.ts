@@ -233,6 +233,23 @@ function failOnBlockedMcpStdioEnv(server: Record<string, unknown>): void {
   }
 }
 
+function clearBlockedMcpStdioEnv(server: Record<string, unknown>): void {
+  const blockedEnvKeys = listBlockedMcpStdioEnvKeys(server);
+  const env = asRecord(server.env);
+  if (blockedEnvKeys.length === 0 || !env) {
+    return;
+  }
+  const nextEnv = { ...env };
+  for (const key of blockedEnvKeys) {
+    delete nextEnv[key];
+  }
+  if (Object.keys(nextEnv).length === 0) {
+    delete server.env;
+  } else {
+    server.env = nextEnv;
+  }
+}
+
 function hasSensitiveKey(name: string): boolean {
   return SENSITIVE_HEADER_NAMES.has(name.trim().toLowerCase()) || SENSITIVE_KEY_PATTERN.test(name);
 }
@@ -1090,6 +1107,7 @@ export function registerMcpCli(program: Command) {
     .option("--include <csv>", "Comma-separated MCP tool names or '*' globs to expose")
     .option("--exclude <csv>", "Comma-separated MCP tool names or '*' globs to hide")
     .option("--clear-tools", "Clear this server's MCP tool filter", false)
+    .option("--clear-blocked-env", "Remove stdio env keys blocked by startup safety policy", false)
     .option("--timeout <seconds>", "Per-request timeout in seconds")
     .option("--connect-timeout <seconds>", "Connection timeout in seconds")
     .option("--clear-timeouts", "Clear request and connection timeout overrides", false)
@@ -1114,6 +1132,7 @@ export function registerMcpCli(program: Command) {
           include?: string;
           exclude?: string;
           clearTools?: boolean;
+          clearBlockedEnv?: boolean;
           timeout?: string;
           connectTimeout?: string;
           clearTimeouts?: boolean;
@@ -1220,7 +1239,12 @@ export function registerMcpCli(program: Command) {
         }
         setOptionalField(next, "clientCert", normalizeStringifiedOptionalString(opts.clientCert));
         setOptionalField(next, "clientKey", normalizeStringifiedOptionalString(opts.clientKey));
-        failOnBlockedMcpStdioEnv(next);
+        if (opts.clearBlockedEnv) {
+          clearBlockedMcpStdioEnv(next);
+        }
+        if (opts.probe) {
+          failOnBlockedMcpStdioEnv(next);
+        }
         if (opts.probe && next.enabled !== false && next.auth !== "oauth") {
           await probeMcpServersOrFail({
             config: loaded.config,
