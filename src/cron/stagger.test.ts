@@ -152,7 +152,7 @@ describe("cron stagger helpers", () => {
     it("handles special numeric values", () => {
       expect(normalizeCronStaggerMs(Infinity)).toBeUndefined();
       expect(normalizeCronStaggerMs(-Infinity)).toBeUndefined();
-      expect(normalizeCronStaggerMs(NaN)).toBeUndefined();
+      expect(normalizeCronStaggerMs(Number.NaN)).toBeUndefined();
     });
 
     it("handles very large numbers", () => {
@@ -199,7 +199,7 @@ describe("cron stagger helpers", () => {
       expect(resolveCronStaggerMs({ kind: "cron", expr: "0 * * * *", staggerMs: 600_000 })).toBe(
         600_000,
       );
-      expect(resolveCronStaggerMs({ kind: "cron", expr: "0 * * * *", staggerMs: "30000" })).toBe(
+      expect(resolveCronStaggerMs({ kind: "cron", expr: "0 * * * *", staggerMs: 30000 })).toBe(
         30_000,
       );
     });
