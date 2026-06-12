@@ -251,7 +251,7 @@ describe("cron update catch-up guard (#91944)", () => {
     state.store = null;
     await runMissedJobs(state);
 
-    const reloaded = state.store?.jobs?.find(
+    const reloaded = storeJobs(state).find(
       (j) => j.id === "genuine-missed-after-update",
     );
     expect(reloaded).toBeDefined();
