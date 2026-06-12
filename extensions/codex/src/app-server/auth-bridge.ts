@@ -641,10 +641,14 @@ function shouldClearOpenAiApiKeyForCodexAuthProfile(params: {
   authProfileId?: string;
   config?: AuthProfileOrderConfig;
 }): boolean {
-  const profileId = params.authProfileId?.trim();
-  const credential = profileId
-    ? params.store.profiles[profileId]
-    : params.store.profiles[OPENAI_CODEX_DEFAULT_PROFILE_ID];
+  const profileId =
+    params.authProfileId?.trim() ||
+    resolveCodexAppServerAuthProfileId({
+      store: params.store,
+      config: params.config,
+    }) ||
+    OPENAI_CODEX_DEFAULT_PROFILE_ID;
+  const credential = params.store.profiles[profileId];
   return isCodexSubscriptionCredential(credential, params.config);
 }
 

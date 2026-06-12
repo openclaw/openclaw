@@ -300,6 +300,53 @@ describe("bridgeCodexAppServerStartOptions", () => {
     }
   });
 
+  it("clears inherited API-key env vars when the migrated ChatGPT Codex profile is subscription auth", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const startOptions = createStartOptions({
+      env: { EXISTING: "1" },
+      clearEnv: ["FOO"],
+    });
+    try {
+      upsertAuthProfile({
+        agentDir,
+        profileId: "openai:chatgpt-default",
+        credential: {
+          type: "oauth",
+          provider: "openai",
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 24 * 60 * 60_000,
+          accountId: "account-123",
+        },
+      });
+
+      await expect(
+        bridgeCodexAppServerStartOptions({
+          startOptions,
+          agentDir,
+          config: {
+            auth: {
+              order: {
+                openai: ["openai:chatgpt-default"],
+              },
+            },
+          },
+        }),
+      ).resolves.toEqual({
+        ...startOptions,
+        env: {
+          EXISTING: "1",
+          CODEX_HOME: resolveCodexAppServerHomeDir(agentDir),
+        },
+        clearEnv: ["FOO", "CODEX_API_KEY", "OPENAI_API_KEY"],
+      });
+      expect(startOptions.clearEnv).toEqual(["FOO"]);
+      await expectPathMissing(path.join(agentDir, "harness-auth"));
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
   it("clears an inherited OpenAI API key for an explicit Codex OAuth profile", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     const startOptions = createStartOptions({ clearEnv: ["FOO"] });
@@ -651,6 +698,47 @@ describe("bridgeCodexAppServerStartOptions", () => {
         type: "chatgptAuthTokens",
         accessToken: "default-access-token",
         chatgptAccountId: "account-default",
+        chatgptPlanType: null,
+      });
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("applies a migrated ChatGPT Codex OAuth profile when no profile id is explicit", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const request = vi.fn(async () => ({ type: "chatgptAuthTokens" }));
+    try {
+      upsertAuthProfile({
+        agentDir,
+        profileId: "openai:chatgpt-default",
+        credential: {
+          type: "oauth",
+          provider: "openai",
+          access: "chatgpt-access-token",
+          refresh: "chatgpt-refresh-token",
+          expires: Date.now() + 24 * 60 * 60_000,
+          accountId: "account-chatgpt-default",
+          email: "codex-chatgpt@example.test",
+        },
+      });
+
+      await applyCodexAppServerAuthProfile({
+        client: { request } as never,
+        agentDir,
+        config: {
+          auth: {
+            order: {
+              openai: ["openai:chatgpt-default"],
+            },
+          },
+        },
+      });
+
+      expect(request).toHaveBeenCalledWith("account/login/start", {
+        type: "chatgptAuthTokens",
+        accessToken: "chatgpt-access-token",
+        chatgptAccountId: "account-chatgpt-default",
         chatgptPlanType: null,
       });
     } finally {
