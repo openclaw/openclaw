@@ -27,7 +27,6 @@ import { EmbeddedBlockChunker, type BlockReplyChunking } from "./embedded-agent-
 import { resolveModelWithRegistry } from "./embedded-agent-runner/model.js";
 import { getActiveEmbeddedRunSnapshot } from "./embedded-agent-runner/runs.js";
 import { resolveEmbeddedAgentStreamFn } from "./embedded-agent-runner/stream-resolution.js";
-import { applyPreparedRuntimeAuthToModel } from "./provider-request-config.js";
 import { resolveAvailableAgentHarnessPolicy, selectAgentHarness } from "./harness/selection.js";
 import {
   resolveImageSanitizationLimits,
@@ -39,8 +38,10 @@ import {
   getApiKeyForModel,
   requireApiKey,
 } from "./model-auth.js";
+import { isCliRuntimeAliasForProvider } from "./model-runtime-aliases.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "./openai-routing.js";
+import { applyPreparedRuntimeAuthToModel } from "./provider-request-config.js";
 import { registerProviderStreamForModel } from "./provider-stream.js";
 import { stripToolResultDetails } from "./session-transcript-repair.js";
 import { sanitizeImageBlocks } from "./tool-images.js";
@@ -378,6 +379,26 @@ export async function runBtwSideQuestion(
   }
   if (harness.id === "codex") {
     throw new Error(`Selected agent harness "${harness.id}" does not support /btw side questions.`);
+  }
+  const fallbackPolicy = resolveAvailableAgentHarnessPolicy({
+    provider: params.provider,
+    modelId: params.model,
+    config: params.cfg,
+    agentId: sessionAgentId,
+    sessionKey: params.sessionKey,
+  });
+  const fallbackRuntime = fallbackPolicy.runtime.trim();
+  if (
+    isCliRuntimeAliasForProvider({
+      runtime: fallbackRuntime,
+      provider: params.provider,
+      cfg: params.cfg,
+    })
+  ) {
+    throw new Error(
+      `/btw is not yet supported for ${fallbackRuntime}-backed models. ` +
+        `The selected model is routed through ${fallbackRuntime}; OpenClaw will not fall back to direct ${params.provider} auth because that would use a different backend than the active session.`,
+    );
   }
 
   const activeRunSnapshot = getActiveEmbeddedRunSnapshot(sessionId);

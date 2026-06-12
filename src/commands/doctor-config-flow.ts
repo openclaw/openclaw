@@ -331,6 +331,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       cfg: candidate,
       doctorFixCommand,
       env: process.env,
+      allowExec: params.options.allowExec === true,
     });
     emitDoctorNotes({
       note,
