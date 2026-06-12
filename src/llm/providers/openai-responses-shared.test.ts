@@ -643,9 +643,18 @@ describe("processResponsesStream", () => {
         textSignature: JSON.stringify({ v: 1, id: "msg_3", phase: "final_answer" }),
       },
     ]);
-    const textEnds = events.filter((event) => event.type === "text_end");
-    expect(textEnds.map((event) => event.contentIndex)).toEqual([0, 0, 0]);
-    expect(textEnds.at(-1)?.content).toBe(snapshot3);
+    // Balanced lifecycle: exactly one text_start, every event on index 0, and
+    // each collapsed snapshot re-ends the same block with its grown content.
+    expect(events.map((event) => [event.type, event.contentIndex])).toEqual([
+      ["text_start", 0],
+      ["text_delta", 0],
+      ["text_end", 0],
+      ["text_end", 0],
+      ["text_end", 0],
+    ]);
+    expect(
+      events.filter((event) => event.type === "text_end").map((event) => event.content),
+    ).toEqual([snapshot1, snapshot2, snapshot3]);
   });
 
   it.each([
@@ -654,6 +663,12 @@ describe("processResponsesStream", () => {
   ])("keeps %s adjacent same-phase message items as distinct blocks", async (_label, a, b) => {
     const output = createAssistantOutput();
     const stream = new AssistantMessageEventStream();
+    const events: Array<Record<string, unknown>> = [];
+    const collect = (async () => {
+      for await (const event of stream) {
+        events.push(event as unknown as Record<string, unknown>);
+      }
+    })();
     await processResponsesStream(
       responseEvents([
         {
@@ -689,6 +704,7 @@ describe("processResponsesStream", () => {
       nativeOpenAIModel,
     );
     stream.end();
+    await collect;
 
     // Only strict extensions collapse; equal or shrinking items are real,
     // independently identified messages and must never be removed.
@@ -703,6 +719,87 @@ describe("processResponsesStream", () => {
         text: b,
         textSignature: JSON.stringify({ v: 1, id: "msg_2", phase: "final_answer" }),
       },
+    ]);
+    // The deferred second item still opens and closes its own block.
+    expect(events.map((event) => [event.type, event.contentIndex])).toEqual([
+      ["text_start", 0],
+      ["text_end", 0],
+      ["text_start", 1],
+      ["text_end", 1],
+    ]);
+  });
+
+  it("streams a deferred distinct message live once its text diverges from the prior block", async () => {
+    const output = createAssistantOutput();
+    const stream = new AssistantMessageEventStream();
+    const events: Array<Record<string, unknown>> = [];
+    const collect = (async () => {
+      for await (const event of stream) {
+        events.push(event as unknown as Record<string, unknown>);
+      }
+    })();
+
+    await processResponsesStream(
+      responseEvents([
+        {
+          type: "response.output_item.added",
+          item: { type: "message", id: "msg_1", phase: "final_answer" },
+        },
+        {
+          type: "response.output_item.done",
+          item: {
+            type: "message",
+            id: "msg_1",
+            phase: "final_answer",
+            content: [{ type: "output_text", text: "Hello." }],
+          },
+        },
+        {
+          type: "response.output_item.added",
+          item: { type: "message", id: "msg_2", phase: "final_answer" },
+        },
+        { type: "response.content_part.added", part: { type: "output_text", text: "" } },
+        { type: "response.output_text.delta", delta: "Good" },
+        { type: "response.output_text.delta", delta: "bye" },
+        {
+          type: "response.output_item.done",
+          item: {
+            type: "message",
+            id: "msg_2",
+            phase: "final_answer",
+            content: [{ type: "output_text", text: "Goodbye" }],
+          },
+        },
+        { type: "response.completed", response: { id: "resp_1", status: "completed" } },
+      ]),
+      output,
+      stream,
+      nativeOpenAIModel,
+    );
+    stream.end();
+    await collect;
+
+    expect(output.content).toEqual([
+      {
+        type: "text",
+        text: "Hello.",
+        textSignature: JSON.stringify({ v: 1, id: "msg_1", phase: "final_answer" }),
+      },
+      {
+        type: "text",
+        text: "Goodbye",
+        textSignature: JSON.stringify({ v: 1, id: "msg_2", phase: "final_answer" }),
+      },
+    ]);
+    // The withheld prefix is replayed as one delta at divergence ("Good"
+    // diverges from "Hello."), then later deltas stream live.
+    expect(events.map((event) => [event.type, event.contentIndex, event.delta ?? null])).toEqual([
+      ["text_start", 0, null],
+      ["text_end", 0, null],
+      ["text_start", 1, null],
+      ["text_delta", 1, "Good"],
+      ["text_delta", 1, "bye"],
+      ["text_end", 1, null],
     ]);
   });
 

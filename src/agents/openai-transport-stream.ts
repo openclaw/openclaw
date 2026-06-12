@@ -1480,11 +1480,29 @@ async function processResponsesStream(
     index: number;
     phase: "commentary" | "final_answer" | undefined;
   } | null = null;
+  // While a message item may still be a cumulative snapshot of lastTextBlock,
+  // its public block is deferred so a collapsed item never leaves an
+  // unbalanced text_start behind (#91959). null = no deferral in progress.
+  let pendingMessageText: string | null = null;
   const streamStartedAt = Date.now();
   let eventCount = 0;
   const eventTypes = new Map<string, number>();
   const sseDebugMode = resolveModelSseDebugMode();
   const blockIndex = () => output.content.length - 1;
+  const appendPendingMessageDelta = (delta: string) => {
+    pendingMessageText = `${pendingMessageText ?? ""}${delta}`;
+    const priorText = stringifyUnknown(lastTextBlock?.block.text);
+    if (priorText.startsWith(pendingMessageText) || pendingMessageText.startsWith(priorText)) {
+      return;
+    }
+    // Diverged from the prior text: this is a distinct message, so open its
+    // block now and replay the withheld text as one delta.
+    currentBlock = { type: "text", text: pendingMessageText };
+    output.content.push(currentBlock);
+    stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
+    stream.push({ type: "text_delta", contentIndex: blockIndex(), delta: pendingMessageText });
+    pendingMessageText = null;
+  };
   const appendCompletedResponseTextItem = (item: Record<string, unknown>) => {
     const text = readResponsesOutputMessageText(item);
     if (!text) {
@@ -1601,6 +1619,7 @@ async function processResponsesStream(
         // Snapshot collapse only applies to back-to-back message items; any
         // other item is a real boundary (see resolveResponsesMessageSnapshotCollapse).
         lastTextBlock = null;
+        pendingMessageText = null;
       }
       if (item.type === "reasoning") {
         currentItem = item;
@@ -1609,9 +1628,14 @@ async function processResponsesStream(
         stream.push({ type: "thinking_start", contentIndex: blockIndex(), partial: output });
       } else if (item.type === "message") {
         currentItem = item;
-        currentBlock = { type: "text", text: "" };
-        output.content.push(currentBlock);
-        stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
+        if (lastTextBlock) {
+          currentBlock = null;
+          pendingMessageText = "";
+        } else {
+          currentBlock = { type: "text", text: "" };
+          output.content.push(currentBlock);
+          stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
+        }
       } else if (item.type === "function_call") {
         currentItem = item;
         currentBlock = {
@@ -1635,13 +1659,17 @@ async function processResponsesStream(
         });
       }
     } else if (isResponsesTextDeltaEventType(type) || type === "response.refusal.delta") {
-      if (currentItem?.type === "message" && currentBlock?.type === "text") {
-        currentBlock.text = `${stringifyUnknown(currentBlock.text)}${stringifyUnknown(event.delta)}`;
-        stream.push({
-          type: "text_delta",
-          contentIndex: blockIndex(),
-          delta: stringifyUnknown(event.delta),
-        });
+      if (currentItem?.type === "message") {
+        if (pendingMessageText !== null) {
+          appendPendingMessageDelta(stringifyUnknown(event.delta));
+        } else if (currentBlock?.type === "text") {
+          currentBlock.text = `${stringifyUnknown(currentBlock.text)}${stringifyUnknown(event.delta)}`;
+          stream.push({
+            type: "text_delta",
+            contentIndex: blockIndex(),
+            delta: stringifyUnknown(event.delta),
+          });
+        }
       }
     } else if (type === "response.function_call_arguments.delta") {
       if (currentItem?.type === "function_call" && currentBlock?.type === "toolCall") {
@@ -1658,6 +1686,7 @@ async function processResponsesStream(
       const item = event.item as Record<string, unknown>;
       if (item.type !== "message") {
         lastTextBlock = null;
+        pendingMessageText = null;
       }
       if (item.type === "reasoning" && currentBlock?.type === "thinking") {
         const summary = Array.isArray(item.summary)
@@ -1684,9 +1713,12 @@ async function processResponsesStream(
           partial: output,
         });
         currentBlock = null;
-      } else if (item.type === "message" && currentBlock?.type === "text") {
+      } else if (
+        item.type === "message" &&
+        (currentBlock?.type === "text" || pendingMessageText !== null)
+      ) {
         const content = Array.isArray(item.content) ? item.content : [];
-        currentBlock.text = content
+        const finalText = content
           .map((part) => {
             const contentPart = part as { type?: string; text?: string; refusal?: string };
             return isResponsesTextContentPartType(contentPart.type)
@@ -1695,19 +1727,23 @@ async function processResponsesStream(
           })
           .join("");
         const phase = (item.phase as "commentary" | "final_answer" | undefined) ?? undefined;
-        const collapse = resolveResponsesMessageSnapshotCollapse({
-          prior: lastTextBlock && {
-            text: stringifyUnknown(lastTextBlock.block.text),
-            phase: lastTextBlock.phase,
-          },
-          nextText: stringifyUnknown(currentBlock.text),
-          nextPhase: phase,
-        });
+        const collapse =
+          pendingMessageText !== null
+            ? resolveResponsesMessageSnapshotCollapse({
+                prior: lastTextBlock && {
+                  text: stringifyUnknown(lastTextBlock.block.text),
+                  phase: lastTextBlock.phase,
+                },
+                nextText: finalText,
+                nextPhase: phase,
+              })
+            : ({ kind: "keep" } as const);
+        pendingMessageText = null;
         if (collapse.kind === "extend" && lastTextBlock) {
           // Cumulative snapshot of the prior message item: replace its text
-          // instead of appending another copy. The newest item's signature is
-          // kept so replay carries the item that produced this content (#91959).
-          output.content.pop();
+          // instead of appending another copy. The deferred block was never
+          // started publicly, and the newest item's signature is kept so
+          // replay carries the item that produced this content (#91959).
           lastTextBlock.block.text = collapse.text;
           lastTextBlock.block.textSignature = encodeTextSignatureV1(
             stringifyUnknown(item.id),
@@ -1720,6 +1756,14 @@ async function processResponsesStream(
             partial: output,
           });
         } else {
+          if (currentBlock?.type !== "text") {
+            // Deferred distinct message: open its block now, balanced with the
+            // text_end below.
+            currentBlock = { type: "text", text: "" };
+            output.content.push(currentBlock);
+            stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
+          }
+          currentBlock.text = finalText;
           currentBlock.textSignature = encodeTextSignatureV1(stringifyUnknown(item.id), phase);
           lastTextBlock = { block: currentBlock, index: blockIndex(), phase };
           stream.push({

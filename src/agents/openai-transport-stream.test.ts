@@ -438,6 +438,7 @@ describe("openai transport stream", () => {
   it("collapses cumulative message snapshot items into one text block (#91959)", async () => {
     const model = createAzureResponsesModel();
     const output = createResponsesAssistantOutput(model);
+    const pushSpy = vi.fn();
     const snapshot1 = "Scaled dot-product attention";
     const snapshot2 = "Scaled dot-product attention divides by sqrt(d_k)";
     const snapshot3 = "Scaled dot-product attention divides by sqrt(d_k) before softmax.";
@@ -472,7 +473,7 @@ describe("openai transport stream", () => {
         },
       ]),
       output,
-      { push: vi.fn() },
+      { push: pushSpy },
       model,
     );
 
@@ -482,6 +483,18 @@ describe("openai transport stream", () => {
         text: snapshot3,
         textSignature: '{"v":1,"id":"msg_3","phase":"final_answer"}',
       },
+    ]);
+    // Balanced lifecycle: one text_start, all events on index 0, and each
+    // collapsed snapshot re-ends the same block.
+    const textEvents = pushSpy.mock.calls
+      .map(([event]) => event as { type: string; contentIndex?: number })
+      .filter((event) => event.type.startsWith("text_"));
+    expect(textEvents.map((event) => [event.type, event.contentIndex])).toEqual([
+      ["text_start", 0],
+      ["text_delta", 0],
+      ["text_end", 0],
+      ["text_end", 0],
+      ["text_end", 0],
     ]);
   });
 
