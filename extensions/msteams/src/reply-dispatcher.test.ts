@@ -7,6 +7,15 @@ const getMSTeamsRuntimeMock = vi.hoisted(() => vi.fn());
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
 const renderReplyPayloadsToMessagesMock = vi.hoisted(() => vi.fn(() => []));
 const sendMSTeamsMessagesMock = vi.hoisted(() => vi.fn(async () => []));
+const sendMessageMSTeamsMock = vi.hoisted(() =>
+  vi.fn(async (_params: { cfg: unknown; to: string; text: string }) => ({
+    messageId: "audit-1",
+  })),
+);
+
+vi.mock("./send.js", () => ({
+  sendMessageMSTeams: sendMessageMSTeamsMock,
+}));
 
 vi.mock("../runtime-api.js", () => ({
   createChannelMessageReplyPipeline: createChannelMessageReplyPipelineMock,
@@ -639,6 +648,58 @@ describe("createMSTeamsReplyDispatcher", () => {
     await dispatcher.markDispatchIdle();
 
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+  });
+
+  it("mirrors natively-streamed replies to the audit channel (S2)", async () => {
+    // The default DM path streams tokens, so the stream controller consumes the payload and block
+    // delivery never runs. The audit mirror must fire at the deliver choke point regardless —
+    // previously it lived in the block path only, so streamed replies left no governance trail.
+    sendMessageMSTeamsMock.mockClear();
+    const dispatcher = createDispatcher("personal", { auditChannel: "conversation:19:audit" });
+    const options = dispatcherOptions();
+
+    // Tokens streamed → preparePayload suppresses block delivery for this payload.
+    dispatcher.replyOptions.onPartialReply?.({ text: "streamed reply" });
+    await options.deliver({ text: "streamed reply" });
+
+    expect(sendMSTeamsMessagesMock).not.toHaveBeenCalled(); // no block delivery happened
+    expect(sendMessageMSTeamsMock).toHaveBeenCalledTimes(1); // ...but the audit mirror fired
+    const auditArgs = sendMessageMSTeamsMock.mock.calls[0]?.[0];
+    expect(auditArgs?.to).toBe("conversation:19:audit");
+    expect(auditArgs?.text).toContain("streamed reply");
+  });
+
+  it("never mirrors the audit channel's own traffic (loop guard at the choke point)", async () => {
+    sendMessageMSTeamsMock.mockClear();
+    // The dispatcher's conversation IS the audit channel — the mirror must not recurse.
+    const contextSendActivity = vi.fn(async () => ({ id: "activity-1" }));
+    const dispatcher = createMSTeamsReplyDispatcher({
+      cfg: {
+        channels: { msteams: { auditChannel: "conversation:conv" } },
+      } as never,
+      agentId: "agent",
+      sessionKey: "agent:main:main",
+      runtime: { error: vi.fn() } as never,
+      log: { debug: vi.fn(), error: vi.fn(), warn: vi.fn() } as never,
+      app: { send: vi.fn(async () => ({})) } as never,
+      appId: "app",
+      conversationRef: {
+        conversation: { id: "conv", conversationType: "personal" },
+        user: { id: "user" },
+        agent: { id: "bot" },
+        channelId: "msteams",
+        serviceUrl: "https://service.example.com",
+      } as never,
+      context: { sendActivity: contextSendActivity } as never,
+      replyStyle: "thread",
+      textLimit: 4000,
+    });
+    const options = dispatcherOptions();
+
+    await options.deliver({ text: "reply inside the audit channel" });
+    await dispatcher.markDispatchIdle();
+
+    expect(sendMessageMSTeamsMock).not.toHaveBeenCalled();
   });
 });
 
