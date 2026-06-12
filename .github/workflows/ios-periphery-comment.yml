@@ -1,0 +1,173 @@
+name: iOS Periphery Dead Code Comment
+
+on:
+  workflow_run:
+    workflows: ["iOS Periphery Dead Code"]
+    types: [completed]
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  comment:
+    name: Comment on PR
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Upsert Periphery PR comment
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const fs = require("node:fs");
+            const os = require("node:os");
+            const path = require("node:path");
+            const childProcess = require("node:child_process");
+
+            const marker = "<!-- openclaw-ios-periphery-dead-code -->";
+            const run = context.payload.workflow_run;
+            const pr = run.pull_requests?.[0];
+            if (!pr) {
+              core.info("No pull request attached to workflow_run.");
+              return;
+            }
+
+            const { owner, repo } = context.repo;
+            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+              owner,
+              repo,
+              run_id: run.id,
+              per_page: 100,
+            });
+
+            const artifact = artifacts.find((item) => item.name?.startsWith("ios-periphery-dead-code-"));
+            if (!artifact) {
+              core.warning("No Periphery artifact found.");
+              return;
+            }
+
+            const archive = await github.rest.actions.downloadArtifact({
+              owner,
+              repo,
+              artifact_id: artifact.id,
+              archive_format: "zip",
+            });
+
+            const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ios-periphery-"));
+            const archivePath = path.join(dir, "artifact.zip");
+            fs.writeFileSync(archivePath, Buffer.from(archive.data));
+            childProcess.execFileSync("unzip", ["-q", archivePath, "-d", dir]);
+
+            const read = (name) => {
+              const file = path.join(dir, name);
+              if (!fs.existsSync(file)) {
+                return "";
+              }
+              if (fs.statSync(file).size > 2 * 1024 * 1024) {
+                core.warning(`${name} is too large to include in a PR comment.`);
+                return "";
+              }
+              return fs.readFileSync(file, "utf8");
+            };
+
+            const status = Number(read("periphery.status").trim() || "1");
+            let findings = null;
+            for (const name of ["periphery.json", "periphery.stdout.json"]) {
+              try {
+                const parsed = JSON.parse(read(name));
+                if (Array.isArray(parsed)) {
+                  findings = parsed;
+                  break;
+                }
+              } catch {}
+            }
+
+            const escapeCell = (value) =>
+              String(value ?? "")
+                .replaceAll("&", "&amp;")
+                .replaceAll("<", "&lt;")
+                .replaceAll(">", "&gt;")
+                .replaceAll("|", "\\|")
+                .replaceAll("\n", " ");
+
+            const rows = (findings ?? []).map((finding) => {
+              const location = String(finding.location ?? "");
+              const [file, line] = location.split(":");
+              return {
+                file: file ? `apps/ios/${file}` : "",
+                line: line || "",
+                kind: String(finding.kind ?? ""),
+                name: String(finding.name ?? ""),
+              };
+            });
+
+            let mode = "failure";
+            let body = `${marker}\n`;
+            if (findings === null) {
+              body += [
+                "### iOS Periphery",
+                "",
+                "Periphery did not complete. Check the workflow artifact for stdout/stderr.",
+              ].join("\n");
+            } else if (rows.length === 0 && status === 0) {
+              mode = "success";
+              body += [
+                "### iOS Periphery",
+                "",
+                "No dead Swift code found.",
+              ].join("\n");
+            } else if (rows.length > 0) {
+              const shown = rows.slice(0, 50);
+              body += [
+                "### iOS Periphery",
+                "",
+                `Found ${rows.length} dead Swift code ${rows.length === 1 ? "symbol" : "symbols"}. Remove the code or add a narrow Periphery exemption with a comment explaining why it must stay.`,
+                "",
+                "| File | Line | Kind | Name |",
+                "| --- | ---: | --- | --- |",
+                ...shown.map((row) => `| ${escapeCell(row.file)} | ${escapeCell(row.line)} | ${escapeCell(row.kind)} | ${escapeCell(row.name)} |`),
+                rows.length > shown.length ? "" : null,
+                rows.length > shown.length ? `Showing first ${shown.length}; full JSON is in the workflow artifact.` : null,
+              ].filter(Boolean).join("\n");
+            } else {
+              body += [
+                "### iOS Periphery",
+                "",
+                "Periphery exited with a non-zero status before producing findings. Check the workflow artifact for stdout/stderr.",
+              ].join("\n");
+            }
+            body += "\n";
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number: pr.number,
+              per_page: 100,
+            });
+            const existing = comments.find((comment) => comment.user?.type === "Bot" && comment.body?.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body,
+              });
+              return;
+            }
+
+            if (mode === "success") {
+              core.info("No existing Periphery comment and scan passed; skipping comment.");
+              return;
+            }
+
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: pr.number,
+              body,
+            });
