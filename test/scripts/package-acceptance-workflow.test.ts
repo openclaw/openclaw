@@ -1642,11 +1642,14 @@ describe("package artifact reuse", () => {
     expect(releaseWorkflow).toContain("Plugin ClawHub run ID");
     expect(releaseWorkflow).toContain("plugin-clawhub-new.yml");
     expect(releaseWorkflow).toContain("Plugin ClawHub bootstrap run ID");
+    expect(releaseWorkflow).toContain("scripts/openclaw-release-clawhub-plan.ts");
+    expect(releaseWorkflow).toContain("openclaw-release-clawhub-plan.json");
     expect(releaseWorkflow).toContain("bootstrap_plugins");
     expect(releaseWorkflow).toContain("missing_trusted_plugins");
-    expect(releaseWorkflow).toContain(
-      "[.bootstrapCandidates[]?.packageName, .missingTrustedPublisher[]?.packageName]",
-    );
+    expect(releaseWorkflow).toContain(".summary.bootstrapPlugins");
+    expect(releaseWorkflow).toContain(".summary.missingTrustedPlugins");
+    expect(releaseWorkflow).toContain("append_clawhub_dispatch_args");
+    expect(releaseWorkflow).toContain(".[$target].inputs | to_entries[]");
     expect(releaseWorkflow).toContain("Bootstrap/repair candidates:");
     expect(releaseWorkflow).toContain("Trusted-publisher repair plugins:");
     expect(releaseWorkflow).toContain(
@@ -1749,14 +1752,13 @@ describe("package artifact reuse", () => {
     expect(clawHubNewWorkflow).toContain('trustedPublisher?.repository !== "openclaw/openclaw"');
     expect(openclawNpmWorkflow).toContain("environment: npm-release");
     expect(releaseWorkflow).toContain("default: from-validation");
-    expect(releaseWorkflow).toContain('-f release_publish_branch="${CHILD_WORKFLOW_REF}"');
-    expect(releaseWorkflow).toContain(
-      'dispatch_workflow_at_ref "${RELEASE_TAG}" plugin-clawhub-release.yml',
-    );
-    expect(releaseWorkflow).toContain(
-      'dispatch_workflow_at_ref "${RELEASE_TAG}" plugin-clawhub-new.yml',
-    );
-    expect(releaseWorkflow).toContain('--clawhub-workflow-ref "${RELEASE_TAG}"');
+    expect(releaseWorkflow).toContain('--release-publish-branch "${CHILD_WORKFLOW_REF}"');
+    expect(releaseWorkflow).toContain('--release-publish-run-id "${GITHUB_RUN_ID}"');
+    expect(releaseWorkflow).toContain("jq -r '.normal.ref' \"${clawhub_plan_path}\"");
+    expect(releaseWorkflow).toContain("jq -r '.normal.workflow' \"${clawhub_plan_path}\"");
+    expect(releaseWorkflow).toContain("jq -r '.bootstrap.ref' \"${clawhub_plan_path}\"");
+    expect(releaseWorkflow).toContain("jq -r '.bootstrap.workflow' \"${clawhub_plan_path}\"");
+    expect(releaseWorkflow).toContain('--clawhub-workflow-ref "${clawhub_workflow_ref}"');
     expect(releaseWorkflow).toContain(
       'if [[ "$EXPECTED_RELEASE_PROFILE" != "from-validation" && "$release_profile" != "$EXPECTED_RELEASE_PROFILE" ]]; then',
     );

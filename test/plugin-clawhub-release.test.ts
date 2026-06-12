@@ -11,6 +11,10 @@ import {
 import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  buildOpenClawReleaseClawHubPlan,
+  parseOpenClawReleaseClawHubPlanArgs,
+} from "../scripts/lib/openclaw-release-clawhub-plan.ts";
+import {
   collectClawHubPublishablePluginPackages,
   collectClawHubVersionGateErrors,
   collectPluginClawHubReleasePathsFromGitRange,
@@ -599,6 +603,187 @@ describe("collectPluginClawHubReleasePlan", () => {
   });
 });
 
+describe("buildOpenClawReleaseClawHubPlan", () => {
+  it("emits a dispatch plan that keeps ClawHub children on the release tag", async () => {
+    const repoDir = createTempPluginRepo({
+      extraExtensionIds: ["demo-two", "demo-three"],
+    });
+    const { fetchImpl } = createClawHubPlanFetch({
+      packages: {
+        "@openclaw/demo-plugin": {
+          status: 200,
+          body: {
+            package: {},
+            owner: {},
+          },
+        },
+        "@openclaw/demo-two": {
+          status: 404,
+        },
+        "@openclaw/demo-three": {
+          status: 200,
+          body: {
+            package: {},
+            owner: {},
+          },
+        },
+      },
+      trustedPublishers: {
+        "@openclaw/demo-plugin": {
+          status: 200,
+          body: {
+            trustedPublisher: {
+              repository: "openclaw/openclaw",
+              workflowFilename: "plugin-clawhub-release.yml",
+            },
+          },
+        },
+        "@openclaw/demo-three": {
+          status: 200,
+          body: {
+            trustedPublisher: null,
+          },
+        },
+      },
+      versions: {
+        "@openclaw/demo-plugin@2026.4.1": 404,
+        "@openclaw/demo-three@2026.4.1": 404,
+      },
+    });
+
+    const plan = await buildOpenClawReleaseClawHubPlan(
+      {
+        releaseTag: "v2026.4.1-beta.1",
+        releasePublishBranch: "main",
+        releasePublishRunId: "12345",
+        pluginPublishScope: "all-publishable",
+        plugins: [],
+      },
+      {
+        rootDir: repoDir,
+        fetchImpl,
+        registryBaseUrl: "https://clawhub.ai",
+      },
+    );
+
+    expect(plan.clawHubWorkflowRef).toBe("v2026.4.1-beta.1");
+    expect(plan.releasePublishBranch).toBe("main");
+    expect(plan.normal).toEqual({
+      workflow: "plugin-clawhub-release.yml",
+      ref: "v2026.4.1-beta.1",
+      shouldDispatch: true,
+      packages: ["@openclaw/demo-plugin"],
+      inputs: {
+        publish_scope: "selected",
+        plugins: "@openclaw/demo-plugin",
+        release_publish_run_id: "12345",
+        release_publish_branch: "main",
+      },
+    });
+    expect(plan.bootstrap).toEqual({
+      workflow: "plugin-clawhub-new.yml",
+      ref: "v2026.4.1-beta.1",
+      shouldDispatch: true,
+      packages: ["@openclaw/demo-two", "@openclaw/demo-three"],
+      inputs: {
+        plugins: "@openclaw/demo-two,@openclaw/demo-three",
+        release_publish_run_id: "12345",
+        release_publish_branch: "main",
+      },
+    });
+    expect(new Set([...plan.normal.packages, ...plan.bootstrap.packages]).size).toBe(3);
+    expect(plan.summary).toEqual({
+      normalCount: 1,
+      bootstrapCount: 2,
+      missingTrustedPublisherCount: 1,
+      normalPlugins: "@openclaw/demo-plugin",
+      bootstrapPlugins: "@openclaw/demo-two,@openclaw/demo-three",
+      missingTrustedPlugins: "@openclaw/demo-three",
+    });
+    expect(plan.verifier).toEqual({
+      clawHubWorkflowRef: "v2026.4.1-beta.1",
+    });
+  });
+
+  it("routes already-published packages missing trusted publisher config to bootstrap repair", async () => {
+    const repoDir = createTempPluginRepo();
+    const { fetchImpl } = createClawHubPlanFetch({
+      packages: {
+        "@openclaw/demo-plugin": {
+          status: 200,
+          body: {
+            package: {},
+            owner: {},
+          },
+        },
+      },
+      trustedPublishers: {
+        "@openclaw/demo-plugin": {
+          status: 200,
+          body: {
+            trustedPublisher: null,
+          },
+        },
+      },
+      versions: {
+        "@openclaw/demo-plugin@2026.4.1": 200,
+      },
+    });
+
+    const plan = await buildOpenClawReleaseClawHubPlan(
+      {
+        releaseTag: "v2026.4.1-beta.1",
+        releasePublishBranch: "release/2026.4.1",
+        releasePublishRunId: "12345",
+        pluginPublishScope: "selected",
+        plugins: ["@openclaw/demo-plugin"],
+      },
+      {
+        rootDir: repoDir,
+        fetchImpl,
+        registryBaseUrl: "https://clawhub.ai",
+      },
+    );
+
+    expect(plan.normal.shouldDispatch).toBe(false);
+    expect(plan.bootstrap).toMatchObject({
+      workflow: "plugin-clawhub-new.yml",
+      ref: "v2026.4.1-beta.1",
+      shouldDispatch: true,
+      packages: ["@openclaw/demo-plugin"],
+      inputs: {
+        plugins: "@openclaw/demo-plugin",
+        release_publish_run_id: "12345",
+        release_publish_branch: "release/2026.4.1",
+      },
+    });
+    expect(plan.summary).toMatchObject({
+      normalCount: 0,
+      bootstrapCount: 1,
+      missingTrustedPublisherCount: 1,
+      bootstrapPlugins: "@openclaw/demo-plugin",
+      missingTrustedPlugins: "@openclaw/demo-plugin",
+    });
+  });
+
+  it("rejects incompatible all-publishable plugin selection args", () => {
+    expect(() =>
+      parseOpenClawReleaseClawHubPlanArgs([
+        "--release-tag",
+        "v2026.4.1-beta.1",
+        "--release-publish-branch",
+        "main",
+        "--release-publish-run-id",
+        "12345",
+        "--plugin-publish-scope",
+        "all-publishable",
+        "--plugins",
+        "@openclaw/demo-plugin",
+      ]),
+    ).toThrow("plugin-publish-scope=all-publishable must not be combined with --plugins.");
+  });
+});
+
 describe("plugin-clawhub-publish.sh", () => {
   it("previews the publish command through the ClawHub CLI dry-run preflight", () => {
     const repoDir = createTempPluginRepo();
@@ -863,7 +1048,9 @@ function createClawHubPlanFetch(config: {
 }) {
   const requests: string[] = [];
   const fetchImpl: typeof fetch = async (input) => {
-    const url = new URL(String(input));
+    const requestUrl =
+      typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    const url = new URL(requestUrl);
     requests.push(url.pathname);
 
     const packageMatch = url.pathname.match(/^\/api\/v1\/packages\/([^/]+)$/u);

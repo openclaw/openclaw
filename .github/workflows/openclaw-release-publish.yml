@@ -717,27 +717,32 @@ jobs:
           }
 
           resolve_clawhub_release_plan() {
-            local release_plan_path
             local -a plan_args
 
-            release_plan_path="${RUNNER_TEMP}/plugin-clawhub-release-plan.json"
-            plan_args=(--selection-mode "${PLUGIN_PUBLISH_SCOPE}")
+            clawhub_plan_path="${RUNNER_TEMP}/openclaw-release-clawhub-plan.json"
+            plan_args=(
+              --release-tag "${RELEASE_TAG}"
+              --release-publish-branch "${CHILD_WORKFLOW_REF}"
+              --release-publish-run-id "${GITHUB_RUN_ID}"
+              --plugin-publish-scope "${PLUGIN_PUBLISH_SCOPE}"
+            )
             if [[ -n "${PLUGINS// }" ]]; then
               plan_args+=(--plugins "${PLUGINS}")
             fi
 
             CLAWHUB_REGISTRY="${CLAWHUB_REGISTRY:-https://clawhub.ai}" \
-              node --import tsx scripts/plugin-clawhub-release-plan.ts "${plan_args[@]}" > "${release_plan_path}"
+              node --import tsx scripts/openclaw-release-clawhub-plan.ts "${plan_args[@]}" > "${clawhub_plan_path}"
 
-            echo "Resolved ClawHub release plan:"
-            cat "${release_plan_path}"
+            echo "Resolved OpenClaw release ClawHub dispatch plan:"
+            cat "${clawhub_plan_path}"
 
-            normal_plugins="$(jq -r '[.candidates[]?.packageName] | join(",")' "${release_plan_path}")"
-            bootstrap_plugins="$(jq -r '[.bootstrapCandidates[]?.packageName, .missingTrustedPublisher[]?.packageName] | join(",")' "${release_plan_path}")"
-            missing_trusted_plugins="$(jq -r '[.missingTrustedPublisher[]?.packageName] | join(",")' "${release_plan_path}")"
-            normal_plugin_count="$(jq -r '.candidates | length' "${release_plan_path}")"
-            bootstrap_plugin_count="$(jq -r '(.bootstrapCandidates | length) + (.missingTrustedPublisher | length)' "${release_plan_path}")"
-            missing_trusted_plugin_count="$(jq -r '.missingTrustedPublisher | length' "${release_plan_path}")"
+            clawhub_workflow_ref="$(jq -r '.clawHubWorkflowRef' "${clawhub_plan_path}")"
+            normal_plugins="$(jq -r '.summary.normalPlugins' "${clawhub_plan_path}")"
+            bootstrap_plugins="$(jq -r '.summary.bootstrapPlugins' "${clawhub_plan_path}")"
+            missing_trusted_plugins="$(jq -r '.summary.missingTrustedPlugins' "${clawhub_plan_path}")"
+            normal_plugin_count="$(jq -r '.summary.normalCount' "${clawhub_plan_path}")"
+            bootstrap_plugin_count="$(jq -r '.summary.bootstrapCount' "${clawhub_plan_path}")"
+            missing_trusted_plugin_count="$(jq -r '.summary.missingTrustedPublisherCount' "${clawhub_plan_path}")"
 
             {
               echo "### ClawHub release plan"
@@ -755,6 +760,13 @@ jobs:
                 echo "- Trusted-publisher repair plugins: \`${missing_trusted_plugins}\`"
               fi
             } >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          append_clawhub_dispatch_args() {
+            local target="$1"
+            while IFS=$'\t' read -r key value; do
+              clawhub_dispatch_args+=(-f "${key}=${value}")
+            done < <(jq -r --arg target "${target}" '.[$target].inputs | to_entries[] | [.key, .value] | @tsv' "${clawhub_plan_path}")
           }
 
           create_or_update_github_release() {
@@ -862,7 +874,7 @@ jobs:
               --dist-tag "${RELEASE_NPM_DIST_TAG}"
               --repo "${GITHUB_REPOSITORY}"
               --workflow-ref "${CHILD_WORKFLOW_REF}"
-              --clawhub-workflow-ref "${RELEASE_TAG}"
+              --clawhub-workflow-ref "${clawhub_workflow_ref}"
               --full-release-validation-run "${FULL_RELEASE_VALIDATION_RUN_ID}"
               --plugin-npm-run "${plugin_npm_run_id}"
               --openclaw-npm-run "${openclaw_npm_run_id}"
@@ -1017,17 +1029,25 @@ jobs:
 
           plugin_npm_run_id="$(dispatch_workflow plugin-npm-release.yml "${npm_args[@]}")"
           plugin_clawhub_run_id=""
-          if [[ "${normal_plugin_count}" != "0" ]]; then
-            clawhub_args=(-f publish_scope="selected" -f plugins="${normal_plugins}" -f release_publish_run_id="${GITHUB_RUN_ID}" -f release_publish_branch="${CHILD_WORKFLOW_REF}")
-            plugin_clawhub_run_id="$(dispatch_workflow_at_ref "${RELEASE_TAG}" plugin-clawhub-release.yml "${clawhub_args[@]}")"
+          if [[ "$(jq -r '.normal.shouldDispatch' "${clawhub_plan_path}")" == "true" ]]; then
+            clawhub_dispatch_args=()
+            append_clawhub_dispatch_args normal
+            plugin_clawhub_run_id="$(dispatch_workflow_at_ref \
+              "$(jq -r '.normal.ref' "${clawhub_plan_path}")" \
+              "$(jq -r '.normal.workflow' "${clawhub_plan_path}")" \
+              "${clawhub_dispatch_args[@]}")"
           else
             echo "- plugin-clawhub-release.yml: no normal OIDC candidates" >> "$GITHUB_STEP_SUMMARY"
           fi
           plugin_clawhub_bootstrap_run_id=""
           plugin_clawhub_bootstrap_completed="false"
-          if [[ "${bootstrap_plugin_count}" != "0" ]]; then
-            bootstrap_args=(-f plugins="${bootstrap_plugins}" -f release_publish_run_id="${GITHUB_RUN_ID}" -f release_publish_branch="${CHILD_WORKFLOW_REF}")
-            plugin_clawhub_bootstrap_run_id="$(dispatch_workflow_at_ref "${RELEASE_TAG}" plugin-clawhub-new.yml "${bootstrap_args[@]}")"
+          if [[ "$(jq -r '.bootstrap.shouldDispatch' "${clawhub_plan_path}")" == "true" ]]; then
+            clawhub_dispatch_args=()
+            append_clawhub_dispatch_args bootstrap
+            plugin_clawhub_bootstrap_run_id="$(dispatch_workflow_at_ref \
+              "$(jq -r '.bootstrap.ref' "${clawhub_plan_path}")" \
+              "$(jq -r '.bootstrap.workflow' "${clawhub_plan_path}")" \
+              "${clawhub_dispatch_args[@]}")"
           else
             echo "- plugin-clawhub-new.yml: no bootstrap candidates" >> "$GITHUB_STEP_SUMMARY"
           fi
