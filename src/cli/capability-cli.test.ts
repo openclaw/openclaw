@@ -1930,7 +1930,7 @@ describe("capability cli", () => {
     expect(mocks.generateImage).not.toHaveBeenCalled();
   });
 
-  it("forwards --file from image generate to runImageGenerate", async () => {
+  it("forwards --file from image generate to the canonical image.edit pipeline", async () => {
     const inputPath = path.join(os.tmpdir(), `openclaw-image-gen-input-${Date.now()}.png`);
     await fs.writeFile(inputPath, Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
 
@@ -1964,6 +1964,9 @@ describe("capability cli", () => {
     expect(call?.prompt).toBe("branded cover");
     expect(inputImages).toHaveLength(1);
     expect(inputImages[0]?.fileName).toBe(path.basename(inputPath));
+    // When --file is provided, image.generate delegates to the image.edit
+    // pipeline and --count is not forwarded (edit does not support count).
+    expect(call?.count).toBeUndefined();
   });
 
   it("rejects partial image generate timeout before provider dispatch", async () => {
