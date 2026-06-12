@@ -1001,26 +1001,6 @@ vi.mock("./doctor/shared/channel-doctor.js", () => {
     return changed;
   }
 
-  function collectCompatibilityMutations(cfg: { channels?: Record<string, unknown> }) {
-    const next = structuredClone(cfg);
-    const changes: string[] = [];
-    const telegram = asRecord(next.channels?.telegram);
-    if (telegram && "groupMentionsOnly" in telegram) {
-      const groups = asRecord(telegram.groups) ?? {};
-      const defaultGroup = asRecord(groups["*"]) ?? {};
-      if (defaultGroup.requireMention === undefined) {
-        defaultGroup.requireMention = telegram.groupMentionsOnly;
-      }
-      groups["*"] = defaultGroup;
-      telegram.groups = groups;
-      delete telegram.groupMentionsOnly;
-      changes.push(
-        'Moved channels.telegram.groupMentionsOnly → channels.telegram.groups."*".requireMention.',
-      );
-    }
-    return changes.length > 0 ? [{ config: next, changes }] : [];
-  }
-
   function collectInactiveTelegramWarnings(cfg: { channels?: Record<string, unknown> }): string[] {
     const telegram = asRecord(cfg.channels?.telegram);
     if (!telegram) {
@@ -1087,7 +1067,6 @@ vi.mock("./doctor/shared/channel-doctor.js", () => {
   }
 
   return {
-    collectChannelDoctorCompatibilityMutations: vi.fn(collectCompatibilityMutations),
     collectChannelDoctorEmptyAllowlistExtraWarnings: vi.fn(collectTelegramFirstTimeExtraWarnings),
     collectChannelDoctorMutableAllowlistWarnings: vi.fn(
       ({ cfg }: { cfg: { channels?: Record<string, unknown> } }) => {

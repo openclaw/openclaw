@@ -446,12 +446,19 @@ export function applyPluginDoctorCompatibilityMigrations(
   let nextCfg = cfg;
   const changes: string[] = [];
   for (const entry of resolvePluginDoctorContracts(params)) {
-    const mutation = entry.normalizeCompatibilityConfig?.({ cfg: nextCfg });
-    if (!mutation || mutation.changes.length === 0) {
+    // Contract hooks run plugin-shipped code: a version-skewed install can throw at
+    // call time even when the module loaded. Skip like failed contract module loads;
+    // the manifest-registry build-version diagnostic owns the user-facing warning.
+    try {
+      const mutation = entry.normalizeCompatibilityConfig?.({ cfg: nextCfg });
+      if (!mutation || mutation.changes.length === 0) {
+        continue;
+      }
+      nextCfg = mutation.config;
+      changes.push(...mutation.changes);
+    } catch {
       continue;
     }
-    nextCfg = mutation.config;
-    changes.push(...mutation.changes);
   }
   return { config: nextCfg, changes };
 }
