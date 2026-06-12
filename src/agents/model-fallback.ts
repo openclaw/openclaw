@@ -169,6 +169,12 @@ export function isFallbackSummaryError(err: unknown): err is FallbackSummaryErro
 export type ModelFallbackRunOptions = {
   allowTransientCooldownProbe?: boolean;
   isFinalFallbackAttempt?: boolean;
+  /**
+   * True when this attempt runs a non-primary candidate (a fallback takeover).
+   * Downstream turn/tool layers use it to restrict work-spawning surfaces while
+   * a fallback model is replying to internal completion announcements (#92271).
+   */
+  isFallback?: boolean;
 };
 
 type ModelFallbackRuntimeContext = {
@@ -1661,6 +1667,7 @@ async function runWithModelFallbackInternal<T>(
       options: {
         ...runOptions,
         isFinalFallbackAttempt: i + 1 === candidates.length,
+        isFallback: i > 0,
       },
       // Only the outer fallback loop knows another candidate remains. Carry
       // that fact through this attempt so the embedded runner does not freeze
@@ -1912,6 +1919,7 @@ export async function runWithImageModelFallback<T>(params: {
       run: params.run,
       ...candidate,
       attempts,
+      options: { isFallback: i > 0 },
       attempt: i + 1,
       total: candidates.length,
     });
