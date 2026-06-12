@@ -578,6 +578,43 @@ describe("resolveUsableCustomProviderApiKey", () => {
     expect(resolved).toBeNull();
   });
 
+  it("resolves snapshot when source config has the same managed-secretref marker", () => {
+    // Same provider id, same secretref-managed marker — the snapshot was
+    // created from this config's resolved value and should be used.
+    const sourceConfig = {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "https://example.com/v1",
+            apiKey: NON_ENV_SECRETREF_MARKER,
+            models: [],
+          },
+        },
+      },
+    };
+    const runtimeConfig = {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "https://example.com/v1",
+            apiKey: "sk-same-marker-resolved", // pragma: allowlist secret
+            models: [],
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+
+    const resolved = resolveUsableCustomProviderApiKey({
+      cfg: sourceConfig,
+      provider: "custom",
+    });
+    expect(resolved).toEqual({
+      apiKey: "sk-same-marker-resolved",
+      source: "models.json (runtime snapshot)",
+    });
+  });
+
   it("does not treat the Vertex ADC marker as a usable models.json credential", () => {
     const resolved = resolveUsableCustomProviderApiKey({
       cfg: {
