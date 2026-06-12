@@ -17,13 +17,13 @@ jobs:
         with:
           xcode-version: '16'
 
-      # 2. 安装 Node.js
+      # 2. 安装 Node.js（升级到 Node 22）
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
-      # 3. 安装 pnpm（已修复：移除硬编码版本，自动适配项目的 pnpm v11）
+      # 3. 安装 pnpm（自动适配项目的 pnpm v11）
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
 
