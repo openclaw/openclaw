@@ -728,7 +728,6 @@ describe("exec approvals store helpers", () => {
       decision: {
         kind: "exact-command",
         commandText: 'printenv API_KEY="secret-value"',
-        cwd: "/tmp/openclaw-work",
       },
     });
 

@@ -167,7 +167,6 @@ function createOneShotAllowAlwaysDecision(): AllowAlwaysPersistenceDecision {
 
 function resolveGatewayEffectiveAllowAlwaysPersistence(params: {
   command: string;
-  cwd?: string;
   allowAlwaysPersistence: AllowAlwaysPersistenceDecision;
   requiresAllowlistPlanApproval: boolean;
 }): AllowAlwaysPersistenceDecision {
@@ -178,9 +177,7 @@ function resolveGatewayEffectiveAllowAlwaysPersistence(params: {
     return params.allowAlwaysPersistence;
   }
   const commandText = params.command.trim();
-  return commandText && params.cwd
-    ? { kind: "exact-command", commandText, cwd: params.cwd }
-    : createOneShotAllowAlwaysDecision();
+  return commandText ? { kind: "exact-command", commandText } : createOneShotAllowAlwaysDecision();
 }
 
 function resolveGatewayEnforcedCommand(params: {
@@ -475,7 +472,6 @@ export async function processGatewayAllowlist(
     segmentAllowlistEntries: allowlistEval.segmentAllowlistEntries,
     allowlist: approvals.allowlist,
     commandText: params.command,
-    cwd: params.workdir,
   });
   const inlineEvalHit =
     params.strictInlineEval === true ? detectPolicyInlineEval(allowlistEval.segments) : null;
@@ -570,7 +566,6 @@ export async function processGatewayAllowlist(
   }
   const effectiveAllowAlwaysPersistence = resolveGatewayEffectiveAllowAlwaysPersistence({
     command: params.command,
-    cwd: params.workdir,
     allowAlwaysPersistence,
     requiresAllowlistPlanApproval,
   });

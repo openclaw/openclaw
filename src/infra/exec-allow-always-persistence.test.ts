@@ -53,7 +53,6 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
     expect(decision).toEqual({
       kind: "exact-command",
       commandText: command,
-      cwd,
     });
     expect(resolveExecApprovalAllowedDecisions({ allowAlwaysPersistence: decision })).toEqual([
       "allow-once",
@@ -62,7 +61,7 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
     ]);
   });
 
-  it("keeps exact-command shell wrappers one-shot without an approved cwd", async () => {
+  it("offers exact-command fallback without an approved cwd", async () => {
     const command = "sh -c './scripts/run.sh'";
     const plan = await planShellAuthorization({ command });
 
@@ -74,11 +73,12 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
     });
 
     expect(decision).toEqual({
-      kind: "one-shot",
-      reasons: expect.arrayContaining(["no-reusable-pattern"]),
+      kind: "exact-command",
+      commandText: command,
     });
     expect(resolveExecApprovalAllowedDecisions({ allowAlwaysPersistence: decision })).toEqual([
       "allow-once",
+      "allow-always",
       "deny",
     ]);
   });
@@ -110,7 +110,7 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
     { command: 'eval "$CMD"', reason: "prompt-only" },
     { command: 'sh -c "$SCRIPT"', reason: "runtime-payload" },
     { command: "sh -c '$1' ignored echo", reason: "runtime-payload" },
-    { command: 'sh -c \'$0 "$@"\' xargs echo SAFE', reason: "runtime-payload" },
+    { command: "sh -c '$0 \"$@\"' xargs echo SAFE", reason: "runtime-payload" },
   ] as const)("keeps $command allow-always approvals one-shot", async ({ command, reason }) => {
     const plan = await planShellAuthorization({ command });
 

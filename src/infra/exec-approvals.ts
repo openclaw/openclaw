@@ -1330,13 +1330,11 @@ export function hasDurableExecApproval(params: {
   segmentAllowlistEntries: Array<ExecAllowlistEntry | null>;
   allowlist?: readonly ExecAllowlistEntry[];
   commandText?: string | null;
-  cwd?: string | null;
 }): boolean {
   return (
     hasExactCommandDurableExecApproval({
       allowlist: params.allowlist,
       commandText: params.commandText,
-      cwd: params.cwd,
     }) ||
     hasSegmentDurableExecApproval({
       analysisOk: params.analysisOk,
@@ -1345,9 +1343,11 @@ export function hasDurableExecApproval(params: {
   );
 }
 
-function buildDurableCommandApprovalPattern(commandText: string, cwd?: string | null): string {
-  const digestInput = cwd ? `${cwd}\x00${commandText}` : commandText;
-  const digest = crypto.createHash("sha256").update(digestInput).digest("hex").slice(0, 16);
+// Digest input is the trimmed command text only. Shipped approvals files
+// already hold `=command:` entries in this format; changing the input
+// silently orphans every persisted exact-command grant.
+function buildDurableCommandApprovalPattern(commandText: string): string {
+  const digest = crypto.createHash("sha256").update(commandText).digest("hex").slice(0, 16);
   return `=command:${digest}`;
 }
 
@@ -1373,14 +1373,12 @@ export function hasNodeCommandAllowAlwaysMarker(params: {
 function hasExactCommandDurableExecApproval(params: {
   allowlist?: readonly ExecAllowlistEntry[];
   commandText?: string | null;
-  cwd?: string | null;
 }): boolean {
   const normalizedCommand = params.commandText?.trim();
   if (!normalizedCommand) {
     return false;
   }
-  const normalizedCwd = params.cwd?.trim();
-  const commandPattern = buildDurableCommandApprovalPattern(normalizedCommand, normalizedCwd);
+  const commandPattern = buildDurableCommandApprovalPattern(normalizedCommand);
   return (params.allowlist ?? []).some(
     (entry) =>
       entry.source === "allow-always" &&
@@ -1518,20 +1516,14 @@ export function addDurableCommandApproval(
   approvals: ExecApprovalsFile,
   agentId: string | undefined,
   commandText: string,
-  options?: { cwd?: string | null },
 ) {
   const normalized = commandText.trim();
   if (!normalized) {
     return;
   }
-  addAllowlistEntry(
-    approvals,
-    agentId,
-    buildDurableCommandApprovalPattern(normalized, options?.cwd),
-    {
-      source: "allow-always",
-    },
-  );
+  addAllowlistEntry(approvals, agentId, buildDurableCommandApprovalPattern(normalized), {
+    source: "allow-always",
+  });
 }
 
 export function resolveAllowAlwaysPatternCoverage(params: {
@@ -1630,16 +1622,16 @@ export type AllowAlwaysPersistenceReason =
 
 export type AllowAlwaysPersistenceDecision =
   | { kind: "patterns"; patterns: readonly AllowAlwaysPattern[]; commandText?: string }
-  | { kind: "exact-command"; commandText: string; cwd: string }
+  | { kind: "exact-command"; commandText: string }
   | { kind: "one-shot"; reasons: AllowAlwaysPersistenceReason[] };
 
 function hasRuntimeShellPayload(argv: readonly string[]): boolean {
   const inlineCommand = extractBindableShellWrapperInlineCommand([...argv]);
   return Boolean(
     inlineCommand &&
-      (/(?:\$[A-Za-z0-9_@*?#$!-]|\$\{|`|\$\()/u.test(inlineCommand) ||
-        hasPosixInteractiveStartupBeforeInlineCommand(argv, POSIX_INLINE_COMMAND_FLAGS) ||
-        hasPosixLoginStartupBeforeInlineCommand(argv, POSIX_INLINE_COMMAND_FLAGS)),
+    (/(?:\$[A-Za-z0-9_@*?#$!-]|\$\{|`|\$\()/u.test(inlineCommand) ||
+      hasPosixInteractiveStartupBeforeInlineCommand(argv, POSIX_INLINE_COMMAND_FLAGS) ||
+      hasPosixLoginStartupBeforeInlineCommand(argv, POSIX_INLINE_COMMAND_FLAGS)),
   );
 }
 
@@ -1709,10 +1701,7 @@ export function resolveAllowAlwaysPersistenceDecision(params: {
     return { kind: "one-shot", reasons: hardReasons };
   }
 
-  if (
-    params.preparedCoverage?.complete === true &&
-    params.preparedCoverage.patterns.length > 0
-  ) {
+  if (params.preparedCoverage?.complete === true && params.preparedCoverage.patterns.length > 0) {
     return {
       kind: "patterns",
       patterns: params.preparedCoverage.patterns,
@@ -1737,8 +1726,8 @@ export function resolveAllowAlwaysPersistenceDecision(params: {
     }
   }
 
-  if (commandText && params.cwd && planPersistence.exactCommandAllowed) {
-    return { kind: "exact-command", commandText, cwd: params.cwd };
+  if (commandText && planPersistence.exactCommandAllowed) {
+    return { kind: "exact-command", commandText };
   }
 
   return { kind: "one-shot", reasons: [...reasons, "no-reusable-pattern"] };
@@ -1753,9 +1742,7 @@ export function persistAllowAlwaysDecision(params: {
     return;
   }
   if (params.decision.kind === "exact-command") {
-    addDurableCommandApproval(params.approvals, params.agentId, params.decision.commandText, {
-      cwd: params.decision.cwd,
-    });
+    addDurableCommandApproval(params.approvals, params.agentId, params.decision.commandText);
     return;
   }
   for (const pattern of params.decision.patterns) {

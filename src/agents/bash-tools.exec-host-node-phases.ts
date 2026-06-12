@@ -117,22 +117,21 @@ type NodeAllowAlwaysCoverage = {
 function hasExactCommandDurableApproval(params: {
   allowlist: readonly ExecAllowlistEntry[];
   commandText: string;
-  cwd?: string;
 }): boolean {
   const normalizedCommand = params.commandText.trim();
-  const normalizedCwd = params.cwd?.trim();
-  if (!normalizedCommand || !normalizedCwd) {
+  if (!normalizedCommand) {
     return false;
   }
   const commandPattern = `=command:${crypto
     .createHash("sha256")
-    .update(`${normalizedCwd}\x00${normalizedCommand}`)
+    .update(normalizedCommand)
     .digest("hex")
     .slice(0, 16)}`;
   return params.allowlist.some(
     (entry) =>
       entry.source === "allow-always" &&
-      entry.pattern === commandPattern,
+      (entry.pattern === commandPattern ||
+        (typeof entry.commandText === "string" && entry.commandText.trim() === normalizedCommand)),
   );
 }
 
@@ -633,7 +632,6 @@ export async function analyzeNodeApprovalRequirement(params: {
               exactDurableApprovalSatisfied: hasExactCommandDurableApproval({
                 allowlist: resolved.allowlist,
                 commandText: entry.command,
-                cwd: entry.cwd,
               }),
               nodeCommandDurableApprovalSatisfied: hasNodeAllowAlwaysCommandApproval({
                 allowlist: resolved.allowlist,
@@ -651,7 +649,6 @@ export async function analyzeNodeApprovalRequirement(params: {
                 segmentAllowlistEntries: allowlistEval.segmentAllowlistEntries,
                 allowlist: resolved.allowlist,
                 commandText: entry.command,
-                cwd: entry.cwd,
               }),
             };
           }),

@@ -82,12 +82,8 @@ const preparedPlan = vi.hoisted(() => ({
   },
 }));
 const nodeCommandMarker = vi.hoisted(() => "=node-command:test");
-const exactCommandMarker = (cwd: string, commandText: string): string =>
-  `=command:${crypto
-    .createHash("sha256")
-    .update(`${cwd}\x00${commandText}`)
-    .digest("hex")
-    .slice(0, 16)}`;
+const exactCommandMarker = (commandText: string): string =>
+  `=command:${crypto.createHash("sha256").update(commandText).digest("hex").slice(0, 16)}`;
 
 const callGatewayToolMock = vi.hoisted(() => vi.fn());
 const listNodesMock = vi.hoisted(() => vi.fn());
@@ -986,7 +982,7 @@ describe("executeNodeHostCommand", () => {
     resolveExecApprovalsFromFileMock.mockReturnValue({
       allowlist: [
         {
-          pattern: exactCommandMarker(wrapperPlan.cwd, wrapperPlan.commandText),
+          pattern: exactCommandMarker(wrapperPlan.commandText),
           source: "allow-always",
           commandText: wrapperPlan.commandText,
         },

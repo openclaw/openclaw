@@ -788,7 +788,6 @@ describe("processGatewayAllowlist", () => {
       allowAlwaysPersistence: {
         kind: "exact-command",
         commandText: command,
-        cwd: process.cwd(),
       },
     });
     expect(buildExecApprovalPendingToolResultMock).toHaveBeenCalledWith(

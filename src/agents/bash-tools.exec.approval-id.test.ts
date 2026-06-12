@@ -877,7 +877,7 @@ describe("exec approvals", () => {
                   {
                     pattern: `=command:${crypto
                       .createHash("sha256")
-                      .update(`${cwd}\x00${commandText}`)
+                      .update(commandText)
                       .digest("hex")
                       .slice(0, 16)}`,
                     source: "allow-always",

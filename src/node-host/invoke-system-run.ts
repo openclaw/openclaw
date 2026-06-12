@@ -28,8 +28,8 @@ import {
   type ExecSecurity,
   type SkillBinTrustEntry,
 } from "../infra/exec-approvals.js";
-import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
 import type { ExecAuthorizationPlan } from "../infra/exec-authorization-plan.js";
+import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
 import type { ExecHostRequest, ExecHostResponse, ExecHostRunResult } from "../infra/exec-host.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
@@ -540,7 +540,6 @@ async function evaluateSystemRunPolicyPhase(
     segmentAllowlistEntries,
     allowlist: approvals.allowlist,
     commandText: parsed.commandText,
-    cwd: parsed.cwd,
   });
   const inlineEvalExecutableTrusted =
     inlineEvalHit !== null &&
