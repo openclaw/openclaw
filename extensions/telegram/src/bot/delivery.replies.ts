@@ -39,6 +39,7 @@ import {
 } from "../format.js";
 import { resolveTelegramInteractiveTextFallback } from "../interactive-fallback.js";
 import { buildInlineKeyboard } from "../send.js";
+import { recordSentMessage } from "../sent-message-cache.js";
 import { resolveTelegramVoiceSend } from "../voice.js";
 import {
   buildTelegramSendParams,
@@ -902,6 +903,10 @@ export async function deliverReplies(params: {
         deliveredContents.push({ text: contentForSentHook, mediaUrls: mediaList });
       }
 
+      const sentSucceeded = progress.deliveredCount > deliveredCountBeforeReply;
+      if (sentSucceeded && typeof firstDeliveredMessageId === "number") {
+        recordSentMessage(params.chatId, firstDeliveredMessageId, params.cfg);
+      }
       emitMessageSentHooks({
         hookRunner,
         enabled: hasMessageSentHooks,
@@ -909,7 +914,7 @@ export async function deliverReplies(params: {
         chatId: params.chatId,
         accountId: params.accountId,
         content: contentForSentHook,
-        success: progress.deliveredCount > deliveredCountBeforeReply,
+        success: sentSucceeded,
         messageId: firstDeliveredMessageId,
         isGroup: params.mirrorIsGroup,
         groupId: params.mirrorGroupId,
