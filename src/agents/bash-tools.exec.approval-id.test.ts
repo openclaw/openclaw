@@ -121,6 +121,11 @@ vi.mock("../process/supervisor/index.js", () => {
     if (command.includes("printf delayed-ok")) {
       return "delayed-ok";
     }
+    if (command.includes("approval-output-line-00")) {
+      return `${Array.from({ length: 60 }, (_, index) =>
+        `approval-output-line-${String(index).padStart(2, "0")}`,
+      ).join("\n")}\n`;
+    }
     if (command.includes("printf webchat-ok")) {
       return "webchat-ok";
     }
