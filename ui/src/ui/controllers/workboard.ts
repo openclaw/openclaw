@@ -1487,14 +1487,7 @@ export async function loadWorkboard(params: {
         return false;
       }
       const previousTasksByCardId = state.tasksByCardId;
-      state.cards =
-        params.taskRefresh === "recent"
-          ? normalized.cards.map((card) => {
-              const taskId =
-                normalizeString(card.taskId) ?? previousTasksByCardId.get(card.id)?.taskId;
-              return taskId && card.taskId !== taskId ? { ...card, taskId } : card;
-            })
-          : normalized.cards;
+      state.cards = normalized.cards;
       state.statuses = normalized.statuses;
       state.tasksByCardId = new Map();
       if (state.cards.length > 0) {

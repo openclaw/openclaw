@@ -258,10 +258,15 @@ describe("workboard controller", () => {
   it("keeps prepared task summaries when bounded poll enrichment fails", async () => {
     const host = {};
     const state = getWorkboardState(host);
+    const linkedCard = {
+      ...sampleCard,
+      sessionKey: sampleTaskSessionKey,
+      runId: "run-1",
+    } satisfies WorkboardCard;
     state.tasksByCardId.set(sampleCard.id, sampleTask);
     const client = createClient((method) => {
       if (method === "workboard.cards.list") {
-        return { cards: [sampleCard], statuses: ["todo", "done"] };
+        return { cards: [linkedCard], statuses: ["todo", "done"] };
       }
       if (method === "tasks.list") {
         throw new Error("tasks unavailable");
@@ -279,15 +284,53 @@ describe("workboard controller", () => {
     expect(state.lastRefreshError).toBe("tasks unavailable");
   });
 
+  it("keeps canonical task unlinks during bounded poll refreshes", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.tasksByCardId.set(sampleCard.id, sampleTask);
+    const client = createClient({
+      "workboard.cards.list": { cards: [sampleCard], statuses: ["todo", "done"] },
+      "tasks.list": { tasks: [] },
+    });
+
+    await refreshWorkboard({
+      host,
+      client: client as never,
+      source: "poll",
+    });
+
+    expect(state.cards[0]).not.toHaveProperty("taskId");
+    expect(state.tasksByCardId.has(sampleCard.id)).toBe(false);
+  });
+
   it("polls through the read refresh path without write methods", async () => {
     vi.useFakeTimers();
     const host = {};
+    const linkedCard = {
+      ...sampleCard,
+      sessionKey: sampleTaskSessionKey,
+      runId: "run-1",
+    } satisfies WorkboardCard;
     const completedTask = { ...sampleTask, status: "completed" as const };
-    const olderCard = { ...sampleCard, id: "card-2", title: "Older running card" };
-    const olderTask = { ...sampleTask, id: "task-2", taskId: "task-2", updatedAt: 1 };
+    const olderSessionKey = "subagent:workboard-default-card-2";
+    const olderCard = {
+      ...sampleCard,
+      id: "card-2",
+      title: "Older running card",
+      sessionKey: olderSessionKey,
+      runId: "run-2",
+    };
+    const olderTask = {
+      ...sampleTask,
+      id: "task-2",
+      taskId: "task-2",
+      childSessionKey: olderSessionKey,
+      runId: "run-2",
+      updatedAt: 1,
+    };
     const client = createClient((method, params) => {
       if (method === "workboard.cards.list") {
-        return { cards: [sampleCard, olderCard], statuses: ["todo", "done"] };
+        return { cards: [linkedCard, olderCard], statuses: ["todo", "done"] };
       }
       if (method === "tasks.list" && !(params as { cursor?: string }).cursor) {
         return { tasks: [completedTask], nextCursor: "500" };
