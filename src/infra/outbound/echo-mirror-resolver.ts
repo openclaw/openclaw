@@ -216,7 +216,8 @@ export function createMirrorReplyResolver(params: {
         return;
       }
       default:
-        return;
+        // Unknown stream: nothing to mirror.
+        break;
     }
   }
 
@@ -230,7 +231,13 @@ export function createMirrorReplyResolver(params: {
     }
     draining = true;
     try {
-      while (queue.length > 0 && !finished) {
+      // `finished` is flipped by settle() reached THROUGH dispatchEvent below, so
+      // it is checked inside the loop (a loop-condition check reads as unmodified
+      // to static analysis).
+      while (queue.length > 0) {
+        if (finished) {
+          break;
+        }
         const evt = queue.shift();
         if (!evt) {
           break;

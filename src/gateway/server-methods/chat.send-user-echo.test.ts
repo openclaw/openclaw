@@ -54,8 +54,8 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
 
 import { dispatchInboundMessage as _mockDispatch } from "../../auto-reply/dispatch.js";
 import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
-import { consumeStreamingEchoHandled as _mockConsumeStreamingEchoHandled } from "../../infra/outbound/mirror-dispatch.js";
 import { fireEchoDeliveries as _mockFireEcho } from "../../infra/outbound/echo.js";
+import { consumeStreamingEchoHandled as _mockConsumeStreamingEchoHandled } from "../../infra/outbound/mirror-dispatch.js";
 import { chatHandlers } from "./chat.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -131,8 +131,8 @@ describe("chat.send user-message echo placement", () => {
     expect((opts as { sessionKey: string }).sessionKey).toBe("agent:main:main");
     expect(payloads).toEqual([{ text: "hello echo" }]);
     expect(
-      (mockDispatch.mock.calls[0]?.[0].ctx as { EchoUserAlreadyDelivered?: boolean })
-        .EchoUserAlreadyDelivered,
+      (mockDispatch.mock.calls[0]?.[0]?.ctx as { EchoUserAlreadyDelivered?: boolean })
+        ?.EchoUserAlreadyDelivered,
     ).toBe(true);
   });
 

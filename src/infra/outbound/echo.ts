@@ -125,10 +125,10 @@ export function fireEchoDeliveries(
   options?: {
     prefixed?: boolean;
     /**
-     * Drop targets for which this returns false. Used to skip targets already
-     * handled by a live streaming renderer (B-full) so the post-hoc final mirror
-     * does not double-deliver. Injected (not imported) to avoid an echo-streaming
-     * import cycle.
+     * Drop targets for which this returns false. Used to skip targets a mirror
+     * turn already rendered natively (mirror-dispatch) so the post-hoc final
+     * mirror does not double-deliver. Injected (not imported) to avoid a
+     * mirror-dispatch import cycle.
      */
     filterTargets?: (target: SessionEchoTarget) => boolean;
   },
@@ -157,7 +157,7 @@ export function fireEchoDeliveries(
   for (const target of targets) {
     deliverOutboundPayloadsInternal({
       cfg: ctx.cfg,
-      channel: target.channel as Exclude<string, "none">,
+      channel: target.channel,
       to: target.to,
       accountId: target.accountId,
       threadId: target.threadId,

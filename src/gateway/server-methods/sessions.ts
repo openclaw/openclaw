@@ -2223,6 +2223,11 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    // Narrow once to locals: object-property narrowing does not survive the
+    // nested mutation/find closures below, so without these the call sites would
+    // need non-null assertions.
+    const pChannel = p.channel;
+    const pTo = p.to;
 
     let changed = false;
     let atLimit = false;
@@ -2245,7 +2250,14 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         // A mirror recipient must be a verified participant of this session, not
         // an arbitrary chat id. Anything that is not the session's known bound
         // thread is rejected; opt other threads in with /pin from that thread.
-        if (!targetMatchesSessionParticipant(entry, { channel: p.channel!, to: p.to!, accountId: p.accountId, threadId: p.threadId })) {
+        if (
+          !targetMatchesSessionParticipant(entry, {
+            channel: pChannel,
+            to: pTo,
+            accountId: p.accountId,
+            threadId: p.threadId,
+          })
+        ) {
           notParticipant = true;
           return entry;
         }
@@ -2256,8 +2268,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         const duplicate = existing.find(
           (t) =>
             t.channel === p.channel &&
-            normalizeEchoTargetId(t.channel, t.to) ===
-              normalizeEchoTargetId(p.channel!, p.to!) &&
+            normalizeEchoTargetId(t.channel, t.to) === normalizeEchoTargetId(pChannel, pTo) &&
             (t.accountId ?? "") === (p.accountId ?? "") &&
             String(t.threadId ?? "") === String(p.threadId ?? ""),
         );
@@ -2268,8 +2279,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         entry.echoTargets = [
           ...existing,
           {
-            channel: p.channel!,
-            to: p.to!,
+            channel: pChannel,
+            to: pTo,
             accountId: p.accountId,
             threadId: p.threadId,
             label: p.label,
@@ -2283,8 +2294,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           (t) =>
             !(
               t.channel === p.channel &&
-              normalizeEchoTargetId(t.channel, t.to) ===
-                normalizeEchoTargetId(p.channel!, p.to!) &&
+              normalizeEchoTargetId(t.channel, t.to) === normalizeEchoTargetId(pChannel, pTo) &&
               (t.accountId ?? "") === (p.accountId ?? "") &&
               String(t.threadId ?? "") === String(p.threadId ?? "")
             ),

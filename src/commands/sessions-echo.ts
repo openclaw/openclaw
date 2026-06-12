@@ -65,8 +65,8 @@ export async function sessionsEchoAddCommand(
     accountId: opts.accountId,
     threadId: opts.threadId,
     label: opts.label,
-    echoUser: opts.echoUser === false ? false : undefined,
-    echoAssistant: opts.echoAssistant === false ? false : undefined,
+    echoUser: opts.echoUser ? undefined : false,
+    echoAssistant: opts.echoAssistant ? undefined : false,
     addedAt: Date.now(),
   } as SessionEchoTarget;
 
@@ -159,7 +159,7 @@ export async function sessionsEchoRemoveCommand(
             normalizeEchoTargetId(t.channel, t.to) ===
               normalizeEchoTargetId(opts.channel, opts.to) &&
             (t.accountId ?? "") === (opts.accountId ?? "") &&
-            String(t.threadId ?? "") === String(opts.threadId ?? "")
+            String(t.threadId ?? "") === (opts.threadId ?? "")
           ),
       );
       if (filtered.length === existing.length) {

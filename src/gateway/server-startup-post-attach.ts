@@ -859,11 +859,13 @@ export async function startGatewaySidecars(params: {
     }, 250);
   }
 
-  void import("../infra/outbound/echo-hook.js").then(({ registerEchoHook }) => {
-    registerEchoHook();
-  }).catch((err: unknown) => {
-    params.log.warn(`Echo hook registration failed: ${err}`);
-  });
+  void import("../infra/outbound/echo-hook.js")
+    .then(({ registerEchoHook }) => {
+      registerEchoHook();
+    })
+    .catch((err: unknown) => {
+      params.log.warn(`Echo hook registration failed: ${String(err)}`);
+    });
 
   if (params.cfg.acp?.enabled) {
     void (async () => {

@@ -227,7 +227,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     target: { to: string; threadId?: string | number };
     replyResolver: GetReplyFromConfig;
   }): Promise<void> => {
-    const rawChatId = String(mirror.target.to)
+    const rawChatId = mirror.target.to
       .replace(/^(telegram|tg):/i, "")
       .replace(/^group:/i, "")
       .trim();
@@ -285,7 +285,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     if (!context) {
       // Signal failure so the mirror launcher un-marks this target and the
       // post-hoc final echo delivers instead (no silent drop).
-      throw new Error(`telegram mirror: context dropped for ${String(mirror.target.to)}`);
+      throw new Error(`telegram mirror: context dropped for ${mirror.target.to}`);
     }
     await dispatchTelegramMessage({
       context,

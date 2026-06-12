@@ -21,8 +21,12 @@ function emitLifecycleEnd(runId: string) {
 
 // Let the serial drain (async) flush.
 async function flush() {
-  await new Promise((r) => setTimeout(r, 0));
-  await new Promise((r) => setTimeout(r, 0));
+  await new Promise((r) => {
+    setTimeout(r, 0);
+  });
+  await new Promise((r) => {
+    setTimeout(r, 0);
+  });
 }
 
 describe("createMirrorReplyResolver", () => {
@@ -58,7 +62,9 @@ describe("createMirrorReplyResolver", () => {
     const partials: string[] = [];
     const done = resolver({} as never, {
       onPartialReply: (p) => {
-        if (p.text) partials.push(p.text);
+        if (p.text) {
+          partials.push(p.text);
+        }
       },
     });
 
@@ -85,7 +91,9 @@ describe("createMirrorReplyResolver", () => {
     const seen: string[] = [];
     const done = resolver({} as never, {
       onPartialReply: (p) => {
-        if (p.text) seen.push(`partial:${p.text}`);
+        if (p.text) {
+          seen.push(`partial:${p.text}`);
+        }
       },
       onItemEvent: (p) => {
         seen.push(`item:${p.itemId}`);
