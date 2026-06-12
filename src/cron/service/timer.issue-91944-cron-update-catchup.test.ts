@@ -1,8 +1,7 @@
 // Regression tests for #91944: cron schedule update follow by restart
 // incorrectly classifies pre-update slots as "missed" during catch-up.
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
-  createDefaultIsolatedRunner,
   createIsolatedRegressionJob,
   createRunningCronServiceState,
   noopLogger,
@@ -41,7 +40,7 @@ describe("cron update catch-up guard (#91944)", () => {
     // lastRunAtMs = May 10 (old schedule execution).
     // previousRunAtMs computed from new expr = May 11 15:18 (predates update).
     // scheduleUpdatedAtMs set at update time → guard must skip this slot.
-    const store = await fixtures.makeStorePath();
+    const store = fixtures.makeStorePath();
     const job = createIsolatedRegressionJob({
       id: "updated-cron",
       name: "updated cron",
@@ -79,7 +78,7 @@ describe("cron update catch-up guard (#91944)", () => {
   it("still catches truly missed slots (no schedule update)", async () => {
     // Same scenario but WITHOUT scheduleUpdatedAtMs — the slot should
     // be treated as genuinely missed (previousRunAtMs > lastRunAtMs).
-    const store = await fixtures.makeStorePath();
+    const store = fixtures.makeStorePath();
     const oldLastRun = ts("2026-05-10T15:18:00.000Z");
     // nextRunAtMs already in the past → genuinely missed.
     const missedNextRun = ts("2026-06-10T14:00:00.000Z");
@@ -125,10 +124,8 @@ describe("cron update catch-up guard (#91944)", () => {
     // When a job is in error backoff and the schedule was updated,
     // deferPendingBackoffMissedCronSlots must not override nextRunAtMs
     // with a backoff target for a pre-update slot.
-    const store = await fixtures.makeStorePath();
+    const store = fixtures.makeStorePath();
     const restartAt = ts("2026-06-10T12:33:00.000Z");
-    // Backoff target: far in the future (restart + 12h).
-    const backoffEnd = restartAt + 12 * 3600_000;
 
     const job = createIsolatedRegressionJob({
       id: "backoff-updated-cron",
@@ -166,7 +163,7 @@ describe("cron update catch-up guard (#91944)", () => {
   it("preserves backward compatibility for jobs without scheduleUpdatedAtMs", async () => {
     // Jobs created before this fix (no scheduleUpdatedAtMs field) must
     // still go through normal catch-up logic.
-    const store = await fixtures.makeStorePath();
+    const store = fixtures.makeStorePath();
     const oldLastRun = ts("2026-05-10T15:18:00.000Z");
     const missedNextRun = ts("2026-06-10T14:00:00.000Z");
     const restartAt = ts("2026-06-10T15:00:00.000Z");
@@ -213,7 +210,7 @@ describe("cron update catch-up guard (#91944)", () => {
   it("allows missed slot that postdates the schedule update", async () => {
     // If the previousRunAtMs is >= scheduleUpdatedAtMs, the slot should
     // still be considered missed (it occurred after the update).
-    const store = await fixtures.makeStorePath();
+    const store = fixtures.makeStorePath();
     // Last run was under the OLD schedule (day 10, May).
     // Schedule was updated BEFORE that old last run — so the update
     // happened a while ago and the next missed slot is genuine.
