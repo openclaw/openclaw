@@ -61,6 +61,7 @@ export async function bridgeCodexAppServerStartOptions(params: {
   const isolatedStartOptions = await withAgentCodexHomeEnvironment(
     params.startOptions,
     params.agentDir,
+    params.authProfileId ?? undefined,
   );
   if (params.authProfileId === null) {
     return isolatedStartOptions;
@@ -295,13 +296,21 @@ export function resolveCodexAppServerNativeHomeDir(agentDir: string): string {
   return path.join(resolveCodexAppServerHomeDir(agentDir), CODEX_APP_SERVER_NATIVE_HOME_DIRNAME);
 }
 
+function hashAuthProfileIdForHome(authProfileId: string): string {
+  return createHash("sha256").update(authProfileId).digest("hex").slice(0, 16);
+}
+
 async function withAgentCodexHomeEnvironment(
   startOptions: CodexAppServerStartOptions,
   agentDir: string,
+  authProfileId?: string,
 ): Promise<CodexAppServerStartOptions> {
-  const codexHome = startOptions.env?.[CODEX_HOME_ENV_VAR]?.trim()
+  const baseCodexHome = startOptions.env?.[CODEX_HOME_ENV_VAR]?.trim()
     ? startOptions.env[CODEX_HOME_ENV_VAR]
     : resolveCodexAppServerHomeDir(agentDir);
+  const codexHome = authProfileId
+    ? path.join(baseCodexHome, `account-${hashAuthProfileIdForHome(authProfileId)}`)
+    : baseCodexHome;
   const nativeHome = startOptions.env?.[HOME_ENV_VAR]?.trim()
     ? startOptions.env[HOME_ENV_VAR]
     : undefined;

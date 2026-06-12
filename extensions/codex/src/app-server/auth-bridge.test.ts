@@ -1,4 +1,5 @@
 // Codex tests cover auth bridge plugin behavior.
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -131,6 +132,11 @@ function createStartOptions(
   };
 }
 
+function resolveIsolatedCodexHome(agentDir: string, authProfileId: string): string {
+  const segment = `account-${createHash("sha256").update(authProfileId).digest("hex").slice(0, 16)}`;
+  return path.join(resolveCodexAppServerHomeDir(agentDir), segment);
+}
+
 async function expectPathMissing(filePath: string): Promise<void> {
   try {
     await fs.access(filePath);
@@ -200,6 +206,33 @@ describe("bridgeCodexAppServerStartOptions", () => {
       await expect(fs.access(codexHome)).resolves.toBeUndefined();
       await expectPathMissing(nativeHome);
       expect(startOptions.env).toBeUndefined();
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("isolates CODEX_HOME by authProfileId to prevent cross-account state pollution", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const startOptions = createStartOptions();
+    const authProfileId = "openai:shared-agent-bad-account";
+    const expectedSegment = `account-${createHash("sha256").update(authProfileId).digest("hex").slice(0, 16)}`;
+    try {
+      const baseCodexHome = resolveCodexAppServerHomeDir(agentDir);
+      const isolatedCodexHome = path.join(baseCodexHome, expectedSegment);
+
+      await expect(
+        bridgeCodexAppServerStartOptions({
+          startOptions,
+          agentDir,
+          authProfileId,
+        }),
+      ).resolves.toEqual({
+        ...startOptions,
+        env: {
+          CODEX_HOME: isolatedCodexHome,
+        },
+      });
+      await expect(fs.access(isolatedCodexHome)).resolves.toBeUndefined();
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }
@@ -326,7 +359,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
       ).resolves.toEqual({
         ...startOptions,
         env: {
-          CODEX_HOME: resolveCodexAppServerHomeDir(agentDir),
+          CODEX_HOME: resolveIsolatedCodexHome(agentDir, "openai:work"),
         },
         clearEnv: ["FOO", "CODEX_API_KEY", "OPENAI_API_KEY"],
       });
@@ -358,7 +391,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
       ).resolves.toEqual({
         ...startOptions,
         env: {
-          CODEX_HOME: resolveCodexAppServerHomeDir(agentDir),
+          CODEX_HOME: resolveIsolatedCodexHome(agentDir, "openai:work"),
         },
         clearEnv: ["FOO", "CODEX_API_KEY", "OPENAI_API_KEY"],
       });
@@ -390,7 +423,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
       ).resolves.toEqual({
         ...startOptions,
         env: {
-          CODEX_HOME: resolveCodexAppServerHomeDir(agentDir),
+          CODEX_HOME: resolveIsolatedCodexHome(agentDir, "openai:work"),
         },
       });
     } finally {

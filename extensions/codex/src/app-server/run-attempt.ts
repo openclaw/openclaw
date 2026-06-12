@@ -2043,6 +2043,13 @@ export async function runCodexAppServerAttempt(
         workspaceBootstrapContext.heartbeatCollaborationInstructions,
     });
     codexModelCallDiagnostics.setRequestPayloadBytes(utf8JsonByteLength(turnStartParams));
+    embeddedAgentLog.debug("codex app-server turn/start payload sizing", {
+      sessionId: params.sessionId,
+      threadId: thread.threadId,
+      promptChars: codexTurnPromptText.length,
+      developerInstructionsChars: buildRenderedCodexDeveloperInstructions()?.length ?? 0,
+      turnStartPayloadBytes: utf8JsonByteLength(turnStartParams),
+    });
     const startedTurn = assertCodexTurnStartResponse(
       await client.request("turn/start", turnStartParams, {
         timeoutMs: params.timeoutMs,
