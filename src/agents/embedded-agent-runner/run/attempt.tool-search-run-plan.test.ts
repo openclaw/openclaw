@@ -196,6 +196,30 @@ describe("buildToolSearchRunPlan", () => {
       "tool_call",
       "client_pick_file",
     ]);
+    expect([...plan.capabilityToolNames]).toEqual(["fake_plugin_tool"]);
     expect(plan.emptyAllowlistCallableNames).toEqual(["client_pick_file", "tool-search:0"]);
+  });
+
+  it("keeps client names out of OpenClaw capability guidance", () => {
+    const plan = buildToolSearchRunPlan({
+      visibleTools: [{ name: "fake_plugin_tool" }] as never,
+      uncompactedTools: [{ name: "fake_plugin_tool" }] as never,
+      clientTools: [
+        {
+          type: "function",
+          function: {
+            name: "sessions_spawn",
+            parameters: { type: "object", properties: {} },
+          },
+        },
+      ],
+      clientToolsCataloged: false,
+      catalogToolCount: 0,
+      controlsEnabled: false,
+      explicitAllowlistSources: [],
+    });
+
+    expect([...plan.liveAllowedToolNames]).toEqual(["fake_plugin_tool", "sessions_spawn"]);
+    expect([...plan.capabilityToolNames]).toEqual(["fake_plugin_tool"]);
   });
 });

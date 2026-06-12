@@ -25,6 +25,7 @@ export type ToolSearchRunPlan = {
   visibleAllowedToolNames: Set<string>;
   replayAllowedToolNames: Set<string>;
   liveAllowedToolNames: Set<string>;
+  capabilityToolNames: Set<string>;
   autoAddedControlNames?: Set<string>;
   emptyAllowlistCallableNames: string[];
 };
@@ -114,6 +115,7 @@ export function buildToolSearchRunPlan(params: {
     tools: params.uncompactedTools,
     clientTools: params.clientTools,
   });
+  const capabilityToolNames = collectAllowedToolNames({ tools: params.uncompactedTools });
   if (params.controlsEnabled) {
     // A control that was visible in the compacted prompt must remain allowed
     // during replay even when the uncompacted tool set would otherwise omit it.
@@ -153,6 +155,7 @@ export function buildToolSearchRunPlan(params: {
     visibleAllowedToolNames,
     replayAllowedToolNames,
     liveAllowedToolNames,
+    capabilityToolNames,
     autoAddedControlNames,
     emptyAllowlistCallableNames: [
       ...buildCallableToolNamesForEmptyAllowlistCheck({

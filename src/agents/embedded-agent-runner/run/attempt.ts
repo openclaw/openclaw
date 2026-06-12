@@ -1758,6 +1758,7 @@ export async function runEmbeddedAttempt(
     });
     const replayAllowedToolNames = toolSearchRunPlan.replayAllowedToolNames;
     const liveAllowedToolNames = toolSearchRunPlan.liveAllowedToolNames;
+    const capabilityToolNames = toolSearchRunPlan.capabilityToolNames;
     const emptyExplicitToolAllowlistError = buildEmptyExplicitToolAllowlistError({
       sources: explicitToolAllowlistSources,
       callableToolNames: toolSearchRunPlan.emptyAllowlistCallableNames,
@@ -1971,7 +1972,7 @@ export async function runEmbeddedAttempt(
         messageToolHints,
         toolSchemaDirectoryPrompt,
         sandboxInfo,
-        capabilityToolNames: [...liveAllowedToolNames].toSorted(),
+        capabilityToolNames: [...capabilityToolNames].toSorted(),
         tools: effectiveTools,
         userTimezone,
         userTime,
@@ -3103,12 +3104,12 @@ export async function runEmbeddedAttempt(
           }
 
           if (params.sessionKey && params.config && !isRawModelRun) {
-            // Capability guidance must include deferred directory tools that live
-            // dispatch can hydrate, while provider schema exposure stays compact.
+            // Capability guidance must include deferred OpenClaw tools without
+            // interpreting arbitrary client tool names as native capabilities.
             const activeSubagentPromptAddition = buildActiveSubagentSystemPromptAddition({
               cfg: params.config,
               controllerSessionKey: params.sessionKey,
-              hasSessionsYield: liveAllowedToolNames.has("sessions_yield"),
+              hasSessionsYield: capabilityToolNames.has("sessions_yield"),
             });
             if (activeSubagentPromptAddition) {
               setActiveSessionSystemPrompt(
