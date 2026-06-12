@@ -105,7 +105,7 @@ function makeTelegramRttEvidenceSummary(
     id: string,
     title: string,
     status: EvidenceStatus,
-    timing: EvidenceTiming,
+    timing: EvidenceTiming | undefined,
   ): EvidenceSummaryForTest["entries"][number] => {
     const result = timing === undefined ? { status } : { status, timing };
     return {

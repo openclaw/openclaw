@@ -34,7 +34,10 @@ describe("mantis before/after runtime", () => {
       await fs.writeFile(screenshotPath, `${lane} screenshot`);
       await fs.writeFile(videoPath, `${lane} video`);
       const summary = buildLiveTransportEvidenceSummary({
-        artifactPaths: ["qa-evidence-summary.json", "discord-qa-report.md"],
+        artifactPaths: [
+          { kind: "summary", path: "qa-evidence-summary.json" },
+          { kind: "report", path: "discord-qa-report.md" },
+        ],
         checks: [
           {
             artifactPaths: { screenshot: screenshotPath, video: videoPath },
