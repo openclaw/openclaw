@@ -26,6 +26,8 @@
         "models": [
           {
             "id": "claude-fable-5",
+            "api": "anthropic-messages",
+            "baseUrl": "https://opencode.ai/zen",
             "name": "Claude Fable 5",
             "reasoning": true,
             "input": ["text", "image"],
@@ -45,6 +47,8 @@
           },
           {
             "id": "claude-opus-4-8",
+            "api": "anthropic-messages",
+            "baseUrl": "https://opencode.ai/zen",
             "name": "Claude Opus 4.8",
             "reasoning": true,
             "input": ["text", "image"],
@@ -64,6 +68,8 @@
           },
           {
             "id": "claude-opus-4-7",
+            "api": "anthropic-messages",
+            "baseUrl": "https://opencode.ai/zen",
             "name": "Claude Opus 4.7",
             "reasoning": true,
             "input": ["text", "image"],
@@ -83,6 +89,8 @@
           },
           {
             "id": "claude-opus-4-6",
+            "api": "anthropic-messages",
+            "baseUrl": "https://opencode.ai/zen",
             "name": "Claude Opus 4.6",
             "reasoning": true,
             "input": ["text", "image"],
@@ -102,6 +110,8 @@
           },
           {
             "id": "claude-sonnet-4-6",
+            "api": "anthropic-messages",
+            "baseUrl": "https://opencode.ai/zen",
             "name": "Claude Sonnet 4.6",
             "reasoning": true,
             "input": ["text", "image"],

@@ -110,8 +110,8 @@ describe("opencode provider plugin", () => {
     expect(opus48.name).toBe("Claude Opus 4.8");
 
     const opus46 = requireMapEntry(models, "claude-opus-4-6");
-    expect(opus46.api).toBe("openai-completions");
-    expect(opus46.baseUrl).toBe("https://opencode.ai/zen/v1");
+    expect(opus46.api).toBe("anthropic-messages");
+    expect(opus46.baseUrl).toBe("https://opencode.ai/zen");
     expect(opus46.input).toEqual(["text", "image"]);
     expect(opus46.reasoning).toBe(true);
     expect(opus46.contextWindow).toBe(200_000);
@@ -124,13 +124,30 @@ describe("opencode provider plugin", () => {
       "dynamic model",
     );
     expect(dynamicModel.id).toBe("claude-opus-4-8");
-    expect(dynamicModel.api).toBe("openai-completions");
+    expect(dynamicModel.api).toBe("anthropic-messages");
     expect(dynamicModel.provider).toBe("opencode");
-    expect(dynamicModel.baseUrl).toBe("https://opencode.ai/zen/v1");
+    expect(dynamicModel.baseUrl).toBe("https://opencode.ai/zen");
     const compat = requireRecord(dynamicModel.compat, "dynamic model compat");
     expect(compat.supportsUsageInStreaming).toBe(true);
     expect(compat.supportsReasoningEffort).toBe(true);
     expect(compat.maxTokensField).toBe("max_tokens");
+
+    const manifestProvider = requireRecord(
+      manifest.modelCatalog.providers.opencode,
+      "manifest provider",
+    );
+    const manifestModels = manifestProvider.models;
+    if (!Array.isArray(manifestModels)) {
+      throw new Error("expected manifest opencode models");
+    }
+    const manifestOpus48 = requireRecord(
+      manifestModels.find(
+        (model) => requireRecord(model, "manifest model").id === "claude-opus-4-8",
+      ),
+      "manifest claude-opus-4-8",
+    );
+    expect(manifestOpus48.api).toBe("anthropic-messages");
+    expect(manifestOpus48.baseUrl).toBe("https://opencode.ai/zen");
   });
 
   it("loads OpenCode Zen model discovery through the provider runtime", () => {
@@ -211,10 +228,16 @@ describe("opencode provider plugin", () => {
     expect(first.apiKey).toBe("OPENCODE_API_KEY");
     expect(first.models.map((model) => model.id)).toEqual(["claude-opus-4-8", "gpt-5.5"]);
     expect(second.models.map((model) => model.id)).toEqual(["claude-opus-4-8", "gpt-5.5"]);
+    const claudeModel = first.models.find((model) => model.id === "claude-opus-4-8");
+    expect(claudeModel).toMatchObject({
+      api: "anthropic-messages",
+      baseUrl: "https://opencode.ai/zen",
+      provider: "opencode",
+    });
     const liveOnlyModel = first.models.find((model) => model.id === "gpt-5.5");
     expect(liveOnlyModel).toMatchObject({
       name: "GPT-5.5",
-      api: "openai-completions",
+      api: "openai-responses",
       baseUrl: "https://opencode.ai/zen/v1",
       provider: "opencode",
       contextWindow: 400_000,
@@ -256,8 +279,8 @@ describe("opencode provider plugin", () => {
           provider: "opencode",
           id: "claude-opus-4-8",
           name: "Claude Opus 4.8",
-          api: "openai-completions",
-          baseUrl: "https://opencode.ai/zen/",
+          api: "anthropic-messages",
+          baseUrl: "https://opencode.ai/zen/v1",
           reasoning: true,
           input: ["text", "image"],
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -267,7 +290,7 @@ describe("opencode provider plugin", () => {
       } as never),
       "normalized model",
     );
-    expect(normalizedModel.baseUrl).toBe("https://opencode.ai/zen/v1");
+    expect(normalizedModel.baseUrl).toBe("https://opencode.ai/zen");
 
     expect(
       provider.normalizeTransport?.({
@@ -278,6 +301,16 @@ describe("opencode provider plugin", () => {
     ).toEqual({
       api: "openai-completions",
       baseUrl: "https://opencode.ai/zen/v1",
+    });
+    expect(
+      provider.normalizeTransport?.({
+        provider: "opencode",
+        api: "anthropic-messages",
+        baseUrl: "https://opencode.ai/zen/v1",
+      } as never),
+    ).toEqual({
+      api: "anthropic-messages",
+      baseUrl: "https://opencode.ai/zen",
     });
   });
 

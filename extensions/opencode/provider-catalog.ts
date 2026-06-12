@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-model-shared";
 import type {
+  ModelApi,
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
@@ -14,6 +15,7 @@ import type {
 const PROVIDER_ID = "opencode";
 
 const OPENCODE_ZEN_OPENAI_BASE_URL = "https://opencode.ai/zen/v1";
+const OPENCODE_ZEN_ANTHROPIC_BASE_URL = "https://opencode.ai/zen";
 const OPENCODE_ZEN_MODELS_ENDPOINT = "https://opencode.ai/zen/v1/models";
 const OPENCODE_ZEN_MODELS_TIMEOUT_MS = 5_000;
 const OPENCODE_ZEN_MODELS_CACHE_TTL_MS = 60_000;
@@ -107,14 +109,34 @@ function resolveMaxTokens(modelId: string): number {
   return 8_192;
 }
 
+type OpencodeZenTransport = {
+  api: ModelApi;
+  baseUrl: string;
+};
+
+function resolveOpencodeZenTransport(modelId: string): OpencodeZenTransport {
+  const lower = modelId.toLowerCase();
+  if (lower.startsWith("gpt-")) {
+    return { api: "openai-responses", baseUrl: OPENCODE_ZEN_OPENAI_BASE_URL };
+  }
+  if (lower.startsWith("claude-") || lower.startsWith("minimax-")) {
+    return { api: "anthropic-messages", baseUrl: OPENCODE_ZEN_ANTHROPIC_BASE_URL };
+  }
+  if (lower.startsWith("gemini-")) {
+    return { api: "google-generative-ai", baseUrl: OPENCODE_ZEN_OPENAI_BASE_URL };
+  }
+  return { api: "openai-completions", baseUrl: OPENCODE_ZEN_OPENAI_BASE_URL };
+}
+
 function buildOpencodeZenModel(modelId: string): OpencodeZenModelDefinition {
   const normalizedModelId = modelId.trim().toLowerCase();
+  const transport = resolveOpencodeZenTransport(normalizedModelId);
   return normalizeModelCompat({
     id: normalizedModelId,
     name: formatModelName(normalizedModelId),
-    api: "openai-completions",
+    api: transport.api,
     provider: PROVIDER_ID,
-    baseUrl: OPENCODE_ZEN_OPENAI_BASE_URL,
+    baseUrl: transport.baseUrl,
     reasoning: true,
     input: supportsImageInput(normalizedModelId) ? ["text", "image"] : ["text"],
     cost: MODEL_COSTS[normalizedModelId] ?? DEFAULT_COST,
@@ -244,8 +266,12 @@ export function normalizeOpencodeZenBaseUrl(params: {
   if (!normalized) {
     return undefined;
   }
-  if (normalized === OPENCODE_ZEN_OPENAI_BASE_URL || normalized === "https://opencode.ai/zen") {
-    return OPENCODE_ZEN_OPENAI_BASE_URL;
+  const isAnthropicRoute = params.api === "anthropic-messages";
+  if (normalized === OPENCODE_ZEN_ANTHROPIC_BASE_URL) {
+    return isAnthropicRoute ? OPENCODE_ZEN_ANTHROPIC_BASE_URL : OPENCODE_ZEN_OPENAI_BASE_URL;
+  }
+  if (normalized === OPENCODE_ZEN_OPENAI_BASE_URL) {
+    return isAnthropicRoute ? OPENCODE_ZEN_ANTHROPIC_BASE_URL : OPENCODE_ZEN_OPENAI_BASE_URL;
   }
   return undefined;
 }
