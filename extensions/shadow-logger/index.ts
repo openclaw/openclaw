@@ -77,15 +77,19 @@ export class ShadowLoggerPlugin {
     };
 
     if (isMessageReceivedEvent(event)) {
+      const ctx = context as any;
+      const metadata = ctx.metadata || {};
       return {
         ...basePayload,
         direction: "inbound",
-        sender_id: context.from,
-        content: context.content,
-        channel_id: context.channelId,
-        conversation_id: context.conversationId,
-        message_id: context.messageId,
-        account_id: context.accountId,
+        sender_id: ctx.from,
+        content: ctx.content,
+        channel_id: ctx.channelId,
+        conversation_id: ctx.conversationId,
+        message_id: ctx.messageId,
+        account_id: ctx.accountId,
+        is_group: ctx.isGroup ?? metadata.isGroup ?? false,
+        group_id: ctx.groupId ?? metadata.groupId,
         metadata: { ...context },
       };
     }
