@@ -103,6 +103,7 @@ const allowedFixturePaths = new Set([
 const allowedCurrentLegacyWritePaths = new Set([
   "extensions/codex/src/app-server/trajectory.ts",
   "extensions/file-transfer/src/shared/audit.ts",
+  "extensions/memory-wiki/src/compile.ts",
   "src/crestodian/audit.ts",
   "src/memory-host-sdk/events.ts",
   "src/infra/restart-sentinel.ts",
@@ -821,6 +822,15 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
       return [unwrapped.text];
     }
     return [];
+  }
+
+  function arrayLiteralElementAt(expression, index) {
+    const unwrapped = unwrapExpression(expression);
+    if (!ts.isArrayLiteralExpression(unwrapped)) {
+      return null;
+    }
+    const element = unwrapped.elements[index];
+    return element && !ts.isSpreadElement(element) ? element : null;
   }
 
   function mergeConditionalLiteralTexts(previous, next) {
@@ -1774,6 +1784,45 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
         collectFsWriteAliasesFromPattern(bindingName, aliases);
       }
     }
+  }
+
+  function markArrayBindingPatternFromForOf(initializer, expression) {
+    if (!ts.isVariableDeclarationList(initializer)) {
+      return;
+    }
+    const declaration = initializer.declarations[0];
+    if (!declaration || !ts.isArrayBindingPattern(declaration.name)) {
+      return;
+    }
+    const iterable = unwrapExpression(expression);
+    if (!ts.isArrayLiteralExpression(iterable)) {
+      return;
+    }
+
+    declaration.name.elements.forEach((bindingElement, index) => {
+      if (ts.isOmittedExpression(bindingElement) || !ts.isIdentifier(bindingElement.name)) {
+        return;
+      }
+
+      const elementsAtIndex = iterable.elements
+        .map((element) => arrayLiteralElementAt(element, index))
+        .filter(Boolean);
+      if (elementsAtIndex.length === 0) {
+        return;
+      }
+
+      currentLegacyPathScope().set(
+        bindingElement.name.text,
+        elementsAtIndex.some((element) => expressionContainsLegacyStore(element)),
+      );
+      currentLiteralTextScope().set(
+        bindingElement.name.text,
+        mergeExhaustiveLiteralTexts(
+          [],
+          elementsAtIndex.flatMap((element) => literalTextsFromExpression(element)),
+        ),
+      );
+    });
   }
 
   function pathArgumentsForFsWrite(name, args) {
@@ -4032,6 +4081,9 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
       wrapperFunctionScopes.push(new Map());
       conditionalExecutionScopes.push(true);
       visit(node.initializer);
+      if (ts.isForOfStatement(node)) {
+        markArrayBindingPatternFromForOf(node.initializer, node.expression);
+      }
       visit(node.statement);
       conditionalExecutionScopes.pop();
       wrapperFunctionScopes.pop();

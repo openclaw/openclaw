@@ -729,6 +729,25 @@ describe("check-database-first-legacy-stores", () => {
     ]);
   });
 
+  it("flags legacy paths destructured from for-of tuple entries", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import path from "node:path";
+        import { root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
+        const CLAIMS_DIGEST_PATH = ".openclaw-wiki/cache/claims.jsonl";
+        const claimsDigestPath = path.join(rootDir, CLAIMS_DIGEST_PATH);
+        for (const [filePath, content] of [[claimsDigestPath, claimsDigest]]) {
+          const relativePath = path.relative(rootDir, filePath);
+          const root = await fsRoot(rootDir);
+          await root.write(relativePath, content);
+        }
+      `,
+      "src/runtime/for-of-destructured-legacy-path.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 9 }]);
+  });
+
   it("applies open write-mode checks inside wrappers", () => {
     const violations = collectDatabaseFirstLegacyStoreViolations(
       `
