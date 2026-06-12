@@ -379,6 +379,7 @@ other: top-level
       { name: "only", interval: "5m", prompt: "ping" },
     ]);
   });
+
   it("treats a flush-left unknown field as the end of the tasks block", () => {
     const content = `tasks:
   - name: only
