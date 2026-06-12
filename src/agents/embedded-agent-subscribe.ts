@@ -283,10 +283,6 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     options?: { emitPartialReply?: boolean },
   ) => {
     const delivery = { data, emitPartialReply: options?.emitPartialReply === true };
-    if (state.deferBlockReplyDelivery) {
-      state.deferredAssistantEvents.push(delivery);
-      return;
-    }
     emitAssistantStreamDataSafely(delivery);
   };
   const flushDeferredAssistantEvents = () => {
