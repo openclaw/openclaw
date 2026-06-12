@@ -65,7 +65,7 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
       return { updated: false };
     }
     note("Running update…", "Update");
-    const { progress, stop } = createUpdateProgress(Boolean(process.stdout.isTTY));
+    const { progress, stop } = createUpdateProgress(process.stdout.isTTY);
     let result;
     try {
       result = await runGatewayUpdate({
