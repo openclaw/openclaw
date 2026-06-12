@@ -63,6 +63,13 @@ const {
   resolveTelegramScopedGroupConfig,
   setTelegramBotRuntimeForTest,
 } = await import("./bot-core.js");
+const {
+  createTelegramSpooledReplayDeferredParticipant,
+  recordTelegramMessageProcessingResult,
+  runWithTelegramSpooledReplayUpdate,
+  TelegramSpooledReplayProcessingError,
+  withTelegramSpooledReplayUpdate,
+} = await import("./bot-processing-outcome.js");
 const { resolveTelegramConversationRoute } = await import("./conversation-route.js");
 const { clearAccountThrottlersForTest } = await import("./account-throttler.js");
 const {
@@ -840,6 +847,146 @@ describe("createTelegramBot", () => {
       }
     },
   );
+
+  it("settles spooled replay participants when stop cancels pending inbound debounce", async () => {
+    const DEBOUNCE_MS = 4321;
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
+      messages: {
+        inbound: {
+          debounceMs: DEBOUNCE_MS,
+        },
+      },
+      channels: {
+        telegram: { dmPolicy: "open", allowFrom: ["*"] },
+      },
+    });
+
+    installPerKeySequentializer();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    try {
+      createTelegramBot({ token: "tok" });
+      const messageHandler = getOnHandler("message") as (
+        ctx: TelegramMiddlewareTestContext,
+      ) => Promise<void>;
+      const firstUpdate = { update_id: 201 };
+      const replay = await runWithTelegramSpooledReplayUpdate(firstUpdate, async () => {
+        await runTelegramMiddlewareChain({
+          ctx: {
+            update: firstUpdate,
+            message: {
+              chat: { id: 7, type: "private" },
+              text: "first",
+              date: 1736380800,
+              message_id: 201,
+              from: { id: 42, first_name: "Ada" },
+            },
+            me: { username: "openclaw_bot" },
+            getFile: async () => ({}),
+          },
+          finalHandler: messageHandler,
+        });
+      });
+
+      const deferredWork = replay.deferredWork;
+      expect(deferredWork).toBeDefined();
+      if (!deferredWork) {
+        throw new Error("Expected spooled replay deferred work");
+      }
+      await runTelegramMiddlewareChain({
+        ctx: {
+          update: { update_id: 202 },
+          message: {
+            chat: { id: 7, type: "private" },
+            text: "stop",
+            date: 1736380801,
+            message_id: 202,
+            from: { id: 42, first_name: "Ada" },
+          },
+          me: { username: "openclaw_bot" },
+          getFile: async () => ({}),
+        },
+        finalHandler: messageHandler,
+      });
+
+      await expect(deferredWork.task).resolves.toEqual({ kind: "skipped" });
+      const debounceCallIndex = setTimeoutSpy.mock.calls.findLastIndex(
+        (call) => call[1] === DEBOUNCE_MS,
+      );
+      expect(debounceCallIndex).toBeGreaterThanOrEqual(0);
+      clearTimeout(
+        setTimeoutSpy.mock.results[debounceCallIndex]?.value as ReturnType<typeof setTimeout>,
+      );
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
+  it("settles spooled replay participants when stop cancels pending text fragments", async () => {
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
+      channels: {
+        telegram: { dmPolicy: "open", allowFrom: ["*"] },
+      },
+    });
+
+    installPerKeySequentializer();
+
+    createTelegramBot({ token: "tok" });
+    const messageHandler = getOnHandler("message") as (
+      ctx: TelegramMiddlewareTestContext,
+    ) => Promise<void>;
+    const firstUpdate = { update_id: 211 };
+    const replay = await runWithTelegramSpooledReplayUpdate(firstUpdate, async () => {
+      await runTelegramMiddlewareChain({
+        ctx: {
+          update: firstUpdate,
+          message: {
+            chat: { id: 7, type: "private" },
+            text: "A".repeat(4050),
+            date: 1736380800,
+            message_id: 211,
+            from: { id: 42, first_name: "Ada" },
+          },
+          me: { username: "openclaw_bot" },
+          getFile: async () => ({}),
+        },
+        finalHandler: messageHandler,
+      });
+    });
+
+    const deferredWork = replay.deferredWork;
+    expect(deferredWork).toBeDefined();
+    if (!deferredWork) {
+      throw new Error("Expected spooled replay deferred work");
+    }
+    await runTelegramMiddlewareChain({
+      ctx: {
+        update: { update_id: 212 },
+        message: {
+          chat: { id: 7, type: "private" },
+          text: "stop",
+          date: 1736380801,
+          message_id: 212,
+          from: { id: 42, first_name: "Ada" },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({}),
+      },
+      finalHandler: messageHandler,
+    });
+
+    await expect(deferredWork.task).resolves.toEqual({ kind: "skipped" });
+  });
 
   it("lets stop cancel pending same-chat forwarded debounce", async () => {
     const DEBOUNCE_MS = 4321;
@@ -2347,6 +2494,213 @@ describe("createTelegramBot", () => {
     await flushTelegramTestMicrotasks();
     expect(retryHandler).toHaveBeenCalledTimes(1);
     expect(onUpdateId.mock.calls.map((call) => Number(call[0]))).toEqual([202]);
+  });
+
+  it("persists recorded dispatch failures during normal polling", async () => {
+    sequentializeSpy.mockImplementationOnce(
+      () => async (_ctx: unknown, next: () => Promise<void>) => {
+        await next();
+      },
+    );
+
+    const onUpdateId = vi.fn();
+
+    createTelegramBot({
+      token: "tok",
+      updateOffset: {
+        lastUpdateId: 500,
+        onUpdateId,
+      },
+    });
+
+    type Middleware = (
+      ctx: Record<string, unknown>,
+      next: () => Promise<void>,
+    ) => Promise<void> | void;
+
+    const middlewares = middlewareUseSpy.mock.calls
+      .map((call) => call[0])
+      .filter((fn): fn is Middleware => typeof fn === "function");
+
+    const runMiddlewareChain = async (
+      ctx: Record<string, unknown>,
+      finalNext: () => Promise<void>,
+    ) => {
+      let idx = -1;
+      const dispatch = async (i: number): Promise<void> => {
+        if (i <= idx) {
+          throw new Error("middleware dispatch called multiple times");
+        }
+        idx = i;
+        const fn = middlewares[i];
+        if (!fn) {
+          await finalNext();
+          return;
+        }
+        await fn(ctx, async () => dispatch(i + 1));
+      };
+      await dispatch(0);
+    };
+
+    const dispatchError = new Error("dispatch exploded");
+    await runMiddlewareChain({ update: { update_id: 501 } }, async () => {
+      recordTelegramMessageProcessingResult({
+        kind: "failed-retryable",
+        error: dispatchError,
+      });
+    });
+    await flushTelegramTestMicrotasks();
+    expect(onUpdateId.mock.calls.map((call) => Number(call[0]))).toEqual([501]);
+
+    await runMiddlewareChain({ update: { update_id: 502 } }, async () => {});
+    await flushTelegramTestMicrotasks();
+    expect(onUpdateId.mock.calls.map((call) => Number(call[0]))).toEqual([501, 502]);
+  });
+
+  it("rejects recorded dispatch failures during isolated spool replay", async () => {
+    sequentializeSpy.mockImplementationOnce(
+      () => async (_ctx: unknown, next: () => Promise<void>) => {
+        await next();
+      },
+    );
+
+    const onUpdateId = vi.fn();
+
+    createTelegramBot({
+      token: "tok",
+      updateOffset: {
+        lastUpdateId: 600,
+        onUpdateId,
+      },
+    });
+
+    type Middleware = (
+      ctx: Record<string, unknown>,
+      next: () => Promise<void>,
+    ) => Promise<void> | void;
+
+    const middlewares = middlewareUseSpy.mock.calls
+      .map((call) => call[0])
+      .filter((fn): fn is Middleware => typeof fn === "function");
+
+    const runMiddlewareChain = async (
+      ctx: Record<string, unknown>,
+      finalNext: () => Promise<void>,
+    ) => {
+      let idx = -1;
+      const dispatch = async (i: number): Promise<void> => {
+        if (i <= idx) {
+          throw new Error("middleware dispatch called multiple times");
+        }
+        idx = i;
+        const fn = middlewares[i];
+        if (!fn) {
+          await finalNext();
+          return;
+        }
+        await fn(ctx, async () => dispatch(i + 1));
+      };
+      await dispatch(0);
+    };
+
+    const update = { update_id: 601 };
+    const dispatchError = new Error("dispatch exploded");
+    await expect(
+      withTelegramSpooledReplayUpdate(update, async () => {
+        await runMiddlewareChain({ update }, async () => {
+          recordTelegramMessageProcessingResult({
+            kind: "failed-retryable",
+            error: dispatchError,
+          });
+        });
+      }),
+    ).rejects.toMatchObject({
+      name: TelegramSpooledReplayProcessingError.name,
+      cause: dispatchError,
+    });
+    await flushTelegramTestMicrotasks();
+    expect(onUpdateId).not.toHaveBeenCalled();
+  });
+
+  it("keeps deferred spooled failures retryable in the same bot tracker", async () => {
+    sequentializeSpy.mockImplementationOnce(
+      () => async (_ctx: unknown, next: () => Promise<void>) => {
+        await next();
+      },
+    );
+
+    const onUpdateId = vi.fn();
+
+    createTelegramBot({
+      token: "tok",
+      updateOffset: {
+        lastUpdateId: 700,
+        onUpdateId,
+      },
+    });
+
+    type Middleware = (
+      ctx: Record<string, unknown>,
+      next: () => Promise<void>,
+    ) => Promise<void> | void;
+
+    const middlewares = middlewareUseSpy.mock.calls
+      .map((call) => call[0])
+      .filter((fn): fn is Middleware => typeof fn === "function");
+
+    const runMiddlewareChain = async (
+      ctx: Record<string, unknown>,
+      finalNext: () => Promise<void>,
+    ) => {
+      let idx = -1;
+      const dispatch = async (i: number): Promise<void> => {
+        if (i <= idx) {
+          throw new Error("middleware dispatch called multiple times");
+        }
+        idx = i;
+        const fn = middlewares[i];
+        if (!fn) {
+          await finalNext();
+          return;
+        }
+        await fn(ctx, async () => dispatch(i + 1));
+      };
+      await dispatch(0);
+    };
+
+    const update = { update_id: 701 };
+    const replay = await runWithTelegramSpooledReplayUpdate(update, async () => {
+      await runMiddlewareChain({ update }, async () => {
+        const participant = createTelegramSpooledReplayDeferredParticipant("test:deferred");
+        if (!participant) {
+          throw new Error("expected spooled replay participant");
+        }
+      });
+    });
+    const deferredWork = replay.deferredWork;
+    expect(deferredWork).toBeDefined();
+    if (!deferredWork) {
+      throw new Error("Expected deferred spooled work");
+    }
+    await flushTelegramTestMicrotasks();
+    expect(onUpdateId).not.toHaveBeenCalled();
+
+    deferredWork.settle({
+      kind: "failed-retryable",
+      error: new Error("deferred dispatch failed"),
+    });
+    await flushTelegramTestMicrotasks();
+    expect(onUpdateId).not.toHaveBeenCalled();
+
+    let retried = false;
+    await runWithTelegramSpooledReplayUpdate(update, async () => {
+      await runMiddlewareChain({ update }, async () => {
+        retried = true;
+      });
+    });
+    await flushTelegramTestMicrotasks();
+    expect(retried).toBe(true);
+    expect(onUpdateId.mock.calls.map((call) => Number(call[0]))).toEqual([701]);
   });
 
   it("skips replayed update ids even when the semantic update key differs", async () => {
