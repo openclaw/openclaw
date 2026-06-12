@@ -8,10 +8,6 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  QA_EVIDENCE_SUMMARY_FILENAME,
-  type QaEvidenceSummaryJson,
-} from "../../extensions/qa-lab/src/evidence-summary.ts";
-import {
   appendJsonl,
   assertRequiredEnv,
   buildRttResult,
@@ -32,12 +28,54 @@ const CREDENTIAL_SCRIPT_PATH = path.resolve(
   "../../scripts/e2e/npm-telegram-rtt-credentials.mjs",
 );
 const CONFIG_SCRIPT_PATH = path.resolve(TEST_DIR, "../../scripts/e2e/npm-telegram-rtt-config.mjs");
+const QA_EVIDENCE_SUMMARY_FILENAME = "qa-evidence-summary.json";
 const CHUNKED_PAYLOAD_MARKER = "__openclawQaCredentialPayloadChunksV1";
 const execFileAsync = promisify(execFile);
 const tempDirs: string[] = [];
 
-type EvidenceStatus = QaEvidenceSummaryJson["entries"][number]["result"]["status"];
-type EvidenceTiming = QaEvidenceSummaryJson["entries"][number]["result"]["timing"] | undefined;
+type EvidenceStatus = "pass" | "fail" | "blocked" | "skipped";
+type EvidenceTiming = {
+  rttMs?: number;
+  avgMs?: number;
+  p50Ms?: number;
+  p95Ms?: number;
+  maxMs?: number;
+  samples?: number;
+  failedSamples?: number;
+};
+
+type EvidenceSummaryForTest = {
+  kind: "openclaw.qa.evidence-summary";
+  schemaVersion: 2;
+  generatedAt: string;
+  entries: Array<{
+    test: {
+      kind: string;
+      id: string;
+      title: string;
+    };
+    mapping: {
+      profile: { id: string };
+      coverage: [];
+    };
+    execution: {
+      runner: { id: string };
+      environment: { ref: null; os: string; nodeVersion: string };
+      provider: {
+        id: string;
+        live: boolean;
+        model: { name: null; ref: null };
+        fixture: string;
+      };
+      packageSource: { kind: string; spec: string };
+      artifacts: [];
+    };
+    result: {
+      status: EvidenceStatus;
+      timing?: EvidenceTiming;
+    };
+  }>;
+};
 
 function makeTelegramRttEvidenceSummary(
   options: {
@@ -46,7 +84,7 @@ function makeTelegramRttEvidenceSummary(
     mentionStatus?: EvidenceStatus;
     mentionTiming?: EvidenceTiming;
   } = {},
-): QaEvidenceSummaryJson {
+): EvidenceSummaryForTest {
   const canaryStatus = options.canaryStatus ?? "pass";
   const canaryTiming = Object.hasOwn(options, "canaryTiming")
     ? options.canaryTiming
@@ -68,7 +106,7 @@ function makeTelegramRttEvidenceSummary(
     title: string,
     status: EvidenceStatus,
     timing: EvidenceTiming,
-  ): QaEvidenceSummaryJson["entries"][number] => {
+  ): EvidenceSummaryForTest["entries"][number] => {
     const result = timing === undefined ? { status } : { status, timing };
     return {
       test: {

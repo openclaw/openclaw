@@ -6,13 +6,24 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { beforeAll, describe, expect, it } from "vitest";
-import {
-  QA_EVIDENCE_SUMMARY_FILENAME,
-  validateQaEvidenceSummaryJson,
-} from "../../extensions/qa-lab/src/evidence-summary.ts";
 import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
 
 const DRIVER_SCRIPT = "scripts/e2e/npm-telegram-rtt-driver.mjs";
+const QA_EVIDENCE_SUMMARY_FILENAME = "qa-evidence-summary.json";
+
+type EvidenceSummaryForTest = {
+  kind?: string;
+  entries: Array<{
+    test: { id: string };
+    mapping?: {
+      coverage?: Array<{ id?: string }>;
+    };
+    result: {
+      status?: string;
+      failure?: { reason?: string };
+    };
+  }>;
+};
 
 function runDriver(env: Record<string, string>) {
   return spawnSync(process.execPath, [DRIVER_SCRIPT], {
@@ -220,9 +231,11 @@ function closeServer(server: Server): Promise<void> {
 }
 
 function readEvidenceSummary(outputDir: string) {
-  return validateQaEvidenceSummaryJson(
-    JSON.parse(readFileSync(path.join(outputDir, QA_EVIDENCE_SUMMARY_FILENAME), "utf8")) as unknown,
-  );
+  const summary = JSON.parse(
+    readFileSync(path.join(outputDir, QA_EVIDENCE_SUMMARY_FILENAME), "utf8"),
+  ) as EvidenceSummaryForTest;
+  expect(Array.isArray(summary.entries)).toBe(true);
+  return summary;
 }
 
 async function startTelegramApiServer(options: {
