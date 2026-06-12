@@ -1149,7 +1149,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             if (abortGeneration !== undefined && myGeneration <= abortGeneration) {
               return;
             }
-            if (plan.reloadPlugins) {
+            if (plan.reloadPlugins && channelsStoppedBeforePluginReload.has(name)) {
               await runOutsideGatewayRootWorkAdmission(() =>
                 params.startChannel(name, undefined, { includeKnownAccounts: true }),
               );
