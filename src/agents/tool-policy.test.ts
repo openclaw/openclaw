@@ -12,6 +12,7 @@ import {
   collectExplicitAllowlist,
   DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
   expandToolGroups,
+  filterRuntimeMaterializationAllowlistEntries,
   normalizeToolName,
   replaceWithEffectiveToolAllowlist,
   resolveToolProfilePolicy,
@@ -103,6 +104,27 @@ describe("tool-policy", () => {
       "probe__search",
       "lsp_hover_typescript",
     ]);
+  });
+
+  it("keeps preserved runtime tokens inside every effective allow layer", () => {
+    const filtered = filterRuntimeMaterializationAllowlistEntries({
+      entries: ["bundle-mcp", "group:plugins", "Probe__Search", "lsp_hover_typescript"],
+      policies: [
+        { allow: ["read", "sessions_spawn", "bundle-mcp", "group:plugins", "lsp_*"] },
+        { allow: ["read", "sessions_spawn", "probe__search", "lsp_hover_typescript"] },
+      ],
+    });
+
+    expect(filtered).toEqual(["probe__search", "lsp_hover_typescript"]);
+  });
+
+  it("lets runtime bundle deny layers remove materialized child selectors", () => {
+    const filtered = filterRuntimeMaterializationAllowlistEntries({
+      entries: ["probe__search", "lsp_hover_typescript"],
+      policies: [{ allow: ["bundle-mcp", "lsp_*"] }, { deny: ["bundle-mcp"] }],
+    });
+
+    expect(filtered).toEqual(["lsp_hover_typescript"]);
   });
 });
 

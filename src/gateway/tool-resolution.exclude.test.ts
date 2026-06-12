@@ -164,4 +164,26 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
       "lsp_hover_typescript",
     ]);
   });
+
+  it("does not restore broad runtime selectors removed by a narrower subagent policy", () => {
+    resolveGatewayScopedTools({
+      cfg: {
+        tools: {
+          profile: "coding",
+          subagents: {
+            tools: {
+              allow: ["read", "sessions_spawn", "probe__search"],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      sessionKey: "agent:main:subagent:worker",
+      surface: "loopback",
+    });
+
+    const args = readCreateToolsArgs();
+    expect(args.pluginToolAllowlist).toContain("bundle-mcp");
+    expect(args.pluginToolAllowlist).toContain("probe__search");
+    expect(args.inheritedToolAllowlist).toEqual(["read", "sessions_spawn", "probe__search"]);
+  });
 });
