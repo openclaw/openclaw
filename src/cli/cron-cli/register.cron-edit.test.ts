@@ -75,61 +75,30 @@ describe("cron edit command", () => {
     );
   });
 
-  it("preserves tz and staggerMs when --cron replaces expression (#92291)", async () => {
-    callGatewayFromCli.mockImplementation(async (method: string) => {
-      if (method === "cron.list") {
-        return {
-          jobs: [
-            {
-              id: "job-1",
-              schedule: {
-                kind: "cron",
-                expr: "0 4 * * *",
-                tz: "America/Phoenix",
-                staggerMs: 5000,
-              },
-            },
-          ],
-        };
-      }
-      return { ok: true };
-    });
+  it("leaves --cron expression edits as direct schedule patches (#92291)", async () => {
     const program = createCronProgram();
 
     await program.parseAsync(["edit", "job-1", "--cron", "0 5 * * *"], { from: "user" });
 
+    expect(callGatewayFromCli).not.toHaveBeenCalledWith("cron.list", expect.anything(), {
+      includeDisabled: true,
+      limit: expect.any(Number),
+      offset: expect.any(Number),
+    });
     expect(callGatewayFromCli).toHaveBeenCalledWith("cron.update", expect.anything(), {
       id: "job-1",
       patch: {
         schedule: {
           kind: "cron",
           expr: "0 5 * * *",
-          tz: "America/Phoenix",
-          staggerMs: 5000,
+          tz: undefined,
+          staggerMs: undefined,
         },
       },
     });
   });
 
   it("allows --tz override when --cron replaces expression (#92291)", async () => {
-    callGatewayFromCli.mockImplementation(async (method: string) => {
-      if (method === "cron.list") {
-        return {
-          jobs: [
-            {
-              id: "job-1",
-              schedule: {
-                kind: "cron",
-                expr: "0 4 * * *",
-                tz: "America/Phoenix",
-                staggerMs: 5000,
-              },
-            },
-          ],
-        };
-      }
-      return { ok: true };
-    });
     const program = createCronProgram();
 
     await program.parseAsync(
