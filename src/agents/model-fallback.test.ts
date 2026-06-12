@@ -445,7 +445,11 @@ async function expectFallsBackToHaiku(params: {
 
   expect(result.result).toBe("ok");
   expect(run).toHaveBeenCalledTimes(2);
-  expect(requireMockCall(run, 1, "fallback run")).toEqual(["anthropic", "claude-haiku-3-5"]);
+  expect(requireMockCall(run, 1, "fallback run")).toEqual([
+    "anthropic",
+    "claude-haiku-3-5",
+    { isFallback: true },
+  ]);
 }
 
 function createOverrideFailureRun(params: {
@@ -528,7 +532,7 @@ async function expectSkippedUnavailableProvider(params: {
   });
 
   expect(result.result).toBe("ok");
-  expect(run.mock.calls).toEqual([["fallback", "ok-model"]]);
+  expect(run.mock.calls).toEqual([["fallback", "ok-model", { isFallback: true }]]);
   expect(result.attempts[0]?.reason).toBe(params.expectedReason);
 }
 
@@ -1371,7 +1375,11 @@ describe("runWithModelFallback", () => {
 
     expect(result.result).toEqual({ payloads: [{ text: "fallback ok" }] });
     expect(run).toHaveBeenCalledTimes(2);
-    expect(requireMockCall(run, 1, "fallback run")).toEqual(["anthropic", "claude-haiku-3-5"]);
+    expect(requireMockCall(run, 1, "fallback run")).toEqual([
+      "anthropic",
+      "claude-haiku-3-5",
+      { isFallback: true },
+    ]);
     expect(result.attempts[0]?.provider).toBe("openai");
     expect(result.attempts[0]?.model).toBe("gpt-5.4");
     expect(result.attempts[0]?.reason).toBe("format");
@@ -1417,7 +1425,11 @@ describe("runWithModelFallback", () => {
 
     expect(result.result.payloads).toEqual([{ text: "fallback ok" }]);
     expect(run).toHaveBeenCalledTimes(2);
-    expect(requireMockCall(run, 1, "fallback run")).toEqual(["openai", "gpt-5.5"]);
+    expect(requireMockCall(run, 1, "fallback run")).toEqual([
+      "openai",
+      "gpt-5.5",
+      { isFallback: true },
+    ]);
     expect(result.attempts[0]).toMatchObject({
       provider: "zai",
       model: "glm-5.1",
@@ -1734,7 +1746,7 @@ describe("runWithModelFallback", () => {
     expect(onError).not.toHaveBeenCalled();
     expect(run.mock.calls).toEqual([
       ["openai", "gpt-4.1-mini"],
-      ["anthropic", "claude-sonnet-4-6"],
+      ["anthropic", "claude-sonnet-4-6", { isFallback: true }],
     ]);
   });
 
@@ -1759,7 +1771,7 @@ describe("runWithModelFallback", () => {
     expect(result.attempts[0]?.reason).toBe("unknown");
     expect(run.mock.calls).toEqual([
       ["openai", "gpt-4.1-mini"],
-      ["anthropic", "claude-haiku-3-5"],
+      ["anthropic", "claude-haiku-3-5", { isFallback: true }],
     ]);
   });
 
@@ -1982,8 +1994,8 @@ describe("runWithModelFallback", () => {
     expect(result.result).toBe("ok");
     expect(run.mock.calls).toEqual([
       ["anthropic", "claude-opus-4"],
-      ["anthropic", "claude-haiku-3-5"],
-      ["openai", "gpt-4.1-mini"],
+      ["anthropic", "claude-haiku-3-5", { isFallback: true }],
+      ["openai", "gpt-4.1-mini", { isFallback: true }],
     ]);
   });
 
@@ -2037,7 +2049,7 @@ describe("runWithModelFallback", () => {
     expect(result.result).toBe("ok");
     expect(run.mock.calls).toEqual([
       ["openrouter", "xiaomi/mimo-v2-pro"],
-      ["openai", "gpt-4.1-mini"],
+      ["openai", "gpt-4.1-mini", { isFallback: true }],
     ]);
     expect(result.attempts).toHaveLength(1);
     expect(result.attempts[0]?.reason).toBe("billing");
@@ -2090,7 +2102,10 @@ describe("runWithModelFallback", () => {
 
         expect(result.result).toBe("ok");
         expect(run).toHaveBeenCalledTimes(2);
-        expect(requireMockCall(run, 1, "fallback run")).toEqual(testCase.expectedFallback);
+        expect(requireMockCall(run, 1, "fallback run")).toEqual([
+          ...testCase.expectedFallback,
+          { isFallback: true },
+        ]);
         if (testCase.expectedReason) {
           expect(result.attempts).toHaveLength(1);
           expect(result.attempts[0]?.reason).toBe(testCase.expectedReason);
@@ -2811,6 +2826,7 @@ describe("runWithModelFallback", () => {
       expect(run).toHaveBeenCalledTimes(1);
       expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-5", {
         allowTransientCooldownProbe: true,
+        isFallback: true,
       });
     });
 
@@ -2872,7 +2888,9 @@ describe("runWithModelFallback", () => {
 
       expect(result.result).toBe("groq success");
       expect(run).toHaveBeenCalledTimes(1);
-      expect(run).toHaveBeenNthCalledWith(1, "groq", "llama-3.3-70b-versatile");
+      expect(run).toHaveBeenNthCalledWith(1, "groq", "llama-3.3-70b-versatile", {
+        isFallback: true,
+      });
     });
 
     it("tries cross-provider fallbacks when same provider has rate limit", async () => {
@@ -2921,7 +2939,9 @@ describe("runWithModelFallback", () => {
       expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-opus-4-6", {
         allowTransientCooldownProbe: true,
       });
-      expect(run).toHaveBeenNthCalledWith(2, "groq", "llama-3.3-70b-versatile");
+      expect(run).toHaveBeenNthCalledWith(2, "groq", "llama-3.3-70b-versatile", {
+        isFallback: true,
+      });
     });
 
     it("limits cooldown probes to one per provider before moving to cross-provider fallback", async () => {
@@ -2959,7 +2979,9 @@ describe("runWithModelFallback", () => {
       expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-opus-4-6", {
         allowTransientCooldownProbe: true,
       });
-      expect(run).toHaveBeenNthCalledWith(2, "groq", "llama-3.3-70b-versatile");
+      expect(run).toHaveBeenNthCalledWith(2, "groq", "llama-3.3-70b-versatile", {
+        isFallback: true,
+      });
     });
 
     it("does not consume transient probe slot when first same-provider probe fails with model_not_found", async () => {
@@ -2999,6 +3021,7 @@ describe("runWithModelFallback", () => {
       });
       expect(run).toHaveBeenNthCalledWith(2, "anthropic", "claude-sonnet-4-5", {
         allowTransientCooldownProbe: true,
+        isFallback: true,
       });
     });
   });
@@ -3086,7 +3109,7 @@ describe("runWithImageModelFallback", () => {
     expect(result.result).toBe("ok");
     expect(run.mock.calls).toEqual([
       ["openai", "gpt-image-1"],
-      ["google", "gemini-2.5-flash-image-preview"],
+      ["google", "gemini-2.5-flash-image-preview", { isFallback: true }],
     ]);
   });
 });
