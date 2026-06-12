@@ -770,10 +770,11 @@ export async function sendMessageTelegram(
       if (!chunk) {
         continue;
       }
-      const { result: message, acceptedParams } = await sendTelegramTextChunk(
+      const { result, acceptedParams } = await sendTelegramTextChunk(
         chunk,
         buildTextParams(index === chunks.length - 1),
       );
+      const message = result as TelegramMessageLike | null | undefined;
       const messageId = resolveTelegramMessageIdOrThrow(message, context);
       recordSentMessage(chatId, messageId, cfg);
       await recordOutboundMessageForPromptContext({

@@ -3145,10 +3145,11 @@ describe("editMessageTelegram", () => {
   it("uses rich editMessageText with markdown payload when the raw Telegram Bot API exposes it", async () => {
     const sendMessage = vi.fn();
     const richEditMessageText = vi.fn().mockResolvedValue({ message_id: 1, chat: { id: "123" } });
+    const legacyEditMessageText = vi.fn();
     const api = {
       sendMessage,
       raw: { editMessageText: richEditMessageText },
-      editMessageText: vi.fn(),
+      editMessageText: legacyEditMessageText,
     } as unknown as Bot["api"];
     const markdownText = "hello **world**";
 
@@ -3163,7 +3164,7 @@ describe("editMessageTelegram", () => {
       message_id: 1,
       rich_message: { markdown: markdownText },
     });
-    expect(api.editMessageText).not.toHaveBeenCalled();
+    expect(legacyEditMessageText).not.toHaveBeenCalled();
   });
 
   it("falls back when rich editMessageText gets 404 Not Found from a lagging apiRoot", async () => {
