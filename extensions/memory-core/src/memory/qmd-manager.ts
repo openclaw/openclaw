@@ -311,7 +311,7 @@ function hasMcporterAuthLikeText(value: unknown): boolean {
 }
 
 function hasMcporterRemoteUrlCredentials(server: Record<string, unknown>): boolean {
-  for (const key of ["baseUrl", "url", "serverUrl"]) {
+  for (const key of ["baseUrl", "base_url", "url", "serverUrl", "server_url"]) {
     const value = server[key];
     if (typeof value !== "string" || value.length === 0) {
       continue;
@@ -451,12 +451,12 @@ function resolveMcporterConfigCandidates(env: NodeJS.ProcessEnv, workspaceDir: s
       candidates.push(path.join(resolved, "mcporter", "mcporter.jsonc"));
     }
   }
-  candidates.push(path.join(os.homedir(), ".mcporter", "mcporter.json"));
-  candidates.push(path.join(os.homedir(), ".mcporter", "mcporter.jsonc"));
-
   const projectConfigDir = path.resolve(workspaceDir, "config");
   candidates.push(path.join(projectConfigDir, "mcporter.json"));
   candidates.push(path.join(projectConfigDir, "mcporter.jsonc"));
+
+  candidates.push(path.join(os.homedir(), ".mcporter", "mcporter.json"));
+  candidates.push(path.join(os.homedir(), ".mcporter", "mcporter.jsonc"));
 
   return candidates;
 }
@@ -2809,12 +2809,18 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private buildDefaultMcporterQmdServer(): Record<string, unknown> {
-    return {
+    const server: Record<string, unknown> = {
       command: this.qmd.command,
       args: ["mcp"],
       env: this.buildMcporterQmdEnv(),
-      lifecycle: { mode: "keep-alive", idleTimeoutMs: 300_000 },
     };
+    // Only keep the QMD MCP server warm when the user has not explicitly opted
+    // out of daemon management. The default (undefined) keeps daemon enabled.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-boolean-literal-compare
+    if (this.qmd.mcporter.startDaemon !== false) {
+      server.lifecycle = { mode: "keep-alive", idleTimeoutMs: 300_000 };
+    }
+    return server;
   }
 
   private async resolveConfiguredMcporterServer(): Promise<ConfiguredMcporterServer | null> {
@@ -2902,8 +2908,10 @@ export class QmdMemoryManager implements MemorySearchManager {
 
     const hasRemoteEndpoint =
       typeof server.baseUrl === "string" ||
+      typeof server.base_url === "string" ||
       typeof server.url === "string" ||
-      typeof server.serverUrl === "string";
+      typeof server.serverUrl === "string" ||
+      typeof server.server_url === "string";
     if (hasRemoteEndpoint) {
       // The generated per-agent config is persisted under OpenClaw state. Do not
       // copy remote auth material from a user's mcporter config into that file;

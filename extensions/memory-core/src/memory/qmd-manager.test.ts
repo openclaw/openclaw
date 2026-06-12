@@ -4205,10 +4205,7 @@ describe("QmdMemoryManager", () => {
     expect(normalizePath(config.mcpServers?.qmd?.env?.XDG_CACHE_HOME)).toContain(
       "/agents/main/qmd/xdg-cache",
     );
-    expect(config.mcpServers?.qmd?.lifecycle).toEqual({
-      mode: "keep-alive",
-      idleTimeoutMs: 300_000,
-    });
+    expect(config.mcpServers?.qmd?.lifecycle).toBeUndefined();
 
     await manager.close();
   });
