@@ -2557,30 +2557,31 @@ describe("openai transport stream", () => {
     expect(params).not.toHaveProperty("reasoning_effort");
   });
 
-  it("uses system role instead of developer for responses providers that disable developer role", () => {
-    const params = buildOpenAIResponsesParams(
-      {
-        id: "grok-4.1-fast",
-        name: "Grok 4.1 Fast",
-        api: "openai-responses",
-        provider: "xai",
-        baseUrl: "https://api.x.ai/v1",
-        reasoning: true,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 200000,
-        maxTokens: 8192,
-      } satisfies Model<"openai-responses">,
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [],
-      } as never,
-      undefined,
-    ) as { input?: Array<{ role?: string }> };
+   it("places system prompt in instructions field for openai-responses providers", () => {
+     const params = buildOpenAIResponsesParams(
+       {
+         id: "grok-4.1-fast",
+         name: "Grok 4.1 Fast",
+         api: "openai-responses",
+         provider: "xai",
+         baseUrl: "https://api.x.ai/v1",
+         reasoning: true,
+         input: ["text"],
+         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+         contextWindow: 200000,
+         maxTokens: 8192,
+       } satisfies Model<"openai-responses">,
+       {
+         systemPrompt: "system",
+         messages: [],
+         tools: [],
+       } as never,
+       undefined,
+     ) as { input?: Array<{ role?: string }>; instructions?: string };
 
-    expect(params.input?.[0]?.role).toBe("system");
-  });
+     expect(params.instructions).toBe("system");
+     expect(params.input).toEqual([]);
+   });
 
   it("omits Responses reasoning params when model compat disables reasoning effort", () => {
     const params = buildOpenAIResponsesParams(
@@ -2673,66 +2674,63 @@ describe("openai transport stream", () => {
     expect(params.include).toEqual(["reasoning.encrypted_content"]);
   });
 
-  it("keeps developer role for native OpenAI reasoning responses models", () => {
-    const params = buildOpenAIResponsesParams(
-      {
-        id: "gpt-5.4",
-        name: "GPT-5.4",
-        api: "openai-responses",
-        provider: "openai",
-        baseUrl: "https://api.openai.com/v1",
-        reasoning: true,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 200000,
-        maxTokens: 8192,
-      } satisfies Model<"openai-responses">,
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [],
-      } as never,
-      undefined,
-    ) as { input?: Array<{ role?: string }> };
+   it("does not include system prompt in input for native OpenAI reasoning responses models", () => {
+     const params = buildOpenAIResponsesParams(
+       {
+         id: "gpt-5.4",
+         name: "GPT-5.4",
+         api: "openai-responses",
+         provider: "openai",
+         baseUrl: "https://api.openai.com/v1",
+         reasoning: true,
+         input: ["text"],
+         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+         contextWindow: 200000,
+         maxTokens: 8192,
+       } satisfies Model<"openai-responses">,
+       {
+         systemPrompt: "system",
+         messages: [],
+         tools: [],
+       } as never,
+       undefined,
+     ) as { input?: Array<{ role?: string }>; instructions?: string };
 
-    expect(params.input?.[0]?.role).toBe("developer");
-  });
+     expect(params.instructions).toBe("system");
+     expect(params.input).toEqual([]);
+   });
 
-  it("serializes Responses input messages with explicit message type and content parts", () => {
-    const params = buildOpenAIResponsesParams(
-      {
-        id: "gpt-5.4",
-        name: "GPT-5.4",
-        api: "openai-responses",
-        provider: "microsoft-foundry",
-        baseUrl: "https://example.services.ai.azure.com/api/projects/demo/openai/v1",
-        reasoning: true,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 200000,
-        maxTokens: 8192,
-      } satisfies Model<"openai-responses">,
-      {
-        systemPrompt: "system",
-        messages: [{ role: "user", content: "hello", timestamp: 1 }],
-        tools: [],
-      } as never,
-      undefined,
-    ) as { input?: unknown };
+   it("places system prompt in instructions and serializes user messages in input", () => {
+     const params = buildOpenAIResponsesParams(
+       {
+         id: "gpt-5.4",
+         name: "GPT-5.4",
+         api: "openai-responses",
+         provider: "microsoft-foundry",
+         baseUrl: "https://example.services.ai.azure.com/api/projects/demo/openai/v1",
+         reasoning: true,
+         input: ["text"],
+         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+         contextWindow: 200000,
+         maxTokens: 8192,
+       } satisfies Model<"openai-responses">,
+       {
+         systemPrompt: "system",
+         messages: [{ role: "user", content: "hello", timestamp: 1 }],
+         tools: [],
+       } as never,
+       undefined,
+     ) as { input?: unknown; instructions?: string };
 
-    expect(params.input).toEqual([
-      {
-        type: "message",
-        role: "system",
-        content: [{ type: "input_text", text: "system" }],
-      },
-      {
-        type: "message",
-        role: "user",
-        content: [{ type: "input_text", text: "hello" }],
-      },
-    ]);
-  });
+     expect(params.instructions).toBe("system");
+     expect(params.input).toEqual([
+       {
+         type: "message",
+         role: "user",
+         content: [{ type: "input_text", text: "hello" }],
+       },
+     ]);
+   });
 
   it("uses model maxTokens for Responses params when runtime maxTokens is omitted", () => {
     const params = buildOpenAIResponsesParams(
@@ -4568,9 +4566,10 @@ describe("openai transport stream", () => {
         tools: [],
       } as never,
       undefined,
-    ) as { input?: Array<{ content?: Array<{ text?: string }> }> };
+     ) as { input?: Array<{ content?: Array<{ text?: string }> }>; instructions?: string };
 
-    expect(params.input?.[0]?.content?.[0]?.text).toBe("Stable prefix\nDynamic suffix");
+     expect(params.instructions).toBe("Stable prefix\nDynamic suffix");
+     expect(params.input).toEqual([]);
   });
 
   it("defaults responses tool schemas to strict on native OpenAI routes", () => {
@@ -5045,30 +5044,31 @@ describe("openai transport stream", () => {
     expect(params).not.toHaveProperty("store");
   });
 
-  it("uses system role for xAI default-route responses providers without relying on baseUrl host sniffing", () => {
-    const params = buildOpenAIResponsesParams(
-      {
-        id: "grok-4.1-fast",
-        name: "Grok 4.1 Fast",
-        api: "openai-responses",
-        provider: "xai",
-        baseUrl: "https://api.x.ai/v1",
-        reasoning: true,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 200000,
-        maxTokens: 8192,
-      } satisfies Model<"openai-responses">,
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [],
-      } as never,
-      undefined,
-    ) as { input?: Array<{ role?: string }> };
+   it("places system prompt in instructions for xAI default-route responses providers", () => {
+     const params = buildOpenAIResponsesParams(
+       {
+         id: "grok-4.1-fast",
+         name: "Grok 4.1 Fast",
+         api: "openai-responses",
+         provider: "xai",
+         baseUrl: "https://api.x.ai/v1",
+         reasoning: true,
+         input: ["text"],
+         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+         contextWindow: 200000,
+         maxTokens: 8192,
+       } satisfies Model<"openai-responses">,
+       {
+         systemPrompt: "system",
+         messages: [],
+         tools: [],
+       } as never,
+       undefined,
+     ) as { input?: Array<{ role?: string }>; instructions?: string };
 
-    expect(params.input?.[0]?.role).toBe("system");
-  });
+     expect(params.instructions).toBe("system");
+     expect(params.input).toEqual([]);
+   });
 
   it("uses system role for Moonshot default-route completions providers", () => {
     const params = buildOpenAICompletionsParams(

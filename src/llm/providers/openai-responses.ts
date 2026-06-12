@@ -194,6 +194,7 @@ function buildParams(
   options?: OpenAIResponsesOptions,
 ) {
   const messages = convertResponsesMessages(model, context, OPENAI_TOOL_CALL_PROVIDERS, {
+    includeSystemPrompt: false,
     replayResponsesItemIds: options?.replayResponsesItemIds ?? false,
   });
 
@@ -209,6 +210,7 @@ function buildParams(
         : clampOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId),
     prompt_cache_retention: getPromptCacheRetention(compat, cacheRetention),
     store: false,
+    ...(context.systemPrompt ? { instructions: context.systemPrompt } : {}),
   };
 
   if (options?.maxTokens) {

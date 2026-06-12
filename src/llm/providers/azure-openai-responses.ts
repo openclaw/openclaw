@@ -218,7 +218,9 @@ function buildParams(
   options: AzureOpenAIResponsesOptions | undefined,
   deploymentName: string,
 ) {
-  const messages = convertResponsesMessages(model, context, AZURE_TOOL_CALL_PROVIDERS);
+  const messages = convertResponsesMessages(model, context, AZURE_TOOL_CALL_PROVIDERS, {
+    includeSystemPrompt: false,
+  });
 
   const params: ResponseCreateParamsStreaming = {
     model: deploymentName,
@@ -228,6 +230,7 @@ function buildParams(
       options?.cacheRetention === "none"
         ? undefined
         : clampOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId),
+    ...(context.systemPrompt ? { instructions: context.systemPrompt } : {}),
   };
 
   applyCommonResponsesParams(params, model, context, options);

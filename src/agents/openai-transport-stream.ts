@@ -2208,19 +2208,19 @@ export function buildOpenAIResponsesParams(
   const policyAllowsReplayIds = payloadPolicy.explicitStore !== false;
   const replayResponsesItemIds =
     !isNativeCodexResponses && (options?.replayResponsesItemIds ?? policyAllowsReplayIds);
-  const messages = convertResponsesMessages(
-    model,
-    context,
-    new Set(["openai", "opencode", "azure-openai-responses", "github-copilot"]),
-    {
-      includeSystemPrompt: !isCodexResponses,
-      supportsDeveloperRole,
-      replayReasoningItems: true,
-      replayResponsesItemIds,
-      authProfileId: options?.authProfileId,
-      sessionId: options?.sessionId,
-    },
-  );
+   const messages = convertResponsesMessages(
+     model,
+     context,
+     new Set(["openai", "opencode", "azure-openai-responses", "github-copilot"]),
+     {
+       includeSystemPrompt: false,
+       supportsDeveloperRole,
+       replayReasoningItems: true,
+       replayResponsesItemIds,
+       authProfileId: options?.authProfileId,
+       sessionId: options?.sessionId,
+     },
+   );
   if (isCodexResponses) {
     ensureOpenAICodexResponsesInput(messages, context);
   }
@@ -2234,6 +2234,8 @@ export function buildOpenAIResponsesParams(
     prompt_cache_retention: getPromptCacheRetention(model.baseUrl, cacheRetention),
     ...(isCodexResponses
       ? { instructions: resolveOpenAICodexResponsesInstructions(model, context) }
+      : context.systemPrompt
+      ? { instructions: context.systemPrompt }
       : {}),
     ...(metadata ? { metadata } : {}),
   };
