@@ -251,7 +251,13 @@ type DispatchTelegramMessageParams = {
   telegramCfg: TelegramAccountConfig;
   telegramDeps?: TelegramBotDeps;
   opts: Pick<TelegramBotOptions, "token" | "mediaMaxMb">;
+  retryDispatchErrors?: boolean;
+  suppressFailureFallback?: boolean;
 };
+
+export type TelegramDispatchResult =
+  | { kind: "completed" }
+  | { kind: "failed-retryable"; error: unknown };
 
 type TelegramReasoningLevel = "off" | "on" | "stream";
 
@@ -721,7 +727,9 @@ export const dispatchTelegramMessage = async ({
   telegramCfg,
   telegramDeps: injectedTelegramDeps,
   opts,
-}: DispatchTelegramMessageParams) => {
+  retryDispatchErrors = false,
+  suppressFailureFallback = false,
+}: DispatchTelegramMessageParams): Promise<TelegramDispatchResult> => {
   const dispatchStartedAt = Date.now();
   const dispatchContext = resolveDispatchTelegramContext({ cfg, context });
   const telegramDeps =
@@ -2471,7 +2479,7 @@ export const dispatchTelegramMessage = async ({
         },
       });
       if (!turnResult.dispatched) {
-        return;
+        return { kind: "completed" };
       }
       ({ queuedFinal } = turnResult.dispatchResult);
       suppressSilentReplyFallback =
@@ -2539,12 +2547,13 @@ export const dispatchTelegramMessage = async ({
     if (!isRoomEvent || deliveryState.snapshot().delivered) {
       clearGroupHistory();
     }
-    return;
+    return { kind: "completed" };
   }
   let sentFallback = false;
   const deliverySummary = deliveryState.snapshot();
   const shouldSendFailureFallback =
     !isRoomEvent &&
+    !suppressFailureFallback &&
     (dispatchError ||
       (!deliverySummary.delivered &&
         (deliverySummary.skippedNonSilent > 0 || deliverySummary.failedNonSilent > 0)));
@@ -2599,6 +2608,16 @@ export const dispatchTelegramMessage = async ({
 
   const hasFinalResponse =
     deliverySummary.delivered || sentFallback || suppressSilentReplyFallback || queuedFinal;
+  const deliveryFailureWithoutFinalResponse =
+    !deliverySummary.delivered &&
+    (deliverySummary.skippedNonSilent > 0 || deliverySummary.failedNonSilent > 0);
+  const retryableDispatchFailure =
+    dispatchError ??
+    (deliveryFailureWithoutFinalResponse
+      ? new Error(
+          `Telegram reply delivery failed without a final response (failed=${deliverySummary.failedNonSilent}, skipped=${deliverySummary.skippedNonSilent})`,
+        )
+      : null);
 
   if (statusReactionController && !hasFinalResponse) {
     void finalizeTelegramStatusReaction({ outcome: "error", hasFinalResponse: false }).catch(
@@ -2611,12 +2630,16 @@ export const dispatchTelegramMessage = async ({
   const shouldClearGroupHistory =
     !isRoomEvent || deliverySummary.delivered || sentFallback || queuedFinal;
 
+  if (retryableDispatchFailure && retryDispatchErrors && !hasFinalResponse) {
+    return { kind: "failed-retryable", error: retryableDispatchFailure };
+  }
+
   if (!hasFinalResponse) {
     if (!shouldClearGroupHistory) {
-      return;
+      return { kind: "completed" };
     }
     clearGroupHistory();
-    return;
+    return { kind: "completed" };
   }
 
   // Fire-and-forget: auto-rename DM topic on first message.
@@ -2690,4 +2713,5 @@ export const dispatchTelegramMessage = async ({
   if (shouldClearGroupHistory) {
     clearGroupHistory();
   }
+  return { kind: "completed" };
 };
