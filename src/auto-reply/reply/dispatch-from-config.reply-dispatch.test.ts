@@ -190,6 +190,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       pendingFinalDeliveryAttemptCount: 3,
       pendingFinalDeliveryLastError: "previous failure",
       pendingFinalDeliveryContext: { source: "heartbeat" },
+      pendingFinalDeliveryIntentId: "intent-1",
     };
     sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({
       existing: sessionStoreMocks.currentEntry,
@@ -212,6 +213,51 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryAttemptCount).toBeUndefined();
     expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryLastError).toBeUndefined();
     expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryContext).toBeUndefined();
+    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryIntentId).toBeUndefined();
+  });
+
+  it("clears pending final delivery when abort arrives after final dispatch succeeds", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(false);
+    sessionStoreMocks.currentEntry = {
+      sessionKey: "agent:test:session",
+      pendingFinalDelivery: true,
+      pendingFinalDeliveryText: "durable reply",
+      pendingFinalDeliveryCreatedAt: 1,
+      pendingFinalDeliveryLastAttemptAt: 2,
+      pendingFinalDeliveryAttemptCount: 3,
+      pendingFinalDeliveryLastError: "previous failure",
+      pendingFinalDeliveryContext: { source: "heartbeat" },
+      pendingFinalDeliveryIntentId: "intent-1",
+    };
+    sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({
+      existing: sessionStoreMocks.currentEntry,
+    });
+    const abortController = new AbortController();
+    const dispatcher = createDispatcher();
+    vi.mocked(dispatcher.sendFinalReply).mockImplementation(() => {
+      abortController.abort();
+      return true;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: createHookCtx(),
+      cfg: emptyConfig,
+      dispatcher,
+      replyOptions: { abortSignal: abortController.signal },
+      replyResolver: async () => ({ text: "durable reply" }),
+    });
+
+    expect(result.queuedFinal).toBe(false);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();
+    expect(sessionStoreMocks.updateSessionStoreEntry).toHaveBeenCalledOnce();
+    expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBeUndefined();
+    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryText).toBeUndefined();
+    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryCreatedAt).toBeUndefined();
+    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryLastAttemptAt).toBeUndefined();
+    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryAttemptCount).toBeUndefined();
+    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryLastError).toBeUndefined();
+    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryContext).toBeUndefined();
+    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryIntentId).toBeUndefined();
   });
 
   it("preserves pending final delivery when final dispatch fails", async () => {
@@ -240,5 +286,140 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBe(true);
     expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryText).toBe("durable reply");
     expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryCreatedAt).toBe(1);
+  });
+
+  it("preserves pending final delivery when accepted final dispatch later fails", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(false);
+    sessionStoreMocks.currentEntry = {
+      sessionKey: "agent:test:session",
+      pendingFinalDelivery: true,
+      pendingFinalDeliveryText: "durable reply",
+      pendingFinalDeliveryCreatedAt: 1,
+    };
+    sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({
+      existing: sessionStoreMocks.currentEntry,
+    });
+    const dispatcher = createDispatcher();
+    let failedFinal = 0;
+    let sentFinal = false;
+    vi.mocked(dispatcher.getFailedCounts).mockImplementation(() => ({
+      tool: 0,
+      block: 0,
+      final: failedFinal,
+    }));
+    vi.mocked(dispatcher.sendFinalReply).mockImplementation(() => {
+      sentFinal = true;
+      return true;
+    });
+    vi.mocked(dispatcher.waitForIdle).mockImplementation(async () => {
+      if (sentFinal) {
+        failedFinal = 1;
+      }
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: createHookCtx(),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => ({ text: "durable reply" }),
+    });
+
+    expect(result.queuedFinal).toBe(true);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();
+    expect(dispatcher.waitForIdle).toHaveBeenCalledTimes(2);
+    expect(sessionStoreMocks.updateSessionStoreEntry).not.toHaveBeenCalled();
+    expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBe(true);
+    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryText).toBe("durable reply");
+    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryCreatedAt).toBe(1);
+  });
+
+  it("clears pending final delivery when accepted final dispatch is intentionally cancelled", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(false);
+    sessionStoreMocks.currentEntry = {
+      sessionKey: "agent:test:session",
+      pendingFinalDelivery: true,
+      pendingFinalDeliveryText: "durable reply",
+      pendingFinalDeliveryCreatedAt: 1,
+    };
+    sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({
+      existing: sessionStoreMocks.currentEntry,
+    });
+    const dispatcher = createDispatcher();
+    let cancelledFinal = 0;
+    let sentFinal = false;
+    dispatcher.getCancelledCounts = vi.fn(() => ({
+      tool: 0,
+      block: 0,
+      final: cancelledFinal,
+    }));
+    vi.mocked(dispatcher.sendFinalReply).mockImplementation(() => {
+      sentFinal = true;
+      return true;
+    });
+    vi.mocked(dispatcher.waitForIdle).mockImplementation(async () => {
+      if (sentFinal) {
+        cancelledFinal = 1;
+      }
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: createHookCtx(),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => ({ text: "durable reply" }),
+    });
+
+    expect(result.queuedFinal).toBe(true);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();
+    expect(dispatcher.waitForIdle).toHaveBeenCalledTimes(2);
+    expect(sessionStoreMocks.updateSessionStoreEntry).toHaveBeenCalledOnce();
+    expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBeUndefined();
+    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryText).toBeUndefined();
+    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryCreatedAt).toBeUndefined();
+  });
+
+  it("clears pending final delivery when only earlier queued final dispatch failed", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(false);
+    sessionStoreMocks.currentEntry = {
+      sessionKey: "agent:test:session",
+      pendingFinalDelivery: true,
+      pendingFinalDeliveryText: "durable reply",
+      pendingFinalDeliveryCreatedAt: 1,
+    };
+    sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({
+      existing: sessionStoreMocks.currentEntry,
+    });
+    const dispatcher = createDispatcher();
+    let sentFinal = false;
+    let failedFinal = 0;
+    vi.mocked(dispatcher.getFailedCounts).mockImplementation(() => ({
+      tool: 0,
+      block: 0,
+      final: failedFinal,
+    }));
+    vi.mocked(dispatcher.waitForIdle).mockImplementation(async () => {
+      if (!sentFinal) {
+        failedFinal = 1;
+      }
+    });
+    vi.mocked(dispatcher.sendFinalReply).mockImplementation(() => {
+      sentFinal = true;
+      return true;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: createHookCtx(),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => ({ text: "durable reply" }),
+    });
+
+    expect(result.queuedFinal).toBe(true);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();
+    expect(dispatcher.waitForIdle).toHaveBeenCalledTimes(2);
+    expect(sessionStoreMocks.updateSessionStoreEntry).toHaveBeenCalledOnce();
+    expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBeUndefined();
+    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryText).toBeUndefined();
+    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryCreatedAt).toBeUndefined();
   });
 });

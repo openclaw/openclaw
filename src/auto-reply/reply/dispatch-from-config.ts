@@ -734,6 +734,7 @@ async function clearPendingFinalDeliveryAfterSuccess(params: {
         pendingFinalDeliveryAttemptCount: undefined,
         pendingFinalDeliveryLastError: undefined,
         pendingFinalDeliveryContext: undefined,
+        pendingFinalDeliveryIntentId: undefined,
         updatedAt: Date.now(),
       };
     },
@@ -2205,7 +2206,11 @@ export async function dispatchReplyFromConfig(
     const sendFinalPayload = async (
       payload: ReplyPayload,
       options: { abortSignal?: AbortSignal } = {},
-    ): Promise<{ queuedFinal: boolean; routedFinalCount: number }> => {
+    ): Promise<{
+      queuedFinal: boolean;
+      completedFinalDeliveryAttempt: boolean;
+      routedFinalCount: number;
+    }> => {
       const abortSignal = options.abortSignal ?? getDispatchAbortSignal();
       const throwIfFinalDeliveryAborted = () => {
         if (abortSignal?.aborted) {
@@ -2254,17 +2259,21 @@ export async function dispatchReplyFromConfig(
         }
         return {
           queuedFinal: result.ok,
+          completedFinalDeliveryAttempt: result.ok,
           routedFinalCount: isRoutedReplyDelivered(result) ? 1 : 0,
         };
       }
       throwIfFinalDeliveryAborted();
       markInboundDedupeReplayUnsafe();
+      await waitForReplyDispatcherIdle(dispatcher, abortSignal);
+      throwIfFinalDeliveryAborted();
       const finalOutcomeBefore = getDispatcherFinalOutcomeCounts(dispatcher);
       const deliveredSourceReplyTranscriptMirror = captureDeliveredSourceReplyTranscriptMirror({
         dispatcher,
         metadata: sourceReplyTranscriptMirror,
       });
       const queuedFinal = dispatcher.sendFinalReply(normalizedPayload);
+      let completedFinalDeliveryAttempt = queuedFinal;
       if (queuedFinal) {
         await mirrorInternalSourceReplyAfterDispatcherDelivery({
           dispatcher,
@@ -2272,9 +2281,12 @@ export async function dispatchReplyFromConfig(
           metadata: deliveredSourceReplyTranscriptMirror,
           cfg,
         });
+        const finalOutcomeAfter = getDispatcherFinalOutcomeCounts(dispatcher);
+        completedFinalDeliveryAttempt = finalOutcomeAfter.failed <= finalOutcomeBefore.failed;
       }
       return {
         queuedFinal,
+        completedFinalDeliveryAttempt,
         routedFinalCount: 0,
       };
     };
@@ -3130,17 +3142,19 @@ export async function dispatchReplyFromConfig(
       const finalReply = await sendFinalPayload(reply);
       queuedFinal = finalReply.queuedFinal || queuedFinal;
       routedFinalCount += finalReply.routedFinalCount;
-      if (!finalReply.queuedFinal && finalReply.routedFinalCount === 0) {
+      if (!finalReply.completedFinalDeliveryAttempt) {
         finalDeliveryFailed = true;
       }
     }
 
     if (attemptedFinalDelivery && !finalDeliveryFailed) {
-      throwIfDispatchOperationAborted();
+      // Final delivery already succeeded; clear durable pending state before
+      // surfacing a later abort so successful replies cannot strand sessions.
       await clearPendingFinalDeliveryAfterSuccess({
         storePath: sessionStoreEntry.storePath,
         sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
       });
+      throwIfDispatchOperationAborted();
     }
 
     if (!suppressDelivery) {
