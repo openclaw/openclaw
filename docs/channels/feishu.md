@@ -206,10 +206,11 @@ Feishu/Lark does not support native slash-command menus, so send these as plain 
 
 1. Ensure the bot is published and approved in Feishu Open Platform / Lark Developer
 2. Ensure event subscription includes `im.message.receive_v1`
-3. Ensure **persistent connection** (WebSocket) is selected
-4. Ensure all required permission scopes are granted
-5. Ensure the gateway is running: `openclaw gateway status`
-6. Check logs: `openclaw logs --follow`
+3. For meeting invite auto-join, also subscribe to `vc.bot.meeting_invited_v1`
+4. Ensure **persistent connection** (WebSocket) is selected
+5. Ensure all required permission scopes are granted
+6. Ensure the gateway is running: `openclaw gateway status`
+7. Check logs: `openclaw logs --follow`
 
 ### QR setup does not react in the Feishu mobile app
 
