@@ -210,6 +210,15 @@ Per-agent override: `agents.list[].subagents.delegationMode`.
 <ParamField path="streamTo" type='"parent"'>
   ACP-only. Streams ACP run output to the parent session when `runtime: "acp"`; omit for native sub-agent spawns.
 </ParamField>
+<ParamField path="execution" type="object">
+  Optional execution placement request for the child run. The current release supports local process execution and rejects unsupported backend types at spawn time instead of silently falling back.
+</ParamField>
+<ParamField path="execution.backend" type="string" default='"local"'>
+  Execution placement backend id. Defaults to the built-in local process backend.
+</ParamField>
+<ParamField path="execution.profile" type="string">
+  Optional profile id within the selected execution backend. Profiles are validated and recorded for status/readback.
+</ParamField>
 <ParamField path="model" type="string">
   Override the sub-agent model. Invalid values are skipped and the sub-agent runs on the default model with a warning in the tool result.
 </ParamField>
