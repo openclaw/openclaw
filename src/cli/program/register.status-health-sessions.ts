@@ -236,6 +236,16 @@ export function registerStatusHealthSessionsCommands(program: Command) {
       "Retire stale direct-DM session rows that no longer match session.dmScope=main",
       false,
     )
+    .option(
+      "--synthetic-only",
+      "Only consider synthetic subagent, cron, hook, node, and heartbeat sessions as cleanup candidates",
+      false,
+    )
+    .option(
+      "--protect-main",
+      "Preserve main and direct customer sessions under age/count pressure",
+      false,
+    )
     .option("--active-key <key>", "Protect this session key from budget-eviction")
     .option("--json", "Output JSON", false)
     .addHelpText(
@@ -254,6 +264,10 @@ export function registerStatusHealthSessionsCommands(program: Command) {
           ["openclaw sessions cleanup --enforce", "Apply maintenance now."],
           ["openclaw sessions cleanup --agent work --dry-run", "Preview one agent store."],
           ["openclaw sessions cleanup --all-agents --dry-run", "Preview all agent stores."],
+          [
+            "openclaw sessions cleanup --all-agents --synthetic-only --protect-main --dry-run --json",
+            "Fleet-safe native cleanup preview for synthetic sessions only.",
+          ],
           [
             "openclaw sessions cleanup --enforce --store ./tmp/sessions.json",
             "Use a specific store.",
@@ -280,6 +294,8 @@ export function registerStatusHealthSessionsCommands(program: Command) {
             enforce: Boolean(opts.enforce),
             fixMissing: Boolean(opts.fixMissing),
             fixDmScope: Boolean(opts.fixDmScope),
+            syntheticOnly: Boolean(opts.syntheticOnly),
+            protectMain: Boolean(opts.protectMain),
             activeKey: opts.activeKey as string | undefined,
             json: Boolean(opts.json || parentOpts?.json),
           },

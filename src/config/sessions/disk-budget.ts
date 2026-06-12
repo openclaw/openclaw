@@ -555,6 +555,7 @@ export async function enforceSessionDiskBudget(params: {
   maintenance: SessionDiskBudgetConfig;
   warnOnly: boolean;
   dryRun?: boolean;
+  skipUnclassifiedArtifacts?: boolean;
   log?: SessionDiskBudgetLogger;
   onRemoveFile?: (canonicalPath: string) => void;
 }): Promise<SessionDiskBudgetSweepResult | null> {
@@ -649,16 +650,19 @@ export async function enforceSessionDiskBudget(params: {
   const tempStaleCutoffMs = Date.now() - SESSION_STORE_TEMP_STALE_MS;
   const promptBlobOrphanCutoffMs = Date.now() - SESSION_PROMPT_BLOB_UNREFERENCED_GRACE_MS;
   const storeBasename = path.basename(params.storePath);
-  const unreferencedPromptBlobQueue = promptBlobFiles
-    .filter((file) => {
-      return isPromptBlobArtifactRemovable(
-        file,
-        projectedPromptBlobRefCounts,
-        promptBlobOrphanCutoffMs,
-        tempStaleCutoffMs,
-      );
-    })
-    .toSorted((a, b) => a.mtimeMs - b.mtimeMs);
+  const unreferencedPromptBlobQueue =
+    params.skipUnclassifiedArtifacts === true
+      ? []
+      : promptBlobFiles
+          .filter((file) => {
+            return isPromptBlobArtifactRemovable(
+              file,
+              projectedPromptBlobRefCounts,
+              promptBlobOrphanCutoffMs,
+              tempStaleCutoffMs,
+            );
+          })
+          .toSorted((a, b) => a.mtimeMs - b.mtimeMs);
   // Cheapest cleanup first: orphaned prompt blobs can relieve pressure without losing sessions.
   for (const file of unreferencedPromptBlobQueue) {
     if (total <= highWaterBytes) {
@@ -682,11 +686,14 @@ export async function enforceSessionDiskBudget(params: {
     removedFiles += 1;
   }
 
-  const removableFileQueue = files
-    .filter((file) =>
-      isDiskBudgetRemovableSessionFile(file, referencedPaths, tempStaleCutoffMs, storeBasename),
-    )
-    .toSorted((a, b) => a.mtimeMs - b.mtimeMs);
+  const removableFileQueue =
+    params.skipUnclassifiedArtifacts === true
+      ? []
+      : files
+          .filter((file) =>
+            isDiskBudgetRemovableSessionFile(file, referencedPaths, tempStaleCutoffMs, storeBasename),
+          )
+          .toSorted((a, b) => a.mtimeMs - b.mtimeMs);
   // Then remove stale artifacts already detached from live entries.
   for (const file of removableFileQueue) {
     if (total <= highWaterBytes) {

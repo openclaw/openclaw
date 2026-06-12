@@ -13,6 +13,7 @@ import {
   parseAgentSessionKey,
 } from "../../sessions/session-key-utils.js";
 import type { SessionMaintenanceConfig, SessionMaintenanceMode } from "../types.base.js";
+import { normalizeStoreSessionKey } from "./store-entry.js";
 import { parseSessionThreadInfoFast } from "./thread-info.js";
 import type { SessionEntry } from "./types.js";
 
@@ -305,7 +306,7 @@ function getEntryUpdatedAt(entry?: SessionEntry): number {
   return entry?.updatedAt ?? Number.NEGATIVE_INFINITY;
 }
 
-function isSyntheticSessionMaintenanceKey(sessionKey: string): boolean {
+export function isSyntheticSessionMaintenanceKey(sessionKey: string): boolean {
   const parsed = parseAgentSessionKey(sessionKey);
   const rest = normalizeLowercaseStringOrEmpty(parsed?.rest ?? sessionKey);
   // ACP bridge sessions use normal model dispatch, but remain synthetic and disposable.
@@ -326,6 +327,16 @@ function isTelegramTopicSessionKey(sessionKey: string): boolean {
   const parsed = parseAgentSessionKey(sessionKey);
   const rest = normalizeLowercaseStringOrEmpty(parsed?.rest ?? sessionKey);
   return /^telegram:(?:group|channel|direct|dm):.+:topic:[^:]+$/.test(rest);
+}
+
+function isMainOrDirectSessionKey(sessionKey: string): boolean {
+  const parsed = parseAgentSessionKey(sessionKey);
+  const rest = normalizeLowercaseStringOrEmpty(parsed?.rest ?? sessionKey);
+  if (rest === "main") {
+    return true;
+  }
+  const parts = rest.split(":").filter(Boolean);
+  return parts.some((part, index) => (part === "direct" || part === "dm") && index < parts.length - 1);
 }
 
 function isExternalGroupOrChannelSessionKey(sessionKey: string): boolean {
@@ -355,6 +366,20 @@ export function isProtectedSessionMaintenanceEntry(
   return chatType === "group" || chatType === "channel" || chatType === "thread";
 }
 
+export function isProtectedMainOrDirectSessionMaintenanceEntry(
+  sessionKey: string,
+  entry: SessionEntry | undefined,
+): boolean {
+  if (isSyntheticSessionMaintenanceKey(sessionKey)) {
+    return false;
+  }
+  if (isMainOrDirectSessionKey(sessionKey)) {
+    return true;
+  }
+  const chatType = normalizeLowercaseStringOrEmpty(entry?.chatType ?? entry?.origin?.chatType);
+  return chatType === "direct" || chatType === "dm";
+}
+
 export function shouldPreserveMaintenanceEntry(params: {
   key: string;
   entry: SessionEntry | undefined;
@@ -362,6 +387,7 @@ export function shouldPreserveMaintenanceEntry(params: {
 }): boolean {
   return (
     params.preserveKeys?.has(params.key) === true ||
+    params.preserveKeys?.has(normalizeStoreSessionKey(params.key)) === true ||
     isProtectedSessionMaintenanceEntry(params.key, params.entry)
   );
 }

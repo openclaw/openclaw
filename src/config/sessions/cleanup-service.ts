@@ -24,6 +24,8 @@ import { collectSessionMaintenancePreserveKeys } from "./store-maintenance-prese
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   capEntryCount,
+  isProtectedMainOrDirectSessionMaintenanceEntry,
+  isSyntheticSessionMaintenanceKey,
   pruneStaleEntries,
   type ResolvedSessionMaintenanceConfig,
 } from "./store-maintenance.js";
@@ -33,6 +35,7 @@ import {
   updateSessionStore,
   type SessionMaintenanceApplyReport,
 } from "./store.js";
+import { normalizeStoreSessionKey } from "./store-entry.js";
 import {
   resolveSessionStoreTargets,
   type SessionStoreTarget,
@@ -47,6 +50,8 @@ export type SessionsCleanupOptions = SessionStoreSelectionOptions & {
   json?: boolean;
   fixMissing?: boolean;
   fixDmScope?: boolean;
+  syntheticOnly?: boolean;
+  protectMain?: boolean;
 };
 
 export type SessionCleanupAction =
@@ -56,6 +61,15 @@ export type SessionCleanupAction =
   | "cap-overflow"
   | "evict-budget"
   | "retire-dm-scope";
+
+export type SessionCleanupCandidateActionCounts = {
+  "prune-missing": number;
+  "retire-dm-scope": number;
+  "prune-stale": number;
+  "cap-overflow": number;
+  "evict-budget": number;
+  "prune-unreferenced-artifact": number;
+};
 
 export type SessionCleanupSummary = {
   agentId: string;
@@ -70,6 +84,23 @@ export type SessionCleanupSummary = {
   capped: number;
   unreferencedArtifacts: SessionUnreferencedArtifactSweepResult;
   diskBudget: Awaited<ReturnType<typeof enforceSessionDiskBudget>>;
+  candidateCounts: {
+    preserve: number;
+    archive_candidate: number;
+    blocked: number;
+    quarantine_review: number;
+  };
+  candidateActionCounts: SessionCleanupCandidateActionCounts;
+  safety: {
+    syntheticOnly: boolean;
+    protectMain: boolean;
+    protectedMainCount: number;
+    protectedDirectCount: number;
+    protectedMainAgentIds: string[];
+    syntheticOnlyPreservedCount: number;
+    blockedCount: number;
+    quarantineCount: number;
+  };
   wouldMutate: boolean;
   applied?: true;
   appliedCount?: number;
@@ -99,6 +130,85 @@ export type SessionsCleanupRunResult = {
 };
 
 const EMPTY_TRANSCRIPT_MAX_BYTES = 4096;
+
+function collectCleanupPolicyPreserveKeys(params: {
+  store: Record<string, SessionEntry>;
+  syntheticOnly?: boolean;
+  protectMain?: boolean;
+}): {
+  keys: Set<string>;
+  protectedMainCount: number;
+  protectedDirectCount: number;
+  protectedMainAgentIds: string[];
+  syntheticOnlyPreservedCount: number;
+} {
+  const keys = new Set<string>();
+  let protectedMainCount = 0;
+  let protectedDirectCount = 0;
+  const protectedMainAgentIds = new Set<string>();
+  let syntheticOnlyPreservedCount = 0;
+  for (const [key, entry] of Object.entries(params.store)) {
+    let preserve = false;
+    if (params.syntheticOnly === true && !isSyntheticSessionMaintenanceKey(key)) {
+      preserve = true;
+      syntheticOnlyPreservedCount += 1;
+    }
+    if (
+      params.protectMain === true &&
+      isProtectedMainOrDirectSessionMaintenanceEntry(key, entry)
+    ) {
+      preserve = true;
+      const parsed = parseAgentSessionKey(key);
+      if (parsed && parsed.rest.toLowerCase() === "main") {
+        protectedMainCount += 1;
+        protectedMainAgentIds.add(normalizeAgentId(parsed.agentId));
+      } else {
+        protectedDirectCount += 1;
+      }
+    }
+    if (preserve) {
+      keys.add(key);
+    }
+  }
+  return {
+    keys,
+    protectedMainCount,
+    protectedDirectCount,
+    protectedMainAgentIds: [...protectedMainAgentIds].toSorted(),
+    syntheticOnlyPreservedCount,
+  };
+}
+
+function collectCleanupPreserveKeys(params: {
+  activeKey?: string;
+  policyPreserveKeys?: Iterable<string>;
+}): Set<string> | undefined {
+  return collectSessionMaintenancePreserveKeys([
+    params.activeKey,
+    ...(params.policyPreserveKeys ?? []),
+  ]);
+}
+
+function hasPreservedSessionKey(
+  preserveKeys: ReadonlySet<string> | undefined,
+  key: string,
+): boolean {
+  return (
+    preserveKeys?.has(key) === true ||
+    preserveKeys?.has(normalizeStoreSessionKey(key)) === true
+  );
+}
+
+function emptyUnreferencedArtifactSweepResult(
+  olderThanMs: number,
+): SessionUnreferencedArtifactSweepResult {
+  return {
+    scannedFiles: 0,
+    removedFiles: 0,
+    freedBytes: 0,
+    olderThanMs,
+  };
+}
 
 function isTranscriptMessageRole(role: unknown): boolean {
   return (
@@ -193,6 +303,24 @@ export function resolveSessionCleanupAction(params: {
   return "keep";
 }
 
+function buildCandidateActionCounts(params: {
+  missing: number;
+  dmScopeRetired: number;
+  pruned: number;
+  capped: number;
+  diskBudgetRemovedEntries?: number;
+  unreferencedArtifactFiles?: number;
+}): SessionCleanupCandidateActionCounts {
+  return {
+    "prune-missing": params.missing,
+    "retire-dm-scope": params.dmScopeRetired,
+    "prune-stale": params.pruned,
+    "cap-overflow": params.capped,
+    "evict-budget": params.diskBudgetRemovedEntries ?? 0,
+    "prune-unreferenced-artifact": params.unreferencedArtifactFiles ?? 0,
+  };
+}
+
 function isMainScopeStaleDirectSessionKey(params: {
   cfg: OpenClawConfig;
   targetAgentId: string;
@@ -231,10 +359,14 @@ function retireMainScopeDirectSessionEntries(params: {
   store: Record<string, SessionEntry>;
   targetAgentId: string;
   activeKey?: string;
+  preserveKeys?: ReadonlySet<string>;
   onRetired?: (key: string, entry: SessionEntry) => void;
 }): number {
   let retired = 0;
   for (const [key, entry] of Object.entries(params.store)) {
+    if (hasPreservedSessionKey(params.preserveKeys, key)) {
+      continue;
+    }
     if (
       isMainScopeStaleDirectSessionKey({
         cfg: params.cfg,
@@ -270,6 +402,7 @@ export function serializeSessionCleanupResult(params: {
 function pruneMissingTranscriptEntries(params: {
   store: Record<string, SessionEntry>;
   storePath: string;
+  preserveKeys?: ReadonlySet<string>;
   onPruned?: (key: string) => void;
 }): number {
   const sessionPathOpts = resolveSessionFilePathOptions({
@@ -277,6 +410,9 @@ function pruneMissingTranscriptEntries(params: {
   });
   let removed = 0;
   for (const [key, entry] of Object.entries(params.store)) {
+    if (hasPreservedSessionKey(params.preserveKeys, key)) {
+      continue;
+    }
     if (!entry?.sessionId) {
       if (parseAgentSessionKey(key)) {
         // Agent-scoped keys without session ids are valid routing entries; keep them.
@@ -336,10 +472,21 @@ async function previewStoreCleanup(params: {
   activeKey?: string;
   fixMissing?: boolean;
   fixDmScope?: boolean;
+  syntheticOnly?: boolean;
+  protectMain?: boolean;
 }) {
   const beforeStore = loadSessionStore(params.target.storePath, { skipCache: true });
   // Preview always mutates a clone so dry-run output can report exact counts without touching disk.
   const previewStore = cloneSessionStoreRecord(beforeStore);
+  const policyPreserve = collectCleanupPolicyPreserveKeys({
+    store: beforeStore,
+    syntheticOnly: params.syntheticOnly,
+    protectMain: params.protectMain,
+  });
+  const preserveSessionKeys = collectCleanupPreserveKeys({
+    activeKey: params.activeKey,
+    policyPreserveKeys: policyPreserve.keys,
+  });
   const staleKeys = new Set<string>();
   const cappedKeys = new Set<string>();
   const missingKeys = new Set<string>();
@@ -349,6 +496,7 @@ async function previewStoreCleanup(params: {
       ? pruneMissingTranscriptEntries({
           store: previewStore,
           storePath: params.target.storePath,
+          preserveKeys: preserveSessionKeys,
           onPruned: (key) => {
             missingKeys.add(key);
           },
@@ -361,12 +509,12 @@ async function previewStoreCleanup(params: {
           store: previewStore,
           targetAgentId: params.target.agentId,
           activeKey: params.activeKey,
+          preserveKeys: preserveSessionKeys,
           onRetired: (key) => {
             dmScopeRetiredKeys.add(key);
           },
         })
       : 0;
-  const preserveSessionKeys = collectSessionMaintenancePreserveKeys([params.activeKey]);
   const pruned = pruneStaleEntries(previewStore, params.maintenance.pruneAfterMs, {
     log: false,
     preserveKeys: preserveSessionKeys,
@@ -410,17 +558,21 @@ async function previewStoreCleanup(params: {
     maintenance: params.maintenance,
     warnOnly: false,
     dryRun: true,
+    skipUnclassifiedArtifacts: params.syntheticOnly === true,
     onRemoveFile: (canonicalPath) => {
       budgetRemovedFilePaths.add(canonicalPath);
     },
   });
-  const unreferencedArtifacts = await pruneUnreferencedSessionArtifacts({
-    store: previewStore,
-    storePath: params.target.storePath,
-    olderThanMs: params.maintenance.pruneAfterMs,
-    dryRun: true,
-    excludeCanonicalPaths: new Set([...budgetRemovedFilePaths, ...entryCleanupArtifactPaths]),
-  });
+  const unreferencedArtifacts =
+    params.syntheticOnly === true
+      ? emptyUnreferencedArtifactSweepResult(params.maintenance.pruneAfterMs)
+      : await pruneUnreferencedSessionArtifacts({
+          store: previewStore,
+          storePath: params.target.storePath,
+          olderThanMs: params.maintenance.pruneAfterMs,
+          dryRun: true,
+          excludeCanonicalPaths: new Set([...budgetRemovedFilePaths, ...entryCleanupArtifactPaths]),
+        });
   const budgetEvictedKeys = new Set<string>();
   for (const key of Object.keys(beforeBudgetStore)) {
     if (!Object.hasOwn(previewStore, key)) {
@@ -437,6 +589,13 @@ async function previewStoreCleanup(params: {
     unreferencedArtifacts.removedFiles > 0 ||
     (diskBudget?.removedEntries ?? 0) > 0 ||
     (diskBudget?.removedFiles ?? 0) > 0;
+  const archiveCandidateCount =
+    missing +
+    dmScopeRetired +
+    pruned +
+    capped +
+    unreferencedArtifacts.removedFiles +
+    (diskBudget?.removedEntries ?? 0);
 
   const summary: SessionCleanupSummary = {
     agentId: params.target.agentId,
@@ -451,6 +610,30 @@ async function previewStoreCleanup(params: {
     capped,
     unreferencedArtifacts,
     diskBudget,
+    candidateCounts: {
+      preserve: afterPreviewCount,
+      archive_candidate: archiveCandidateCount,
+      blocked: 0,
+      quarantine_review: 0,
+    },
+    candidateActionCounts: buildCandidateActionCounts({
+      missing,
+      dmScopeRetired,
+      pruned,
+      capped,
+      diskBudgetRemovedEntries: diskBudget?.removedEntries ?? 0,
+      unreferencedArtifactFiles: unreferencedArtifacts.removedFiles,
+    }),
+    safety: {
+      syntheticOnly: params.syntheticOnly === true,
+      protectMain: params.protectMain === true,
+      protectedMainCount: policyPreserve.protectedMainCount,
+      protectedDirectCount: policyPreserve.protectedDirectCount,
+      protectedMainAgentIds: policyPreserve.protectedMainAgentIds,
+      syntheticOnlyPreservedCount: policyPreserve.syntheticOnlyPreservedCount,
+      blockedCount: 0,
+      quarantineCount: 0,
+    },
     wouldMutate,
   };
 
@@ -493,6 +676,8 @@ export async function runSessionsCleanup(params: {
       activeKey: opts.activeKey,
       fixMissing: Boolean(opts.fixMissing),
       fixDmScope: Boolean(opts.fixDmScope),
+      syntheticOnly: Boolean(opts.syntheticOnly),
+      protectMain: Boolean(opts.protectMain),
     });
     previewResults.push(result);
   }
@@ -506,6 +691,16 @@ export async function runSessionsCleanup(params: {
       const dmScopeRemovedSessionFiles = new Map<string, string | undefined>();
       let missingApplied = 0;
       let dmScopeRetiredApplied = 0;
+      const beforeStoreForPolicy = loadSessionStore(target.storePath, { skipCache: true });
+      const policyPreserve = collectCleanupPolicyPreserveKeys({
+        store: beforeStoreForPolicy,
+        syntheticOnly: opts.syntheticOnly,
+        protectMain: opts.protectMain,
+      });
+      const preserveSessionKeys = collectCleanupPreserveKeys({
+        activeKey: opts.activeKey,
+        policyPreserveKeys: policyPreserve.keys,
+      });
       await updateSessionStore(
         target.storePath,
         async (store) => {
@@ -514,6 +709,7 @@ export async function runSessionsCleanup(params: {
             missingApplied = pruneMissingTranscriptEntries({
               store,
               storePath: target.storePath,
+              preserveKeys: preserveSessionKeys,
             });
             removed += missingApplied;
           }
@@ -524,6 +720,7 @@ export async function runSessionsCleanup(params: {
               store,
               targetAgentId: target.agentId,
               activeKey: opts.activeKey,
+              preserveKeys: preserveSessionKeys,
               onRetired: (_key, entry) => {
                 rememberRemovedSessionFile(dmScopeRemovedSessionFiles, entry);
               },
@@ -534,6 +731,8 @@ export async function runSessionsCleanup(params: {
         },
         {
           activeSessionKey: opts.activeKey,
+          maintenancePreserveKeys: policyPreserve.keys,
+          maintenanceSkipUnclassifiedArtifacts: opts.syntheticOnly === true,
           maintenanceOverride: {
             mode,
           },
@@ -559,7 +758,7 @@ export async function runSessionsCleanup(params: {
       }
       const afterStore = loadSessionStore(target.storePath, { skipCache: true });
       const unreferencedArtifacts =
-        mode === "warn"
+        mode === "warn" || opts.syntheticOnly === true
           ? {
               scannedFiles: 0,
               removedFiles: 0,
@@ -592,6 +791,30 @@ export async function runSessionsCleanup(params: {
                 capped: 0,
                 unreferencedArtifacts,
                 diskBudget: null,
+                candidateCounts: {
+                  preserve: 0,
+                  archive_candidate: 0,
+                  blocked: 0,
+                  quarantine_review: 0,
+                },
+                candidateActionCounts: buildCandidateActionCounts({
+                  missing: 0,
+                  dmScopeRetired: 0,
+                  pruned: 0,
+                  capped: 0,
+                  diskBudgetRemovedEntries: 0,
+                  unreferencedArtifactFiles: unreferencedArtifacts.removedFiles,
+                }),
+                safety: {
+                  syntheticOnly: opts.syntheticOnly === true,
+                  protectMain: opts.protectMain === true,
+                  protectedMainCount: policyPreserve.protectedMainCount,
+                  protectedDirectCount: policyPreserve.protectedDirectCount,
+                  protectedMainAgentIds: policyPreserve.protectedMainAgentIds,
+                  syntheticOnlyPreservedCount: policyPreserve.syntheticOnlyPreservedCount,
+                  blockedCount: 0,
+                  quarantineCount: 0,
+                },
                 wouldMutate: false,
               }),
               dryRun: false,
@@ -614,6 +837,36 @@ export async function runSessionsCleanup(params: {
               capped: appliedReport.capped,
               unreferencedArtifacts,
               diskBudget: appliedReport.diskBudget,
+              candidateCounts: {
+                preserve: appliedReport.afterCount,
+                archive_candidate:
+                  missingApplied +
+                  dmScopeRetiredApplied +
+                  appliedReport.pruned +
+                  appliedReport.capped +
+                  unreferencedArtifacts.removedFiles +
+                  (appliedReport.diskBudget?.removedEntries ?? 0),
+                blocked: 0,
+                quarantine_review: 0,
+              },
+              candidateActionCounts: buildCandidateActionCounts({
+                missing: missingApplied,
+                dmScopeRetired: dmScopeRetiredApplied,
+                pruned: appliedReport.pruned,
+                capped: appliedReport.capped,
+                diskBudgetRemovedEntries: appliedReport.diskBudget?.removedEntries ?? 0,
+                unreferencedArtifactFiles: unreferencedArtifacts.removedFiles,
+              }),
+              safety: {
+                syntheticOnly: opts.syntheticOnly === true,
+                protectMain: opts.protectMain === true,
+                protectedMainCount: policyPreserve.protectedMainCount,
+                protectedDirectCount: policyPreserve.protectedDirectCount,
+                protectedMainAgentIds: policyPreserve.protectedMainAgentIds,
+                syntheticOnlyPreservedCount: policyPreserve.syntheticOnlyPreservedCount,
+                blockedCount: 0,
+                quarantineCount: 0,
+              },
               wouldMutate:
                 missingApplied > 0 ||
                 dmScopeRetiredApplied > 0 ||
