@@ -157,7 +157,6 @@ OPENCLAW_APP_BUNDLE_ID = ai.openclaw.client
 OPENCLAW_SHARE_BUNDLE_ID = ai.openclaw.client.share
 OPENCLAW_ACTIVITY_WIDGET_BUNDLE_ID = ai.openclaw.client.activitywidget
 OPENCLAW_WATCH_APP_BUNDLE_ID = ai.openclaw.client.watchkitapp
-OPENCLAW_WATCH_EXTENSION_BUNDLE_ID = ai.openclaw.client.watchkitapp.extension
 OPENCLAW_APP_PROFILE =
 OPENCLAW_SHARE_PROFILE =
 OPENCLAW_PUSH_TRANSPORT = relay
