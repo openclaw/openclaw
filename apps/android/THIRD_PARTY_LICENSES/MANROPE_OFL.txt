@@ -78,7 +78,7 @@ remain under this license does not apply to any document created
 using the Font Software.
 
 TERMINATION
-This license becomes null and void if any of the above conditions are
+This license  null and void if any of the above conditions are
 not met.
 
 DISCLAIMER
