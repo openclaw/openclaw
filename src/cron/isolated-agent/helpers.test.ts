@@ -5,6 +5,7 @@ import {
   pickLastDeliverablePayload,
   pickLastNonEmptyTextFromPayloads,
   pickSummaryFromPayloads,
+  resolveCronPayloadOutcome,
 } from "./helpers.js";
 
 type TextPayload = { text?: string | undefined; isError?: boolean | undefined };
@@ -147,6 +148,70 @@ describe("pickDeliverablePayloads", () => {
     ];
 
     expect(pickDeliverablePayloads(payloads)).toEqual([{ text: "last error", isError: true }]);
+  });
+});
+
+describe("resolveCronPayloadOutcome", () => {
+  it("keeps recovered read-only fetch warnings from failing cron runs", () => {
+    const finalText =
+      "Deploy is green. The live owner page and representative club claim CTA are verified.";
+
+    const outcome = resolveCronPayloadOutcome({
+      payloads: [
+        { text: finalText },
+        {
+          text: '⚠️ 🛠️ `fetch https://mypadelway.com/owner -> search "Claim your venue"` failed',
+          isError: true,
+        },
+      ],
+      finalAssistantVisibleText: finalText,
+      preferFinalAssistantVisibleText: false,
+    });
+
+    expect(outcome.hasFatalErrorPayload).toBe(false);
+    expect(outcome.embeddedRunError).toBeUndefined();
+    expect(outcome.outputText).toBe(finalText);
+    expect(outcome.deliveryPayloads).toEqual([{ text: finalText }]);
+  });
+
+  it("keeps recovered read-only search warnings from failing cron runs", () => {
+    const finalText = "The fallback source verified the deploy.";
+
+    const outcome = resolveCronPayloadOutcome({
+      payloads: [
+        { text: finalText },
+        {
+          text: '⚠️ 🛠️ `search "mypadelway owner copy"` failed',
+          isError: true,
+        },
+      ],
+      finalAssistantVisibleText: finalText,
+      preferFinalAssistantVisibleText: false,
+    });
+
+    expect(outcome.hasFatalErrorPayload).toBe(false);
+    expect(outcome.outputText).toBe(finalText);
+    expect(outcome.deliveryPayloads).toEqual([{ text: finalText }]);
+  });
+
+  it("keeps mutating tool warnings fatal after success-looking cron output", () => {
+    const finalText = "Done.";
+
+    const outcome = resolveCronPayloadOutcome({
+      payloads: [
+        { text: finalText },
+        {
+          text: "⚠️ 🛠️ `write /tmp/report.md` failed",
+          isError: true,
+        },
+      ],
+      finalAssistantVisibleText: finalText,
+      preferFinalAssistantVisibleText: false,
+    });
+
+    expect(outcome.hasFatalErrorPayload).toBe(true);
+    expect(outcome.embeddedRunError).toBe("⚠️ 🛠️ `write /tmp/report.md` failed");
+    expect(outcome.outputText).toBe("⚠️ 🛠️ `write /tmp/report.md` failed");
   });
 });
 

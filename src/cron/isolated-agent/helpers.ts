@@ -206,6 +206,14 @@ function isCronToolWarning(text: string | undefined): boolean {
   return normalizeOptionalString(text)?.startsWith("⚠️ 🛠️ ") === true;
 }
 
+function isRecoveredReadOnlyCronToolWarning(text: string | undefined): boolean {
+  const normalized = normalizeOptionalString(text);
+  if (!normalized?.startsWith("⚠️ 🛠️ ")) {
+    return false;
+  }
+  return /^⚠️ 🛠️ `(?:fetch|search)\b/i.test(normalized);
+}
+
 function isNonTerminalToolErrorWarning(payload: object | undefined): boolean {
   return Boolean(payload && getReplyPayloadMetadata(payload)?.nonTerminalToolErrorWarning);
 }
@@ -280,12 +288,20 @@ export function resolveCronPayloadOutcome(params: {
     !hasStructuredDeliveryPayloads &&
     errorPayloads.length > 0 &&
     errorPayloads.every((payload) => isCronToolWarning(payload?.text));
+  const hasRecoveredReadOnlyToolWarning =
+    !params.runLevelError &&
+    params.failureSignal?.fatalForCron !== true &&
+    normalizedFinalAssistantVisibleText !== undefined &&
+    !hasStructuredDeliveryPayloads &&
+    errorPayloads.length > 0 &&
+    errorPayloads.every((payload) => isRecoveredReadOnlyCronToolWarning(payload?.text));
   const hasFatalStructuredErrorPayload =
     hasErrorPayload &&
     !hasSuccessfulPayloadAfterLastError &&
     !hasPendingPresentationWarning &&
     !hasNonTerminalToolErrorWarning &&
-    !hasRecoveredToolWarning;
+    !hasRecoveredToolWarning &&
+    !hasRecoveredReadOnlyToolWarning;
   // Keep structured/media announce payloads intact. Only collapse purely textual
   // cron announce output to the final assistant-visible answer.
   const shouldUseFinalAssistantVisibleText =
