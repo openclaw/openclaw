@@ -62,6 +62,7 @@ let editMessageFeishu: typeof import("./send.js").editMessageFeishu;
 let getMessageFeishu: typeof import("./send.js").getMessageFeishu;
 let listFeishuThreadMessages: typeof import("./send.js").listFeishuThreadMessages;
 let resolveFeishuCardTemplate: typeof import("./send.js").resolveFeishuCardTemplate;
+let sendCardFeishu: typeof import("./send.js").sendCardFeishu;
 let sendMessageFeishu: typeof import("./send.js").sendMessageFeishu;
 
 describe("getMessageFeishu", () => {
@@ -72,6 +73,7 @@ describe("getMessageFeishu", () => {
       getMessageFeishu,
       listFeishuThreadMessages,
       resolveFeishuCardTemplate,
+      sendCardFeishu,
       sendMessageFeishu,
     } = await import("./send.js"));
   });
@@ -171,6 +173,64 @@ describe("getMessageFeishu", () => {
         ],
       },
     });
+  });
+
+  it("redacts audit-sensitive contact info from post message content before sending", async () => {
+    const create = vi.fn().mockResolvedValue({ code: 0, data: { message_id: "om_redacted" } });
+    mockCreateFeishuClient.mockReturnValue({
+      im: {
+        message: {
+          create,
+          reply: vi.fn(),
+          get: mockClientGet,
+          list: mockClientList,
+          patch: mockClientPatch,
+        },
+      },
+    });
+
+    await sendMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      to: "oc_send",
+      text: "Latest invoice came from billing@example.com; call +86 138-1234-5678 or 95530.",
+    });
+
+    const content = JSON.parse(create.mock.calls[0][0].data.content) as {
+      zh_cn: { content: Array<Array<{ text?: string }>> };
+    };
+    expect(content.zh_cn.content[0]?.[0]?.text).toBe(
+      "Latest invoice came from [email redacted]; call [phone redacted] or [phone redacted].",
+    );
+  });
+
+  it("redacts audit-sensitive contact info from interactive card content before sending", async () => {
+    const create = vi.fn().mockResolvedValue({ code: 0, data: { message_id: "om_card" } });
+    mockCreateFeishuClient.mockReturnValue({
+      im: {
+        message: {
+          create,
+          reply: vi.fn(),
+          get: mockClientGet,
+          list: mockClientList,
+          patch: mockClientPatch,
+        },
+      },
+    });
+
+    await sendCardFeishu({
+      cfg: {} as ClawdbotConfig,
+      to: "oc_send",
+      card: {
+        body: {
+          elements: [{ tag: "markdown", content: "Contact 51fapiao@ceair.com or 400-123-4567" }],
+        },
+      },
+    });
+
+    const card = JSON.parse(create.mock.calls[0][0].data.content) as {
+      body: { elements: Array<{ content?: string }> };
+    };
+    expect(card.body.elements[0]?.content).toBe("Contact [email redacted] or [phone redacted]");
   });
 
   it("extracts text content from interactive card elements", async () => {
@@ -598,6 +658,32 @@ describe("editMessageFeishu", () => {
     });
     expect(result).toEqual({ messageId: "om_card", contentType: "interactive" });
   });
+
+  it("redacts audit-sensitive contact info from edited text and cards", async () => {
+    mockClientPatch.mockResolvedValue({ code: 0 });
+
+    await editMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_text",
+      text: "Reply to alice@example.com or 13912345678",
+    });
+    await editMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_card",
+      card: { body: { elements: [{ tag: "markdown", content: "bob@example.com 95530" }] } },
+    });
+
+    const textPayload = JSON.parse(mockClientPatch.mock.calls[0][0].data.content) as {
+      zh_cn: { content: Array<Array<{ text?: string }>> };
+    };
+    const cardPayload = JSON.parse(mockClientPatch.mock.calls[1][0].data.content) as {
+      body: { elements: Array<{ content?: string }> };
+    };
+    expect(textPayload.zh_cn.content[0]?.[0]?.text).toBe(
+      "Reply to [email redacted] or [phone redacted]",
+    );
+    expect(cardPayload.body.elements[0]?.content).toBe("[email redacted] [phone redacted]");
+  });
 });
 
 describe("resolveFeishuCardTemplate", () => {
@@ -657,5 +743,31 @@ describe("buildStructuredCard", () => {
         template: "blue",
       },
     });
+  });
+
+  it("redacts audit-sensitive contact info from visible card text", () => {
+    const card = buildStructuredCard("Contact alice@example.com or 95530", {
+      header: { title: "Owner bob@example.com 13812345678" },
+      note: "cc carol@example.com 800-123-4567",
+    }) as {
+      header: { title: { content: string } };
+      body: { elements: Array<{ content?: string }> };
+    };
+
+    expect(card.header.title.content).toBe("Owner [email redacted] [phone redacted]");
+    expect(card.body.elements[0]?.content).toBe("Contact [email redacted] or [phone redacted]");
+    expect(card.body.elements[2]?.content).toBe(
+      "<font color='grey'>cc [email redacted] [phone redacted]</font>",
+    );
+  });
+});
+
+describe("buildMarkdownCard", () => {
+  it("redacts audit-sensitive contact info from markdown content", () => {
+    const card = buildMarkdownCard("Send to billing@example.com or 95530") as {
+      body: { elements: Array<{ content?: string }> };
+    };
+
+    expect(card.body.elements[0]?.content).toBe("Send to [email redacted] or [phone redacted]");
   });
 });
