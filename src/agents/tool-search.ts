@@ -37,6 +37,7 @@ const TOOL_SEARCH_CONTROL_TOOL_NAMES = new Set([
 ]);
 
 const TOOL_SCHEMA_DIRECTORY_CONTROL_TOOL_NAMES = new Set([
+  TOOL_SEARCH_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
   TOOL_CALL_RAW_TOOL_NAME,
 ]);
@@ -45,6 +46,7 @@ const DEFAULT_CODE_TIMEOUT_MS = 10_000;
 const DEFAULT_SEARCH_LIMIT = 8;
 const DEFAULT_MAX_SEARCH_LIMIT = 20;
 const MAX_REUSABLE_CATALOG_SNAPSHOTS = 256;
+const MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS = 18_000;
 
 type ToolSearchMode = "code" | "tools" | "directory";
 type CatalogSource = "openclaw" | "mcp" | "client";
@@ -1084,18 +1086,43 @@ function formatToolDirectoryEntry(entry: ReturnType<typeof compactEntry>): strin
   return `- ${entry.name}${owner}: ${description || "No description."}`;
 }
 
+function renderToolSearchCatalogDirectory(lines: string[], total: number): string {
+  const omitted = total - lines.length;
+  const footer =
+    omitted > 0
+      ? `${omitted} additional tools omitted. Use tool_search to find them, then tool_describe to load a full schema before tool_call.`
+      : "Call tool_describe with a listed tool name to load its full schema before using tool_call.";
+  return ["Available deferred-schema tools:", ...lines, "", footer].join("\n");
+}
+
 function formatToolSearchCatalogDirectory(entries: Array<ReturnType<typeof compactEntry>>): string {
   if (entries.length === 0) {
     return "Available deferred-schema tools: none.";
   }
-  return [
-    "Available deferred-schema tools:",
-    ...entries
-      .toSorted((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
-      .map(formatToolDirectoryEntry),
-    "",
-    "Call tool_describe with a listed tool name to load its full schema before using tool_call.",
-  ].join("\n");
+  const lines = entries
+    .toSorted((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
+    .map(formatToolDirectoryEntry);
+  const fullDirectory = renderToolSearchCatalogDirectory(lines, entries.length);
+  if (fullDirectory.length <= MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS) {
+    return fullDirectory;
+  }
+
+  // Keep the directory deterministic and bounded; omitted names remain
+  // discoverable through the visible tool_search control.
+  let low = 0;
+  let high = lines.length;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (
+      renderToolSearchCatalogDirectory(lines.slice(0, middle), entries.length).length <=
+      MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS
+    ) {
+      low = middle;
+    } else {
+      high = middle - 1;
+    }
+  }
+  return renderToolSearchCatalogDirectory(lines.slice(0, low), entries.length);
 }
 
 const TOOL_DIRECTORY_HYDRATION_KEYWORDS: Array<{
@@ -2120,6 +2147,7 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
 export const testing = {
   sessionCatalogs,
   reusableCatalogSnapshots,
+  maxToolSchemaDirectoryPromptChars: MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS,
   resolveToolSearchConfig,
   isToolSearchCodeModeSupported,
   setToolSearchCodeModeSupportedForTest: (value: boolean | undefined) => {

@@ -221,6 +221,7 @@ import {
   resolveToolSearchConfig,
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
+  TOOL_SEARCH_RAW_TOOL_NAME,
   type ToolSearchCatalogRef,
   type ToolSearchCatalogToolExecutor,
   type ToolSearchTargetTranscriptProjection,
@@ -1710,6 +1711,10 @@ export async function runEmbeddedAttempt(
             : `tool-search: cataloged ${toolSearch.catalogToolCount} tools behind compact prompt surface`,
       );
     }
+    const deferredDirectoryToolsCallable =
+      toolSearchControlsEnabledForRun &&
+      toolSearchConfig.mode === "directory" &&
+      toolSearch.catalogRegistered;
     prepStages.mark("bundle-tools");
     const explicitToolAllowlistSources = collectAttemptExplicitToolAllowlistSources({
       config: params.config,
@@ -1740,15 +1745,17 @@ export async function runEmbeddedAttempt(
         (toolSearchControlsEnabledForRun && toolSearchConfig.mode !== "directory"),
       catalogToolCount: toolSearch.catalogToolCount,
       controlsEnabled: toolSearchControlsEnabledForRun || codeModeControlsEnabledForRun,
+      deferredToolsCallable: deferredDirectoryToolsCallable,
       controlNames: codeModeControlsEnabledForRun
         ? [CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME]
         : toolSearchConfig.mode === "directory"
-          ? [TOOL_DESCRIBE_RAW_TOOL_NAME, TOOL_CALL_RAW_TOOL_NAME]
+          ? [TOOL_SEARCH_RAW_TOOL_NAME, TOOL_DESCRIBE_RAW_TOOL_NAME, TOOL_CALL_RAW_TOOL_NAME]
           : undefined,
       explicitAllowlistSources: explicitToolAllowlistSources,
     });
     const allowedToolNames = toolSearchRunPlan.visibleAllowedToolNames;
     const replayAllowedToolNames = toolSearchRunPlan.replayAllowedToolNames;
+    const liveAllowedToolNames = toolSearchRunPlan.liveAllowedToolNames;
     const emptyExplicitToolAllowlistError = buildEmptyExplicitToolAllowlistError({
       sources: explicitToolAllowlistSources,
       callableToolNames: toolSearchRunPlan.emptyAllowlistCallableNames,
@@ -1829,20 +1836,17 @@ export async function runEmbeddedAttempt(
           accountId: params.agentAccountId,
         })
       : undefined;
-    const toolSchemaDirectoryPrompt =
-      toolSearchControlsEnabledForRun &&
-      toolSearchConfig.mode === "directory" &&
-      toolSearch.catalogRegistered
-        ? buildToolSchemaDirectoryPrompt({
-            config: params.config,
-            runtimeConfig: params.config,
-            agentId: sessionAgentId,
-            sessionKey: sandboxSessionKey,
-            sessionId: params.sessionId,
-            runId: params.runId,
-            catalogRef: toolSearchCatalogRef,
-          })
-        : undefined;
+    const toolSchemaDirectoryPrompt = deferredDirectoryToolsCallable
+      ? buildToolSchemaDirectoryPrompt({
+          config: params.config,
+          runtimeConfig: params.config,
+          agentId: sessionAgentId,
+          sessionKey: sandboxSessionKey,
+          sessionId: params.sessionId,
+          runId: params.runId,
+          catalogRef: toolSearchCatalogRef,
+        })
+      : undefined;
 
     const defaultModelRef = resolveDefaultModelForAgent({
       cfg: params.config ?? {},
@@ -2353,30 +2357,27 @@ export async function runEmbeddedAttempt(
           sessionManager,
           settingsManager,
           resourceLoader,
-          resolveDeferredTool:
-            toolSearchControlsEnabledForRun &&
-            toolSearchConfig.mode === "directory" &&
-            toolSearch.catalogRegistered
-              ? ({ toolCall }) => {
-                  const tool = resolveToolSearchCatalogTool(
-                    {
-                      config: params.config,
-                      runtimeConfig: params.config,
-                      agentId: sessionAgentId,
-                      sessionKey: sandboxSessionKey,
-                      sessionId: params.sessionId,
-                      runId: params.runId,
-                      catalogRef: toolSearchCatalogRef,
-                      abortSignal: runAbortController.signal,
-                    },
-                    toolCall.name,
-                  );
-                  if (tool) {
-                    log.info(`tool-search: hydrated deferred directory tool ${toolCall.name}`);
-                  }
-                  return tool;
+          resolveDeferredTool: deferredDirectoryToolsCallable
+            ? ({ toolCall }) => {
+                const tool = resolveToolSearchCatalogTool(
+                  {
+                    config: params.config,
+                    runtimeConfig: params.config,
+                    agentId: sessionAgentId,
+                    sessionKey: sandboxSessionKey,
+                    sessionId: params.sessionId,
+                    runId: params.runId,
+                    catalogRef: toolSearchCatalogRef,
+                    abortSignal: runAbortController.signal,
+                  },
+                  toolCall.name,
+                );
+                if (tool) {
+                  log.info(`tool-search: hydrated deferred directory tool ${toolCall.name}`);
                 }
-              : undefined,
+                return tool;
+              }
+            : undefined,
           withSessionWriteLock: (operation) =>
             sessionLockController.withSessionWriteLock(operation),
         },
@@ -2897,7 +2898,7 @@ export async function runEmbeddedAttempt(
       );
       activeSession.agent.streamFn = wrapStreamFnTrimToolCallNames(
         activeSession.agent.streamFn,
-        allowedToolNames,
+        liveAllowedToolNames,
         {
           unknownToolThreshold: resolveUnknownToolGuardThreshold(clientToolLoopDetection),
         },

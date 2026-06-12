@@ -93,6 +93,7 @@ describe("buildToolSearchRunPlan", () => {
       "fake_plugin_tool",
       "client_pick_file",
     ]);
+    expect(plan.liveAllowedToolNames).toBe(plan.visibleAllowedToolNames);
     expect(plan.emptyAllowlistCallableNames).toEqual(["tool-search:0", "tool-search:1"]);
   });
 
@@ -159,7 +160,11 @@ describe("buildToolSearchRunPlan", () => {
 
   it("keeps uncataloged directory-mode client tools visible", () => {
     const plan = buildToolSearchRunPlan({
-      visibleTools: [{ name: "tool_describe" }, { name: "tool_call" }] as never,
+      visibleTools: [
+        { name: "tool_search" },
+        { name: "tool_describe" },
+        { name: "tool_call" },
+      ] as never,
       uncompactedTools: [{ name: "fake_plugin_tool" }] as never,
       clientTools: [
         {
@@ -173,11 +178,20 @@ describe("buildToolSearchRunPlan", () => {
       clientToolsCataloged: false,
       catalogToolCount: 1,
       controlsEnabled: true,
-      controlNames: ["tool_describe", "tool_call"],
+      deferredToolsCallable: true,
+      controlNames: ["tool_search", "tool_describe", "tool_call"],
       explicitAllowlistSources: [{ entries: ["missing_tool"] }],
     });
 
     expect([...plan.visibleAllowedToolNames]).toEqual([
+      "tool_search",
+      "tool_describe",
+      "tool_call",
+      "client_pick_file",
+    ]);
+    expect([...plan.liveAllowedToolNames]).toEqual([
+      "fake_plugin_tool",
+      "tool_search",
       "tool_describe",
       "tool_call",
       "client_pick_file",

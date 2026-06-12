@@ -24,6 +24,7 @@ type CollectAllowedToolNamesParams = Parameters<typeof collectAllowedToolNames>[
 export type ToolSearchRunPlan = {
   visibleAllowedToolNames: Set<string>;
   replayAllowedToolNames: Set<string>;
+  liveAllowedToolNames: Set<string>;
   autoAddedControlNames?: Set<string>;
   emptyAllowlistCallableNames: string[];
 };
@@ -101,6 +102,7 @@ export function buildToolSearchRunPlan(params: {
   clientToolsCataloged: boolean;
   catalogToolCount: number;
   controlsEnabled: boolean;
+  deferredToolsCallable?: boolean;
   controlNames?: readonly string[];
   explicitAllowlistSources: Array<{ entries: string[] }>;
 }): ToolSearchRunPlan {
@@ -121,6 +123,21 @@ export function buildToolSearchRunPlan(params: {
       }
     }
   }
+  const liveAllowedToolNames = params.deferredToolsCallable
+    ? collectAllowedToolNames({ tools: params.uncompactedTools })
+    : visibleAllowedToolNames;
+  if (params.deferredToolsCallable) {
+    // Deferred resolution can hydrate catalog tools, but Tool Search controls
+    // excluded from the visible surface are not catalog entries.
+    for (const controlName of TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES) {
+      if (!visibleAllowedToolNames.has(controlName)) {
+        liveAllowedToolNames.delete(controlName);
+      }
+    }
+    for (const visibleName of visibleAllowedToolNames) {
+      liveAllowedToolNames.add(visibleName);
+    }
+  }
   const autoAddedControlNames = buildAutoAddedToolSearchControlNamesForAllowlistCheck({
     toolSearchControlsEnabled: params.controlsEnabled,
     explicitAllowlistSources: params.explicitAllowlistSources,
@@ -135,6 +152,7 @@ export function buildToolSearchRunPlan(params: {
   return {
     visibleAllowedToolNames,
     replayAllowedToolNames,
+    liveAllowedToolNames,
     autoAddedControlNames,
     emptyAllowlistCallableNames: [
       ...buildCallableToolNamesForEmptyAllowlistCheck({

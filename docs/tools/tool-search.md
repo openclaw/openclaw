@@ -64,16 +64,19 @@ normal policy, approval, hook, logging, and result handling still apply.
 - `code`: exposes `tool_search_code`, the default compact JavaScript bridge.
 - `tools`: exposes `tool_search`, `tool_describe`, and `tool_call` as plain
   structured tools for providers that should not receive code.
-- `directory`: exposes `tool_describe` and `tool_call` plus a compact prompt
-  directory of available tool names and descriptions for providers that should
-  see tool names without every full schema.
+- `directory`: exposes `tool_search`, `tool_describe`, and `tool_call` plus a
+  bounded prompt directory of available tool names and descriptions for
+  providers that should see tool names without every full schema. OpenClaw can
+  also expose a small bounded set of likely or required tool schemas directly
+  for the current turn.
 
-All modes use the same catalog and execution path. The only difference is the
-shape the model sees. If the current runtime cannot launch the isolated Node
-code-mode child process, the default `code` mode falls back to `tools` before
-catalog compaction. In `directory` mode, client-provided tools stay directly
-visible for the current run while OpenClaw tools, plugin tools, and MCP tools
-can be compacted behind the directory catalog.
+All modes use the same policy-filtered catalog and normal OpenClaw execution
+path. If the current runtime cannot launch the isolated Node code-mode child
+process, the default `code` mode falls back to `tools` before catalog
+compaction. In `directory` mode, client-provided tools stay directly visible
+for the current run while OpenClaw tools, plugin tools, and MCP tools can be
+compacted behind the directory catalog. A direct call to an exact hidden
+directory name is hydrated from that same authorized catalog before execution.
 
 All modes are experimental. Prefer direct tool exposure for small OpenClaw tool
 catalogs, and prefer the Codex-native stable surfaces for Codex harness runs.
@@ -95,9 +98,10 @@ Tool Search changes the shape:
   contract
 - Tool Search tools mode: the model sees three compact structured fallback
   tools
-- Tool Search directory mode: the model sees a compact directory plus describe
-  and call controls
-- during the turn: the model loads only the tool schemas it actually needs
+- Tool Search directory mode: the model sees a bounded directory plus
+  search/describe/call controls and a small bounded set of likely or required
+  schemas
+- during the turn: the model can load remaining schemas as needed
 
 Direct tool exposure is still the right default for small catalogs. Tool Search
 is best when one run can see many tools, especially from MCP servers or
@@ -141,8 +145,15 @@ The structured fallback mode exposes the same operations as tools:
 
 Directory mode exposes:
 
+- `tool_search`
 - `tool_describe`
 - `tool_call`
+
+It also keeps client-provided tools directly visible and may expose a small
+bounded set of likely or required catalog tool schemas directly for the current
+turn. If the bounded directory omits entries, use `tool_search` to find them. If
+the model requests an exact hidden directory tool name directly, OpenClaw
+hydrates it from the authorized catalog before normal execution.
 
 ## Runtime boundary
 

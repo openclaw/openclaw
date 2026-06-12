@@ -289,6 +289,7 @@ describe("Tool Search", () => {
   });
 
   it("can expose a compact tool directory while deferring full schemas", async () => {
+    const searchTool = fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "search");
     const describeTool = fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "describe");
     const callTool = fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call");
     const target = pluginTool(
@@ -305,12 +306,13 @@ describe("Tool Search", () => {
     };
 
     const compacted = applyToolSchemaDirectoryCatalog({
-      tools: [describeTool, callTool, target],
+      tools: [searchTool, describeTool, callTool, target],
       config: { tools: { toolSearch: { enabled: true, mode: "directory" } } } as never,
       sessionId: "session-schema-directory",
     });
 
     expect(compacted.tools.map((tool) => tool.name)).toEqual([
+      TOOL_SEARCH_RAW_TOOL_NAME,
       TOOL_DESCRIBE_RAW_TOOL_NAME,
       TOOL_CALL_RAW_TOOL_NAME,
     ]);
@@ -352,6 +354,38 @@ describe("Tool Search", () => {
       undefined,
       undefined,
     );
+  });
+
+  it("bounds the directory prompt and keeps omitted tools searchable", () => {
+    const sessionId = "session-bounded-schema-directory";
+    const catalogTools = Array.from({ length: 200 }, (_, index) =>
+      pluginTool(
+        `fake_directory_tool_${String(index).padStart(3, "0")}`,
+        `Directory target ${index} ${"description ".repeat(30)}`,
+      ),
+    );
+    applyToolSchemaDirectoryCatalog({
+      tools: [
+        fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "search"),
+        fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "describe"),
+        fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call"),
+        ...catalogTools,
+      ],
+      config: { tools: { toolSearch: { enabled: true, mode: "directory" } } } as never,
+      sessionId,
+    });
+
+    const directory = buildToolSchemaDirectoryPrompt({
+      sessionId,
+      config: { tools: { toolSearch: { enabled: true, mode: "directory" } } } as never,
+    });
+
+    expect(directory.length).toBeLessThanOrEqual(testing.maxToolSchemaDirectoryPromptChars);
+    expect(directory).toContain("- fake_directory_tool_000");
+    expect(directory).not.toContain("- fake_directory_tool_199");
+    expect(directory).toContain("additional tools omitted");
+    expect(directory).toContain("Use tool_search to find them");
+    clearToolSearchCatalog({ sessionId });
   });
 
   it("resolves exact deferred directory tools without fuzzy lookup", () => {
