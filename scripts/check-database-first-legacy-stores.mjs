@@ -4,13 +4,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import ts from "typescript";
-import {
-  collectTypeScriptFilesFromRoots,
-  resolveRepoRoot,
-  runAsScript,
-  toLine,
-  unwrapExpression,
-} from "./lib/ts-guard-utils.mjs";
+import { resolveRepoRoot, runAsScript, toLine, unwrapExpression } from "./lib/ts-guard-utils.mjs";
 
 export const databaseFirstLegacyStoreSourceRoots = ["src", "extensions", "packages"];
 
@@ -41,6 +35,8 @@ const helperWriteCallees = new Set([
   "writeJsonSync",
   "writeTextAtomic",
 ]);
+
+const helperWriteModulePattern = /(?:^|\/)(?:fs-safe|json-files|replace-file)(?:\.[cm]?[jt]s)?$/u;
 
 const bridgeMarkerPattern = /\btranscriptLocator\b|sqlite-transcript:\/\//u;
 
@@ -83,6 +79,38 @@ const allowedCurrentLegacyWritePaths = new Set([
   "src/infra/restart.ts",
 ]);
 
+const sourceFileExtensions = new Set([".cjs", ".cts", ".js", ".mjs", ".mts", ".ts", ".tsx"]);
+
+const sourceTestSuffixes = [
+  ".e2e-harness.js",
+  ".e2e-harness.mjs",
+  ".e2e-harness.ts",
+  ".test-fixtures.js",
+  ".test-fixtures.mjs",
+  ".test-fixtures.ts",
+  ".test-helper.js",
+  ".test-helper.mjs",
+  ".test-helper.ts",
+  ".test-helpers.js",
+  ".test-helpers.mjs",
+  ".test-helpers.ts",
+  ".test-harness.js",
+  ".test-harness.mjs",
+  ".test-harness.ts",
+  ".test-mocks.js",
+  ".test-mocks.mjs",
+  ".test-mocks.ts",
+  ".test-support.js",
+  ".test-support.mjs",
+  ".test-support.ts",
+  ".test-utils.js",
+  ".test-utils.mjs",
+  ".test-utils.ts",
+  ".test.js",
+  ".test.mjs",
+  ".test.ts",
+];
+
 function isAllowedLegacyOwnerPath(relativePath) {
   return (
     allowedFixturePaths.has(relativePath) ||
@@ -95,15 +123,58 @@ function isAllowedLegacyOwnerPath(relativePath) {
   );
 }
 
-function nodeTextContainsLegacyStore(sourceFile, node) {
-  return legacyCandidateTexts(sourceFile, node).some((text) =>
-    legacyStorePatterns.some((pattern) => pattern.test(text)),
-  );
+function isSourceFile(filePath) {
+  return sourceFileExtensions.has(path.extname(filePath));
+}
+
+function isTestLikeSourceFile(filePath) {
+  return sourceTestSuffixes.some((suffix) => filePath.endsWith(suffix));
+}
+
+async function collectSourceFiles(targetPath) {
+  let stat;
+  try {
+    stat = await fs.stat(targetPath);
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
+
+  if (stat.isFile()) {
+    return isSourceFile(targetPath) && !isTestLikeSourceFile(targetPath) ? [targetPath] : [];
+  }
+
+  const entries = await fs.readdir(targetPath, { withFileTypes: true });
+  const files = [];
+  for (const entry of entries) {
+    if (entry.name === "node_modules") {
+      continue;
+    }
+    const entryPath = path.join(targetPath, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...(await collectSourceFiles(entryPath)));
+      continue;
+    }
+    if (entry.isFile() && isSourceFile(entryPath) && !isTestLikeSourceFile(entryPath)) {
+      files.push(entryPath);
+    }
+  }
+  return files;
+}
+
+export async function collectDatabaseFirstLegacyStoreSourceFiles(sourceRoots) {
+  return (await Promise.all(sourceRoots.map((root) => collectSourceFiles(root)))).flat();
 }
 
 function importSource(node) {
   const moduleSpecifier = node.moduleSpecifier;
   return ts.isStringLiteral(moduleSpecifier) ? moduleSpecifier.text : "";
+}
+
+function isHelperWriteModuleSource(source) {
+  return source === "openclaw/plugin-sdk/security-runtime" || helperWriteModulePattern.test(source);
 }
 
 function collectCreateRequireBindings(sourceFile) {
@@ -183,6 +254,11 @@ function collectFsBindings(sourceFile) {
       if (fsModuleSpecifiers.has(source)) {
         fsModuleBindings.add(namedBindings.name.text);
       }
+      if (isHelperWriteModuleSource(source)) {
+        for (const helperName of helperWriteCallees) {
+          fsWriteAliases.set(`${namedBindings.name.text}.${helperName}`, helperName);
+        }
+      }
       continue;
     }
     for (const element of namedBindings.elements) {
@@ -193,7 +269,7 @@ function collectFsBindings(sourceFile) {
       if (fsModuleSpecifiers.has(source) && legacyWriteCallees.has(importedName)) {
         fsWriteAliases.set(element.name.text, importedName);
       }
-      if (helperWriteCallees.has(importedName)) {
+      if (isHelperWriteModuleSource(source) && helperWriteCallees.has(importedName)) {
         fsWriteAliases.set(element.name.text, importedName);
       }
     }
@@ -202,10 +278,57 @@ function collectFsBindings(sourceFile) {
   return { fsModuleBindings, fsWriteAliases };
 }
 
+function templateCandidateText(current) {
+  let text = current.head.text;
+  for (const span of current.templateSpans) {
+    text += `*${span.literal.text}`;
+  }
+  return text || "*";
+}
+
 function legacyCandidateTexts(sourceFile, node) {
   const candidates = [node.getText(sourceFile)];
   const stringSegments = [];
+
+  function binaryExpressionCandidateText(current) {
+    if (current.operatorToken.kind !== ts.SyntaxKind.PlusToken) {
+      return null;
+    }
+    const left = pathSegmentCandidateText(current.left);
+    const right = pathSegmentCandidateText(current.right);
+    if (!left && !right) {
+      return null;
+    }
+    return `${left ?? "*"}${right ?? "*"}`;
+  }
+
+  function pathSegmentCandidateText(current) {
+    const unwrapped = unwrapExpression(current);
+    if (ts.isStringLiteralLike(unwrapped)) {
+      return unwrapped.text;
+    }
+    if (ts.isTemplateExpression(unwrapped)) {
+      return templateCandidateText(unwrapped);
+    }
+    if (ts.isBinaryExpression(unwrapped)) {
+      return binaryExpressionCandidateText(unwrapped);
+    }
+    return "*";
+  }
+
+  function maybeAddCallPathCandidate(current) {
+    if (!ts.isCallExpression(current) || current.arguments.length < 2) {
+      return;
+    }
+    const segments = current.arguments.map((argument) => pathSegmentCandidateText(argument));
+    if (!segments.some((segment) => segment !== "*")) {
+      return;
+    }
+    candidates.push(segments.join("/"));
+  }
+
   function visit(current) {
+    maybeAddCallPathCandidate(current);
     if (ts.isStringLiteralLike(current)) {
       stringSegments.push(current.text);
     }
@@ -237,6 +360,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
   const requireShadowScopes = [new Set()];
   const createRequireShadowScopes = [new Set()];
   const legacyPathScopes = [new Map()];
+  const literalTextScopes = [new Map()];
   const legacyObjectPropertyScopes = [new Map()];
   const wrapperFunctionScopes = [new Map()];
   const conditionalExecutionScopes = [false];
@@ -254,6 +378,10 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
 
   function currentLegacyPathScope() {
     return legacyPathScopes[legacyPathScopes.length - 1];
+  }
+
+  function currentLiteralTextScope() {
+    return literalTextScopes[literalTextScopes.length - 1];
   }
 
   function currentFsWriteAliasScope() {
@@ -416,6 +544,141 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
     return false;
   }
 
+  function resolveLiteralTextIdentifier(name) {
+    for (let index = literalTextScopes.length - 1; index >= 0; index--) {
+      const scope = literalTextScopes[index];
+      if (scope.has(name)) {
+        return scope.get(name) ?? [];
+      }
+    }
+    return [];
+  }
+
+  function literalTextWriteScope(name) {
+    for (let index = literalTextScopes.length - 1; index >= 0; index--) {
+      const scope = literalTextScopes[index];
+      if (scope.has(name)) {
+        return scope;
+      }
+    }
+    return currentLiteralTextScope();
+  }
+
+  function expressionLiteralCandidateTexts(node) {
+    const candidates = legacyCandidateTexts(sourceFile, node);
+    const segmentOptions = [];
+
+    function combineSegmentOptions(left, right) {
+      const joined = left.flatMap((leftOption) =>
+        right.map((rightOption) => `${leftOption}${rightOption}`),
+      );
+      return joined.length > 32 ? joined.slice(0, 32) : joined;
+    }
+
+    function expressionSegmentOptions(current) {
+      const unwrapped = unwrapExpression(current);
+      if (ts.isStringLiteralLike(unwrapped)) {
+        return [unwrapped.text];
+      }
+      if (ts.isTemplateExpression(unwrapped)) {
+        return [templateCandidateText(unwrapped)];
+      }
+      if (
+        ts.isBinaryExpression(unwrapped) &&
+        unwrapped.operatorToken.kind === ts.SyntaxKind.PlusToken
+      ) {
+        return combineSegmentOptions(
+          expressionSegmentOptions(unwrapped.left),
+          expressionSegmentOptions(unwrapped.right),
+        );
+      }
+      if (ts.isIdentifier(unwrapped)) {
+        const texts = resolveLiteralTextIdentifier(unwrapped.text);
+        return texts.length > 0 ? texts : ["*"];
+      }
+      return ["*"];
+    }
+
+    function maybeAddCallLiteralCandidate(current) {
+      if (!ts.isCallExpression(current) || current.arguments.length < 2) {
+        return;
+      }
+      const argumentOptions = current.arguments.map((argument) =>
+        expressionSegmentOptions(argument),
+      );
+      if (!argumentOptions.some((options) => options.some((option) => option !== "*"))) {
+        return;
+      }
+      let joined = [""];
+      for (const options of argumentOptions) {
+        joined = joined.flatMap((prefix) =>
+          options.map((option) => (prefix.length === 0 ? option : `${prefix}/${option}`)),
+        );
+        if (joined.length > 32) {
+          joined = joined.slice(0, 32);
+        }
+      }
+      candidates.push(...joined);
+    }
+
+    function visitCandidate(current) {
+      maybeAddCallLiteralCandidate(current);
+      if (ts.isStringLiteralLike(current)) {
+        segmentOptions.push([current.text]);
+        return;
+      }
+      if (ts.isIdentifier(current)) {
+        const texts = resolveLiteralTextIdentifier(current.text);
+        if (texts.length > 0) {
+          segmentOptions.push(texts);
+        }
+      }
+      ts.forEachChild(current, visitCandidate);
+    }
+    visitCandidate(node);
+    if (segmentOptions.length > 1) {
+      let joined = [""];
+      for (const options of segmentOptions) {
+        joined = joined.flatMap((prefix) =>
+          options.map((option) => (prefix.length === 0 ? option : `${prefix}/${option}`)),
+        );
+        if (joined.length > 32) {
+          joined = joined.slice(0, 32);
+        }
+      }
+      candidates.push(...joined);
+    }
+    return candidates;
+  }
+
+  function expressionTextContainsLegacyStore(node) {
+    return expressionLiteralCandidateTexts(node).some((text) =>
+      legacyStorePatterns.some((pattern) => pattern.test(text)),
+    );
+  }
+
+  function literalTextsFromExpression(expression) {
+    const unwrapped = unwrapExpression(expression);
+    if (ts.isStringLiteralLike(unwrapped)) {
+      return [unwrapped.text];
+    }
+    return [];
+  }
+
+  function mergeConditionalLiteralTexts(previous, next) {
+    if (next.length === 0) {
+      return previous ?? null;
+    }
+    return [...new Set([...(previous ?? []), ...next])];
+  }
+
+  function mergeExhaustiveLiteralTexts(left, right) {
+    if (left.length === 0 && right.length === 0) {
+      return null;
+    }
+    return [...new Set([...left, ...right])];
+  }
+
   function resolveLegacyObjectProperty(objectName, propertyName) {
     return lookupLegacyObjectProperty(objectName, propertyName) === true;
   }
@@ -531,7 +794,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
   }
 
   function expressionContainsLegacyStore(node) {
-    if (nodeTextContainsLegacyStore(sourceFile, node)) {
+    if (expressionTextContainsLegacyStore(node)) {
       return true;
     }
     let found = false;
@@ -567,6 +830,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
     requireShadowScopes.push(new Set());
     createRequireShadowScopes.push(new Set());
     legacyPathScopes.push(new Map());
+    literalTextScopes.push(new Map());
     legacyObjectPropertyScopes.push(new Map());
     wrapperFunctionScopes.push(new Map());
     conditionalExecutionScopes.push(
@@ -579,6 +843,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
     conditionalExecutionScopes.pop();
     wrapperFunctionScopes.pop();
     legacyObjectPropertyScopes.pop();
+    literalTextScopes.pop();
     legacyPathScopes.pop();
     fsModulePropertyScopes.pop();
     fsModuleBindingScopes.pop();
@@ -640,12 +905,14 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
     requireShadowScopes.push(new Set());
     createRequireShadowScopes.push(new Set());
     legacyPathScopes.push(new Map());
+    literalTextScopes.push(new Map());
     legacyObjectPropertyScopes.push(new Map());
     wrapperFunctionScopes.push(new Map());
     conditionalExecutionScopes.push(false);
     node.parameters.forEach((parameter, index) => {
       for (const name of bindingPatternNames(parameter.name)) {
         currentLegacyPathScope().set(name, false);
+        currentLiteralTextScope().set(name, null);
         currentWrapperFunctionScope().set(name, null);
       }
       markFsWriteAliasShadows(parameter.name);
@@ -662,6 +929,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
     conditionalExecutionScopes.pop();
     wrapperFunctionScopes.pop();
     legacyObjectPropertyScopes.pop();
+    literalTextScopes.pop();
     legacyPathScopes.pop();
     fsModulePropertyScopes.pop();
     fsModuleBindingScopes.pop();
@@ -748,6 +1016,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
       if (resolveFsWriteAlias(bindingName)) {
         currentFsWriteAliasScope().set(bindingName, null);
       }
+      shadowVisibleFsWriteObjectAliases(bindingName);
     }
   }
 
@@ -1072,6 +1341,24 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
     return args.slice(0, 1);
   }
 
+  function openFlagsMayWrite(flags) {
+    if (!flags) {
+      return false;
+    }
+    const unwrapped = unwrapExpression(flags);
+    if (ts.isStringLiteralLike(unwrapped)) {
+      return /[wa+]/u.test(unwrapped.text);
+    }
+    return true;
+  }
+
+  function fsWriteCallMayWrite(name, args) {
+    if (name === "open" || name === "openSync") {
+      return openFlagsMayWrite(args[1]);
+    }
+    return true;
+  }
+
   function propertyNameText(name) {
     return ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNumericLiteral(name)
       ? name.text
@@ -1140,13 +1427,14 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
     return `${index}:${name}`;
   }
 
-  function recordBranchIdentifierAssignment(index, name, value, initializer) {
+  function recordBranchIdentifierAssignment(index, name, value, initializer, literalTexts) {
     const effects = currentBranchEffectScope();
     if (!effects) {
       return;
     }
     effects.identifierAssignments.set(branchIdentifierAssignmentKey(index, name), {
       index,
+      literalTexts,
       name,
       value,
       objectProperties: legacyObjectPropertiesFromAssignment(name, initializer),
@@ -1264,14 +1552,23 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
       );
       if (applyToTargetScopes) {
         const pathScope = legacyPathScopes[index];
+        const literalScope = literalTextScopes[index];
         const propertyScope = legacyObjectPropertyScopes[index];
         pathScope.set(name, mergedValue);
+        literalScope.set(
+          name,
+          mergeExhaustiveLiteralTexts(thenAssignment.literalTexts, elseAssignment.literalTexts),
+        );
         clearLegacyObjectProperties(propertyScope, name);
         for (const [propertyKey, value] of mergedProperties) {
           propertyScope.set(propertyKey, value);
         }
       }
       currentLegacyPathScope().set(name, mergedValue);
+      currentLiteralTextScope().set(
+        name,
+        mergeExhaustiveLiteralTexts(thenAssignment.literalTexts, elseAssignment.literalTexts),
+      );
       clearLegacyObjectProperties(currentLegacyObjectPropertyScope(), name);
       for (const [propertyKey, value] of mergedProperties) {
         currentLegacyObjectPropertyScope().set(propertyKey, value);
@@ -1279,6 +1576,9 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
       if (parentEffect) {
         parentEffect.identifierAssignments.set(branchIdentifierAssignmentKey(index, name), {
           index,
+          literalTexts:
+            mergeExhaustiveLiteralTexts(thenAssignment.literalTexts, elseAssignment.literalTexts) ??
+            [],
           name,
           value: mergedValue,
           objectProperties: mergedProperties,
@@ -2580,7 +2880,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
       markParameterAssignment(current);
       if (ts.isCallExpression(current)) {
         const fsWriteName = legacyWrapperFsWriteName(current.expression);
-        if (fsWriteName) {
+        if (fsWriteName && fsWriteCallMayWrite(fsWriteName, [...current.arguments])) {
           for (const argument of pathArgumentsForFsWrite(fsWriteName, [...current.arguments])) {
             for (const use of collectPathPropertyUses(
               argument,
@@ -2966,6 +3266,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
     requireShadowScopes.push(new Set());
     createRequireShadowScopes.push(new Set());
     legacyPathScopes.push(new Map());
+    literalTextScopes.push(new Map());
     legacyObjectPropertyScopes.push(new Map());
     wrapperFunctionScopes.push(new Map());
     branchEffectScopes.push(branchEffects);
@@ -2973,6 +3274,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
     branchEffectScopes.pop();
     wrapperFunctionScopes.pop();
     legacyObjectPropertyScopes.pop();
+    literalTextScopes.pop();
     legacyPathScopes.pop();
     fsModulePropertyScopes.pop();
     fsModuleBindingScopes.pop();
@@ -3018,6 +3320,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
       requireShadowScopes.push(new Set());
       createRequireShadowScopes.push(new Set());
       legacyPathScopes.push(new Map());
+      literalTextScopes.push(new Map());
       legacyObjectPropertyScopes.push(new Map());
       wrapperFunctionScopes.push(new Map());
       conditionalExecutionScopes.push(false);
@@ -3034,6 +3337,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
       conditionalExecutionScopes.pop();
       wrapperFunctionScopes.pop();
       legacyObjectPropertyScopes.pop();
+      literalTextScopes.pop();
       legacyPathScopes.pop();
       fsModulePropertyScopes.pop();
       fsModuleBindingScopes.pop();
@@ -3051,6 +3355,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
       requireShadowScopes.push(new Set());
       createRequireShadowScopes.push(new Set());
       legacyPathScopes.push(new Map());
+      literalTextScopes.push(new Map());
       legacyObjectPropertyScopes.push(new Map());
       wrapperFunctionScopes.push(new Map());
       conditionalExecutionScopes.push(true);
@@ -3059,6 +3364,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
       conditionalExecutionScopes.pop();
       wrapperFunctionScopes.pop();
       legacyObjectPropertyScopes.pop();
+      literalTextScopes.pop();
       legacyPathScopes.pop();
       fsModulePropertyScopes.pop();
       fsModuleBindingScopes.pop();
@@ -3114,6 +3420,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
         markFsWriteAliasShadows(node.name);
         currentFsWriteAliasScope().set(node.name.text, legacyFsWriteName(node.initializer));
         refreshCurrentWrapperFunctionAliases();
+        currentLiteralTextScope().set(node.name.text, literalTextsFromExpression(node.initializer));
         currentLegacyPathScope().set(
           node.name.text,
           expressionContainsLegacyStore(node.initializer),
@@ -3134,6 +3441,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
         currentFsModuleBindingScope().set(node.name.text, false);
         currentFsWriteAliasScope().set(node.name.text, null);
         currentLegacyPathScope().set(node.name.text, false);
+        currentLiteralTextScope().set(node.name.text, null);
         currentWrapperFunctionScope().set(node.name.text, null);
         markFsWriteAliasShadows(node.name);
         markFsModuleBindingShadows(node.name);
@@ -3161,6 +3469,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
       refreshCurrentWrapperFunctionAliases();
       for (const name of bindingPatternNames(node.name)) {
         currentLegacyPathScope().set(name, false);
+        currentLiteralTextScope().set(name, null);
         currentWrapperFunctionScope().set(name, null);
       }
       if (
@@ -3180,6 +3489,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
         node.left.text,
       );
       const nextPathValue = expressionContainsLegacyStore(node.right);
+      const nextLiteralTexts = literalTextsFromExpression(node.right);
       const nextFsModuleValue = isFsBindingExpression(node.right);
       const nextFsWriteAlias = legacyFsWriteName(node.right);
       const conditionalWrite =
@@ -3188,8 +3498,21 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
         node.left.text,
         conditionalWrite ? pathScope.get(node.left.text) === true || nextPathValue : nextPathValue,
       );
+      const literalScope = literalTextWriteScope(node.left.text);
+      literalScope.set(
+        node.left.text,
+        conditionalWrite
+          ? mergeConditionalLiteralTexts(literalScope.get(node.left.text), nextLiteralTexts)
+          : nextLiteralTexts,
+      );
       if (conditionalWrite) {
-        recordBranchIdentifierAssignment(index, node.left.text, nextPathValue, node.right);
+        recordBranchIdentifierAssignment(
+          index,
+          node.left.text,
+          nextPathValue,
+          node.right,
+          nextLiteralTexts,
+        );
         const nextPropertyScope = new Map();
         markLegacyObjectProperties(node.left.text, node.right, nextPropertyScope);
         for (const [key, value] of nextPropertyScope) {
@@ -3315,6 +3638,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
       const fsWriteName = legacyFsWriteName(node.expression);
       if (
         fsWriteName &&
+        fsWriteCallMayWrite(fsWriteName, [...node.arguments]) &&
         pathArgumentsForFsWrite(fsWriteName, [...node.arguments]).some((argument) =>
           pathArgumentContainsLegacyStore(argument),
         )
@@ -3364,16 +3688,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
 export async function main() {
   const repoRoot = resolveRepoRoot(import.meta.url);
   const sourceRoots = databaseFirstLegacyStoreSourceRoots.map((root) => path.join(repoRoot, root));
-  const files = await collectTypeScriptFilesFromRoots(sourceRoots, {
-    extraTestSuffixes: [
-      ".e2e-harness.ts",
-      ".test-fixtures.ts",
-      ".test-helper.ts",
-      ".test-helpers.ts",
-      ".test-mocks.ts",
-      ".test-support.ts",
-    ],
-  });
+  const files = await collectDatabaseFirstLegacyStoreSourceFiles(sourceRoots);
   const violations = [];
 
   for (const filePath of files) {

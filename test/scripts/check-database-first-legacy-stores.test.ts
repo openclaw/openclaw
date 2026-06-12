@@ -1,8 +1,34 @@
 // Database-first legacy-store guard tests cover runtime state-file regressions.
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { collectDatabaseFirstLegacyStoreViolations } from "../../scripts/check-database-first-legacy-stores.mjs";
+import {
+  collectDatabaseFirstLegacyStoreSourceFiles,
+  collectDatabaseFirstLegacyStoreViolations,
+} from "../../scripts/check-database-first-legacy-stores.mjs";
 
 describe("check-database-first-legacy-stores", () => {
+  it("collects JavaScript runtime source files", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-db-first-guard-"));
+    try {
+      await fs.mkdir(path.join(root, "src"), { recursive: true });
+      await fs.writeFile(path.join(root, "src", "runtime.js"), "export {};\n");
+      await fs.writeFile(path.join(root, "src", "worker.mjs"), "export {};\n");
+      await fs.writeFile(path.join(root, "src", "types.ts"), "export {};\n");
+      await fs.writeFile(path.join(root, "src", "runtime.test.js"), "export {};\n");
+
+      const files = await collectDatabaseFirstLegacyStoreSourceFiles([path.join(root, "src")]);
+      const relativeFiles = files
+        .map((file) => path.relative(root, file).replaceAll(path.sep, "/"))
+        .toSorted();
+
+      expect(relativeFiles).toEqual(["src/runtime.js", "src/types.ts", "src/worker.mjs"]);
+    } finally {
+      await fs.rm(root, { force: true, recursive: true });
+    }
+  });
+
   it("flags runtime writes to legacy sessions.json stores", () => {
     const violations = collectDatabaseFirstLegacyStoreViolations(
       `
@@ -65,19 +91,176 @@ describe("check-database-first-legacy-stores", () => {
     ]);
   });
 
+  it("flags legacy paths with dynamic agent id segments", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        import path from "node:path";
+        await fs.writeFile(path.join(stateDir, "agents", agentId, "agent", "auth.json"), "{}\\n");
+      `,
+      "src/runtime/dynamic-agent-auth.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 4 }]);
+  });
+
+  it("flags legacy paths with dynamic segments and constant filenames", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        import path from "node:path";
+        const AUTH_FILE = "auth.json";
+        await fs.writeFile(path.join(stateDir, "agents", agentId, "agent", AUTH_FILE), "{}\\n");
+      `,
+      "src/runtime/dynamic-agent-auth-constant.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 5 }]);
+  });
+
+  it("flags legacy JSONL paths with dynamic template filenames", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        import path from "node:path";
+        await fs.appendFile(path.join(stateDir, "cron", "runs", \`\${runId}.jsonl\`), "{}\\n");
+      `,
+      "src/runtime/dynamic-cron-run.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 4 }]);
+  });
+
   it("flags legacy paths assembled from filename constants", () => {
     const violations = collectDatabaseFirstLegacyStoreViolations(
       `
         import { promises as fs } from "node:fs";
         import path from "node:path";
         const STORE_FILE = "sessions.json";
+        const JOBS_FILE = "jobs.json";
+        const SQLITE_FILE = "state.sqlite";
         const storePath = path.join(dir, STORE_FILE);
         await fs.writeFile(storePath, "{}\\n", "utf8");
+        await fs.writeFile(path.join(stateDir, "cron", JOBS_FILE), "{}\\n");
+        await fs.writeFile(path.join(stateDir, "plugin-state", SQLITE_FILE), "");
       `,
       "src/runtime/constant-session-store.ts",
     );
 
-    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 6 }]);
+    expect(violations).toEqual([
+      { kind: "legacy store filesystem write", line: 8 },
+      { kind: "legacy store filesystem write", line: 9 },
+      { kind: "legacy store filesystem write", line: 10 },
+    ]);
+  });
+
+  it("does not leak conditional literal path constants", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        import path from "node:path";
+        const JOBS_FILE = "current.json";
+        if (debug) {
+          const JOBS_FILE = "jobs.json";
+          console.log(JOBS_FILE);
+        }
+        await fs.writeFile(path.join(stateDir, "cron", JOBS_FILE), "{}\\n");
+      `,
+      "src/runtime/conditional-literal-shadow.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("keeps conditional literal reassignment candidates", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        import path from "node:path";
+        let JOBS_FILE = "current.json";
+        if (debug) {
+          JOBS_FILE = "jobs.json";
+        }
+        await fs.writeFile(path.join(stateDir, "cron", JOBS_FILE), "{}\\n");
+      `,
+      "src/runtime/conditional-literal-reassignment.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 8 }]);
+  });
+
+  it("keeps known literal candidates when conditional reassignment is dynamic", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        import path from "node:path";
+        let JOBS_FILE = "jobs.json";
+        if (debug) {
+          JOBS_FILE = getJobsFile();
+        }
+        await fs.writeFile(path.join(stateDir, "cron", JOBS_FILE), "{}\\n");
+      `,
+      "src/runtime/conditional-dynamic-literal-reassignment.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 8 }]);
+  });
+
+  it("drops stale literal candidates after exhaustive branch reassignment", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        import path from "node:path";
+        let JOBS_FILE = "jobs.json";
+        if (debug) {
+          JOBS_FILE = "current.json";
+        } else {
+          JOBS_FILE = "active.json";
+        }
+        await fs.writeFile(path.join(stateDir, "cron", JOBS_FILE), "{}\\n");
+      `,
+      "src/runtime/exhaustive-literal-reassignment.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("keeps known literal candidates after exhaustive dynamic branch reassignment", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        import path from "node:path";
+        let JOBS_FILE = "current.json";
+        if (debug) {
+          JOBS_FILE = "jobs.json";
+        } else {
+          JOBS_FILE = getJobsFile();
+        }
+        await fs.writeFile(path.join(stateDir, "cron", JOBS_FILE), "{}\\n");
+      `,
+      "src/runtime/exhaustive-dynamic-literal-reassignment.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 10 }]);
+  });
+
+  it("drops stale literal candidates after exhaustive dynamic branch reassignment", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        import path from "node:path";
+        let JOBS_FILE = "jobs.json";
+        if (debug) {
+          JOBS_FILE = "current.json";
+        } else {
+          JOBS_FILE = getJobsFile();
+        }
+        await fs.writeFile(path.join(stateDir, "cron", JOBS_FILE), "{}\\n");
+      `,
+      "src/runtime/exhaustive-dynamic-stale-literal-reassignment.ts",
+    );
+
+    expect(violations).toEqual([]);
   });
 
   it("flags imported and destructured fs write aliases", () => {
@@ -95,6 +278,94 @@ describe("check-database-first-legacy-stores", () => {
       { kind: "legacy store filesystem write", line: 4 },
       { kind: "legacy store filesystem write", line: 5 },
     ]);
+  });
+
+  it("flags helper writes through namespace imports", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import * as jsonFiles from "../infra/json-files.js";
+        await jsonFiles.writeJson("sessions.json", {});
+      `,
+      "src/runtime/helper-namespace-write.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 3 }]);
+  });
+
+  it("ignores helper-like namespace imports from unrelated modules", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import * as runtime from "../runtime/json-output.js";
+        runtime.writeJson("sessions.json", {});
+      `,
+      "src/runtime/unrelated-helper-namespace.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("ignores helper-like named imports from unrelated modules", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { writeJson } from "../runtime/json-output.js";
+        writeJson("sessions.json", {});
+      `,
+      "src/runtime/unrelated-helper-named-import.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("clears namespace helper aliases after shadowing", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import * as jsonFiles from "../infra/json-files.js";
+        function save(jsonFiles: { writeJson(path: string, value: unknown): void }) {
+          jsonFiles.writeJson("sessions.json", {});
+        }
+        save(customJsonFiles);
+      `,
+      "src/runtime/helper-namespace-shadow.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("allows read-only fs open calls and flags write modes", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import fs from "node:fs/promises";
+        await fs.open("sessions.json");
+        await fs.open("sessions.json", "r");
+        await fs.open("sessions.json", "r+");
+        await fs.open("sessions.json", "w");
+      `,
+      "src/runtime/open-flags.ts",
+    );
+
+    expect(violations).toEqual([
+      { kind: "legacy store filesystem write", line: 5 },
+      { kind: "legacy store filesystem write", line: 6 },
+    ]);
+  });
+
+  it("applies open write-mode checks inside wrappers", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import fs from "node:fs/promises";
+        function read(path: string) {
+          return fs.open(path, "r");
+        }
+        function write(path: string) {
+          return fs.open(path, "w");
+        }
+        await read("sessions.json");
+        await write("sessions.json");
+      `,
+      "src/runtime/open-wrapper-flags.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 10 }]);
   });
 
   it("flags string-literal fs write aliases from destructuring", () => {
