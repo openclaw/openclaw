@@ -302,6 +302,11 @@ export type CronJobState = {
   lastFailureAlertAtMs?: number;
   /** Number of consecutive schedule computation errors. Auto-disables job after threshold. */
   scheduleErrorCount?: number;
+  /** Timestamp (ms) of last cron.update schedule/enabled change.
+   *  Used during restart catch-up to skip inferred "missed" slots that
+   *  predate the schedule change — a slot computed from the new expression
+   *  that falls after the last real run is not truly missed. */
+  scheduleUpdatedAtMs?: number;
   /** Explicit delivery outcome, separate from execution outcome. */
   lastDeliveryStatus?: CronDeliveryStatus;
   /** Delivery-specific error text when available. */

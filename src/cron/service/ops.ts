@@ -488,6 +488,7 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
 
     nextJob.updatedAtMs = now;
     if (scheduleChanged || enabledChanged) {
+      nextJob.state.scheduleUpdatedAtMs = now;
       if (isJobEnabled(nextJob)) {
         nextJob.state.nextRunAtMs = computeJobNextRunAtMs(nextJob, now);
       } else {

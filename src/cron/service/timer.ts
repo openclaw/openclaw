@@ -1066,7 +1066,21 @@ function isRunnableJob(params: {
     // Only replay a "missed slot" when there is concrete run history.
     return false;
   }
-  return previousRunAtMs > lastRunAtMs;
+  if (previousRunAtMs <= lastRunAtMs) {
+    return false;
+  }
+  // Skip "missed" slots that predate a schedule update — the slot was
+  // computed from the new cron expression after the update and was never
+  // intended to execute (#91944).
+  const scheduleUpdatedAtMs = job.state.scheduleUpdatedAtMs;
+  if (
+    typeof scheduleUpdatedAtMs === "number" &&
+    Number.isFinite(scheduleUpdatedAtMs) &&
+    previousRunAtMs < scheduleUpdatedAtMs
+  ) {
+    return false;
+  }
+  return true;
 }
 
 function isErrorBackoffPending(state: CronServiceState, job: CronJob, nowMs: number): boolean {
@@ -1142,6 +1156,15 @@ function deferPendingBackoffMissedCronSlots(
       typeof lastRunAtMs !== "number" ||
       !Number.isFinite(lastRunAtMs) ||
       previousRunAtMs <= lastRunAtMs
+    ) {
+      continue;
+    }
+    // Skip deferred-backoff slots that predate a schedule update (#91944).
+    const scheduleUpdatedAtMs = job.state.scheduleUpdatedAtMs;
+    if (
+      typeof scheduleUpdatedAtMs === "number" &&
+      Number.isFinite(scheduleUpdatedAtMs) &&
+      previousRunAtMs < scheduleUpdatedAtMs
     ) {
       continue;
     }
