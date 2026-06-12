@@ -294,10 +294,9 @@ const OPENCODE_GO_MODELS = (
       reasoning: true,
       input: ["text", "image", "video"],
       cost: {
-        input: 0.6,
-        output: 2.4,
-        cacheRead: 0.12,
-        cacheWrite: 0.75,
+        input: 0.9,
+        output: 3.6,
+        cacheRead: 0.18,
       },
       contextWindow: 512_000,
       maxTokens: 131_072,
