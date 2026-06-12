@@ -114,7 +114,7 @@ function planKeywordSearch(params: {
   const matchTerms: string[] = [];
   const substringTerms: string[] = [];
   for (const token of tokens) {
-    if (SHORT_CJK_TRIGRAM_RE.test(token) && Array.from(token).length < 3) {
+    if (SHORT_CJK_TRIGRAM_RE.test(token)) {
       substringTerms.push(token);
       continue;
     }
