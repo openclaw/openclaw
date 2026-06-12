@@ -21,6 +21,7 @@ const closeActiveMemorySearchManagersMock = vi.hoisted(() => vi.fn(async () => {
 const hasMemoryRuntimeMock = vi.hoisted(() => vi.fn(() => false));
 const listAgentHarnessIdsMock = vi.hoisted(() => vi.fn((): string[] => []));
 const disposeRegisteredAgentHarnessesMock = vi.hoisted(() => vi.fn(async () => {}));
+const clearCurrentProviderAuthStateMock = vi.hoisted(() => vi.fn());
 const ensureTaskRegistryReadyMock = vi.hoisted(() => vi.fn());
 const startTaskRegistryMaintenanceMock = vi.hoisted(() => vi.fn());
 const outputRootHelpMock = vi.hoisted(() => vi.fn());
@@ -172,6 +173,10 @@ vi.mock("../plugins/memory-state.js", () => ({
 vi.mock("../agents/harness/registry.js", () => ({
   listAgentHarnessIds: listAgentHarnessIdsMock,
   disposeRegisteredAgentHarnesses: disposeRegisteredAgentHarnessesMock,
+}));
+
+vi.mock("../agents/model-provider-auth.js", () => ({
+  clearCurrentProviderAuthState: clearCurrentProviderAuthStateMock,
 }));
 
 vi.mock("../tasks/task-registry.js", () => ({
@@ -364,6 +369,28 @@ describe("runCli exit behavior", () => {
 
     expect(parseAsync).toHaveBeenCalledWith(["node", "openclaw", "agent", "--local"]);
     expect(disposeRegisteredAgentHarnessesMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears provider auth warm state after local JSON agent completion", async () => {
+    tryRouteCliMock.mockResolvedValueOnce(false);
+    const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
+    buildProgramMock.mockReturnValueOnce({
+      commands: [{ name: () => "agent", aliases: () => [] }],
+      parseAsync,
+    });
+
+    await runCli(["node", "openclaw", "agent", "--local", "--json", "--message", "hi"]);
+
+    expect(parseAsync).toHaveBeenCalledWith([
+      "node",
+      "openclaw",
+      "agent",
+      "--local",
+      "--json",
+      "--message",
+      "hi",
+    ]);
+    expect(clearCurrentProviderAuthStateMock).toHaveBeenCalledTimes(1);
   });
 
   it("shows the standard spinner while loading the full CLI", async () => {
