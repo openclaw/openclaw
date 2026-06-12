@@ -3014,7 +3014,7 @@ export async function stopWorkboardCard(params: {
   params.requestUpdate?.();
   try {
     let taskCancelled = false;
-    if (taskId && taskIsActive(task)) {
+    if (taskId && (!task || taskIsActive(task))) {
       const cancelled = await cancelWorkboardTaskRun({
         client: params.client,
         taskId,
@@ -3024,7 +3024,7 @@ export async function stopWorkboardCard(params: {
         state.tasksByCardId.set(
           params.card.id,
           cancelled.task ?? {
-            ...task,
+            ...(task ?? { id: taskId, taskId }),
             status: "cancelled",
             updatedAt: Date.now(),
           },

@@ -3706,6 +3706,33 @@ describe("workboard controller", () => {
     });
   });
 
+  it("cancels unresolved task-only cards through their canonical task id", async () => {
+    const host = {};
+    const linked = { ...sampleCard, status: "running" as const, taskId: "task-1" };
+    const blocked = { ...linked, status: "blocked" as const };
+    const state = getWorkboardState(host);
+    state.cards = [linked];
+    const client = createClient({
+      "tasks.cancel": { cancelled: true },
+      "workboard.cards.update": { card: blocked },
+    });
+
+    await stopWorkboardCard({ host, client: client as never, card: linked });
+
+    expect(client.request).toHaveBeenNthCalledWith(1, "tasks.cancel", {
+      taskId: "task-1",
+      reason: "Stopped from Workboard.",
+    });
+    expect(client.request).toHaveBeenNthCalledWith(2, "workboard.cards.update", {
+      id: "card-1",
+      patch: { status: "blocked" },
+    });
+    expect(state.tasksByCardId.get("card-1")).toMatchObject({
+      taskId: "task-1",
+      status: "cancelled",
+    });
+  });
+
   it("keeps task-linked cards running when ledger cancel does not abort the session", async () => {
     const host = {};
     const linked = {
