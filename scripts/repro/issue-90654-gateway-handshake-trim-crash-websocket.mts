@@ -48,7 +48,7 @@ async function main() {
   await fs.mkdir(path.join(tmpDir, "devices"), { recursive: true });
   await fs.writeFile(path.join(tmpDir, "openclaw.json"), JSON.stringify(config, null, 2));
 
-  const identity = await loadOrCreateDeviceIdentity(path.join(tmpDir, "device-identity.json"));
+  const identity = loadOrCreateDeviceIdentity(path.join(tmpDir, "device-identity.json"));
   const publicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
   const deviceId = identity.deviceId;
 
@@ -101,7 +101,7 @@ async function main() {
     );
 
     ws.on("message", (data) => {
-      const text = data.toString();
+      const text = String(data);
       console.log("[ws] message:", text.slice(0, 500));
       let frame: unknown;
       try {
@@ -122,7 +122,7 @@ async function main() {
       ) {
         connectChallengeNonce = payload.nonce;
         console.log("Got challenge nonce:", connectChallengeNonce);
-        sendConnect();
+        void sendConnect();
         return;
       }
       if (rec.type === "res") {
