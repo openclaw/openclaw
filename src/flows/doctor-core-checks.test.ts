@@ -778,7 +778,7 @@ describe("registerCoreHealthChecks", () => {
       expect.objectContaining({
         checkId: "core/doctor/default-model",
         severity: "warning",
-        message: expect.stringContaining("no provider configuration was found"),
+        message: expect.stringContaining("no custom model registration was found"),
       }),
     );
   });

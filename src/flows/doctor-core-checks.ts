@@ -373,16 +373,14 @@ const defaultModelCheck: HealthCheck = {
       defaultModel: DEFAULT_MODEL,
     });
     if (!status.inCatalog) {
-      const hasProviderConfig = Boolean(
-        ctx.cfg.models?.providers?.[resolved.provider],
-      );
+      const hasProviderConfig = Boolean(ctx.cfg.models?.providers?.[resolved.provider]);
       const sameProvider = catalog
         .filter((e) => e.provider === resolved.provider)
         .map((e) => `${e.provider}/${e.id}`);
       const hint =
         sameProvider.length > 0
           ? `Available models from ${resolved.provider}: ${sameProvider.join(", ")}. Update agents.defaults.model in your config.`
-          : "No models found for this provider in the catalog. Check your provider configuration.";
+          : "No models found for this provider in the catalog. Verify the model name or check provider documentation.";
       if (hasProviderConfig) {
         return [
           {
@@ -399,7 +397,7 @@ const defaultModelCheck: HealthCheck = {
         {
           checkId: "core/doctor/default-model",
           severity: "warning",
-          message: `Default model "${status.key}" is not in the model catalog and no provider configuration was found — model may have been removed.`,
+          message: `Default model "${status.key}" is not in the model catalog and no custom model registration was found for provider "${resolved.provider}" — model may have been removed.`,
           path: "agents.defaults.model",
           fixHint: hint,
         },
