@@ -1,4 +1,5 @@
 // Normalizes MCP server config for runtime launch and validation.
+import { isDangerousMcpStdioEnvVarName } from "../agents/mcp-config-shared.js";
 import { isRecord } from "../utils.js";
 import { readSourceConfigSnapshot } from "./io.js";
 import {
@@ -46,6 +47,15 @@ function normalizeToolSelectionList(value: readonly string[] | undefined): strin
     new Set(value.map((entry) => entry.trim()).filter((entry) => entry.length > 0)),
   ).toSorted((a, b) => a.localeCompare(b));
   return normalized.length > 0 ? normalized : undefined;
+}
+
+/** Returns blocked env keys found in a server config's env record. */
+function findBlockedStdioEnvKeys(server: Record<string, unknown>): string[] {
+  const env = server.env;
+  if (!isRecord(env)) {
+    return [];
+  }
+  return Object.keys(env).filter((key) => isDangerousMcpStdioEnvVarName(key));
 }
 
 export async function listConfiguredMcpServers(): Promise<ConfigMcpReadResult> {
@@ -161,6 +171,16 @@ export async function updateConfiguredMcpServer(params: {
   const next = structuredClone(loaded.config);
   const servers = normalizeConfiguredMcpServers(next.mcp?.servers);
   servers[name] = canonicalizeConfiguredMcpServer(params.update({ ...servers[name] }));
+
+  const blockedKeys = findBlockedStdioEnvKeys(servers[name]);
+  if (blockedKeys.length > 0) {
+    return {
+      ok: false,
+      path: loaded.path,
+      error: `MCP server env keys are blocked by stdio startup safety policy: ${blockedKeys.join(", ")}. Remove them from the config or set the values inside the server script.`,
+    };
+  }
+
   next.mcp = {
     ...next.mcp,
     servers,
@@ -208,6 +228,16 @@ export async function setConfiguredMcpServer(params: {
   const next = structuredClone(loaded.config);
   const servers = normalizeConfiguredMcpServers(next.mcp?.servers);
   servers[name] = canonicalizeConfiguredMcpServer(params.server);
+
+  const blockedKeys = findBlockedStdioEnvKeys(servers[name]);
+  if (blockedKeys.length > 0) {
+    return {
+      ok: false,
+      path: loaded.path,
+      error: `MCP server env keys are blocked by stdio startup safety policy: ${blockedKeys.join(", ")}. Remove them from the config or set the values inside the server script.`,
+    };
+  }
+
   next.mcp = {
     ...next.mcp,
     servers,
