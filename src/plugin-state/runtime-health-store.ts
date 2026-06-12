@@ -1,7 +1,7 @@
-import { getProcessStartTime } from "../shared/pid-alive.js";
 // Shared mechanics for cross-process runtime health records persisted in the
 // core plugin-state store: envelope validation, process-liveness hygiene, and
 // per-process cleanup. Domain modules own record fields and display keys.
+import { getProcessStartTime } from "../shared/pid-alive.js";
 import { createCorePluginStateSyncKeyedStore } from "./plugin-state-store.js";
 
 /** Envelope persisted with every cross-process runtime health record. */

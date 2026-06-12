@@ -659,13 +659,7 @@ describe("buildStatusReply subagent summary", () => {
     expect(normalizeTestText(text)).toContain("Uptime: gateway 2h 5m · system 4d 3h");
   });
 
-  it("passes config and workspace into compact plugin health", async () => {
-    const cfg = {
-      ...baseCfg,
-      channels: {
-        broken: { enabled: true },
-      },
-    };
+  it("renders compact plugin health from the runtime snapshot", async () => {
     pluginHealthRuntimeMock.collectRuntimePluginHealthSnapshot.mockReturnValue({
       plugins: [],
       diagnostics: [],
@@ -674,13 +668,14 @@ describe("buildStatusReply subagent summary", () => {
       channelPluginFailures: [
         {
           channelId: "broken",
-          message: "configured channel plugin is missing or unavailable",
+          message: "failed to load setup entry: boom",
+          source: "diagnostic",
         },
       ],
     });
 
     const text = await buildStatusText({
-      cfg,
+      cfg: baseCfg,
       sessionEntry: {
         sessionId: "sess-status-plugin-health",
         updatedAt: 0,
@@ -704,10 +699,9 @@ describe("buildStatusReply subagent summary", () => {
       activeModelAuthOverride: "api-key",
     });
 
-    expect(pluginHealthRuntimeMock.collectRuntimePluginHealthSnapshot).toHaveBeenCalledWith({
-      config: cfg,
-      workspaceDir: "/tmp/status-plugin-health-workspace",
-    });
+    // Compact status reads only the runtime snapshot; no config-driven
+    // channel inspection happens on this path.
+    expect(pluginHealthRuntimeMock.collectRuntimePluginHealthSnapshot).toHaveBeenCalledWith();
     expect(normalizeTestText(text)).toContain("Plugins: 1 channel plugin failure");
   });
 
