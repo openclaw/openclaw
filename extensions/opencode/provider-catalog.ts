@@ -1,0 +1,251 @@
+// Opencode Zen provider module implements model/runtime integration.
+import type { ModelCatalogEntry } from "openclaw/plugin-sdk/agent-runtime";
+import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  getCachedLiveProviderModelRows,
+  type LiveModelCatalogFetchGuard,
+} from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-model-shared";
+import type {
+  ModelDefinitionConfig,
+  ModelProviderConfig,
+} from "openclaw/plugin-sdk/provider-model-shared";
+
+const PROVIDER_ID = "opencode";
+
+const OPENCODE_ZEN_OPENAI_BASE_URL = "https://opencode.ai/zen/v1";
+const OPENCODE_ZEN_MODELS_ENDPOINT = "https://opencode.ai/zen/v1/models";
+const OPENCODE_ZEN_MODELS_TIMEOUT_MS = 5_000;
+const OPENCODE_ZEN_MODELS_CACHE_TTL_MS = 60_000;
+
+const DEFAULT_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } as const;
+
+const MODEL_COSTS: Record<
+  string,
+  { input: number; output: number; cacheRead: number; cacheWrite: number }
+> = {
+  "claude-fable-5": { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+  "claude-opus-4-6": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+  "claude-opus-4-7": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+  "claude-opus-4-8": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+  "claude-sonnet-4-6": { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+  "gpt-5.5": { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
+};
+
+const MODEL_NAMES: Record<string, string> = {
+  "claude-fable-5": "Claude Fable 5",
+  "claude-opus-4-6": "Claude Opus 4.6",
+  "claude-opus-4-7": "Claude Opus 4.7",
+  "claude-opus-4-8": "Claude Opus 4.8",
+  "claude-sonnet-4-6": "Claude Sonnet 4.6",
+  "gpt-5.5": "GPT-5.5",
+};
+
+type OpencodeZenModelDefinition = ModelDefinitionConfig & {
+  provider: typeof PROVIDER_ID;
+  api: NonNullable<ModelDefinitionConfig["api"]>;
+  baseUrl: string;
+  input: Array<"text" | "image">;
+};
+
+export type FetchOpencodeZenLiveModelIdsParams = {
+  apiKey?: string;
+  discoveryApiKey?: string;
+  fetchGuard?: LiveModelCatalogFetchGuard;
+  signal?: AbortSignal;
+};
+
+function formatModelName(modelId: string): string {
+  const exact = MODEL_NAMES[modelId];
+  if (exact) {
+    return exact;
+  }
+  return modelId
+    .split("-")
+    .map((part) => (part ? part.charAt(0).toUpperCase() + part.slice(1) : part))
+    .join(" ");
+}
+
+function supportsImageInput(modelId: string): boolean {
+  const lower = modelId.toLowerCase();
+  return !(
+    lower.includes("deepseek") ||
+    lower.includes("glm") ||
+    lower.includes("minimax") ||
+    lower.includes("qwen")
+  );
+}
+
+function resolveContextWindow(modelId: string): number {
+  const lower = modelId.toLowerCase();
+  if (lower.includes("gemini")) {
+    return 1_048_576;
+  }
+  if (lower.includes("gpt") || lower.includes("codex")) {
+    return 400_000;
+  }
+  if (lower.includes("claude")) {
+    return 200_000;
+  }
+  if (lower.includes("glm") || lower.includes("minimax")) {
+    return 204_800;
+  }
+  return 128_000;
+}
+
+function resolveMaxTokens(modelId: string): number {
+  const lower = modelId.toLowerCase();
+  if (lower.includes("glm") || lower.includes("minimax")) {
+    return 131_072;
+  }
+  if (lower.includes("gpt") || lower.includes("codex")) {
+    return 128_000;
+  }
+  if (lower.includes("claude") || lower.includes("gemini")) {
+    return 65_536;
+  }
+  return 8_192;
+}
+
+function buildOpencodeZenModel(modelId: string): OpencodeZenModelDefinition {
+  const normalizedModelId = modelId.trim().toLowerCase();
+  return normalizeModelCompat({
+    id: normalizedModelId,
+    name: formatModelName(normalizedModelId),
+    api: "openai-completions",
+    provider: PROVIDER_ID,
+    baseUrl: OPENCODE_ZEN_OPENAI_BASE_URL,
+    reasoning: true,
+    input: supportsImageInput(normalizedModelId) ? ["text", "image"] : ["text"],
+    cost: MODEL_COSTS[normalizedModelId] ?? DEFAULT_COST,
+    contextWindow: resolveContextWindow(normalizedModelId),
+    maxTokens: resolveMaxTokens(normalizedModelId),
+    compat: {
+      supportsUsageInStreaming: true,
+      supportsReasoningEffort: true,
+      maxTokensField: "max_tokens",
+    },
+  }) as OpencodeZenModelDefinition;
+}
+
+const OPENCODE_ZEN_MODELS = [
+  "claude-fable-5",
+  "claude-opus-4-8",
+  "claude-opus-4-7",
+  "claude-opus-4-6",
+  "claude-sonnet-4-6",
+].map(buildOpencodeZenModel);
+
+function buildOpencodeZenProviderConfig(
+  models: OpencodeZenModelDefinition[],
+  apiKey?: string,
+): ModelProviderConfig {
+  return {
+    api: "openai-completions",
+    baseUrl: OPENCODE_ZEN_OPENAI_BASE_URL,
+    ...(apiKey ? { apiKey } : {}),
+    models,
+  };
+}
+
+export function buildStaticOpencodeZenProviderConfig(apiKey?: string): ModelProviderConfig {
+  return buildOpencodeZenProviderConfig(OPENCODE_ZEN_MODELS, apiKey);
+}
+
+function readLiveModelId(row: unknown): string | undefined {
+  if (!row || typeof row !== "object" || Array.isArray(row)) {
+    return undefined;
+  }
+  const candidate = row as { id?: unknown; object?: unknown };
+  if (candidate.object !== undefined && candidate.object !== "model") {
+    return undefined;
+  }
+  if (typeof candidate.id !== "string") {
+    return undefined;
+  }
+  const modelId = candidate.id.trim().toLowerCase();
+  return modelId || undefined;
+}
+
+async function fetchOpencodeZenLiveModelIds(
+  params: FetchOpencodeZenLiveModelIdsParams = {},
+): Promise<string[]> {
+  const rows = await getCachedLiveProviderModelRows({
+    providerId: PROVIDER_ID,
+    endpoint: OPENCODE_ZEN_MODELS_ENDPOINT,
+    apiKey: params.apiKey,
+    discoveryApiKey: params.discoveryApiKey,
+    fetchGuard: params.fetchGuard,
+    signal: params.signal,
+    timeoutMs: OPENCODE_ZEN_MODELS_TIMEOUT_MS,
+    ttlMs: OPENCODE_ZEN_MODELS_CACHE_TTL_MS,
+    auditContext: "opencode-zen-model-discovery",
+  });
+  const seen = new Set<string>();
+  const modelIds: string[] = [];
+  for (const row of rows) {
+    const modelId = readLiveModelId(row);
+    if (!modelId || seen.has(modelId)) {
+      continue;
+    }
+    seen.add(modelId);
+    modelIds.push(modelId);
+  }
+  return modelIds;
+}
+
+function buildDiscoveredOpencodeZenModels(modelIds: string[]): OpencodeZenModelDefinition[] {
+  const staticModels = new Map(OPENCODE_ZEN_MODELS.map((model) => [model.id, model]));
+  return modelIds.map((modelId) => staticModels.get(modelId) ?? buildOpencodeZenModel(modelId));
+}
+
+export async function buildOpencodeZenLiveProviderConfig(
+  params: FetchOpencodeZenLiveModelIdsParams = {},
+): Promise<ModelProviderConfig> {
+  try {
+    const liveModelIds = await fetchOpencodeZenLiveModelIds(params);
+    if (liveModelIds.length > 0) {
+      return buildOpencodeZenProviderConfig(
+        buildDiscoveredOpencodeZenModels(liveModelIds),
+        params.apiKey,
+      );
+    }
+  } catch {
+    // Live discovery is advisory; keep the provider-owned static seed visible.
+  }
+  return buildStaticOpencodeZenProviderConfig(params.apiKey);
+}
+
+export function listOpencodeZenModelCatalogEntries(): ModelCatalogEntry[] {
+  return OPENCODE_ZEN_MODELS.map((model) => ({
+    provider: model.provider,
+    id: model.id,
+    name: model.name,
+    reasoning: model.reasoning,
+    input: model.input,
+    contextWindow: model.contextWindow,
+  }));
+}
+
+export function resolveOpencodeZenModel(modelId: string): ProviderRuntimeModel | undefined {
+  const normalizedModelId = modelId.trim().toLowerCase();
+  return OPENCODE_ZEN_MODELS.find((model) => model.id === normalizedModelId);
+}
+
+function normalizeBaseUrl(baseUrl: string | undefined): string {
+  return (baseUrl ?? "").trim().replace(/\/+$/, "");
+}
+
+export function normalizeOpencodeZenBaseUrl(params: {
+  api?: string | null;
+  baseUrl?: string;
+}): string | undefined {
+  const normalized = normalizeBaseUrl(params.baseUrl);
+  if (!normalized) {
+    return undefined;
+  }
+  if (normalized === OPENCODE_ZEN_OPENAI_BASE_URL || normalized === "https://opencode.ai/zen") {
+    return OPENCODE_ZEN_OPENAI_BASE_URL;
+  }
+  return undefined;
+}
