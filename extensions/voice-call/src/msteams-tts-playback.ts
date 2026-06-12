@@ -7,7 +7,7 @@ import {
 } from "./msteams-media-stream.js";
 import type { MsteamsTtsProvider } from "./msteams-tts.js";
 import { chunkAudio } from "./telephony-audio.js";
-import { estimateVisemes } from "./viseme-estimate.js";
+import { estimateVisemes, visemesFromAlignment } from "./viseme-estimate.js";
 
 /** PCM 16 kHz, 16-bit mono — the wire format both directions of the Teams bridge. */
 const MSTEAMS_SAMPLE_RATE_HZ = MSTEAMS_PCM_SAMPLE_RATE_HZ;
@@ -66,8 +66,13 @@ export async function playTtsToCall(
     // non-fatal: expression is a cosmetic cue
   }
 
-  // msteams-tts.ts synthesizes and resamples to PCM 16 kHz mono.
-  const pcm16k = await deps.ttsProvider.synthesizePcm16k(text);
+  // msteams-tts.ts synthesizes and resamples to PCM 16 kHz mono. Prefer the timing-aware path
+  // so providers that return character alignment (ElevenLabs with-timestamps) drive real viseme
+  // timing; providers without it return audio-only and we estimate below.
+  const synthesis = deps.ttsProvider.synthesizePcm16kWithTiming
+    ? await deps.ttsProvider.synthesizePcm16kWithTiming(text)
+    : { pcm16k: await deps.ttsProvider.synthesizePcm16k(text) };
+  const pcm16k = synthesis.pcm16k;
   if (abort.signal.aborted) {
     return;
   }
@@ -75,16 +80,23 @@ export async function playTtsToCall(
     throw new Error("MsteamsProvider.playTts: TTS produced no audio");
   }
 
-  // CVI Phase 5 (spike): send an estimated viseme timeline just ahead of the audio. 16-bit mono
-  // @ 16 kHz → 2 bytes/sample. A viseme-capable worker layers these as coarse mouth shapes
+  // CVI Phase 5: send a viseme timeline just ahead of the audio. Real per-character timing from
+  // the provider's alignment when available; otherwise an even-spread estimate from the text and
+  // audio duration. A viseme-capable worker layers these as coarse mouth shapes
   // (open/wide/round/closed) over its RMS-driven openness; an older worker ignores the message and
   // stays RMS-only. Best-effort/cosmetic either way.
   try {
-    const durationMs = (pcm16k.length / BYTES_PER_SAMPLE / MSTEAMS_SAMPLE_RATE_HZ) * 1000;
-    const marks = estimateVisemes(text, durationMs);
+    const alignment = synthesis.alignment;
+    let marks = alignment
+      ? visemesFromAlignment(alignment.characters, alignment.startTimesSeconds)
+      : [];
+    if (marks.length === 0) {
+      const durationMs = (pcm16k.length / BYTES_PER_SAMPLE / MSTEAMS_SAMPLE_RATE_HZ) * 1000;
+      marks = estimateVisemes(text, durationMs);
+    }
     if (marks.length > 0) {
       deps.logger?.debug?.(
-        `MsteamsProvider: speech.marks ${marks.length} visemes for ${state.providerCallId}`,
+        `MsteamsProvider: speech.marks ${marks.length} visemes (${alignment ? "aligned" : "estimated"}) for ${state.providerCallId}`,
       );
       state.session.send({ type: "speech.marks", ts: 0, marks });
     }

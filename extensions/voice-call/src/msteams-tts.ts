@@ -20,12 +20,26 @@ import type { TelephonyTtsRuntime } from "./telephony-tts.js";
 /** Teams wire format: PCM 16 kHz, 16-bit mono, little-endian. */
 export const MSTEAMS_TTS_SAMPLE_RATE_HZ = MSTEAMS_PCM_SAMPLE_RATE_HZ;
 
+/** Per-character speech timing forwarded from the TTS provider (wall-clock seconds). */
+export type MsteamsTtsAlignment = {
+  characters: string[];
+  startTimesSeconds: number[];
+};
+
 export interface MsteamsTtsProvider {
   /**
    * Synthesize `text` and return PCM 16 kHz, 16-bit mono LE audio, resampled
    * from the TTS provider's native rate (e.g. 22050 Hz) when needed.
    */
   synthesizePcm16k(text: string): Promise<Buffer>;
+  /**
+   * Like `synthesizePcm16k`, but also surfaces the provider's per-character alignment when
+   * available (e.g. ElevenLabs with-timestamps) so playback can emit real-timed viseme marks.
+   * Optional: older/mock providers without it fall back to estimated viseme timing.
+   */
+  synthesizePcm16kWithTiming?(
+    text: string,
+  ): Promise<{ pcm16k: Buffer; alignment?: MsteamsTtsAlignment }>;
 }
 
 export function createMsteamsTtsProvider(params: {
@@ -39,29 +53,34 @@ export function createMsteamsTtsProvider(params: {
   const { coreConfig, ttsOverride, runtime, logger } = params;
   const mergedConfig = applyTtsOverride(coreConfig, ttsOverride);
 
+  const synthesizePcm16kWithTiming = async (text: string) => {
+    const result = await runtime.textToSpeechTelephony({ text, cfg: mergedConfig });
+
+    if (!result.success || !result.audioBuffer || !result.sampleRate) {
+      throw new Error(result.error ?? "msteams TTS synthesis failed");
+    }
+
+    if (result.fallbackFrom && result.provider && result.fallbackFrom !== result.provider) {
+      const attemptedChain =
+        result.attemptedProviders && result.attemptedProviders.length > 0
+          ? result.attemptedProviders.join(" -> ")
+          : `${result.fallbackFrom} -> ${result.provider}`;
+      logger?.warn?.(
+        `[voice-call] msteams TTS fallback used from=${result.fallbackFrom} to=${result.provider} attempts=${attemptedChain}`,
+      );
+    }
+
+    // Alignment is wall-clock seconds, so it stays valid across the resample below.
+    const pcm16k =
+      result.sampleRate === MSTEAMS_TTS_SAMPLE_RATE_HZ
+        ? result.audioBuffer
+        : resamplePcm(result.audioBuffer, result.sampleRate, MSTEAMS_TTS_SAMPLE_RATE_HZ);
+    return { pcm16k, alignment: result.alignment };
+  };
+
   return {
-    synthesizePcm16k: async (text: string) => {
-      const result = await runtime.textToSpeechTelephony({ text, cfg: mergedConfig });
-
-      if (!result.success || !result.audioBuffer || !result.sampleRate) {
-        throw new Error(result.error ?? "msteams TTS synthesis failed");
-      }
-
-      if (result.fallbackFrom && result.provider && result.fallbackFrom !== result.provider) {
-        const attemptedChain =
-          result.attemptedProviders && result.attemptedProviders.length > 0
-            ? result.attemptedProviders.join(" -> ")
-            : `${result.fallbackFrom} -> ${result.provider}`;
-        logger?.warn?.(
-          `[voice-call] msteams TTS fallback used from=${result.fallbackFrom} to=${result.provider} attempts=${attemptedChain}`,
-        );
-      }
-
-      if (result.sampleRate === MSTEAMS_TTS_SAMPLE_RATE_HZ) {
-        return result.audioBuffer;
-      }
-      return resamplePcm(result.audioBuffer, result.sampleRate, MSTEAMS_TTS_SAMPLE_RATE_HZ);
-    },
+    synthesizePcm16k: async (text: string) => (await synthesizePcm16kWithTiming(text)).pcm16k,
+    synthesizePcm16kWithTiming,
   };
 }
 
