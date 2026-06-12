@@ -682,6 +682,22 @@ describe("createInboundDebouncer", () => {
     expect(calls).toEqual(["1", "2"]);
   });
 
+  it("rethrows flush errors when rethrowOnFlushError is set", async () => {
+    const onError = vi.fn();
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 0,
+      buildKey: (item) => item.key,
+      rethrowOnFlushError: true,
+      onFlush: async () => {
+        throw new Error("flush failed");
+      },
+      onError,
+    });
+
+    await expect(debouncer.enqueue({ key: "a", id: "1" })).rejects.toThrow("flush failed");
+    expect(onError).toHaveBeenCalledWith(expect.any(Error), expect.any(Array));
+  });
+
   it("does not leak unhandled rejections when a keyed flush failure is awaited", async () => {
     const debouncer = createInboundDebouncer<{ key: string; id: string }>({
       debounceMs: 0,
