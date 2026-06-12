@@ -476,16 +476,25 @@ describe("prepareSimpleCompletionModel", () => {
   });
 
   it("can preserve asynchronous provider model discovery", async () => {
-    hoisted.resolveModelAsyncMock.mockResolvedValueOnce({
-      model: {
-        provider: "anthropic",
-        id: "claude-opus-4-6",
-      },
-      authStorage: {
-        setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
-      },
-      modelRegistry: {},
-    });
+    // Replace the default mock implementation (which calls resolveModelMock) with
+    // one that returns the resolved model directly, so the sync resolveModel path
+    // is never exercised even if mockResolvedValueOnce state leaks from another test.
+    hoisted.resolveModelAsyncMock.mockImplementation(() =>
+      Promise.resolve({
+        model: {
+          provider: "anthropic",
+          id: "claude-opus-4-6",
+        },
+        authStorage: {
+          setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
+        },
+        modelRegistry: {},
+      }),
+    );
+    // Explicitly clear the sync mock to guard against call-history leakage from
+    // prior tests in the file (vi.hoisted mocks can retain call state across
+    // tests in some Vitest runner configurations).
+    hoisted.resolveModelMock.mockClear();
 
     const result = await prepareSimpleCompletionModel({
       cfg: undefined,
