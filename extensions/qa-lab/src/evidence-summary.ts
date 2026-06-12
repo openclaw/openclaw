@@ -9,7 +9,15 @@ export const QA_EVIDENCE_SUMMARY_SCHEMA_VERSION = 2;
 
 const qaEvidenceStatusSchema = z.enum(["pass", "fail", "blocked", "skipped"]);
 const nonEmptyStringSchema = z.string().trim().min(1);
-const qaEvidenceProfileSchema = nonEmptyStringSchema;
+const nullableStringSchema = nonEmptyStringSchema.nullable();
+const optionalSourcePathShape = {
+  sourcePath: nonEmptyStringSchema.optional(),
+} as const;
+const qaEvidenceProfileIdSchema = nonEmptyStringSchema;
+const qaEvidenceIdSchema = z.object({ id: nonEmptyStringSchema });
+const qaEvidenceIdWithSourcePathSchema = qaEvidenceIdSchema
+  .extend(optionalSourcePathShape)
+  .strict();
 
 const qaEvidenceProviderSchema = z
   .object({
@@ -17,8 +25,8 @@ const qaEvidenceProviderSchema = z
     live: z.boolean(),
     model: z
       .object({
-        name: nonEmptyStringSchema.nullable(),
-        ref: nonEmptyStringSchema.nullable(),
+        name: nullableStringSchema,
+        ref: nullableStringSchema,
       })
       .strict(),
     fixture: nonEmptyStringSchema.optional(),
@@ -36,7 +44,7 @@ const qaEvidenceChannelSchema = z
 
 const qaEvidenceEnvironmentSchema = z
   .object({
-    ref: nonEmptyStringSchema.nullable(),
+    ref: nullableStringSchema,
     os: nonEmptyStringSchema,
     nodeVersion: nonEmptyStringSchema,
   })
@@ -84,20 +92,16 @@ const qaEvidenceTestSchema = z
   })
   .strict();
 
-const qaEvidenceRefSchema = z
-  .object({
-    id: nonEmptyStringSchema,
+const qaEvidenceRefSchema = qaEvidenceIdWithSourcePathSchema
+  .extend({
     kind: nonEmptyStringSchema,
     path: nonEmptyStringSchema,
-    sourcePath: nonEmptyStringSchema.optional(),
   })
   .strict();
 
-const qaEvidenceCoverageSchema = z
-  .object({
-    id: nonEmptyStringSchema,
+const qaEvidenceCoverageSchema = qaEvidenceIdWithSourcePathSchema
+  .extend({
     role: nonEmptyStringSchema,
-    sourcePath: nonEmptyStringSchema.optional(),
     surfaceIds: z.array(nonEmptyStringSchema),
     categoryIds: z.array(nonEmptyStringSchema),
     refIds: z.array(nonEmptyStringSchema).optional(),
@@ -106,12 +110,7 @@ const qaEvidenceCoverageSchema = z
 
 const qaEvidenceMappingSchema = z
   .object({
-    profile: z
-      .object({
-        id: qaEvidenceProfileSchema,
-        sourcePath: nonEmptyStringSchema.optional(),
-      })
-      .strict(),
+    profile: qaEvidenceIdWithSourcePathSchema,
     taxonomy: z
       .object({
         sourcePath: nonEmptyStringSchema,
@@ -120,13 +119,7 @@ const qaEvidenceMappingSchema = z
       .optional(),
     coverage: z.array(qaEvidenceCoverageSchema),
     refs: z.array(qaEvidenceRefSchema).optional(),
-    runtimeParity: z
-      .object({
-        id: nonEmptyStringSchema,
-        sourcePath: nonEmptyStringSchema.optional(),
-      })
-      .strict()
-      .optional(),
+    runtimeParity: qaEvidenceIdWithSourcePathSchema.optional(),
   })
   .strict();
 
@@ -179,7 +172,7 @@ export const qaEvidenceSummarySchema = z
   })
   .strict();
 
-export type QaEvidenceProfile = z.infer<typeof qaEvidenceProfileSchema>;
+export type QaEvidenceProfile = z.infer<typeof qaEvidenceProfileIdSchema>;
 export type QaEvidenceStatus = z.infer<typeof qaEvidenceStatusSchema>;
 export type QaEvidenceTiming = z.infer<typeof qaEvidenceTimingSchema>;
 export type QaEvidenceSummaryEntry = z.infer<typeof qaEvidenceSummaryEntrySchema>;
@@ -204,7 +197,7 @@ type QaEvidenceScenarioSpecInput = {
   codeRefs?: readonly string[];
 };
 
-type QaEvidenceScenarioResultInput = {
+type QaEvidenceTimedResultInput = {
   id?: string;
   name?: string;
   requirementId?: string;
@@ -217,18 +210,10 @@ type QaEvidenceScenarioResultInput = {
   };
 };
 
-type QaEvidenceLiveTransportCheckInput = {
+type QaEvidenceScenarioResultInput = QaEvidenceTimedResultInput;
+
+type QaEvidenceLiveTransportCheckInput = QaEvidenceTimedResultInput & {
   artifactPaths?: Readonly<Record<string, string>>;
-  id?: string;
-  name?: string;
-  requirementId?: string;
-  title?: string;
-  status: QaEvidenceStatusInput;
-  details?: string;
-  rttMs?: number;
-  rttMeasurement?: {
-    finalMatchedReplyRttMs?: number;
-  };
 };
 
 type QaEvidenceTestTargetInput = {
@@ -262,20 +247,6 @@ type QaEvidenceBuildBase = {
   runner?: string;
 };
 
-function buildQaEvidenceTest(params: {
-  kind: string;
-  id: string;
-  title: string;
-  sourcePath?: string;
-}) {
-  return {
-    kind: params.kind,
-    id: params.id,
-    title: params.title,
-    ...(params.sourcePath ? { source: { path: params.sourcePath } } : {}),
-  };
-}
-
 function buildQaEvidenceRefs(params: {
   docsRefs?: readonly string[];
   codeRefs?: readonly string[];
@@ -286,7 +257,7 @@ function buildQaEvidenceRefs(params: {
       id: `${kind}:${refPath}`,
       kind,
       path: refPath,
-      ...(params.sourcePath ? { sourcePath: params.sourcePath } : {}),
+      sourcePath: params.sourcePath,
     };
     return ref;
   };
@@ -311,10 +282,10 @@ function buildQaEvidenceCoverage(params: {
   const buildCoverage = (id: string, role: "primary" | "secondary") => ({
     id,
     role,
-    ...(params.sourcePath ? { sourcePath: params.sourcePath } : {}),
+    sourcePath: params.sourcePath,
     surfaceIds,
     categoryIds: role === "primary" ? categoryIds : [],
-    ...(refIds.length > 0 ? { refIds } : {}),
+    refIds: refIds.length > 0 ? refIds : undefined,
   });
   return [
     ...uniqueSortedStrings(params.primaryIds ?? []).map((id) => buildCoverage(id, "primary")),
@@ -426,8 +397,8 @@ function resolveQaEvidencePackageSource(env: NodeJS.ProcessEnv | undefined) {
     (spec && spec.endsWith(".tgz") ? "packed-tarball" : spec ? "npm-package" : "source-checkout");
   return {
     kind,
-    ...(spec ? { spec } : {}),
-    ...(sha ? { sha } : {}),
+    spec,
+    sha,
   };
 }
 
@@ -493,6 +464,19 @@ function timingForTestResult(result: QaEvidenceTestResultInput) {
     : undefined;
 }
 
+function resultForEvidence(
+  result: Pick<QaEvidenceTimedResultInput, "details" | "status"> & {
+    failureMessage?: string;
+  },
+  timing?: QaEvidenceTiming,
+) {
+  return {
+    status: normalizeQaEvidenceStatus(result.status),
+    failure: failureForResult(result),
+    timing,
+  };
+}
+
 function buildQaEvidenceSummary(params: {
   entries: QaEvidenceSummaryEntry[];
   generatedAt: string;
@@ -545,13 +529,14 @@ export function buildQaSuiteEvidenceSummary(
       sourcePath: scenario?.sourcePath,
     });
     const refIds = refs.map((ref) => ref.id);
+    const timing = timingForLiveTransportCheck(result);
     return {
-      test: buildQaEvidenceTest({
+      test: {
         kind: "qa-scenario",
         id: testId,
         title: scenario?.title ?? result.title ?? result.name ?? `Scenario ${index + 1}`,
-        sourcePath: scenario?.sourcePath,
-      }),
+        source: scenario?.sourcePath ? { path: scenario.sourcePath } : undefined,
+      },
       mapping: {
         profile: {
           id: profile,
@@ -566,15 +551,13 @@ export function buildQaSuiteEvidenceSummary(
           refIds,
           sourcePath: scenario?.sourcePath,
         }),
-        ...(refs.length > 0 ? { refs } : {}),
-        ...(runtimeParity
+        refs: refs.length > 0 ? refs : undefined,
+        runtimeParity: runtimeParity
           ? {
-              runtimeParity: {
-                id: runtimeParity,
-                ...(scenario?.sourcePath ? { sourcePath: scenario.sourcePath } : {}),
-              },
+              id: runtimeParity,
+              sourcePath: scenario?.sourcePath,
             }
-          : {}),
+          : undefined,
       },
       execution: {
         runner: {
@@ -585,18 +568,12 @@ export function buildQaSuiteEvidenceSummary(
         channel: {
           id: params.channelId,
           live: false,
-          ...(channelDriver ? { driver: channelDriver.id } : {}),
+          driver: channelDriver?.id,
         },
         packageSource,
         artifacts: buildQaEvidenceArtifacts(params.artifactPaths, "qa-suite"),
       },
-      result: {
-        status: normalizeQaEvidenceStatus(result.status),
-        ...(failureForResult(result) ? { failure: failureForResult(result) } : {}),
-        ...(timingForLiveTransportCheck(result)
-          ? { timing: timingForLiveTransportCheck(result) }
-          : {}),
-      },
+      result: resultForEvidence(result, timing),
     };
   });
   return buildQaEvidenceSummary({ generatedAt: params.generatedAt, entries });
@@ -637,13 +614,14 @@ function buildTestRunnerEvidenceSummary(
       codeRefs: target?.codeRefs,
       sourcePath: target?.sourcePath,
     });
+    const timing = timingForTestResult(result);
     return {
-      test: buildQaEvidenceTest({
+      test: {
         kind: params.testKind,
         id: target?.id ?? fallbackId,
         title: target?.title ?? result.title ?? fallbackId,
-        sourcePath,
-      }),
+        source: sourcePath ? { path: sourcePath } : undefined,
+      },
       mapping: {
         profile: {
           id: profile,
@@ -655,7 +633,7 @@ function buildTestRunnerEvidenceSummary(
           refIds: refs.map((ref) => ref.id),
           sourcePath: target?.sourcePath,
         }),
-        ...(refs.length > 0 ? { refs } : {}),
+        refs: refs.length > 0 ? refs : undefined,
       },
       execution: {
         runner: {
@@ -666,11 +644,7 @@ function buildTestRunnerEvidenceSummary(
         packageSource,
         artifacts: buildQaEvidenceArtifacts(params.artifactPaths, runner),
       },
-      result: {
-        status: normalizeQaEvidenceStatus(result.status),
-        ...(failureForResult(result) ? { failure: failureForResult(result) } : {}),
-        ...(timingForTestResult(result) ? { timing: timingForTestResult(result) } : {}),
-      },
+      result: resultForEvidence(result, timing),
     };
   });
   return buildQaEvidenceSummary({ generatedAt: params.generatedAt, entries });
@@ -728,34 +702,34 @@ export function buildLiveTransportEvidenceSummary(
     const requirementCoverageId = check.requirementId
       ? `channels.${params.transportId}.${check.requirementId}`
       : undefined;
+    const coverage = [
+      {
+        id: `channels.${params.transportId}.live`,
+        role: "live-transport",
+        surfaceIds: [`channels.${params.transportId}`],
+        categoryIds: [`channels.${params.transportId}.live`],
+      },
+    ];
+    if (requirementCoverageId) {
+      coverage.push({
+        id: requirementCoverageId,
+        role: "live-transport-requirement",
+        surfaceIds: [`channels.${params.transportId}`],
+        categoryIds: [`channels.${params.transportId}.live`],
+      });
+    }
+    const timing = timingForLiveTransportCheck(check);
     return {
-      test: buildQaEvidenceTest({
+      test: {
         kind: "live-transport-check",
         id: testId,
         title: check.title ?? check.name ?? testId,
-      }),
+      },
       mapping: {
         profile: {
           id: profile,
         },
-        coverage: [
-          {
-            id: `channels.${params.transportId}.live`,
-            role: "live-transport",
-            surfaceIds: [`channels.${params.transportId}`],
-            categoryIds: [`channels.${params.transportId}.live`],
-          },
-          ...(requirementCoverageId
-            ? [
-                {
-                  id: requirementCoverageId,
-                  role: "live-transport-requirement",
-                  surfaceIds: [`channels.${params.transportId}`],
-                  categoryIds: [`channels.${params.transportId}.live`],
-                },
-              ]
-            : []),
-        ],
+        coverage,
       },
       execution: {
         runner: {
@@ -777,13 +751,7 @@ export function buildLiveTransportEvidenceSummary(
           ),
         ],
       },
-      result: {
-        status: normalizeQaEvidenceStatus(check.status),
-        ...(failureForResult(check) ? { failure: failureForResult(check) } : {}),
-        ...(timingForLiveTransportCheck(check)
-          ? { timing: timingForLiveTransportCheck(check) }
-          : {}),
-      },
+      result: resultForEvidence(check, timing),
     };
   });
   return buildQaEvidenceSummary({ generatedAt: params.generatedAt, entries });

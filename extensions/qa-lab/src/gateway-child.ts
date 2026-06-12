@@ -183,12 +183,6 @@ function appendQaGatewayTempRoot(details: string, tempRoot: string) {
     : `${details}\nQA gateway temp root preserved at ${tempRoot}`;
 }
 
-function wrapQaGatewayChildStartupError(error: unknown, message: string) {
-  return error instanceof QaSuiteInfraError
-    ? new QaSuiteInfraError(error.code, message, { cause: error })
-    : new Error(message, { cause: error });
-}
-
 export function resolveQaGatewayChildProviderMode(providerMode?: QaProviderMode): QaProviderMode {
   return providerMode ?? DEFAULT_QA_PROVIDER_MODE;
 }
@@ -1042,12 +1036,13 @@ export async function startQaGatewayChild(params: {
         stagedBundledPluginsRoot,
       });
     }
-    throw wrapQaGatewayChildStartupError(
-      error,
-      keepTemp
-        ? appendQaGatewayTempRoot(formatErrorMessage(error), tempRoot)
-        : formatErrorMessage(error),
-    );
+    const message = keepTemp
+      ? appendQaGatewayTempRoot(formatErrorMessage(error), tempRoot)
+      : formatErrorMessage(error);
+    if (error instanceof QaSuiteInfraError) {
+      throw new QaSuiteInfraError(error.code, message, { cause: error });
+    }
+    throw new Error(message, { cause: error });
   }
 }
 export { testing as __testing };
