@@ -769,6 +769,18 @@ jobs:
             done < <(jq -r --arg target "${target}" '.[$target].inputs | to_entries[] | [.key, .value] | @tsv' "${clawhub_plan_path}")
           }
 
+          write_clawhub_runtime_state() {
+            local force_skip_clawhub="$1"
+            local output_path="$2"
+            node --import tsx scripts/openclaw-release-clawhub-runtime-state.ts \
+              --repository "${GITHUB_REPOSITORY}" \
+              --wait-for-clawhub "${WAIT_FOR_CLAWHUB}" \
+              --force-skip-clawhub "${force_skip_clawhub}" \
+              --normal-run-id "${plugin_clawhub_run_id:-}" \
+              --bootstrap-run-id "${plugin_clawhub_bootstrap_run_id:-}" \
+              --bootstrap-completed "${plugin_clawhub_bootstrap_completed:-false}" > "${output_path}"
+          }
+
           create_or_update_github_release() {
             local release_version notes_version title notes_file changelog_file latest_arg prerelease_args
             release_version="${RELEASE_TAG#v}"
@@ -857,7 +869,7 @@ jobs:
           }
 
           verify_published_release() {
-            local release_version evidence_path skip_clawhub
+            local release_version evidence_path skip_clawhub clawhub_runtime_state_path
             local -a verify_args
 
             skip_clawhub="${1:-false}"
@@ -881,24 +893,11 @@ jobs:
               --evidence-out "${evidence_path}"
               --skip-github-release
             )
-            should_verify_clawhub="false"
-            if [[ -n "${plugin_clawhub_run_id:-}" && "${WAIT_FOR_CLAWHUB}" == "true" ]]; then
-              should_verify_clawhub="true"
-            fi
-            if [[ -n "${plugin_clawhub_bootstrap_run_id:-}" && "${plugin_clawhub_bootstrap_completed:-false}" == "true" ]]; then
-              if [[ -z "${plugin_clawhub_run_id:-}" || "${WAIT_FOR_CLAWHUB}" == "true" ]]; then
-                should_verify_clawhub="true"
-              fi
-            fi
-            if [[ "${skip_clawhub}" == "true" || "${should_verify_clawhub}" != "true" ]]; then
-              verify_args+=(--skip-clawhub)
-            fi
-            if [[ -n "${plugin_clawhub_run_id:-}" && "${WAIT_FOR_CLAWHUB}" == "true" && "${skip_clawhub}" != "true" ]]; then
-              verify_args+=(--plugin-clawhub-run "${plugin_clawhub_run_id}")
-            fi
-            if [[ -n "${plugin_clawhub_bootstrap_run_id:-}" && "${plugin_clawhub_bootstrap_completed:-false}" == "true" && "${skip_clawhub}" != "true" ]]; then
-              verify_args+=(--plugin-clawhub-bootstrap-run "${plugin_clawhub_bootstrap_run_id}")
-            fi
+            clawhub_runtime_state_path="${RUNNER_TEMP}/openclaw-release-clawhub-runtime-state-verify.json"
+            write_clawhub_runtime_state "${skip_clawhub}" "${clawhub_runtime_state_path}"
+            while IFS= read -r arg; do
+              verify_args+=("${arg}")
+            done < <(jq -r '.verifierArgs[]' "${clawhub_runtime_state_path}")
             if [[ -n "${PLUGINS// }" ]]; then
               verify_args+=(--plugins "${PLUGINS}")
             fi
@@ -914,7 +913,7 @@ jobs:
           }
 
           append_release_proof_to_github_release() {
-            local release_version body_file notes_file tarball integrity telegram_line clawhub_line clawhub_bootstrap_line
+            local release_version body_file notes_file tarball integrity telegram_line clawhub_line clawhub_bootstrap_line clawhub_runtime_state_path
 
             release_version="${RELEASE_TAG#v}"
             body_file="${RUNNER_TEMP}/release-body.md"
@@ -928,22 +927,10 @@ jobs:
             else
               telegram_line="- npm Telegram beta E2E: not supplied"
             fi
-            if [[ -z "${plugin_clawhub_run_id:-}" ]]; then
-              clawhub_line="- plugin ClawHub publish: no normal OIDC candidates"
-            elif [[ "${WAIT_FOR_CLAWHUB}" == "true" ]]; then
-              clawhub_line="- plugin ClawHub publish: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${plugin_clawhub_run_id}"
-            else
-              clawhub_line="- plugin ClawHub publish: dispatched separately, not awaited by this proof: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${plugin_clawhub_run_id}"
-            fi
-            if [[ -z "${plugin_clawhub_bootstrap_run_id:-}" ]]; then
-              clawhub_bootstrap_line="- plugin ClawHub bootstrap: not needed"
-            elif [[ "${plugin_clawhub_bootstrap_completed:-false}" == "true" ]]; then
-              clawhub_bootstrap_line="- plugin ClawHub bootstrap: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${plugin_clawhub_bootstrap_run_id}"
-            elif [[ "${WAIT_FOR_CLAWHUB}" == "true" ]]; then
-              clawhub_bootstrap_line="- plugin ClawHub bootstrap: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${plugin_clawhub_bootstrap_run_id}"
-            else
-              clawhub_bootstrap_line="- plugin ClawHub bootstrap: dispatched separately, not awaited by this proof: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${plugin_clawhub_bootstrap_run_id}"
-            fi
+            clawhub_runtime_state_path="${RUNNER_TEMP}/openclaw-release-clawhub-runtime-state-proof.json"
+            write_clawhub_runtime_state false "${clawhub_runtime_state_path}"
+            clawhub_line="$(jq -r '.proofLines.normal' "${clawhub_runtime_state_path}")"
+            clawhub_bootstrap_line="$(jq -r '.proofLines.bootstrap' "${clawhub_runtime_state_path}")"
 
             RELEASE_BODY_FILE="${body_file}" \
               RELEASE_NOTES_FILE="${notes_file}" \

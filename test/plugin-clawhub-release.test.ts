@@ -12,6 +12,7 @@ import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   buildOpenClawReleaseClawHubPlan,
+  buildOpenClawReleaseClawHubRuntimeState,
   parseOpenClawReleaseClawHubPlanArgs,
 } from "../scripts/lib/openclaw-release-clawhub-plan.ts";
 import {
@@ -781,6 +782,99 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
         "@openclaw/demo-plugin",
       ]),
     ).toThrow("plugin-publish-scope=all-publishable must not be combined with --plugins.");
+  });
+});
+
+describe("buildOpenClawReleaseClawHubRuntimeState", () => {
+  it("includes the normal ClawHub run in verifier args when the release waits for it", () => {
+    const state = buildOpenClawReleaseClawHubRuntimeState({
+      repository: "openclaw/openclaw",
+      waitForClawHub: true,
+      forceSkipClawHub: false,
+      normalRunId: "111",
+      bootstrapRunId: "",
+      bootstrapCompleted: false,
+    });
+
+    expect(state.verifierArgs).toEqual(["--plugin-clawhub-run", "111"]);
+    expect(state.proofLines.normal).toBe(
+      "- plugin ClawHub publish: https://github.com/openclaw/openclaw/actions/runs/111",
+    );
+    expect(state.proofLines.bootstrap).toBe("- plugin ClawHub bootstrap: not needed");
+  });
+
+  it("includes a completed bootstrap run even when there is no normal ClawHub run", () => {
+    const state = buildOpenClawReleaseClawHubRuntimeState({
+      repository: "openclaw/openclaw",
+      waitForClawHub: false,
+      forceSkipClawHub: false,
+      normalRunId: "",
+      bootstrapRunId: "222",
+      bootstrapCompleted: true,
+    });
+
+    expect(state.verifierArgs).toEqual(["--plugin-clawhub-bootstrap-run", "222"]);
+    expect(state.proofLines.normal).toBe("- plugin ClawHub publish: no normal OIDC candidates");
+    expect(state.proofLines.bootstrap).toBe(
+      "- plugin ClawHub bootstrap: https://github.com/openclaw/openclaw/actions/runs/222",
+    );
+  });
+
+  it("skips ClawHub verification for non-awaited incomplete runs while keeping proof links", () => {
+    const state = buildOpenClawReleaseClawHubRuntimeState({
+      repository: "openclaw/openclaw",
+      waitForClawHub: false,
+      forceSkipClawHub: false,
+      normalRunId: "111",
+      bootstrapRunId: "222",
+      bootstrapCompleted: false,
+    });
+
+    expect(state.verifierArgs).toEqual(["--skip-clawhub"]);
+    expect(state.proofLines.normal).toBe(
+      "- plugin ClawHub publish: dispatched separately, not awaited by this proof: https://github.com/openclaw/openclaw/actions/runs/111",
+    );
+    expect(state.proofLines.bootstrap).toBe(
+      "- plugin ClawHub bootstrap: dispatched separately, not awaited by this proof: https://github.com/openclaw/openclaw/actions/runs/222",
+    );
+  });
+
+  it("keeps completed bootstrap run evidence when the normal ClawHub run is not awaited", () => {
+    const state = buildOpenClawReleaseClawHubRuntimeState({
+      repository: "openclaw/openclaw",
+      waitForClawHub: false,
+      forceSkipClawHub: false,
+      normalRunId: "111",
+      bootstrapRunId: "222",
+      bootstrapCompleted: true,
+    });
+
+    expect(state.verifierArgs).toEqual(["--skip-clawhub", "--plugin-clawhub-bootstrap-run", "222"]);
+    expect(state.proofLines.normal).toBe(
+      "- plugin ClawHub publish: dispatched separately, not awaited by this proof: https://github.com/openclaw/openclaw/actions/runs/111",
+    );
+    expect(state.proofLines.bootstrap).toBe(
+      "- plugin ClawHub bootstrap: https://github.com/openclaw/openclaw/actions/runs/222",
+    );
+  });
+
+  it("forces skip-clawhub after a failed child run even if ClawHub runs completed", () => {
+    const state = buildOpenClawReleaseClawHubRuntimeState({
+      repository: "openclaw/openclaw",
+      waitForClawHub: true,
+      forceSkipClawHub: true,
+      normalRunId: "111",
+      bootstrapRunId: "222",
+      bootstrapCompleted: true,
+    });
+
+    expect(state.verifierArgs).toEqual(["--skip-clawhub"]);
+    expect(state.proofLines.normal).toBe(
+      "- plugin ClawHub publish: https://github.com/openclaw/openclaw/actions/runs/111",
+    );
+    expect(state.proofLines.bootstrap).toBe(
+      "- plugin ClawHub bootstrap: https://github.com/openclaw/openclaw/actions/runs/222",
+    );
   });
 });
 
