@@ -119,11 +119,22 @@ describe("opencode-go provider plugin", () => {
     expect(kimi.maxTokens).toBe(65_536);
 
     const minimax = requireMapEntry(models, "minimax-m2.7");
-    expect(minimax.api).toBe("openai-completions");
-    expect(minimax.baseUrl).toBe("https://opencode.ai/zen/go/v1");
+    expect(minimax.api).toBe("anthropic-messages");
+    expect(minimax.baseUrl).toBe("https://opencode.ai/zen/go");
     expect(minimax.reasoning).toBe(true);
     expect(minimax.contextWindow).toBe(204_800);
     expect(minimax.maxTokens).toBe(131_072);
+
+    const minimaxM3 = requireRecord(
+      provider.resolveDynamicModel?.({ modelId: "minimax-m3" } as never),
+      "dynamic model",
+    );
+    expect(minimaxM3.api).toBe("anthropic-messages");
+    expect(minimaxM3.baseUrl).toBe("https://opencode.ai/zen/go");
+    expect(minimaxM3.input).toEqual(["text", "image", "video"]);
+    expect(minimaxM3.reasoning).toBe(true);
+    expect(minimaxM3.contextWindow).toBe(512_000);
+    expect(minimaxM3.maxTokens).toBe(131_072);
 
     const mimoPro = requireMapEntry(models, "mimo-v2.5-pro");
     expect(mimoPro.api).toBe("openai-completions");
@@ -138,6 +149,84 @@ describe("opencode-go provider plugin", () => {
     expect(mimo.reasoning).toBe(true);
     expect(mimo.contextWindow).toBe(1_000_000);
     expect(mimo.maxTokens).toBe(128_000);
+
+    const qwenMax = requireRecord(
+      provider.resolveDynamicModel?.({ modelId: "qwen3.7-max" } as never),
+      "dynamic model",
+    );
+    expect(qwenMax.api).toBe("anthropic-messages");
+    expect(qwenMax.baseUrl).toBe("https://opencode.ai/zen/go");
+    expect(qwenMax.input).toEqual(["text"]);
+    expect(qwenMax.reasoning).toBe(true);
+    expect(qwenMax.contextWindow).toBe(1_000_000);
+    expect(qwenMax.maxTokens).toBe(65_536);
+    expect(requireRecord(qwenMax.compat, "Qwen3.7 compat")).toMatchObject({
+      thinkingFormat: "qwen",
+    });
+
+    const qwen36Plus = requireRecord(
+      provider.resolveDynamicModel?.({ modelId: "qwen3.6-plus" } as never),
+      "dynamic model",
+    );
+    expect(qwen36Plus.api).toBe("anthropic-messages");
+    expect(qwen36Plus.baseUrl).toBe("https://opencode.ai/zen/go");
+    expect(qwen36Plus.contextWindow).toBe(1_000_000);
+    expect(qwen36Plus.maxTokens).toBe(65_536);
+    expect(qwen36Plus.cost).toMatchObject({
+      input: 0.5,
+      output: 3,
+      cacheRead: 0.05,
+      cacheWrite: 0.625,
+      tieredPricing: [
+        {
+          input: 0.5,
+          output: 3,
+          cacheRead: 0.05,
+          cacheWrite: 0.625,
+          range: [0, 256_000],
+        },
+        {
+          input: 2,
+          output: 6,
+          cacheRead: 0.2,
+          cacheWrite: 2.5,
+          range: [256_000],
+        },
+      ],
+    });
+
+    const qwen37Plus = requireRecord(
+      provider.resolveDynamicModel?.({ modelId: "qwen3.7-plus" } as never),
+      "dynamic model",
+    );
+    expect(qwen37Plus.api).toBe("anthropic-messages");
+    expect(qwen37Plus.baseUrl).toBe("https://opencode.ai/zen/go");
+    expect(qwen37Plus.input).toEqual(["text", "image"]);
+    expect(qwen37Plus.reasoning).toBe(true);
+    expect(qwen37Plus.contextWindow).toBe(1_000_000);
+    expect(qwen37Plus.maxTokens).toBe(65_536);
+    expect(qwen37Plus.cost).toMatchObject({
+      input: 0.4,
+      output: 1.6,
+      cacheRead: 0.04,
+      cacheWrite: 0.5,
+      tieredPricing: [
+        {
+          input: 0.4,
+          output: 1.6,
+          cacheRead: 0.04,
+          cacheWrite: 0.5,
+          range: [0, 256_000],
+        },
+        {
+          input: 1.2,
+          output: 4.8,
+          cacheRead: 0.12,
+          cacheWrite: 1.5,
+          range: [256_000],
+        },
+      ],
+    });
 
     const dynamicModel = requireRecord(
       provider.resolveDynamicModel?.({
