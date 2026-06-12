@@ -1215,6 +1215,25 @@ export function createAgentEventHandler({
       ) {
         // before_agent_finalize revision clears the first attempt's
         // streamed SSE so the second attempt starts with a fresh buffer.
+        // Send a replace delta to clear the Control UI's visible text,
+        // then clear server-side throttle state.
+        const staleText = chatRunState.buffers.get(clientRunId) ?? "";
+        sendChatPayload(sessionKey, {
+          runId: clientRunId,
+          sessionKey,
+          ...(sessionAgentId ? { agentId: sessionAgentId } : {}),
+          seq: evt.seq,
+          state: "delta" as const,
+          deltaText: "",
+          replace: true as const,
+          message: staleText
+            ? {
+                role: "assistant",
+                content: [{ type: "text", text: staleText }],
+                timestamp: Date.now(),
+              }
+            : undefined,
+        });
         clearBufferedChatState(clientRunId);
       }
       if (

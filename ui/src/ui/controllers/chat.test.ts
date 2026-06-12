@@ -371,6 +371,39 @@ describe("handleChatEvent", () => {
     expect(state.chatStream).toBe("Alpha");
   });
 
+  it("clears the stream on a replace delta then streams a second attempt", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Rejected first draft",
+    });
+    // Replace delta from before_agent_finalize revision clears the visible
+    // text so the second attempt starts with a fresh stream.
+    const replacePayload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "delta",
+      deltaText: "",
+      replace: true,
+    };
+    expect(handleChatEvent(state, replacePayload)).toBe("delta");
+    expect(state.chatStream).toBe("");
+
+    // Second attempt streams new text after the replace.
+    const secondPayload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "delta",
+      deltaText: "Revised answer",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Revised answer" }],
+      },
+    };
+    expect(handleChatEvent(state, secondPayload)).toBe("delta");
+    expect(state.chatStream).toBe("Revised answer");
+  });
+
   it("adopts the run id for selected-session live deltas observed from another channel", () => {
     const state = createState({
       sessionKey: "agent:main:feishu:direct:peer-1",

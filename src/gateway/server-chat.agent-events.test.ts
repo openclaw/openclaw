@@ -1246,6 +1246,51 @@ describe("agent event handler", () => {
     nowSpy.mockRestore();
   });
 
+  it("broadcasts a replace-only chat delta to clear the Control UI on before_agent_finalize revision", () => {
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => 11_700);
+    const { broadcast, nodeSendToSession, chatRunState, handler } = createHarness();
+    chatRunState.registry.add("run-revision-replace", {
+      sessionKey: "session-revision-replace",
+      clientRunId: "client-revision-replace",
+    });
+
+    // Stream the first attempt's text.
+    handler({
+      runId: "run-revision-replace",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "First attempt text" },
+    });
+
+    // The before_agent_finalize gate emits a replace-only assistant event
+    // to signal that the first attempt's visible text must be cleared.
+    handler({
+      runId: "run-revision-replace",
+      seq: 2,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { replace: true },
+    });
+
+    const chatCalls = chatBroadcastCalls(broadcast);
+    // At least one delta (the first attempt text) plus the replace delta.
+    const replaceCall = chatCalls.find(([, payload]) => {
+      const p = payload as { replace?: boolean };
+      return p.replace === true;
+    });
+    expect(replaceCall).toBeDefined();
+    const replacePayload = replaceCall![1] as {
+      deltaText?: string;
+      replace?: boolean;
+      state?: string;
+    };
+    expect(replacePayload.state).toBe("delta");
+    expect(replacePayload.deltaText).toBe("");
+    expect(replacePayload.replace).toBe(true);
+    nowSpy.mockRestore();
+  });
+
   it("flushes throttled shorter replacement deltas before final", () => {
     let now = 11_700;
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
