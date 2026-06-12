@@ -107,6 +107,8 @@ describe("renderWorkboard", () => {
   it("disables card-write controls while dispatch is running", () => {
     const host = {};
     const state = getWorkboardState(host);
+    const sessionKey = "agent:main:workboard-dispatch";
+    const request = vi.fn(async () => ({ card: state.cards[0] }));
     state.loaded = true;
     state.dispatching = true;
     state.cards = [
@@ -119,16 +121,19 @@ describe("renderWorkboard", () => {
         position: 1000,
         createdAt: 1,
         updatedAt: 1,
+        sessionKey,
       },
     ];
     const container = document.createElement("div");
     const props: WorkboardRenderProps = {
       host,
-      client: null,
+      client: { request } as unknown as GatewayBrowserClient,
       connected: true,
       pluginEnabled: true,
       agentsList: null,
-      sessions: [],
+      sessions: [
+        { key: sessionKey, kind: "direct", status: "running", hasActiveRun: true, updatedAt: 2 },
+      ],
       onOpenSession: () => undefined,
     };
 
@@ -152,6 +157,7 @@ describe("renderWorkboard", () => {
     expect(container.querySelector<HTMLElement>(".workboard-card")?.getAttribute("draggable")).toBe(
       "false",
     );
+    expect(request).not.toHaveBeenCalled();
 
     state.draftOpen = true;
     state.editingCardId = "card-1";

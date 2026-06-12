@@ -2327,7 +2327,7 @@ export function renderWorkboard(props: WorkboardProps) {
       requestUpdate: props.onRequestUpdate,
       refreshDiagnostics: canMutate(props),
     });
-    if (!suppressLifecycleSync) {
+    if (!suppressLifecycleSync && !state.dispatching) {
       void syncWorkboardLifecycle({
         host: props.host,
         client: props.client,

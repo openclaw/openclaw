@@ -437,15 +437,18 @@ describe("workboard controller", () => {
     ).toHaveLength(1);
 
     first.resolve({ card: { ...sampleCard, status: "review" } });
+    getWorkboardState(host).draggedCardId = secondCard.id;
     await firstMove;
 
     expect(getWorkboardState(host).busyCardIds).toEqual(new Set([secondCard.id]));
+    expect(getWorkboardState(host).draggedCardId).toBe(secondCard.id);
     await dispatchWorkboard({ host, client: client as never });
     expect(client.request).not.toHaveBeenCalledWith("workboard.cards.dispatch", {});
 
     second.resolve({ card: { ...secondCard, status: "review" } });
     await secondMove;
     expect(getWorkboardState(host).busyCardIds.size).toBe(0);
+    expect(getWorkboardState(host).draggedCardId).toBeNull();
   });
 
   it("clears stale task summaries when dispatch task refresh fails", async () => {
@@ -1189,6 +1192,25 @@ describe("workboard controller", () => {
     });
     expect(requestPatch(client, 1)).not.toHaveProperty("status");
     expect(state.cards[0]).toMatchObject({ status: "running" });
+  });
+
+  it("does not start lifecycle writes while dispatch is active", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.dispatching = true;
+    state.cards = [{ ...sampleCard, sessionKey: sampleSession.key }];
+    const client = createClient({
+      "workboard.cards.update": { card: { ...sampleCard, status: "running" } },
+    });
+
+    await syncWorkboardLifecycle({
+      host,
+      client: client as never,
+      sessions: [{ ...sampleSession, status: "running", hasActiveRun: true }],
+    });
+
+    expect(client.request).not.toHaveBeenCalled();
   });
 
   it("blocks stale lifecycle status writes while edit-modal status saves are in flight", async () => {
@@ -2994,6 +3016,41 @@ describe("workboard controller", () => {
       }),
     });
     expect(state.tasksByCardId.get("card-1")).toMatchObject({ status: "completed" });
+  });
+
+  it("does not resume lifecycle writes when dispatch starts during task refresh", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const linked = {
+      ...sampleCard,
+      status: "running",
+      sessionKey: sampleTaskSessionKey,
+      runId: "run-1",
+      taskId: "task-1",
+    } satisfies WorkboardCard;
+    const taskList = createDeferred<unknown>();
+    state.loaded = true;
+    state.cards = [linked];
+    state.tasksByCardId.set("card-1", sampleTask);
+    const client = createClient((method) => {
+      if (method === "tasks.list") {
+        return taskList.promise;
+      }
+      return { card: { ...linked, status: "review" } };
+    });
+
+    const syncing = syncWorkboardLifecycle({
+      host,
+      client: client as never,
+      sessions: [],
+    });
+    await Promise.resolve();
+    state.dispatching = true;
+    taskList.resolve({ tasks: [{ ...sampleTask, status: "completed" }] });
+    await syncing;
+
+    expect(client.request).toHaveBeenCalledOnce();
+    expect(client.request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
   });
 
   it("moves stale running sessions into running while recording stale metadata", async () => {

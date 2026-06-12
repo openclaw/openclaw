@@ -2244,7 +2244,7 @@ export async function syncWorkboardLifecycle(params: {
   requestUpdate?: () => void;
 }) {
   const state = getWorkboardState(params.host);
-  if (!params.client || !state.loaded || params.canWrite === false) {
+  if (!params.client || !state.loaded || params.canWrite === false || state.dispatching) {
     return;
   }
   if (shouldRefreshWorkboardTasksForLifecycle(state)) {
@@ -2256,8 +2256,14 @@ export async function syncWorkboardLifecycle(params: {
       params.requestUpdate?.();
     }
   }
+  if (state.dispatching) {
+    return;
+  }
   const syncKeys = getLifecycleSyncKeys(params.host);
   for (const card of state.cards) {
+    if (state.dispatching) {
+      return;
+    }
     const lifecycle = getWorkboardLifecycle(
       card,
       params.sessions,
@@ -2485,7 +2491,9 @@ export async function moveWorkboardCard(params: {
   } finally {
     clearPendingStatusTransition(params.host, params.cardId, pendingStatusRecorded);
     state.busyCardIds.delete(params.cardId);
-    state.draggedCardId = null;
+    if (state.draggedCardId === params.cardId) {
+      state.draggedCardId = null;
+    }
     params.requestUpdate?.();
   }
 }
