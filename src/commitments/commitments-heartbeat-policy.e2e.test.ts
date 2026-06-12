@@ -7,6 +7,7 @@ import {
   seedSessionStore,
   withTempHeartbeatSandbox,
 } from "../infra/heartbeat-runner.test-utils.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { saveCommitmentStore, loadCommitmentStore } from "./store.js";
 import type { CommitmentRecord } from "./types.js";
 
@@ -52,74 +53,75 @@ describe("commitments heartbeat delivery policy e2e", () => {
 
   it("does not send externally when heartbeat target is none", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-      vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            workspace: tmpDir,
-            heartbeat: {
-              every: "5m",
-              target: "none",
+      await withEnvAsync({ OPENCLAW_STATE_DIR: tmpDir }, async () => {
+        const cfg: OpenClawConfig = {
+          agents: {
+            defaults: {
+              workspace: tmpDir,
+              heartbeat: {
+                every: "5m",
+                target: "none",
+              },
             },
           },
-        },
-        channels: { telegram: { allowFrom: ["*"] } },
-        session: { store: storePath },
-        commitments: { enabled: true },
-      };
-      await seedSessionStore(storePath, sessionKey, {
-        lastChannel: "telegram",
-        lastProvider: "telegram",
-        lastTo: "155462274",
-      });
-      await saveCommitmentStore(undefined, {
-        version: 1,
-        commitments: [commitment()],
-      });
+          channels: { telegram: { allowFrom: ["*"] } },
+          session: { store: storePath },
+          commitments: { enabled: true },
+        };
+        await seedSessionStore(storePath, sessionKey, {
+          lastChannel: "telegram",
+          lastProvider: "telegram",
+          lastTo: "155462274",
+        });
+        await saveCommitmentStore(undefined, {
+          version: 1,
+          commitments: [commitment()],
+        });
 
-      const sendTelegram = vi.fn().mockResolvedValue({
-        messageId: "m1",
-        chatId: "155462274",
-      });
-      replySpy.mockImplementation(
-        async (
-          ctx: { Body?: string; OriginatingChannel?: string; OriginatingTo?: string },
-          opts?: { disableTools?: boolean },
-        ) => {
-          expect(ctx.Body).not.toContain("Due inferred follow-up commitments");
-          expect(ctx.Body).not.toContain("Did you get some rest?");
-          expect(ctx.Body).not.toContain("CALL_TOOL");
-          expect(ctx.OriginatingChannel).toBeUndefined();
-          expect(ctx.OriginatingTo).toBeUndefined();
-          expect(opts?.disableTools).toBeUndefined();
-          return { text: "internal heartbeat only" };
-        },
-      );
+        const sendTelegram = vi.fn().mockResolvedValue({
+          messageId: "m1",
+          chatId: "155462274",
+        });
+        replySpy.mockImplementation(
+          async (
+            ctx: { Body?: string; OriginatingChannel?: string; OriginatingTo?: string },
+            opts?: { disableTools?: boolean },
+          ) => {
+            expect(ctx.Body).not.toContain("Due inferred follow-up commitments");
+            expect(ctx.Body).not.toContain("Did you get some rest?");
+            expect(ctx.Body).not.toContain("CALL_TOOL");
+            expect(ctx.OriginatingChannel).toBeUndefined();
+            expect(ctx.OriginatingTo).toBeUndefined();
+            expect(opts?.disableTools).toBeUndefined();
+            return { text: "internal heartbeat only" };
+          },
+        );
 
-      const result = await runHeartbeatOnce({
-        cfg,
-        agentId: "main",
-        sessionKey,
-        deps: {
-          getReplyFromConfig: replySpy,
-          telegram: sendTelegram,
-          getQueueSize: () => 0,
-          nowMs: () => nowMs,
-        },
-      });
+        const result = await runHeartbeatOnce({
+          cfg,
+          agentId: "main",
+          sessionKey,
+          deps: {
+            getReplyFromConfig: replySpy,
+            telegram: sendTelegram,
+            getQueueSize: () => 0,
+            nowMs: () => nowMs,
+          },
+        });
 
-      expect(result.status).toBe("ran");
-      expect(sendTelegram).not.toHaveBeenCalled();
-      const store = await loadCommitmentStore();
-      const [persistedCommitment] = store.commitments;
-      if (!persistedCommitment) {
-        throw new Error("missing persisted commitment");
-      }
-      expect(persistedCommitment.id).toBe("cm_target_none");
-      expect(persistedCommitment.status).toBe("pending");
-      expect(persistedCommitment.attempts).toBe(0);
-      expect(persistedCommitment).not.toHaveProperty("sourceUserText");
-      expect(persistedCommitment).not.toHaveProperty("sourceAssistantText");
+        expect(result.status).toBe("ran");
+        expect(sendTelegram).not.toHaveBeenCalled();
+        const store = await loadCommitmentStore();
+        const [persistedCommitment] = store.commitments;
+        if (!persistedCommitment) {
+          throw new Error("missing persisted commitment");
+        }
+        expect(persistedCommitment.id).toBe("cm_target_none");
+        expect(persistedCommitment.status).toBe("pending");
+        expect(persistedCommitment.attempts).toBe(0);
+        expect(persistedCommitment).not.toHaveProperty("sourceUserText");
+        expect(persistedCommitment).not.toHaveProperty("sourceAssistantText");
+      });
     });
   });
 });

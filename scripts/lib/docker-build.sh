@@ -152,9 +152,10 @@ docker_build_run_logged() {
         fi
       done < <(pgrep -P "$process_id" 2>/dev/null || true)
     fi
-    kill -s "$signal" -- "-$process_id" 2>/dev/null ||
-      kill -s "$signal" "$process_id" 2>/dev/null ||
-      true
+    # A successful group signal does not prove this exact PID was in that group;
+    # send both so timeout/build wrappers cannot exit while their command stays alive.
+    kill -s "$signal" -- "-$process_id" 2>/dev/null || true
+    kill -s "$signal" "$process_id" 2>/dev/null || true
   }
 
   docker_build_stop_tracked_build() {

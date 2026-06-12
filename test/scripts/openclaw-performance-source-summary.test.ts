@@ -62,6 +62,23 @@ function writeSourceFixture(sourceDir: string) {
       { dir: "extensions/browser", maxRssMb: 80, deltaFromBaselineMb: 12, status: "ok" },
     ],
   });
+  writeJson(path.join(sourceDir, "sqlite-perf-smoke.json"), {
+    integrity: { agent: ["ok"], state: "ok" },
+    profile: "smoke",
+    queries: [{ p50Ms: 0.1, p95Ms: 0.2, query: "SELECT 1", rows: 1 }],
+    rows: {
+      agentCacheEntries: 1000,
+      agentDatabases: 2,
+      channelIngressEvents: 1000,
+      cronJobs: 100,
+      cronRunLogs: 1000,
+      deliveryQueueEntries: 1000,
+      pluginStateEntries: 1000,
+      stateRows: 4100,
+    },
+    timingsMs: { checkpoint: 1, seed: 100, total: 150 },
+    walBytes: { agentAfter: [0], agentBefore: [1024], stateAfter: 0, stateBefore: 4096 },
+  });
   writeJson(path.join(sourceDir, "mock-hello", "run-001", "qa-suite-summary.json"), {
     counts: { failed: 0, passed: 1, total: 1 },
     metrics: {
@@ -118,6 +135,8 @@ describe("buildMarkdown", () => {
 
     expect(buildMarkdown(sourceDir, null)).toContain("run-001");
     expect(buildMarkdown(sourceDir, null)).toContain("gateway health json");
+    expect(buildMarkdown(sourceDir, null)).toContain("## SQLite State Smoke");
+    expect(buildMarkdown(sourceDir, null)).toContain("4100");
   });
 
   it("rejects a missing source directory", () => {
@@ -174,6 +193,47 @@ describe("buildMarkdown", () => {
 
     expect(() => buildMarkdown(sourceDir, null)).toThrow(
       "[source-performance] incomplete gateway startup metrics for default:",
+    );
+  });
+
+  it("allows source performance fixtures without older-ref SQLite smoke artifacts", () => {
+    const sourceDir = mkTmpRoot();
+    writeSourceFixture(sourceDir);
+    fs.rmSync(path.join(sourceDir, "sqlite-perf-smoke.json"));
+
+    expect(buildMarkdown(sourceDir, null)).toContain("## SQLite State Smoke");
+    expect(buildMarkdown(sourceDir, null)).toContain("No data.");
+  });
+
+  it("rejects malformed SQLite perf smoke artifacts", () => {
+    const sourceDir = mkTmpRoot();
+    writeSourceFixture(sourceDir);
+    writeJson(path.join(sourceDir, "sqlite-perf-smoke.json"), {
+      integrity: { agent: ["ok"], state: "ok" },
+      profile: "smoke",
+      rows: { stateRows: 4100 },
+      walBytes: { stateAfter: 1 },
+    });
+
+    expect(() => buildMarkdown(sourceDir, null)).toThrow(
+      "[source-performance] incomplete SQLite perf metrics:",
+    );
+  });
+
+  it("rejects SQLite perf smoke artifacts with failing agent integrity", () => {
+    const sourceDir = mkTmpRoot();
+    writeSourceFixture(sourceDir);
+    writeJson(path.join(sourceDir, "sqlite-perf-smoke.json"), {
+      integrity: { agent: ["ok", "database disk image is malformed"], state: "ok" },
+      profile: "smoke",
+      queries: [{ p50Ms: 0.1, p95Ms: 0.2, query: "SELECT 1", rows: 1 }],
+      rows: { agentCacheEntries: 1000, stateRows: 4100 },
+      timingsMs: { total: 150 },
+      walBytes: { stateAfter: 0, stateBefore: 4096 },
+    });
+
+    expect(() => buildMarkdown(sourceDir, null)).toThrow(
+      "[source-performance] SQLite agent integrity check did not pass:",
     );
   });
 });
