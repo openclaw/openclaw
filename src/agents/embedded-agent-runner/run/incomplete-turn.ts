@@ -635,7 +635,7 @@ function shouldSkipPlanningOnlyRetry(params: {
   );
 }
 
-/** Allows configured silent handling for replay-safe empty or reasoning-only assistant turns. */
+/** Allows configured silent handling for replay-safe empty, reasoning-only, or explicit silent turns. */
 export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   allowEmptyAssistantReplyAsSilent?: boolean;
   payloadCount: number;
@@ -647,6 +647,25 @@ export function shouldTreatEmptyAssistantReplyAsSilent(params: {
     return false;
   }
   if (hasCommittedMessagingToolDeliveryEvidence(params.attempt)) {
+    return false;
+  }
+  const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
+  if (
+    params.payloadCount === 0 &&
+    assistant?.stopReason !== "error" &&
+    hasOnlySilentAssistantReply(params.attempt.assistantTexts)
+  ) {
+    return true;
+  }
+  // Post-tool empty stops are ambiguous provider failures, not intentional silence.
+  // Let the retry/incomplete-turn paths decide whether replay is safe.
+  if (
+    params.attempt.toolMetas.length > 0 &&
+    isEmptyResponseAssistantTurn({
+      payloadCount: params.payloadCount,
+      attempt: params.attempt,
+    })
+  ) {
     return false;
   }
   return isNonVisibleAssistantTurnEligibleForSilentReply({

@@ -193,9 +193,7 @@ describe("session startup catch-up", () => {
       });
 
     try {
-      await expect((harness as any).syncSessionFiles({ needsFullReindex: true })).resolves.toBe(
-        undefined,
-      );
+      await (harness as any).syncSessionFiles({ needsFullReindex: true });
       expect(attempts).toBe(2);
     } finally {
       openSpy.mockRestore();

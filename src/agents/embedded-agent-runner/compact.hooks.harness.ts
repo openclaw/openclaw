@@ -169,8 +169,9 @@ export const applyExtraParamsToAgentMock = vi.fn(() => ({ effectiveExtraParams: 
 export const resolveAgentTransportOverrideMock: Mock<(params?: unknown) => string | undefined> =
   vi.fn(() => undefined);
 export const resolveSandboxContextMock = vi.fn(async () => null);
-export const maybeCompactAgentHarnessSessionMock: Mock<(params?: unknown) => Promise<unknown>> =
-  vi.fn(async () => undefined);
+export const maybeCompactAgentHarnessSessionMock: Mock<
+  (params?: unknown, options?: unknown) => Promise<unknown>
+> = vi.fn(async () => undefined);
 export const rotateTranscriptAfterCompactionMock: Mock<
   (_params?: unknown) => Promise<CompactionTranscriptRotation>
 > = vi.fn(async () => ({

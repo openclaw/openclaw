@@ -1,6 +1,7 @@
 // Codex tests cover rate limits plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
+  buildCodexAppServerUsageSnapshot,
   formatCodexUsageLimitErrorMessage,
   resolveCodexUsageLimitResetAtMs,
   summarizeCodexAccountUsage,
@@ -128,6 +129,107 @@ describe("formatCodexUsageLimitErrorMessage", () => {
     expect(message).toContain("Wait until Codex becomes available");
     expect(message).not.toContain("Next reset");
     expect(message).not.toContain("1 hour");
+  });
+});
+
+describe("buildCodexAppServerUsageSnapshot", () => {
+  it("parses Codex app-server rate-limit windows as OpenAI usage", () => {
+    const result = buildCodexAppServerUsageSnapshot({
+      rateLimitsByLimitId: {
+        premium: {
+          limitId: "premium",
+          primary: null,
+        },
+        codex: {
+          limitId: "codex",
+          planType: "plus",
+          credits: { hasCredits: true, balance: "12.5" },
+          primary: {
+            usedPercent: 9,
+            windowDurationMins: 300,
+            resetsAt: 1_700_003_600,
+          },
+          secondary: {
+            usedPercent: 30,
+            windowDurationMins: 7 * 24 * 60,
+            resetsAt: 1_700_604_800,
+          },
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      provider: "openai",
+      displayName: "OpenAI",
+      plan: "plus (13 credits)",
+      windows: [
+        { label: "5h", usedPercent: 9, resetAt: 1_700_003_600_000 },
+        { label: "Week", usedPercent: 30, resetAt: 1_700_604_800_000 },
+      ],
+    });
+  });
+
+  it("uses reset cadence when Codex reports a 24h weekly secondary window", () => {
+    const nowMs = 1_700_000_000_000;
+    const primaryReset = Math.ceil(nowMs / 1000) + 60 * 60;
+    const weeklyReset = primaryReset + 7 * 24 * 60 * 60;
+    const payload = {
+      rateLimitsByLimitId: {
+        codex: {
+          limitId: "codex",
+          planType: "plus",
+          primary: {
+            usedPercent: 9,
+            windowDurationMins: 300,
+            resetsAt: primaryReset,
+          },
+          secondary: {
+            usedPercent: 30,
+            windowDurationMins: 24 * 60,
+            resetsAt: weeklyReset,
+          },
+        },
+      },
+    };
+
+    expect(buildCodexAppServerUsageSnapshot(payload).windows).toEqual([
+      { label: "5h", usedPercent: 9, resetAt: primaryReset * 1000 },
+      { label: "Week", usedPercent: 30, resetAt: weeklyReset * 1000 },
+    ]);
+    expect(summarizeCodexAccountUsage(payload, nowMs)?.usageLine).toBe(
+      "weekly 30% \u00b7 short-term 9%",
+    );
+  });
+
+  it("formats unlimited Codex credits without currency wording", () => {
+    const result = buildCodexAppServerUsageSnapshot({
+      rate_limits: {
+        limit_id: "codex",
+        plan_type: "plus",
+        credits: { has_credits: true, unlimited: true, balance: null },
+        primary: null,
+        secondary: null,
+      },
+    });
+
+    expect(result.plan).toBe("plus (Unlimited credits)");
+  });
+
+  it("accepts snake_case Codex core payload fields", () => {
+    const result = buildCodexAppServerUsageSnapshot({
+      rate_limits: {
+        limit_id: "codex",
+        plan_type: "pro",
+        primary: {
+          used_percent: 25,
+          window_minutes: 60,
+          resets_at: 1_700_000_060,
+        },
+      },
+    });
+
+    expect(result.windows).toEqual([{ label: "1h", usedPercent: 25, resetAt: 1_700_000_060_000 }]);
+    expect(result.plan).toBe("pro");
   });
 });
 

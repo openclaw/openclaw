@@ -150,8 +150,13 @@ function evaluateExpression(
       ];
     }
     const diagnostics = expression.anyOf.map((entry) => evaluateExpression(entry, context));
-    // anyOf is available when at least one branch has no diagnostics; otherwise preserve all reasons.
-    return diagnostics.some((entries) => entries.length === 0) ? [] : diagnostics.flat();
+    // "unsupported-signal" marks a malformed descriptor, not a runtime condition, so it must surface
+    // even when a sibling branch is available; otherwise an available branch masks an authoring error.
+    const unsupported = diagnostics.flat().filter((entry) => entry.reason === "unsupported-signal");
+    if (diagnostics.some((entries) => entries.length === 0)) {
+      return unsupported;
+    }
+    return diagnostics.flat();
   }
   return [
     {

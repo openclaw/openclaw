@@ -479,6 +479,32 @@ describe("ui.seamColor", () => {
   });
 });
 
+describe("tui.footer.showRemoteHost", () => {
+  it("accepts the TUI remote-host footer toggle", () => {
+    const result = OpenClawSchema.safeParse({
+      tui: {
+        footer: {
+          showRemoteHost: true,
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects unknown TUI footer keys", () => {
+    const result = OpenClawSchema.safeParse({
+      tui: {
+        footer: {
+          showLocalHost: true,
+        },
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
+});
+
 describe("gateway.controlUi.embedSandbox", () => {
   it("accepts strict, scripts, and trusted modes", () => {
     for (const mode of ["strict", "scripts", "trusted"] as const) {

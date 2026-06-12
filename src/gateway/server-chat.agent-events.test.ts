@@ -413,6 +413,89 @@ describe("agent event handler", () => {
     nowSpy?.mockRestore();
   });
 
+  it("emits the first assistant chat.send timing event to the originating Control UI", () => {
+    const { broadcastToConnIds, chatRunState, handler, nowSpy } = createHarness({ now: 1_000 });
+    chatRunState.registry.add("run-1", {
+      sessionKey: "session-1",
+      clientRunId: "client-1",
+      chatSendTiming: {
+        ackedAtMs: 0,
+        connId: "conn-control-ui",
+        dispatchStartedAtMs: 0,
+        receivedAtMs: 0,
+      },
+    });
+
+    handler({
+      runId: "run-1",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Hello world" },
+    });
+    handler({
+      runId: "run-1",
+      seq: 2,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Hello world again" },
+    });
+
+    expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "chat.send_timing",
+      expect.objectContaining({
+        phase: "first-assistant-event",
+        runId: "client-1",
+        sessionKey: "session-1",
+        ackToPhaseMs: expect.any(Number),
+        dispatchStartedToPhaseMs: expect.any(Number),
+        receivedToPhaseMs: expect.any(Number),
+      }),
+      new Set(["conn-control-ui"]),
+      { dropIfSlow: true },
+    );
+    nowSpy?.mockRestore();
+  });
+
+  it("emits first assistant chat.send timing when text first flushes on final", () => {
+    const { broadcastToConnIds, chatRunState, handler, nowSpy } = createHarness({ now: 1_000 });
+    chatRunState.registry.add("run-final-only", {
+      sessionKey: "session-1",
+      clientRunId: "client-final",
+      chatSendTiming: {
+        ackedAtMs: 0,
+        connId: "conn-control-ui",
+        dispatchStartedAtMs: 0,
+        receivedAtMs: 0,
+      },
+    });
+    chatRunState.buffers.set("client-final", "Final only reply");
+
+    handler({
+      runId: "run-final-only",
+      seq: 1,
+      stream: "lifecycle",
+      ts: Date.now(),
+      data: { phase: "end" },
+    });
+
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "chat.send_timing",
+      expect.objectContaining({
+        phase: "first-assistant-event",
+        runId: "client-final",
+        sessionKey: "session-1",
+        ackToPhaseMs: expect.any(Number),
+        dispatchStartedToPhaseMs: expect.any(Number),
+        receivedToPhaseMs: expect.any(Number),
+      }),
+      new Set(["conn-control-ui"]),
+      { dropIfSlow: true },
+    );
+    nowSpy?.mockRestore();
+  });
+
   it("coalesces assistant agent events under the chat delta throttle", () => {
     let now = 10_000;
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
@@ -2556,6 +2639,47 @@ describe("agent event handler", () => {
     expect(finalPayload.runId).toBe("run-terminal-error");
     expect(clearAgentRunContext).toHaveBeenCalledWith("run-terminal-error");
     expect(agentRunSeq.has("run-terminal-error")).toBe(false);
+  });
+
+  it("finalizes fallback-exhausted lifecycle errors without waiting for retry grace", () => {
+    vi.useFakeTimers();
+    const { broadcast, clearAgentRunContext, agentRunSeq, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-terminal-error",
+      lifecycleErrorRetryGraceMs: 100,
+    });
+    registerAgentRunContext("run-terminal-final-failure", {
+      sessionKey: "session-terminal-error",
+    });
+
+    handler({
+      runId: "run-terminal-final-failure",
+      seq: 1,
+      stream: "lifecycle",
+      ts: Date.now(),
+      data: {
+        phase: "error",
+        error: "LLM request failed: network connection error.",
+        fallbackExhaustedFailure: true,
+      },
+    });
+
+    const finalPayload = chatBroadcastCalls(broadcast).at(-1)?.[1] as {
+      state?: string;
+      runId?: string;
+      errorMessage?: string;
+    };
+    expect(finalPayload.state).toBe("error");
+    expect(finalPayload.runId).toBe("run-terminal-final-failure");
+    expect(finalPayload.errorMessage).toContain("network connection error");
+    expect(clearAgentRunContext).toHaveBeenCalledWith("run-terminal-final-failure");
+    expect(agentRunSeq.has("run-terminal-final-failure")).toBe(false);
+    expect(
+      persistGatewaySessionLifecycleEventMock.mock.calls.some(
+        ([params]) =>
+          (params as { event?: { data?: { fallbackExhaustedFailure?: boolean } } }).event?.data
+            ?.fallbackExhaustedFailure === true,
+      ),
+    ).toBe(true);
   });
 
   it("keeps deferred lifecycle-error cleanup across later non-terminal events", () => {
