@@ -205,6 +205,7 @@ export class CodexAppServerEventProjector {
   private streamedPartialAssistantItemId: string | undefined;
   private streamedPartialAssistantItemReplaceable = false;
   private completedTurn: CodexTurn | undefined;
+  private completedTurnStatus: string | undefined;
   private promptError: unknown;
   private promptErrorSource: EmbeddedRunAttemptResult["promptErrorSource"] = null;
   private synthesizedMissingToolResultError: string | null = null;
@@ -323,11 +324,12 @@ export class CodexAppServerEventProjector {
     options?: { yieldDetected?: boolean },
   ): EmbeddedRunAttemptResult {
     const assistantTexts = this.collectAssistantTexts();
-    // buildResult is the terminal projection boundary for an attempt. Mark the
-    // selected answer candidate here as an idempotent fallback so dashboard
-    // activity has a selected record even when the app-server completion
-    // snapshot is sparse or omitted.
-    this.markSelectedFinalAnswerCandidate();
+    // buildResult is the terminal projection boundary for an attempt. Finalize
+    // answer-candidate activity here as an idempotent fallback, but only mark a
+    // candidate selected after an authoritative successful Codex turn. Failed,
+    // aborted, timed-out, or client-closed attempts must not look like they
+    // selected a final answer in Control UI activity.
+    this.finalizeFinalAnswerCandidateLifecycle();
     const reasoningText = collectReasoningTextValues(
       this.reasoningTextByGroup,
       this.reasoningItemOrder,
@@ -827,11 +829,18 @@ export class CodexAppServerEventProjector {
   }
 
   private async handleTurnCompleted(params: JsonObject): Promise<void> {
+    const rawTurn = isJsonObject(params.turn) ? params.turn : undefined;
+    if (!rawTurn || readString(rawTurn, "id") !== this.turnId) {
+      return;
+    }
+    this.completedTurnStatus = readString(rawTurn, "status");
     const turn = readTurn(params.turn);
     if (!turn || turn.id !== this.turnId) {
+      this.finalizeFinalAnswerCandidateLifecycle();
       return;
     }
     this.completedTurn = turn;
+    this.completedTurnStatus = turn.status ?? this.completedTurnStatus;
     if (turn.status === "failed") {
       this.promptError =
         formatCodexUsageLimitErrorMessage({
@@ -881,7 +890,7 @@ export class CodexAppServerEventProjector {
       this.emitToolResultSummary(item);
       this.emitToolResultOutput(item);
     }
-    this.markSelectedFinalAnswerCandidate();
+    this.finalizeFinalAnswerCandidateLifecycle();
     this.activeCompactionItemIds.clear();
     await this.maybeEndReasoning();
   }
@@ -1177,6 +1186,14 @@ export class CodexAppServerEventProjector {
       return;
     }
     this.markFinalAnswerCandidate(itemId, "superseded");
+  }
+
+  private finalizeFinalAnswerCandidateLifecycle(): void {
+    if (this.completedTurnStatus !== "completed") {
+      this.supersedeActiveFinalAnswerCandidate();
+      return;
+    }
+    this.markSelectedFinalAnswerCandidate();
   }
 
   private markSelectedFinalAnswerCandidate(): void {

@@ -269,7 +269,7 @@ function turnWithStatus(status: string, items: unknown[] = []): ProjectorNotific
     method: "turn/completed",
     params: {
       threadId: THREAD_ID,
-      turn: { id: TURN_ID, status, items },
+      turn: { id: TURN_ID, threadId: THREAD_ID, status, items },
     },
   } as ProjectorNotification;
 }
@@ -486,6 +486,7 @@ describe("CodexAppServerEventProjector", () => {
       forCurrentTurn("turn/completed", {
         turn: {
           id: TURN_ID,
+          threadId: THREAD_ID,
           status: "completed",
           items: [
             {
@@ -563,6 +564,59 @@ describe("CodexAppServerEventProjector", () => {
         progressText: "Final answer",
       },
     ]);
+  });
+
+  it("does not mark final-answer candidates selected for non-successful terminal attempts", async () => {
+    const terminalCases: Array<
+      | { name: string; status: string; sendTurnCompleted: true }
+      | { name: string; sendTurnCompleted: false }
+    > = [
+      { name: "failed turn", status: "failed", sendTurnCompleted: true },
+      { name: "aborted turn", status: "aborted", sendTurnCompleted: true },
+      { name: "timed out turn", status: "timed_out", sendTurnCompleted: true },
+      { name: "client close before turn completion", sendTurnCompleted: false },
+    ];
+
+    for (const terminalCase of terminalCases) {
+      const onAgentEvent = vi.fn();
+      const projector = await createProjector({ ...(await createParams()), onAgentEvent });
+      const itemId = `msg-${terminalCase.name.replace(/\s+/g, "-")}`;
+
+      await projector.handleNotification(
+        forCurrentTurn("item/started", {
+          item: {
+            type: "agentMessage",
+            id: itemId,
+            phase: "final_answer",
+            text: "",
+          },
+        }),
+      );
+      await projector.handleNotification(
+        agentMessageDelta("Candidate before terminal failure", itemId),
+      );
+      if (terminalCase.sendTurnCompleted) {
+        await projector.handleNotification(
+          turnWithStatus(terminalCase.status, [
+            {
+              type: "agentMessage",
+              id: itemId,
+              phase: "final_answer",
+              text: "Candidate before terminal failure",
+            },
+          ]),
+        );
+      }
+
+      projector.buildResult(buildEmptyToolTelemetry());
+
+      const candidateStatuses = onAgentEvent.mock.calls
+        .map((call) => call[0])
+        .filter((event) => event.stream === "item" && event.data.kind === "answer_candidate")
+        .map((event) => event.data.status);
+
+      expect(candidateStatuses, terminalCase.name).toEqual(["candidate", "superseded"]);
+    }
   });
 
   it("suppresses mirrored user prompt when the inbound message was already persisted", async () => {
