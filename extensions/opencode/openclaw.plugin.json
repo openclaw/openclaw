@@ -5,11 +5,15 @@
     "onStartup": false
   },
   "enabledByDefault": true,
-  "providers": ["opencode"],
+  "providers": [
+    "opencode"
+  ],
   "providerEndpoints": [
     {
       "endpointClass": "opencode-native",
-      "hostSuffixes": ["opencode.ai"]
+      "hostSuffixes": [
+        "opencode.ai"
+      ]
     }
   ],
   "providerRequest": {
@@ -31,7 +35,10 @@
             "baseUrl": "https://opencode.ai/zen",
             "name": "Claude Fable 5",
             "reasoning": true,
-            "input": ["text", "image"],
+            "input": [
+              "text",
+              "image"
+            ],
             "contextWindow": 200000,
             "maxTokens": 65536,
             "cost": {
@@ -52,7 +59,10 @@
             "baseUrl": "https://opencode.ai/zen",
             "name": "Claude Opus 4.8",
             "reasoning": true,
-            "input": ["text", "image"],
+            "input": [
+              "text",
+              "image"
+            ],
             "contextWindow": 200000,
             "maxTokens": 65536,
             "cost": {
@@ -73,7 +83,10 @@
             "baseUrl": "https://opencode.ai/zen",
             "name": "Claude Opus 4.7",
             "reasoning": true,
-            "input": ["text", "image"],
+            "input": [
+              "text",
+              "image"
+            ],
             "contextWindow": 200000,
             "maxTokens": 65536,
             "cost": {
@@ -94,7 +107,10 @@
             "baseUrl": "https://opencode.ai/zen",
             "name": "Claude Opus 4.6",
             "reasoning": true,
-            "input": ["text", "image"],
+            "input": [
+              "text",
+              "image"
+            ],
             "contextWindow": 200000,
             "maxTokens": 65536,
             "cost": {
@@ -110,12 +126,63 @@
             }
           },
           {
+            "id": "claude-opus-4-5",
+            "api": "anthropic-messages",
+            "baseUrl": "https://opencode.ai/zen",
+            "name": "Claude Opus 4.5",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 200000,
+            "maxTokens": 65536,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "claude-opus-4-1",
+            "api": "anthropic-messages",
+            "baseUrl": "https://opencode.ai/zen",
+            "name": "Claude Opus 4.1",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 200000,
+            "maxTokens": 65536,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
             "id": "claude-sonnet-4-6",
             "api": "anthropic-messages",
             "baseUrl": "https://opencode.ai/zen",
             "name": "Claude Sonnet 4.6",
             "reasoning": true,
-            "input": ["text", "image"],
+            "input": [
+              "text",
+              "image"
+            ],
             "contextWindow": 200000,
             "maxTokens": 65536,
             "cost": {
@@ -123,6 +190,979 @@
               "output": 15,
               "cacheRead": 0.3,
               "cacheWrite": 3.75
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "claude-sonnet-4-5",
+            "api": "anthropic-messages",
+            "baseUrl": "https://opencode.ai/zen",
+            "name": "Claude Sonnet 4.5",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 200000,
+            "maxTokens": 65536,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "claude-sonnet-4",
+            "api": "anthropic-messages",
+            "baseUrl": "https://opencode.ai/zen",
+            "name": "Claude Sonnet 4",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 200000,
+            "maxTokens": 65536,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "claude-haiku-4-5",
+            "api": "anthropic-messages",
+            "baseUrl": "https://opencode.ai/zen",
+            "name": "Claude Haiku 4.5",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 200000,
+            "maxTokens": 65536,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "gemini-3.5-flash",
+            "api": "google-generative-ai",
+            "baseUrl": "https://opencode.ai/zen/v1",
+            "name": "Gemini 3.5 Flash",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 1048576,
+            "maxTokens": 65536,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "gemini-3.1-pro",
+            "api": "google-generative-ai",
+            "baseUrl": "https://opencode.ai/zen/v1",
+            "name": "Gemini 3.1 Pro",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 1048576,
+            "maxTokens": 65536,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "gemini-3-flash",
+            "api": "google-generative-ai",
+            "baseUrl": "https://opencode.ai/zen/v1",
+            "name": "Gemini 3 Flash",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 1048576,
+            "maxTokens": 65536,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "gpt-5.5",
+            "api": "openai-responses",
+            "baseUrl": "https://opencode.ai/zen/v1",
+            "name": "GPT-5.5",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 400000,
+            "maxTokens": 128000,
+            "cost": {
+              "input": 1.75,
+              "output": 14,
+              "cacheRead": 0.175,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "gpt-5.5-pro",
+            "api": "openai-responses",
+            "baseUrl": "https://opencode.ai/zen/v1",
+            "name": "GPT-5.5 Pro",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 400000,
+            "maxTokens": 128000,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "gpt-5.4",
+            "api": "openai-responses",
+            "baseUrl": "https://opencode.ai/zen/v1",
+            "name": "GPT-5.4",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 400000,
+            "maxTokens": 128000,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "gpt-5.4-pro",
+            "api": "openai-responses",
+            "baseUrl": "https://opencode.ai/zen/v1",
+            "name": "GPT-5.4 Pro",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 400000,
+            "maxTokens": 128000,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "gpt-5.4-mini",
+            "api": "openai-responses",
+            "baseUrl": "https://opencode.ai/zen/v1",
+            "name": "GPT-5.4 Mini",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 400000,
+            "maxTokens": 128000,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "gpt-5.4-nano",
+            "api": "openai-responses",
+            "baseUrl": "https://opencode.ai/zen/v1",
+            "name": "GPT-5.4 Nano",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 400000,
+            "maxTokens": 128000,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "gpt-5.3-codex-spark",
+            "api": "openai-responses",
+            "baseUrl": "https://opencode.ai/zen/v1",
+            "name": "GPT-5.3 Codex Spark",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 400000,
+            "maxTokens": 128000,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "gpt-5.3-codex",
+            "api": "openai-responses",
+            "baseUrl": "https://opencode.ai/zen/v1",
+            "name": "GPT-5.3 Codex",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 400000,
+            "maxTokens": 128000,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "gpt-5.2",
+            "api": "openai-responses",
+            "baseUrl": "https://opencode.ai/zen/v1",
+            "name": "GPT-5.2",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 400000,
+            "maxTokens": 128000,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "gpt-5.2-codex",
+            "api": "openai-responses",
+            "baseUrl": "https://opencode.ai/zen/v1",
+            "name": "GPT-5.2 Codex",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 400000,
+            "maxTokens": 128000,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "gpt-5.1",
+            "api": "openai-responses",
+            "baseUrl": "https://opencode.ai/zen/v1",
+            "name": "GPT-5.1",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 400000,
+            "maxTokens": 128000,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "gpt-5.1-codex-max",
+            "api": "openai-responses",
+            "baseUrl": "https://opencode.ai/zen/v1",
+            "name": "GPT-5.1 Codex Max",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 400000,
+            "maxTokens": 128000,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "gpt-5.1-codex",
+            "api": "openai-responses",
+            "baseUrl": "https://opencode.ai/zen/v1",
+            "name": "GPT-5.1 Codex",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 400000,
+            "maxTokens": 128000,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "gpt-5.1-codex-mini",
+            "api": "openai-responses",
+            "baseUrl": "https://opencode.ai/zen/v1",
+            "name": "GPT-5.1 Codex Mini",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 400000,
+            "maxTokens": 128000,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "gpt-5",
+            "api": "openai-responses",
+            "baseUrl": "https://opencode.ai/zen/v1",
+            "name": "GPT-5",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 400000,
+            "maxTokens": 128000,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "gpt-5-codex",
+            "api": "openai-responses",
+            "baseUrl": "https://opencode.ai/zen/v1",
+            "name": "GPT-5 Codex",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 400000,
+            "maxTokens": 128000,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "gpt-5-nano",
+            "api": "openai-responses",
+            "baseUrl": "https://opencode.ai/zen/v1",
+            "name": "GPT-5 Nano",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 400000,
+            "maxTokens": 128000,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "grok-build-0.1",
+            "api": "openai-completions",
+            "baseUrl": "https://opencode.ai/zen/v1",
+            "name": "Grok Build 0.1",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 128000,
+            "maxTokens": 8192,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "deepseek-v4-pro",
+            "api": "openai-completions",
+            "baseUrl": "https://opencode.ai/zen/v1",
+            "name": "DeepSeek V4 Pro",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 1000000,
+            "maxTokens": 384000,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "deepseek-v4-flash",
+            "api": "openai-completions",
+            "baseUrl": "https://opencode.ai/zen/v1",
+            "name": "DeepSeek V4 Flash",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 1000000,
+            "maxTokens": 384000,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "glm-5.1",
+            "api": "openai-completions",
+            "baseUrl": "https://opencode.ai/zen/v1",
+            "name": "GLM-5.1",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 204800,
+            "maxTokens": 131072,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "glm-5",
+            "api": "openai-completions",
+            "baseUrl": "https://opencode.ai/zen/v1",
+            "name": "GLM-5",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 204800,
+            "maxTokens": 131072,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "minimax-m2.7",
+            "api": "anthropic-messages",
+            "baseUrl": "https://opencode.ai/zen",
+            "name": "MiniMax M2.7",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 204800,
+            "maxTokens": 131072,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "minimax-m2.5",
+            "api": "anthropic-messages",
+            "baseUrl": "https://opencode.ai/zen",
+            "name": "MiniMax M2.5",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 204800,
+            "maxTokens": 131072,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "kimi-k2.6",
+            "api": "openai-completions",
+            "baseUrl": "https://opencode.ai/zen/v1",
+            "name": "Kimi K2.6",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 262144,
+            "maxTokens": 65536,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "kimi-k2.5",
+            "api": "openai-completions",
+            "baseUrl": "https://opencode.ai/zen/v1",
+            "name": "Kimi K2.5",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 262144,
+            "maxTokens": 65536,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "qwen3.6-plus",
+            "api": "openai-completions",
+            "baseUrl": "https://opencode.ai/zen/v1",
+            "name": "Qwen3.6 Plus",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 262144,
+            "maxTokens": 65536,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "qwen3.5-plus",
+            "api": "openai-completions",
+            "baseUrl": "https://opencode.ai/zen/v1",
+            "name": "Qwen3.5 Plus",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 262144,
+            "maxTokens": 65536,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "big-pickle",
+            "api": "openai-completions",
+            "baseUrl": "https://opencode.ai/zen/v1",
+            "name": "Big Pickle",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 128000,
+            "maxTokens": 8192,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "deepseek-v4-flash-free",
+            "api": "openai-completions",
+            "baseUrl": "https://opencode.ai/zen/v1",
+            "name": "DeepSeek V4 Flash Free",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 1000000,
+            "maxTokens": 384000,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "mimo-v2.5-free",
+            "api": "openai-completions",
+            "baseUrl": "https://opencode.ai/zen/v1",
+            "name": "MiMo V2.5 Free",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 262144,
+            "maxTokens": 8192,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "qwen3.6-plus-free",
+            "api": "openai-completions",
+            "baseUrl": "https://opencode.ai/zen/v1",
+            "name": "Qwen3.6 Plus Free",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 262144,
+            "maxTokens": 65536,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "minimax-m3-free",
+            "api": "anthropic-messages",
+            "baseUrl": "https://opencode.ai/zen",
+            "name": "MiniMax M3 Free",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 204800,
+            "maxTokens": 131072,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "nemotron-3-ultra-free",
+            "api": "openai-completions",
+            "baseUrl": "https://opencode.ai/zen/v1",
+            "name": "Nemotron 3 Ultra Free",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 128000,
+            "maxTokens": 8192,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "north-mini-code-free",
+            "api": "openai-completions",
+            "baseUrl": "https://opencode.ai/zen/v1",
+            "name": "North Mini Code Free",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 128000,
+            "maxTokens": 8192,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
             },
             "compat": {
               "supportsUsageInStreaming": true,
@@ -141,7 +1181,10 @@
     "providers": [
       {
         "id": "opencode",
-        "envVars": ["OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"]
+        "envVars": [
+          "OPENCODE_API_KEY",
+          "OPENCODE_ZEN_API_KEY"
+        ]
       }
     ]
   },
@@ -161,11 +1204,15 @@
     }
   ],
   "contracts": {
-    "mediaUnderstandingProviders": ["opencode"]
+    "mediaUnderstandingProviders": [
+      "opencode"
+    ]
   },
   "mediaUnderstandingProviderMetadata": {
     "opencode": {
-      "capabilities": ["image"],
+      "capabilities": [
+        "image"
+      ],
       "defaultModels": {
         "image": "gpt-5-nano"
       }

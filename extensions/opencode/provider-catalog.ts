@@ -35,12 +35,54 @@ const MODEL_COSTS: Record<
 };
 
 const MODEL_NAMES: Record<string, string> = {
+  "big-pickle": "Big Pickle",
   "claude-fable-5": "Claude Fable 5",
+  "claude-haiku-4-5": "Claude Haiku 4.5",
+  "claude-opus-4-1": "Claude Opus 4.1",
+  "claude-opus-4-5": "Claude Opus 4.5",
   "claude-opus-4-6": "Claude Opus 4.6",
   "claude-opus-4-7": "Claude Opus 4.7",
   "claude-opus-4-8": "Claude Opus 4.8",
+  "claude-sonnet-4": "Claude Sonnet 4",
+  "claude-sonnet-4-5": "Claude Sonnet 4.5",
   "claude-sonnet-4-6": "Claude Sonnet 4.6",
+  "deepseek-v4-flash": "DeepSeek V4 Flash",
+  "deepseek-v4-flash-free": "DeepSeek V4 Flash Free",
+  "deepseek-v4-pro": "DeepSeek V4 Pro",
+  "gemini-3-flash": "Gemini 3 Flash",
+  "gemini-3.1-pro": "Gemini 3.1 Pro",
+  "gemini-3.5-flash": "Gemini 3.5 Flash",
+  "glm-5": "GLM-5",
+  "glm-5.1": "GLM-5.1",
+  "gpt-5": "GPT-5",
+  "gpt-5-codex": "GPT-5 Codex",
+  "gpt-5-nano": "GPT-5 Nano",
+  "gpt-5.1": "GPT-5.1",
+  "gpt-5.1-codex": "GPT-5.1 Codex",
+  "gpt-5.1-codex-max": "GPT-5.1 Codex Max",
+  "gpt-5.1-codex-mini": "GPT-5.1 Codex Mini",
+  "gpt-5.2": "GPT-5.2",
+  "gpt-5.2-codex": "GPT-5.2 Codex",
+  "gpt-5.3-codex": "GPT-5.3 Codex",
+  "gpt-5.3-codex-spark": "GPT-5.3 Codex Spark",
+  "gpt-5.4": "GPT-5.4",
+  "gpt-5.4-mini": "GPT-5.4 Mini",
+  "gpt-5.4-nano": "GPT-5.4 Nano",
+  "gpt-5.4-pro": "GPT-5.4 Pro",
   "gpt-5.5": "GPT-5.5",
+  "gpt-5.5-pro": "GPT-5.5 Pro",
+  "grok-build-0.1": "Grok Build 0.1",
+  "kimi-k2.5": "Kimi K2.5",
+  "kimi-k2.6": "Kimi K2.6",
+  "mimo-v2.5-free": "MiMo V2.5 Free",
+  "minimax-m2.5": "MiniMax M2.5",
+  "minimax-m2.7": "MiniMax M2.7",
+  "minimax-m3-free": "MiniMax M3 Free",
+  "nemotron-3-ultra-free": "Nemotron 3 Ultra Free",
+  "north-mini-code-free": "North Mini Code Free",
+  "qwen3.5-plus": "Qwen3.5 Plus",
+  "qwen3.6-plus": "Qwen3.6 Plus",
+  "qwen3.6-plus-free": "Qwen3.6 Plus Free",
 };
 
 type OpencodeZenModelDefinition = ModelDefinitionConfig & {
@@ -86,24 +128,38 @@ function resolveContextWindow(modelId: string): number {
   if (lower.includes("gpt") || lower.includes("codex")) {
     return 400_000;
   }
+  if (lower.includes("deepseek")) {
+    return 1_000_000;
+  }
   if (lower.includes("claude")) {
     return 200_000;
   }
   if (lower.includes("glm") || lower.includes("minimax")) {
     return 204_800;
   }
+  if (lower.includes("kimi") || lower.includes("mimo") || lower.includes("qwen")) {
+    return 262_144;
+  }
   return 128_000;
 }
 
 function resolveMaxTokens(modelId: string): number {
   const lower = modelId.toLowerCase();
+  if (lower.includes("deepseek")) {
+    return 384_000;
+  }
   if (lower.includes("glm") || lower.includes("minimax")) {
     return 131_072;
   }
   if (lower.includes("gpt") || lower.includes("codex")) {
     return 128_000;
   }
-  if (lower.includes("claude") || lower.includes("gemini")) {
+  if (
+    lower.includes("claude") ||
+    lower.includes("gemini") ||
+    lower.includes("kimi") ||
+    lower.includes("qwen")
+  ) {
     return 65_536;
   }
   return 8_192;
@@ -155,7 +211,50 @@ const OPENCODE_ZEN_MODELS = [
   "claude-opus-4-8",
   "claude-opus-4-7",
   "claude-opus-4-6",
+  "claude-opus-4-5",
+  "claude-opus-4-1",
   "claude-sonnet-4-6",
+  "claude-sonnet-4-5",
+  "claude-sonnet-4",
+  "claude-haiku-4-5",
+  "gemini-3.5-flash",
+  "gemini-3.1-pro",
+  "gemini-3-flash",
+  "gpt-5.5",
+  "gpt-5.5-pro",
+  "gpt-5.4",
+  "gpt-5.4-pro",
+  "gpt-5.4-mini",
+  "gpt-5.4-nano",
+  "gpt-5.3-codex-spark",
+  "gpt-5.3-codex",
+  "gpt-5.2",
+  "gpt-5.2-codex",
+  "gpt-5.1",
+  "gpt-5.1-codex-max",
+  "gpt-5.1-codex",
+  "gpt-5.1-codex-mini",
+  "gpt-5",
+  "gpt-5-codex",
+  "gpt-5-nano",
+  "grok-build-0.1",
+  "deepseek-v4-pro",
+  "deepseek-v4-flash",
+  "glm-5.1",
+  "glm-5",
+  "minimax-m2.7",
+  "minimax-m2.5",
+  "kimi-k2.6",
+  "kimi-k2.5",
+  "qwen3.6-plus",
+  "qwen3.5-plus",
+  "big-pickle",
+  "deepseek-v4-flash-free",
+  "mimo-v2.5-free",
+  "qwen3.6-plus-free",
+  "minimax-m3-free",
+  "nemotron-3-ultra-free",
+  "north-mini-code-free",
 ].map(buildOpencodeZenModel);
 
 function buildOpencodeZenProviderConfig(
