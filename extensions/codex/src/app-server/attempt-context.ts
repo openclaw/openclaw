@@ -815,8 +815,8 @@ function renderCodexWorkspaceMemoryCollaborationInstructions(params: {
   citationsMode?: Parameters<typeof buildMemorySystemPromptAddition>[0]["citationsMode"];
 }): string | undefined {
   const memoryRecallInstructions = params.memoryToolRouted
-    ? buildMemorySystemPromptAddition({
-        availableTools: new Set(params.toolNames),
+    ? renderCodexMemoryRecallInstructions({
+        toolNames: params.toolNames,
         citationsMode: params.citationsMode,
       })
     : undefined;
@@ -826,6 +826,69 @@ function renderCodexWorkspaceMemoryCollaborationInstructions(params: {
   });
   const sections = [memoryRecallInstructions, memoryReferenceInstructions].filter(isNonEmptyString);
   return sections.length > 0 ? sections.join("\n\n") : undefined;
+}
+
+function renderCodexMemoryRecallInstructions(params: {
+  toolNames: readonly string[];
+  citationsMode?: Parameters<typeof buildMemorySystemPromptAddition>[0]["citationsMode"];
+}): string | undefined {
+  const availableTools = new Set(params.toolNames);
+  const memoryPrompt =
+    buildMemorySystemPromptAddition({
+      availableTools,
+      citationsMode: params.citationsMode,
+    }) ??
+    buildCodexFallbackMemorySystemPromptAddition({
+      availableTools,
+      citationsMode: params.citationsMode,
+    });
+  const toolSearchBridge = renderCodexMemoryToolSearchBridge(params.toolNames);
+  const sections = [memoryPrompt, toolSearchBridge].filter(isNonEmptyString);
+  return sections.length > 0 ? sections.join("\n").trim() : undefined;
+}
+
+function buildCodexFallbackMemorySystemPromptAddition(params: {
+  availableTools: Set<string>;
+  citationsMode?: Parameters<typeof buildMemorySystemPromptAddition>[0]["citationsMode"];
+}): string | undefined {
+  const hasMemorySearch = params.availableTools.has("memory_search");
+  const hasMemoryGet = params.availableTools.has("memory_get");
+  if (!hasMemorySearch && !hasMemoryGet) {
+    return undefined;
+  }
+
+  const toolGuidance = (() => {
+    if (hasMemorySearch && hasMemoryGet) {
+      return "Before answering anything about prior work, decisions, dates, people, preferences, or todos: run memory_search on MEMORY.md + memory/*.md + indexed session transcripts; then use memory_get to pull only the needed lines. If low confidence after search, say you checked.";
+    }
+    if (hasMemorySearch) {
+      return "Before answering anything about prior work, decisions, dates, people, preferences, or todos: run memory_search on MEMORY.md + memory/*.md + indexed session transcripts and answer from the matching results. If low confidence after search, say you checked.";
+    }
+    return "Before answering anything about prior work, decisions, dates, people, preferences, or todos that already point to a specific memory file or note: run memory_get to pull only the needed lines. If low confidence after reading them, say you checked.";
+  })();
+
+  const lines = ["## Memory Recall", toolGuidance];
+  if (params.citationsMode === "off") {
+    lines.push(
+      "Citations are disabled: do not mention file paths or line numbers in replies unless the user explicitly asks.",
+    );
+  } else {
+    lines.push(
+      "Citations: include Source: <path#line> when it helps the user verify memory snippets.",
+    );
+  }
+  return lines.join("\n").trim();
+}
+
+function renderCodexMemoryToolSearchBridge(toolNames: readonly string[]): string | undefined {
+  const memoryToolNames = toolNames
+    .map((name) => normalizeCodexDynamicToolName(name))
+    .filter((name) => CODEX_MEMORY_TOOL_NAMES.has(name))
+    .toSorted();
+  if (memoryToolNames.length === 0) {
+    return undefined;
+  }
+  return `Codex may expose ${memoryToolNames.join(" and ")} as deferred tools. Use \`tool_search\` first if the memory tools are not already loaded, then call the loaded memory tool before answering.`;
 }
 
 /** Returns whether the current dynamic tool list can serve workspace memory. */
