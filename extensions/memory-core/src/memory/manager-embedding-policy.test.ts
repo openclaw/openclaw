@@ -78,7 +78,7 @@ describe("memory embedding policy", () => {
   it("stops retrying after the caller signal aborts, even for retryable-looking errors", async () => {
     const controller = new AbortController();
     const run = vi.fn(async () => {
-      controller.abort(new Error("memory_search timed out after 15s"));
+      controller.abort(new Error("memory_search timed out after 60s"));
       // "timed out" matches the retryable transport pattern; abort must still win.
       throw new Error("memory embeddings query timed out after 60s");
     });

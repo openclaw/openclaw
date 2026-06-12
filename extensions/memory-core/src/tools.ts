@@ -44,7 +44,7 @@ type MemorySearchToolResult =
   | (MemorySearchResult & { corpus: MemorySource })
   | MemoryCorpusSearchResult;
 
-const MEMORY_SEARCH_TOOL_TIMEOUT_MS = 15_000;
+const MEMORY_SEARCH_TOOL_TIMEOUT_MS = 60_000;
 const MEMORY_SEARCH_TOOL_COOLDOWN_MS = 60_000;
 
 const memorySearchToolCooldowns = new Map<string, { until: number; error: string }>();

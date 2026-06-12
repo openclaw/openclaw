@@ -144,7 +144,7 @@ describe("memory_search unavailable payloads", () => {
 
       const result = await resultPromise;
       expectUnavailableMemorySearchDetails(result.details, {
-        error: "memory_search timed out after 15s",
+        error: "memory_search timed out after 60s",
         warning: "Memory search is unavailable due to an embedding/provider error.",
         action: "Check embedding provider configuration and retry memory_search.",
       });
@@ -170,7 +170,7 @@ describe("memory_search unavailable payloads", () => {
 
       const result = await resultPromise;
       expectUnavailableMemorySearchDetails(result.details, {
-        error: "memory_search timed out after 15s",
+        error: "memory_search timed out after 60s",
         warning: "Memory search is unavailable due to an embedding/provider error.",
         action: "Check embedding provider configuration and retry memory_search.",
       });
@@ -178,7 +178,7 @@ describe("memory_search unavailable payloads", () => {
       expect(searchSignal?.aborted).toBe(true);
       const cooldownResult = await tool.execute("search-cooldown", { query: "hello again" });
       expectUnavailableMemorySearchDetails(cooldownResult.details, {
-        error: "memory_search timed out after 15s",
+        error: "memory_search timed out after 60s",
         warning: "Memory search is unavailable due to an embedding/provider error.",
         action: "Check embedding provider configuration and retry memory_search.",
       });
@@ -208,7 +208,7 @@ describe("memory_search unavailable payloads", () => {
 
       const result = await resultPromise;
       expectUnavailableMemorySearchDetails(result.details, {
-        error: "memory_search timed out after 15s",
+        error: "memory_search timed out after 60s",
         warning: "Memory search is unavailable due to an embedding/provider error.",
         action: "Check embedding provider configuration and retry memory_search.",
       });
