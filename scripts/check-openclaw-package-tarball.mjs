@@ -78,7 +78,12 @@ const entries = list.stdout
   .filter(Boolean);
 const listedNormalized = entries.map((entry) => entry.replace(/^package\//u, ""));
 const normalized = listedNormalized.map((entry) => (entry ? path.posix.normalize(entry) : entry));
-const entrySet = new Set(normalized);
+const packageNormalized = entries
+  .filter((entry) => entry.startsWith("package/"))
+  .map((entry) => entry.slice("package/".length))
+  .map((entry) => (entry ? path.posix.normalize(entry) : entry))
+  .filter(Boolean);
+const packageEntrySet = new Set(packageNormalized);
 const normalizedEntryCounts = new Map();
 const errors = [];
 const warnings = [];
@@ -250,38 +255,26 @@ function collectUnsafeExtractedDistTreeErrors() {
   return treeErrors;
 }
 
-function readTarEntry(entryPath) {
-  const candidates = [
-    resolveExtractedTarEntry(entryPath, true),
-    resolveExtractedTarEntry(entryPath, false),
-  ];
-  for (const candidate of candidates) {
-    if (candidate && fs.existsSync(candidate)) {
-      return fs.readFileSync(candidate, "utf8");
-    }
+function readPackageTarEntry(entryPath) {
+  const candidate = resolveExtractedTarEntry(entryPath, true);
+  if (candidate && fs.existsSync(candidate)) {
+    return fs.readFileSync(candidate, "utf8");
   }
   return "";
 }
 
-function readTarEntryBuffer(entryPath) {
-  const candidates = [
-    {
-      candidate: resolveExtractedTarEntry(entryPath, true),
-      root: path.join(extractDir, "package"),
-    },
-    { candidate: resolveExtractedTarEntry(entryPath, false), root: extractDir },
-  ];
-  for (const { candidate, root } of candidates) {
-    if (candidate && fs.existsSync(candidate)) {
-      if (hasUnsafeExtractedAncestor(candidate, root)) {
-        return { error: `unsafe content inventory tar entry ${entryPath}` };
-      }
-      const stats = fs.lstatSync(candidate);
-      if (!stats.isFile() || stats.isSymbolicLink()) {
-        return { error: `unsafe content inventory tar entry ${entryPath}` };
-      }
-      return { content: fs.readFileSync(candidate) };
+function readPackageTarEntryBuffer(entryPath) {
+  const candidate = resolveExtractedTarEntry(entryPath, true);
+  const root = path.join(extractDir, "package");
+  if (candidate && fs.existsSync(candidate)) {
+    if (hasUnsafeExtractedAncestor(candidate, root)) {
+      return { error: `unsafe content inventory tar entry ${entryPath}` };
     }
+    const stats = fs.lstatSync(candidate);
+    if (!stats.isFile() || stats.isSymbolicLink()) {
+      return { error: `unsafe content inventory tar entry ${entryPath}` };
+    }
+    return { content: fs.readFileSync(candidate) };
   }
   return { content: null };
 }
@@ -331,35 +324,35 @@ if (unsafeExtractedDistTreeErrors.length > 0) {
   );
 }
 
-if (!entrySet.has("package.json")) {
+if (!packageEntrySet.has("package.json")) {
   errors.push("missing package.json");
 }
-if (!normalized.some((entry) => entry.startsWith("dist/"))) {
+if (!packageNormalized.some((entry) => entry.startsWith("dist/"))) {
   errors.push("missing dist/ entries");
 }
 for (const requiredEntry of REQUIRED_TARBALL_ENTRIES) {
-  if (!entrySet.has(requiredEntry)) {
+  if (!packageEntrySet.has(requiredEntry)) {
     errors.push(`missing required tar entry ${requiredEntry}`);
   }
 }
 for (const requiredPrefix of REQUIRED_TARBALL_ENTRY_PREFIXES) {
-  if (!normalized.some((entry) => entry.startsWith(requiredPrefix))) {
+  if (!packageNormalized.some((entry) => entry.startsWith(requiredPrefix))) {
     errors.push(`missing required tar entries under ${requiredPrefix}`);
   }
 }
 let packageVersion = "";
-if (entrySet.has("package.json")) {
+if (packageEntrySet.has("package.json")) {
   try {
-    const packageJson = JSON.parse(readTarEntry("package.json"));
+    const packageJson = JSON.parse(readPackageTarEntry("package.json"));
     packageVersion = typeof packageJson.version === "string" ? packageJson.version : "";
   } catch {
     packageVersion = "";
   }
 }
-if (entrySet.has("package-lock.json")) {
+if (packageEntrySet.has("package-lock.json")) {
   errors.push("package tarball must ship npm-shrinkwrap.json, not package-lock.json");
 }
-if (!entrySet.has("npm-shrinkwrap.json")) {
+if (!packageEntrySet.has("npm-shrinkwrap.json")) {
   if (isLegacyShrinkwrapCompatVersion(packageVersion)) {
     warnings.push("legacy package omits npm-shrinkwrap.json");
   } else {
@@ -367,7 +360,7 @@ if (!entrySet.has("npm-shrinkwrap.json")) {
   }
 } else {
   try {
-    const shrinkwrap = JSON.parse(readTarEntry("npm-shrinkwrap.json"));
+    const shrinkwrap = JSON.parse(readPackageTarEntry("npm-shrinkwrap.json"));
     const rootPackage = shrinkwrap.packages?.[""];
     if (shrinkwrap.name !== "openclaw") {
       errors.push("npm-shrinkwrap.json root name must be openclaw");
@@ -403,7 +396,7 @@ if (!entrySet.has("npm-shrinkwrap.json")) {
   }
 }
 for (const forbiddenEntry of FORBIDDEN_LOCAL_BUILD_METADATA_FILES) {
-  if (entrySet.has(forbiddenEntry)) {
+  if (packageEntrySet.has(forbiddenEntry)) {
     if (isLegacyLocalBuildMetadataCompatVersion(packageVersion)) {
       warnings.push(`legacy package includes local build metadata tar entry ${forbiddenEntry}`);
       continue;
@@ -411,10 +404,10 @@ for (const forbiddenEntry of FORBIDDEN_LOCAL_BUILD_METADATA_FILES) {
     errors.push(`forbidden local build metadata tar entry ${forbiddenEntry}`);
   }
 }
-if (!entrySet.has("dist/postinstall-inventory.json")) {
+if (!packageEntrySet.has("dist/postinstall-inventory.json")) {
   errors.push("missing dist/postinstall-inventory.json");
 }
-if (!entrySet.has("dist/postinstall-content-inventory.json")) {
+if (!packageEntrySet.has("dist/postinstall-content-inventory.json")) {
   if (isLegacyContentInventoryCompatVersion(packageVersion)) {
     warnings.push("legacy package omits dist/postinstall-content-inventory.json");
   } else {
@@ -423,11 +416,11 @@ if (!entrySet.has("dist/postinstall-content-inventory.json")) {
 }
 let packageDistImports = null;
 let normalizedInventory = null;
-if (entrySet.has("dist/postinstall-inventory.json")) {
+if (packageEntrySet.has("dist/postinstall-inventory.json")) {
   try {
     const allowLegacyPrivateQaInventoryOmissions =
       isLegacyPackageAcceptanceCompatVersion(packageVersion);
-    const inventory = JSON.parse(readTarEntry("dist/postinstall-inventory.json"));
+    const inventory = JSON.parse(readPackageTarEntry("dist/postinstall-inventory.json"));
     if (!Array.isArray(inventory) || inventory.some((entry) => typeof entry !== "string")) {
       errors.push("invalid dist/postinstall-inventory.json");
     } else {
@@ -435,13 +428,13 @@ if (entrySet.has("dist/postinstall-inventory.json")) {
       const normalizedInventorySet = new Set(normalizedInventory);
       packageDistImports = runPhase("dist import graph", () =>
         collectPackageDistImports({
-          files: normalized,
-          readText: readTarEntry,
+          files: packageNormalized,
+          readText: readPackageTarEntry,
         }),
       );
       for (const inventoryEntry of inventory) {
         const normalizedEntry = inventoryEntry.replace(/\\/gu, "/");
-        if (!entrySet.has(normalizedEntry)) {
+        if (!packageEntrySet.has(normalizedEntry)) {
           if (
             allowLegacyPrivateQaInventoryOmissions &&
             isLegacyOmittedPrivateQaInventoryEntry(normalizedEntry)
@@ -455,9 +448,9 @@ if (entrySet.has("dist/postinstall-inventory.json")) {
         }
       }
       const expandedInventory = expandPackageDistImportClosure({
-        files: normalized,
+        files: packageNormalized,
         seedFiles: normalizedInventory,
-        readText: readTarEntry,
+        readText: readPackageTarEntry,
         imports: packageDistImports,
       });
       for (const importedEntry of expandedInventory) {
@@ -475,9 +468,11 @@ if (entrySet.has("dist/postinstall-inventory.json")) {
   }
 }
 
-if (entrySet.has("dist/postinstall-content-inventory.json")) {
+if (packageEntrySet.has("dist/postinstall-content-inventory.json")) {
   try {
-    const contentInventory = JSON.parse(readTarEntry("dist/postinstall-content-inventory.json"));
+    const contentInventory = JSON.parse(
+      readPackageTarEntry("dist/postinstall-content-inventory.json"),
+    );
     if (
       !Array.isArray(contentInventory) ||
       contentInventory.some((entry) => !isContentInventoryEntry(entry))
@@ -514,11 +509,11 @@ if (entrySet.has("dist/postinstall-content-inventory.json")) {
         if (normalizedInventorySet && !normalizedInventorySet.has(contentEntry.path)) {
           continue;
         }
-        if (!entrySet.has(contentEntry.path)) {
+        if (!packageEntrySet.has(contentEntry.path)) {
           errors.push(`content inventory references missing tar entry ${contentEntry.path}`);
           continue;
         }
-        const { content, error } = readTarEntryBuffer(contentEntry.path);
+        const { content, error } = readPackageTarEntryBuffer(contentEntry.path);
         if (error) {
           errors.push(error);
           continue;
@@ -547,8 +542,8 @@ if (entrySet.has("dist/postinstall-content-inventory.json")) {
 
 errors.push(
   ...collectPackageDistImportErrors({
-    files: normalized,
-    readText: readTarEntry,
+    files: packageNormalized,
+    readText: readPackageTarEntry,
     imports: packageDistImports ?? undefined,
   }),
 );

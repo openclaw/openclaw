@@ -84,7 +84,7 @@ function withTarball(
     }
     if (options.includeContentInventory !== false) {
       const contentInventory = inventory
-        .filter((relativePath) => Object.prototype.hasOwnProperty.call(tarFiles, relativePath))
+        .filter((relativePath) => Object.hasOwn(tarFiles, relativePath))
         .map((relativePath) => {
           const body = tarFiles[relativePath] ?? "";
           return {
@@ -225,6 +225,65 @@ describe("check-openclaw-package-tarball", () => {
       },
       "2026.6.6",
       { includeContentInventory: false },
+    );
+  });
+
+  it("rejects content inventory outside the package root", () => {
+    const body = "export {};\n";
+    withTarball(
+      ["dist/index.js"],
+      { "dist/index.js": body },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("missing dist/postinstall-content-inventory.json");
+      },
+      "2026.6.6",
+      {
+        includeContentInventory: false,
+        extraRootFiles: {
+          "dist/postinstall-content-inventory.json": JSON.stringify([
+            {
+              path: "dist/index.js",
+              sha256: createHash("sha256").update(body).digest("hex"),
+              mode: 0o644,
+              size: Buffer.byteLength(body),
+            },
+          ]),
+        },
+      },
+    );
+  });
+
+  it("rejects package inventory entries that only exist outside the package root", () => {
+    const body = "export {};\n";
+    withTarball(
+      ["dist/index.js"],
+      {
+        "dist/postinstall-content-inventory.json": JSON.stringify([
+          {
+            path: "dist/index.js",
+            sha256: createHash("sha256").update(body).digest("hex"),
+            mode: 0o644,
+            size: Buffer.byteLength(body),
+          },
+        ]),
+      },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("inventory references missing tar entry dist/index.js");
+        expect(result.stderr).toContain(
+          "content inventory references missing tar entry dist/index.js",
+        );
+      },
+      "2026.6.6",
+      {
+        includeContentInventory: false,
+        extraRootFiles: { "dist/index.js": body },
+      },
     );
   });
 
