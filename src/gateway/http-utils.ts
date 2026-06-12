@@ -6,7 +6,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { modelKey, parseModelRef, resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { createModelVisibilityPolicy } from "../agents/model-visibility-policy.js";
 import { getRuntimeConfig } from "../config/io.js";
@@ -131,19 +131,38 @@ export async function resolveOpenAiCompatModelOverride(params: {
   return { modelOverride: raw };
 }
 
-/** Resolves the request agent from headers, model alias, or the configured default. */
+/** Resolves the request agent from headers, model alias, or the configured default.
+ *  Returns an error when an explicit header or model selection targets an
+ *  agent that is not in the configured roster, so callers can surface a 4xx. */
 export function resolveAgentIdForRequest(params: {
   req: IncomingMessage;
   model: string | undefined;
-}): string {
+}): { agentId: string } | { errorMessage: string } {
   const cfg = getRuntimeConfig();
+  const roster = new Set(listAgentIds(cfg));
+
   const fromHeader = resolveAgentIdFromHeader(params.req);
   if (fromHeader) {
-    return fromHeader;
+    if (!roster.has(fromHeader)) {
+      return {
+        errorMessage: `Unknown agent '${fromHeader}' requested via x-openclaw-agent-id header.`,
+      };
+    }
+    return { agentId: fromHeader };
   }
 
   const fromModel = resolveAgentIdFromModel(params.model, cfg);
-  return fromModel ?? resolveDefaultAgentId(cfg);
+  if (fromModel) {
+    if (!roster.has(fromModel)) {
+      return {
+        errorMessage: `Unknown agent '${fromModel}' requested via model selector.`,
+      };
+    }
+    return { agentId: fromModel };
+  }
+
+  // No explicit selection — use configured default (existing behavior).
+  return { agentId: resolveDefaultAgentId(cfg) };
 }
 
 function resolveSessionKey(params: {
@@ -170,8 +189,12 @@ export function resolveGatewayRequestContext(params: {
   sessionPrefix: string;
   defaultMessageChannel: string;
   useMessageChannelHeader?: boolean;
-}): { agentId: string; sessionKey: string; messageChannel: string } {
-  const agentId = resolveAgentIdForRequest({ req: params.req, model: params.model });
+}): { agentId: string; sessionKey: string; messageChannel: string } | { errorMessage: string } {
+  const resolved = resolveAgentIdForRequest({ req: params.req, model: params.model });
+  if ("errorMessage" in resolved) {
+    return resolved;
+  }
+  const agentId = resolved.agentId;
   const sessionKey = resolveSessionKey({
     req: params.req,
     agentId,

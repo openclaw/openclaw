@@ -477,7 +477,14 @@ export async function handleOpenResponsesHttpRequest(
   const stream = Boolean(payload.stream);
   const model = payload.model;
   const user = payload.user;
-  const agentId = resolveAgentIdForRequest({ req, model });
+  const agentResolved = resolveAgentIdForRequest({ req, model });
+  if ("errorMessage" in agentResolved) {
+    sendJson(res, 404, {
+      error: { message: agentResolved.errorMessage, type: "invalid_request_error" },
+    });
+    return true;
+  }
+  const agentId = agentResolved.agentId;
   const { modelOverride, errorMessage: modelError } = await resolveOpenAiCompatModelOverride({
     req,
     agentId,
@@ -624,7 +631,7 @@ export async function handleOpenResponsesHttpRequest(
     });
     return true;
   }
-  const resolved = resolveGatewayRequestContext({
+  const ctxResolved = resolveGatewayRequestContext({
     req,
     model,
     user,
@@ -632,10 +639,16 @@ export async function handleOpenResponsesHttpRequest(
     defaultMessageChannel: "webchat",
     useMessageChannelHeader: true,
   });
+  if ("errorMessage" in ctxResolved) {
+    sendJson(res, 404, {
+      error: { message: ctxResolved.errorMessage, type: "invalid_request_error" },
+    });
+    return true;
+  }
   const responseSessionScope = createResponseSessionScope({
     req,
     auth: opts.auth,
-    agentId: resolved.agentId,
+    agentId: ctxResolved.agentId,
   });
   // Resolve session key: reuse previous_response_id only when it matches the
   // same auth-subject/agent/requested-session scope as the current request.
@@ -643,8 +656,8 @@ export async function handleOpenResponsesHttpRequest(
     payload.previous_response_id,
     responseSessionScope,
   );
-  const sessionKey = previousSessionKey ?? resolved.sessionKey;
-  const messageChannel = resolved.messageChannel;
+  const sessionKey = previousSessionKey ?? ctxResolved.sessionKey;
+  const messageChannel = ctxResolved.messageChannel;
 
   // Build prompt from input
   const prompt = buildAgentPrompt(payload.input);

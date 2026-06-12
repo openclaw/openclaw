@@ -211,19 +211,28 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         await res.text();
       }
 
-      await expectAgentSessionKeyMatch({
-        body: { model: "openclaw", messages: [{ role: "user", content: "hi" }] },
-        headers: { "x-openclaw-agent-id": "beta" },
-        matcher: /^agent:beta:/,
-      });
+      // Unknown agent via header → 404
+      {
+        mockAgentOnce([{ text: "hello" }]);
+        const unknownRes = await postChatCompletions(
+          port,
+          { model: "openclaw", messages: [{ role: "user", content: "hi" }] },
+          { "x-openclaw-agent-id": "unknown-agent" },
+        );
+        expect(unknownRes.status).toBe(404);
+        const unknownBody = await unknownRes.json();
+        expect(unknownBody.error.type).toBe("invalid_request_error");
+      }
 
-      await expectAgentSessionKeyMatch({
-        body: {
-          model: "openclaw/beta",
+      // Unknown agent via model selector → 404
+      {
+        mockAgentOnce([{ text: "hello" }]);
+        const unknownRes = await postChatCompletions(port, {
+          model: "openclaw/unknown-agent",
           messages: [{ role: "user", content: "hi" }],
-        },
-        matcher: /^agent:beta:/,
-      });
+        });
+        expect(unknownRes.status).toBe(404);
+      }
 
       await expectAgentSessionKeyMatch({
         body: {
@@ -233,19 +242,26 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         matcher: /^agent:main:/,
       });
 
+      // Explicit header/message-channel-select agent within roster → 200
+      await expectAgentSessionKeyMatch({
+        body: { model: "openclaw", messages: [{ role: "user", content: "hi" }] },
+        headers: { "x-openclaw-agent-id": "main" },
+        matcher: /^agent:main:/,
+      });
+
       {
         mockAgentOnce([{ text: "hello" }]);
         const res = await postChatCompletions(
           port,
           { model: "openclaw", messages: [{ role: "user", content: "hi" }] },
           {
-            "x-openclaw-agent-id": "beta",
-            "x-openclaw-session-key": "agent:beta:openai:custom",
+            "x-openclaw-agent-id": "main",
+            "x-openclaw-session-key": "agent:main:openai:custom",
           },
         );
         expect(res.status).toBe(200);
 
-        expect(firstAgentCommandOptions()?.sessionKey).toBe("agent:beta:openai:custom");
+        expect(firstAgentCommandOptions()?.sessionKey).toBe("agent:main:openai:custom");
         await res.text();
       }
 
