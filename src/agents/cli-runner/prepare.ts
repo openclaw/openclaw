@@ -297,32 +297,34 @@ export async function prepareCliRunContext(
     authCredential = authStore.profiles[effectiveAuthProfileId];
   }
   if (
+    effectiveAuthProfileId &&
     shouldRefreshAuthProfileForExecution({
       backendId: backendResolved.id,
       authProfileId: effectiveAuthProfileId,
       authCredential,
     })
   ) {
+    const authProfileId = effectiveAuthProfileId;
     const writableAuthStore = loadAuthProfileStoreForRuntime(agentDir, {
       externalCli: externalCliDiscoveryForProviderAuth({
         provider: params.provider,
-        profileId: effectiveAuthProfileId,
+        profileId: authProfileId,
       }),
     });
     await resolveApiKeyForProfile({
       cfg: params.config,
       store: writableAuthStore,
-      profileId: effectiveAuthProfileId,
+      profileId: authProfileId,
       agentDir,
     });
     authStore = loadAuthProfileStoreForRuntime(agentDir, {
       readOnly: true,
       externalCli: externalCliDiscoveryForProviderAuth({
         provider: params.provider,
-        profileId: effectiveAuthProfileId,
+        profileId: authProfileId,
       }),
     });
-    authCredential = authStore.profiles[effectiveAuthProfileId];
+    authCredential = authStore.profiles[authProfileId];
   }
   const extraSystemPrompt = params.extraSystemPrompt?.trim() ?? "";
   // Use the static portion (excluding per-message inbound metadata) for session reuse hashing.
