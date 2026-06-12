@@ -54,6 +54,10 @@ export type InboundDebounceCreateParams<T> = {
   shouldDebounce?: (item: T) => boolean;
   resolveDebounceMs?: (item: T) => number | undefined;
   serializeImmediate?: boolean;
+  /** When true, flush errors rethrow after calling onError so the enqueue
+   *  caller can propagate the failure (e.g. to reject bot.handleUpdate()
+   *  and keep spooled update claims for retry). */
+  rethrowOnFlushError?: boolean;
   onFlush: (items: T[]) => Promise<void>;
   onError?: (err: unknown, items: T[]) => void;
   onCancel?: (items: T[]) => void;
@@ -75,15 +79,22 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
   };
 
   const runFlush = async (items: T[]) => {
+    let flushError: unknown;
     try {
       await params.onFlush(items);
     } catch (err) {
+      flushError = err;
       try {
         params.onError?.(err, items);
       } catch {
         // Flush failures are reported via onError, but this helper stays
         // non-throwing so keyed chains can continue processing later items.
       }
+    }
+    // Rethrow so the enqueue caller can propagate the failure (e.g. to
+    // reject bot.handleUpdate() and keep spooled update claims for retry).
+    if (flushError !== undefined && params.rethrowOnFlushError) {
+      throw flushError;
     }
   };
 
