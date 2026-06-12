@@ -5,6 +5,7 @@ import path from "node:path";
 import { pathExists } from "./fs-safe.js";
 import { readPackageVersion } from "./package-json.js";
 import { movePathWithCopyFallback } from "./replace-file.js";
+import { trimLogTail } from "./restart-sentinel.js";
 import {
   PACKAGE_POST_INSTALL_DOCTOR_ADVISORY,
   UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
@@ -126,7 +127,7 @@ export function markPackagePostInstallDoctorAdvisory<
   return {
     ...step,
     advisory: PACKAGE_POST_INSTALL_DOCTOR_ADVISORY,
-    stderrTail: advisoryTail || step.stderrTail,
+    stderrTail: trimLogTail(advisoryTail) ?? step.stderrTail,
   };
 }
 

@@ -100,6 +100,25 @@ describe("markPackagePostInstallDoctorAdvisory", () => {
     expect(step.stderrTail).toContain("deferred configured plugin repair");
   });
 
+  it("keeps advisory diagnostics bounded after appending deferred repair details", () => {
+    const step = markPackagePostInstallDoctorAdvisory(
+      {
+        exitCode: UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
+        stderrTail: "doctor deferred repair",
+        signal: null,
+        killed: false,
+        termination: "exit" as const,
+      },
+      createDeferredConfiguredPluginRepairDoctorResult([
+        `deferred configured plugin repair ${"x".repeat(10_000)}`,
+      ]),
+    );
+
+    expect(step.stderrTail).toHaveLength(8_001);
+    expect(step.stderrTail).toMatch(/^…/u);
+    expect(step.stderrTail).toContain("recoverable update-time repair warning");
+  });
+
   it("does not mark unknown nonzero doctor exits as advisory", () => {
     const step = markPackagePostInstallDoctorAdvisory(
       {
