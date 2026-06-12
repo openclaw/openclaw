@@ -175,6 +175,15 @@ function ensureUniqueName(base: string, existing: Set<string>): string {
   return unique;
 }
 
+/**
+ * Detect Windows absolute paths (e.g. C:\Users\... or C:/Users/...).
+ * These must not be passed through splitShellArgs which treats backslashes
+ * as POSIX escape characters, stripping them from the path.
+ */
+function isWindowsAbsolutePath(raw: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(raw);
+}
+
 function resolvePath(raw: string, workspaceDir: string): string {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -439,8 +448,12 @@ export function resolveMemoryBackendConfig(params: {
   ];
 
   const rawCommand = qmdCfg?.command?.trim() || "qmd";
-  const parsedCommand = splitShellArgs(rawCommand);
-  const command = parsedCommand?.[0] || rawCommand.split(/\s+/)[0] || "qmd";
+  // On Windows, absolute paths contain backslashes that splitShellArgs would
+  // consume as POSIX escape characters (e.g. C:\Users → CUsers).  Detect
+  // Windows drive-letter paths and use them verbatim instead.
+  const command = isWindowsAbsolutePath(rawCommand)
+    ? rawCommand
+    : (splitShellArgs(rawCommand)?.[0] || rawCommand.split(/\s+/)[0] || "qmd");
   const resolved: ResolvedQmdConfig = {
     command,
     mcporter: resolveMcporterConfig(qmdCfg?.mcporter),
