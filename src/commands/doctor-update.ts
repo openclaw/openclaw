@@ -7,6 +7,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { createUpdateProgress } from "../cli/update-cli/progress.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { runGatewayUpdate } from "../infra/update-runner.js";
+import type { UpdateRunResult } from "../infra/update-runner.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
@@ -66,7 +67,7 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
     }
     note("Running update…", "Update");
     const { progress, stop } = createUpdateProgress(process.stdout.isTTY);
-    let result;
+    let result: UpdateRunResult;
     try {
       result = await runGatewayUpdate({
         cwd: params.root,
