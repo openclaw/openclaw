@@ -1322,8 +1322,13 @@ function expandDirectoryHydrationGroups(params: {
   selectedNames: readonly string[];
   tools: readonly Pick<AnyAgentTool, "name" | "description">[];
   intent: ToolSearchDirectoryIntent;
+  maxTools: number;
 }): string[] {
+  if (params.maxTools <= 0) {
+    return [];
+  }
   const emitted = new Set<string>();
+  const expandedFamilies = new Set<ToolDirectoryFamily>();
   const expanded: string[] = [];
   const toolsByName = new Map(params.tools.map((tool) => [tool.name, tool]));
   const toolsByFamily = new Map<ToolDirectoryFamily, string[]>();
@@ -1343,16 +1348,29 @@ function expandDirectoryHydrationGroups(params: {
     );
   }
   for (const selectedName of params.selectedNames) {
+    if (expanded.length >= params.maxTools) {
+      break;
+    }
     if (!emitted.has(selectedName)) {
       expanded.push(selectedName);
       emitted.add(selectedName);
+    }
+    if (expanded.length >= params.maxTools) {
+      break;
     }
     const selectedTool = toolsByName.get(selectedName);
     if (!selectedTool) {
       continue;
     }
     for (const family of classifyDirectoryToolFamilies(selectedTool, params.intent)) {
+      if (expandedFamilies.has(family)) {
+        continue;
+      }
+      expandedFamilies.add(family);
       for (const groupedName of toolsByFamily.get(family) ?? []) {
+        if (expanded.length >= params.maxTools) {
+          return expanded;
+        }
         if (emitted.has(groupedName)) {
           continue;
         }
@@ -1389,13 +1407,12 @@ export function estimateToolSchemaDirectoryToolNames(params: {
     .filter((entry) => entry.score > 0)
     .toSorted((a, b) => b.score - a.score || a.name.localeCompare(b.name));
   const selected = uniqueStrings([...required, ...scored.map((entry) => entry.name)]);
-  return uniqueStrings(
-    expandDirectoryHydrationGroups({
-      selectedNames: selected,
-      tools: params.tools,
-      intent,
-    }),
-  ).slice(0, maxTools);
+  return expandDirectoryHydrationGroups({
+    selectedNames: selected,
+    tools: params.tools,
+    intent,
+    maxTools,
+  });
 }
 
 function describeEntry(entry: ToolSearchCatalogEntry) {

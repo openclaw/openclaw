@@ -515,6 +515,28 @@ describe("Tool Search", () => {
     expect(hydrated).toEqual(["google_search", "page_fetch"]);
   });
 
+  it("stops large same-family expansion at the directory hydration cap", () => {
+    const tools = Array.from({ length: 1_000 }, (_, index) =>
+      pluginTool(
+        `web_search_${String(index).padStart(4, "0")}`,
+        "Search the web for current facts",
+      ),
+    );
+
+    const hydrated = estimateToolSchemaDirectoryToolNames({
+      tools,
+      query: "search current news",
+      maxTools: 4,
+    });
+
+    expect(hydrated).toEqual([
+      "web_search_0000",
+      "web_search_0001",
+      "web_search_0002",
+      "web_search_0003",
+    ]);
+  });
+
   it("groups active memory-capability tools for recall intents without hard-coded tool names", () => {
     const recallTool = pluginTool("recall_find", "Search durable memory and prior history");
     const getTool = pluginTool("knowledge_get", "Get one recalled knowledge item by id");
