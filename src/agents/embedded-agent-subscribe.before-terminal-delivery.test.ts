@@ -43,7 +43,9 @@ describe("subscribeEmbeddedAgentSession before terminal delivery", () => {
       text: "First answer.",
     });
     expect(onBlockReply).not.toHaveBeenCalled();
-    expect(hasAssistantEvent(onAgentEvent.mock.calls)).toBe(false);
+    // Gateway SSE events stream immediately even when a before_agent_finalize
+    // hook is registered; only partial replies and block replies are deferred.
+    expect(hasAssistantEvent(onAgentEvent.mock.calls)).toBe(true);
 
     emit({
       type: "agent_end",
@@ -67,7 +69,10 @@ describe("subscribeEmbeddedAgentSession before terminal delivery", () => {
       }),
     );
     expect(onBlockReply).not.toHaveBeenCalled();
-    expect(hasAssistantEvent(onAgentEvent.mock.calls)).toBe(false);
+    // Gateway assistant events were already emitted during generation;
+    // suppressTerminalDelivery clears deferred buffers but cannot retract
+    // already-streamed SSE.
+    expect(hasAssistantEvent(onAgentEvent.mock.calls)).toBe(true);
     expect(hasLifecycleEndEvent(onAgentEvent.mock.calls)).toBe(false);
   });
 
@@ -134,7 +139,9 @@ describe("subscribeEmbeddedAgentSession before terminal delivery", () => {
       emit,
       text: "Visible stream.",
     });
-    expect(hasAssistantEvent(onAgentEvent.mock.calls)).toBe(false);
+    // Gateway SSE events stream immediately during generation; only channel
+    // partial replies are deferred until the terminal gate resolves.
+    expect(hasAssistantEvent(onAgentEvent.mock.calls)).toBe(true);
     expect(onPartialReply).not.toHaveBeenCalled();
 
     emit({

@@ -282,16 +282,40 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     data: EmbeddedAgentSubscribeContext["state"]["deferredAssistantEvents"][number]["data"],
     options?: { emitPartialReply?: boolean },
   ) => {
-    const delivery = { data, emitPartialReply: options?.emitPartialReply === true };
-    emitAssistantStreamDataSafely(delivery);
+    // Gateway SSE events always emit immediately so webchat streaming
+    // works even when a before_agent_finalize hook is registered.
+    // Only channel partial replies (Telegram/Discord live preview) are
+    // deferred until the terminal gate resolves.
+    emitAgentEvent({
+      runId: params.runId,
+      stream: "assistant",
+      data,
+    });
+    void params.onAgentEvent?.({
+      stream: "assistant",
+      data,
+    });
+    const emitPartialReply =
+      options?.emitPartialReply === true && params.onPartialReply && state.shouldEmitPartialReplies;
+    if (emitPartialReply) {
+      if (state.deferBlockReplyDelivery) {
+        state.deferredAssistantEvents.push({ data, emitPartialReply: true });
+      } else {
+        void params.onPartialReply(data);
+      }
+    }
   };
   const flushDeferredAssistantEvents = () => {
     if (state.deferredAssistantEvents.length === 0) {
       return;
     }
+    // Only flush partial replies; gateway SSE events were already emitted
+    // immediately during generation.
     const deferred = state.deferredAssistantEvents.splice(0);
     for (const delivery of deferred) {
-      emitAssistantStreamDataSafely(delivery);
+      if (delivery.emitPartialReply && params.onPartialReply && state.shouldEmitPartialReplies) {
+        void params.onPartialReply(delivery.data);
+      }
     }
   };
   const clearDeferredAssistantEvents = () => {
