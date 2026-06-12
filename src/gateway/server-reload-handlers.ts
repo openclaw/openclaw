@@ -483,7 +483,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           if (!channelsStoppedBeforePluginReload.has(name)) {
             await params.stopChannel(name, undefined, { manual: false });
           }
-          if (plan.reloadPlugins) {
+          if (plan.reloadPlugins && channelsStoppedBeforePluginReload.has(name)) {
             await params.startChannel(name, undefined, { includeKnownAccounts: true });
           } else {
             await params.startChannel(name);
