@@ -117,6 +117,7 @@ import type {
 } from "./controllers/skills.ts";
 import { importCustomThemeFromUrl } from "./custom-theme.ts";
 import {
+  clearActiveFloatingTooltips,
   promoteNativeTitleTooltip,
   refreshActiveFloatingTooltip,
   restoreNativeTitleTooltip,
@@ -859,6 +860,7 @@ export class OpenClawApp extends LitElement {
     this.removeEventListener("pointerout", this.nativeTitleTooltipPointerOutHandler);
     this.removeEventListener("focusin", this.nativeTitleTooltipFocusInHandler);
     this.removeEventListener("focusout", this.nativeTitleTooltipFocusOutHandler);
+    clearActiveFloatingTooltips(this);
     if (this.sessionSwitchNoticeTimer !== null) {
       window.clearTimeout(this.sessionSwitchNoticeTimer);
       this.sessionSwitchNoticeTimer = null;
