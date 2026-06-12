@@ -81,11 +81,13 @@ export function resolveAnthropicEphemeralCacheControl(
 function applyAnthropicCacheControlToSystem(
   system: unknown,
   cacheControl: AnthropicEphemeralCacheControl,
+  markerBudget: number = ANTHROPIC_CACHE_CONTROL_LIMIT,
 ): void {
   if (!Array.isArray(system)) {
     return;
   }
 
+  let remaining = markerBudget;
   const normalizedBlocks: Array<unknown> = [];
   for (const block of system) {
     if (!block || typeof block !== "object") {
@@ -99,8 +101,9 @@ function applyAnthropicCacheControlToSystem(
     }
     const split = splitSystemPromptCacheBoundary(record.text);
     if (!split) {
-      if (record.cache_control === undefined) {
+      if (record.cache_control === undefined && remaining > 0) {
         record.cache_control = cacheControl;
+        remaining--;
       }
       normalizedBlocks.push(record);
       continue;
@@ -111,8 +114,15 @@ function applyAnthropicCacheControlToSystem(
       normalizedBlocks.push({
         ...rest,
         text: split.stablePrefix,
-        cache_control: existingCacheControl ?? cacheControl,
+        ...(existingCacheControl !== undefined
+          ? { cache_control: existingCacheControl }
+          : remaining > 0
+            ? { cache_control: cacheControl }
+            : {}),
       });
+      if (!existingCacheControl && remaining > 0) {
+        remaining--;
+      }
     }
     if (split.dynamicSuffix) {
       normalizedBlocks.push({

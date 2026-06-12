@@ -399,4 +399,45 @@ describe("anthropic payload policy", () => {
 
     expect(payload.system).toEqual([textBlock("Stable prefix\nDynamic lab suffix")]);
   });
+
+  it("limits system cache_control markers to 4 blocks (Vertex AI 4-block cap)", () => {
+    const policy = resolveAnthropicPayloadPolicy({
+      provider: "anthropic-vertex",
+      api: "anthropic-messages",
+      baseUrl: "https://us-east5-aiplatform.googleapis.com",
+      cacheRetention: "short",
+      enableCacheControl: true,
+    });
+    // 5 system text blocks — Vertex AI rejects >4 cache_control blocks
+    const payload: TestPayload = {
+      system: [
+        { type: "text", text: "Block 1." },
+        { type: "text", text: "Block 2." },
+        { type: "text", text: "Block 3." },
+        { type: "text", text: "Block 4." },
+        { type: "text", text: "Block 5." },
+      ],
+      messages: [{ role: "user", content: "Hello" }],
+    };
+
+    applyAnthropicPayloadPolicyToParams(payload, policy);
+
+    // Only the first 4 system blocks should have cache_control
+    const system = payload.system as Array<{ cache_control?: unknown }>;
+    expect(system.length).toBe(5);
+    let markerCount = 0;
+    for (const block of system) {
+      if (block.cache_control) {
+        markerCount++;
+      }
+    }
+    expect(markerCount).toBe(4);
+    // The first 4 should have cache_control, the 5th should not
+    expect(system[0].cache_control).toEqual({ type: "ephemeral" });
+    expect(system[1].cache_control).toEqual({ type: "ephemeral" });
+    expect(system[2].cache_control).toEqual({ type: "ephemeral" });
+    expect(system[3].cache_control).toEqual({ type: "ephemeral" });
+    expect(system[4].cache_control).toBeUndefined();
+  });
 });
+
