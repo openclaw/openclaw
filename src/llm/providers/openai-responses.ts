@@ -194,6 +194,7 @@ function buildParams(
   options?: OpenAIResponsesOptions,
 ) {
   const messages = convertResponsesMessages(model, context, OPENAI_TOOL_CALL_PROVIDERS, {
+    includeSystemPrompt: false,
     replayResponsesItemIds: options?.replayResponsesItemIds ?? false,
   });
 
@@ -203,6 +204,7 @@ function buildParams(
     model: model.id,
     input: messages,
     stream: true,
+    ...(context.systemPrompt ? { instructions: context.systemPrompt } : {}),
     prompt_cache_key:
       cacheRetention === "none"
         ? undefined

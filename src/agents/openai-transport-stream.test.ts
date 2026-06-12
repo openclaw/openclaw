@@ -2579,7 +2579,29 @@ describe("openai transport stream", () => {
       undefined,
     ) as { input?: Array<{ role?: string }> };
 
-    expect(params.input?.[0]?.role).toBe("system");
+    expect(params.instructions).toBe("system");
+    expect(params.input).toEqual([]);
+  });
+
+  it("adds explicit message item types for Responses system and user input items", () => {
+    const params = buildOpenAIResponsesParams(
+      createAzureResponsesModel(),
+      {
+        systemPrompt: "system",
+        messages: [{ role: "user", content: "hello" }],
+        tools: [],
+      } as never,
+      undefined,
+    ) as { input?: Array<{ type?: string; role?: string; content?: unknown }> };
+
+    expect(params.instructions).toBe("system");
+    expect(params.input).toEqual([
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "hello" }],
+      },
+    ]);
   });
 
   it("omits Responses reasoning params when model compat disables reasoning effort", () => {
@@ -2695,7 +2717,8 @@ describe("openai transport stream", () => {
       undefined,
     ) as { input?: Array<{ role?: string }> };
 
-    expect(params.input?.[0]?.role).toBe("developer");
+    expect(params.instructions).toBe("system");
+    expect(params.input).toEqual([]);
   });
 
   it("serializes Responses input messages with explicit message type and content parts", () => {
@@ -4570,7 +4593,8 @@ describe("openai transport stream", () => {
       undefined,
     ) as { input?: Array<{ content?: Array<{ text?: string }> }> };
 
-    expect(params.input?.[0]?.content?.[0]?.text).toBe("Stable prefix\nDynamic suffix");
+    expect(params.instructions).toBe("Stable prefix\nDynamic suffix");
+    expect(params.input).toEqual([]);
   });
 
   it("defaults responses tool schemas to strict on native OpenAI routes", () => {
@@ -5067,7 +5091,8 @@ describe("openai transport stream", () => {
       undefined,
     ) as { input?: Array<{ role?: string }> };
 
-    expect(params.input?.[0]?.role).toBe("system");
+    expect(params.instructions).toBe("system");
+    expect(params.input).toEqual([]);
   });
 
   it("uses system role for Moonshot default-route completions providers", () => {
@@ -9919,6 +9944,15 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
     const assistant = getAssistantMessage(
       buildReplayParams(customQwenReasoningModel, "reasoning_content"),
     );
+
+    expect(assistant.reasoning_content).toBe("Need to answer politely.");
+    expect(assistant).not.toHaveProperty("reasoning_details");
+    expect(assistant).not.toHaveProperty("reasoning");
+    expect(assistant).not.toHaveProperty("reasoning_text");
+  });
+
+  it("preserves reasoning_content replay for Gemma 4 openai-completions models", () => {
+    const assistant = getAssistantMessage(buildReplayParams(gemma4Model, "reasoning_content"));
 
     expect(assistant.reasoning_content).toBe("Need to answer politely.");
     expect(assistant).not.toHaveProperty("reasoning_details");

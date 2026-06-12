@@ -218,12 +218,15 @@ function buildParams(
   options: AzureOpenAIResponsesOptions | undefined,
   deploymentName: string,
 ) {
-  const messages = convertResponsesMessages(model, context, AZURE_TOOL_CALL_PROVIDERS);
+  const messages = convertResponsesMessages(model, context, AZURE_TOOL_CALL_PROVIDERS, {
+    includeSystemPrompt: false,
+  });
 
   const params: ResponseCreateParamsStreaming = {
     model: deploymentName,
     input: messages,
     stream: true,
+    ...(context.systemPrompt ? { instructions: context.systemPrompt } : {}),
     prompt_cache_key:
       options?.cacheRetention === "none"
         ? undefined
