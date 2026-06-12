@@ -90,6 +90,17 @@ export function resolveSubagentModelAndThinkingPlan(params: {
         ? {
             model: resolvedModel,
             modelOverrideSource: params.modelOverride?.trim() ? "user" : "auto",
+            ...(params.modelOverride?.trim()
+              ? {}
+              : (() => {
+                  const { provider, model } = splitModelRef(resolvedModel);
+                  return {
+                    ...(provider
+                      ? { modelOverrideFallbackOriginProvider: provider }
+                      : {}),
+                    ...(model ? { modelOverrideFallbackOriginModel: model } : {}),
+                  };
+                })()),
           }
         : {}),
       ...thinkingPlan.initialSessionPatch,

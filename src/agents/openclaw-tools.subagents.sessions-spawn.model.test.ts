@@ -86,6 +86,8 @@ describe("subagent spawn model + thinking plan", () => {
     expect(plan.resolvedModel).toBe("minimax/MiniMax-M2.7");
     expect(plan.initialSessionPatch.model).toBe("minimax/MiniMax-M2.7");
     expect(plan.initialSessionPatch.modelOverrideSource).toBe("auto");
+    expect(plan.initialSessionPatch.modelOverrideFallbackOriginProvider).toBe("minimax");
+    expect(plan.initialSessionPatch.modelOverrideFallbackOriginModel).toBe("MiniMax-M2.7");
   });
 
   it("falls back to runtime default model when no model config is set", () => {
@@ -99,6 +101,8 @@ describe("subagent spawn model + thinking plan", () => {
     expect(plan.resolvedModel).toBe(defaultModelRef);
     expect(plan.initialSessionPatch.model).toBe(defaultModelRef);
     expect(plan.initialSessionPatch.modelOverrideSource).toBe("auto");
+    expect(plan.initialSessionPatch.modelOverrideFallbackOriginProvider).toBe(DEFAULT_PROVIDER);
+    expect(plan.initialSessionPatch.modelOverrideFallbackOriginModel).toBe(DEFAULT_MODEL);
   });
 
   it("can resolve only explicit or configured subagent model selections", () => {
@@ -139,6 +143,8 @@ describe("subagent spawn model + thinking plan", () => {
     expect(plan.resolvedModel).toBe("opencode/claude");
     expect(plan.initialSessionPatch.model).toBe("opencode/claude");
     expect(plan.initialSessionPatch.modelOverrideSource).toBe("auto");
+    expect(plan.initialSessionPatch.modelOverrideFallbackOriginProvider).toBe("opencode");
+    expect(plan.initialSessionPatch.modelOverrideFallbackOriginModel).toBe("claude");
   });
 
   it("prefers default subagent model over target agent primary model", () => {
@@ -162,6 +168,8 @@ describe("subagent spawn model + thinking plan", () => {
     expect(plan.resolvedModel).toBe("minimax/MiniMax-M2.7");
     expect(plan.initialSessionPatch.model).toBe("minimax/MiniMax-M2.7");
     expect(plan.initialSessionPatch.modelOverrideSource).toBe("auto");
+    expect(plan.initialSessionPatch.modelOverrideFallbackOriginProvider).toBe("minimax");
+    expect(plan.initialSessionPatch.modelOverrideFallbackOriginModel).toBe("MiniMax-M2.7");
   });
 
   it("prefers target agent primary model over global default", () => {
@@ -185,6 +193,8 @@ describe("subagent spawn model + thinking plan", () => {
     expect(plan.resolvedModel).toBe("opencode/claude");
     expect(plan.initialSessionPatch.model).toBe("opencode/claude");
     expect(plan.initialSessionPatch.modelOverrideSource).toBe("auto");
+    expect(plan.initialSessionPatch.modelOverrideFallbackOriginProvider).toBe("opencode");
+    expect(plan.initialSessionPatch.modelOverrideFallbackOriginModel).toBe("claude");
   });
 
   it("uses config default timeout when agent omits runTimeoutSeconds", () => {

@@ -352,6 +352,20 @@ function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<S
         entry.modelProvider = provider;
         entry.providerOverride = provider;
       }
+      if (
+        patch.modelOverrideSource === "auto" &&
+        typeof patch.modelOverrideFallbackOriginProvider === "string" &&
+        patch.modelOverrideFallbackOriginProvider.trim()
+      ) {
+        entry.modelOverrideFallbackOriginProvider = patch.modelOverrideFallbackOriginProvider.trim();
+      }
+      if (
+        patch.modelOverrideSource === "auto" &&
+        typeof patch.modelOverrideFallbackOriginModel === "string" &&
+        patch.modelOverrideFallbackOriginModel.trim()
+      ) {
+        entry.modelOverrideFallbackOriginModel = patch.modelOverrideFallbackOriginModel.trim();
+      }
     }
   }
   return entry;
