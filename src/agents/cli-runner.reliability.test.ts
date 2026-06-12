@@ -1700,6 +1700,76 @@ describe("runCliAgent reliability", () => {
     }
   });
 
+  it("forwards channel identity context to CLI before_agent_run hooks", async () => {
+    supervisorSpawnMock.mockClear();
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "before_agent_run"),
+      runBeforeAgentRun: vi.fn(async () => ({
+        pluginId: "policy-plugin",
+        decision: {
+          outcome: "block" as const,
+          reason: "sender scoped policy",
+          message: "The agent cannot read this message.",
+        },
+      })),
+    };
+    setHookRunnerForTest(hookRunner);
+    const { dir, sessionFile } = createSessionFile();
+
+    try {
+      const context = buildPreparedContext({
+        sessionKey: "agent:main:telegram:chat-1",
+        runId: "run-cli-channel-before-agent-run",
+      });
+      const result = await runPreparedCliAgent({
+        ...context,
+        params: {
+          ...context.params,
+          agentId: "main",
+          sessionFile,
+          workspaceDir: dir,
+          prompt: "sender scoped prompt",
+          messageChannel: "telegram",
+          messageProvider: "telegram",
+          currentChannelId: "telegram:chat-1",
+          senderId: "user-42",
+          senderIsOwner: true,
+          userTurnTranscriptRecorder: createCliUserTurnRecorder({
+            text: "sender scoped prompt",
+            sessionFile,
+            sessionKey: "agent:main:telegram:chat-1",
+            workspaceDir: dir,
+          }),
+        },
+      });
+
+      expect(result.payloads).toEqual([
+        {
+          text: "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
+          isError: true,
+        },
+      ]);
+      expect(supervisorSpawnMock).not.toHaveBeenCalled();
+      const beforeRunEvent = requireRecord(
+        callArg(hookRunner.runBeforeAgentRun, 0, 0, "before_agent_run event"),
+        "before_agent_run event",
+      );
+      expect(beforeRunEvent.channelId).toBe("chat-1");
+      expect(beforeRunEvent.senderId).toBe("user-42");
+      expect(beforeRunEvent.senderIsOwner).toBe(true);
+      const beforeRunContext = requireRecord(
+        callArg(hookRunner.runBeforeAgentRun, 0, 1, "before_agent_run context"),
+        "before_agent_run context",
+      );
+      expect(beforeRunContext.channel).toBe("telegram");
+      expect(beforeRunContext.chatId).toBe("chat-1");
+      expect(beforeRunContext.channelId).toBe("chat-1");
+      expect(beforeRunContext.senderId).toBe("user-42");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("does not emit llm_output when the CLI run returns no assistant text", async () => {
     const hookRunner = {
       hasHooks: vi.fn((hookName: string) => hookName === "llm_output"),

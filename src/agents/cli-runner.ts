@@ -750,6 +750,8 @@ export async function runPreparedCliAgent(
             }),
             channelId: hookContext.channelId,
             accountId: params.agentAccountId,
+            senderId: params.senderId ?? undefined,
+            senderIsOwner: params.senderIsOwner ?? undefined,
           },
           buildAgentHookContext(hookContext),
         );
@@ -901,6 +903,8 @@ export function buildRunClaudeCliAgentParams(params: RunClaudeCliAgentParams): R
     currentThreadTs: params.currentThreadTs,
     currentMessageId: params.currentMessageId,
     currentInboundAudio: params.currentInboundAudio,
+    senderId: params.senderId,
+    senderIsOwner: params.senderIsOwner,
   };
 }
 
