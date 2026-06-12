@@ -87,6 +87,18 @@ jobs:
           fi
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
+      - name: Validate OIDC source matches workflow ref
+        env:
+          TARGET_SHA: ${{ steps.ref.outputs.sha }}
+          WORKFLOW_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "${TARGET_SHA}" != "${WORKFLOW_SHA}" ]]; then
+            echo "Plugin ClawHub OIDC publishes must run from the same ref that is being published." >&2
+            echo "Dispatch this workflow with --ref pointing at the target release tag/ref, or omit the ref input." >&2
+            exit 1
+          fi
+
       - name: Validate ref is on a trusted publish branch
         env:
           WORKFLOW_REF: ${{ github.ref }}

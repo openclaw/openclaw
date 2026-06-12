@@ -1577,6 +1577,10 @@ describe("package artifact reuse", () => {
     expect(clawHubWorkflow).toContain("Install pinned ClawHub CLI wrapper");
     expect(clawHubWorkflow).toContain("Pack ClawHub package artifact");
     expect(clawHubWorkflow).toContain("Upload ClawHub package artifact");
+    expect(clawHubWorkflow).toContain("Validate OIDC source matches workflow ref");
+    expect(clawHubWorkflow).toContain(
+      "Plugin ClawHub OIDC publishes must run from the same ref that is being published.",
+    );
     expect(clawHubWorkflow).toContain(
       "uses: openclaw/clawhub/.github/workflows/package-publish.yml@9d49df109d4ad3dc8a6ecf05d26b39f46d294721",
     );
@@ -1723,6 +1727,14 @@ describe("package artifact reuse", () => {
     expect(clawHubNewWorkflow).toContain('trustedPublisher?.repository !== "openclaw/openclaw"');
     expect(openclawNpmWorkflow).toContain("environment: npm-release");
     expect(releaseWorkflow).toContain("default: from-validation");
+    expect(releaseWorkflow).toContain("CLAWHUB_WORKFLOW_REF: ${{ inputs.tag }}");
+    expect(releaseWorkflow).toContain(
+      'dispatch_workflow_at_ref "${CLAWHUB_WORKFLOW_REF}" plugin-clawhub-release.yml',
+    );
+    expect(releaseWorkflow).toContain(
+      'dispatch_workflow_at_ref "${CLAWHUB_WORKFLOW_REF}" plugin-clawhub-new.yml',
+    );
+    expect(releaseWorkflow).toContain('--clawhub-workflow-ref "${CLAWHUB_WORKFLOW_REF}"');
     expect(releaseWorkflow).toContain(
       'if [[ "$EXPECTED_RELEASE_PROFILE" != "from-validation" && "$release_profile" != "$EXPECTED_RELEASE_PROFILE" ]]; then',
     );
