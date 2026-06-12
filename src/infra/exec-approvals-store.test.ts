@@ -340,10 +340,11 @@ describe("exec approvals store helpers", () => {
 
       expect(resolved.agent.security).toBe("full");
       expect(resolved.agent.ask).toBe("off");
-      // In YOLO mode the fast path bypasses the socket entirely,
-      // so the token is not read from the file.
+      // In YOLO mode the fast path bypasses the socket (and ensureExecApprovals)
+      // entirely, so the token is not read from the file and the file is not
+      // re-hardened.
       expect(resolved.token).toBe("");
-      expect(fs.statSync(approvalsPath).mode & 0o777).toBe(0o600);
+      expect(fs.statSync(approvalsPath).mode & 0o777).toBe(0o644);
     },
   );
 
