@@ -1,5 +1,5 @@
 // Package Acceptance Workflow tests cover package acceptance workflow script behavior.
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
@@ -54,6 +54,10 @@ type Workflow = {
 
 function readWorkflow(path: string): Workflow {
   return parse(readFileSync(path, "utf8")) as Workflow;
+}
+
+function isExecutable(path: string): boolean {
+  return (statSync(path).mode & 0o111) !== 0;
 }
 
 function workflowPaths(): string[] {
@@ -1375,7 +1379,6 @@ describe("package artifact reuse", () => {
 
   it("keeps release QA and repo E2E lanes off scarce 32-core runners", () => {
     const releaseChecksWorkflow = readFileSync(RELEASE_CHECKS_WORKFLOW, "utf8");
-    const qaWorkflow = readFileSync(QA_LIVE_TRANSPORTS_WORKFLOW, "utf8");
     const liveE2eWorkflow = readFileSync(LIVE_E2E_WORKFLOW, "utf8");
 
     for (const jobName of [
@@ -1648,6 +1651,8 @@ describe("package artifact reuse", () => {
     expect(releaseWorkflow).toContain("Plugin ClawHub bootstrap run ID");
     expect(releaseWorkflow).toContain("scripts/openclaw-release-clawhub-plan.ts");
     expect(releaseWorkflow).toContain("scripts/openclaw-release-clawhub-runtime-state.ts");
+    expect(isExecutable("scripts/openclaw-release-clawhub-plan.ts")).toBe(true);
+    expect(isExecutable("scripts/openclaw-release-clawhub-runtime-state.ts")).toBe(true);
     expect(releaseWorkflow).toContain("openclaw-release-clawhub-plan.json");
     expect(releaseWorkflow).toContain("openclaw-release-clawhub-runtime-state");
     expect(releaseWorkflow).toContain("bootstrap_plugins");

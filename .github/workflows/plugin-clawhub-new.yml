@@ -281,7 +281,12 @@ jobs:
           done
 
   publish_bootstrap_plugins:
-    needs: [resolve_bootstrap_plan, validate_release_publish_approval, validate_bootstrap_trusted_publisher_cli]
+    needs:
+      [
+        resolve_bootstrap_plan,
+        validate_release_publish_approval,
+        validate_bootstrap_trusted_publisher_cli,
+      ]
     if: always() && github.event_name == 'workflow_dispatch' && needs.resolve_bootstrap_plan.outputs.has_bootstrap_candidates == 'true' && needs.validate_release_publish_approval.result == 'success' && (inputs.dry_run == true || needs.validate_bootstrap_trusted_publisher_cli.result == 'success')
     runs-on: ubuntu-latest
     environment: clawhub-plugin-bootstrap
