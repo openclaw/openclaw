@@ -209,6 +209,20 @@ export async function getSkillById(id: number, userId: number): Promise<SkillRow
   return (rows[0] as SkillRow) ?? null;
 }
 
+/**
+ * Look up a single skill by its (user_id, name) pair. Used by the agent-facing
+ * save tool to upsert: update an existing same-named skill instead of inserting
+ * a duplicate. Returns the first match (most recently updated) or null.
+ */
+export async function getSkillByName(name: string, userId: number): Promise<SkillRow | null> {
+  const p = getPool();
+  const [rows] = await p.execute<mysql.RowDataPacket[]>(
+    "SELECT id, user_id, name, description, content, source, category, is_enable, `references`, scripts, created_at, updated_at FROM skills WHERE name = ? AND user_id = ? ORDER BY updated_at DESC LIMIT 1",
+    [name, userId],
+  );
+  return (rows[0] as SkillRow) ?? null;
+}
+
 export async function createSkill(
   data: {
     name: string;
@@ -370,6 +384,19 @@ let lastFailureAt = 0;
 const FAILURE_COOLDOWN_MS = 60_000;
 // Hard ceiling on how long skill materialization may add to a turn.
 const MATERIALIZE_TIMEOUT_MS = 8_000;
+
+/**
+ * Force the next `materializeSkillsForUser` call to re-fetch from the DB instead
+ * of short-circuiting on the in-process TTL/key cache. Call this right after a
+ * skill write (create/update) so the freshly saved skill is materialized to disk
+ * and primed into the cache on the next materialize, making it visible to the
+ * very next turn's skills snapshot (no gateway restart required).
+ */
+export function invalidateSkillsMaterializeCache(): void {
+  materializedKey = null;
+  materializedAt = 0;
+  cacheLoadTime = 0;
+}
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
