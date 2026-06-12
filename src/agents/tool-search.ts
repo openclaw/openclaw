@@ -1285,8 +1285,9 @@ function scoreDirectoryTool(
   const toolText = `${tool.name} ${tool.description ?? ""}`.toLowerCase();
   const toolTokens = new Set(tokenize(toolText));
   let score = 0;
-  for (const token of intent.tokens) {
-    if (toolTokens.has(token)) {
+  // Iterate catalog text so large prompts do not multiply scoring work for every tool.
+  for (const token of toolTokens) {
+    if (intent.tokens.has(token)) {
       score += 2;
     }
   }

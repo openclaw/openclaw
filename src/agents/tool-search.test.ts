@@ -557,6 +557,24 @@ describe("Tool Search", () => {
     ]);
   });
 
+  it("scores large prompts against catalog text without losing exact token matches", () => {
+    const tools = [
+      ...Array.from({ length: 1_000 }, (_, index) =>
+        pluginTool(`fake_tool_${String(index).padStart(4, "0")}`, "Handle fake records"),
+      ),
+      pluginTool("needle_lookup", "Find needle records"),
+    ];
+    const query = `${Array.from({ length: 20_000 }, (_, index) => `prompt_${index}`).join(" ")} needle`;
+
+    const hydrated = estimateToolSchemaDirectoryToolNames({
+      tools,
+      query,
+      maxTools: 1,
+    });
+
+    expect(hydrated).toEqual(["needle_lookup"]);
+  });
+
   it("groups active memory-capability tools for recall intents without hard-coded tool names", () => {
     const recallTool = pluginTool("recall_find", "Search durable memory and prior history");
     const getTool = pluginTool("knowledge_get", "Get one recalled knowledge item by id");
