@@ -54,6 +54,7 @@ import {
 import { normalizeResolvedProviderModel } from "./model.provider-normalization.js";
 import {
   canonicalizeManifestModelCatalogProviderAlias,
+  resolveBundledProviderStaticCatalogModel,
   resolveBundledStaticCatalogModel,
 } from "./model.static-catalog.js";
 
@@ -1566,25 +1567,32 @@ export async function resolveModelAsync(
     authProfileId: options?.authProfileId,
     preferredProfile: options?.preferredProfile,
   });
-  let staticCatalogLookupComplete = false;
-  let staticCatalogModel: ReturnType<typeof resolveBundledStaticCatalogModel> | undefined;
-  const resolveStaticCatalogModel = () => {
+  let staticCatalogLookup: Promise<ProviderRuntimeModel | undefined> | undefined;
+  const resolveStaticCatalogModel = async () => {
     if (!options?.allowBundledStaticCatalogFallback) {
       return undefined;
     }
-    if (!staticCatalogLookupComplete) {
-      staticCatalogLookupComplete = true;
-      staticCatalogModel = resolveBundledStaticCatalogModel({
+    staticCatalogLookup ??= (async () => {
+      const manifestModel = resolveBundledStaticCatalogModel({
         provider: normalizedRef.provider,
         modelId: normalizedRef.model,
         cfg,
         workspaceDir,
       });
-    }
-    return staticCatalogModel;
+      if (manifestModel) {
+        return manifestModel;
+      }
+      return await resolveBundledProviderStaticCatalogModel({
+        provider: normalizedRef.provider,
+        modelId: normalizedRef.model,
+        cfg,
+        workspaceDir,
+      });
+    })();
+    return await staticCatalogLookup;
   };
-  const resolveStaticCatalogFallbackModel = () => {
-    const catalogModel = resolveStaticCatalogModel();
+  const resolveStaticCatalogFallbackModel = async () => {
+    const catalogModel = await resolveStaticCatalogModel();
     if (!catalogModel) {
       return undefined;
     }
@@ -1657,7 +1665,7 @@ export async function resolveModelAsync(
     model = await resolveDynamicAttempt();
   }
   if (!model && !explicitModel && options?.allowBundledStaticCatalogFallback) {
-    model = resolveStaticCatalogFallbackModel();
+    model = await resolveStaticCatalogFallbackModel();
   }
   if (!model && !explicitModel && options?.allowBundledStaticCatalogFallback) {
     model = resolveConfiguredFallbackModel({
@@ -1670,7 +1678,7 @@ export async function resolveModelAsync(
     });
   }
   if (model && options?.allowBundledStaticCatalogFallback) {
-    const staticMediaInput = resolveStaticCatalogModel()?.mediaInput;
+    const staticMediaInput = (await resolveStaticCatalogModel())?.mediaInput;
     const resolvedMediaInput = (model as ProviderRuntimeModel).mediaInput;
     const mediaInput = mergeModelMediaInput(staticMediaInput, resolvedMediaInput);
     if (mediaInput) {
