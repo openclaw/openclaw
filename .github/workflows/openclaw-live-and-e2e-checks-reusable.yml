@@ -1748,7 +1748,7 @@ jobs:
             anthropic) require_any Anthropic ANTHROPIC_API_KEY ANTHROPIC_API_KEY_OLD ANTHROPIC_API_TOKEN ;;
             google) require_any Google GEMINI_API_KEY GOOGLE_API_KEY ;;
             minimax) require_any MiniMax MINIMAX_API_KEY ;;
-            moonshot) require_any Moonshot MOONSHOT_API_KEY ;;
+            moonshot) require_any Moonshot MOONSHOT_API_KEY KIMI_API_KEY ;;
             openai) require_any OpenAI OPENAI_API_KEY ;;
             opencode-go) require_any OpenCode OPENCODE_API_KEY OPENCODE_ZEN_API_KEY ;;
             openrouter) require_any OpenRouter OPENROUTER_API_KEY ;;
@@ -1923,7 +1923,7 @@ jobs:
               anthropic) require_any Anthropic ANTHROPIC_API_KEY ANTHROPIC_API_KEY_OLD ANTHROPIC_API_TOKEN ;;
               google) require_any Google GEMINI_API_KEY GOOGLE_API_KEY ;;
               minimax) require_any MiniMax MINIMAX_API_KEY ;;
-              moonshot) require_any Moonshot MOONSHOT_API_KEY ;;
+              moonshot) require_any Moonshot MOONSHOT_API_KEY KIMI_API_KEY ;;
               openai) require_any OpenAI OPENAI_API_KEY ;;
               opencode-go) require_any OpenCode OPENCODE_API_KEY OPENCODE_ZEN_API_KEY ;;
               openrouter) require_any OpenRouter OPENROUTER_API_KEY ;;
