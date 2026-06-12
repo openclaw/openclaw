@@ -2318,6 +2318,7 @@ export abstract class MemoryManagerSyncOps {
       vectorDims: this.vector.dims,
       vectorDegradedWriteWarningShown: this.vectorDegradedWriteWarningShown,
       vectorReady: this.vectorReady,
+      lastMetaSerialized: this.lastMetaSerialized,
     };
 
     const restoreOriginalState = () => {
@@ -2333,6 +2334,7 @@ export abstract class MemoryManagerSyncOps {
       this.vector.dims = originalState.vectorDims;
       this.vectorDegradedWriteWarningShown = originalState.vectorDegradedWriteWarningShown;
       this.vectorReady = originalDbClosed ? null : originalState.vectorReady;
+      this.lastMetaSerialized = originalState.lastMetaSerialized;
     };
 
     this.db = tempDb;
@@ -2574,7 +2576,14 @@ export abstract class MemoryManagerSyncOps {
 
   protected writeMeta(meta: MemoryIndexMeta) {
     const value = JSON.stringify(meta);
-    if (this.lastMetaSerialized === value) {
+    const activeDbHasMetaValue =
+      this.lastMetaSerialized === value &&
+      (
+        this.db.prepare(`SELECT value FROM meta WHERE key = ?`).get(META_KEY) as
+          | { value: string }
+          | undefined
+      )?.value === value;
+    if (activeDbHasMetaValue) {
       return;
     }
     this.db

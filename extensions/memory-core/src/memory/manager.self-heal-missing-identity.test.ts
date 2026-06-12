@@ -142,6 +142,34 @@ describe("memory manager self-heal missing identity with FTS-only chunks", () =>
     expect(statusAfter.dirty).toBe(false);
   });
 
+  it("persists one metadata row after repeated safe force reindexes into fresh databases", async () => {
+    vi.stubEnv("OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX", "0");
+    const memoryManager = await createManager({ vectorEnabled: false });
+
+    await memoryManager.sync({ reason: "test", force: true });
+    await memoryManager.sync({ reason: "cli", force: true });
+
+    expect(indexIdentityStatus(memoryManager)).toBe("valid");
+    await memoryManager.close();
+    manager = null;
+
+    const db = new DatabaseSync(indexPath);
+    try {
+      const rows = db
+        .prepare("SELECT value FROM meta WHERE key = ?")
+        .all("memory_index_meta_v1") as Array<{ value: string }>;
+
+      expect(rows).toHaveLength(1);
+      expect(JSON.parse(rows[0]?.value ?? "{}")).toMatchObject({
+        model: "fts-only",
+        provider: "none",
+        sources: ["memory"],
+      });
+    } finally {
+      db.close();
+    }
+  });
+
   it("does not rebuild missing-identity semantic chunks when the provider is unavailable", async () => {
     await seedChunksWithNoMeta("text-embedding-3-small");
     const memoryManager = await createManager({ vectorEnabled: false });

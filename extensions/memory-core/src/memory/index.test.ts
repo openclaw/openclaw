@@ -1876,6 +1876,23 @@ describe("memory index", () => {
 
       expect(manager.status().dirty).toBe(false);
       expect(manager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+      const metaRows = (
+        manager as unknown as {
+          db: {
+            prepare: (sql: string) => {
+              all: (...args: unknown[]) => Array<{ key: string; value: string }>;
+            };
+          };
+        }
+      ).db
+        .prepare("SELECT key, value FROM meta WHERE key = ?")
+        .all("memory_index_meta_v1");
+      expect(metaRows).toHaveLength(1);
+      expect(JSON.parse(metaRows[0]?.value ?? "{}")).toMatchObject({
+        model: "mock-embed",
+        provider: "mock",
+        sources: ["memory"],
+      });
     } finally {
       await manager.close?.();
     }
