@@ -712,6 +712,23 @@ describe("check-database-first-legacy-stores", () => {
     ]);
   });
 
+  it("flags fs copy calls writing legacy store paths", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import fs from "node:fs/promises";
+        import syncFs from "node:fs";
+        await fs.cp("source.json", "sessions.json");
+        syncFs.cpSync("source.json", "cron/jobs.json");
+      `,
+      "src/runtime/fs-copy-legacy-store.ts",
+    );
+
+    expect(violations).toEqual([
+      { kind: "legacy store filesystem write", line: 4 },
+      { kind: "legacy store filesystem write", line: 5 },
+    ]);
+  });
+
   it("applies open write-mode checks inside wrappers", () => {
     const violations = collectDatabaseFirstLegacyStoreViolations(
       `

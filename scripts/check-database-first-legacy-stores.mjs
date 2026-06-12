@@ -11,6 +11,8 @@ export const databaseFirstLegacyStoreSourceRoots = ["src", "extensions", "packag
 const legacyWriteCallees = new Set([
   "appendFile",
   "appendFileSync",
+  "cp",
+  "cpSync",
   "copyFile",
   "copyFileSync",
   "createWriteStream",
@@ -1814,6 +1816,8 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
     if (
       name === "copyFile" ||
       name === "copyFileSync" ||
+      name === "cp" ||
+      name === "cpSync" ||
       name === "rename" ||
       name === "renameSync"
     ) {
