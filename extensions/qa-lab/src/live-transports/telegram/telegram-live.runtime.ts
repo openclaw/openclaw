@@ -2000,9 +2000,9 @@ export async function runTelegramQaLive(params: {
   const observedMessagesPath = path.join(outputDir, "telegram-qa-observed-messages.json");
   const evidence = buildLiveTransportEvidenceSummary({
     artifactPaths: [
-      path.basename(summaryPath),
-      path.basename(reportPath),
-      path.basename(observedMessagesPath),
+      { kind: "summary", path: path.basename(summaryPath) },
+      { kind: "report", path: path.basename(reportPath) },
+      { kind: "transport-observations", path: path.basename(observedMessagesPath) },
     ],
     env: process.env,
     generatedAt: finishedAt,

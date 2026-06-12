@@ -2082,9 +2082,9 @@ export async function runSlackQaLive(params: {
   });
   const evidence = buildLiveTransportEvidenceSummary({
     artifactPaths: [
-      path.basename(summaryPath),
-      path.basename(reportPath),
-      path.basename(observedMessagesPath),
+      { kind: "summary", path: path.basename(summaryPath) },
+      { kind: "report", path: path.basename(reportPath) },
+      { kind: "transport-observations", path: path.basename(observedMessagesPath) },
     ],
     checks: artifactScenarioResults,
     env: process.env,

@@ -1,4 +1,4 @@
-// Qa Lab tests cover normalized evidence summary behavior.
+// Qa Lab tests cover QA evidence summary behavior.
 import { describe, expect, it } from "vitest";
 import {
   QA_EVIDENCE_SUMMARY_KIND,
@@ -14,7 +14,10 @@ import {
 describe("evidence summary", () => {
   it("builds taxonomy-mapped QA suite evidence entries from catalog metadata", () => {
     const evidence = buildQaSuiteEvidenceSummary({
-      artifactPaths: ["qa-suite-summary.json", "qa-suite-report.md"],
+      artifactPaths: [
+        { kind: "summary", path: "qa-suite-summary.json" },
+        { kind: "report", path: "qa-suite-report.md" },
+      ],
       scenarioDefinitions: [
         {
           id: "dm-chat-baseline",
@@ -146,12 +149,12 @@ describe("evidence summary", () => {
     });
   });
 
-  it("normalizes Telegram live summaries onto the same evidence schema", () => {
+  it("builds Telegram live transport evidence entries", () => {
     const evidence = buildLiveTransportEvidenceSummary({
       artifactPaths: [
-        QA_EVIDENCE_SUMMARY_FILENAME,
-        "telegram-qa-report.md",
-        "telegram-qa-observed-messages.json",
+        { kind: "summary", path: QA_EVIDENCE_SUMMARY_FILENAME },
+        { kind: "report", path: "telegram-qa-report.md" },
+        { kind: "transport-observations", path: "telegram-qa-observed-messages.json" },
       ],
       env: {
         OPENCLAW_QA_RUNNER: "crabbox",
@@ -248,9 +251,11 @@ describe("evidence summary", () => {
     ]);
   });
 
-  it("normalizes Vitest runner results onto the same evidence schema", () => {
+  it("builds Vitest runner evidence entries", () => {
     const evidence = buildVitestEvidenceSummary({
-      artifactPaths: ["vitest-results/runtime-boundary.vitest.json"],
+      artifactPaths: [
+        { kind: "runner-result", path: "vitest-results/runtime-boundary.vitest.json" },
+      ],
       env: {
         OPENCLAW_QA_REF: "abc123",
       } as NodeJS.ProcessEnv,
@@ -345,9 +350,12 @@ describe("evidence summary", () => {
     ]);
   });
 
-  it("normalizes Playwright runner results onto the same evidence schema", () => {
+  it("builds Playwright runner evidence entries", () => {
     const evidence = buildPlaywrightEvidenceSummary({
-      artifactPaths: ["playwright-results/control-ui.json", "playwright-report/index.html"],
+      artifactPaths: [
+        { kind: "runner-result", path: "playwright-results/control-ui.json" },
+        { kind: "report", path: "playwright-report/index.html" },
+      ],
       env: {
         GITHUB_SHA: "def456",
       } as NodeJS.ProcessEnv,
@@ -443,7 +451,7 @@ describe("evidence summary", () => {
 
   it("carries profile env values without hardcoding taxonomy mapping ids", () => {
     const evidence = buildQaSuiteEvidenceSummary({
-      artifactPaths: ["qa-suite-summary.json"],
+      artifactPaths: [{ kind: "summary", path: "qa-suite-summary.json" }],
       scenarioDefinitions: [
         {
           id: "dm-chat-baseline",
@@ -469,7 +477,7 @@ describe("evidence summary", () => {
 
   it("keeps mock non-OpenAI model refs attributed to their model provider", () => {
     const evidence = buildQaSuiteEvidenceSummary({
-      artifactPaths: ["qa-suite-summary.json"],
+      artifactPaths: [{ kind: "summary", path: "qa-suite-summary.json" }],
       scenarioDefinitions: [
         {
           id: "anthropic-parity",
@@ -506,7 +514,7 @@ describe("evidence summary", () => {
 
   it("uses explicit package provenance from package runners", () => {
     const evidence = buildLiveTransportEvidenceSummary({
-      artifactPaths: [QA_EVIDENCE_SUMMARY_FILENAME],
+      artifactPaths: [{ kind: "summary", path: QA_EVIDENCE_SUMMARY_FILENAME }],
       generatedAt: "2026-06-07T12:15:00.000Z",
       packageSource: {
         kind: "packed-tarball",
@@ -528,7 +536,7 @@ describe("evidence summary", () => {
 
   it("derives package provenance from generic QA evidence env", () => {
     const evidence = buildLiveTransportEvidenceSummary({
-      artifactPaths: [QA_EVIDENCE_SUMMARY_FILENAME],
+      artifactPaths: [{ kind: "summary", path: QA_EVIDENCE_SUMMARY_FILENAME }],
       env: {
         OPENCLAW_QA_PACKAGE_SOURCE: "openclaw@beta",
         OPENCLAW_QA_PACKAGE_SOURCE_KIND: "npm-package",
@@ -550,7 +558,7 @@ describe("evidence summary", () => {
 
   it("does not infer package provenance from runner-specific env", () => {
     const evidence = buildLiveTransportEvidenceSummary({
-      artifactPaths: [QA_EVIDENCE_SUMMARY_FILENAME],
+      artifactPaths: [{ kind: "summary", path: QA_EVIDENCE_SUMMARY_FILENAME }],
       env: {
         OPENCLAW_NPM_TELEGRAM_INSTALL_SOURCE: "openclaw@beta",
       } as NodeJS.ProcessEnv,
@@ -570,7 +578,10 @@ describe("evidence summary", () => {
 
   it("keeps live transport check artifacts on the owning entry", () => {
     const evidence = buildLiveTransportEvidenceSummary({
-      artifactPaths: [QA_EVIDENCE_SUMMARY_FILENAME, "discord-qa-report.md"],
+      artifactPaths: [
+        { kind: "summary", path: QA_EVIDENCE_SUMMARY_FILENAME },
+        { kind: "report", path: "discord-qa-report.md" },
+      ],
       generatedAt: "2026-06-07T12:20:00.000Z",
       primaryModel: "openai/gpt-5.5",
       providerMode: "live-frontier",

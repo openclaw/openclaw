@@ -1,4 +1,4 @@
-// Qa Lab plugin module implements normalized evidence summary behavior.
+// Qa Lab plugin module implements QA evidence summary behavior.
 import { z } from "zod";
 import { splitQaModelRef } from "./model-selection.js";
 import { getQaProvider, type QaProviderMode } from "./providers/index.js";
@@ -201,8 +201,6 @@ type QaEvidenceScenarioDefinitionInput = {
 type QaEvidenceTimedResultInput = {
   id?: string;
   name?: string;
-  // Here "standard" means a taxonomy-backed requirement standard, not the default lane.
-  standardId?: string;
   title?: string;
   status: QaEvidenceStatusInput;
   details?: string;
@@ -215,6 +213,8 @@ type QaEvidenceTimedResultInput = {
 type QaEvidenceScenarioResultInput = QaEvidenceTimedResultInput;
 
 type QaEvidenceLiveTransportCheckInput = QaEvidenceTimedResultInput & {
+  // Here "standard" means a taxonomy-backed requirement standard, not the default lane.
+  standardId?: string;
   artifactPaths?: Readonly<Record<string, string>>;
 };
 
@@ -238,8 +238,13 @@ type QaEvidenceTestResultInput = {
   failureMessage?: string;
 };
 
+type QaEvidenceArtifactInput = {
+  kind: string;
+  path: string;
+};
+
 type QaEvidenceBuildBase = {
-  artifactPaths: readonly string[];
+  artifactPaths: readonly QaEvidenceArtifactInput[];
   env?: NodeJS.ProcessEnv;
   generatedAt: string;
   primaryModel: string;
@@ -296,24 +301,10 @@ function buildQaEvidenceCoverage(params: {
   ];
 }
 
-function inferQaEvidenceArtifactKind(path: string) {
-  const normalized = path.toLowerCase();
-  if (normalized.includes("observed-messages")) {
-    return "transport-observations";
-  }
-  if (normalized.includes("summary")) {
-    return "summary";
-  }
-  if (normalized.includes("report")) {
-    return "report";
-  }
-  return "runner-result";
-}
-
-function buildQaEvidenceArtifacts(paths: readonly string[], source: string) {
-  return paths.map((artifactPath) => ({
-    kind: inferQaEvidenceArtifactKind(artifactPath),
-    path: artifactPath,
+function buildQaEvidenceArtifacts(paths: readonly QaEvidenceArtifactInput[], source: string) {
+  return paths.map((artifact) => ({
+    kind: artifact.kind,
+    path: artifact.path,
     source,
   }));
 }

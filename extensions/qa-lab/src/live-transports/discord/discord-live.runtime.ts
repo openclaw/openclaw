@@ -1869,10 +1869,12 @@ export async function runDiscordQaLive(params: {
   const reactionTimelinesPath = path.join(outputDir, "discord-qa-reaction-timelines.json");
   const evidence = buildLiveTransportEvidenceSummary({
     artifactPaths: [
-      path.basename(summaryPath),
-      path.basename(reportPath),
-      path.basename(observedMessagesPath),
-      ...(reactionTimelines.length > 0 ? [path.basename(reactionTimelinesPath)] : []),
+      { kind: "summary", path: path.basename(summaryPath) },
+      { kind: "report", path: path.basename(reportPath) },
+      { kind: "transport-observations", path: path.basename(observedMessagesPath) },
+      ...(reactionTimelines.length > 0
+        ? [{ kind: "reaction-timelines", path: path.basename(reactionTimelinesPath) }]
+        : []),
     ],
     checks: scenarioResults,
     env: process.env,

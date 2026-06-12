@@ -104,9 +104,9 @@ describe("buildQaSuiteSummaryJson", () => {
     });
   });
 
-  it("preserves the normalized evidence summary when provided", () => {
+  it("preserves the evidence summary when provided", () => {
     const evidence = buildQaSuiteEvidenceSummary({
-      artifactPaths: ["qa-suite-summary.json"],
+      artifactPaths: [{ kind: "summary", path: "qa-suite-summary.json" }],
       scenarioDefinitions: [
         {
           id: "dm-chat-baseline",

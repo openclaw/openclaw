@@ -615,7 +615,7 @@ describe("RTT harness", () => {
     expect(config.messages.groupChat.visibleReplies).toBe("automatic");
   });
 
-  it("extracts RTT values from normalized evidence summaries", () => {
+  it("extracts RTT values from evidence summaries", () => {
     const summary = makeTelegramRttEvidenceSummary();
 
     expect(extractRtt(summary)).toEqual({
@@ -629,7 +629,7 @@ describe("RTT harness", () => {
     });
   });
 
-  it("resolves the normalized evidence summary path for Telegram RTT artifacts", async () => {
+  it("resolves the evidence summary path for Telegram RTT artifacts", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-rtt-summary-test-"));
     tempDirs.push(tempDir);
 
@@ -638,7 +638,7 @@ describe("RTT harness", () => {
     );
   });
 
-  it("builds normalized result JSON", async () => {
+  it("builds RTT result JSON", async () => {
     const summary = makeTelegramRttEvidenceSummary();
     const result = buildRttResult({
       artifacts: {
@@ -714,7 +714,7 @@ describe("RTT harness", () => {
     expect(result.rtt).toEqual({ canaryMs: 5948, mentionReplyMs: undefined });
   });
 
-  it("marks incomplete normalized RTT summaries as failed results", () => {
+  it("marks incomplete RTT summaries as failed results", () => {
     const baseParams = {
       artifacts: {
         rawObservedMessagesPath: "runs/run/raw/telegram-qa-observed-messages.json",

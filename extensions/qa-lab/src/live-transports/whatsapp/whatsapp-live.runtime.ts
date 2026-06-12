@@ -3217,9 +3217,9 @@ export async function runWhatsAppQaLive(params: {
     : scenarioResults;
   const evidence = buildLiveTransportEvidenceSummary({
     artifactPaths: [
-      path.basename(summaryPath),
-      path.basename(reportPath),
-      path.basename(observedMessagesPath),
+      { kind: "summary", path: path.basename(summaryPath) },
+      { kind: "report", path: path.basename(reportPath) },
+      { kind: "transport-observations", path: path.basename(observedMessagesPath) },
     ],
     checks: publishedScenarioResults,
     env: process.env,

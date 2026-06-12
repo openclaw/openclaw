@@ -72,7 +72,7 @@ describe("qa suite summary helpers", () => {
     ).toBe(1);
   });
 
-  it("counts normalized evidence entry results", () => {
+  it("counts evidence entry results", () => {
     const summary = {
       entries: [
         { result: { status: "pass" } },
