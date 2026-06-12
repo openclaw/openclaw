@@ -268,7 +268,7 @@ describe("workboard controller", () => {
       if (method === "workboard.cards.list") {
         return { cards: [linkedCard], statuses: ["todo", "done"] };
       }
-      if (method === "tasks.list") {
+      if (method === "tasks.get") {
         throw new Error("tasks unavailable");
       }
       return {};
@@ -290,7 +290,6 @@ describe("workboard controller", () => {
     state.tasksByCardId.set(sampleCard.id, sampleTask);
     const client = createClient({
       "workboard.cards.list": { cards: [sampleCard], statuses: ["todo", "done"] },
-      "tasks.list": { tasks: [] },
     });
 
     await refreshWorkboard({
@@ -332,8 +331,11 @@ describe("workboard controller", () => {
       if (method === "workboard.cards.list") {
         return { cards: [linkedCard, olderCard], statuses: ["todo", "done"] };
       }
-      if (method === "tasks.list" && !(params as { cursor?: string }).cursor) {
-        return { tasks: [completedTask], nextCursor: "500" };
+      if (method === "tasks.get") {
+        return {
+          task:
+            (params as { taskId: string }).taskId === sampleTask.taskId ? completedTask : olderTask,
+        };
       }
       return {};
     });
@@ -355,18 +357,49 @@ describe("workboard controller", () => {
       expect.anything(),
     );
     expect(client.request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
-    expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
-    expect(client.request).not.toHaveBeenCalledWith("tasks.list", {
-      limit: 500,
-      cursor: "500",
-    });
-    expect(client.request).not.toHaveBeenCalledWith("tasks.get", expect.anything());
+    expect(client.request).not.toHaveBeenCalledWith("tasks.list", expect.anything());
+    expect(client.request).toHaveBeenCalledWith("tasks.get", { taskId: sampleTask.taskId });
+    expect(client.request).toHaveBeenCalledWith("tasks.get", { taskId: olderTask.taskId });
     expect(state.tasksByCardId.get(sampleCard.id)).toEqual(completedTask);
     expect(state.tasksByCardId.get(olderCard.id)).toEqual(olderTask);
     vi.clearAllMocks();
     stopWorkboardPolling(host);
     await vi.advanceTimersByTimeAsync(5000);
     expect(client.request).not.toHaveBeenCalled();
+  });
+
+  it("rotates bounded linked-task polling batches", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.cards = Array.from({ length: 40 }, (_, index) => ({
+      ...sampleCard,
+      id: `card-${index}`,
+      taskId: `task-${index}`,
+    }));
+    const client = createClient((method, params) => {
+      if (method === "workboard.cards.list") {
+        return { cards: state.cards, statuses: ["todo", "done"] };
+      }
+      if (method === "tasks.get") {
+        const taskId = (params as { taskId: string }).taskId;
+        return { task: { ...sampleTask, id: taskId, taskId } };
+      }
+      return {};
+    });
+
+    await refreshWorkboard({ host, client: client as never, source: "poll" });
+    const firstBatch = client.request.mock.calls
+      .filter(([method]) => method === "tasks.get")
+      .map(([, params]) => (params as { taskId: string }).taskId);
+    vi.clearAllMocks();
+    await refreshWorkboard({ host, client: client as never, source: "poll" });
+    const secondBatch = client.request.mock.calls
+      .filter(([method]) => method === "tasks.get")
+      .map(([, params]) => (params as { taskId: string }).taskId);
+
+    expect(firstBatch).toHaveLength(32);
+    expect(secondBatch).toHaveLength(32);
+    expect(secondBatch).not.toEqual(firstBatch);
   });
 
   it("defers polling while a card is being dragged", async () => {
@@ -772,7 +805,7 @@ describe("workboard controller", () => {
       host,
       client: client as never,
       force: true,
-      taskRefresh: "recent",
+      taskRefresh: "linked",
     });
     await Promise.resolve();
     const forced = loadWorkboard({
@@ -789,8 +822,42 @@ describe("workboard controller", () => {
     expect(
       client.request.mock.calls.filter(([method]) => method === "workboard.cards.list"),
     ).toHaveLength(2);
-    expect(client.request.mock.calls.filter(([method]) => method === "tasks.list")).toHaveLength(2);
+    expect(client.request.mock.calls.filter(([method]) => method === "tasks.list")).toHaveLength(1);
     expect(getWorkboardState(host).cards).toMatchObject([{ title: "Forced full refresh" }]);
+  });
+
+  it("does not start a queued forced refresh after a card write begins", async () => {
+    const host = {};
+    const pollList = createDeferred<unknown>();
+    const client = createClient((method) => {
+      if (method === "workboard.cards.list") {
+        return pollList.promise;
+      }
+      return {};
+    });
+
+    const poll = loadWorkboard({
+      host,
+      client: client as never,
+      force: true,
+      taskRefresh: "linked",
+    });
+    await Promise.resolve();
+    const forced = loadWorkboard({
+      host,
+      client: client as never,
+      force: true,
+      refreshDiagnostics: true,
+      taskRefresh: "all",
+    });
+    getWorkboardState(host).busyCardIds.add(sampleCard.id);
+    pollList.resolve({ cards: [sampleCard], statuses: ["todo", "done"] });
+    await Promise.all([poll, forced]);
+
+    expect(client.request).not.toHaveBeenCalledWith("workboard.cards.diagnostics.refresh", {});
+    expect(
+      client.request.mock.calls.filter(([method]) => method === "workboard.cards.list"),
+    ).toHaveLength(1);
   });
 
   it("does not mark a load successful when task enrichment is invalidated by a write", async () => {

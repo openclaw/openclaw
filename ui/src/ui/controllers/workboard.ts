@@ -416,6 +416,7 @@ type WorkboardHost = object;
 const workboardStates = new WeakMap<WorkboardHost, WorkboardUiState>();
 const workboardLoadPromises = new WeakMap<WorkboardHost, Promise<boolean>>();
 const workboardLoadGenerations = new WeakMap<WorkboardHost, number>();
+const workboardTaskPollOffsets = new WeakMap<WorkboardHost, number>();
 const workboardPollingTimers = new WeakMap<WorkboardHost, ReturnType<typeof setTimeout>>();
 const workboardPollingEntries = new WeakMap<
   WorkboardHost,
@@ -434,6 +435,7 @@ const WORKBOARD_CAPTURE_TITLE_MAX_CHARS = 180;
 const WORKBOARD_SESSION_LABEL_MAX_CHARS = 512;
 const WORKBOARD_STALE_SESSION_MS = 30 * 60 * 1000;
 const WORKBOARD_TASKS_LIST_LIMIT = 500;
+const WORKBOARD_TASK_POLL_BATCH_SIZE = 32;
 const WORKBOARD_TASK_LOOKUP_RETRY_DELAYS_MS = [100, 250, 500] as const;
 
 function nextWorkboardLoadGeneration(host: WorkboardHost): number {
@@ -1274,16 +1276,6 @@ async function listWorkboardTasks(client: GatewayBrowserClient): Promise<Workboa
   }
 }
 
-async function listRecentWorkboardTasks(
-  client: GatewayBrowserClient,
-): Promise<WorkboardTaskSummary[]> {
-  // Timer polls use one newest-first page so periodic refresh stays bounded.
-  // Full loads still paginate when they need to discover historical task links.
-  return normalizeTasksPage(
-    await client.request("tasks.list", { limit: WORKBOARD_TASKS_LIST_LIMIT }),
-  ).tasks;
-}
-
 function taskUpdatedAtValue(task: WorkboardTaskSummary): number {
   if (typeof task.updatedAt === "number") {
     return task.updatedAt;
@@ -1338,6 +1330,66 @@ function taskMatchesCard(task: WorkboardTaskSummary, card: WorkboardCard): boole
     return cardSessionKey ? taskSessionMatches : true;
   }
   return taskSessionMatches;
+}
+
+function selectWorkboardTaskPollIds(
+  host: WorkboardHost,
+  cards: readonly WorkboardCard[],
+  previousTasksByCardId: ReadonlyMap<string, WorkboardTaskSummary>,
+): string[] {
+  // Prepared summaries cover links between polls; rotate a hard-bounded batch
+  // so active and unresolved task IDs are eventually refreshed without fan-out.
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  for (const card of cards) {
+    const previousTask = previousTasksByCardId.get(card.id);
+    const previousMatches = previousTask ? taskMatchesCard(previousTask, card) : false;
+    let taskId: string | undefined;
+    if (previousMatches && previousTask && taskIsActive(previousTask)) {
+      taskId = previousTask.taskId;
+    } else if (!previousMatches) {
+      taskId = normalizeString(card.taskId) ?? undefined;
+    }
+    if (taskId && !seen.has(taskId)) {
+      seen.add(taskId);
+      ids.push(taskId);
+    }
+  }
+  if (ids.length <= WORKBOARD_TASK_POLL_BATCH_SIZE) {
+    workboardTaskPollOffsets.set(host, 0);
+    return ids;
+  }
+  const offset = (workboardTaskPollOffsets.get(host) ?? 0) % ids.length;
+  const batch = Array.from(
+    { length: WORKBOARD_TASK_POLL_BATCH_SIZE },
+    (_, index) => ids[(offset + index) % ids.length],
+  ).filter((taskId): taskId is string => Boolean(taskId));
+  workboardTaskPollOffsets.set(host, (offset + batch.length) % ids.length);
+  return batch;
+}
+
+async function getWorkboardTaskPollBatch(
+  client: GatewayBrowserClient,
+  taskIds: readonly string[],
+): Promise<{ tasks: WorkboardTaskSummary[]; error: string | null }> {
+  const results = await Promise.allSettled(
+    taskIds.map(async (taskId) => {
+      const payload = await client.request("tasks.get", { taskId });
+      return isRecord(payload) ? normalizeTaskSummary(payload.task) : null;
+    }),
+  );
+  const tasks: WorkboardTaskSummary[] = [];
+  let error: string | null = null;
+  for (const result of results) {
+    if (result.status === "fulfilled") {
+      if (result.value) {
+        tasks.push(result.value);
+      }
+    } else {
+      error ??= formatError(result.reason);
+    }
+  }
+  return { tasks, error };
 }
 
 type WorkboardTaskIndex = {
@@ -1453,7 +1505,7 @@ export async function loadWorkboard(params: {
   requestUpdate?: () => void;
   force?: boolean;
   refreshDiagnostics?: boolean;
-  taskRefresh?: "all" | "recent";
+  taskRefresh?: "all" | "linked";
 }): Promise<boolean> {
   const state = getWorkboardState(params.host);
   if (!params.client || (!params.force && (state.loaded || state.loadAttempted))) {
@@ -1465,7 +1517,9 @@ export async function loadWorkboard(params: {
     const result = await existingLoad;
     // Forced callers carry their own diagnostics/task-refresh contract, so a
     // weaker in-flight load cannot satisfy them.
-    return params.force ? await loadWorkboard(params) : result;
+    return params.force && !state.dispatching && !workboardHasActiveWrites(state)
+      ? await loadWorkboard(params)
+      : result;
   }
   const generation = nextWorkboardLoadGeneration(params.host);
   state.loadAttempted = true;
@@ -1495,20 +1549,25 @@ export async function loadWorkboard(params: {
       state.tasksByCardId = new Map();
       if (state.cards.length > 0) {
         try {
-          const tasks =
-            params.taskRefresh === "recent"
-              ? await listRecentWorkboardTasks(client)
-              : await listWorkboardTasks(client);
-          // Task transitions become recent, while omitted long-running links
-          // must retain their prepared state so Start/Stop stays correct.
-          const taskSummaries =
-            params.taskRefresh === "recent" ? [...tasks, ...previousTasksByCardId.values()] : tasks;
+          const pollResult =
+            params.taskRefresh === "linked"
+              ? await getWorkboardTaskPollBatch(
+                  client,
+                  selectWorkboardTaskPollIds(params.host, state.cards, previousTasksByCardId),
+                )
+              : null;
+          const taskSummaries = pollResult
+            ? [...pollResult.tasks, ...previousTasksByCardId.values()]
+            : await listWorkboardTasks(client);
           if (isCurrentWorkboardLoadGeneration(params.host, generation)) {
             applyTaskSummariesToState(state, taskSummaries);
+            if (pollResult?.error) {
+              state.lastRefreshError = pollResult.error;
+            }
           }
         } catch (error) {
           if (isCurrentWorkboardLoadGeneration(params.host, generation)) {
-            if (params.taskRefresh === "recent") {
+            if (params.taskRefresh === "linked") {
               applyTaskSummariesToState(state, [...previousTasksByCardId.values()]);
             }
             state.lastRefreshError = formatError(error);
@@ -1574,7 +1633,7 @@ export async function refreshWorkboard(params: {
       requestUpdate: params.requestUpdate,
       force: true,
       refreshDiagnostics: params.refreshDiagnostics,
-      taskRefresh: params.source === "poll" ? "recent" : "all",
+      taskRefresh: params.source === "poll" ? "linked" : "all",
     });
     state.lastRefreshSource = params.source;
     if (state.error) {
