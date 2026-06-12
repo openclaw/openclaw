@@ -1846,7 +1846,7 @@ export function configureWorkboardPolling(params: {
     previous.enabled !== enabled ||
     previous.intervalMs !== intervalMs ||
     previous.client !== params.client;
-  if (configChanged || !workboardPollingTimers.get(params.host)) {
+  if (!state.pollRefreshInProgress && (configChanged || !workboardPollingTimers.get(params.host))) {
     scheduleWorkboardPoll(params.host);
   }
 }

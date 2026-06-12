@@ -420,6 +420,45 @@ describe("workboard controller", () => {
     expect(client.request).not.toHaveBeenCalled();
   });
 
+  it("does not rearm polling while a poll is in flight", async () => {
+    vi.useFakeTimers();
+    const host = {};
+    const listResponse = createDeferred<unknown>();
+    const client = createClient((method) => {
+      if (method === "workboard.cards.list") {
+        return listResponse.promise;
+      }
+      return {};
+    });
+    const state = getWorkboardState(host);
+    state.autoRefreshIntervalMs = 5000;
+    const configure = () =>
+      configureWorkboardPolling({
+        host,
+        client: client as never,
+        enabled: true,
+      });
+
+    configure();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(state.pollRefreshInProgress).toBe(true);
+
+    configure();
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(
+      client.request.mock.calls.filter(([method]) => method === "workboard.cards.list"),
+    ).toHaveLength(1);
+
+    stopWorkboardPolling(host);
+    listResponse.resolve({ cards: [sampleCard], statuses: ["todo", "done"] });
+    await Promise.resolve();
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(
+      client.request.mock.calls.filter(([method]) => method === "workboard.cards.list"),
+    ).toHaveLength(1);
+  });
+
   it("polls a canonical replacement task instead of a stale session-matched task", async () => {
     const host = {};
     const state = getWorkboardState(host);
