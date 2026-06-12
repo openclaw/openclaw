@@ -243,7 +243,18 @@ export function registerCronEditCommand(cron: Command) {
             tz: opts.tz,
           });
           if (scheduleRequest.kind === "direct") {
-            patch.schedule = scheduleRequest.schedule;
+            if (
+              scheduleRequest.schedule.kind === "cron" &&
+              scheduleRequest.schedule.tz === undefined
+            ) {
+              const existing = await loadCronJobForEditSchedulePatch(opts, String(id));
+              patch.schedule =
+                existing?.schedule.kind === "cron" && existing.schedule.tz !== undefined
+                  ? { ...scheduleRequest.schedule, tz: existing.schedule.tz }
+                  : scheduleRequest.schedule;
+            } else {
+              patch.schedule = scheduleRequest.schedule;
+            }
           } else if (scheduleRequest.kind === "patch-existing-cron") {
             const existing = await loadCronJobForEditSchedulePatch(opts, String(id));
             if (!existing) {

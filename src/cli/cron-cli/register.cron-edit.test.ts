@@ -75,12 +75,30 @@ describe("cron edit command", () => {
     );
   });
 
-  it("leaves --cron expression edits as direct schedule patches (#92291)", async () => {
+  it("preserves timezone without copying stale stagger when --cron replaces expression (#92291)", async () => {
+    callGatewayFromCli.mockImplementation(async (method: string) => {
+      if (method === "cron.list") {
+        return {
+          jobs: [
+            {
+              id: "job-1",
+              schedule: {
+                kind: "cron",
+                expr: "0 * * * *",
+                tz: "America/Phoenix",
+                staggerMs: 120_000,
+              },
+            },
+          ],
+        };
+      }
+      return { ok: true };
+    });
     const program = createCronProgram();
 
     await program.parseAsync(["edit", "job-1", "--cron", "0 5 * * *"], { from: "user" });
 
-    expect(callGatewayFromCli).not.toHaveBeenCalledWith("cron.list", expect.anything(), {
+    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.list", expect.anything(), {
       includeDisabled: true,
       limit: expect.any(Number),
       offset: expect.any(Number),
@@ -91,7 +109,7 @@ describe("cron edit command", () => {
         schedule: {
           kind: "cron",
           expr: "0 5 * * *",
-          tz: undefined,
+          tz: "America/Phoenix",
           staggerMs: undefined,
         },
       },
@@ -113,6 +131,49 @@ describe("cron edit command", () => {
           kind: "cron",
           expr: "0 5 * * *",
           tz: "UTC",
+          staggerMs: 10000,
+        },
+      },
+    });
+    expect(callGatewayFromCli).not.toHaveBeenCalledWith("cron.list", expect.anything(), {
+      includeDisabled: true,
+      limit: expect.any(Number),
+      offset: expect.any(Number),
+    });
+  });
+
+  it("preserves timezone when --cron edits stagger metadata (#92291)", async () => {
+    callGatewayFromCli.mockImplementation(async (method: string) => {
+      if (method === "cron.list") {
+        return {
+          jobs: [
+            {
+              id: "job-1",
+              schedule: {
+                kind: "cron",
+                expr: "0 * * * *",
+                tz: "America/Phoenix",
+                staggerMs: 120_000,
+              },
+            },
+          ],
+        };
+      }
+      return { ok: true };
+    });
+    const program = createCronProgram();
+
+    await program.parseAsync(["edit", "job-1", "--cron", "0 5 * * *", "--stagger", "10s"], {
+      from: "user",
+    });
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.update", expect.anything(), {
+      id: "job-1",
+      patch: {
+        schedule: {
+          kind: "cron",
+          expr: "0 5 * * *",
+          tz: "America/Phoenix",
           staggerMs: 10000,
         },
       },

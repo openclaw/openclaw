@@ -813,7 +813,7 @@ describe("cron stagger defaults", () => {
     expectCronStaggerMs(job, 0);
   });
 
-  it("preserves existing cron metadata when editing only the expression", () => {
+  it("preserves existing stagger when editing cron expression without stagger", () => {
     const now = Date.now();
     const job: CronJob = {
       id: "job-keep-stagger",
@@ -821,12 +821,7 @@ describe("cron stagger defaults", () => {
       enabled: true,
       createdAtMs: now,
       updatedAtMs: now,
-      schedule: {
-        kind: "cron",
-        expr: "0 * * * *",
-        tz: "America/Phoenix",
-        staggerMs: 120_000,
-      },
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC", staggerMs: 120_000 },
       sessionTarget: "main",
       wakeMode: "now",
       payload: { kind: "systemEvent", text: "tick" },
@@ -834,41 +829,13 @@ describe("cron stagger defaults", () => {
     };
 
     applyJobPatch(job, {
-      schedule: { kind: "cron", expr: "0 */2 * * *" },
+      schedule: { kind: "cron", expr: "0 */2 * * *", tz: "UTC" },
     });
 
     expect(job.schedule.kind).toBe("cron");
     if (job.schedule.kind === "cron") {
       expect(job.schedule.expr).toBe("0 */2 * * *");
-      expect(job.schedule.tz).toBe("America/Phoenix");
       expect(job.schedule.staggerMs).toBe(120_000);
-    }
-  });
-
-  it("preserves existing cron timezone when editing expression and stagger", () => {
-    const now = Date.now();
-    const job: CronJob = {
-      id: "job-keep-tz-with-stagger",
-      name: "job-keep-tz-with-stagger",
-      enabled: true,
-      createdAtMs: now,
-      updatedAtMs: now,
-      schedule: { kind: "cron", expr: "0 * * * *", tz: "America/Phoenix" },
-      sessionTarget: "main",
-      wakeMode: "now",
-      payload: { kind: "systemEvent", text: "tick" },
-      state: {},
-    };
-
-    applyJobPatch(job, {
-      schedule: { kind: "cron", expr: "0 */2 * * *", staggerMs: 30_000 },
-    });
-
-    expect(job.schedule.kind).toBe("cron");
-    if (job.schedule.kind === "cron") {
-      expect(job.schedule.expr).toBe("0 */2 * * *");
-      expect(job.schedule.tz).toBe("America/Phoenix");
-      expect(job.schedule.staggerMs).toBe(30_000);
     }
   });
 

@@ -820,19 +820,11 @@ export function applyJobPatch(
     if (patch.schedule.kind === "cron") {
       const explicitStaggerMs = normalizeCronStaggerMs(patch.schedule.staggerMs);
       if (explicitStaggerMs !== undefined) {
-        job.schedule = {
-          ...patch.schedule,
-          tz: patch.schedule.tz ?? (job.schedule.kind === "cron" ? job.schedule.tz : undefined),
-          staggerMs: explicitStaggerMs,
-        };
+        job.schedule = { ...patch.schedule, staggerMs: explicitStaggerMs };
       } else if (job.schedule.kind === "cron") {
-        // Cron schedule patches preserve omitted metadata so expression-only
-        // edits cannot silently drift timezone or staggered fire timing.
-        job.schedule = {
-          ...patch.schedule,
-          tz: patch.schedule.tz ?? job.schedule.tz,
-          staggerMs: job.schedule.staggerMs,
-        };
+        // Preserve an existing explicit stagger when editing only the cron
+        // expression; otherwise a patch could silently change fire timing.
+        job.schedule = { ...patch.schedule, staggerMs: job.schedule.staggerMs };
       } else {
         const defaultStaggerMs = resolveDefaultCronStaggerMs(patch.schedule.expr);
         job.schedule =
