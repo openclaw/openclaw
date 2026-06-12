@@ -208,4 +208,39 @@ describe("memory hybrid helpers", () => {
     expect(media?.score).toBeCloseTo(0.3 * 0.9);
     expect(media?.score ?? 0).toBeGreaterThan(0);
   });
+
+  it("keeps classified media scored under vectorWeight 0 when it has both vector and keyword results", async () => {
+    const imagePath = "memory/generated/images/photo.png";
+    const merged = await mergeHybridResults({
+      vectorWeight: 0,
+      textWeight: 1,
+      isNonTextMediaPath: (path) => path === imagePath,
+      vector: [
+        {
+          id: "image",
+          path: imagePath,
+          startLine: 1,
+          endLine: 1,
+          source: "memory",
+          snippet: "Image file: generated/images/photo.png",
+          vectorScore: 0.95,
+        },
+      ],
+      keyword: [
+        {
+          id: "image",
+          path: imagePath,
+          startLine: 1,
+          endLine: 1,
+          source: "memory",
+          snippet: "Image file: generated/images/photo.png",
+          textScore: 0.8,
+        },
+      ],
+    });
+
+    const image = merged.find((r) => r.path === imagePath);
+    expect(image?.score).toBeCloseTo(0.8);
+    expect(image?.score ?? 0).toBeGreaterThan(0);
+  });
 });
