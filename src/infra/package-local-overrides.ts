@@ -69,7 +69,7 @@ function normalizeDistPath(relativePath: string): string {
 }
 
 function resolveSafePackagePath(packageRoot: string, relativePath: string): string {
-  const normalized = normalizeRelativePath(relativePath);
+  const normalized = normalizeDistPath(relativePath);
   if (!normalized.startsWith("dist/") || normalized.includes("\0")) {
     throw new Error(`unsafe local override path: ${relativePath}`);
   }
@@ -441,10 +441,11 @@ export async function applyLocalPackageOverrides(params: {
     };
   }
 
-  const rollbackDir = await fs.mkdtemp(path.join(params.plan.recoveryDir, "rollback-"));
+  let rollbackDir: string | null = null;
   const rollbackEntries: Array<{ path: string; backupPath?: string }> = [];
   let applied = 0;
   try {
+    rollbackDir = await fs.mkdtemp(path.join(params.plan.recoveryDir, "rollback-"));
     for (const change of changesToApply) {
       const targetPath = resolveSafePackagePath(params.packageRoot, change.path);
       const backupPath = path.join(rollbackDir, change.path);
@@ -484,7 +485,9 @@ export async function applyLocalPackageOverrides(params: {
       warnings: ["Local OpenClaw changes were preserved but could not be reapplied."],
     };
   } finally {
-    await fs.rm(rollbackDir, { recursive: true, force: true }).catch(() => undefined);
+    if (rollbackDir) {
+      await fs.rm(rollbackDir, { recursive: true, force: true }).catch(() => undefined);
+    }
   }
 
   return {
