@@ -7,6 +7,7 @@ import {
 } from "./dom-tooltips.ts";
 
 afterEach(() => {
+  clearActiveFloatingTooltips();
   document.querySelector(".control-ui-floating-tooltip")?.remove();
 });
 
@@ -185,6 +186,40 @@ describe("native title tooltip promotion", () => {
     const tooltip = document.querySelector<HTMLElement>(".control-ui-floating-tooltip");
     expect(tooltip?.style.left).toBe("314px");
     expect(tooltip?.style.top).toBe("44px");
+  });
+
+  it("repositions the active floating tooltip on viewport movement", () => {
+    const root = document.createElement("div");
+    const button = document.createElement("button");
+    let top = 10;
+    button.className = "btn";
+    button.title = "Delete card";
+    button.getBoundingClientRect = () =>
+      ({
+        left: 300,
+        right: 328,
+        top,
+        bottom: top + 28,
+        width: 28,
+        height: 28,
+        x: 300,
+        y: top,
+        toJSON: () => ({}),
+      }) as DOMRect;
+    root.append(button);
+
+    promoteNativeTitleTooltip(button, root, "focus");
+    const tooltip = document.querySelector<HTMLElement>(".control-ui-floating-tooltip");
+    expect(tooltip?.style.top).toBe("44px");
+
+    top = 100;
+    window.dispatchEvent(new Event("scroll"));
+    expect(tooltip?.style.top).toBe("134px");
+
+    restoreNativeTitleTooltip(button, root, "focus");
+    top = 200;
+    window.dispatchEvent(new Event("scroll"));
+    expect(tooltip?.style.top).toBe("134px");
   });
 
   it("flips the floating tooltip above buttons near the bottom viewport edge", () => {

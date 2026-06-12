@@ -12,6 +12,32 @@ type FloatingTooltipTrigger = "focus" | "pointer";
 // after the last active trigger leaves the element.
 const activeFloatingTooltipTriggers = new WeakMap<HTMLElement, Set<FloatingTooltipTrigger>>();
 let activeFloatingTooltipOwner: HTMLElement | null = null;
+let activeFloatingTooltipRoot: ParentNode | null = null;
+
+function refreshFloatingTooltipForViewportChange() {
+  if (activeFloatingTooltipRoot) {
+    refreshActiveFloatingTooltip(activeFloatingTooltipRoot);
+  }
+}
+
+function stopFloatingTooltipViewportTracking() {
+  if (!activeFloatingTooltipRoot) {
+    return;
+  }
+  window.removeEventListener("scroll", refreshFloatingTooltipForViewportChange, true);
+  window.removeEventListener("resize", refreshFloatingTooltipForViewportChange);
+  activeFloatingTooltipRoot = null;
+}
+
+function startFloatingTooltipViewportTracking(root: ParentNode) {
+  if (activeFloatingTooltipRoot === root) {
+    return;
+  }
+  stopFloatingTooltipViewportTracking();
+  activeFloatingTooltipRoot = root;
+  window.addEventListener("scroll", refreshFloatingTooltipForViewportChange, true);
+  window.addEventListener("resize", refreshFloatingTooltipForViewportChange);
+}
 
 function tooltipRootContains(root: ParentNode, element: Element): boolean {
   return root instanceof Node && root.contains(element);
@@ -141,6 +167,7 @@ export function clearActiveFloatingTooltips(root: ParentNode = document): void {
     restorePromotedTooltipAccessibleName(element);
   }
   activeFloatingTooltipOwner = null;
+  stopFloatingTooltipViewportTracking();
   hideFloatingTooltip();
 }
 
@@ -172,6 +199,7 @@ export function promoteNativeTitleTooltip(
   activeFloatingTooltipTriggers.set(element, triggers);
   element.setAttribute(ACTIVE_FLOATING_TOOLTIP_ATTR, "true");
   activeFloatingTooltipOwner = element;
+  startFloatingTooltipViewportTracking(root);
   showFloatingTooltip(element, tooltipText);
   return element;
 }
@@ -184,10 +212,12 @@ export function refreshActiveFloatingTooltip(root: ParentNode): HTMLElement | nu
       : root.querySelector<HTMLElement>(`[${ACTIVE_FLOATING_TOOLTIP_ATTR}]`);
   if (!element) {
     activeFloatingTooltipOwner = null;
+    stopFloatingTooltipViewportTracking();
     hideFloatingTooltip();
     return null;
   }
   activeFloatingTooltipOwner = element;
+  startFloatingTooltipViewportTracking(root);
   const tooltipText = getTooltipText(element);
   if (!tooltipText) {
     element.removeAttribute(PROMOTED_TITLE_ATTR);

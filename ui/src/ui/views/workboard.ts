@@ -1455,6 +1455,13 @@ function taskIsActive(task: WorkboardTaskSummary | undefined): boolean {
   return task?.status === "queued" || task?.status === "running";
 }
 
+function cardHasActiveOrUnresolvedTask(
+  card: WorkboardCard,
+  task: WorkboardTaskSummary | undefined,
+): boolean {
+  return taskIsActive(task) || Boolean(card.taskId && !task);
+}
+
 function cardCanStart(
   state: WorkboardUiState,
   sessions: readonly GatewaySessionRow[],
@@ -1462,7 +1469,7 @@ function cardCanStart(
 ): boolean {
   const task = state.tasksByCardId.get(card.id);
   const session = findWorkboardSession(card, sessions);
-  const activeTask = taskIsActive(task);
+  const activeTask = cardHasActiveOrUnresolvedTask(card, task);
   const linkedSessionKey = card.sessionKey ?? card.execution?.sessionKey;
   return !activeTask && (!linkedSessionKey || !session);
 }
@@ -2044,7 +2051,7 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
   const session = findWorkboardSession(card, props.sessions);
   const busy = state.busyCardIds.has(card.id) || state.dispatching;
   const syncing = state.syncingCardIds.has(card.id);
-  const activeTask = taskIsActive(task);
+  const activeTask = cardHasActiveOrUnresolvedTask(card, task);
   const live =
     activeTask ||
     session?.hasActiveRun === true ||
