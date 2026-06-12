@@ -86,7 +86,50 @@ describe("opencode provider plugin", () => {
       "claude-opus-4-8",
       "claude-opus-4-7",
       "claude-opus-4-6",
+      "claude-opus-4-5",
+      "claude-opus-4-1",
       "claude-sonnet-4-6",
+      "claude-sonnet-4-5",
+      "claude-sonnet-4",
+      "claude-haiku-4-5",
+      "gemini-3.5-flash",
+      "gemini-3.1-pro",
+      "gemini-3-flash",
+      "gpt-5.5",
+      "gpt-5.5-pro",
+      "gpt-5.4",
+      "gpt-5.4-pro",
+      "gpt-5.4-mini",
+      "gpt-5.4-nano",
+      "gpt-5.3-codex-spark",
+      "gpt-5.3-codex",
+      "gpt-5.2",
+      "gpt-5.2-codex",
+      "gpt-5.1",
+      "gpt-5.1-codex-max",
+      "gpt-5.1-codex",
+      "gpt-5.1-codex-mini",
+      "gpt-5",
+      "gpt-5-codex",
+      "gpt-5-nano",
+      "grok-build-0.1",
+      "deepseek-v4-pro",
+      "deepseek-v4-flash",
+      "glm-5.1",
+      "glm-5",
+      "minimax-m2.7",
+      "minimax-m2.5",
+      "kimi-k2.6",
+      "kimi-k2.5",
+      "qwen3.6-plus",
+      "qwen3.5-plus",
+      "big-pickle",
+      "deepseek-v4-flash-free",
+      "mimo-v2.5-free",
+      "qwen3.6-plus-free",
+      "minimax-m3-free",
+      "nemotron-3-ultra-free",
+      "north-mini-code-free",
     ];
     const models = new Map<string, ProviderRuntimeModel>();
     for (const modelId of expectedModelIds) {
@@ -117,6 +160,19 @@ describe("opencode provider plugin", () => {
     expect(opus46.contextWindow).toBe(200_000);
     expect(opus46.maxTokens).toBe(65_536);
 
+    expect(requireMapEntry(models, "gpt-5.5")).toMatchObject({
+      api: "openai-responses",
+      baseUrl: "https://opencode.ai/zen/v1",
+    });
+    expect(requireMapEntry(models, "gemini-3.5-flash")).toMatchObject({
+      api: "google-generative-ai",
+      baseUrl: "https://opencode.ai/zen/v1",
+    });
+    expect(requireMapEntry(models, "minimax-m2.7")).toMatchObject({
+      api: "anthropic-messages",
+      baseUrl: "https://opencode.ai/zen",
+    });
+
     const dynamicModel = requireRecord(
       provider.resolveDynamicModel?.({
         modelId: "claude-opus-4-8",
@@ -140,6 +196,7 @@ describe("opencode provider plugin", () => {
     if (!Array.isArray(manifestModels)) {
       throw new Error("expected manifest opencode models");
     }
+    expect(manifestModels).toHaveLength(expectedModelIds.length);
     const manifestOpus48 = requireRecord(
       manifestModels.find(
         (model) => requireRecord(model, "manifest model").id === "claude-opus-4-8",
@@ -205,7 +262,7 @@ describe("opencode provider plugin", () => {
         JSON.stringify({
           data: [
             { id: "claude-opus-4-8", object: "model" },
-            { id: "gpt-5.5", object: "model" },
+            { id: "gpt-6-experimental", object: "model" },
           ],
         }),
       ),
@@ -226,17 +283,22 @@ describe("opencode provider plugin", () => {
 
     expect(fetchGuard).toHaveBeenCalledTimes(1);
     expect(first.apiKey).toBe("OPENCODE_API_KEY");
-    expect(first.models.map((model) => model.id)).toEqual(["claude-opus-4-8", "gpt-5.5"]);
-    expect(second.models.map((model) => model.id)).toEqual(["claude-opus-4-8", "gpt-5.5"]);
+    expect(first.models.map((model) => model.id)).toEqual([
+      "claude-opus-4-8",
+      "gpt-6-experimental",
+    ]);
+    expect(second.models.map((model) => model.id)).toEqual([
+      "claude-opus-4-8",
+      "gpt-6-experimental",
+    ]);
     const claudeModel = first.models.find((model) => model.id === "claude-opus-4-8");
     expect(claudeModel).toMatchObject({
       api: "anthropic-messages",
       baseUrl: "https://opencode.ai/zen",
       provider: "opencode",
     });
-    const liveOnlyModel = first.models.find((model) => model.id === "gpt-5.5");
+    const liveOnlyModel = first.models.find((model) => model.id === "gpt-6-experimental");
     expect(liveOnlyModel).toMatchObject({
-      name: "GPT-5.5",
       api: "openai-responses",
       baseUrl: "https://opencode.ai/zen/v1",
       provider: "opencode",
