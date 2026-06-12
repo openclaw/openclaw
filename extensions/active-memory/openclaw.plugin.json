@@ -96,7 +96,7 @@
     },
     "agents": {
       "label": "Target Agents",
-      "help": "Explicit agent ids that may use active memory."
+      "help": "Agent ids that may use Active Memory. Omit or leave empty to target every configured agent, or main when no agent list is configured."
     },
     "model": {
       "label": "Memory Model",
