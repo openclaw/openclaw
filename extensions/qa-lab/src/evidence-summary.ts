@@ -181,7 +181,7 @@ export type QaEvidenceSummaryJson = z.infer<typeof qaEvidenceSummarySchema>;
 
 type QaEvidenceStatusInput = QaEvidenceStatus | "skip";
 
-type QaEvidenceScenarioSpecInput = {
+type QaEvidenceScenarioDefinitionInput = {
   id: string;
   title: string;
   sourcePath?: string;
@@ -492,7 +492,7 @@ export function validateQaEvidenceSummaryJson(summary: unknown): QaEvidenceSumma
 export function buildQaSuiteEvidenceSummary(
   params: QaEvidenceBuildBase & {
     channelId: string;
-    scenarioSpecs: readonly QaEvidenceScenarioSpecInput[];
+    scenarioDefinitions: readonly QaEvidenceScenarioDefinitionInput[];
     scenarioResults: readonly QaEvidenceScenarioResultInput[];
   },
 ): QaEvidenceSummaryJson {
@@ -510,7 +510,7 @@ export function buildQaSuiteEvidenceSummary(
     fallback: params.channelDriver,
   });
   const entries = params.scenarioResults.map((result, index): QaEvidenceSummaryEntry => {
-    const scenario = params.scenarioSpecs[index];
+    const scenario = params.scenarioDefinitions[index];
     const primaryCoverageIds = uniqueSortedStrings(scenario?.coverage?.primary ?? []);
     const coverageIds = uniqueSortedStrings([
       ...(scenario?.coverage?.primary ?? []),

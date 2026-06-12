@@ -15,7 +15,7 @@ describe("evidence summary", () => {
   it("builds taxonomy-mapped QA suite evidence entries from catalog metadata", () => {
     const evidence = buildQaSuiteEvidenceSummary({
       artifactPaths: ["qa-suite-summary.json", "qa-suite-report.md"],
-      scenarioSpecs: [
+      scenarioDefinitions: [
         {
           id: "dm-chat-baseline",
           title: "DM baseline conversation",
@@ -444,7 +444,7 @@ describe("evidence summary", () => {
   it("carries profile env values without hardcoding taxonomy mapping ids", () => {
     const evidence = buildQaSuiteEvidenceSummary({
       artifactPaths: ["qa-suite-summary.json"],
-      scenarioSpecs: [
+      scenarioDefinitions: [
         {
           id: "dm-chat-baseline",
           title: "DM baseline conversation",
@@ -470,7 +470,7 @@ describe("evidence summary", () => {
   it("keeps mock non-OpenAI model refs attributed to their model provider", () => {
     const evidence = buildQaSuiteEvidenceSummary({
       artifactPaths: ["qa-suite-summary.json"],
-      scenarioSpecs: [
+      scenarioDefinitions: [
         {
           id: "anthropic-parity",
           title: "Anthropic parity",
