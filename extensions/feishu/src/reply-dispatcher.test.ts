@@ -1693,9 +1693,13 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await expect(result.ensureNoVisibleReplyFallback("empty-complete")).resolves.toBe(true);
 
     expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
-    expect(String(firstMockArg(sendMessageFeishuMock, "send message params").text)).toContain(
-      "without visible content",
+    const fallbackText = String(
+      firstMockArg(sendMessageFeishuMock, "send message params").text,
     );
+    expect(fallbackText).toContain("without visible content");
+    // Verify the fallback includes the slash-prefixed recovery command.
+    expect(fallbackText).toContain("/status");
+    expect(fallbackText).toContain("/状态");
     expect(result.getVisibleReplyState()).toEqual({
       visibleReplySent: true,
       skippedFinalReason: null,
