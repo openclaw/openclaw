@@ -644,17 +644,27 @@ async function runDefaultModelHealth(ctx: DoctorHealthFlowContext): Promise<void
     defaultModel: DEFAULT_MODEL,
   });
   if (!status.inCatalog) {
+    const hasProviderConfig = Boolean(
+      ctx.cfg.models?.providers?.[resolved.provider],
+    );
     const sameProvider = catalog
       .filter((e) => e.provider === resolved.provider)
       .map((e) => `${e.provider}/${e.id}`);
-    const hint =
-      sameProvider.length > 0
-        ? `Available: ${sameProvider.join(", ")}.`
-        : "No models found for this provider.";
-    note(
-      `- Default model "${status.key}" not in the model catalog (may fail at runtime). ${hint}`,
-      "Default model",
-    );
+    if (hasProviderConfig) {
+      note(
+        `- Default model "${status.key}" not in the static catalog, but provider "${resolved.provider}" is configured and may resolve it at runtime.`,
+        "Default model",
+      );
+    } else {
+      const hint =
+        sameProvider.length > 0
+          ? `Available: ${sameProvider.join(", ")}.`
+          : "No models found for this provider.";
+      note(
+        `- Default model "${status.key}" not in the model catalog and no provider configuration found (model may have been removed). ${hint}`,
+        "Default model",
+      );
+    }
   }
 }
 

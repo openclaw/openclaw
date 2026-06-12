@@ -719,4 +719,99 @@ describe("registerCoreHealthChecks", () => {
       }),
     );
   });
+
+  it("reports info severity when default model is not in catalog but provider is configured", async () => {
+    mocks.loadModelCatalog.mockResolvedValue([]);
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: "anthropic/claude-4-opus",
+        },
+      },
+      models: {
+        providers: {
+          anthropic: {
+            apiKey: "test-key",
+          },
+        },
+      },
+    };
+    const check = getCheck(createCoreHealthChecks(createDeps()), "core/doctor/default-model");
+
+    const findings = await check.detect({
+      mode: "lint",
+      runtime,
+      cfg,
+    });
+
+    expect(findings).toContainEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/default-model",
+        severity: "info",
+        message: expect.stringContaining("not in the static model catalog"),
+      }),
+    );
+  });
+
+  it("reports warning severity when default model is not in catalog and no provider config", async () => {
+    mocks.loadModelCatalog.mockResolvedValue([]);
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: "anthropic/claude-4-opus",
+        },
+      },
+    };
+    const check = getCheck(createCoreHealthChecks(createDeps()), "core/doctor/default-model");
+
+    const findings = await check.detect({
+      mode: "lint",
+      runtime,
+      cfg,
+    });
+
+    expect(findings).toContainEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/default-model",
+        severity: "warning",
+        message: expect.stringContaining("no provider configuration was found"),
+      }),
+    );
+  });
+
+  it("reports no findings when default model is in catalog", async () => {
+    mocks.loadModelCatalog.mockResolvedValue([
+      { provider: "openai", id: "gpt-4o" },
+    ]);
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: "openai/gpt-4o",
+        },
+      },
+    };
+    const check = getCheck(createCoreHealthChecks(createDeps()), "core/doctor/default-model");
+
+    const findings = await check.detect({
+      mode: "lint",
+      runtime,
+      cfg,
+    });
+
+    expect(findings).toEqual([]);
+  });
+
+  it("reports no findings when no default model is configured", async () => {
+    mocks.loadModelCatalog.mockResolvedValue([]);
+    const check = getCheck(createCoreHealthChecks(createDeps()), "core/doctor/default-model");
+
+    const findings = await check.detect({
+      mode: "lint",
+      runtime,
+      cfg: {},
+    });
+
+    expect(findings).toEqual([]);
+  });
+
 });
