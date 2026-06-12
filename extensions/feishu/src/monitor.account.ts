@@ -305,6 +305,10 @@ function registerEventHandlers(
     "im.message.message_read_v1": async () => {
       // Ignore read receipts
     },
+    "im.chat.access_event.bot_p2p_chat_entered_v1": async () => {
+      // Ignore p2p chat entered events — these fire when a user opens the bot
+      // private chat window and carry no actionable payload.
+    },
     "im.chat.member.bot.added_v1": async (data) => {
       try {
         const event = parseFeishuBotAddedEventPayload(data);
