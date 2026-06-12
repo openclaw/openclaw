@@ -317,21 +317,18 @@ function pushScenarioPackLines(lines: string[], packs: readonly QaCoverageScenar
 }
 
 function pushScorecardTaxonomyLines(lines: string[], report: QaScorecardTaxonomyReport) {
-  const mode = report.reportOnly ? "report-only" : "blocking";
   lines.push("## Scorecard Taxonomy", "");
   lines.push(`- Mapping: ${report.taxonomyPath ?? "missing"}`);
-  lines.push(`- Mapping ID: ${report.taxonomyId ?? "missing"} (${mode})`);
+  lines.push(`- Mapping ID: ${report.taxonomyId ?? "missing"}`);
   lines.push(`- Maturity taxonomy: ${report.taxonomy?.sourcePath ?? "missing"}`);
   if (report.scoreSnapshotRef) {
     lines.push(`- Maturity score snapshot: ${report.scoreSnapshotRef}`);
   }
-  lines.push(`- Mapping authority: ${report.mappingAuthority ?? "unknown"}`);
-  lines.push(`- Mapping owner: ${report.mappingOwner ?? "unknown"}`);
   lines.push(
     `- Categories: ${report.categoryCount} (${report.ltsIncludedCategoryCount} LTS-included, ${report.deferredCategoryCount} deferred, ${report.advisoryCategoryCount} advisory)`,
   );
   lines.push(`- Profiles: ${report.profileCount}`);
-  lines.push(`- Future blocking categories: ${report.releaseBlockingCategoryCount}`);
+  lines.push(`- Release-blocking categories: ${report.releaseBlockingCategoryCount}`);
   lines.push(`- Mapped coverage IDs: ${report.mappedCoverageIdCount}`);
   lines.push(`- Mapped scenarios: ${report.mappedScenarioCount}`);
   lines.push(`- Unmapped coverage IDs: ${report.unmappedCoverageIdCount}`);

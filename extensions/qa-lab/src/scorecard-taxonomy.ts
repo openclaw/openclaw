@@ -83,9 +83,6 @@ const qaScorecardTaxonomySchema = z
     taxonomy: qaScorecardTaxonomyRefSchema,
     scoreSnapshotRef: qaScorecardRepoRefSchema.optional(),
     status: z.enum(["initial", "candidate", "active"]),
-    mappingAuthority: z.enum(["scaffold", "authoritative"]),
-    mappingOwner: z.string().trim().min(1),
-    reportOnly: z.boolean(),
     notes: z.string().trim().min(1).optional(),
     profiles: z.array(qaScorecardProfileSchema).min(1),
     categories: z.array(qaScorecardCategorySchema).min(1),
@@ -238,9 +235,6 @@ export type QaScorecardTaxonomyReport = {
   } | null;
   scoreSnapshotRef: string | null;
   status: string | null;
-  mappingAuthority: string | null;
-  mappingOwner: string | null;
-  reportOnly: boolean;
   profileCount: number;
   profiles: QaScorecardProfileReport[];
   categoryCount: number;
@@ -408,9 +402,6 @@ export function buildQaScorecardTaxonomyReport(params: {
       taxonomy: null,
       scoreSnapshotRef: null,
       status: null,
-      mappingAuthority: null,
-      mappingOwner: null,
-      reportOnly: true,
       profileCount: 0,
       profiles: [],
       categoryCount: 0,
@@ -708,9 +699,6 @@ export function buildQaScorecardTaxonomyReport(params: {
     taxonomy: params.taxonomy.taxonomy,
     scoreSnapshotRef: params.taxonomy.scoreSnapshotRef ?? null,
     status: params.taxonomy.status,
-    mappingAuthority: params.taxonomy.mappingAuthority,
-    mappingOwner: params.taxonomy.mappingOwner,
-    reportOnly: params.taxonomy.reportOnly,
     profileCount: params.taxonomy.profiles.length,
     profiles,
     categoryCount: params.taxonomy.categories.length,

@@ -9,9 +9,6 @@ taxonomy:
   sourceRef: origin/main@41eef4a7965
 scoreSnapshotRef: docs/maturity-scores.yaml
 status: initial
-mappingAuthority: scaffold
-mappingOwner: maturity-scorecard-maintainers
-reportOnly: true
 notes: Executable QA coverage/profile mapping layer over taxonomy.yaml. taxonomy.yaml is
   authoritative for maturity surfaces, categories, and levels; this file only maps existing QA
   coverage IDs and runnable smoke-ci/release profile selectors to those taxonomy categories.

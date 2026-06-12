@@ -45,7 +45,6 @@ describe("qa coverage report", () => {
       "whatsapp",
     ]);
     expect(inventory.scorecardTaxonomy.taxonomyId).toBe("stable-lts-initial");
-    expect(inventory.scorecardTaxonomy.reportOnly).toBe(true);
     expect(inventory.scorecardTaxonomy.profileCount).toBe(2);
     expect(inventory.scorecardTaxonomy.categoryCount).toBe(16);
     expect(inventory.scorecardTaxonomy.ltsIncludedCategoryCount).toBe(7);
@@ -124,7 +123,7 @@ describe("qa coverage report", () => {
     );
     expect(report).toContain("thread-follow-up: slack-thread-follow-up");
     expect(report).toContain("## Scorecard Taxonomy");
-    expect(report).toContain("- Mapping ID: stable-lts-initial (report-only)");
+    expect(report).toContain("- Mapping ID: stable-lts-initial");
     expect(report).toContain("- Maturity taxonomy: taxonomy.yaml");
     expect(report).toContain("- Maturity score snapshot: docs/maturity-scores.yaml");
     expect(report).toContain("- Categories: 16 (7 LTS-included, 8 deferred, 1 advisory)");
@@ -139,7 +138,7 @@ describe("qa coverage report", () => {
     expect(report).toContain("agents.subagents");
   });
 
-  it("reports taxonomy mapping gaps without making closure blocking", () => {
+  it("reports taxonomy mapping gaps as scorecard signals", () => {
     const taxonomy = parseQaScorecardTaxonomy({
       version: 1,
       id: "test-taxonomy",
@@ -147,9 +146,6 @@ describe("qa coverage report", () => {
       taxonomy: TEST_TAXONOMY_REF,
       scoreSnapshotRef: "docs/maturity-scores.yaml",
       status: "initial",
-      mappingAuthority: "scaffold",
-      mappingOwner: "maturity-scorecard-maintainers",
-      reportOnly: true,
       profiles: testScorecardProfiles(),
       categories: [
         {
@@ -179,7 +175,6 @@ describe("qa coverage report", () => {
       scenarios: readQaScenarioPack().scenarios,
     });
 
-    expect(report.reportOnly).toBe(true);
     expect(report.categories[0]?.mappingStatus).toBe("partial");
     expect(report.validationIssues.map((issue) => issue.code)).toEqual([
       "coverage-id-not-found",
@@ -197,9 +192,6 @@ describe("qa coverage report", () => {
       taxonomy: TEST_TAXONOMY_REF,
       scoreSnapshotRef: "docs/maturity-scores.yaml",
       status: "initial",
-      mappingAuthority: "scaffold",
-      mappingOwner: "maturity-scorecard-maintainers",
-      reportOnly: true,
       profiles: testScorecardProfiles(TEST_EXECUTABLE_CATEGORY_ID, "smoke-ci"),
       categories: [
         {
@@ -242,9 +234,6 @@ describe("qa coverage report", () => {
       taxonomy: TEST_TAXONOMY_REF,
       scoreSnapshotRef: "docs/maturity-scores.yaml",
       status: "initial",
-      mappingAuthority: "scaffold",
-      mappingOwner: "maturity-scorecard-maintainers",
-      reportOnly: true,
       profiles: testScorecardProfiles(
         "clawhub-and-external-plugin-distribution.compatibility-and-trust",
         "smoke-ci",
@@ -291,9 +280,6 @@ describe("qa coverage report", () => {
       taxonomy: TEST_TAXONOMY_REF,
       scoreSnapshotRef: "docs/maturity-scores.yaml",
       status: "initial",
-      mappingAuthority: "scaffold",
-      mappingOwner: "maturity-scorecard-maintainers",
-      reportOnly: true,
       profiles: testScorecardProfiles(TEST_EXECUTABLE_CATEGORY_ID, "none"),
       categories: [
         {
@@ -336,9 +322,6 @@ describe("qa coverage report", () => {
       taxonomy: TEST_TAXONOMY_REF,
       scoreSnapshotRef: "docs/maturity-scores.yaml",
       status: "initial",
-      mappingAuthority: "scaffold",
-      mappingOwner: "maturity-scorecard-maintainers",
-      reportOnly: true,
       profiles: testScorecardProfiles(TEST_EXECUTABLE_CATEGORY_ID, "release"),
       categories: [
         {
@@ -381,9 +364,6 @@ describe("qa coverage report", () => {
       taxonomy: TEST_TAXONOMY_REF,
       scoreSnapshotRef: "docs/maturity-scores.yaml",
       status: "initial",
-      mappingAuthority: "scaffold",
-      mappingOwner: "maturity-scorecard-maintainers",
-      reportOnly: true,
       profiles: [
         {
           id: "smoke-ci",
@@ -437,9 +417,6 @@ describe("qa coverage report", () => {
       taxonomy: TEST_TAXONOMY_REF,
       scoreSnapshotRef: "docs/maturity-scores.yaml",
       status: "initial",
-      mappingAuthority: "scaffold",
-      mappingOwner: "maturity-scorecard-maintainers",
-      reportOnly: true,
       profiles: [...testScorecardProfiles(TEST_EXECUTABLE_CATEGORY_ID, "release")],
       categories: [
         {
@@ -480,9 +457,6 @@ describe("qa coverage report", () => {
       taxonomy: TEST_TAXONOMY_REF,
       scoreSnapshotRef: "docs/maturity-scores.yaml",
       status: "initial",
-      mappingAuthority: "scaffold",
-      mappingOwner: "maturity-scorecard-maintainers",
-      reportOnly: true,
       profiles: [
         ...testScorecardProfiles(TEST_EXECUTABLE_CATEGORY_ID, "none"),
         {
@@ -534,9 +508,6 @@ describe("qa coverage report", () => {
         },
         scoreSnapshotRef: "docs/maturity-scores.yaml",
         status: "initial",
-        mappingAuthority: "scaffold",
-        mappingOwner: "maturity-scorecard-maintainers",
-        reportOnly: true,
         profiles: testScorecardProfiles(TEST_EXECUTABLE_CATEGORY_ID, "smoke-ci"),
         categories: [
           {
