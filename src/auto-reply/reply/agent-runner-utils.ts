@@ -231,6 +231,9 @@ function buildEmbeddedContextFromTemplate(params: {
       to: params.sessionCtx.To,
     }),
     messageThreadId: params.sessionCtx.MessageThreadId ?? undefined,
+    chatId:
+      normalizeOptionalString(params.sessionCtx.NativeChannelId) ??
+      normalizeOptionalString(params.sessionCtx.ChatId),
     memberRoleIds: normalizeMemberRoleIds(params.sessionCtx.MemberRoleIds),
     // Provider threading context for tool auto-injection
     ...buildThreadingToolContext({

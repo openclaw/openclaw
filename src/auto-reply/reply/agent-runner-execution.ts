@@ -2228,6 +2228,9 @@ export async function runAgentTurnWithFallback(params: {
                       params.followupRun.originatingTo ??
                       params.sessionCtx.OriginatingTo ??
                       params.sessionCtx.To,
+                    senderId: params.followupRun.run.senderId,
+                    chatId: params.followupRun.originatingChatId,
+                    channelContext: params.followupRun.run.channelContext,
                     currentThreadTs:
                       cliCurrentThreadId != null ? String(cliCurrentThreadId) : undefined,
                     currentMessageId: cliCurrentMessageId,

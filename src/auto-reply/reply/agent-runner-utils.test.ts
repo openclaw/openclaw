@@ -256,6 +256,7 @@ describe("agent-runner-utils", () => {
         Provider: "OpenAI",
         To: "channel-1",
         ChatType: "Channel",
+        NativeChannelId: "native-channel-1",
         SenderId: "sender-1",
         MemberRoleIds: ["admin", " ", "operator"],
       },
@@ -273,6 +274,7 @@ describe("agent-runner-utils", () => {
     expect(resolved.embeddedContext.messageProvider).toBe("openai");
     expect(resolved.embeddedContext.chatType).toBe("channel");
     expect(resolved.embeddedContext.messageTo).toBe("channel-1");
+    expect(resolved.embeddedContext.chatId).toBe("native-channel-1");
     expect(resolved.embeddedContext.memberRoleIds).toEqual(["admin", "operator"]);
     expect(resolved.embeddedContext.currentInboundAudio).toBe(false);
     expect(resolved.senderContext).toEqual({
@@ -300,6 +302,23 @@ describe("agent-runner-utils", () => {
     expect(resolved.embeddedContext.messageProvider).toBe("telegram");
     expect(resolved.embeddedContext.chatType).toBe("group");
     expect(resolved.embeddedContext.messageTo).toBe("268300329");
+  });
+
+  it("falls back to ChatId for native hook chat context", () => {
+    const run = makeRun();
+
+    const resolved = buildEmbeddedRunContexts({
+      run,
+      sessionCtx: {
+        Provider: "feishu",
+        To: "chat:oc_123",
+        ChatId: "oc_123",
+      },
+      hasRepliedRef: undefined,
+      provider: "openai",
+    });
+
+    expect(resolved.embeddedContext.chatId).toBe("oc_123");
   });
 
   it("carries inbound audio context into embedded message tools", () => {

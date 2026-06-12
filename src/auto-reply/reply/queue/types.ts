@@ -8,6 +8,7 @@ import type { InboundEventKind } from "../../../channels/inbound-event/kind.js";
 import type { SessionEntry } from "../../../config/sessions.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
+import type { PluginHookChannelContext } from "../../../plugins/hook-types.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import type { SkillSnapshot } from "../../../skills/types.js";
@@ -75,6 +76,8 @@ export type FollowupRun = {
    * The chat/channel/user ID where the reply should be sent.
    */
   originatingTo?: string;
+  /** Transport-native chat/conversation ID for hook identity context. */
+  originatingChatId?: string;
   /** Provider account id (multi-account). */
   originatingAccountId?: string;
   /** Thread id for reply routing (Telegram topic id or Matrix thread event id). */
@@ -96,6 +99,7 @@ export type FollowupRun = {
     groupChannel?: string;
     groupSpace?: string;
     senderId?: string;
+    channelContext?: PluginHookChannelContext;
     senderName?: string;
     senderUsername?: string;
     senderE164?: string;

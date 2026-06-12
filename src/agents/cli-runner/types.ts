@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import type { ImageContent } from "../../llm/types.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
+import type { PluginHookChannelContext } from "../../plugins/hook-types.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type {
   PersistedUserTurnMessage,
@@ -87,6 +88,12 @@ export type RunCliAgentParams = {
   messageChannel?: string;
   messageProvider?: string;
   currentChannelId?: string;
+  /** Channel-scoped sender ID for plugin hook identity context. */
+  senderId?: string;
+  /** Transport-native chat/conversation ID for plugin hook identity context. */
+  chatId?: string;
+  /** Channel-owned sender/chat metadata for plugin hook identity context. */
+  channelContext?: PluginHookChannelContext;
   currentThreadTs?: string;
   currentMessageId?: string | number;
   currentInboundAudio?: boolean;

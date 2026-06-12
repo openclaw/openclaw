@@ -18,7 +18,10 @@ import { emitAgentPlanEvent, registerAgentRunContext } from "../../infra/agent-e
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { freezeDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
+import {
+  buildAgentHookContextChannelFields,
+  buildAgentHookContextIdentityFields,
+} from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveProviderAuthProfileId } from "../../plugins/provider-runtime.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
@@ -664,6 +667,12 @@ export async function runEmbeddedAgent(
         modelId,
         trigger: params.trigger,
         ...buildAgentHookContextChannelFields(params),
+        ...buildAgentHookContextIdentityFields({
+          trigger: params.trigger,
+          senderId: params.senderId,
+          chatId: params.chatId,
+          channel: params.channelContext,
+        }),
       };
       if (params.trigger === "cron" && hookRunner?.hasHooks("before_agent_reply")) {
         notifyExecutionPhase("before_agent_reply", { provider, model: modelId });
@@ -1646,6 +1655,8 @@ export async function runEmbeddedAgent(
             senderUsername: params.senderUsername,
             senderE164: params.senderE164,
             currentChannelId: params.currentChannelId,
+            chatId: params.chatId,
+            channelContext: params.channelContext,
             currentThreadTs: params.currentThreadTs,
             currentMessageId: params.currentMessageId,
             currentInboundAudio: params.currentInboundAudio,

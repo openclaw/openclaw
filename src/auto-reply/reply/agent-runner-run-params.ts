@@ -85,6 +85,7 @@ export function buildEmbeddedRunBaseParams(params: {
     ownerNumbers: params.run.ownerNumbers,
     inputProvenance: params.run.inputProvenance,
     senderIsOwner: params.run.senderIsOwner,
+    channelContext: params.run.channelContext,
     enforceFinalTag: resolveEnforceFinalTagWithResolver(
       params.run,
       params.provider,
