@@ -1,9 +1,10 @@
 // Research autocapture helpers decide when skill research signals should be captured.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { readWorkspaceSkillFile } from "../lifecycle/workspace-skill-write.js";
 import { resolveSkillWorkshopConfig } from "../workshop/config.js";
 import { listSkillProposals, proposeCreateSkill, proposeUpdateSkill } from "../workshop/service.js";
-import { readWorkspaceSkillFile, resolveSkillProposalTarget } from "../workshop/store.js";
+import { resolveSkillProposalTarget } from "../workshop/store.js";
 import { extractDurableInstructionProposal } from "./signals.js";
 
 type SkillResearchAgentEndEvent = {

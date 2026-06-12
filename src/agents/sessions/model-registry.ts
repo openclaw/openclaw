@@ -170,6 +170,7 @@ const ModelDefinitionSchema = Type.Object({
   ),
   contextWindow: Type.Optional(Type.Number()),
   maxTokens: Type.Optional(Type.Number()),
+  params: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
   headers: Type.Optional(Type.Record(Type.String(), Type.String())),
   compat: Type.Optional(ProviderCompatSchema),
 });
@@ -553,6 +554,7 @@ export class ModelRegistry {
           cost: modelDef.cost ?? defaultCost,
           contextWindow: modelDef.contextWindow ?? 128000,
           maxTokens: modelDef.maxTokens ?? 16384,
+          params: modelDef.params,
           headers: undefined,
           compat,
         } as Model);
@@ -878,6 +880,7 @@ export class ModelRegistry {
           cost: modelDef.cost,
           contextWindow: modelDef.contextWindow,
           maxTokens: modelDef.maxTokens,
+          params: modelDef.params,
           headers: undefined,
           compat: modelDef.compat,
         } as Model);
@@ -923,6 +926,7 @@ export interface ProviderConfigInput {
     cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
     contextWindow: number;
     maxTokens: number;
+    params?: Record<string, unknown>;
     headers?: Record<string, string>;
     compat?: Model["compat"];
   }>;

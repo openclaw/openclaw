@@ -8,6 +8,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { readErrorName } from "../infra/errors.js";
 import {
   classifyFailoverSignal,
+  extractFailoverSignalDetails,
   inferSignalStatus,
   isUnclassifiedNoBodyHttpSignal,
   type FailoverClassification,
@@ -237,6 +238,26 @@ function getProvider(err: unknown): string | undefined {
   return findErrorProperty(err, readDirectProvider);
 }
 
+function readDirectErrorDetails(err: unknown): string[] | undefined {
+  if (!err || typeof err !== "object") {
+    return undefined;
+  }
+  const candidate = err as {
+    body?: unknown;
+    detail?: unknown;
+    error?: unknown;
+    errorBody?: unknown;
+    param?: unknown;
+  };
+  return extractFailoverSignalDetails(
+    candidate.param,
+    candidate.errorBody,
+    candidate.body,
+    candidate.detail,
+    candidate.error,
+  );
+}
+
 function readDirectErrorMessage(err: unknown): string | undefined {
   if (err instanceof Error) {
     return err.message || undefined;
@@ -271,6 +292,7 @@ function normalizeDirectErrorSignal(err: unknown): FailoverSignal {
     errorType: readDirectErrorType(err),
     message: message || undefined,
     provider: readDirectProvider(err),
+    details: readDirectErrorDetails(err),
   };
 }
 
@@ -390,6 +412,7 @@ function normalizeErrorSignal(err: unknown, providerHint?: string): FailoverSign
     errorType: getErrorType(err),
     message: message || undefined,
     provider: getProvider(err) ?? providerHint,
+    details: readDirectErrorDetails(err),
   };
 }
 

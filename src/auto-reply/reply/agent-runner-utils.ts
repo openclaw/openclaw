@@ -3,6 +3,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { normalizeChatType } from "../../channels/chat-type.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type {
   ChannelId,
@@ -213,6 +214,7 @@ function buildEmbeddedContextFromTemplate(params: {
   hasRepliedRef: { value: boolean } | undefined;
 }) {
   const config = params.run.config;
+  const chatType = normalizeChatType(params.sessionCtx.ChatType) ?? params.run.chatType;
   return {
     sessionId: params.run.sessionId,
     sessionKey: params.run.sessionKey,
@@ -222,6 +224,7 @@ function buildEmbeddedContextFromTemplate(params: {
       originatingChannel: params.sessionCtx.OriginatingChannel,
       provider: params.sessionCtx.Provider,
     }),
+    ...(chatType ? { chatType } : {}),
     agentAccountId: params.sessionCtx.AccountId,
     messageTo: resolveOriginMessageTo({
       originatingTo: params.sessionCtx.OriginatingTo,

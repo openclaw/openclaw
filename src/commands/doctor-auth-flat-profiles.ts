@@ -354,6 +354,46 @@ function mergeImportedAuthProfileState(params: {
   };
 }
 
+function formatMissingAuthProfileSqliteVerification(params: {
+  expected: AuthProfileStore;
+  importedProfileIds: ReadonlySet<string>;
+  loaded: AuthProfileStore | null;
+}): string | null {
+  const missingProfileIds = [...params.importedProfileIds].filter(
+    (profileId) => !params.loaded?.profiles[profileId],
+  );
+  const missingStateFields: string[] = [];
+  for (const [provider, profileIds] of Object.entries(params.expected.order ?? {})) {
+    const loadedProfileIds = params.loaded?.order?.[provider];
+    if (
+      !loadedProfileIds ||
+      loadedProfileIds.length !== profileIds.length ||
+      loadedProfileIds.some((profileId, index) => profileId !== profileIds[index])
+    ) {
+      missingStateFields.push(`order.${provider}`);
+    }
+  }
+  for (const [provider, profileId] of Object.entries(params.expected.lastGood ?? {})) {
+    if (params.loaded?.lastGood?.[provider] !== profileId) {
+      missingStateFields.push(`lastGood.${provider}`);
+    }
+  }
+  for (const profileId of Object.keys(params.expected.usageStats ?? {})) {
+    if (!params.loaded?.usageStats?.[profileId]) {
+      missingStateFields.push(`usageStats.${profileId}`);
+    }
+  }
+
+  const parts: string[] = [];
+  if (missingProfileIds.length > 0) {
+    parts.push(`imported profile(s): ${missingProfileIds.toSorted().join(", ")}`);
+  }
+  if (missingStateFields.length > 0) {
+    parts.push(`auth state field(s): ${missingStateFields.toSorted().join(", ")}`);
+  }
+  return parts.length > 0 ? parts.join("; ") : null;
+}
+
 function filterRawAuthProfileState(
   raw: Record<string, unknown>,
   shouldKeepProfileId: (profileId: string) => boolean,
@@ -483,9 +523,14 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
   prompter: Pick<DoctorPrompter, "confirmAutoFix">;
   now?: () => number;
   env?: NodeJS.ProcessEnv;
+  deps?: {
+    loadPersistedAuthProfileStore?: typeof loadPersistedAuthProfileStore;
+  };
 }): Promise<LegacyFlatAuthProfileRepairResult> {
   const now = params.now ?? Date.now;
   const env = params.env ?? process.env;
+  const loadMigratedStore =
+    params.deps?.loadPersistedAuthProfileStore ?? loadPersistedAuthProfileStore;
   const candidates = listAuthProfileSqliteMigrationCandidates(params.cfg, env);
   const detected = candidates.filter(
     (candidate) =>
@@ -582,16 +627,20 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
         continue;
       }
 
-      const existing = loadPersistedAuthProfileStore(candidate.agentDir) ?? {
+      const existing = loadMigratedStore(candidate.agentDir) ?? {
         version: AUTH_STORE_VERSION,
         profiles: {},
       };
       const existingProfileIds = new Set(Object.keys(existing.profiles));
       const existingState = coerceAuthProfileState(existing);
       let next: AuthProfileStore = { ...existing };
+      const importedProfileIds = new Set<string>();
       if (legacyStore) {
         const legacyAsStore: AuthProfileStore = { version: AUTH_STORE_VERSION, profiles: {} };
         applyLegacyAuthStore(legacyAsStore, legacyStore);
+        for (const profileId of Object.keys(legacyAsStore.profiles)) {
+          importedProfileIds.add(profileId);
+        }
         next = mergeImportedAuthProfiles({
           store: next,
           profiles: legacyAsStore.profiles,
@@ -599,6 +648,9 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
         });
       }
       if (canonicalStore) {
+        for (const profileId of Object.keys(canonicalStore.profiles)) {
+          importedProfileIds.add(profileId);
+        }
         next = {
           ...next,
           version: Math.max(next.version, canonicalStore.version),
@@ -631,6 +683,17 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
           preserveStateProfileIds: stateProfileIds,
           syncExternalCli: false,
         });
+        const verificationFailure = formatMissingAuthProfileSqliteVerification({
+          expected: next,
+          importedProfileIds,
+          loaded: loadMigratedStore(candidate.agentDir),
+        });
+        if (verificationFailure) {
+          result.warnings.push(
+            `Left auth profile JSON in place for ${shortenHomePath(candidate.authPath)} because SQLite verification did not find ${verificationFailure}.`,
+          );
+          continue;
+        }
       }
 
       const backups: string[] = [];

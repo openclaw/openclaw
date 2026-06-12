@@ -3,6 +3,10 @@ import { createServer } from "node:http";
 import type { Api, Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import {
+  classifyAssistantFailoverReason,
+  formatUserFacingAssistantErrorText,
+} from "./embedded-agent-helpers.js";
+import {
   buildOpenAIResponsesParams,
   buildOpenAICompletionsParams,
   createOpenAICompletionsTransportStreamFn,
@@ -1579,6 +1583,83 @@ describe("openai transport stream", () => {
     }
   });
 
+  it("classifies OpenAI-compatible unsupported-model detail from failed chat requests", async () => {
+    const server = createServer((req, res) => {
+      req.resume();
+      req.on("end", () => {
+        res.writeHead(400, {
+          "content-type": "application/json; charset=utf-8",
+          "x-request-id": "req_not_supported_model",
+        });
+        res.end(
+          JSON.stringify({
+            error: {
+              code: "400",
+              message: "Param Incorrect",
+              param: "Not supported model some-model-id",
+            },
+          }),
+        );
+      });
+    });
+
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Missing loopback server address");
+      }
+      const model = {
+        id: "some-model-id",
+        name: "Some Model",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200_000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">;
+      const stream = createOpenAICompletionsTransportStreamFn()(
+        model,
+        {
+          systemPrompt: "system",
+          messages: [{ role: "user", content: "Reply OK", timestamp: Date.now() }],
+          tools: [],
+        } as never,
+        { apiKey: "test-key" } as never,
+      );
+
+      let errorPayload: Record<string, unknown> | undefined;
+      for await (const event of stream as AsyncIterable<{
+        type: string;
+        error?: Record<string, unknown>;
+      }>) {
+        if (event.type === "error") {
+          errorPayload = event.error;
+        }
+      }
+
+      expect(errorPayload).toMatchObject({
+        stopReason: "error",
+        errorMessage: "400 Param Incorrect",
+        errorCode: "400",
+      });
+      expect(String(errorPayload?.errorBody)).toContain("Not supported model some-model-id");
+      expect(classifyAssistantFailoverReason(errorPayload as never)).toBe("model_not_found");
+      expect(formatUserFacingAssistantErrorText(errorPayload as never)).toBe(
+        "The selected model was not found by the provider. Check the model id or choose a different model.",
+      );
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
   it("preserves reasoning tokens without double-counting them", () => {
     const model = {
       id: "gpt-5",
@@ -2402,6 +2483,53 @@ describe("openai transport stream", () => {
       },
     ]);
     expect(JSON.stringify(events)).not.toContain("DSML");
+  });
+
+  it("parses repeated DeepSeek DSML name attributes consistently", async () => {
+    // Guards the cached attribute matchers: repeated parses must stay identical
+    // (no stale RegExp lastIndex) across separate stream invocations.
+    const model = createDeepSeekCompletionsModel();
+    const content =
+      '<｜DSML｜tool_calls>\n<｜DSML｜invoke name="session_status">\n<｜DSML｜parameter name="sessionKey" string="true">current</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜tool_calls>';
+
+    const runOnce = async () => {
+      const output = createAssistantOutput(model);
+      await testing.processOpenAICompletionsStream(
+        streamChunks([
+          {
+            id: "chatcmpl-deepseek-dsml-repeat",
+            object: "chat.completion.chunk",
+            created: 1,
+            model: model.id,
+            choices: [
+              {
+                index: 0,
+                delta: { content },
+                logprobs: null,
+                finish_reason: "stop",
+              },
+            ],
+          },
+        ]),
+        output,
+        model,
+        { push() {} },
+      );
+      return output.content;
+    };
+
+    const first = await runOnce();
+    const second = await runOnce();
+    expect(second).toEqual(first);
+    expect(first).toEqual([
+      {
+        type: "toolCall",
+        id: "call_deepseek_dsml_1",
+        name: "session_status",
+        arguments: { sessionKey: "current" },
+        partialArgs: '{"sessionKey":"current"}',
+      },
+    ]);
   });
 
   it("recovers split DeepSeek DSML JSON tool calls emitted as text", async () => {
@@ -9941,6 +10069,19 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
     maxTokens: 32_000,
   } satisfies Model<"openai-completions">;
 
+  const gemma4Model = {
+    id: "google/gemma-4-12b",
+    name: "Gemma 4 12B",
+    api: "openai-completions",
+    provider: "vllm",
+    baseUrl: "https://proxy.example.com/v1",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 262_144,
+    maxTokens: 32_000,
+  } satisfies Model<"openai-completions">;
+
   const kimiCodingProxyModel = {
     ...customKimiProxyModel,
     id: "kimi-for-coding",
@@ -10115,6 +10256,15 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
     const assistant = getAssistantMessage(
       buildReplayParams(customQwenReasoningModel, "reasoning_content"),
     );
+
+    expect(assistant.reasoning_content).toBe("Need to answer politely.");
+    expect(assistant).not.toHaveProperty("reasoning_details");
+    expect(assistant).not.toHaveProperty("reasoning");
+    expect(assistant).not.toHaveProperty("reasoning_text");
+  });
+
+  it("preserves reasoning_content replay for Gemma 4 openai-completions models", () => {
+    const assistant = getAssistantMessage(buildReplayParams(gemma4Model, "reasoning_content"));
 
     expect(assistant.reasoning_content).toBe("Need to answer politely.");
     expect(assistant).not.toHaveProperty("reasoning_details");

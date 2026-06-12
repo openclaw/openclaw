@@ -3,15 +3,26 @@
  */
 import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/model-catalog-types";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { planManifestModelCatalogRows } from "../../model-catalog/manifest-planner.js";
 import { listOpenClawPluginManifestMetadata } from "../../plugins/manifest-metadata-scan.js";
 import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import { loadPluginManifest } from "../../plugins/manifest.js";
+import {
+  normalizePluginDiscoveryResult,
+  resolveRuntimePluginDiscoveryProviders,
+  runProviderStaticCatalog,
+} from "../../plugins/provider-discovery.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
+import {
+  resolveBundledProviderCompatPluginIds,
+  resolveOwningPluginIdsForProviderRef,
+} from "../../plugins/providers.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { normalizeStaticProviderModelId } from "../model-ref-shared.js";
+import { buildInlineProviderModels } from "./model.inline-provider.js";
 
 /**
  * Resolves bundled plugin static model-catalog rows into runtime model records.
@@ -21,20 +32,34 @@ function rowMatchesModel(params: {
   provider: string;
   modelId: string;
 }): boolean {
+  return staticModelIdMatches({
+    candidateId: params.row.id,
+    provider: params.provider,
+    modelId: params.modelId,
+    rowProvider: params.row.provider,
+  });
+}
+
+function staticModelIdMatches(params: {
+  candidateId: string;
+  provider: string;
+  modelId: string;
+  rowProvider?: string;
+}): boolean {
   const normalizedProvider = normalizeProviderId(params.provider);
-  if (normalizeProviderId(params.row.provider) !== normalizedProvider) {
+  if (params.rowProvider && normalizeProviderId(params.rowProvider) !== normalizedProvider) {
     return false;
   }
   return (
-    normalizeStaticProviderModelId(normalizedProvider, params.row.id).trim().toLowerCase() ===
+    normalizeStaticProviderModelId(normalizedProvider, params.candidateId).trim().toLowerCase() ===
     normalizeStaticProviderModelId(normalizedProvider, params.modelId).trim().toLowerCase()
   );
 }
 
 function normalizeStaticCatalogInput(
-  input: NormalizedModelCatalogRow["input"],
+  input: readonly unknown[] | undefined,
 ): ProviderRuntimeModel["input"] {
-  const normalizedInput = input.filter(
+  const normalizedInput = (input ?? []).filter(
     (item): item is "text" | "image" => item === "text" || item === "image",
   );
   return normalizedInput.length > 0 ? normalizedInput : ["text"];
@@ -68,6 +93,42 @@ function modelFromStaticCatalogRow(row: NormalizedModelCatalogRow): ProviderRunt
     headers: row.headers,
     compat: row.compat,
     mediaInput: row.mediaInput,
+  };
+}
+
+function modelFromProviderStaticCatalog(params: {
+  provider: string;
+  providerConfig: ModelProviderConfig;
+  model: ModelProviderConfig["models"][number];
+}): ProviderRuntimeModel {
+  const [model] = buildInlineProviderModels({
+    [params.provider]: { ...params.providerConfig, models: [params.model] },
+  });
+  return {
+    ...model,
+    id: model?.id ?? params.model.id,
+    name: model?.name || params.model.name || params.model.id,
+    provider: params.provider,
+    api: model?.api ?? params.model.api ?? params.providerConfig.api ?? "openai-responses",
+    baseUrl: model?.baseUrl ?? params.model.baseUrl ?? params.providerConfig.baseUrl ?? "",
+    reasoning: model?.reasoning ?? params.model.reasoning ?? false,
+    input: normalizeStaticCatalogInput(model?.input ?? params.model.input),
+    cost: model?.cost ?? normalizeStaticCatalogCost(params.model.cost),
+    contextWindow:
+      model?.contextWindow ??
+      params.model.contextWindow ??
+      params.providerConfig.contextWindow ??
+      DEFAULT_CONTEXT_TOKENS,
+    contextTokens:
+      model?.contextTokens ?? params.model.contextTokens ?? params.providerConfig.contextTokens,
+    maxTokens:
+      model?.maxTokens ??
+      params.model.maxTokens ??
+      params.providerConfig.maxTokens ??
+      DEFAULT_CONTEXT_TOKENS,
+    ...(params.providerConfig.authHeader !== undefined
+      ? { authHeader: params.providerConfig.authHeader }
+      : {}),
   };
 }
 
@@ -206,6 +267,89 @@ export function resolveBundledStaticCatalogModel(params: {
     );
     if (row) {
       return modelFromStaticCatalogRow(row);
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Resolves one bundled provider static-catalog model row for provider/model lookup.
+ *
+ * Some bundled providers expose their canonical offline rows through
+ * `providerCatalogEntry` instead of manifest `modelCatalog`. This keeps the
+ * skip-discovery fallback aligned with model list/inspect without running live
+ * discovery or untrusted workspace plugins.
+ */
+export async function resolveBundledProviderStaticCatalogModel(params: {
+  provider: string;
+  modelId: string;
+  cfg?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<ProviderRuntimeModel | undefined> {
+  const env = params.env ?? process.env;
+  const provider = normalizeProviderId(params.provider);
+  if (!provider || !params.modelId.trim()) {
+    return undefined;
+  }
+  const pluginIds = resolveOwningPluginIdsForProviderRef({
+    provider,
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+    env,
+  });
+  if (!pluginIds || pluginIds.length === 0) {
+    return undefined;
+  }
+  const bundledPluginIds = new Set(
+    resolveBundledProviderCompatPluginIds({
+      config: params.cfg,
+      workspaceDir: params.workspaceDir,
+      env,
+    }),
+  );
+  const scopedPluginIds = pluginIds.filter((pluginId) => bundledPluginIds.has(pluginId));
+  if (scopedPluginIds.length === 0) {
+    return undefined;
+  }
+
+  const providers = await resolveRuntimePluginDiscoveryProviders({
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+    env,
+    onlyPluginIds: scopedPluginIds,
+    includeUntrustedWorkspacePlugins: false,
+    requireCompleteDiscoveryEntryCoverage: true,
+    discoveryEntriesOnly: true,
+    includeManifestModelCatalogProviders: false,
+  });
+
+  for (const catalogProvider of providers) {
+    const result = await runProviderStaticCatalog({
+      provider: catalogProvider,
+      config: params.cfg ?? {},
+      workspaceDir: params.workspaceDir,
+      env,
+    });
+    const normalized = normalizePluginDiscoveryResult({
+      provider: catalogProvider,
+      result,
+    });
+    for (const [providerIdRaw, providerConfig] of Object.entries(normalized)) {
+      const providerId = normalizeProviderId(providerIdRaw);
+      if (providerId !== provider || !Array.isArray(providerConfig.models)) {
+        continue;
+      }
+      const model = providerConfig.models.find((candidate) =>
+        staticModelIdMatches({
+          candidateId: candidate.id,
+          provider,
+          modelId: params.modelId,
+        }),
+      );
+      if (model) {
+        return modelFromProviderStaticCatalog({ provider, providerConfig, model });
+      }
     }
   }
   return undefined;

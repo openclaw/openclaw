@@ -135,6 +135,40 @@ describe("generateConversationLabel", () => {
     expect(call[2].signal).toBeInstanceOf(AbortSignal);
   });
 
+  it("applies prepared runtime auth to the completion model", async () => {
+    resolveDefaultModelForAgent.mockReturnValue({
+      provider: "microsoft-foundry",
+      model: "claude-fable-5",
+    });
+    resolveModelAsync.mockResolvedValue({
+      model: {
+        provider: "microsoft-foundry",
+        api: "anthropic-messages",
+        baseUrl: "https://example.services.ai.azure.com/anthropic",
+        headers: { "x-api-key": "stale-key" },
+      },
+      authStorage: {},
+      modelRegistry: {},
+    });
+    getRuntimeAuthForModel.mockResolvedValue({
+      apiKey: "entra-token",
+      mode: "api-key",
+      request: { auth: { mode: "authorization-bearer", token: "entra-token" } },
+    });
+    requireApiKey.mockReturnValue("entra-token");
+
+    await generateConversationLabel({
+      userMessage: "Need help with invoices",
+      prompt: "Generate a label",
+      cfg: {},
+    });
+
+    expect(requireFirstMockCall(completeSimple, "simple completion")[0]).toMatchObject({
+      provider: "microsoft-foundry",
+      headers: { Authorization: "Bearer entra-token" },
+    });
+  });
+
   it("omits temperature for Codex Responses simple completions", async () => {
     resolveDefaultModelForAgent.mockReturnValue({ provider: "openai", model: "gpt-5.5" });
     resolveModelAsync.mockResolvedValue({
