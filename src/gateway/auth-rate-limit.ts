@@ -55,6 +55,11 @@ export const AUTH_RATE_LIMIT_SCOPE_NODE_REAPPROVAL = "node-reapproval";
 // device signature can queue the bootstrap-pairing flow behind their
 // requests, blocking legitimate node onboarding during the attack.
 export const AUTH_RATE_LIMIT_SCOPE_BOOTSTRAP_TOKEN = "bootstrap-token";
+// Per-IP gate for the pre-auth device-signature verify path. Capped
+// independently of shared-secret/device-token attempts so a single IP
+// cannot force unbounded crypto.createPublicKey / crypto.verify work
+// regardless of whether other auth fields are present.
+export const AUTH_RATE_LIMIT_SCOPE_DEVICE_SIGNATURE = "device-signature";
 export const AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH = "hook-auth";
 const BROWSER_ORIGIN_RATE_LIMIT_KEY_PREFIX = "browser-origin:";
 const IDENTITY_RATE_LIMIT_KEY_PREFIX = "identity:";
