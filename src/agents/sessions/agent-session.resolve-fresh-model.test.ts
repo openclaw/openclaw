@@ -78,18 +78,18 @@ describe("resolveFreshModel", () => {
     expect(result?.reasoning).toBe(true);
   });
 
-  it("reflects updated thinkingBudgets from the registry", () => {
-    const snapshot = makeModel({ thinkingBudgets: undefined });
+  it("reflects updated thinkingLevelMap from the registry", () => {
+    const snapshot = makeModel({ thinkingLevelMap: undefined });
     const fresh = makeModel({
-      thinkingBudgets: { low: 1000, medium: 2000, high: 3000 },
+      thinkingLevelMap: { low: "1000", medium: "2000", high: "3000" },
     });
     const find = vi.fn().mockReturnValue(fresh);
 
     const result = resolveFreshModel(snapshot, find);
-    expect(result?.thinkingBudgets).toEqual({
-      low: 1000,
-      medium: 2000,
-      high: 3000,
+    expect(result?.thinkingLevelMap).toEqual({
+      low: "1000",
+      medium: "2000",
+      high: "3000",
     });
   });
 });
