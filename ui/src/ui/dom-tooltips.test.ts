@@ -185,6 +185,48 @@ describe("native title tooltip promotion", () => {
     expect(tooltip?.style.top).toBe("44px");
   });
 
+  it("flips the floating tooltip above buttons near the bottom viewport edge", () => {
+    const root = document.createElement("div");
+    const button = document.createElement("button");
+    const targetTop = window.innerHeight - 38;
+    button.className = "btn";
+    button.title = "Delete card";
+    button.getBoundingClientRect = () =>
+      ({
+        left: 300,
+        right: 328,
+        top: targetTop,
+        bottom: targetTop + 28,
+        width: 28,
+        height: 28,
+        x: 300,
+        y: targetTop,
+        toJSON: () => ({}),
+      }) as DOMRect;
+    root.append(button);
+
+    promoteNativeTitleTooltip(button, root);
+    const tooltip = document.querySelector<HTMLElement>(".control-ui-floating-tooltip");
+    if (tooltip) {
+      tooltip.getBoundingClientRect = () =>
+        ({
+          left: 0,
+          right: 100,
+          top: 0,
+          bottom: 24,
+          width: 100,
+          height: 24,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+        }) as DOMRect;
+    }
+
+    refreshActiveFloatingTooltip(root);
+
+    expect(tooltip?.style.top).toBe(`${window.innerHeight - 68}px`);
+  });
+
   it("clamps the floating tooltip away from viewport edges", () => {
     const root = document.createElement("div");
     const button = document.createElement("button");

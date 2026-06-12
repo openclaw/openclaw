@@ -79,7 +79,9 @@ function showFloatingTooltip(element: HTMLElement, text: string) {
   const tooltip = getFloatingTooltip();
   const rect = element.getBoundingClientRect();
   const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
+  const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
   const gutter = 8;
+  const gap = 6;
   const maxTooltipWidth = Math.min(260, viewportWidth * 0.6);
   const midpoint = rect.left + rect.width / 2;
   const left = Math.min(
@@ -87,8 +89,15 @@ function showFloatingTooltip(element: HTMLElement, text: string) {
     viewportWidth - gutter - maxTooltipWidth / 2,
   );
   tooltip.textContent = text;
+  const tooltipHeight = tooltip.getBoundingClientRect().height;
+  const belowTop = rect.bottom + gap;
+  const aboveTop = rect.top - gap - tooltipHeight;
+  const fitsBelow = belowTop + tooltipHeight <= viewportHeight - gutter;
+  const preferredTop = fitsBelow ? belowTop : aboveTop;
+  const maxTop = Math.max(gutter, viewportHeight - gutter - tooltipHeight);
+  const top = Math.min(Math.max(gutter, preferredTop), maxTop);
   tooltip.style.left = `${left}px`;
-  tooltip.style.top = `${rect.bottom + 6}px`;
+  tooltip.style.top = `${top}px`;
   tooltip.dataset.open = "true";
 }
 
