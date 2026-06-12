@@ -801,16 +801,16 @@ export class OpenClawApp extends LitElement {
     this.setChatMobileControlsOpen(false);
   };
   private nativeTitleTooltipPointerOverHandler = (event: PointerEvent) => {
-    promoteNativeTitleTooltip(event.target, this);
+    promoteNativeTitleTooltip(event.target, this, "pointer");
   };
   private nativeTitleTooltipPointerOutHandler = (event: PointerEvent) => {
-    restoreNativeTitleTooltip(event.target, this, event.relatedTarget);
+    restoreNativeTitleTooltip(event.target, this, "pointer", event.relatedTarget);
   };
   private nativeTitleTooltipFocusInHandler = (event: FocusEvent) => {
-    promoteNativeTitleTooltip(event.target, this);
+    promoteNativeTitleTooltip(event.target, this, "focus");
   };
   private nativeTitleTooltipFocusOutHandler = (event: FocusEvent) => {
-    restoreNativeTitleTooltip(event.target, this, event.relatedTarget);
+    restoreNativeTitleTooltip(event.target, this, "focus", event.relatedTarget);
   };
 
   override createRenderRoot() {

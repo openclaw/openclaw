@@ -284,6 +284,33 @@ describe("workboard controller", () => {
     expect(client.request).not.toHaveBeenCalled();
   });
 
+  it("defers polling while a card is being dragged", async () => {
+    vi.useFakeTimers();
+    const host = {};
+    const client = createClient({
+      "workboard.cards.list": { cards: [sampleCard], statuses: ["todo", "done"] },
+      "tasks.list": { tasks: [] },
+    });
+    const state = getWorkboardState(host);
+    state.autoRefreshIntervalMs = 5000;
+    state.draggedCardId = sampleCard.id;
+
+    configureWorkboardPolling({
+      host,
+      client: client as never,
+      enabled: true,
+    });
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(client.request).not.toHaveBeenCalled();
+
+    state.draggedCardId = null;
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(client.request).toHaveBeenCalledWith("workboard.cards.list", {});
+    stopWorkboardPolling(host);
+  });
+
   it("tracks dispatch independently from refresh loading state", async () => {
     const host = {};
     const state = getWorkboardState(host);

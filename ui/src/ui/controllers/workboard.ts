@@ -1469,6 +1469,7 @@ function shouldDeferWorkboardPoll(state: WorkboardUiState): boolean {
     state.draftOpen ||
     state.editingCardId ||
     state.busyCardId ||
+    state.draggedCardId ||
     state.dispatching ||
     state.detailCommentBody.trim() ||
     state.draftCommentBody.trim(),
