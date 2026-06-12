@@ -152,8 +152,10 @@ function isFsDynamicImportExpression(expression) {
     return false;
   }
   const [specifier] = call.arguments;
-  return Boolean(
-    specifier && ts.isStringLiteralLike(specifier) && fsModuleSpecifiers.has(specifier.text),
+  return (
+    specifier !== undefined &&
+    ts.isStringLiteralLike(specifier) &&
+    fsModuleSpecifiers.has(specifier.text)
   );
 }
 
@@ -1321,7 +1323,6 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
         wrapperFunctionScopes[index].set(name, cloneWrapperFunctionValue(mergedValue));
       }
       currentWrapperFunctionScope().set(name, cloneWrapperFunctionValue(mergedValue));
-      const parentEffect = currentBranchEffectScope();
       if (parentEffect) {
         parentEffect.wrapperAssignments.set(branchWrapperAssignmentKey(index, name), {
           index,
@@ -1978,57 +1979,61 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
       );
     }
 
-    function markParameterAssignment(node) {
-      if (!ts.isBinaryExpression(node) || node.operatorToken.kind !== ts.SyntaxKind.EqualsToken) {
+    function markParameterAssignment(assignmentNode) {
+      if (
+        !ts.isBinaryExpression(assignmentNode) ||
+        assignmentNode.operatorToken.kind !== ts.SyntaxKind.EqualsToken
+      ) {
         return;
       }
-      if (ts.isIdentifier(node.left)) {
-        if (resolveParameterIndex(node.left.text) !== null) {
-          const objectIndex = resolveParameterObjectBindingExpression(node.right);
+      if (ts.isIdentifier(assignmentNode.left)) {
+        if (resolveParameterIndex(assignmentNode.left.text) !== null) {
+          const objectIndex = resolveParameterObjectBindingExpression(assignmentNode.right);
           if (currentConditionalWrapperBodyScope()) {
-            recordWrapperBranchParameterObjectAssignment(node.left.text, objectIndex);
+            recordWrapperBranchParameterObjectAssignment(assignmentNode.left.text, objectIndex);
             if (objectIndex !== null) {
               appendConditionalUse(
                 currentConditionalParameterObjectScope(),
-                node.left.text,
+                assignmentNode.left.text,
                 objectIndex,
               );
             }
+          } else if (objectIndex !== null) {
+            currentParameterObjectBindingScope().set(assignmentNode.left.text, objectIndex);
           } else {
-            if (objectIndex !== null) {
-              currentParameterObjectBindingScope().set(node.left.text, objectIndex);
-            } else {
-              currentParameterObjectShadowScope().add(node.left.text);
-              currentParameterObjectAssignmentShadowScope().add(node.left.text);
-            }
+            currentParameterObjectShadowScope().add(assignmentNode.left.text);
+            currentParameterObjectAssignmentShadowScope().add(assignmentNode.left.text);
           }
         }
-        if (resolveDestructuredParameterProperty(node.left.text)) {
-          const binding = resolveParameterPropertyBinding(node.right);
+        if (resolveDestructuredParameterProperty(assignmentNode.left.text)) {
+          const binding = resolveParameterPropertyBinding(assignmentNode.right);
           if (currentConditionalWrapperBodyScope()) {
-            recordWrapperBranchDestructuredAssignment(node.left.text, binding);
+            recordWrapperBranchDestructuredAssignment(assignmentNode.left.text, binding);
             if (binding) {
               appendConditionalUse(
                 currentConditionalDestructuredParameterPropertyScope(),
-                node.left.text,
+                assignmentNode.left.text,
                 binding,
               );
             }
           } else {
             const updatesOuterBinding = !currentDestructuredParameterPropertyScope().has(
-              node.left.text,
+              assignmentNode.left.text,
             );
-            currentDestructuredParameterPropertyScope().set(node.left.text, binding);
+            currentDestructuredParameterPropertyScope().set(assignmentNode.left.text, binding);
             if (updatesOuterBinding) {
-              currentDestructuredParameterPropertyMergeScope().set(node.left.text, binding);
+              currentDestructuredParameterPropertyMergeScope().set(
+                assignmentNode.left.text,
+                binding,
+              );
             }
           }
         }
         return;
       }
-      const propertyAccess = namedObjectPropertyAccess(node.left);
+      const propertyAccess = namedObjectPropertyAccess(assignmentNode.left);
       if (propertyAccess && resolveParameterIndex(propertyAccess.objectName) !== null) {
-        const binding = resolveParameterPropertyBinding(node.right);
+        const binding = resolveParameterPropertyBinding(assignmentNode.right);
         const key = `${propertyAccess.objectName}.${propertyAccess.propertyName}`;
         if (currentConditionalWrapperBodyScope()) {
           recordWrapperBranchParameterPropertyAssignment(key, binding);
@@ -2926,7 +2931,10 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
       if (!argumentUsesDefault) {
         return pathArgumentContainsLegacyStore(argument);
       }
-      return !!parameter?.initializer && pathArgumentContainsLegacyStore(parameter.initializer);
+      return (
+        parameter?.initializer !== undefined &&
+        pathArgumentContainsLegacyStore(parameter.initializer)
+      );
     }
     if (!argumentUsesDefault) {
       if (objectArgumentPropertyContainsLegacyStore(argument, propertyName)) {
