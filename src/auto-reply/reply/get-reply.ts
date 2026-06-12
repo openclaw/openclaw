@@ -119,6 +119,29 @@ function loadCommandsCoreRuntime() {
   return commandsCoreRuntimeLoader.load();
 }
 
+function isDistRotationError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const obj = err as Record<string, unknown>;
+  const code = typeof obj.code === "string" ? obj.code : undefined;
+  if (code !== "ERR_MODULE_NOT_FOUND" && code !== "MODULE_NOT_FOUND") return false;
+  const message = typeof obj.message === "string" ? obj.message : "";
+  return /openclaw[/\\]dist[/\\]/i.test(message);
+}
+
+async function guardedLoad<T>(loader: () => Promise<T>, label: string): Promise<T> {
+  try {
+    return await loader();
+  } catch (error) {
+    if (isDistRotationError(error)) {
+      throw new Error(
+        `bundled module changed under running gateway after update/rollback — restart required (lazy module "${label}" failed: ${formatErrorMessage(error)})`,
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+}
+
 const hookRunnerGlobalLoader = createLazyImportLoader(
   () => import("../../plugins/hook-runner-global.js"),
 );
@@ -541,7 +564,10 @@ export async function getReplyFromConfig(
   }
 
   if (resetTriggered && normalizeOptionalString(bodyStripped)) {
-    const { applyResetModelOverride } = await loadSessionResetModelRuntime();
+    const { applyResetModelOverride } = await guardedLoad(
+      loadSessionResetModelRuntime,
+      "session-reset-model.runtime",
+    );
     await applyResetModelOverride({
       cfg,
       agentId,
@@ -799,7 +825,10 @@ export async function getReplyFromConfig(
     if (!resetMatch) {
       return;
     }
-    const { emitResetCommandHooks } = await loadCommandsCoreRuntime();
+    const { emitResetCommandHooks } = await guardedLoad(
+      loadCommandsCoreRuntime,
+      "commands-core.runtime",
+    );
     const action: ResetCommandAction = resetMatch[1]?.toLowerCase() === "reset" ? "reset" : "new";
     await emitResetCommandHooks({
       action,
@@ -922,10 +951,13 @@ export async function getReplyFromConfig(
 
   // Allow plugins to intercept and return a synthetic reply before the LLM runs.
   if (!useFastTestBootstrap) {
-    const { getGlobalHookRunner } = await loadHookRunnerGlobal();
+    const { getGlobalHookRunner } = await guardedLoad(loadHookRunnerGlobal, "hook-runner-global");
     const hookRunner = getGlobalHookRunner();
     if (hookRunner?.hasHooks("before_agent_reply")) {
-      const { resolveOriginMessageProvider } = await loadOriginRouting();
+      const { resolveOriginMessageProvider } = await guardedLoad(
+        loadOriginRouting,
+        "origin-routing",
+      );
       const hookMessageProvider = resolveOriginMessageProvider({
         originatingChannel: sessionCtx.OriginatingChannel,
         provider: sessionCtx.Provider,
