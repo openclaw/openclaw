@@ -247,8 +247,10 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
         type: chatType,
         ...(chatType === "supergroup" ? { is_forum: threadId != null } : {}),
       },
-      from: { id: 0, is_bot: true, first_name: "mirror" },
-      text: "",
+      from: { id: 0, is_bot: false, first_name: "mirror" },
+      // Minimal non-empty body: the body is never used (replyResolver supplies the
+      // reply from the bus) but the inbound pipeline drops empty messages.
+      text: "·",
       ...(threadId != null ? { message_thread_id: threadId, is_topic_message: true } : {}),
     } as unknown as TelegramContext["message"];
     const primaryCtx: TelegramContext = {
@@ -260,7 +262,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       primaryCtx,
       allMedia: [],
       storeAllowFrom: [],
-      options: { mirror: true },
+      options: { mirror: true, forceWasMentioned: true },
       bot,
       cfg,
       account,
