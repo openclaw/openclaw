@@ -2234,6 +2234,8 @@ export function buildOpenAIResponsesParams(
     prompt_cache_retention: getPromptCacheRetention(model.baseUrl, cacheRetention),
     ...(isCodexResponses
       ? { instructions: resolveOpenAICodexResponsesInstructions(model, context) }
+      : context.systemPrompt
+      ? { instructions: context.systemPrompt }
       : {}),
     ...(metadata ? { metadata } : {}),
   };
