@@ -15,7 +15,6 @@ import {
 import { readPackageName, readPackageVersion } from "./package-json.js";
 import { normalizePackageTagInput } from "./package-tag.js";
 import {
-  markPackagePostInstallDoctorAdvisory,
   runGlobalPackageUpdateSteps,
   type PackageUpdateStepAdvisory,
 } from "./package-update-steps.js";
@@ -30,11 +29,6 @@ import {
   type UpdateChannel,
 } from "./update-channels.js";
 import { compareSemverStrings } from "./update-check.js";
-import {
-  consumeUpdatePostInstallDoctorResult,
-  createUpdatePostInstallDoctorResultPath,
-  UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
-} from "./update-doctor-result.js";
 import {
   cleanupGlobalRenameDirs,
   createGlobalInstallEnv,
@@ -1562,46 +1556,23 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         }
         const doctorNodePath = await resolveStableNodePath(process.execPath);
         const candidateHostVersion = await readPackageVersion(verifiedPackageRoot);
-        const doctorResultPath = createUpdatePostInstallDoctorResultPath();
-        const doctorArgv = [doctorNodePath, doctorEntry, "doctor", "--non-interactive", "--fix"];
-        const doctorProgressInfo = {
-          name: "openclaw doctor",
-          command: doctorArgv.join(" "),
-          index: 0,
-          total: 1,
-        };
-        progress?.onStepStart?.(doctorProgressInfo);
-        const doctorStep = await runStep({
+        return await runStep({
           runCommand,
           name: "openclaw doctor",
-          argv: doctorArgv,
+          argv: [doctorNodePath, doctorEntry, "doctor", "--non-interactive", "--fix"],
           cwd: verifiedPackageRoot,
           timeoutMs,
           env: {
             OPENCLAW_UPDATE_IN_PROGRESS: "1",
-            [UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV]: "1",
             [UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]: "1",
-            [UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]: doctorResultPath,
             ...(candidateHostVersion === null
               ? {}
               : { OPENCLAW_COMPATIBILITY_HOST_VERSION: candidateHostVersion }),
           },
+          progress,
           stepIndex: 0,
           totalSteps: 1,
         });
-        const doctorResult = await consumeUpdatePostInstallDoctorResult(doctorResultPath);
-        const completedDoctorStep = markPackagePostInstallDoctorAdvisory(doctorStep, doctorResult);
-        progress?.onStepComplete?.({
-          ...doctorProgressInfo,
-          durationMs: completedDoctorStep.durationMs,
-          exitCode: completedDoctorStep.exitCode,
-          stderrTail: completedDoctorStep.stderrTail,
-          signal: completedDoctorStep.signal,
-          killed: completedDoctorStep.killed,
-          termination: completedDoctorStep.termination,
-          advisory: completedDoctorStep.advisory,
-        });
-        return completedDoctorStep;
       },
     });
     return {
