@@ -10,7 +10,11 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { formatCliCommand } from "../cli/command-format.js";
-import { getRuntimeConfigSnapshot } from "../config/config.js";
+import {
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
+  selectApplicableRuntimeConfig,
+} from "../config/config.js";
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
@@ -848,8 +852,24 @@ function resolveProviderSyntheticRuntimeAuth(params: {
 
   const directAuth = resolveFromConfig(params.cfg);
   if (!directAuth) {
+    // Only inherit a resolved runtime snapshot when the caller's config is the
+    // active source config for that snapshot, or when the caller explicitly
+    // stores the managed SecretRef marker. This prevents unrelated configs that
+    // happen to use the same provider id from picking up another config's
+    // credentials.
     const runtimeConfig = getRuntimeConfigSnapshot();
-    if (runtimeConfig && runtimeConfig !== params.cfg) {
+    const runtimeConfigApplies =
+      runtimeConfig !== params.cfg &&
+      selectApplicableRuntimeConfig({
+        inputConfig: params.cfg,
+        runtimeConfig,
+        runtimeSourceConfig: getRuntimeConfigSourceSnapshot(),
+      }) === runtimeConfig;
+    const sourceProviderConfig = resolveProviderConfig(params.cfg, params.provider);
+    const hasManagedMarker =
+      typeof sourceProviderConfig?.apiKey === "string" &&
+      isManagedSecretRefApiKeyMarker(sourceProviderConfig.apiKey);
+    if ((runtimeConfigApplies || hasManagedMarker) && runtimeConfig) {
       const runtimeAuth = resolveFromConfig(runtimeConfig);
       if (runtimeAuth && runtimeAuth.apiKey && !isNonSecretApiKeyMarker(runtimeAuth.apiKey)) {
         return { auth: runtimeAuth };

@@ -966,6 +966,52 @@ describe("resolveApiKeyForProvider", () => {
     });
   });
 
+  it("does not inherit a runtime snapshot credential from a mismatched caller config", async () => {
+    const sourceConfig = {
+      models: {
+        providers: {
+          "mismatch-provider": {
+            api: "openai-responses",
+            apiKey: {
+              source: "file",
+              provider: "vault",
+              id: "/mismatch-provider/apiKey",
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const runtimeConfig = {
+      models: {
+        providers: {
+          "mismatch-provider": {
+            api: "openai-responses",
+            apiKey: "runtime-resolved-key", // pragma: allowlist secret
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+
+    const unrelatedConfig = {
+      models: {
+        providers: {
+          "mismatch-provider": {
+            api: "openai-responses",
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    await expect(
+      resolveApiKeyForProvider({
+        provider: "mismatch-provider",
+        cfg: unrelatedConfig,
+        store: { version: 1, profiles: {} },
+      }),
+    ).rejects.toThrow('No API key found for provider "mismatch-provider"');
+  });
+
   it("does not reuse plugin fallback auth when the plugin is disabled", async () => {
     await expect(
       withoutEnv("PLUGIN_WEB_API_KEY", () =>
