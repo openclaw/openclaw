@@ -155,8 +155,8 @@ describe("memory embedding timeout abort", () => {
       },
     });
 
-    external.abort(new Error("memory_search timed out after 15s"));
-    await expect(resultPromise).rejects.toThrow("memory_search timed out after 15s");
+    external.abort(new Error("memory_search timed out after 60s"));
+    await expect(resultPromise).rejects.toThrow("memory_search timed out after 60s");
     expect(signalSeen?.aborted).toBe(true);
   });
 
