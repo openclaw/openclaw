@@ -11,7 +11,6 @@ describe("telegram rich-message classifier", () => {
       },
     };
 
-    // oxlint-disable-next-line vitest/prefer-to-be-truthy
     expect(isTelegramRichMethodUnavailableError(err)).toBe(true);
   });
 
@@ -25,7 +24,6 @@ describe("telegram rich-message classifier", () => {
       },
     };
 
-    // oxlint-disable-next-line vitest/prefer-to-be-truthy
     expect(isTelegramRichMethodUnavailableError(err)).toBe(true);
   });
 
@@ -37,7 +35,6 @@ describe("telegram rich-message classifier", () => {
       },
     };
 
-    // oxlint-disable-next-line vitest/prefer-to-be-falsy
     expect(isTelegramRichMethodUnavailableError(err)).toBe(false);
   });
 });

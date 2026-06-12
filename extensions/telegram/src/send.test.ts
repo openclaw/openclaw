@@ -786,10 +786,7 @@ describe("sendMessageTelegram", () => {
     const api = {
       sendMessage,
       raw: { sendRichMessage },
-    } as unknown as {
-      sendMessage: typeof sendMessage;
-      raw: { sendRichMessage: typeof sendRichMessage };
-    };
+    } as unknown as Bot["api"];
     const markdownText = "| Name | Value |\n| --- | --- |\n| hello | **world** |";
 
     const res = await sendMessageTelegram("123", markdownText, {
@@ -813,10 +810,7 @@ describe("sendMessageTelegram", () => {
     const api = {
       sendMessage,
       raw: { sendRichMessage },
-    } as unknown as {
-      sendMessage: typeof sendMessage;
-      raw: { sendRichMessage: typeof sendRichMessage };
-    };
+    } as unknown as Bot["api"];
 
     const res = await sendMessageTelegram("123", "hello **world**", {
       cfg: TELEGRAM_TEST_CFG,
@@ -3155,11 +3149,7 @@ describe("editMessageTelegram", () => {
       sendMessage,
       raw: { editMessageText: richEditMessageText },
       editMessageText: vi.fn(),
-    } as unknown as {
-      sendMessage: typeof sendMessage;
-      raw: { editMessageText: typeof richEditMessageText };
-      editMessageText: ReturnType<typeof vi.fn>;
-    };
+    } as unknown as Bot["api"];
     const markdownText = "hello **world**";
 
     await editMessageTelegram("123", 1, markdownText, {
@@ -3183,10 +3173,7 @@ describe("editMessageTelegram", () => {
     const api = {
       raw: { editMessageText: richEditMessageText },
       editMessageText: legacyEditMessageText,
-    } as unknown as {
-      raw: { editMessageText: typeof richEditMessageText };
-      editMessageText: typeof legacyEditMessageText;
-    };
+    } as unknown as Bot["api"];
 
     await editMessageTelegram("123", 1, "hello **world**", {
       token: "tok",
