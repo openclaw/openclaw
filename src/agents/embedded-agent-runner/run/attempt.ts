@@ -3069,10 +3069,12 @@ export async function runEmbeddedAttempt(
           }
 
           if (params.sessionKey && params.config && !isRawModelRun) {
+            // Capability guidance must include deferred directory tools that live
+            // dispatch can hydrate, while provider schema exposure stays compact.
             const activeSubagentPromptAddition = buildActiveSubagentSystemPromptAddition({
               cfg: params.config,
               controllerSessionKey: params.sessionKey,
-              hasSessionsYield: effectiveTools.some((tool) => tool.name === "sessions_yield"),
+              hasSessionsYield: liveAllowedToolNames.has("sessions_yield"),
             });
             if (activeSubagentPromptAddition) {
               setActiveSessionSystemPrompt(
@@ -3122,7 +3124,7 @@ export async function runEmbeddedAttempt(
               sessionKey: params.sessionKey,
               messages: activeSession.messages,
               tokenBudget: params.contextTokenBudget,
-              availableTools: new Set(effectiveTools.map((tool) => tool.name)),
+              availableTools: new Set(liveAllowedToolNames),
               citationsMode: params.config?.memory?.citations,
               modelId: params.modelId,
               ...(params.prompt !== undefined ? { prompt: params.prompt } : {}),
