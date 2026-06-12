@@ -15,7 +15,7 @@ const FAIL = "✗";
 let passed = 0;
 let failed = 0;
 
-function assert(label, condition) {
+function assert(label: string, condition: boolean) {
   if (condition) {
     console.log(`  ${PASS} ${label}`);
     passed += 1;
@@ -34,7 +34,7 @@ const err1 = Object.assign(
 );
 assert(
   "Linux ERR_MODULE_NOT_FOUND with openclaw/dist path → true",
-  isDistRotationError(err1) === true,
+  isDistRotationError(err1),
 );
 
 // Case 2: Windows path with backslashes
@@ -44,7 +44,7 @@ const err2 = Object.assign(
 );
 assert(
   "Windows MODULE_NOT_FOUND with openclaw\\dist path → true",
-  isDistRotationError(err2) === true,
+  isDistRotationError(err2),
 );
 
 // Case 3: ERR_MODULE_NOT_FOUND with hashed chunk (the actual symptom)
@@ -54,7 +54,7 @@ const err3 = Object.assign(
 );
 assert(
   "Hashed chunk ERR_MODULE_NOT_FOUND in dist → true",
-  isDistRotationError(err3) === true,
+  isDistRotationError(err3),
 );
 
 console.log("\n=== isDistRotationError: negative cases ===");
@@ -66,26 +66,26 @@ const err4 = Object.assign(
 );
 assert(
   "ERR_MODULE_NOT_FOUND outside openclaw → false",
-  isDistRotationError(err4) === false,
+  !isDistRotationError(err4),
 );
 
 // Case 5: Other error code
 const err5 = Object.assign(new Error("ENOENT: no such file"), { code: "ENOENT" });
 assert(
   "ENOENT error → false",
-  isDistRotationError(err5) === false,
+  !isDistRotationError(err5),
 );
 
 // Case 6: No code property
 assert(
   "Error without code → false",
-  isDistRotationError(new Error("plain")) === false,
+  !isDistRotationError(new Error("plain")),
 );
 
 // Case 7: Non-object inputs
-assert("null → false", isDistRotationError(null) === false);
-assert("undefined → false", isDistRotationError(undefined) === false);
-assert("string → false", isDistRotationError("ERR_MODULE_NOT_FOUND") === false);
+assert("null → false", !isDistRotationError(null));
+assert("undefined → false", !isDistRotationError(undefined));
+assert("string → false", !isDistRotationError("ERR_MODULE_NOT_FOUND"));
 
 console.log("\n=== guardedLoad: behavior verification ===");
 
@@ -145,21 +145,12 @@ console.log("\n--- dist rotation guard triggers (expected error output below) --
 let threw = false;
 try {
   await guardedLoad(distErrLoader, "stale-module");
-} catch (err) {
+} catch {
   threw = true;
-  assert(
-    "guardedLoad: dist rotation error re-thrown",
-    true,
-  );
 }
-assert(
-  "guardedLoad: dist rotation clears stale cache",
-  clearCalled === true,
-);
-assert(
-  "guardedLoad: dist rotation propagated to caller",
-  threw === true,
-);
+assert("guardedLoad: dist rotation error re-thrown", threw);
+assert("guardedLoad: dist rotation clears stale cache", clearCalled);
+assert("guardedLoad: dist rotation propagated to caller", threw);
 
 // Test: non-rotation error → no clear, re-throw
 let clearCalled2 = false;
@@ -174,17 +165,11 @@ console.log("--- non-rotation error (expected pass-through, no clear) ---");
 let threw2 = false;
 try {
   await guardedLoad(plainErrLoader, "other-module");
-} catch (err) {
+} catch {
   threw2 = true;
 }
-assert(
-  "guardedLoad: non-rotation error does NOT clear cache",
-  clearCalled2 === false,
-);
-assert(
-  "guardedLoad: non-rotation error still re-thrown",
-  threw2 === true,
-);
+assert("guardedLoad: non-rotation error does NOT clear cache", !clearCalled2);
+assert("guardedLoad: non-rotation error still re-thrown", threw2);
 
 console.log(`\n=== Results: ${passed} passed, ${failed} failed ===`);
 process.exit(failed > 0 ? 1 : 0);

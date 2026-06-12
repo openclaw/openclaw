@@ -6,10 +6,14 @@
  * disk.
  */
 export function isDistRotationError(err: unknown): boolean {
-  if (!err || typeof err !== "object") return false;
+  if (!err || typeof err !== "object") {
+    return false;
+  }
   const obj = err as Record<string, unknown>;
   const code = typeof obj.code === "string" ? obj.code : undefined;
-  if (code !== "ERR_MODULE_NOT_FOUND" && code !== "MODULE_NOT_FOUND") return false;
+  if (code !== "ERR_MODULE_NOT_FOUND" && code !== "MODULE_NOT_FOUND") {
+    return false;
+  }
   const msg = typeof obj.message === "string" ? obj.message : "";
   // Only classify as dist rotation when the missing module is inside the
   // openclaw dist tree (bundled chunk hashes are the tell).
