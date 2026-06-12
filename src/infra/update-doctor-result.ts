@@ -49,7 +49,12 @@ export async function writeUpdatePostInstallDoctorResult(params: {
   result: UpdatePostInstallDoctorResult;
 }): Promise<void> {
   await fs.mkdir(path.dirname(params.resultPath), { recursive: true });
-  await fs.writeFile(params.resultPath, `${JSON.stringify(params.result)}\n`, "utf8");
+  // Advisory details can contain config-derived IDs; pre-existing paths must fail closed.
+  await fs.writeFile(params.resultPath, `${JSON.stringify(params.result)}\n`, {
+    encoding: "utf8",
+    mode: 0o600,
+    flag: "wx",
+  });
 }
 
 export async function consumeUpdatePostInstallDoctorResult(

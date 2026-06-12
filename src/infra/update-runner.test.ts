@@ -2045,12 +2045,19 @@ describe("runGatewayUpdate", () => {
         if (!resultPath) {
           throw new Error("missing doctor result path");
         }
+        const advisoryResult = createDeferredConfiguredPluginRepairDoctorResult([
+          "deferred configured plugin repair",
+        ]);
         await writeUpdatePostInstallDoctorResult({
           resultPath,
-          result: createDeferredConfiguredPluginRepairDoctorResult([
-            "deferred configured plugin repair",
-          ]),
+          result: advisoryResult,
         });
+        if (process.platform !== "win32") {
+          expect((await fs.stat(resultPath)).mode & 0o777).toBe(0o600);
+        }
+        await expect(
+          writeUpdatePostInstallDoctorResult({ resultPath, result: advisoryResult }),
+        ).rejects.toMatchObject({ code: "EEXIST" });
         return {
           stdout: "",
           stderr: "doctor deferred configured plugin repair",
