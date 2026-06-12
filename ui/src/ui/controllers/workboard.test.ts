@@ -259,12 +259,12 @@ describe("workboard controller", () => {
     vi.useFakeTimers();
     const host = {};
     const completedTask = { ...sampleTask, status: "completed" as const };
-    const client = createClient((method) => {
+    const client = createClient((method, params) => {
       if (method === "workboard.cards.list") {
         return { cards: [sampleCard], statuses: ["todo", "done"] };
       }
-      if (method === "tasks.get") {
-        return { task: completedTask };
+      if (method === "tasks.list" && !(params as { cursor?: string }).cursor) {
+        return { tasks: [completedTask], nextCursor: "500" };
       }
       return {};
     });
@@ -285,8 +285,12 @@ describe("workboard controller", () => {
       expect.anything(),
     );
     expect(client.request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
-    expect(client.request).not.toHaveBeenCalledWith("tasks.list", expect.anything());
-    expect(client.request).toHaveBeenCalledWith("tasks.get", { taskId: sampleTask.taskId });
+    expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
+    expect(client.request).not.toHaveBeenCalledWith("tasks.list", {
+      limit: 500,
+      cursor: "500",
+    });
+    expect(client.request).not.toHaveBeenCalledWith("tasks.get", expect.anything());
     expect(state.tasksByCardId.get(sampleCard.id)).toEqual(completedTask);
     vi.clearAllMocks();
     stopWorkboardPolling(host);

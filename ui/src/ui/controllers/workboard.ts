@@ -1274,22 +1274,14 @@ async function listWorkboardTasks(client: GatewayBrowserClient): Promise<Workboa
   }
 }
 
-async function getLinkedWorkboardTasks(
+async function listRecentWorkboardTasks(
   client: GatewayBrowserClient,
-  cards: readonly WorkboardCard[],
 ): Promise<WorkboardTaskSummary[]> {
-  const taskIds = new Set(
-    cards
-      .map((card) => normalizeString(card.taskId))
-      .filter((taskId): taskId is string => Boolean(taskId)),
-  );
-  const tasks = await Promise.all(
-    [...taskIds].map(async (taskId) => {
-      const payload = await client.request("tasks.get", { taskId });
-      return isRecord(payload) ? normalizeTaskSummary(payload.task) : null;
-    }),
-  );
-  return tasks.filter((task): task is WorkboardTaskSummary => task !== null);
+  // Timer polls use one newest-first page so periodic refresh stays bounded.
+  // Full loads still paginate when they need to discover historical task links.
+  return normalizeTasksPage(
+    await client.request("tasks.list", { limit: WORKBOARD_TASKS_LIST_LIMIT }),
+  ).tasks;
 }
 
 function taskUpdatedAtValue(task: WorkboardTaskSummary): number {
@@ -1348,19 +1340,83 @@ function taskMatchesCard(task: WorkboardTaskSummary, card: WorkboardCard): boole
   return taskSessionMatches;
 }
 
+type WorkboardTaskIndex = {
+  byId: Map<string, WorkboardTaskSummary[]>;
+  byRunId: Map<string, WorkboardTaskSummary[]>;
+  bySessionKey: Map<string, WorkboardTaskSummary[]>;
+};
+
+function addTaskIndexEntry(
+  index: Map<string, WorkboardTaskSummary[]>,
+  key: string | undefined,
+  task: WorkboardTaskSummary,
+) {
+  if (!key) {
+    return;
+  }
+  const tasks = index.get(key) ?? [];
+  tasks.push(task);
+  index.set(key, tasks);
+}
+
+function buildWorkboardTaskIndex(tasks: readonly WorkboardTaskSummary[]): WorkboardTaskIndex {
+  const index: WorkboardTaskIndex = {
+    byId: new Map(),
+    byRunId: new Map(),
+    bySessionKey: new Map(),
+  };
+  for (const task of tasks) {
+    addTaskIndexEntry(index.byId, task.id, task);
+    addTaskIndexEntry(index.byId, task.taskId, task);
+    addTaskIndexEntry(index.byRunId, task.runId, task);
+    for (const sessionKey of [task.sessionKey, task.childSessionKey, task.ownerKey]) {
+      addTaskIndexEntry(index.bySessionKey, sessionKey, task);
+      const nestedWorkboardSessionIndex = sessionKey?.lastIndexOf(":subagent:workboard-") ?? -1;
+      if (nestedWorkboardSessionIndex >= 0) {
+        addTaskIndexEntry(
+          index.bySessionKey,
+          sessionKey?.slice(nestedWorkboardSessionIndex + 1),
+          task,
+        );
+      }
+    }
+  }
+  return index;
+}
+
+function findLatestTaskForCard(
+  index: WorkboardTaskIndex,
+  card: WorkboardCard,
+): WorkboardTaskSummary | null {
+  const candidates = new Set<WorkboardTaskSummary>();
+  const addCandidates = (tasks: readonly WorkboardTaskSummary[] | undefined) => {
+    for (const task of tasks ?? []) {
+      candidates.add(task);
+    }
+  };
+  addCandidates(index.byId.get(normalizeString(card.taskId) ?? ""));
+  addCandidates(index.byRunId.get(workboardCardRunId(card) ?? ""));
+  addCandidates(index.bySessionKey.get(workboardCardSessionKey(card) ?? ""));
+  let latest: WorkboardTaskSummary | null = null;
+  for (const task of candidates) {
+    if (
+      taskMatchesCard(task, card) &&
+      (!latest || taskUpdatedAtValue(task) > taskUpdatedAtValue(latest))
+    ) {
+      latest = task;
+    }
+  }
+  return latest;
+}
+
 function applyTaskSummariesToState(
   state: WorkboardUiState,
   tasks: readonly WorkboardTaskSummary[],
 ) {
   const tasksByCardId = new Map<string, WorkboardTaskSummary>();
+  const taskIndex = buildWorkboardTaskIndex(tasks);
   const cards = state.cards.map((card) => {
-    const matches = tasks.filter((task) => taskMatchesCard(task, card));
-    if (matches.length === 0) {
-      return card;
-    }
-    const task = matches.toSorted(
-      (left, right) => taskUpdatedAtValue(right) - taskUpdatedAtValue(left),
-    )[0];
+    const task = findLatestTaskForCard(taskIndex, card);
     if (!task) {
       return card;
     }
@@ -1397,7 +1453,7 @@ export async function loadWorkboard(params: {
   requestUpdate?: () => void;
   force?: boolean;
   refreshDiagnostics?: boolean;
-  taskRefresh?: "all" | "linked";
+  taskRefresh?: "all" | "recent";
 }): Promise<boolean> {
   const state = getWorkboardState(params.host);
   if (!params.client || (!params.force && (state.loaded || state.loadAttempted))) {
@@ -1432,7 +1488,7 @@ export async function loadWorkboard(params: {
       }
       const previousTasksByCardId = state.tasksByCardId;
       state.cards =
-        params.taskRefresh === "linked"
+        params.taskRefresh === "recent"
           ? normalized.cards.map((card) => {
               const taskId =
                 normalizeString(card.taskId) ?? previousTasksByCardId.get(card.id)?.taskId;
@@ -1444,8 +1500,8 @@ export async function loadWorkboard(params: {
       if (state.cards.length > 0) {
         try {
           const tasks =
-            params.taskRefresh === "linked"
-              ? await getLinkedWorkboardTasks(client, state.cards)
+            params.taskRefresh === "recent"
+              ? await listRecentWorkboardTasks(client)
               : await listWorkboardTasks(client);
           if (isCurrentWorkboardLoadGeneration(params.host, generation)) {
             applyTaskSummariesToState(state, tasks);
@@ -1515,7 +1571,7 @@ export async function refreshWorkboard(params: {
       requestUpdate: params.requestUpdate,
       force: true,
       refreshDiagnostics: params.refreshDiagnostics,
-      taskRefresh: params.source === "poll" ? "linked" : "all",
+      taskRefresh: params.source === "poll" ? "recent" : "all",
     });
     state.lastRefreshSource = params.source;
     if (state.error) {
