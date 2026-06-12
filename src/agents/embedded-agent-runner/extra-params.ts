@@ -55,7 +55,12 @@ const providerRuntimeDeps = {
 };
 
 let preparedExtraParamsCache = new WeakMap<OpenClawConfig, Map<string, Record<string, unknown>>>();
-const REQUEST_SCOPED_EXTRA_PARAM_KEYS = new Set(["response_format", "responseFormat", "stop"]);
+const REQUEST_SCOPED_EXTRA_PARAM_KEYS = new Set([
+  "nativeWebSearch",
+  "response_format",
+  "responseFormat",
+  "stop",
+]);
 
 export const testing = {
   setProviderRuntimeDepsForTest(
@@ -372,6 +377,77 @@ function hasRequestScopedExtraParams(value: Record<string, unknown> | undefined)
   }
   return [...REQUEST_SCOPED_EXTRA_PARAM_KEYS].some((key) => Object.hasOwn(value, key));
 }
+
+function resolveRequestExtraParams(params: {
+  effectiveExtraParams: Record<string, unknown>;
+  override?: Record<string, unknown>;
+}): Record<string, unknown> {
+  const baseExtraParams =
+    params.override && hasRequestScopedExtraParams(params.override)
+      ? stripRequestScopedExtraParams(params.effectiveExtraParams)
+      : params.effectiveExtraParams;
+  return params.override
+    ? { ...(baseExtraParams ?? {}), ...params.override }
+    : params.effectiveExtraParams;
+}
+
+function hasNativeWebSearchRequest(value: Record<string, unknown> | undefined): boolean {
+  return value
+    ? Object.hasOwn(value, "nativeWebSearch") && value.nativeWebSearch !== undefined
+    : false;
+}
+
+function isDirectOpenAIResponsesBaseUrl(baseUrl: unknown): boolean {
+  if (typeof baseUrl !== "string" || baseUrl.trim() === "") {
+    return true;
+  }
+  try {
+    const url = new URL(baseUrl);
+    return (
+      (url.protocol === "https:" || url.protocol === "http:") &&
+      url.hostname === "api.openai.com" &&
+      (url.pathname === "" ||
+        url.pathname === "/" ||
+        url.pathname === "/v1" ||
+        url.pathname === "/v1/")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function shouldUseOpenAINativeWebSearchProvider(config: OpenClawConfig | undefined): boolean {
+  const provider = config?.tools?.web?.search?.provider;
+  if (typeof provider !== "string") {
+    return true;
+  }
+  const normalized = provider.trim().toLowerCase();
+  return normalized === "" || normalized === "auto" || normalized === "openai";
+}
+
+function canRequestUseNativeWebSearch(params: {
+  config: OpenClawConfig | undefined;
+  model: ProviderRuntimeModel | undefined;
+}): boolean {
+  if (params.config?.tools?.web?.search?.enabled === false) {
+    return false;
+  }
+  const model = params.model;
+  if (!model) {
+    return false;
+  }
+  if (model.api === "openai-chatgpt-responses") {
+    return true;
+  }
+  return (
+    model.api === "openai-responses" &&
+    typeof model.provider === "string" &&
+    model.provider.trim().toLowerCase() === "openai" &&
+    shouldUseOpenAINativeWebSearchProvider(params.config) &&
+    isDirectOpenAIResponsesBaseUrl(model.baseUrl)
+  );
+}
+
 function shouldApplyDefaultOpenAIGptRuntimeParams(params: {
   provider: string;
   modelId: string;
@@ -786,11 +862,10 @@ type ApplyExtraParamsContext = {
 };
 
 function applyPrePluginStreamWrappers(ctx: ApplyExtraParamsContext): void {
-  const baseExtraParams =
-    ctx.override && hasRequestScopedExtraParams(ctx.override)
-      ? stripRequestScopedExtraParams(ctx.effectiveExtraParams)
-      : ctx.effectiveExtraParams;
-  const streamParams = ctx.override ? { ...baseExtraParams, ...ctx.override } : baseExtraParams;
+  const streamParams = resolveRequestExtraParams({
+    effectiveExtraParams: ctx.effectiveExtraParams,
+    override: ctx.override,
+  });
   const wrappedStreamFn = createStreamFnWithExtraParams(
     ctx.agent.streamFn,
     streamParams,
@@ -820,9 +895,10 @@ function applyPrePluginStreamWrappers(ctx: ApplyExtraParamsContext): void {
 function applyPostPluginStreamWrappers(
   ctx: ApplyExtraParamsContext & { providerWrapperHandled: boolean },
 ): void {
-  const streamParams = ctx.override
-    ? { ...ctx.effectiveExtraParams, ...ctx.override }
-    : ctx.effectiveExtraParams;
+  const streamParams = resolveRequestExtraParams({
+    effectiveExtraParams: ctx.effectiveExtraParams,
+    override: ctx.override,
+  });
   ctx.agent.streamFn = createOpenRouterSystemCacheWrapper(ctx.agent.streamFn, streamParams);
   ctx.agent.streamFn = createOpenAIStringContentWrapper(ctx.agent.streamFn);
   ctx.agent.streamFn = createOpenAICompletionsStrictMessageKeysWrapper(ctx.agent.streamFn);
@@ -1081,6 +1157,18 @@ export function applyExtraParamsToAgent(
       model,
       resolvedTransport,
     });
+  const requestExtraParams = resolveRequestExtraParams({
+    effectiveExtraParams,
+    override,
+  });
+  if (
+    hasNativeWebSearchRequest(requestExtraParams) &&
+    !canRequestUseNativeWebSearch({ config: cfg, model })
+  ) {
+    throw new Error(
+      "web_search_options require native OpenAI/Codex web_search, but the selected model does not support native web_search",
+    );
+  }
   const wrapperContext: ApplyExtraParamsContext = {
     agent,
     cfg,
@@ -1116,7 +1204,7 @@ export function applyExtraParamsToAgent(
       nativeWebSearchAllowedByToolPolicy,
       provider,
       modelId,
-      extraParams: effectiveExtraParams,
+      extraParams: requestExtraParams,
       thinkingLevel,
       model,
       streamFn: providerStreamBase,

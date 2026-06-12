@@ -8,7 +8,10 @@ import {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { OPENAI_RESPONSES_STREAM_HOOKS } from "openclaw/plugin-sdk/provider-stream-family";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { createOpenAINativeWebSearchWrapper } from "./native-web-search.js";
+import {
+  createOpenAINativeWebSearchWrapper,
+  resolveOpenAINativeWebSearchRequest,
+} from "./native-web-search.js";
 import { buildOpenAIReplayPolicy } from "./replay-policy.js";
 import {
   resolveOpenAITransportTurnState,
@@ -90,6 +93,7 @@ const wrapOpenAIResponsesProviderStreamFn: NonNullable<
     config: ctx.config,
     agentId: ctx.agentId,
     nativeWebSearchAllowedByToolPolicy: ctx.nativeWebSearchAllowedByToolPolicy,
+    nativeWebSearch: resolveOpenAINativeWebSearchRequest(ctx.extraParams),
   });
 
 export function buildOpenAIResponsesProviderHooks(options?: {

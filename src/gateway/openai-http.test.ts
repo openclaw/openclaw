@@ -116,6 +116,16 @@ type FirstAgentCommandOptions = {
   streamParams?: {
     frequencyPenalty?: number;
     maxTokens?: number;
+    nativeWebSearch?: {
+      searchContextSize?: "low" | "medium" | "high";
+      userLocation?: {
+        type: "approximate";
+        city?: string;
+        country?: string;
+        region?: string;
+        timezone?: string;
+      };
+    };
     presencePenalty?: number;
     responseFormat?: Record<string, unknown>;
     seed?: number;
@@ -1531,6 +1541,61 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       expect(json.error?.message).toMatch(/top_p/);
       expect(agentCommand).toHaveBeenCalledTimes(0);
     }
+  });
+
+  it("maps inbound web_search_options into native web search streamParams", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
+
+    const res = await postChatCompletions(port, {
+      model: "openclaw",
+      web_search_options: {
+        search_context_size: "high",
+        user_location: {
+          type: "approximate",
+          approximate: {
+            city: "London",
+            country: "GB",
+            region: "London",
+            timezone: "Europe/London",
+          },
+        },
+      },
+      messages: [{ role: "user", content: "hi" }],
+    });
+
+    expect(res.status).toBe(200);
+    expect(firstAgentCommandOptions()?.streamParams?.nativeWebSearch).toEqual({
+      searchContextSize: "high",
+      userLocation: {
+        type: "approximate",
+        city: "London",
+        country: "GB",
+        region: "London",
+        timezone: "Europe/London",
+      },
+    });
+    await res.text();
+  });
+
+  it("rejects unsupported web_search_options instead of ignoring them", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+
+    const res = await postChatCompletions(port, {
+      model: "openclaw",
+      web_search_options: {
+        search_context_size: "deep",
+      },
+      messages: [{ role: "user", content: "hi" }],
+    });
+
+    expect(res.status).toBe(400);
+    const json = (await res.json()) as { error?: { type?: string; message?: string } };
+    expect(json.error?.type).toBe("invalid_request_error");
+    expect(json.error?.message).toMatch(/web_search_options/);
+    expect(agentCommand).toHaveBeenCalledTimes(0);
   });
 
   it("forwards inbound penalty and seed params into streamParams", async () => {
