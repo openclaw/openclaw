@@ -13,6 +13,10 @@ export type OpenAiEmbeddingClient = {
   ssrfPolicy?: SsrFPolicy;
   fetchImpl?: typeof fetch;
   model: string;
+  /** Explicit `dimensions` sent to endpoints that require it (e.g. DashScope). */
+  dimensions?: number;
+  /** Per-request input cap honored by the shared remote provider. */
+  maxInputsPerRequest?: number;
 };
 
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";

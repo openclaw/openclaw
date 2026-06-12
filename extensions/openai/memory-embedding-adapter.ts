@@ -32,6 +32,7 @@ export const openAiMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
           provider: "openai",
           baseUrl: client.baseUrl,
           model: client.model,
+          ...(typeof client.dimensions === "number" ? { dimensions: client.dimensions } : {}),
           headers: sanitizeEmbeddingCacheHeaders(client.headers, ["authorization"]),
         },
         batchEmbed: async (batch) => {
