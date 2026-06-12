@@ -113,6 +113,13 @@ const REPLAY_UNSAFE_FALLBACK_METADATA: EmbeddedRunAttemptResult["replayMetadata"
   hadPotentialSideEffects: true,
   replaySafe: false,
 };
+const TERMINAL_TOOL_RESULT_ERROR_STATUSES = new Set([
+  "error",
+  "failed",
+  "partial_failed",
+  "timeout",
+  "timed_out",
+]);
 
 export function isIncompleteTerminalAssistantTurn(params: {
   hasAssistantVisibleText: boolean;
@@ -453,6 +460,18 @@ function readToolResultAggregatedText(message: AgentMessage): string | undefined
   return trimmed || undefined;
 }
 
+function hasTerminalToolResultErrorStatus(message: AgentMessage): boolean {
+  const details =
+    message && typeof message === "object" && !Array.isArray(message)
+      ? (message as { details?: unknown }).details
+      : undefined;
+  if (!details || typeof details !== "object" || Array.isArray(details)) {
+    return false;
+  }
+  const status = normalizeLowercaseStringOrEmpty((details as { status?: unknown }).status);
+  return TERMINAL_TOOL_RESULT_ERROR_STATUSES.has(status);
+}
+
 function resolveTrailingToolResultText(messages: readonly AgentMessage[]): string | null {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const message = messages[i];
@@ -461,7 +480,10 @@ function resolveTrailingToolResultText(messages: readonly AgentMessage[]): strin
     }
     const role = normalizeLowercaseStringOrEmpty(message?.role);
     if (isToolResultRole(role)) {
-      if ((message as { isError?: boolean }).isError === true) {
+      if (
+        (message as { isError?: boolean }).isError === true ||
+        hasTerminalToolResultErrorStatus(message)
+      ) {
         return null;
       }
       const text = readMessageTextContent(message) ?? readToolResultAggregatedText(message);

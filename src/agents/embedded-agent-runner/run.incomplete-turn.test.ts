@@ -358,8 +358,37 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(payload).toEqual({
       text:
         "exec completed, but the model did not provide a final answer. " +
-        "No user-facing result text was provided.",
+      "No user-facing result text was provided.",
     });
+  });
+
+  it("does not synthesize a completed terminal reply from failed trailing tool output", () => {
+    const payload = resolveTerminalToolResultReplyPayload({
+      isCronTrigger: false,
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "exec" }],
+        messagesSnapshot: [
+          {
+            role: "toolResult",
+            content: [{ type: "text", text: "exit code 1" }],
+            details: { status: "failed", aggregated: "exit code 1" },
+          } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+          {
+            role: "assistant",
+            stopReason: "stop",
+            provider: "openai",
+            model: "gpt-5.4",
+            content: [],
+          } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+        ],
+      }),
+    });
+
+    expect(payload).toBeNull();
   });
 
   it("does not reuse an older NO_REPLY tool result without current-attempt tool activity", () => {

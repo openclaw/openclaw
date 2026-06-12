@@ -117,6 +117,13 @@ export type DefinedToolPluginEntry = ReturnType<typeof definePluginEntry> & {
   [toolPluginMetadataSymbol]: ToolPluginMetadata;
 };
 
+export function toolResult<TDetails>(
+  result: AgentToolResult<TDetails>,
+): AgentToolResult<TDetails> {
+  Object.defineProperty(result, AGENT_TOOL_RESULT_MARK, { value: true });
+  return result;
+}
+
 function wrapToolPluginResult(result: unknown): AgentToolResult<unknown> {
   if (isAgentToolResult(result)) {
     return result;

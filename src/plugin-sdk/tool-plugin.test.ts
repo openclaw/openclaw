@@ -1,8 +1,7 @@
 import { Type } from "typebox";
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
-import { textResult } from "../agents/tools/common.js";
 import { createCapturedPluginRegistration } from "../plugins/captured-registration.js";
-import { defineToolPlugin, getToolPluginMetadata } from "./tool-plugin.js";
+import { defineToolPlugin, getToolPluginMetadata, toolResult } from "./tool-plugin.js";
 
 describe("defineToolPlugin", () => {
   it("registers declared tools and wraps plain object results", async () => {
@@ -121,7 +120,11 @@ describe("defineToolPlugin", () => {
           name: "text_result",
           description: "Return a text result.",
           parameters: Type.Object({}),
-          execute: () => textResult("ready", { status: "ok" }),
+          execute: () =>
+            toolResult({
+              content: [{ type: "text", text: "ready" }],
+              details: { status: "ok" },
+            }),
         }),
       ],
     });

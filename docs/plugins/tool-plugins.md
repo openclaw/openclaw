@@ -159,9 +159,11 @@ format:
 - Return a string when the model should see that exact text.
 - Return a JSON-compatible value when you want the model to see formatted JSON
   and OpenClaw to keep the original value in `details`.
-- Return a full `AgentToolResult` when you need result metadata such as
-  `terminalSummary`, progress, or termination hints, or when you need non-text
-  content blocks such as images.
+- Return a full `AgentToolResult` with `toolResult(...)` when you need custom
+  model text plus structured details, result metadata such as `terminalSummary`,
+  progress, or termination hints, or non-text content blocks such as images.
+
+Import `toolResult` from `openclaw/plugin-sdk/tool-plugin` for full results.
 
 ```typescript
 tool({
@@ -182,6 +184,21 @@ tool({
     input: Type.String(),
   }),
   execute: ({ input }) => ({ input, length: input.length }),
+});
+```
+
+```typescript
+tool({
+  name: "echo_result",
+  description: "Echo input text with structured details.",
+  parameters: Type.Object({
+    input: Type.String(),
+  }),
+  execute: ({ input }) =>
+    toolResult({
+      content: [{ type: "text", text: input }],
+      details: { input, length: input.length },
+    }),
 });
 ```
 
