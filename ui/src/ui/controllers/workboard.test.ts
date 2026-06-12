@@ -1450,6 +1450,36 @@ describe("workboard controller", () => {
     expect(client.request).not.toHaveBeenCalled();
   });
 
+  it("does not start lifecycle writes while a canonical refresh is loading", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [{ ...sampleCard, sessionKey: sampleSession.key }];
+    const loadResponse = createDeferred<unknown>();
+    const client = createClient((method) => {
+      if (method === "workboard.cards.list") {
+        return loadResponse.promise;
+      }
+      if (method === "workboard.cards.update") {
+        return { card: { ...sampleCard, status: "running" } };
+      }
+      return {};
+    });
+
+    const loading = loadWorkboard({ host, client: client as never, force: true });
+    await Promise.resolve();
+    await syncWorkboardLifecycle({
+      host,
+      client: client as never,
+      sessions: [{ ...sampleSession, status: "running", hasActiveRun: true }],
+    });
+
+    expect(client.request).toHaveBeenCalledTimes(1);
+    expect(client.request).toHaveBeenCalledWith("workboard.cards.list", {});
+    loadResponse.resolve({ cards: [sampleCard] });
+    await loading;
+  });
+
   it("blocks stale lifecycle status writes while edit-modal status saves are in flight", async () => {
     const host = {};
     const state = getWorkboardState(host);

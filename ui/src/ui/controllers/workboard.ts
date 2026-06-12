@@ -516,6 +516,10 @@ export function workboardHasActiveWrites(state: WorkboardUiState): boolean {
   );
 }
 
+function workboardHasActiveLoad(host: WorkboardHost): boolean {
+  return workboardLoadPromises.has(host);
+}
+
 export function consumeWorkboardLifecycleSyncSuppression(state: WorkboardUiState): boolean {
   if (state.pollRefreshInProgress) {
     return true;
@@ -2322,7 +2326,13 @@ export async function syncWorkboardLifecycle(params: {
   requestUpdate?: () => void;
 }) {
   const state = getWorkboardState(params.host);
-  if (!params.client || !state.loaded || params.canWrite === false || state.dispatching) {
+  if (
+    !params.client ||
+    !state.loaded ||
+    params.canWrite === false ||
+    state.dispatching ||
+    workboardHasActiveLoad(params.host)
+  ) {
     return;
   }
   if (shouldRefreshWorkboardTasksForLifecycle(state)) {
@@ -2334,12 +2344,12 @@ export async function syncWorkboardLifecycle(params: {
       params.requestUpdate?.();
     }
   }
-  if (state.dispatching) {
+  if (state.dispatching || workboardHasActiveLoad(params.host)) {
     return;
   }
   const syncKeys = getLifecycleSyncKeys(params.host);
   for (const card of state.cards) {
-    if (state.dispatching) {
+    if (state.dispatching || workboardHasActiveLoad(params.host)) {
       return;
     }
     const lifecycle = getWorkboardLifecycle(
