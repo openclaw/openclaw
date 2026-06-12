@@ -1,0 +1,75 @@
+{
+  "id": "evolink",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["evolink"],
+  "modelIdNormalization": {
+    "providers": {
+      "evolink": {
+        "prefixWhenBare": "evolink"
+      }
+    }
+  },
+  "providerRequest": {
+    "providers": {
+      "evolink": {
+        "family": "evolink"
+      }
+    }
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "evolink",
+        "envVars": ["EVOLINK_API_KEY"]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "evolink",
+      "method": "api-key",
+      "choiceId": "evolink-api-key",
+      "choiceLabel": "EvoLink API key",
+      "choiceHint": "OpenAI-compatible EvoLink endpoint",
+      "groupId": "evolink",
+      "groupLabel": "EvoLink",
+      "groupHint": "OpenAI-compatible smart routing",
+      "optionKey": "evolinkApiKey",
+      "cliFlag": "--evolink-api-key",
+      "cliOption": "--evolink-api-key <key>",
+      "cliDescription": "EvoLink API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "modelCatalog": {
+    "providers": {
+      "evolink": {
+        "baseUrl": "https://direct.evolink.ai/v1",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "evolink/auto",
+            "name": "EvoLink Auto",
+            "reasoning": false,
+            "input": ["text"],
+            "contextWindow": 131072,
+            "maxTokens": 8192,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          }
+        ]
+      }
+    }
+  }
+}
