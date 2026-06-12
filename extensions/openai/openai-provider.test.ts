@@ -1279,6 +1279,45 @@ describe("buildOpenAIProvider", () => {
     ]);
   });
 
+  it("clears existing native OpenAI web search location when request location is null", () => {
+    const provider = buildOpenAIProvider();
+    const wrap = provider.wrapStreamFn;
+    expect(wrap).toBeTypeOf("function");
+    if (!wrap) {
+      throw new Error("expected OpenAI wrapper");
+    }
+
+    const result = runWrappedPayloadCase({
+      wrap,
+      provider: "openai",
+      modelId: "gpt-5.4",
+      extraParams: {
+        nativeWebSearch: {
+          userLocation: null,
+        },
+      },
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        baseUrl: "https://api.openai.com/v1",
+      } as Model<"openai-responses">,
+      payload: {
+        tools: [
+          {
+            type: "web_search",
+            user_location: {
+              type: "approximate",
+              country: "US",
+            },
+          },
+        ],
+      },
+    });
+
+    expect(result.payload.tools).toEqual([{ type: "web_search" }]);
+  });
+
   it("keeps managed OpenAI web_search when agent policy denies native web search", () => {
     const provider = buildOpenAIProvider();
     const wrap = provider.wrapStreamFn;

@@ -874,7 +874,9 @@ function resolveOpenAiChatWebSearchOptions(
   }
 
   const userLocation = options.user_location;
-  if (userLocation !== undefined) {
+  if (userLocation === null) {
+    nativeWebSearch.userLocation = null;
+  } else if (userLocation !== undefined) {
     nativeWebSearch.userLocation = resolveOpenAiChatWebSearchUserLocation(userLocation);
   }
 

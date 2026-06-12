@@ -17,7 +17,7 @@ type OpenAINativeWebSearchRequest = {
     country?: string;
     region?: string;
     timezone?: string;
-  };
+  } | null;
 };
 
 type OpenAINativeWebSearchPatchResult =
@@ -116,7 +116,9 @@ function applyOpenAIWebSearchOptions(
   if (nativeWebSearch.searchContextSize) {
     tool.search_context_size = nativeWebSearch.searchContextSize;
   }
-  if (nativeWebSearch.userLocation) {
+  if (nativeWebSearch.userLocation === null) {
+    delete tool.user_location;
+  } else if (nativeWebSearch.userLocation) {
     tool.user_location = nativeWebSearch.userLocation;
   }
 }

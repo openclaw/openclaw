@@ -10,7 +10,7 @@ export type NativeWebSearchStreamParams = {
     country?: string;
     region?: string;
     timezone?: string;
-  };
+  } | null;
 };
 
 export type AgentStreamParams = {

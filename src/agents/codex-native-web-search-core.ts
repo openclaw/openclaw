@@ -322,7 +322,9 @@ export function buildCodexNativeWebSearchTool(
     tool.search_context_size = searchContextSize;
   }
 
-  const userLocation = nativeWebSearch?.userLocation
+  const hasRequestUserLocation =
+    nativeWebSearch !== undefined && Object.hasOwn(nativeWebSearch, "userLocation");
+  const userLocation = hasRequestUserLocation
     ? nativeWebSearch.userLocation
     : nativeConfig.userLocation
       ? {
@@ -347,7 +349,9 @@ function applyCodexNativeWebSearchOptions(
   if (nativeWebSearch.searchContextSize) {
     tool.search_context_size = nativeWebSearch.searchContextSize;
   }
-  if (nativeWebSearch.userLocation) {
+  if (nativeWebSearch.userLocation === null) {
+    delete tool.user_location;
+  } else if (nativeWebSearch.userLocation) {
     tool.user_location = nativeWebSearch.userLocation;
   }
 }
