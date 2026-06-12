@@ -724,22 +724,11 @@ describe("subagent registry persistence", () => {
     expect(listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
   });
 
-  it("keeps stale unended restored runs with abortedLastRun for restart recovery", async () => {
-    vi.mocked(callGateway).mockImplementationOnce(async (request) => {
-      expectFields(request, {
-        method: "agent.wait",
-      });
-      expectFields((request as { params?: unknown }).params, {
-        runId: "run-stale-aborted-restore",
-      });
-      return {
-        status: "pending",
-      };
-    });
+  it("retires stale unended restored runs with abortedLastRun past the staleness window", async () => {
     const now = Date.now();
-    const runId = "run-stale-aborted-restore";
-    const childSessionKey = "agent:main:subagent:stale-aborted-restore";
-    await writePersistedRegistry(
+    const runId = "run-stale-aborted-retire";
+    const childSessionKey = "agent:main:subagent:stale-aborted-retire";
+    const registryPath = await writePersistedRegistry(
       {
         version: 2,
         runs: {
@@ -748,7 +737,7 @@ describe("subagent registry persistence", () => {
             childSessionKey,
             requesterSessionKey: "agent:main:main",
             requesterDisplayKey: "main",
-            task: "stale restart-recoverable work",
+            task: "stale restart-recoverable work past staleness window",
             cleanup: "keep",
             createdAt: now - 3 * 60 * 60 * 1_000,
             startedAt: now - 3 * 60 * 60 * 1_000,
@@ -759,21 +748,22 @@ describe("subagent registry persistence", () => {
     );
     await writeChildSessionEntry({
       sessionKey: childSessionKey,
-      sessionId: "sess-stale-aborted-restore",
+      sessionId: "sess-stale-aborted-retire",
       updatedAt: now,
       abortedLastRun: true,
     });
 
     restartRegistry();
-    await waitForRegistryWork(() => vi.mocked(callGateway).mock.calls.length > 0);
+    await waitForRegistryWork(async () => {
+      const after = JSON.parse(await fs.readFile(registryPath, "utf8")) as {
+        runs?: Record<string, unknown>;
+      };
+      return after.runs?.[runId] === undefined;
+    });
 
-    expect(callGateway).toHaveBeenCalledTimes(1);
-    const [request] = vi.mocked(callGateway).mock.calls.at(0) ?? [];
-    expectFields(request, { method: "agent.wait" });
-    expectFields((request as { params?: unknown } | undefined)?.params, { runId });
-    expect(
-      listSubagentRunsForRequester("agent:main:main").some((entry) => entry.runId === runId),
-    ).toBe(true);
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(announceSpy).not.toHaveBeenCalled();
+    expect(listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
   });
 
   it("removes attachments when pruning orphaned restored runs", async () => {

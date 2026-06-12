@@ -34,6 +34,7 @@ import {
   replaceSubagentRunAfterSteer,
 } from "./subagent-registry-steer-runtime.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isStaleUnendedSubagentRun } from "./subagent-run-liveness.js";
 
 const log = createSubsystemLogger("subagent-interrupted-resume");
 
@@ -250,6 +251,18 @@ export async function recoverOrphanedSubagentSessions(params: {
         // Check if this session was aborted by the restart
         if (!entry.abortedLastRun) {
           result.skipped++;
+          continue;
+        }
+
+        // Age out stale runs so long-downtime orphans are retired instead
+        // of being resurrected past the staleness window.
+        if (isStaleUnendedSubagentRun(runRecord, now)) {
+          result.skipped++;
+          result.failedRuns.push({
+            runId,
+            childSessionKey,
+            error: "stale-unended-run",
+          });
           continue;
         }
 
