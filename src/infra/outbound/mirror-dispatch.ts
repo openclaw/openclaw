@@ -120,7 +120,12 @@ export function consumeStreamingEchoHandled(
  * Register the mirror dispatcher for a channel ACCOUNT. A channel plugin
  * registers one dispatcher per account it serves (the dispatcher closes over
  * that account's bot/runtime), so a mirror to a given target renders through the
- * target's own account. First-wins per (channel, account).
+ * target's own account.
+ *
+ * Re-registration REPLACES the previous dispatcher (last-wins). The dispatcher
+ * captures a live bot instance, so when an account is reloaded/restarted in-process
+ * its bot-core re-registers — the new dispatcher must supersede the old one, or
+ * mirrors would keep routing through the stopped runtime (stale token/bot).
  */
 export function registerChannelMirrorDispatcher(
   channel: string,
@@ -135,22 +140,28 @@ export function registerChannelMirrorDispatcher(
   }
   const existing = byAccount.get(key);
   if (existing && existing !== dispatcher) {
-    log.warn(
-      `mirror dispatcher already registered for ${channel}/${key || "default"}; ignoring re-registration`,
+    log.debug(
+      `mirror dispatcher for ${channel}/${key || "default"} replaced (account re-registered)`,
     );
-    return;
   }
   byAccount.set(key, dispatcher);
 }
 
 /**
- * Resolve the dispatcher for a target's (channel, account). Exact account match
- * is required when more than one account is registered for the channel — on a
- * mismatch we fail closed (return undefined) rather than mirror through the wrong
- * account, and the post-hoc final echo then delivers via the target's own account
- * routing. A single registered account is unambiguous (single-account install, or
- * a wildcard target with no pinned accountId), so it matches regardless.
+ * Remove the mirror dispatcher for a channel account (called when an account stops
+ * so a removed account does not keep a stale dispatcher). No-op if absent.
  */
+export function unregisterChannelMirrorDispatcher(channel: string, accountId: string): void {
+  const byAccount = state.dispatchers.get(channel);
+  if (!byAccount) {
+    return;
+  }
+  byAccount.delete(normalizeDispatcherAccountId(accountId));
+  if (byAccount.size === 0) {
+    state.dispatchers.delete(channel);
+  }
+}
+
 /**
  * Whether the channel supports native mirroring at all (any account registered a
  * dispatcher). Used to fail closed: for a mirror-capable channel, the native mirror
@@ -162,6 +173,14 @@ export function channelHasMirrorDispatcher(channel: string): boolean {
   return byAccount !== undefined && byAccount.size > 0;
 }
 
+/**
+ * Resolve the dispatcher for a target's (channel, account). Exact account match
+ * is required when more than one account is registered for the channel — on a
+ * mismatch we fail closed (return undefined) rather than mirror through the wrong
+ * account, and the post-hoc final echo then delivers via the target's own account
+ * routing. A single registered account is unambiguous (single-account install, or
+ * a wildcard target with no pinned accountId), so it matches regardless.
+ */
 export function resolveChannelMirrorDispatcher(
   channel: string,
   accountId?: string,

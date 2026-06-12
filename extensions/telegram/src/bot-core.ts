@@ -1,4 +1,7 @@
-import { registerChannelMirrorDispatcher } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  registerChannelMirrorDispatcher,
+  unregisterChannelMirrorDispatcher,
+} from "openclaw/plugin-sdk/channel-outbound";
 // Telegram plugin module implements bot core behavior.
 import {
   resolveChannelGroupPolicy,
@@ -424,6 +427,9 @@ export function createTelegramBotCore(
   const originalStop = bot.stop.bind(bot);
   bot.stop = ((...args: Parameters<typeof originalStop>) => {
     threadBindingManager?.stop();
+    // Drop this account's mirror dispatcher so a stopped account never keeps a
+    // stale dispatcher (a reload re-registers a fresh one; a removal just clears it).
+    unregisterChannelMirrorDispatcher("telegram", account.accountId);
     return originalStop(...args);
   }) as typeof bot.stop;
 

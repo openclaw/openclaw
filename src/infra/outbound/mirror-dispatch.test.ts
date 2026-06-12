@@ -7,6 +7,7 @@ import {
   registerChannelMirrorDispatcher,
   resetMirrorDispatchForTest,
   resolveChannelMirrorDispatcher,
+  unregisterChannelMirrorDispatcher,
 } from "./mirror-dispatch.js";
 
 function entryWith(
@@ -24,14 +25,23 @@ const cfg = {} as OpenClawConfig;
 const TG = { channel: "telegram", to: "telegram:-100", accountId: "default", threadId: 1 };
 
 describe("mirror-dispatch", () => {
-  it("registers and resolves a channel mirror dispatcher (first-wins per account)", () => {
+  it("re-registration replaces the dispatcher (last-wins, for account reload)", () => {
     resetMirrorDispatchForTest();
     const a = vi.fn();
     const b = vi.fn();
     registerChannelMirrorDispatcher("telegram", "default", a);
-    registerChannelMirrorDispatcher("telegram", "default", b); // ignored (first-wins)
-    expect(resolveChannelMirrorDispatcher("telegram", "default")).toBe(a);
+    registerChannelMirrorDispatcher("telegram", "default", b); // account reloaded -> replaces a
+    expect(resolveChannelMirrorDispatcher("telegram", "default")).toBe(b);
     expect(resolveChannelMirrorDispatcher("discord", "default")).toBeUndefined();
+  });
+
+  it("unregister removes a stopped account's dispatcher", () => {
+    resetMirrorDispatchForTest();
+    const a = vi.fn();
+    registerChannelMirrorDispatcher("telegram", "default", a);
+    expect(resolveChannelMirrorDispatcher("telegram", "default")).toBe(a);
+    unregisterChannelMirrorDispatcher("telegram", "default");
+    expect(resolveChannelMirrorDispatcher("telegram", "default")).toBeUndefined();
   });
 
   it("keys dispatchers by account and fails closed on a multi-account mismatch", async () => {
