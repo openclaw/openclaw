@@ -934,11 +934,17 @@ export function buildToolSchemaDirectoryPrompt(
 /** Resolve an exact hidden catalog tool name without exposing fuzzy search or catalog ids. */
 export function resolveToolSearchCatalogTool(
   ctx: ToolSearchToolContext,
-  name: string,
+  name: unknown,
   options?: CatalogVisibilityOptions,
 ): AnyAgentTool | undefined {
+  if (typeof name !== "string") {
+    return undefined;
+  }
+  const needle = name.trim();
+  if (!needle) {
+    return undefined;
+  }
   try {
-    const needle = name.trim();
     return visibleCatalogEntries(resolveCatalog(ctx), options).find(
       (entry) => entry.name === needle,
     )?.tool as AnyAgentTool | undefined;

@@ -418,6 +418,12 @@ describe("Tool Search", () => {
         "openclaw:fake-catalog:fake_exact_hidden",
       ),
     ).toBeUndefined();
+    expect(
+      resolveToolSearchCatalogTool({ sessionId: "session-directory-resolve", config }, undefined),
+    ).toBeUndefined();
+    expect(
+      resolveToolSearchCatalogTool({ sessionId: "session-directory-resolve", config }, "  "),
+    ).toBeUndefined();
   });
 
   it("hydrates likely directory tool schemas while cataloging the rest", () => {
