@@ -84,8 +84,8 @@ export async function createOpenAiEmbeddingProvider(
     provider: {
       id: "openai",
       model: client.model,
-      ...(typeof OPENAI_MAX_INPUT_TOKENS[client.model] === "number"
-        ? { maxInputTokens: OPENAI_MAX_INPUT_TOKENS[client.model] }
+      ...(typeof OPENAI_MAX_INPUT_TOKENS[normalizeOpenAiModel(client.model)] === "number"
+        ? { maxInputTokens: OPENAI_MAX_INPUT_TOKENS[normalizeOpenAiModel(client.model)] }
         : {}),
       embedQuery: async (text, optionsValue) => {
         const [vec] = await embed([text], "query", optionsValue?.signal);

@@ -153,6 +153,20 @@ describe("OpenAI embedding provider", () => {
     expect(provider.model).toBe("openai/text-embedding-3-small");
   });
 
+  it("provides maxInputTokens for qualified model with non-native base URL", async () => {
+    mocks.resolveRemoteEmbeddingClient.mockResolvedValueOnce({
+      ...DEFAULT_MOCK_CLIENT,
+      baseUrl: "https://router.requesty.ai/v1",
+      model: "text-embedding-3-small",
+    });
+
+    const { provider } = await createOpenAiEmbeddingProvider(
+      createOptions({ model: "openai/text-embedding-3-small" }),
+    );
+
+    expect(provider.maxInputTokens).toBe(8192);
+  });
+
   it("preserves openai/ prefix in embedding request body for non-native base URLs", async () => {
     mocks.resolveRemoteEmbeddingClient.mockResolvedValueOnce({
       ...DEFAULT_MOCK_CLIENT,
