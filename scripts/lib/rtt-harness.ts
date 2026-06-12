@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import {
-  QA_EVIDENCE_SUMMARY_FILENAME,
+  QA_EVIDENCE_FILENAME,
   validateQaEvidenceSummaryJson,
   type QaEvidenceSummaryJson,
   type QaEvidenceTiming,
@@ -281,7 +281,7 @@ export async function readTelegramSummary(summaryPath: string) {
 }
 
 export async function resolveTelegramSummaryPath(outputDir: string) {
-  return path.join(outputDir, QA_EVIDENCE_SUMMARY_FILENAME);
+  return path.join(outputDir, QA_EVIDENCE_FILENAME);
 }
 
 export async function writeJson(pathname: string, value: unknown) {

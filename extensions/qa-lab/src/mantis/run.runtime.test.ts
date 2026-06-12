@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildLiveTransportEvidenceSummary } from "../evidence-summary.js";
+import { QA_EVIDENCE_FILENAME, buildLiveTransportEvidenceSummary } from "../evidence-summary.js";
 import { runMantisBeforeAfter } from "./run.runtime.js";
 
 describe("mantis before/after runtime", () => {
@@ -35,7 +35,7 @@ describe("mantis before/after runtime", () => {
       await fs.writeFile(videoPath, `${lane} video`);
       const summary = buildLiveTransportEvidenceSummary({
         artifactPaths: [
-          { kind: "summary", path: "qa-evidence-summary.json" },
+          { kind: "summary", path: QA_EVIDENCE_FILENAME },
           { kind: "report", path: "discord-qa-report.md" },
         ],
         checks: [
@@ -56,7 +56,7 @@ describe("mantis before/after runtime", () => {
         transportId: "discord",
       });
       await fs.writeFile(
-        path.join(outputDir, "qa-evidence-summary.json"),
+        path.join(outputDir, QA_EVIDENCE_FILENAME),
         `${JSON.stringify(summary, null, 2)}\n`,
       );
     });

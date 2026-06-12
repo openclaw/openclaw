@@ -71,7 +71,7 @@ function evidenceCredentialSource(summary) {
 }
 
 // Historical Telegram summary artifacts can still appear in old Mantis uploads.
-// Current QA producers write qa-evidence-summary.json for gate inputs.
+// Current QA producers write qa-evidence.json for gate inputs.
 function legacyTelegramSummaryToEvidenceSummary(summary) {
   const scenarios = Array.isArray(summary.scenarios) ? summary.scenarios : [];
   return {
@@ -326,7 +326,7 @@ export function buildTelegramEvidenceManifest({
   candidateSha,
   scenarioLabel,
   summary,
-  summaryArtifactPath = "qa-evidence-summary.json",
+  summaryArtifactPath = "qa-evidence.json",
 }) {
   const counts = evidenceCounts(summary);
   const pass = counts.failed === 0 && Number(counts.total ?? 0) > 0;
@@ -447,7 +447,7 @@ export function writeTelegramEvidence(rawArgs = process.argv.slice(2)) {
   }
   const outputDir = path.resolve(args.output_dir);
   mkdirSync(outputDir, { recursive: true });
-  const evidenceSummaryPath = path.join(outputDir, "qa-evidence-summary.json");
+  const evidenceSummaryPath = path.join(outputDir, "qa-evidence.json");
   const legacySummaryPath = path.join(outputDir, "telegram-qa-summary.json");
   const summaryPath = existsSync(evidenceSummaryPath) ? evidenceSummaryPath : legacySummaryPath;
   const observedPath = path.join(outputDir, "telegram-qa-observed-messages.json");

@@ -15,10 +15,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { z } from "zod";
-import {
-  QA_EVIDENCE_SUMMARY_FILENAME,
-  buildLiveTransportEvidenceSummary,
-} from "../../evidence-summary.js";
+import { QA_EVIDENCE_FILENAME, buildLiveTransportEvidenceSummary } from "../../evidence-summary.js";
 import { startQaGatewayChild } from "../../gateway-child.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "../../providers/index.js";
 import { fingerprintQaCredentialId } from "../../qa-credentials-fingerprint.runtime.js";
@@ -3206,7 +3203,7 @@ export async function runWhatsAppQaLive(params: {
 
   const finishedAt = new Date().toISOString();
   const reportPath = path.join(outputDir, "whatsapp-qa-report.md");
-  const summaryPath = path.join(outputDir, QA_EVIDENCE_SUMMARY_FILENAME);
+  const summaryPath = path.join(outputDir, QA_EVIDENCE_FILENAME);
   const observedMessagesPath = path.join(outputDir, "whatsapp-qa-observed-messages.json");
   const credentialFingerprint = fingerprintQaCredentialId(credentialLease?.credentialId);
   const publishedCleanupIssues = redactPublicMetadata

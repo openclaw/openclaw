@@ -28,7 +28,7 @@ const CREDENTIAL_SCRIPT_PATH = path.resolve(
   "../../scripts/e2e/npm-telegram-rtt-credentials.mjs",
 );
 const CONFIG_SCRIPT_PATH = path.resolve(TEST_DIR, "../../scripts/e2e/npm-telegram-rtt-config.mjs");
-const QA_EVIDENCE_SUMMARY_FILENAME = "qa-evidence-summary.json";
+const QA_EVIDENCE_FILENAME = "qa-evidence.json";
 const CHUNKED_PAYLOAD_MARKER = "__openclawQaCredentialPayloadChunksV1";
 const execFileAsync = promisify(execFile);
 const tempDirs: string[] = [];
@@ -634,7 +634,7 @@ describe("RTT harness", () => {
     tempDirs.push(tempDir);
 
     await expect(resolveTelegramSummaryPath(tempDir)).resolves.toBe(
-      path.join(tempDir, QA_EVIDENCE_SUMMARY_FILENAME),
+      path.join(tempDir, QA_EVIDENCE_FILENAME),
     );
   });
 
@@ -644,7 +644,7 @@ describe("RTT harness", () => {
       artifacts: {
         rawObservedMessagesPath: "runs/run/raw/telegram-qa-observed-messages.json",
         rawReportPath: "runs/run/raw/telegram-qa-report.md",
-        rawSummaryPath: "runs/run/raw/qa-evidence-summary.json",
+        rawSummaryPath: "runs/run/raw/qa-evidence.json",
         resultPath: "runs/run/result.json",
       },
       finishedAt: new Date("2026-05-01T00:00:12.000Z"),
@@ -661,7 +661,7 @@ describe("RTT harness", () => {
       artifacts: {
         rawObservedMessagesPath: "runs/run/raw/telegram-qa-observed-messages.json",
         rawReportPath: "runs/run/raw/telegram-qa-report.md",
-        rawSummaryPath: "runs/run/raw/qa-evidence-summary.json",
+        rawSummaryPath: "runs/run/raw/qa-evidence.json",
         resultPath: "runs/run/result.json",
       },
       package: { spec: "openclaw@beta", version: "2026.4.30-beta.1" },
@@ -693,7 +693,7 @@ describe("RTT harness", () => {
       artifacts: {
         rawObservedMessagesPath: "runs/run/raw/telegram-qa-observed-messages.json",
         rawReportPath: "runs/run/raw/telegram-qa-report.md",
-        rawSummaryPath: "runs/run/raw/qa-evidence-summary.json",
+        rawSummaryPath: "runs/run/raw/qa-evidence.json",
         resultPath: "runs/run/result.json",
       },
       finishedAt: new Date("2026-05-01T00:00:12.000Z"),
@@ -719,7 +719,7 @@ describe("RTT harness", () => {
       artifacts: {
         rawObservedMessagesPath: "runs/run/raw/telegram-qa-observed-messages.json",
         rawReportPath: "runs/run/raw/telegram-qa-report.md",
-        rawSummaryPath: "runs/run/raw/qa-evidence-summary.json",
+        rawSummaryPath: "runs/run/raw/qa-evidence.json",
         resultPath: "runs/run/result.json",
       },
       finishedAt: new Date("2026-05-01T00:00:12.000Z"),

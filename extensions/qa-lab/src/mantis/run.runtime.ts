@@ -4,10 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
-import {
-  QA_EVIDENCE_SUMMARY_FILENAME,
-  validateQaEvidenceSummaryJson,
-} from "../evidence-summary.js";
+import { QA_EVIDENCE_FILENAME, validateQaEvidenceSummaryJson } from "../evidence-summary.js";
 
 export type MantisBeforeAfterOptions = {
   allowFailures?: boolean;
@@ -239,7 +236,7 @@ async function readNormalizedLaneResult(params: {
   publishedLaneDir: string;
   scenario: string;
 }): Promise<NormalizedScenarioSummary | undefined> {
-  const summaryPath = path.join(params.publishedLaneDir, QA_EVIDENCE_SUMMARY_FILENAME);
+  const summaryPath = path.join(params.publishedLaneDir, QA_EVIDENCE_FILENAME);
   let rawSummary: string;
   try {
     rawSummary = await fs.readFile(summaryPath, "utf8");
@@ -251,7 +248,8 @@ async function readNormalizedLaneResult(params: {
   }
 
   const summary = validateQaEvidenceSummaryJson(JSON.parse(rawSummary));
-  const entry = summary.entries.find((candidate) => candidate.test.id === params.scenario) ??
+  const entry =
+    summary.entries.find((candidate) => candidate.test.id === params.scenario) ??
     summary.entries[0];
   const artifacts = entry?.execution.artifacts ?? [];
   return {

@@ -4,7 +4,7 @@ import { splitQaModelRef } from "./model-selection.js";
 import { getQaProvider, type QaProviderMode } from "./providers/index.js";
 
 export const QA_EVIDENCE_SUMMARY_KIND = "openclaw.qa.evidence-summary";
-export const QA_EVIDENCE_SUMMARY_FILENAME = "qa-evidence-summary.json";
+export const QA_EVIDENCE_FILENAME = "qa-evidence.json";
 export const QA_EVIDENCE_SUMMARY_SCHEMA_VERSION = 2;
 
 const qaEvidenceStatusSchema = z.enum(["pass", "fail", "blocked", "skipped"]);

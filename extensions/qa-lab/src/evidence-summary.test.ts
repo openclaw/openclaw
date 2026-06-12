@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 import {
   QA_EVIDENCE_SUMMARY_KIND,
-  QA_EVIDENCE_SUMMARY_FILENAME,
+  QA_EVIDENCE_FILENAME,
   QA_EVIDENCE_SUMMARY_SCHEMA_VERSION,
   buildLiveTransportEvidenceSummary,
   buildPlaywrightEvidenceSummary,
@@ -131,7 +131,7 @@ describe("evidence summary", () => {
   it("builds Telegram live transport evidence entries", () => {
     const evidence = buildLiveTransportEvidenceSummary({
       artifactPaths: [
-        { kind: "summary", path: QA_EVIDENCE_SUMMARY_FILENAME },
+        { kind: "summary", path: QA_EVIDENCE_FILENAME },
         { kind: "report", path: "telegram-qa-report.md" },
         { kind: "transport-observations", path: "telegram-qa-observed-messages.json" },
       ],
@@ -198,7 +198,7 @@ describe("evidence summary", () => {
           artifacts: [
             {
               kind: "summary",
-              path: QA_EVIDENCE_SUMMARY_FILENAME,
+              path: QA_EVIDENCE_FILENAME,
               source: "telegram-live-transport",
             },
             {
@@ -471,7 +471,7 @@ describe("evidence summary", () => {
 
   it("uses explicit package provenance from package runners", () => {
     const evidence = buildLiveTransportEvidenceSummary({
-      artifactPaths: [{ kind: "summary", path: QA_EVIDENCE_SUMMARY_FILENAME }],
+      artifactPaths: [{ kind: "summary", path: QA_EVIDENCE_FILENAME }],
       generatedAt: "2026-06-07T12:15:00.000Z",
       packageSource: {
         kind: "packed-tarball",
@@ -501,7 +501,7 @@ describe("evidence summary", () => {
 
   it("derives package provenance from generic QA evidence env", () => {
     const evidence = buildLiveTransportEvidenceSummary({
-      artifactPaths: [{ kind: "summary", path: QA_EVIDENCE_SUMMARY_FILENAME }],
+      artifactPaths: [{ kind: "summary", path: QA_EVIDENCE_FILENAME }],
       env: {
         OPENCLAW_QA_PACKAGE_SOURCE: "openclaw@beta",
         OPENCLAW_QA_PACKAGE_SOURCE_KIND: "npm-package",
@@ -531,7 +531,7 @@ describe("evidence summary", () => {
 
   it("does not infer package provenance from runner-specific env", () => {
     const evidence = buildLiveTransportEvidenceSummary({
-      artifactPaths: [{ kind: "summary", path: QA_EVIDENCE_SUMMARY_FILENAME }],
+      artifactPaths: [{ kind: "summary", path: QA_EVIDENCE_FILENAME }],
       env: {
         OPENCLAW_NPM_TELEGRAM_INSTALL_SOURCE: "openclaw@beta",
       } as NodeJS.ProcessEnv,
@@ -560,7 +560,7 @@ describe("evidence summary", () => {
   it("keeps live transport check artifacts on the owning entry", () => {
     const evidence = buildLiveTransportEvidenceSummary({
       artifactPaths: [
-        { kind: "summary", path: QA_EVIDENCE_SUMMARY_FILENAME },
+        { kind: "summary", path: QA_EVIDENCE_FILENAME },
         { kind: "report", path: "discord-qa-report.md" },
       ],
       generatedAt: "2026-06-07T12:20:00.000Z",

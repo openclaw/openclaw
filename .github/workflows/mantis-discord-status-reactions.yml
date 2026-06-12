@@ -439,8 +439,8 @@ jobs:
 
           read_discord_status_reaction_status() {
             local lane="$1"
-            if [[ -f "$root/$lane/qa-evidence-summary.json" ]]; then
-              jq -r '.entries[0].result.status' "$root/$lane/qa-evidence-summary.json"
+            if [[ -f "$root/$lane/qa-evidence.json" ]]; then
+              jq -r '.entries[0].result.status' "$root/$lane/qa-evidence.json"
               return
             fi
             jq -r '.scenarios[0].status' "$root/$lane/discord-qa-summary.json"

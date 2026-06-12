@@ -196,7 +196,7 @@ describe("package Telegram live Docker E2E", () => {
   });
 
   it("gates package Telegram status on the summary artifact", async () => {
-    const summaryPath = path.join(mkTempRoot(), "qa-evidence-summary.json");
+    const summaryPath = path.join(mkTempRoot(), "qa-evidence.json");
     writeFileSync(
       summaryPath,
       JSON.stringify({

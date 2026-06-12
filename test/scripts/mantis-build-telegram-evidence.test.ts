@@ -23,7 +23,7 @@ function makeTelegramOutput({ includeReport = true, summary = {} } = {}) {
   tempDirs.push(dir);
   mkdirSync(dir, { recursive: true });
   writeFileSync(
-    path.join(dir, "qa-evidence-summary.json"),
+    path.join(dir, "qa-evidence.json"),
     JSON.stringify({
       kind: "openclaw.qa.evidence-summary",
       schemaVersion: 2,

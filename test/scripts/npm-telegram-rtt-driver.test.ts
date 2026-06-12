@@ -9,7 +9,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
 
 const DRIVER_SCRIPT = "scripts/e2e/npm-telegram-rtt-driver.mjs";
-const QA_EVIDENCE_SUMMARY_FILENAME = "qa-evidence-summary.json";
+const QA_EVIDENCE_FILENAME = "qa-evidence.json";
 
 type EvidenceSummaryForTest = {
   kind?: string;
@@ -232,7 +232,7 @@ function closeServer(server: Server): Promise<void> {
 
 function readEvidenceSummary(outputDir: string) {
   const summary = JSON.parse(
-    readFileSync(path.join(outputDir, QA_EVIDENCE_SUMMARY_FILENAME), "utf8"),
+    readFileSync(path.join(outputDir, QA_EVIDENCE_FILENAME), "utf8"),
   ) as EvidenceSummaryForTest;
   expect(Array.isArray(summary.entries)).toBe(true);
   return summary;

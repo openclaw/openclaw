@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { QA_EVIDENCE_SUMMARY_FILENAME, QA_EVIDENCE_SUMMARY_KIND } from "../../evidence-summary.js";
+import { QA_EVIDENCE_FILENAME, QA_EVIDENCE_SUMMARY_KIND } from "../../evidence-summary.js";
 import { testing, runSlackQaLive } from "./slack-live.runtime.js";
 
 describe("Slack live QA runtime helpers", () => {
@@ -437,7 +437,7 @@ describe("Slack live QA runtime helpers", () => {
     expect(result.scenarios[0]?.status).toBe("fail");
     expect(result.scenarios[0]?.details).toContain("Missing OPENCLAW_QA_CONVEX_SITE_URL");
     await expect(fs.stat(result.reportPath).then((stats) => stats.isFile())).resolves.toBe(true);
-    expect(path.basename(result.summaryPath)).toBe(QA_EVIDENCE_SUMMARY_FILENAME);
+    expect(path.basename(result.summaryPath)).toBe(QA_EVIDENCE_FILENAME);
     const summary = JSON.parse(await fs.readFile(result.summaryPath, "utf8")) as {
       entries: Array<{
         result: { failure?: { reason?: string }; status: string };

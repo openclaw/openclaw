@@ -9,10 +9,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
-import {
-  QA_EVIDENCE_SUMMARY_FILENAME,
-  buildLiveTransportEvidenceSummary,
-} from "../../evidence-summary.js";
+import { QA_EVIDENCE_FILENAME, buildLiveTransportEvidenceSummary } from "../../evidence-summary.js";
 import { startQaGatewayChild } from "../../gateway-child.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "../../providers/index.js";
 import {
@@ -2073,7 +2070,7 @@ export async function runSlackQaLive(params: {
 
   const finishedAt = new Date().toISOString();
   const reportPath = path.join(outputDir, "slack-qa-report.md");
-  const summaryPath = path.join(outputDir, QA_EVIDENCE_SUMMARY_FILENAME);
+  const summaryPath = path.join(outputDir, QA_EVIDENCE_FILENAME);
   const observedMessagesPath = path.join(outputDir, "slack-qa-observed-messages.json");
   const artifactScenarioResults = toSlackQaScenarioArtifactResults({
     scenarios: scenarioResults,

@@ -15,10 +15,7 @@ import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtim
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { chromium } from "playwright-core";
 import { z } from "zod";
-import {
-  QA_EVIDENCE_SUMMARY_FILENAME,
-  buildLiveTransportEvidenceSummary,
-} from "../../evidence-summary.js";
+import { QA_EVIDENCE_FILENAME, buildLiveTransportEvidenceSummary } from "../../evidence-summary.js";
 import { startQaGatewayChild } from "../../gateway-child.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "../../providers/index.js";
 import {
@@ -1864,7 +1861,7 @@ export async function runDiscordQaLive(params: {
     ? redactQaLiveLaneIssues(cleanupIssues)
     : cleanupIssues;
   const reportPath = path.join(outputDir, "discord-qa-report.md");
-  const summaryPath = path.join(outputDir, QA_EVIDENCE_SUMMARY_FILENAME);
+  const summaryPath = path.join(outputDir, QA_EVIDENCE_FILENAME);
   const observedMessagesPath = path.join(outputDir, "discord-qa-observed-messages.json");
   const reactionTimelinesPath = path.join(outputDir, "discord-qa-reaction-timelines.json");
   const evidence = buildLiveTransportEvidenceSummary({

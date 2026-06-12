@@ -429,7 +429,7 @@ function buildEvidenceSummary(params) {
           artifacts: [
             {
               kind: "summary",
-              path: "qa-evidence-summary.json",
+              path: "qa-evidence.json",
               source: "telegram-rtt",
             },
             {
@@ -575,7 +575,7 @@ async function main() {
   const evidenceSummary = buildEvidenceSummary({ scenarios });
 
   await fs.writeFile(
-    path.join(outputDir, "qa-evidence-summary.json"),
+    path.join(outputDir, "qa-evidence.json"),
     `${JSON.stringify(evidenceSummary, null, 2)}\n`,
   );
   await fs.writeFile(path.join(outputDir, "telegram-qa-report.md"), reportMarkdown(reportSummary));
