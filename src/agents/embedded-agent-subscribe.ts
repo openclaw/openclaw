@@ -261,23 +261,6 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   const partialReplyDirectiveAccumulator = createStreamingDirectiveAccumulator();
   const shouldAllowSilentTurnText = (text: string | undefined) =>
     Boolean(text && isSilentReplyText(text, SILENT_REPLY_TOKEN));
-  const emitAssistantStreamDataSafely = (
-    delivery: EmbeddedAgentSubscribeContext["state"]["deferredAssistantEvents"][number],
-  ) => {
-    const { data } = delivery;
-    emitAgentEvent({
-      runId: params.runId,
-      stream: "assistant",
-      data,
-    });
-    void params.onAgentEvent?.({
-      stream: "assistant",
-      data,
-    });
-    if (delivery.emitPartialReply && params.onPartialReply && state.shouldEmitPartialReplies) {
-      void params.onPartialReply(data);
-    }
-  };
   const emitAssistantStreamData = (
     data: EmbeddedAgentSubscribeContext["state"]["deferredAssistantEvents"][number]["data"],
     options?: { emitPartialReply?: boolean },
