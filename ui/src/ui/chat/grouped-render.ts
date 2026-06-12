@@ -438,7 +438,7 @@ export function renderMessageGroup(
     name: opts.userName ?? null,
     avatar: opts.userAvatar ?? null,
   });
-  const userLabel = group.senderLabel?.trim();
+  const userLabel = group.senderLabel?.trim() || null;
   const who =
     normalizedRole === "user"
       ? (userLabel ?? resolvedUserName)
