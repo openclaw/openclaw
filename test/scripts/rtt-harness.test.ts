@@ -196,6 +196,8 @@ describe("RTT harness", () => {
     expect(env.OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC).toBe("openclaw@beta");
     expect(env.OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL).toBe("openclaw@beta (2026.4.30-beta.1)");
     expect(env.OPENCLAW_NPM_TELEGRAM_PROVIDER_MODE).toBe("mock-openai");
+    expect(env.OPENCLAW_QA_PACKAGE_SOURCE).toBe("openclaw@beta");
+    expect(env.OPENCLAW_QA_PACKAGE_SOURCE_KIND).toBe("npm-package");
     expect(env.OPENCLAW_NPM_TELEGRAM_SCENARIOS).toBe("telegram-mentioned-message-reply");
     expect(env.OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR).toBe(".artifacts/rtt/run/raw");
     expect(env.OPENCLAW_NPM_TELEGRAM_FAST).toBe("0");
@@ -203,6 +205,26 @@ describe("RTT harness", () => {
     expect(env.OPENCLAW_NPM_TELEGRAM_SAMPLE_TIMEOUT_MS).toBe("30000");
     expect(env.OPENCLAW_QA_TELEGRAM_CANARY_TIMEOUT_MS).toBe("180000");
     expect(env.OPENCLAW_QA_TELEGRAM_SCENARIO_TIMEOUT_MS).toBe("180000");
+  });
+
+  it("marks package tarball provenance in RTT evidence env", () => {
+    const env = createHarnessEnv({
+      baseEnv: {},
+      packageTgz: "/tmp/openclaw.tgz",
+      providerMode: "mock-openai",
+      rawOutputDir: ".artifacts/rtt/run/raw",
+      samples: 20,
+      sampleTimeoutMs: 30_000,
+      scenarios: ["telegram-mentioned-message-reply"],
+      spec: "openclaw@main",
+      timeoutMs: 180_000,
+      version: "2026.4.30+abc123",
+    });
+
+    expect(env.OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC).toBe("openclaw@main");
+    expect(env.OPENCLAW_NPM_TELEGRAM_PACKAGE_TGZ).toBe("/tmp/openclaw.tgz");
+    expect(env.OPENCLAW_QA_PACKAGE_SOURCE).toBe("/tmp/openclaw.tgz");
+    expect(env.OPENCLAW_QA_PACKAGE_SOURCE_KIND).toBe("packed-tarball");
   });
 
   it("forwards Convex credential controls without dropping RTT sample controls", () => {
@@ -273,6 +295,9 @@ describe("RTT harness", () => {
     expect(script).toContain(
       '-e OPENCLAW_E2E_NPM_INSTALL_TIMEOUT="${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}"',
     );
+    expect(script).toContain('-e OPENCLAW_QA_PACKAGE_SOURCE="$package_install_source"');
+    expect(script).toContain('-e OPENCLAW_QA_PACKAGE_SOURCE_KIND="$package_source_kind"');
+    expect(script).toContain("OPENCLAW_QA_PACKAGE_SOURCE_SHA");
     expect(script).toContain(
       '"$timeout_bin" --kill-after=30s "$npm_install_timeout" npm install -g "$install_source" --no-fund --no-audit',
     );

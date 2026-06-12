@@ -175,6 +175,7 @@ export const qaEvidenceSummarySchema = z
 export type QaEvidenceProfile = z.infer<typeof qaEvidenceProfileIdSchema>;
 export type QaEvidenceStatus = z.infer<typeof qaEvidenceStatusSchema>;
 export type QaEvidenceTiming = z.infer<typeof qaEvidenceTimingSchema>;
+export type QaEvidencePackageSource = z.infer<typeof qaEvidencePackageSourceSchema>;
 export type QaEvidenceSummaryEntry = z.infer<typeof qaEvidenceSummaryEntrySchema>;
 export type QaEvidenceSummaryJson = z.infer<typeof qaEvidenceSummarySchema>;
 
@@ -244,6 +245,7 @@ type QaEvidenceBuildBase = {
   primaryModel: string;
   providerMode: QaProviderMode;
   channelDriver?: string;
+  packageSource?: QaEvidencePackageSource;
   profile?: QaEvidenceProfile;
   runner?: string;
 };
@@ -379,19 +381,8 @@ function resolveQaEvidenceEnvironment(env: NodeJS.ProcessEnv | undefined) {
 }
 
 function resolveQaEvidencePackageSource(env: NodeJS.ProcessEnv | undefined) {
-  const spec =
-    env?.OPENCLAW_QA_PACKAGE_SOURCE?.trim() ||
-    env?.OPENCLAW_PACKAGE_SPEC?.trim() ||
-    env?.OPENCLAW_NPM_PACKAGE_SPEC?.trim() ||
-    env?.OPENCLAW_NPM_TELEGRAM_INSTALL_SOURCE?.trim() ||
-    env?.OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC?.trim() ||
-    env?.OPENCLAW_NPM_TELEGRAM_PACKAGE_TGZ?.trim() ||
-    env?.OPENCLAW_CURRENT_PACKAGE_TGZ?.trim() ||
-    undefined;
-  const sha =
-    env?.OPENCLAW_QA_PACKAGE_SOURCE_SHA?.trim() ||
-    env?.OPENCLAW_PACKAGE_SOURCE_SHA?.trim() ||
-    undefined;
+  const spec = env?.OPENCLAW_QA_PACKAGE_SOURCE?.trim() || undefined;
+  const sha = env?.OPENCLAW_QA_PACKAGE_SOURCE_SHA?.trim() || undefined;
   const explicitKind = env?.OPENCLAW_QA_PACKAGE_SOURCE_KIND?.trim();
   const kind =
     explicitKind ||
@@ -401,6 +392,10 @@ function resolveQaEvidencePackageSource(env: NodeJS.ProcessEnv | undefined) {
     spec,
     sha,
   };
+}
+
+function resolveQaEvidenceBuildPackageSource(params: QaEvidenceBuildBase) {
+  return params.packageSource ?? resolveQaEvidencePackageSource(params.env);
 }
 
 function buildQaEvidenceProvider(params: { providerMode: QaProviderMode; primaryModel: string }) {
@@ -503,7 +498,7 @@ export function buildQaSuiteEvidenceSummary(
 ): QaEvidenceSummaryJson {
   const provider = buildQaEvidenceProvider(params);
   const environment = resolveQaEvidenceEnvironment(params.env);
-  const packageSource = resolveQaEvidencePackageSource(params.env);
+  const packageSource = resolveQaEvidenceBuildPackageSource(params);
   const runner = resolveQaEvidenceRunner({ env: params.env, fallback: params.runner });
   const profile = resolveQaEvidenceProfile({
     env: params.env,
@@ -590,7 +585,7 @@ function buildTestRunnerEvidenceSummary(
 ): QaEvidenceSummaryJson {
   const provider = buildQaEvidenceProvider(params);
   const environment = resolveQaEvidenceEnvironment(params.env);
-  const packageSource = resolveQaEvidencePackageSource(params.env);
+  const packageSource = resolveQaEvidenceBuildPackageSource(params);
   const runner = resolveQaEvidenceRunner({
     env: params.env,
     fallback: params.runner ?? params.defaultRunner,
@@ -687,7 +682,7 @@ export function buildLiveTransportEvidenceSummary(
 ): QaEvidenceSummaryJson {
   const provider = buildQaEvidenceProvider(params);
   const environment = resolveQaEvidenceEnvironment(params.env);
-  const packageSource = resolveQaEvidencePackageSource(params.env);
+  const packageSource = resolveQaEvidenceBuildPackageSource(params);
   const runner = resolveQaEvidenceRunner({ env: params.env, fallback: params.runner });
   const profile = resolveQaEvidenceProfile({
     env: params.env,

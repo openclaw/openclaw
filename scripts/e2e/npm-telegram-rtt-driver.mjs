@@ -319,15 +319,15 @@ function buildProviderEvidence() {
 }
 
 function buildPackageSourceEvidence() {
-  const spec =
-    process.env.OPENCLAW_NPM_TELEGRAM_INSTALL_SOURCE?.trim() ||
-    process.env.OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC?.trim() ||
-    process.env.OPENCLAW_NPM_TELEGRAM_PACKAGE_TGZ?.trim() ||
-    undefined;
-  const kind = spec?.endsWith(".tgz") ? "packed-tarball" : spec ? "npm-package" : "unknown";
+  const spec = process.env.OPENCLAW_QA_PACKAGE_SOURCE?.trim() || undefined;
+  const sha = process.env.OPENCLAW_QA_PACKAGE_SOURCE_SHA?.trim() || undefined;
+  const kind =
+    process.env.OPENCLAW_QA_PACKAGE_SOURCE_KIND?.trim() ||
+    (spec?.endsWith(".tgz") ? "packed-tarball" : spec ? "npm-package" : "source-checkout");
   return {
     kind,
     ...(spec ? { spec } : {}),
+    ...(sha ? { sha } : {}),
   };
 }
 

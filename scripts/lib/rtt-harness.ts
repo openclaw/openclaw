@@ -175,12 +175,15 @@ export function createHarnessEnv(params: {
   sampleTimeoutMs: number;
   timeoutMs: number;
 }) {
+  const packageSourceSpec = params.packageTgz ?? params.spec;
   return {
     ...params.baseEnv,
     OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC: params.spec,
     ...(params.packageTgz ? { OPENCLAW_NPM_TELEGRAM_PACKAGE_TGZ: params.packageTgz } : {}),
     OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL: `${params.spec} (${params.version})`,
     OPENCLAW_NPM_TELEGRAM_PROVIDER_MODE: params.providerMode,
+    OPENCLAW_QA_PACKAGE_SOURCE: packageSourceSpec,
+    OPENCLAW_QA_PACKAGE_SOURCE_KIND: params.packageTgz ? "packed-tarball" : "npm-package",
     ...(params.credentialSource
       ? { OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE: params.credentialSource }
       : {}),

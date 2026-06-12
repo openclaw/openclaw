@@ -499,6 +499,9 @@ describe("npm Telegram RTT driver", () => {
       const result = await runDriverAsync({
         OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR: outputDir,
         OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES: "1",
+        OPENCLAW_QA_PACKAGE_SOURCE: "/package-under-test/openclaw.tgz",
+        OPENCLAW_QA_PACKAGE_SOURCE_KIND: "packed-tarball",
+        OPENCLAW_QA_PACKAGE_SOURCE_SHA: "abc123",
         OPENCLAW_QA_TELEGRAM_API_BASE_URL: server.baseUrl,
         OPENCLAW_QA_TELEGRAM_CANARY_TIMEOUT_MS: "1000",
         OPENCLAW_QA_TELEGRAM_SCENARIO_TIMEOUT_MS: "1000",
@@ -539,6 +542,11 @@ describe("npm Telegram RTT driver", () => {
           }),
         ]),
       );
+      expect(summary.entries[0]?.execution.packageSource).toEqual({
+        kind: "packed-tarball",
+        spec: "/package-under-test/openclaw.tgz",
+        sha: "abc123",
+      });
       expect(existsSync(path.join(outputDir, "telegram-qa-summary.json"))).toBe(false);
     } finally {
       await server.close();

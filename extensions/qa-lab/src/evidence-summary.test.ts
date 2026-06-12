@@ -504,11 +504,35 @@ describe("evidence summary", () => {
     });
   });
 
-  it("derives package provenance from package runner env", () => {
-    const npmEvidence = buildLiveTransportEvidenceSummary({
+  it("uses explicit package provenance from package runners", () => {
+    const evidence = buildLiveTransportEvidenceSummary({
+      artifactPaths: [QA_EVIDENCE_SUMMARY_FILENAME],
+      generatedAt: "2026-06-07T12:15:00.000Z",
+      packageSource: {
+        kind: "packed-tarball",
+        spec: "/tmp/openclaw.tgz",
+        sha: "abc123",
+      },
+      primaryModel: "openai/gpt-5.5",
+      providerMode: "live-frontier",
+      checks: [{ id: "telegram-canary", standardId: "canary", status: "pass" }],
+      transportId: "telegram",
+    });
+
+    expect(evidence.entries[0]?.execution.packageSource).toEqual({
+      kind: "packed-tarball",
+      spec: "/tmp/openclaw.tgz",
+      sha: "abc123",
+    });
+  });
+
+  it("derives package provenance from generic QA evidence env", () => {
+    const evidence = buildLiveTransportEvidenceSummary({
       artifactPaths: [QA_EVIDENCE_SUMMARY_FILENAME],
       env: {
-        OPENCLAW_NPM_TELEGRAM_INSTALL_SOURCE: "openclaw@beta",
+        OPENCLAW_QA_PACKAGE_SOURCE: "openclaw@beta",
+        OPENCLAW_QA_PACKAGE_SOURCE_KIND: "npm-package",
+        OPENCLAW_QA_PACKAGE_SOURCE_SHA: "def456",
       } as NodeJS.ProcessEnv,
       generatedAt: "2026-06-07T12:15:00.000Z",
       primaryModel: "openai/gpt-5.5",
@@ -516,10 +540,19 @@ describe("evidence summary", () => {
       checks: [{ id: "telegram-canary", standardId: "canary", status: "pass" }],
       transportId: "telegram",
     });
-    const tarballEvidence = buildLiveTransportEvidenceSummary({
+
+    expect(evidence.entries[0]?.execution.packageSource).toEqual({
+      kind: "npm-package",
+      spec: "openclaw@beta",
+      sha: "def456",
+    });
+  });
+
+  it("does not infer package provenance from runner-specific env", () => {
+    const evidence = buildLiveTransportEvidenceSummary({
       artifactPaths: [QA_EVIDENCE_SUMMARY_FILENAME],
       env: {
-        OPENCLAW_NPM_TELEGRAM_INSTALL_SOURCE: "/tmp/openclaw.tgz",
+        OPENCLAW_NPM_TELEGRAM_INSTALL_SOURCE: "openclaw@beta",
       } as NodeJS.ProcessEnv,
       generatedAt: "2026-06-07T12:16:00.000Z",
       primaryModel: "openai/gpt-5.5",
@@ -528,13 +561,10 @@ describe("evidence summary", () => {
       transportId: "telegram",
     });
 
-    expect(npmEvidence.entries[0]?.execution.packageSource).toEqual({
-      kind: "npm-package",
-      spec: "openclaw@beta",
-    });
-    expect(tarballEvidence.entries[0]?.execution.packageSource).toEqual({
-      kind: "packed-tarball",
-      spec: "/tmp/openclaw.tgz",
+    expect(evidence.entries[0]?.execution.packageSource).toEqual({
+      kind: "source-checkout",
+      spec: undefined,
+      sha: undefined,
     });
   });
 
