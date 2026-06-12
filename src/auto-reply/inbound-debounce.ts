@@ -94,7 +94,9 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     // Rethrow so the enqueue caller can propagate the failure (e.g. to
     // reject bot.handleUpdate() and keep spooled update claims for retry).
     if (flushError !== undefined && params.rethrowOnFlushError) {
-      throw flushError;
+      throw flushError instanceof Error
+        ? flushError
+        : new Error(typeof flushError === "string" ? flushError : "unknown flush error");
     }
   };
 
