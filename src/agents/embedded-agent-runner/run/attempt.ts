@@ -1104,7 +1104,7 @@ export async function runEmbeddedAttempt(
       resolveContextEngineOwnerPluginId(activeContextEngine);
     const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
     const diagnosticTrace = freezeDiagnosticTraceContext(
-      getActiveDiagnosticTraceContext() ?? createDiagnosticTraceContext(),
+      params.diagnosticTrace ?? getActiveDiagnosticTraceContext() ?? createDiagnosticTraceContext(),
     );
     const runTrace = freezeDiagnosticTraceContext(
       createChildDiagnosticTraceContext(diagnosticTrace),

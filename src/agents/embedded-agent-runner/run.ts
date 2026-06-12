@@ -16,7 +16,14 @@ import {
 } from "../../context-engine/registry.js";
 import { emitAgentPlanEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
-import { freezeDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
+import { emitTrustedDiagnosticEvent } from "../../infra/diagnostic-events.js";
+import {
+  createChildDiagnosticTraceContext,
+  createDiagnosticTraceContext,
+  freezeDiagnosticTraceContext,
+  getActiveDiagnosticTraceContext,
+  runWithDiagnosticTraceContext,
+} from "../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
@@ -501,6 +508,7 @@ export async function runEmbeddedAgent(
   paramsInput: RunEmbeddedAgentParams,
 ): Promise<EmbeddedAgentRunResult> {
   let params = paramsInput;
+  const parentDiagnosticTrace = params.diagnosticTrace ?? getActiveDiagnosticTraceContext();
   // Resolve sessionKey early so all downstream consumers (hooks, LCM, compaction)
   // receive a non-null key even when callers omit it. See #60552.
   const effectiveSessionKey = backfillSessionKey({
@@ -1623,148 +1631,200 @@ export async function runEmbeddedAgent(
           } else {
             parentAbortSignal?.addEventListener("abort", relayParentAbort, { once: true });
           }
-          const rawAttempt = await runEmbeddedAttemptWithBackend({
-            sessionId: activeSessionId,
-            sessionKey: resolvedSessionKey,
-            promptCacheKey: params.promptCacheKey,
-            sandboxSessionKey: params.sandboxSessionKey,
-            trigger: params.trigger,
-            memoryFlushWritePath: params.memoryFlushWritePath,
-            messageChannel: params.messageChannel,
-            messageProvider: params.messageProvider,
-            chatType: params.chatType,
-            agentAccountId: params.agentAccountId,
-            messageTo: params.messageTo,
-            messageThreadId: params.messageThreadId,
-            groupId: params.groupId,
-            groupChannel: params.groupChannel,
-            groupSpace: params.groupSpace,
-            memberRoleIds: params.memberRoleIds,
-            spawnedBy: params.spawnedBy,
-            isCanonicalWorkspace,
-            senderId: params.senderId,
-            senderName: params.senderName,
-            senderUsername: params.senderUsername,
-            senderE164: params.senderE164,
-            currentChannelId: params.currentChannelId,
-            currentThreadTs: params.currentThreadTs,
-            currentMessageId: params.currentMessageId,
-            currentInboundAudio: params.currentInboundAudio,
-            replyToMode: params.replyToMode,
-            hasRepliedRef: params.hasRepliedRef,
-            sessionFile: activeSessionFile,
-            workspaceDir: resolvedWorkspace,
-            cwd: params.cwd,
-            agentDir,
-            config: params.config,
-            allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
-            contextEngine,
-            contextTokenBudget: ctxInfo.tokens,
-            contextWindowInfo: ctxInfo,
-            skillsSnapshot: params.skillsSnapshot,
-            prompt,
-            transcriptPrompt: params.transcriptPrompt,
-            userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
-            currentInboundEventKind: params.currentInboundEventKind,
-            currentInboundContext: params.currentInboundContext,
-            images: params.images,
-            imageOrder: params.imageOrder,
-            clientTools: params.clientTools,
-            disableTools: params.disableTools,
-            provider,
-            modelId,
-            // Use the harness selected before model/auth setup for the actual
-            // attempt too. Otherwise plugin-owned transports can skip OpenClaw auth
-            // bootstrap but drift back to OpenClaw when the attempt is created.
-            agentHarnessId: agentHarness.id,
-            ...(params.sessionKey
-              ? {
-                  agentHarnessTaskRuntimeScope: createAgentHarnessTaskRuntimeScope({
-                    requesterSessionKey: params.sessionKey,
-                  }),
-                }
-              : {}),
-            runtimePlan,
-            model: applyAuthHeaderOverride(
-              applyLocalNoAuthHeaderOverride(effectiveModel, apiKeyInfo),
-              // When runtime auth exchange produced a different credential
-              // (runtimeAuthState is set), the exchanged token lives in
-              // authStorage and the SDK will pick it up automatically.
-              // Skip header injection to avoid leaking the pre-exchange key.
-              runtimeAuthState ? null : apiKeyInfo,
-              params.config,
-            ),
-            resolvedApiKey: resolvedStreamApiKey,
-            authProfileId: lastProfileId,
-            authProfileIdSource: lockedProfileId ? "user" : "auto",
-            initialReplayState: accumulatedReplayState,
-            authStorage,
-            authProfileStore: runAttemptAuthProfileStore,
-            // These harnesses build OpenClaw tools internally. Keep transport auth
-            // scoped while letting tool construction see plugin/provider creds.
-            toolAuthProfileStore: harnessBuildsOpenClawTools ? attemptAuthProfileStore : undefined,
-            modelRegistry,
-            agentId: workspaceResolution.agentId,
-            beforeAgentStartResult,
-            thinkLevel,
-            onToolOutcome: observePostCompactionToolOutcome,
-            onRunProgress: notifyRunProgress,
-            fastMode: params.fastMode,
-            verboseLevel: params.verboseLevel,
-            reasoningLevel: params.reasoningLevel,
-            toolResultFormat: resolvedToolResultFormat,
-            toolProgressDetail: params.toolProgressDetail,
-            execOverrides: params.execOverrides,
-            bashElevated: params.bashElevated,
-            timeoutMs: params.timeoutMs,
-            runTimeoutOverrideMs: params.runTimeoutOverrideMs,
+          const invocationTrace = freezeDiagnosticTraceContext(
+            parentDiagnosticTrace
+              ? createChildDiagnosticTraceContext(parentDiagnosticTrace)
+              : createDiagnosticTraceContext(),
+          );
+          const invocationBase = {
             runId: params.runId,
-            abortSignal: attemptAbortController.signal,
-            replyOperation: params.replyOperation,
-            shouldEmitToolResult: params.shouldEmitToolResult,
-            shouldEmitToolOutput: params.shouldEmitToolOutput,
-            onPartialReply: params.onPartialReply,
-            onAssistantMessageStart: params.onAssistantMessageStart,
-            onBlockReply: params.onBlockReply,
-            onBlockReplyFlush: params.onBlockReplyFlush,
-            blockReplyBreak: params.blockReplyBreak,
-            blockReplyChunking: params.blockReplyChunking,
-            onReasoningStream: params.onReasoningStream,
-            onReasoningEnd: params.onReasoningEnd,
-            onToolResult: params.onToolResult,
-            onAgentEvent: params.onAgentEvent,
-            onExecutionPhase: params.onExecutionPhase,
-            extraSystemPrompt: params.extraSystemPrompt,
-            sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-            inputProvenance: params.inputProvenance,
-            streamParams: params.streamParams,
-            modelRun: params.modelRun,
-            promptMode: params.promptMode,
-            ownerNumbers: params.ownerNumbers,
-            enforceFinalTag: params.enforceFinalTag,
-            silentExpected: params.silentExpected,
-            bootstrapContextMode: params.bootstrapContextMode,
-            bootstrapContextRunKind: params.bootstrapContextRunKind,
-            jobId: params.jobId,
-            toolsAllow: params.toolsAllow,
-            disableMessageTool: params.disableMessageTool,
-            forceMessageTool: params.forceMessageTool,
-            enableHeartbeatTool: params.enableHeartbeatTool,
-            forceHeartbeatTool: params.forceHeartbeatTool,
-            requireExplicitMessageTarget: params.requireExplicitMessageTarget,
-            internalEvents: params.internalEvents,
-            bootstrapPromptWarningSignaturesSeen,
-            bootstrapPromptWarningSignature:
-              bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
-            suppressNextUserMessagePersistence,
-            beforeAgentFinalizeRevisionAttempts,
-            maxBeforeAgentFinalizeRevisions: MAX_BEFORE_AGENT_FINALIZE_REVISIONS,
-            suppressTranscriptOnlyAssistantPersistence:
-              params.suppressTranscriptOnlyAssistantPersistence,
-            suppressAssistantErrorPersistence: params.suppressAssistantErrorPersistence,
-            onUserMessagePersisted,
-            onAssistantErrorMessagePersisted: params.onAssistantErrorMessagePersisted,
-          })
+            ...(resolvedSessionKey && { sessionKey: resolvedSessionKey }),
+            ...(activeSessionId && { sessionId: activeSessionId }),
+            provider,
+            model: modelId,
+            ...(params.trigger && { trigger: params.trigger }),
+            ...((params.messageChannel ?? params.messageProvider)
+              ? { channel: params.messageChannel ?? params.messageProvider }
+              : {}),
+            trace: invocationTrace,
+          };
+          const invocationStartedAt = Date.now();
+          emitTrustedDiagnosticEvent({
+            type: "run.invocation",
+            ...invocationBase,
+          });
+          const runAttempt = () =>
+            runEmbeddedAttemptWithBackend({
+              sessionId: activeSessionId,
+              sessionKey: resolvedSessionKey,
+              promptCacheKey: params.promptCacheKey,
+              sandboxSessionKey: params.sandboxSessionKey,
+              trigger: params.trigger,
+              memoryFlushWritePath: params.memoryFlushWritePath,
+              messageChannel: params.messageChannel,
+              messageProvider: params.messageProvider,
+              chatType: params.chatType,
+              agentAccountId: params.agentAccountId,
+              messageTo: params.messageTo,
+              messageThreadId: params.messageThreadId,
+              groupId: params.groupId,
+              groupChannel: params.groupChannel,
+              groupSpace: params.groupSpace,
+              memberRoleIds: params.memberRoleIds,
+              spawnedBy: params.spawnedBy,
+              isCanonicalWorkspace,
+              senderId: params.senderId,
+              senderName: params.senderName,
+              senderUsername: params.senderUsername,
+              senderE164: params.senderE164,
+              currentChannelId: params.currentChannelId,
+              currentThreadTs: params.currentThreadTs,
+              currentMessageId: params.currentMessageId,
+              currentInboundAudio: params.currentInboundAudio,
+              replyToMode: params.replyToMode,
+              hasRepliedRef: params.hasRepliedRef,
+              sessionFile: activeSessionFile,
+              workspaceDir: resolvedWorkspace,
+              cwd: params.cwd,
+              agentDir,
+              config: params.config,
+              allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
+              contextEngine,
+              contextTokenBudget: ctxInfo.tokens,
+              contextWindowInfo: ctxInfo,
+              skillsSnapshot: params.skillsSnapshot,
+              prompt,
+              transcriptPrompt: params.transcriptPrompt,
+              userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
+              currentInboundEventKind: params.currentInboundEventKind,
+              currentInboundContext: params.currentInboundContext,
+              images: params.images,
+              imageOrder: params.imageOrder,
+              clientTools: params.clientTools,
+              disableTools: params.disableTools,
+              provider,
+              modelId,
+              // Use the harness selected before model/auth setup for the actual
+              // attempt too. Otherwise plugin-owned transports can skip OpenClaw auth
+              // bootstrap but drift back to OpenClaw when the attempt is created.
+              agentHarnessId: agentHarness.id,
+              ...(params.sessionKey
+                ? {
+                    agentHarnessTaskRuntimeScope: createAgentHarnessTaskRuntimeScope({
+                      requesterSessionKey: params.sessionKey,
+                    }),
+                  }
+                : {}),
+              runtimePlan,
+              model: applyAuthHeaderOverride(
+                applyLocalNoAuthHeaderOverride(effectiveModel, apiKeyInfo),
+                // When runtime auth exchange produced a different credential
+                // (runtimeAuthState is set), the exchanged token lives in
+                // authStorage and the SDK will pick it up automatically.
+                // Skip header injection to avoid leaking the pre-exchange key.
+                runtimeAuthState ? null : apiKeyInfo,
+                params.config,
+              ),
+              resolvedApiKey: resolvedStreamApiKey,
+              authProfileId: lastProfileId,
+              authProfileIdSource: lockedProfileId ? "user" : "auto",
+              initialReplayState: accumulatedReplayState,
+              authStorage,
+              authProfileStore: runAttemptAuthProfileStore,
+              // These harnesses build OpenClaw tools internally. Keep transport auth
+              // scoped while letting tool construction see plugin/provider creds.
+              toolAuthProfileStore: harnessBuildsOpenClawTools
+                ? attemptAuthProfileStore
+                : undefined,
+              modelRegistry,
+              agentId: workspaceResolution.agentId,
+              beforeAgentStartResult,
+              thinkLevel,
+              onToolOutcome: observePostCompactionToolOutcome,
+              onRunProgress: notifyRunProgress,
+              fastMode: params.fastMode,
+              verboseLevel: params.verboseLevel,
+              reasoningLevel: params.reasoningLevel,
+              toolResultFormat: resolvedToolResultFormat,
+              toolProgressDetail: params.toolProgressDetail,
+              execOverrides: params.execOverrides,
+              bashElevated: params.bashElevated,
+              timeoutMs: params.timeoutMs,
+              runTimeoutOverrideMs: params.runTimeoutOverrideMs,
+              runId: params.runId,
+              abortSignal: attemptAbortController.signal,
+              replyOperation: params.replyOperation,
+              shouldEmitToolResult: params.shouldEmitToolResult,
+              shouldEmitToolOutput: params.shouldEmitToolOutput,
+              onPartialReply: params.onPartialReply,
+              onAssistantMessageStart: params.onAssistantMessageStart,
+              onBlockReply: params.onBlockReply,
+              onBlockReplyFlush: params.onBlockReplyFlush,
+              blockReplyBreak: params.blockReplyBreak,
+              blockReplyChunking: params.blockReplyChunking,
+              onReasoningStream: params.onReasoningStream,
+              onReasoningEnd: params.onReasoningEnd,
+              onToolResult: params.onToolResult,
+              onAgentEvent: params.onAgentEvent,
+              onExecutionPhase: params.onExecutionPhase,
+              extraSystemPrompt: params.extraSystemPrompt,
+              sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+              inputProvenance: params.inputProvenance,
+              streamParams: params.streamParams,
+              modelRun: params.modelRun,
+              promptMode: params.promptMode,
+              ownerNumbers: params.ownerNumbers,
+              enforceFinalTag: params.enforceFinalTag,
+              silentExpected: params.silentExpected,
+              bootstrapContextMode: params.bootstrapContextMode,
+              bootstrapContextRunKind: params.bootstrapContextRunKind,
+              jobId: params.jobId,
+              toolsAllow: params.toolsAllow,
+              disableMessageTool: params.disableMessageTool,
+              forceMessageTool: params.forceMessageTool,
+              enableHeartbeatTool: params.enableHeartbeatTool,
+              forceHeartbeatTool: params.forceHeartbeatTool,
+              requireExplicitMessageTarget: params.requireExplicitMessageTarget,
+              internalEvents: params.internalEvents,
+              bootstrapPromptWarningSignaturesSeen,
+              bootstrapPromptWarningSignature:
+                bootstrapPromptWarningSignaturesSeen[
+                  bootstrapPromptWarningSignaturesSeen.length - 1
+                ],
+              suppressNextUserMessagePersistence,
+              beforeAgentFinalizeRevisionAttempts,
+              maxBeforeAgentFinalizeRevisions: MAX_BEFORE_AGENT_FINALIZE_REVISIONS,
+              suppressTranscriptOnlyAssistantPersistence:
+                params.suppressTranscriptOnlyAssistantPersistence,
+              suppressAssistantErrorPersistence: params.suppressAssistantErrorPersistence,
+              onUserMessagePersisted,
+              onAssistantErrorMessagePersisted: params.onAssistantErrorMessagePersisted,
+            });
+          const rawAttempt = await (
+            invocationTrace
+              ? runWithDiagnosticTraceContext(invocationTrace, runAttempt)
+              : runAttempt()
+          )
+            .then(
+              (result) => {
+                emitTrustedDiagnosticEvent({
+                  type: "run.invocation.completed",
+                  ...invocationBase,
+                  durationMs: Date.now() - invocationStartedAt,
+                  outcome: "completed",
+                });
+                return result;
+              },
+              (err: unknown): never => {
+                emitTrustedDiagnosticEvent({
+                  type: "run.invocation.completed",
+                  ...invocationBase,
+                  durationMs: Date.now() - invocationStartedAt,
+                  outcome: "error",
+                });
+                throw err;
+              },
+            )
             .catch((err: unknown): never => {
               throw postCompactionAbortError ?? err;
             })

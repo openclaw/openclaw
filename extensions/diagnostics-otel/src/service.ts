@@ -1257,6 +1257,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         string,
         { span: ReturnType<typeof tracer.startSpan>; spanId: string; owner: TrustedSpanAliasOwner }
       >();
+      const activeRunInvocationSpanIds = new Set<string>();
       const retainedTrustedSpanContexts = new Map<
         string,
         { spanContext: SpanContext; token: symbol; owner?: TrustedSpanAliasOwner }
@@ -1277,6 +1278,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         }
         activeTrustedSpans.clear();
         activeTrustedSpanAliases.clear();
+        activeRunInvocationSpanIds.clear();
       };
 
       const tokensCounter = meter.createCounter("openclaw.tokens", {
@@ -2352,6 +2354,60 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         }
       };
 
+      const recordRunInvocation = (
+        evt: Extract<DiagnosticEventPayload, { type: "run.invocation" }>,
+        metadata: DiagnosticEventMetadata,
+      ) => {
+        if (!tracesEnabled || !metadata.trusted) {
+          return;
+        }
+        const traceContext = trustedTraceContext(evt, metadata);
+        if (!traceContext?.spanId) {
+          return;
+        }
+        const spanAttrs: Record<string, string | number | boolean> = {};
+        addRunAttrs(spanAttrs, evt);
+        const span = trackTrustedSpan(
+          evt,
+          metadata,
+          spanWithDuration("openclaw.run.invocation", spanAttrs, undefined, {
+            parentContext:
+              activeTrustedParentContext(evt, metadata) ??
+              internalOrTrustedExplicitParentContext(evt, metadata),
+            startTimeMs: evt.ts,
+          }),
+        );
+        setSpanAttrs(span, spanAttrs);
+        activeRunInvocationSpanIds.add(traceContext.spanId);
+      };
+
+      const recordRunInvocationCompleted = (
+        evt: Extract<DiagnosticEventPayload, { type: "run.invocation.completed" }>,
+        metadata: DiagnosticEventMetadata,
+      ) => {
+        if (!tracesEnabled || !metadata.trusted) {
+          return;
+        }
+        const traceContext = trustedTraceContext(evt, metadata);
+        const span = traceContext?.spanId ? activeTrustedSpans.get(traceContext.spanId) : undefined;
+        if (
+          !traceContext?.spanId ||
+          !span ||
+          !activeRunInvocationSpanIds.delete(traceContext.spanId)
+        ) {
+          return;
+        }
+        const spanAttrs: Record<string, string | number | boolean> = {
+          "openclaw.outcome": evt.outcome,
+        };
+        addRunAttrs(spanAttrs, evt);
+        setSpanAttrs(span, spanAttrs);
+        if (evt.outcome === "error") {
+          span.setStatus({ code: SpanStatusCode.ERROR, message: "error" });
+        }
+        completeTrackedLifecycleSpan(traceContext.spanId, span, evt.ts);
+      };
+
       const recordLaneEnqueue = (
         evt: Extract<DiagnosticEventPayload, { type: "queue.lane.enqueue" }>,
       ) => {
@@ -3380,6 +3436,12 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               return;
             case "session.recovery.completed":
               recordSessionRecoveryCompleted(evt);
+              return;
+            case "run.invocation":
+              recordRunInvocation(evt, metadata);
+              return;
+            case "run.invocation.completed":
+              recordRunInvocationCompleted(evt, metadata);
               return;
             case "run.attempt":
               recordRunAttempt(evt);
