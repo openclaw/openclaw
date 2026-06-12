@@ -849,6 +849,7 @@ describe("renderWorkboard", () => {
     expect(request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
 
     state.pollRefreshInProgress = false;
+    state.lifecycleTasksPrepared = true;
     render(
       renderWorkboard({
         host,
@@ -877,6 +878,8 @@ describe("renderWorkboard", () => {
         patch: expect.objectContaining({ status: "review" }),
       }),
     );
+    expect(request).not.toHaveBeenCalledWith("tasks.list", expect.anything());
+    expect(state.lifecycleTasksPrepared).toBe(true);
   });
 
   it("can hide empty columns while keeping populated columns visible", () => {

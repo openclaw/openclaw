@@ -390,6 +390,7 @@ export type WorkboardUiState = {
   lastRefreshError: string | null;
   lastRefreshSource: WorkboardRefreshSource | null;
   pollRefreshInProgress: boolean;
+  lifecycleTasksPrepared: boolean;
   draftOpen: boolean;
   draftSaving: boolean;
   editingCardId: string | null;
@@ -450,6 +451,10 @@ function isCurrentWorkboardLoadGeneration(host: WorkboardHost, generation: numbe
 }
 
 function invalidateWorkboardLoads(host: WorkboardHost) {
+  const state = workboardStates.get(host);
+  if (state) {
+    state.lifecycleTasksPrepared = false;
+  }
   nextWorkboardLoadGeneration(host);
 }
 
@@ -477,6 +482,7 @@ function createDefaultState(): WorkboardUiState {
     lastRefreshError: null,
     lastRefreshSource: null,
     pollRefreshInProgress: false,
+    lifecycleTasksPrepared: false,
     draftOpen: false,
     draftSaving: false,
     editingCardId: null,
@@ -1550,12 +1556,21 @@ function findLatestTaskForCard(
 function applyTaskSummariesToState(
   state: WorkboardUiState,
   tasks: readonly WorkboardTaskSummary[],
+  options: {
+    clearMissingTaskIds?: boolean;
+    missingTaskIds?: ReadonlySet<string>;
+  } = {},
 ) {
   const tasksByCardId = new Map<string, WorkboardTaskSummary>();
   const taskIndex = buildWorkboardTaskIndex(tasks);
   const cards = state.cards.map((card) => {
     const task = findLatestTaskForCard(taskIndex, card);
     if (!task) {
+      const taskId = normalizeString(card.taskId);
+      if (taskId && (options.clearMissingTaskIds === true || options.missingTaskIds?.has(taskId))) {
+        const { taskId: _, ...unlinkedCard } = card;
+        return unlinkedCard;
+      }
       return card;
     }
     tasksByCardId.set(card.id, task);
@@ -1566,19 +1581,6 @@ function applyTaskSummariesToState(
   });
   state.cards = cards;
   state.tasksByCardId = tasksByCardId;
-}
-
-function clearMissingTaskLinks(state: WorkboardUiState, missingTaskIds: ReadonlySet<string>) {
-  if (missingTaskIds.size === 0) {
-    return;
-  }
-  state.cards = state.cards.map((card) => {
-    if (!card.taskId || !missingTaskIds.has(card.taskId)) {
-      return card;
-    }
-    const { taskId: _, ...unlinkedCard } = card;
-    return unlinkedCard;
-  });
 }
 
 function shouldRefreshWorkboardTasksForLifecycle(state: WorkboardUiState): boolean {
@@ -1673,10 +1675,13 @@ export async function loadWorkboard(params: {
               ]
             : await listWorkboardTasks(client);
           if (isCurrentWorkboardLoadGeneration(params.host, generation)) {
-            if (pollResult) {
-              clearMissingTaskLinks(state, pollResult.missingTaskIds);
-            }
-            applyTaskSummariesToState(state, taskSummaries);
+            applyTaskSummariesToState(
+              state,
+              taskSummaries,
+              pollResult
+                ? { missingTaskIds: pollResult.missingTaskIds }
+                : { clearMissingTaskIds: true },
+            );
             if (pollResult?.error) {
               state.lastRefreshError = pollResult.error;
             }
@@ -1693,6 +1698,7 @@ export async function loadWorkboard(params: {
       if (!isCurrentWorkboardLoadGeneration(params.host, generation)) {
         return false;
       }
+      state.lifecycleTasksPrepared = params.taskRefresh === "linked";
       state.loaded = true;
       return true;
     } catch (error) {
@@ -2427,7 +2433,9 @@ export async function syncWorkboardLifecycle(params: {
   ) {
     return;
   }
-  if (shouldRefreshWorkboardTasksForLifecycle(state)) {
+  const tasksPrepared = state.lifecycleTasksPrepared;
+  state.lifecycleTasksPrepared = false;
+  if (!tasksPrepared && shouldRefreshWorkboardTasksForLifecycle(state)) {
     const generation = nextWorkboardLoadGeneration(params.host);
     try {
       const taskSummaries = await listWorkboardTasks(params.client);
@@ -2437,7 +2445,7 @@ export async function syncWorkboardLifecycle(params: {
       ) {
         return;
       }
-      applyTaskSummariesToState(state, taskSummaries);
+      applyTaskSummariesToState(state, taskSummaries, { clearMissingTaskIds: true });
     } catch (error) {
       if (
         !isCurrentWorkboardLoadGeneration(params.host, generation) ||
@@ -2538,6 +2546,9 @@ export async function syncWorkboardLifecycle(params: {
       syncKeys.set(card.id, key);
     } finally {
       state.syncingCardIds.delete(card.id);
+      if (isCurrentWorkboardLoadGeneration(params.host, generation)) {
+        state.lifecycleTasksPrepared = true;
+      }
       params.requestUpdate?.();
     }
   }
@@ -2770,7 +2781,9 @@ export async function dispatchWorkboard(params: {
     state.lastDispatchSummary = normalizeDispatchSummary(dispatchResult);
     state.tasksByCardId = new Map();
     try {
-      applyTaskSummariesToState(state, await listWorkboardTasks(params.client));
+      applyTaskSummariesToState(state, await listWorkboardTasks(params.client), {
+        clearMissingTaskIds: true,
+      });
     } catch (error) {
       state.lastRefreshError = formatError(error);
     }

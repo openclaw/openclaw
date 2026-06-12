@@ -165,6 +165,24 @@ describe("workboard controller", () => {
     });
   });
 
+  it("clears absent persisted task ids during authoritative full loads", async () => {
+    const host = {};
+    const linked = {
+      ...sampleCard,
+      taskId: sampleTask.taskId,
+      sessionKey: sampleTaskSessionKey,
+      runId: "run-1",
+    } satisfies WorkboardCard;
+    const client = createClient({
+      "workboard.cards.list": { cards: [linked], statuses: ["todo", "done"] },
+      "tasks.list": { tasks: [] },
+    });
+
+    await loadWorkboard({ host, client: client as never, force: true });
+
+    expect(getWorkboardState(host).cards[0]).not.toHaveProperty("taskId");
+  });
+
   it("records poll refresh state until the final reconciliation render", async () => {
     const host = {};
     const client = createClient({
@@ -188,6 +206,7 @@ describe("workboard controller", () => {
     expect(state.lastRefreshSource).toBe("poll");
     expect(state.lastRefreshAt).toEqual(expect.any(Number));
     expect(state.lastRefreshError).toBeNull();
+    expect(state.lifecycleTasksPrepared).toBe(true);
   });
 
   it("does not mark a disconnected refresh as successful", async () => {
