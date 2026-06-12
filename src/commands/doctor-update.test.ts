@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { maybeOfferUpdateBeforeDoctor } from "./doctor-update.js";
 
 const originalStdinIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+const originalStdoutIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
 
 const mocks = vi.hoisted(() => ({
   createUpdateProgress: vi.fn(),
@@ -52,6 +53,10 @@ beforeEach(async () => {
     configurable: true,
     value: true,
   });
+  Object.defineProperty(process.stdout, "isTTY", {
+    configurable: true,
+    value: true,
+  });
 });
 
 afterEach(() => {
@@ -60,6 +65,11 @@ afterEach(() => {
     Object.defineProperty(process.stdin, "isTTY", originalStdinIsTtyDescriptor);
   } else {
     delete (process.stdin as Partial<typeof process.stdin>).isTTY;
+  }
+  if (originalStdoutIsTtyDescriptor) {
+    Object.defineProperty(process.stdout, "isTTY", originalStdoutIsTtyDescriptor);
+  } else {
+    delete (process.stdout as Partial<typeof process.stdout>).isTTY;
   }
 });
 
@@ -115,7 +125,40 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
     await expect(runOffer({ root: "/repo/link", confirm })).rejects.toThrow("update exploded");
 
     expect(mocks.runGatewayUpdate).toHaveBeenCalledWith(expect.objectContaining({ progress }));
+    expect(mocks.createUpdateProgress).toHaveBeenCalledWith(true);
     expect(stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables update progress when stdout is not a TTY", async () => {
+    Object.defineProperty(process.stdout, "isTTY", {
+      configurable: true,
+      value: false,
+    });
+    vi.spyOn(fs, "realpath").mockImplementation(async (candidate) => String(candidate));
+    mocks.runCommandWithTimeout.mockResolvedValue({
+      stdout: "/repo/link\n",
+      stderr: "",
+      code: 0,
+      killed: false,
+      signal: null,
+      termination: "exit",
+      noOutputTimedOut: false,
+    });
+    mocks.runGatewayUpdate.mockResolvedValue({
+      status: "skipped",
+      mode: "git",
+      root: "/repo/link",
+      steps: [],
+      durationMs: 0,
+    });
+
+    const confirm = vi.fn().mockResolvedValue(true);
+    await expect(runOffer({ root: "/repo/link", confirm })).resolves.toEqual({
+      updated: true,
+      handled: false,
+    });
+
+    expect(mocks.createUpdateProgress).toHaveBeenCalledWith(false);
   });
 
   it("keeps package-manager guidance when git reports a different checkout", async () => {
