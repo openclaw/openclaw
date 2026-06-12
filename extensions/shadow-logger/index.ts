@@ -4,6 +4,14 @@ import type { PluginRuntime } from "../../../src/plugins/runtime/types.js";
 import type { PluginLogger } from "../../../src/plugins/types.js";
 import { createSupabaseClient } from "./supabase-client.js";
 
+/**
+ * ShadowLoggerPlugin
+ * 
+ * Captures inbound and outbound messages via internal hooks and 
+ * persists them to Supabase for long-term memory distillation.
+ * 
+ * See ./README.md for the full technical specification.
+ */
 export class ShadowLoggerPlugin {
   private logger: PluginLogger;
   private supabase: ReturnType<typeof createSupabaseClient> | undefined;
