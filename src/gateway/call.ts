@@ -69,6 +69,11 @@ type CallGatewayBaseOptions = {
   password?: string;
   tlsFingerprint?: string;
   config?: OpenClawConfig;
+  /**
+   * Explicit CLI --port is already patched onto config.gateway.port. When set,
+   * local target resolution ignores OPENCLAW_GATEWAY_PORT so the visible flag wins.
+   */
+  preferConfigGatewayPort?: boolean;
   method: string;
   params?: unknown;
   expectFinal?: boolean;
@@ -348,18 +353,28 @@ function resolveGatewayPortValue(config?: OpenClawConfig, env?: NodeJS.ProcessEn
   return resolveGatewayPortFn(config, env);
 }
 
+function omitGatewayPortEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const { OPENCLAW_GATEWAY_PORT: _openClawGatewayPort, ...rest } = env;
+  return rest;
+}
+
 export function buildGatewayConnectionDetails(
   options: {
     config?: OpenClawConfig;
     url?: string;
     configPath?: string;
     urlSource?: "cli" | "env";
+    preferConfigGatewayPort?: boolean;
   } = {},
 ): GatewayConnectionDetails {
   return buildGatewayConnectionDetailsWithResolvers(options, {
     getRuntimeConfig: () => loadGatewayConfigForConnectionDetails(),
     resolveConfigPath: (env) => resolveGatewayConfigPath(env),
-    resolveGatewayPort: (config, env) => resolveGatewayPortValue(config, env),
+    resolveGatewayPort: (config, env) =>
+      resolveGatewayPortValue(
+        config,
+        options.preferConfigGatewayPort ? omitGatewayPortEnv(env ?? process.env) : env,
+      ),
   });
 }
 
@@ -1022,6 +1037,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     config: context.config,
     url: context.urlOverride,
     urlSource: context.urlOverrideSource,
+    preferConfigGatewayPort: opts.preferConfigGatewayPort,
     ...(opts.configPath ? { configPath: opts.configPath } : {}),
   });
   const url = connectionDetails.url;

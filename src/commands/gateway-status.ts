@@ -36,10 +36,15 @@ function loadGatewayTlsModule() {
   return gatewayTlsModuleLoader.load();
 }
 
+function resolveGatewayPortIgnoringEnv(cfg?: Parameters<typeof resolveGatewayPort>[0]): number {
+  return resolveGatewayPort(cfg, { ...process.env, OPENCLAW_GATEWAY_PORT: undefined });
+}
+
 /** Resolves gateway status inputs, probes targets, then writes JSON or text output. */
 export async function gatewayStatusCommand(
   opts: {
     url?: string;
+    port?: number;
     token?: string;
     password?: string;
     timeout?: unknown;
@@ -51,16 +56,24 @@ export async function gatewayStatusCommand(
   runtime: RuntimeEnv,
 ) {
   const startedAt = Date.now();
-  const cfg = await readBestEffortConfig();
+  const rawCfg = await readBestEffortConfig();
+  // Apply the port override onto the loaded config so resolveTargets derives the right
+  // scheme (wss:// vs ws://) from gateway.tls settings rather than hard-coding ws://.
+  const cfg =
+    opts.port != null && opts.port > 0
+      ? { ...rawCfg, gateway: { ...rawCfg.gateway, port: opts.port } }
+      : rawCfg;
   const rich = isRich() && opts.json !== true;
   const defaultTimeoutMs = Math.max(3000, cfg.gateway?.handshakeTimeoutMs ?? 0);
   const overallTimeoutMs = parseTimeoutMs(opts.timeout, defaultTimeoutMs);
   const wideAreaDomain = resolveWideAreaDiscoveryDomain({
     configDomain: cfg.discovery?.wideArea?.domain,
   });
-  const baseTargets = resolveTargets(cfg, opts.url);
-  const network = buildNetworkHints(cfg);
-  const remotePort = resolveGatewayPort(cfg);
+  const resolveStatusGatewayPort =
+    opts.port != null && opts.port > 0 ? resolveGatewayPortIgnoringEnv : resolveGatewayPort;
+  const baseTargets = resolveTargets(cfg, opts.url, resolveStatusGatewayPort);
+  const network = buildNetworkHints(cfg, resolveStatusGatewayPort);
+  const remotePort = resolveStatusGatewayPort(cfg);
   const discoveryTimeoutMs = Math.min(1200, overallTimeoutMs);
 
   let sshTarget = sanitizeSshTarget(opts.ssh) ?? sanitizeSshTarget(cfg.gateway?.remote?.sshTarget);
