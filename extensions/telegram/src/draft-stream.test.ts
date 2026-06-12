@@ -378,11 +378,20 @@ describe("createTelegramDraftStream", () => {
     expect(stream.sendMayHaveLanded?.()).toBe(expected);
   }
 
-  it("clears sendMayHaveLanded on pre-connect first preview send failures", async () => {
-    await expectSendMayHaveLandedStateAfterFirstFailure(
+  it("retries pre-connect first preview send failures instead of stopping", async () => {
+    const api = createMockDraftApi();
+    api.sendMessage.mockRejectedValueOnce(
       Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }),
-      false,
     );
+    const stream = createDraftStream(api);
+
+    stream.update("Hello");
+    await stream.flush();
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledTimes(2);
+    expect(stream.sendMayHaveLanded?.()).toBe(false);
+    expect(stream.messageId()).toBe(17);
   });
 
   it("clears sendMayHaveLanded on Telegram 4xx client rejections", async () => {
@@ -390,6 +399,103 @@ describe("createTelegramDraftStream", () => {
       Object.assign(new Error("403: Forbidden"), { error_code: 403 }),
       false,
     );
+  });
+
+  it("treats message-is-not-modified edits as delivered", async () => {
+    const api = createMockDraftApi();
+    api.editMessageText.mockRejectedValueOnce(
+      Object.assign(
+        new Error("Call to 'editMessageText' failed! (400: Bad Request: message is not modified)"),
+        { error_code: 400 },
+      ),
+    );
+    const warn = vi.fn();
+    const stream = createDraftStream(api, { warn });
+
+    stream.update("Hello");
+    await stream.flush();
+    stream.update("Hello again");
+    await stream.flush();
+    stream.update("Hello more");
+    await stream.flush();
+
+    expect(api.editMessageText).toHaveBeenCalledTimes(2);
+    expect(api.editMessageText).toHaveBeenLastCalledWith(123, 17, "Hello more");
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("retries the preview edit after a transient network failure", async () => {
+    const api = createMockDraftApi();
+    api.editMessageText.mockRejectedValueOnce(
+      Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }),
+    );
+    const warn = vi.fn();
+    const stream = createDraftStream(api, { warn });
+
+    stream.update("Hello");
+    await stream.flush();
+    stream.update("Hello again");
+    await stream.flush();
+    expect(warn).toHaveBeenCalledWith(
+      "telegram stream preview edit failed (retrying): read ECONNRESET",
+    );
+
+    await stream.flush();
+
+    expect(api.editMessageText).toHaveBeenCalledTimes(2);
+    expect(api.editMessageText).toHaveBeenLastCalledWith(123, 17, "Hello again");
+    expect(stream.lastDeliveredText?.()).toBe("Hello again");
+  });
+
+  it("suspends preview edits for retry_after during flood control", async () => {
+    vi.useFakeTimers();
+    try {
+      const api = createMockDraftApi();
+      api.editMessageText.mockRejectedValueOnce(
+        Object.assign(
+          new Error("Call to 'editMessageText' failed! (429: Too Many Requests: retry after 1)"),
+          { error_code: 429, parameters: { retry_after: 1 } },
+        ),
+      );
+      const stream = createDraftStream(api);
+
+      stream.update("Hello");
+      await stream.flush();
+      stream.update("Hello again");
+      await stream.flush();
+      stream.update("Hello more");
+      await stream.flush();
+      expect(api.editMessageText).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1100);
+      await stream.flush();
+
+      expect(api.editMessageText).toHaveBeenCalledTimes(2);
+      expect(api.editMessageText).toHaveBeenLastCalledWith(123, 17, "Hello more");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops the preview after repeated retryable edit failures", async () => {
+    const api = createMockDraftApi();
+    api.editMessageText.mockRejectedValue(
+      Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }),
+    );
+    const warn = vi.fn();
+    const stream = createDraftStream(api, { warn });
+
+    stream.update("Hello");
+    await stream.flush();
+    stream.update("Hello again");
+    await stream.flush();
+    await stream.flush();
+    await stream.flush();
+    await stream.flush();
+    await stream.flush();
+
+    expect(api.editMessageText).toHaveBeenCalledTimes(4);
+    expect(warn).toHaveBeenCalledWith("telegram stream preview failed: read ECONNRESET");
   });
 
   it("supports rendered previews with parse_mode", async () => {

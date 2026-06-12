@@ -3,8 +3,6 @@ import { createAssistantMessageEventStream, type Model } from "openclaw/plugin-s
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { AnthropicVertexStreamDeps } from "./stream-runtime.js";
 
-const SYSTEM_PROMPT_CACHE_BOUNDARY = "\n<!-- OPENCLAW_CACHE_BOUNDARY -->\n";
-
 function createStreamDeps(): {
   deps: AnthropicVertexStreamDeps;
   streamAnthropicMock: ReturnType<typeof vi.fn>;
@@ -50,8 +48,6 @@ function makeModel(params: {
   } as Model<"anthropic-messages">;
 }
 
-const CACHE_BOUNDARY_PROMPT = `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`;
-
 type PayloadHook = (payload: unknown, payloadModel: unknown) => Promise<unknown>;
 
 function streamAnthropicCall(streamAnthropicMock: ReturnType<typeof vi.fn>): unknown[] {
@@ -72,8 +68,8 @@ function streamTransportOptions(
   return options as Record<string, unknown>;
 }
 
-function captureCacheBoundaryPayloadHook(
-  onPayload: PayloadHook,
+function captureTransportPayloadHook(
+  onPayload: PayloadHook | undefined,
   deps: AnthropicVertexStreamDeps,
   streamAnthropicMock: ReturnType<typeof vi.fn>,
 ) {
@@ -82,14 +78,8 @@ function captureCacheBoundaryPayloadHook(
 
   void streamFn(
     model,
-    {
-      systemPrompt: CACHE_BOUNDARY_PROMPT,
-      messages: [{ role: "user", content: "Hello" }],
-    } as never,
-    {
-      cacheRetention: "short",
-      onPayload,
-    } as never,
+    { messages: [{ role: "user", content: "Hello" }] } as never,
+    { cacheRetention: "short", ...(onPayload ? { onPayload } : {}) } as never,
   );
 
   const transportOptions = streamTransportOptions(streamAnthropicMock);
@@ -97,32 +87,59 @@ function captureCacheBoundaryPayloadHook(
   return { model, onPayload: transportOptions.onPayload as PayloadHook | undefined };
 }
 
-function buildExpectedCacheBoundaryPayload(messageText: string) {
+// Mirrors the shared anthropic-messages transport output: cache boundary already
+// split (uncached dynamic suffix) and all four cache_control markers allocated.
+function buildBudgetedTransportPayload() {
   return {
     system: [
-      {
-        type: "text",
-        text: "Stable prefix",
-        cache_control: { type: "ephemeral" },
-      },
-      {
-        type: "text",
-        text: "Dynamic suffix",
-      },
+      { type: "text", text: "Stable prefix", cache_control: { type: "ephemeral" } },
+      { type: "text", text: "Dynamic suffix" },
+    ],
+    tools: [
+      { name: "exec", input_schema: { type: "object" }, cache_control: { type: "ephemeral" } },
     ],
     messages: [
       {
         role: "user",
+        content: [{ type: "text", text: "Hello", cache_control: { type: "ephemeral" } }],
+      },
+      { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "exec", input: {} }] },
+      {
+        role: "user",
         content: [
           {
-            type: "text",
-            text: messageText,
+            type: "tool_result",
+            tool_use_id: "t1",
+            content: [],
             cache_control: { type: "ephemeral" },
           },
         ],
       },
     ],
   };
+}
+
+function countCacheControlMarkers(payload: unknown): number {
+  let count = 0;
+  const visit = (value: unknown) => {
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    if (!value || typeof value !== "object") {
+      return;
+    }
+    const record = value as Record<string, unknown>;
+    if (record.cache_control !== undefined) {
+      count += 1;
+    }
+    visit(record.content);
+  };
+  const record = payload as Record<string, unknown>;
+  visit(record.system);
+  visit(record.tools);
+  visit(record.messages);
+  return count;
 }
 
 describe("createAnthropicVertexStreamFn", () => {
@@ -343,63 +360,35 @@ describe("createAnthropicVertexStreamFn", () => {
     expect(transportOptions).not.toHaveProperty("temperature");
   });
 
-  it("applies Anthropic cache-boundary shaping before forwarding payload hooks", async () => {
+  it("keeps already-budgeted cache_control markers intact when forwarding payload hooks", async () => {
     const { deps, streamAnthropicMock } = createStreamDeps();
     const onPayload = vi.fn(async (payload: unknown) => payload);
-    const { model, onPayload: transportPayloadHook } = captureCacheBoundaryPayloadHook(
+    const { model, onPayload: transportPayloadHook } = captureTransportPayloadHook(
       onPayload,
       deps,
       streamAnthropicMock,
     );
-    const payload = {
-      system: [
-        {
-          type: "text",
-          text: CACHE_BOUNDARY_PROMPT,
-          cache_control: { type: "ephemeral" },
-        },
-      ],
-      messages: [{ role: "user", content: "Hello" }],
-    };
+    const payload = buildBudgetedTransportPayload();
 
     const nextPayload = await transportPayloadHook?.(payload, model);
 
-    const expectedPayload = buildExpectedCacheBoundaryPayload("Hello");
-    expect(onPayload).toHaveBeenCalledWith(expectedPayload, model);
-    expect(nextPayload).toEqual(expectedPayload);
+    expect(onPayload).toHaveBeenCalledWith(payload, model);
+    expect(countCacheControlMarkers(nextPayload)).toBe(4);
+    expect((nextPayload as ReturnType<typeof buildBudgetedTransportPayload>).system[1]).toEqual({
+      type: "text",
+      text: "Dynamic suffix",
+    });
   });
 
-  it("reapplies Anthropic cache-boundary shaping when payload hooks return a fresh payload", async () => {
+  it("omits the transport payload hook when the caller provides none", () => {
     const { deps, streamAnthropicMock } = createStreamDeps();
-    const onPayload = vi.fn(async () => ({
-      system: [
-        {
-          type: "text",
-          text: CACHE_BOUNDARY_PROMPT,
-        },
-      ],
-      messages: [{ role: "user", content: "Hello again" }],
-    }));
-    const { model, onPayload: transportPayloadHook } = captureCacheBoundaryPayloadHook(
-      onPayload,
+    const { onPayload: transportPayloadHook } = captureTransportPayloadHook(
+      undefined,
       deps,
       streamAnthropicMock,
     );
 
-    const nextPayload = await transportPayloadHook?.(
-      {
-        system: [
-          {
-            type: "text",
-            text: CACHE_BOUNDARY_PROMPT,
-          },
-        ],
-        messages: [{ role: "user", content: "Hello" }],
-      },
-      model,
-    );
-
-    expect(nextPayload).toEqual(buildExpectedCacheBoundaryPayload("Hello again"));
+    expect(transportPayloadHook).toBeUndefined();
   });
 
   it("omits maxTokens when neither the model nor request provide a finite limit", () => {

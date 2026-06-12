@@ -1374,7 +1374,6 @@
                 "pages": [
                   "clawhub/cli",
                   "clawhub/publishing",
-                  "clawhub/plugin-validation-fixes",
                   "clawhub/skill-format",
                   "clawhub/auth",
                   "clawhub/telemetry",
