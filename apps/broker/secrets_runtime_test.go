@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,10 +17,20 @@ import (
 
 type stubSecretsClient struct {
 	metadata      map[string]string
+	list          []secretMetadata
 	resolved      resolvedSecretSet
 	resolveTenant string
 	resolveNames  []string
 	resolveTool   string
+	resolveCalls  int
+	listTenant    string
+	listCalls     int
+}
+
+func (s *stubSecretsClient) ListMetadata(_ context.Context, tenant string) ([]secretMetadata, error) {
+	s.listTenant = tenant
+	s.listCalls++
+	return append([]secretMetadata{}, s.list...), nil
 }
 
 func (s stubSecretsClient) CandidateMetadata(_ context.Context, _ string, names []string) (map[string]string, error) {
@@ -36,6 +47,7 @@ func (s *stubSecretsClient) Resolve(_ context.Context, tenant string, names []st
 	s.resolveTenant = tenant
 	s.resolveNames = append([]string{}, names...)
 	s.resolveTool = tool
+	s.resolveCalls++
 	return s.resolved, nil
 }
 
@@ -55,106 +67,38 @@ func withStubSecretsClient(t *testing.T, client platformSecretsClient) {
 	})
 }
 
-func TestParseExactEchoHeadCommand(t *testing.T) {
-	got, ok := parseExactEchoHeadCommand(" echo   $DEPLOY_KEY | head -c 4 ")
-	if !ok {
-		t.Fatal("expected exact form to parse")
-	}
-	if got.Name != "DEPLOY_KEY" || got.Count != 4 {
-		t.Fatalf("unexpected parse result: %+v", got)
-	}
-	got, ok = parseExactEchoHeadCommand(" echo   ${DEPLOY_KEY} | head -c 4 ")
-	if !ok || got.Name != "DEPLOY_KEY" || got.Count != 4 {
-		t.Fatalf("unexpected braced parse result: %+v ok=%v", got, ok)
-	}
-	for _, command := range []string{
-		"echo '$DEPLOY_KEY' | head -c 4",
-		"FOO=1 echo $DEPLOY_KEY | head -c 4",
-		"echo $DEPLOY_KEY | head -c 0",
-		"echo $DEPLOY_KEY | head -c 65",
-		"echo $deploy_key | head -c 4",
-		"echo $DEPLOY_KEY | head -c 4 | cat",
-		"echo $DEPLOY_KEY | head -c 4 > out",
-	} {
-		if _, ok := parseExactEchoHeadCommand(command); ok {
-			t.Fatalf("unexpectedly accepted %q", command)
-		}
-	}
-}
-
-func TestSecretAwareSpawnAllowsUnknownHomePath(t *testing.T) {
+func TestRejectDisallowedSecretReferencesAllowsUnknownHomePath(t *testing.T) {
 	t.Setenv("ROCKIELAB_TENANT_ID", "tenant-test")
 	withStubSecretsClient(t, &stubSecretsClient{metadata: map[string]string{}})
-	_, handled, err := executeSecretAwareSpawnCommand(context.Background(), "echo $HOME && echo $PATH")
-	if err != nil {
+	if err := rejectDisallowedSecretReferences(context.Background(), "echo $HOME && echo $PATH"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if handled {
-		t.Fatal("ordinary HOME/PATH refs should be left to the shell when not stored secrets")
-	}
 }
 
-func TestSecretAwareSpawnExactFormReturnsOnlyMarker(t *testing.T) {
+func TestRejectDisallowedSecretReferencesRejectsKnownStoredSecretWithoutResolve(t *testing.T) {
 	t.Setenv("ROCKIELAB_TENANT_ID", "tenant-test")
-	secretValue := "CANARY_SECRET_VALUE_abcdef"
-	withStubSecretsClient(t, &stubSecretsClient{
+	client := &stubSecretsClient{
 		metadata: map[string]string{"DEPLOY_KEY": "ssh_key"},
 		resolved: resolvedSecretSet{
-			Values:     map[string]string{"DEPLOY_KEY": secretValue},
+			Values:     map[string]string{"DEPLOY_KEY": "CANARY_SECRET_VALUE_abcdef"},
 			Categories: map[string]string{"DEPLOY_KEY": "ssh_key"},
 		},
-	})
-	resp, handled, err := executeSecretAwareSpawnCommand(context.Background(), "echo $DEPLOY_KEY | head -c 17")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
 	}
-	if !handled {
-		t.Fatal("expected exact form to be handled broker-natively")
-	}
-	if !strings.Contains(resp.Stdout, "<redacted:DEPLOY_KEY>") {
-		t.Fatalf("expected redacted marker, got %q", resp.Stdout)
-	}
-	if strings.Contains(resp.Stdout, secretValue) || strings.Contains(resp.Stdout, secretValue[:4]) {
-		t.Fatalf("secret-derived bytes leaked: %q", resp.Stdout)
-	}
-}
-
-func TestSecretAwareSpawnLeavesNonExactKnownSecretUseForEnvInjection(t *testing.T) {
-	t.Setenv("ROCKIELAB_TENANT_ID", "tenant-test")
-	withStubSecretsClient(t, &stubSecretsClient{
-		metadata: map[string]string{"DEPLOY_KEY": "ssh_key"},
-	})
-	_, handled, err := executeSecretAwareSpawnCommand(context.Background(), "printf %s $DEPLOY_KEY")
-	if handled || err != nil {
-		t.Fatalf("expected non-exact secret reference to fall through, handled=%v err=%v", handled, err)
-	}
-}
-
-func TestResolveSecretEnvForSpawnCommandMaterializesKnownRefs(t *testing.T) {
-	t.Setenv("ROCKIELAB_TENANT_ID", "tenant-test")
-	secretValue := "CANARY_SECRET_VALUE_abcdef"
-	withStubSecretsClient(t, &stubSecretsClient{
-		metadata: map[string]string{"DEPLOY_KEY": "ssh_key"},
-		resolved: resolvedSecretSet{
-			Values:     map[string]string{"DEPLOY_KEY": secretValue},
-			Categories: map[string]string{"DEPLOY_KEY": "ssh_key"},
-		},
-	})
-	resolved, handled, err := resolveSecretEnvForSpawnCommand(
-		context.Background(),
+	withStubSecretsClient(t, client)
+	for _, command := range []string{
+		"echo $DEPLOY_KEY | head -c 17",
 		`mkdir -p ~/.ssh && printf '%s' "$DEPLOY_KEY" > ~/.ssh/deploy_key`,
-	)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	} {
+		err := rejectDisallowedSecretReferences(context.Background(), command)
+		if err == nil {
+			t.Fatalf("expected known stored secret ref to be rejected for %q", command)
+		}
+		if !strings.Contains(err.Error(), "materialize_secret") {
+			t.Fatalf("unexpected rejection error: %v", err)
+		}
 	}
-	if !handled {
-		t.Fatal("expected known secret ref to be resolved for bash env injection")
-	}
-	if resolved.Values["DEPLOY_KEY"] != secretValue {
-		t.Fatalf("unexpected resolved value map: %v", resolved.Values)
-	}
-	if got := resolved.Redactor.Redact("prefix " + secretValue); strings.Contains(got, secretValue) {
-		t.Fatalf("redactor leaked secret value: %q", got)
+	if client.resolveCalls != 0 {
+		t.Fatalf("non-materialize rejection must not call Resolve, got %d", client.resolveCalls)
 	}
 }
 
@@ -358,6 +302,34 @@ func TestMetadataCacheIsTenantScoped(t *testing.T) {
 	got, err = cachedCandidateMetadata(context.Background(), "tenant-b", []string{"DEPLOY_KEY"})
 	if err != nil || got["DEPLOY_KEY"] != "token" {
 		t.Fatalf("tenant-scoped cache lookup failed: got=%v err=%v", got, err)
+	}
+}
+
+func TestHTTPPlatformSecretsClientListMetadataUsesBrokerListEndpoint(t *testing.T) {
+	t.Setenv("ROCKIELAB_BROKER_TOKEN", "broker-token")
+	var gotPath, gotAuth, gotTenant, gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		gotTenant = r.Header.Get("X-Tenant-Id")
+		body, _ := io.ReadAll(r.Body)
+		gotBody = string(body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[{"name":"DEPLOY_KEY","category":"ssh_key","description":"deploy key","created_at":"2026-06-12T12:00:00Z"}]`))
+	}))
+	defer srv.Close()
+	t.Setenv("ROCKIELAB_API_BASE", srv.URL)
+
+	client := httpPlatformSecretsClient{httpClient: srv.Client()}
+	got, err := client.ListMetadata(context.Background(), "tenant-test")
+	if err != nil {
+		t.Fatalf("ListMetadata failed: %v", err)
+	}
+	if gotPath != "/api/secrets/list" || gotAuth != "Bearer broker-token" || gotTenant != "tenant-test" || gotBody != "{}" {
+		t.Fatalf("unexpected request path=%q auth=%q tenant=%q body=%q", gotPath, gotAuth, gotTenant, gotBody)
+	}
+	if len(got) != 1 || got[0].Name != "DEPLOY_KEY" || got[0].Category != "ssh_key" {
+		t.Fatalf("unexpected metadata response: %+v", got)
 	}
 }
 

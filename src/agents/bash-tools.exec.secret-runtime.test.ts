@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetPlatformSecretMetadataCacheForTests } from "../secrets/platform-runtime.js";
+import {
+  MATERIALIZE_ONLY_SECRET_RESOLUTION_MESSAGE,
+  resetPlatformSecretMetadataCacheForTests,
+} from "../secrets/platform-runtime.js";
 import { createExecTool } from "./bash-tools.exec.js";
 
 function jsonResponse(payload: unknown): Response {
@@ -23,7 +26,7 @@ describe("exec platform secret runtime", () => {
     resetPlatformSecretMetadataCacheForTests();
   });
 
-  it("accepts only native echo/head proof without leaking prefix bytes", async () => {
+  it("rejects native echo/head proof without resolving plaintext", async () => {
     const fetchMock = vi.fn(async (input: unknown) => {
       const url = String(input);
       if (url.endsWith("/api/secrets/metadata")) {
@@ -33,66 +36,48 @@ describe("exec platform secret runtime", () => {
         });
       }
       if (url.endsWith("/api/secrets/resolve")) {
-        return jsonResponse({
-          resolved: { OPENAI_API_KEY: "sk-test-canary-secret" },
-          categories: { OPENAI_API_KEY: "api_key" },
-          missing: [],
-        });
+        throw new Error("gateway exec must not resolve plaintext secrets");
       }
       throw new Error(`unexpected URL: ${url}`);
     });
     vi.stubGlobal("fetch", fetchMock);
 
     const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
-    const result = await tool.execute("secret-proof", {
-      command: "echo $OPENAI_API_KEY | head -c 9",
-    });
-
-    const text = result.content.find((entry) => entry.type === "text")?.text ?? "";
-    expect(text).toBe("<redacted:OPENAI_API_KEY>");
-    expect(text).not.toContain("sk-test");
-    expect(text).not.toContain("sk-t");
-    expect(result.details).toMatchObject({
-      status: "completed",
-      accepted: true,
-      name: "OPENAI_API_KEY",
-      requestedCount: 9,
-      aggregated: "<redacted:OPENAI_API_KEY>",
-    });
+    await expect(
+      tool.execute("secret-proof", {
+        command: "echo $OPENAI_API_KEY | head -c 9",
+      }),
+    ).rejects.toThrow(MATERIALIZE_ONLY_SECRET_RESOLUTION_MESSAGE);
+    expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([
+      "https://api.rockielab.com/api/secrets/metadata",
+    ]);
   });
 
-  it("injects stored secret refs into gateway subprocess env and redacts output", async () => {
-    const secretValue = "sk-test-canary-secret";
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: unknown) => {
-        const url = String(input);
-        if (url.endsWith("/api/secrets/metadata")) {
-          return jsonResponse({
-            known: { OPENAI_API_KEY: { category: "api_key" } },
-            unknown: [],
-          });
-        }
-        if (url.endsWith("/api/secrets/resolve")) {
-          return jsonResponse({
-            resolved: { OPENAI_API_KEY: secretValue },
-            categories: { OPENAI_API_KEY: "api_key" },
-            missing: [],
-          });
-        }
-        throw new Error(`unexpected URL: ${url}`);
-      }),
-    );
+  it("rejects stored secret refs before gateway subprocess env injection", async () => {
+    const fetchMock = vi.fn(async (input: unknown) => {
+      const url = String(input);
+      if (url.endsWith("/api/secrets/metadata")) {
+        return jsonResponse({
+          known: { OPENAI_API_KEY: { category: "api_key" } },
+          unknown: [],
+        });
+      }
+      if (url.endsWith("/api/secrets/resolve")) {
+        throw new Error("gateway exec must not resolve plaintext secrets");
+      }
+      throw new Error(`unexpected URL: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
 
     const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
-    const result = await tool.execute("secret-inject", {
-      command: "printf %s $OPENAI_API_KEY",
-    });
-
-    const text = result.content.find((entry) => entry.type === "text")?.text ?? "";
-    expect(text).toContain("<redacted:OPENAI_API_KEY>");
-    expect(text).not.toContain(secretValue);
-    expect(text).not.toContain("sk-test");
+    await expect(
+      tool.execute("secret-inject", {
+        command: "printf %s $OPENAI_API_KEY",
+      }),
+    ).rejects.toThrow(MATERIALIZE_ONLY_SECRET_RESOLUTION_MESSAGE);
+    expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([
+      "https://api.rockielab.com/api/secrets/metadata",
+    ]);
   });
 
   it("rejects platform-secret sandbox commands before backend materialization", async () => {
@@ -122,7 +107,7 @@ describe("exec platform secret runtime", () => {
       tool.execute("secret-ssh-reject", {
         command: "printf %s $DEPLOY_KEY",
       }),
-    ).rejects.toThrow(/Stored secret references are only supported in gateway bash subprocess/);
+    ).rejects.toThrow(MATERIALIZE_ONLY_SECRET_RESOLUTION_MESSAGE);
     expect(buildExecSpec).not.toHaveBeenCalled();
   });
 });

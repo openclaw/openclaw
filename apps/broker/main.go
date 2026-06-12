@@ -753,31 +753,13 @@ func spawnHandler(w http.ResponseWriter, r *http.Request) {
 		req.Cwd = os.Getenv("HOME")
 	}
 
-	var commandSecrets resolvedCommandSecrets
-	var hasCommandSecrets bool
 	if req.Binary == "bash" && len(req.Args) == 2 && req.Args[0] == "-c" {
-		if resp, handled, err := executeSecretAwareSpawnCommand(r.Context(), req.Args[1]); handled || err != nil {
-			if err != nil {
-				jsonError(w, http.StatusBadRequest, "secret_command_rejected", err.Error())
-				return
-			}
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(resp)
-			log("spawn: exact secret form accepted name=redacted")
+		if err := rejectDisallowedSecretReferences(r.Context(), req.Args[1]); err != nil {
+			jsonError(w, http.StatusBadRequest, "secret_resolution_disabled", err.Error())
 			return
-		}
-		resolved, handled, err := resolveSecretEnvForSpawnCommand(r.Context(), req.Args[1])
-		if err != nil {
-			jsonError(w, http.StatusBadRequest, "secret_command_rejected", err.Error())
-			return
-		}
-		if handled {
-			commandSecrets = resolved
-			hasCommandSecrets = true
-			defer commandSecrets.Redactor.Close()
 		}
 	} else if err := rejectDisallowedSecretReferences(r.Context(), strings.Join(req.Args, " ")); err != nil {
-		jsonError(w, http.StatusBadRequest, "secret_command_rejected", err.Error())
+		jsonError(w, http.StatusBadRequest, "secret_resolution_disabled", err.Error())
 		return
 	}
 
@@ -788,11 +770,6 @@ func spawnHandler(w http.ResponseWriter, r *http.Request) {
 	cmd := exec.CommandContext(ctx, req.Binary, req.Args...)
 	cmd.Dir = req.Cwd
 	cmd.Env = ownedChildEnv()
-	if hasCommandSecrets {
-		for name, value := range commandSecrets.Values {
-			cmd.Env = append(cmd.Env, name+"="+value)
-		}
-	}
 
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
@@ -802,10 +779,6 @@ func spawnHandler(w http.ResponseWriter, r *http.Request) {
 	resp := spawnResponse{
 		Stdout: stdout.String(),
 		Stderr: stderr.String(),
-	}
-	if hasCommandSecrets {
-		resp.Stdout = commandSecrets.Redactor.Redact(resp.Stdout)
-		resp.Stderr = commandSecrets.Redactor.Redact(resp.Stderr)
 	}
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		resp.TimedOut = true
@@ -821,11 +794,7 @@ func spawnHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
 
-	if hasCommandSecrets {
-		log("spawn: binary=%s args=%v exit=%d timed_out=%v secret_env=resolved", req.Binary, req.Args, resp.ExitCode, resp.TimedOut)
-	} else {
-		log("spawn: binary=%s args=%v exit=%d timed_out=%v", req.Binary, req.Args, resp.ExitCode, resp.TimedOut)
-	}
+	log("spawn: binary=%s args=%v exit=%d timed_out=%v", req.Binary, req.Args, resp.ExitCode, resp.TimedOut)
 }
 
 type materializeSecretRequest struct {
@@ -882,6 +851,121 @@ func materializeSecretHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
 	log("materialize-secret: name=%s category=%s path=%s", resp.Name, resp.Category, resp.Path)
+}
+
+type secretGetRequest struct {
+	Name string `json:"name"`
+}
+
+type secretGetResponse struct {
+	Name           string  `json:"name"`
+	Category       string  `json:"category"`
+	Description    *string `json:"description,omitempty"`
+	CreatedAt      *string `json:"created_at,omitempty"`
+	LastUsedAt     *string `json:"last_used_at,omitempty"`
+	Redacted       string  `json:"redacted"`
+	Materializable bool    `json:"materializable"`
+}
+
+func secretListHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, http.StatusMethodNotAllowed, "method_not_allowed",
+			"only POST is allowed on /secret-list")
+		return
+	}
+	if !isLoopbackRemoteAddr(r.RemoteAddr) {
+		jsonError(w, http.StatusForbidden, "loopback_required",
+			"/secret-list is only available from localhost")
+		return
+	}
+	if !requireTenantID(w) {
+		return
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var body struct{}
+	if err := decoder.Decode(&body); err != nil {
+		jsonError(w, http.StatusBadRequest, "bad_request",
+			"invalid JSON body")
+		return
+	}
+	var extra json.RawMessage
+	if err := decoder.Decode(&extra); err != io.EOF {
+		jsonError(w, http.StatusBadRequest, "bad_request",
+			"invalid JSON body")
+		return
+	}
+
+	secrets, err := brokerSecretsClient.ListMetadata(r.Context(), tenantID())
+	if err != nil {
+		jsonError(w, http.StatusBadGateway, "secret_list_failed", err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string][]secretMetadata{"secrets": secrets})
+	log("secret-list: count=%d", len(secrets))
+}
+
+func secretGetHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, http.StatusMethodNotAllowed, "method_not_allowed",
+			"only POST is allowed on /secret-get")
+		return
+	}
+	if !isLoopbackRemoteAddr(r.RemoteAddr) {
+		jsonError(w, http.StatusForbidden, "loopback_required",
+			"/secret-get is only available from localhost")
+		return
+	}
+	if !requireTenantID(w) {
+		return
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var req secretGetRequest
+	if err := decoder.Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "bad_request",
+			"invalid JSON body")
+		return
+	}
+	var extra json.RawMessage
+	if err := decoder.Decode(&extra); err != io.EOF {
+		jsonError(w, http.StatusBadRequest, "bad_request",
+			"invalid JSON body")
+		return
+	}
+	if strings.TrimSpace(req.Name) == "" || !secretNameRE.MatchString(req.Name) {
+		jsonError(w, http.StatusBadRequest, "invalid_secret_name",
+			"name must be UPPER_SNAKE_CASE")
+		return
+	}
+
+	secrets, err := brokerSecretsClient.ListMetadata(r.Context(), tenantID())
+	if err != nil {
+		jsonError(w, http.StatusBadGateway, "secret_get_failed", err.Error())
+		return
+	}
+	for _, entry := range secrets {
+		if entry.Name != req.Name {
+			continue
+		}
+		resp := secretGetResponse{
+			Name:           entry.Name,
+			Category:       entry.Category,
+			Description:    entry.Description,
+			CreatedAt:      entry.CreatedAt,
+			LastUsedAt:     entry.LastUsedAt,
+			Redacted:       "<redacted>",
+			Materializable: entry.Category == "ssh_key",
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+		log("secret-get: name=%s category=%s", resp.Name, resp.Category)
+		return
+	}
+	jsonError(w, http.StatusNotFound, "secret_missing", "secret not found")
 }
 
 // chatRequest is the JSON body for POST /chat.
@@ -1195,6 +1279,8 @@ func run() error {
 	mux.HandleFunc("/fs/file", runtimeFSFileHandler)
 	mux.HandleFunc("/spawn", spawnHandler)
 	mux.HandleFunc("/materialize-secret", materializeSecretHandler)
+	mux.HandleFunc("/secret-list", secretListHandler)
+	mux.HandleFunc("/secret-get", secretGetHandler)
 	mux.HandleFunc("/chat", chatHandler)
 	mux.HandleFunc("/chat-pty", chatPTYHandler)
 	mux.HandleFunc("/datasets", finalizedDatasets)

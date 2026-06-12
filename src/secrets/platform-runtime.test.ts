@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  MATERIALIZE_ONLY_SECRET_RESOLUTION_MESSAGE,
   evaluateSecretAwareExecCommand,
   parseExactEchoHeadCommand,
   resetPlatformSecretMetadataCacheForTests,
@@ -12,7 +13,10 @@ import {
 function client(params: {
   metadata?: CandidateMetadata;
   envelope?: ResolveEnvelope;
-}): PlatformSecretsRuntimeClient {
+}): PlatformSecretsRuntimeClient & {
+  candidateMetadata: ReturnType<typeof vi.fn>;
+  resolve: ReturnType<typeof vi.fn>;
+} {
   return {
     candidateMetadata: vi.fn(async () => params.metadata ?? { known: {}, unknown: [] }),
     resolve: vi.fn(async () => params.envelope ?? { resolved: {}, categories: {}, missing: [] }),
@@ -21,6 +25,11 @@ function client(params: {
 
 describe("platform runtime secrets", () => {
   beforeEach(() => {
+    resetPlatformSecretMetadataCacheForTests();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
     resetPlatformSecretMetadataCacheForTests();
   });
 
@@ -64,66 +73,93 @@ describe("platform runtime secrets", () => {
     expect(result).toEqual({ action: "pass" });
   });
 
-  it("handles exact secret form without disclosing prefix bytes", async () => {
-    const secret = "CANARY_SECRET_VALUE_abcdef";
+  it("rejects exact echo/head for known tenant secrets without resolving plaintext", async () => {
     const runtimeClient = client({
       metadata: { known: { DEPLOY_KEY: { category: "ssh_key" } }, unknown: [] },
-      envelope: {
-        resolved: { DEPLOY_KEY: secret },
-        categories: { DEPLOY_KEY: "ssh_key" },
-        missing: [],
-      },
     });
     const result = await evaluateSecretAwareExecCommand({
       command: "echo $DEPLOY_KEY | head -c 17",
       env: { ROCKIELAB_TENANT_ID: "tenant-a" },
       client: runtimeClient,
     });
-    expect(result.action).toBe("handled");
-    if (result.action !== "handled") {
-      return;
-    }
-    expect(result.text).toBe("<redacted:DEPLOY_KEY>");
-    expect(result.text).not.toContain(secret);
-    expect(result.text).not.toContain(secret.slice(0, 17));
-    expect(result.details).toMatchObject({
-      accepted: true,
-      name: "DEPLOY_KEY",
-      requestedCount: 17,
+    expect(result).toEqual({
+      action: "reject",
+      reason: MATERIALIZE_ONLY_SECRET_RESOLUTION_MESSAGE,
     });
+    expect(runtimeClient.candidateMetadata).toHaveBeenCalledWith(["DEPLOY_KEY"], "tenant-a");
+    expect(runtimeClient.resolve).not.toHaveBeenCalled();
   });
 
-  it("resolves confirmed secrets for gateway env injection", async () => {
+  it("rejects confirmed secrets for exec env without resolving plaintext", async () => {
+    const runtimeClient = client({
+      metadata: { known: { DEPLOY_KEY: { category: "ssh_key" } }, unknown: [] },
+    });
     const result = await evaluateSecretAwareExecCommand({
       command: `mkdir -p ~/.ssh && printf '%s' "$DEPLOY_KEY" > ~/.ssh/deploy_key`,
       env: { ROCKIELAB_TENANT_ID: "tenant-a" },
-      client: client({
-        metadata: { known: { DEPLOY_KEY: { category: "ssh_key" } }, unknown: [] },
-        envelope: {
-          resolved: { DEPLOY_KEY: "CANARY_SECRET_VALUE_abcdef" },
-          categories: { DEPLOY_KEY: "ssh_key" },
-          missing: [],
-        },
-      }),
-      allowEnvInjection: true,
+      client: runtimeClient,
     });
-    expect(result.action).toBe("inject");
-    if (result.action !== "inject") {
-      return;
-    }
-    expect(result.env).toEqual({ DEPLOY_KEY: "CANARY_SECRET_VALUE_abcdef" });
-    expect(result.redactor.redact("CANARY_SECRET_VALUE_abcdef")).toBe("<redacted:DEPLOY_KEY>");
+    expect(result).toEqual({
+      action: "reject",
+      reason: MATERIALIZE_ONLY_SECRET_RESOLUTION_MESSAGE,
+    });
+    expect(runtimeClient.resolve).not.toHaveBeenCalled();
   });
 
-  it("rejects non-exact use of confirmed secrets when env injection is not allowed", async () => {
+  it("rejects non-exact use of confirmed secrets with the materialize-only message", async () => {
+    const runtimeClient = client({
+      metadata: { known: { DEPLOY_KEY: { category: "ssh_key" } }, unknown: [] },
+    });
     const result = await evaluateSecretAwareExecCommand({
       command: "printf %s $DEPLOY_KEY",
       env: { ROCKIELAB_TENANT_ID: "tenant-a" },
-      client: client({
-        metadata: { known: { DEPLOY_KEY: { category: "ssh_key" } }, unknown: [] },
-      }),
+      client: runtimeClient,
     });
-    expect(result).toMatchObject({ action: "reject" });
+    expect(result).toEqual({
+      action: "reject",
+      reason: MATERIALIZE_ONLY_SECRET_RESOLUTION_MESSAGE,
+    });
+    expect(runtimeClient.resolve).not.toHaveBeenCalled();
+  });
+
+  it("does not call /api/secrets/resolve for non-materialize exec paths", async () => {
+    const fetchMock = vi.fn(async (input: unknown) => {
+      const url = String(input);
+      if (url.endsWith("/api/secrets/metadata")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            known: { DEPLOY_KEY: { category: "ssh_key" } },
+            unknown: [],
+          }),
+        } as Response;
+      }
+      if (url.endsWith("/api/secrets/resolve")) {
+        throw new Error("exec path must not resolve plaintext secrets");
+      }
+      throw new Error(`unexpected URL: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    for (const command of ["printf %s $DEPLOY_KEY", "echo $DEPLOY_KEY | head -c 17"]) {
+      resetPlatformSecretMetadataCacheForTests();
+      await expect(
+        evaluateSecretAwareExecCommand({
+          command,
+          env: {
+            ROCKIELAB_TENANT_ID: "tenant-a",
+            BROKER_TENANT_TOKEN: "broker-token",
+          },
+        }),
+      ).resolves.toEqual({
+        action: "reject",
+        reason: MATERIALIZE_ONLY_SECRET_RESOLUTION_MESSAGE,
+      });
+    }
+    const resolveCalls = fetchMock.mock.calls.filter(([input]) =>
+      String(input).endsWith("/api/secrets/resolve"),
+    );
+    expect(resolveCalls).toHaveLength(0);
   });
 
   it("fails closed without ROCKIELAB_TENANT_ID and ignores token fallbacks as identity", async () => {

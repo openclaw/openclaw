@@ -83,15 +83,6 @@ export type ExecToolDetails =
       cwd?: string;
     }
   | {
-      status: "completed";
-      exitCode: 0;
-      durationMs: number;
-      aggregated: string;
-      accepted: true;
-      name: string;
-      requestedCount: number;
-    }
-  | {
       status: "approval-pending";
       approvalId: string;
       approvalSlug: string;

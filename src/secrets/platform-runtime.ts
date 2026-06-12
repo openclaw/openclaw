@@ -220,31 +220,15 @@ export async function getCachedCandidateMetadata(params: {
   return out;
 }
 
-export type SecretAwareExecResult =
-  | { action: "pass" }
-  | { action: "reject"; reason: string }
-  | {
-      action: "handled";
-      text: string;
-      details: {
-        status: "completed";
-        accepted: true;
-        name: string;
-        requestedCount: number;
-      };
-    }
-  | {
-      action: "inject";
-      env: Record<string, string>;
-      redactor: ReturnType<typeof createRuntimeSecretRedactor>;
-      names: string[];
-    };
+export type SecretAwareExecResult = { action: "pass" } | { action: "reject"; reason: string };
+
+export const MATERIALIZE_ONLY_SECRET_RESOLUTION_MESSAGE =
+  "Stored secret resolution is only supported by materialize_secret";
 
 export async function evaluateSecretAwareExecCommand(params: {
   command: string;
   env?: NodeJS.ProcessEnv;
   client?: PlatformSecretsRuntimeClient;
-  allowEnvInjection?: boolean;
 }): Promise<SecretAwareExecResult> {
   const candidates = extractSecretReferenceCandidates(params.command);
   const exact = parseExactEchoHeadCommand(params.command);
@@ -266,45 +250,10 @@ export async function evaluateSecretAwareExecCommand(params: {
   if (secretNames.length === 0) {
     return { action: "pass" };
   }
-  if (!exact || secretNames.length !== 1 || secretNames[0] !== exact.name) {
-    if (params.allowEnvInjection !== true) {
-      return {
-        action: "reject",
-        reason: "Stored secret references are only supported in gateway bash subprocess commands.",
-      };
-    }
-    const envelope = validateResolveEnvelope({
-      requested: secretNames,
-      envelope: await client.resolve(secretNames, tenantId, "exec.env"),
-      metadata,
-    });
-    return {
-      action: "inject",
-      env: envelope.resolved,
-      redactor: createRuntimeSecretRedactor(envelope.resolved),
-      names: secretNames,
-    };
-  }
-  const envelope = validateResolveEnvelope({
-    requested: [exact.name],
-    envelope: await client.resolve([exact.name], tenantId, "exec.exact.echo_head"),
-    metadata,
-  });
-  const redactor = createRuntimeSecretRedactor(envelope.resolved);
-  try {
-    return {
-      action: "handled",
-      text: redactor.redact(`<redacted:${exact.name}>`),
-      details: {
-        status: "completed",
-        accepted: true,
-        name: exact.name,
-        requestedCount: exact.count,
-      },
-    };
-  } finally {
-    redactor.close();
-  }
+  return {
+    action: "reject",
+    reason: MATERIALIZE_ONLY_SECRET_RESOLUTION_MESSAGE,
+  };
 }
 
 export function createRuntimeSecretRedactor(values: Record<string, string>) {

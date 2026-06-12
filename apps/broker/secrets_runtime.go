@@ -12,7 +12,6 @@ import (
 	"os"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,10 +20,9 @@ import (
 const secretMetadataCacheTTL = 60 * time.Second
 
 var (
-	secretNameRE        = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
-	secretReferenceRE   = regexp.MustCompile(`\$(?:([A-Z][A-Z0-9_]*)|\{([A-Z][A-Z0-9_]*)\})`)
-	exactEchoHeadFormRE = regexp.MustCompile(`^echo\s+\$[{]?([A-Z][A-Z0-9_]*)[}]?\s*\|\s*head\s+-c\s+([0-9]+)$`)
-	allowedCategories   = map[string]struct{}{
+	secretNameRE      = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
+	secretReferenceRE = regexp.MustCompile(`\$(?:([A-Z][A-Z0-9_]*)|\{([A-Z][A-Z0-9_]*)\})`)
+	allowedCategories = map[string]struct{}{
 		"ssh_key": {},
 		"api_key": {},
 		"token":   {},
@@ -32,14 +30,18 @@ var (
 	}
 )
 
-type exactEchoHeadCommand struct {
-	Name  string
-	Count int
-}
-
 type platformSecretsClient interface {
+	ListMetadata(ctx context.Context, tenantID string) ([]secretMetadata, error)
 	CandidateMetadata(ctx context.Context, tenantID string, names []string) (map[string]string, error)
 	Resolve(ctx context.Context, tenantID string, names []string, tool string) (resolvedSecretSet, error)
+}
+
+type secretMetadata struct {
+	Name        string  `json:"name"`
+	Category    string  `json:"category"`
+	Description *string `json:"description,omitempty"`
+	CreatedAt   *string `json:"created_at,omitempty"`
+	LastUsedAt  *string `json:"last_used_at,omitempty"`
 }
 
 type resolvedSecretSet struct {
@@ -72,22 +74,6 @@ var metadataCache = struct {
 	entries map[string]metadataCacheEntry
 }{entries: map[string]metadataCacheEntry{}}
 
-func parseExactEchoHeadCommand(command string) (exactEchoHeadCommand, bool) {
-	match := exactEchoHeadFormRE.FindStringSubmatch(strings.TrimSpace(command))
-	if match == nil {
-		return exactEchoHeadCommand{}, false
-	}
-	name := match[1]
-	if !secretNameRE.MatchString(name) {
-		return exactEchoHeadCommand{}, false
-	}
-	count, err := strconv.Atoi(match[2])
-	if err != nil || count < 1 || count > 64 {
-		return exactEchoHeadCommand{}, false
-	}
-	return exactEchoHeadCommand{Name: name, Count: count}, true
-}
-
 func extractSecretReferenceCandidates(command string) []string {
 	matches := secretReferenceRE.FindAllStringSubmatch(command, -1)
 	if len(matches) == 0 {
@@ -110,85 +96,6 @@ func extractSecretReferenceCandidates(command string) []string {
 	return out
 }
 
-func executeSecretAwareSpawnCommand(ctx context.Context, command string) (spawnResponse, bool, error) {
-	candidates := extractSecretReferenceCandidates(command)
-	exact, exactOK := parseExactEchoHeadCommand(command)
-	if len(candidates) == 0 && !exactOK {
-		return spawnResponse{}, false, nil
-	}
-
-	requestedForMetadata := candidates
-	if exactOK && !containsString(requestedForMetadata, exact.Name) {
-		requestedForMetadata = append(append([]string{}, requestedForMetadata...), exact.Name)
-		sort.Strings(requestedForMetadata)
-	}
-	known, err := cachedCandidateMetadata(ctx, tenantID(), requestedForMetadata)
-	if err != nil {
-		return spawnResponse{}, false, err
-	}
-	secretRefs := make([]string, 0, len(known))
-	for _, name := range requestedForMetadata {
-		if _, ok := known[name]; ok {
-			secretRefs = append(secretRefs, name)
-		}
-	}
-	if len(secretRefs) == 0 {
-		return spawnResponse{}, false, nil
-	}
-	if !exactOK || len(secretRefs) != 1 || secretRefs[0] != exact.Name {
-		return spawnResponse{}, false, nil
-	}
-	resolved, err := brokerSecretsClient.Resolve(ctx, tenantID(), []string{exact.Name}, "exec.exact.echo_head")
-	if err != nil {
-		return spawnResponse{}, true, err
-	}
-	if err := validateResolvedExactSet([]string{exact.Name}, resolved, known); err != nil {
-		return spawnResponse{}, true, err
-	}
-	redactor := newSecretRedactor(resolved.Values)
-	defer redactor.Close()
-	return spawnResponse{
-		ExitCode: 0,
-		Stdout:   fmt.Sprintf("<redacted:%s>\n", exact.Name),
-		Stderr:   "",
-		TimedOut: false,
-	}, true, nil
-}
-
-func resolveSecretEnvForSpawnCommand(ctx context.Context, command string) (resolvedCommandSecrets, bool, error) {
-	candidates := extractSecretReferenceCandidates(command)
-	if len(candidates) == 0 {
-		return resolvedCommandSecrets{}, false, nil
-	}
-	known, err := cachedCandidateMetadata(ctx, tenantID(), candidates)
-	if err != nil {
-		return resolvedCommandSecrets{}, false, err
-	}
-	if len(known) == 0 {
-		return resolvedCommandSecrets{}, false, nil
-	}
-	secretRefs := make([]string, 0, len(known))
-	for _, name := range candidates {
-		if _, ok := known[name]; ok {
-			secretRefs = append(secretRefs, name)
-		}
-	}
-	resolved, err := brokerSecretsClient.Resolve(ctx, tenantID(), secretRefs, "exec.env")
-	if err != nil {
-		return resolvedCommandSecrets{}, true, err
-	}
-	if err := validateResolvedExactSet(secretRefs, resolved, known); err != nil {
-		return resolvedCommandSecrets{}, true, err
-	}
-	if err := assertNoSecretInArgv([]string{"bash", "-c", command}, resolved.Values); err != nil {
-		return resolvedCommandSecrets{}, true, err
-	}
-	return resolvedCommandSecrets{
-		Values:   resolved.Values,
-		Redactor: newSecretRedactor(resolved.Values),
-	}, true, nil
-}
-
 func rejectDisallowedSecretReferences(ctx context.Context, command string) error {
 	candidates := extractSecretReferenceCandidates(command)
 	if len(candidates) == 0 {
@@ -201,7 +108,7 @@ func rejectDisallowedSecretReferences(ctx context.Context, command string) error
 	if len(known) == 0 {
 		return nil
 	}
-	return errors.New("stored secret references are only supported in broker bash -c commands")
+	return errors.New("stored secret resolution is only supported by materialize_secret")
 }
 
 func validateResolvedExactSet(requested []string, resolved resolvedSecretSet, metadata map[string]string) error {
@@ -337,6 +244,22 @@ func (c httpPlatformSecretsClient) CandidateMetadata(ctx context.Context, tenant
 		out[name] = entry.Category
 	}
 	return out, nil
+}
+
+func (c httpPlatformSecretsClient) ListMetadata(ctx context.Context, tenantID string) ([]secretMetadata, error) {
+	var response []secretMetadata
+	if err := c.post(ctx, tenantID, "/api/secrets/list", map[string]any{}, &response); err != nil {
+		return nil, err
+	}
+	for _, entry := range response {
+		if !secretNameRE.MatchString(entry.Name) {
+			return nil, fmt.Errorf("list returned invalid secret name %q", entry.Name)
+		}
+		if _, ok := allowedCategories[entry.Category]; !ok {
+			return nil, fmt.Errorf("list returned invalid category for %q", entry.Name)
+		}
+	}
+	return response, nil
 }
 
 func (c httpPlatformSecretsClient) Resolve(ctx context.Context, tenantID string, names []string, tool string) (resolvedSecretSet, error) {

@@ -1408,21 +1408,9 @@ export function createExecTool(
 
       const secretCommand = await evaluateSecretAwareExecCommand({
         command: params.command,
-        allowEnvInjection: target.selectedTarget === "gateway",
       });
       if (secretCommand.action === "reject") {
         throw new Error(secretCommand.reason);
-      }
-      if (secretCommand.action === "handled") {
-        return textResult(secretCommand.text, {
-          status: "completed",
-          exitCode: 0,
-          durationMs: 0,
-          aggregated: secretCommand.text,
-          accepted: true,
-          name: secretCommand.details.name,
-          requestedCount: secretCommand.details.requestedCount,
-        });
       }
 
       const inheritedBaseEnv = coerceEnv(buildOwnedChildEnv());
@@ -1478,9 +1466,6 @@ export function createExecTool(
               containerWorkdir: containerWorkdir ?? sandbox.containerWorkdir,
             })
           : (hostEnvResult?.env ?? inheritedBaseEnv);
-      if (secretCommand.action === "inject") {
-        Object.assign(env, secretCommand.env);
-      }
 
       if (!sandbox && host === "gateway" && !params.env?.PATH) {
         const shellPath = getShellPathFromLoginShell({
@@ -1602,11 +1587,6 @@ export function createExecTool(
         notifyDeliveryContext,
         timeoutSec: effectiveTimeout,
         onUpdate,
-        redactOutput:
-          secretCommand.action === "inject"
-            ? (text: string) => secretCommand.redactor.redact(text)
-            : undefined,
-        allowedSecretEnvNames: secretCommand.action === "inject" ? secretCommand.names : undefined,
       });
 
       let yielded = false;

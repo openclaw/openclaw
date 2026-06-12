@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -403,36 +404,144 @@ func TestSpawnChildReceivesSafeTenantRuntimeEnv(t *testing.T) {
 	}
 }
 
-func TestSpawnBashInjectsResolvedTenantSecretEnvAndRedactsOutput(t *testing.T) {
+func TestSpawnBashRejectsStoredSecretRefsWithoutResolve(t *testing.T) {
 	setBrokerTestEnv(t, "tt")
 	secretValue := "CANARY_SECRET_VALUE_abcdef"
-	withStubSecretsClient(t, &stubSecretsClient{
+	client := &stubSecretsClient{
 		metadata: map[string]string{"DEPLOY_KEY": "ssh_key"},
 		resolved: resolvedSecretSet{
 			Values:     map[string]string{"DEPLOY_KEY": secretValue},
 			Categories: map[string]string{"DEPLOY_KEY": "ssh_key"},
 		},
-	})
-	body := strings.NewReader(`{"binary":"bash","args":["-c","test -n \"$DEPLOY_KEY\" && printf '%s' \"$DEPLOY_KEY\""],"timeout_sec":5}`)
-	req := httptest.NewRequest(http.MethodPost, "/spawn?token=tt", body)
+	}
+	withStubSecretsClient(t, client)
+	for _, command := range []string{
+		`test -n "$DEPLOY_KEY" && printf '%s' "$DEPLOY_KEY"`,
+		`echo $DEPLOY_KEY | head -c 17`,
+	} {
+		body := strings.NewReader(`{"binary":"bash","args":["-c",` + strconv.Quote(command) + `],"timeout_sec":5}`)
+		req := httptest.NewRequest(http.MethodPost, "/spawn?token=tt", body)
+		rec := httptest.NewRecorder()
+		spawnHandler(rec, req)
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for %q, got %d body=%s", command, rec.Code, rec.Body.String())
+		}
+		if strings.Contains(rec.Body.String(), secretValue) || strings.Contains(rec.Body.String(), secretValue[:6]) {
+			t.Fatalf("secret value leaked in rejection body: %q", rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), "secret_resolution_disabled") {
+			t.Fatalf("expected disabled code in body, got %s", rec.Body.String())
+		}
+	}
+	if client.resolveCalls != 0 {
+		t.Fatalf("spawn must not call Resolve for stored secret refs, got %d", client.resolveCalls)
+	}
+}
+
+func TestSecretListAndGetHandlersReturnMetadataOnlyWithoutResolve(t *testing.T) {
+	setBrokerTestEnv(t, "tt")
+	description := "deploy key for tests"
+	created := "2026-06-12T12:00:00Z"
+	lastUsed := "2026-06-12T13:00:00Z"
+	secretValue := "CANARY_SECRET_VALUE_abcdef"
+	client := &stubSecretsClient{
+		list: []secretMetadata{
+			{
+				Name:        "DEPLOY_KEY",
+				Category:    "ssh_key",
+				Description: &description,
+				CreatedAt:   &created,
+				LastUsedAt:  &lastUsed,
+			},
+		},
+		resolved: resolvedSecretSet{
+			Values:     map[string]string{"DEPLOY_KEY": secretValue},
+			Categories: map[string]string{"DEPLOY_KEY": "ssh_key"},
+		},
+	}
+	withStubSecretsClient(t, client)
+
+	req := httptest.NewRequest(http.MethodPost, "/secret-list", strings.NewReader(`{}`))
+	req.RemoteAddr = "127.0.0.1:12345"
 	rec := httptest.NewRecorder()
-	spawnHandler(rec, req)
+	secretListHandler(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	var resp spawnResponse
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+	var listResp struct {
+		Secrets []secretMetadata `json:"secrets"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &listResp); err != nil {
 		t.Fatalf("bad JSON: %v / %s", err, rec.Body.String())
 	}
-	if resp.ExitCode != 0 {
-		t.Fatalf("expected exit 0, got %d stderr=%q", resp.ExitCode, resp.Stderr)
+	if len(listResp.Secrets) != 1 || listResp.Secrets[0].Name != "DEPLOY_KEY" {
+		t.Fatalf("unexpected list response: %+v", listResp)
 	}
-	if strings.Contains(resp.Stdout, secretValue) || strings.Contains(resp.Stdout, secretValue[:6]) {
-		t.Fatalf("secret value leaked in stdout: %q", resp.Stdout)
+	if strings.Contains(rec.Body.String(), secretValue) || strings.Contains(rec.Body.String(), "abcdef") {
+		t.Fatalf("secret list leaked plaintext-derived data: %s", rec.Body.String())
 	}
-	if !strings.Contains(resp.Stdout, "<redacted:DEPLOY_KEY>") {
-		t.Fatalf("expected redacted marker in stdout, got %q", resp.Stdout)
+
+	req = httptest.NewRequest(http.MethodPost, "/secret-get", strings.NewReader(`{"name":"DEPLOY_KEY"}`))
+	req.RemoteAddr = "127.0.0.1:12345"
+	rec = httptest.NewRecorder()
+	secretGetHandler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var getResp secretGetResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &getResp); err != nil {
+		t.Fatalf("bad JSON: %v / %s", err, rec.Body.String())
+	}
+	if getResp.Name != "DEPLOY_KEY" || getResp.Redacted != "<redacted>" || !getResp.Materializable {
+		t.Fatalf("unexpected get response: %+v", getResp)
+	}
+	if strings.Contains(rec.Body.String(), secretValue) || strings.Contains(rec.Body.String(), "abcdef") {
+		t.Fatalf("secret get leaked plaintext-derived data: %s", rec.Body.String())
+	}
+	if client.listTenant != "tenant-test" || client.listCalls != 2 {
+		t.Fatalf("unexpected list calls tenant=%q calls=%d", client.listTenant, client.listCalls)
+	}
+	if client.resolveCalls != 0 {
+		t.Fatalf("metadata handlers must not call Resolve, got %d", client.resolveCalls)
+	}
+}
+
+func TestSecretMetadataHandlersRequireLoopbackAndStrictBodies(t *testing.T) {
+	setBrokerTestEnv(t, "tt")
+	withStubSecretsClient(t, &stubSecretsClient{})
+
+	req := httptest.NewRequest(http.MethodPost, "/secret-list", strings.NewReader(`{}`))
+	req.RemoteAddr = "203.0.113.10:12345"
+	rec := httptest.NewRecorder()
+	secretListHandler(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("non-loopback list status = %d, want 403", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/secret-list", strings.NewReader(`{"tenant_id":"other"}`))
+	req.RemoteAddr = "127.0.0.1:12345"
+	rec = httptest.NewRecorder()
+	secretListHandler(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("extra list field status = %d, want 400", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/secret-get", strings.NewReader(`{"name":"deploy_key"}`))
+	req.RemoteAddr = "127.0.0.1:12345"
+	rec = httptest.NewRecorder()
+	secretGetHandler(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("bad secret-get name status = %d, want 400", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/secret-get", strings.NewReader(`{"name":"DEPLOY_KEY"}`))
+	req.RemoteAddr = "[::1]:12345"
+	rec = httptest.NewRecorder()
+	secretGetHandler(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("loopback missing secret status = %d, want 404", rec.Code)
 	}
 }
 

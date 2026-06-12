@@ -601,6 +601,30 @@ const STATIC_TOOLS = [
 
 const LOCAL_TOOLS = [
   {
+    name: "secret_list",
+    description:
+      "List saved tenant secret metadata. Returns names, categories, descriptions, and timestamps only; never plaintext.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      required: [],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "secret_get",
+    description:
+      "Read a redacted saved tenant secret summary. Returns metadata, availability, and materialization eligibility only; never plaintext.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", minLength: 1 },
+      },
+      required: ["name"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "materialize_secret",
     description:
       "Materialize a saved tenant ssh_key secret to a local broker-managed file. Returns only name, category, path, and mode; use the returned path with ssh -i.",
@@ -781,6 +805,59 @@ async function callMaterializeSecret(args) {
   return detail;
 }
 
+async function callLocalSecretTool(toolName, args) {
+  let brokerPath;
+  let payload;
+  if (toolName === "secret_list") {
+    brokerPath = "/secret-list";
+    payload = {};
+  } else if (toolName === "secret_get") {
+    const name = args?.name;
+    if (typeof name !== "string" || !name.trim()) {
+      const err = new Error("secret_get requires a non-empty name");
+      err.code = "invalid_secret_name";
+      throw err;
+    }
+    brokerPath = "/secret-get";
+    payload = { name };
+  } else {
+    const err = new Error(`unknown local secret tool: ${toolName}`);
+    err.code = "unknown_tool";
+    throw err;
+  }
+
+  const url = `http://127.0.0.1:${BROKER_PORT}${brokerPath}`;
+  let r;
+  try {
+    r = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  } catch (e) {
+    const err = new Error(`local broker unavailable: ${e?.message || e}`);
+    err.code = "broker_unavailable";
+    throw err;
+  }
+
+  const text = await r.text();
+  let detail;
+  try {
+    detail = JSON.parse(text);
+  } catch {
+    detail = null;
+  }
+  if (!r.ok) {
+    const err = new Error(
+      detail?.error?.message || `${toolName} broker call failed with ${r.status}`,
+    );
+    err.status = r.status;
+    err.code = detail?.error?.code || `${toolName}_failed`;
+    throw err;
+  }
+  return detail;
+}
+
 const server = new Server(
   { name: "mcp-rockie", version: "0.2.0" },
   { capabilities: { tools: {} } },
@@ -790,6 +867,34 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: liveCatal
 
 async function handleCallToolRequest(req) {
   const { name, arguments: args = {} } = req.params;
+  if (name === "secret_list" || name === "secret_get") {
+    try {
+      const result = await callLocalSecretTool(name, args);
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    } catch (err) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              error: {
+                code: err?.code || `${name}_failed`,
+                message: err?.message || String(err),
+              },
+            }),
+          },
+        ],
+        isError: true,
+      };
+    }
+  }
   if (name === "materialize_secret") {
     try {
       const result = await callMaterializeSecret(args);
@@ -901,6 +1006,7 @@ server.setRequestHandler(CallToolRequestSchema, handleCallToolRequest);
 export function __rockieMcpTestHooks() {
   return {
     callMaterializeSecret,
+    callLocalSecretTool,
     handleCallToolRequest,
     refreshCatalog,
     listTools: () => liveCatalog,
