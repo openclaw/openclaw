@@ -134,7 +134,9 @@ function evaluateExpression(
       return [
         {
           reason: "unsupported-signal",
-          message: "Empty availability allOf group",
+          signal: { kind: "always" },
+          message:
+            "Empty availability allOf group — this is an authoring error; the group should contain at least one entry",
         },
       ];
     }
@@ -145,7 +147,9 @@ function evaluateExpression(
       return [
         {
           reason: "unsupported-signal",
-          message: "Empty availability anyOf group",
+          signal: { kind: "always" },
+          message:
+            "Empty availability anyOf group — this is an authoring error; the group should contain at least one entry",
         },
       ];
     }
@@ -177,9 +181,19 @@ export function evaluateToolAvailability(params: {
     return [
       {
         reason: "unsupported-signal",
+        signal: { kind: "always" },
         message: "Unsupported availability expression",
       },
     ];
   }
-  return evaluateExpression(availability, context);
+  const diagnostics = evaluateExpression(availability, context);
+  if (diagnostics.some((d) => d.reason === "unsupported-signal")) {
+    console.warn(
+      `[openclaw:tools] Tool "${params.descriptor.name}" has malformed availability — ${diagnostics
+        .filter((d) => d.reason === "unsupported-signal")
+        .map((d) => d.message)
+        .join("; ")}`,
+    );
+  }
+  return diagnostics;
 }

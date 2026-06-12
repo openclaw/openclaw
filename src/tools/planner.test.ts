@@ -108,7 +108,9 @@ describe("buildToolPlan", () => {
     expect(hiddenTool.diagnostics).toEqual([
       {
         reason: "unsupported-signal",
-        message: "Empty availability allOf group",
+        signal: { kind: "always" },
+        message:
+          "Empty availability allOf group — this is an authoring error; the group should contain at least one entry",
       },
     ]);
   });
