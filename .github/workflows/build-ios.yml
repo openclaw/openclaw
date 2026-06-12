@@ -55,8 +55,7 @@ jobs:
           cd apps/ios
           xcodegen generate
 
-      # 7. 使用 archive 代替 build（核心修复 ✨）
-      # Archive 会强制执行 iOS 生产环境的“扁平化”流程，彻底消除依赖库中的 macOS 风格软链接，完美兼容 Windows
+      # 7. 使用 archive 归档项目
       - name: Archive App (Flatten Frameworks)
         run: |
           xcodebuild archive \
@@ -69,12 +68,14 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             PROVISIONING_PROFILE_SPECIFIER=""
 
-      # 8. 从归档产物（.xcarchive）中安全提取扁平化后的 .app 并打包
-      - name: Package to IPA
+      # 8. 彻底消除所有 Unix 软链接（解决 Windows Sideloadly 报错的关键 ✨）
+      - name: Package to IPA (Flatten Symlinks for Windows)
         run: |
           mkdir -p Payload
-          cp -R build_output/OpenClaw.xcarchive/Products/Applications/OpenClaw.app Payload/
-          zip -yr OpenClaw_Unsigned.ipa Payload
+          # 使用 -RL 参数强制跟随并展开所有软链接，把它们变成在 Windows 下也可读的真实文件实体
+          cp -RL build_output/OpenClaw.xcarchive/Products/Applications/OpenClaw.app Payload/
+          # 此时 Payload 内部已无任何软链接，直接进行标准压缩
+          zip -r OpenClaw_Unsigned.ipa Payload
 
       # 9. 将打包好的成品上传到 GitHub Actions 产物中供下载
       - name: Upload Artifact
