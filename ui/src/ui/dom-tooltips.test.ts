@@ -51,6 +51,26 @@ describe("native title tooltip promotion", () => {
     expect(button.getAttribute("aria-label")).toBe("Open session");
   });
 
+  it("preserves visible button names while promoting descriptive title tooltips", () => {
+    const root = document.createElement("div");
+    const button = document.createElement("button");
+    button.className = "btn";
+    button.title = "Chroma family";
+    button.textContent = "Claw";
+    root.append(button);
+
+    promoteNativeTitleTooltip(button, root, "pointer");
+
+    expect(button.textContent).toBe("Claw");
+    expect(button.getAttribute("aria-label")).toBeNull();
+    expect(button.getAttribute("data-tooltip")).toBe("Chroma family");
+
+    restoreNativeTitleTooltip(button, root, "pointer");
+
+    expect(button.getAttribute("title")).toBe("Chroma family");
+    expect(button.getAttribute("aria-label")).toBeNull();
+  });
+
   it("does not promote rich role-button containers", () => {
     const root = document.createElement("div");
     const card = document.createElement("article");

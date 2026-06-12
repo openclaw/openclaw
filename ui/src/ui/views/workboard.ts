@@ -980,7 +980,7 @@ function renderWorkboardSelect<Value extends string>(params: {
   showLabel?: boolean;
 }) {
   const selected = params.options.find((option) => option.value === params.value);
-  const selectedLabel = selected?.label ?? params.options[0]?.label ?? "";
+  const selectedLabel = selected?.label ?? params.value;
   const select = html`
     <details
       class="workboard-select ${params.className ?? ""}"

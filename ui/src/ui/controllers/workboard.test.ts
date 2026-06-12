@@ -3992,7 +3992,7 @@ describe("workboard controller", () => {
     });
   });
 
-  it("keeps task-linked cards running when ledger cancel does not abort the session", async () => {
+  it("marks task-linked cards blocked when task cancellation already stopped the session", async () => {
     const host = {};
     const linked = {
       ...sampleCard,
@@ -4003,9 +4003,11 @@ describe("workboard controller", () => {
     const state = getWorkboardState(host);
     state.cards = [linked];
     state.tasksByCardId.set("card-1", sampleTask);
+    const blocked = { ...linked, status: "blocked" as const };
     const client = createClient({
       "tasks.cancel": { cancelled: true },
       "chat.abort": { aborted: false, runIds: [] },
+      "workboard.cards.update": { card: blocked },
     });
 
     await stopWorkboardCard({ host, client: client as never, card: linked });
@@ -4021,8 +4023,11 @@ describe("workboard controller", () => {
     expect(client.request).toHaveBeenNthCalledWith(3, "chat.abort", {
       sessionKey: sampleTaskSessionKey,
     });
-    expect(client.request).toHaveBeenCalledTimes(3);
-    expect(state.cards).toEqual([linked]);
+    expect(client.request).toHaveBeenNthCalledWith(4, "workboard.cards.update", {
+      id: "card-1",
+      patch: { status: "blocked" },
+    });
+    expect(state.cards).toEqual([blocked]);
     expect(state.tasksByCardId.get("card-1")).toMatchObject({
       taskId: "task-1",
       status: "cancelled",

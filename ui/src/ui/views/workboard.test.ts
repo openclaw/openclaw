@@ -3214,6 +3214,38 @@ describe("renderWorkboard", () => {
     expect(container.textContent).toContain("Existing session");
   });
 
+  it("shows a missing current session key instead of a false empty selection", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.draftOpen = true;
+    state.draftSessionKey = "agent:main:archived-session";
+    const container = document.createElement("div");
+
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: null,
+        sessions: [],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+
+    const sessionSelect = [
+      ...(container
+        .querySelector(".workboard-draft")
+        ?.querySelectorAll<HTMLElement>(".workboard-select") ?? []),
+    ].at(3);
+    expect(sessionSelect?.querySelector(".workboard-select__value")?.textContent).toBe(
+      "agent:main:archived-session",
+    );
+    expect(sessionSelect?.querySelector('[aria-selected="true"]')).toBeNull();
+  });
+
   it("does not offer synthetic heartbeat sessions when creating a card", () => {
     const host = {};
     const state = getWorkboardState(host);

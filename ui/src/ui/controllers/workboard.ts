@@ -3163,7 +3163,7 @@ export async function stopWorkboardCard(params: {
           runId: workboardCardRunId(params.card),
         })
       : false;
-    if (sessionKey ? !sessionAborted : !taskCancelled) {
+    if (!taskCancelled && !sessionAborted) {
       return;
     }
     const payload = await params.client.request("workboard.cards.update", {

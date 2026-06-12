@@ -81,14 +81,19 @@ function getTooltipText(element: HTMLElement): string {
 }
 
 function ensurePromotedTooltipAccessibleName(element: HTMLElement, title: string | null) {
-  if (!title || element.hasAttribute("aria-labelledby")) {
+  if (!title) {
     return;
   }
   if (element.getAttribute(GENERATED_ARIA_LABEL_ATTR) === "true") {
     element.setAttribute("aria-label", title);
     return;
   }
-  if (element.hasAttribute("aria-label")) {
+  const hasAccessibleNameWithoutTitle =
+    element.hasAttribute("aria-label") ||
+    element.hasAttribute("aria-labelledby") ||
+    Boolean(element.textContent?.trim()) ||
+    Boolean(element.querySelector("[aria-label], [aria-labelledby], img[alt]:not([alt=''])"));
+  if (hasAccessibleNameWithoutTitle) {
     return;
   }
   element.setAttribute("aria-label", title);
