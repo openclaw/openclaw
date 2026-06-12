@@ -86,6 +86,37 @@ const {
   warmCurrentProviderAuthStateOffMainThread,
 } = await import("./model-provider-auth.js");
 
+async function createSlowProviderAuthWorker(): Promise<{
+  tempDir: string;
+  markerPath: string;
+  workerUrl: URL;
+}> {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-provider-auth-worker-"));
+  const workerPath = path.join(tempDir, "slow-worker.mjs");
+  const markerPath = path.join(tempDir, "worker-finished");
+  await fs.writeFile(
+    workerPath,
+    `
+      import fs from "node:fs";
+      import { parentPort, workerData } from "node:worker_threads";
+      setTimeout(() => {
+        fs.writeFileSync(workerData.cfg.markerPath, "finished");
+        parentPort.postMessage({
+          status: "ok",
+          snapshot: {
+            agents: [{
+              agentId: "default",
+              configFingerprint: "fingerprint",
+              providers: [["openai", true]]
+            }]
+          }
+        });
+      }, 200);
+    `,
+  );
+  return { tempDir, markerPath, workerUrl: pathToFileURL(workerPath) };
+}
+
 describe("prepared provider auth state", () => {
   afterEach(() => {
     clearCurrentProviderAuthState();
@@ -543,29 +574,7 @@ describe("prepared provider auth state", () => {
   });
 
   it("terminates the off-main-thread warm worker when cancellation fires", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-provider-auth-worker-"));
-    const workerPath = path.join(tempDir, "slow-worker.mjs");
-    const markerPath = path.join(tempDir, "worker-finished");
-    await fs.writeFile(
-      workerPath,
-      `
-        import fs from "node:fs";
-        import { parentPort, workerData } from "node:worker_threads";
-        setTimeout(() => {
-          fs.writeFileSync(workerData.cfg.markerPath, "finished");
-          parentPort.postMessage({
-            status: "ok",
-            snapshot: {
-              agents: [{
-                agentId: "default",
-                configFingerprint: "fingerprint",
-                providers: [["openai", true]]
-              }]
-            }
-          });
-        }, 200);
-      `,
-    );
+    const { tempDir, markerPath, workerUrl } = await createSlowProviderAuthWorker();
     let cancelled = false;
 
     try {
@@ -574,11 +583,35 @@ describe("prepared provider auth state", () => {
         {
           isCancelled: () => cancelled,
           timeoutMs: 5_000,
-          workerUrl: pathToFileURL(workerPath),
+          workerUrl,
         },
       );
       await Promise.resolve();
       cancelled = true;
+      await warmPromise;
+      await new Promise((resolve) => {
+        setTimeout(resolve, 250);
+      });
+
+      await expect(fs.access(markerPath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("terminates the active off-main-thread warm worker when provider auth state is cleared", async () => {
+    const { tempDir, markerPath, workerUrl } = await createSlowProviderAuthWorker();
+
+    try {
+      const warmPromise = warmCurrentProviderAuthStateOffMainThread(
+        { markerPath } as unknown as OpenClawConfig,
+        {
+          timeoutMs: 5_000,
+          workerUrl,
+        },
+      );
+      await Promise.resolve();
+      clearCurrentProviderAuthState();
       await warmPromise;
       await new Promise((resolve) => {
         setTimeout(resolve, 250);
