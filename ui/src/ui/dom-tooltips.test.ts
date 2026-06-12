@@ -90,6 +90,7 @@ describe("native title tooltip promotion", () => {
     promoteNativeTitleTooltip(button, root, "pointer");
 
     expect(button.getAttribute("data-tooltip")).toBe("Hide archived cards");
+    expect(button.getAttribute("aria-label")).toBe("Hide archived cards");
     expect(document.querySelector(".control-ui-floating-tooltip")?.textContent).toBe(
       "Hide archived cards",
     );
@@ -109,6 +110,7 @@ describe("native title tooltip promotion", () => {
     expect(button.getAttribute("title")).toBeNull();
     expect(button.getAttribute("data-tooltip")).toBe("Hide archived cards");
     expect(button.getAttribute("data-native-tooltip-title")).toBe("Hide archived cards");
+    expect(button.getAttribute("aria-label")).toBe("Hide archived cards");
     expect(document.querySelector(".control-ui-floating-tooltip")?.textContent).toBe(
       "Hide archived cards",
     );

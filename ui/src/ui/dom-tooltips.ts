@@ -55,7 +55,14 @@ function getTooltipText(element: HTMLElement): string {
 }
 
 function ensurePromotedTooltipAccessibleName(element: HTMLElement, title: string | null) {
-  if (!title || element.hasAttribute("aria-label") || element.hasAttribute("aria-labelledby")) {
+  if (!title || element.hasAttribute("aria-labelledby")) {
+    return;
+  }
+  if (element.getAttribute(GENERATED_ARIA_LABEL_ATTR) === "true") {
+    element.setAttribute("aria-label", title);
+    return;
+  }
+  if (element.hasAttribute("aria-label")) {
     return;
   }
   element.setAttribute("aria-label", title);

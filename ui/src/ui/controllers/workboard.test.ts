@@ -258,9 +258,15 @@ describe("workboard controller", () => {
   it("polls through the read refresh path without write methods", async () => {
     vi.useFakeTimers();
     const host = {};
-    const client = createClient({
-      "workboard.cards.list": { cards: [sampleCard], statuses: ["todo", "done"] },
-      "tasks.list": { tasks: [] },
+    const completedTask = { ...sampleTask, status: "completed" as const };
+    const client = createClient((method) => {
+      if (method === "workboard.cards.list") {
+        return { cards: [sampleCard], statuses: ["todo", "done"] };
+      }
+      if (method === "tasks.get") {
+        return { task: completedTask };
+      }
+      return {};
     });
     const state = getWorkboardState(host);
     state.autoRefreshIntervalMs = 5000;
@@ -280,7 +286,8 @@ describe("workboard controller", () => {
     );
     expect(client.request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
     expect(client.request).not.toHaveBeenCalledWith("tasks.list", expect.anything());
-    expect(state.tasksByCardId.get(sampleCard.id)).toEqual(sampleTask);
+    expect(client.request).toHaveBeenCalledWith("tasks.get", { taskId: sampleTask.taskId });
+    expect(state.tasksByCardId.get(sampleCard.id)).toEqual(completedTask);
     vi.clearAllMocks();
     stopWorkboardPolling(host);
     await vi.advanceTimersByTimeAsync(5000);

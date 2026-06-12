@@ -1274,6 +1274,24 @@ async function listWorkboardTasks(client: GatewayBrowserClient): Promise<Workboa
   }
 }
 
+async function getLinkedWorkboardTasks(
+  client: GatewayBrowserClient,
+  cards: readonly WorkboardCard[],
+): Promise<WorkboardTaskSummary[]> {
+  const taskIds = new Set(
+    cards
+      .map((card) => normalizeString(card.taskId))
+      .filter((taskId): taskId is string => Boolean(taskId)),
+  );
+  const tasks = await Promise.all(
+    [...taskIds].map(async (taskId) => {
+      const payload = await client.request("tasks.get", { taskId });
+      return isRecord(payload) ? normalizeTaskSummary(payload.task) : null;
+    }),
+  );
+  return tasks.filter((task): task is WorkboardTaskSummary => task !== null);
+}
+
 function taskUpdatedAtValue(task: WorkboardTaskSummary): number {
   if (typeof task.updatedAt === "number") {
     return task.updatedAt;
@@ -1379,7 +1397,7 @@ export async function loadWorkboard(params: {
   requestUpdate?: () => void;
   force?: boolean;
   refreshDiagnostics?: boolean;
-  refreshTasks?: boolean;
+  taskRefresh?: "all" | "linked";
 }): Promise<boolean> {
   const state = getWorkboardState(params.host);
   if (!params.client || (!params.force && (state.loaded || state.loadAttempted))) {
@@ -1412,19 +1430,23 @@ export async function loadWorkboard(params: {
       if (!isCurrentWorkboardLoadGeneration(params.host, generation)) {
         return false;
       }
-      state.cards = normalized.cards;
+      const previousTasksByCardId = state.tasksByCardId;
+      state.cards =
+        params.taskRefresh === "linked"
+          ? normalized.cards.map((card) => {
+              const taskId =
+                normalizeString(card.taskId) ?? previousTasksByCardId.get(card.id)?.taskId;
+              return taskId && card.taskId !== taskId ? { ...card, taskId } : card;
+            })
+          : normalized.cards;
       state.statuses = normalized.statuses;
-      if (params.refreshTasks === false) {
-        const cardIds = new Set(normalized.cards.map((card) => card.id));
-        state.tasksByCardId = new Map(
-          [...state.tasksByCardId].filter(([cardId]) => cardIds.has(cardId)),
-        );
-      } else {
-        state.tasksByCardId = new Map();
-      }
-      if (params.refreshTasks !== false && normalized.cards.length > 0) {
+      state.tasksByCardId = new Map();
+      if (state.cards.length > 0) {
         try {
-          const tasks = await listWorkboardTasks(client);
+          const tasks =
+            params.taskRefresh === "linked"
+              ? await getLinkedWorkboardTasks(client, state.cards)
+              : await listWorkboardTasks(client);
           if (isCurrentWorkboardLoadGeneration(params.host, generation)) {
             applyTaskSummariesToState(state, tasks);
           }
@@ -1493,7 +1515,7 @@ export async function refreshWorkboard(params: {
       requestUpdate: params.requestUpdate,
       force: true,
       refreshDiagnostics: params.refreshDiagnostics,
-      refreshTasks: params.source !== "poll",
+      taskRefresh: params.source === "poll" ? "linked" : "all",
     });
     state.lastRefreshSource = params.source;
     if (state.error) {
