@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  makeIsolatedAgentTurnJob,
   makeIsolatedAgentTurnParams,
   setupRunCronIsolatedAgentTurnSuite,
 } from "./run.suite-helpers.js";
@@ -27,12 +28,18 @@ function requireEmbeddedAgentCall(index: number): { prompt?: string } {
 }
 
 function requireDeliveryRequest(): {
+  deliveryBestEffort?: boolean;
+  deliveryPayloadHasStructuredContent?: boolean;
   skipHeartbeatDelivery?: boolean;
+  synthesizedText?: unknown;
   deliveryPayloads?: unknown;
 } {
   const request = dispatchCronDeliveryMock.mock.calls[0]?.[0] as
     | {
+        deliveryBestEffort?: boolean;
+        deliveryPayloadHasStructuredContent?: boolean;
         skipHeartbeatDelivery?: boolean;
+        synthesizedText?: unknown;
         deliveryPayloads?: unknown;
       }
     | undefined;
@@ -127,7 +134,7 @@ describe("runCronIsolatedAgentTurn — interim ack retry", () => {
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
   });
 
-  it("delivers synthesized fatal failure signals even when the original payloads are empty", async () => {
+  it("suppresses synthesized fatal failure delivery when required cron failure alerts will report it", async () => {
     usePayloadTextExtraction();
     resolveCronDeliveryPlanMock.mockReturnValue({
       requested: true,
@@ -157,10 +164,53 @@ describe("runCronIsolatedAgentTurn — interim ack retry", () => {
     expect(result.status).toBe("error");
     expect(result.error).toBe("SYSTEM_RUN_DENIED: approval required");
     const deliveryRequest = requireDeliveryRequest();
+    expect(deliveryRequest.deliveryBestEffort).toBe(false);
+    expect(deliveryRequest.skipHeartbeatDelivery).toBe(false);
+    expect(deliveryRequest.deliveryPayloadHasStructuredContent).toBe(false);
+    expect(deliveryRequest.deliveryPayloads).toEqual([]);
+    expect(deliveryRequest.synthesizedText).toBeUndefined();
+  });
+
+  it("delivers synthesized fatal failure signals for best-effort cron delivery", async () => {
+    usePayloadTextExtraction();
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "messagechat",
+      to: "123",
+    });
+    isHeartbeatOnlyResponseMock.mockReturnValue(true);
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {
+        agentMeta: { usage: { input: 10, output: 20 } },
+        failureSignal: {
+          kind: "execution_denied",
+          source: "tool",
+          toolName: "exec",
+          code: "SYSTEM_RUN_DENIED",
+          message: "SYSTEM_RUN_DENIED: approval required",
+          fatalForCron: true,
+        },
+      },
+    });
+
+    mockRunCronFallbackPassthrough();
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentTurnParams({
+        job: makeIsolatedAgentTurnJob({ delivery: { bestEffort: true } }),
+      }),
+    );
+
+    expect(result.status).toBe("error");
+    expect(result.error).toBe("SYSTEM_RUN_DENIED: approval required");
+    const deliveryRequest = requireDeliveryRequest();
+    expect(deliveryRequest.deliveryBestEffort).toBe(true);
     expect(deliveryRequest.skipHeartbeatDelivery).toBe(false);
     expect(deliveryRequest.deliveryPayloads).toEqual([
       { text: "SYSTEM_RUN_DENIED: approval required", isError: true },
     ]);
+    expect(deliveryRequest.synthesizedText).toBe("SYSTEM_RUN_DENIED: approval required");
   });
 
   it("does not retry when descendants were spawned in this run even if they already settled", async () => {

@@ -1001,6 +1001,8 @@ async function finalizeCronRun(params: {
     !hasFatalErrorPayload &&
     isHeartbeatOnlyResponse(deliveryPayloads, resolveHeartbeatAckMaxChars(prepared.agentCfg));
   const { dispatchCronDelivery, resolveCronDeliveryBestEffort } = await loadCronDeliveryRuntime();
+  const deliveryBestEffort = resolveCronDeliveryBestEffort(prepared.input.job);
+  const suppressFatalErrorDelivery = hasFatalErrorPayload && !deliveryBestEffort;
   const sourceDeliveryOutcome = resolveSourceDeliveryOutcome(prepared.sourceDelivery, {
     didSendViaMessageTool: finalRunResult.didSendViaMessagingTool,
     messageToolSentTargets: finalRunResult.messagingToolSentTargets,
@@ -1021,10 +1023,12 @@ async function finalizeCronRun(params: {
     deliveryRequested: prepared.deliveryRequested,
     skipHeartbeatDelivery,
     sourceDeliveryOutcome,
-    deliveryBestEffort: resolveCronDeliveryBestEffort(prepared.input.job),
-    deliveryPayloadHasStructuredContent,
-    deliveryPayloads,
-    synthesizedText,
+    deliveryBestEffort,
+    deliveryPayloadHasStructuredContent: suppressFatalErrorDelivery
+      ? false
+      : deliveryPayloadHasStructuredContent,
+    deliveryPayloads: suppressFatalErrorDelivery ? [] : deliveryPayloads,
+    synthesizedText: suppressFatalErrorDelivery ? undefined : synthesizedText,
     ttsAuto: prepared.cronSession.sessionEntry.ttsAuto,
     summary,
     outputText,
