@@ -253,6 +253,70 @@ describe("runAgentLoop deferred tool hydration", () => {
     expect(messages.some((message) => message.role === "toolResult")).toBe(true);
   });
 
+  it("resolves a missing deferred tool once across pre-scan and preparation", async () => {
+    let streamCalls = 0;
+    const streamFn: StreamFn = () => {
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        streamCalls += 1;
+        const message =
+          streamCalls === 1
+            ? {
+                role: "assistant" as const,
+                content: [
+                  {
+                    type: "toolCall" as const,
+                    id: "call-missing",
+                    name: "missing_deferred",
+                    arguments: {},
+                  },
+                ],
+                api: "faux",
+                provider: "faux",
+                model: "faux-1",
+                usage: TEST_USAGE,
+                stopReason: "toolUse" as const,
+                timestamp: Date.now(),
+              }
+            : {
+                role: "assistant" as const,
+                content: [{ type: "text" as const, text: "done" }],
+                api: "faux",
+                provider: "faux",
+                model: "faux-1",
+                usage: TEST_USAGE,
+                stopReason: "stop" as const,
+                timestamp: Date.now(),
+              };
+        stream.push({ type: "done", reason: message.stopReason, message });
+      });
+      return stream;
+    };
+    const resolveDeferredTool = vi.fn(() => undefined);
+
+    const messages = await runAgentLoop(
+      [{ role: "user", content: "call missing tool", timestamp: Date.now() }],
+      { systemPrompt: "test", messages: [], tools: [] },
+      {
+        model,
+        convertToLlm: (agentMessages: AgentMessage[]) => agentMessages as never,
+        resolveDeferredTool,
+      },
+      (_event: AgentEvent) => {},
+      undefined,
+      streamFn,
+    );
+
+    expect(resolveDeferredTool).toHaveBeenCalledTimes(1);
+    expect(messages).toContainEqual(
+      expect.objectContaining({
+        role: "toolResult",
+        toolName: "missing_deferred",
+        isError: true,
+      }),
+    );
+  });
+
   it("hydrates sequential deferred tools before choosing the executor", async () => {
     let activeExecutions = 0;
     let maxActiveExecutions = 0;

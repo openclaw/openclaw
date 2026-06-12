@@ -1741,8 +1741,8 @@ export async function runEmbeddedAttempt(
       uncompactedTools: uncompactedEffectiveTools,
       clientTools,
       clientToolsCataloged:
-        codeModeControlsEnabledForRun ||
-        (toolSearchControlsEnabledForRun && toolSearchConfig.mode !== "directory"),
+        toolSearch.catalogRegistered &&
+        (codeModeControlsEnabledForRun || toolSearchConfig.mode !== "directory"),
       catalogToolCount: toolSearch.catalogToolCount,
       controlsEnabled: toolSearchControlsEnabledForRun || codeModeControlsEnabledForRun,
       deferredToolsCallable: deferredDirectoryToolsCallable,

@@ -502,6 +502,7 @@ async function executeToolCalls(
   emit: AgentEventSink,
 ): Promise<ExecutedToolCallBatch> {
   const toolCalls = assistantMessage.content.filter((c) => c.type === "toolCall");
+  const resolvedToolCalls = new Map<AgentToolCall, AgentTool | undefined>();
   let hasSequentialToolCall = false;
   if (config.toolExecution !== "sequential") {
     for (const toolCall of toolCalls) {
@@ -511,6 +512,7 @@ async function executeToolCalls(
         toolCall,
         config,
         signal,
+        resolvedToolCalls,
       );
       if (tool?.executionMode === "sequential") {
         hasSequentialToolCall = true;
@@ -526,6 +528,7 @@ async function executeToolCalls(
       currentContext,
       assistantMessage,
       toolCalls,
+      resolvedToolCalls,
       config,
       signal,
       emit,
@@ -535,6 +538,7 @@ async function executeToolCalls(
     currentContext,
     assistantMessage,
     toolCalls,
+    resolvedToolCalls,
     config,
     signal,
     emit,
@@ -550,6 +554,7 @@ async function executeToolCallsSequential(
   currentContext: AgentContext,
   assistantMessage: AssistantMessage,
   toolCalls: AgentToolCall[],
+  resolvedToolCalls: Map<AgentToolCall, AgentTool | undefined>,
   config: AgentLoopConfig,
   signal: AbortSignal | undefined,
   emit: AgentEventSink,
@@ -571,6 +576,7 @@ async function executeToolCallsSequential(
       toolCall,
       config,
       signal,
+      resolvedToolCalls,
     );
     let finalized: FinalizedToolCallOutcome;
     if (preparation.kind === "immediate") {
@@ -612,6 +618,7 @@ async function executeToolCallsParallel(
   currentContext: AgentContext,
   assistantMessage: AssistantMessage,
   toolCalls: AgentToolCall[],
+  resolvedToolCalls: Map<AgentToolCall, AgentTool | undefined>,
   config: AgentLoopConfig,
   signal: AbortSignal | undefined,
   emit: AgentEventSink,
@@ -632,6 +639,7 @@ async function executeToolCallsParallel(
       toolCall,
       config,
       signal,
+      resolvedToolCalls,
     );
     if (preparation.kind === "immediate") {
       const finalized = {
@@ -734,7 +742,11 @@ async function resolveToolCallTool(
   toolCall: AgentToolCall,
   config: AgentLoopConfig,
   signal: AbortSignal | undefined,
+  resolvedToolCalls?: Map<AgentToolCall, AgentTool | undefined>,
 ): Promise<AgentTool | undefined> {
+  if (resolvedToolCalls?.has(toolCall)) {
+    return resolvedToolCalls.get(toolCall);
+  }
   let tool = currentContext.tools?.find((t) => t.name === toolCall.name);
   if (!tool) {
     tool = await config.resolveDeferredTool?.(
@@ -750,6 +762,7 @@ async function resolveToolCallTool(
       currentContext.tools = [...(currentContext.tools ?? []), tool];
     }
   }
+  resolvedToolCalls?.set(toolCall, tool);
   return tool;
 }
 
@@ -759,6 +772,7 @@ async function prepareToolCall(
   toolCall: AgentToolCall,
   config: AgentLoopConfig,
   signal: AbortSignal | undefined,
+  resolvedToolCalls: Map<AgentToolCall, AgentTool | undefined>,
 ): Promise<PreparedToolCall | ImmediateToolCallOutcome> {
   const tool = await resolveToolCallTool(
     currentContext,
@@ -766,6 +780,7 @@ async function prepareToolCall(
     toolCall,
     config,
     signal,
+    resolvedToolCalls,
   );
   if (!tool) {
     return {
