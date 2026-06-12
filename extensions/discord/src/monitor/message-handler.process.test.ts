@@ -143,6 +143,8 @@ type DispatchInboundParams = {
     onItemEvent?: (payload: {
       itemId?: string;
       kind?: string;
+      phase?: string;
+      status?: string;
       progressText?: string;
       summary?: string;
       title?: string;
@@ -159,6 +161,7 @@ type DispatchInboundParams = {
       phase?: string;
       name?: string;
       title?: string;
+      status?: string;
       exitCode?: number | null;
     }) => Promise<void> | void;
     onPatchSummary?: (payload: {
@@ -2085,6 +2088,57 @@ describe("processDiscordMessage draft streaming", () => {
     expect(updates).toEqual(["Pinching\n\n🛠️ Exec\n• exec done"]);
     expectPreviewEditContent("done");
     expect(deliverDiscordReply).not.toHaveBeenCalled();
+  });
+
+  it("does not render failed Discord item progress as draft text", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onItemEvent?.({
+        itemId: "tool-1",
+        kind: "tool",
+        name: "exec",
+        phase: "result",
+        status: "failed",
+        progressText: "exec failed",
+      });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: { maxLinesPerMessage: 5 },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    const updates = draftStream.update.mock.calls.map((call) => call[0]).join("\n");
+    expect(updates).not.toContain("exec failed");
+    expect(draftStream.update).not.toHaveBeenCalled();
+  });
+
+  it("does not render failed Discord command output as draft text", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onCommandOutput?.({
+        phase: "end",
+        title: "Exec",
+        name: "exec",
+        status: "failed",
+        exitCode: 1,
+      });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: { maxLinesPerMessage: 5 },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    const updates = draftStream.update.mock.calls.map((call) => call[0]).join("\n");
+    expect(updates).not.toContain("Exec");
+    expect(draftStream.update).not.toHaveBeenCalled();
   });
 
   it("does not update Discord progress drafts after final answer delivery", async () => {
