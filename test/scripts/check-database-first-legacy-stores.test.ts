@@ -292,6 +292,366 @@ describe("check-database-first-legacy-stores", () => {
     expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 3 }]);
   });
 
+  it("flags private file store writes to legacy paths", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { privateFileStore } from "openclaw/plugin-sdk/security-runtime";
+        await privateFileStore(stateDir).writeJson("thread-bindings.json", {});
+      `,
+      "src/runtime/private-file-store-write.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 3 }]);
+  });
+
+  it("flags fs-safe factory aliases writing legacy paths", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { privateFileStore } from "openclaw/plugin-sdk/security-runtime";
+        import * as fsSafe from "openclaw/plugin-sdk/security-runtime";
+        const makePrivateStore = privateFileStore;
+        const makeRoot = fsSafe.root;
+        const { privateFileStore: makeFromNamespace } = fsSafe;
+        await makePrivateStore(stateDir).writeJson("thread-bindings.json", {});
+        await (await makeRoot(stateDir)).writeJson("plugin-binding-approvals.json", {});
+        await makeFromNamespace(stateDir).writeJson("gateway-restart-intent.json", {});
+      `,
+      "src/runtime/fs-safe-factory-alias-write.ts",
+    );
+
+    expect(violations).toEqual([
+      { kind: "legacy store filesystem write", line: 7 },
+      { kind: "legacy store filesystem write", line: 8 },
+      { kind: "legacy store filesystem write", line: 9 },
+    ]);
+  });
+
+  it("flags fs-safe root writes to legacy paths", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { root } from "openclaw/plugin-sdk/security-runtime";
+        const state = await root(stateDir);
+        await state.writeJson("plugin-binding-approvals.json", {});
+        await (await root(stateDir)).writeJson("thread-bindings.json", {});
+      `,
+      "src/runtime/fs-safe-root-write.ts",
+    );
+
+    expect(violations).toEqual([
+      { kind: "legacy store filesystem write", line: 4 },
+      { kind: "legacy store filesystem write", line: 5 },
+    ]);
+  });
+
+  it("flags bare fs-safe package root writes to legacy paths", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { root } from "@openclaw/fs-safe";
+        const state = await root(stateDir);
+        await state.writeJson("thread-bindings.json", {});
+      `,
+      "src/runtime/bare-fs-safe-root-write.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 4 }]);
+  });
+
+  it("flags file access runtime root writes to legacy paths", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { root } from "openclaw/plugin-sdk/file-access-runtime";
+        const state = await root(stateDir);
+        await state.writeJson("thread-bindings.json", {});
+      `,
+      "extensions/example/src/runtime/file-access-root-write.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 4 }]);
+  });
+
+  it("flags fs-safe store root writes to legacy paths", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { privateFileStore } from "openclaw/plugin-sdk/security-runtime";
+        const state = await privateFileStore(stateDir).root();
+        await state.writeJson("thread-bindings.json", {});
+        await (await privateFileStore(stateDir).root()).writeJson("plugin-binding-approvals.json", {});
+      `,
+      "src/runtime/fs-safe-store-root-write.ts",
+    );
+
+    expect(violations).toEqual([
+      { kind: "legacy store filesystem write", line: 4 },
+      { kind: "legacy store filesystem write", line: 5 },
+    ]);
+  });
+
+  it("allows fs-safe store reads from legacy paths", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { privateFileStore } from "openclaw/plugin-sdk/security-runtime";
+        const store = privateFileStore(stateDir);
+        await store.readJson("thread-bindings.json");
+      `,
+      "src/runtime/private-file-store-read.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("flags fs-safe JSON store writes to legacy paths", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { privateFileStore } from "openclaw/plugin-sdk/security-runtime";
+        await privateFileStore(stateDir).json("thread-bindings.json").write({});
+        const bindings = privateFileStore(stateDir).json("plugin-binding-approvals.json");
+        await bindings.update((current) => current ?? {});
+        await privateFileStore(stateDir).json("gateway-restart-intent.json").updateOr({}, (current) => current);
+      `,
+      "src/runtime/private-file-json-store-write.ts",
+    );
+
+    expect(violations).toEqual([
+      { kind: "legacy store filesystem write", line: 3 },
+      { kind: "legacy store filesystem write", line: 5 },
+      { kind: "legacy store filesystem write", line: 6 },
+    ]);
+  });
+
+  it("flags direct fs-safe package store writes to legacy paths", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { fileStore, jsonStore } from "@openclaw/fs-safe/store";
+        await fileStore({ rootDir: stateDir }).writeJson("thread-bindings.json", {});
+        const options = { filePath: "plugin-binding-approvals.json" };
+        await jsonStore(options).write({});
+        await jsonStore({ filePath: "gateway-restart-intent.json" }).update((current) => current ?? {});
+      `,
+      "src/runtime/direct-fs-safe-store-write.ts",
+    );
+
+    expect(violations).toEqual([
+      { kind: "legacy store filesystem write", line: 3 },
+      { kind: "legacy store filesystem write", line: 5 },
+      { kind: "legacy store filesystem write", line: 6 },
+    ]);
+  });
+
+  it("flags fs-safe store object aliases writing legacy paths", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { privateFileStore } from "openclaw/plugin-sdk/security-runtime";
+        const jsonBindings = privateFileStore(stateDir).json("plugin-binding-approvals.json");
+        const stores = {
+          state: privateFileStore(stateDir),
+          bindings: jsonBindings,
+        };
+        await stores.state.writeJson("thread-bindings.json", {});
+        await stores.bindings.write({});
+        stores.state = customStore;
+        stores.bindings = privateFileStore(stateDir).json("gateway-restart-intent.json");
+        await stores.state.writeJson("thread-bindings.json", {});
+        await stores.bindings.update((current) => current ?? {});
+      `,
+      "src/runtime/fs-safe-store-object-alias-write.ts",
+    );
+
+    expect(violations).toEqual([
+      { kind: "legacy store filesystem write", line: 8 },
+      { kind: "legacy store filesystem write", line: 9 },
+      { kind: "legacy store filesystem write", line: 13 },
+    ]);
+  });
+
+  it("flags fs-safe store object aliases copied through spreads and nested objects", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { privateFileStore } from "openclaw/plugin-sdk/security-runtime";
+        const base = { state: privateFileStore(stateDir) };
+        const stores = { ...base };
+        const nested = { inner: { bindings: privateFileStore(stateDir).json("plugin-binding-approvals.json") } };
+        await stores.state.writeJson("thread-bindings.json", {});
+        await nested.inner.bindings.write({});
+      `,
+      "src/runtime/fs-safe-store-spread-object-alias-write.ts",
+    );
+
+    expect(violations).toEqual([
+      { kind: "legacy store filesystem write", line: 6 },
+      { kind: "legacy store filesystem write", line: 7 },
+    ]);
+  });
+
+  it("flags fs-safe store object aliases assigned through nested object properties", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { privateFileStore } from "openclaw/plugin-sdk/security-runtime";
+        const stores = {};
+        stores.inner = { bindings: privateFileStore(stateDir).json("thread-bindings.json") };
+        await stores.inner.bindings.write({});
+      `,
+      "src/runtime/assigned-nested-fs-safe-store-object-alias.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 5 }]);
+  });
+
+  it("flags fs-safe store object aliases copied through destructuring", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { privateFileStore } from "openclaw/plugin-sdk/security-runtime";
+        const stores = { state: privateFileStore(stateDir) };
+        const nested = { inner: { bindings: privateFileStore(stateDir).json("plugin-binding-approvals.json") } };
+        const { state } = stores;
+        const { inner: { bindings } } = nested;
+        await state.writeJson("thread-bindings.json", {});
+        await bindings.write({});
+      `,
+      "src/runtime/fs-safe-store-destructured-object-alias-write.ts",
+    );
+
+    expect(violations).toEqual([
+      { kind: "legacy store filesystem write", line: 7 },
+      { kind: "legacy store filesystem write", line: 8 },
+    ]);
+  });
+
+  it("clears fs-safe store object aliases after exhaustive property reassignment", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { privateFileStore } from "openclaw/plugin-sdk/security-runtime";
+        const stores = { state: privateFileStore(stateDir) };
+        if (flag) {
+          stores.state = customA;
+        } else {
+          stores.state = customB;
+        }
+        await stores.state.writeJson("thread-bindings.json", {});
+      `,
+      "src/runtime/exhaustive-fs-safe-store-property-reassignment.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("clears nested fs-safe store object aliases after exhaustive property reassignment", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { privateFileStore } from "openclaw/plugin-sdk/security-runtime";
+        const stores = { inner: { bindings: privateFileStore(stateDir).json("thread-bindings.json") } };
+        if (flag) {
+          stores.inner = { bindings: customA };
+        } else {
+          stores.inner = { bindings: customB };
+        }
+        await stores.inner.bindings.write({});
+      `,
+      "src/runtime/exhaustive-nested-fs-safe-store-property-reassignment.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("keeps fs-safe store object aliases when one exhaustive property branch remains a store", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { privateFileStore } from "openclaw/plugin-sdk/security-runtime";
+        const stores = { state: customStore };
+        if (flag) {
+          stores.state = customA;
+        } else {
+          stores.state = privateFileStore(stateDir);
+        }
+        await stores.state.writeJson("thread-bindings.json", {});
+      `,
+      "src/runtime/exhaustive-fs-safe-store-property-partial-reassignment.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 9 }]);
+  });
+
+  it("flags direct fs-safe package namespace store writes to legacy paths", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import * as fsSafeStore from "@openclaw/fs-safe/store";
+        const store = fsSafeStore.fileStoreSync({ rootDir: stateDir });
+        store.writeJson("thread-bindings.json", {});
+        const bindings = fsSafeStore.jsonStore({ filePath: "plugin-binding-approvals.json" });
+        await bindings.write({});
+      `,
+      "src/runtime/direct-fs-safe-store-namespace-write.ts",
+    );
+
+    expect(violations).toEqual([
+      { kind: "legacy store filesystem write", line: 4 },
+      { kind: "legacy store filesystem write", line: 6 },
+    ]);
+  });
+
+  it("allows fs-safe JSON store reads from legacy paths", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { privateFileStore } from "openclaw/plugin-sdk/security-runtime";
+        const bindings = privateFileStore(stateDir).json("thread-bindings.json");
+        await bindings.read();
+        await privateFileStore(stateDir).json("plugin-binding-approvals.json").readOr({});
+      `,
+      "src/runtime/private-file-json-store-read.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("clears fs-safe store aliases after exhaustive non-store reassignment", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { privateFileStore } from "openclaw/plugin-sdk/security-runtime";
+        let store = privateFileStore(stateDir);
+        if (flag) {
+          store = customA;
+        } else {
+          store = customB;
+        }
+        await store.writeJson("thread-bindings.json", {});
+      `,
+      "src/runtime/exhaustive-fs-safe-store-reassignment.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("keeps fs-safe store aliases when one exhaustive branch remains a store", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { privateFileStore } from "openclaw/plugin-sdk/security-runtime";
+        let store = customStore;
+        if (flag) {
+          store = customA;
+        } else {
+          store = privateFileStore(stateDir);
+        }
+        await store.writeJson("thread-bindings.json", {});
+      `,
+      "src/runtime/exhaustive-fs-safe-store-partial-reassignment.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 9 }]);
+  });
+
+  it("clears fs-safe namespace factory aliases after shadowing", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import * as fsSafe from "openclaw/plugin-sdk/security-runtime";
+        async function save(fsSafe: { root(dir: string): Promise<{ writeJson(path: string): void }> }) {
+          await (await fsSafe.root(stateDir)).writeJson("thread-bindings.json");
+        }
+      `,
+      "src/runtime/fs-safe-namespace-shadow.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
   it("ignores helper-like namespace imports from unrelated modules", () => {
     const violations = collectDatabaseFirstLegacyStoreViolations(
       `

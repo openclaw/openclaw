@@ -36,7 +36,34 @@ const helperWriteCallees = new Set([
   "writeTextAtomic",
 ]);
 
-const helperWriteModulePattern = /(?:^|\/)(?:fs-safe|json-files|replace-file)(?:\.[cm]?[jt]s)?$/u;
+const fsSafeStoreFactoryCallees = new Set([
+  "fileStore",
+  "fileStoreSync",
+  "privateFileStore",
+  "privateFileStoreSync",
+  "root",
+]);
+const fsSafeJsonStoreFactoryCallees = new Set(["jsonStore"]);
+
+const fsSafeStoreWriteMethods = new Set([
+  "append",
+  "copyIn",
+  "create",
+  "createJson",
+  "mkdir",
+  "move",
+  "openWritable",
+  "remove",
+  "write",
+  "writeJson",
+  "writeStream",
+  "writeText",
+]);
+const fsSafeJsonStoreWriteMethods = new Set(["update", "updateOr", "write"]);
+
+const helperWriteModulePattern =
+  /(?:^|\/)(?:fs-safe|json-files|private-file-store|replace-file)(?:\.[cm]?[jt]s)?$/u;
+const fsSafePackageModulePattern = /^@openclaw\/fs-safe(?:\/(?:root|store))?$/u;
 
 const bridgeMarkerPattern = /\btranscriptLocator\b|sqlite-transcript:\/\//u;
 
@@ -174,7 +201,12 @@ function importSource(node) {
 }
 
 function isHelperWriteModuleSource(source) {
-  return source === "openclaw/plugin-sdk/security-runtime" || helperWriteModulePattern.test(source);
+  return (
+    source === "openclaw/plugin-sdk/file-access-runtime" ||
+    source === "openclaw/plugin-sdk/security-runtime" ||
+    fsSafePackageModulePattern.test(source) ||
+    helperWriteModulePattern.test(source)
+  );
 }
 
 function collectCreateRequireBindings(sourceFile) {
@@ -233,6 +265,7 @@ function isFsDynamicImportExpression(expression) {
 function collectFsBindings(sourceFile) {
   const fsModuleBindings = new Set();
   const fsWriteAliases = new Map();
+  const fsSafeStoreFactoryAliases = new Map();
 
   for (const statement of sourceFile.statements) {
     if (!ts.isImportDeclaration(statement)) {
@@ -258,6 +291,12 @@ function collectFsBindings(sourceFile) {
         for (const helperName of helperWriteCallees) {
           fsWriteAliases.set(`${namedBindings.name.text}.${helperName}`, helperName);
         }
+        for (const factoryName of [
+          ...fsSafeStoreFactoryCallees,
+          ...fsSafeJsonStoreFactoryCallees,
+        ]) {
+          fsSafeStoreFactoryAliases.set(`${namedBindings.name.text}.${factoryName}`, factoryName);
+        }
       }
       continue;
     }
@@ -272,10 +311,17 @@ function collectFsBindings(sourceFile) {
       if (isHelperWriteModuleSource(source) && helperWriteCallees.has(importedName)) {
         fsWriteAliases.set(element.name.text, importedName);
       }
+      if (
+        isHelperWriteModuleSource(source) &&
+        (fsSafeStoreFactoryCallees.has(importedName) ||
+          fsSafeJsonStoreFactoryCallees.has(importedName))
+      ) {
+        fsSafeStoreFactoryAliases.set(element.name.text, importedName);
+      }
     }
   }
 
-  return { fsModuleBindings, fsWriteAliases };
+  return { fsModuleBindings, fsWriteAliases, fsSafeStoreFactoryAliases };
 }
 
 function templateCandidateText(current) {
@@ -351,12 +397,16 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
 
   const sourceFile = ts.createSourceFile(relativePath, content, ts.ScriptTarget.Latest, true);
   const createRequireBindings = collectCreateRequireBindings(sourceFile);
-  const { fsModuleBindings, fsWriteAliases } = collectFsBindings(sourceFile);
+  const { fsModuleBindings, fsWriteAliases, fsSafeStoreFactoryAliases } =
+    collectFsBindings(sourceFile);
   const violations = [];
   const seenViolations = new Set();
   const fsModuleBindingScopes = [new Map([...fsModuleBindings].map((name) => [name, true]))];
   const fsModulePropertyScopes = [new Map()];
   const fsWriteAliasScopes = [fsWriteAliases];
+  const fsSafeStoreFactoryAliasScopes = [fsSafeStoreFactoryAliases];
+  const fsSafeStoreScopes = [new Map()];
+  const fsSafeJsonStoreScopes = [new Map()];
   const requireShadowScopes = [new Set()];
   const createRequireShadowScopes = [new Set()];
   const legacyPathScopes = [new Map()];
@@ -475,6 +525,46 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
     return null;
   }
 
+  function resolveFsSafeStoreFactoryAlias(name) {
+    for (let index = fsSafeStoreFactoryAliasScopes.length - 1; index >= 0; index--) {
+      const scope = fsSafeStoreFactoryAliasScopes[index];
+      if (scope.has(name)) {
+        return scope.get(name) ?? null;
+      }
+    }
+    return null;
+  }
+
+  function resolveFsSafeStore(name) {
+    const value = lookupFsSafeStore(name);
+    return value === true;
+  }
+
+  function lookupFsSafeStore(name) {
+    for (let index = fsSafeStoreScopes.length - 1; index >= 0; index--) {
+      const scope = fsSafeStoreScopes[index];
+      if (scope.has(name)) {
+        return scope.get(name) === true;
+      }
+    }
+    return null;
+  }
+
+  function resolveFsSafeJsonStore(name) {
+    const value = lookupFsSafeJsonStore(name);
+    return value === true;
+  }
+
+  function lookupFsSafeJsonStore(name) {
+    for (let index = fsSafeJsonStoreScopes.length - 1; index >= 0; index--) {
+      const scope = fsSafeJsonStoreScopes[index];
+      if (scope.has(name)) {
+        return scope.get(name) === true;
+      }
+    }
+    return null;
+  }
+
   function visibleFsWriteAliases() {
     const aliases = new Map();
     for (const scope of fsWriteAliasScopes) {
@@ -505,8 +595,50 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
     return currentFsWriteAliasScope();
   }
 
+  function fsSafeStoreWriteScope(name) {
+    for (let index = fsSafeStoreScopes.length - 1; index >= 0; index--) {
+      const scope = fsSafeStoreScopes[index];
+      if (scope.has(name)) {
+        return scope;
+      }
+    }
+    return currentFsSafeStoreScope();
+  }
+
+  function fsSafeStoreFactoryAliasWriteScope(name) {
+    for (let index = fsSafeStoreFactoryAliasScopes.length - 1; index >= 0; index--) {
+      const scope = fsSafeStoreFactoryAliasScopes[index];
+      if (scope.has(name)) {
+        return scope;
+      }
+    }
+    return currentFsSafeStoreFactoryAliasScope();
+  }
+
+  function fsSafeJsonStoreWriteScope(name) {
+    for (let index = fsSafeJsonStoreScopes.length - 1; index >= 0; index--) {
+      const scope = fsSafeJsonStoreScopes[index];
+      if (scope.has(name)) {
+        return scope;
+      }
+    }
+    return currentFsSafeJsonStoreScope();
+  }
+
   function currentLegacyObjectPropertyScope() {
     return legacyObjectPropertyScopes[legacyObjectPropertyScopes.length - 1];
+  }
+
+  function currentFsSafeStoreFactoryAliasScope() {
+    return fsSafeStoreFactoryAliasScopes[fsSafeStoreFactoryAliasScopes.length - 1];
+  }
+
+  function currentFsSafeStoreScope() {
+    return fsSafeStoreScopes[fsSafeStoreScopes.length - 1];
+  }
+
+  function currentFsSafeJsonStoreScope() {
+    return fsSafeJsonStoreScopes[fsSafeJsonStoreScopes.length - 1];
   }
 
   function currentWrapperFunctionScope() {
@@ -524,6 +656,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
   function createBranchEffects() {
     return {
       fsIdentifierAssignments: new Map(),
+      fsSafePropertyAssignments: new Map(),
       identifierAssignments: new Map(),
       propertyAssignments: new Map(),
       wrapperAssignments: new Map(),
@@ -825,6 +958,9 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
 
   function visitWithChildScope(node) {
     fsWriteAliasScopes.push(new Map());
+    fsSafeStoreFactoryAliasScopes.push(new Map());
+    fsSafeStoreScopes.push(new Map());
+    fsSafeJsonStoreScopes.push(new Map());
     fsModuleBindingScopes.push(new Map());
     fsModulePropertyScopes.push(new Map());
     requireShadowScopes.push(new Set());
@@ -847,6 +983,9 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
     legacyPathScopes.pop();
     fsModulePropertyScopes.pop();
     fsModuleBindingScopes.pop();
+    fsSafeJsonStoreScopes.pop();
+    fsSafeStoreScopes.pop();
+    fsSafeStoreFactoryAliasScopes.pop();
     fsWriteAliasScopes.pop();
     createRequireShadowScopes.pop();
     requireShadowScopes.pop();
@@ -900,6 +1039,9 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
 
   function visitFunctionLike(node, fsBindingParameterIndexes = new Set()) {
     fsWriteAliasScopes.push(new Map());
+    fsSafeStoreFactoryAliasScopes.push(new Map());
+    fsSafeStoreScopes.push(new Map());
+    fsSafeJsonStoreScopes.push(new Map());
     fsModuleBindingScopes.push(new Map());
     fsModulePropertyScopes.push(new Map());
     requireShadowScopes.push(new Set());
@@ -916,6 +1058,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
         currentWrapperFunctionScope().set(name, null);
       }
       markFsWriteAliasShadows(parameter.name);
+      markFsSafeStoreShadows(parameter.name);
       markFsModuleBindingShadows(parameter.name);
       markFsModulePropertyShadows(parameter.name);
       markRequireShadows(parameter.name);
@@ -933,6 +1076,9 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
     legacyPathScopes.pop();
     fsModulePropertyScopes.pop();
     fsModuleBindingScopes.pop();
+    fsSafeJsonStoreScopes.pop();
+    fsSafeStoreScopes.pop();
+    fsSafeStoreFactoryAliasScopes.pop();
     fsWriteAliasScopes.pop();
     createRequireShadowScopes.pop();
     requireShadowScopes.pop();
@@ -1011,12 +1157,172 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
       : resolveFsWriteAlias(callee.text);
   }
 
+  function fsSafeStoreFactoryAliasName(expression) {
+    const callee = unwrapExpression(expression);
+    if (ts.isIdentifier(callee)) {
+      return resolveFsSafeStoreFactoryAlias(callee.text);
+    }
+    const name = callExpressionName(callee);
+    return name ? resolveFsSafeStoreFactoryAlias(name) : null;
+  }
+
+  function isFsSafeStoreFactoryCall(expression) {
+    const unwrapped = unwrapExpression(expression);
+    const call = ts.isAwaitExpression(unwrapped)
+      ? unwrapExpression(unwrapped.expression)
+      : unwrapped;
+    if (!ts.isCallExpression(call)) {
+      return false;
+    }
+    const callee = unwrapExpression(call.expression);
+    if (ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee)) {
+      const methodName = ts.isPropertyAccessExpression(callee)
+        ? callee.name.text
+        : elementAccessName(callee.argumentExpression);
+      if (methodName === "root" && isFsSafeStoreExpression(callee.expression)) {
+        return true;
+      }
+    }
+    const name = callExpressionName(call.expression);
+    const factoryName = name ? resolveFsSafeStoreFactoryAlias(name) : null;
+    return Boolean(factoryName && fsSafeStoreFactoryCallees.has(factoryName));
+  }
+
+  function isFsSafeStoreExpression(expression) {
+    const unwrapped = unwrapExpression(expression);
+    if (isFsSafeStoreFactoryCall(unwrapped)) {
+      return true;
+    }
+    if (ts.isIdentifier(unwrapped)) {
+      return resolveFsSafeStore(unwrapped.text);
+    }
+    const receiverPath = propertyAccessPath(unwrapped);
+    if (receiverPath) {
+      return resolveFsSafeStore(receiverPath.join("."));
+    }
+    return false;
+  }
+
+  function objectFilePathContainsLegacyStore(expression) {
+    const unwrapped = unwrapExpression(expression);
+    if (ts.isIdentifier(unwrapped)) {
+      return lookupLegacyObjectProperty(unwrapped.text, "filePath") === true;
+    }
+    if (!ts.isObjectLiteralExpression(unwrapped)) {
+      return expressionContainsLegacyStore(unwrapped);
+    }
+    return objectLiteralPropertyContainsLegacyStore(unwrapped, "filePath");
+  }
+
+  function expressionContainsFsSafeJsonStoreLegacyPath(expression) {
+    const unwrapped = unwrapExpression(expression);
+    if (ts.isIdentifier(unwrapped)) {
+      return resolveFsSafeJsonStore(unwrapped.text);
+    }
+    const receiverPath = propertyAccessPath(unwrapped);
+    if (receiverPath && resolveFsSafeJsonStore(receiverPath.join("."))) {
+      return true;
+    }
+    if (!ts.isCallExpression(unwrapped)) {
+      return false;
+    }
+    const callName = callExpressionName(unwrapped.expression);
+    const factoryName = callName ? resolveFsSafeStoreFactoryAlias(callName) : null;
+    if (factoryName && fsSafeJsonStoreFactoryCallees.has(factoryName)) {
+      const options = unwrapped.arguments[0];
+      return options ? objectFilePathContainsLegacyStore(options) : false;
+    }
+    const callee = unwrapExpression(unwrapped.expression);
+    if (!ts.isPropertyAccessExpression(callee) && !ts.isElementAccessExpression(callee)) {
+      return false;
+    }
+    const methodName = ts.isPropertyAccessExpression(callee)
+      ? callee.name.text
+      : elementAccessName(callee.argumentExpression);
+    if (methodName !== "json" || !isFsSafeStoreExpression(callee.expression)) {
+      return false;
+    }
+    const pathArgument = unwrapped.arguments[0];
+    return pathArgument ? pathArgumentContainsLegacyStore(pathArgument) : false;
+  }
+
+  function fsSafeJsonStoreWriteContainsLegacyStore(call) {
+    const callee = unwrapExpression(call.expression);
+    if (!ts.isPropertyAccessExpression(callee) && !ts.isElementAccessExpression(callee)) {
+      return false;
+    }
+    const methodName = ts.isPropertyAccessExpression(callee)
+      ? callee.name.text
+      : elementAccessName(callee.argumentExpression);
+    if (!methodName || !fsSafeJsonStoreWriteMethods.has(methodName)) {
+      return false;
+    }
+    return expressionContainsFsSafeJsonStoreLegacyPath(callee.expression);
+  }
+
+  function fsSafeStoreWritePathArguments(call) {
+    const callee = unwrapExpression(call.expression);
+    if (!ts.isPropertyAccessExpression(callee) && !ts.isElementAccessExpression(callee)) {
+      return [];
+    }
+    const methodName = ts.isPropertyAccessExpression(callee)
+      ? callee.name.text
+      : elementAccessName(callee.argumentExpression);
+    if (!methodName || !fsSafeStoreWriteMethods.has(methodName)) {
+      return [];
+    }
+    if (!isFsSafeStoreExpression(callee.expression)) {
+      return [];
+    }
+    if (methodName === "move") {
+      return [...call.arguments].slice(0, 2);
+    }
+    return call.arguments[0] ? [call.arguments[0]] : [];
+  }
+
   function markFsWriteAliasShadows(name) {
     for (const bindingName of bindingPatternNames(name)) {
       if (resolveFsWriteAlias(bindingName)) {
         currentFsWriteAliasScope().set(bindingName, null);
       }
       shadowVisibleFsWriteObjectAliases(bindingName);
+    }
+  }
+
+  function markFsSafeStoreShadows(name) {
+    for (const bindingName of bindingPatternNames(name)) {
+      if (resolveFsSafeStoreFactoryAlias(bindingName)) {
+        currentFsSafeStoreFactoryAliasScope().set(bindingName, null);
+      }
+      const prefix = `${bindingName}.`;
+      for (const scope of fsSafeStoreFactoryAliasScopes) {
+        for (const alias of scope.keys()) {
+          if (alias.startsWith(prefix)) {
+            currentFsSafeStoreFactoryAliasScope().set(alias, null);
+          }
+        }
+      }
+      if (resolveFsSafeStore(bindingName)) {
+        currentFsSafeStoreScope().set(bindingName, false);
+      }
+      if (resolveFsSafeJsonStore(bindingName)) {
+        currentFsSafeJsonStoreScope().set(bindingName, false);
+      }
+      const storePrefix = `${bindingName}.`;
+      for (const scope of fsSafeStoreScopes) {
+        for (const alias of scope.keys()) {
+          if (alias.startsWith(storePrefix)) {
+            currentFsSafeStoreScope().set(alias, false);
+          }
+        }
+      }
+      for (const scope of fsSafeJsonStoreScopes) {
+        for (const alias of scope.keys()) {
+          if (alias.startsWith(storePrefix)) {
+            currentFsSafeJsonStoreScope().set(alias, false);
+          }
+        }
+      }
     }
   }
 
@@ -1155,6 +1461,157 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
           resolveFsWriteAlias(property.name.text),
           conditionalWrite,
         );
+      }
+    }
+  }
+
+  function clearFsSafeStoreObjectAliases(storeScope, jsonStoreScope, objectName) {
+    const prefix = `${objectName}.`;
+    for (const name of storeScope.keys()) {
+      if (name.startsWith(prefix)) {
+        storeScope.set(name, false);
+      }
+    }
+    for (const name of jsonStoreScope.keys()) {
+      if (name.startsWith(prefix)) {
+        jsonStoreScope.set(name, false);
+      }
+    }
+  }
+
+  function shadowVisibleFsSafeStoreObjectAliases(objectName) {
+    const prefix = `${objectName}.`;
+    const currentStoreScope = currentFsSafeStoreScope();
+    const currentJsonStoreScope = currentFsSafeJsonStoreScope();
+    for (const scope of fsSafeStoreScopes) {
+      for (const name of scope.keys()) {
+        if (name.startsWith(prefix)) {
+          currentStoreScope.set(name, false);
+        }
+      }
+    }
+    for (const scope of fsSafeJsonStoreScopes) {
+      for (const name of scope.keys()) {
+        if (name.startsWith(prefix)) {
+          currentJsonStoreScope.set(name, false);
+        }
+      }
+    }
+  }
+
+  function setFsSafeStoreObjectAlias(
+    storeScope,
+    jsonStoreScope,
+    name,
+    isStore,
+    isJsonStore,
+    conditionalWrite,
+  ) {
+    if (isStore) {
+      storeScope.set(name, true);
+    } else if (!conditionalWrite) {
+      storeScope.set(name, false);
+    }
+    if (isJsonStore) {
+      jsonStoreScope.set(name, true);
+    } else if (!conditionalWrite) {
+      jsonStoreScope.set(name, false);
+    }
+  }
+
+  function copyFsSafeStoreObjectAliases(
+    targetName,
+    sourceName,
+    storeScope = currentFsSafeStoreScope(),
+    jsonStoreScope = currentFsSafeJsonStoreScope(),
+  ) {
+    const sourcePrefix = `${sourceName}.`;
+    for (let index = fsSafeStoreScopes.length - 1; index >= 0; index--) {
+      const sourceStoreScope = fsSafeStoreScopes[index];
+      const sourceJsonStoreScope = fsSafeJsonStoreScopes[index];
+      let copied = false;
+      for (const [key, value] of sourceStoreScope) {
+        if (key.startsWith(sourcePrefix)) {
+          storeScope.set(`${targetName}.${key.slice(sourcePrefix.length)}`, value);
+          copied = true;
+        }
+      }
+      for (const [key, value] of sourceJsonStoreScope) {
+        if (key.startsWith(sourcePrefix)) {
+          jsonStoreScope.set(`${targetName}.${key.slice(sourcePrefix.length)}`, value);
+          copied = true;
+        }
+      }
+      if (copied || sourceStoreScope.has(sourceName) || sourceJsonStoreScope.has(sourceName)) {
+        return;
+      }
+    }
+  }
+
+  function registerFsSafeStoreObjectAliases(
+    objectName,
+    initializer,
+    storeScope = currentFsSafeStoreScope(),
+    jsonStoreScope = currentFsSafeJsonStoreScope(),
+    conditionalWrite = false,
+  ) {
+    const objectLiteral = unwrapExpression(initializer);
+    if (!ts.isObjectLiteralExpression(objectLiteral)) {
+      return;
+    }
+    for (const property of objectLiteral.properties) {
+      if (ts.isPropertyAssignment(property)) {
+        const name = propertyNameText(property.name);
+        if (name) {
+          setFsSafeStoreObjectAlias(
+            storeScope,
+            jsonStoreScope,
+            `${objectName}.${name}`,
+            isFsSafeStoreExpression(property.initializer),
+            expressionContainsFsSafeJsonStoreLegacyPath(property.initializer),
+            conditionalWrite,
+          );
+          if (ts.isObjectLiteralExpression(unwrapExpression(property.initializer))) {
+            registerFsSafeStoreObjectAliases(
+              `${objectName}.${name}`,
+              property.initializer,
+              storeScope,
+              jsonStoreScope,
+              conditionalWrite,
+            );
+          }
+        }
+        continue;
+      }
+      if (ts.isShorthandPropertyAssignment(property)) {
+        setFsSafeStoreObjectAlias(
+          storeScope,
+          jsonStoreScope,
+          `${objectName}.${property.name.text}`,
+          resolveFsSafeStore(property.name.text),
+          resolveFsSafeJsonStore(property.name.text),
+          conditionalWrite,
+        );
+        continue;
+      }
+      if (ts.isSpreadAssignment(property)) {
+        const spreadExpression = unwrapExpression(property.expression);
+        if (ts.isIdentifier(spreadExpression)) {
+          copyFsSafeStoreObjectAliases(
+            objectName,
+            spreadExpression.text,
+            storeScope,
+            jsonStoreScope,
+          );
+        } else if (ts.isObjectLiteralExpression(spreadExpression)) {
+          registerFsSafeStoreObjectAliases(
+            objectName,
+            spreadExpression,
+            storeScope,
+            jsonStoreScope,
+            conditionalWrite,
+          );
+        }
       }
     }
   }
@@ -1479,17 +1936,95 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
     });
   }
 
-  function recordBranchFsIdentifierAssignment(index, name, moduleValue, writeAlias) {
+  function recordBranchFsIdentifierAssignment(
+    index,
+    name,
+    moduleValue,
+    writeAlias,
+    fsSafeFactoryAlias,
+    fsSafeStoreValue,
+    fsSafeJsonStoreValue,
+  ) {
     const effects = currentBranchEffectScope();
     if (!effects) {
       return;
     }
     effects.fsIdentifierAssignments.set(branchIdentifierAssignmentKey(index, name), {
+      fsSafeFactoryAlias,
+      fsSafeJsonStoreValue,
+      fsSafeStoreValue,
       index,
       moduleValue,
       name,
       writeAlias,
     });
+  }
+
+  function recordBranchFsSafePropertyAssignment(
+    index,
+    objectName,
+    propertyName,
+    storeValue,
+    jsonStoreValue,
+  ) {
+    const effects = currentBranchEffectScope();
+    if (!effects) {
+      return;
+    }
+    effects.fsSafePropertyAssignments.set(
+      branchPropertyAssignmentKey(index, objectName, propertyName),
+      {
+        index,
+        jsonStoreValue,
+        objectName,
+        propertyName,
+        storeValue,
+      },
+    );
+  }
+
+  function recordBranchFsSafeObjectPropertyAssignment(
+    index,
+    objectName,
+    propertyName,
+    initializer,
+    storeValue,
+    jsonStoreValue,
+  ) {
+    const assignmentRoot = objectPropertyKey(objectName, propertyName);
+    const storeAssignments = new Map([[assignmentRoot, storeValue]]);
+    const jsonStoreAssignments = new Map([[assignmentRoot, jsonStoreValue]]);
+    const descendantPrefix = `${assignmentRoot}.`;
+    for (const scope of fsSafeStoreScopes) {
+      for (const key of scope.keys()) {
+        if (key.startsWith(descendantPrefix)) {
+          storeAssignments.set(key, false);
+        }
+      }
+    }
+    for (const scope of fsSafeJsonStoreScopes) {
+      for (const key of scope.keys()) {
+        if (key.startsWith(descendantPrefix)) {
+          jsonStoreAssignments.set(key, false);
+        }
+      }
+    }
+    registerFsSafeStoreObjectAliases(
+      assignmentRoot,
+      initializer,
+      storeAssignments,
+      jsonStoreAssignments,
+    );
+    const assignmentKeys = new Set([...storeAssignments.keys(), ...jsonStoreAssignments.keys()]);
+    for (const key of assignmentKeys) {
+      recordBranchFsSafePropertyAssignment(
+        index,
+        objectName,
+        key.slice(`${objectName}.`.length),
+        storeAssignments.get(key) === true,
+        jsonStoreAssignments.get(key) === true,
+      );
+    }
   }
 
   function mergeWrapperAssignmentValues(left, right) {
@@ -1516,14 +2051,30 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
       const mergedModuleValue =
         thenAssignment.moduleValue === true || elseAssignment.moduleValue === true;
       const mergedWriteAlias = thenAssignment.writeAlias ?? elseAssignment.writeAlias;
+      const mergedFsSafeFactoryAlias =
+        thenAssignment.fsSafeFactoryAlias ?? elseAssignment.fsSafeFactoryAlias;
+      const mergedFsSafeStoreValue =
+        thenAssignment.fsSafeStoreValue === true || elseAssignment.fsSafeStoreValue === true;
+      const mergedFsSafeJsonStoreValue =
+        thenAssignment.fsSafeJsonStoreValue === true ||
+        elseAssignment.fsSafeJsonStoreValue === true;
       if (applyToTargetScopes) {
         fsModuleBindingScopes[index].set(name, mergedModuleValue);
         fsWriteAliasScopes[index].set(name, mergedWriteAlias);
+        fsSafeStoreFactoryAliasScopes[index].set(name, mergedFsSafeFactoryAlias);
+        fsSafeStoreScopes[index].set(name, mergedFsSafeStoreValue);
+        fsSafeJsonStoreScopes[index].set(name, mergedFsSafeJsonStoreValue);
       }
       currentFsModuleBindingScope().set(name, mergedModuleValue);
       currentFsWriteAliasScope().set(name, mergedWriteAlias);
+      currentFsSafeStoreFactoryAliasScope().set(name, mergedFsSafeFactoryAlias);
+      currentFsSafeStoreScope().set(name, mergedFsSafeStoreValue);
+      currentFsSafeJsonStoreScope().set(name, mergedFsSafeJsonStoreValue);
       if (parentEffect) {
         parentEffect.fsIdentifierAssignments.set(branchIdentifierAssignmentKey(index, name), {
+          fsSafeFactoryAlias: mergedFsSafeFactoryAlias,
+          fsSafeJsonStoreValue: mergedFsSafeJsonStoreValue,
+          fsSafeStoreValue: mergedFsSafeStoreValue,
           index,
           moduleValue: mergedModuleValue,
           name,
@@ -1583,6 +2134,32 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
           value: mergedValue,
           objectProperties: mergedProperties,
         });
+      }
+    }
+    for (const [key, thenAssignment] of thenEffects.fsSafePropertyAssignments) {
+      const elseAssignment = elseEffects.fsSafePropertyAssignments.get(key);
+      if (!elseAssignment) {
+        continue;
+      }
+      const mergedStoreValue =
+        thenAssignment.storeValue === true || elseAssignment.storeValue === true;
+      const mergedJsonStoreValue =
+        thenAssignment.jsonStoreValue === true || elseAssignment.jsonStoreValue === true;
+      const propertyKey = objectPropertyKey(thenAssignment.objectName, thenAssignment.propertyName);
+      if (applyToTargetScopes) {
+        fsSafeStoreScopes[thenAssignment.index].set(propertyKey, mergedStoreValue);
+        fsSafeJsonStoreScopes[thenAssignment.index].set(propertyKey, mergedJsonStoreValue);
+      }
+      currentFsSafeStoreScope().set(propertyKey, mergedStoreValue);
+      currentFsSafeJsonStoreScope().set(propertyKey, mergedJsonStoreValue);
+      if (parentEffect) {
+        recordBranchFsSafePropertyAssignment(
+          thenAssignment.index,
+          thenAssignment.objectName,
+          thenAssignment.propertyName,
+          mergedStoreValue,
+          mergedJsonStoreValue,
+        );
       }
     }
     for (const [key, thenAssignment] of thenEffects.propertyAssignments) {
@@ -1869,6 +2446,58 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
       }
       if (ts.isObjectBindingPattern(element.name)) {
         markLegacyPathsFromObjectBinding(element.name, sourceName, nextPath);
+      }
+    }
+  }
+
+  function markFsSafeStoresFromObjectBinding(bindingPattern, sourceName, propertyPath = []) {
+    for (const element of bindingPattern.elements) {
+      const propertyName = element.propertyName
+        ? propertyNameText(element.propertyName)
+        : ts.isIdentifier(element.name)
+          ? element.name.text
+          : null;
+      if (!propertyName) {
+        continue;
+      }
+      const nextPath = [...propertyPath, propertyName];
+      if (ts.isIdentifier(element.name)) {
+        const key = `${sourceName}.${nextPath.join(".")}`;
+        const trackedStore = lookupFsSafeStore(key);
+        const trackedJsonStore = lookupFsSafeJsonStore(key);
+        currentFsSafeStoreScope().set(
+          element.name.text,
+          trackedStore ??
+            (element.initializer ? isFsSafeStoreExpression(element.initializer) : false),
+        );
+        currentFsSafeJsonStoreScope().set(
+          element.name.text,
+          trackedJsonStore ??
+            (element.initializer
+              ? expressionContainsFsSafeJsonStoreLegacyPath(element.initializer)
+              : false),
+        );
+        continue;
+      }
+      if (ts.isObjectBindingPattern(element.name)) {
+        markFsSafeStoresFromObjectBinding(element.name, sourceName, nextPath);
+      }
+    }
+  }
+
+  function markFsSafeFactoryAliasesFromObjectBinding(bindingPattern, sourceName) {
+    for (const element of bindingPattern.elements) {
+      if (!ts.isIdentifier(element.name)) {
+        continue;
+      }
+      const propertyName = element.propertyName
+        ? propertyNameText(element.propertyName)
+        : element.name.text;
+      const factoryAlias = propertyName
+        ? resolveFsSafeStoreFactoryAlias(`${sourceName}.${propertyName}`)
+        : null;
+      if (factoryAlias) {
+        currentFsSafeStoreFactoryAliasScope().set(element.name.text, factoryAlias);
       }
     }
   }
@@ -3261,6 +3890,9 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
   function visitInConditionalExecution(node, branchEffects = null) {
     conditionalExecutionScopes.push(true);
     fsWriteAliasScopes.push(new Map());
+    fsSafeStoreFactoryAliasScopes.push(new Map());
+    fsSafeStoreScopes.push(new Map());
+    fsSafeJsonStoreScopes.push(new Map());
     fsModuleBindingScopes.push(new Map());
     fsModulePropertyScopes.push(new Map());
     requireShadowScopes.push(new Set());
@@ -3278,6 +3910,9 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
     legacyPathScopes.pop();
     fsModulePropertyScopes.pop();
     fsModuleBindingScopes.pop();
+    fsSafeJsonStoreScopes.pop();
+    fsSafeStoreScopes.pop();
+    fsSafeStoreFactoryAliasScopes.pop();
     fsWriteAliasScopes.pop();
     createRequireShadowScopes.pop();
     requireShadowScopes.pop();
@@ -3315,6 +3950,9 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
 
     if (ts.isForStatement(node)) {
       fsWriteAliasScopes.push(new Map());
+      fsSafeStoreFactoryAliasScopes.push(new Map());
+      fsSafeStoreScopes.push(new Map());
+      fsSafeJsonStoreScopes.push(new Map());
       fsModuleBindingScopes.push(new Map());
       fsModulePropertyScopes.push(new Map());
       requireShadowScopes.push(new Set());
@@ -3341,6 +3979,9 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
       legacyPathScopes.pop();
       fsModulePropertyScopes.pop();
       fsModuleBindingScopes.pop();
+      fsSafeJsonStoreScopes.pop();
+      fsSafeStoreScopes.pop();
+      fsSafeStoreFactoryAliasScopes.pop();
       fsWriteAliasScopes.pop();
       createRequireShadowScopes.pop();
       requireShadowScopes.pop();
@@ -3350,6 +3991,9 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
     if (ts.isForInStatement(node) || ts.isForOfStatement(node)) {
       visit(node.expression);
       fsWriteAliasScopes.push(new Map());
+      fsSafeStoreFactoryAliasScopes.push(new Map());
+      fsSafeStoreScopes.push(new Map());
+      fsSafeJsonStoreScopes.push(new Map());
       fsModuleBindingScopes.push(new Map());
       fsModulePropertyScopes.push(new Map());
       requireShadowScopes.push(new Set());
@@ -3368,6 +4012,9 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
       legacyPathScopes.pop();
       fsModulePropertyScopes.pop();
       fsModuleBindingScopes.pop();
+      fsSafeJsonStoreScopes.pop();
+      fsSafeStoreScopes.pop();
+      fsSafeStoreFactoryAliasScopes.pop();
       fsWriteAliasScopes.pop();
       createRequireShadowScopes.pop();
       requireShadowScopes.pop();
@@ -3418,7 +4065,17 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
         markCreateRequireShadows(node.name);
         collectFsWriteAliasesFromBinding(node);
         markFsWriteAliasShadows(node.name);
+        markFsSafeStoreShadows(node.name);
         currentFsWriteAliasScope().set(node.name.text, legacyFsWriteName(node.initializer));
+        currentFsSafeStoreFactoryAliasScope().set(
+          node.name.text,
+          fsSafeStoreFactoryAliasName(node.initializer),
+        );
+        currentFsSafeStoreScope().set(node.name.text, isFsSafeStoreExpression(node.initializer));
+        currentFsSafeJsonStoreScope().set(
+          node.name.text,
+          expressionContainsFsSafeJsonStoreLegacyPath(node.initializer),
+        );
         refreshCurrentWrapperFunctionAliases();
         currentLiteralTextScope().set(node.name.text, literalTextsFromExpression(node.initializer));
         currentLegacyPathScope().set(
@@ -3427,6 +4084,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
         );
         markLegacyObjectProperties(node.name.text, node.initializer);
         registerFsWriteObjectAliases(node.name.text, node.initializer);
+        registerFsSafeStoreObjectAliases(node.name.text, node.initializer);
         registerFsModuleObjectProperties(node.name.text, node.initializer);
         if (ts.isFunctionExpression(node.initializer) || ts.isArrowFunction(node.initializer)) {
           registerWrapperFunction(node.name.text, node.initializer);
@@ -3440,10 +4098,14 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
       } else {
         currentFsModuleBindingScope().set(node.name.text, false);
         currentFsWriteAliasScope().set(node.name.text, null);
+        currentFsSafeStoreFactoryAliasScope().set(node.name.text, null);
+        currentFsSafeStoreScope().set(node.name.text, false);
+        currentFsSafeJsonStoreScope().set(node.name.text, false);
         currentLegacyPathScope().set(node.name.text, false);
         currentLiteralTextScope().set(node.name.text, null);
         currentWrapperFunctionScope().set(node.name.text, null);
         markFsWriteAliasShadows(node.name);
+        markFsSafeStoreShadows(node.name);
         markFsModuleBindingShadows(node.name);
         markFsModulePropertyShadows(node.name);
         registerFsModuleTypeProperties(node.name, node.type);
@@ -3459,6 +4121,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
         isFsBindingExpression(node.initializer);
       collectFsModuleBindingsFromBinding(node);
       collectFsWriteAliasesFromBinding(node);
+      markFsSafeStoreShadows(node.name);
       if (!isFsAliasBinding) {
         markFsWriteAliasShadows(node.name);
         markFsModuleBindingShadows(node.name);
@@ -3468,6 +4131,9 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
       }
       refreshCurrentWrapperFunctionAliases();
       for (const name of bindingPatternNames(node.name)) {
+        currentFsSafeStoreFactoryAliasScope().set(name, null);
+        currentFsSafeStoreScope().set(name, false);
+        currentFsSafeJsonStoreScope().set(name, false);
         currentLegacyPathScope().set(name, false);
         currentLiteralTextScope().set(name, null);
         currentWrapperFunctionScope().set(name, null);
@@ -3478,6 +4144,8 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
         ts.isIdentifier(node.initializer)
       ) {
         markLegacyPathsFromObjectBinding(node.name, node.initializer.text);
+        markFsSafeStoresFromObjectBinding(node.name, node.initializer.text);
+        markFsSafeFactoryAliasesFromObjectBinding(node.name, node.initializer.text);
       }
     }
     if (
@@ -3492,6 +4160,9 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
       const nextLiteralTexts = literalTextsFromExpression(node.right);
       const nextFsModuleValue = isFsBindingExpression(node.right);
       const nextFsWriteAlias = legacyFsWriteName(node.right);
+      const nextFsSafeFactoryAlias = fsSafeStoreFactoryAliasName(node.right);
+      const nextFsSafeStoreValue = isFsSafeStoreExpression(node.right);
+      const nextFsSafeJsonStoreValue = expressionContainsFsSafeJsonStoreLegacyPath(node.right);
       const conditionalWrite =
         currentConditionalExecutionScope() && !conditionalExecutionScopes[index];
       pathScope.set(
@@ -3524,11 +4195,28 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
       } else {
         fsModuleBindingWriteScope(node.left.text).set(node.left.text, nextFsModuleValue);
         fsWriteAliasWriteScope(node.left.text).set(node.left.text, nextFsWriteAlias);
+        fsSafeStoreFactoryAliasWriteScope(node.left.text).set(
+          node.left.text,
+          nextFsSafeFactoryAlias,
+        );
+        fsSafeStoreWriteScope(node.left.text).set(node.left.text, nextFsSafeStoreValue);
+        fsSafeJsonStoreWriteScope(node.left.text).set(node.left.text, nextFsSafeJsonStoreValue);
         markFsModulePropertyShadows(node.left);
         clearLegacyObjectProperties(propertyScope, node.left.text);
         markLegacyObjectProperties(node.left.text, node.right, propertyScope);
         clearFsWriteObjectAliases(fsWriteAliasScopes[index], node.left.text);
         registerFsWriteObjectAliases(node.left.text, node.right, fsWriteAliasScopes[index]);
+        clearFsSafeStoreObjectAliases(
+          fsSafeStoreScopes[index],
+          fsSafeJsonStoreScopes[index],
+          node.left.text,
+        );
+        registerFsSafeStoreObjectAliases(
+          node.left.text,
+          node.right,
+          fsSafeStoreScopes[index],
+          fsSafeJsonStoreScopes[index],
+        );
         registerFsModuleObjectProperties(node.left.text, node.right, fsModulePropertyScopes[index]);
         clearWrapperObjectMethods(wrapperScope, node.left.text);
         registerWrapperObjectMethods(node.left.text, node.right, wrapperScope);
@@ -3536,20 +4224,48 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
       if (conditionalWrite) {
         const fsModuleScope = fsModuleBindingScopes[index];
         const fsWriteScope = fsWriteAliasScopes[index];
+        const fsSafeFactoryAliasScope = fsSafeStoreFactoryAliasScopes[index];
+        const fsSafeStoreScope = fsSafeStoreScopes[index];
+        const fsSafeJsonStoreScope = fsSafeJsonStoreScopes[index];
         fsModuleScope.set(
           node.left.text,
           fsModuleScope.get(node.left.text) === true || nextFsModuleValue,
         );
         fsWriteScope.set(node.left.text, fsWriteScope.get(node.left.text) ?? nextFsWriteAlias);
+        fsSafeFactoryAliasScope.set(
+          node.left.text,
+          fsSafeFactoryAliasScope.get(node.left.text) ?? nextFsSafeFactoryAlias,
+        );
+        fsSafeStoreScope.set(
+          node.left.text,
+          fsSafeStoreScope.get(node.left.text) === true || nextFsSafeStoreValue,
+        );
+        fsSafeJsonStoreScope.set(
+          node.left.text,
+          fsSafeJsonStoreScope.get(node.left.text) === true || nextFsSafeJsonStoreValue,
+        );
         currentFsModuleBindingScope().set(node.left.text, nextFsModuleValue);
         currentFsWriteAliasScope().set(node.left.text, nextFsWriteAlias);
+        currentFsSafeStoreFactoryAliasScope().set(node.left.text, nextFsSafeFactoryAlias);
+        currentFsSafeStoreScope().set(node.left.text, nextFsSafeStoreValue);
+        currentFsSafeJsonStoreScope().set(node.left.text, nextFsSafeJsonStoreValue);
         recordBranchFsIdentifierAssignment(
           index,
           node.left.text,
           nextFsModuleValue,
           nextFsWriteAlias,
+          nextFsSafeFactoryAlias,
+          nextFsSafeStoreValue,
+          nextFsSafeJsonStoreValue,
         );
         registerFsWriteObjectAliases(node.left.text, node.right, fsWriteAliasScopes[index], true);
+        registerFsSafeStoreObjectAliases(
+          node.left.text,
+          node.right,
+          fsSafeStoreScopes[index],
+          fsSafeJsonStoreScopes[index],
+          true,
+        );
         registerFsModuleObjectProperties(
           node.left.text,
           node.right,
@@ -3558,6 +4274,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
         );
         shadowVisibleFsWriteObjectAliases(node.left.text);
         registerFsWriteObjectAliases(node.left.text, node.right);
+        registerFsSafeStoreObjectAliases(node.left.text, node.right);
         registerFsModuleObjectProperties(node.left.text, node.right);
         registerWrapperObjectMethods(node.left.text, node.right, wrapperScope, true);
         shadowVisibleWrapperObjectMethods(node.left.text);
@@ -3614,9 +4331,47 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
         isFsModuleExpression(node.right),
         conditionalWrapperWrite,
       );
+      if (!conditionalWrapperWrite) {
+        clearFsSafeStoreObjectAliases(
+          fsSafeStoreScopes[wrapperTarget.index],
+          fsSafeJsonStoreScopes[wrapperTarget.index],
+          key,
+        );
+      }
+      setFsSafeStoreObjectAlias(
+        fsSafeStoreScopes[wrapperTarget.index],
+        fsSafeJsonStoreScopes[wrapperTarget.index],
+        key,
+        isFsSafeStoreExpression(node.right),
+        expressionContainsFsSafeJsonStoreLegacyPath(node.right),
+        conditionalWrapperWrite,
+      );
+      if (!conditionalWrapperWrite) {
+        registerFsSafeStoreObjectAliases(
+          key,
+          node.right,
+          fsSafeStoreScopes[wrapperTarget.index],
+          fsSafeJsonStoreScopes[wrapperTarget.index],
+        );
+      }
       if (conditionalWrapperWrite) {
         currentFsWriteAliasScope().set(key, legacyFsWriteName(node.right));
         currentFsModulePropertyScope().set(key, isFsModuleExpression(node.right));
+        shadowVisibleFsSafeStoreObjectAliases(key);
+        currentFsSafeStoreScope().set(key, isFsSafeStoreExpression(node.right));
+        currentFsSafeJsonStoreScope().set(
+          key,
+          expressionContainsFsSafeJsonStoreLegacyPath(node.right),
+        );
+        registerFsSafeStoreObjectAliases(key, node.right);
+        recordBranchFsSafeObjectPropertyAssignment(
+          wrapperTarget.index,
+          propertyAccess.objectName,
+          propertyAccess.propertyName,
+          node.right,
+          isFsSafeStoreExpression(node.right),
+          expressionContainsFsSafeJsonStoreLegacyPath(node.right),
+        );
       }
       const assignedWrapper =
         ts.isFunctionExpression(node.right) || ts.isArrowFunction(node.right)
@@ -3643,6 +4398,16 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
           pathArgumentContainsLegacyStore(argument),
         )
       ) {
+        addViolation(node.expression, "legacy store filesystem write");
+      }
+      if (
+        fsSafeStoreWritePathArguments(node).some((argument) =>
+          pathArgumentContainsLegacyStore(argument),
+        )
+      ) {
+        addViolation(node.expression, "legacy store filesystem write");
+      }
+      if (fsSafeJsonStoreWriteContainsLegacyStore(node)) {
         addViolation(node.expression, "legacy store filesystem write");
       }
       const wrapperName = callExpressionName(node.expression);
