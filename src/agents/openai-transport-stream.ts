@@ -2213,7 +2213,7 @@ export function buildOpenAIResponsesParams(
     context,
     new Set(["openai", "opencode", "azure-openai-responses", "github-copilot"]),
     {
-      includeSystemPrompt: !isCodexResponses,
+      includeSystemPrompt: false,
       supportsDeveloperRole,
       replayReasoningItems: true,
       replayResponsesItemIds,
