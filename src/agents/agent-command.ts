@@ -1541,8 +1541,11 @@ async function agentCommandInternal(
         catalog: thinkingCatalog,
       })
     ) {
-      const explicitThink = Boolean(thinkOnce || thinkOverride);
-      if (explicitThink) {
+      // Only throw for interactive --think CLI flags (user can correct the value).
+      // Programmatic thinkOverride (from sessions_spawn / session-patch) gets
+      // the resolveSupportedThinkingLevel fallback below — callers cannot handle
+      // unexpected throws and the cron path already uses the same fallback.
+      if (thinkOnce) {
         throw new Error(
           `Thinking level "${resolvedThinkLevel}" is not supported for ${provider}/${model}. Use one of: ${formatThinkingLevels(provider, model, ", ", thinkingCatalog)}.`,
         );
