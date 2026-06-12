@@ -24,20 +24,49 @@ const cfg = {} as OpenClawConfig;
 const TG = { channel: "telegram", to: "telegram:-100", accountId: "default", threadId: 1 };
 
 describe("mirror-dispatch", () => {
-  it("registers and resolves a channel mirror dispatcher (first-wins)", () => {
+  it("registers and resolves a channel mirror dispatcher (first-wins per account)", () => {
     resetMirrorDispatchForTest();
     const a = vi.fn();
     const b = vi.fn();
-    registerChannelMirrorDispatcher("telegram", a);
-    registerChannelMirrorDispatcher("telegram", b); // ignored (first-wins)
-    expect(resolveChannelMirrorDispatcher("telegram")).toBe(a);
-    expect(resolveChannelMirrorDispatcher("discord")).toBeUndefined();
+    registerChannelMirrorDispatcher("telegram", "default", a);
+    registerChannelMirrorDispatcher("telegram", "default", b); // ignored (first-wins)
+    expect(resolveChannelMirrorDispatcher("telegram", "default")).toBe(a);
+    expect(resolveChannelMirrorDispatcher("discord", "default")).toBeUndefined();
+  });
+
+  it("keys dispatchers by account and fails closed on a multi-account mismatch", async () => {
+    resetMirrorDispatchForTest();
+    const accA = vi.fn();
+    const accB = vi.fn();
+    registerChannelMirrorDispatcher("telegram", "acc-a", accA);
+    registerChannelMirrorDispatcher("telegram", "acc-b", accB);
+    // Exact account match resolves THAT account's runtime.
+    expect(resolveChannelMirrorDispatcher("telegram", "acc-b")).toBe(accB);
+    expect(resolveChannelMirrorDispatcher("telegram", "acc-a")).toBe(accA);
+    // Unknown account with >1 registered → fail closed (post-hoc delivers).
+    expect(resolveChannelMirrorDispatcher("telegram", "acc-c")).toBeUndefined();
+
+    // A target mirrors through its OWN account's dispatcher only.
+    const handle = await launchMirrorDispatch({
+      originRunId: "run-acct",
+      cfg,
+      sessionKey: "sk-acct",
+      sessionEntry: entryWith([
+        { channel: "telegram", to: "telegram:-100", accountId: "acc-b", threadId: 1 },
+      ]),
+      originChannel: "webchat",
+      originTo: "",
+    });
+    expect(handle.count).toBe(1);
+    expect(accB).toHaveBeenCalledTimes(1);
+    expect(accA).not.toHaveBeenCalled();
+    handle.dispose();
   });
 
   it("dispatches a mirror turn to each resolved target with a bus-sourced resolver, marks handled", async () => {
     resetMirrorDispatchForTest();
     const dispatcher = vi.fn();
-    registerChannelMirrorDispatcher("telegram", dispatcher);
+    registerChannelMirrorDispatcher("telegram", "default", dispatcher);
 
     const handle = await launchMirrorDispatch({
       originRunId: "run-1",
@@ -50,7 +79,10 @@ describe("mirror-dispatch", () => {
 
     expect(handle.count).toBe(1);
     expect(dispatcher).toHaveBeenCalledTimes(1);
-    const arg = dispatcher.mock.calls[0][0] as { target: { channel: string }; replyResolver: unknown };
+    const arg = dispatcher.mock.calls[0][0] as {
+      target: { channel: string };
+      replyResolver: unknown;
+    };
     expect(arg.target.channel).toBe("telegram");
     expect(typeof arg.replyResolver).toBe("function");
 
@@ -63,7 +95,7 @@ describe("mirror-dispatch", () => {
   it("un-marks a target when its dispatcher fails (post-hoc delivers, no silent drop)", async () => {
     resetMirrorDispatchForTest();
     const dispatcher = vi.fn(() => Promise.reject(new Error("context dropped")));
-    registerChannelMirrorDispatcher("telegram", dispatcher);
+    registerChannelMirrorDispatcher("telegram", "default", dispatcher);
     await launchMirrorDispatch({
       originRunId: "run-fail",
       cfg,
@@ -91,13 +123,15 @@ describe("mirror-dispatch", () => {
       originTo: "",
     });
     expect(handle.count).toBe(0);
-    expect(consumeStreamingEchoHandled("sk-2", { channel: "discord", to: "discord:42" })).toBe(false);
+    expect(consumeStreamingEchoHandled("sk-2", { channel: "discord", to: "discord:42" })).toBe(
+      false,
+    );
   });
 
   it("excludes the origin target (no self-mirror)", async () => {
     resetMirrorDispatchForTest();
     const dispatcher = vi.fn();
-    registerChannelMirrorDispatcher("telegram", dispatcher);
+    registerChannelMirrorDispatcher("telegram", "default", dispatcher);
     const handle = await launchMirrorDispatch({
       originRunId: "run-3",
       cfg,

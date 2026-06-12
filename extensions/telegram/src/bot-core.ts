@@ -1,3 +1,4 @@
+import { registerChannelMirrorDispatcher } from "openclaw/plugin-sdk/channel-outbound";
 // Telegram plugin module implements bot core behavior.
 import {
   resolveChannelGroupPolicy,
@@ -14,7 +15,6 @@ import {
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
 } from "openclaw/plugin-sdk/native-command-config-runtime";
-import { registerChannelMirrorDispatcher } from "openclaw/plugin-sdk/channel-outbound";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -371,9 +371,10 @@ export function createTelegramBotCore(
     telegramDeps,
   });
 
-  // Pin-from-here: re-home a mirrored turn onto this account through its own
-  // dispatch (drafts/streaming/persistence per this account's config).
-  registerChannelMirrorDispatcher("telegram", ({ target, replyResolver }) =>
+  // Pin-from-here: re-home a mirrored turn onto THIS account through its own
+  // dispatch (drafts/streaming/persistence per this account's config). Keyed by
+  // accountId so a multi-account install mirrors through the target's own bot.
+  registerChannelMirrorDispatcher("telegram", account.accountId, ({ target, replyResolver }) =>
     processMessage.dispatchMirror({ target, replyResolver }),
   );
 

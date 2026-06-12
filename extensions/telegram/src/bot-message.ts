@@ -258,11 +258,18 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       ...(bot.botInfo ? { me: bot.botInfo } : {}),
       getFile: (async () => undefined) as unknown as TelegramContext["getFile"],
     };
+    let revoked = false;
     const context = await buildTelegramMessageContext({
       primaryCtx,
       allMedia: [],
       storeAllowFrom: [],
-      options: { mirror: true, forceWasMentioned: true },
+      options: {
+        mirror: true,
+        forceWasMentioned: true,
+        onMirrorAdmissionBlocked: () => {
+          revoked = true;
+        },
+      },
       bot,
       cfg,
       account,
@@ -283,8 +290,19 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       sendChatActionHandler,
     });
     if (!context) {
-      // Signal failure so the mirror launcher un-marks this target and the
-      // post-hoc final echo delivers instead (no silent drop).
+      if (revoked) {
+        // The destination's current policy now denies this pin (group/topic
+        // disabled, or requireTopic). Drop silently and return normally so the
+        // launcher KEEPS the handled-mark — the post-hoc final echo (a raw send
+        // that does not re-check enablement) must not deliver the revoked content
+        // either. This is the persisted-pin revocation path.
+        logVerbose(
+          `telegram mirror: destination policy denies ${mirror.target.to}; dropped (pin revoked)`,
+        );
+        return;
+      }
+      // Unexpected null (not a policy denial): signal failure so the launcher
+      // un-marks this target and the post-hoc final echo delivers (no silent drop).
       throw new Error(`telegram mirror: context dropped for ${mirror.target.to}`);
     }
     await dispatchTelegramMessage({

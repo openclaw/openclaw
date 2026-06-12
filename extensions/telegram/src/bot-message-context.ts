@@ -304,29 +304,46 @@ export const buildTelegramMessageContext = async ({
     enforceAllowOverride: true,
     requireSenderForAllowOverride: false,
   });
-  if (!isMirror && !baseAccess.allowed) {
+  if (!baseAccess.allowed) {
+    // Destination-enablement gates are re-checked for mirrors too: a persisted
+    // pin must stop delivering once the destination group/topic is disabled
+    // (revocation). Only the sender allowFrom gate is skipped for a mirror — its
+    // inbound is synthetic and the /pin was the authorization, not the sender.
     if (baseAccess.reason === "group-disabled") {
       logVerbose(`Blocked telegram group ${chatId} (group disabled)`);
+      if (isMirror) {
+        options?.onMirrorAdmissionBlocked?.();
+      }
       return null;
     }
     if (baseAccess.reason === "topic-disabled") {
       logVerbose(
         `Blocked telegram topic ${chatId} (${resolvedThreadId ?? "unknown"}) (topic disabled)`,
       );
+      if (isMirror) {
+        options?.onMirrorAdmissionBlocked?.();
+      }
       return null;
     }
-    logVerbose(
-      isGroup
-        ? `Blocked telegram group sender ${senderId || "unknown"} (group allowFrom override)`
-        : `Blocked telegram DM sender ${senderId || "unknown"} (DM allowFrom override)`,
-    );
-    return null;
+    if (!isMirror) {
+      logVerbose(
+        isGroup
+          ? `Blocked telegram group sender ${senderId || "unknown"} (group allowFrom override)`
+          : `Blocked telegram DM sender ${senderId || "unknown"} (DM allowFrom override)`,
+      );
+      return null;
+    }
   }
 
   const requireTopic = directConfig?.requireTopic;
   const topicRequiredButMissing = !isGroup && requireTopic === true && dmThreadId == null;
-  if (!isMirror && topicRequiredButMissing) {
+  // Enforced for mirrors too: a destination that now requires a topic must not
+  // receive a topic-less mirror (revocation of the topic requirement).
+  if (topicRequiredButMissing) {
     logVerbose(`Blocked telegram DM ${chatId}: requireTopic=true but no topic present`);
+    if (isMirror) {
+      options?.onMirrorAdmissionBlocked?.();
+    }
     return null;
   }
 

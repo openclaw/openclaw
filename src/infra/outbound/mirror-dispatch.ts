@@ -43,10 +43,17 @@ export type MirrorDispatchHandle = {
 };
 
 const state = {
-  dispatchers: new Map<string, MirrorDispatcher>(),
+  // channel -> accountId -> dispatcher. Account-keyed (not channel-only) so a
+  // multi-account install mirrors through the TARGET account's own runtime — its
+  // bot token, routing, and persistence — never the first-registered account's.
+  dispatchers: new Map<string, Map<string, MirrorDispatcher>>(),
   /** sessionKey -> target keys a mirror turn was launched for this run. */
   handledBySession: new Map<string, Set<string>>(),
 };
+
+function normalizeDispatcherAccountId(accountId: string | undefined): string {
+  return accountId && accountId.trim() ? accountId : "";
+}
 
 function echoTargetKey(target: {
   channel: string;
@@ -110,24 +117,56 @@ export function consumeStreamingEchoHandled(
 }
 
 /**
- * Register the mirror dispatcher for a channel. First-wins, mirroring the
- * ownership contract of the channel registry: a channel plugin registers the
- * dispatcher for its OWN channel id, exactly once.
+ * Register the mirror dispatcher for a channel ACCOUNT. A channel plugin
+ * registers one dispatcher per account it serves (the dispatcher closes over
+ * that account's bot/runtime), so a mirror to a given target renders through the
+ * target's own account. First-wins per (channel, account).
  */
 export function registerChannelMirrorDispatcher(
   channel: string,
+  accountId: string,
   dispatcher: MirrorDispatcher,
 ): void {
-  const existing = state.dispatchers.get(channel);
+  const key = normalizeDispatcherAccountId(accountId);
+  let byAccount = state.dispatchers.get(channel);
+  if (!byAccount) {
+    byAccount = new Map<string, MirrorDispatcher>();
+    state.dispatchers.set(channel, byAccount);
+  }
+  const existing = byAccount.get(key);
   if (existing && existing !== dispatcher) {
-    log.warn(`mirror dispatcher already registered for ${channel}; ignoring re-registration`);
+    log.warn(
+      `mirror dispatcher already registered for ${channel}/${key || "default"}; ignoring re-registration`,
+    );
     return;
   }
-  state.dispatchers.set(channel, dispatcher);
+  byAccount.set(key, dispatcher);
 }
 
-export function resolveChannelMirrorDispatcher(channel: string): MirrorDispatcher | undefined {
-  return state.dispatchers.get(channel);
+/**
+ * Resolve the dispatcher for a target's (channel, account). Exact account match
+ * is required when more than one account is registered for the channel — on a
+ * mismatch we fail closed (return undefined) rather than mirror through the wrong
+ * account, and the post-hoc final echo then delivers via the target's own account
+ * routing. A single registered account is unambiguous (single-account install, or
+ * a wildcard target with no pinned accountId), so it matches regardless.
+ */
+export function resolveChannelMirrorDispatcher(
+  channel: string,
+  accountId?: string,
+): MirrorDispatcher | undefined {
+  const byAccount = state.dispatchers.get(channel);
+  if (!byAccount || byAccount.size === 0) {
+    return undefined;
+  }
+  const exact = byAccount.get(normalizeDispatcherAccountId(accountId));
+  if (exact) {
+    return exact;
+  }
+  if (byAccount.size === 1) {
+    return [...byAccount.values()][0];
+  }
+  return undefined;
 }
 
 /**
@@ -163,9 +202,10 @@ export async function launchMirrorDispatch(params: {
 
   const active: Array<{ dispose: () => void }> = [];
   for (const target of targets) {
-    const dispatcher = resolveChannelMirrorDispatcher(target.channel);
+    const dispatcher = resolveChannelMirrorDispatcher(target.channel, target.accountId);
     if (!dispatcher) {
-      // No dispatcher for this channel — the post-hoc final mirror handles it.
+      // No dispatcher for this channel+account — the post-hoc final mirror handles
+      // it (delivering via the target's own account routing).
       continue;
     }
     const label = `${target.channel}:${target.to}`;
