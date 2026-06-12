@@ -264,6 +264,33 @@ export function describeGatewayServiceRestart(
 
 type SupportedGatewayServicePlatform = "darwin" | "linux" | "win32";
 
+function createUnsupportedGatewayServiceError(): Error {
+  return new Error(`Gateway service install not supported on ${process.platform}`);
+}
+
+async function rejectUnsupportedGatewayService(): Promise<never> {
+  throw createUnsupportedGatewayServiceError();
+}
+
+function createUnsupportedGatewayService(): GatewayService {
+  return {
+    label: "Gateway service",
+    loadedText: "available",
+    notLoadedText: "not installed",
+    stage: rejectUnsupportedGatewayService,
+    install: rejectUnsupportedGatewayService,
+    uninstall: rejectUnsupportedGatewayService,
+    stop: rejectUnsupportedGatewayService,
+    restart: rejectUnsupportedGatewayService,
+    isLoaded: rejectUnsupportedGatewayService,
+    readCommand: async () => null,
+    readRuntime: async () => ({
+      status: "unknown",
+      detail: createUnsupportedGatewayServiceError().message,
+    }),
+  };
+}
+
 const GATEWAY_SERVICE_REGISTRY: Record<SupportedGatewayServicePlatform, GatewayService> = {
   darwin: {
     label: "LaunchAgent",
@@ -344,5 +371,5 @@ export function resolveGatewayService(): GatewayService {
   if (isSupportedGatewayServicePlatform(process.platform)) {
     return withFutureConfigGuard(GATEWAY_SERVICE_REGISTRY[process.platform]);
   }
-  throw new Error(`Gateway service install not supported on ${process.platform}`);
+  return createUnsupportedGatewayService();
 }
