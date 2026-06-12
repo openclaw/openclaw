@@ -13,7 +13,8 @@ const LOG_PREFIX = '[imessage-service]';
 const RECORD_SEPARATOR = String.fromCharCode(30);
 const FIELD_SEPARATOR = String.fromCharCode(31);
 const HOME_DIR = process.env.HOME || os.homedir();
-const DATA_DIR = path.join(HOME_DIR, '.openclaw', 'workspace', 'imessage');
+const DATA_DIR = process.env.OPENCLAW_IMESSAGE_DATA_DIR
+  || path.join(HOME_DIR, '.openclaw', 'workspace', 'imessage');
 const REQUEST_FILENAME = 'imessage-request.json';
 const REQUEST_FILE = path.join(DATA_DIR, REQUEST_FILENAME);
 const RESPONSE_FILE = path.join(DATA_DIR, 'imessage-response.json');
@@ -60,7 +61,8 @@ function logError(message) {
 
 function writeResponse(payload) {
   const tempFile = RESPONSE_FILE + '.tmp';
-  fs.writeFileSync(tempFile, JSON.stringify(payload, null, 2));
+  fs.writeFileSync(tempFile, JSON.stringify(payload, null, 2), { mode: 0o600 });
+  fs.chmodSync(tempFile, 0o600);
   fs.renameSync(tempFile, RESPONSE_FILE);
 }
 
@@ -678,6 +680,15 @@ async function dispatchRequest(request) {
     case 'search':
       return handleSearch(request);
     case 'send':
+      // Legacy send path is disabled by default. The opt-in env var is
+      // deliberately never set anywhere (no plist EnvironmentVariables);
+      // sending stays off until a hardened send executor exists.
+      if (process.env.OPENCLAW_IMESSAGE_SEND_OPTIN !== '1') {
+        throw createServiceError(
+          'send is disabled pending a hardened send executor',
+          { code: 'send_disabled' }
+        );
+      }
       return handleSend(request);
     case 'list_contacts':
       return handleListContacts(request);
@@ -695,30 +706,67 @@ async function processRequestFile() {
   isProcessing = true;
 
   try {
-    if (!fs.existsSync(REQUEST_FILE)) {
+    // Consume the request file atomically BEFORE dispatch so a service
+    // respawn can never re-process (and re-send) the same request.
+    const processingFile = REQUEST_FILE + '.processing';
+    try {
+      fs.renameSync(REQUEST_FILE, processingFile);
+    } catch (error) {
+      if (error.code === 'ENOENT') return;
+      throw error;
+    }
+
+    let raw;
+    try {
+      raw = fs.readFileSync(processingFile, 'utf8');
+    } finally {
+      try {
+        fs.unlinkSync(processingFile);
+      } catch (cleanupError) {
+        logError(`failed to remove consumed request: ${cleanupError.message}`);
+      }
+    }
+
+    const request = JSON.parse(raw);
+    const action = request?.action || null;
+    const requestId = typeof request?.request_id === 'string' ? request.request_id : null;
+
+    const respond = (payload) => {
+      if (requestId !== null) payload.request_id = requestId;
+      writeResponse(payload);
+    };
+
+    // requested_at is mandatory and must be fresh: a missing, unparseable,
+    // or stale timestamp is rejected (fail closed) instead of processed.
+    const requestedAt = request?.requested_at;
+    const requestedAtMs = typeof requestedAt === 'string' ? Date.parse(requestedAt) : NaN;
+    if (!Number.isFinite(requestedAtMs)) {
+      respond(errorResponse(action, createServiceError(
+        'requested_at is required and must be a valid ISO timestamp',
+        { code: 'invalid_requested_at' }
+      )));
+      logError(`rejected ${action || 'unknown'} request: missing or invalid requested_at`);
       return;
     }
 
-    const raw = fs.readFileSync(REQUEST_FILE, 'utf8');
-    const request = JSON.parse(raw);
-    const action = request?.action || null;
-
-    if (request.requested_at) {
-      const requestAge = Date.now() - new Date(request.requested_at).getTime();
-      if (requestAge > STALE_REQUEST_MS) {
-        log(`skipping stale ${action || 'unknown'} request (${Math.round(requestAge / 1000)}s old)`);
-        return;
-      }
+    const requestAge = Date.now() - requestedAtMs;
+    if (requestAge > STALE_REQUEST_MS) {
+      respond(errorResponse(action, createServiceError(
+        `request is stale (${Math.round(requestAge / 1000)}s old)`,
+        { code: 'stale_request' }
+      )));
+      logError(`rejected stale ${action || 'unknown'} request (${Math.round(requestAge / 1000)}s old)`);
+      return;
     }
 
     log(`processing ${action || 'unknown'} request`);
 
     try {
       const data = await dispatchRequest(request);
-      writeResponse(successResponse(action, data));
+      respond(successResponse(action, data));
       log(`completed ${action}`);
     } catch (error) {
-      writeResponse(errorResponse(action, error));
+      respond(errorResponse(action, error));
       logError(`action ${action || 'unknown'} failed: ${error.message}`);
     }
   } catch (error) {
@@ -735,22 +783,17 @@ async function processRequestFile() {
   }
 }
 
-fs.watch(DATA_DIR, (eventType, filename) => {
-  if (filename !== REQUEST_FILENAME) return;
+function startWatcher() {
+  fs.watch(DATA_DIR, (eventType, filename) => {
+    if (filename !== REQUEST_FILENAME) return;
 
-  const now = Date.now();
-  if (now - lastProcessedAt < DEBOUNCE_MS) return;
-  lastProcessedAt = now;
+    const now = Date.now();
+    if (now - lastProcessedAt < DEBOUNCE_MS) return;
+    lastProcessedAt = now;
 
-  processRequestFile().catch((error) => logError(`processing failed: ${error.message}`));
-});
-
-processRequestFile().catch((error) => logError(`startup processing failed: ${error.message}`));
-
-loadContacts().catch((error) => {
-  contactsLoadError = error.message;
-  logError(`failed to load contacts on startup: ${error.message}`);
-});
+    processRequestFile().catch((error) => logError(`processing failed: ${error.message}`));
+  });
+}
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
@@ -787,8 +830,30 @@ const server = http.createServer((req, res) => {
   res.end('Not found');
 });
 
-server.listen(PORT, () => {
-  log(`imessage service running on port ${PORT}`);
-  log(`watching ${REQUEST_FILE}`);
-  log(`health: http://localhost:${PORT}/health`);
-});
+if (require.main === module) {
+  startWatcher();
+
+  processRequestFile().catch((error) => logError(`startup processing failed: ${error.message}`));
+
+  loadContacts().catch((error) => {
+    contactsLoadError = error.message;
+    logError(`failed to load contacts on startup: ${error.message}`);
+  });
+
+  server.listen(PORT, () => {
+    log(`imessage service running on port ${PORT}`);
+    log(`watching ${REQUEST_FILE}`);
+    log(`health: http://localhost:${PORT}/health`);
+  });
+}
+
+module.exports = {
+  __test: {
+    processRequestFile,
+    dispatchRequest,
+    writeResponse,
+    REQUEST_FILE,
+    RESPONSE_FILE,
+    DATA_DIR
+  }
+};
