@@ -373,6 +373,28 @@ describe("Tool Search", () => {
     expect(compacted.catalogToolCount).toBe(0);
   });
 
+  it("leaves inactive directory control names unchanged when Tool Search is disabled", () => {
+    const tools = [
+      fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "plugin search"),
+      fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "plugin describe"),
+      fakeTool(TOOL_CALL_RAW_TOOL_NAME, "plugin call"),
+      fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "plugin code search"),
+    ];
+
+    const compacted = applyToolSchemaDirectoryCatalog({
+      tools,
+      config: {
+        tools: { toolSearch: { enabled: false, mode: "directory" } },
+      } as never,
+      sessionId: "session-directory-disabled",
+    });
+
+    expect(compacted.tools).toEqual(tools);
+    expect(compacted.compacted).toBe(false);
+    expect(compacted.catalogRegistered).toBe(false);
+    expect(compacted.catalogToolCount).toBe(0);
+  });
+
   it("bounds the directory prompt and keeps omitted tools searchable", () => {
     const sessionId = "session-bounded-schema-directory";
     const catalogTools = Array.from({ length: 200 }, (_, index) =>
