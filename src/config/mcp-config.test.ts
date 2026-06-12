@@ -112,6 +112,57 @@ describe("config mcp config", () => {
     });
   });
 
+  it("rejects blocked stdio env keys at set time without writing", async () => {
+    await withMcpConfigHome({}, async ({ configPath }) => {
+      const setResult = await setConfiguredMcpServer({
+        name: "pytools",
+        server: {
+          command: "/srv/venv/bin/python",
+          args: ["server.py"],
+          env: {
+            PYTHONPATH: "/srv/workspace",
+            PYTHONUNBUFFERED: "1",
+          },
+        },
+      });
+
+      expect(setResult.ok).toBe(false);
+      if (setResult.ok) {
+        throw new Error("expected blocked env key to fail MCP set");
+      }
+      expect(setResult.error).toContain('"PYTHONPATH"');
+      expect(setResult.error).toContain("blocked for stdio startup safety");
+
+      const raw = JSON.parse(await fs.readFile(configPath, "utf-8"));
+      expect(raw.mcp?.servers?.pytools).toBeUndefined();
+    });
+  });
+
+  it("allows benign interpreter env keys on stdio servers", async () => {
+    await withMcpConfigHome({}, async () => {
+      const setResult = await setConfiguredMcpServer({
+        name: "pytools",
+        server: {
+          command: "/srv/venv/bin/python",
+          args: ["server.py"],
+          env: { PYTHONUNBUFFERED: "1" },
+        },
+      });
+
+      expect(setResult.ok).toBe(true);
+      const loaded = await listConfiguredMcpServers();
+      expect(loaded.ok).toBe(true);
+      if (!loaded.ok) {
+        throw new Error("expected MCP config to load");
+      }
+      expect(loaded.mcpServers.pytools).toEqual({
+        command: "/srv/venv/bin/python",
+        args: ["server.py"],
+        env: { PYTHONUNBUFFERED: "1" },
+      });
+    });
+  });
+
   it("fails closed when the config file is invalid", async () => {
     await withMcpConfigHome({}, async ({ configPath }) => {
       await fs.writeFile(configPath, "{", "utf-8");

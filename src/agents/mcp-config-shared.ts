@@ -31,7 +31,8 @@ const MCP_EXPLICIT_CREDENTIAL_ENV_KEYS = new Set([
   "REDIS_URL",
 ]);
 
-function isDangerousMcpStdioEnvVarName(rawKey: string): boolean {
+/** Returns whether the stdio startup safety policy blocks an MCP env key. */
+export function isDangerousMcpStdioEnvVarName(rawKey: string): boolean {
   if (isDangerousHostEnvVarName(rawKey)) {
     return true;
   }
@@ -45,6 +46,14 @@ function isDangerousMcpStdioEnvVarName(rawKey: string): boolean {
 /** Returns whether a value is a plain MCP config record. */
 export function isMcpConfigRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/** Lists configured MCP env keys the stdio startup safety policy blocks. */
+export function listBlockedMcpStdioEnvKeys(env: unknown): string[] {
+  if (!isMcpConfigRecord(env)) {
+    return [];
+  }
+  return Object.keys(env).filter((key) => isDangerousMcpStdioEnvVarName(key));
 }
 
 function toMcpFilteredStringRecord(
