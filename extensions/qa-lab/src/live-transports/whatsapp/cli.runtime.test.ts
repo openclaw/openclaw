@@ -45,7 +45,7 @@ async function writeSummary(summary: unknown) {
 }
 
 describe("WhatsApp QA CLI runtime", () => {
-  it("fails when a standard scenario is skipped by default", async () => {
+  it("fails when a requirement is skipped by default", async () => {
     originalExitCode = process.exitCode;
     process.exitCode = undefined;
     const { outputDir, summaryPath } = await writeSummary({

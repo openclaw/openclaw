@@ -82,11 +82,11 @@ import {
   runQaParityReportCommand,
   runQaSuiteCommand,
 } from "./cli.runtime.js";
+import { QaSuiteInfraError } from "./errors.js";
 import { QA_EVIDENCE_SUMMARY_FILENAME } from "./evidence-summary.js";
 import { runQaTelegramCommand } from "./live-transports/telegram/cli.runtime.js";
 import { defaultQaModelForMode as defaultQaProviderModelForMode } from "./model-selection.js";
 import type { QaProviderModeInput } from "./run-config.js";
-import { QaSuiteInfraError } from "./suite-infra-error.js";
 
 function mockFirstObjectArg(mock: unknown): Record<string, unknown> {
   const calls = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls ?? [];

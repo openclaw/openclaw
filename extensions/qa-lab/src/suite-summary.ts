@@ -1,26 +1,10 @@
 // Qa Lab plugin module implements suite summary behavior.
 import fs from "node:fs/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { QaSuiteArtifactError } from "./errors.js";
 import type { QaEvidenceSummaryJson } from "./evidence-summary.js";
 import type { QaProviderMode } from "./model-selection.js";
 import type { RuntimeId, RuntimeParityResult } from "./runtime-parity.js";
-
-export type QaSuiteArtifactErrorCode =
-  | "report_missing"
-  | "summary_read_failed"
-  | "summary_parse_failed"
-  | "summary_failure_count_missing"
-  | "summary_blocking_count_missing";
-
-export class QaSuiteArtifactError extends Error {
-  readonly code: QaSuiteArtifactErrorCode;
-
-  constructor(code: QaSuiteArtifactErrorCode, message: string, options?: { cause?: unknown }) {
-    super(message, options);
-    this.name = "QaSuiteArtifactError";
-    this.code = code;
-  }
-}
 
 type QaSuiteSummaryScenario = {
   name: string;

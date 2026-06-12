@@ -8,17 +8,19 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  QA_EVIDENCE_SUMMARY_FILENAME,
+  type QaEvidenceSummaryJson,
+} from "../../extensions/qa-lab/src/evidence-summary.ts";
+import {
   appendJsonl,
   assertRequiredEnv,
   buildRttResult,
   buildRunId,
   createHarnessEnv,
   extractRtt,
-  QA_EVIDENCE_SUMMARY_FILENAME,
   readTelegramSummary,
   resolveTelegramSummaryPath,
   safeRunLabel,
-  TELEGRAM_RTT_SUMMARY_FILENAME,
   validateOpenClawPackageSpec,
 } from "../../scripts/lib/rtt-harness.ts";
 import { testing as cliTesting } from "../../scripts/rtt.ts";
@@ -31,6 +33,7 @@ const CREDENTIAL_SCRIPT_PATH = path.resolve(
   "../../scripts/e2e/npm-telegram-rtt-credentials.mjs",
 );
 const CONFIG_SCRIPT_PATH = path.resolve(TEST_DIR, "../../scripts/e2e/npm-telegram-rtt-config.mjs");
+const LEGACY_TELEGRAM_RTT_SUMMARY_FILENAME = "telegram-qa-summary.json";
 const CHUNKED_PAYLOAD_MARKER = "__openclawQaCredentialPayloadChunksV1";
 const execFileAsync = promisify(execFile);
 const tempDirs: string[] = [];
@@ -494,39 +497,85 @@ describe("RTT harness", () => {
   });
 
   it("extracts RTT values from normalized evidence summaries", () => {
-    expect(
-      extractRtt({
-        kind: "openclaw.qa.evidence-summary",
-        entries: [
-          {
-            test: { id: "telegram-canary" },
-            result: { status: "pass", timing: { rttMs: 1234 } },
+    const summary: QaEvidenceSummaryJson = {
+      kind: "openclaw.qa.evidence-summary",
+      schemaVersion: 2,
+      generatedAt: "2026-05-01T00:00:00.000Z",
+      entries: [
+        {
+          test: {
+            kind: "live-transport-check",
+            id: "telegram-canary",
+            title: "Telegram canary",
           },
-          {
-            test: { id: "telegram-mentioned-message-reply" },
-            result: {
-              status: "pass",
-              timing: { rttMs: 6000, p50Ms: 5000, p95Ms: 7000, maxMs: 7000 },
+          mapping: { profile: { id: "release" }, coverage: [] },
+          execution: {
+            runner: { id: "docker" },
+            environment: { ref: null, os: "linux", nodeVersion: "v24.0.0" },
+            provider: {
+              id: "openai",
+              live: false,
+              model: { name: null, ref: null },
+              fixture: "mock-openai",
+            },
+            packageSource: { kind: "npm-package", spec: "openclaw@beta" },
+            artifacts: [],
+          },
+          result: { status: "pass", timing: { rttMs: 1234 } },
+        },
+        {
+          test: {
+            kind: "live-transport-check",
+            id: "telegram-mentioned-message-reply",
+            title: "Telegram normal reply",
+          },
+          mapping: { profile: { id: "release" }, coverage: [] },
+          execution: {
+            runner: { id: "docker" },
+            environment: { ref: null, os: "linux", nodeVersion: "v24.0.0" },
+            provider: {
+              id: "openai",
+              live: false,
+              model: { name: null, ref: null },
+              fixture: "mock-openai",
+            },
+            packageSource: { kind: "npm-package", spec: "openclaw@beta" },
+            artifacts: [],
+          },
+          result: {
+            status: "pass",
+            timing: {
+              rttMs: 6000,
+              avgMs: 5333,
+              p50Ms: 5000,
+              p95Ms: 7000,
+              maxMs: 7000,
+              samples: 3,
+              failedSamples: 0,
             },
           },
-        ],
-      }),
-    ).toEqual({
+        },
+      ],
+    };
+
+    expect(extractRtt(summary)).toEqual({
       canaryMs: 1234,
       mentionReplyMs: 5000,
+      avgMs: 5333,
       p50Ms: 5000,
       p95Ms: 7000,
       maxMs: 7000,
+      failedSamples: 0,
     });
   });
 
   it("prefers normalized evidence summaries when resolving Telegram RTT artifacts", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-rtt-summary-test-"));
     tempDirs.push(tempDir);
-    await fs.writeFile(path.join(tempDir, TELEGRAM_RTT_SUMMARY_FILENAME), "{}\n");
+    await fs.writeFile(path.join(tempDir, LEGACY_TELEGRAM_RTT_SUMMARY_FILENAME), "{}\n");
 
     await expect(resolveTelegramSummaryPath(tempDir)).resolves.toBe(
-      path.join(tempDir, TELEGRAM_RTT_SUMMARY_FILENAME),
+      path.join(tempDir, LEGACY_TELEGRAM_RTT_SUMMARY_FILENAME),
     );
 
     await fs.writeFile(path.join(tempDir, QA_EVIDENCE_SUMMARY_FILENAME), "{}\n");

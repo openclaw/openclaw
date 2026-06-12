@@ -285,13 +285,13 @@ function pushLiveTransportLines(
     const members = lane.members
       .map((member) =>
         member.scenarioId
-          ? `${member.standardId}: ${member.scenarioId}`
-          : `${member.standardId}: always-on`,
+          ? `${member.requirementId}: ${member.scenarioId}`
+          : `${member.requirementId}: always-on`,
       )
       .join(", ");
     const missing =
-      lane.baselineMissingStandardScenarioIds.length > 0
-        ? lane.baselineMissingStandardScenarioIds.join(", ")
+      lane.baselineMissingRequirementIds.length > 0
+        ? lane.baselineMissingRequirementIds.join(", ")
         : "none";
     lines.push(
       `- ${lane.transportId} (${lane.commandName}): ${members}; missing baseline: ${missing}`,

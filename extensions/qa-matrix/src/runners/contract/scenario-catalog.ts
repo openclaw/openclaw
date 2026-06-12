@@ -1,7 +1,7 @@
 // Qa Matrix plugin module implements scenario catalog behavior.
 import type { QaProviderModeInput } from "../../run-config.js";
 import {
-  collectLiveTransportStandardScenarioCoverage,
+  collectLiveTransportRequirementCoverage,
   selectLiveTransportScenarios,
   type LiveTransportScenarioDefinition,
 } from "../../shared/live-transport-scenarios.js";
@@ -343,7 +343,7 @@ const MATRIX_QA_APPROVAL_BOTH_CONFIG = {
 export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
   {
     id: "matrix-thread-follow-up",
-    standardId: "thread-follow-up",
+    requirementId: "thread-follow-up",
     timeoutMs: 60_000,
     title: "Matrix thread follow-up reply",
   },
@@ -359,7 +359,7 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
   },
   {
     id: "matrix-thread-isolation",
-    standardId: "thread-isolation",
+    requirementId: "thread-isolation",
     timeoutMs: 75_000,
     title: "Matrix top-level reply stays out of prior thread",
   },
@@ -384,7 +384,7 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
   },
   {
     id: "matrix-top-level-reply-shape",
-    standardId: "top-level-reply-shape",
+    requirementId: "top-level-reply-shape",
     timeoutMs: 45_000,
     title: "Matrix top-level reply keeps replyToMode off",
   },
@@ -588,7 +588,7 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
   },
   {
     id: "matrix-reaction-notification",
-    standardId: "reaction-observation",
+    requirementId: "reaction-observation",
     timeoutMs: 45_000,
     title: "Matrix reactions on bot replies are observed",
   },
@@ -646,7 +646,7 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
   },
   {
     id: "matrix-restart-resume",
-    standardId: "restart-resume",
+    requirementId: "restart-resume",
     timeoutMs: 60_000,
     title: "Matrix lane resumes cleanly after gateway restart",
     topology: MATRIX_QA_RESTART_ROOM_TOPOLOGY,
@@ -689,7 +689,7 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
   },
   {
     id: "matrix-mention-gating",
-    standardId: "mention-gating",
+    requirementId: "mention-gating",
     timeoutMs: 8_000,
     title: "Matrix room message without mention does not trigger",
   },
@@ -820,7 +820,7 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
   },
   {
     id: "matrix-allowlist-block",
-    standardId: "allowlist-block",
+    requirementId: "allowlist-block",
     timeoutMs: 8_000,
     title: "Matrix sender allowlist blocks observer replies",
   },
@@ -1205,8 +1205,8 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
   },
 ];
 
-export const MATRIX_QA_STANDARD_SCENARIO_IDS = collectLiveTransportStandardScenarioCoverage({
-  alwaysOnStandardScenarioIds: ["canary"],
+export const MATRIX_QA_REQUIREMENT_IDS = collectLiveTransportRequirementCoverage({
+  alwaysOnRequirementIds: ["canary"],
   scenarios: MATRIX_QA_SCENARIOS,
 });
 

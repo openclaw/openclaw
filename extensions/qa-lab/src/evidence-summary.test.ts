@@ -162,7 +162,7 @@ describe("evidence summary", () => {
       checks: [
         {
           id: "telegram-canary",
-          standardId: "canary",
+          requirementId: "canary",
           title: "Telegram canary",
           status: "fail",
           details: "timed out waiting for SUT reply",
@@ -193,7 +193,7 @@ describe("evidence summary", () => {
             },
             {
               id: "channels.telegram.canary",
-              role: "live-transport-standard",
+              role: "live-transport-requirement",
               surfaceIds: ["channels.telegram"],
               categoryIds: ["channels.telegram.live"],
             },
@@ -513,7 +513,7 @@ describe("evidence summary", () => {
       generatedAt: "2026-06-07T12:15:00.000Z",
       primaryModel: "openai/gpt-5.5",
       providerMode: "live-frontier",
-      checks: [{ id: "telegram-canary", standardId: "canary", status: "pass" }],
+      checks: [{ id: "telegram-canary", requirementId: "canary", status: "pass" }],
       transportId: "telegram",
     });
     const tarballEvidence = buildLiveTransportEvidenceSummary({
@@ -524,7 +524,7 @@ describe("evidence summary", () => {
       generatedAt: "2026-06-07T12:16:00.000Z",
       primaryModel: "openai/gpt-5.5",
       providerMode: "live-frontier",
-      checks: [{ id: "telegram-canary", standardId: "canary", status: "pass" }],
+      checks: [{ id: "telegram-canary", requirementId: "canary", status: "pass" }],
       transportId: "telegram",
     });
 

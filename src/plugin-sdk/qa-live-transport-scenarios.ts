@@ -1,5 +1,5 @@
-/** Standard live-transport behavior buckets used to compare channel QA suites. */
-export type LiveTransportStandardScenarioId =
+/** Live-transport requirement buckets used to compare channel QA suites. */
+export type LiveTransportRequirementId =
   | "canary"
   | "mention-gating"
   | "allowlist-block"
@@ -10,25 +10,25 @@ export type LiveTransportStandardScenarioId =
   | "reaction-observation"
   | "help-command";
 
-/** Transport-specific live QA scenario with optional mapping to a standard behavior bucket. */
+/** Transport-specific live QA scenario with optional mapping to a requirement bucket. */
 export type LiveTransportScenarioDefinition<TId extends string = string> = {
   /** Transport-specific scenario id accepted by CLI scenario filters. */
   id: TId;
-  /** Optional standard coverage bucket this transport-specific scenario proves. */
-  standardId?: LiveTransportStandardScenarioId;
+  /** Optional requirement coverage bucket this transport-specific scenario proves. */
+  requirementId?: LiveTransportRequirementId;
   /** Per-scenario timeout for live transport execution. */
   timeoutMs: number;
   /** Human-readable label used in QA output. */
   title: string;
 };
 
-type LiveTransportStandardScenarioDefinition = {
+type LiveTransportRequirementDefinition = {
   description: string;
-  id: LiveTransportStandardScenarioId;
+  id: LiveTransportRequirementId;
   title: string;
 };
 
-const LIVE_TRANSPORT_STANDARD_SCENARIOS: readonly LiveTransportStandardScenarioDefinition[] = [
+const LIVE_TRANSPORT_REQUIREMENTS: readonly LiveTransportRequirementDefinition[] = [
   {
     id: "canary",
     title: "Transport canary",
@@ -76,26 +76,25 @@ const LIVE_TRANSPORT_STANDARD_SCENARIOS: readonly LiveTransportStandardScenarioD
   },
 ] as const;
 
-/** Minimum standard scenarios expected from baseline live transport suites. */
-export const LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS: readonly LiveTransportStandardScenarioId[] =
-  [
-    "canary",
-    "mention-gating",
-    "allowlist-block",
-    "top-level-reply-shape",
-    "restart-resume",
-  ] as const;
+/** Minimum requirements expected from baseline live transport suites. */
+export const LIVE_TRANSPORT_BASELINE_REQUIREMENT_IDS: readonly LiveTransportRequirementId[] = [
+  "canary",
+  "mention-gating",
+  "allowlist-block",
+  "top-level-reply-shape",
+  "restart-resume",
+] as const;
 
-const LIVE_TRANSPORT_STANDARD_SCENARIO_ID_SET = new Set(
-  LIVE_TRANSPORT_STANDARD_SCENARIOS.map((scenario) => scenario.id),
+const LIVE_TRANSPORT_REQUIREMENT_ID_SET = new Set(
+  LIVE_TRANSPORT_REQUIREMENTS.map((scenario) => scenario.id),
 );
 
-function assertKnownStandardScenarioIds(ids: readonly LiveTransportStandardScenarioId[]) {
+function assertKnownRequirementIds(ids: readonly LiveTransportRequirementId[]) {
   for (const id of ids) {
-    // Keep typoed standard ids failing at suite-definition time instead of
+    // Keep typoed requirement ids failing at suite-definition time instead of
     // silently weakening baseline coverage comparisons.
-    if (!LIVE_TRANSPORT_STANDARD_SCENARIO_ID_SET.has(id)) {
-      throw new Error(`unknown live transport standard scenario id: ${id}`);
+    if (!LIVE_TRANSPORT_REQUIREMENT_ID_SET.has(id)) {
+      throw new Error(`unknown live transport requirement id: ${id}`);
     }
   }
 }
@@ -120,14 +119,14 @@ export function selectLiveTransportScenarios<TDefinition extends { id: string }>
   return selected;
 }
 
-/** Collects unique standard coverage ids from always-on coverage and scenario metadata. */
-export function collectLiveTransportStandardScenarioCoverage<TId extends string>(params: {
-  alwaysOnStandardScenarioIds?: readonly LiveTransportStandardScenarioId[];
+/** Collects unique requirement coverage ids from always-on coverage and scenario metadata. */
+export function collectLiveTransportRequirementCoverage<TId extends string>(params: {
+  alwaysOnRequirementIds?: readonly LiveTransportRequirementId[];
   scenarios: readonly LiveTransportScenarioDefinition<TId>[];
 }) {
-  const coverage: LiveTransportStandardScenarioId[] = [];
-  const seen = new Set<LiveTransportStandardScenarioId>();
-  const append = (id: LiveTransportStandardScenarioId | undefined) => {
+  const coverage: LiveTransportRequirementId[] = [];
+  const seen = new Set<LiveTransportRequirementId>();
+  const append = (id: LiveTransportRequirementId | undefined) => {
     if (!id || seen.has(id)) {
       return;
     }
@@ -135,26 +134,27 @@ export function collectLiveTransportStandardScenarioCoverage<TId extends string>
     coverage.push(id);
   };
 
-  assertKnownStandardScenarioIds(params.alwaysOnStandardScenarioIds ?? []);
-  for (const id of params.alwaysOnStandardScenarioIds ?? []) {
+  const alwaysOnRequirementIds = params.alwaysOnRequirementIds ?? [];
+  assertKnownRequirementIds(alwaysOnRequirementIds);
+  for (const id of alwaysOnRequirementIds) {
     append(id);
   }
   for (const scenario of params.scenarios) {
-    if (scenario.standardId) {
-      assertKnownStandardScenarioIds([scenario.standardId]);
+    if (scenario.requirementId) {
+      assertKnownRequirementIds([scenario.requirementId]);
     }
-    append(scenario.standardId);
+    append(scenario.requirementId);
   }
   return coverage;
 }
 
-/** Returns expected standard scenario ids that are not covered by the supplied suite. */
-export function findMissingLiveTransportStandardScenarios(params: {
-  coveredStandardScenarioIds: readonly LiveTransportStandardScenarioId[];
-  expectedStandardScenarioIds: readonly LiveTransportStandardScenarioId[];
+/** Returns expected requirement ids that are not covered by the supplied suite. */
+export function findMissingLiveTransportRequirements(params: {
+  coveredRequirementIds: readonly LiveTransportRequirementId[];
+  expectedRequirementIds: readonly LiveTransportRequirementId[];
 }) {
-  assertKnownStandardScenarioIds(params.coveredStandardScenarioIds);
-  assertKnownStandardScenarioIds(params.expectedStandardScenarioIds);
-  const covered = new Set(params.coveredStandardScenarioIds);
-  return params.expectedStandardScenarioIds.filter((id) => !covered.has(id));
+  assertKnownRequirementIds(params.coveredRequirementIds);
+  assertKnownRequirementIds(params.expectedRequirementIds);
+  const covered = new Set(params.coveredRequirementIds);
+  return params.expectedRequirementIds.filter((id) => !covered.has(id));
 }

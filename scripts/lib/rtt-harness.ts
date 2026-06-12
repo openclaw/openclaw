@@ -3,6 +3,11 @@ import { execFile, spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import {
+  QA_EVIDENCE_SUMMARY_FILENAME,
+  type QaEvidenceSummaryJson,
+  type QaEvidenceTiming,
+} from "../../extensions/qa-lab/src/evidence-summary.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -44,7 +49,7 @@ type RttResult = {
   };
 };
 
-type TelegramQaSummary = {
+type LegacyTelegramRttSummary = {
   status?: string;
   totals?: {
     failed?: number;
@@ -70,30 +75,9 @@ type TelegramQaSummary = {
   }>;
 };
 
-type QaEvidenceSummary = {
-  kind?: string;
-  entries?: Array<{
-    test?: {
-      id?: string;
-    };
-    result?: {
-      status?: string;
-      timing?: {
-        rttMs?: number;
-        avgMs?: number;
-        p50Ms?: number;
-        p95Ms?: number;
-        maxMs?: number;
-        samples?: number;
-      };
-    };
-  }>;
-};
+type TelegramRttSummary = LegacyTelegramRttSummary | QaEvidenceSummaryJson;
 
-type TelegramRttSummary = TelegramQaSummary | QaEvidenceSummary;
-
-export const QA_EVIDENCE_SUMMARY_FILENAME = "qa-evidence-summary.json";
-export const TELEGRAM_RTT_SUMMARY_FILENAME = "telegram-qa-summary.json";
+const LEGACY_TELEGRAM_RTT_SUMMARY_FILENAME = "telegram-qa-summary.json";
 
 const OPENCLAW_PACKAGE_SPEC_RE =
   /^openclaw@(main|alpha|beta|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-(alpha|beta)\.[1-9][0-9]*)?)$/u;
@@ -175,11 +159,11 @@ export function buildRunId(params: { now: Date; spec: string; index?: number }) 
   return `${stamp}-${safeRunLabel(params.spec)}${suffix}`;
 }
 
-function isQaEvidenceSummary(summary: TelegramRttSummary): summary is QaEvidenceSummary {
-  return Array.isArray((summary as QaEvidenceSummary).entries);
+function isQaEvidenceSummary(summary: TelegramRttSummary): summary is QaEvidenceSummaryJson {
+  return Array.isArray((summary as { entries?: unknown }).entries);
 }
 
-function extractNormalizedEvidenceRtt(summary: QaEvidenceSummary) {
+function extractNormalizedEvidenceRtt(summary: QaEvidenceSummaryJson) {
   const entries = summary.entries ?? [];
   const findEntry = (id: string) => entries.find((entry) => entry.test?.id === id);
   const canary = findEntry("telegram-canary")?.result?.timing;
@@ -188,19 +172,26 @@ function extractNormalizedEvidenceRtt(summary: QaEvidenceSummary) {
     canaryMs: canary?.rttMs,
     mentionReplyMs: mention?.p50Ms ?? mention?.rttMs,
   };
-  if (mention?.avgMs !== undefined) {
-    rtt.avgMs = mention.avgMs;
-  }
-  if (mention?.p50Ms !== undefined) {
-    rtt.p50Ms = mention.p50Ms;
-  }
-  if (mention?.p95Ms !== undefined) {
-    rtt.p95Ms = mention.p95Ms;
-  }
-  if (mention?.maxMs !== undefined) {
-    rtt.maxMs = mention.maxMs;
-  }
+  appendRttTiming(rtt, mention);
   return rtt;
+}
+
+function appendRttTiming(rtt: RttResult["rtt"], timing: QaEvidenceTiming | undefined) {
+  if (timing?.avgMs !== undefined) {
+    rtt.avgMs = timing.avgMs;
+  }
+  if (timing?.p50Ms !== undefined) {
+    rtt.p50Ms = timing.p50Ms;
+  }
+  if (timing?.p95Ms !== undefined) {
+    rtt.p95Ms = timing.p95Ms;
+  }
+  if (timing?.maxMs !== undefined) {
+    rtt.maxMs = timing.maxMs;
+  }
+  if (timing?.failedSamples !== undefined) {
+    rtt.failedSamples = timing.failedSamples;
+  }
 }
 
 export function extractRtt(summary: TelegramRttSummary) {
@@ -221,11 +212,21 @@ export function extractRtt(summary: TelegramRttSummary) {
     rtt.warmSamples = warmSamples;
   }
   if (mention?.stats) {
-    rtt.avgMs = mention.stats.avgMs;
-    rtt.p50Ms = mention.stats.p50Ms;
-    rtt.p95Ms = mention.stats.p95Ms;
-    rtt.maxMs = mention.stats.maxMs;
-    rtt.failedSamples = mention.stats.failed;
+    if (mention.stats.avgMs !== undefined) {
+      rtt.avgMs = mention.stats.avgMs;
+    }
+    if (mention.stats.p50Ms !== undefined) {
+      rtt.p50Ms = mention.stats.p50Ms;
+    }
+    if (mention.stats.p95Ms !== undefined) {
+      rtt.p95Ms = mention.stats.p95Ms;
+    }
+    if (mention.stats.maxMs !== undefined) {
+      rtt.maxMs = mention.stats.maxMs;
+    }
+    if (mention.stats.failed !== undefined) {
+      rtt.failedSamples = mention.stats.failed;
+    }
   }
   return rtt;
 }
@@ -352,7 +353,7 @@ export async function resolveTelegramSummaryPath(outputDir: string) {
     await fs.access(evidencePath);
     return evidencePath;
   } catch {
-    return path.join(outputDir, TELEGRAM_RTT_SUMMARY_FILENAME);
+    return path.join(outputDir, LEGACY_TELEGRAM_RTT_SUMMARY_FILENAME);
   }
 }
 
@@ -380,7 +381,9 @@ export async function runHarness(params: { env: NodeJS.ProcessEnv; harnessRoot: 
   return exitCode ?? 1;
 }
 
-function hasWarmSampleEvidence(scenario: NonNullable<TelegramQaSummary["scenarios"]>[number]) {
+function hasWarmSampleEvidence(
+  scenario: NonNullable<LegacyTelegramRttSummary["scenarios"]>[number],
+) {
   if (
     typeof scenario.stats?.total !== "number" ||
     scenario.stats.total < 1 ||
@@ -399,7 +402,10 @@ function hasWarmSampleEvidence(scenario: NonNullable<TelegramQaSummary["scenario
   );
 }
 
-function normalizedEvidenceSummaryFailed(summary: QaEvidenceSummary, requestedScenarios: string[]) {
+function normalizedEvidenceSummaryFailed(
+  summary: QaEvidenceSummaryJson,
+  requestedScenarios: string[],
+) {
   const entries = summary.entries ?? [];
   const requiredScenarioIds = ["telegram-canary", ...requestedScenarios];
   for (const scenarioId of requiredScenarioIds) {

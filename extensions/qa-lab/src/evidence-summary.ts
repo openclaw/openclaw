@@ -61,9 +61,12 @@ const qaEvidenceTimingSchema = z
   .object({
     wallMs: z.number().finite().positive().optional(),
     rttMs: z.number().finite().positive().optional(),
+    avgMs: z.number().finite().positive().optional(),
     p50Ms: z.number().finite().positive().optional(),
     p95Ms: z.number().finite().positive().optional(),
+    maxMs: z.number().finite().positive().optional(),
     samples: z.number().int().positive().optional(),
+    failedSamples: z.number().int().nonnegative().optional(),
   })
   .strict();
 
@@ -178,6 +181,7 @@ export const qaEvidenceSummarySchema = z
 
 export type QaEvidenceProfile = z.infer<typeof qaEvidenceProfileSchema>;
 export type QaEvidenceStatus = z.infer<typeof qaEvidenceStatusSchema>;
+export type QaEvidenceTiming = z.infer<typeof qaEvidenceTimingSchema>;
 export type QaEvidenceSummaryEntry = z.infer<typeof qaEvidenceSummaryEntrySchema>;
 export type QaEvidenceSummaryJson = z.infer<typeof qaEvidenceSummarySchema>;
 
@@ -203,7 +207,7 @@ type QaEvidenceScenarioSpecInput = {
 type QaEvidenceScenarioResultInput = {
   id?: string;
   name?: string;
-  standardId?: string;
+  requirementId?: string;
   title?: string;
   status: QaEvidenceStatusInput;
   details?: string;
@@ -217,7 +221,7 @@ type QaEvidenceLiveTransportCheckInput = {
   artifactPaths?: Readonly<Record<string, string>>;
   id?: string;
   name?: string;
-  standardId?: string;
+  requirementId?: string;
   title?: string;
   status: QaEvidenceStatusInput;
   details?: string;
@@ -721,8 +725,8 @@ export function buildLiveTransportEvidenceSummary(
   }) ?? { id: "native" };
   const entries = params.checks.map((check, index): QaEvidenceSummaryEntry => {
     const testId = check.id ?? check.name ?? `live-transport-check-${index + 1}`;
-    const standardCoverageId = check.standardId
-      ? `channels.${params.transportId}.${check.standardId}`
+    const requirementCoverageId = check.requirementId
+      ? `channels.${params.transportId}.${check.requirementId}`
       : undefined;
     return {
       test: buildQaEvidenceTest({
@@ -741,11 +745,11 @@ export function buildLiveTransportEvidenceSummary(
             surfaceIds: [`channels.${params.transportId}`],
             categoryIds: [`channels.${params.transportId}.live`],
           },
-          ...(standardCoverageId
+          ...(requirementCoverageId
             ? [
                 {
-                  id: standardCoverageId,
-                  role: "live-transport-standard",
+                  id: requirementCoverageId,
+                  role: "live-transport-requirement",
                   surfaceIds: [`channels.${params.transportId}`],
                   categoryIds: [`channels.${params.transportId}.live`],
                 },

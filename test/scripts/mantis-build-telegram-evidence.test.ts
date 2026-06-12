@@ -177,7 +177,7 @@ describe("scripts/mantis/build-telegram-evidence", () => {
     );
   });
 
-  it("normalizes legacy Telegram summaries from historical candidate refs", () => {
+  it("uses legacy Telegram summaries only as historical fallback artifacts", () => {
     const dir = makeLegacyTelegramOutput();
 
     const result = writeTelegramEvidence(["--output-dir", dir]);

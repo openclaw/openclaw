@@ -102,7 +102,7 @@ describe("plugin-sdk qa-runtime", () => {
   it("keeps shared live transport scenario coverage helpers ordered and strict", async () => {
     const module = await import("./qa-runtime.js");
 
-    expect(module.LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS).toEqual([
+    expect(module.LIVE_TRANSPORT_BASELINE_REQUIREMENT_IDS).toEqual([
       "canary",
       "mention-gating",
       "allowlist-block",
@@ -129,24 +129,24 @@ describe("plugin-sdk qa-runtime", () => {
       }),
     ).toThrow("unknown Demo QA scenario id(s): missing");
 
-    const covered = module.collectLiveTransportStandardScenarioCoverage({
-      alwaysOnStandardScenarioIds: ["canary"],
+    const covered = module.collectLiveTransportRequirementCoverage({
+      alwaysOnRequirementIds: ["canary"],
       scenarios: [
-        { id: "scenario-1", standardId: "mention-gating", timeoutMs: 1_000, title: "mention" },
+        { id: "scenario-1", requirementId: "mention-gating", timeoutMs: 1_000, title: "mention" },
         {
           id: "scenario-2",
-          standardId: "mention-gating",
+          requirementId: "mention-gating",
           timeoutMs: 1_000,
           title: "mention again",
         },
-        { id: "scenario-3", standardId: "restart-resume", timeoutMs: 1_000, title: "restart" },
+        { id: "scenario-3", requirementId: "restart-resume", timeoutMs: 1_000, title: "restart" },
       ],
     });
     expect(covered).toEqual(["canary", "mention-gating", "restart-resume"]);
     expect(
-      module.findMissingLiveTransportStandardScenarios({
-        coveredStandardScenarioIds: covered,
-        expectedStandardScenarioIds: module.LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS,
+      module.findMissingLiveTransportRequirements({
+        coveredRequirementIds: covered,
+        expectedRequirementIds: module.LIVE_TRANSPORT_BASELINE_REQUIREMENT_IDS,
       }),
     ).toEqual(["allowlist-block", "top-level-reply-shape"]);
   });

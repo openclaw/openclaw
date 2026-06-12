@@ -3,6 +3,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { QaBusState } from "./bus-state.js";
+import { QaSuiteInfraError } from "./errors.js";
 import { getQaProvider } from "./providers/index.js";
 import { QaStateBackedTransportAdapter } from "./qa-transport.js";
 import type {
@@ -12,7 +13,6 @@ import type {
   QaTransportReportParams,
 } from "./qa-transport.js";
 import { qaChannelPlugin } from "./runtime-api.js";
-import { QaSuiteInfraError } from "./suite-infra-error.js";
 
 const QA_CHANNEL_ID = "qa-channel";
 const QA_CHANNEL_ACCOUNT_ID = "default";

@@ -28,6 +28,7 @@ import {
 } from "./coverage-report.js";
 import { buildQaDockerHarnessImage, writeQaDockerHarnessFiles } from "./docker-harness.js";
 import { runQaDockerUp } from "./docker-up.runtime.js";
+import { QaSuiteArtifactError, QaSuiteInfraError } from "./errors.js";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
 import {
   createMockJsonlReplayCellRunner,
@@ -67,12 +68,8 @@ import {
   type QaRuntimeParityTier,
 } from "./scenario-catalog.js";
 import { resolveQaScenarioPackScenarioIds } from "./scenario-packs.js";
-import { QaSuiteInfraError } from "./suite-infra-error.js";
 import { runQaSuiteFromRuntime } from "./suite-launch.runtime.js";
-import {
-  QaSuiteArtifactError,
-  readQaSuiteFailedOrSkippedScenarioCountFromFile,
-} from "./suite-summary.js";
+import { readQaSuiteFailedOrSkippedScenarioCountFromFile } from "./suite-summary.js";
 import {
   buildTokenEfficiencyReport,
   renderTokenEfficiencyMarkdownReport,

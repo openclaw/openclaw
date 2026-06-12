@@ -8,6 +8,8 @@ const groupId = process.env.OPENCLAW_QA_TELEGRAM_GROUP_ID;
 const driverToken = process.env.OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN;
 const sutToken = process.env.OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN;
 const outputDir = process.env.OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR ?? ".artifacts/rtt/raw";
+const providerMode = process.env.OPENCLAW_NPM_TELEGRAM_PROVIDER_MODE?.trim() || "mock-openai";
+const primaryModel = process.env.OPENCLAW_NPM_TELEGRAM_MODEL?.trim() || null;
 const telegramApiBaseUrl = (
   process.env.OPENCLAW_QA_TELEGRAM_API_BASE_URL ?? "https://api.telegram.org"
 ).replace(/\/+$/u, "");
@@ -287,6 +289,171 @@ function summarizeSamples(samples) {
   };
 }
 
+function splitModelRef(modelRef) {
+  if (!modelRef) {
+    return { provider: "openai", model: null, ref: null };
+  }
+  const slashIndex = modelRef.indexOf("/");
+  if (slashIndex <= 0 || slashIndex === modelRef.length - 1) {
+    return { provider: "openai", model: modelRef, ref: modelRef };
+  }
+  return {
+    provider: modelRef.slice(0, slashIndex),
+    model: modelRef.slice(slashIndex + 1),
+    ref: modelRef,
+  };
+}
+
+function buildProviderEvidence() {
+  const split = splitModelRef(primaryModel);
+  const live = providerMode !== "mock-openai";
+  return {
+    id: split.provider || "openai",
+    live,
+    model: {
+      name: split.model,
+      ref: split.ref,
+    },
+    ...(live ? { auth: providerMode } : { fixture: providerMode }),
+  };
+}
+
+function buildPackageSourceEvidence() {
+  const spec =
+    process.env.OPENCLAW_NPM_TELEGRAM_INSTALL_SOURCE?.trim() ||
+    process.env.OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC?.trim() ||
+    process.env.OPENCLAW_NPM_TELEGRAM_PACKAGE_TGZ?.trim() ||
+    undefined;
+  const kind = spec?.endsWith(".tgz") ? "packed-tarball" : spec ? "npm-package" : "unknown";
+  return {
+    kind,
+    ...(spec ? { spec } : {}),
+  };
+}
+
+function requirementIdForScenario(scenarioId) {
+  if (scenarioId === "telegram-canary") {
+    return "canary";
+  }
+  if (scenarioId === "telegram-mentioned-message-reply") {
+    return "mention-gating";
+  }
+  return undefined;
+}
+
+function timingForScenario(scenario) {
+  const timing = {};
+  if (typeof scenario.rttMs === "number" && Number.isFinite(scenario.rttMs) && scenario.rttMs > 0) {
+    timing.rttMs = scenario.rttMs;
+  }
+  if (scenario.stats) {
+    for (const key of ["avgMs", "p50Ms", "p95Ms", "maxMs"]) {
+      const value = scenario.stats[key];
+      if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+        timing[key] = value;
+      }
+    }
+    if (
+      typeof scenario.stats.total === "number" &&
+      Number.isFinite(scenario.stats.total) &&
+      scenario.stats.total > 0
+    ) {
+      timing.samples = scenario.stats.total;
+    }
+    if (
+      typeof scenario.stats.failed === "number" &&
+      Number.isFinite(scenario.stats.failed) &&
+      scenario.stats.failed >= 0
+    ) {
+      timing.failedSamples = scenario.stats.failed;
+    }
+  }
+  return Object.keys(timing).length > 0 ? timing : undefined;
+}
+
+function buildScenarioCoverage(scenarioId) {
+  const liveCoverage = {
+    id: "channels.telegram.live",
+    role: "live-transport",
+    surfaceIds: ["channels.telegram"],
+    categoryIds: ["channels.telegram.live"],
+  };
+  const requirementId = requirementIdForScenario(scenarioId);
+  if (!requirementId) {
+    return [liveCoverage];
+  }
+  return [
+    liveCoverage,
+    {
+      id: `channels.telegram.${requirementId}`,
+      role: "live-transport-requirement",
+      surfaceIds: ["channels.telegram"],
+      categoryIds: ["channels.telegram.live"],
+    },
+  ];
+}
+
+function buildEvidenceSummary(params) {
+  const provider = buildProviderEvidence();
+  const generatedAt = new Date().toISOString();
+  return {
+    kind: "openclaw.qa.evidence-summary",
+    schemaVersion: 2,
+    generatedAt,
+    entries: params.scenarios.map((scenario) => {
+      const timing = timingForScenario(scenario);
+      return {
+        test: {
+          kind: "live-transport-check",
+          id: scenario.id,
+          title: scenario.title,
+        },
+        mapping: {
+          profile: { id: "release" },
+          coverage: buildScenarioCoverage(scenario.id),
+        },
+        execution: {
+          runner: { id: "docker" },
+          environment: {
+            ref: process.env.OPENCLAW_QA_REF?.trim() || process.env.GITHUB_SHA?.trim() || null,
+            os: process.platform,
+            nodeVersion: process.version,
+          },
+          provider,
+          channel: {
+            id: "telegram",
+            live: true,
+            driver: "native",
+          },
+          packageSource: buildPackageSourceEvidence(),
+          artifacts: [
+            {
+              kind: "summary",
+              path: "qa-evidence-summary.json",
+              source: "telegram-rtt",
+            },
+            {
+              kind: "report",
+              path: "telegram-qa-report.md",
+              source: "telegram-rtt",
+            },
+            {
+              kind: "transport-observations",
+              path: "telegram-qa-observed-messages.json",
+              source: "telegram-rtt",
+            },
+          ],
+        },
+        result: {
+          status: scenario.status,
+          ...(scenario.status === "pass" ? {} : { failure: { reason: scenario.details } }),
+          ...(timing ? { timing } : {}),
+        },
+      };
+    }),
+  };
+}
+
 async function runWarmScenario(params) {
   const samples = [];
   let failures = 0;
@@ -396,7 +563,7 @@ async function main() {
   }
 
   const failed = scenarios.filter((scenario) => scenario.status === "fail").length;
-  const summary = {
+  const reportSummary = {
     provider: "telegram",
     driver: { id: driverMe.id, username: driverMe.username },
     sut: { id: sutMe.id, username: sutMe.username },
@@ -405,12 +572,13 @@ async function main() {
     totals: { total: scenarios.length, failed, passed: scenarios.length - failed },
     scenarios,
   };
+  const evidenceSummary = buildEvidenceSummary({ scenarios });
 
   await fs.writeFile(
-    path.join(outputDir, "telegram-qa-summary.json"),
-    `${JSON.stringify(summary, null, 2)}\n`,
+    path.join(outputDir, "qa-evidence-summary.json"),
+    `${JSON.stringify(evidenceSummary, null, 2)}\n`,
   );
-  await fs.writeFile(path.join(outputDir, "telegram-qa-report.md"), reportMarkdown(summary));
+  await fs.writeFile(path.join(outputDir, "telegram-qa-report.md"), reportMarkdown(reportSummary));
   await fs.writeFile(
     path.join(outputDir, "telegram-qa-observed-messages.json"),
     `${JSON.stringify(observedMessages, null, 2)}\n`,

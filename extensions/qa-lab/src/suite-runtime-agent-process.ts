@@ -13,8 +13,8 @@ import {
   QA_CHILD_STDOUT_MAX_BYTES,
   readQaChildOutput,
 } from "./child-output.js";
+import { QaSuiteInfraError } from "./errors.js";
 import { resolveQaNodeExecPath } from "./node-exec.js";
-import { QaSuiteInfraError } from "./suite-infra-error.js";
 import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
 import { waitForGatewayHealthy, waitForTransportReady } from "./suite-runtime-gateway.js";
 import type { QaDreamingStatus, QaSuiteRuntimeEnv } from "./suite-runtime-types.js";

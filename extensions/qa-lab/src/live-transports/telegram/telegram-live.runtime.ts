@@ -37,7 +37,7 @@ import {
 } from "../shared/live-artifacts.js";
 import { startQaLiveLaneGateway } from "../shared/live-gateway.runtime.js";
 import {
-  collectLiveTransportStandardScenarioCoverage,
+  collectLiveTransportRequirementCoverage,
   selectLiveTransportScenarios,
   type LiveTransportScenarioDefinition,
 } from "../shared/live-transport-scenarios.js";
@@ -141,7 +141,7 @@ const DEFAULT_TELEGRAM_QA_CANARY_TIMEOUT_MS = 30_000;
 
 type TelegramQaScenarioResult = {
   id: string;
-  standardId?: string;
+  requirementId?: string;
   title: string;
   status: "pass" | "fail";
   details: string;
@@ -249,7 +249,7 @@ function telegramQaStepRun(step: TelegramQaScenarioStep): TelegramQaScenarioRun 
 const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
   {
     id: "telegram-help-command",
-    standardId: "help-command",
+    requirementId: "help-command",
     title: "Telegram help command reply",
     rationale: "Canary-grade native command reply path.",
     timeoutMs: 45_000,
@@ -505,7 +505,7 @@ const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
   },
   {
     id: "telegram-mention-gating",
-    standardId: "mention-gating",
+    requirementId: "mention-gating",
     title: "Telegram group message without mention does not trigger",
     rationale: "Required group mention gate should suppress ordinary group chatter.",
     timeoutMs: 8_000,
@@ -520,8 +520,8 @@ const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
   },
 ];
 
-const TELEGRAM_QA_STANDARD_SCENARIO_IDS = collectLiveTransportStandardScenarioCoverage({
-  alwaysOnStandardScenarioIds: ["canary"],
+const TELEGRAM_QA_REQUIREMENT_IDS = collectLiveTransportRequirementCoverage({
+  alwaysOnRequirementIds: ["canary"],
   scenarios: TELEGRAM_QA_SCENARIOS,
 });
 
@@ -1769,7 +1769,7 @@ export async function runTelegramQaLive(params: {
         latestSutMessageId = canaryTiming.responseMessageId;
         scenarioResults.push({
           id: "telegram-canary",
-          standardId: "canary",
+          requirementId: "canary",
           title: "Telegram canary",
           status: "pass",
           details: redactPublicMetadata
@@ -1800,7 +1800,7 @@ export async function runTelegramQaLive(params: {
         });
         scenarioResults.push({
           id: "telegram-canary",
-          standardId: "canary",
+          requirementId: "canary",
           title: "Telegram canary",
           status: "fail",
           details: canaryFailure,
@@ -1896,7 +1896,7 @@ export async function runTelegramQaLive(params: {
             if (!lastMatched || !firstRequestStartedAt || lastSentMessageId === undefined) {
               const result = {
                 id: scenario.id,
-                standardId: scenario.standardId,
+                requirementId: scenario.requirementId,
                 title: scenario.title,
                 status: "pass",
                 details: "no reply",
@@ -1920,7 +1920,7 @@ export async function runTelegramQaLive(params: {
                 : `; ${scenarioSteps.filter((step) => step.expectReply).length} command replies matched`;
             const result = {
               id: scenario.id,
-              standardId: scenario.standardId,
+              requirementId: scenario.requirementId,
               title: scenario.title,
               status: "pass",
               details: redactPublicMetadata
@@ -1946,7 +1946,7 @@ export async function runTelegramQaLive(params: {
           } catch (error) {
             const result = {
               id: scenario.id,
-              standardId: scenario.standardId,
+              requirementId: scenario.requirementId,
               title: scenario.title,
               status: "fail",
               details: formatErrorMessage(error),
@@ -2078,7 +2078,7 @@ export async function runTelegramQaLive(params: {
 
 export const testing = {
   TELEGRAM_QA_SCENARIOS,
-  TELEGRAM_QA_STANDARD_SCENARIO_IDS,
+  TELEGRAM_QA_REQUIREMENT_IDS,
   buildTelegramQaConfig,
   buildObservedMessagesArtifact,
   canaryFailureMessage,

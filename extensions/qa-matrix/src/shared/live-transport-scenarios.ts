@@ -1,9 +1,9 @@
 // Qa Matrix plugin module implements live transport scenarios behavior.
 export {
-  LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS,
-  collectLiveTransportStandardScenarioCoverage,
-  findMissingLiveTransportStandardScenarios,
+  LIVE_TRANSPORT_BASELINE_REQUIREMENT_IDS,
+  collectLiveTransportRequirementCoverage,
+  findMissingLiveTransportRequirements,
   selectLiveTransportScenarios,
   type LiveTransportScenarioDefinition,
-  type LiveTransportStandardScenarioId,
+  type LiveTransportRequirementId,
 } from "openclaw/plugin-sdk/qa-live-transport-scenarios";
