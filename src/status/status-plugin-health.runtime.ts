@@ -72,7 +72,6 @@ function collectChannelPluginFailures(params: {
   config?: OpenClawConfig;
   diagnostics?: readonly PluginDiagnosticRecord[];
   workspaceDir?: string;
-  includeSetupFallbackPlugins?: boolean;
 }): ChannelPluginFailureRecord[] {
   const diagnosticFailures = (params.diagnostics ?? [])
     .filter(isChannelPluginFailureDiagnostic)
@@ -95,7 +94,9 @@ function collectChannelPluginFailures(params: {
       workspaceDir: params.workspaceDir,
       activationSourceConfig: params.config,
       includePersistedAuthState: false,
-      includeSetupFallbackPlugins: params.includeSetupFallbackPlugins === true,
+      // Detailed status inspects the full surface, including setup-fallback
+      // plugins, so missing-channel detection matches what setup would load.
+      includeSetupFallbackPlugins: true,
     });
     const loadFailures = resolution.loadFailures.map((failure) => ({
       channelId: failure.channelId,
@@ -150,12 +151,9 @@ function filterRuntimeToolQuarantinesForRegistry(params: {
   });
 }
 
-export function collectRuntimePluginHealthSnapshot(
-  _params: {
-    config?: OpenClawConfig;
-    workspaceDir?: string;
-  } = {},
-): StatusPluginHealthSnapshot {
+// Compact status reads only the active registry and persisted health stores;
+// full config-driven channel inspection is reserved for the installed path.
+export function collectRuntimePluginHealthSnapshot(): StatusPluginHealthSnapshot {
   const registry = getActiveRuntimePluginRegistry();
   const diagnostics = (registry?.diagnostics ?? []).map(normalizeDiagnostic);
   const plugins = (registry?.plugins ?? []).map(normalizeSnapshotPlugin);
@@ -192,7 +190,6 @@ export async function collectInstalledPluginHealthSnapshot(params: {
     config: params.config,
     diagnostics: dedupePluginDiagnostics([...installedDiagnostics, ...runtime.diagnostics]),
     workspaceDir: params.workspaceDir,
-    includeSetupFallbackPlugins: true,
   });
   const runtimeRegistry = getActiveRuntimePluginRegistry();
   const runtimeCompatibilityNotices = runtimeRegistry

@@ -55,6 +55,20 @@ function recordKey(
   return JSON.stringify([record.owner ?? "", record.toolName, record.processId]);
 }
 
+export type RuntimeToolSchemaQuarantineIdentity = {
+  toolName: string;
+  owner?: string;
+};
+
+function identityKey(identity: RuntimeToolSchemaQuarantineIdentity): string {
+  return JSON.stringify([identity.owner ?? "", identity.toolName]);
+}
+
+// Keys this process has persisted. Recovery clearing checks this set first so
+// the per-run path does zero store IO unless this process actually recorded a
+// quarantine that may have recovered.
+const locallyPersistedKeys = new Set<string>();
+
 export function recordPersistedRuntimeToolSchemaQuarantine(
   quarantine: RuntimeToolSchemaQuarantine,
 ): void {
@@ -65,18 +79,32 @@ export function recordPersistedRuntimeToolSchemaQuarantine(
     ...(quarantine.owner ? { owner: quarantine.owner } : {}),
   };
   quarantineStore.register(recordKey(record), record);
+  locallyPersistedKeys.add(identityKey(record));
 }
 
-export function clearPersistedRuntimeToolSchemaQuarantine(params: {
-  toolName: string;
-  owner?: string;
-}): void {
-  quarantineStore.clearForProcess(
-    process.pid,
-    (record) =>
-      record.toolName === params.toolName &&
-      (record.owner ?? undefined) === (params.owner ?? undefined),
+/**
+ * Removes this process's persisted quarantines for tools that now validate
+ * cleanly. `listHealthyTools` is only invoked when this process has persisted
+ * quarantines, keeping the common per-run path free of work.
+ */
+export function clearRecoveredPersistedRuntimeToolSchemaQuarantines(
+  listHealthyTools: () => readonly RuntimeToolSchemaQuarantineIdentity[],
+): void {
+  if (locallyPersistedKeys.size === 0) {
+    return;
+  }
+  const recoveredKeys = new Set(
+    listHealthyTools()
+      .map(identityKey)
+      .filter((key) => locallyPersistedKeys.has(key)),
   );
+  if (recoveredKeys.size === 0) {
+    return;
+  }
+  quarantineStore.clearForProcess(process.pid, (record) => recoveredKeys.has(identityKey(record)));
+  for (const key of recoveredKeys) {
+    locallyPersistedKeys.delete(key);
+  }
 }
 
 export function listPersistedRuntimeToolSchemaQuarantines(): RuntimeToolSchemaQuarantine[] {

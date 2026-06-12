@@ -236,24 +236,8 @@ describe("runtime plugin health snapshot", () => {
       message: "failed to load setup entry: boom",
     });
     setActivePluginRegistry(registry, "broken-channel", "default", "/tmp/ws");
-    resolveReadOnlyChannelPluginsForConfigMock.mockReturnValue({
-      plugins: [],
-      configuredChannelIds: ["broken-channel"],
-      missingConfiguredChannelIds: ["broken-channel"],
-      loadFailures: [
-        {
-          channelId: "broken-channel",
-          pluginId: "broken-channel",
-          message: "failed to load setup entry: boom",
-          source: "setup",
-        },
-      ],
-    });
 
-    const snapshot = collectRuntimePluginHealthSnapshot({
-      config: { channels: {} } as never,
-      workspaceDir: "/tmp/ws",
-    });
+    const snapshot = collectRuntimePluginHealthSnapshot();
 
     expect(snapshot.channelPluginFailures).toEqual([
       {

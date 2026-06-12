@@ -9,8 +9,9 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import type { RuntimeToolSchemaDiagnostic } from "./tool-schema-projection.js";
 import {
-  clearPersistedRuntimeToolSchemaQuarantine,
+  clearRecoveredPersistedRuntimeToolSchemaQuarantines,
   recordPersistedRuntimeToolSchemaQuarantine,
+  type RuntimeToolSchemaQuarantineIdentity,
 } from "./tool-schema-quarantine-health.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -32,11 +33,11 @@ function pluginOwner(pluginId: string | undefined): string | undefined {
   return pluginId ? `plugin:${pluginId}` : undefined;
 }
 
-function toolQuarantineKey(params: { owner?: string; toolName: string }): string {
+function toolQuarantineKey(params: RuntimeToolSchemaQuarantineIdentity): string {
   return JSON.stringify([params.owner ?? "", params.toolName]);
 }
 
-function readToolIdentity(tool: AnyAgentTool): { owner?: string; toolName: string } | undefined {
+function readToolIdentity(tool: AnyAgentTool): RuntimeToolSchemaQuarantineIdentity | undefined {
   try {
     if (typeof tool.name !== "string" || tool.name.length === 0) {
       return undefined;
@@ -48,10 +49,12 @@ function readToolIdentity(tool: AnyAgentTool): { owner?: string; toolName: strin
   }
 }
 
-function clearRecoveredRuntimeToolSchemaQuarantines(params: {
+// Tools that validated cleanly this run; identities behind a thunk so the
+// common no-quarantine path does not even walk the tool list.
+function listHealthyToolIdentities(params: {
   diagnostics: readonly RuntimeToolSchemaDiagnostic[];
   tools: readonly AnyAgentTool[];
-}): void {
+}): RuntimeToolSchemaQuarantineIdentity[] {
   const failingKeys = new Set(
     params.diagnostics.map((diagnostic) =>
       toolQuarantineKey({
@@ -60,13 +63,14 @@ function clearRecoveredRuntimeToolSchemaQuarantines(params: {
       }),
     ),
   );
+  const healthy: RuntimeToolSchemaQuarantineIdentity[] = [];
   for (const tool of params.tools) {
     const identity = readToolIdentity(tool);
-    if (!identity || failingKeys.has(toolQuarantineKey(identity))) {
-      continue;
+    if (identity && !failingKeys.has(toolQuarantineKey(identity))) {
+      healthy.push(identity);
     }
-    clearPersistedRuntimeToolSchemaQuarantine(identity);
   }
+  return healthy;
 }
 
 /** Emits diagnostics and logs for tools removed from runtime schema projection. */
@@ -77,10 +81,9 @@ export function logRuntimeToolSchemaQuarantine(params: {
   sessionKey?: string;
   sessionId?: string;
 }): void {
-  clearRecoveredRuntimeToolSchemaQuarantines({
-    diagnostics: params.diagnostics,
-    tools: params.tools,
-  });
+  clearRecoveredPersistedRuntimeToolSchemaQuarantines(() =>
+    listHealthyToolIdentities({ diagnostics: params.diagnostics, tools: params.tools }),
+  );
   if (params.diagnostics.length === 0) {
     return;
   }
