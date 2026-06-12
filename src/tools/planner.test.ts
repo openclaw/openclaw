@@ -113,6 +113,41 @@ describe("buildToolPlan", () => {
     ]);
   });
 
+  it("surfaces hidden-tool diagnostics via onHiddenDiagnostic callback", () => {
+    const captured: Array<{ reason: string; message: string }> = [];
+    buildToolPlan({
+      descriptors: [
+        descriptor("empty_allof", { availability: { allOf: [] } }),
+        descriptor("empty_anyof", { availability: { anyOf: [] } }),
+        descriptor("bad_expr", {
+          availability: { kind: "unknown-kind" } as unknown as ToolDescriptor["availability"],
+        }),
+      ],
+      onHiddenDiagnostic: (entry) => {
+        captured.push({ reason: entry.reason, message: entry.message });
+      },
+    });
+
+    // Descriptors sort alphabetically: bad_expr, empty_allof, empty_anyof
+    expect(captured).toEqual([
+      { reason: "unsupported-signal", message: "Unsupported availability signal" },
+      { reason: "unsupported-signal", message: "Empty availability allOf group" },
+      { reason: "unsupported-signal", message: "Empty availability anyOf group" },
+    ]);
+  });
+
+  it("does not invoke onHiddenDiagnostic for available tools", () => {
+    let callCount = 0;
+    buildToolPlan({
+      descriptors: [descriptor("available")],
+      onHiddenDiagnostic: () => {
+        callCount++;
+      },
+    });
+
+    expect(callCount).toBe(0);
+  });
+
   it("keeps protocol conversion separate from executor refs and model normalization", () => {
     const plan = buildToolPlan({
       descriptors: [
