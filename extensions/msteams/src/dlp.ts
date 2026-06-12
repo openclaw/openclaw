@@ -54,11 +54,12 @@ function luhnValid(digits: string): boolean {
 // Built-in detectors. Order matters: more specific patterns run first so they win the redaction.
 const BUILTIN_DETECTORS: Detector[] = [
   { category: "awsKey", regex: /\bAKIA[0-9A-Z]{16}\b/g },
-  // Common provider secret prefixes (OpenAI/GitHub/Slack/Stripe/Google).
+  // Common provider secret prefixes (OpenAI/Anthropic/GitHub/Slack/Stripe/Google). The sk- class
+  // includes - and _ so segmented keys (sk-proj-…, sk-ant-api03-…) match too. (Review S5)
   {
     category: "secret",
     regex:
-      /\b(?:sk-[A-Za-z0-9]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{20,})\b/g,
+      /\b(?:sk-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{20,})\b/g,
   },
   { category: "iban", regex: /\b[A-Z]{2}\d{2}(?:[ ]?[A-Z0-9]{4}){2,7}(?:[ ]?[A-Z0-9]{1,3})?\b/g },
   { category: "email", regex: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g },
@@ -145,4 +146,49 @@ export function redactOutboundMSTeamsText(
     log?.debug?.("dlp redacted outbound text", { redactions: result.redactions });
   }
   return result.text;
+}
+
+/**
+ * Deep-redact every string value in an outbound Adaptive Card (or any JSON-shaped) payload.
+ * Cards are an agent-reachable outbound surface too — with only the text paths redacted,
+ * "put the secret in a card" was a DLP loophole. A no-op (returns `card` unchanged) when DLP is
+ * off. (Review S3)
+ */
+export function redactOutboundMSTeamsCard<T>(
+  card: T,
+  cfg: OpenClawConfig,
+  log?: { debug?: (message: string, meta?: Record<string, unknown>) => void },
+): T {
+  const dlp = cfg.channels?.msteams?.dlp;
+  if (!dlp?.enabled || card === null || typeof card !== "object") {
+    return card;
+  }
+  const totals = new Map<string, number>();
+  const walk = (value: unknown): unknown => {
+    if (typeof value === "string") {
+      const result = redactText(value, dlp);
+      for (const r of result.redactions) {
+        totals.set(r.category, (totals.get(r.category) ?? 0) + r.count);
+      }
+      return result.text;
+    }
+    if (Array.isArray(value)) {
+      return value.map(walk);
+    }
+    if (value && typeof value === "object") {
+      const out: Record<string, unknown> = {};
+      for (const [key, entry] of Object.entries(value)) {
+        out[key] = walk(entry);
+      }
+      return out;
+    }
+    return value;
+  };
+  const redacted = walk(card) as T;
+  if (totals.size > 0) {
+    log?.debug?.("dlp redacted outbound card", {
+      redactions: [...totals.entries()].map(([category, count]) => ({ category, count })),
+    });
+  }
+  return redacted;
 }

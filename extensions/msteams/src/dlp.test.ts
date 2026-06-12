@@ -1,5 +1,6 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
-import { redactText } from "./dlp.js";
+import { redactOutboundMSTeamsCard, redactText } from "./dlp.js";
 
 const on = (extra?: Record<string, unknown>) => ({ enabled: true, ...extra });
 
@@ -59,5 +60,43 @@ describe("dlp redactText (#16)", () => {
   it("counts multiple hits per category", () => {
     const out = redactText("a@x.com, b@y.com", on({ categories: ["email"] }));
     expect(out.redactions).toContainEqual({ category: "email", count: 2 });
+  });
+
+  it("redacts segmented provider keys — sk-proj-/sk-ant- (S5)", () => {
+    expect(redactText(`key sk-proj-${"Ab1".repeat(10)} here`, on()).text).toBe(
+      "key [REDACTED:secret] here",
+    );
+    expect(redactText(`key sk-ant-api03-${"Xy9_".repeat(8)}end`, on()).text).toBe(
+      "key [REDACTED:secret]",
+    );
+  });
+});
+
+describe("dlp redactOutboundMSTeamsCard (S3)", () => {
+  const cardCfg = (enabled: boolean): OpenClawConfig =>
+    ({ channels: { msteams: { dlp: { enabled } } } }) as unknown as OpenClawConfig;
+
+  it("deep-redacts every string value in an outbound card without mutating the original", () => {
+    const card = {
+      type: "AdaptiveCard",
+      body: [{ type: "TextBlock", text: `the key is sk-${"a".repeat(24)}` }],
+      actions: [
+        { type: "Action.OpenUrl", title: "contact a.b@example.com", url: "https://x.test" },
+      ],
+    };
+    const out = redactOutboundMSTeamsCard(card, cardCfg(true));
+    const json = JSON.stringify(out);
+    expect(json).not.toContain("sk-");
+    expect(json).not.toContain("a.b@example.com");
+    expect(json).toContain("[REDACTED:secret]");
+    expect(json).toContain("[REDACTED:email]");
+    // Structural fields survive; the input card is untouched.
+    expect((out as typeof card).type).toBe("AdaptiveCard");
+    expect(card.body[0]?.text).toContain("sk-");
+  });
+
+  it("is a no-op (same reference) when DLP is off", () => {
+    const card = { body: [{ text: `sk-${"a".repeat(24)}` }] };
+    expect(redactOutboundMSTeamsCard(card, cardCfg(false))).toBe(card);
   });
 });

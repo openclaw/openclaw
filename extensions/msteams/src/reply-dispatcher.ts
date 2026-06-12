@@ -252,17 +252,22 @@ export function createMSTeamsReplyDispatcher(params: {
       chunkMode,
     });
     pendingMessages.push(...messages);
+  };
 
-    // Audit mirror (#15): post a compact, DLP-redacted line of this reply to the audit channel.
-    // Fire-and-forget so it never blocks or fails the user-facing reply. The audit send goes through
-    // sendMessageMSTeams (not this dispatcher), so it can't recurse; the loop guard skips replies that
-    // are themselves in the audit channel.
+  // Audit mirror (#15): post a compact, DLP-redacted line of each reply to the audit channel.
+  // Runs at the DELIVERY choke point — on the payload BEFORE the stream controller decides which
+  // path carries it — so natively-streamed replies (the default for personal chats) land in the
+  // trail too, not only block deliveries. (Review S2) Fire-and-forget so it never blocks or fails
+  // the user-facing reply. The audit send goes through sendMessageMSTeams (not this dispatcher),
+  // so it can't recurse; the loop guard skips replies that are themselves in the audit channel.
+  const mirrorReplyToAudit = (payload: ReplyPayload) => {
     const auditTo = resolveMSTeamsAuditTarget(params.cfg, params.conversationRef.conversation?.id);
     if (auditTo && payload.text?.trim()) {
       void sendMessageMSTeams({
         cfg: params.cfg,
         to: auditTo,
         text: buildMSTeamsAuditLine({
+          cfg: params.cfg,
           sourceConversationId: params.conversationRef.conversation?.id,
           senderName: params.conversationRef.user?.name,
           text: payload.text,
@@ -335,6 +340,7 @@ export function createMSTeamsReplyDispatcher(params: {
     },
     typingCallbacks,
     deliver: async (payload) => {
+      mirrorReplyToAudit(payload);
       const preparedPayload = streamController.preparePayload(payload);
       if (!preparedPayload) {
         return;
