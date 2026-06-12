@@ -12,6 +12,12 @@ const createEventDispatcherMock = vi.hoisted(() => vi.fn());
 const monitorWebSocketMock = vi.hoisted(() => vi.fn(async () => {}));
 const monitorWebhookMock = vi.hoisted(() => vi.fn(async () => {}));
 const createFeishuThreadBindingManagerMock = vi.hoisted(() => vi.fn(() => ({ stop: vi.fn() })));
+const resolveFeishuDmIngressAccessMock = vi.hoisted(() => vi.fn());
+const sendMessageFeishuMock = vi.hoisted(() => vi.fn(async () => ({ messageId: "om_pairing" })));
+const runtimeMocks = vi.hoisted(() => ({
+  readAllowFromStore: vi.fn(async () => []),
+  upsertPairingRequest: vi.fn(async () => ({ code: "ABCDEFGH", created: true })),
+}));
 const dedupMocks = vi.hoisted(() => ({
   warmupDedupFromPluginState: vi.fn(async () => 0),
   hasProcessedFeishuMessage: vi.fn(async () => false),
@@ -48,6 +54,33 @@ vi.mock("./dedup.js", async () => {
     warmupDedupFromPluginState: dedupMocks.warmupDedupFromPluginState,
     hasProcessedFeishuMessage: dedupMocks.hasProcessedFeishuMessage,
     recordProcessedFeishuMessage: dedupMocks.recordProcessedFeishuMessage,
+  };
+});
+
+vi.mock("./policy.js", async () => {
+  const actual = await vi.importActual<typeof import("./policy.js")>("./policy.js");
+  return {
+    ...actual,
+    resolveFeishuDmIngressAccess: resolveFeishuDmIngressAccessMock,
+  };
+});
+
+vi.mock("./runtime.js", () => ({
+  getFeishuRuntime: () => ({
+    channel: {
+      pairing: {
+        readAllowFromStore: runtimeMocks.readAllowFromStore,
+        upsertPairingRequest: runtimeMocks.upsertPairingRequest,
+      },
+    },
+  }),
+}));
+
+vi.mock("./send.js", async () => {
+  const actual = await vi.importActual<typeof import("./send.js")>("./send.js");
+  return {
+    ...actual,
+    sendMessageFeishu: sendMessageFeishuMock,
   };
 });
 
@@ -159,6 +192,12 @@ describe("createFeishuVcMeetingInvitedHandler", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     handleFeishuMessageMock.mockResolvedValue(undefined);
+    resolveFeishuDmIngressAccessMock.mockResolvedValue({
+      ingress: { admission: "dispatch" },
+    });
+    sendMessageFeishuMock.mockResolvedValue({ messageId: "om_pairing" });
+    runtimeMocks.readAllowFromStore.mockResolvedValue([]);
+    runtimeMocks.upsertPairingRequest.mockResolvedValue({ code: "ABCDEFGH", created: true });
     dedupMocks.warmupDedupFromPluginState.mockResolvedValue(0);
     dedupMocks.hasProcessedFeishuMessage.mockResolvedValue(false);
     dedupMocks.recordProcessedFeishuMessage.mockResolvedValue(true);
@@ -228,6 +267,36 @@ describe("createFeishuVcMeetingInvitedHandler", () => {
     expect(JSON.parse(params.event?.message?.content ?? "{}")).toEqual({
       text: 'Use the available tool to join the meeting with meeting number 123456789 immediately. Do not ask for confirmation. If the join tool supports a call_id parameter, pass call_id="call_vc_123"; otherwise join by meeting number only.',
     });
+  });
+
+  it("sends pairing challenge to the inviter user target before dispatch", async () => {
+    resolveFeishuDmIngressAccessMock.mockResolvedValue({
+      ingress: { admission: "pairing-required" },
+    });
+    const handler = createFeishuVcMeetingInvitedHandler({
+      cfg: buildConfig({
+        channels: {
+          feishu: {
+            enabled: true,
+            dmPolicy: "pairing",
+          },
+        },
+      }),
+      accountId: "default",
+      fireAndForget: false,
+    });
+
+    await handler(vcEvent);
+
+    expect(handleFeishuMessageMock).not.toHaveBeenCalled();
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    const pairingMessage = mockCallArg(sendMessageFeishuMock, "sendMessageFeishu") as {
+      to?: string;
+      text?: string;
+    };
+    expect(pairingMessage.to).toBe("user:ou_inviter_1");
+    expect(pairingMessage.text).toContain("Pairing code:");
+    expect(pairingMessage.text).toContain("ABCDEFGH");
   });
 
   it("uses user_id as the DM target when open_id is unavailable", async () => {
