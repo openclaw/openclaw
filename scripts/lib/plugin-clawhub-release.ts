@@ -546,9 +546,7 @@ export async function collectPluginClawHubReleasePlan(params?: {
       .filter((plugin) => !plugin.packageExists)
       .map(stripPackageReleaseState),
     missingTrustedPublisher: planned
-      .filter(
-        (plugin) => plugin.packageExists && !plugin.hasTrustedPublisher && !plugin.alreadyPublished,
-      )
+      .filter((plugin) => plugin.packageExists && !plugin.hasTrustedPublisher)
       .map(stripPackageReleaseState),
     skippedPublished: planned
       .filter((plugin) => plugin.alreadyPublished)

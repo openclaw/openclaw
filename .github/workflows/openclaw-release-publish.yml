@@ -1022,7 +1022,7 @@ jobs:
           plugin_npm_run_id="$(dispatch_workflow plugin-npm-release.yml "${npm_args[@]}")"
           plugin_clawhub_run_id=""
           if [[ "${normal_plugin_count}" != "0" ]]; then
-            clawhub_args=(-f publish_scope="selected" -f plugins="${normal_plugins}" -f release_publish_run_id="${GITHUB_RUN_ID}")
+            clawhub_args=(-f publish_scope="selected" -f plugins="${normal_plugins}" -f release_publish_run_id="${GITHUB_RUN_ID}" -f release_publish_branch="${CHILD_WORKFLOW_REF}")
             plugin_clawhub_run_id="$(dispatch_workflow_at_ref "${CLAWHUB_WORKFLOW_REF}" plugin-clawhub-release.yml "${clawhub_args[@]}")"
           else
             echo "- plugin-clawhub-release.yml: no normal OIDC candidates" >> "$GITHUB_STEP_SUMMARY"
@@ -1030,7 +1030,7 @@ jobs:
           plugin_clawhub_bootstrap_run_id=""
           plugin_clawhub_bootstrap_completed="false"
           if [[ "${bootstrap_plugin_count}" != "0" ]]; then
-            bootstrap_args=(-f plugins="${bootstrap_plugins}" -f release_publish_run_id="${GITHUB_RUN_ID}")
+            bootstrap_args=(-f plugins="${bootstrap_plugins}" -f release_publish_run_id="${GITHUB_RUN_ID}" -f release_publish_branch="${CHILD_WORKFLOW_REF}")
             plugin_clawhub_bootstrap_run_id="$(dispatch_workflow_at_ref "${CLAWHUB_WORKFLOW_REF}" plugin-clawhub-new.yml "${bootstrap_args[@]}")"
           else
             echo "- plugin-clawhub-new.yml: no bootstrap candidates" >> "$GITHUB_STEP_SUMMARY"

@@ -1590,6 +1590,10 @@ describe("package artifact reuse", () => {
     expect(clawHubWorkflow).toContain("approve_plugins_clawhub_release:");
     expect(clawHubWorkflow).toContain("environment: clawhub-plugin-release");
     expect(clawHubWorkflow).toContain("inputs.dry_run != true");
+    expect(clawHubWorkflow).toContain("release_publish_branch:");
+    expect(clawHubWorkflow).toContain(
+      "EXPECTED_WORKFLOW_BRANCH: ${{ inputs.release_publish_branch || github.ref_name }}",
+    );
     expect(clawHubWorkflow).toContain(
       "always() && github.event_name == 'workflow_dispatch' && needs.preview_plugins_clawhub.outputs.has_candidates == 'true' && needs.pack_plugins_clawhub_artifacts.result == 'success' && (inputs.dry_run == true || needs.approve_plugins_clawhub_release.result == 'success')",
     );
@@ -1713,6 +1717,15 @@ describe("package artifact reuse", () => {
     expect(clawHubNewWorkflow).toContain("Usage: clawhub package trusted-publisher set");
     expect(clawHubNewWorkflow).toContain("Publish ClawHub bootstrap package");
     expect(clawHubNewWorkflow).toContain("bash scripts/plugin-clawhub-publish.sh --publish");
+    expect(clawHubNewWorkflow).toContain("bootstrapMode");
+    expect(clawHubNewWorkflow).toContain("BOOTSTRAP_MODE: ${{ matrix.plugin.bootstrapMode }}");
+    expect(clawHubNewWorkflow).toContain("configure-only");
+    expect(clawHubNewWorkflow).toContain(
+      "version is already present on ClawHub; configuring trusted publisher only",
+    );
+    expect(clawHubNewWorkflow).toContain(
+      "EXPECTED_WORKFLOW_BRANCH: ${{ inputs.release_publish_branch || github.ref_name }}",
+    );
     expect(clawHubNewWorkflow).toContain('OPENCLAW_PLUGIN_NPM_RUNTIME_BUILD: "0"');
     expect(clawHubNewWorkflow).toContain("trusted-publisher set");
     expect(clawHubNewWorkflow).toContain("--workflow-filename plugin-clawhub-release.yml");
@@ -1728,6 +1741,7 @@ describe("package artifact reuse", () => {
     expect(openclawNpmWorkflow).toContain("environment: npm-release");
     expect(releaseWorkflow).toContain("default: from-validation");
     expect(releaseWorkflow).toContain("CLAWHUB_WORKFLOW_REF: ${{ inputs.tag }}");
+    expect(releaseWorkflow).toContain('-f release_publish_branch="${CHILD_WORKFLOW_REF}"');
     expect(releaseWorkflow).toContain(
       'dispatch_workflow_at_ref "${CLAWHUB_WORKFLOW_REF}" plugin-clawhub-release.yml',
     );

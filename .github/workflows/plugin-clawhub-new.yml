@@ -16,6 +16,10 @@ on:
         description: Approved OpenClaw Release Publish workflow run id
         required: false
         type: string
+      release_publish_branch:
+        description: Branch name of the approving OpenClaw Release Publish workflow run
+        required: false
+        type: string
       dry_run:
         description: Validate the token-gated ClawHub bootstrap handoff without publishing.
         required: false
@@ -126,16 +130,29 @@ jobs:
 
           cat .local/plugin-clawhub-release-plan.json
 
-          bootstrap_candidate_count="$(jq -r '.bootstrapCandidates | length' .local/plugin-clawhub-release-plan.json)"
+          bootstrap_candidate_count="$(jq -r '(.bootstrapCandidates | length) + (.missingTrustedPublisher | length)' .local/plugin-clawhub-release-plan.json)"
           selected_count="$(jq -r '.all | length' .local/plugin-clawhub-release-plan.json)"
-          matrix_json="$(jq -c '.bootstrapCandidates' .local/plugin-clawhub-release-plan.json)"
+          matrix_json="$(
+            jq -c '
+              [
+                .bootstrapCandidates[]? + { bootstrapMode: "publish" },
+                .missingTrustedPublisher[]? + {
+                  bootstrapMode: (if .alreadyPublished then "configure-only" else "publish" end)
+                }
+              ]
+            ' .local/plugin-clawhub-release-plan.json
+          )"
           has_bootstrap_candidates="false"
           if [[ "${bootstrap_candidate_count}" != "0" ]]; then
             has_bootstrap_candidates="true"
           fi
 
           invalid_scope="$(
-            jq -r '.bootstrapCandidates[]? | select(.packageName | startswith("@openclaw/") | not) | "- \(.packageName)@\(.version)"' .local/plugin-clawhub-release-plan.json
+            jq -r '
+              (.bootstrapCandidates[]?, .missingTrustedPublisher[]?)
+              | select(.packageName | startswith("@openclaw/") | not)
+              | "- \(.packageName)@\(.version)"
+            ' .local/plugin-clawhub-release-plan.json
           )"
           if [[ -n "${invalid_scope}" ]]; then
             echo "Plugin ClawHub bootstrap only supports @openclaw/* packages." >&2
@@ -146,13 +163,14 @@ jobs:
           not_bootstrap="$(
             jq -r '
               (.bootstrapCandidates | map(.packageName)) as $bootstrapNames
+              | (.missingTrustedPublisher | map(.packageName)) as $repairNames
               | .all[]?
-              | select(.packageName as $name | ($bootstrapNames | index($name) | not))
+              | select(.packageName as $name | ($bootstrapNames + $repairNames | index($name) | not))
               | "- \(.packageName)@\(.version)"
             ' .local/plugin-clawhub-release-plan.json
           )"
           if [[ -n "${not_bootstrap}" ]]; then
-            echo "Selected packages must all be first-publish bootstrap candidates." >&2
+            echo "Selected packages must all be first-publish bootstrap candidates or trusted-publisher repair candidates." >&2
             printf '%s\n' "${not_bootstrap}" >&2
             exit 1
           fi
@@ -168,14 +186,24 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
           echo "ClawHub bootstrap candidates:"
-          jq -r '.bootstrapCandidates[]? | "- \(.packageName)@\(.version) [\(.publishTag)] from \(.packageDir)"' .local/plugin-clawhub-release-plan.json
+          jq -r '
+            .bootstrapCandidates[]? | "- \(.packageName)@\(.version) [\(.publishTag)] from \(.packageDir)"
+          ' .local/plugin-clawhub-release-plan.json
+          echo "ClawHub trusted-publisher repair candidates:"
+          jq -r '
+            .missingTrustedPublisher[]? | "- \(.packageName)@\(.version) [\(.publishTag)] from \(.packageDir), alreadyPublished=\(.alreadyPublished)"
+          ' .local/plugin-clawhub-release-plan.json
 
       - name: Validate Tideclaw alpha plugin channels
         if: startsWith(github.ref, 'refs/heads/tideclaw/alpha/')
         run: |
           set -euo pipefail
           invalid="$(
-            jq -r '.bootstrapCandidates[]? | select(.publishTag != "alpha" or .channel != "alpha") | "- \(.packageName)@\(.version) [\(.publishTag)]"' .local/plugin-clawhub-release-plan.json
+            jq -r '
+              (.bootstrapCandidates[]?, .missingTrustedPublisher[]?)
+              | select(.publishTag != "alpha" or .channel != "alpha")
+              | "- \(.packageName)@\(.version) [\(.publishTag)]"
+            ' .local/plugin-clawhub-release-plan.json
           )"
           if [[ -n "${invalid}" ]]; then
             echo "Tideclaw alpha ClawHub bootstraps may only publish alpha plugin versions." >&2
@@ -201,7 +229,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
-          EXPECTED_WORKFLOW_BRANCH: ${{ github.ref_name }}
+          EXPECTED_WORKFLOW_BRANCH: ${{ inputs.release_publish_branch || github.ref_name }}
         run: |
           set -euo pipefail
           if [[ -z "${RELEASE_PUBLISH_RUN_ID// }" ]]; then
@@ -309,11 +337,14 @@ jobs:
           SOURCE_REF: ${{ github.ref }}
           PACKAGE_TAG: ${{ matrix.plugin.publishTag }}
           PACKAGE_DIR: ${{ matrix.plugin.packageDir }}
+          BOOTSTRAP_MODE: ${{ matrix.plugin.bootstrapMode }}
           DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
           OPENCLAW_PLUGIN_NPM_RUNTIME_BUILD: "0"
         run: |
           set -euo pipefail
-          if [[ "${DRY_RUN}" == "true" ]]; then
+          if [[ "${BOOTSTRAP_MODE}" == "configure-only" ]]; then
+            echo "Skipping bootstrap publish because ${PACKAGE_DIR} version is already present on ClawHub; configuring trusted publisher only."
+          elif [[ "${DRY_RUN}" == "true" ]]; then
             bash scripts/plugin-clawhub-publish.sh --dry-run "${PACKAGE_DIR}"
           else
             bash scripts/plugin-clawhub-publish.sh --publish "${PACKAGE_DIR}"

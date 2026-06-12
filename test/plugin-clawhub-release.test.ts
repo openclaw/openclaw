@@ -517,7 +517,15 @@ describe("collectPluginClawHubReleasePlan", () => {
 
     expect(plan.candidates).toStrictEqual([]);
     expect(plan.bootstrapCandidates).toStrictEqual([]);
-    expect(plan.missingTrustedPublisher).toStrictEqual([]);
+    expect(plan.missingTrustedPublisher.map((plugin) => plugin.packageName)).toEqual([
+      "@openclaw/demo-plugin",
+    ]);
+    expect(plan.missingTrustedPublisher[0]).toMatchObject({
+      alreadyPublished: true,
+      artifactName: "clawhub-package-openclaw-demo-plugin-2026.4.1",
+      packageName: "@openclaw/demo-plugin",
+      version: "2026.4.1",
+    });
     expect(plan.skippedPublished).toHaveLength(1);
     expect(plan.skippedPublished[0]).toEqual({
       alreadyPublished: true,
