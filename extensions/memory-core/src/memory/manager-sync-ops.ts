@@ -139,6 +139,7 @@ type MemorySourceSyncPlan = {
   finalize: () => Promise<void> | void;
 };
 
+<<<<<<< HEAD
 type MemorySessionDeltaState = { lastSize: number; pendingBytes: number; pendingMessages: number };
 
 type MemoryReindexRetryState = {
@@ -149,6 +150,38 @@ type MemoryReindexRetryState = {
   sessionsDirtyFiles: Set<string>;
   sessionDeltas: Map<string, MemorySessionDeltaState>;
 };
+=======
+/**
+ * Remove stale backup (.backup-*) and temp (.tmp-*) SQLite files left behind
+ * by interrupted atomic reindex swaps. These accumulate when the process is
+ * killed during runMemoryAtomicReindex's file rename sequence.
+ */
+function cleanupStaleIndexFiles(dbPath: string): void {
+  const dir = path.dirname(dbPath);
+  const baseName = path.basename(dbPath);
+  try {
+    const entries = fsSync.readdirSync(dir);
+    for (const entry of entries) {
+      if (
+        (entry.startsWith(`${baseName}.backup-`) ||
+          entry.startsWith(`${baseName}.tmp-`)) &&
+        !entry.endsWith("-wal") &&
+        !entry.endsWith("-shm")
+      ) {
+        const fullPath = path.join(dir, entry);
+        // Best-effort cleanup; don't fail the sync if a file is locked.
+        try {
+          fsSync.unlinkSync(fullPath);
+        } catch {
+          // File may be locked on Windows — skip and try next sync.
+        }
+      }
+    }
+  } catch {
+    // Directory read failed — skip cleanup silently.
+  }
+}
+>>>>>>> 3b54bbe771 (fix(memory-core): WAL checkpoint after writeMeta + stale index file cleanup)
 
 const META_KEY = "memory_index_meta_v1";
 const VECTOR_TABLE = MEMORY_INDEX_VECTOR_TABLE;
@@ -2417,6 +2450,8 @@ export abstract class MemoryManagerSyncOps {
       });
     }
     const vectorReady = await this.ensureVectorReady();
+    // Clean up stale backup/temp files from interrupted atomic reindexes.
+    cleanupStaleIndexFiles(resolveUserPath(this.settings.store.path));
     const meta = this.readMeta();
     const targetSessionFiles = await this.combineTargetSessionFiles({
       sessions: params?.sessions,
@@ -2859,6 +2894,16 @@ export abstract class MemoryManagerSyncOps {
         `INSERT INTO memory_index_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
       )
       .run(META_KEY, value);
+    // Force WAL checkpoint so meta survives process crashes.
+    // Without this, the meta row may live only in the WAL file; if the
+    // process is killed before closeMemoryDatabase() checkpoints, the
+    // next startup reads no meta and declares the index missing.
+    try {
+      this.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    } catch {
+      // Non-fatal: checkpoint may fail in read-only or edge cases.
+      // The normal close path will still attempt a checkpoint.
+    }
     this.lastMetaSerialized = value;
   }
 }
