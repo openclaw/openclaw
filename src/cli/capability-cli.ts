@@ -2243,13 +2243,21 @@ export function registerCapabilityCli(program: Command) {
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const files = Array.isArray(opts.file) ? (opts.file as string[]) : [];
-        // When --file is provided, route through the canonical image.edit
-        // pipeline so that input-image behavior, capability identity, metadata,
-        // and provider checks stay consistent with the documented edit route.
         const hasFiles = files.length > 0;
-        const capability = hasFiles ? "image.edit" : "image.generate";
+        // --file routes through the canonical image.edit pipeline so that
+        // input-image behavior, capability identity, metadata, and provider
+        // checks stay consistent with the documented edit route.
+        const resolvedCapability = hasFiles ? "image.edit" : "image.generate";
+        // --count is an image.generate-only option. Reject it explicitly when
+        // combined with --file so the user gets a clear error instead of
+        // silent discard.
+        if (hasFiles && opts.count !== undefined) {
+          throw new Error(
+            "--count is not supported with --file; use image generate without --file for multi-output text-to-image, or remove --count for input-image operations",
+          );
+        }
         const result = await runImageGenerate({
-          capability,
+          capability: resolvedCapability,
           prompt: String(opts.prompt),
           model: opts.model as string | undefined,
           count: hasFiles ? undefined : parseOptionalPositiveInteger(opts.count, "--count"),

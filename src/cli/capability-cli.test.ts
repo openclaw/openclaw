@@ -1969,6 +1969,34 @@ describe("capability cli", () => {
     expect(call?.count).toBeUndefined();
   });
 
+  it("rejects --count combined with --file on image generate", async () => {
+    const inputPath = path.join(os.tmpdir(), `openclaw-image-gen-count-${Date.now()}.png`);
+    await fs.writeFile(inputPath, Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+
+    try {
+      await expect(
+        runRegisteredCli({
+          register: registerCapabilityCli as (program: Command) => void,
+          argv: [
+            "capability",
+            "image",
+            "generate",
+            "--prompt",
+            "branded cover",
+            "--file",
+            inputPath,
+            "--count",
+            "4",
+          ],
+        }),
+      ).rejects.toThrow("exit 1");
+    } finally {
+      await fs.unlink(inputPath).catch(() => undefined);
+    }
+
+    expectRuntimeErrorContains("--count is not supported with --file");
+  });
+
   it("rejects partial image generate timeout before provider dispatch", async () => {
     await expect(
       runRegisteredCli({
