@@ -126,7 +126,10 @@ export async function mergeHybridResults(params: {
   }
 
   const merged = Array.from(byId.values()).map((entry) => {
-    const dropMediaTextSignal = entry.hasVector && params.isNonTextMediaPath?.(entry.path) === true;
+    const dropMediaTextSignal =
+      entry.hasVector &&
+      params.vectorWeight > 0 &&
+      params.isNonTextMediaPath?.(entry.path) === true;
     const effectiveTextWeight = dropMediaTextSignal ? 0 : params.textWeight;
     const weightSum = params.vectorWeight + effectiveTextWeight;
     const weighted =
