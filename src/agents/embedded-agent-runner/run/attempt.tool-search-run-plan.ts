@@ -145,12 +145,18 @@ export function buildToolSearchRunPlan(params: {
     explicitAllowlistSources: params.explicitAllowlistSources,
     controlNames: params.controlNames,
   });
-  const clientCatalogCallableNames = params.clientToolsCataloged
-    ? collectExplicitlyAllowedClientToolNames({
-        clientTools: params.clientTools,
-        explicitAllowlistSources: params.explicitAllowlistSources,
-      }).map((name) => `tool-search-client:${name}`)
-    : [];
+  const explicitlyAllowedClientToolNames = collectExplicitlyAllowedClientToolNames({
+    clientTools: params.clientTools,
+    explicitAllowlistSources: params.explicitAllowlistSources,
+  });
+  const emptyAllowlistVisibleToolNames = params.deferredToolsCallable
+    ? collectAllowedToolNames({ tools: params.visibleTools })
+    : visibleAllowedToolNames;
+  const explicitClientCallableNames = params.clientToolsCataloged
+    ? explicitlyAllowedClientToolNames.map((name) => `tool-search-client:${name}`)
+    : params.deferredToolsCallable
+      ? explicitlyAllowedClientToolNames
+      : [];
   return {
     visibleAllowedToolNames,
     replayAllowedToolNames,
@@ -159,11 +165,11 @@ export function buildToolSearchRunPlan(params: {
     autoAddedControlNames,
     emptyAllowlistCallableNames: [
       ...buildCallableToolNamesForEmptyAllowlistCheck({
-        effectiveToolNames: [...visibleAllowedToolNames],
+        effectiveToolNames: [...emptyAllowlistVisibleToolNames],
         autoAddedToolSearchControlNames: autoAddedControlNames,
         toolSearchCatalogToolCount: params.catalogToolCount,
       }),
-      ...clientCatalogCallableNames,
+      ...explicitClientCallableNames,
     ],
   };
 }

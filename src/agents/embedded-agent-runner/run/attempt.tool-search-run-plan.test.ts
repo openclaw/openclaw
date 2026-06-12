@@ -197,7 +197,64 @@ describe("buildToolSearchRunPlan", () => {
       "client_pick_file",
     ]);
     expect([...plan.capabilityToolNames]).toEqual(["fake_plugin_tool"]);
-    expect(plan.emptyAllowlistCallableNames).toEqual(["client_pick_file", "tool-search:0"]);
+    expect(plan.emptyAllowlistCallableNames).toEqual(["tool-search:0"]);
+  });
+
+  it("does not let visible directory client tools mask a bad explicit allowlist", () => {
+    const plan = buildToolSearchRunPlan({
+      visibleTools: [
+        { name: "tool_search" },
+        { name: "tool_describe" },
+        { name: "tool_call" },
+      ] as never,
+      uncompactedTools: [],
+      clientTools: [
+        {
+          type: "function",
+          function: {
+            name: "client_pick_file",
+            parameters: { type: "object", properties: {} },
+          },
+        },
+      ],
+      clientToolsCataloged: false,
+      catalogToolCount: 0,
+      controlsEnabled: true,
+      deferredToolsCallable: true,
+      controlNames: ["tool_search", "tool_describe", "tool_call"],
+      explicitAllowlistSources: [{ entries: ["missing_tool"] }],
+    });
+
+    expect([...plan.visibleAllowedToolNames]).toContain("client_pick_file");
+    expect(plan.emptyAllowlistCallableNames).toEqual([]);
+  });
+
+  it("counts explicitly allowlisted visible directory client tools", () => {
+    const plan = buildToolSearchRunPlan({
+      visibleTools: [
+        { name: "tool_search" },
+        { name: "tool_describe" },
+        { name: "tool_call" },
+      ] as never,
+      uncompactedTools: [],
+      clientTools: [
+        {
+          type: "function",
+          function: {
+            name: "client_pick_file",
+            parameters: { type: "object", properties: {} },
+          },
+        },
+      ],
+      clientToolsCataloged: false,
+      catalogToolCount: 0,
+      controlsEnabled: true,
+      deferredToolsCallable: true,
+      controlNames: ["tool_search", "tool_describe", "tool_call"],
+      explicitAllowlistSources: [{ entries: ["client_pick_file"] }],
+    });
+
+    expect(plan.emptyAllowlistCallableNames).toEqual(["client_pick_file"]);
   });
 
   it("keeps client names out of OpenClaw capability guidance", () => {
