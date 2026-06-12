@@ -55,24 +55,25 @@ jobs:
           cd apps/ios
           xcodegen generate
 
-      # 7. 编译代码（强制关闭代码签名）
-      - name: Compile Code (Disable Code Signing)
+      # 7. 使用 archive 代替 build（核心修复 ✨）
+      # Archive 会强制执行 iOS 生产环境的“扁平化”流程，彻底消除依赖库中的 macOS 风格软链接，完美兼容 Windows
+      - name: Archive App (Flatten Frameworks)
         run: |
-          xcodebuild clean build \
+          xcodebuild archive \
             -project apps/ios/OpenClaw.xcodeproj \
             -scheme OpenClaw \
             -configuration Release \
-            -derivedDataPath build_output \
+            -archivePath build_output/OpenClaw.xcarchive \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             PROVISIONING_PROFILE_SPECIFIER=""
 
-      # 8. 将编译出的 .app 文件夹打包为标准的 .ipa 安装包（已修复：使用 mv 和 zip -yr 完美保留复杂的多平台软链接）
+      # 8. 从归档产物（.xcarchive）中安全提取扁平化后的 .app 并打包
       - name: Package to IPA
         run: |
           mkdir -p Payload
-          mv build_output/Build/Products/Release-iphoneos/OpenClaw.app Payload/
+          cp -R build_output/OpenClaw.xcarchive/Products/Applications/OpenClaw.app Payload/
           zip -yr OpenClaw_Unsigned.ipa Payload
 
       # 9. 将打包好的成品上传到 GitHub Actions 产物中供下载
