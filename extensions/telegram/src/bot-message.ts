@@ -283,7 +283,9 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       sendChatActionHandler,
     });
     if (!context) {
-      return;
+      // Signal failure so the mirror launcher un-marks this target and the
+      // post-hoc final echo delivers instead (no silent drop).
+      throw new Error(`telegram mirror: context dropped for ${String(mirror.target.to)}`);
     }
     await dispatchTelegramMessage({
       context,

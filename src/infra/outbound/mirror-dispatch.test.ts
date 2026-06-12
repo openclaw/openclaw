@@ -60,6 +60,24 @@ describe("mirror-dispatch", () => {
     handle.dispose();
   });
 
+  it("un-marks a target when its dispatcher fails (post-hoc delivers, no silent drop)", async () => {
+    resetMirrorDispatchForTest();
+    const dispatcher = vi.fn(() => Promise.reject(new Error("context dropped")));
+    registerChannelMirrorDispatcher("telegram", dispatcher);
+    await launchMirrorDispatch({
+      originRunId: "run-fail",
+      cfg,
+      sessionKey: "sk-fail",
+      sessionEntry: entryWith([TG]),
+      originChannel: "webchat",
+      originTo: "",
+    });
+    // Let the rejected fire-and-forget promise settle.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // Failure un-marked the target, so the post-hoc final echo still delivers.
+    expect(consumeStreamingEchoHandled("sk-fail", TG)).toBe(false);
+  });
+
   it("skips a target whose channel has no dispatcher (post-hoc handles it)", async () => {
     resetMirrorDispatchForTest();
     const handle = await launchMirrorDispatch({

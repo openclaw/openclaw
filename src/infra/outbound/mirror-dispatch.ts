@@ -67,6 +67,16 @@ function markHandled(sessionKey: string | undefined, key: string): void {
   set.add(key);
 }
 
+function unmarkHandled(sessionKey: string | undefined, key: string): void {
+  if (!sessionKey) {
+    return;
+  }
+  const set = state.handledBySession.get(sessionKey);
+  if (set?.delete(key) && set.size === 0) {
+    state.handledBySession.delete(sessionKey);
+  }
+}
+
 /**
  * Consume the "mirror handled this target" mark. The post-hoc final echo
  * (fireEchoDeliveries) calls this to SKIP targets a mirror turn already rendered
@@ -149,12 +159,17 @@ export async function launchMirrorDispatch(params: {
       continue;
     }
     const label = `${target.channel}:${target.to}`;
+    const targetKey = echoTargetKey(target);
     const { resolver, dispose } = createMirrorReplyResolver({
       originRunId: params.originRunId,
       targetLabel: label,
     });
-    // Mark so the post-hoc final echo skips this target (the mirror renders it).
-    markHandled(params.sessionKey, echoTargetKey(target));
+    // Mark synchronously so the post-hoc final echo skips this target (the mirror
+    // renders it) — the post-hoc fires after the origin run, so the mark must be
+    // set before then. If the mirror dispatch fails (dispatcher throws / context
+    // dropped / never renders), UN-mark so the post-hoc still delivers and the
+    // target is not silently dropped.
+    markHandled(params.sessionKey, targetKey);
     active.push({ dispose });
     // Fire-and-forget: a mirror turn must never block or abort the origin turn.
     void Promise.resolve(
@@ -166,6 +181,7 @@ export async function launchMirrorDispatch(params: {
       }),
     ).catch((err: unknown) => {
       log.warn(`mirror dispatch failed for ${label}: ${formatErrorMessage(err)}`);
+      unmarkHandled(params.sessionKey, targetKey);
       dispose();
     });
   }
