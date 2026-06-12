@@ -67,7 +67,7 @@ describe("enforceChatHistoryFinalBudget", () => {
     expect(result.messages).toHaveLength(1);
     expect(firstText(result.messages)).toContain("chat.history unavailable");
     // The sentinel does not carry the oversized source metadata.
-    expect((result.messages[0] as Record<string, unknown>).__openclaw).toBeUndefined();
+    expect((result.messages[0] as Record<string, unknown>)["__openclaw"]).toBeUndefined();
     expect(result.placeholderCount).toBe(1);
   });
 });
