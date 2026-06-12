@@ -233,12 +233,12 @@ export type QaReportScenario = {
 };
 
 export {
-  LIVE_TRANSPORT_BASELINE_REQUIREMENT_IDS,
-  collectLiveTransportRequirementCoverage,
-  findMissingLiveTransportRequirements,
+  LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS,
+  collectLiveTransportStandardScenarioCoverage,
+  findMissingLiveTransportStandardScenarios,
   selectLiveTransportScenarios,
   type LiveTransportScenarioDefinition,
-  type LiveTransportRequirementId,
+  type LiveTransportStandardScenarioId,
 } from "./qa-live-transport-scenarios.js";
 
 /** Docker command runner abstraction used by QA Docker helpers and tests. */

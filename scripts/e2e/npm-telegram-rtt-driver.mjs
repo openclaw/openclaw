@@ -331,7 +331,7 @@ function buildPackageSourceEvidence() {
   };
 }
 
-function requirementIdForScenario(scenarioId) {
+function standardIdForScenario(scenarioId) {
   if (scenarioId === "telegram-canary") {
     return "canary";
   }
@@ -378,15 +378,15 @@ function buildScenarioCoverage(scenarioId) {
     surfaceIds: ["channels.telegram"],
     categoryIds: ["channels.telegram.live"],
   };
-  const requirementId = requirementIdForScenario(scenarioId);
-  if (!requirementId) {
+  const standardId = standardIdForScenario(scenarioId);
+  if (!standardId) {
     return [liveCoverage];
   }
   return [
     liveCoverage,
     {
-      id: `channels.telegram.${requirementId}`,
-      role: "live-transport-requirement",
+      id: `channels.telegram.${standardId}`,
+      role: "live-transport-standard",
       surfaceIds: ["channels.telegram"],
       categoryIds: ["channels.telegram.live"],
     },

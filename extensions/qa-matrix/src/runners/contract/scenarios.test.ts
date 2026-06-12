@@ -46,8 +46,8 @@ vi.mock("./scenario-runtime-cli.js", () => ({
 }));
 
 import {
-  LIVE_TRANSPORT_BASELINE_REQUIREMENT_IDS,
-  findMissingLiveTransportRequirements,
+  LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS,
+  findMissingLiveTransportStandardScenarios,
 } from "../../shared/live-transport-scenarios.js";
 import type { MatrixQaObservedEvent } from "../../substrate/events.js";
 import {
@@ -955,7 +955,7 @@ describe("matrix live qa scenarios", () => {
   });
 
   it("covers the baseline live transport contract plus Matrix-specific extras", () => {
-    expect(scenarioTesting.MATRIX_QA_REQUIREMENT_IDS).toEqual([
+    expect(scenarioTesting.MATRIX_QA_STANDARD_SCENARIO_IDS).toEqual([
       "canary",
       "thread-follow-up",
       "thread-isolation",
@@ -966,9 +966,9 @@ describe("matrix live qa scenarios", () => {
       "allowlist-block",
     ]);
     expect(
-      findMissingLiveTransportRequirements({
-        coveredRequirementIds: scenarioTesting.MATRIX_QA_REQUIREMENT_IDS,
-        expectedRequirementIds: LIVE_TRANSPORT_BASELINE_REQUIREMENT_IDS,
+      findMissingLiveTransportStandardScenarios({
+        coveredStandardScenarioIds: scenarioTesting.MATRIX_QA_STANDARD_SCENARIO_IDS,
+        expectedStandardScenarioIds: LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS,
       }),
     ).toStrictEqual([]);
   });
@@ -981,7 +981,7 @@ describe("matrix live qa scenarios", () => {
           MATRIX_QA_SCENARIOS[0],
           {
             id: "matrix-restart-resume",
-            requirementId: "restart-resume",
+            standardId: "restart-resume",
             timeoutMs: 60_000,
             title: "Matrix restart resume",
             topology: {
@@ -1040,7 +1040,7 @@ describe("matrix live qa scenarios", () => {
         scenarios: [
           {
             id: "matrix-thread-follow-up",
-            requirementId: "thread-follow-up",
+            standardId: "thread-follow-up",
             timeoutMs: 60_000,
             title: "A",
             topology: {
@@ -1058,7 +1058,7 @@ describe("matrix live qa scenarios", () => {
           },
           {
             id: "matrix-thread-isolation",
-            requirementId: "thread-isolation",
+            standardId: "thread-isolation",
             timeoutMs: 60_000,
             title: "B",
             topology: {

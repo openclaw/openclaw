@@ -268,7 +268,7 @@ The doctor checks Convex broker env, validates endpoint settings, and verifies a
 
 Live transport lanes share one contract instead of each inventing their own scenario list shape. `qa-channel` is the broad synthetic product-behavior suite and is not part of the live transport coverage matrix.
 
-Live transport runners should import the shared requirement ids, baseline
+Live transport runners should import the shared scenario ids, baseline
 coverage helpers, and scenario-selection helper from
 `openclaw/plugin-sdk/qa-live-transport-scenarios`.
 

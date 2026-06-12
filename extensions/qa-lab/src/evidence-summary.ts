@@ -200,7 +200,8 @@ type QaEvidenceScenarioSpecInput = {
 type QaEvidenceTimedResultInput = {
   id?: string;
   name?: string;
-  requirementId?: string;
+  // Here "standard" means a taxonomy-backed requirement standard, not the default lane.
+  standardId?: string;
   title?: string;
   status: QaEvidenceStatusInput;
   details?: string;
@@ -699,8 +700,8 @@ export function buildLiveTransportEvidenceSummary(
   }) ?? { id: "native" };
   const entries = params.checks.map((check, index): QaEvidenceSummaryEntry => {
     const testId = check.id ?? check.name ?? `live-transport-check-${index + 1}`;
-    const requirementCoverageId = check.requirementId
-      ? `channels.${params.transportId}.${check.requirementId}`
+    const standardCoverageId = check.standardId
+      ? `channels.${params.transportId}.${check.standardId}`
       : undefined;
     const coverage = [
       {
@@ -710,10 +711,10 @@ export function buildLiveTransportEvidenceSummary(
         categoryIds: [`channels.${params.transportId}.live`],
       },
     ];
-    if (requirementCoverageId) {
+    if (standardCoverageId) {
       coverage.push({
-        id: requirementCoverageId,
-        role: "live-transport-requirement",
+        id: standardCoverageId,
+        role: "live-transport-standard",
         surfaceIds: [`channels.${params.transportId}`],
         categoryIds: [`channels.${params.transportId}.live`],
       });

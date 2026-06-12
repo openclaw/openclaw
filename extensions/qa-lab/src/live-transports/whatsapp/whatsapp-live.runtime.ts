@@ -40,7 +40,7 @@ import {
 } from "../shared/live-artifacts.js";
 import { startQaLiveLaneGateway } from "../shared/live-gateway.runtime.js";
 import {
-  collectLiveTransportRequirementCoverage,
+  collectLiveTransportStandardScenarioCoverage,
   selectLiveTransportScenarios,
   type LiveTransportScenarioDefinition,
 } from "../shared/live-transport-scenarios.js";
@@ -261,7 +261,7 @@ type WhatsAppQaScenarioResult = {
     responseObservedAt: string;
     source: "approval-request-to-resolution" | "request-to-observed-message";
   };
-  requirementId?: string;
+  standardId?: string;
   status: "fail" | "pass" | "skip";
   title: string;
 };
@@ -418,7 +418,7 @@ const whatsappQaCredentialPayloadSchema = z.object({
 const WHATSAPP_QA_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
   {
     id: "whatsapp-canary",
-    requirementId: "canary",
+    standardId: "canary",
     title: "WhatsApp DM canary",
     timeoutMs: 60_000,
     buildRun: () => {
@@ -447,7 +447,7 @@ const WHATSAPP_QA_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
   },
   {
     id: "whatsapp-mention-gating",
-    requirementId: "mention-gating",
+    standardId: "mention-gating",
     title: "WhatsApp group mention gating",
     timeoutMs: 60_000,
     requiresGroupJid: true,
@@ -468,7 +468,7 @@ const WHATSAPP_QA_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
   },
   {
     id: "whatsapp-top-level-reply-shape",
-    requirementId: "top-level-reply-shape",
+    standardId: "top-level-reply-shape",
     title: "WhatsApp DM top-level reply shape",
     timeoutMs: 60_000,
     configOverrides: {
@@ -494,7 +494,7 @@ const WHATSAPP_QA_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
   },
   {
     id: "whatsapp-restart-resume",
-    requirementId: "restart-resume",
+    standardId: "restart-resume",
     title: "WhatsApp DM resumes after gateway restart",
     timeoutMs: 120_000,
     buildRun: () => {
@@ -527,7 +527,7 @@ const WHATSAPP_QA_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
   },
   {
     id: "whatsapp-help-command",
-    requirementId: "help-command",
+    standardId: "help-command",
     title: "WhatsApp help command replies",
     timeoutMs: 60_000,
     buildRun: () => ({
@@ -1270,7 +1270,7 @@ const WHATSAPP_QA_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
   },
   {
     id: "whatsapp-status-reactions",
-    requirementId: "reaction-observation",
+    standardId: "reaction-observation",
     title: "WhatsApp status reactions are observable",
     timeoutMs: 60_000,
     configOverrides: {
@@ -1311,7 +1311,7 @@ const WHATSAPP_QA_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
   },
   {
     id: "whatsapp-group-allowlist-block",
-    requirementId: "allowlist-block",
+    standardId: "allowlist-block",
     title: "WhatsApp group outside allowlist stays quiet",
     timeoutMs: 8_000,
     configOverrides: {
@@ -1382,7 +1382,7 @@ const WHATSAPP_QA_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
   },
 ];
 
-export const WHATSAPP_QA_REQUIREMENT_IDS = collectLiveTransportRequirementCoverage({
+export const WHATSAPP_QA_STANDARD_SCENARIO_IDS = collectLiveTransportStandardScenarioCoverage({
   scenarios: WHATSAPP_QA_SCENARIOS,
 });
 
@@ -1465,7 +1465,7 @@ function shouldRunWhatsAppScenarioByDefault(
   if (scenario.defaultEnabled === false) {
     return false;
   }
-  if (scenario.requirementId) {
+  if (scenario.standardId) {
     return true;
   }
   return Boolean(scenario.defaultProviderModes?.includes(providerMode));
@@ -2603,7 +2603,7 @@ async function runWhatsAppScenario(params: {
       return {
         id: params.scenario.id,
         title: params.scenario.title,
-        requirementId: params.scenario.requirementId,
+        standardId: params.scenario.standardId,
         status: "pass" as const,
         details: `${scenarioRun.approvalKind} approval ${approval.approvalId} resolved ${scenarioRun.decision} in ${approval.rttMs}ms`,
         rttMs: approval.rttMs,
@@ -2707,7 +2707,7 @@ async function runWhatsAppScenario(params: {
       return {
         id: params.scenario.id,
         title: params.scenario.title,
-        requirementId: params.scenario.requirementId,
+        standardId: params.scenario.standardId,
         status: "pass" as const,
         details: "no reply",
       };
@@ -2741,7 +2741,7 @@ async function runWhatsAppScenario(params: {
     return {
       id: params.scenario.id,
       title: params.scenario.title,
-      requirementId: params.scenario.requirementId,
+      standardId: params.scenario.standardId,
       status: "pass" as const,
       details: [`reply matched in ${rttMs}ms`, afterSendDetails, afterReplyDetails, batchDetails]
         .filter(Boolean)
@@ -2921,7 +2921,7 @@ function createMissingGroupJidScenarioResult(params: {
   return {
     id: params.scenario.id,
     title: params.scenario.title,
-    requirementId: params.scenario.requirementId,
+    standardId: params.scenario.standardId,
     status: params.explicitScenarioSelection ? "fail" : "skip",
     details: params.explicitScenarioSelection
       ? "requested scenario requires groupJid in the WhatsApp QA credential payload"
@@ -2944,7 +2944,7 @@ function appendPreScenarioFailureResults(params: {
     params.scenarioResults.push({
       id: scenario.id,
       title: scenario.title,
-      requirementId: scenario.requirementId,
+      standardId: scenario.standardId,
       status: "fail",
       details: params.details,
     });
@@ -3133,7 +3133,7 @@ export async function runWhatsAppQaLive(params: {
           const result: WhatsAppQaScenarioResult = {
             id: scenario.id,
             title: scenario.title,
-            requirementId: scenario.requirementId,
+            standardId: scenario.standardId,
             status: "fail",
             details:
               driverAttempt > 1
@@ -3292,6 +3292,6 @@ export const testing = {
   resolveWhatsAppMetadataRedaction,
   toObservedWhatsAppArtifacts,
   unpackWhatsAppAuthArchive,
-  WHATSAPP_QA_REQUIREMENT_IDS,
+  WHATSAPP_QA_STANDARD_SCENARIO_IDS,
 };
 export { testing as __testing };

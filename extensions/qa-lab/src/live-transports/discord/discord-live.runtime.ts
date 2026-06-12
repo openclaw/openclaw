@@ -37,7 +37,7 @@ import {
 } from "../shared/live-artifacts.js";
 import { startQaLiveLaneGateway } from "../shared/live-gateway.runtime.js";
 import {
-  collectLiveTransportRequirementCoverage,
+  collectLiveTransportStandardScenarioCoverage,
   selectLiveTransportScenarios,
   type LiveTransportScenarioDefinition,
 } from "../shared/live-transport-scenarios.js";
@@ -188,7 +188,7 @@ type DiscordQaScenarioResult = {
   artifactPaths?: Record<string, string>;
   id: string;
   title: string;
-  requirementId?: string;
+  standardId?: string;
   status: "pass" | "fail";
   details: string;
   requestStartedAt?: string;
@@ -268,7 +268,7 @@ const DISCORD_QA_ENV_KEYS = [
 const DISCORD_QA_SCENARIOS: DiscordQaScenarioDefinition[] = [
   {
     id: "discord-canary",
-    requirementId: "canary",
+    standardId: "canary",
     title: "Discord canary echo",
     timeoutMs: 45_000,
     buildRun: (sutApplicationId) => {
@@ -284,7 +284,7 @@ const DISCORD_QA_SCENARIOS: DiscordQaScenarioDefinition[] = [
   },
   {
     id: "discord-mention-gating",
-    requirementId: "mention-gating",
+    standardId: "mention-gating",
     title: "Discord unmentioned message does not trigger",
     timeoutMs: 8_000,
     buildRun: () => {
@@ -354,7 +354,7 @@ const DISCORD_QA_DEFAULT_SCENARIOS = DISCORD_QA_SCENARIOS.filter(
     scenario.id !== "discord-thread-reply-filepath-attachment",
 );
 
-const DISCORD_QA_REQUIREMENT_IDS = collectLiveTransportRequirementCoverage({
+const DISCORD_QA_STANDARD_SCENARIO_IDS = collectLiveTransportStandardScenarioCoverage({
   scenarios: DISCORD_QA_SCENARIOS,
 });
 
@@ -1279,7 +1279,7 @@ async function runDiscordThreadReplyFilePathAttachmentScenario(params: {
     return {
       id: params.scenario.id,
       title: params.scenario.title,
-      requirementId: params.scenario.requirementId,
+      standardId: params.scenario.standardId,
       status,
       details:
         status === "pass"
@@ -1669,7 +1669,7 @@ export async function runDiscordQaLive(params: {
             scenarioResults.push({
               id: scenario.id,
               title: scenario.title,
-              requirementId: scenario.requirementId,
+              standardId: scenario.standardId,
               status: "pass",
               details: redactPublicMetadata
                 ? "native command registered"
@@ -1691,7 +1691,7 @@ export async function runDiscordQaLive(params: {
             scenarioResults.push({
               id: scenario.id,
               title: scenario.title,
-              requirementId: scenario.requirementId,
+              standardId: scenario.standardId,
               status: "pass",
               details: redactPublicMetadata
                 ? "SUT bot joined voice channel"
@@ -1746,7 +1746,7 @@ export async function runDiscordQaLive(params: {
             scenarioResults.push({
               id: scenario.id,
               title: scenario.title,
-              requirementId: scenario.requirementId,
+              standardId: scenario.standardId,
               status: missing.length === 0 ? "pass" : "fail",
               details:
                 missing.length === 0
@@ -1792,7 +1792,7 @@ export async function runDiscordQaLive(params: {
           scenarioResults.push({
             id: scenario.id,
             title: scenario.title,
-            requirementId: scenario.requirementId,
+            standardId: scenario.standardId,
             status: "pass",
             details: redactPublicMetadata
               ? "reply matched"
@@ -1820,7 +1820,7 @@ export async function runDiscordQaLive(params: {
               scenarioResults.push({
                 id: scenario.id,
                 title: scenario.title,
-                requirementId: scenario.requirementId,
+                standardId: scenario.standardId,
                 status: "pass",
                 details: "no reply",
               });
@@ -1830,7 +1830,7 @@ export async function runDiscordQaLive(params: {
           scenarioResults.push({
             id: scenario.id,
             title: scenario.title,
-            requirementId: scenario.requirementId,
+            standardId: scenario.standardId,
             status: "fail",
             details: formatErrorMessage(error),
           });
@@ -1949,7 +1949,7 @@ export async function runDiscordQaLive(params: {
 
 export const testing = {
   DISCORD_QA_SCENARIOS,
-  DISCORD_QA_REQUIREMENT_IDS,
+  DISCORD_QA_STANDARD_SCENARIO_IDS,
   collectSeenReactionSequence,
   assertDiscordScenarioReply,
   assertDiscordApplicationCommandsRegistered,

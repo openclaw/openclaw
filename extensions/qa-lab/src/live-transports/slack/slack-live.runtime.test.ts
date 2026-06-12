@@ -54,8 +54,8 @@ describe("Slack live QA runtime helpers", () => {
     });
   });
 
-  it("reports live transport requirement coverage", () => {
-    expect(testing.SLACK_QA_REQUIREMENT_IDS).toEqual([
+  it("reports live transport standard scenario coverage", () => {
+    expect(testing.SLACK_QA_STANDARD_SCENARIO_IDS).toEqual([
       "canary",
       "mention-gating",
       "allowlist-block",
@@ -72,13 +72,13 @@ describe("Slack live QA runtime helpers", () => {
     ]);
   });
 
-  it("selects native approval scenarios by id without changing requirement coverage", () => {
+  it("selects native approval scenarios by id without changing standard scenario coverage", () => {
     expect(
       testing
         .findScenario(["slack-approval-exec-native", "slack-approval-plugin-native"])
         .map((scenario) => scenario.id),
     ).toEqual(["slack-approval-exec-native", "slack-approval-plugin-native"]);
-    expect(testing.SLACK_QA_REQUIREMENT_IDS).not.toContain("slack-approval-exec-native");
+    expect(testing.SLACK_QA_STANDARD_SCENARIO_IDS).not.toContain("slack-approval-exec-native");
   });
 
   it("enables Slack native exec and plugin approval delivery for approval scenarios", () => {

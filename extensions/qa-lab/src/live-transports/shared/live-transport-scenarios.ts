@@ -1,24 +1,24 @@
 // Qa Lab plugin module implements live transport scenarios behavior.
 import {
-  LIVE_TRANSPORT_BASELINE_REQUIREMENT_IDS,
-  collectLiveTransportRequirementCoverage,
-  findMissingLiveTransportRequirements,
+  LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS,
+  collectLiveTransportStandardScenarioCoverage,
+  findMissingLiveTransportStandardScenarios,
   type LiveTransportScenarioDefinition,
-  type LiveTransportRequirementId,
+  type LiveTransportStandardScenarioId,
 } from "openclaw/plugin-sdk/qa-live-transport-scenarios";
 
 export {
-  LIVE_TRANSPORT_BASELINE_REQUIREMENT_IDS,
-  collectLiveTransportRequirementCoverage,
-  findMissingLiveTransportRequirements,
+  LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS,
+  collectLiveTransportStandardScenarioCoverage,
+  findMissingLiveTransportStandardScenarios,
   selectLiveTransportScenarios,
   type LiveTransportScenarioDefinition,
-  type LiveTransportRequirementId,
+  type LiveTransportStandardScenarioId,
 } from "openclaw/plugin-sdk/qa-live-transport-scenarios";
 
 export type LiveTransportCoverageMember = {
   scenarioId?: string;
-  requirementId: LiveTransportRequirementId;
+  standardId: LiveTransportStandardScenarioId;
 };
 
 export type LiveTransportCoverageLane = {
@@ -28,11 +28,11 @@ export type LiveTransportCoverageLane = {
 };
 
 export type LiveTransportCoverageLaneSummary = {
-  baselineMissingRequirementIds: LiveTransportRequirementId[];
+  baselineMissingStandardScenarioIds: LiveTransportStandardScenarioId[];
   commandName: string;
   memberCount: number;
   members: LiveTransportCoverageMember[];
-  requirementIds: LiveTransportRequirementId[];
+  standardScenarioIds: LiveTransportStandardScenarioId[];
   transportId: string;
 };
 
@@ -41,43 +41,43 @@ export const LIVE_TRANSPORT_COVERAGE_LANES: readonly LiveTransportCoverageLane[]
     transportId: "discord",
     commandName: "discord",
     members: [
-      { requirementId: "canary", scenarioId: "discord-canary" },
-      { requirementId: "mention-gating", scenarioId: "discord-mention-gating" },
+      { standardId: "canary", scenarioId: "discord-canary" },
+      { standardId: "mention-gating", scenarioId: "discord-mention-gating" },
     ],
   },
   {
     transportId: "slack",
     commandName: "slack",
     members: [
-      { requirementId: "canary", scenarioId: "slack-canary" },
-      { requirementId: "mention-gating", scenarioId: "slack-mention-gating" },
-      { requirementId: "allowlist-block", scenarioId: "slack-allowlist-block" },
-      { requirementId: "top-level-reply-shape", scenarioId: "slack-top-level-reply-shape" },
-      { requirementId: "restart-resume", scenarioId: "slack-restart-resume" },
-      { requirementId: "thread-follow-up", scenarioId: "slack-thread-follow-up" },
-      { requirementId: "thread-isolation", scenarioId: "slack-thread-isolation" },
+      { standardId: "canary", scenarioId: "slack-canary" },
+      { standardId: "mention-gating", scenarioId: "slack-mention-gating" },
+      { standardId: "allowlist-block", scenarioId: "slack-allowlist-block" },
+      { standardId: "top-level-reply-shape", scenarioId: "slack-top-level-reply-shape" },
+      { standardId: "restart-resume", scenarioId: "slack-restart-resume" },
+      { standardId: "thread-follow-up", scenarioId: "slack-thread-follow-up" },
+      { standardId: "thread-isolation", scenarioId: "slack-thread-isolation" },
     ],
   },
   {
     transportId: "telegram",
     commandName: "telegram",
     members: [
-      { requirementId: "canary" },
-      { requirementId: "help-command", scenarioId: "telegram-help-command" },
-      { requirementId: "mention-gating", scenarioId: "telegram-mention-gating" },
+      { standardId: "canary" },
+      { standardId: "help-command", scenarioId: "telegram-help-command" },
+      { standardId: "mention-gating", scenarioId: "telegram-mention-gating" },
     ],
   },
   {
     transportId: "whatsapp",
     commandName: "whatsapp",
     members: [
-      { requirementId: "canary", scenarioId: "whatsapp-canary" },
-      { requirementId: "mention-gating", scenarioId: "whatsapp-mention-gating" },
-      { requirementId: "top-level-reply-shape", scenarioId: "whatsapp-top-level-reply-shape" },
-      { requirementId: "restart-resume", scenarioId: "whatsapp-restart-resume" },
-      { requirementId: "help-command", scenarioId: "whatsapp-help-command" },
-      { requirementId: "reaction-observation", scenarioId: "whatsapp-status-reactions" },
-      { requirementId: "allowlist-block", scenarioId: "whatsapp-group-allowlist-block" },
+      { standardId: "canary", scenarioId: "whatsapp-canary" },
+      { standardId: "mention-gating", scenarioId: "whatsapp-mention-gating" },
+      { standardId: "top-level-reply-shape", scenarioId: "whatsapp-top-level-reply-shape" },
+      { standardId: "restart-resume", scenarioId: "whatsapp-restart-resume" },
+      { standardId: "help-command", scenarioId: "whatsapp-help-command" },
+      { standardId: "reaction-observation", scenarioId: "whatsapp-status-reactions" },
+      { standardId: "allowlist-block", scenarioId: "whatsapp-group-allowlist-block" },
     ],
   },
 ] as const;
@@ -88,21 +88,21 @@ export function buildLiveTransportCoverageLaneSummaries(
   return lanes
     .map((lane) => {
       const scenarios: LiveTransportScenarioDefinition[] = lane.members.map((member) => ({
-        id: member.scenarioId ?? `${lane.transportId}:${member.requirementId}`,
-        requirementId: member.requirementId,
+        id: member.scenarioId ?? `${lane.transportId}:${member.standardId}`,
+        standardId: member.standardId,
         timeoutMs: 0,
-        title: member.requirementId,
+        title: member.standardId,
       }));
-      const requirementIds = collectLiveTransportRequirementCoverage({ scenarios });
+      const standardScenarioIds = collectLiveTransportStandardScenarioCoverage({ scenarios });
       return {
-        baselineMissingRequirementIds: findMissingLiveTransportRequirements({
-          coveredRequirementIds: requirementIds,
-          expectedRequirementIds: LIVE_TRANSPORT_BASELINE_REQUIREMENT_IDS,
+        baselineMissingStandardScenarioIds: findMissingLiveTransportStandardScenarios({
+          coveredStandardScenarioIds: standardScenarioIds,
+          expectedStandardScenarioIds: LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS,
         }),
         commandName: lane.commandName,
         memberCount: lane.members.length,
         members: [...lane.members],
-        requirementIds,
+        standardScenarioIds,
         transportId: lane.transportId,
       };
     })

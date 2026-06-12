@@ -30,7 +30,7 @@ import {
 } from "../shared/live-artifacts.js";
 import { startQaLiveLaneGateway } from "../shared/live-gateway.runtime.js";
 import {
-  collectLiveTransportRequirementCoverage,
+  collectLiveTransportStandardScenarioCoverage,
   selectLiveTransportScenarios,
   type LiveTransportScenarioDefinition,
 } from "../shared/live-transport-scenarios.js";
@@ -218,7 +218,7 @@ type SlackQaScenarioResult = {
     responseObservedAt: string;
     source: "approval-request-to-resolution" | "request-to-observed-message";
   };
-  requirementId?: string;
+  standardId?: string;
   status: "fail" | "pass";
   title: string;
 };
@@ -290,7 +290,7 @@ const slackRepliesSchema = z.object({
 const SLACK_QA_SCENARIOS: SlackQaScenarioDefinition[] = [
   {
     id: "slack-canary",
-    requirementId: "canary",
+    standardId: "canary",
     title: "Slack canary echo",
     timeoutMs: 45_000,
     buildRun: (sutUserId) => {
@@ -304,7 +304,7 @@ const SLACK_QA_SCENARIOS: SlackQaScenarioDefinition[] = [
   },
   {
     id: "slack-mention-gating",
-    requirementId: "mention-gating",
+    standardId: "mention-gating",
     title: "Slack unmentioned bot message does not trigger",
     timeoutMs: 8_000,
     buildRun: () => {
@@ -318,7 +318,7 @@ const SLACK_QA_SCENARIOS: SlackQaScenarioDefinition[] = [
   },
   {
     id: "slack-allowlist-block",
-    requirementId: "allowlist-block",
+    standardId: "allowlist-block",
     title: "Slack non-allowlisted sender does not trigger",
     timeoutMs: 8_000,
     configOverrides: {
@@ -336,7 +336,7 @@ const SLACK_QA_SCENARIOS: SlackQaScenarioDefinition[] = [
   },
   {
     id: "slack-top-level-reply-shape",
-    requirementId: "top-level-reply-shape",
+    standardId: "top-level-reply-shape",
     title: "Slack top-level reply stays top-level",
     timeoutMs: 45_000,
     configOverrides: { replyToMode: "off" },
@@ -393,7 +393,7 @@ const SLACK_QA_SCENARIOS: SlackQaScenarioDefinition[] = [
   },
   {
     id: "slack-restart-resume",
-    requirementId: "restart-resume",
+    standardId: "restart-resume",
     title: "Slack replies after gateway restart",
     timeoutMs: 60_000,
     buildRun: (sutUserId) => {
@@ -429,7 +429,7 @@ const SLACK_QA_SCENARIOS: SlackQaScenarioDefinition[] = [
   },
   {
     id: "slack-thread-follow-up",
-    requirementId: "thread-follow-up",
+    standardId: "thread-follow-up",
     title: "Slack threaded prompt receives threaded reply",
     timeoutMs: 45_000,
     configOverrides: { replyToMode: "all" },
@@ -462,7 +462,7 @@ const SLACK_QA_SCENARIOS: SlackQaScenarioDefinition[] = [
   },
   {
     id: "slack-thread-isolation",
-    requirementId: "thread-isolation",
+    standardId: "thread-isolation",
     title: "Slack fresh top-level prompt stays out of previous thread",
     timeoutMs: 45_000,
     configOverrides: { replyToMode: "off" },
@@ -495,7 +495,7 @@ const SLACK_QA_SCENARIOS: SlackQaScenarioDefinition[] = [
   },
 ];
 
-const SLACK_QA_REQUIREMENT_IDS = collectLiveTransportRequirementCoverage({
+const SLACK_QA_STANDARD_SCENARIO_IDS = collectLiveTransportStandardScenarioCoverage({
   scenarios: SLACK_QA_SCENARIOS,
 });
 
@@ -1891,7 +1891,7 @@ export async function runSlackQaLive(params: {
               approval: approval.artifact,
               id: scenario.id,
               title: scenario.title,
-              requirementId: scenario.requirementId,
+              standardId: scenario.standardId,
               status: "pass",
               details: [
                 `${scenarioRun.approvalKind} approval resolved ${scenarioRun.decision} in ${approval.rttMs}ms`,
@@ -1948,7 +1948,7 @@ export async function runSlackQaLive(params: {
             scenarioResults.push({
               id: scenario.id,
               title: scenario.title,
-              requirementId: scenario.requirementId,
+              standardId: scenario.standardId,
               status: "pass",
               details: [
                 `reply matched in ${rttMs}ms`,
@@ -1983,7 +1983,7 @@ export async function runSlackQaLive(params: {
             scenarioResults.push({
               id: scenario.id,
               title: scenario.title,
-              requirementId: scenario.requirementId,
+              standardId: scenario.standardId,
               status: "pass",
               details:
                 scenarioAttempt > 1 ? `no reply; retried ${scenarioAttempt - 1}x` : "no reply",
@@ -2001,7 +2001,7 @@ export async function runSlackQaLive(params: {
           scenarioResults.push({
             id: scenario.id,
             title: scenario.title,
-            requirementId: scenario.requirementId,
+            standardId: scenario.standardId,
             status: "fail",
             details:
               scenarioAttempt > 1
@@ -2050,7 +2050,7 @@ export async function runSlackQaLive(params: {
     scenarioResults.push({
       id: "slack-canary",
       title: "Slack canary echo",
-      requirementId: "canary",
+      standardId: "canary",
       status: "fail",
       details: formatErrorMessage(error),
     });
@@ -2144,7 +2144,7 @@ export const testing = {
   resolveSlackApprovalCheckpointConfig,
   resolveApprovalDecision,
   resolveSlackQaRuntimeEnv,
-  SLACK_QA_REQUIREMENT_IDS,
+  SLACK_QA_STANDARD_SCENARIO_IDS,
   toSlackQaScenarioArtifactResults,
   waitForSlackNoReply,
 };

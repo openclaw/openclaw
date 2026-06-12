@@ -3,8 +3,8 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  LIVE_TRANSPORT_BASELINE_REQUIREMENT_IDS,
-  findMissingLiveTransportRequirements,
+  LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS,
+  findMissingLiveTransportStandardScenarios,
 } from "../shared/live-transport-scenarios.js";
 import { testing } from "./telegram-live.runtime.js";
 
@@ -560,15 +560,15 @@ describe("telegram live qa runtime", () => {
   });
 
   it("tracks Telegram live coverage against the shared transport contract", () => {
-    expect(testing.TELEGRAM_QA_REQUIREMENT_IDS).toEqual([
+    expect(testing.TELEGRAM_QA_STANDARD_SCENARIO_IDS).toEqual([
       "canary",
       "help-command",
       "mention-gating",
     ]);
     expect(
-      findMissingLiveTransportRequirements({
-        coveredRequirementIds: testing.TELEGRAM_QA_REQUIREMENT_IDS,
-        expectedRequirementIds: LIVE_TRANSPORT_BASELINE_REQUIREMENT_IDS,
+      findMissingLiveTransportStandardScenarios({
+        coveredStandardScenarioIds: testing.TELEGRAM_QA_STANDARD_SCENARIO_IDS,
+        expectedStandardScenarioIds: LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS,
       }),
     ).toEqual(["allowlist-block", "top-level-reply-shape", "restart-resume"]);
   });
