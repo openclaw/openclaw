@@ -1722,7 +1722,7 @@ export class AgentSession {
     if (!this.model) {
       return THINKING_LEVELS;
     }
-    return getSupportedThinkingLevels(this.resolveFreshModel() ?? this.model) as ThinkingLevel[];
+    return getSupportedThinkingLevels(this.resolveFreshModel()!) as ThinkingLevel[];
   }
 
   /**
@@ -2265,6 +2265,11 @@ export class AgentSession {
    * Falls back to the snapshot if the registry has no entry for the current model.
    * Ensures post-turn reads (contextWindow, reasoning, thinkingBudgets) reflect
    * the latest registry state after a /model switch.
+   *
+   * Why not call refreshCurrentModelFromRegistry() instead?
+   * That method mutates agent.state.model — a persistent side effect.
+   * Post-turn reads should not change the snapshot mid-turn.
+   * This helper only does a transient read from the registry.
    */
   private resolveFreshModel(): Model | undefined {
     const current = this.model;
