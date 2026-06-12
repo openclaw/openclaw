@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import { normalizeChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -29,6 +30,15 @@ import {
   type ReplyDispatcherWithTypingOptions,
 } from "./reply/reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply/reply-dispatcher.types.js";
+import {
+  classifyTurnTimingFailure,
+  createTelegramTurnTimingContext,
+  emitTurnTimingEvent,
+  getTurnTimingContextFromReplyOptions,
+  measureTurnTimingDurationMs,
+  wrapTurnTimingDispatcherOptions,
+  wrapTurnTimingReplyOptions,
+} from "./reply/turn-timing.js";
 import type { FinalizedMsgContext, MsgContext } from "./templating.js";
 import type { GetReplyOptions, ReplyPayload } from "./types.js";
 
@@ -268,27 +278,63 @@ export async function dispatchInboundMessage(params: {
       source: "dispatchInboundMessage",
     });
   }
-  const result = await withReplyDispatcher({
-    dispatcher: params.dispatcher,
-    run: () =>
-      measureDiagnosticsTimelineSpan(
-        "auto_reply.dispatch_reply_from_config",
-        () =>
-          dispatchReplyFromConfig({
-            ctx: finalized,
-            cfg: params.cfg,
-            dispatcher: params.dispatcher,
-            replyOptions: params.replyOptions,
-            replyResolver: params.replyResolver,
-          }),
-        {
-          phase: "agent-turn",
-          config: params.cfg,
-          attributes: buildDispatchTimelineAttributes(finalized),
-        },
-      ),
-  });
-  return finalizeDispatchResult(result, params.dispatcher);
+  const turnTiming =
+    getTurnTimingContextFromReplyOptions(params.replyOptions) ??
+    createTelegramTurnTimingContext({
+      ctx: finalized,
+      runId: params.replyOptions?.runId,
+    });
+  const turnStartedAtMs = performance.now();
+  const turnReplyOptions = wrapTurnTimingReplyOptions(turnTiming, params.replyOptions);
+  emitTurnTimingEvent(turnTiming, { phase: "telegram.update_received" });
+  emitTurnTimingEvent(turnTiming, { phase: "gateway.dispatch_start" });
+  try {
+    const result = await withReplyDispatcher({
+      dispatcher: params.dispatcher,
+      run: () =>
+        measureDiagnosticsTimelineSpan(
+          "auto_reply.dispatch_reply_from_config",
+          () =>
+            dispatchReplyFromConfig({
+              ctx: finalized,
+              cfg: params.cfg,
+              dispatcher: params.dispatcher,
+              replyOptions: turnReplyOptions,
+              replyResolver: params.replyResolver,
+            }),
+          {
+            phase: "agent-turn",
+            config: params.cfg,
+            attributes: buildDispatchTimelineAttributes(finalized),
+          },
+        ),
+    });
+    const finalizedResult = finalizeDispatchResult(result, params.dispatcher);
+    const queuedCounts = params.dispatcher.getQueuedCounts();
+    const failedCounts = params.dispatcher.getFailedCounts();
+    const cancelledCounts = params.dispatcher.getCancelledCounts?.();
+    emitTurnTimingEvent(turnTiming, {
+      phase: "gateway.dispatch_complete",
+      durationMs: measureTurnTimingDurationMs(turnStartedAtMs),
+      outcome: "completed",
+      replyQueuedCount: queuedCounts.tool + queuedCounts.block + queuedCounts.final,
+      replyFailedCount: failedCounts.tool + failedCounts.block + failedCounts.final,
+      replyCancelledCount:
+        (cancelledCounts?.tool ?? 0) +
+        (cancelledCounts?.block ?? 0) +
+        (cancelledCounts?.final ?? 0),
+    });
+    return finalizedResult;
+  } catch (error) {
+    emitTurnTimingEvent(turnTiming, {
+      phase: "gateway.dispatch_error",
+      durationMs: measureTurnTimingDurationMs(turnStartedAtMs),
+      outcome: "error",
+      failureClass: classifyTurnTimingFailure(error),
+      errorName: error instanceof Error ? error.name : undefined,
+    });
+    throw error;
+  }
 }
 
 export async function dispatchInboundMessageWithBufferedDispatcher(params: {
@@ -300,6 +346,10 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
 }): Promise<DispatchInboundResult> {
   const finalized = finalizeInboundContext(params.ctx);
   const foregroundReplyFence = beginForegroundReplyFence(finalized);
+  const turnTiming = createTelegramTurnTimingContext({
+    ctx: finalized,
+    runId: params.replyOptions?.runId,
+  });
   const silentReplyContext = resolveDispatcherSilentReplyContext(finalized, params.cfg);
   const configuredBeforeDeliver =
     params.dispatcherOptions.beforeDeliver ?? buildMessageSendingBeforeDeliver(finalized);
@@ -320,20 +370,21 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
       : undefined;
   const { dispatcher, replyOptions, markDispatchIdle, markRunComplete } =
     createReplyDispatcherWithTyping({
-      ...params.dispatcherOptions,
+      ...wrapTurnTimingDispatcherOptions(turnTiming, params.dispatcherOptions),
       beforeDeliver,
       silentReplyContext: params.dispatcherOptions.silentReplyContext ?? silentReplyContext,
     });
+  const dispatchReplyOptions = wrapTurnTimingReplyOptions(turnTiming, {
+    ...params.replyOptions,
+    ...replyOptions,
+  });
   try {
     return await dispatchInboundMessage({
       ctx: finalized,
       cfg: params.cfg,
       dispatcher,
       replyResolver: params.replyResolver,
-      replyOptions: {
-        ...params.replyOptions,
-        ...replyOptions,
-      },
+      replyOptions: dispatchReplyOptions,
     });
   } finally {
     if (foregroundReplyFence) {
@@ -351,18 +402,23 @@ export async function dispatchInboundMessageWithDispatcher(params: {
   replyOptions?: Omit<GetReplyOptions, "onBlockReply">;
   replyResolver?: GetReplyFromConfig;
 }): Promise<DispatchInboundResult> {
-  const silentReplyContext = resolveDispatcherSilentReplyContext(params.ctx, params.cfg);
+  const finalized = finalizeInboundContext(params.ctx);
+  const turnTiming = createTelegramTurnTimingContext({
+    ctx: finalized,
+    runId: params.replyOptions?.runId,
+  });
+  const silentReplyContext = resolveDispatcherSilentReplyContext(finalized, params.cfg);
   const dispatcher = createReplyDispatcher({
-    ...params.dispatcherOptions,
+    ...wrapTurnTimingDispatcherOptions(turnTiming, params.dispatcherOptions),
     beforeDeliver:
-      params.dispatcherOptions.beforeDeliver ?? buildMessageSendingBeforeDeliver(params.ctx),
+      params.dispatcherOptions.beforeDeliver ?? buildMessageSendingBeforeDeliver(finalized),
     silentReplyContext: params.dispatcherOptions.silentReplyContext ?? silentReplyContext,
   });
   return await dispatchInboundMessage({
-    ctx: params.ctx,
+    ctx: finalized,
     cfg: params.cfg,
     dispatcher,
     replyResolver: params.replyResolver,
-    replyOptions: params.replyOptions,
+    replyOptions: wrapTurnTimingReplyOptions(turnTiming, params.replyOptions),
   });
 }
