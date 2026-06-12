@@ -532,6 +532,79 @@ describe("runMessageAction media behavior", () => {
     });
   });
 
+  it("recognizes top-level image param as media source (#92407)", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "workspace",
+          source: "test",
+          plugin: workspacePlugin,
+        },
+      ]),
+    );
+
+    await withSandbox(async (sandboxDir) => {
+      const result = await runDrySend({
+        cfg: workspaceConfig,
+        actionParams: {
+          channel: "workspace",
+          target: "12345678",
+          message: "check this photo",
+          image: "./photo.jpg",
+        },
+        sandboxRoot: sandboxDir,
+      });
+
+      expect(result.kind).toBe("send");
+      if (result.kind !== "send") {
+        throw new Error("expected send result");
+      }
+      // image param must be recognized as a media source and the value
+      // must appear in the resolved media URLs.
+      expect(result.sendResult?.mediaUrl).toBe(path.join(sandboxDir, "photo.jpg"));
+      expect(result.sendResult?.mediaUrls).toEqual([
+        path.join(sandboxDir, "photo.jpg"),
+      ]);
+    });
+  });
+
+  it("recognizes image field in structured attachments (#92407)", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "workspace",
+          source: "test",
+          plugin: workspacePlugin,
+        },
+      ]),
+    );
+
+    await withSandbox(async (sandboxDir) => {
+      const result = await runDrySend({
+        cfg: workspaceConfig,
+        actionParams: {
+          channel: "workspace",
+          target: "12345678",
+          message: "check these photos",
+          attachments: [
+            { type: "image", image: "./photo.jpg", name: "test.jpg" },
+          ],
+        },
+        sandboxRoot: sandboxDir,
+      });
+
+      expect(result.kind).toBe("send");
+      if (result.kind !== "send") {
+        throw new Error("expected send result");
+      }
+      // image inside structured attachment must be recognized as media source.
+      expect(result.sendResult?.mediaUrl).toBe(path.join(sandboxDir, "photo.jpg"));
+      expect(result.sendResult?.mediaUrls).toEqual([
+        path.join(sandboxDir, "photo.jpg"),
+      ]);
+    });
+  });
+
   describe("sendAttachment hydration", () => {
     const cfg = {
       channels: {
