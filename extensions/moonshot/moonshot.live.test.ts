@@ -108,10 +108,13 @@ function createNoopTool(): Tool {
 }
 
 async function collectDoneMessage(
-  stream: AsyncIterable<{ type: string; message?: AssistantMessage }>,
+  stream: AsyncIterable<{ type: string; message?: AssistantMessage; error?: AssistantMessage }>,
 ): Promise<AssistantMessage> {
   let doneMessage: AssistantMessage | undefined;
   for await (const event of stream) {
+    if (event.type === "error") {
+      throw new Error(event.error?.errorMessage || "Moonshot K2.7 live request failed");
+    }
     if (event.type === "done") {
       doneMessage = event.message;
     }
@@ -156,7 +159,11 @@ describeModelLive("moonshot K2.7 Code live", () => {
             firstPayload = payload as Record<string, unknown>;
           },
         },
-      ) as AsyncIterable<{ type: string; message?: AssistantMessage }>,
+      ) as AsyncIterable<{
+        type: string;
+        message?: AssistantMessage;
+        error?: AssistantMessage;
+      }>,
     );
 
     expect(firstPayload).toBeDefined();
@@ -202,7 +209,11 @@ describeModelLive("moonshot K2.7 Code live", () => {
         onPayload: (payload) => {
           secondPayload = payload as Record<string, unknown>;
         },
-      }) as AsyncIterable<{ type: string; message?: AssistantMessage }>,
+      }) as AsyncIterable<{
+        type: string;
+        message?: AssistantMessage;
+        error?: AssistantMessage;
+      }>,
     );
 
     expect(secondPayload).toBeDefined();
