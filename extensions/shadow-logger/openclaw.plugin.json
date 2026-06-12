@@ -1,0 +1,9 @@
+{
+  "id": "shadow-logger",
+  "label": "Shadow Logger",
+  "description": "Logs all incoming and outgoing messages to Supabase for long-term memory distillation.",
+  "version": "0.1.0",
+  "manifest": {
+    "pluginId": "shadow-logger"
+  }
+}
