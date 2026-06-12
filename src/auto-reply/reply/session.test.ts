@@ -4730,3 +4730,40 @@ describe("initSessionState internal channel routing preservation", () => {
     expect(result.sessionEntry.deliveryContext?.accountId).toBe("work");
   });
 });
+
+describe("initSessionState exec security from config", () => {
+  it("initializes execSecurity from tools.exec.security on cold boot", async () => {
+    const storePath = await createStorePath("exec-security-cold-boot-");
+    const cfg = {
+      session: { store: storePath },
+      tools: { exec: { security: "full" as const } },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello",
+        SessionKey: "agent:main:whatsapp:+15555550123",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry.execSecurity).toBe("full");
+  });
+
+  it("keeps execSecurity undefined when config is absent", async () => {
+    const storePath = await createStorePath("exec-security-no-config-");
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello",
+        SessionKey: "agent:main:whatsapp:+15555550123",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry.execSecurity).toBeUndefined();
+  });
+});

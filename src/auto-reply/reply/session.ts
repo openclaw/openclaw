@@ -76,6 +76,7 @@ import {
 import { forkSessionFromParent, resolveParentForkDecision } from "./session-fork.js";
 import { buildSessionEndHookPayload, buildSessionStartHookPayload } from "./session-hooks.js";
 import { clearSessionResetRuntimeState } from "./session-reset-cleanup.js";
+import { normalizeExecSecurity } from "../../infra/exec-approvals.js";
 
 const log = createSubsystemLogger("session-init");
 const sessionArchiveRuntimeLoader = createLazyImportLoader(
@@ -662,6 +663,10 @@ export async function initSessionState(params: {
     // Persist previously stored thinking/verbose levels when present.
     thinkingLevel: persistedThinking ?? baseEntry?.thinkingLevel,
     verboseLevel: persistedVerbose ?? baseEntry?.verboseLevel,
+    // Initialize exec security from config so that tools.exec.security
+    // persists across gateway cold restarts without requiring a manual
+    // /exec security=full slash command every session.
+    execSecurity: baseEntry?.execSecurity ?? normalizeExecSecurity(cfg.tools?.exec?.security) ?? undefined,
     traceLevel: persistedTrace ?? baseEntry?.traceLevel,
     reasoningLevel: persistedReasoning ?? baseEntry?.reasoningLevel,
     ttsAuto: persistedTtsAuto ?? baseEntry?.ttsAuto,
