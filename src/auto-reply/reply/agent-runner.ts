@@ -59,7 +59,9 @@ import { resolveResponseUsageMode, type VerboseLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
+  buildContextOverflowRecoveryText,
   buildKnownAgentRunFailureReplyPayload,
+  markAgentRunFailureReplyPayload,
   runAgentTurnWithFallback,
 } from "./agent-runner-execution.js";
 import {
@@ -111,6 +113,11 @@ const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
 
 function isReplayInvalidAgentRunError(error: unknown): boolean {
   return classifyProviderRuntimeFailureKind(formatErrorMessage(error)) === "replay_invalid";
+}
+
+function isPreflightCompactionFailure(error: unknown): boolean {
+  const message = formatErrorMessage(error);
+  return message.includes("Preflight compaction required but failed:");
 }
 
 function markBeforeAgentRunBlockedPayloads(payloads: ReplyPayload[]): ReplyPayload[] {
@@ -2206,6 +2213,28 @@ export async function runReplyAgent(params: {
     }
     if (isReplayInvalidAgentRunError(error) && sessionKey) {
       await resetSessionAfterReplayInvalid(formatErrorMessage(error));
+    }
+    if (isPreflightCompactionFailure(error)) {
+      const reason = formatErrorMessage(error);
+      const resetApplied = await resetSession({
+        failureLabel: "preflight compaction failure",
+        buildLogMessage: (nextSessionId) =>
+          `Preflight compaction failure (${reason}). Restarting session ${sessionKey} -> ${nextSessionId}.`,
+      });
+      replyOperation.fail("run_failed", error);
+      return returnWithQueuedFollowupDrain(
+        markAgentRunFailureReplyPayload({
+          text: buildContextOverflowRecoveryText({
+            duringCompaction: true,
+            preserveSessionMapping: !resetApplied,
+            cfg,
+            agentId: followupRun.run.agentId,
+            primaryProvider: followupRun.run.provider,
+            primaryModel: followupRun.run.model,
+            activeSessionEntry,
+          }),
+        }),
+      );
     }
     const knownFailurePayload = buildKnownAgentRunFailureReplyPayload({
       err: error,

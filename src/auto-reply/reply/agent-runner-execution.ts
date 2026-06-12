@@ -651,7 +651,7 @@ function buildExternalRunFailureReply(
   };
 }
 
-function markAgentRunFailureReplyPayload<T extends ReplyPayload>(payload: T): T {
+export function markAgentRunFailureReplyPayload<T extends ReplyPayload>(payload: T): T {
   return markReplyPayloadForSourceSuppressionDelivery(payload);
 }
 

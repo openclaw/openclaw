@@ -26,6 +26,7 @@ const createReplyMediaPathNormalizerMock = vi.fn();
 const runPreflightCompactionIfNeededMock = vi.fn();
 const runMemoryFlushIfNeededMock = vi.fn();
 const enqueueFollowupRunMock = vi.fn();
+const resetReplyRunSessionMock = vi.fn();
 
 vi.mock("./agent-runner-utils.js", async () => {
   const actual =
@@ -72,6 +73,10 @@ vi.mock("./queue.js", async () => {
     enqueueFollowupRun: (...args: unknown[]) => enqueueFollowupRunMock(...args),
   };
 });
+
+vi.mock("./agent-runner-session-reset.js", () => ({
+  resetReplyRunSession: (...args: unknown[]) => resetReplyRunSessionMock(...args),
+}));
 
 const { runReplyAgent } = await import("./agent-runner.js");
 
@@ -179,6 +184,7 @@ describe("runReplyAgent runtime config", () => {
     createReplyMediaPathNormalizerMock.mockReturnValue((payload: unknown) => payload);
     runPreflightCompactionIfNeededMock.mockRejectedValue(sentinelError);
     runMemoryFlushIfNeededMock.mockResolvedValue(undefined);
+    resetReplyRunSessionMock.mockResolvedValue(true);
   });
 
   it("resolves direct reply runs before early helpers read config", async () => {
@@ -304,6 +310,39 @@ describe("runReplyAgent runtime config", () => {
     expect(result.text).toBe(`⚠️ ${codexMessage}`);
     const metadata = getReplyPayloadMetadata(result);
     expect(metadata?.deliverDespiteSourceReplySuppression).toBe(true);
+  });
+
+  it("resets the session and surfaces preflight compaction timeout failures", async () => {
+    const { followupRun, replyParams } = createDirectRuntimeReplyParams({
+      shouldFollowup: false,
+      isActive: false,
+    });
+    const sessionKey = "agent:main:main";
+    const activeSessionEntry = { sessionId: "session-1", updatedAt: 1 };
+    replyParams.sessionKey = sessionKey;
+    replyParams.sessionEntry = activeSessionEntry;
+    replyParams.sessionStore = { [sessionKey]: activeSessionEntry };
+    replyParams.storePath = "/tmp/openclaw-test-sessions.json";
+    const compactionError = new Error(
+      "Preflight compaction required but failed: timed out waiting for codex app-server compaction",
+    );
+    runPreflightCompactionIfNeededMock.mockRejectedValue(compactionError);
+
+    const result = await runReplyAgent(replyParams);
+
+    if (!result || Array.isArray(result)) {
+      throw new Error("expected a single preflight compaction recovery payload");
+    }
+    expect(result.text).toContain("I've reset our conversation to start fresh");
+    expect(result.text).toContain("reserveTokensFloor");
+    expect(getReplyPayloadMetadata(result)?.deliverDespiteSourceReplySuppression).toBe(true);
+    expect(resetReplyRunSessionMock).toHaveBeenCalledOnce();
+    expect(resetReplyRunSessionMock.mock.calls[0]?.[0]).toMatchObject({
+      options: { failureLabel: "preflight compaction failure" },
+      sessionKey,
+      followupRun,
+    });
+    expect(runMemoryFlushIfNeededMock).not.toHaveBeenCalled();
   });
 
   it("does not resolve secrets before the enqueue-followup queue path", async () => {

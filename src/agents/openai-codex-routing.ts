@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeEmbeddedAgentRuntime } from "./pi-embedded-runner/runtime.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
-import { findNormalizedProviderValue, normalizeProviderId } from "./provider-id.js";
+import { findNormalizedProviderValue } from "./provider-id.js";
 export {
   OPENAI_CODEX_PROVIDER_ID,
   OPENAI_PROVIDER_ID,
