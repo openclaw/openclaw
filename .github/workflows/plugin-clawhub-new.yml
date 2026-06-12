@@ -30,9 +30,7 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.15.0"
   CLAWHUB_REGISTRY: "https://clawhub.ai"
-  CLAWHUB_REPOSITORY: "openclaw/clawhub"
-  # Pinned to a reviewed ClawHub commit so bootstrap behavior stays reproducible.
-  CLAWHUB_REF: "c9bb13023598dcc547fdf4a93b9d42512b8c8854"
+  CLAWHUB_CLI_PACKAGE: "clawhub@0.20.2"
 
 jobs:
   resolve_bootstrap_plan:
@@ -222,9 +220,37 @@ jobs:
           RUN_JSON="$(gh run view "$RELEASE_PUBLISH_RUN_ID" --repo "$GITHUB_REPOSITORY" --json workflowName,headBranch,event,status,conclusion,url)"
           printf '%s' "$RUN_JSON" | DIRECT_RELEASE_RECOVERY="${direct_recovery}" node scripts/validate-release-publish-approval.mjs
 
-  publish_bootstrap_plugins:
+  validate_bootstrap_trusted_publisher_cli:
     needs: [resolve_bootstrap_plan, validate_release_publish_approval]
-    if: always() && github.event_name == 'workflow_dispatch' && needs.resolve_bootstrap_plan.outputs.has_bootstrap_candidates == 'true' && needs.validate_release_publish_approval.result == 'success'
+    if: always() && github.event_name == 'workflow_dispatch' && inputs.dry_run != true && needs.resolve_bootstrap_plan.outputs.has_bootstrap_candidates == 'true' && needs.validate_release_publish_approval.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Validate pinned ClawHub trusted publisher CLI support
+        env:
+          CLAWHUB_CLI_PACKAGE: ${{ env.CLAWHUB_CLI_PACKAGE }}
+        run: |
+          set -euo pipefail
+          help_output="$(
+            npm exec --yes --package "${CLAWHUB_CLI_PACKAGE}" -- \
+              clawhub package trusted-publisher set --help 2>&1 || true
+          )"
+          printf '%s\n' "${help_output}"
+          if ! grep -Fq "Usage: clawhub package trusted-publisher set" <<<"${help_output}"; then
+            echo "::error::CLAW-277 03 - Split OpenClaw plugin ClawHub publishing into OIDC release and token bootstrap workflows requires ${CLAWHUB_CLI_PACKAGE} to expose 'package trusted-publisher set' before token bootstrap publish can run. The pinned CLI returned parent help or no set command, so this workflow is stopping before creating a ClawHub package row."
+            exit 1
+          fi
+          for required_flag in --repository --workflow-filename; do
+            if ! grep -Fq -- "${required_flag}" <<<"${help_output}"; then
+              echo "::error::CLAW-277 03 - Split OpenClaw plugin ClawHub publishing into OIDC release and token bootstrap workflows requires ${CLAWHUB_CLI_PACKAGE} trusted-publisher set help to include ${required_flag}."
+              exit 1
+            fi
+          done
+
+  publish_bootstrap_plugins:
+    needs: [resolve_bootstrap_plan, validate_release_publish_approval, validate_bootstrap_trusted_publisher_cli]
+    if: always() && github.event_name == 'workflow_dispatch' && needs.resolve_bootstrap_plan.outputs.has_bootstrap_candidates == 'true' && needs.validate_release_publish_approval.result == 'success' && (inputs.dry_run == true || needs.validate_bootstrap_trusted_publisher_cli.result == 'success')
     runs-on: ubuntu-latest
     environment: clawhub-plugin-bootstrap
     permissions:
@@ -259,60 +285,19 @@ jobs:
           install-bun: "true"
           install-deps: "true"
 
-      - name: Checkout ClawHub CLI source
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-          repository: ${{ env.CLAWHUB_REPOSITORY }}
-          ref: main
-          path: clawhub-source
-          fetch-depth: 0
+      - name: Verify package-local runtime build
+        run: node scripts/check-plugin-npm-runtime-builds.mjs --package "${{ matrix.plugin.packageDir }}"
 
-      - name: Checkout pinned ClawHub CLI revision
-        working-directory: clawhub-source
-        env:
-          CLAWHUB_REF: ${{ env.CLAWHUB_REF }}
-        run: git checkout --detach "${CLAWHUB_REF}"
-
-      - name: Install ClawHub CLI dependencies
-        working-directory: clawhub-source
+      - name: Install pinned ClawHub CLI wrapper
         run: |
           set -euo pipefail
-          for attempt in 1 2 3; do
-            if bun install --frozen-lockfile; then
-              exit 0
-            fi
-            status="$?"
-            if [[ "${attempt}" == "3" ]]; then
-              exit "${status}"
-            fi
-            echo "bun install failed while preparing ClawHub CLI; retrying (${attempt}/3)."
-            rm -rf node_modules "${RUNNER_TEMP}/bun-install-cache" || true
-            sleep $((attempt * 15))
-          done
-
-      - name: Bootstrap ClawHub CLI
-        run: |
-          cat > "$RUNNER_TEMP/clawhub" <<'EOF'
+          cat > "${RUNNER_TEMP}/clawhub" <<'EOF'
           #!/usr/bin/env bash
           set -euo pipefail
-          exec bun "$GITHUB_WORKSPACE/clawhub-source/packages/clawhub/src/cli.ts" "$@"
+          exec npm exec --yes --package "${CLAWHUB_CLI_PACKAGE}" -- clawhub "$@"
           EOF
-          chmod +x "$RUNNER_TEMP/clawhub"
-          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
-
-      - name: Validate trusted publisher CLI support
-        if: inputs.dry_run != true
-        env:
-          PACKAGE_NAME: ${{ matrix.plugin.packageName }}
-        run: |
-          set -euo pipefail
-          # CLAW-276 adds this CLI command. Until the pinned ClawHub CLI includes it,
-          # fail before the token publish path can create a package without OIDC config.
-          if ! clawhub package trusted-publisher set --help >/dev/null 2>&1; then
-            echo "::error::Pinned ClawHub CLI does not yet support 'package trusted-publisher set'; update CLAWHUB_REF after CLAW-276 lands, then rerun bootstrap for ${PACKAGE_NAME}."
-            exit 1
-          fi
+          chmod +x "${RUNNER_TEMP}/clawhub"
+          echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
 
       - name: Publish ClawHub bootstrap package
         env:
@@ -336,15 +321,16 @@ jobs:
       - name: Configure trusted publisher for normal OIDC releases
         if: inputs.dry_run != true
         env:
+          CLAWHUB_CLI_PACKAGE: ${{ env.CLAWHUB_CLI_PACKAGE }}
           CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
           OPENCLAW_CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
           PACKAGE_NAME: ${{ matrix.plugin.packageName }}
         run: |
           set -euo pipefail
-          clawhub package trusted-publisher set "${PACKAGE_NAME}" \
-            --repository openclaw/openclaw \
-            --workflow-filename plugin-clawhub-release.yml \
-            --environment clawhub-plugin-release
+          npm exec --yes --package "${CLAWHUB_CLI_PACKAGE}" -- \
+            clawhub package trusted-publisher set "${PACKAGE_NAME}" \
+              --repository openclaw/openclaw \
+              --workflow-filename plugin-clawhub-release.yml
 
   verify_bootstrap_clawhub_package:
     needs: [resolve_bootstrap_plan, publish_bootstrap_plugins]
@@ -423,10 +409,10 @@ jobs:
           if (
             trustedPublisher?.repository !== "openclaw/openclaw" ||
             trustedPublisher?.workflowFilename !== "plugin-clawhub-release.yml" ||
-            trustedPublisher?.environment !== "clawhub-plugin-release"
+            trustedPublisher?.environment != null
           ) {
             throw new Error(
-              `${packageName}: trusted publisher config did not match openclaw/openclaw plugin-clawhub-release.yml clawhub-plugin-release.`,
+              `${packageName}: trusted publisher config did not match openclaw/openclaw plugin-clawhub-release.yml without an environment pin.`,
             );
           }
 

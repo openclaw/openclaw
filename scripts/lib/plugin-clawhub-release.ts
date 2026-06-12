@@ -69,6 +69,12 @@ type ClawHubTrustedPublisherDetail = {
   trustedPublisher?: unknown;
 };
 
+type ClawHubTrustedPublisherConfig = {
+  repository?: unknown;
+  workflowFilename?: unknown;
+  environment?: unknown;
+};
+
 type PluginReleasePlanItemWithPackageState = PluginReleasePlanItem & {
   packageExists: boolean;
   hasTrustedPublisher: boolean;
@@ -80,6 +86,8 @@ type ClawHubPublishablePluginPackageFilters = {
 };
 
 const CLAWHUB_DEFAULT_REGISTRY = "https://clawhub.ai";
+const OPENCLAW_PLUGIN_CLAWHUB_REPOSITORY = "openclaw/openclaw";
+const OPENCLAW_PLUGIN_CLAWHUB_WORKFLOW_FILENAME = "plugin-clawhub-release.yml";
 const SAFE_EXTENSION_ID_RE = /^[a-z0-9][a-z0-9._-]*$/;
 const CLAWHUB_SHARED_RELEASE_INPUT_PATHS = [
   ".github/workflows/plugin-clawhub-release.yml",
@@ -433,7 +441,19 @@ async function hasClawHubTrustedPublisher(
     });
   }
 
-  return Boolean(trustedPublisherDetail.trustedPublisher);
+  return isOpenClawPluginTrustedPublisher(trustedPublisherDetail.trustedPublisher);
+}
+
+function isOpenClawPluginTrustedPublisher(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const trustedPublisher = value as ClawHubTrustedPublisherConfig;
+  return (
+    trustedPublisher.repository === OPENCLAW_PLUGIN_CLAWHUB_REPOSITORY &&
+    trustedPublisher.workflowFilename === OPENCLAW_PLUGIN_CLAWHUB_WORKFLOW_FILENAME &&
+    trustedPublisher.environment == null
+  );
 }
 
 function stripPackageReleaseState(

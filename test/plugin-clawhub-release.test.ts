@@ -338,6 +338,7 @@ describe("collectPluginClawHubReleasePlan", () => {
           body: {
             trustedPublisher: {
               repository: "openclaw/openclaw",
+              workflowFilename: "plugin-clawhub-release.yml",
             },
           },
         },
@@ -439,6 +440,49 @@ describe("collectPluginClawHubReleasePlan", () => {
     });
   });
 
+  it("routes environment-pinned trusted publisher config out of normal candidates", async () => {
+    const repoDir = createTempPluginRepo();
+    const { fetchImpl } = createClawHubPlanFetch({
+      packages: {
+        "@openclaw/demo-plugin": {
+          status: 200,
+          body: {
+            package: {},
+            owner: {},
+          },
+        },
+      },
+      trustedPublishers: {
+        "@openclaw/demo-plugin": {
+          status: 200,
+          body: {
+            trustedPublisher: {
+              repository: "openclaw/openclaw",
+              workflowFilename: "plugin-clawhub-release.yml",
+              environment: "clawhub-plugin-release",
+            },
+          },
+        },
+      },
+      versions: {
+        "@openclaw/demo-plugin@2026.4.1": 404,
+      },
+    });
+
+    const plan = await collectPluginClawHubReleasePlan({
+      rootDir: repoDir,
+      selection: ["@openclaw/demo-plugin"],
+      fetchImpl,
+      registryBaseUrl: "https://clawhub.ai",
+    });
+
+    expect(plan.candidates).toStrictEqual([]);
+    expect(plan.bootstrapCandidates).toStrictEqual([]);
+    expect(plan.missingTrustedPublisher.map((plugin) => plugin.packageName)).toEqual([
+      "@openclaw/demo-plugin",
+    ]);
+  });
+
   it("skips versions that already exist on ClawHub", async () => {
     const repoDir = createTempPluginRepo();
     const { fetchImpl } = createClawHubPlanFetch({
@@ -528,6 +572,7 @@ describe("collectPluginClawHubReleasePlan", () => {
             body: {
               trustedPublisher: {
                 repository: "openclaw/openclaw",
+                workflowFilename: "plugin-clawhub-release.yml",
               },
             },
           },

@@ -38,9 +38,7 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.15.0"
   CLAWHUB_REGISTRY: "https://clawhub.ai"
-  CLAWHUB_REPOSITORY: "openclaw/clawhub"
-  # Pinned to a reviewed ClawHub commit so release behavior stays reproducible.
-  CLAWHUB_REF: "c9bb13023598dcc547fdf4a93b9d42512b8c8854"
+  CLAWHUB_CLI_PACKAGE: "clawhub@0.20.2"
 
 jobs:
   preview_plugins_clawhub:
@@ -212,7 +210,7 @@ jobs:
         if: steps.plan.outputs.missing_trusted_publisher_count != '0'
         run: |
           echo "::error::One or more ClawHub packages exist but do not have trusted publishing configured. Configure trusted publishing before running the normal OIDC publish workflow."
-          jq -r '.missingTrustedPublisher[]? | "::error::Missing trusted publisher: \(.packageName)@\(.version). Configure trusted publishing for openclaw/openclaw, workflow plugin-clawhub-release.yml, environment clawhub-plugin-release."' .local/plugin-clawhub-release-plan.json
+          jq -r '.missingTrustedPublisher[]? | "::error::Missing trusted publisher: \(.packageName)@\(.version). Configure trusted publishing for openclaw/openclaw, workflow plugin-clawhub-release.yml."' .local/plugin-clawhub-release-plan.json
           exit 1
 
       - name: Fail normal publish when bootstrap is required
@@ -278,99 +276,8 @@ jobs:
           RUN_JSON="$(gh run view "$RELEASE_PUBLISH_RUN_ID" --repo "$GITHUB_REPOSITORY" --json workflowName,headBranch,event,status,conclusion,url)"
           printf '%s' "$RUN_JSON" | DIRECT_RELEASE_RECOVERY="${direct_recovery}" node scripts/validate-release-publish-approval.mjs
 
-  preview_plugin_pack:
-    needs: preview_plugins_clawhub
-    if: needs.preview_plugins_clawhub.outputs.has_candidates == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    strategy:
-      fail-fast: false
-      max-parallel: 12
-      matrix:
-        plugin: ${{ fromJson(needs.preview_plugins_clawhub.outputs.matrix) }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-          ref: ${{ github.ref }}
-          fetch-depth: 0
-
-      - name: Checkout target revision
-        env:
-          TARGET_SHA: ${{ needs.preview_plugins_clawhub.outputs.ref_revision }}
-        run: |
-          set -euo pipefail
-          git fetch --no-tags origin \
-            +refs/heads/main:refs/remotes/origin/main \
-            '+refs/heads/release/*:refs/remotes/origin/release/*'
-          git checkout --detach "${TARGET_SHA}"
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          install-bun: "true"
-          install-deps: "true"
-
-      - name: Checkout ClawHub CLI source
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-          repository: ${{ env.CLAWHUB_REPOSITORY }}
-          ref: main
-          path: clawhub-source
-          fetch-depth: 0
-
-      - name: Checkout pinned ClawHub CLI revision
-        working-directory: clawhub-source
-        env:
-          CLAWHUB_REF: ${{ env.CLAWHUB_REF }}
-        run: git checkout --detach "${CLAWHUB_REF}"
-
-      - name: Install ClawHub CLI dependencies
-        working-directory: clawhub-source
-        run: |
-          set -euo pipefail
-          for attempt in 1 2 3; do
-            if bun install --frozen-lockfile; then
-              exit 0
-            fi
-            status="$?"
-            if [[ "${attempt}" == "3" ]]; then
-              exit "${status}"
-            fi
-            echo "bun install failed while preparing ClawHub CLI; retrying (${attempt}/3)."
-            rm -rf node_modules "${RUNNER_TEMP}/bun-install-cache" || true
-            sleep $((attempt * 15))
-          done
-
-      - name: Bootstrap ClawHub CLI
-        run: |
-          cat > "$RUNNER_TEMP/clawhub" <<'EOF'
-          #!/usr/bin/env bash
-          set -euo pipefail
-          exec bun "$GITHUB_WORKSPACE/clawhub-source/packages/clawhub/src/cli.ts" "$@"
-          EOF
-          chmod +x "$RUNNER_TEMP/clawhub"
-          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
-
-      - name: Verify package-local runtime build
-        run: node scripts/check-plugin-npm-runtime-builds.mjs --package "${{ matrix.plugin.packageDir }}"
-
-      - name: Preview publish command
-        env:
-          CLAWHUB_REGISTRY: ${{ env.CLAWHUB_REGISTRY }}
-          SOURCE_REPO: ${{ github.repository }}
-          SOURCE_COMMIT: ${{ needs.preview_plugins_clawhub.outputs.ref_revision }}
-          SOURCE_REF: ${{ github.ref }}
-          PACKAGE_TAG: ${{ matrix.plugin.publishTag }}
-          PACKAGE_DIR: ${{ matrix.plugin.packageDir }}
-        run: bash scripts/plugin-clawhub-publish.sh --dry-run "${PACKAGE_DIR}"
-
   pack_plugins_clawhub_artifacts:
-    needs: [preview_plugins_clawhub, preview_plugin_pack, validate_release_publish_approval]
+    needs: [preview_plugins_clawhub, validate_release_publish_approval]
     if: github.event_name == 'workflow_dispatch' && needs.preview_plugins_clawhub.outputs.has_candidates == 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -405,47 +312,19 @@ jobs:
           install-bun: "true"
           install-deps: "true"
 
-      - name: Checkout ClawHub CLI source
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-          repository: ${{ env.CLAWHUB_REPOSITORY }}
-          ref: main
-          path: clawhub-source
-          fetch-depth: 0
+      - name: Verify package-local runtime build
+        run: node scripts/check-plugin-npm-runtime-builds.mjs --package "${{ matrix.plugin.packageDir }}"
 
-      - name: Checkout pinned ClawHub CLI revision
-        working-directory: clawhub-source
-        env:
-          CLAWHUB_REF: ${{ env.CLAWHUB_REF }}
-        run: git checkout --detach "${CLAWHUB_REF}"
-
-      - name: Install ClawHub CLI dependencies
-        working-directory: clawhub-source
+      - name: Install pinned ClawHub CLI wrapper
         run: |
           set -euo pipefail
-          for attempt in 1 2 3; do
-            if bun install --frozen-lockfile; then
-              exit 0
-            fi
-            status="$?"
-            if [[ "${attempt}" == "3" ]]; then
-              exit "${status}"
-            fi
-            echo "bun install failed while preparing ClawHub CLI; retrying (${attempt}/3)."
-            rm -rf node_modules "${RUNNER_TEMP}/bun-install-cache" || true
-            sleep $((attempt * 15))
-          done
-
-      - name: Bootstrap ClawHub CLI
-        run: |
-          cat > "$RUNNER_TEMP/clawhub" <<'EOF'
+          cat > "${RUNNER_TEMP}/clawhub" <<'EOF'
           #!/usr/bin/env bash
           set -euo pipefail
-          exec bun "$GITHUB_WORKSPACE/clawhub-source/packages/clawhub/src/cli.ts" "$@"
+          exec npm exec --yes --package "${CLAWHUB_CLI_PACKAGE}" -- clawhub "$@"
           EOF
-          chmod +x "$RUNNER_TEMP/clawhub"
-          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+          chmod +x "${RUNNER_TEMP}/clawhub"
+          echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
 
       - name: Pack ClawHub package artifact
         env:
@@ -466,11 +345,22 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  publish_plugins_clawhub:
+  approve_plugins_clawhub_release:
     needs: [preview_plugins_clawhub, pack_plugins_clawhub_artifacts]
     if: always() && github.event_name == 'workflow_dispatch' && needs.preview_plugins_clawhub.outputs.has_candidates == 'true' && needs.pack_plugins_clawhub_artifacts.result == 'success'
     runs-on: ubuntu-latest
     environment: clawhub-plugin-release
+    permissions:
+      contents: read
+    steps:
+      - name: Approve Plugin ClawHub release publish
+        run: |
+          echo "Approved CLAW-277 03 - Split OpenClaw plugin ClawHub publishing into OIDC release and token bootstrap workflows release publish gate."
+
+  publish_plugins_clawhub:
+    needs: [preview_plugins_clawhub, pack_plugins_clawhub_artifacts, approve_plugins_clawhub_release]
+    if: always() && github.event_name == 'workflow_dispatch' && needs.preview_plugins_clawhub.outputs.has_candidates == 'true' && needs.pack_plugins_clawhub_artifacts.result == 'success' && needs.approve_plugins_clawhub_release.result == 'success'
+    uses: openclaw/clawhub/.github/workflows/package-publish.yml@pe/claw-277-package-publish-artifact-inputs
     permissions:
       actions: read
       contents: read
@@ -480,111 +370,18 @@ jobs:
       max-parallel: 32
       matrix:
         plugin: ${{ fromJson(needs.preview_plugins_clawhub.outputs.matrix) }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          install-bun: "true"
-          install-deps: "false"
-
-      - name: Checkout ClawHub CLI source
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-          repository: ${{ env.CLAWHUB_REPOSITORY }}
-          ref: main
-          path: clawhub-source
-          fetch-depth: 0
-
-      - name: Checkout pinned ClawHub CLI revision
-        working-directory: clawhub-source
-        env:
-          CLAWHUB_REF: ${{ env.CLAWHUB_REF }}
-        run: git checkout --detach "${CLAWHUB_REF}"
-
-      - name: Install ClawHub CLI dependencies
-        working-directory: clawhub-source
-        run: |
-          set -euo pipefail
-          for attempt in 1 2 3; do
-            if bun install --frozen-lockfile; then
-              exit 0
-            fi
-            status="$?"
-            if [[ "${attempt}" == "3" ]]; then
-              exit "${status}"
-            fi
-            echo "bun install failed while preparing ClawHub CLI; retrying (${attempt}/3)."
-            rm -rf node_modules "${RUNNER_TEMP}/bun-install-cache" || true
-            sleep $((attempt * 15))
-          done
-
-      - name: Bootstrap ClawHub CLI
-        run: |
-          cat > "$RUNNER_TEMP/clawhub" <<'EOF'
-          #!/usr/bin/env bash
-          set -euo pipefail
-          exec bun "$GITHUB_WORKSPACE/clawhub-source/packages/clawhub/src/cli.ts" "$@"
-          EOF
-          chmod +x "$RUNNER_TEMP/clawhub"
-          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
-
-      - name: Download ClawHub package artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: ${{ matrix.plugin.artifactName }}
-          path: ${{ runner.temp }}/clawhub-package-artifact
-
-      - name: Publish ClawHub package artifact
-        env:
-          CLAWHUB_REGISTRY: ${{ env.CLAWHUB_REGISTRY }}
-          SOURCE_REPO: ${{ github.repository }}
-          SOURCE_COMMIT: ${{ needs.preview_plugins_clawhub.outputs.ref_revision }}
-          SOURCE_REF: ${{ github.ref }}
-          PACKAGE_TAG: ${{ matrix.plugin.publishTag }}
-          PACKAGE_DIR: ${{ matrix.plugin.packageDir }}
-          DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
-          ARTIFACT_DIR: ${{ runner.temp }}/clawhub-package-artifact
-        run: |
-          set -euo pipefail
-          artifact_path="$(find "${ARTIFACT_DIR}" -maxdepth 1 -type f -name '*.tgz' -print -quit)"
-          if [[ -z "${artifact_path}" ]]; then
-            echo "Downloaded ClawHub package artifact is missing." >&2
-            find "${ARTIFACT_DIR}" -maxdepth 2 -type f -print >&2 || true
-            exit 1
-          fi
-
-          publish_cmd=(
-            clawhub
-            package
-            publish
-            "${artifact_path}"
-            --tags
-            "${PACKAGE_TAG}"
-            --source-repo
-            "${SOURCE_REPO}"
-            --source-commit
-            "${SOURCE_COMMIT}"
-            --source-path
-            "${PACKAGE_DIR}"
-          )
-          if [[ -n "${SOURCE_REF}" ]]; then
-            publish_cmd+=(--source-ref "${SOURCE_REF}")
-          fi
-          if [[ "${DRY_RUN}" == "true" ]]; then
-            publish_cmd+=(--dry-run)
-          fi
-
-          printf 'Publish command:'
-          printf ' %q' "${publish_cmd[@]}"
-          printf '\n'
-          "${publish_cmd[@]}"
+    with:
+      package_artifact_name: ${{ matrix.plugin.artifactName }}
+      dry_run: ${{ inputs.dry_run }}
+      registry: https://clawhub.ai
+      site: https://clawhub.ai
+      tags: ${{ matrix.plugin.publishTag }}
+      source_repo: ${{ github.repository }}
+      source_commit: ${{ needs.preview_plugins_clawhub.outputs.ref_revision }}
+      source_ref: ${{ github.ref }}
+      source_path: ${{ matrix.plugin.packageDir }}
+      inspector_artifact_name: ${{ matrix.plugin.artifactName }}-inspector
+      publish_json_artifact_name: ${{ matrix.plugin.artifactName }}-publish-json
 
   verify_published_clawhub_package:
     needs: [preview_plugins_clawhub, publish_plugins_clawhub]
