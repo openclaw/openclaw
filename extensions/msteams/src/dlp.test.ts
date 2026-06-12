@@ -91,7 +91,7 @@ describe("dlp redactOutboundMSTeamsCard (S3)", () => {
     expect(json).toContain("[REDACTED:secret]");
     expect(json).toContain("[REDACTED:email]");
     // Structural fields survive; the input card is untouched.
-    expect((out as typeof card).type).toBe("AdaptiveCard");
+    expect(out.type).toBe("AdaptiveCard");
     expect(card.body[0]?.text).toContain("sk-");
   });
 
