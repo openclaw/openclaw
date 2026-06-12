@@ -145,6 +145,10 @@ import {
   type ProviderInfo,
 } from "./model-buttons.js";
 import { parseTelegramOpaqueCallbackData } from "./native-command-callback-data.js";
+import {
+  isTelegramEditTargetMissingError,
+  isTelegramMessageHasNoTextError,
+} from "./network-errors.js";
 import { buildInlineKeyboard } from "./send.js";
 
 export const registerTelegramHandlers = ({
@@ -1303,11 +1307,8 @@ export const registerTelegramHandlers = ({
     }
   }
 
-  const TELEGRAM_PERMANENT_CALLBACK_EDIT_ERROR_RE =
-    /400:\s*Bad Request:\s*message to edit not found|400:\s*Bad Request:\s*there is no text in the message to edit|MESSAGE_ID_INVALID|400:\s*Bad Request:\s*message can't be edited/i;
-
   const isPermanentTelegramCallbackEditError = (err: unknown): boolean =>
-    TELEGRAM_PERMANENT_CALLBACK_EDIT_ERROR_RE.test(String(err));
+    isTelegramEditTargetMissingError(err) || isTelegramMessageHasNoTextError(err);
 
   const resolveTelegramEventAuthorizationContext = async (params: {
     chatId: number;

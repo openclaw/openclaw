@@ -104,6 +104,7 @@ type WorkerPollSuccessListener = (message: {
 type WorkerPollErrorListener = (message: {
   type: "poll-error";
   message: string;
+  errorCode?: number;
   finishedAt: number;
 }) => void;
 type WorkerMessageListener = (message: TelegramIngressWorkerMessage) => void;
@@ -2356,6 +2357,89 @@ describe("TelegramPollingSession", () => {
     }
   });
 
+  it("restarts isolated ingress on a getUpdates conflict instead of crashing the account", async () => {
+    const abort = new AbortController();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
+    const log = vi.fn();
+    const setStatus = vi.fn();
+    // 409 conflicts are not "recoverable network errors"; the conflict branch
+    // must restart the cycle before that classifier is consulted.
+    isRecoverableTelegramNetworkErrorMock.mockReturnValue(false);
+    const deleteWebhook = vi.fn(async () => true);
+    createTelegramBotMock.mockImplementation(() => ({
+      api: {
+        deleteWebhook,
+        config: { use: vi.fn() },
+      },
+      init: vi.fn(async () => undefined),
+      handleUpdate: vi.fn(async () => undefined),
+      stop: vi.fn(async () => undefined),
+    }));
+    const transport1 = makeTelegramTransport();
+    const transport2 = makeTelegramTransport();
+    const createTelegramTransport = vi
+      .fn<() => ReturnType<typeof makeTelegramTransport>>()
+      .mockReturnValueOnce(transport2);
+
+    let workerCycle = 0;
+    let listener: WorkerPollErrorListener | undefined;
+    const createWorker = vi.fn(() => ({
+      onMessage: vi.fn((next: WorkerPollErrorListener) => {
+        listener = next;
+        return () => undefined;
+      }),
+      stop: vi.fn(async () => undefined),
+      task: vi.fn(async () => {
+        workerCycle += 1;
+        if (workerCycle === 1) {
+          listener?.({
+            type: "poll-error",
+            message: "Conflict: terminated by other getUpdates request",
+            errorCode: 409,
+            finishedAt: Date.now(),
+          });
+          throw new Error("Telegram ingress worker exited with code 1");
+        }
+        abort.abort();
+      }),
+    }));
+
+    try {
+      const session = createPollingSession({
+        abortSignal: abort.signal,
+        log,
+        setStatus,
+        telegramTransport: transport1,
+        createTelegramTransport,
+        isolatedIngress: {
+          enabled: true,
+          spoolDir: tempDir,
+          createWorker,
+          drainIntervalMs: 100,
+        },
+      });
+
+      await session.runUntilAbort();
+
+      expect(createWorker).toHaveBeenCalledTimes(2);
+      // The conflict resets webhook cleanup so the next cycle re-runs deleteWebhook.
+      expect(deleteWebhook).toHaveBeenCalledTimes(2);
+      // The conflict marks the transport dirty so the next cycle gets a fresh socket.
+      expect(createTelegramTransport).toHaveBeenCalledTimes(1);
+      expectLogIncludes(log, "Another OpenClaw gateway, script, or Telegram poller");
+      expect(
+        statusPatches(setStatus).some(
+          (patch) =>
+            patch.connected === false &&
+            String(patch.lastError).includes("Another OpenClaw gateway"),
+        ),
+      ).toBe(true);
+    } finally {
+      abort.abort();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps active spooled lanes blocked across account restarts", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const firstAbort = new AbortController();
@@ -3533,9 +3617,11 @@ describe("TelegramPollingSession", () => {
     const watchdogHarness = installPollingStallWatchdogHarness();
 
     const log = vi.fn();
+    const setStatus = vi.fn();
     const session = createPollingSession({
       abortSignal: abort.signal,
       log,
+      setStatus,
     });
 
     try {
@@ -3567,6 +3653,14 @@ describe("TelegramPollingSession", () => {
       abort.abort();
       resolveFirstTask();
       await runPromise;
+
+      // The stall must reach channel status, not just the gateway log.
+      expect(
+        statusPatches(setStatus).some(
+          (patch) =>
+            patch.connected === false && String(patch.lastError).includes("Polling stall detected"),
+        ),
+      ).toBe(true);
     } finally {
       watchdogHarness.restore();
     }
@@ -3614,6 +3708,7 @@ describe("TelegramPollingSession", () => {
   it("logs an actionable duplicate-poller hint for getUpdates conflicts", async () => {
     const abort = new AbortController();
     const log = vi.fn();
+    const setStatus = vi.fn();
     const conflictError = Object.assign(
       new Error("Conflict: terminated by other getUpdates request"),
       {
@@ -3628,11 +3723,19 @@ describe("TelegramPollingSession", () => {
     const session = createPollingSession({
       abortSignal: abort.signal,
       log,
+      setStatus,
     });
 
     await session.runUntilAbort();
 
     expectLogIncludes(log, "Another OpenClaw gateway, script, or Telegram poller");
+    // The hint must reach channel status, not just the gateway log.
+    expect(
+      statusPatches(setStatus).some(
+        (patch) =>
+          patch.connected === false && String(patch.lastError).includes("Another OpenClaw gateway"),
+      ),
+    ).toBe(true);
   });
 
   it("logs polling cycle start after a transport rebuild", async () => {
