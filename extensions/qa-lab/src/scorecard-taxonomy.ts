@@ -457,9 +457,10 @@ export function buildQaScorecardTaxonomyReport(params: {
         });
         continue;
       }
-      const profileIds = profileCategoryIdsByCategoryId.get(categoryId) ?? new Set<string>();
-      profileIds.add(profile.id);
-      profileCategoryIdsByCategoryId.set(categoryId, profileIds);
+      const categoryProfileIds =
+        profileCategoryIdsByCategoryId.get(categoryId) ?? new Set<string>();
+      categoryProfileIds.add(profile.id);
+      profileCategoryIdsByCategoryId.set(categoryId, categoryProfileIds);
     }
 
     return {
