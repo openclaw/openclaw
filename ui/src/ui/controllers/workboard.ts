@@ -390,7 +390,6 @@ export type WorkboardUiState = {
   lastRefreshError: string | null;
   lastRefreshSource: WorkboardRefreshSource | null;
   pollRefreshInProgress: boolean;
-  suppressNextLifecycleSync: boolean;
   draftOpen: boolean;
   draftSaving: boolean;
   editingCardId: string | null;
@@ -417,6 +416,7 @@ const workboardStates = new WeakMap<WorkboardHost, WorkboardUiState>();
 const workboardLoadPromises = new WeakMap<WorkboardHost, Promise<boolean>>();
 const workboardLoadGenerations = new WeakMap<WorkboardHost, number>();
 const workboardTaskPollOffsets = new WeakMap<WorkboardHost, number>();
+const workboardTaskDiscoveryOffsets = new WeakMap<WorkboardHost, number>();
 const workboardPollingTimers = new WeakMap<WorkboardHost, ReturnType<typeof setTimeout>>();
 const workboardPollingEntries = new WeakMap<
   WorkboardHost,
@@ -436,6 +436,7 @@ const WORKBOARD_SESSION_LABEL_MAX_CHARS = 512;
 const WORKBOARD_STALE_SESSION_MS = 30 * 60 * 1000;
 const WORKBOARD_TASKS_LIST_LIMIT = 500;
 const WORKBOARD_TASK_POLL_BATCH_SIZE = 32;
+const WORKBOARD_TASK_DISCOVERY_BATCH_SIZE = 4;
 const WORKBOARD_TASK_LOOKUP_RETRY_DELAYS_MS = [100, 250, 500] as const;
 
 function nextWorkboardLoadGeneration(host: WorkboardHost): number {
@@ -476,7 +477,6 @@ function createDefaultState(): WorkboardUiState {
     lastRefreshError: null,
     lastRefreshSource: null,
     pollRefreshInProgress: false,
-    suppressNextLifecycleSync: false,
     draftOpen: false,
     draftSaving: false,
     editingCardId: null,
@@ -518,17 +518,6 @@ export function workboardHasActiveWrites(state: WorkboardUiState): boolean {
 
 function workboardHasActiveLoad(host: WorkboardHost): boolean {
   return workboardLoadPromises.has(host);
-}
-
-export function consumeWorkboardLifecycleSyncSuppression(state: WorkboardUiState): boolean {
-  if (state.pollRefreshInProgress) {
-    return true;
-  }
-  if (!state.suppressNextLifecycleSync) {
-    return false;
-  }
-  state.suppressNextLifecycleSync = false;
-  return true;
 }
 
 function hasWorkboardProofEvidence(card: WorkboardCard): boolean {
@@ -1348,6 +1337,25 @@ function taskMatchesCanonicalCardLink(task: WorkboardTaskSummary, card: Workboar
   return taskMatchesCard(task, card);
 }
 
+function selectRotatingBatch(
+  host: WorkboardHost,
+  items: readonly string[],
+  limit: number,
+  offsets: WeakMap<WorkboardHost, number>,
+): string[] {
+  if (items.length <= limit) {
+    offsets.set(host, 0);
+    return [...items];
+  }
+  const offset = (offsets.get(host) ?? 0) % items.length;
+  const batch = Array.from(
+    { length: limit },
+    (_, index) => items[(offset + index) % items.length],
+  ).filter((item): item is string => Boolean(item));
+  offsets.set(host, (offset + batch.length) % items.length);
+  return batch;
+}
+
 function selectWorkboardTaskPollIds(
   host: WorkboardHost,
   cards: readonly WorkboardCard[],
@@ -1371,36 +1379,59 @@ function selectWorkboardTaskPollIds(
       ids.push(taskId);
     }
   }
-  if (ids.length <= WORKBOARD_TASK_POLL_BATCH_SIZE) {
-    workboardTaskPollOffsets.set(host, 0);
-    return ids;
+  return selectRotatingBatch(host, ids, WORKBOARD_TASK_POLL_BATCH_SIZE, workboardTaskPollOffsets);
+}
+
+function selectWorkboardTaskDiscoverySessionKeys(
+  host: WorkboardHost,
+  cards: readonly WorkboardCard[],
+  previousTasksByCardId: ReadonlyMap<string, WorkboardTaskSummary>,
+): string[] {
+  const sessionKeys: string[] = [];
+  const seen = new Set<string>();
+  for (const card of cards) {
+    const previousTask = previousTasksByCardId.get(card.id);
+    const hasCanonicalTask =
+      normalizeString(card.taskId) ||
+      (previousTask ? taskMatchesCanonicalCardLink(previousTask, card) : false);
+    const sessionKey = workboardCardSessionKey(card);
+    if (card.status === "running" && !hasCanonicalTask && sessionKey && !seen.has(sessionKey)) {
+      seen.add(sessionKey);
+      sessionKeys.push(sessionKey);
+    }
   }
-  const offset = (workboardTaskPollOffsets.get(host) ?? 0) % ids.length;
-  const batch = Array.from(
-    { length: WORKBOARD_TASK_POLL_BATCH_SIZE },
-    (_, index) => ids[(offset + index) % ids.length],
-  ).filter((taskId): taskId is string => Boolean(taskId));
-  workboardTaskPollOffsets.set(host, (offset + batch.length) % ids.length);
-  return batch;
+  return selectRotatingBatch(
+    host,
+    sessionKeys,
+    WORKBOARD_TASK_DISCOVERY_BATCH_SIZE,
+    workboardTaskDiscoveryOffsets,
+  );
 }
 
 async function getWorkboardTaskPollBatch(
   client: GatewayBrowserClient,
   taskIds: readonly string[],
+  discoverySessionKeys: readonly string[],
 ): Promise<{ tasks: WorkboardTaskSummary[]; error: string | null }> {
-  const results = await Promise.allSettled(
-    taskIds.map(async (taskId) => {
+  const results = await Promise.allSettled([
+    ...taskIds.map(async (taskId) => {
       const payload = await client.request("tasks.get", { taskId });
-      return isRecord(payload) ? normalizeTaskSummary(payload.task) : null;
+      const task = isRecord(payload) ? normalizeTaskSummary(payload.task) : null;
+      return task ? [task] : [];
     }),
-  );
+    ...discoverySessionKeys.map(async (sessionKey) => {
+      const payload = await client.request("tasks.list", {
+        sessionKey,
+        limit: WORKBOARD_TASKS_LIST_LIMIT,
+      });
+      return normalizeTasksPage(payload).tasks;
+    }),
+  ]);
   const tasks: WorkboardTaskSummary[] = [];
   let error: string | null = null;
   for (const result of results) {
     if (result.status === "fulfilled") {
-      if (result.value) {
-        tasks.push(result.value);
-      }
+      tasks.push(...result.value);
     } else {
       error ??= formatError(result.reason);
     }
@@ -1574,6 +1605,11 @@ export async function loadWorkboard(params: {
               ? await getWorkboardTaskPollBatch(
                   client,
                   selectWorkboardTaskPollIds(params.host, state.cards, previousTasksByCardId),
+                  selectWorkboardTaskDiscoverySessionKeys(
+                    params.host,
+                    state.cards,
+                    previousTasksByCardId,
+                  ),
                 )
               : null;
           const taskSummaries = pollResult
@@ -1634,14 +1670,12 @@ export async function refreshWorkboard(params: {
   state.lastRefreshError = null;
   if (params.source === "poll") {
     state.pollRefreshInProgress = true;
-    state.suppressNextLifecycleSync = true;
   }
   params.requestUpdate?.();
   if (!params.client) {
     state.lastRefreshError = "Gateway client unavailable";
     if (params.source === "poll") {
       state.pollRefreshInProgress = false;
-      state.suppressNextLifecycleSync = true;
     }
     params.requestUpdate?.();
     return;
@@ -1664,7 +1698,6 @@ export async function refreshWorkboard(params: {
   } finally {
     if (params.source === "poll") {
       state.pollRefreshInProgress = false;
-      state.suppressNextLifecycleSync = true;
     }
     params.requestUpdate?.();
   }

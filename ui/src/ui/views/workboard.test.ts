@@ -777,12 +777,11 @@ describe("renderWorkboard", () => {
     }
   });
 
-  it("skips render-triggered lifecycle sync after a poll refresh", async () => {
+  it("skips lifecycle sync during a poll and reconciles after it completes", async () => {
     const host = {};
     const state = getWorkboardState(host);
     state.loaded = true;
     state.pollRefreshInProgress = true;
-    state.suppressNextLifecycleSync = true;
     state.cards = [
       {
         id: "card-1",
@@ -796,10 +795,11 @@ describe("renderWorkboard", () => {
         sessionKey: "agent:main:dashboard:1",
       },
     ];
-    const request = vi.fn(async () => ({
-      cards: state.cards,
-      statuses: ["running", "review"],
-    }));
+    const request = vi.fn(async (method: string) =>
+      method === "workboard.cards.update"
+        ? { card: { ...state.cards[0], status: "review" } }
+        : { cards: state.cards, statuses: ["running", "review"] },
+    );
     const container = document.createElement("div");
 
     render(
@@ -870,7 +870,13 @@ describe("renderWorkboard", () => {
     );
     await Promise.resolve();
 
-    expect(request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
+    expect(request).toHaveBeenCalledWith(
+      "workboard.cards.update",
+      expect.objectContaining({
+        id: "card-1",
+        patch: expect.objectContaining({ status: "review" }),
+      }),
+    );
   });
 
   it("can hide empty columns while keeping populated columns visible", () => {

@@ -6,7 +6,6 @@ import {
   addWorkboardCardComment,
   archiveWorkboardCard,
   configureWorkboardPolling,
-  consumeWorkboardLifecycleSyncSuppression,
   deleteWorkboardCard,
   dispatchWorkboard,
   filterWorkboardCardsForPreset,
@@ -2320,7 +2319,6 @@ function renderColumn(props: WorkboardProps, status: WorkboardStatus, cards: Wor
 
 export function renderWorkboard(props: WorkboardProps) {
   const state = getWorkboardState(props.host);
-  const suppressLifecycleSync = consumeWorkboardLifecycleSyncSuppression(state);
   configureWorkboardPolling({
     host: props.host,
     client: props.client,
@@ -2334,7 +2332,7 @@ export function renderWorkboard(props: WorkboardProps) {
       requestUpdate: props.onRequestUpdate,
       refreshDiagnostics: canMutate(props),
     });
-    if (!suppressLifecycleSync && !state.dispatching) {
+    if (!state.pollRefreshInProgress && !state.dispatching) {
       void syncWorkboardLifecycle({
         host: props.host,
         client: props.client,

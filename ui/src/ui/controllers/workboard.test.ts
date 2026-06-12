@@ -6,7 +6,6 @@ import {
   archiveWorkboardCard,
   captureSessionToWorkboard,
   configureWorkboardPolling,
-  consumeWorkboardLifecycleSyncSuppression,
   createWorkboardCard,
   deleteWorkboardCard,
   dispatchWorkboard,
@@ -165,31 +164,29 @@ describe("workboard controller", () => {
     });
   });
 
-  it("records refresh state and suppresses lifecycle sync for poll refreshes", async () => {
+  it("records poll refresh state until the final reconciliation render", async () => {
     const host = {};
     const client = createClient({
       "workboard.cards.list": { cards: [sampleCard], statuses: ["todo", "done"] },
       "tasks.list": { tasks: [] },
     });
-    const suppressions: boolean[] = [];
+    const pollStates: boolean[] = [];
 
     await refreshWorkboard({
       host,
       client: client as never,
       source: "poll",
-      requestUpdate: () =>
-        suppressions.push(consumeWorkboardLifecycleSyncSuppression(getWorkboardState(host))),
+      requestUpdate: () => pollStates.push(getWorkboardState(host).pollRefreshInProgress),
     });
 
     const state = getWorkboardState(host);
     expect(client.request).toHaveBeenCalledWith("workboard.cards.list", {});
-    expect(suppressions.length).toBeGreaterThanOrEqual(3);
-    expect(suppressions.every(Boolean)).toBe(true);
+    expect(pollStates.slice(0, -1).every(Boolean)).toBe(true);
+    expect(pollStates.at(-1)).toBe(false);
     expect(state.pollRefreshInProgress).toBe(false);
     expect(state.lastRefreshSource).toBe("poll");
     expect(state.lastRefreshAt).toEqual(expect.any(Number));
     expect(state.lastRefreshError).toBeNull();
-    expect(consumeWorkboardLifecycleSyncSuppression(state)).toBe(false);
   });
 
   it("does not mark a disconnected refresh as successful", async () => {
@@ -438,6 +435,56 @@ describe("workboard controller", () => {
     expect(firstBatch).toHaveLength(32);
     expect(secondBatch).toHaveLength(32);
     expect(secondBatch).not.toEqual(firstBatch);
+  });
+
+  it("rediscovers a bounded batch of running task links during polls", async () => {
+    const host = {};
+    const cards = Array.from({ length: 6 }, (_, index) => ({
+      ...sampleCard,
+      id: `card-${index}`,
+      status: "running" as const,
+      sessionKey: `subagent:workboard-default-card-${index}`,
+      runId: `run-${index}`,
+    }));
+    const client = createClient((method, params) => {
+      if (method === "workboard.cards.list") {
+        return { cards, statuses: ["todo", "running", "done"] };
+      }
+      if (method === "tasks.list") {
+        const sessionKey = (params as { sessionKey: string }).sessionKey;
+        const index = sessionKey.at(-1);
+        return {
+          tasks: [
+            {
+              ...sampleTask,
+              id: `task-${index}`,
+              taskId: `task-${index}`,
+              childSessionKey: sessionKey,
+              runId: `run-${index}`,
+            },
+          ],
+        };
+      }
+      return {};
+    });
+
+    await refreshWorkboard({ host, client: client as never, source: "poll" });
+    const firstDiscoveryCalls = client.request.mock.calls.filter(
+      ([method]) => method === "tasks.list",
+    );
+    expect(firstDiscoveryCalls).toHaveLength(4);
+    expect(firstDiscoveryCalls[0]?.[1]).toMatchObject({
+      sessionKey: "subagent:workboard-default-card-0",
+      limit: 500,
+    });
+
+    vi.clearAllMocks();
+    await refreshWorkboard({ host, client: client as never, source: "poll" });
+    const secondDiscoveryCalls = client.request.mock.calls.filter(
+      ([method]) => method === "tasks.list",
+    );
+    expect(secondDiscoveryCalls).toHaveLength(2);
+    expect(getWorkboardState(host).cards.every((card) => Boolean(card.taskId))).toBe(true);
   });
 
   it("defers polling while a card is being dragged", async () => {
