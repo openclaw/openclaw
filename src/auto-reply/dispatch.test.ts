@@ -755,7 +755,7 @@ describe("withReplyDispatcher", () => {
 
     expect(customBeforeDeliver).toHaveBeenCalledTimes(2);
     expect(customBeforeDeliver).toHaveBeenCalledWith({ text: "original" }, { kind: "final" });
-    expect(runMessageSending).not.toHaveBeenCalled();
+    expect(runMessageSending).toHaveBeenCalledTimes(2);
     expect(runReplyPayloadSending).toHaveBeenCalledTimes(2);
     expect(runReplyPayloadSending).toHaveBeenCalledWith(
       {
@@ -772,7 +772,7 @@ describe("withReplyDispatcher", () => {
         runId: undefined,
       },
     );
-    expect(payload).toEqual({ text: "original [custom] [plugin]" });
+    expect(payload).toEqual({ text: "message hook" });
     expect(payloadWithMetadata ? getReplyPayloadMetadata(payloadWithMetadata) : undefined).toEqual({
       assistantMessageIndex: 5,
     });
