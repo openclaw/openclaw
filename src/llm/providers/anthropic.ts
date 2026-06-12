@@ -1080,6 +1080,7 @@ function buildParams(
       isOAuthTokenResult,
       cacheControl,
       messageCacheControlLimit,
+      options?.thinkingEnabled,
     ),
     max_tokens: options?.maxTokens ?? model.maxTokens,
     stream: true,
@@ -1166,6 +1167,7 @@ function convertMessages(
   isOAuthTokenValue: boolean,
   cacheControl?: CacheControlEphemeral,
   messageCacheControlLimit = 4,
+  thinkingEnabled?: boolean,
 ): MessageParam[] {
   const params: MessageParam[] = [];
 
@@ -1227,6 +1229,18 @@ function convertMessages(
             text: sanitizeSurrogates(block.text),
           });
         } else if (block.type === "thinking") {
+          // When thinking is explicitly disabled for the current request, Anthropic
+          // rejects history containing thinking/redacted_thinking blocks. Strip them
+          // and convert to plain text where possible to preserve context.
+          if (thinkingEnabled === false) {
+            if (!block.redacted && block.thinking?.trim()) {
+              blocks.push({
+                type: "text",
+                text: sanitizeSurrogates(block.thinking),
+              });
+            }
+            continue;
+          }
           // Redacted thinking: pass the opaque payload back as redacted_thinking
           if (block.redacted) {
             blocks.push({

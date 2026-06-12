@@ -242,6 +242,100 @@ describe("Anthropic provider", () => {
     expect(result.responseModel).toBe("claude-fable-5");
   });
 
+  it("strips thinking blocks from history when thinking is explicitly disabled", async () => {
+    let capturedPayload: unknown;
+    const client = {
+      messages: {
+        create: vi.fn(() => ({
+          asResponse: () =>
+            Promise.resolve(
+              createSseResponse([
+                {
+                  type: "message_start",
+                  message: {
+                    id: "msg_1",
+                    model: "claude-sonnet-4-6",
+                    usage: { input_tokens: 1, output_tokens: 0 },
+                  },
+                },
+                {
+                  type: "message_delta",
+                  delta: { stop_reason: "end_turn" },
+                  usage: { input_tokens: 1, output_tokens: 1 },
+                },
+                { type: "message_stop" },
+              ]),
+            ),
+        })),
+      },
+    };
+
+    const stream = streamAnthropic(
+      makeAnthropicModel(),
+      {
+        messages: [
+          { role: "user", content: "hello", timestamp: 0 },
+          {
+            role: "assistant",
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-6",
+            stopReason: "stop",
+            timestamp: 0,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            content: [
+              {
+                type: "thinking",
+                thinking: "deep reasoning about the answer",
+                thinkingSignature: "sig_1",
+              },
+              {
+                type: "text",
+                text: "Here is the answer.",
+              },
+            ],
+          },
+          { role: "user", content: "again", timestamp: 0 },
+        ],
+      },
+      {
+        apiKey: "***",
+        client: client as never,
+        thinkingEnabled: false,
+        onPayload: (payload) => {
+          capturedPayload = payload;
+        },
+      },
+    );
+
+    await stream.result();
+
+    const payload = capturedPayload as { messages: Array<{ role: string; content: unknown[] }> };
+    const assistantMessage = payload.messages.find((message) => message.role === "assistant");
+    // Thinking block with signature should be converted to plain text, not sent as thinking type
+    expect(assistantMessage?.content).toEqual([
+      {
+        type: "text",
+        text: "deep reasoning about the answer",
+      },
+      {
+        type: "text",
+        text: "Here is the answer.",
+      },
+    ]);
+    // No thinking or redacted_thinking blocks should be present
+    const contentStr = JSON.stringify(assistantMessage?.content);
+    expect(contentStr).not.toContain('"type":"thinking"');
+    expect(contentStr).not.toContain('"type":"redacted_thinking"');
+  });
+
   it.each([
     ["anthropic", "sk-ant-provider"],
     ["anthropic-vertex", "vertex-token"],
