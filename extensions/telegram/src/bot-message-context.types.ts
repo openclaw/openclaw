@@ -25,6 +25,7 @@ export type TelegramMessageContextOptions = {
   receivedAtMs?: number;
   ingressBuffer?: "inbound-debounce" | "text-fragment";
   promptContextMinTimestampMs?: number;
+  spooledReplay?: boolean;
   /**
    * Pin-from-here mirror turn: a synthetic inbound re-homing an already-authorized
    * session's turn onto this chat. The SENDER allowFrom gate is skipped (the pin was

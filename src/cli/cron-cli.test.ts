@@ -212,6 +212,9 @@ function mockCronEditJobLookup(schedule: unknown): void {
           jobs: [{ id: "job-1", schedule }],
         };
       }
+      if (method === "cron.get") {
+        return { id: "job-1", schedule };
+      }
       return { ok: true, params };
     },
   );
@@ -1498,11 +1501,10 @@ describe("cron cli", () => {
   });
 
   it("sets explicit stagger for cron edit", async () => {
-    await runCronCommand(["cron", "edit", "job-1", "--cron", "0 * * * *", "--stagger", "30s"]);
-
-    const patch = getGatewayCallParams<{
-      patch?: { schedule?: { kind?: string; staggerMs?: number } };
-    }>("cron.update");
+    const patch = await runCronEditWithScheduleLookup(
+      { kind: "cron", expr: "0 */2 * * *", tz: "UTC", staggerMs: 300_000 },
+      ["--cron", "0 * * * *", "--stagger", "30s"],
+    );
     expect(patch?.patch?.schedule?.kind).toBe("cron");
     expect(patch?.patch?.schedule?.staggerMs).toBe(30_000);
   });
