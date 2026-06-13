@@ -121,7 +121,7 @@ describe("channel plugin blockers", () => {
       },
     ]);
     expect(collectConfiguredChannelPluginBlockerWarnings(hits)).toEqual([
-      '- channels.discord: channel is configured, but external plugin "discord" is installed but omitted from plugins.allow. Include "discord" in plugins.allow or remove the restrictive allowlist. Fix plugin enablement before relying on setup guidance for this channel.',
+      '- channels.discord: channel is configured, but external plugin "discord" is installed but omitted from plugins.allow. Include "discord" in plugins.allow. Fix plugin enablement before relying on setup guidance for this channel.',
     ]);
   });
 

@@ -147,7 +147,7 @@ vi.mock("./channel-plugin-blockers.js", () => ({
           : hit.reason === "plugins disabled"
             ? "plugins.enabled=false blocks channel plugins globally."
             : hit.reason === "not in allowlist"
-              ? `external plugin "${hit.pluginId}" is installed but omitted from plugins.allow. Include "${hit.pluginId}" in plugins.allow or remove the restrictive allowlist.`
+              ? `external plugin "${hit.pluginId}" is installed but omitted from plugins.allow. Include "${hit.pluginId}" in plugins.allow.`
               : `external plugin "${hit.pluginId}" is installed without explicit trust. Add plugins.entries.${hit.pluginId}.enabled=true.`;
       return `- channels.${hit.channelId}: channel is configured, but ${reason}`;
     }),
