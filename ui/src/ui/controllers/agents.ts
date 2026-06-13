@@ -251,10 +251,13 @@ export async function setDefaultAgent(
   state: AgentsConfigSaveState,
   agentId: string,
 ): Promise<void> {
-  // Set Default is a one-click action: stage the canonical agents.list[].default flag,
-  // then persist through the shared save path. Staging the form draft alone is silently
-  // dropped on refresh, so without the save the default never sticks (impact:data-loss).
+  const hadPendingConfigDraft = state.configFormDirty;
+  // Set Default is a one-click action on a clean draft, but saveConfig serializes the
+  // whole form. If other edits were already dirty, keep them staged for the explicit
+  // Save button instead of committing unrelated pending config changes.
   if (stageDefaultAgentConfigEntry(state, agentId)) {
-    await saveAgentsConfig(state);
+    if (!hadPendingConfigDraft && state.configFormDirty) {
+      await saveAgentsConfig(state);
+    }
   }
 }

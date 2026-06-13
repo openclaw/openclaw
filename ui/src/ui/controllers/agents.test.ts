@@ -441,6 +441,8 @@ describe("setDefaultAgent", () => {
   it("stages the canonical default flag and persists it through config.set", async () => {
     const { state, request } = createSaveState();
     state.configForm = { agents: { list: [{ id: "main" }, { id: "kimi" }] } };
+    state.configFormOriginal = { agents: { list: [{ id: "main" }, { id: "kimi" }] } };
+    state.configFormDirty = false;
     request
       .mockResolvedValueOnce(undefined)
       .mockResolvedValueOnce({
@@ -477,5 +479,29 @@ describe("setDefaultAgent", () => {
     await setDefaultAgent(state, "ghost");
 
     expect(request).not.toHaveBeenCalled();
+  });
+
+  it("does not persist unrelated dirty agent config drafts", async () => {
+    const { state, request } = createSaveState();
+    state.configFormDirty = true;
+    state.configFormOriginal = { agents: { list: [{ id: "main" }, { id: "kimi" }] } };
+    state.configForm = {
+      agents: {
+        list: [{ id: "main", model: "gpt-5.5" }, { id: "kimi" }],
+      },
+    };
+
+    await setDefaultAgent(state, "kimi");
+
+    expect(request).not.toHaveBeenCalled();
+    expect(state.configForm).toEqual({
+      agents: {
+        list: [
+          { id: "main", model: "gpt-5.5" },
+          { id: "kimi", default: true },
+        ],
+      },
+    });
+    expect(state.configFormDirty).toBe(true);
   });
 });
