@@ -8,7 +8,10 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { ConnectParams } from "../../packages/gateway-protocol/src/index.js";
 import type { NodePairingPairedNode, NodePairingRequestInput } from "../infra/node-pairing.js";
-import { reconcileNodePairingOnConnect } from "./node-connect-reconcile.js";
+import {
+  NodePairingDeviceMismatchError,
+  reconcileNodePairingOnConnect,
+} from "./node-connect-reconcile.js";
 
 function makeNodeConnectParams(overrides?: Partial<ConnectParams>): ConnectParams {
   return {
@@ -49,6 +52,7 @@ function expectNodePairingRequest(
 ) {
   expect(requestPairing).toHaveBeenCalledWith({
     nodeId: "openclaw-ios",
+    deviceId: undefined,
     clientId: undefined,
     clientMode: undefined,
     displayName: undefined,
@@ -116,6 +120,134 @@ describe("reconcileNodePairingOnConnect", () => {
         permissions: { camera: true },
       }),
     );
+  });
+
+  it("uses explicit node-host node ids for pending pairing requests", async () => {
+    const requestPairing = makePendingPairingRequest("req-custom-node");
+
+    const result = await reconcileNodePairingOnConnect({
+      cfg: {} as never,
+      connectParams: makeNodeConnectParams({
+        nodeId: "my-mac-node",
+        device: {
+          id: "device-fingerprint",
+          publicKey: "public-key",
+          signature: "signature",
+          signedAt: 1,
+          nonce: "nonce",
+        },
+        client: {
+          id: GATEWAY_CLIENT_IDS.NODE_HOST,
+          version: "test",
+          platform: "macos",
+          deviceFamily: "Mac",
+          mode: GATEWAY_CLIENT_MODES.NODE,
+        },
+      }),
+      pairedNode: null,
+      requestPairing,
+    });
+
+    expect(result.nodeId).toBe("my-mac-node");
+    expectNodePairingRequest(requestPairing, {
+      nodeId: "my-mac-node",
+      deviceId: "device-fingerprint",
+      platform: "macos",
+      deviceFamily: "Mac",
+    });
+  });
+
+  it("ignores explicit node ids from non-node-host clients", async () => {
+    const requestPairing = makePendingPairingRequest("req-non-host-node-id");
+
+    const result = await reconcileNodePairingOnConnect({
+      cfg: {} as never,
+      connectParams: makeNodeConnectParams({
+        nodeId: "spoofed-node-id",
+        device: {
+          id: "device-fingerprint",
+          publicKey: "public-key",
+          signature: "signature",
+          signedAt: 1,
+          nonce: "nonce",
+        },
+      }),
+      pairedNode: null,
+      requestPairing,
+    });
+
+    expect(result.nodeId).toBe("device-fingerprint");
+    expectNodePairingRequest(requestPairing, {
+      nodeId: "device-fingerprint",
+      deviceId: "device-fingerprint",
+    });
+  });
+
+  it("rejects approved custom node ids bound to a different device", async () => {
+    const requestPairing = makePendingPairingRequest("req-device-mismatch");
+
+    await expect(
+      reconcileNodePairingOnConnect({
+        cfg: {} as never,
+        connectParams: makeNodeConnectParams({
+          nodeId: "my-mac-node",
+          device: {
+            id: "other-device",
+            publicKey: "public-key",
+            signature: "signature",
+            signedAt: 1,
+            nonce: "nonce",
+          },
+          client: {
+            id: GATEWAY_CLIENT_IDS.NODE_HOST,
+            version: "test",
+            platform: "macos",
+            deviceFamily: "Mac",
+            mode: GATEWAY_CLIENT_MODES.NODE,
+          },
+        }),
+        pairedNode: makePairedNode({
+          nodeId: "my-mac-node",
+          deviceId: "original-device",
+        }),
+        requestPairing,
+      }),
+    ).rejects.toBeInstanceOf(NodePairingDeviceMismatchError);
+    expect(requestPairing).not.toHaveBeenCalled();
+  });
+
+  it("allows legacy paired nodes without stored device ids when node id matches device id", async () => {
+    const requestPairing = makePendingPairingRequest("req-legacy-device-id");
+
+    const result = await reconcileNodePairingOnConnect({
+      cfg: {} as never,
+      connectParams: makeNodeConnectParams({
+        commands: [],
+        device: {
+          id: "legacy-device-id",
+          publicKey: "public-key",
+          signature: "signature",
+          signedAt: 1,
+          nonce: "nonce",
+        },
+        client: {
+          id: GATEWAY_CLIENT_IDS.NODE_HOST,
+          version: "test",
+          platform: "macos",
+          deviceFamily: "Mac",
+          mode: GATEWAY_CLIENT_MODES.NODE,
+        },
+      }),
+      pairedNode: makePairedNode({
+        nodeId: "legacy-device-id",
+        deviceId: undefined,
+        commands: [],
+      }),
+      requestPairing,
+    });
+
+    expect(result.nodeId).toBe("legacy-device-id");
+    expect(requestPairing).not.toHaveBeenCalled();
   });
 
   it.each([

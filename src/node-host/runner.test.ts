@@ -1,5 +1,5 @@
 /** Tests node-host runner command parsing, timeout, and plugin dispatch behavior. */
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayClientOptions } from "../gateway/client.js";
 import {
   resolveNodeHostGatewayDeviceFamily,
@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   ensureNodeHostConfig: vi.fn(async () => ({
     version: 1,
     nodeId: "node-test",
+    nodeIdSource: "generated" as "generated" | "user",
   })),
   saveNodeHostConfig: vi.fn(async () => undefined),
   getRuntimeConfig: vi.fn(() => ({
@@ -74,6 +75,16 @@ vi.mock("./plugin-node-host.js", () => ({
 }));
 
 describe("runNodeHost", () => {
+  beforeEach(() => {
+    mocks.capturedGatewayClientOptions.length = 0;
+    mocks.ensureNodeHostConfig.mockResolvedValue({
+      version: 1,
+      nodeId: "node-test",
+      nodeIdSource: "generated",
+    });
+    mocks.saveNodeHostConfig.mockClear();
+  });
+
   it("maps runtime platforms to gateway platform ids", () => {
     expect(resolveNodeHostGatewayPlatform("darwin")).toBe("macos");
     expect(resolveNodeHostGatewayPlatform("win32")).toBe("windows");
@@ -101,5 +112,44 @@ describe("runNodeHost", () => {
     expect(mocks.capturedGatewayClientOptions[0]?.deviceFamily).toBe(
       resolveNodeHostGatewayDeviceFamily(process.platform),
     );
+    expect(mocks.capturedGatewayClientOptions[0]?.instanceId).toBe("node-test");
+    expect(mocks.capturedGatewayClientOptions[0]?.nodeId).toBeUndefined();
+  });
+
+  it("passes an explicit node id as the user-visible gateway node id", async () => {
+    await expect(
+      runNodeHost({
+        gatewayHost: "127.0.0.1",
+        gatewayPort: 18789,
+        nodeId: "my-mac-node",
+      }),
+    ).rejects.toThrow("event loop readiness timeout");
+
+    expect(mocks.capturedGatewayClientOptions[0]?.instanceId).toBe("my-mac-node");
+    expect(mocks.capturedGatewayClientOptions[0]?.nodeId).toBe("my-mac-node");
+    expect(mocks.saveNodeHostConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nodeId: "my-mac-node",
+        nodeIdSource: "user",
+      }),
+    );
+  });
+
+  it("keeps a persisted user node id visible on reconnect", async () => {
+    mocks.ensureNodeHostConfig.mockResolvedValue({
+      version: 1,
+      nodeId: "my-mac-node",
+      nodeIdSource: "user",
+    });
+
+    await expect(
+      runNodeHost({
+        gatewayHost: "127.0.0.1",
+        gatewayPort: 18789,
+      }),
+    ).rejects.toThrow("event loop readiness timeout");
+
+    expect(mocks.capturedGatewayClientOptions[0]?.instanceId).toBe("my-mac-node");
+    expect(mocks.capturedGatewayClientOptions[0]?.nodeId).toBe("my-mac-node");
   });
 });

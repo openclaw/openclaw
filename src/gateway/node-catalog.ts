@@ -9,6 +9,7 @@ import type { NodeSession } from "./node-registry.js";
 
 type KnownNodeDevicePairingSource = {
   nodeId: string;
+  deviceId: string;
   displayName?: string;
   platform?: string;
   clientId?: string;
@@ -21,6 +22,7 @@ type KnownNodeDevicePairingSource = {
 
 type KnownNodeApprovedSource = {
   nodeId: string;
+  deviceId?: string;
   displayName?: string;
   platform?: string;
   version?: string;
@@ -57,6 +59,7 @@ function uniqueSortedStrings(...items: Array<readonly unknown[] | undefined>): s
 function buildDevicePairingSource(entry: PairedDevice): KnownNodeDevicePairingSource {
   return {
     nodeId: entry.deviceId,
+    deviceId: entry.deviceId,
     displayName: entry.displayName,
     platform: entry.platform,
     clientId: entry.clientId,
@@ -71,6 +74,7 @@ function buildDevicePairingSource(entry: PairedDevice): KnownNodeDevicePairingSo
 function buildApprovedNodeSource(entry: NodePairingPairedNode): KnownNodeApprovedSource {
   return {
     nodeId: entry.nodeId,
+    deviceId: entry.deviceId,
     displayName: entry.displayName,
     platform: entry.platform,
     version: entry.version,
@@ -173,21 +177,82 @@ function compareKnownNodes(left: NodeListNode, right: NodeListNode): number {
   return left.nodeId.localeCompare(right.nodeId);
 }
 
+function normalizeOptionalNodeId(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function addDeviceNodeAlias(
+  aliases: Map<string, string>,
+  params: { deviceId?: string; nodeId: string; overwrite: boolean },
+): void {
+  const deviceId = normalizeOptionalNodeId(params.deviceId);
+  const nodeId = normalizeOptionalNodeId(params.nodeId);
+  if (!deviceId || !nodeId || deviceId === nodeId || (!params.overwrite && aliases.has(deviceId))) {
+    return;
+  }
+  aliases.set(deviceId, nodeId);
+}
+
+function buildDeviceNodeAliases(params: {
+  pairedNodes: readonly NodePairingPairedNode[];
+  connectedNodes: readonly NodeSession[];
+}): Map<string, string> {
+  const aliases = new Map<string, string>();
+  for (const entry of params.connectedNodes) {
+    addDeviceNodeAlias(aliases, {
+      deviceId: entry.deviceId,
+      nodeId: entry.nodeId,
+      overwrite: false,
+    });
+  }
+  for (const entry of params.pairedNodes) {
+    addDeviceNodeAlias(aliases, {
+      deviceId: entry.deviceId,
+      nodeId: entry.nodeId,
+      overwrite: true,
+    });
+  }
+  return aliases;
+}
+
+function isStaleLiveDeviceAlias(
+  entry: NodeSession,
+  aliasesByDeviceId: ReadonlyMap<string, string>,
+): boolean {
+  const deviceId = normalizeOptionalNodeId(entry.deviceId);
+  return Boolean(deviceId && entry.nodeId === deviceId && aliasesByDeviceId.has(deviceId));
+}
+
 /** Builds a node catalog keyed by node id from pairing stores and live sessions. */
 export function createKnownNodeCatalog(params: {
   pairedDevices: readonly PairedDevice[];
   pairedNodes?: readonly NodePairingPairedNode[];
   connectedNodes: readonly NodeSession[];
 }): KnownNodeCatalog {
-  const devicePairingById = new Map(
-    params.pairedDevices
-      .filter((entry) => hasEffectivePairedDeviceRole(entry, "node"))
-      .map((entry) => [entry.deviceId, buildDevicePairingSource(entry)]),
-  );
+  const pairedNodes = params.pairedNodes ?? [];
+  const aliasesByDeviceId = buildDeviceNodeAliases({
+    pairedNodes,
+    connectedNodes: params.connectedNodes,
+  });
+  const devicePairingById = new Map<string, KnownNodeDevicePairingSource>();
+  for (const entry of params.pairedDevices) {
+    if (!hasEffectivePairedDeviceRole(entry, "node")) {
+      continue;
+    }
+    devicePairingById.set(
+      aliasesByDeviceId.get(entry.deviceId) ?? entry.deviceId,
+      buildDevicePairingSource(entry),
+    );
+  }
   const nodePairingById = new Map(
-    (params.pairedNodes ?? []).map((entry) => [entry.nodeId, buildApprovedNodeSource(entry)]),
+    pairedNodes.map((entry) => [entry.nodeId, buildApprovedNodeSource(entry)]),
   );
-  const liveById = new Map(params.connectedNodes.map((entry) => [entry.nodeId, entry]));
+  const liveById = new Map(
+    params.connectedNodes
+      .filter((entry) => !isStaleLiveDeviceAlias(entry, aliasesByDeviceId))
+      .map((entry) => [entry.nodeId, entry]),
+  );
   const nodeIds = new Set<string>([
     ...devicePairingById.keys(),
     ...nodePairingById.keys(),

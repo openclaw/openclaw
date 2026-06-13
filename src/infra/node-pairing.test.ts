@@ -153,6 +153,265 @@ describe("node pairing tokens", () => {
     });
   });
 
+  test("persists node-host device binding through approval", async () => {
+    await withNodePairingDir(async (baseDir) => {
+      const request = await requestNodePairing(
+        {
+          nodeId: "my-mac-node",
+          deviceId: "device-fingerprint",
+          platform: "macos",
+        },
+        baseDir,
+      );
+
+      expect(request.request.deviceId).toBe("device-fingerprint");
+
+      await approveNodePairing(
+        request.request.requestId,
+        { callerScopes: ["operator.pairing"] },
+        baseDir,
+      );
+
+      const paired = await getPairedNode("my-mac-node", baseDir);
+      expect(paired?.deviceId).toBe("device-fingerprint");
+    });
+  });
+
+  test("rekeys stale same-device approvals to the approved custom node id", async () => {
+    await withNodePairingDir(async (baseDir) => {
+      const deviceRequest = await requestNodePairing(
+        {
+          nodeId: "device-fingerprint",
+          deviceId: "device-fingerprint",
+          platform: "macos",
+          commands: ["screen.snapshot"],
+        },
+        baseDir,
+      );
+      const deviceApproval = await approveNodePairing(
+        deviceRequest.request.requestId,
+        { callerScopes: ["operator.pairing", "operator.write"] },
+        baseDir,
+      );
+      const deviceRecord = requireRecord(deviceApproval);
+      const deviceNode = requireRecord(deviceRecord.node);
+
+      const customRequest = await requestNodePairing(
+        {
+          nodeId: "my-mac-node",
+          deviceId: "device-fingerprint",
+          platform: "macos",
+          commands: ["screen.snapshot", "system.run"],
+        },
+        baseDir,
+      );
+      const customApproval = await approveNodePairing(
+        customRequest.request.requestId,
+        { callerScopes: ["operator.pairing", "operator.write", "operator.admin"] },
+        baseDir,
+      );
+      const customRecord = requireRecord(customApproval);
+      const customNode = requireRecord(customRecord.node);
+
+      await expect(getPairedNode("device-fingerprint", baseDir)).resolves.toBeNull();
+      const paired = await getPairedNode("my-mac-node", baseDir);
+      expect(paired?.deviceId).toBe("device-fingerprint");
+      expect(customNode.createdAtMs).toBe(deviceNode.createdAtMs);
+
+      const pairing = await listNodePairing(baseDir);
+      expect(pairing.paired.map((entry) => entry.nodeId)).toEqual(["my-mac-node"]);
+    });
+  });
+
+  test("supersedes same-device pending requests when the visible node id changes", async () => {
+    await withNodePairingDir(async (baseDir) => {
+      const deviceRequest = await requestNodePairing(
+        {
+          nodeId: "device-fingerprint",
+          deviceId: "device-fingerprint",
+          platform: "macos",
+          commands: ["screen.snapshot"],
+        },
+        baseDir,
+      );
+
+      const customRequest = await requestNodePairing(
+        {
+          nodeId: "my-mac-node",
+          deviceId: "device-fingerprint",
+          platform: "macos",
+          commands: ["screen.snapshot"],
+        },
+        baseDir,
+      );
+
+      expect(customRequest.created).toBe(true);
+      expect(customRequest.request.nodeId).toBe("my-mac-node");
+      expect(customRequest.superseded).toEqual([
+        { requestId: deviceRequest.request.requestId, nodeId: "device-fingerprint" },
+      ]);
+
+      const pairing = await listNodePairing(baseDir);
+      expect(pairing.pending.map((entry) => entry.requestId)).toEqual([
+        customRequest.request.requestId,
+      ]);
+      await expect(
+        approveNodePairing(
+          deviceRequest.request.requestId,
+          { callerScopes: ["operator.pairing", "operator.write"] },
+          baseDir,
+        ),
+      ).resolves.toBeNull();
+
+      await approveNodePairing(
+        customRequest.request.requestId,
+        { callerScopes: ["operator.pairing", "operator.write"] },
+        baseDir,
+      );
+      await expect(getPairedNode("device-fingerprint", baseDir)).resolves.toBeNull();
+      expect((await getPairedNode("my-mac-node", baseDir))?.deviceId).toBe("device-fingerprint");
+    });
+  });
+
+  test("keeps unrelated legacy pending requests when approving without a device id", async () => {
+    await withNodePairingDir(async (baseDir) => {
+      const first = await requestNodePairing(
+        {
+          nodeId: "legacy-node-a",
+          platform: "darwin",
+        },
+        baseDir,
+      );
+      const second = await requestNodePairing(
+        {
+          nodeId: "legacy-node-b",
+          platform: "darwin",
+        },
+        baseDir,
+      );
+
+      await approveNodePairing(
+        first.request.requestId,
+        { callerScopes: ["operator.pairing"] },
+        baseDir,
+      );
+
+      const pairing = await listNodePairing(baseDir);
+      expect(pairing.pending.map((entry) => entry.requestId)).toEqual([second.request.requestId]);
+      expect(pairing.paired.map((entry) => entry.nodeId)).toEqual(["legacy-node-a"]);
+    });
+  });
+
+  test("preserves an existing device binding when approving an unbound same-node request", async () => {
+    await withNodePairingDir(async (baseDir) => {
+      const initial = await requestNodePairing(
+        {
+          nodeId: "my-mac-node",
+          deviceId: "device-fingerprint",
+          platform: "macos",
+          commands: ["screen.snapshot"],
+        },
+        baseDir,
+      );
+      await approveNodePairing(
+        initial.request.requestId,
+        { callerScopes: ["operator.pairing", "operator.write"] },
+        baseDir,
+      );
+
+      const upgrade = await requestNodePairing(
+        {
+          nodeId: "my-mac-node",
+          platform: "macos",
+          commands: ["screen.snapshot", "system.run"],
+        },
+        baseDir,
+      );
+      await approveNodePairing(
+        upgrade.request.requestId,
+        { callerScopes: ["operator.pairing", "operator.write", "operator.admin"] },
+        baseDir,
+      );
+
+      const paired = await getPairedNode("my-mac-node", baseDir);
+      expect(paired?.deviceId).toBe("device-fingerprint");
+      expect(paired?.commands).toEqual(["screen.snapshot", "system.run"]);
+    });
+  });
+
+  test("keeps conflicting pending device bindings separate until approval", async () => {
+    await withNodePairingDir(async (baseDir) => {
+      const first = await requestNodePairing(
+        {
+          nodeId: "shared-custom-node",
+          deviceId: "device-a",
+          platform: "macos",
+        },
+        baseDir,
+      );
+      const second = await requestNodePairing(
+        {
+          nodeId: "shared-custom-node",
+          deviceId: "device-b",
+          platform: "macos",
+        },
+        baseDir,
+      );
+
+      expect(second.created).toBe(true);
+      expect(second.request.requestId).not.toBe(first.request.requestId);
+
+      let pairing = await listNodePairing(baseDir);
+      expect(pairing.pending.filter((entry) => entry.nodeId === "shared-custom-node")).toHaveLength(
+        2,
+      );
+
+      await approveNodePairing(
+        first.request.requestId,
+        { callerScopes: ["operator.pairing"] },
+        baseDir,
+      );
+
+      pairing = await listNodePairing(baseDir);
+      expect(pairing.pending.filter((entry) => entry.nodeId === "shared-custom-node")).toHaveLength(
+        0,
+      );
+      expect((await getPairedNode("shared-custom-node", baseDir))?.deviceId).toBe("device-a");
+    });
+  });
+
+  test("returns superseded pending requests when one conflicting device is approved", async () => {
+    await withNodePairingDir(async (baseDir) => {
+      const first = await requestNodePairing(
+        {
+          nodeId: "shared-custom-node",
+          deviceId: "device-a",
+          platform: "macos",
+        },
+        baseDir,
+      );
+      const second = await requestNodePairing(
+        {
+          nodeId: "shared-custom-node",
+          deviceId: "device-b",
+          platform: "macos",
+        },
+        baseDir,
+      );
+
+      await expect(
+        approveNodePairing(
+          first.request.requestId,
+          { callerScopes: ["operator.pairing"] },
+          baseDir,
+        ),
+      ).resolves.toMatchObject({
+        requestId: first.request.requestId,
+        superseded: [{ requestId: second.request.requestId, nodeId: "shared-custom-node" }],
+      });
+    });
+  });
+
   test("supersedes pending requests when the approval surface changes", async () => {
     await withNodePairingDir(async (baseDir) => {
       const first = await requestNodePairing(

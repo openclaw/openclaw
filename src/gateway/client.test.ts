@@ -4,6 +4,10 @@ import { Buffer } from "node:buffer";
 import { generateKeyPairSync } from "node:crypto";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../packages/gateway-protocol/src/client-info.js";
+import {
   MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
 } from "../../packages/gateway-protocol/src/index.js";
@@ -948,7 +952,11 @@ describe("GatewayClient connect auth payload", () => {
     params?: {
       minProtocol?: number;
       maxProtocol?: number;
+      nodeId?: string;
       scopes?: string[];
+      client?: {
+        instanceId?: string;
+      };
       auth?: {
         token?: string;
         bootstrapToken?: string;
@@ -1131,6 +1139,16 @@ describe("GatewayClient connect auth payload", () => {
     failureDetails: Record<string, unknown>;
     failureMessage?: string;
   }) {
+    const request = await expectRetriedConnectRequest(params);
+    return request.params?.auth ?? {};
+  }
+
+  async function expectRetriedConnectRequest(params: {
+    firstWs: MockWebSocket;
+    connectId: string | undefined;
+    failureDetails: Record<string, unknown>;
+    failureMessage?: string;
+  }) {
     emitConnectFailure(
       params.firstWs,
       params.connectId,
@@ -1141,7 +1159,7 @@ describe("GatewayClient connect auth payload", () => {
     const ws = getLatestWs();
     ws.emitOpen();
     emitConnectChallenge(ws, "nonce-2");
-    return connectFrameFrom(ws);
+    return connectRequestFrom(ws);
   }
 
   async function expectNoReconnectAfterConnectFailure(params: {
@@ -1219,6 +1237,34 @@ describe("GatewayClient connect auth payload", () => {
       "retried connect auth",
     );
     expect(retriedAuth.approvalRuntimeToken).toBeUndefined();
+    client.stop();
+  });
+
+  it("retries without node id when an older gateway rejects the connect field", async () => {
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-token",
+      instanceId: "my-mac-node",
+      nodeId: "my-mac-node",
+      clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+      mode: GATEWAY_CLIENT_MODES.NODE,
+      role: "node",
+      scopes: [],
+      deviceIdentity: null,
+    });
+
+    const { ws: ws1, connect: firstConnect } = startClientAndConnect({ client });
+    expect(firstConnect.params?.nodeId).toBe("my-mac-node");
+
+    const retried = await expectRetriedConnectRequest({
+      firstWs: ws1,
+      connectId: firstConnect.id,
+      failureDetails: {},
+      failureMessage: "invalid connect params: at root: unexpected property 'nodeId'",
+    });
+
+    expect(retried.params?.nodeId).toBeUndefined();
+    expect(retried.params?.client?.instanceId).toBe("my-mac-node");
     client.stop();
   });
 

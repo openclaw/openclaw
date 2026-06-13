@@ -18,6 +18,7 @@ import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
 
 type NodeDeclaredSurface = {
   nodeId: string;
+  deviceId?: string;
   clientId?: string;
   clientMode?: string;
   displayName?: string;
@@ -95,6 +96,7 @@ function buildPendingNodePairingRequest(params: {
   return {
     requestId: params.requestId ?? randomUUID(),
     nodeId: params.req.nodeId,
+    deviceId: params.req.deviceId,
     clientId: params.req.clientId,
     clientMode: params.req.clientMode,
     displayName: params.req.displayName,
@@ -121,6 +123,7 @@ function refreshPendingNodePairingRequest(
     ...existing,
     clientId: incoming.clientId ?? existing.clientId,
     clientMode: incoming.clientMode ?? existing.clientMode,
+    deviceId: incoming.deviceId ?? existing.deviceId,
     displayName: incoming.displayName ?? existing.displayName,
     platform: incoming.platform ?? existing.platform,
     version: incoming.version ?? existing.version,
@@ -161,6 +164,7 @@ function mergeNodePairingReplacementInput(params: {
   const latest = params.existing[0];
   return {
     nodeId: params.incoming.nodeId,
+    deviceId: params.incoming.deviceId ?? latest?.deviceId,
     clientId: params.incoming.clientId ?? latest?.clientId,
     clientMode: params.incoming.clientMode ?? latest?.clientMode,
     displayName: params.incoming.displayName ?? latest?.displayName,
@@ -194,7 +198,11 @@ function toPendingNodePairingEntry(pending: NodePairingPendingRequest): NodePair
   };
 }
 
-type ApprovedNodePairingResult = { requestId: string; node: NodePairingPairedNode };
+type ApprovedNodePairingResult = {
+  requestId: string;
+  node: NodePairingPairedNode;
+  superseded?: NodePairingSupersededRequest[];
+};
 type ForbiddenNodePairingResult = { status: "forbidden"; missingScope: string };
 type ApproveNodePairingResult = ApprovedNodePairingResult | ForbiddenNodePairingResult | null;
 
@@ -222,6 +230,97 @@ async function persistState(state: NodePairingStateFile, baseDir?: string) {
 
 function normalizeNodeId(nodeId: string) {
   return nodeId.trim();
+}
+
+function normalizeOptionalNodeId(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function samePendingNodeIdentity(
+  existing: NodePairingPendingRequest,
+  incoming: NodePairingRequestInput,
+): boolean {
+  const existingDeviceId = normalizeOptionalNodeId(existing.deviceId);
+  const incomingDeviceId = normalizeOptionalNodeId(incoming.deviceId);
+  if (existingDeviceId || incomingDeviceId) {
+    return existingDeviceId === incomingDeviceId;
+  }
+  return true;
+}
+
+function samePendingDeviceIdentity(
+  existing: NodePairingPendingRequest,
+  pending: NodePairingPendingRequest,
+): boolean {
+  const pendingDeviceId = normalizeOptionalNodeId(pending.deviceId);
+  if (!pendingDeviceId) {
+    return false;
+  }
+  return (
+    normalizeOptionalNodeId(existing.deviceId) === pendingDeviceId ||
+    existing.nodeId === pendingDeviceId
+  );
+}
+
+function sameIncomingDeviceIdentity(
+  existing: NodePairingPendingRequest,
+  incoming: Pick<NodePairingRequestInput, "deviceId">,
+): boolean {
+  const incomingDeviceId = normalizeOptionalNodeId(incoming.deviceId);
+  if (!incomingDeviceId) {
+    return false;
+  }
+  return (
+    normalizeOptionalNodeId(existing.deviceId) === incomingDeviceId ||
+    existing.nodeId === incomingDeviceId
+  );
+}
+
+function matchesPendingNodeReplacement(
+  existing: NodePairingPendingRequest,
+  incoming: NodePairingRequestInput,
+): boolean {
+  return (
+    (existing.nodeId === incoming.nodeId && samePendingNodeIdentity(existing, incoming)) ||
+    sameIncomingDeviceIdentity(existing, incoming)
+  );
+}
+
+function sameDeviceBoundNode(params: {
+  nodeId: string;
+  deviceId?: string;
+  pending: Pick<NodePairingPendingRequest, "deviceId">;
+}): boolean {
+  const pendingDeviceId = normalizeOptionalNodeId(params.pending.deviceId);
+  if (!pendingDeviceId) {
+    return false;
+  }
+  return (
+    normalizeOptionalNodeId(params.deviceId) === pendingDeviceId ||
+    params.nodeId === pendingDeviceId
+  );
+}
+
+function findExistingPairedNodeForApproval(
+  state: NodePairingStateFile,
+  pending: NodePairingPendingRequest,
+): NodePairingPairedNode | undefined {
+  const sameNode = state.pairedByNodeId[pending.nodeId];
+  if (sameNode) {
+    return sameNode;
+  }
+  const sameDeviceNodes = Object.entries(state.pairedByNodeId)
+    .filter(([nodeId, node]) =>
+      sameDeviceBoundNode({
+        nodeId,
+        deviceId: node.deviceId,
+        pending,
+      }),
+    )
+    .map(([, node]) => node)
+    .toSorted((left, right) => left.createdAtMs - right.createdAtMs);
+  return sameDeviceNodes[0];
 }
 
 function newToken() {
@@ -259,21 +358,25 @@ export async function requestNodePairing(
     if (!nodeId) {
       throw new Error("nodeId required");
     }
+    const incoming = {
+      ...req,
+      nodeId,
+    };
     const pendingForNode = Object.values(state.pendingById)
-      .filter((pending) => pending.nodeId === nodeId)
+      .filter((pending) => matchesPendingNodeReplacement(pending, incoming))
       .toSorted((left, right) => right.ts - left.ts);
     const result = await reconcilePendingPairingRequests({
       pendingById: state.pendingById,
       existing: pendingForNode,
-      incoming: {
-        ...req,
-        nodeId,
-      },
-      canRefreshSingle: (existing, incoming) => samePendingApprovalSurface(existing, incoming),
-      refreshSingle: (existing, incoming) => refreshPendingNodePairingRequest(existing, incoming),
-      buildReplacement: ({ existing, incoming }) =>
+      incoming,
+      canRefreshSingle: (existing, incomingRequest) =>
+        existing.nodeId === incomingRequest.nodeId &&
+        samePendingApprovalSurface(existing, incomingRequest),
+      refreshSingle: (existing, incomingRequest) =>
+        refreshPendingNodePairingRequest(existing, incomingRequest),
+      buildReplacement: ({ existing, incoming: incomingRequest }) =>
         buildPendingNodePairingRequest({
-          req: mergeNodePairingReplacementInput({ existing, incoming }),
+          req: mergeNodePairingReplacementInput({ existing, incoming: incomingRequest }),
         }),
       persist: async () => await persistState(state, baseDir),
     });
@@ -309,9 +412,10 @@ export async function approveNodePairing(
     }
 
     const now = Date.now();
-    const existing = state.pairedByNodeId[pending.nodeId];
+    const existing = findExistingPairedNodeForApproval(state, pending);
     const node: NodePairingPairedNode = {
       nodeId: pending.nodeId,
+      deviceId: pending.deviceId ?? existing?.deviceId,
       token: newToken(),
       clientId: pending.clientId,
       clientMode: pending.clientMode,
@@ -330,10 +434,32 @@ export async function approveNodePairing(
       approvedAtMs: now,
     };
 
-    delete state.pendingById[requestId];
+    const superseded: NodePairingSupersededRequest[] = [];
+    for (const [pendingId, otherPending] of Object.entries(state.pendingById)) {
+      const sameNode = otherPending.nodeId === pending.nodeId;
+      const sameDevice = samePendingDeviceIdentity(otherPending, pending);
+      if (pendingId !== requestId && (sameNode || sameDevice)) {
+        superseded.push({ requestId: pendingId, nodeId: otherPending.nodeId });
+      }
+      if (pendingId === requestId || sameNode || sameDevice) {
+        delete state.pendingById[pendingId];
+      }
+    }
+    for (const [nodeId, paired] of Object.entries(state.pairedByNodeId)) {
+      if (
+        nodeId !== pending.nodeId &&
+        sameDeviceBoundNode({
+          nodeId,
+          deviceId: paired.deviceId,
+          pending,
+        })
+      ) {
+        delete state.pairedByNodeId[nodeId];
+      }
+    }
     state.pairedByNodeId[pending.nodeId] = node;
     await persistState(state, baseDir);
-    return { requestId, node };
+    return superseded.length > 0 ? { requestId, node, superseded } : { requestId, node };
   });
 }
 

@@ -23,6 +23,7 @@ function makeClient(
     caps?: string[];
     commands?: string[];
     permissions?: Record<string, boolean>;
+    deviceId?: string;
     declaredCaps?: string[];
     declaredCommands?: string[];
     declaredPermissions?: Record<string, boolean>;
@@ -50,8 +51,9 @@ function makeClient(
         platform: opts.platform ?? "darwin",
         mode: "node",
       },
+      ...(opts.deviceId ? { nodeId } : {}),
       device: {
-        id: nodeId,
+        id: opts.deviceId ?? nodeId,
         publicKey: "public-key",
         signature: "signature",
         signedAt: 1,
@@ -180,7 +182,11 @@ describe("gateway/node-registry", () => {
         ok: true,
       }),
     ).toBe(false);
-    expect(registry.unregister("conn-old")).toBeNull();
+    expect(registry.unregister("conn-old")).toEqual({
+      nodeId: "node-1",
+      nodeDisconnected: false,
+      presenceDisconnected: false,
+    });
     expect(registry.get("node-1")).toBe(newSession);
     await expect(oldDisconnected).resolves.toBeInstanceOf(Error);
   });
@@ -598,6 +604,181 @@ describe("gateway/node-registry", () => {
     expect(updated?.permissions).toEqual({ microphone: true, camera: false });
     expect(client.connect.caps).toEqual(["talk"]);
     expect((client.connect as { commands?: string[] }).commands).toEqual(["talk.ptt.start"]);
+  });
+
+  it("replaces stale same-device sessions when a custom node id connects", () => {
+    const registry = new NodeRegistry();
+    registry.register(
+      makeClient("conn-1", "device-fingerprint", ["screen.snapshot"], {
+        clientId: "node-host",
+        commands: ["screen.snapshot"],
+        deviceId: "device-fingerprint",
+      }),
+      {},
+    );
+
+    const custom = registry.register(
+      makeClient("conn-2", "my-mac-node", ["system.run"], {
+        clientId: "node-host",
+        commands: ["system.run"],
+        deviceId: "device-fingerprint",
+      }),
+      {},
+    );
+
+    expect(custom.nodeId).toBe("my-mac-node");
+    expect(custom.deviceId).toBe("device-fingerprint");
+    expect(registry.get("device-fingerprint")).toBeUndefined();
+    expect(registry.get("my-mac-node")?.connId).toBe("conn-2");
+    expect(registry.listConnected().map((node) => node.nodeId)).toEqual(["my-mac-node"]);
+  });
+
+  it("promotes the approved device instead of updating another device with the same node id", () => {
+    const registry = new NodeRegistry();
+    const deviceBClient = makeClient("conn-b", "shared-custom-node", [], {
+      clientId: "node-host",
+      commands: [],
+      deviceId: "device-b",
+    });
+    registry.register(
+      makeClient("conn-a", "shared-custom-node", [], {
+        clientId: "node-host",
+        commands: [],
+        declaredCommands: ["system.run"],
+        deviceId: "device-a",
+      }),
+      {},
+    );
+    registry.register(deviceBClient, {});
+
+    const updated = registry.updateSurface(
+      "shared-custom-node",
+      {
+        caps: ["camera"],
+        commands: ["system.run"],
+        permissions: undefined,
+      },
+      { deviceId: "device-a" },
+    );
+
+    expect(updated?.deviceId).toBe("device-a");
+    expect(updated?.commands).toEqual(["system.run"]);
+    expect(registry.get("shared-custom-node")?.connId).toBe("conn-a");
+    expect((deviceBClient.connect as { commands?: string[] }).commands).toEqual([]);
+  });
+
+  it("evicts superseded same-node sessions when the approved device is already current", () => {
+    const registry = new NodeRegistry();
+    const staleSocket = { send: vi.fn(), close: vi.fn() };
+    const approvedSocket = { send: vi.fn(), close: vi.fn() };
+    const approvedClient = makeClient("conn-a", "shared-custom-node", [], {
+      clientId: "node-host",
+      commands: [],
+      declaredCommands: ["system.run"],
+      deviceId: "device-a",
+      socket: approvedSocket as unknown as GatewayWsClient["socket"],
+    });
+
+    registry.register(
+      makeClient("conn-b", "shared-custom-node", [], {
+        clientId: "node-host",
+        commands: [],
+        declaredCommands: ["system.run"],
+        deviceId: "device-b",
+        socket: staleSocket as unknown as GatewayWsClient["socket"],
+      }),
+      {},
+    );
+    registry.register(approvedClient, {});
+
+    const updated = registry.updateSurface(
+      "shared-custom-node",
+      {
+        caps: [],
+        commands: ["system.run"],
+        permissions: undefined,
+      },
+      { deviceId: "device-a" },
+    );
+
+    expect(updated?.connId).toBe("conn-a");
+    expect(updated?.commands).toEqual(["system.run"]);
+    expect(staleSocket.close).toHaveBeenCalledWith(4001, "node pairing superseded");
+    expect(approvedSocket.close).not.toHaveBeenCalled();
+    expect(registry.unregister("conn-a")).toEqual({
+      nodeId: "shared-custom-node",
+      nodeDisconnected: true,
+      presenceDisconnected: false,
+    });
+    expect(registry.get("shared-custom-node")).toBeUndefined();
+  });
+
+  it("evicts older same-device reconnects so stale approvals cannot be promoted", () => {
+    const registry = new NodeRegistry();
+    const oldSocket = { send: vi.fn(), close: vi.fn() };
+    registry.register(
+      makeClient("conn-old", "shared-custom-node", [], {
+        clientId: "node-host",
+        commands: ["system.run"],
+        declaredCommands: ["system.run"],
+        deviceId: "device-a",
+        socket: oldSocket as unknown as GatewayWsClient["socket"],
+      }),
+      {},
+    );
+
+    registry.register(
+      makeClient("conn-new", "shared-custom-node", [], {
+        clientId: "node-host",
+        commands: [],
+        declaredCommands: ["system.run"],
+        deviceId: "device-a",
+      }),
+      {},
+    );
+
+    expect(oldSocket.close).toHaveBeenCalledWith(4001, "node connection superseded");
+    expect(registry.unregister("conn-old")).toEqual({
+      nodeId: "shared-custom-node",
+      nodeDisconnected: false,
+      presenceDisconnected: false,
+    });
+    expect(registry.unregister("conn-new")).toEqual({
+      nodeId: "shared-custom-node",
+      nodeDisconnected: true,
+      presenceDisconnected: false,
+    });
+    expect(registry.get("shared-custom-node")).toBeUndefined();
+  });
+
+  it("returns old-node cleanup for same-device reconnects under a new node id", () => {
+    const registry = new NodeRegistry();
+    const oldSocket = { send: vi.fn(), close: vi.fn() };
+    registry.register(
+      makeClient("conn-old", "device-fingerprint", [], {
+        clientId: "node-host",
+        deviceId: "device-fingerprint",
+        socket: oldSocket as unknown as GatewayWsClient["socket"],
+      }),
+      {},
+    );
+
+    registry.register(
+      makeClient("conn-new", "my-mac-node", [], {
+        clientId: "node-host",
+        deviceId: "device-fingerprint",
+      }),
+      {},
+    );
+
+    expect(oldSocket.close).toHaveBeenCalledWith(4001, "node connection superseded");
+    expect(registry.unregister("conn-old")).toEqual({
+      nodeId: "device-fingerprint",
+      nodeDisconnected: true,
+      presenceDisconnected: false,
+    });
+    expect(registry.get("device-fingerprint")).toBeUndefined();
+    expect(registry.get("my-mac-node")?.connId).toBe("conn-new");
   });
 
   it("clears effective permissions when explicitly removed", () => {

@@ -17,6 +17,11 @@ import {
   resolveNodeCommandAllowlist,
   resolveNodePairingCommandAllowlist,
 } from "./node-command-policy.js";
+import {
+  nodePairingMatchesConnectDevice,
+  resolveNodeConnectDeviceId,
+  resolveNodeConnectId,
+} from "./node-id.js";
 
 // Node connect reconciliation turns declared caps/commands/permissions into the
 // effective runtime surface. New or upgraded surfaces create a pending pairing
@@ -31,6 +36,18 @@ export type NodeConnectPairingReconcileResult = {
   effectivePermissions?: Record<string, boolean>;
   pendingPairing?: RequestNodePairingResult;
 };
+
+export class NodePairingDeviceMismatchError extends Error {
+  readonly nodeId: string;
+  readonly deviceId: string | null;
+
+  constructor(params: { nodeId: string; deviceId: string | null }) {
+    super("node pairing device mismatch");
+    this.name = "NodePairingDeviceMismatchError";
+    this.nodeId = params.nodeId;
+    this.deviceId = params.deviceId;
+  }
+}
 
 function resolveApprovedReconnectCommands(params: {
   pairedCommands: readonly string[] | undefined;
@@ -96,6 +113,7 @@ function buildNodePairingRequestInput(params: {
 }): NodePairingRequestInput {
   return {
     nodeId: params.nodeId,
+    deviceId: params.connectParams.device?.id,
     displayName: params.connectParams.client.displayName,
     platform: params.connectParams.client.platform,
     version: params.connectParams.client.version,
@@ -116,7 +134,16 @@ export async function reconcileNodePairingOnConnect(params: {
   reportedClientIp?: string;
   requestPairing: (input: NodePairingRequestInput) => Promise<RequestNodePairingResult | null>;
 }): Promise<NodeConnectPairingReconcileResult> {
-  const nodeId = params.connectParams.device?.id ?? params.connectParams.client.id;
+  const nodeId = resolveNodeConnectId(params.connectParams);
+  if (
+    params.pairedNode &&
+    !nodePairingMatchesConnectDevice(params.pairedNode, params.connectParams)
+  ) {
+    throw new NodePairingDeviceMismatchError({
+      nodeId,
+      deviceId: resolveNodeConnectDeviceId(params.connectParams),
+    });
+  }
   const policyNode = {
     platform: params.connectParams.client.platform,
     deviceFamily: params.connectParams.client.deviceFamily,

@@ -233,9 +233,13 @@ function buildNodeHostLocalAuthConfig(config: OpenClawConfig): OpenClawConfig {
 
 export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   const config = await ensureNodeHostConfig();
-  const nodeId = opts.nodeId?.trim() || config.nodeId;
+  const overrideNodeId = opts.nodeId?.trim();
+  const nodeId = overrideNodeId || config.nodeId;
   if (nodeId !== config.nodeId) {
     config.nodeId = nodeId;
+  }
+  if (overrideNodeId) {
+    config.nodeIdSource = "user";
   }
   const displayName =
     opts.displayName?.trim() || config.displayName || (await getMachineDisplayName());
@@ -270,6 +274,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     password: password || undefined,
     preauthHandshakeTimeoutMs: cfg.gateway?.handshakeTimeoutMs,
     instanceId: nodeId,
+    nodeId: config.nodeIdSource === "user" ? nodeId : undefined,
     clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
     clientDisplayName: displayName,
     clientVersion: VERSION,

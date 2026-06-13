@@ -125,6 +125,7 @@ export type GatewayClientOptions = {
   password?: string;
   approvalRuntimeToken?: string;
   instanceId?: string;
+  nodeId?: string;
   clientName?: GatewayClientName;
   clientDisplayName?: string;
   clientVersion?: string;
