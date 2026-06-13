@@ -1501,7 +1501,7 @@ async function getWorkboardTaskPollBatch(
       const page = normalizeTasksPage(payload);
       return {
         tasks: page.tasks,
-        ...(query.sessionKey ? {} : { nextUnfilteredCursor: page.nextCursor }),
+        ...(query.sessionKey ? {} : { nextUnfilteredCursor: page.nextCursor ?? null }),
       };
     }),
   ]);

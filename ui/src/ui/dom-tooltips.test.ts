@@ -22,7 +22,7 @@ describe("native title tooltip promotion", () => {
 
     promoteNativeTitleTooltip(button, root, "pointer");
 
-    expect(button.getAttribute("title")).toBeNull();
+    expect(button.getAttribute("title")).toBe("");
     expect(button.getAttribute("aria-label")).toBe("Refresh");
     expect(button.getAttribute("data-tooltip")).toBe("Refresh");
     expect(button.getAttribute("data-native-tooltip-title")).toBe("Refresh");
@@ -107,6 +107,26 @@ describe("native title tooltip promotion", () => {
     expect(card.getAttribute("aria-label")).toBeNull();
   });
 
+  it("suppresses inherited native titles while a nested custom tooltip is active", () => {
+    const root = document.createElement("div");
+    const card = document.createElement("article");
+    const button = document.createElement("button");
+    card.title = "View details";
+    button.className = "btn";
+    button.title = "Edit card";
+    card.append(button);
+    root.append(card);
+
+    promoteNativeTitleTooltip(button, root, "pointer");
+
+    expect(button.getAttribute("title")).toBe("");
+    expect(button.getAttribute("data-tooltip")).toBe("Edit card");
+
+    restoreNativeTitleTooltip(button, root, "pointer");
+
+    expect(button.getAttribute("title")).toBe("Edit card");
+  });
+
   it("preserves explicit custom tooltip metadata", () => {
     const root = document.createElement("div");
     const button = document.createElement("button");
@@ -151,7 +171,7 @@ describe("native title tooltip promotion", () => {
     button.title = "Hide archived cards";
     refreshActiveFloatingTooltip(root);
 
-    expect(button.getAttribute("title")).toBeNull();
+    expect(button.getAttribute("title")).toBe("");
     expect(button.getAttribute("data-tooltip")).toBe("Hide archived cards");
     expect(button.getAttribute("data-native-tooltip-title")).toBe("Hide archived cards");
     expect(button.getAttribute("aria-label")).toBe("Hide archived cards");
@@ -189,7 +209,7 @@ describe("native title tooltip promotion", () => {
 
     promoteNativeTitleTooltip(button, root, "pointer");
 
-    expect(button.getAttribute("title")).toBeNull();
+    expect(button.getAttribute("title")).toBe("");
     expect(button.getAttribute("data-tooltip")).toBe("View details");
     expect(button.getAttribute("data-floating-tooltip-active")).toBe("true");
     expect(document.querySelector(".control-ui-floating-tooltip")?.textContent).toBe(
@@ -198,6 +218,7 @@ describe("native title tooltip promotion", () => {
 
     restoreNativeTitleTooltip(button, root, "pointer");
 
+    expect(button.getAttribute("title")).toBeNull();
     expect(button.getAttribute("data-tooltip")).toBe("View details");
     expect(button.getAttribute("data-floating-tooltip-active")).toBeNull();
     expect(document.querySelector<HTMLElement>(".control-ui-floating-tooltip")?.dataset.open).toBe(
@@ -345,7 +366,7 @@ describe("native title tooltip promotion", () => {
     promoteNativeTitleTooltip(button, root, "pointer");
     restoreNativeTitleTooltip(button, root, "pointer", icon);
 
-    expect(button.getAttribute("title")).toBeNull();
+    expect(button.getAttribute("title")).toBe("");
     expect(button.getAttribute("data-tooltip")).toBe("Stop");
   });
 
@@ -365,7 +386,7 @@ describe("native title tooltip promotion", () => {
       promoteNativeTitleTooltip(button, root, "focus");
 
       expect(restoreNativeTitleTooltip(button, root, released)).toBeNull();
-      expect(button.getAttribute("title")).toBeNull();
+      expect(button.getAttribute("title")).toBe("");
       expect(button.getAttribute("data-floating-tooltip-active")).toBe("true");
       expect(
         document.querySelector<HTMLElement>(".control-ui-floating-tooltip")?.dataset.open,

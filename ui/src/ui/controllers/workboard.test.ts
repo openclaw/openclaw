@@ -882,6 +882,38 @@ describe("workboard controller", () => {
     expect(getWorkboardState(host).cards[0]).toMatchObject({ taskId: sampleTask.taskId });
   });
 
+  it("restarts default-agent task discovery after a terminal page", async () => {
+    const host = {};
+    const linkedCard = {
+      ...sampleCard,
+      status: "running",
+      sessionKey: sampleTaskSessionKey,
+      runId: "run-1",
+    } satisfies WorkboardCard;
+    const client = createClient((method, params) => {
+      if (method === "workboard.cards.list") {
+        return { cards: [linkedCard], statuses: ["todo", "running", "done"] };
+      }
+      if (method === "tasks.list") {
+        return (params as { cursor?: string }).cursor === "500"
+          ? { tasks: [] }
+          : { tasks: [], nextCursor: "500" };
+      }
+      return {};
+    });
+
+    await refreshWorkboard({ host, client: client as never, source: "poll" });
+    await refreshWorkboard({ host, client: client as never, source: "poll" });
+    await refreshWorkboard({ host, client: client as never, source: "poll" });
+
+    const discoveryCalls = client.request.mock.calls.filter(([method]) => method === "tasks.list");
+    expect(discoveryCalls.map(([, params]) => params)).toEqual([
+      { limit: 500 },
+      { limit: 500, cursor: "500" },
+      { limit: 500 },
+    ]);
+  });
+
   it("defers polling while a card is being dragged", async () => {
     vi.useFakeTimers();
     const host = {};

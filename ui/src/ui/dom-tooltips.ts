@@ -77,9 +77,19 @@ function resolvePromotedTooltipTarget(
 
 function getTooltipText(element: HTMLElement): string {
   if (element.getAttribute(GENERATED_TOOLTIP_ATTR) === "true") {
-    return element.getAttribute("title") ?? element.getAttribute("data-tooltip") ?? "";
+    return element.getAttribute("title") || element.getAttribute("data-tooltip") || "";
   }
-  return element.getAttribute("data-tooltip") ?? element.getAttribute("title") ?? "";
+  return element.getAttribute("data-tooltip") || element.getAttribute("title") || "";
+}
+
+function restorePromotedTooltipTitle(element: HTMLElement) {
+  const title = element.getAttribute(PROMOTED_TITLE_ATTR);
+  if (title) {
+    element.setAttribute("title", title);
+  } else {
+    element.removeAttribute("title");
+  }
+  element.removeAttribute(PROMOTED_TITLE_ATTR);
 }
 
 function ensurePromotedTooltipAccessibleName(element: HTMLElement, title: string | null) {
@@ -193,11 +203,7 @@ export function clearActiveFloatingTooltips(root: ParentNode = document): void {
   for (const element of root.querySelectorAll<HTMLElement>(
     `[${ACTIVE_FLOATING_TOOLTIP_ATTR}], [${PROMOTED_TITLE_ATTR}]`,
   )) {
-    const title = element.getAttribute(PROMOTED_TITLE_ATTR);
-    if (title) {
-      element.setAttribute("title", title);
-    }
-    element.removeAttribute(PROMOTED_TITLE_ATTR);
+    restorePromotedTooltipTitle(element);
     element.removeAttribute(ACTIVE_FLOATING_TOOLTIP_ATTR);
     activeFloatingTooltipTriggers.delete(element);
     if (element.getAttribute(GENERATED_TOOLTIP_ATTR) === "true") {
@@ -237,7 +243,7 @@ export function promoteNativeTitleTooltip(
     element.setAttribute("data-tooltip", tooltipText);
     element.setAttribute(GENERATED_TOOLTIP_ATTR, "true");
   }
-  element.removeAttribute("title");
+  element.setAttribute("title", "");
   const triggers = activeFloatingTooltipTriggers.get(element) ?? new Set<FloatingTooltipTrigger>();
   triggers.add(trigger);
   activeFloatingTooltipTriggers.set(element, triggers);
@@ -265,7 +271,7 @@ export function refreshActiveFloatingTooltip(root: ParentNode): HTMLElement | nu
   startFloatingTooltipViewportTracking(root);
   const tooltipText = getTooltipText(element);
   if (!tooltipText) {
-    element.removeAttribute(PROMOTED_TITLE_ATTR);
+    restorePromotedTooltipTitle(element);
     element.removeAttribute(ACTIVE_FLOATING_TOOLTIP_ATTR);
     activeFloatingTooltipTriggers.delete(element);
     restoreFloatingTooltipDescription(element);
@@ -284,7 +290,7 @@ export function refreshActiveFloatingTooltip(root: ParentNode): HTMLElement | nu
     element.setAttribute("data-tooltip", tooltipText);
     element.setAttribute(GENERATED_TOOLTIP_ATTR, "true");
   }
-  element.removeAttribute("title");
+  element.setAttribute("title", "");
   showFloatingTooltip(element, tooltipText);
   return element;
 }
@@ -309,11 +315,7 @@ export function restoreNativeTitleTooltip(
   }
   activeFloatingTooltipTriggers.delete(element);
   const wasOwner = activeFloatingTooltipOwner === element;
-  const title = element.getAttribute(PROMOTED_TITLE_ATTR);
-  if (title) {
-    element.setAttribute("title", title);
-  }
-  element.removeAttribute(PROMOTED_TITLE_ATTR);
+  restorePromotedTooltipTitle(element);
   element.removeAttribute(ACTIVE_FLOATING_TOOLTIP_ATTR);
   if (element.getAttribute(GENERATED_TOOLTIP_ATTR) === "true") {
     element.removeAttribute("data-tooltip");
