@@ -3,13 +3,17 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
+  hasExplicitChannelConfig,
   listExplicitConfiguredChannelIdsForConfig,
-  resolveConfiguredChannelPresencePolicy,
 } from "../../../plugins/channel-plugin-ids.js";
+import { normalizePluginsConfig } from "../../../plugins/config-state.js";
 import {
-  normalizePluginsConfig,
-  resolveEffectivePluginActivationState,
-} from "../../../plugins/config-state.js";
+  hasExplicitManifestOwnerTrust,
+  isActivatedManifestOwner,
+  resolveManifestOwnerBasePolicyBlock,
+  type ManifestOwnerBasePolicyBlockReason,
+} from "../../../plugins/manifest-owner-policy.js";
+import type { PluginManifestRecord } from "../../../plugins/manifest-registry.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "../../../plugins/plugin-registry.js";
 
 export type ChannelPluginBlockerHit = {
@@ -40,108 +44,148 @@ export function scanConfiguredChannelPluginBlockers(
     return [];
   }
 
-  const pluginsConfig = normalizePluginsConfig(activationSourceConfig.plugins);
+  const sourcePluginsConfig = normalizePluginsConfig(activationSourceConfig.plugins);
+  const effectivePluginsConfig = normalizePluginsConfig(cfg.plugins);
   const registry = loadPluginManifestRegistryForPluginRegistry({
     config: cfg,
     env,
     includeDisabled: true,
   });
-  const presencePolicy = resolveConfiguredChannelPresencePolicy({
-    config: cfg,
-    activationSourceConfig,
-    env,
-    includePersistedAuthState: false,
-    manifestRecords: registry.plugins,
-  });
-  const activeConfiguredChannelIds = new Set(
-    presencePolicy.filter((entry) => entry.effective).map((entry) => entry.channelId),
-  );
-  const blockedReasonsByChannelId = new Map(
-    presencePolicy
-      .filter((entry) => !entry.effective)
-      .map((entry) => [entry.channelId, new Set(entry.blockedReasons)] as const),
-  );
   const hits: ChannelPluginBlockerHit[] = [];
 
-  for (const plugin of registry.plugins) {
-    if (plugin.channels.length === 0) {
+  for (const channelId of configuredChannelIds) {
+    const owners = registry.plugins.filter((plugin) =>
+      plugin.channels.some(
+        (rawChannelId) => normalizeOptionalLowercaseString(rawChannelId) === channelId,
+      ),
+    );
+    const ownerStates = owners.map((plugin) =>
+      resolveConfiguredChannelOwnerState({
+        plugin,
+        channelId,
+        sourceConfig: activationSourceConfig,
+        sourcePluginsConfig,
+        effectiveConfig: cfg,
+        effectivePluginsConfig,
+      }),
+    );
+    if (ownerStates.some((state) => state.available)) {
       continue;
     }
-
-    const activationState = resolveEffectivePluginActivationState({
-      id: plugin.id,
-      origin: plugin.origin,
-      config: pluginsConfig,
-      rootConfig: activationSourceConfig,
-      enabledByDefault: plugin.enabledByDefault,
-    });
-    if (
-      activationState.activated ||
-      !activationState.reason ||
-      (activationState.reason !== "disabled in config" &&
-        activationState.reason !== "plugins disabled")
-    ) {
-      continue;
-    }
-
-    for (const rawChannelId of plugin.channels) {
-      const channelId = normalizeOptionalLowercaseString(rawChannelId);
-      if (!channelId) {
+    let reportedGlobalDisable = false;
+    for (const state of ownerStates) {
+      if (!state.reason) {
         continue;
       }
-      if (!configuredChannelIds.has(channelId)) {
-        continue;
-      }
-      if (activeConfiguredChannelIds.has(channelId)) {
-        continue;
+      if (state.reason === "plugins disabled") {
+        if (reportedGlobalDisable) {
+          continue;
+        }
+        reportedGlobalDisable = true;
       }
       hits.push({
         channelId,
-        pluginId: plugin.id,
-        reason: activationState.reason,
-      });
-    }
-  }
-
-  const channelsWithExplicitBlockerHits = new Set(hits.map((hit) => hit.channelId));
-
-  for (const plugin of registry.plugins) {
-    if (plugin.origin === "bundled" || plugin.channels.length === 0) {
-      continue;
-    }
-
-    for (const rawChannelId of plugin.channels) {
-      const channelId = normalizeOptionalLowercaseString(rawChannelId);
-      if (!channelId) {
-        continue;
-      }
-      if (!configuredChannelIds.has(channelId)) {
-        continue;
-      }
-      if (channelsWithExplicitBlockerHits.has(channelId)) {
-        continue;
-      }
-      if (activeConfiguredChannelIds.has(channelId)) {
-        continue;
-      }
-      const blockedReasons = blockedReasonsByChannelId.get(channelId);
-      const reason = blockedReasons?.has("untrusted-plugin")
-        ? "missing explicit enablement"
-        : blockedReasons?.has("not-in-allowlist")
-          ? "not in allowlist"
-          : undefined;
-      if (!reason) {
-        continue;
-      }
-      hits.push({
-        channelId,
-        pluginId: plugin.id,
-        reason,
+        pluginId: state.pluginId,
+        reason: state.reason,
       });
     }
   }
 
   return hits;
+}
+
+type ChannelOwnerState = {
+  pluginId: string;
+  available: boolean;
+  reason?: ChannelPluginBlockerHit["reason"];
+};
+
+function resolveConfiguredChannelOwnerState(params: {
+  plugin: PluginManifestRecord;
+  channelId: string;
+  sourceConfig: OpenClawConfig;
+  sourcePluginsConfig: ReturnType<typeof normalizePluginsConfig>;
+  effectiveConfig: OpenClawConfig;
+  effectivePluginsConfig: ReturnType<typeof normalizePluginsConfig>;
+}): ChannelOwnerState {
+  const bundledChannelConfigured =
+    params.plugin.origin === "bundled" &&
+    hasExplicitChannelConfig({
+      config: params.sourceConfig,
+      channelId: params.channelId,
+    });
+  const sourceAllowlistBypass =
+    bundledChannelConfigured ||
+    (params.plugin.origin === "workspace" &&
+      params.sourcePluginsConfig.slots.contextEngine === params.plugin.id);
+  const sourceBaseBlock = resolveManifestOwnerBasePolicyBlock({
+    plugin: params.plugin,
+    normalizedConfig: params.sourcePluginsConfig,
+    allowRestrictiveAllowlistBypass: sourceAllowlistBypass,
+  });
+  const sourceExternalTrusted =
+    params.plugin.origin === "bundled" ||
+    (sourceBaseBlock === null &&
+      (params.plugin.origin === "workspace"
+        ? isActivatedManifestOwner({
+            plugin: params.plugin,
+            normalizedConfig: params.sourcePluginsConfig,
+            rootConfig: params.sourceConfig,
+          })
+        : hasExplicitManifestOwnerTrust({
+            plugin: params.plugin,
+            normalizedConfig: params.sourcePluginsConfig,
+          })));
+
+  const effectiveBundledChannelConfigured =
+    params.plugin.origin === "bundled" &&
+    hasExplicitChannelConfig({
+      config: params.effectiveConfig,
+      channelId: params.channelId,
+    });
+  const effectiveAllowlistBypass =
+    effectiveBundledChannelConfigured ||
+    (params.plugin.origin === "workspace" &&
+      params.effectivePluginsConfig.slots.contextEngine === params.plugin.id);
+  const effectiveBaseBlock = resolveManifestOwnerBasePolicyBlock({
+    plugin: params.plugin,
+    normalizedConfig: params.effectivePluginsConfig,
+    allowRestrictiveAllowlistBypass: effectiveAllowlistBypass,
+  });
+  const available =
+    effectiveBaseBlock === null &&
+    sourceExternalTrusted &&
+    (effectiveBundledChannelConfigured ||
+      isActivatedManifestOwner({
+        plugin: params.plugin,
+        normalizedConfig: params.effectivePluginsConfig,
+        rootConfig: params.effectiveConfig,
+      }));
+  return {
+    pluginId: params.plugin.id,
+    available,
+    reason: available
+      ? undefined
+      : (mapManifestOwnerBlockerReason(sourceBaseBlock) ??
+        (!sourceExternalTrusted && sourceBaseBlock === null
+          ? "missing explicit enablement"
+          : undefined)),
+  };
+}
+
+function mapManifestOwnerBlockerReason(
+  reason: ManifestOwnerBasePolicyBlockReason | null,
+): ChannelPluginBlockerHit["reason"] | undefined {
+  if (reason === "plugins-disabled") {
+    return "plugins disabled";
+  }
+  if (reason === "plugin-disabled") {
+    return "disabled in config";
+  }
+  if (reason === "not-in-allowlist") {
+    return "not in allowlist";
+  }
+  return undefined;
 }
 
 function formatReason(hit: ChannelPluginBlockerHit): string {
