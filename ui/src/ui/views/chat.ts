@@ -203,6 +203,12 @@ export type ChatProps = {
   onChatScroll?: (event: Event) => void;
   basePath?: string;
   composerControls?: TemplateResult | typeof nothing | ReturnType<typeof guard>;
+  /** Selected message to reply to (set via right-click or keyboard shortcut). */
+  replyTarget?: { messageId: string; text: string; senderLabel?: string | null } | null;
+  /** Clear the current reply target. */
+  onClearReply?: () => void;
+  /** Set the reply target from a message element. */
+  onSetReply?: (target: { messageId: string; text: string; senderLabel?: string | null }) => void;
   sessionWorkspace?: {
     collapsed: boolean;
     sessionKey: string;
@@ -2024,6 +2030,16 @@ function renderSlashMenu(
   `;
 }
 
+let contextMenuKeydownHandler: ((e: KeyboardEvent) => void) | null = null;
+
+function removeReplyContextMenu() {
+  document.querySelector(".chat-reply-context-menu")?.remove();
+  if (contextMenuKeydownHandler) {
+    document.removeEventListener("keydown", contextMenuKeydownHandler);
+    contextMenuKeydownHandler = null;
+  }
+}
+
 export function renderChat(props: ChatProps) {
   const canCompose = props.connected;
   const isBusy = props.sending || props.stream !== null;
@@ -2081,6 +2097,72 @@ export function renderChat(props: ChatProps) {
       setTimeout(() => btn.classList.remove("copied"), 1500);
     });
   };
+  const handleChatContextMenu = (e: MouseEvent, p: ChatProps) => {
+    const bubble = (e.target as HTMLElement).closest(".chat-bubble");
+    // Always suppress native menu on chat bubbles; we show our own Reply menu.
+    if (!bubble) {
+      return;
+    }
+    if (typeof p.onSetReply !== "function") {
+      return;
+    }
+    const group = bubble.closest(".chat-group");
+    if (!group) {
+      return;
+    }
+    // Skip streaming messages and reading indicators
+    if (
+      group.querySelector(".chat-reading-indicator") ||
+      group.querySelector(".chat-bubble.streaming")
+    ) {
+      return;
+    }
+    const senderEl = group.querySelector(".chat-sender-name");
+    const senderLabel = senderEl?.textContent?.trim() ?? undefined;
+    const text = (bubble as HTMLElement).dataset.messageText?.trim().slice(0, 500) ?? "";
+    if (!text) {
+      return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    const messageId = `msg-${Date.now()}`;
+    removeReplyContextMenu();
+    const menu = document.createElement("div");
+    menu.className = "chat-reply-context-menu";
+    menu.setAttribute("role", "menu");
+    menu.innerHTML = `<button type="button" role="menuitem"><svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" stroke="none"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> Reply</button>`;
+    menu.style.left = `${e.clientX}px`;
+    menu.style.top = `${e.clientY}px`;
+    menu.querySelector("button")?.addEventListener("click", () => {
+      p.onSetReply?.({ messageId, text, senderLabel });
+      removeReplyContextMenu();
+      composerTextarea?.focus();
+    });
+    document.body.appendChild(menu);
+    // Clamp menu position within the viewport
+    const menuRect = menu.getBoundingClientRect();
+    let left = e.clientX;
+    let top = e.clientY;
+    if (left + menuRect.width > window.innerWidth) {
+      left = window.innerWidth - menuRect.width - 8;
+    }
+    if (top + menuRect.height > window.innerHeight) {
+      top = window.innerHeight - menuRect.height - 8;
+    }
+    menu.style.left = `${Math.max(0, left)}px`;
+    menu.style.top = `${Math.max(0, top)}px`;
+    menu.querySelector<HTMLButtonElement>("button")?.focus();
+    requestAnimationFrame(() => {
+      document.addEventListener("click", removeReplyContextMenu, { once: true });
+      const handleKeydown = (ev: KeyboardEvent) => {
+        if (ev.key === "Escape") {
+          removeReplyContextMenu();
+        }
+      };
+      contextMenuKeydownHandler = handleKeydown;
+      document.addEventListener("keydown", handleKeydown);
+    });
+  };
   const handleChatThreadScroll = (event: Event) => {
     maybeExpandChatHistoryRenderWindow(event, requestUpdate);
     props.onChatScroll?.(event);
@@ -2126,6 +2208,7 @@ export function renderChat(props: ChatProps) {
       })}
       @scroll=${handleChatThreadScroll}
       @click=${handleCodeBlockCopy}
+      @contextmenu=${(e: MouseEvent) => handleChatContextMenu(e, props)}
     >
       <div class="chat-thread-inner">
         ${showLoadingSkeleton
@@ -2533,6 +2616,30 @@ export function renderChat(props: ChatProps) {
       @click=${(event: MouseEvent) => focusComposerFromChrome(event, props.connected)}
     >
       ${renderSlashMenu(requestUpdate, props, visibleDraft)} ${renderAttachmentPreview(props)}
+      ${props.replyTarget
+        ? html`
+            <div class="chat-reply-preview">
+              <span class="chat-reply-preview__icon">${icons.messageSquare}</span>
+              <span class="chat-reply-preview__label"
+                >Replying to ${props.replyTarget.senderLabel ?? "message"}</span
+              >
+              <span class="chat-reply-preview__text"
+                >${props.replyTarget.text.slice(0, 120)}${props.replyTarget.text.length > 120
+                  ? "…"
+                  : ""}</span
+              >
+              <button
+                type="button"
+                class="chat-reply-preview__dismiss"
+                @click=${() => props.onClearReply?.()}
+                aria-label="Cancel reply"
+                title="Cancel reply"
+              >
+                ${icons.x}
+              </button>
+            </div>
+          `
+        : nothing}
       <div class="agent-chat__composer-status-stack">
         ${renderFallbackIndicator(props.fallbackStatus)}
         ${renderCompactionIndicator(props.compactionStatus)}
@@ -2709,6 +2816,12 @@ export function renderChat(props: ChatProps) {
       class="card chat"
       @drop=${(e: DragEvent) => handleDrop(e, props)}
       @dragover=${(e: DragEvent) => e.preventDefault()}
+      @keydown=${(e: KeyboardEvent) => {
+        if (e.key === "Escape" && props.replyTarget && !e.defaultPrevented) {
+          e.preventDefault();
+          props.onClearReply?.();
+        }
+      }}
     >
       ${props.disabledReason ? html`<div class="callout">${props.disabledReason}</div>` : nothing}
       ${

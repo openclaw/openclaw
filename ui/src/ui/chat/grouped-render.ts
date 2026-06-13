@@ -1772,7 +1772,7 @@ function renderGroupedMessage(
   const duplicateCount = Math.max(1, Math.floor(opts.duplicateCount ?? 1));
 
   return html`
-    <div class="${bubbleClasses}">
+    <div class="${bubbleClasses}" data-message-text=${extractedText || nothing}>
       ${renderReplyPill(normalizedMessage.replyTarget)}
       ${hasActions
         ? html`<div class="chat-bubble-actions">
