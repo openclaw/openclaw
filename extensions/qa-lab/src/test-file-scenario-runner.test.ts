@@ -105,13 +105,13 @@ describe("qa test file scenario runner", () => {
       mapping: {
         coverage: [
           {
-            id: "ui.control",
+            coverageId: "ui.control",
             role: "primary",
             surfaceIds: ["control-ui"],
             categoryIds: ["browser-control-ui-and-webchat.browser-ui"],
           },
           {
-            id: "ui.streaming",
+            coverageId: "ui.streaming",
             role: "secondary",
             surfaceIds: ["control-ui"],
             categoryIds: [],
@@ -191,11 +191,11 @@ describe("qa test file scenario runner", () => {
       mapping: {
         coverage: [
           {
-            id: "qa.coverage",
+            coverageId: "qa.coverage",
             role: "primary",
           },
           {
-            id: "qa.reporting",
+            coverageId: "qa.reporting",
             role: "secondary",
           },
         ],

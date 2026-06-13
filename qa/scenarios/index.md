@@ -15,11 +15,11 @@ Single source of truth for repo-backed QA suite bootstrap data.
 
 Coverage tracking:
 
-- add fully qualified taxonomy coverage IDs to `coverage.primary` in each scenario's
-  `qa-scenario` block
+- add taxonomy coverage IDs to `coverage.primary` in each scenario's `qa-scenario`
+  block
 - add `coverage.secondary` only when a scenario intentionally protects another behavior
 - keep IDs behavior-shaped, broad enough to reuse, lowercase, and dotted or dashed
-- use coverage IDs from `taxonomy.yaml` in `<surface>.<category>.<feature>` form
+- use the exact `coverageId` values from `taxonomy.yaml`
 - prefer reusing an existing coverage ID over minting a scenario-shaped ID
 - avoid copying the scenario title into coverage IDs
 - use `pnpm openclaw qa coverage` to render the current inventory
