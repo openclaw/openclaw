@@ -1287,6 +1287,15 @@ describe("runHeartbeatOnce", () => {
         expectedTexts: ["Thinking\n\n_Because it helps_"],
       },
       {
+        // Reasoning-only result: the selector returns no main reply, but the
+        // documented includeReasoning opt-in must still deliver the Thinking
+        // message instead of going silent (#92242 follow-up / review finding).
+        name: "raw flagged reasoning only (no main reply)",
+        caseDir: "hb-reasoning-only",
+        replies: [{ text: "Because it helps", isReasoning: true }],
+        expectedTexts: ["Thinking\n\n_Because it helps_"],
+      },
+      {
         name: "visible final that starts with thinking prose",
         caseDir: "hb-thinking-visible-final",
         replies: [{ text: "Thinking... all clear" }],

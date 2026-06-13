@@ -1878,7 +1878,15 @@ export async function runHeartbeatOnce(opts: {
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
-    if (!heartbeatToolResponse && (!replyPayload || !hasOutboundReplyContent(replyPayload))) {
+    if (
+      !heartbeatToolResponse &&
+      (!replyPayload || !hasOutboundReplyContent(replyPayload)) &&
+      reasoningPayloads.length === 0
+    ) {
+      // No main reply to send. Only treat this as an empty heartbeat when there
+      // is also no opt-in reasoning to deliver; otherwise fall through so the
+      // includeReasoning Thinking payload is still sent (mirrors the
+      // shouldSkipMain guard below). See #92242 follow-up.
       await restoreHeartbeatUpdatedAt({
         storePath,
         sessionKey,
