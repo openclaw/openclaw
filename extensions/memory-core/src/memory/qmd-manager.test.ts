@@ -197,7 +197,11 @@ vi.mock("openclaw/plugin-sdk/file-lock", async () => {
 });
 
 import { spawn as mockedSpawn } from "node:child_process";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import {
+  readQmdSessionExportCacheEntry,
+  upsertQmdSessionExportCacheEntry,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   requireNodeSqlite,
   resolveMemoryBackendConfig,
@@ -5262,8 +5266,7 @@ describe("QmdMemoryManager", () => {
     }
 
     // Simulate the export markdown being deleted out from under us while
-    // the source jsonl (and the .export-state.json cache entry pointing
-    // at it) remain intact.
+    // the source jsonl and SQLite cache entry pointing at it remain intact.
     await fs.rm(exportFile);
     await expect(fs.access(exportFile)).rejects.toThrow();
 
@@ -5275,6 +5278,75 @@ describe("QmdMemoryManager", () => {
       await second.manager.sync({ reason: "manual" });
       const rebuilt = await fs.readFile(exportFile, "utf-8");
       expect(rebuilt).toContain("hello");
+    } finally {
+      await second.manager.close();
+    }
+  });
+
+  it("rebuilds the expected export when a current-scope cache row points elsewhere", async () => {
+    const sessionsDir = path.join(stateDir, "agents", agentId, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "session-1.jsonl");
+    const exportDir = path.join(stateDir, "agents", agentId, "qmd", "sessions");
+    const exportFile = path.join(exportDir, "session-1.md");
+    const wrongTarget = path.join(stateDir, "wrong-target.md");
+    await fs.writeFile(
+      sessionFile,
+      '{"type":"message","message":{"role":"user","content":"hello"}}\n',
+      "utf-8",
+    );
+    await fs.writeFile(wrongTarget, "stale wrong target\n", "utf-8");
+
+    const currentMemory = cfg.memory;
+    cfg = {
+      ...cfg,
+      memory: {
+        ...currentMemory,
+        qmd: {
+          ...currentMemory?.qmd,
+          sessions: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+
+    const first = await createManager();
+    try {
+      await first.manager.sync({ reason: "manual" });
+      expect(await fs.readFile(exportFile, "utf-8")).toContain("hello");
+    } finally {
+      await first.manager.close();
+    }
+
+    const key = {
+      agentId,
+      env: process.env,
+    };
+    const cached = readQmdSessionExportCacheEntry(key, {
+      sessionFile,
+      exportDir,
+      renderVersion: 1,
+    });
+    expect(cached).not.toBeNull();
+    upsertQmdSessionExportCacheEntry(key, {
+      ...requireValue(cached, "missing cache row"),
+      target: wrongTarget,
+      updatedAt: Date.now(),
+    });
+    await fs.rm(exportFile);
+
+    const second = await createManager();
+    try {
+      await second.manager.sync({ reason: "manual" });
+      const rebuilt = await fs.readFile(exportFile, "utf-8");
+      expect(rebuilt).toContain("hello");
+      expect(await fs.readFile(wrongTarget, "utf-8")).toBe("stale wrong target\n");
+      expect(
+        readQmdSessionExportCacheEntry(key, {
+          sessionFile,
+          exportDir,
+          renderVersion: 1,
+        })?.target,
+      ).toBe(exportFile);
     } finally {
       await second.manager.close();
     }

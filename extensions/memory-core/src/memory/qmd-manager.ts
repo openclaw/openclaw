@@ -2521,6 +2521,8 @@ export class QmdMemoryManager implements MemorySearchManager {
         // any stale export below.
         continue;
       }
+      const targetName = `${path.basename(sessionFile, ".jsonl")}.md`;
+      const target = path.join(exportDir, targetName);
       const cached = readQmdSessionExportCacheEntry(exportCacheOptions, {
         sessionFile,
         exportDir,
@@ -2530,8 +2532,10 @@ export class QmdMemoryManager implements MemorySearchManager {
       // fingerprint confirms the file bytes are unchanged. Skip the full
       // entry build, redaction, hashing, and write entirely.
       let cachedTargetMissing = false;
+      const cachedTargetMatches = cached?.target === target;
       if (
         cached &&
+        cachedTargetMatches &&
         cached.size === stat.size &&
         cached.mtimeMs === stat.mtimeMs &&
         cached.ino === stat.ino
@@ -2546,9 +2550,9 @@ export class QmdMemoryManager implements MemorySearchManager {
           // Verify the cached export target still exists on disk. If it was
           // deleted out from under us, fall through to the slow rebuild path.
           try {
-            await fs.access(cached.target);
+            await fs.access(target);
             tracked.add(sessionFile);
-            keep.add(cached.target);
+            keep.add(target);
             continue;
           } catch {
             cachedTargetMissing = true;
@@ -2563,11 +2567,10 @@ export class QmdMemoryManager implements MemorySearchManager {
       if (cutoff && entry.mtimeMs < cutoff) {
         continue;
       }
-      const targetName = `${path.basename(sessionFile, ".jsonl")}.md`;
-      const target = path.join(exportDir, targetName);
       tracked.add(sessionFile);
       if (
         cachedTargetMissing ||
+        !cachedTargetMatches ||
         !cached ||
         cached.hash !== entry.hash ||
         cached.mtimeMs !== entry.mtimeMs
