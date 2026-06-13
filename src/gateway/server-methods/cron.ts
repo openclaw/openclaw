@@ -23,8 +23,17 @@ import {
   readCronRunLogEntriesPageAll,
 } from "../../cron/run-log.js";
 import { applyJobPatch } from "../../cron/service/jobs.js";
-import { isInvalidCronSessionTargetIdError } from "../../cron/session-target.js";
-import type { CronDelivery, CronJob, CronJobCreate, CronJobPatch } from "../../cron/types.js";
+import {
+  isInvalidCronSessionTargetIdError,
+  resolveCronDeliverySessionKey,
+} from "../../cron/session-target.js";
+import type {
+  CronDelivery,
+  CronJob,
+  CronJobCreate,
+  CronJobPatch,
+  CronPayload,
+} from "../../cron/types.js";
 import { validateScheduleTimestamp } from "../../cron/validate-timestamp.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
@@ -59,26 +68,63 @@ function listConfiguredAnnounceChannelIds(cfg: OpenClawConfig): string[] {
   });
 }
 
+type CronAnnounceDeliveryField = "delivery.channel" | "delivery.failureDestination.channel";
+
+function isImplicitLastRouteValue(value: unknown): boolean {
+  return typeof value === "string" && value.trim().toLowerCase() === "last";
+}
+
+function formatDeterministicAnnounceRouteError(field: CronAnnounceDeliveryField): string {
+  const target = field === "delivery.channel" ? "delivery" : "delivery.failureDestination";
+  const modeHint =
+    target === "delivery"
+      ? 'or set delivery.mode="none"'
+      : 'or use delivery.failureDestination.mode="webhook"';
+  return `${field} cannot use implicit last routing when multiple channels are configured; explicitly set ${target}.channel and ${target}.to, use a provider-prefixed ${target}.to, ${modeHint}`;
+}
+
+function assertNoImplicitLastAnnounceRoute(params: {
+  cfg: OpenClawConfig;
+  channel?: string;
+  to?: string;
+  field: CronAnnounceDeliveryField;
+  allowSessionLastRoute?: boolean;
+}) {
+  if (listConfiguredAnnounceChannelIds(params.cfg).length <= 1) {
+    return;
+  }
+  const normalizedChannel = normalizeMessageChannel(params.channel);
+  const hasDeterministicChannel =
+    Boolean(normalizedChannel && normalizedChannel !== "last") ||
+    Boolean(resolveTargetPrefixedChannel(params.to));
+  if (
+    !params.allowSessionLastRoute &&
+    !hasDeterministicChannel &&
+    (isImplicitLastRouteValue(params.channel) || isImplicitLastRouteValue(params.to))
+  ) {
+    throw new Error(formatDeterministicAnnounceRouteError(params.field));
+  }
+}
+
 function assertConfiguredAnnounceChannel(params: {
   cfg: OpenClawConfig;
   channel?: string;
-  field: "delivery.channel" | "delivery.failureDestination.channel";
+  field: CronAnnounceDeliveryField;
+  allowSessionLastRoute?: boolean;
 }) {
-  // `last` defers channel selection to runtime session context; every concrete
-  // announce channel must be one the gateway can actually deliver through.
-  if (params.channel === "last") {
-    return;
-  }
-
   const configuredChannels = listConfiguredAnnounceChannelIds(params.cfg).toSorted();
   const normalizedChannel = normalizeMessageChannel(params.channel);
+  if (
+    normalizedChannel === "last" &&
+    (configuredChannels.length <= 1 || params.allowSessionLastRoute)
+  ) {
+    return;
+  }
   if (!normalizedChannel) {
-    if (configuredChannels.length <= 1) {
+    if (configuredChannels.length <= 1 || params.allowSessionLastRoute) {
       return;
     }
-    throw new Error(
-      `${params.field} is required when multiple channels are configured: ${configuredChannels.join(", ")}`,
-    );
+    throw new Error(formatDeterministicAnnounceRouteError(params.field));
   }
 
   if (configuredChannels.length === 0) {
@@ -107,7 +153,7 @@ function resolveAnnounceValidationChannel(params: {
 function assertCompatibleAnnounceTarget(params: {
   channel?: string;
   to?: string;
-  field: "delivery.channel" | "delivery.failureDestination.channel";
+  field: CronAnnounceDeliveryField;
 }) {
   if (!params.channel || params.channel === "last") {
     return;
@@ -121,8 +167,62 @@ function assertCompatibleAnnounceTarget(params: {
   }
 }
 
-function assertValidCronAnnounceDelivery(params: { cfg: OpenClawConfig; delivery?: CronDelivery }) {
+function isIsolatedLikeAgentTurn(params: {
+  sessionTarget?: string;
+  payload?: CronPayload;
+}): boolean {
+  return (
+    params.payload?.kind === "agentTurn" &&
+    typeof params.sessionTarget === "string" &&
+    (params.sessionTarget === "isolated" ||
+      params.sessionTarget === "current" ||
+      params.sessionTarget.startsWith("session:"))
+  );
+}
+
+function assertValidCronAnnounceDelivery(params: {
+  cfg: OpenClawConfig;
+  delivery?: CronDelivery;
+  sessionTarget?: string;
+  sessionKey?: string;
+  payload?: CronPayload;
+}) {
+  const allowSessionLastRoute = Boolean(
+    resolveCronDeliverySessionKey({
+      sessionTarget: params.sessionTarget,
+      sessionKey: params.sessionKey,
+    }),
+  );
+  const implicitIsolatedAgentTurnDelivery =
+    !params.delivery &&
+    isIsolatedLikeAgentTurn({
+      sessionTarget: params.sessionTarget,
+      payload: params.payload,
+    });
+
+  if (implicitIsolatedAgentTurnDelivery) {
+    assertNoImplicitLastAnnounceRoute({
+      cfg: params.cfg,
+      channel: "last",
+      field: "delivery.channel",
+      allowSessionLastRoute,
+    });
+    assertConfiguredAnnounceChannel({
+      cfg: params.cfg,
+      channel: "last",
+      field: "delivery.channel",
+      allowSessionLastRoute,
+    });
+  }
+
   if (params.delivery && (params.delivery.mode ?? "announce") === "announce") {
+    assertNoImplicitLastAnnounceRoute({
+      cfg: params.cfg,
+      channel: params.delivery.channel,
+      to: params.delivery.to,
+      field: "delivery.channel",
+      allowSessionLastRoute,
+    });
     assertCompatibleAnnounceTarget({
       channel: params.delivery.channel,
       to: params.delivery.to,
@@ -135,6 +235,7 @@ function assertValidCronAnnounceDelivery(params: { cfg: OpenClawConfig; delivery
         to: params.delivery.to,
       }),
       field: "delivery.channel",
+      allowSessionLastRoute,
     });
   }
 
@@ -148,6 +249,13 @@ function assertValidCronAnnounceDelivery(params: { cfg: OpenClawConfig; delivery
     ) {
       return;
     }
+    assertNoImplicitLastAnnounceRoute({
+      cfg: params.cfg,
+      channel: failureDestination.channel,
+      to: failureDestination.to,
+      field: "delivery.failureDestination.channel",
+      allowSessionLastRoute,
+    });
     assertCompatibleAnnounceTarget({
       channel: failureDestination.channel,
       to: failureDestination.to,
@@ -160,6 +268,7 @@ function assertValidCronAnnounceDelivery(params: { cfg: OpenClawConfig; delivery
         to: failureDestination.to,
       }),
       field: "delivery.failureDestination.channel",
+      allowSessionLastRoute,
     });
   }
 }
@@ -168,6 +277,9 @@ function assertValidCronCreateDelivery(cfg: OpenClawConfig, jobCreate: CronJobCr
   assertValidCronAnnounceDelivery({
     cfg,
     delivery: jobCreate.delivery,
+    sessionTarget: jobCreate.sessionTarget,
+    sessionKey: jobCreate.sessionKey,
+    payload: jobCreate.payload,
   });
 }
 
@@ -177,19 +289,30 @@ function assertValidCronUpdatePatch(params: {
   currentJob: CronJob;
   patch: CronJobPatch;
 }) {
-  // Apply the full patch so service-owned payload/session constraints are
-  // checked before mutation; configured-channel checks stay delivery-scoped so
-  // stale existing delivery does not block unrelated updates like disabling.
+  const shouldValidateDeliveryOutcome =
+    "delivery" in params.patch ||
+    "payload" in params.patch ||
+    "sessionTarget" in params.patch ||
+    "enabled" in params.patch ||
+    "schedule" in params.patch;
+  if (!shouldValidateDeliveryOutcome) {
+    return;
+  }
+
   const nextJob = structuredClone(params.currentJob);
   applyJobPatch(nextJob, params.patch, {
     defaultAgentId: params.defaultAgentId,
   });
-  if ("delivery" in params.patch) {
-    assertValidCronAnnounceDelivery({
-      cfg: params.cfg,
-      delivery: nextJob.delivery,
-    });
+  if (!nextJob.enabled) {
+    return;
   }
+  assertValidCronAnnounceDelivery({
+    cfg: params.cfg,
+    delivery: nextJob.delivery,
+    sessionTarget: nextJob.sessionTarget,
+    sessionKey: nextJob.sessionKey,
+    payload: nextJob.payload,
+  });
 }
 
 function resolveCronJobId(params: CronJobIdParams): string | undefined {
@@ -468,7 +591,10 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    context.logGateway.info("cron: job created", { jobId: job.id, schedule: jobCreate.schedule });
+    context.logGateway.info("cron: job created", {
+      jobId: job.id,
+      schedule: jobCreate.schedule,
+    });
     respond(true, job, undefined);
   },
   "cron.update": async ({ params, respond, context }) => {
