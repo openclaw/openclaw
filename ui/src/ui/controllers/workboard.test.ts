@@ -3993,6 +3993,31 @@ describe("workboard controller", () => {
     expect(state.tasksByCardId.get("card-1")).toMatchObject({ status: "completed" });
   });
 
+  it("keeps prepared task lifecycle state after no-op syncs", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const linked = {
+      ...sampleCard,
+      status: "running",
+      sessionKey: sampleTaskSessionKey,
+      runId: "run-1",
+      taskId: "task-1",
+    } satisfies WorkboardCard;
+    state.loaded = true;
+    state.cards = [linked];
+    state.tasksByCardId.set("card-1", sampleTask);
+    state.lifecycleTasksPrepared = true;
+    const client = createClient({
+      "tasks.list": { tasks: [sampleTask] },
+    });
+
+    await syncWorkboardLifecycle({ host, client: client as never, sessions: [] });
+    await syncWorkboardLifecycle({ host, client: client as never, sessions: [] });
+
+    expect(client.request).not.toHaveBeenCalled();
+    expect(state.lifecycleTasksPrepared).toBe(true);
+  });
+
   it("does not retry a failed lifecycle task refresh on the next render", async () => {
     const host = {};
     const state = getWorkboardState(host);

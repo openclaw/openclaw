@@ -2639,6 +2639,7 @@ export async function syncWorkboardLifecycle(params: {
     return;
   }
   const syncKeys = getLifecycleSyncKeys(params.host);
+  let lifecycleWriteStarted = false;
   for (const card of state.cards) {
     if (workboardLifecycleSyncBlocked(params.host, state)) {
       return;
@@ -2695,6 +2696,7 @@ export async function syncWorkboardLifecycle(params: {
       continue;
     }
     const generation = nextWorkboardLoadGeneration(params.host);
+    lifecycleWriteStarted = true;
     state.syncingCardIds.add(card.id);
     params.requestUpdate?.();
     try {
@@ -2728,6 +2730,9 @@ export async function syncWorkboardLifecycle(params: {
       }
       params.requestUpdate?.();
     }
+  }
+  if (!lifecycleWriteStarted) {
+    state.lifecycleTasksPrepared = true;
   }
 }
 
