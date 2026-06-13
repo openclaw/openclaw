@@ -56,7 +56,7 @@ export class ShadowLoggerPlugin {
 
     try {
       const payload = this.extractPayload(event);
-      const { error } = await this.supabase.schema("shadow_log").from("dialogues").insert(payload);
+      const { error } = await this.supabase.schema("shadow_log").from("messages").insert(payload);
 
       if (error) {
         this.logger.error(`Shadow Logger: Supabase insert error [${event.type}:${event.action}]: ${error.message}`);
@@ -81,7 +81,7 @@ export class ShadowLoggerPlugin {
       const metadata = ctx.metadata || {};
       return {
         ...basePayload,
-        direction: "inbound",
+        direction: "received",
         sender_id: ctx.from,
         content: ctx.content,
         channel_id: ctx.channelId,
@@ -97,7 +97,7 @@ export class ShadowLoggerPlugin {
     if (isMessageSentEvent(event)) {
       return {
         ...basePayload,
-        direction: "outbound",
+        direction: "sent",
         sender_id: "openclaw",
         content: context.content,
         channel_id: context.channelId,
