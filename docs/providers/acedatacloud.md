@@ -90,10 +90,16 @@ Or override the search key independently:
 
 ```json5
 {
-  acedatacloud: {
-    webSearch: {
-      apiKey: "ace-...", // optional override
-      baseUrl: "https://api.acedata.cloud", // optional override
+  plugins: {
+    entries: {
+      acedatacloud: {
+        config: {
+          webSearch: {
+            apiKey: "ace-...", // optional override
+            baseUrl: "https://api.acedata.cloud", // optional override
+          },
+        },
+      },
     },
   },
 }
@@ -115,7 +121,7 @@ All requests use `Authorization: Bearer <key>` against the Ace Data Cloud OpenAI
   <Card title="Models concepts" href="/concepts/models" icon="brain">
     How OpenClaw resolves model refs and provider selection.
   </Card>
-  <Card title="Web search" href="/tools/web-search" icon="magnifying-glass">
+  <Card title="Web search" href="/tools/web" icon="magnifying-glass">
     The shared web-search tool contract used by Ace Data Cloud's SERP provider.
   </Card>
 </CardGroup>

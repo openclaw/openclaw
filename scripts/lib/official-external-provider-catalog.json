@@ -200,13 +200,14 @@
             "placeholder": "ace-...",
             "signupUrl": "https://platform.acedata.cloud",
             "docsUrl": "https://docs.acedata.cloud/serp/google",
-            "credentialPath": "acedatacloud.webSearch.apiKey"
+            "credentialPath": "plugins.entries.acedatacloud.config.webSearch.apiKey"
           }
         ],
         "install": {
-          "npmSpec": "@acedatacloud/openclaw-provider",
+          "npmSpec": "@acedatacloud/openclaw-provider@2026.5.33",
           "defaultChoice": "npm",
-          "minHostVersion": ">=2026.4.2"
+          "minHostVersion": ">=2026.4.2",
+          "expectedIntegrity": "sha512-+DjgalysMMo7nJl9ngRXzugc+Tl7lSLw5eKvuPKILKpevg2Fg2Kz3iW6TM8SBg7mVuRqLRKx2w4ksKdhyBRBnw=="
         }
       }
     }
