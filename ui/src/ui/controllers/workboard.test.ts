@@ -4419,6 +4419,41 @@ describe("workboard controller", () => {
     expect(state.lifecycleTasksPrepared).toBe(true);
   });
 
+  it("reconciles session-only cards when task discovery is unavailable", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const linked = {
+      ...sampleCard,
+      status: "running",
+      sessionKey: sampleSession.key,
+      runId: "run-1",
+    } satisfies WorkboardCard;
+    state.loaded = true;
+    state.cards = [linked];
+    const client = createClient((method) => {
+      if (method === "tasks.list") {
+        throw new Error("tasks unavailable");
+      }
+      if (method === "workboard.cards.update") {
+        return { card: { ...linked, status: "review" } };
+      }
+      return {};
+    });
+
+    await syncWorkboardLifecycle({
+      host,
+      client: client as never,
+      sessions: [{ ...sampleSession, status: "done", hasActiveRun: false }],
+    });
+
+    expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
+    expect(client.request).toHaveBeenCalledWith("workboard.cards.update", {
+      id: linked.id,
+      patch: expect.objectContaining({ status: "review" }),
+    });
+    expect(state.cards[0]?.status).toBe("review");
+  });
+
   it("exact-confirms task list omissions before lifecycle writes", async () => {
     const host = {};
     const state = getWorkboardState(host);
@@ -5205,8 +5240,14 @@ describe("workboard controller", () => {
     } as const;
     state.loaded = true;
     state.cards = [linked];
-    const client = createClient(() => {
-      throw new Error("write denied");
+    const client = createClient((method) => {
+      if (method === "tasks.list") {
+        throw new Error("tasks unavailable");
+      }
+      if (method === "workboard.cards.update") {
+        return { card: { ...linked, status: "review", updatedAt: 3000 } };
+      }
+      return {};
     });
 
     await syncWorkboardLifecycle({
@@ -5220,9 +5261,13 @@ describe("workboard controller", () => {
       sessions: [completedSession],
     });
 
-    expect(client.request).toHaveBeenCalledOnce();
+    expect(client.request.mock.calls.filter(([method]) => method === "tasks.list")).toHaveLength(1);
+    expect(
+      client.request.mock.calls.filter(([method]) => method === "workboard.cards.update"),
+    ).toHaveLength(1);
     expect(state.error).toBeNull();
-    expect(state.lifecycleTaskRefreshError).toBe("write denied");
+    expect(state.lifecycleTaskRefreshError).toBe("tasks unavailable");
+    expect(state.cards[0]?.status).toBe("review");
   });
 
   it("stops linked sessions and marks cards blocked", async () => {

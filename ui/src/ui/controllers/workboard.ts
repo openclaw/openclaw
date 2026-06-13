@@ -1848,16 +1848,20 @@ function applyTaskSummariesToState(
   state.missingTaskIds = new Set([...missingTaskIds].filter((taskId) => linkedTaskIds.has(taskId)));
 }
 
-function shouldRefreshWorkboardTasksForLifecycle(state: WorkboardUiState): boolean {
+function workboardLifecycleRequiresTaskRefresh(state: WorkboardUiState): boolean {
   return (
     state.tasksByCardId.size > 0 ||
     state.cards.some((card) => {
       const taskId = normalizeString(card.taskId);
-      return (
-        Boolean(taskId && !state.missingTaskIds.has(taskId)) ||
-        (card.status === "running" && Boolean(workboardCardSessionKey(card)))
-      );
+      return Boolean(taskId && !state.missingTaskIds.has(taskId));
     })
+  );
+}
+
+function shouldRefreshWorkboardTasksForLifecycle(state: WorkboardUiState): boolean {
+  return (
+    workboardLifecycleRequiresTaskRefresh(state) ||
+    state.cards.some((card) => card.status === "running" && Boolean(workboardCardSessionKey(card)))
   );
 }
 
@@ -2960,7 +2964,7 @@ export async function syncWorkboardLifecycle(params: {
     !params.client ||
     !state.loaded ||
     (workboardLifecycleTaskRefreshRetryPending(state) &&
-      shouldRefreshWorkboardTasksForLifecycle(state)) ||
+      workboardLifecycleRequiresTaskRefresh(state)) ||
     workboardLifecycleSyncBlocked(params.host, state)
   ) {
     return;
@@ -2978,7 +2982,7 @@ export async function syncWorkboardLifecycle(params: {
       },
       state,
     );
-    if (tasksPreparedAt === null) {
+    if (tasksPreparedAt === null && workboardLifecycleRequiresTaskRefresh(state)) {
       return;
     }
   }

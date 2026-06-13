@@ -1596,12 +1596,23 @@ function taskIsActive(task: WorkboardTaskSummary | undefined): boolean {
   return task?.status === "queued" || task?.status === "running";
 }
 
-function cardHasActiveOrUnresolvedTask(
+function cardHasUnresolvedTaskLink(
   card: WorkboardCard,
   task: WorkboardTaskSummary | undefined,
   missingTaskIds: ReadonlySet<string>,
 ): boolean {
-  return taskIsActive(task) || Boolean(card.taskId && !task && !missingTaskIds.has(card.taskId));
+  return Boolean(card.taskId && !task && !missingTaskIds.has(card.taskId));
+}
+
+function cardHasActiveOrRunningUnresolvedTask(
+  card: WorkboardCard,
+  task: WorkboardTaskSummary | undefined,
+  missingTaskIds: ReadonlySet<string>,
+): boolean {
+  return (
+    taskIsActive(task) ||
+    (card.status === "running" && cardHasUnresolvedTaskLink(card, task, missingTaskIds))
+  );
 }
 
 function cardHasUnresolvedStartedRun(card: WorkboardCard): boolean {
@@ -1617,9 +1628,10 @@ function cardCanStart(
 ): boolean {
   const task = state.tasksByCardId.get(card.id);
   const session = findWorkboardSession(card, sessions);
-  const activeTask = cardHasActiveOrUnresolvedTask(card, task, state.missingTaskIds);
+  const taskBlocksStart =
+    taskIsActive(task) || cardHasUnresolvedTaskLink(card, task, state.missingTaskIds);
   const linkedSessionKey = card.sessionKey ?? card.execution?.sessionKey;
-  return !activeTask && !cardHasUnresolvedStartedRun(card) && (!linkedSessionKey || !session);
+  return !taskBlocksStart && !cardHasUnresolvedStartedRun(card) && (!linkedSessionKey || !session);
 }
 
 function formatDependencyParent(parent: WorkboardDependencyState["parents"][number]): string {
@@ -2199,7 +2211,7 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
   const session = findWorkboardSession(card, props.sessions);
   const busy = state.busyCardIds.has(card.id) || state.dispatching;
   const syncing = state.syncingCardIds.has(card.id);
-  const activeTask = cardHasActiveOrUnresolvedTask(card, task, state.missingTaskIds);
+  const activeTask = cardHasActiveOrRunningUnresolvedTask(card, task, state.missingTaskIds);
   const live =
     activeTask ||
     cardHasUnresolvedStartedRun(card) ||
