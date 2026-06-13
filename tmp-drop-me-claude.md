@@ -1,2 +1,3 @@
 - 2026-06-13T18:35:26+00:00: lane created off assembly-drift-cure @599f7ba0c9, work-branch pushed remote-first, workorder written. Next: dispatch Claude Code in tmux against the workorder.
 - 2026-06-13T18:56:26+00:00: core drop done — system-events.ts unconditional sanitize + dropped forceSenderIsOwnerFalse/resolveEventOwnerDowngrade; session-system-events.ts collapsed Block→string drain, kept continuation tracer/ack/traceparent. Next: 22 extension callsites.
+- 2026-06-13T19:06:39+00:00: dropped forceSenderIsOwnerFalse:true from 22 extension prod callsites (21 files). PROD grep clean. Next: tests.
