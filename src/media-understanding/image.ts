@@ -64,14 +64,10 @@ function isNativeResponsesReasoningPayload(model: Model): boolean {
   }).usesKnownNativeOpenAIRoute;
 }
 
-function formatModelInputCapabilities(input: Model["input"] | undefined): string {
-  return input && input.length > 0 ? input.join(", ") : "none";
-}
-
-function resolvedModelSupportsImage(model: Model | undefined): model is Model {
-  return Boolean(
-    model?.input?.includes("image") &&
-    !isKnownNonImageModel({ providerId: model.provider, modelId: model.id }),
+function modelSupportsImage(model: Model): boolean {
+  return (
+    model.input.includes("image") &&
+    !isKnownNonImageModel({ providerId: model.provider, modelId: model.id })
   );
 }
 
@@ -167,7 +163,7 @@ async function resolveImageRuntime(params: {
       ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     },
   );
-  if (resolvedModelSupportsImage(fastResolved.model)) {
+  if (fastResolved.model && modelSupportsImage(fastResolved.model)) {
     const normalizedResolved = await resolveModelAsync(
       resolvedRef.provider,
       resolvedRef.model,
@@ -179,7 +175,7 @@ async function resolveImageRuntime(params: {
         ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
       },
     );
-    if (resolvedModelSupportsImage(normalizedResolved.model)) {
+    if (normalizedResolved.model && modelSupportsImage(normalizedResolved.model)) {
       return await prepareResolvedImageRuntime(
         params,
         normalizedResolved.model,
@@ -205,7 +201,7 @@ async function resolveImageRuntime(params: {
   if (!model) {
     throw new Error(`Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`);
   }
-  if (!resolvedModelSupportsImage(model)) {
+  if (!modelSupportsImage(model)) {
     // resolveModelWithRegistry may synthesize a text-only fallback for configured
     // providers, which would change "Unknown model" → "Model does not support images"
     // and skip the MiniMax VLM recovery path. Throw Unknown model for MiniMax VLM
@@ -213,9 +209,10 @@ async function resolveImageRuntime(params: {
     if (isMinimaxVlmModel(resolvedRef.provider, resolvedRef.model)) {
       throw new Error(`Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`);
     }
+    const input = model.input.length > 0 ? model.input.join(", ") : "none";
     throw new Error(
       `Model does not support images: ${params.provider}/${params.model} ` +
-        `(resolved ${model.provider}/${model.id} input: ${formatModelInputCapabilities(model.input)})`,
+        `(resolved ${model.provider}/${model.id} input: ${input})`,
     );
   }
   return await prepareResolvedImageRuntime(params, model, authStorage);
