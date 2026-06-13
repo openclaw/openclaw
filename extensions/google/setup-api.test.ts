@@ -7,6 +7,47 @@ import { describe, expect, it } from "vitest";
 import { buildGoogleGeminiCliBackend } from "./cli-backend.js";
 import setupEntry from "./setup-api.js";
 
+type GeminiPrepareContext = Parameters<
+  NonNullable<ReturnType<typeof buildGoogleGeminiCliBackend>["prepareExecution"]>
+>[0] & {
+  authCredential: {
+    type: "oauth";
+    provider: "google-gemini-cli";
+    access: string;
+    refresh: string;
+    expires: number;
+    idToken?: string;
+    email: string;
+  };
+};
+
+function buildGeminiPrepareContext(workspaceDir: string): GeminiPrepareContext {
+  return {
+    workspaceDir,
+    provider: "google-gemini-cli",
+    modelId: "gemini-3.1-pro-preview",
+    authProfileId: "google-gemini-cli:user@example.test",
+    // Private bundled-runtime bridge, not public Plugin SDK surface.
+    authCredential: {
+      type: "oauth",
+      provider: "google-gemini-cli",
+      access: "access-token",
+      refresh: "refresh-token",
+      expires: 1_800_000_000_000,
+      idToken: "id-token",
+      email: "user@example.test",
+    },
+  };
+}
+
+function restoreEnv(name: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[name];
+    return;
+  }
+  process.env[name] = value;
+}
+
 describe("google setup entry", () => {
   it("registers setup runtime providers declared by the manifest", () => {
     const providerIds: string[] = [];
@@ -37,32 +78,7 @@ describe("google gemini cli backend auth bridge", () => {
     let home: string | undefined;
 
     try {
-      prepared = await backend.prepareExecution?.({
-        workspaceDir,
-        provider: "google-gemini-cli",
-        modelId: "gemini-3.1-pro-preview",
-        authProfileId: "google-gemini-cli:user@example.test",
-        // Private bundled-runtime bridge, not public Plugin SDK surface.
-        authCredential: {
-          type: "oauth",
-          provider: "google-gemini-cli",
-          access: "access-token",
-          refresh: "refresh-token",
-          expires: 1_800_000_000_000,
-          idToken: "id-token",
-          email: "user@example.test",
-        },
-      } as Parameters<NonNullable<typeof backend.prepareExecution>>[0] & {
-        authCredential: {
-          type: "oauth";
-          provider: "google-gemini-cli";
-          access: string;
-          refresh: string;
-          expires: number;
-          idToken: string;
-          email: string;
-        };
-      });
+      prepared = await backend.prepareExecution?.(buildGeminiPrepareContext(workspaceDir));
 
       home = prepared?.env?.GEMINI_CLI_HOME;
       expect(home).toBeTruthy();
@@ -81,6 +97,35 @@ describe("google gemini cli backend auth bridge", () => {
     }
 
     await expect(fs.access(home ?? "")).rejects.toThrow();
+  });
+
+  it("clears inherited Gemini GCA credentials when staging selected OAuth credentials", async () => {
+    const backend = buildGoogleGeminiCliBackend();
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-workspace-"));
+    const originalUseGca = process.env.GOOGLE_GENAI_USE_GCA;
+    const originalCloudAccessToken = process.env.GOOGLE_CLOUD_ACCESS_TOKEN;
+    let prepared:
+      | Awaited<ReturnType<NonNullable<typeof backend.prepareExecution>>>
+      | null
+      | undefined;
+
+    process.env.GOOGLE_GENAI_USE_GCA = "true";
+    process.env.GOOGLE_CLOUD_ACCESS_TOKEN = "ambient-cloud-token";
+
+    try {
+      prepared = await backend.prepareExecution?.(buildGeminiPrepareContext(workspaceDir));
+
+      expect(prepared?.env?.GEMINI_CLI_HOME).toBeTruthy();
+      expect(prepared?.clearEnv).toEqual([
+        "GOOGLE_GENAI_USE_GCA",
+        "GOOGLE_CLOUD_ACCESS_TOKEN",
+      ]);
+    } finally {
+      restoreEnv("GOOGLE_GENAI_USE_GCA", originalUseGca);
+      restoreEnv("GOOGLE_CLOUD_ACCESS_TOKEN", originalCloudAccessToken);
+      await prepared?.cleanup?.();
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
   });
 
   it("uses profile-only auth epochs for the private Gemini CLI bridge", () => {
