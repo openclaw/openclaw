@@ -469,7 +469,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
               ...currentSessionPatchTarget(),
               model: args,
             });
-            chatLog.addSystem(`model set to ${args}`);
+            const resolvedModelRef =
+              result.resolved?.model && result.resolved?.modelProvider
+                ? `${result.resolved.modelProvider}/${result.resolved.model}`
+                : (result.resolved?.model ?? args);
+            chatLog.addSystem(`model set to ${resolvedModelRef}`);
             applySessionInfoFromPatch(result);
             await refreshSessionInfo();
           } catch (err) {
