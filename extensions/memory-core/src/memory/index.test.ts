@@ -1168,12 +1168,13 @@ describe("memory index", () => {
       try {
         const fields = nextManager as unknown as {
           dirty: boolean;
-          syncSessionFiles: (params: unknown) => Promise<void>;
+          syncSessionFiles: (params: unknown) => Promise<unknown>;
         };
         const syncSessionFiles = fields.syncSessionFiles.bind(nextManager);
         fields.syncSessionFiles = async (params) => {
           fields.dirty = true;
-          await syncSessionFiles(params);
+          // Forward the sync plan: runSync reads scanOk from the return value.
+          return await syncSessionFiles(params);
         };
 
         await nextManager.sync({ reason: "test", force: true });

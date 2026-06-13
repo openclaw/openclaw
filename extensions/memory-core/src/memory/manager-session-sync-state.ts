@@ -40,11 +40,25 @@ export function resolveMemorySessionSyncPlan(params: {
   sessionsDirtyFiles: Set<string>;
   existingRows?: MemorySourceFileStateRow[] | null;
   sessionPathForFile: (file: string) => string;
+  // Whether the enumeration that produced `files` was authoritative (the
+  // sessions dir was read or does not exist). Required so a new caller cannot
+  // silently default a failed scan to authoritative: an empty `files` array
+  // from a failed scan must not drive the destructive stale-row prune. See
+  // `pruneStaleRows`. Targeted syncs pass true (no scan involved).
+  scanOk: boolean;
 }): {
   activePaths: Set<string> | null;
   existingRows: MemorySourceFileStateRow[] | null;
   existingHashes: Map<string, string> | null;
   indexAll: boolean;
+  // True only when the stale-row prune is safe to run: a full enumeration
+  // (activePaths !== null) that authoritatively read the directory. When the
+  // scan failed, `files` is empty for reasons unrelated to the on-disk state,
+  // so pruning every row not in the (empty) listing would wipe the session
+  // index on a single transient NFS error. An authoritatively empty directory
+  // still prunes, so legitimately removed sessions (e.g. disk-budget removing
+  // the last archive) do not leave orphaned rows.
+  pruneStaleRows: boolean;
 } {
   const activePaths = params.targetSessionFiles
     ? null
@@ -58,5 +72,6 @@ export function resolveMemorySessionSyncPlan(params: {
       params.needsFullReindex ||
       Boolean(params.targetSessionFiles) ||
       params.sessionsDirtyFiles.size === 0,
+    pruneStaleRows: activePaths !== null && params.scanOk,
   };
 }

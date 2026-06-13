@@ -147,12 +147,21 @@ async function collectMemoryFilesFromDir(
   files.push(...scan.entries.map((entry) => entry.path));
 }
 
-export async function listMemoryFiles(
+// Result of enumerating memory files. `ok` is false when a listing root (the
+// workspace memory dir, an extra path, or the root memory file stat) failed
+// for a non-missing reason; destructive callers (stale-row pruning) must then
+// skip rather than treat unseen files as deleted. Failures in subtrees below
+// the probed roots stay invisible (fs-safe walkDirectory swallows them); the
+// flag guards the whole-index wipe hazard, not per-file drift.
+export type MemoryFilesScanResult = { ok: boolean; files: string[] };
+
+export async function scanMemoryFiles(
   workspaceDir: string,
   extraPaths?: string[],
   multimodal?: MemoryMultimodalSettings,
-): Promise<string[]> {
+): Promise<MemoryFilesScanResult> {
   const result: string[] = [];
+  let ok = true;
   const memoryDir = path.join(workspaceDir, "memory");
 
   const shouldSkipWorkspaceMemoryPath = (absPath: string): boolean =>
@@ -168,7 +177,9 @@ export async function listMemoryFiles(
         return;
       }
       result.push(absPath);
-    } catch {}
+    } catch {
+      ok = false;
+    }
   };
 
   const memoryFile = await resolveCanonicalRootMemoryFile(workspaceDir);
@@ -178,9 +189,17 @@ export async function listMemoryFiles(
   try {
     const dirStat = await fs.lstat(memoryDir);
     if (!dirStat.isSymbolicLink() && dirStat.isDirectory()) {
+      // fs-safe walkDirectory swallows readdir errors, even at the root, so
+      // probe the root read explicitly: a transient failure must flag the
+      // scan instead of reading as an empty dir and triggering mass pruning.
+      await fs.readdir(memoryDir);
       await collectMemoryFilesFromDir(memoryDir, result, multimodal, shouldSkipWorkspaceMemoryPath);
     }
-  } catch {}
+  } catch (err) {
+    if (!isFileMissingError(err)) {
+      ok = false;
+    }
+  }
 
   const normalizedExtraPaths = normalizeExtraMemoryPaths(workspaceDir, extraPaths);
   if (normalizedExtraPaths.length > 0) {
@@ -194,6 +213,9 @@ export async function listMemoryFiles(
           continue;
         }
         if (stat.isDirectory()) {
+          // Same root-read probe as the memory dir: walkDirectory cannot
+          // report a failed readdir.
+          await fs.readdir(inputPath);
           await collectMemoryFilesFromDir(
             inputPath,
             result,
@@ -205,11 +227,15 @@ export async function listMemoryFiles(
         if (stat.isFile() && isAllowedMemoryFilePath(inputPath, multimodal)) {
           result.push(inputPath);
         }
-      } catch {}
+      } catch (err) {
+        if (!isFileMissingError(err)) {
+          ok = false;
+        }
+      }
     }
   }
   if (result.length <= 1) {
-    return result;
+    return { ok, files: result };
   }
   const seen = new Set<string>();
   const deduped: string[] = [];
@@ -224,7 +250,15 @@ export async function listMemoryFiles(
     seen.add(key);
     deduped.push(entry);
   }
-  return deduped;
+  return { ok, files: deduped };
+}
+
+export async function listMemoryFiles(
+  workspaceDir: string,
+  extraPaths?: string[],
+  multimodal?: MemoryMultimodalSettings,
+): Promise<string[]> {
+  return (await scanMemoryFiles(workspaceDir, extraPaths, multimodal)).files;
 }
 
 export async function buildFileEntry(

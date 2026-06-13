@@ -12,8 +12,10 @@ export {
   parseEmbedding,
   remapChunkLines,
   runWithConcurrency,
+  scanMemoryFiles,
   type MemoryChunk,
   type MemoryFileEntry,
+  type MemoryFilesScanResult,
 } from "./host/internal.js";
 export { readMemoryFile } from "./host/read-file.js";
 export { isTransientMemoryReadError, retryTransientMemoryRead } from "./host/read-retry.js";
