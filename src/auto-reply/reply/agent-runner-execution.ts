@@ -56,6 +56,12 @@ import {
   resolvePersistedOverrideModelRef,
 } from "../../agents/model-selection.js";
 import { resolveOpenAIRuntimeProvider } from "../../agents/openai-routing.js";
+import {
+  AGENT_RUN_RESTART_ABORT_STOP_REASON,
+  createAgentRunRestartAbortError,
+  isAgentRunRestartAbortReason,
+  resolveAgentRunAbortLifecycleFields,
+} from "../../agents/run-termination.js";
 import { buildAgentRuntimeOutcomePlan } from "../../agents/runtime-plan/build.js";
 import type { ContinueWorkRequest } from "../../agents/tools/continue-work-tool.js";
 import {
@@ -69,7 +75,12 @@ import {
 import { resolveSilentReplyPolicy } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
-import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
+import {
+  captureAgentRunLifecycleGeneration,
+  clearAgentRunContext,
+  emitAgentEvent,
+  registerAgentRunContext,
+} from "../../infra/agent-events.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { logSessionTurnCreated } from "../../logging/diagnostic.js";
@@ -1468,7 +1479,15 @@ function isReplyOperationRestartAbort(replyOperation?: ReplyOperation): boolean 
   );
 }
 
-function createEmbeddedLifecycleTerminalBackstop(params: { runId: string; sessionKey?: string }) {
+function createEmbeddedLifecycleTerminalBackstop(params: {
+  runId: string;
+  sessionKey?: string;
+  getLifecycleGeneration: () => string;
+  resolveAbortLifecycleFields: () => {
+    aborted?: true;
+    stopReason?: string;
+  };
+}) {
   let terminalEmitted = false;
   let startedAt: number | undefined;
 
@@ -1490,13 +1509,20 @@ function createEmbeddedLifecycleTerminalBackstop(params: { runId: string; sessio
       return;
     }
     terminalEmitted = true;
+    const abortLifecycleFields = params.resolveAbortLifecycleFields();
+    const restartAbort = abortLifecycleFields.stopReason === AGENT_RUN_RESTART_ABORT_STOP_REASON;
+    const terminalPhase = restartAbort ? "end" : phase;
     const data: Record<string, unknown> = {
-      phase,
+      phase: terminalPhase,
       endedAt: Date.now(),
       ...(startedAt !== undefined ? { startedAt } : {}),
     };
-    if (phase === "error") {
+    if (restartAbort) {
+      data.aborted = true;
+      data.stopReason = AGENT_RUN_RESTART_ABORT_STOP_REASON;
+    } else if (phase === "error") {
       data.error = formatErrorMessage(resultOrError);
+      Object.assign(data, abortLifecycleFields);
     } else {
       const meta =
         resultOrError && typeof resultOrError === "object" && "meta" in resultOrError
@@ -1516,9 +1542,16 @@ function createEmbeddedLifecycleTerminalBackstop(params: { runId: string; sessio
       if (meta?.replayInvalid === true) {
         data.replayInvalid = true;
       }
+      if (abortLifecycleFields.aborted === true) {
+        data.aborted = true;
+      }
+      if (abortLifecycleFields.stopReason && !readStringValue(data.stopReason)) {
+        data.stopReason = abortLifecycleFields.stopReason;
+      }
     }
     emitAgentEvent({
       runId: params.runId,
+      lifecycleGeneration: params.getLifecycleGeneration(),
       ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
       stream: "lifecycle",
       data,
@@ -1730,6 +1763,22 @@ export async function runAgentTurnWithFallback(params: {
   const agentTurnTiming = createAgentTurnTimingTracker({
     profilerEnabled: isReplyProfilerEnabled({ config: runtimeConfig }),
   });
+  const shouldSurfaceToControlUi = isInternalMessageChannel(
+    params.followupRun.run.messageProvider ??
+      params.sessionCtx.Surface ??
+      params.sessionCtx.Provider,
+  );
+  let lifecycleGeneration = captureAgentRunLifecycleGeneration(runId);
+  if (params.sessionKey) {
+    registerAgentRunContext(runId, {
+      sessionKey: params.sessionKey,
+      ...(params.followupRun.run.sessionId ? { sessionId: params.followupRun.run.sessionId } : {}),
+      lifecycleGeneration,
+      verboseLevel: params.resolvedVerboseLevel,
+      isHeartbeat: params.isHeartbeat,
+      isControlUiVisible: shouldSurfaceToControlUi,
+    });
+  }
   if (isDiagnosticsEnabled(runtimeConfig)) {
     logSessionTurnCreated({
       runId,
@@ -1743,32 +1792,40 @@ export async function runAgentTurnWithFallback(params: {
       trigger: resolveReplyHookTrigger(params.opts),
     });
   }
-  const replyMediaContext =
-    params.replyMediaContext ??
-    agentTurnTiming.measureSync("reply_media_context", () =>
-      createReplyMediaContext({
+  let replyMediaContext: ReplyMediaContext;
+  let currentTurnImages: Awaited<ReturnType<typeof resolveCurrentTurnImages>>;
+  try {
+    replyMediaContext =
+      params.replyMediaContext ??
+      agentTurnTiming.measureSync("reply_media_context", () =>
+        createReplyMediaContext({
+          cfg: runtimeConfig,
+          sessionKey: params.sessionKey,
+          workspaceDir: params.followupRun.run.workspaceDir,
+          messageProvider: params.followupRun.run.messageProvider,
+          accountId:
+            params.followupRun.originatingAccountId ?? params.followupRun.run.agentAccountId,
+          groupId: params.followupRun.run.groupId,
+          groupChannel: params.followupRun.run.groupChannel,
+          groupSpace: params.followupRun.run.groupSpace,
+          requesterSenderId: params.followupRun.run.senderId,
+          requesterSenderName: params.followupRun.run.senderName,
+          requesterSenderUsername: params.followupRun.run.senderUsername,
+          requesterSenderE164: params.followupRun.run.senderE164,
+        }),
+      );
+    currentTurnImages = await agentTurnTiming.measure("current_turn_images", () =>
+      resolveCurrentTurnImages({
+        ctx: params.sessionCtx,
         cfg: runtimeConfig,
-        sessionKey: params.sessionKey,
-        workspaceDir: params.followupRun.run.workspaceDir,
-        messageProvider: params.followupRun.run.messageProvider,
-        accountId: params.followupRun.originatingAccountId ?? params.followupRun.run.agentAccountId,
-        groupId: params.followupRun.run.groupId,
-        groupChannel: params.followupRun.run.groupChannel,
-        groupSpace: params.followupRun.run.groupSpace,
-        requesterSenderId: params.followupRun.run.senderId,
-        requesterSenderName: params.followupRun.run.senderName,
-        requesterSenderUsername: params.followupRun.run.senderUsername,
-        requesterSenderE164: params.followupRun.run.senderE164,
+        images: params.followupRun.images ?? params.opts?.images,
+        imageOrder: params.followupRun.imageOrder ?? params.opts?.imageOrder,
       }),
     );
-  const currentTurnImages = await agentTurnTiming.measure("current_turn_images", () =>
-    resolveCurrentTurnImages({
-      ctx: params.sessionCtx,
-      cfg: runtimeConfig,
-      images: params.followupRun.images ?? params.opts?.images,
-      imageOrder: params.followupRun.imageOrder ?? params.opts?.imageOrder,
-    }),
-  );
+  } catch (error) {
+    clearAgentRunContext(runId, lifecycleGeneration);
+    throw error;
+  }
   let didNotifyAgentRunStart = false;
   const notifyAgentRunStart = () => {
     if (didNotifyAgentRunStart) {
@@ -1831,20 +1888,7 @@ export async function runAgentTurnWithFallback(params: {
     }
     await deliverCompactionNoticePayload(noticePayload, "hook");
   };
-  const shouldSurfaceToControlUi = isInternalMessageChannel(
-    params.followupRun.run.messageProvider ??
-      params.sessionCtx.Surface ??
-      params.sessionCtx.Provider,
-  );
-  if (params.sessionKey) {
-    registerAgentRunContext(runId, {
-      sessionKey: params.sessionKey,
-      ...(params.followupRun.run.sessionId ? { sessionId: params.followupRun.run.sessionId } : {}),
-      verboseLevel: params.resolvedVerboseLevel,
-      isHeartbeat: params.isHeartbeat,
-      isControlUiVisible: shouldSurfaceToControlUi,
-    });
-  }
+  const runAbortSignal = params.replyOperation?.abortSignal ?? params.opts?.abortSignal;
   let runResult: EmbeddedAgentRunResult;
   let fallbackProvider = params.followupRun.run.provider;
   let fallbackModel = params.followupRun.run.model;
@@ -2322,6 +2366,7 @@ export async function runAgentTurnWithFallback(params: {
               const result = await agentTurnTiming.measure("cli_run", () =>
                 runCliAgentWithLifecycle({
                   runId,
+                  lifecycleGeneration,
                   provider: cliExecutionProvider,
                   onAgentRunStart: notifyAgentRunStart,
                   suppressAssistantBridge: params.followupRun.run.silentExpected,
@@ -2399,6 +2444,10 @@ export async function runAgentTurnWithFallback(params: {
                     suppressNextUserMessagePersistence: suppressQueuedUserPersistenceForCandidate,
                     userTurnTranscriptRecorder,
                     onUserMessagePersisted: notifyUserMessagePersisted,
+                    persistAssistantTranscript:
+                      params.followupRun.currentInboundEventKind !== "room_event" &&
+                      params.followupRun.run.suppressTranscriptOnlyAssistantPersistence !== true,
+                    storePath: params.storePath,
                     currentInboundEventKind: params.followupRun.currentInboundEventKind,
                     currentInboundContext: params.followupRun.currentInboundContext,
                     inputProvenance: params.followupRun.run.inputProvenance,
@@ -2504,6 +2553,16 @@ export async function runAgentTurnWithFallback(params: {
               const lifecycleBackstop = createEmbeddedLifecycleTerminalBackstop({
                 runId,
                 sessionKey: params.sessionKey,
+                getLifecycleGeneration: () => lifecycleGeneration,
+                resolveAbortLifecycleFields: () => ({
+                  ...resolveAgentRunAbortLifecycleFields(runAbortSignal),
+                  ...(isReplyOperationRestartAbort(params.replyOperation)
+                    ? {
+                        aborted: true as const,
+                        stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON,
+                      }
+                    : {}),
+                }),
               });
               try {
                 // Profiler-only milestone: it exposes time spent before Codex
@@ -2517,6 +2576,7 @@ export async function runAgentTurnWithFallback(params: {
                 const embeddedRunResult = await agentTurnTiming.measure("embedded_run", () =>
                   runEmbeddedAgent({
                     ...embeddedContext,
+                    lifecycleGeneration,
                     allowGatewaySubagentBinding: true,
                     trigger: resolveReplyHookTrigger(params.opts),
                     fireReason: resolveReplyRunFireReason({
@@ -2662,6 +2722,11 @@ export async function runAgentTurnWithFallback(params: {
                             },
                           }
                         : undefined,
+                    onExecutionStarted: (info) => {
+                      if (info?.lifecycleGeneration) {
+                        lifecycleGeneration = info.lifecycleGeneration;
+                      }
+                    },
                     blockReplyBreak: params.resolvedBlockStreamingBreak,
                     blockReplyChunking: params.blockReplyChunking,
                     onPartialReply: async (payload) => {
@@ -2999,6 +3064,12 @@ export async function runAgentTurnWithFallback(params: {
         sessionKey: params.sessionKey,
         outcome: "completed",
       });
+      const restartAbortReason = runAbortSignal?.reason;
+      if (isReplyOperationRestartAbort(params.replyOperation)) {
+        throw isAgentRunRestartAbortReason(restartAbortReason)
+          ? restartAbortReason
+          : createAgentRunRestartAbortError();
+      }
       const fallbackRunResult = fallbackResult.result as
         | EmbeddedAgentRunResult
         | {
@@ -3337,15 +3408,32 @@ export async function runAgentTurnWithFallback(params: {
         isGenericRunnerFailure: externalRunFailureReply?.isGenericRunnerFailure ?? false,
         cfg: params.followupRun.run.config,
       });
+      const abortedSignal =
+        params.replyOperation?.abortSignal.aborted === true
+          ? params.replyOperation.abortSignal
+          : params.opts?.abortSignal?.aborted === true
+            ? params.opts.abortSignal
+            : undefined;
+      const abortLifecycleFields = {
+        ...resolveAgentRunAbortLifecycleFields(abortedSignal),
+        ...(isReplyOperationRestartAbort(params.replyOperation)
+          ? {
+              aborted: true as const,
+              stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON,
+            }
+          : {}),
+      };
 
       emitAgentEvent({
         runId,
+        lifecycleGeneration,
         ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
         stream: "lifecycle",
         data: {
           phase: "error",
           error: message,
           endedAt: Date.now(),
+          ...abortLifecycleFields,
           fallbackExhaustedFailure: true,
         },
       });

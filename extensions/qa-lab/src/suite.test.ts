@@ -1,8 +1,13 @@
 // Qa Lab tests cover suite plugin behavior.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { QA_EVIDENCE_FILENAME, QA_EVIDENCE_SUMMARY_KIND } from "./evidence-summary.js";
 import type { QaLabServerHandle } from "./lab-server.types.js";
+import type { QaTransportAdapter } from "./qa-transport.js";
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
-import { qaSuiteProgressTesting, runQaSuite } from "./suite.js";
+import { qaSuiteProgressTesting, runQaFlowSuite } from "./suite.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 
@@ -33,7 +38,7 @@ describe("qa suite", () => {
     const startLab = vi.fn();
 
     await expect(
-      runQaSuite({
+      runQaFlowSuite({
         transportId: "qa-nope" as unknown as "qa-channel",
         startLab,
       }),
@@ -220,6 +225,51 @@ describe("qa suite", () => {
         },
       ],
     });
+  });
+
+  it("writes standalone evidence while keeping suite summary evidence-free", async () => {
+    const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-suite-artifacts-"));
+    try {
+      const artifacts = await qaSuiteProgressTesting.writeQaSuiteArtifacts({
+        outputDir,
+        startedAt: new Date("2026-04-11T00:00:00.000Z"),
+        finishedAt: new Date("2026-04-11T00:01:00.000Z"),
+        scenarios: [{ name: "Baseline", status: "pass", steps: [] }],
+        scenarioDefinitions: [
+          {
+            ...makeQaSuiteTestScenario("baseline", {
+              surface: "channel",
+            }),
+            coverage: {
+              primary: ["channels.messages"],
+            },
+          },
+        ],
+        transport: {
+          id: "qa-channel",
+          createReportNotes: () => [],
+        } as unknown as QaTransportAdapter,
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.5",
+        alternateModel: "mock-openai/gpt-5.5-alt",
+        fastMode: true,
+        concurrency: 1,
+      });
+
+      expect(artifacts.evidencePath).toBe(path.join(outputDir, QA_EVIDENCE_FILENAME));
+      const evidence = JSON.parse(await fs.readFile(artifacts.evidencePath, "utf8")) as {
+        kind?: string;
+        entries?: unknown[];
+      };
+      expect(evidence.kind).toBe(QA_EVIDENCE_SUMMARY_KIND);
+      expect(evidence.entries).toHaveLength(1);
+      const summary = JSON.parse(await fs.readFile(artifacts.summaryPath, "utf8")) as {
+        evidence?: unknown;
+      };
+      expect(summary.evidence).toBeUndefined();
+    } finally {
+      await fs.rm(outputDir, { recursive: true, force: true });
+    }
   });
 
   it("arms gateway heap checkpoint env only when requested", () => {

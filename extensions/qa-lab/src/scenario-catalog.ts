@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
 import { z } from "zod";
+import { isRepoRootRelativeRef } from "./cli-paths.js";
 
 export const DEFAULT_QA_AGENT_IDENTITY_MARKDOWN = `# Dev C-3PO
 
@@ -46,11 +47,38 @@ const qaScenarioConfigSchema = z.record(z.string(), z.unknown()).superRefine((co
   }
 });
 
-const qaScenarioExecutionSchema = z.object({
+const qaScenarioRepoRefSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .regex(/^[A-Za-z0-9._/-]+$/, {
+    message: "repo refs must be repo-root relative paths",
+  })
+  .refine(isRepoRootRelativeRef, {
+    message: "repo refs must not be absolute or contain parent-directory segments",
+  });
+
+const qaFlowScenarioExecutionSchema = z.object({
   kind: z.literal("flow").default("flow"),
   summary: z.string().trim().min(1).optional(),
   config: qaScenarioConfigSchema.optional(),
 });
+
+const qaTestFileScenarioExecutionBaseSchema = z.object({
+  summary: z.string().trim().min(1).optional(),
+  path: qaScenarioRepoRefSchema,
+  config: qaScenarioConfigSchema.optional(),
+});
+
+const qaTestFileScenarioExecutionSchema = z.discriminatedUnion("kind", [
+  qaTestFileScenarioExecutionBaseSchema.extend({ kind: z.literal("vitest") }),
+  qaTestFileScenarioExecutionBaseSchema.extend({ kind: z.literal("playwright") }),
+]);
+
+const qaScenarioExecutionSchema = z.union([
+  qaFlowScenarioExecutionSchema,
+  qaTestFileScenarioExecutionSchema,
+]);
 
 const qaCoverageIdSchema = z
   .string()
@@ -377,13 +405,14 @@ export function readQaScenarioPack(): QaScenarioPack {
         parsedScenario.execution ?? {},
         relativePath,
       );
-      const flow = extractQaScenarioFlow(content, relativePath);
+      const flow =
+        execution.kind === "flow" ? extractQaScenarioFlow(content, relativePath) : undefined;
       return {
         ...parsedScenario,
         sourcePath: relativePath,
         execution: {
           ...execution,
-          flow,
+          ...(flow ? { flow } : {}),
         },
       } satisfies QaSeedScenarioWithSource;
     })(),

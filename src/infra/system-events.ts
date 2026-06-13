@@ -54,10 +54,12 @@ type SystemEventOptions = {
   sessionDeliveryAckId?: string;
   sessionDeliveryAckStateDir?: string;
   /**
-   * Trusted-internal enrichment marker (continuation/OCR/transcripts). Accepted
-   * for source compatibility with continuation producers; the anti-spoof guard
-   * is now unconditional at the queue boundary (`sanitizeInboundSystemTags`), so
-   * this flag no longer gates sanitization.
+   * Trusted-internal enrichment marker (continuation/OCR/transcripts). When
+   * `true`, the payload is trusted core data that may legitimately contain
+   * `System:`/`[System]` examples (subagent returns, post-compaction context,
+   * AGENTS.md text), so it bypasses the inbound anti-spoof sanitizer and is
+   * preserved verbatim. Untrusted producers (plugin/channel text) omit this
+   * flag and are sanitized at the queue boundary.
    */
   trusted?: boolean;
   /**
@@ -144,9 +146,14 @@ export function enqueueSystemEventEntry(
 ): SystemEvent | null {
   const key = requireSessionKey(options.sessionKey);
   const entry = getOrCreateSessionQueue(key);
-  // These entries are rendered as `System:` lines, so strip nested system-marker
-  // spoofs at the queue boundary before any plugin/channel text reaches a prompt.
-  const cleaned = sanitizeInboundSystemTags(text).trim();
+  // Untrusted producers (plugin/channel text) are rendered as `System:` lines, so
+  // strip nested system-marker spoofs at the queue boundary before any such text
+  // reaches a prompt. Trusted-internal producers (tagged `trusted: true`) carry
+  // workspace/subagent data that may legitimately contain those markers and are
+  // preserved verbatim.
+  const cleaned = (
+    options.trusted === true ? text : sanitizeInboundSystemTags(text)
+  ).trim();
   if (!cleaned) {
     return null;
   }
