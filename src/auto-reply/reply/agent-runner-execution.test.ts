@@ -1967,6 +1967,8 @@ describe("runAgentTurnWithFallback", () => {
       agentId: "agent",
       sessionId: "session",
       suppressNextUserMessagePersistence: false,
+      persistAssistantTranscript: true,
+      storePath: "/tmp/sessions.json",
     });
     const call = requireMockCall(state.runCliAgentMock, 0, "CLI runtime");
     const callParams = requireRecord(call[0], "CLI runtime");
@@ -2019,6 +2021,7 @@ describe("runAgentTurnWithFallback", () => {
     expect(result.kind).toBe("success");
     expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
       currentInboundEventKind: "room_event",
+      persistAssistantTranscript: false,
       cliSessionId: "existing-cli-session",
       cliSessionBinding: {
         sessionId: "existing-cli-session",

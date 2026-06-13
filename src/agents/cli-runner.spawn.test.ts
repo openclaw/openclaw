@@ -656,6 +656,9 @@ describe("runCliAgent spawn path", () => {
       currentMessageId: "reply-message-1",
       senderId: "sender-1",
       senderIsOwner: true,
+      persistAssistantTranscript: true,
+      storePath: "/tmp/sessions.json",
+      currentInboundEventKind: "room_event",
     });
 
     expect(params.messageChannel).toBe("telegram");
@@ -666,6 +669,9 @@ describe("runCliAgent spawn path", () => {
     expect(params.senderId).toBe("sender-1");
     expect(params.senderIsOwner).toBe(true);
     expect(params.cwd).toBe("/tmp/task-repo");
+    expect(params.persistAssistantTranscript).toBe(true);
+    expect(params.storePath).toBe("/tmp/sessions.json");
+    expect(params.currentInboundEventKind).toBe("room_event");
   });
 
   it("forwards static extra system prompt through the compat wrapper", () => {

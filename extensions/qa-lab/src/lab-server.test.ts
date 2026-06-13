@@ -315,7 +315,7 @@ describe("qa-lab server", () => {
       controlUiUrl: string | null;
       controlUiEmbeddedUrl: string | null;
       kickoffTask: string;
-      scenarios: Array<{ id: string; title: string }>;
+      scenarios: Array<{ id: string; title: string; execution?: { kind?: string } }>;
       defaults: { conversationId: string; senderId: string };
       runner: { status: string; selection: { providerMode: string; scenarioIds: string[] } };
     };
@@ -328,7 +328,12 @@ describe("qa-lab server", () => {
     expect(bootstrap.scenarios.map((scenario) => scenario.id)).toContain("dm-chat-baseline");
     expect(bootstrap.runner.status).toBe("idle");
     expect(bootstrap.runner.selection.providerMode).toBe("live-frontier");
-    expect(bootstrap.runner.selection.scenarioIds).toHaveLength(bootstrap.scenarios.length);
+    const flowScenarioIds = bootstrap.scenarios
+      .filter(
+        (scenario) => scenario.execution?.kind === undefined || scenario.execution.kind === "flow",
+      )
+      .map((scenario) => scenario.id);
+    expect(bootstrap.runner.selection.scenarioIds).toEqual(flowScenarioIds);
 
     const startupStatus = (await (
       await fetchWithRetry(`${lab.baseUrl}/api/capture/startup-status`)

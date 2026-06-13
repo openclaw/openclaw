@@ -19,7 +19,7 @@ vi.mock("../../plugins/provider-runtime.js", () => ({
   normalizeProviderResolvedModelWithPlugin: mocks.normalizeProviderResolvedModelWithPlugin,
 }));
 
-import { appendProviderCatalogRows } from "./list.rows.js";
+import { appendConfiguredProviderRows, appendProviderCatalogRows } from "./list.rows.js";
 
 const authIndex = {
   hasProviderAuth: (provider: string) => provider === "codex",
@@ -79,6 +79,7 @@ describe("appendProviderCatalogRows", () => {
         models: { providers: {} },
       },
     });
+    expect(mocks.normalizeProviderResolvedModelWithPlugin).not.toHaveBeenCalled();
     const row = requireOnlyRow(rows);
     expect(row.key).toBe("codex/gpt-5.5");
     expect(row.available).toBe(true);
@@ -187,5 +188,55 @@ describe("appendProviderCatalogRows", () => {
     expect(row.key).toBe("openai/gpt-5.5");
     expect(row.available).toBe(true);
     expect(row.tags).toEqual(["configured"]);
+  });
+});
+
+describe("appendConfiguredProviderRows", () => {
+  it("keeps provider normalization for configured provider models", async () => {
+    mocks.normalizeProviderResolvedModelWithPlugin.mockReturnValueOnce({
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+      name: "Claude Sonnet 4.6",
+      input: ["text", "image"],
+      contextWindow: 200_000,
+    } as never);
+    const rows: ModelRow[] = [];
+
+    await appendConfiguredProviderRows({
+      rows,
+      seenKeys: new Set(),
+      context: {
+        cfg: {
+          models: {
+            providers: {
+              anthropic: {
+                api: "anthropic-messages",
+                baseUrl: "https://api.anthropic.com",
+                models: [
+                  {
+                    id: "claude-sonnet-4-6",
+                    name: "Claude Sonnet 4.6",
+                    reasoning: false,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 200_000,
+                    maxTokens: 8192,
+                  },
+                ],
+              },
+            },
+          },
+        },
+        agentDir: "/tmp/openclaw-agent",
+        authIndex,
+        configuredByKey: new Map(),
+        discoveredKeys: new Set(),
+        filter: { provider: "anthropic", local: false },
+        skipRuntimeModelSuppression: true,
+      },
+    });
+
+    expect(mocks.normalizeProviderResolvedModelWithPlugin).toHaveBeenCalledOnce();
+    expect(requireOnlyRow(rows).input).toBe("text+image");
   });
 });

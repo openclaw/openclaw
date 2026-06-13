@@ -46,6 +46,19 @@ describe("provider replay helpers", () => {
     expect(policy).not.toHaveProperty("toolCallIdMode");
   });
 
+  it("selects OpenAI-style ids for duplicate replay tool calls", () => {
+    expectFields(
+      buildOpenAICompatibleReplayPolicy("openai-completions", {
+        duplicateToolCallIdStyle: "openai",
+      }),
+      {
+        sanitizeToolCallIds: true,
+        toolCallIdMode: "strict",
+        duplicateToolCallIdStyle: "openai",
+      },
+    );
+  });
+
   it("drops historical reasoning for OpenAI-compatible chat completions replay", () => {
     expect(
       buildOpenAICompatibleReplayPolicy("openai-completions", {

@@ -611,6 +611,7 @@ export const ar: TranslationMap = {
     labelsPlaceholder: "ui, docs",
     searchPlaceholder: "البحث في البطاقات",
     allPriorities: "كل الأولويات",
+    hideEmptyColumns: "Hide empty columns",
     emptyColumn: "أفلِت العمل هنا",
     lifecycleUnlinked: "لا توجد جلسة",
     lifecycleUnlinkedDetail: "ابدأ جلسة أو اربطها",

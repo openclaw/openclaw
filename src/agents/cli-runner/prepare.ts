@@ -26,6 +26,7 @@ import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-con
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { resolveSkillsPromptForRun } from "../../skills/loading/workspace.js";
+import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { externalCliDiscoveryForProviderAuth } from "../auth-profiles/external-cli-discovery.js";
@@ -63,8 +64,13 @@ import {
 } from "../embedded-agent-runner/run/attempt.prompt-helpers.js";
 import { composeSystemPromptWithHookContext } from "../embedded-agent-runner/run/attempt.thread-helpers.js";
 import { buildCurrentInboundPrompt } from "../embedded-agent-runner/run/runtime-context-prompt.js";
+import {
+  mapSandboxSkillEntriesForPrompt,
+  resolveSandboxSkillRuntimeInputs,
+} from "../embedded-agent-runner/sandbox-skills.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
+import { ensureSandboxWorkspaceForSession } from "../sandbox.js";
 import { ensureSystemPromptCacheBoundary } from "../system-prompt-cache-boundary.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt, buildModelIdentityPromptLine } from "../system-prompt.js";
@@ -97,6 +103,75 @@ const prepareDeps = {
   claudeCliSessionTranscriptHasContent,
   claudeCliSessionTranscriptHasOrphanedToolUse,
 };
+
+async function resolveCliSkillsPrompt(params: {
+  agentId: string;
+  config: RunCliAgentParams["config"];
+  sessionKey: string;
+  skillsSnapshot: RunCliAgentParams["skillsSnapshot"];
+  workspaceDir: string;
+}): Promise<string> {
+  const sandboxWorkspace = await ensureSandboxWorkspaceForSession({
+    config: params.config,
+    sessionKey: params.sessionKey,
+    workspaceDir: params.workspaceDir,
+  });
+  if (!sandboxWorkspace) {
+    return resolveSkillsPromptForRun({
+      skillsSnapshot: params.skillsSnapshot,
+      workspaceDir: params.workspaceDir,
+      config: params.config,
+      agentId: params.agentId,
+    });
+  }
+
+  const {
+    skillsEligibility,
+    skillsPromptWorkspaceDir,
+    skillsSnapshot: skillsSnapshotForRun,
+    skillsWorkspaceDir,
+    workspaceOnly,
+  } = resolveSandboxSkillRuntimeInputs({
+    sandbox: {
+      enabled: true,
+      ...(sandboxWorkspace.containerWorkdir
+        ? { containerWorkdir: sandboxWorkspace.containerWorkdir }
+        : {}),
+      ...(sandboxWorkspace.skillsEligibility
+        ? { skillsEligibility: sandboxWorkspace.skillsEligibility }
+        : {}),
+      ...(sandboxWorkspace.skillsWorkspaceDir
+        ? { skillsWorkspaceDir: sandboxWorkspace.skillsWorkspaceDir }
+        : {}),
+      ...(sandboxWorkspace.workspaceAccess
+        ? { workspaceAccess: sandboxWorkspace.workspaceAccess }
+        : {}),
+    },
+    effectiveWorkspace: sandboxWorkspace.workspaceDir,
+    skillsSnapshot: params.skillsSnapshot,
+  });
+  const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
+    workspaceDir: skillsWorkspaceDir,
+    config: params.config,
+    agentId: params.agentId,
+    eligibility: skillsEligibility,
+    skillsSnapshot: skillsSnapshotForRun,
+    workspaceOnly,
+  });
+  const promptSkillEntries = mapSandboxSkillEntriesForPrompt({
+    entries: shouldLoadSkillEntries ? skillEntries : undefined,
+    skillsWorkspaceDir,
+    skillsPromptWorkspaceDir,
+  });
+  return resolveSkillsPromptForRun({
+    skillsSnapshot: skillsSnapshotForRun,
+    entries: promptSkillEntries,
+    workspaceDir: skillsPromptWorkspaceDir,
+    config: params.config,
+    agentId: params.agentId,
+    eligibility: skillsEligibility,
+  });
+}
 
 const CLAUDE_CLI_CONTEXT_MODEL_ALIASES: Record<string, string> = {
   opus: "claude-opus-4-8",
@@ -450,13 +525,16 @@ export async function prepareCliRunContext(
     cwd,
     moduleUrl: import.meta.url,
   });
-  const skillsPrompt = resolveSkillsPromptForRun({
-    skillsSnapshot: params.skillsSnapshot,
-    workspaceDir,
-    config: params.config,
-    agentId: sessionAgentId,
-  });
-  const systemPromptSkillsPrompt = claudeSkillsPlugin.args.length > 0 ? "" : skillsPrompt;
+  const systemPromptSkillsPrompt =
+    claudeSkillsPlugin.args.length > 0
+      ? ""
+      : await resolveCliSkillsPrompt({
+          skillsSnapshot: params.skillsSnapshot,
+          workspaceDir,
+          config: params.config,
+          agentId: sessionAgentId,
+          sessionKey: params.sessionKey?.trim() || params.sessionId,
+        });
   const builtSystemPrompt = buildCliAgentSystemPrompt({
     workspaceDir,
     cwd,

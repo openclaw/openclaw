@@ -571,6 +571,23 @@ describe("formatAssistantErrorText", () => {
       "LLM request failed: provider rejected the request schema or tool payload.",
     );
   });
+
+  it("uses structured error body detail for model-not-found copy", () => {
+    const msg = makeAssistantMessageFixture({
+      errorMessage: "400 Param Incorrect",
+      errorCode: "400",
+      errorBody:
+        '{"code":"400","message":"Param Incorrect","param":"Not supported model some-model-id"}',
+      content: [],
+    });
+
+    expect(formatAssistantErrorText(msg)).toBe(
+      "The selected model was not found by the provider. Check the model id or choose a different model.",
+    );
+    expect(formatUserFacingAssistantErrorText(msg)).toBe(
+      "The selected model was not found by the provider. Check the model id or choose a different model.",
+    );
+  });
 });
 
 describe("formatRawAssistantErrorForUi", () => {

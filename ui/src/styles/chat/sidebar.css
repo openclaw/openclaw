@@ -179,7 +179,7 @@
   border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--danger, #ef4444) 12%, transparent);
   color: var(--danger, #ef4444);
-  font-size: 10px;
+  font-size: 12px; /* was 10px */
   line-height: 1.2;
 }
 
@@ -267,7 +267,7 @@
   gap: 8px;
   min-width: 0;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px; /* was 11px */
   font-weight: 700;
   letter-spacing: 0.14em;
   text-transform: uppercase;

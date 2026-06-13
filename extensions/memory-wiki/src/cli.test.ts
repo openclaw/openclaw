@@ -10,6 +10,7 @@ import {
   runWikiChatGptImport,
   runWikiChatGptRollback,
   runWikiDoctor,
+  runWikiOkfImport,
   runWikiStatus,
 } from "./cli.js";
 import type { MemoryWikiPluginConfig } from "./config.js";
@@ -27,6 +28,7 @@ vi.mock("openclaw/plugin-sdk/gateway-runtime", () => ({
 const { createVault } = createMemoryWikiTestHarness();
 let suiteRoot = "";
 let caseIndex = 0;
+let stdoutWriteMock: ReturnType<typeof vi.fn>;
 
 describe("memory-wiki cli", () => {
   beforeAll(async () => {
@@ -41,8 +43,9 @@ describe("memory-wiki cli", () => {
 
   beforeEach(() => {
     callGatewayFromCliMock.mockReset();
+    stdoutWriteMock = vi.fn(() => true);
     vi.spyOn(process.stdout, "write").mockImplementation(
-      (() => true) as typeof process.stdout.write,
+      stdoutWriteMock as unknown as typeof process.stdout.write,
     );
     process.exitCode = undefined;
   });
@@ -171,6 +174,65 @@ describe("memory-wiki cli", () => {
     expect(page).toContain("source.alpha");
     await expect(fs.readFile(path.join(rootDir, "index.md"), "utf8")).resolves.toContain(
       "[CLI Alpha](syntheses/cli-alpha.md)",
+    );
+  });
+
+  it("registers OKF import and searches imported concepts", async () => {
+    const { rootDir, config } = await createCliVault();
+    const bundlePath = path.join(rootDir, "okf-bundle");
+    await fs.mkdir(path.join(bundlePath, "tables"), { recursive: true });
+    await fs.writeFile(path.join(bundlePath, "index.md"), "# Sales OKF\n", "utf8");
+    await fs.writeFile(
+      path.join(bundlePath, "tables", "customers.md"),
+      `---
+type: BigQuery Table
+title: Customers
+---
+
+Customer rows.
+`,
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(bundlePath, "tables", "orders.md"),
+      `---
+type: BigQuery Table
+title: Orders
+description: One row per completed order.
+---
+
+Orders join to [customers](/tables/customers.md).
+`,
+      "utf8",
+    );
+
+    const program = new Command();
+    program.name("test");
+    registerWikiCli(program, config);
+
+    await program.parseAsync(["wiki", "okf", "import", bundlePath, "--json"], { from: "user" });
+
+    const importOutput = String(stdoutWriteMock.mock.calls.at(-1)?.[0] ?? "");
+    const importResult = JSON.parse(importOutput) as Awaited<ReturnType<typeof runWikiOkfImport>>;
+    expect(importResult.importedCount).toBe(2);
+    expect(importResult.pagePaths).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/^concepts\/okf-okf-bundle-[0-9a-f]{8}-tables-orders-/),
+      ]),
+    );
+
+    stdoutWriteMock.mockClear();
+    await program.parseAsync(["wiki", "search", "completed order", "--json"], { from: "user" });
+
+    const searchOutput = String(stdoutWriteMock.mock.calls.at(-1)?.[0] ?? "");
+    const searchResults = JSON.parse(searchOutput) as Array<{ path: string; title: string }>;
+    expect(searchResults).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          title: "Orders",
+          path: expect.stringMatching(/^concepts\/okf-okf-bundle-[0-9a-f]{8}-tables-orders-/),
+        }),
+      ]),
     );
   });
 

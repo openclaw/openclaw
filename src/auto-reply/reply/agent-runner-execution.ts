@@ -2194,6 +2194,10 @@ export async function runAgentTurnWithFallback(params: {
                     suppressNextUserMessagePersistence: suppressQueuedUserPersistenceForCandidate,
                     userTurnTranscriptRecorder,
                     onUserMessagePersisted: notifyUserMessagePersisted,
+                    persistAssistantTranscript:
+                      params.followupRun.currentInboundEventKind !== "room_event" &&
+                      params.followupRun.run.suppressTranscriptOnlyAssistantPersistence !== true,
+                    storePath: params.storePath,
                     currentInboundEventKind: params.followupRun.currentInboundEventKind,
                     currentInboundContext: params.followupRun.currentInboundContext,
                     inputProvenance: params.followupRun.run.inputProvenance,

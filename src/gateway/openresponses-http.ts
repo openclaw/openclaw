@@ -36,9 +36,16 @@ import { defaultRuntime } from "../runtime.js";
 import { resolveAssistantStreamDeltaText } from "./agent-event-assistant-text.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { sendJson, setSseHeaders, watchClientDisconnect, writeDone } from "./http-common.js";
+import {
+  sendJson,
+  sendMissingScopeForbidden,
+  setSseHeaders,
+  watchClientDisconnect,
+  writeDone,
+} from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import {
+  authorizeOpenAiCompatibleHttpModelOverride,
   getBearerToken,
   getHeader,
   resolveAgentIdForRequest,
@@ -425,7 +432,7 @@ async function runResponsesAgentCommand(params: {
       deliver: false,
       messageChannel: params.messageChannel,
       bestEffortDeliver: false,
-      allowModelOverride: true,
+      allowModelOverride: params.modelOverride !== undefined,
       abortSignal: params.abortSignal,
     },
     defaultRuntime,
@@ -460,6 +467,11 @@ export async function handleOpenResponsesHttpRequest(
     return false;
   }
   if (!handled) {
+    return true;
+  }
+  const modelOverrideAuth = authorizeOpenAiCompatibleHttpModelOverride(req, handled.requestAuth);
+  if (!modelOverrideAuth.allowed) {
+    sendMissingScopeForbidden(res, modelOverrideAuth.missingScope);
     return true;
   }
   // Validate request body with Zod

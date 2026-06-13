@@ -234,6 +234,19 @@ describe("prepared provider auth state", () => {
     ).resolves.toBe(false);
     expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(2);
 
+    // Bounded browse callers may explicitly consume the prepared broad answer
+    // while keeping slow fallback discovery disabled.
+    await expect(
+      hasAuthForModelProvider({
+        provider: "openai",
+        cfg,
+        discoverExternalCliAuth: false,
+        allowPluginSyntheticAuth: false,
+        allowPreparedRuntimeAuth: true,
+      }),
+    ).resolves.toBe(true);
+    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(2);
+
     // Broad-scope caller (default flags) still hits the prepared map.
     await expect(hasAuthForModelProvider({ provider: "openai", cfg })).resolves.toBe(true);
     expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(2);

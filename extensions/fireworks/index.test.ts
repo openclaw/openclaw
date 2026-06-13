@@ -144,19 +144,19 @@ describe("fireworks provider plugin", () => {
     expect(resolved?.reasoning).toBe(false);
   });
 
-  it("disables reasoning metadata for Fireworks Kimi k2.6 dynamic models", async () => {
+  it("defers manifest catalog models to core static-catalog resolution", async () => {
     const provider = await registerSingleProviderPlugin(fireworksPlugin);
-    const resolved = provider.resolveDynamicModel?.(
-      createProviderDynamicModelContext({
-        provider: "fireworks",
-        modelId: "accounts/fireworks/models/kimi-k2p6",
-        models: [createFireworksDefaultRuntimeModel({ reasoning: false })],
-      }),
-    );
+    for (const modelId of [FIREWORKS_K2_6_MODEL_ID, FIREWORKS_DEFAULT_MODEL_ID]) {
+      const resolved = provider.resolveDynamicModel?.(
+        createProviderDynamicModelContext({
+          provider: "fireworks",
+          modelId,
+          models: [createFireworksDefaultRuntimeModel({ reasoning: false })],
+        }),
+      );
 
-    expect(resolved?.provider).toBe("fireworks");
-    expect(resolved?.id).toBe("accounts/fireworks/models/kimi-k2p6");
-    expect(resolved?.reasoning).toBe(false);
+      expect(resolved).toBeUndefined();
+    }
   });
 
   it("exposes off-only thinking policy for Fireworks Kimi models", async () => {

@@ -9,6 +9,21 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
 
 const DRIVER_SCRIPT = "scripts/e2e/npm-telegram-rtt-driver.mjs";
+const QA_EVIDENCE_FILENAME = "qa-evidence.json";
+
+type EvidenceSummaryForTest = {
+  kind?: string;
+  entries: Array<{
+    test: { id: string };
+    mapping?: {
+      coverage?: Array<{ id?: string }>;
+    };
+    result: {
+      status?: string;
+      failure?: { reason?: string };
+    };
+  }>;
+};
 
 function runDriver(env: Record<string, string>) {
   return spawnSync(process.execPath, [DRIVER_SCRIPT], {
@@ -213,6 +228,14 @@ function closeServer(server: Server): Promise<void> {
       resolve();
     });
   });
+}
+
+function readEvidenceSummary(outputDir: string) {
+  const summary = JSON.parse(
+    readFileSync(path.join(outputDir, QA_EVIDENCE_FILENAME), "utf8"),
+  ) as EvidenceSummaryForTest;
+  expect(Array.isArray(summary.entries)).toBe(true);
+  return summary;
 }
 
 async function startTelegramApiServer(options: {
@@ -463,22 +486,17 @@ describe("npm Telegram RTT driver", () => {
         OPENCLAW_QA_TELEGRAM_CANARY_TIMEOUT_MS: "250",
         OPENCLAW_QA_TELEGRAM_SCENARIO_TIMEOUT_MS: "250",
       });
-      const summary = JSON.parse(
-        readFileSync(path.join(outputDir, "telegram-qa-summary.json"), "utf8"),
-      ) as {
-        scenarios: Array<{ id: string; status: string; details?: string }>;
-        status: string;
-      };
-      const canary = summary.scenarios.find((scenario) => scenario.id === "telegram-canary");
+      const summary = readEvidenceSummary(outputDir);
+      const canary = summary.entries.find((entry) => entry.test.id === "telegram-canary");
 
       expect(result.timedOut).toBe(false);
       expect(result.status).not.toBe(0);
-      expect(summary.status).toBe("fail");
       expect(canary).toMatchObject({
-        id: "telegram-canary",
-        status: "fail",
+        test: { id: "telegram-canary" },
+        result: { status: "fail" },
       });
-      expect(canary?.details).toContain("timed out");
+      expect(canary?.result.failure?.reason).toContain("timed out");
+      expect(existsSync(path.join(outputDir, "telegram-qa-summary.json"))).toBe(false);
     } finally {
       await server.close();
       rmSync(root, { force: true, recursive: true });
@@ -494,29 +512,55 @@ describe("npm Telegram RTT driver", () => {
       const result = await runDriverAsync({
         OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR: outputDir,
         OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES: "1",
+        OPENCLAW_QA_PACKAGE_SOURCE: "/package-under-test/openclaw.tgz",
+        OPENCLAW_QA_PACKAGE_SOURCE_KIND: "packed-tarball",
+        OPENCLAW_QA_PACKAGE_SOURCE_SHA: "abc123",
         OPENCLAW_QA_TELEGRAM_API_BASE_URL: server.baseUrl,
         OPENCLAW_QA_TELEGRAM_CANARY_TIMEOUT_MS: "1000",
         OPENCLAW_QA_TELEGRAM_SCENARIO_TIMEOUT_MS: "1000",
       });
-      const summary = JSON.parse(
-        readFileSync(path.join(outputDir, "telegram-qa-summary.json"), "utf8"),
-      ) as {
-        scenarios: Array<{ id: string; status: string }>;
-        status: string;
-      };
+      const summary = readEvidenceSummary(outputDir);
 
       expect(result).toMatchObject({
         signal: null,
         status: 0,
         timedOut: false,
       });
-      expect(summary.status).toBe("pass");
-      expect(summary.scenarios).toEqual(
+      expect(summary.kind).toBe("openclaw.qa.evidence-summary");
+      expect(summary.entries).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({ id: "telegram-canary", status: "pass" }),
-          expect.objectContaining({ id: "telegram-mentioned-message-reply", status: "pass" }),
+          expect.objectContaining({
+            test: expect.objectContaining({ id: "telegram-canary" }),
+            mapping: expect.objectContaining({
+              coverage: expect.arrayContaining([
+                expect.objectContaining({ id: "channels.telegram.canary" }),
+              ]),
+            }),
+            result: expect.objectContaining({ status: "pass" }),
+          }),
+          expect.objectContaining({
+            test: expect.objectContaining({ id: "telegram-mentioned-message-reply" }),
+            mapping: expect.objectContaining({
+              coverage: expect.arrayContaining([
+                expect.objectContaining({ id: "channels.telegram.mention-gating" }),
+              ]),
+            }),
+            result: expect.objectContaining({
+              status: "pass",
+              timing: expect.objectContaining({
+                failedSamples: 0,
+                samples: 1,
+              }),
+            }),
+          }),
         ]),
       );
+      expect(summary.entries[0]?.execution.packageSource).toEqual({
+        kind: "packed-tarball",
+        spec: "/package-under-test/openclaw.tgz",
+        sha: "abc123",
+      });
+      expect(existsSync(path.join(outputDir, "telegram-qa-summary.json"))).toBe(false);
     } finally {
       await server.close();
       rmSync(root, { force: true, recursive: true });

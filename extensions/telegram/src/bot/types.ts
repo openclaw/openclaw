@@ -19,6 +19,7 @@ export type TelegramGetChat = (chatId: number | string) => Promise<TelegramChatD
  */
 export type TelegramContext = {
   message: Message;
+  update?: unknown;
   me?: UserFromGetMe;
   getFile: TelegramGetFile;
 };

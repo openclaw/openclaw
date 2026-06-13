@@ -19,6 +19,7 @@ import { resetModelDiscoveryCacheForTest } from "./model-discovery-cache.js";
 import { createProviderRuntimeTestMock } from "./model.provider-runtime.test-support.js";
 
 const resolveBundledStaticCatalogModelMock = vi.hoisted(() => vi.fn());
+const resolveBundledProviderStaticCatalogModelMock = vi.hoisted(() => vi.fn());
 const resolveRuntimeSyntheticAuthProviderRefsMock = vi.hoisted(() => vi.fn((): string[] => []));
 const resolveRuntimeExternalAuthProviderRefsMock = vi.hoisted(() => vi.fn((): string[] => []));
 
@@ -134,6 +135,7 @@ vi.mock("./model.static-catalog.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./model.static-catalog.js")>();
   return {
     ...actual,
+    resolveBundledProviderStaticCatalogModel: resolveBundledProviderStaticCatalogModelMock,
     resolveBundledStaticCatalogModel: resolveBundledStaticCatalogModelMock,
   };
 });
@@ -187,6 +189,7 @@ beforeEach(() => {
   mockLoadOpenRouterModelCapabilities.mockReset();
   mockLoadOpenRouterModelCapabilities.mockResolvedValue();
   resolveBundledStaticCatalogModelMock.mockReset();
+  resolveBundledProviderStaticCatalogModelMock.mockReset();
 });
 
 function createRuntimeHooks() {
@@ -568,6 +571,58 @@ describe("resolveModel", () => {
       cfg: undefined,
       workspaceDir: undefined,
     });
+    expect(resolveBundledProviderStaticCatalogModelMock).not.toHaveBeenCalled();
+    expect(discoverAuthStorage).not.toHaveBeenCalled();
+    expect(discoverModels).not.toHaveBeenCalled();
+  });
+
+  it("resolves opt-in provider static catalog rows while skipping agent discovery", async () => {
+    resolveBundledProviderStaticCatalogModelMock.mockResolvedValueOnce({
+      provider: "google",
+      id: "gemini-3.1-pro-preview",
+      name: "Gemini 3.1 Pro Preview",
+      api: "google-generative-ai",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 2, output: 12, cacheRead: 0.5, cacheWrite: 0 },
+      contextWindow: 1_048_576,
+      maxTokens: 65_536,
+    });
+
+    const result = await resolveModelAsync(
+      "google",
+      "gemini-3.1-pro-preview",
+      "/tmp/agent",
+      undefined,
+      {
+        allowBundledStaticCatalogFallback: true,
+        runtimeHooks: createRuntimeHooks(),
+        skipAgentDiscovery: true,
+      },
+    );
+
+    expectRecordFields(expectResolvedModel(result), {
+      provider: "google",
+      id: "gemini-3.1-pro-preview",
+      api: "google-generative-ai",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      reasoning: true,
+      contextWindow: 1_048_576,
+      maxTokens: 65_536,
+    });
+    expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledWith({
+      provider: "google",
+      modelId: "gemini-3.1-pro-preview",
+      cfg: undefined,
+      workspaceDir: undefined,
+    });
+    expect(resolveBundledProviderStaticCatalogModelMock).toHaveBeenCalledWith({
+      provider: "google",
+      modelId: "gemini-3.1-pro-preview",
+      cfg: undefined,
+      workspaceDir: undefined,
+    });
     expect(discoverAuthStorage).not.toHaveBeenCalled();
     expect(discoverModels).not.toHaveBeenCalled();
   });
@@ -631,6 +686,100 @@ describe("resolveModel", () => {
     expect(runProviderDynamicModel).toHaveBeenCalled();
     expect(discoverAuthStorage).not.toHaveBeenCalled();
     expect(discoverModels).not.toHaveBeenCalled();
+  });
+
+  it("resolves a deferred Fireworks manifest id from the bundled static catalog", async () => {
+    resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
+      provider: "fireworks",
+      id: "accounts/fireworks/models/kimi-k2p6",
+      name: "Kimi K2.6",
+      api: "openai-completions",
+      baseUrl: "https://api.fireworks.ai/inference/v1",
+      reasoning: false,
+      input: ["text", "image"],
+      cost: { input: 0.95, output: 4, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 262144,
+      maxTokens: 262144,
+    });
+
+    const result = await resolveModelAsync(
+      "fireworks",
+      "accounts/fireworks/models/kimi-k2p6",
+      "/tmp/agent",
+      undefined,
+      {
+        allowBundledStaticCatalogFallback: true,
+        runtimeHooks: createRuntimeHooks(),
+        skipAgentDiscovery: true,
+      },
+    );
+
+    expectRecordFields(expectResolvedModel(result), {
+      provider: "fireworks",
+      id: "accounts/fireworks/models/kimi-k2p6",
+      api: "openai-completions",
+      baseUrl: "https://api.fireworks.ai/inference/v1",
+      contextWindow: 262144,
+      maxTokens: 262144,
+    });
+    expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "fireworks",
+        modelId: "accounts/fireworks/models/kimi-k2p6",
+      }),
+    );
+  });
+
+  it("prefers user openclaw.json config over the Fireworks manifest for the same id", () => {
+    resolveBundledStaticCatalogModelMock.mockReturnValue({
+      ...makeModel("accounts/fireworks/models/kimi-k2p6"),
+      provider: "fireworks",
+      name: "Kimi K2.6",
+      api: "openai-completions",
+      baseUrl: "https://api.fireworks.ai/inference/v1",
+      input: ["text", "image"],
+      contextWindow: 262_144,
+      maxTokens: 262_144,
+    });
+    const cfg = {
+      models: {
+        providers: {
+          fireworks: {
+            api: "openai-completions",
+            baseUrl: "https://api.fireworks.ai/inference/v1",
+            models: [
+              {
+                ...makeModel("accounts/fireworks/models/kimi-k2p6"),
+                name: "Kimi K2.6 (user override)",
+                contextWindow: 300_000,
+                maxTokens: 300_000,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest(
+      "fireworks",
+      "accounts/fireworks/models/kimi-k2p6",
+      "/tmp/agent",
+      cfg,
+    );
+
+    expectRecordFields(expectResolvedModel(result), {
+      provider: "fireworks",
+      id: "accounts/fireworks/models/kimi-k2p6",
+      contextWindow: 300_000,
+      maxTokens: 300_000,
+    });
+    expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "fireworks",
+        modelId: "accounts/fireworks/models/kimi-k2p6",
+        cfg,
+      }),
+    );
   });
 
   it("keeps provider dynamic metadata for runtime-preferred models", async () => {
@@ -2864,6 +3013,52 @@ describe("resolveModel", () => {
       id: "openrouter/healer-alpha",
       reasoning: false,
       input: ["text"],
+    });
+  });
+
+  it("uses provider-normalized model ids for OpenRouter transport", () => {
+    const modelId = "openrouter/anthropic/claude-sonnet-4.6";
+    mockDiscoveredModel(discoverModels, {
+      provider: "openrouter",
+      modelId,
+      templateModel: {
+        ...makeModel(modelId),
+        provider: "openrouter",
+        api: "openai-completions",
+        baseUrl: "https://openrouter.ai/api/v1",
+      },
+    });
+    const baseRuntimeHooks = createRuntimeHooks();
+    const normalizeProviderResolvedModelWithPlugin = vi.fn(
+      (params: { context: { model: { id: string } } }) => ({
+        ...params.context.model,
+        id: params.context.model.id.slice("openrouter/".length),
+      }),
+    );
+
+    const result = resolveModel("openrouter", modelId, "/tmp/agent", undefined, {
+      authStorage: { mocked: true } as never,
+      modelRegistry: discoverModels({ mocked: true } as never, "/tmp/agent"),
+      runtimeHooks: {
+        ...baseRuntimeHooks,
+        normalizeProviderResolvedModelWithPlugin,
+      },
+    });
+
+    expect(normalizeProviderResolvedModelWithPlugin).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openrouter",
+        context: expect.objectContaining({
+          modelId,
+          model: expect.objectContaining({ id: modelId }),
+        }),
+      }),
+    );
+    expectRecordFields(result.model, {
+      provider: "openrouter",
+      id: "anthropic/claude-sonnet-4.6",
+      api: "openai-completions",
+      baseUrl: "https://openrouter.ai/api/v1",
     });
   });
 

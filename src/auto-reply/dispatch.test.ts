@@ -73,6 +73,8 @@ const {
   dispatchInboundMessageWithBufferedDispatcher,
   withReplyDispatcher,
 } = await import("./dispatch.js");
+const { clearReplyUsageStateForTest, recordReplyUsageState } =
+  await import("./reply/reply-usage-state.js");
 
 function createDispatcher(record: string[]): ReplyDispatcher {
   return {
@@ -110,6 +112,7 @@ function requireReplyDispatcherOptions(index = 0): Parameters<CreateReplyDispatc
 describe("withReplyDispatcher", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    clearReplyUsageStateForTest();
     hoisted.finalizeInboundContextMock.mockImplementation((ctx: unknown) => ctx);
     hoisted.deriveInboundMessageHookContextMock.mockReturnValue({
       channelId: "threads",
@@ -420,6 +423,57 @@ describe("withReplyDispatcher", () => {
         accountId: "acct-1",
         conversationId: "conv-1",
         runId: "run-123",
+      },
+    );
+  });
+
+  it("correlates reply_payload_sending usageState with the generated run id", async () => {
+    const usageState = { provider: "openai", model: "gpt-5.5" };
+    const runReplyPayloadSending = vi.fn(async ({ payload }: { payload: { text?: string } }) => ({
+      payload,
+    }));
+    hoisted.getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn((hookName?: string) => hookName === "reply_payload_sending"),
+      runMessageSending: vi.fn(async () => undefined),
+      runReplyPayloadSending,
+    });
+    hoisted.createReplyDispatcherMock.mockReturnValueOnce(createDispatcher([]));
+    hoisted.dispatchReplyFromConfigMock.mockImplementationOnce(async ({ replyOptions }) => {
+      replyOptions?.onAgentRunStart?.("generated-run");
+      recordReplyUsageState("generated-run", usageState);
+      return { text: "ok" };
+    });
+
+    await dispatchInboundMessageWithDispatcher({
+      ctx: buildTestCtx({ Surface: "telegram", SessionKey: "agent:test:session" }),
+      cfg: {} as OpenClawConfig,
+      dispatcherOptions: {
+        deliver: async () => undefined,
+      },
+      replyResolver: async () => ({ text: "ok" }),
+    });
+
+    const dispatcherOptions = requireReplyDispatcherOptions();
+    if (!dispatcherOptions?.beforeDeliver) {
+      throw new Error("expected beforeDeliver hook");
+    }
+
+    await dispatcherOptions.beforeDeliver({ text: "original reply" }, { kind: "final" });
+
+    expect(runReplyPayloadSending).toHaveBeenCalledWith(
+      {
+        payload: { text: "original reply" },
+        kind: "final",
+        channel: "telegram",
+        sessionKey: "agent:test:session",
+        runId: "generated-run",
+        usageState,
+      },
+      {
+        accountId: "acct-1",
+        channelId: "threads",
+        conversationId: "conv-1",
+        runId: "generated-run",
       },
     );
   });

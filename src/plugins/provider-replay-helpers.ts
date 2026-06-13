@@ -15,6 +15,7 @@ export function buildOpenAICompatibleReplayPolicy(
   modelApi: string | null | undefined,
   options: {
     sanitizeToolCallIds?: boolean;
+    duplicateToolCallIdStyle?: "openai";
     modelId?: string | null;
     dropReasoningFromHistory?: boolean;
   } = {},
@@ -37,7 +38,13 @@ export function buildOpenAICompatibleReplayPolicy(
 
   return {
     ...(sanitizeToolCallIds
-      ? { sanitizeToolCallIds: true, toolCallIdMode: "strict" as const }
+      ? {
+          sanitizeToolCallIds: true,
+          toolCallIdMode: "strict" as const,
+          ...(options.duplicateToolCallIdStyle
+            ? { duplicateToolCallIdStyle: options.duplicateToolCallIdStyle }
+            : {}),
+        }
       : {}),
     ...(isResponsesFamily ? { allowSyntheticToolResults: true } : {}),
     ...(modelApi === "openai-completions"
