@@ -221,7 +221,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
-  it("collapses the workspace files panel from its header control", async () => {
+  it("starts the workspace files panel collapsed and toggles it open", async () => {
     const context = await browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -240,6 +240,14 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
     try {
       await page.goto(`${server.baseUrl}chat`);
+      await page.getByRole("button", { name: "Expand workspace files" }).waitFor({
+        timeout: 10_000,
+      });
+      expect(await gateway.getRequests("agents.files.list")).toHaveLength(0);
+      expect(await page.locator(".chat-workspace-rail__file").count()).toBe(0);
+      expect(await page.locator(".chat-workspace-rail__collapsed-icon svg").count()).toBe(1);
+
+      await page.getByRole("button", { name: "Expand workspace files" }).click();
       await page.getByRole("button", { name: "Collapse workspace files" }).waitFor({
         timeout: 10_000,
       });
@@ -258,6 +266,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         timeout: 10_000,
       });
       await page.getByText("AGENTS.md").waitFor({ timeout: 10_000 });
+      expect(await gateway.getRequests("agents.files.list")).toHaveLength(1);
 
       await page.setViewportSize({ height: 900, width: 1000 });
       expect(await page.locator(".chat-workspace-rail").isHidden()).toBe(true);
