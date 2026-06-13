@@ -1026,6 +1026,25 @@ export const OpenClawSchema = z
             dangerouslyAllowHostHeaderOriginFallback: z.boolean().optional(),
             allowInsecureAuth: z.boolean().optional(),
             dangerouslyDisableDeviceAuth: z.boolean().optional(),
+            timezone: z
+              .string()
+              .refine(
+                (v) => {
+                  if (v === "host") {
+                    return true;
+                  }
+                  try {
+                    Intl.DateTimeFormat(undefined, { timeZone: v });
+                    return true;
+                  } catch {
+                    return false;
+                  }
+                },
+                {
+                  message: 'Must be "host" or a valid IANA timezone (e.g. "America/New_York")',
+                },
+              )
+              .optional(),
           })
           .strict()
           .optional(),
