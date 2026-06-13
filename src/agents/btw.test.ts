@@ -1,4 +1,5 @@
 /** Tests BTW side-question execution, session context, auth, and harness routing. */
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 
@@ -25,6 +26,8 @@ const listAgentEntriesMock = vi.fn();
 const prepareProviderRuntimeAuthMock = vi.fn();
 const registerProviderStreamForModelMock = vi.fn();
 const resolveEmbeddedAgentStreamFnMock = vi.fn();
+const prepareCliRunContextMock = vi.fn();
+const executePreparedCliRunMock = vi.fn();
 const diagDebugMock = vi.fn();
 
 vi.mock("../llm/stream.js", async () => {
@@ -83,6 +86,7 @@ vi.mock("./model-runtime-aliases.js", () => ({
     provider,
     cfg,
     modelId,
+    authProfileId,
   }: {
     provider?: string;
     cfg?: {
@@ -91,15 +95,40 @@ vi.mock("./model-runtime-aliases.js", () => ({
           models?: Record<string, { agentRuntime?: { id?: string } }>;
         };
       };
+      auth?: {
+        order?: Record<string, string[]>;
+        profiles?: Record<string, { provider?: string }>;
+      };
     };
     modelId?: string;
+    authProfileId?: string;
   }) => {
     const key = provider && modelId ? `${provider}/${modelId}` : undefined;
     const runtime = key
       ? cfg?.agents?.defaults?.models?.[key]?.agentRuntime?.id?.trim()
       : undefined;
+    if ((!runtime || runtime === "auto") && authProfileId?.trim()) {
+      return cfg?.auth?.profiles?.[authProfileId]?.provider === "claude-cli"
+        ? "claude-cli"
+        : undefined;
+    }
+    if (!runtime || runtime === "auto") {
+      for (const profileId of cfg?.auth?.order?.[provider ?? ""] ?? []) {
+        if (cfg?.auth?.profiles?.[profileId]?.provider === "claude-cli") {
+          return "claude-cli";
+        }
+      }
+    }
     return runtime || undefined;
   },
+}));
+
+vi.mock("./cli-runner/prepare.runtime.js", () => ({
+  prepareCliRunContext: (...args: unknown[]) => prepareCliRunContextMock(...args),
+}));
+
+vi.mock("./cli-runner/execute.runtime.js", () => ({
+  executePreparedCliRun: (...args: unknown[]) => executePreparedCliRunMock(...args),
 }));
 
 vi.mock("./embedded-agent-runner/runs.js", () => ({
@@ -421,6 +450,8 @@ describe("runBtwSideQuestion", () => {
     prepareProviderRuntimeAuthMock.mockReset();
     registerProviderStreamForModelMock.mockReset();
     resolveEmbeddedAgentStreamFnMock.mockReset();
+    prepareCliRunContextMock.mockReset();
+    executePreparedCliRunMock.mockReset();
     diagDebugMock.mockReset();
     clearAgentHarnesses();
 
@@ -644,7 +675,135 @@ describe("runBtwSideQuestion", () => {
     expect(streamSimpleMock).toHaveBeenCalledTimes(1);
   });
 
-  it("fails closed instead of using direct provider auth for CLI-runtime alias models", async () => {
+  it("runs CLI-runtime alias BTW as an ephemeral CLI side question", async () => {
+    const cleanup = vi.fn(async () => undefined);
+    prepareCliRunContextMock.mockResolvedValueOnce({
+      prepared: true,
+      preparedBackend: { cleanup },
+    });
+    executePreparedCliRunMock.mockResolvedValueOnce({ text: "CLI side answer." });
+
+    const result = await runSideQuestion({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+            },
+          },
+        },
+      } as never,
+      model: "claude-opus-4-7",
+      sessionKey: DEFAULT_SESSION_KEY,
+    });
+
+    expect(result).toEqual({ text: "CLI side answer." });
+    expect(prepareCliRunContextMock).toHaveBeenCalledTimes(1);
+    const prepareParams = mockArg(prepareCliRunContextMock, 0, 0) as {
+      executionMode?: string;
+      provider?: string;
+      model?: string;
+      disableTools?: boolean;
+      cliSessionId?: string;
+      extraSystemPrompt?: string;
+      prompt?: string;
+    };
+    expect(prepareParams.executionMode).toBe("side-question");
+    expect(prepareParams.provider).toBe("claude-cli");
+    expect(prepareParams.model).toBe("claude-opus-4-7");
+    expect(prepareParams.disableTools).toBe(true);
+    expect(prepareParams.cliSessionId).toBeUndefined();
+    expect(prepareParams.extraSystemPrompt).toContain("Answer only the side question");
+    expect(prepareParams.prompt).toContain("<conversation_history>");
+    expect(prepareParams.prompt).toContain("<btw_side_question>");
+    expect(executePreparedCliRunMock).toHaveBeenCalledWith({
+      prepared: true,
+      preparedBackend: { cleanup },
+    });
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(getApiKeyForModelMock).not.toHaveBeenCalled();
+    expect(streamSimpleMock).not.toHaveBeenCalled();
+    expect(registerProviderStreamForModelMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves the explicit no-timeout override for CLI-runtime BTW", async () => {
+    const cleanup = vi.fn(async () => undefined);
+    prepareCliRunContextMock.mockResolvedValueOnce({
+      prepared: true,
+      preparedBackend: { cleanup },
+    });
+    executePreparedCliRunMock.mockResolvedValueOnce({ text: "CLI side answer." });
+
+    await runSideQuestion({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+            },
+          },
+        },
+      } as never,
+      model: "claude-opus-4-7",
+      opts: { timeoutOverrideSeconds: 0 },
+      sessionKey: DEFAULT_SESSION_KEY,
+    });
+
+    const prepareParams = mockArg(prepareCliRunContextMock, 0, 0) as {
+      timeoutMs?: unknown;
+      runTimeoutOverrideMs?: unknown;
+    };
+    expect(prepareParams.timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
+    expect(prepareParams.runTimeoutOverrideMs).toBe(MAX_TIMER_TIMEOUT_MS);
+  });
+
+  it("runs auth-order-selected CLI BTW through the CLI side-question path", async () => {
+    const cleanup = vi.fn(async () => undefined);
+    prepareCliRunContextMock.mockResolvedValueOnce({
+      prepared: true,
+      preparedBackend: { cleanup },
+    });
+    executePreparedCliRunMock.mockResolvedValueOnce({ text: "CLI auth-order side answer." });
+
+    const result = await runSideQuestion({
+      cfg: {
+        auth: {
+          order: { anthropic: ["anthropic:claude-cli"] },
+          profiles: {
+            "anthropic:claude-cli": { provider: "claude-cli" },
+          },
+        },
+      } as never,
+      model: "claude-opus-4-7",
+      sessionKey: DEFAULT_SESSION_KEY,
+    });
+
+    expect(result).toEqual({ text: "CLI auth-order side answer." });
+    expect(prepareCliRunContextMock).toHaveBeenCalledTimes(1);
+    const prepareParams = mockArg(prepareCliRunContextMock, 0, 0) as {
+      executionMode?: string;
+      provider?: string;
+      disableTools?: boolean;
+    };
+    expect(prepareParams.executionMode).toBe("side-question");
+    expect(prepareParams.provider).toBe("claude-cli");
+    expect(prepareParams.disableTools).toBe(true);
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(getApiKeyForModelMock).not.toHaveBeenCalled();
+    expect(streamSimpleMock).not.toHaveBeenCalled();
+  });
+
+  it("does not expose raw CLI BTW output when transformed text is empty", async () => {
+    const cleanup = vi.fn(async () => undefined);
+    prepareCliRunContextMock.mockResolvedValueOnce({
+      prepared: true,
+      preparedBackend: { cleanup },
+    });
+    executePreparedCliRunMock.mockResolvedValueOnce({
+      text: "   ",
+      rawText: "raw untransformed answer",
+    });
+
     await expect(
       runSideQuestion({
         cfg: {
@@ -659,41 +818,19 @@ describe("runBtwSideQuestion", () => {
         model: "claude-opus-4-7",
         sessionKey: DEFAULT_SESSION_KEY,
       }),
-    ).rejects.toThrow(
-      "/btw is not yet supported for claude-cli-backed models. The selected model is routed through claude-cli; OpenClaw will not fall back to direct anthropic auth because that would use a different backend than the active session.",
-    );
-    expect(getApiKeyForModelMock).not.toHaveBeenCalled();
+    ).rejects.toThrow("/btw side question via claude-cli produced no answer");
+
+    expect(cleanup).toHaveBeenCalledTimes(1);
     expect(streamSimpleMock).not.toHaveBeenCalled();
-    expect(registerProviderStreamForModelMock).not.toHaveBeenCalled();
   });
 
-  it("does not let an auto-selected stale Anthropic profile suppress Claude CLI auth for BTW", async () => {
-    const claudeAuthStore = {
-      version: 1 as const,
-      profiles: {
-        "anthropic:api": {
-          type: "api_key" as const,
-          provider: "anthropic",
-          key: "static-key",
-        },
-        "anthropic:claude-cli": {
-          type: "oauth" as const,
-          provider: "claude-cli",
-          access: "claude-cli-access",
-          refresh: "claude-cli-refresh",
-          expires: Date.now() + 60_000,
-        },
-      },
-    };
-    ensureAuthProfileStoreMock.mockReturnValueOnce(claudeAuthStore);
-    getApiKeyForModelMock.mockResolvedValueOnce({
-      apiKey: "claude-cli-access",
-      mode: "oauth",
-      source: "profile:anthropic:claude-cli",
-      profileId: "anthropic:claude-cli",
+  it("does not let an auto-selected stale direct profile suppress auth-order CLI BTW", async () => {
+    const cleanup = vi.fn(async () => undefined);
+    prepareCliRunContextMock.mockResolvedValueOnce({
+      prepared: true,
+      preparedBackend: { cleanup },
     });
-    requireApiKeyMock.mockReturnValueOnce("claude-cli-access");
-    mockDoneAnswer("Claude CLI answer.");
+    executePreparedCliRunMock.mockResolvedValueOnce({ text: "Claude CLI answer." });
 
     const result = await runSideQuestion({
       cfg: {
@@ -712,28 +849,55 @@ describe("runBtwSideQuestion", () => {
     });
 
     expect(result).toEqual({ text: "Claude CLI answer." });
-    expect(ensureAuthProfileStoreMock).toHaveBeenCalledWith(DEFAULT_AGENT_DIR, {
-      externalCliProviderIds: ["claude-cli"],
-      allowKeychainPrompt: false,
+    const prepareParams = mockArg(prepareCliRunContextMock, 0, 0) as {
+      provider?: string;
+      authProfileId?: string;
+      executionMode?: string;
+    };
+    expect(prepareParams.provider).toBe("claude-cli");
+    expect(prepareParams.executionMode).toBe("side-question");
+    expect(prepareParams.authProfileId).toBeUndefined();
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(getApiKeyForModelMock).not.toHaveBeenCalled();
+    expect(streamSimpleMock).not.toHaveBeenCalled();
+  });
+
+  it("uses an auto-selected session CLI auth profile for CLI BTW", async () => {
+    const cleanup = vi.fn(async () => undefined);
+    prepareCliRunContextMock.mockResolvedValueOnce({
+      prepared: true,
+      preparedBackend: { cleanup },
     });
-    expect(ensureAuthProfileStoreWithoutExternalProfilesMock).not.toHaveBeenCalled();
-    expectRecordFields(mockArg(getApiKeyForModelMock, 0, 0), {
-      profileId: undefined,
-      store: claudeAuthStore,
+    executePreparedCliRunMock.mockResolvedValueOnce({ text: "Session Claude CLI answer." });
+
+    const result = await runSideQuestion({
+      cfg: {
+        auth: {
+          order: { anthropic: ["anthropic:api"] },
+          profiles: {
+            "anthropic:api": { provider: "anthropic", mode: "api_key" },
+            "anthropic:auto-cli": { provider: "claude-cli", mode: "oauth" },
+          },
+        },
+      } as never,
+      sessionEntry: createSessionEntry({
+        authProfileOverride: "anthropic:auto-cli",
+        authProfileOverrideSource: "auto",
+      }),
     });
-    expectRecordFields(mockArg(prepareProviderRuntimeAuthMock, 0, 0), {
-      provider: "anthropic",
-    });
-    expectRecordFields(
-      (mockArg(prepareProviderRuntimeAuthMock, 0, 0) as { context?: unknown }).context,
-      {
-        profileId: "anthropic:claude-cli",
-        authMode: "oauth",
-      },
-    );
-    expectRecordFields(mockArg(resolveEmbeddedAgentStreamFnMock, 0, 0), {
-      authProfileId: "anthropic:claude-cli",
-    });
+
+    expect(result).toEqual({ text: "Session Claude CLI answer." });
+    const prepareParams = mockArg(prepareCliRunContextMock, 0, 0) as {
+      provider?: string;
+      authProfileId?: string;
+      executionMode?: string;
+    };
+    expect(prepareParams.provider).toBe("claude-cli");
+    expect(prepareParams.executionMode).toBe("side-question");
+    expect(prepareParams.authProfileId).toBe("anthropic:auto-cli");
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(getApiKeyForModelMock).not.toHaveBeenCalled();
+    expect(streamSimpleMock).not.toHaveBeenCalled();
   });
 
   it("loads Claude CLI auth for BTW from persisted auth-store order", async () => {
