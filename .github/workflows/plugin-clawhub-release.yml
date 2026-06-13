@@ -16,7 +16,7 @@ on:
         required: false
         type: string
       ref:
-        description: Commit SHA on main, a release branch, or the matching Tideclaw alpha branch to publish from; defaults to the workflow ref
+        description: Dry-run target ref to validate; real OIDC publishes must dispatch the workflow with --ref set to the target release tag/ref
         required: false
         default: ""
         type: string
@@ -95,11 +95,17 @@ jobs:
         env:
           TARGET_SHA: ${{ steps.ref.outputs.sha }}
           WORKFLOW_SHA: ${{ github.sha }}
+          DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
         run: |
           set -euo pipefail
           if [[ "${TARGET_SHA}" != "${WORKFLOW_SHA}" ]]; then
+            if [[ "${DRY_RUN}" == "true" ]]; then
+              echo "Dry-run publish target differs from workflow ref; allowing validation-only dispatch."
+              exit 0
+            fi
             echo "Plugin ClawHub OIDC publishes must run from the same ref that is being published." >&2
-            echo "Dispatch this workflow with --ref pointing at the target release tag/ref, or omit the ref input." >&2
+            echo "The ref input is only supported for dry_run=true." >&2
+            echo "For real publishes, dispatch this workflow with --ref pointing at the target release tag/ref and omit the ref input." >&2
             exit 1
           fi
 

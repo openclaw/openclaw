@@ -1586,7 +1586,14 @@ describe("package artifact reuse", () => {
     expect(clawHubWorkflow).toContain("Upload ClawHub package artifact");
     expect(clawHubWorkflow).toContain("Validate OIDC source matches workflow ref");
     expect(clawHubWorkflow).toContain(
+      "Dry-run target ref to validate; real OIDC publishes must dispatch the workflow with --ref set to the target release tag/ref",
+    );
+    expect(clawHubWorkflow).toContain(
       "Plugin ClawHub OIDC publishes must run from the same ref that is being published.",
+    );
+    expect(clawHubWorkflow).toContain("The ref input is only supported for dry_run=true.");
+    expect(clawHubWorkflow).toContain(
+      "Dry-run publish target differs from workflow ref; allowing validation-only dispatch.",
     );
     expect(clawHubWorkflow).toContain(
       "uses: openclaw/clawhub/.github/workflows/package-publish.yml@9d49df109d4ad3dc8a6ecf05d26b39f46d294721",
