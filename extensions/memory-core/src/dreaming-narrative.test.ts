@@ -185,6 +185,32 @@ describe("extractNarrativeText", () => {
     ];
     expect(extractNarrativeText(messages)).toBe("Final response.");
   });
+
+  it("unwraps message envelope from cron/subagent context", () => {
+    const messages = [
+      { type: "message", message: { role: "user", content: "hello" } },
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "The gateway hums at ninety-six tonight." }],
+        },
+      },
+    ];
+    expect(extractNarrativeText(messages)).toBe(
+      "The gateway hums at ninety-six tonight.",
+    );
+  });
+
+  it("unwraps envelope with string content", () => {
+    const messages = [
+      {
+        type: "message",
+        message: { role: "assistant", content: "Poetic diary entry." },
+      },
+    ];
+    expect(extractNarrativeText(messages)).toBe("Poetic diary entry.");
+  });
 });
 
 describe("formatNarrativeDate", () => {

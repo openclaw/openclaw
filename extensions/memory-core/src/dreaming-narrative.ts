@@ -317,10 +317,19 @@ export function extractNarrativeText(messages: unknown[]): string | null {
       continue;
     }
     const record = msg as Record<string, unknown>;
-    if (record.role !== "assistant") {
+    // Unwrap message envelope from cron/subagent context where
+    // getSessionMessages() wraps messages as {type: "message", message: {...}}.
+    const unwrapped =
+      record.type === "message" &&
+      record.message &&
+      typeof record.message === "object" &&
+      !Array.isArray(record.message)
+        ? (record.message as Record<string, unknown>)
+        : record;
+    if (unwrapped.role !== "assistant") {
       continue;
     }
-    const content = record.content;
+    const content = unwrapped.content;
     if (typeof content === "string" && content.trim().length > 0) {
       return content.trim();
     }
