@@ -473,6 +473,27 @@ describe("cli program (nodes basics)", () => {
     ).toBe(true);
   });
 
+  it("keeps connection age adjacent to connection status before pending approval", async () => {
+    callGateway.mockResolvedValue({
+      ts: Date.now(),
+      nodes: [
+        {
+          nodeId: "pending-reapproval-node",
+          displayName: "Pending Reapproval Node",
+          approvalState: "pending-reapproval",
+          pendingRequestId: "request-reapproval",
+          paired: true,
+          connected: true,
+          connectedAtMs: Date.now() - 60_000,
+        },
+      ],
+    });
+
+    await runProgram(["nodes", "status"]);
+
+    expect(getRuntimeOutput()).toMatch(/connected \([^)]* ago\) · reapproval pending/);
+  });
+
   it("runs nodes describe and calls node.describe", async () => {
     mockGatewayWithIosNodeListAnd("node.describe", {
       ts: Date.now(),

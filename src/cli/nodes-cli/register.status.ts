@@ -351,7 +351,7 @@ export function registerNodesStatusCommands(nodes: Command) {
               ID: sanitizeTerminalText(n.nodeId),
               IP: sanitizeTerminalText(n.remoteIp ?? ""),
               Detail: detailParts.join(" · "),
-              Status: `${paired} · ${connected}${approval ? ` · ${approval}` : ""}${since}`,
+              Status: `${paired} · ${connected}${since}${approval ? ` · ${approval}` : ""}`,
               Caps: caps,
             };
           });
