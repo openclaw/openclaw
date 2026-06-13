@@ -110,7 +110,7 @@ describe("node pairing rate limit", () => {
     });
   });
 
-  test("keeps paired reconnects on the approved surface when upgrade pairing is limited", async () => {
+  test("records paired reconnect reapproval despite first-time pairing limits", async () => {
     testState.gatewayAuth = {
       mode: "token",
       token: "secret",
@@ -127,7 +127,10 @@ describe("node pairing rate limit", () => {
         `openclaw-node-pairing-upgrade-${randomUUID()}`,
       );
       const pairedIdentityPath = `${identityPrefix}-paired.json`;
-      await approveNodeIdentity({ identityPath: pairedIdentityPath, caps: ["camera"] });
+      const pairedIdentity = await approveNodeIdentity({
+        identityPath: pairedIdentityPath,
+        caps: ["camera"],
+      });
 
       const firstTimeResponses = await Promise.all(
         Array.from(
@@ -159,7 +162,12 @@ describe("node pairing rate limit", () => {
         });
       }
 
-      expect((await listNodePairing()).pending).toHaveLength(3);
+      const pending = (await listNodePairing()).pending;
+      expect(pending).toHaveLength(4);
+      expect(pending.find((entry) => entry.nodeId === pairedIdentity.deviceId)?.caps).toEqual([
+        "camera",
+        "screen",
+      ]);
     });
   });
 });

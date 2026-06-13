@@ -212,8 +212,11 @@ async function requestNodePairingFromConnect(params: {
   input: Parameters<typeof requestNodePairing>[0];
   rateLimiter?: AuthRateLimiter;
   clientIp?: string;
+  pairedReconnect?: boolean;
 }): Promise<Awaited<ReturnType<typeof requestNodePairing>>> {
-  if (!params.rateLimiter) {
+  // Paired reconnects replace at most one request for their node. First-time
+  // pairing pressure must not suppress a required reapproval refresh.
+  if (!params.rateLimiter || params.pairedReconnect) {
     return await requestNodePairing(params.input);
   }
   return await withSerializedRateLimitAttempt({
@@ -1619,9 +1622,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           | { nodeId: string; observed: NodePairingPendingSnapshot[] }
           | undefined;
         if (role === "node") {
-          const nodePairingSnapshot = await getNodePairingConnectSnapshot(
-            connectParams.device?.id ?? connectParams.client.id,
-          );
+          const nodeId = connectParams.device?.id ?? connectParams.client.id;
+          const nodePairingSnapshot = await getNodePairingConnectSnapshot(nodeId);
           const pairedNode = nodePairingSnapshot.pairedNode;
           let reconciliation: Awaited<ReturnType<typeof reconcileNodePairingOnConnect>>;
           try {
@@ -1631,20 +1633,12 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
               pairedNode,
               reportedClientIp,
               requestPairing: async (input) => {
-                try {
-                  return await requestNodePairingFromConnect({
-                    input,
-                    rateLimiter: authRateLimiter,
-                    clientIp: browserRateLimitClientIp,
-                  });
-                } catch (error) {
-                  if (error instanceof NodePairingRateLimitError && pairedNode) {
-                    // Paired upgrade reconnects can keep their approved surface;
-                    // only the fresh pending request is throttled here.
-                    return null;
-                  }
-                  throw error;
-                }
+                return await requestNodePairingFromConnect({
+                  input,
+                  rateLimiter: authRateLimiter,
+                  clientIp: browserRateLimitClientIp,
+                  pairedReconnect: pairedNode !== null,
+                });
               },
             });
           } catch (error) {
@@ -2001,31 +1995,30 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         }
         if (pendingNodePairingCleanup) {
           const context = buildRequestContext();
-          // A newer overlapping reconnect may now own the node and its pending approval.
-          if (context.nodeRegistry.get(pendingNodePairingCleanup.nodeId)?.connId === connId) {
-            try {
-              const resolvedPairings = await rejectPendingNodePairingRequestsForNode(
-                pendingNodePairingCleanup.nodeId,
-                pendingNodePairingCleanup.observed,
-              );
-              const resolvedAt = Date.now();
-              for (const resolved of resolvedPairings) {
-                context.broadcast(
-                  "node.pair.resolved",
-                  {
-                    requestId: resolved.requestId,
-                    nodeId: resolved.nodeId,
-                    decision: "rejected",
-                    ts: resolvedAt,
-                  },
-                  { dropIfSlow: true },
-                );
-              }
-            } catch (error) {
-              logGateway.warn(
-                `failed to clear stale pending pairings for ${pendingNodePairingCleanup.nodeId}: ${formatForLog(error)}`,
+          try {
+            // Reconciliation and cleanup share the pairing lock. A newer reconnect
+            // refreshes the request revision, so this observed snapshot cannot delete it.
+            const resolvedPairings = await rejectPendingNodePairingRequestsForNode(
+              pendingNodePairingCleanup.nodeId,
+              pendingNodePairingCleanup.observed,
+            );
+            const resolvedAt = Date.now();
+            for (const resolved of resolvedPairings) {
+              context.broadcast(
+                "node.pair.resolved",
+                {
+                  requestId: resolved.requestId,
+                  nodeId: resolved.nodeId,
+                  decision: "rejected",
+                  ts: resolvedAt,
+                },
+                { dropIfSlow: true },
               );
             }
+          } catch (error) {
+            logGateway.warn(
+              `failed to clear stale pending pairings for ${pendingNodePairingCleanup.nodeId}: ${formatForLog(error)}`,
+            );
           }
         }
         logWs("out", "hello-ok", {

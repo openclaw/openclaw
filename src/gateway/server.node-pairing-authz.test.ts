@@ -16,7 +16,6 @@ import {
   openTrackedWs,
   pairDeviceIdentity,
 } from "./device-authz.test-helpers.js";
-import { NodeRegistry } from "./node-registry.js";
 import { connectGatewayClient } from "./test-helpers.e2e.js";
 import {
   connectOk,
@@ -499,62 +498,6 @@ describe("gateway node pairing authorization", () => {
           ),
         ).toBe(false);
       });
-    });
-
-    test("preserves reapproval when an overlapping node connection becomes current", async () => {
-      const pairedNode = await pairDeviceIdentity({
-        name: "node-overlapping-reapproval",
-        role: "node",
-        scopes: [],
-        clientId: GATEWAY_CLIENT_NAMES.NODE_HOST,
-        clientMode: GATEWAY_CLIENT_MODES.NODE,
-      });
-      const initial = await requestNodePairing({
-        nodeId: pairedNode.identity.deviceId,
-        platform: "macos",
-        deviceFamily: "Mac",
-        commands: ["screen.snapshot"],
-      });
-      await approveNodePairing(initial.request.requestId, {
-        callerScopes: ["operator.pairing", "operator.write"],
-      });
-      const pending = await requestNodePairing({
-        nodeId: pairedNode.identity.deviceId,
-        platform: "macos",
-        deviceFamily: "Mac",
-        commands: ["screen.snapshot", "system.run"],
-      });
-
-      const originalGet = Reflect.get(NodeRegistry.prototype, "get");
-      const getSpy = vi.spyOn(NodeRegistry.prototype, "get").mockImplementation(function (
-        this: NodeRegistry,
-        nodeId: string,
-      ) {
-        const current = Reflect.apply(originalGet, this, [nodeId]);
-        return current && nodeId === pairedNode.identity.deviceId
-          ? { ...current, connId: "overlapping-upgraded-connection" }
-          : current;
-      });
-      let reverted: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
-      try {
-        reverted = await connectNodeClient({
-          port: getStarted().port,
-          deviceIdentity: pairedNode.identity,
-          commands: ["screen.snapshot"],
-        });
-        await vi.waitFor(() => {
-          expect(getSpy).toHaveBeenCalledWith(pairedNode.identity.deviceId);
-        });
-      } finally {
-        getSpy.mockRestore();
-        await reverted?.stopAndWait();
-      }
-
-      expect(
-        (await listNodePairing()).pending.find(
-          (entry) => entry.nodeId === pairedNode.identity.deviceId,
-        )?.requestId,
-      ).toBe(pending.request.requestId);
     });
 
     test("requests re-pairing when a paired node reconnects with upgraded commands", async () => {
