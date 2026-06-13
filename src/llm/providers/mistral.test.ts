@@ -173,4 +173,45 @@ describe("Mistral provider", () => {
     );
     expect(mistralMockState.payloads).toHaveLength(0);
   });
+
+  it("validates and emits one snapshot of a pinned Mistral tool name", async () => {
+    let nameReads = 0;
+    const stream = streamMistral(
+      makeMistralModel(),
+      {
+        ...context,
+        tools: [
+          {
+            name: "healthy_tool",
+            description: "healthy tool",
+            parameters: { type: "object", properties: {} },
+            async execute() {
+              return { content: [{ type: "text", text: "ok" }] };
+            },
+          },
+        ] as never,
+      },
+      {
+        apiKey: "sk-mistral-provider",
+        toolChoice: {
+          type: "function",
+          function: {
+            get name() {
+              nameReads += 1;
+              return nameReads === 1 ? "healthy_tool" : "broken_tool";
+            },
+          },
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(nameReads).toBe(1);
+    expect((mistralMockState.payloads[0] as { toolChoice?: unknown }).toolChoice).toEqual({
+      type: "function",
+      function: { name: "healthy_tool" },
+    });
+  });
 });

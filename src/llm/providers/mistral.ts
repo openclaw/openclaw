@@ -722,14 +722,15 @@ function mapToolChoice(
   if (choice === "auto" || choice === "none" || choice === "any" || choice === "required") {
     return choice;
   }
-  if (convertedToolNames && !convertedToolNames.has(choice.function.name)) {
+  const toolName = choice.function.name;
+  if (convertedToolNames && !convertedToolNames.has(toolName)) {
     throw new Error(
-      `Mistral tool_choice requested unavailable tool "${choice.function.name}" after schema conversion`,
+      `Mistral tool_choice requested unavailable tool "${toolName}" after schema conversion`,
     );
   }
   return {
     type: "function",
-    function: { name: choice.function.name },
+    function: { name: toolName },
   };
 }
 
