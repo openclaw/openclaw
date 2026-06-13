@@ -1653,6 +1653,8 @@ export async function runEmbeddedAgent(
             replyToMode: params.replyToMode,
             hasRepliedRef: params.hasRepliedRef,
             sessionFile: activeSessionFile,
+            sessionStorePath: params.sessionStorePath,
+            sessionStoreEntry: params.sessionStoreEntry,
             workspaceDir: resolvedWorkspace,
             cwd: params.cwd,
             agentDir,

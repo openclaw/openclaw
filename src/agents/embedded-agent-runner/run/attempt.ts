@@ -331,6 +331,11 @@ import {
   rotateTranscriptAfterCompaction,
   shouldRotateCompactionTranscript,
 } from "../compaction-successor-transcript.js";
+import {
+  installSessionFamilyCarryoverContextTransform,
+  resolveSessionFamilyCarryoverSummary,
+  shouldInstallSessionFamilyCarryoverContextTransform,
+} from "../session-family-carryover.js";
 import { releaseEmbeddedAttemptSessionLockForAbort } from "./attempt-abort.js";
 import { resolveAttemptWorkspaceBootstrapRouting } from "./attempt-bootstrap-routing.js";
 import { configureEmbeddedAttemptHttpRuntime } from "./attempt-http-runtime.js";
@@ -2351,6 +2356,23 @@ export async function runEmbeddedAttempt(
         const baseConvertToLlm = activeSession.agent.convertToLlm.bind(activeSession.agent);
         activeSession.agent.convertToLlm = async (messages) =>
           await baseConvertToLlm(normalizeMessagesForLlmBoundary(messages, buildBoundaryOptions()));
+      }
+      if (shouldInstallSessionFamilyCarryoverContextTransform({ isRawModelRun })) {
+        installSessionFamilyCarryoverContextTransform({
+          messages: activeSession.messages,
+          getTransformContext: () => activeSession.agent.transformContext,
+          setTransformContext: (transform) => {
+            activeSession.agent.transformContext = transform;
+          },
+          resolveCarryover: async () =>
+            await resolveSessionFamilyCarryoverSummary({
+              sessionId: params.sessionId,
+              sessionFile: params.sessionFile,
+              storePath: params.sessionStorePath,
+              agentId: sessionAgentId,
+              entry: params.sessionStoreEntry,
+            }),
+        });
       }
       let prePromptMessageCount = activeSession.messages.length;
       let contextEngineAfterTurnCheckpoint: number | null = null;

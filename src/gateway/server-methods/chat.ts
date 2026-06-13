@@ -140,6 +140,7 @@ import {
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import type { ChatRunTiming } from "../server-chat-state.js";
 import { getMaxChatHistoryMessagesBytes, MAX_PAYLOAD_BYTES } from "../server-constants.js";
+import { resolveSessionFamilyTranscriptReadTargets } from "../session-history-family.js";
 import { resolveSessionHistoryTailReadOptions } from "../session-history-state.js";
 import { readSessionTranscriptIndex } from "../session-transcript-index.fs.js";
 import {
@@ -2479,11 +2480,12 @@ async function handleChatHistoryRequest({
     );
     return;
   }
-  const { sessionKey, limit, maxChars } = params as {
+  const { sessionKey, limit, maxChars, includeFamily } = params as {
     sessionKey: string;
     agentId?: string;
     limit?: number;
     maxChars?: number;
+    includeFamily?: boolean;
   };
   const agentIdOverride = normalizeOptionalText((params as { agentId?: string }).agentId);
   const requestedAgentId = resolveRequestedChatAgentId({
@@ -2542,20 +2544,45 @@ async function handleChatHistoryRequest({
     maxMessages: rawHistoryWindow.maxMessages + 1,
     maxLines: rawHistoryWindow.maxLines + 1,
   };
+  const includeFamilyHistory = includeFamily === true && method === "chat.history";
+  const transcriptTargets = await resolveSessionFamilyTranscriptReadTargets({
+    entry,
+    sessionId,
+    storePath,
+    agentId: sessionAgentId,
+    includeFamily: includeFamilyHistory,
+  });
   const localMessages =
-    sessionId && storePath
-      ? await readRecentSessionMessagesAsync(sessionId, storePath, entry?.sessionFile, {
-          ...localHistoryReadOptions,
-          maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
-        })
+    transcriptTargets.length > 0 && storePath
+      ? (
+          await Promise.all(
+            transcriptTargets.map(async (target) => {
+              const messages = await readRecentSessionMessagesAsync(
+                target.sessionId,
+                storePath,
+                target.sessionFile,
+                {
+                  ...localHistoryReadOptions,
+                  maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
+                },
+              );
+              // Family history may read reset archives before the current
+              // session start, but the active current transcript must keep
+              // the existing stale subagent_announce cutoff.
+              return dropPreSessionStartAnnouncePairs(
+                messages,
+                target.applySessionStartedAtFilter && typeof entry?.sessionStartedAt === "number"
+                  ? entry.sessionStartedAt
+                  : undefined,
+              );
+            }),
+          )
+        ).flat()
       : [];
   const overreadContextMessage =
     localMessages.length > rawHistoryWindow.maxMessages ? localMessages[0] : undefined;
   const localMessagesWithBoundaryFilter = dropLocalHistoryOverreadContextMessage(
-    dropPreSessionStartAnnouncePairs(
-      localMessages,
-      typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined,
-    ),
+    localMessages,
     overreadContextMessage,
   );
   const rawMessages = augmentChatHistoryWithCliSessionImports({
@@ -2569,7 +2596,9 @@ async function handleChatHistoryRequest({
   // timestamped messages share the same chat.history response surface.
   const recencyFilteredMessages = dropPreSessionStartAnnouncePairs(
     rawMessages,
-    typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined,
+    !includeFamilyHistory && typeof entry?.sessionStartedAt === "number"
+      ? entry.sessionStartedAt
+      : undefined,
   );
   const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(cfg, maxChars);
   const normalized = augmentChatHistoryWithCanvasBlocks(
@@ -2657,6 +2686,7 @@ async function handleChatHistoryRequest({
     sessionKey,
     sessionId,
     messages: bounded.messages,
+    includeFamily: includeFamilyHistory,
     defaults,
     sessionInfo,
     thinkingLevel,

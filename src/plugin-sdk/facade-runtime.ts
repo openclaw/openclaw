@@ -47,6 +47,10 @@ const OPENCLAW_PACKAGE_ROOT =
 const CURRENT_MODULE_PATH = fileURLToPath(import.meta.url);
 const OPENCLAW_SOURCE_EXTENSIONS_ROOT = path.resolve(OPENCLAW_PACKAGE_ROOT, "extensions");
 
+type FacadeSurfaceTypeParam<T extends object> = {
+  readonly __facadeSurfaceType?: (surface: T) => T;
+};
+
 function createFacadeResolutionKey(params: {
   dirName: string;
   artifactBasename: string;
@@ -190,9 +194,8 @@ function buildFacadeActivationCheckParams(
 }
 
 /** Load a bundled or registry-backed plugin public surface, tracking activation ownership. */
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic facade loaders use caller-supplied module surface types.
 export function loadBundledPluginPublicSurfaceModuleSync<T extends object>(
-  params: BundledPluginPublicSurfaceParams,
+  params: BundledPluginPublicSurfaceParams & FacadeSurfaceTypeParam<T>,
 ): T {
   const location = resolveFacadeModuleLocation(params);
   const trackedPluginId = () =>
@@ -227,12 +230,13 @@ export function canLoadActivatedBundledPluginPublicSurface(params: {
 }
 
 /** Load an activated plugin public surface or throw when activation policy blocks access. */
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic facade loaders use caller-supplied module surface types.
-export function loadActivatedBundledPluginPublicSurfaceModuleSync<T extends object>(params: {
-  dirName: string;
-  artifactBasename: string;
-  env?: NodeJS.ProcessEnv;
-}): T {
+export function loadActivatedBundledPluginPublicSurfaceModuleSync<T extends object>(
+  params: {
+    dirName: string;
+    artifactBasename: string;
+    env?: NodeJS.ProcessEnv;
+  } & FacadeSurfaceTypeParam<T>,
+): T {
   loadFacadeActivationCheckRuntime().resolveActivatedBundledPluginPublicSurfaceAccessOrThrow(
     buildFacadeActivationCheckParams(params),
   );
@@ -240,12 +244,13 @@ export function loadActivatedBundledPluginPublicSurfaceModuleSync<T extends obje
 }
 
 /** Load an activated plugin public surface, returning null when activation policy blocks access. */
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic facade loaders use caller-supplied module surface types.
-export function tryLoadActivatedBundledPluginPublicSurfaceModuleSync<T extends object>(params: {
-  dirName: string;
-  artifactBasename: string;
-  env?: NodeJS.ProcessEnv;
-}): T | null {
+export function tryLoadActivatedBundledPluginPublicSurfaceModuleSync<T extends object>(
+  params: {
+    dirName: string;
+    artifactBasename: string;
+    env?: NodeJS.ProcessEnv;
+  } & FacadeSurfaceTypeParam<T>,
+): T | null {
   const access = loadFacadeActivationCheckRuntime().resolveBundledPluginPublicSurfaceAccess(
     buildFacadeActivationCheckParams(params),
   );

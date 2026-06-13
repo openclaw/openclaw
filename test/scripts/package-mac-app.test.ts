@@ -210,6 +210,9 @@ describe("package-mac-app plist stamping", () => {
     const tempRoot = mkdtempSync(path.join(tmpdir(), "openclaw-package-pnpm-root-"));
     const toolsDir = mkdtempSync(path.join(tmpdir(), "openclaw-package-pnpm-tools-"));
     tempDirs.push(tempRoot, toolsDir);
+    const corepackPath = path.join(toolsDir, "corepack");
+    writeFileSync(corepackPath, "#!/bin/sh\nexit 127\n", "utf8");
+    chmodSync(corepackPath, 0o755);
 
     const result = runHelper(`
       set -euo pipefail
