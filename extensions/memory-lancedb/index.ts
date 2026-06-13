@@ -287,7 +287,9 @@ class MemoryDB {
       } catch (error) {
         lastError = error;
         if (attempt < maxRetries - 1) {
-          await new Promise((resolve) => setTimeout(resolve, retryDelayMs * (attempt + 1)));
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, retryDelayMs * (attempt + 1));
+          });
         }
       }
     }
