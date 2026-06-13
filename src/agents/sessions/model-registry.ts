@@ -451,7 +451,7 @@ export class ModelRegistry {
             requireGeneratedCatalog: true,
           });
           if (pluginResult.error) {
-            return pluginResult;
+            continue;
           }
           models.push(...pluginResult.models);
         }

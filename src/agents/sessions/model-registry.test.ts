@@ -225,4 +225,42 @@ describe("ModelRegistry models.json auth", () => {
     expect(registry.getError()).toBeUndefined();
     expect(registry.find("zai", "glm-5.1")).toBeUndefined();
   });
+
+  it("does not let an invalid plugin catalog shard discard valid root models", () => {
+    const modelsPath = writeModelsJsonWithPluginCatalog({
+      root: {
+        providers: {
+          custom: {
+            baseUrl: "https://models.example/v1",
+            api: "openai-responses",
+            apiKey: "CUSTOM_API_KEY",
+            models: [{ id: "example-model", name: "Example Model" }],
+          },
+        },
+      },
+      pluginRelativePath: join("plugins", "bad", PLUGIN_MODEL_CATALOG_FILE),
+      pluginCatalog: {
+        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+        providers: {
+          bad: {
+            baseUrl: "https://bad.example/v1",
+            apiKey: "BAD_API_KEY",
+            models: [{ id: "bad-model" }],
+          },
+        },
+      },
+    });
+
+    const registry = ModelRegistry.create(
+      AuthStorage.inMemory({
+        custom: { type: "api_key", key: "sk-test" },
+      }),
+      modelsPath,
+      { pluginMetadataSnapshot: pluginOwnerSnapshot("bad", "bad") },
+    );
+
+    expect(registry.getError()).toBeUndefined();
+    expect(registry.find("custom", "example-model")?.name).toBe("Example Model");
+    expect(registry.find("bad", "bad-model")).toBeUndefined();
+  });
 });
