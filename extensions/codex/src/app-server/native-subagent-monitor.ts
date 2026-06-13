@@ -493,6 +493,9 @@ export class CodexNativeSubagentMonitor {
     if (!taskRuntime) {
       return;
     }
+    this.getMirrorForChild(completion.childThreadId)?.markAuthoritativeCompletion(
+      completion.childThreadId,
+    );
     taskRuntime.finalizeTaskRunByRunId({
       runId: codexNativeSubagentRunId(completion.childThreadId),
       status: completion.status,
@@ -508,6 +511,12 @@ export class CodexNativeSubagentMonitor {
     const childState = this.childStates.get(childThreadId.trim());
     const state = childState ? this.parentStates.get(childState.parentThreadId) : undefined;
     return state?.taskRuntime;
+  }
+
+  private getMirrorForChild(childThreadId: string): CodexNativeSubagentTaskMirror | undefined {
+    const childState = this.childStates.get(childThreadId.trim());
+    const state = childState ? this.parentStates.get(childState.parentThreadId) : undefined;
+    return state?.mirror;
   }
 
   private registerChildThread(
