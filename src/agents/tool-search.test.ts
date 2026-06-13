@@ -46,6 +46,29 @@ function pluginTool(name: string, description: string, pluginId = "fake-catalog"
   return tool;
 }
 
+function unreadableParametersTool(name: string, description: string): AnyAgentTool {
+  const tool = Object.defineProperties(
+    {
+      name,
+      label: name,
+      description,
+      execute: vi.fn(async (_toolCallId, input) => jsonResult({ name, input })),
+    },
+    {
+      parameters: {
+        get() {
+          throw new Error("parameters getter exploded");
+        },
+      },
+    },
+  ) as unknown as AnyAgentTool;
+  setPluginToolMeta(tool, {
+    pluginId: "fake-catalog",
+    optional: true,
+  });
+  return tool;
+}
+
 function resultDetails(result: { details?: unknown }): Record<string, unknown> {
   if (!result.details || typeof result.details !== "object") {
     throw new Error("Expected result details");
@@ -158,6 +181,44 @@ describe("Tool Search", () => {
     expect(telemetry.searchCount).toBe(1);
     expect(telemetry.describeCount).toBe(1);
     expect(telemetry.callCount).toBe(1);
+  });
+
+  it("skips unreadable target tool schemas while keeping healthy catalog siblings", async () => {
+    const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
+    const broken = unreadableParametersTool("fake_broken_schema", "Broken schema");
+    const valid = pluginTool("fake_valid_schema", "Valid schema");
+
+    const compacted = applyToolSearchCatalog({
+      tools: [codeTool, broken, valid],
+      config: {
+        tools: {
+          toolSearch: true,
+        },
+      } as never,
+      sessionId: "session-unreadable-schema",
+      sessionKey: "agent:main:main",
+    });
+
+    expect(compacted.tools.map((tool) => tool.name)).toEqual([TOOL_SEARCH_CODE_MODE_TOOL_NAME]);
+    expect(compacted.catalogToolCount).toBe(1);
+
+    const [runtimeCodeTool] = createToolSearchTools({
+      sessionId: "session-unreadable-schema",
+      sessionKey: "agent:main:main",
+    });
+    const result = await runtimeCodeTool.execute("call-unreadable-schema", {
+      code: `
+        const hits = await openclaw.tools.search("schema", { limit: 10 });
+        return hits.map((hit) => hit.name);
+      `,
+    });
+
+    expect(vi.mocked(broken.execute)).not.toHaveBeenCalled();
+    expect(resultDetails(result)).toMatchObject({
+      ok: true,
+      value: ["fake_valid_schema"],
+      telemetry: { catalogSize: 1 },
+    });
   });
 
   it("scopes catalogs by run id when attempts share a session", async () => {
@@ -331,6 +392,35 @@ describe("Tool Search", () => {
       .get("session:session-client")
       ?.entries.find((entry) => entry.id === "client:client:client_pick_file");
     expect(clientEntry?.source).toBe("client");
+  });
+
+  it("quarantines unreadable client tool schemas instead of exposing them directly", () => {
+    const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
+    const config = {
+      tools: {
+        toolSearch: true,
+      },
+    } as never;
+    applyToolSearchCatalog({
+      tools: [codeTool],
+      config,
+      sessionId: "session-client-unreadable-schema",
+    });
+
+    const broken = unreadableParametersTool("client_broken_schema", "Broken client schema");
+    const valid = fakeTool("client_valid_schema", "Valid client schema");
+    const compacted = addClientToolsToToolSearchCatalog({
+      tools: [broken, valid],
+      config,
+      sessionId: "session-client-unreadable-schema",
+    });
+
+    expect(compacted.tools).toEqual([]);
+    expect(compacted.compacted).toBe(true);
+    expect(compacted.catalogToolCount).toBe(1);
+    const catalogEntries =
+      testing.sessionCatalogs.get("session:session-client-unreadable-schema")?.entries ?? [];
+    expect(catalogEntries.map((entry) => entry.name)).toEqual(["client_valid_schema"]);
   });
 
   it("wraps cataloged OpenClaw tools with before_tool_call hooks", async () => {
