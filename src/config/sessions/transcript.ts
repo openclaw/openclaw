@@ -66,6 +66,30 @@ type AssistantBeforeMessageWrite = (params: {
   sessionKey?: string;
 }) => AgentMessage | null;
 
+function applyBeforeMessageWriteToAssistant(params: {
+  message: Parameters<SessionManager["appendMessage"]>[0];
+  beforeMessageWrite?: AssistantBeforeMessageWrite;
+  explicitIdempotencyKey?: string;
+  agentId?: string;
+  sessionKey: string;
+}): Parameters<SessionManager["appendMessage"]>[0] | undefined {
+  if (!params.beforeMessageWrite) {
+    return params.message;
+  }
+  const nextMessage = params.beforeMessageWrite({
+    message: params.message as AgentMessage,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    sessionKey: params.sessionKey,
+  });
+  if (nextMessage?.role !== "assistant") {
+    return undefined;
+  }
+  return {
+    ...nextMessage,
+    ...(params.explicitIdempotencyKey ? { idempotencyKey: params.explicitIdempotencyKey } : {}),
+  } as Parameters<SessionManager["appendMessage"]>[0];
+}
+
 type AssistantTranscriptText = {
   id?: string;
   text: string;
@@ -319,13 +343,33 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
         const explicitIdempotencyKey =
           params.idempotencyKey ??
           ((params.message as { idempotencyKey?: unknown }).idempotencyKey as string | undefined);
+        const message = {
+          ...params.message,
+          ...(explicitIdempotencyKey ? { idempotencyKey: explicitIdempotencyKey } : {}),
+        } as Parameters<SessionManager["appendMessage"]>[0];
+        const preparedUnkeyedMessage =
+          !explicitIdempotencyKey && params.beforeMessageWrite
+            ? applyBeforeMessageWriteToAssistant({
+                message,
+                beforeMessageWrite: params.beforeMessageWrite,
+                agentId: params.agentId,
+                sessionKey: resolved.normalizedKey,
+              })
+            : message;
+        if (!preparedUnkeyedMessage) {
+          return {
+            ok: false,
+            code: "blocked",
+            reason: "blocked by before_message_write",
+          };
+        }
         const identifiedChannelFinal =
           Boolean(explicitIdempotencyKey) && isChannelFinalDeliveryMirror(params.message);
         const latestEquivalentAssistantId =
           isRedundantDeliveryMirror(params.message) && !identifiedChannelFinal
             ? await findLatestEquivalentAssistantMessageId(
                 sessionFile,
-                params.message,
+                preparedUnkeyedMessage as SessionTranscriptAssistantMessage,
                 params.config,
               )
             : undefined;
@@ -334,10 +378,6 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
         if (latestEquivalentAssistantId) {
           return { ok: true, sessionFile, messageId: latestEquivalentAssistantId };
         }
-        const message = {
-          ...params.message,
-          ...(explicitIdempotencyKey ? { idempotencyKey: explicitIdempotencyKey } : {}),
-        } as Parameters<SessionManager["appendMessage"]>[0];
         const appendedResult = await runWithOwnedSessionTranscriptWritePublication(
           { sessionFile, sessionKey: resolved.normalizedKey },
           async () => {
@@ -348,28 +388,20 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
             });
             return await appendSessionTranscriptMessage({
               transcriptPath: sessionFile,
-              message,
+              message: preparedUnkeyedMessage,
               ...(explicitIdempotencyKey ? { idempotencyLookup: "scan" } : {}),
-              ...(params.beforeMessageWrite
+              ...(explicitIdempotencyKey && params.beforeMessageWrite
                 ? {
                     prepareMessageAfterIdempotencyCheck: (
                       candidate: Parameters<SessionManager["appendMessage"]>[0],
-                    ) => {
-                      const nextMessage = params.beforeMessageWrite?.({
-                        message: candidate as AgentMessage,
-                        ...(params.agentId ? { agentId: params.agentId } : {}),
+                    ) =>
+                      applyBeforeMessageWriteToAssistant({
+                        message: candidate,
+                        beforeMessageWrite: params.beforeMessageWrite,
+                        explicitIdempotencyKey,
+                        agentId: params.agentId,
                         sessionKey: resolved.normalizedKey,
-                      });
-                      if (nextMessage?.role !== "assistant") {
-                        return undefined;
-                      }
-                      return {
-                        ...nextMessage,
-                        ...(explicitIdempotencyKey
-                          ? { idempotencyKey: explicitIdempotencyKey }
-                          : {}),
-                      } as Parameters<SessionManager["appendMessage"]>[0];
-                    },
+                      }),
                   }
                 : {}),
               config: params.config,

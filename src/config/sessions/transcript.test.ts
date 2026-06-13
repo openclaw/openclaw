@@ -937,6 +937,43 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     ]);
   });
 
+  it("dedupes unkeyed delivery mirrors after before_message_write rewrites", async () => {
+    writeTranscriptStore();
+    const beforeMessageWrite = vi.fn(({ message }: BeforeMessageWriteParams) => ({
+      ...message,
+      content: [{ type: "text" as const, text: "[redacted by hook]" }],
+    }));
+    const append = () =>
+      appendAssistantMessageToSessionTranscript({
+        sessionKey,
+        storePath: fixture.storePath(),
+        text: "secret output",
+        beforeMessageWrite,
+      });
+
+    const first = await append();
+    const replay = await append();
+
+    expect(first.ok).toBe(true);
+    expect(replay.ok).toBe(true);
+    expect(beforeMessageWrite).toHaveBeenCalledTimes(2);
+    if (!first.ok) {
+      throw new Error("expected delivery mirror append to succeed");
+    }
+    const messages = fs
+      .readFileSync(first.sessionFile, "utf-8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { message?: ExactAssistantMessage })
+      .flatMap((entry) => (entry.message ? [entry.message] : []));
+    expect(messages).toEqual([
+      expect.objectContaining({
+        role: "assistant",
+        content: [{ type: "text", text: "[redacted by hook]" }],
+      }),
+    ]);
+  });
+
   it("reports assistant messages blocked by before_message_write", async () => {
     writeTranscriptStore();
 
