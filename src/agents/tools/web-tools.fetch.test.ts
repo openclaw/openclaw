@@ -169,14 +169,12 @@ describe("web_fetch extraction fallbacks", () => {
     vi.restoreAllMocks();
   });
 
-  it("declares a structured terminal fallback for fetch metadata", () => {
+  it("declares a structured terminal fallback without raw fetch URLs", () => {
     const tool = createFetchTool({ firecrawl: { enabled: false } });
 
     expect(tool?.terminalResultFallback).toEqual({
       mode: "structured_summary",
       fields: [
-        { label: "URL", paths: [["url"]], missingText: "unknown" },
-        { label: "Final URL", paths: [["finalUrl"]], missingText: "unknown" },
         { label: "Status", paths: [["status"]], missingText: "unknown" },
         { label: "Title", paths: [["title"]], missingText: "none" },
         { label: "Cached", paths: [["cached"]], missingText: "unknown" },

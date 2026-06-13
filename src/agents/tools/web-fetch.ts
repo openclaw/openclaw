@@ -674,8 +674,6 @@ export function createWebFetchTool(options?: {
     terminalResultFallback: {
       mode: "structured_summary",
       fields: [
-        { label: "URL", paths: [["url"]], missingText: "unknown" },
-        { label: "Final URL", paths: [["finalUrl"]], missingText: "unknown" },
         { label: "Status", paths: [["status"]], missingText: "unknown" },
         { label: "Title", paths: [["title"]], missingText: "none" },
         { label: "Cached", paths: [["cached"]], missingText: "unknown" },

@@ -5485,11 +5485,16 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(retryInstruction).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
   });
 
-  it("does not retry when the user explicitly asked only for a plan", () => {
+  it.each([
+    "What's your plan for fixing this?",
+    "What is the best approach for fixing this?",
+    "What strategy would you recommend for this?",
+    "How should we approach this?",
+  ])("does not retry when the user explicitly asked only for a plan: %s", (prompt) => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "custom-provider",
       modelId: "custom-model",
-      prompt: "What's your plan for fixing this?",
+      prompt,
       aborted: false,
       timedOut: false,
       attempt: makeAttemptResult({
