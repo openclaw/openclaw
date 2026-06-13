@@ -32,8 +32,13 @@ title: "Usage tracking"
 
 ## Custom `/usage full` footer
 
-`messages.usageTemplate` customizes the per-response `/usage full` footer. The
-value is a JSON file path (supports `~`) or an inline object:
+`/usage full` shows a built-in compact footer with model, reasoning, fast/slow,
+context window, final-call tokens, cache, and cost when those fields are
+available. No template file is required.
+
+`messages.usageTemplate` is only for advanced custom layouts. The value is a
+JSON file path (supports `~`) or an inline object, and it replaces the built-in
+footer when valid:
 
 ```json
 {
@@ -43,35 +48,30 @@ value is a JSON file path (supports `~`) or an inline object:
 }
 ```
 
-Set it to the string `"default"` to use OpenClaw's built-in footer as-is:
-
-```json
-{ "messages": { "usageTemplate": "default" } }
-```
-
-When unset, the legacy single-line footer is used; `"default"` opts into the
-richer built-in footer (model, reasoning, fast/slow, context-window bar, last-call
-tokens, cache, cost).
-
-Your template is **merged over that built-in footer**, the same way other config
-objects layer over defaults: nested objects (`scales`, `aliases`) extend
-key-by-key, while an `output.surfaces.<channel>` piece list replaces that
-channel's default. So a template only needs to contain what it adds or changes —
-start from `"default"` and override just the pieces you want. A missing,
-unreadable, or invalid template falls back to the built-in line.
+Missing, unreadable, invalid, or empty templates fall back to the built-in
+footer.
 
 ### Shape
 
 ```jsonc
 {
   "schema": "openclaw.usageBar.v1",
-  "scales":  { "<name>": "low→high glyphs" },   // string (1 glyph/char) or array
+  "scales": { "<name>": "low-to-high glyphs" }, // string (1 glyph/char) or array
   "aliases": { "<table>": { "<value>": "<label>" } },
   "output": {
-    "sep": "",                                  // joins surviving pieces
-    "default":  [ /* pieces */ ],               // fallback for any surface
-    "surfaces": { "discord": [ /* pieces */ ], "telegram": [ /* pieces */ ] }
-  }
+    "sep": "", // joins surviving pieces
+    "default": [
+      /* pieces */
+    ], // fallback for any surface
+    "surfaces": {
+      "discord": [
+        /* pieces */
+      ],
+      "telegram": [
+        /* pieces */
+      ],
+    },
+  },
 }
 ```
 
@@ -79,47 +79,47 @@ Each surface is an ordered list of **pieces**; the engine renders each, drops
 empties, and joins survivors with `sep`. A surface with no entry uses
 `output.default`.
 
-### Contract — the `{paths}` you can read
+### Contract Paths
 
 A piece reads values from the per-turn contract by dot-path. Absent values are
 empty (so a `when` guard or a `|fallback` keeps the piece clean).
 
-| Path | Meaning |
-| --- | --- |
-| `surface` | channel id (`discord`/`telegram`/…) |
-| `model.provider` · `model.display_name` | provider id · model id |
-| `model.reasoning` | effort (`off`…`xhigh`) |
-| `model.is_fallback` · `model.is_override` | bool — fallback used · model pinned |
-| `state.fast_mode` | bool — fast vs slow |
-| `context.max_tokens` · `context.pct_used` | window budget · 0–100 used |
-| `usage.input_tokens` · `usage.output_tokens` · `usage.cache_hit_pct` | turn aggregate |
-| `usage.last.input_tokens` · `usage.last.output_tokens` · `usage.last.cache_hit_pct` | final model call only |
-| `cost.turn_usd` | estimated turn cost |
-| `timing.duration_ms` | wall-clock ms |
-| `identity.name` · `identity.emoji` | agent name · chosen emoji |
+| Path                                                                                | Meaning                                |
+| ----------------------------------------------------------------------------------- | -------------------------------------- |
+| `surface`                                                                           | channel id (`discord`/`telegram`/etc.) |
+| `model.provider` / `model.display_name`                                             | provider id / model id                 |
+| `model.reasoning`                                                                   | effort (`off` through `xhigh`)         |
+| `model.is_fallback` / `model.is_override`                                           | bool: fallback used / model pinned     |
+| `state.fast_mode`                                                                   | bool: fast vs slow                     |
+| `context.max_tokens` / `context.pct_used`                                           | window budget / 0-100 used             |
+| `usage.input_tokens` / `usage.output_tokens` / `usage.cache_hit_pct`                | turn aggregate                         |
+| `usage.last.input_tokens` / `usage.last.output_tokens` / `usage.last.cache_hit_pct` | final model call only                  |
+| `cost.turn_usd`                                                                     | estimated turn cost                    |
+| `timing.duration_ms`                                                                | wall-clock ms                          |
+| `identity.name` / `identity.emoji`                                                  | agent name / chosen emoji              |
 
 (Provider rate-limit windows are **not** in this contract.)
 
-### Verbs — `{path|verb:arg|fallback}`
+### Verbs
 
-Pipe a value through verbs left→right; a non-verb segment is the fallback.
+Pipe a value through verbs left to right; a non-verb segment is the fallback.
 
-| Verb | Effect | Example |
-| --- | --- | --- |
-| `num` | compact count | `272000 → 272k` |
-| `fixed:N` | N decimals (default 2) | `0.0377` |
-| `dur` | seconds → duration | `14820 → 4h07m` |
-| `pct` | append `%` | `96 → 96%` |
-| `inv` | `100 − x` | for used→remaining |
-| `alias:TABLE` | lookup in `aliases`, echo if unlisted | `medium → 🌗` |
-| `meter:W:SCALE` | W-cell glyph bar over a 0–100 value | `[⣿⣿⠐⠐⠐]` (`meter:1` = one glyph) |
+| Verb            | Effect                                | Example                           |
+| --------------- | ------------------------------------- | --------------------------------- |
+| `num`           | compact count                         | `272000 -> 272k`                  |
+| `fixed:N`       | N decimals (default 2)                | `0.0377`                          |
+| `dur`           | seconds to duration                   | `14820 -> 4h07m`                  |
+| `pct`           | append `%`                            | `96 -> 96%`                       |
+| `inv`           | `100 - x`                             | for used to remaining             |
+| `alias:TABLE`   | lookup in `aliases`, echo if unlisted | `medium -> 🌗`                    |
+| `meter:W:SCALE` | W-cell glyph bar over a 0-100 value   | `[⣿⣿⠐⠐⠐]` (`meter:1` = one glyph) |
 
 ### Piece forms
 
-- `{ "text": "📚 {context.max_tokens|num}" }` — literal + interpolation.
-- `{ "when": "<path>", "text": … }` — render only if the path is truthy.
-- `{ "map": "<path>", "cases": { "true": "⚡", "false": "🐌", "_default": "?" } }` — value→glyph.
-- `{ "each": "limits.windows", "item": "{label}", "item_scales": ["weather"] }` — iterate an array; `*` in `item` selects the per-item scale.
+- `{ "text": "📚 {context.max_tokens|num}" }`: literal + interpolation.
+- `{ "when": "<path>", "text": "..." }`: render only if the path is truthy.
+- `{ "map": "<path>", "cases": { "true": "⚡", "false": "🐌" } }`: value to glyph.
+- `{ "each": "limits.windows", "item": "{label}" }`: iterate an array.
 
 ### Example
 
@@ -134,11 +134,13 @@ Pipe a value through verbs left→right; a non-verb segment is the fallback.
         { "text": "{model.display_name}" },
         { "when": "model.reasoning", "text": " {model.reasoning|alias:reasoning}" },
         { "map": "state.fast_mode", "cases": { "true": " ⚡", "false": " 🐌" } },
-        { "when": "context.max_tokens",
-          "text": " | 📚 [{context.pct_used|meter:5:braille}]{context.max_tokens|num}" }
-      ]
-    }
-  }
+        {
+          "when": "context.max_tokens",
+          "text": " | 📚 [{context.pct_used|meter:5:braille}]{context.max_tokens|num}",
+        },
+      ],
+    },
+  },
 }
 ```
 

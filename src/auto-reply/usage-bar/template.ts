@@ -6,9 +6,6 @@ import type { UsageBarTemplate } from "./translator.js";
 
 export type UsageTemplateConfig = string | Record<string, unknown> | undefined;
 
-/** Sentinel value of `messages.usageTemplate` that selects the built-in default. */
-const DEFAULT_SENTINEL = "default";
-
 type CacheEntry = { template: UsageBarTemplate | undefined; watcher?: FSWatcher };
 const fileCache = new Map<string, CacheEntry>();
 
@@ -26,24 +23,12 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/**
- * Deep-merge a user override OVER the built-in default, like other openclaw
- * config objects: nested objects are merged key-by-key (so `scales`/`aliases`
- * extend rather than replace), while arrays and scalars from the override win
- * (a `output.surfaces.<channel>` piece-list replaces that channel's default).
- * Never mutates `base` — each level is cloned.
- */
-function mergeTemplate(
-  base: Record<string, unknown>,
-  override: Record<string, unknown>,
-): UsageBarTemplate {
-  const out: Record<string, unknown> = { ...base };
-  for (const [key, value] of Object.entries(override)) {
-    const prev = out[key];
-    out[key] =
-      isPlainObject(prev) && isPlainObject(value) ? mergeTemplate(prev, value) : value;
+function isUsableTemplate(value: unknown): value is UsageBarTemplate {
+  if (!isPlainObject(value)) {
+    return false;
   }
-  return out;
+  const hasOutput = typeof value.output === "object" && value.output !== null;
+  return hasOutput || Array.isArray(value.segments);
 }
 
 function readTemplateFile(path: string): UsageBarTemplate | undefined {
@@ -55,7 +40,7 @@ function readTemplateFile(path: string): UsageBarTemplate | undefined {
   }
   try {
     const parsed: unknown = JSON.parse(raw);
-    return isPlainObject(parsed) ? parsed : undefined;
+    return isUsableTemplate(parsed) ? parsed : undefined;
   } catch {
     return undefined;
   }
@@ -80,30 +65,20 @@ function cacheTemplateFile(path: string): UsageBarTemplate | undefined {
   return entry.template;
 }
 
-export function loadUsageBarTemplate(
-  configured: UsageTemplateConfig,
-): UsageBarTemplate | undefined {
+export function loadUsageBarTemplate(configured: UsageTemplateConfig): UsageBarTemplate {
   if (!configured) {
-    return undefined;
-  }
-  // The bare default, no override.
-  if (configured === DEFAULT_SENTINEL) {
     return DEFAULT_USAGE_BAR_TEMPLATE;
   }
-  // Inline override object → merged over the default.
   if (typeof configured === "object") {
-    return isPlainObject(configured)
-      ? mergeTemplate(DEFAULT_USAGE_BAR_TEMPLATE, configured)
-      : undefined;
+    return isUsableTemplate(configured) ? configured : DEFAULT_USAGE_BAR_TEMPLATE;
   }
-  // File path → parsed override merged over the default. A missing/invalid file
-  // yields no override (undefined), so the caller falls back to the built-in line.
   const path = expandPath(configured);
   const cached = fileCache.get(path);
-  const override = cached
-    ? (cached.template ?? (cached.watcher ? undefined : cacheTemplateFile(path)))
-    : cacheTemplateFile(path);
-  return override ? mergeTemplate(DEFAULT_USAGE_BAR_TEMPLATE, override) : undefined;
+  return (
+    (cached
+      ? (cached.template ?? (cached.watcher ? undefined : cacheTemplateFile(path)))
+      : cacheTemplateFile(path)) ?? DEFAULT_USAGE_BAR_TEMPLATE
+  );
 }
 
 export function clearUsageBarTemplateCacheForTest(): void {
