@@ -184,6 +184,36 @@ describe("diagnostic session state pruning", () => {
     expect(getDiagnosticSessionStateCountForTest()).toBe(2000);
   });
 
+  it("evicts stale non-idle session states after the fallback TTL", () => {
+    const now = Date.now();
+    diagnosticSessionStates.set("ghost-1", {
+      sessionId: "ghost-1",
+      lastActivity: now,
+      generation: 0,
+      state: "processing",
+      queueDepth: 0,
+    });
+    diagnosticSessionStates.set("idle-1", {
+      sessionId: "idle-1",
+      lastActivity: now,
+      generation: 0,
+      state: "idle",
+      queueDepth: 0,
+    });
+    expect(getDiagnosticSessionStateCountForTest()).toBe(2);
+
+    // Advance past idle TTL (30 min) but not past fallback TTL (60 min)
+    pruneDiagnosticSessionStates(now + 31 * 60 * 1000, true);
+    // idle-1 should be evicted (idle + stale), ghost-1 should survive (non-idle, not past 2x TTL)
+    expect(getDiagnosticSessionStateCountForTest()).toBe(1);
+    expect(diagnosticSessionStates.has("ghost-1")).toBe(true);
+
+    // Advance past fallback TTL (60 min)
+    pruneDiagnosticSessionStates(now + 61 * 60 * 1000, true);
+    // ghost-1 should now be evicted by the fallback condition
+    expect(getDiagnosticSessionStateCountForTest()).toBe(0);
+  });
+
   it("reuses keyed session state when later looked up by sessionId", () => {
     const keyed = getDiagnosticSessionState({
       sessionId: "s1",
