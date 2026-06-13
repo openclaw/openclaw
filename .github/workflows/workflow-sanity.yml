@@ -5,6 +5,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      control-director-proof:
+        description: "Run the scoped Control Director reliability proof instead of generated docs baselines"
+        required: false
+        default: "false"
 
 permissions:
   contents: read
@@ -82,7 +87,7 @@ jobs:
         run: node scripts/check-no-conflict-markers.mjs
 
   generated-doc-baselines:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.control-director-proof != 'true'
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -98,3 +103,55 @@ jobs:
 
       - name: Check plugin SDK API baseline drift
         run: pnpm plugin-sdk:api:check
+
+
+  control-director-reliability-proof:
+    if: github.event_name == 'workflow_dispatch' && inputs.control-director-proof == 'true'
+    name: Control Director reliability proof
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node 24 and pnpm 11.2.2
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "24.x"
+          pnpm-version: "11.2.2"
+          install-bun: "false"
+          frozen-lockfile: "true"
+
+      - name: Print proof identity and command list
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "proof_sha=$(git rev-parse HEAD)"
+          echo "branch=${GITHUB_REF_NAME}"
+          echo "node=$(node -v)"
+          echo "pnpm=$(pnpm -v)"
+          cat <<'EOF'
+          commands:
+          - pnpm test test/scripts/runtime-postbuild.test.ts test/scripts/control-ui-control-director-no-response-smoke.test.ts src/agents/control-director-contract.test.ts src/agents/agent-command.live-model-switch.test.ts src/gateway/session-utils.subagent.test.ts test/scripts/control-director-readiness.test.ts
+          - pnpm ui:smoke:control-director-no-response
+          - pnpm check:changed scripts/runtime-postbuild.mjs test/scripts/runtime-postbuild.test.ts scripts/dev/control-ui-control-director-no-response-smoke.ts test/scripts/control-ui-control-director-no-response-smoke.test.ts package.json scripts/dev/control-ui-dashboard-smoke-suite.ts src/agents/agent-command.ts src/agents/control-director-contract.ts src/agents/control-director-delivery-guards.ts src/agents/agent-command.live-model-switch.test.ts src/agents/control-director-contract.test.ts src/config/sessions/types.ts src/gateway/server-methods/chat.ts src/gateway/session-utils.ts src/gateway/session-utils.types.ts src/gateway/session-utils.subagent.test.ts src/gateway/session-utils.test.ts src/plugins/session-entry-slot-keys.ts scripts/control-director-readiness.mjs test/scripts/control-director-readiness.test.ts
+          EOF
+
+      - name: Run targeted Control Director tests
+        run: pnpm test test/scripts/runtime-postbuild.test.ts test/scripts/control-ui-control-director-no-response-smoke.test.ts src/agents/control-director-contract.test.ts src/agents/agent-command.live-model-switch.test.ts src/gateway/session-utils.subagent.test.ts test/scripts/control-director-readiness.test.ts
+
+      - name: Run Control UI no-response proof
+        env:
+          CI: "true"
+        run: pnpm ui:smoke:control-director-no-response
+
+      - name: Run explicit changed gate
+        env:
+          CI: "true"
+          NODE_OPTIONS: --max-old-space-size=4096
+          OPENCLAW_TEST_PROJECTS_PARALLEL: "6"
+          OPENCLAW_VITEST_MAX_WORKERS: "1"
+          OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "900000"
+        run: pnpm check:changed scripts/runtime-postbuild.mjs test/scripts/runtime-postbuild.test.ts scripts/dev/control-ui-control-director-no-response-smoke.ts test/scripts/control-ui-control-director-no-response-smoke.test.ts package.json scripts/dev/control-ui-dashboard-smoke-suite.ts src/agents/agent-command.ts src/agents/control-director-contract.ts src/agents/control-director-delivery-guards.ts src/agents/agent-command.live-model-switch.test.ts src/agents/control-director-contract.test.ts src/config/sessions/types.ts src/gateway/server-methods/chat.ts src/gateway/session-utils.ts src/gateway/session-utils.types.ts src/gateway/session-utils.subagent.test.ts src/gateway/session-utils.test.ts src/plugins/session-entry-slot-keys.ts scripts/control-director-readiness.mjs test/scripts/control-director-readiness.test.ts
