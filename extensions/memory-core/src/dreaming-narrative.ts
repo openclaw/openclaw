@@ -95,10 +95,13 @@ const NARRATIVE_SYSTEM_PROMPT = [
 // many minutes after the reports have already been written. The previous 15 s
 // limit was empirically too tight for warm-gateway runs across light, REM, and
 // deep phases — even unblocked LLM calls hit it on the first sweep after a
-// restart. 60 s gives realistic latency headroom while still capping the
-// worst case at one minute, well below the multi-minute stall the original
-// comment warned against.
-const NARRATIVE_TIMEOUT_MS = 60_000;
+// restart. 60 s was still too tight for ARM devices with 600+ skills where
+// cold-loading tool definitions takes ~57 s on the first narrative phase,
+// leaving almost no headroom for the LLM call itself. 120 s gives realistic
+// latency headroom for resource-constrained environments while still capping
+// the worst case at two minutes, well below the multi-minute stall the
+// original comment warned against.
+const NARRATIVE_TIMEOUT_MS = 120_000;
 const NARRATIVE_MESSAGE_FETCH_LIMIT = 5;
 // A completed run can reach the session reader before the final assistant text
 // is visible, so retry briefly before falling back to synthetic diary text.
