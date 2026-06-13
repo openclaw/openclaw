@@ -1,2 +1,1 @@
-export const KNIP_UNUSED_FILE_ALLOWLIST = [];
-export const KNIP_OPTIONAL_UNUSED_FILE_ALLOWLIST = [];
+export {};
