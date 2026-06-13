@@ -140,15 +140,21 @@ function listConfiguredBundledDependencyNames(packageJson) {
 
 /** Resolve an npm command invocation for plugin package scripts. */
 export function resolvePluginNpmCommand(args, params = {}) {
+  const env = params.env ?? process.env;
+  const testNpmCommand = env.OPENCLAW_PLUGIN_NPM_MANIFEST_OVERLAY_NPM;
+  if (testNpmCommand) {
+    return { args, command: testNpmCommand };
+  }
   return resolveNpmRunner({
     comSpec: params.comSpec,
-    env: params.env,
+    env,
     execPath: params.execPath,
     existsSync: params.existsSync,
     npmArgs: args,
     platform: params.platform,
   });
 }
+
 
 function spawnNpmSync(args, options = {}) {
   const invocation = resolvePluginNpmCommand(args, { env: options.env ?? process.env });

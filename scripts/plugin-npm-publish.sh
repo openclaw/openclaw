@@ -5,8 +5,8 @@ set -euo pipefail
 mode="${1:-}"
 package_dir="${2:-}"
 
-if [[ "${mode}" != "--dry-run" && "${mode}" != "--pack-dry-run" && "${mode}" != "--publish" ]]; then
-  echo "usage: bash scripts/plugin-npm-publish.sh [--dry-run|--pack-dry-run|--publish] <package-dir>" >&2
+if [[ "${mode}" != "--dry-run" && "${mode}" != "--pack-dry-run" && "${mode}" != "--publish" && "${mode}" != "--publish-package" && "${mode}" != "--mirror-dist-tags" ]]; then
+  echo "usage: bash scripts/plugin-npm-publish.sh [--dry-run|--pack-dry-run|--publish|--publish-package|--mirror-dist-tags] <package-dir>" >&2
   exit 2
 fi
 
@@ -41,10 +41,18 @@ const auth = resolveNpmDistTagMirrorAuth({
   nodeAuthToken: process.env.NODE_AUTH_TOKEN,
   npmToken: process.env.NPM_TOKEN,
 });
+const publishMode = process.env.PUBLISH_MODE;
+const mirrorAuthPresenceFlag = ["1", "true", "yes", "available"]
+  .includes((process.env.OPENCLAW_NPM_DIST_TAG_MIRROR_AUTH_AVAILABLE ?? "").trim().toLowerCase());
 const shouldRequireMirrorAuth = shouldRequireNpmDistTagMirrorAuth({
-  mode: process.env.PUBLISH_MODE === "--publish" ? "--publish" : "--dry-run",
+  mode:
+    publishMode === "--publish" ||
+    publishMode === "--publish-package" ||
+    publishMode === "--mirror-dist-tags"
+      ? "--publish"
+      : "--dry-run",
   mirrorDistTags: plan.mirrorDistTags,
-  hasAuth: auth.hasAuth,
+  hasAuth: auth.hasAuth || mirrorAuthPresenceFlag,
 });
 console.log(plan.channel);
 console.log(plan.publishTag);
@@ -72,7 +80,21 @@ log "Current beta dist-tag: ${current_beta_version:-<missing>}"
 log "Resolved release channel: ${release_channel}"
 log "Resolved publish tag: ${publish_tag}"
 log "Resolved mirror dist-tags: ${mirror_dist_tags_csv:-<none>}"
+mirror_auth_presence_flag="${OPENCLAW_NPM_DIST_TAG_MIRROR_AUTH_AVAILABLE:-}"
+case "${mirror_auth_presence_flag,,}" in
+  1|true|yes|available)
+    mirror_auth_available="true"
+    ;;
+  *)
+    mirror_auth_available="false"
+    ;;
+esac
+if [[ "${mirror_auth_source}" != "none" ]]; then
+  mirror_auth_available="true"
+fi
+
 log "Mirror dist-tag auth source: ${mirror_auth_source}"
+log "Mirror dist-tag auth availability: ${mirror_auth_available}"
 log "Mirror dist-tag auth requirement: ${mirror_auth_requirement}"
 
 build_package_runtime() {
@@ -108,36 +130,56 @@ publish_provenance="without provenance"
 if [[ " ${publish_cmd[*]} " == *" --provenance "* ]]; then
   publish_provenance="with provenance"
 fi
-if [[ -n "${publish_auth_token}" ]]; then
-  log "Publish auth: ${publish_auth_source} ${publish_provenance}"
-else
-  log "Publish auth: GitHub OIDC trusted publishing"
+if [[ "${mode}" != "--mirror-dist-tags" ]]; then
+  if [[ -n "${publish_auth_token}" ]]; then
+    log "Publish auth: ${publish_auth_source} ${publish_provenance}"
+  else
+    log "Publish auth: GitHub OIDC trusted publishing"
+  fi
 fi
 
-if [[ "${mirror_auth_requirement}" == "required" && -z "${mirror_auth_token}" ]]; then
-  echo "npm dist-tag mirroring requires explicit npm auth via NODE_AUTH_TOKEN or NPM_TOKEN." >&2
-  echo "Refusing publish before npm latest/beta promotion can diverge." >&2
+if [[ "${mirror_auth_requirement}" == "required" ]]; then
+  if [[ "${mode}" == "--publish-package" ]]; then
+    echo "npm dist-tag mirroring requires confirmed npm auth availability before package publish." >&2
+    echo "Set OPENCLAW_NPM_DIST_TAG_MIRROR_AUTH_AVAILABLE=1 only after confirming the later mirror step has npm auth." >&2
+  elif [[ "${mode}" == "--mirror-dist-tags" ]]; then
+    echo "npm dist-tag mirroring requires explicit npm auth via NODE_AUTH_TOKEN or NPM_TOKEN." >&2
+    echo "Refusing npm latest/beta promotion without npm auth." >&2
+  else
+    echo "npm dist-tag mirroring requires explicit npm auth via NODE_AUTH_TOKEN or NPM_TOKEN." >&2
+    echo "Refusing publish before npm latest/beta promotion can diverge." >&2
+  fi
   exit 1
 fi
 
-if [[ "${mode}" == "--pack-dry-run" ]]; then
-  {
+if [[ "${mode}" == "--mirror-dist-tags" && -n "${mirror_dist_tags_csv}" && -z "${mirror_auth_token}" ]]; then
+  echo "npm dist-tag mirroring requires explicit npm auth via NODE_AUTH_TOKEN or NPM_TOKEN." >&2
+  echo "Refusing npm latest/beta promotion without npm auth." >&2
+  exit 1
+fi
+
+if [[ "${mode}" != "--mirror-dist-tags" ]]; then
+  if [[ "${mode}" == "--pack-dry-run" ]]; then
+    {
+      printf 'Publish command:'
+      printf ' %q' "${publish_cmd[@]}"
+      printf '\n'
+    } >&2
+  else
     printf 'Publish command:'
     printf ' %q' "${publish_cmd[@]}"
     printf '\n'
-  } >&2
-else
-  printf 'Publish command:'
-  printf ' %q' "${publish_cmd[@]}"
-  printf '\n'
+  fi
 fi
 
 if [[ "${mode}" == "--dry-run" ]]; then
   exit 0
 fi
 
-build_package_runtime
-check_package_shrinkwrap
+if [[ "${mode}" != "--mirror-dist-tags" ]]; then
+  build_package_runtime
+  check_package_shrinkwrap
+fi
 
 if [[ "${mode}" == "--pack-dry-run" ]]; then
   OPENCLAW_PLUGIN_NPM_BUNDLE_DEPENDENCIES=1 \
@@ -153,18 +195,20 @@ fi
     OPENCLAW_PLUGIN_NPM_BUNDLE_DEPENDENCIES=1 \
       node scripts/lib/plugin-npm-package-manifest.mjs --run "${package_dir}" -- "$@"
   }
-  publish_userconfig=""
-  if [[ -n "${publish_auth_token}" ]]; then
-    publish_userconfig="$(mktemp)"
-    cleanup_files+=("${publish_userconfig}")
-    chmod 0600 "${publish_userconfig}"
-    printf '%s\n' "//registry.npmjs.org/:_authToken=${publish_auth_token}" > "${publish_userconfig}"
-    NPM_CONFIG_USERCONFIG="${publish_userconfig}" run_with_manifest_overlay "${publish_cmd[@]}"
-  else
-    run_with_manifest_overlay "${publish_cmd[@]}"
-  fi
+  run_publish_with_manifest_overlay() {
+    if [[ "${OPENCLAW_NPM_PUBLISH_AUTH_MODE:-}" == "trusted-publisher" ]]; then
+      env -u NODE_AUTH_TOKEN -u NPM_TOKEN -u NPM_CONFIG_USERCONFIG \
+        node scripts/lib/plugin-npm-package-manifest.mjs --run "${package_dir}" -- "$@"
+    else
+      run_with_manifest_overlay "$@"
+    fi
+  }
+  mirror_dist_tags() {
+    if [[ -z "${mirror_dist_tags_csv}" ]]; then
+      log "Mirror dist-tags: <none>"
+      return
+    fi
 
-  if [[ -n "${mirror_dist_tags_csv}" ]]; then
     mirror_userconfig="$(mktemp)"
     cleanup_files+=("${mirror_userconfig}")
     chmod 0600 "${mirror_userconfig}"
@@ -182,5 +226,22 @@ fi
         echo "Warning: optional npm dist-tag mirror failed for ${package_name}@${package_version} -> ${dist_tag}; published package remains live." >&2
       fi
     done
+  }
+
+  if [[ "${mode}" != "--mirror-dist-tags" ]]; then
+    publish_userconfig=""
+    if [[ -n "${publish_auth_token}" ]]; then
+      publish_userconfig="$(mktemp)"
+      cleanup_files+=("${publish_userconfig}")
+      chmod 0600 "${publish_userconfig}"
+      printf '%s\n' "//registry.npmjs.org/:_authToken=${publish_auth_token}" > "${publish_userconfig}"
+      NPM_CONFIG_USERCONFIG="${publish_userconfig}" run_publish_with_manifest_overlay "${publish_cmd[@]}"
+    else
+      run_publish_with_manifest_overlay "${publish_cmd[@]}"
+    fi
+  fi
+
+  if [[ "${mode}" == "--publish" || "${mode}" == "--mirror-dist-tags" ]]; then
+    mirror_dist_tags
   fi
 )

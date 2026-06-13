@@ -61,9 +61,7 @@ on:
         default: false
         type: boolean
 
-permissions:
-  actions: write
-  contents: write
+permissions: {}
 
 concurrency:
   group: openclaw-release-publish-${{ inputs.tag }}
@@ -78,6 +76,9 @@ jobs:
     name: Resolve release target
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: read
     outputs:
       sha: ${{ steps.manifest.outputs.sha || steps.ref.outputs.sha }}
       preflight_artifact_name: ${{ steps.preflight_artifact.outputs.name }}
@@ -119,8 +120,8 @@ jobs:
           if [[ "${RELEASE_TAG}" == *"-alpha."* && "${RELEASE_NPM_DIST_TAG}" == "alpha" && "${WORKFLOW_REF}" =~ ^refs/heads/tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
             tideclaw_alpha_publish=true
           fi
-          if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" && "${WORKFLOW_REF}" != "refs/heads/main" && ! "${WORKFLOW_REF}" =~ ^refs/heads/release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ && "${tideclaw_alpha_publish}" != "true" ]]; then
-            echo "publish_openclaw_npm=true requires dispatching this workflow from main, release/YYYY.M.PATCH, or a Tideclaw alpha branch for alpha prereleases." >&2
+          if [[ "${WORKFLOW_REF}" != "refs/heads/main" && ! "${WORKFLOW_REF}" =~ ^refs/heads/release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ && "${tideclaw_alpha_publish}" != "true" ]]; then
+            echo "Release publish must be dispatched from main, release/YYYY.M.PATCH, or a Tideclaw alpha branch for alpha prereleases so write-scoped publish jobs use trusted workflow logic." >&2
             exit 1
           fi
           if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" && "${PLUGIN_PUBLISH_SCOPE}" != "all-publishable" ]]; then
@@ -196,7 +197,7 @@ jobs:
 
       - name: Download full release validation manifest
         if: ${{ inputs.publish_openclaw_npm }}
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: full-release-validation-${{ inputs.full_release_validation_run_id }}
           path: ${{ runner.temp }}/full-release-validation-manifest
@@ -205,7 +206,7 @@ jobs:
           github-token: ${{ github.token }}
 
       - name: Checkout release tag
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: refs/tags/${{ inputs.tag }}
           fetch-depth: 0
@@ -355,9 +356,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     environment: npm-release
+    permissions:
+      actions: write
+      contents: write
     steps:
       - name: Checkout release SHA
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ needs.resolve_release_target.outputs.sha }}
           fetch-depth: 1
@@ -1033,7 +1037,7 @@ jobs:
 
       - name: Upload postpublish evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: openclaw-release-postpublish-evidence-${{ inputs.tag }}
           path: ${{ runner.temp }}/openclaw-release-postpublish-evidence

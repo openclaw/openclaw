@@ -90,6 +90,7 @@ jobs:
 
       - name: Resolve release dist cache seeds
         id: dist-cache-seeds
+        if: github.event_name != 'pull_request'
         shell: bash
         run: |
           set -euo pipefail
@@ -140,7 +141,8 @@ jobs:
 
       - name: Restore dist build cache
         id: dist-cache
-        uses: actions/cache/restore@v5
+        if: github.event_name != 'pull_request'
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: |
             .artifacts/build-all-cache/
@@ -150,13 +152,13 @@ jobs:
           restore-keys: ${{ steps.dist-cache-seeds.outputs.restore-keys }}
 
       - name: Build dist on cache miss
-        if: steps.dist-cache.outputs.cache-hit != 'true'
+        if: github.event_name == 'pull_request' || steps.dist-cache.outputs.cache-hit != 'true'
         env:
           NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build:ci-artifacts
 
       - name: Build Control UI on cache miss
-        if: steps.dist-cache.outputs.cache-hit != 'true'
+        if: github.event_name == 'pull_request' || steps.dist-cache.outputs.cache-hit != 'true'
         run: pnpm ui:build
 
       - name: Verify build artifacts
@@ -174,8 +176,8 @@ jobs:
           test -f dist/control-ui/index.html
 
       - name: Save dist build cache
-        if: steps.dist-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
+        if: github.event_name != 'pull_request' && steps.dist-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: |
             .artifacts/build-all-cache/
