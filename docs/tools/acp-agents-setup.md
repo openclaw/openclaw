@@ -218,14 +218,12 @@ or flag value should remain one argv token:
 - `agents.<id>.command` is the executable or existing command string for that ACP agent.
 - `agents.<id>.args` is optional. Each array item is shell-quoted before OpenClaw passes it through the current acpx command-string registry.
 
-Gemini CLI auth note: OpenClaw's generated `gemini` ACP wrapper strips
-`GEMINI_API_KEY`, `GOOGLE_API_KEY`, `GOOGLE_GENAI_USE_GCA`, and
-`GOOGLE_GENAI_USE_VERTEXAI` from the child environment by default so unrelated
-Gateway/provider credentials are not inherited accidentally. If you intentionally
-run Gemini CLI with API-key or Vertex environment auth, set
-`OPENCLAW_ACPX_PRESERVE_GEMINI_AUTH_ENV=1` in the environment for that ACP
-launch along with the Gemini auth variables. The preserve flag is consumed by the
-OpenClaw wrapper and is not forwarded to the Gemini child process.
+ACP auth environment note: OpenClaw-generated ACP wrappers strip only the
+Codex-auth bridge variables (`ACPX_AUTH_CODEX_API_KEY`,
+`ACPX_AUTH_OPENAI_API_KEY`, `CODEX_API_KEY`, and `OPENAI_API_KEY`) from spawned
+provider children. Provider-specific environment auth, path/home values,
+acceptance variables, and intentional provider flags remain inherited by the
+provider CLI.
 
 See [Plugins](/tools/plugin).
 

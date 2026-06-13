@@ -456,9 +456,12 @@ Auth is selected in this order:
    still required.
 
 When OpenClaw sees a ChatGPT subscription-style Codex auth profile, it removes
-`CODEX_API_KEY` and `OPENAI_API_KEY` from the spawned Codex child process. That
-keeps Gateway-level API keys available for embeddings or direct OpenAI models
-without making native Codex app-server turns bill through the API by accident.
+Codex-auth bridge variables (`ACPX_AUTH_CODEX_API_KEY`,
+`ACPX_AUTH_OPENAI_API_KEY`, `CODEX_API_KEY`, and `OPENAI_API_KEY`) from spawned
+ACP child processes. That keeps Gateway-level API keys available for embeddings
+or direct OpenAI models without making native Codex app-server turns bill
+through the API by accident, and without stripping provider-specific CLI auth,
+path/home values, acceptance variables, or intentional provider flags.
 Explicit Codex API-key profiles and local stdio env-key fallback use app-server
 login instead of inherited child-process env. WebSocket app-server connections
 do not receive Gateway env API-key fallback; use an explicit auth profile or the

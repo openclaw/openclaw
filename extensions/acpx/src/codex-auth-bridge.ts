@@ -31,7 +31,12 @@ const GEMINI_LEGACY_ACP_ARG = "--experimental-acp";
 const GEMINI_STABLE_ACP_MIN_VERSION = [0, 33, 0] as const;
 const GEMINI_ACP_ARGS = [GEMINI_ACP_ARG];
 const RUN_CONFIGURED_COMMAND_SENTINEL = "--openclaw-run-configured";
-const OPENCLAW_ACPX_PRESERVE_GEMINI_AUTH_ENV = "OPENCLAW_ACPX_PRESERVE_GEMINI_AUTH_ENV";
+const CODEX_AUTH_BRIDGE_ENV_VARS_TO_STRIP = [
+  "ACPX_AUTH_CODEX_API_KEY",
+  "ACPX_AUTH_OPENAI_API_KEY",
+  "CODEX_API_KEY",
+  "OPENAI_API_KEY",
+] as const;
 const requireFromHere = createRequire(import.meta.url);
 
 type PackageManifest = {
@@ -42,24 +47,17 @@ type PackageManifest = {
 
 type BuiltInAcpHarnessMetadata = {
   displayName: string;
-  stripEnvVars?: string[];
-  preserveStrippedEnvVarsFlag?: string;
+  alwaysStripEnvVars?: readonly string[];
 };
 
 const BUILT_IN_ACP_HARNESS_METADATA = {
   claude: {
     displayName: "Claude",
-    stripEnvVars: ["ANTHROPIC_API_KEY"],
+    alwaysStripEnvVars: CODEX_AUTH_BRIDGE_ENV_VARS_TO_STRIP,
   },
   gemini: {
     displayName: "Gemini",
-    stripEnvVars: [
-      "GEMINI_API_KEY",
-      "GOOGLE_API_KEY",
-      "GOOGLE_GENAI_USE_GCA",
-      "GOOGLE_GENAI_USE_VERTEXAI",
-    ],
-    preserveStrippedEnvVarsFlag: OPENCLAW_ACPX_PRESERVE_GEMINI_AUTH_ENV,
+    alwaysStripEnvVars: CODEX_AUTH_BRIDGE_ENV_VARS_TO_STRIP,
   },
 } satisfies Record<string, BuiltInAcpHarnessMetadata>;
 
@@ -261,8 +259,7 @@ function buildAdapterWrapperScript(params: {
   defaultArgs?: string[];
   envSetup: string;
   stderrLogFileNamePrefix?: string;
-  stripEnvVars?: string[];
-  preserveStrippedEnvVarsFlag?: string;
+  alwaysStripEnvVars?: readonly string[];
   postCommandSetupScript?: string;
 }): string {
   return `#!/usr/bin/env node
@@ -271,27 +268,13 @@ import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-const providerEnvVarsToStrip = new Set([
-  ${(params.stripEnvVars ?? []).map(quoteCommandPart).join(",\n  ")}
+const envVarsToAlwaysStrip = new Set([
+  ${(params.alwaysStripEnvVars ?? []).map(quoteCommandPart).join(",\n  ")}
 ]);
-const preserveStrippedEnvVarsFlag = ${params.preserveStrippedEnvVarsFlag ? quoteCommandPart(params.preserveStrippedEnvVarsFlag) : "undefined"};
-
-function isTruthyEnvFlag(value) {
-  return /^(?:1|true|yes|on)$/i.test(String(value ?? "").trim());
-}
-
 function createChildEnv(sourceEnv) {
   const childEnv = { ...sourceEnv };
-  const preserveStrippedEnvVars = preserveStrippedEnvVarsFlag
-    ? isTruthyEnvFlag(sourceEnv[preserveStrippedEnvVarsFlag])
-    : false;
-  if (preserveStrippedEnvVarsFlag) {
-    delete childEnv[preserveStrippedEnvVarsFlag];
-  }
-  if (!preserveStrippedEnvVars) {
-    for (const name of providerEnvVarsToStrip) {
-      delete childEnv[name];
-    }
+  for (const name of envVarsToAlwaysStrip) {
+    delete childEnv[name];
   }
   return childEnv;
 }
@@ -594,6 +577,7 @@ function buildCodexAcpWrapperScript(installedBinPath?: string): string {
     binName: CODEX_ACP_BIN,
     installedBinPath,
     stderrLogFileNamePrefix: "codex-acp-wrapper.stderr",
+    alwaysStripEnvVars: CODEX_AUTH_BRIDGE_ENV_VARS_TO_STRIP,
     envSetup: `const codexHome = fileURLToPath(new URL("./codex-home/", import.meta.url));
 const codexAuthPath = fileURLToPath(new URL("./codex-home/auth.json", import.meta.url));
 const codexApiKey = (process.env.CODEX_API_KEY || process.env.OPENAI_API_KEY || "").trim();
@@ -639,7 +623,7 @@ function buildClaudeAcpWrapperScript(installedBinPath?: string): string {
     binName: CLAUDE_ACP_BIN,
     installedBinPath,
     envSetup: `const env = createChildEnv(process.env);`,
-    stripEnvVars: BUILT_IN_ACP_HARNESS_METADATA.claude.stripEnvVars,
+    alwaysStripEnvVars: BUILT_IN_ACP_HARNESS_METADATA.claude.alwaysStripEnvVars,
   });
 }
 
@@ -706,8 +690,7 @@ function buildGeminiAcpWrapperScript(): string {
     defaultCommand: GEMINI_ACP_BIN,
     defaultArgs: GEMINI_ACP_ARGS,
     envSetup: `const env = createChildEnv(process.env);`,
-    stripEnvVars: BUILT_IN_ACP_HARNESS_METADATA.gemini.stripEnvVars,
-    preserveStrippedEnvVarsFlag: BUILT_IN_ACP_HARNESS_METADATA.gemini.preserveStrippedEnvVarsFlag,
+    alwaysStripEnvVars: BUILT_IN_ACP_HARNESS_METADATA.gemini.alwaysStripEnvVars,
     postCommandSetupScript: buildGeminiAcpFlagCompatibilityScript(),
   });
 }
@@ -873,6 +856,7 @@ function buildDirectAcpWrapperCommand(params: {
   wrapperPath: string;
   configuredCommand?: string;
   binName: string;
+  dropConfiguredArgs?: readonly string[];
 }): string {
   const trimmed = params.configuredCommand?.trim();
   if (!trimmed) {
@@ -880,7 +864,8 @@ function buildDirectAcpWrapperCommand(params: {
   }
   const parts = splitCommandParts(trimmed);
   if (isAcpBinName(parts[0] ?? "", params.binName)) {
-    return buildWrapperCommand(params.wrapperPath, parts.slice(1));
+    const configuredArgs = parts.slice(1).filter((arg) => !params.dropConfiguredArgs?.includes(arg));
+    return buildWrapperCommand(params.wrapperPath, configuredArgs);
   }
   return trimmed;
 }
@@ -890,6 +875,7 @@ function buildGeminiAcpWrapperCommand(wrapperPath: string, configuredCommand?: s
     wrapperPath,
     configuredCommand,
     binName: GEMINI_ACP_BIN,
+    dropConfiguredArgs: [GEMINI_ACP_ARG, GEMINI_LEGACY_ACP_ARG],
   });
 }
 
