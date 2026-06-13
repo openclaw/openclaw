@@ -642,7 +642,12 @@ export function createMemorySearchTool(options: {
           if (shouldRecordCooldown) {
             recordMemorySearchToolCooldown(cooldownKey, outcome.error);
           }
-          return jsonResult(buildMemorySearchUnavailableResult(outcome.error));
+          return jsonResult(
+            buildMemorySearchUnavailableResult(
+              outcome.error,
+              unavailablePhase ? { phase: unavailablePhase } : undefined,
+            ),
+          );
         }
         return outcome.value;
       },

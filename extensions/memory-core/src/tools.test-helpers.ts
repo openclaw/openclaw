@@ -55,6 +55,8 @@ export function expectUnavailableMemorySearchDetails(
     error: string;
     warning: string;
     action: string;
+    timedOut?: boolean;
+    phase?: "memory" | "supplement";
   },
 ) {
   expect(details).toEqual({
@@ -68,6 +70,8 @@ export function expectUnavailableMemorySearchDetails(
       warning: params.warning,
       action: params.action,
       error: params.error,
+      ...(params.timedOut ? { timedOut: true } : {}),
+      ...(params.phase ? { phase: params.phase } : {}),
     },
   });
 }

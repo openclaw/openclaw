@@ -526,8 +526,11 @@ describe("memory tools", () => {
       const stalledAllResult = await stalledAllResultPromise;
       expectUnavailableMemorySearchDetails(stalledAllResult.details, {
         error: "memory_search timed out after 15s",
-        warning: "Memory search is unavailable due to an embedding/provider error.",
-        action: "Check embedding provider configuration and retry memory_search.",
+        warning: "Memory search timed out before completing (slow branch: wiki/supplement).",
+        action:
+          "Retry memory_search; if timeouts persist, narrow the corpus (e.g. corpus=memory) or check embedding/provider latency.",
+        timedOut: true,
+        phase: "supplement",
       });
 
       const memoryResult = await tool.execute("call_memory_after_stalled_wiki", {
@@ -574,8 +577,11 @@ describe("memory tools", () => {
       const stalledAllResult = await stalledAllResultPromise;
       expectUnavailableMemorySearchDetails(stalledAllResult.details, {
         error: "memory_search timed out after 15s",
-        warning: "Memory search is unavailable due to an embedding/provider error.",
-        action: "Check embedding provider configuration and retry memory_search.",
+        warning: "Memory search timed out before completing (slow branch: memory/session).",
+        action:
+          "Retry memory_search; if timeouts persist, narrow the corpus (e.g. corpus=memory) or check embedding/provider latency.",
+        timedOut: true,
+        phase: "memory",
       });
 
       const wikiOnlyResult = await tool.execute("call_all_after_stalled_memory", {

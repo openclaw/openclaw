@@ -110,28 +110,52 @@ export function buildMemorySearchUnavailableResult(
   overrides?: {
     warning?: string;
     action?: string;
+    /**
+     * The corpus branch that was active when the failure occurred. When the
+     * failure was a deadline timeout this lets the warning name the slow branch
+     * instead of blaming the embedding provider for an aggregation stall.
+     */
+    phase?: "memory" | "supplement";
   },
 ) {
   const reason = (error ?? "memory search unavailable").trim() || "memory search unavailable";
   const normalizedReason = normalizeLowercaseStringOrEmpty(reason);
   const isQuotaError = /insufficient_quota|quota|429/.test(normalizedReason);
+  // The tool-level deadline wrapper reports "... timed out after Ns". A timeout
+  // is not necessarily an embedding/provider fault: the provider probe and each
+  // individual corpus can be healthy while corpus=all aggregation stalls. Report
+  // it as a timeout instead of pointing users at provider configuration.
+  const isTimeoutError = !isQuotaError && normalizedReason.includes("timed out after");
   const isMissingNodeSqlite = /missing node:sqlite|no such built-?in module: node:sqlite/.test(
     normalizedReason,
   );
+  const phaseLabel =
+    overrides?.phase === "memory"
+      ? "memory/session"
+      : overrides?.phase === "supplement"
+        ? "wiki/supplement"
+        : undefined;
+  const timeoutWarning = phaseLabel
+    ? `Memory search timed out before completing (slow branch: ${phaseLabel}).`
+    : "Memory search timed out before completing.";
   const warning =
     overrides?.warning ??
     (isQuotaError
       ? "Memory search is unavailable because the embedding provider quota is exhausted."
-      : isMissingNodeSqlite
-        ? "Memory search is unavailable because this OpenClaw Node runtime does not provide SQLite support."
-        : "Memory search is unavailable due to an embedding/provider error.");
+      : isTimeoutError
+        ? timeoutWarning
+        : isMissingNodeSqlite
+          ? "Memory search is unavailable because this OpenClaw Node runtime does not provide SQLite support."
+          : "Memory search is unavailable due to an embedding/provider error.");
   const action =
     overrides?.action ??
     (isQuotaError
       ? "Top up or switch embedding provider, then retry memory_search."
-      : isMissingNodeSqlite
-        ? "Run OpenClaw with a Node runtime that includes node:sqlite, then retry memory_search."
-        : "Check embedding provider configuration and retry memory_search.");
+      : isTimeoutError
+        ? "Retry memory_search; if timeouts persist, narrow the corpus (e.g. corpus=memory) or check embedding/provider latency."
+        : isMissingNodeSqlite
+          ? "Run OpenClaw with a Node runtime that includes node:sqlite, then retry memory_search."
+          : "Check embedding provider configuration and retry memory_search.");
   return {
     results: [],
     disabled: true,
@@ -143,6 +167,8 @@ export function buildMemorySearchUnavailableResult(
       warning,
       action,
       error: reason,
+      ...(isTimeoutError ? { timedOut: true } : {}),
+      ...(isTimeoutError && overrides?.phase ? { phase: overrides.phase } : {}),
     },
   };
 }
