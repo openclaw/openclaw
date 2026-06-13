@@ -320,6 +320,96 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     ).toBe(false);
   });
 
+  it("prepares side questions without agent-turn context, tools, hooks, or reusable sessions", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    appendTranscriptEntry(sessionFile, {
+      id: "msg-1",
+      parentId: null,
+      timestamp: new Date(1).toISOString(),
+      message: { role: "user", content: "prior user text", timestamp: 1 },
+    });
+    const resolveBootstrapContextForRun = vi.fn(async () => ({
+      bootstrapFiles: [{ path: "AGENTS.md", content: "bootstrap" }],
+      contextFiles: [{ path: "context.md", content: "context" }],
+    }));
+    const ensureMcpLoopbackServer = vi.fn(createTestMcpLoopbackServer);
+    const prepareClaudeCliSkillsPlugin = vi.fn(async () => ({
+      args: ["--plugin-dir", "/tmp/claude-skills"],
+      cleanup: vi.fn(async () => undefined),
+    }));
+    const prepareExecution = vi.fn(async () => undefined);
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "test-cli",
+          pluginId: "test",
+          bundleMcp: true,
+          bundleMcpMode: "claude-config-file",
+          nativeToolMode: "always-on",
+          sideQuestionToolMode: "disabled",
+          prepareExecution,
+          config: {
+            command: "test-cli",
+            args: ["--print"],
+            liveSession: "claude-stdio",
+            sessionMode: "always",
+            output: "jsonl",
+            input: "stdin",
+          },
+        },
+      ],
+    });
+    setCliRunnerPrepareTestDeps({
+      resolveBootstrapContextForRun,
+      ensureMcpLoopbackServer,
+      prepareClaudeCliSkillsPlugin,
+      makeBootstrapWarn: vi.fn(() => () => undefined),
+      getActiveMcpLoopbackRuntime: vi.fn(() => undefined),
+      createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
+      resolveMcpLoopbackBearerToken: vi.fn(() => "token"),
+      resolveMcpLoopbackScopedTools: vi.fn(() => ({ agentId: "main", tools: [{ name: "exec" }] })),
+      resolveOpenClawReferencePaths: vi.fn(async () => ({ docsPath: "docs", sourcePath: "src" })),
+    });
+
+    const context = await prepareCliRunContext({
+      sessionId: "session-test",
+      sessionKey: "agent:main:main",
+      sessionFile,
+      workspaceDir: dir,
+      config: createCliBackendConfig({ bundleMcp: true }),
+      prompt: "side question prompt",
+      executionMode: "side-question",
+      provider: "test-cli",
+      model: "test-model",
+      timeoutMs: 120_000,
+      runId: "run-side-question",
+      extraSystemPrompt: "BTW system prompt",
+      disableTools: true,
+      cliSessionId: "existing-cli-session",
+    });
+
+    expect(resolveBootstrapContextForRun).not.toHaveBeenCalled();
+    expect(ensureMcpLoopbackServer).not.toHaveBeenCalled();
+    expect(prepareClaudeCliSkillsPlugin).not.toHaveBeenCalled();
+    expect(mockGetGlobalHookRunner).not.toHaveBeenCalled();
+    expect(prepareExecution).toHaveBeenCalledWith(
+      expect.objectContaining({ executionMode: "side-question" }),
+    );
+    expect(context.systemPrompt).toBe("BTW system prompt");
+    expect(context.params.prompt).toBe("side question prompt");
+    expect(context.openClawHistoryPrompt).toBeUndefined();
+    expect(context.contextEngine).toBeUndefined();
+    expect(context.contextEngineTurnPrompt).toBeUndefined();
+    expect(context.hadSessionFile).toBe(false);
+    expect(context.claudeSkillsPluginArgs).toEqual([]);
+    expect(context.preparedBackend.backend.sessionMode).toBe("none");
+    expect(context.preparedBackend.backend.liveSession).toBeUndefined();
+    expect(context.bootstrapPromptWarningLines).toEqual([]);
+    expect(context.systemPromptReport.injectedWorkspaceFiles).toEqual([]);
+    expect(context.systemPromptReport.tools.entries).toEqual([]);
+  });
+
   it("applies prompt-build hook context to Claude-style CLI preparation", async () => {
     const { dir, sessionFile } = createSessionFile();
     try {
