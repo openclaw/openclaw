@@ -10,6 +10,7 @@ import {
   resolveDefaultMediaModel,
   resolveDocumentMediaModel,
 } from "../../media-understanding/defaults.js";
+import { configuredModelInputSupportsImage } from "../../media-understanding/known-model-capabilities.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { findNormalizedProviderValue } from "../model-selection.js";
 import {
@@ -313,12 +314,17 @@ export function resolvePdfModelConfigForTool(params: {
       }
       const models = providerCfg?.models ?? [];
       const modelId = models
-        .find(
-          (model) =>
-            Boolean(model?.id?.trim()) &&
-            Array.isArray(model?.input) &&
-            model.input.includes("image"),
-        )
+        .find((model) => {
+          const modelId = model?.id?.trim();
+          return Boolean(
+            modelId &&
+            configuredModelInputSupportsImage({
+              providerId,
+              modelId,
+              input: model?.input,
+            }),
+          );
+        })
         ?.id?.trim();
       if (!modelId) {
         continue;

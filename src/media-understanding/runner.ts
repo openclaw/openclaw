@@ -42,6 +42,10 @@ import type { ActiveMediaModel } from "./active-model.types.js";
 import { MediaAttachmentCache, selectAttachments } from "./attachments.js";
 import { isMediaUnderstandingSkipError } from "./errors.js";
 import { fileExists } from "./fs.js";
+import {
+  configuredModelInputSupportsImage,
+  isKnownNonImageModel,
+} from "./known-model-capabilities.js";
 import { resolveOpenAiAudioAuthModelApi } from "./openai-audio-api.js";
 import { normalizeMediaExecutionProviderId, normalizeMediaProviderId } from "./provider-id.js";
 import {
@@ -165,7 +169,14 @@ function resolveConfiguredImageModel(params: {
     | undefined;
   return providerCfg?.models?.find((entry) => {
     const id = entry?.id?.trim();
-    return Boolean(id) && entry?.input?.includes("image");
+    return Boolean(
+      id &&
+      configuredModelInputSupportsImage({
+        providerId: params.providerId,
+        modelId: id,
+        input: entry?.input,
+      }),
+    );
   });
 }
 
@@ -234,13 +245,20 @@ async function explicitImageModelVisionStatus(params: {
   // Explicit model overrides should survive unknown catalog state, but known
   // text-only models must not be routed into image understanding.
   if (
-    isMinimaxVlmProvider(params.providerId) &&
-    !isMinimaxVlmModel(params.providerId, params.model)
+    isKnownNonImageModel({ providerId: params.providerId, modelId: params.model }) ||
+    (isMinimaxVlmProvider(params.providerId) && !isMinimaxVlmModel(params.providerId, params.model))
   ) {
     return "unsupported";
   }
   const configured = resolveConfiguredImageModel(params);
-  if (configured?.id?.trim() === params.model && configured.input?.includes("image")) {
+  if (
+    configured?.id?.trim() === params.model &&
+    configuredModelInputSupportsImage({
+      providerId: params.providerId,
+      modelId: params.model,
+      input: configured.input,
+    })
+  ) {
     return "supported";
   }
   const { findModelInCatalog, loadModelCatalog, modelSupportsVision } = await loadModelCatalogApi();
@@ -738,11 +756,15 @@ async function activeModelSupportsNativeVision(params: {
     return false;
   }
   if (
-    isMinimaxVlmProvider(activeProvider) &&
-    !isMinimaxNativeVisionModel({
-      provider: activeProvider,
-      model: params.activeModel?.model,
-    })
+    isKnownNonImageModel({
+      providerId: activeProvider,
+      modelId: params.activeModel?.model ?? "",
+    }) ||
+    (isMinimaxVlmProvider(activeProvider) &&
+      !isMinimaxNativeVisionModel({
+        provider: activeProvider,
+        model: params.activeModel?.model,
+      }))
   ) {
     return false;
   }
