@@ -100,4 +100,78 @@ describe("read tool", () => {
 
     expect(textContent(result)).toBe("alpha\n\n[2 more lines in file. Use offset=2 to continue.]");
   });
+
+  it("decodes non-UTF-8 text buffers through TextDecoder (not Buffer#toString)", async () => {
+    // Regression test for the read tool's encoding path. Node.js Buffer#toString
+    // throws ERR_UNKNOWN_ENCODING for "shift-jis" and "gbk", so the read tool
+    // must route through decodeBuffer (TextDecoder) instead. Each case below
+    // would have raised ERR_UNKNOWN_ENCODING before the patch.
+    //
+    // BOMs are stripped from the buffer before decode so the model never sees
+    // a stray U+FEFF prefix on a UTF-8 / UTF-16 file.
+    const cases: Array<{ name: string; buffer: Buffer; expected: string }> = [
+      {
+        name: "Shift-JIS こんにちは",
+        buffer: Buffer.from([
+          0x82, 0xb1, 0x82, 0xf1, 0x82, 0xc9, 0x82, 0xbf, 0x82, 0xcd, 0x20, 0x57, 0x6f, 0x72, 0x6c,
+          0x64,
+        ]),
+        expected: "こんにちは World",
+      },
+      {
+        name: "UTF-16 LE with BOM",
+        buffer: Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from("Hi", "utf16le")]),
+        expected: "Hi",
+      },
+      {
+        name: "UTF-16 BE with BOM",
+        buffer: Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from("Hi", "utf16le").swap16()]),
+        expected: "Hi",
+      },
+      {
+        name: "UTF-8 with BOM",
+        buffer: Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from("BOM OK", "utf-8")]),
+        expected: "BOM OK",
+      },
+    ];
+
+    for (const c of cases) {
+      const tool = createReadToolDefinition("/workspace", {
+        operations: {
+          access: async () => {},
+          detectImageMimeType: async () => null,
+          readFile: async () => c.buffer,
+        },
+      });
+      const result = await tool.execute(
+        "call-1",
+        { path: c.name },
+        undefined,
+        undefined,
+        {} as never,
+      );
+      expect(textContent(result), `decode path for ${c.name}`).toBe(c.expected);
+    }
+  });
+
+  it("preserves UTF-8 byte-for-byte when detection returns utf-8", async () => {
+    // Backward-compat check: pure UTF-8 / ASCII content must come back unchanged
+    // because the read tool's only contract change is "non-UTF-8 files now
+    // decode correctly", not "UTF-8 files start coming back differently".
+    const tool = createReadToolDefinition("/workspace", {
+      operations: {
+        access: async () => {},
+        detectImageMimeType: async () => null,
+        readFile: async () => Buffer.from("alpha\nβ\nγ", "utf-8"),
+      },
+    });
+    const result = await tool.execute(
+      "call-1",
+      { path: "utf8.txt" },
+      undefined,
+      undefined,
+      {} as never,
+    );
+    expect(textContent(result)).toBe("alpha\nβ\nγ");
+  });
 });
