@@ -375,8 +375,7 @@ export const vi: TranslationMap = {
     labels: {
       host: "Máy chủ",
       agent: "Agent",
-      command: "Command",
-      cwd: "CWD",
+      
       session: "Phiên",
       cwd: "CWD",
       resolved: "Đã giải quyết",
@@ -397,8 +396,7 @@ export const vi: TranslationMap = {
     chat: "Trò chuyện",
     control: "Điều khiển",
     agent: "Agent",
-      command: "Command",
-      cwd: "CWD",
+      
     settings: "Cài đặt",
     expand: "Mở rộng thanh bên",
     collapse: "Thu gọn thanh bên",
@@ -1000,8 +998,6 @@ export const vi: TranslationMap = {
       hours: "Giờ",
       session: "Phiên",
       agent: "Agent",
-      command: "Command",
-      cwd: "CWD",
       channel: "Kênh",
       provider: "Nhà cung cấp",
       model: "Mô hình",

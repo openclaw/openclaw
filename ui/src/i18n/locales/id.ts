@@ -375,8 +375,7 @@ export const id: TranslationMap = {
     labels: {
       host: "Host",
       agent: "Agen",
-      command: "Command",
-      cwd: "CWD",
+      
       session: "Sesi",
       cwd: "CWD",
       resolved: "Resolved",
@@ -397,8 +396,7 @@ export const id: TranslationMap = {
     chat: "Chat",
     control: "Kontrol",
     agent: "Agen",
-      command: "Command",
-      cwd: "CWD",
+      
     settings: "Pengaturan",
     expand: "Perluas bilah samping",
     collapse: "Ciutkan bilah samping",
@@ -1000,9 +998,7 @@ export const id: TranslationMap = {
       days: "Hari",
       hours: "Jam",
       session: "Sesi",
-      agent: "Agen",
-      command: "Command",
-      cwd: "CWD",
+      agent: "Agent",
       channel: "Saluran",
       provider: "Penyedia",
       model: "Model",

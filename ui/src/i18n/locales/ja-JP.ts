@@ -378,8 +378,7 @@ export const ja_JP: TranslationMap = {
     labels: {
       host: "Host",
       agent: "エージェント",
-      command: "Command",
-      cwd: "CWD",
+      
       session: "セッション",
       cwd: "CWD",
       resolved: "Resolved",
@@ -400,8 +399,7 @@ export const ja_JP: TranslationMap = {
     chat: "チャット",
     control: "コントロール",
     agent: "エージェント",
-      command: "Command",
-      cwd: "CWD",
+      
     settings: "設定",
     expand: "サイドバーを展開",
     collapse: "サイドバーを折りたたむ",
@@ -1002,9 +1000,7 @@ export const ja_JP: TranslationMap = {
       days: "日",
       hours: "時間",
       session: "セッション",
-      agent: "エージェント",
-      command: "Command",
-      cwd: "CWD",
+      agent: "Agent",
       channel: "チャンネル",
       provider: "プロバイダー",
       model: "モデル",

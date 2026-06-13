@@ -373,8 +373,7 @@ export const th: TranslationMap = {
     labels: {
       host: "Host",
       agent: "เอเจนต์",
-      command: "Command",
-      cwd: "CWD",
+      
       session: "เซสชัน",
       cwd: "CWD",
       resolved: "Resolved",
@@ -395,8 +394,7 @@ export const th: TranslationMap = {
     chat: "แชต",
     control: "ควบคุม",
     agent: "เอเจนต์",
-      command: "Command",
-      cwd: "CWD",
+      
     settings: "การตั้งค่า",
     expand: "ขยายแถบด้านข้าง",
     collapse: "ย่อแถบด้านข้าง",
@@ -990,9 +988,7 @@ export const th: TranslationMap = {
       days: "วัน",
       hours: "ชั่วโมง",
       session: "เซสชัน",
-      agent: "เอเจนต์",
-      command: "Command",
-      cwd: "CWD",
+      agent: "Agent",
       channel: "ช่องทาง",
       provider: "Provider",
       model: "Model",

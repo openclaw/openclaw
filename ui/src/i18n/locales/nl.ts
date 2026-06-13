@@ -377,8 +377,7 @@ export const nl: TranslationMap = {
     labels: {
       host: "Host",
       agent: "Agent",
-      command: "Command",
-      cwd: "CWD",
+      
       session: "Sessie",
       cwd: "CWD",
       resolved: "Opgelost",
@@ -399,8 +398,7 @@ export const nl: TranslationMap = {
     chat: "Chat",
     control: "Control",
     agent: "Agent",
-      command: "Command",
-      cwd: "CWD",
+      
     settings: "Instellingen",
     expand: "Zijbalk uitvouwen",
     collapse: "Zijbalk samenvouwen",
@@ -1004,8 +1002,6 @@ export const nl: TranslationMap = {
       hours: "Uren",
       session: "Sessie",
       agent: "Agent",
-      command: "Command",
-      cwd: "CWD",
       channel: "Kanaal",
       provider: "Provider",
       model: "Model",

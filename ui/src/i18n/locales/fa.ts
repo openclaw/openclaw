@@ -376,8 +376,7 @@ export const fa: TranslationMap = {
     labels: {
       host: "میزبان",
       agent: "عامل",
-      command: "Command",
-      cwd: "CWD",
+      
       session: "جلسه",
       cwd: "CWD",
       resolved: "حل‌شده",
@@ -398,8 +397,7 @@ export const fa: TranslationMap = {
     chat: "چت",
     control: "کنترل",
     agent: "عامل",
-      command: "Command",
-      cwd: "CWD",
+      
     settings: "تنظیمات",
     expand: "گسترش نوار کناری",
     collapse: "جمع کردن نوار کناری",
@@ -1000,9 +998,7 @@ export const fa: TranslationMap = {
       days: "روزها",
       hours: "ساعت‌ها",
       session: "نشست",
-      agent: "عامل",
-      command: "Command",
-      cwd: "CWD",
+      agent: "Agent",
       channel: "کانال",
       provider: "ارائه‌دهنده",
       model: "مدل",
