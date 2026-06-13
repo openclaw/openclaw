@@ -1608,6 +1608,70 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
+  it.each([
+    {
+      name: "delivery flag",
+      delivery: { didDeliverSourceReplyViaMessageTool: true },
+    },
+    {
+      name: "presentation source reply",
+      delivery: {
+        messagingToolSourceReplyPayloads: [
+          { presentation: { title: "Deployment ready", blocks: [] } },
+        ],
+      },
+    },
+    {
+      name: "interactive source reply",
+      delivery: {
+        messagingToolSourceReplyPayloads: [
+          { interactive: { blocks: [{ type: "button", label: "Open", value: "open" }] } },
+        ],
+      },
+    },
+    {
+      name: "channel data source reply",
+      delivery: {
+        messagingToolSourceReplyPayloads: [
+          { channelData: { embeds: [{ title: "Deployment ready" }] } },
+        ],
+      },
+    },
+  ])("does not surface fallback failure after committed $name", async ({ delivery }) => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      ...delivery,
+      meta: {},
+    });
+    const fallbackSpy = vi
+      .spyOn(modelFallbackModule, "runWithModelFallback")
+      .mockImplementationOnce(
+        async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+          result: await run("openai", "gpt-5.5"),
+          provider: "openai",
+          model: "gpt-5.5",
+          attempts: [
+            {
+              provider: "lmstudio",
+              model: "gemma-4-e4b-it",
+              error: "Connection error.",
+              reason: "timeout",
+            },
+          ],
+        }),
+      );
+
+    try {
+      const { run } = createMinimalRun({
+        opts: { sourceReplyDeliveryMode: "message_tool_only" },
+      });
+
+      await expect(run()).resolves.toBeUndefined();
+    } finally {
+      fallbackSpy.mockRestore();
+    }
+  });
+
   it("surfaces side-effect progress when a runtime returns no payloads", async () => {
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [],

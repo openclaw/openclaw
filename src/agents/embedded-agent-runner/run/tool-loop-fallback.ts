@@ -180,7 +180,10 @@ export function appendBoundedToolLoopObservation(
   const boundedObservation = boundToolLoopObservation(observation);
   if (retentionState) {
     const actionIdentity = resolveToolActionIdentity(boundedObservation);
-    if (boundedObservation.failed === true) {
+    if (
+      boundedObservation.failed === true &&
+      !isTerminalLoopBlockedObservation(boundedObservation)
+    ) {
       retentionState.unresolvedFailureActions.add(actionIdentity);
     } else if (isSuccessfulObservation(boundedObservation)) {
       retentionState.unresolvedFailureActions.delete(actionIdentity);

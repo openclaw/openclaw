@@ -273,6 +273,7 @@ function hasFallbackSuppressingSideEffectDelivery(params: {
   messagingToolSentTargets?: unknown[];
   successfulCronAdds?: number;
   didSendDeterministicApprovalPrompt?: boolean;
+  committedMessagingToolSourceReplyDelivery?: boolean;
 }): boolean {
   return (
     (params.directlySentBlockKeys?.size ?? 0) > 0 ||
@@ -280,7 +281,8 @@ function hasFallbackSuppressingSideEffectDelivery(params: {
     hasNonEmptyStringArray(params.messagingToolSentMediaUrls) ||
     hasVisibleMessagingTargetDeliveryEvidence(params.messagingToolSentTargets) ||
     (params.successfulCronAdds ?? 0) > 0 ||
-    params.didSendDeterministicApprovalPrompt === true
+    params.didSendDeterministicApprovalPrompt === true ||
+    params.committedMessagingToolSourceReplyDelivery === true
   );
 }
 
@@ -1961,14 +1963,6 @@ export async function runReplyAgent(params: {
       preserveFreshTotalTokensOnStaleUsage: preflightCompactionApplied,
     });
 
-    const fallbackSuppressingSideEffectDelivery = hasFallbackSuppressingSideEffectDelivery({
-      directlySentBlockKeys,
-      messagingToolSentTexts: runResult.messagingToolSentTexts,
-      messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
-      messagingToolSentTargets: runResult.messagingToolSentTargets,
-      successfulCronAdds: runResult.successfulCronAdds,
-      didSendDeterministicApprovalPrompt: runResult.didSendDeterministicApprovalPrompt,
-    });
     const successfulSourceReplyDelivery = hasSuccessfulSourceReplyDelivery({
       blockReplyPipeline,
       directlySentBlockKeys,
@@ -1979,6 +1973,15 @@ export async function runReplyAgent(params: {
     const committedMessagingToolSourceReplyDelivery =
       runResult.didDeliverSourceReplyViaMessageTool === true ||
       hasVisibleAgentPayload({ payloads: runResult.messagingToolSourceReplyPayloads });
+    const fallbackSuppressingSideEffectDelivery = hasFallbackSuppressingSideEffectDelivery({
+      directlySentBlockKeys,
+      messagingToolSentTexts: runResult.messagingToolSentTexts,
+      messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
+      messagingToolSentTargets: runResult.messagingToolSentTargets,
+      successfulCronAdds: runResult.successfulCronAdds,
+      didSendDeterministicApprovalPrompt: runResult.didSendDeterministicApprovalPrompt,
+      committedMessagingToolSourceReplyDelivery,
+    });
     const successfulDirectSourceReplyDelivery =
       Boolean(blockReplyPipeline?.didStream() && !blockReplyPipeline.isAborted()) ||
       (directlySentBlockKeys?.size ?? 0) > 0 ||

@@ -111,6 +111,37 @@ describe("tool-loop terminal fallback", () => {
     ).toBeUndefined();
   });
 
+  it("does not retain a terminal loop veto as an unresolved execution failure", () => {
+    const observations: Parameters<typeof appendBoundedToolLoopObservation>[0] = [];
+    const retentionState = createToolLoopObservationRetentionState();
+    appendBoundedToolLoopObservation(
+      observations,
+      {
+        toolName: "status",
+        argsHash: "current",
+        resultHash: "healthy",
+        resultText: "healthy",
+        terminalResultFallback: { mode: "safe_text", prefix: "Status:" },
+      },
+      retentionState,
+    );
+    appendBoundedToolLoopObservation(
+      observations,
+      {
+        toolName: "status",
+        argsHash: "current",
+        blockedReason: "tool-loop",
+        failed: true,
+      },
+      retentionState,
+    );
+
+    expect(retentionState.unresolvedFailureActions).toHaveLength(0);
+    expect(resolveToolLoopAbortFallback({ observations, retentionState })?.payload).toEqual({
+      text: "Status:\nhealthy",
+    });
+  });
+
   it("uses a public terminal summary returned by any tool without runner-side registration", () => {
     const resolution = resolveToolLoopAbortFallback({
       observations: [

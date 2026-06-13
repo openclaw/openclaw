@@ -2310,8 +2310,9 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
 
   it("warns instead of surfacing a later fallback after an earlier attempt had side effects", async () => {
     mockedRunEmbeddedAttempt
-      .mockImplementationOnce(async (params) => {
-        params.onToolOutcome?.({
+      .mockImplementationOnce(async (params: unknown) => {
+        const attemptParams = params as EmbeddedRunAttemptParams;
+        attemptParams.onToolOutcome?.({
           toolName: "write",
           argsHash: "report",
           resultHash: "write-result",
@@ -2327,8 +2328,9 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
           },
         });
       })
-      .mockImplementation(async (params) => {
-        params.onToolOutcome?.({
+      .mockImplementation(async (params: unknown) => {
+        const attemptParams = params as EmbeddedRunAttemptParams;
+        attemptParams.onToolOutcome?.({
           toolName: "status_probe",
           argsHash: "current",
           resultHash: "status-result",
@@ -2336,29 +2338,13 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
           terminalResultFallback: { mode: "safe_text", prefix: "Status:" },
         });
         return makeAttemptResult({
-          assistantTexts: [],
+          assistantTexts: ["I'll verify the status next."],
           itemLifecycle: {
             startedCount: 1,
             completedCount: 1,
             activeCount: 0,
           },
           toolMetas: [{ toolName: "status_probe", mutatingAction: false }],
-          lastAssistant: {
-            role: "assistant",
-            stopReason: "end_turn",
-            provider: "openai",
-            model: "gpt-5.4",
-            content: [
-              {
-                type: "thinking",
-                thinking: "internal reasoning",
-                thinkingSignature: JSON.stringify({
-                  id: "rs_prior_side_effect",
-                  type: "reasoning",
-                }),
-              },
-            ],
-          } as never,
         });
       });
     mockedCompactDirect.mockResolvedValueOnce(
@@ -2367,9 +2353,9 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
 
     const result = await runEmbeddedAgent({
       ...overflowBaseRunParams,
+      prompt: "Please update the report and verify the status.",
       provider: "openai",
       model: "gpt-5.4",
-      reasoningLevel: "on",
       runId: "run-prior-side-effect-blocks-later-fallback",
     });
 

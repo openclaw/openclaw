@@ -3950,7 +3950,7 @@ export async function runEmbeddedAgent(
             // this run is blocked from the user's perspective.
             const replayInvalid = resolveReplayInvalidForAttempt(null);
             const livenessState: EmbeddedRunLivenessState = exhaustedPlanningOnlyPayloads
-              ? "working"
+              ? resolveTerminalFallbackLivenessState(exhaustedPlanningOnlyPayloads)
               : "blocked";
             setTerminalLifecycleMeta({
               replayInvalid,
