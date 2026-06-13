@@ -2012,6 +2012,44 @@ describe("messaging tool media URL tracking", () => {
     });
   });
 
+  it.each([
+    ["ordinary text", "sent through plugin"],
+    [
+      "agent tool result",
+      {
+        content: [{ type: "text", text: "sent through plugin" }],
+        details: undefined,
+      },
+    ],
+  ])("commits plugin message sends with successful %s results", async (_label, result) => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-plugin-success-result",
+      args: {
+        action: "send",
+        to: "channel:mattermost",
+        content: "sent through plugin",
+      },
+    });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-plugin-success-result",
+      isError: false,
+      result,
+    });
+
+    expect(ctx.state.messagingToolSentTexts).toEqual(["sent through plugin"]);
+    expectRecordFields(requireSingleMessagingTarget(ctx), "messaging target", {
+      to: "channel:mattermost",
+      text: "sent through plugin",
+    });
+  });
+
   it("does not commit ambiguous message send results as delivered", async () => {
     for (const [toolCallId, result] of [
       ["tool-no-details", {}],

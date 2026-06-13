@@ -462,37 +462,39 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     },
   );
 
-  it.each([{ ok: false }, { success: false }, { deliveryStatus: "failed" }])(
-    "does not synthesize a completed terminal reply from explicit failure details",
-    (details) => {
-      const payload = resolveTerminalToolResultReplyPayload({
-        isCronTrigger: false,
-        payloadCount: 0,
-        aborted: false,
-        timedOut: false,
-        attempt: makeAttemptResult({
-          assistantTexts: [],
-          toolMetas: [{ toolName: "exec" }],
-          messagesSnapshot: [
-            {
-              role: "toolResult",
-              content: [{ type: "text", text: "operation failed" }],
-              details,
-            } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
-            {
-              role: "assistant",
-              stopReason: "stop",
-              provider: "openai",
-              model: "gpt-5.4",
-              content: [],
-            } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
-          ],
-        }),
-      });
+  it.each([
+    { ok: false },
+    { success: false },
+    { deliveryStatus: "failed" },
+    { delivery_status: "failed" },
+  ])("does not synthesize a completed terminal reply from explicit failure details", (details) => {
+    const payload = resolveTerminalToolResultReplyPayload({
+      isCronTrigger: false,
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "exec" }],
+        messagesSnapshot: [
+          {
+            role: "toolResult",
+            content: [{ type: "text", text: "operation failed" }],
+            details,
+          } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+          {
+            role: "assistant",
+            stopReason: "stop",
+            provider: "openai",
+            model: "gpt-5.4",
+            content: [],
+          } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+        ],
+      }),
+    });
 
-      expect(payload).toBeNull();
-    },
-  );
+    expect(payload).toBeNull();
+  });
 
   it("does not reuse an older NO_REPLY tool result without current-attempt tool activity", () => {
     const payload = resolveSilentToolResultReplyPayload({
@@ -5863,6 +5865,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     "Could you explain your strategy for deleting old backups?",
     "Please make a plan for migrating the database",
     "Can you prepare an approach for migrating the database?",
+    "Can you write me a plan for deleting old backups?",
+    "Could you send me a plan for deleting old backups?",
   ])("does not retry when the user explicitly asked only for a plan: %s", (prompt) => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "custom-provider",

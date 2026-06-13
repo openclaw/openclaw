@@ -274,7 +274,7 @@ const EXPLICIT_PLANNING_REQUEST_RE =
 const EXPLICIT_PLAN_DESCRIPTION_REQUEST_RE =
   /^(?:please\s+)?(?:(?:can|could|would|will)\s+you\s+)?(?:please\s+)?(?:(?:tell|show)\s+me\s+|(?:describe|explain)\s+)(?:(?:the|your|our|my|a)\s+)?(?:plan|approach|outline|steps|strategy)\b/i;
 const EXPLICIT_PLAN_CREATION_REQUEST_RE =
-  /^(?:please\s+)?(?:(?:can|could|would|will)\s+you\s+)?(?:please\s+)?(?:make|create|prepare|draft)\s+(?:me\s+)?(?:(?:a|an|the)\s+)?(?:plan|approach|outline|strategy)\b/i;
+  /^(?:please\s+)?(?:(?:can|could|would|will)\s+you\s+)?(?:please\s+)?(?:make|create|prepare|draft|write|send)\s+(?:me\s+)?(?:(?:a|an|the)\s+)?(?:plan|approach|outline|strategy)\b/i;
 const NON_ACTIONABLE_CONTEXT_UPDATE_RE =
   /^\s*(?:i|we)\b(?!.{0,120}\b(?:need|want|would like)\s+you\b).{0,180}\b(?:haven't|have not|am not|ain't|haven’t)\b.{0,120}\b(?:yet|though|fyi|heads up)\b/i;
 const NON_ACTIONABLE_PROMPT_NORMALIZED_SET = new Set([
@@ -531,7 +531,9 @@ function hasTerminalToolResultFailure(message: AgentMessage): boolean {
   }
   const record = details as Record<string, unknown>;
   const status = normalizeLowercaseStringOrEmpty(record.status);
-  const deliveryStatus = normalizeLowercaseStringOrEmpty(record.deliveryStatus);
+  const deliveryStatus = normalizeLowercaseStringOrEmpty(
+    record.deliveryStatus ?? record.delivery_status,
+  );
   return (
     record.ok === false ||
     record.success === false ||
