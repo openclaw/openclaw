@@ -797,6 +797,59 @@ describe("QmdMemoryManager", () => {
     await manager?.close();
   });
 
+  it("preserves blocking boot update freshness for one-shot CLI mode", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: {
+            interval: "5m",
+            debounceMs: 60_000,
+            onBoot: true,
+            waitForBootSync: true,
+          },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    const updateSpawned = createDeferred<void>();
+    let releaseUpdate: (() => void) | null = null;
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "update") {
+        const child = createMockChild({ autoClose: false });
+        releaseUpdate = () => child.closeWith(0);
+        updateSpawned.resolve();
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const createPromise = createManager({ mode: "cli" });
+    await updateSpawned.promise;
+    let created = false;
+    void createPromise.then(() => {
+      created = true;
+    });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(created).toBe(false);
+    expect(watchMock).not.toHaveBeenCalled();
+
+    (releaseUpdate as (() => void) | null)?.();
+    const { manager } = await createPromise;
+    const updateCalls = spawnMock.mock.calls
+      .map((call: unknown[]) => call[1] as string[])
+      .filter((args: string[]) => args[0] === "update" || args[0] === "embed");
+    expect(updateCalls).toStrictEqual([["update"]]);
+    expect(watchMock).not.toHaveBeenCalled();
+
+    await manager?.close();
+  });
+
   it("keeps one-shot CLI searches from scheduling session-start updates", async () => {
     cfg = {
       ...cfg,

@@ -497,6 +497,11 @@ export class QmdMemoryManager implements MemorySearchManager {
 
     await this.ensureCollections();
     if (mode === "cli") {
+      if (this.qmd.update.onBoot && this.qmd.update.waitForBootSync) {
+        await this.runUpdate("boot:cli", true).catch((err: unknown) => {
+          log.warn(`qmd cli boot update failed: ${String(err)}`);
+        });
+      }
       log.info(
         `qmd manager initialized for agent "${this.agentId}" mode=cli collections=${this.qmd.collections.length} durationMs=${Date.now() - startTime}`,
       );
