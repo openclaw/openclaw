@@ -23,7 +23,15 @@ describe("extractMessagingToolSend", () => {
           plugin: {
             ...createChannelTestPluginBase({ id: "telegram" }),
             messaging: { normalizeTarget: normalizeTelegramMessagingTargetForTest },
-            threading: { resolveAutoThreadId: () => "456" },
+            threading: {
+              resolveAutoThreadId: ({
+                to,
+                toolContext,
+              }: {
+                to: string;
+                toolContext?: { currentThreadTs?: string };
+              }) => (to.includes(":topic:") ? undefined : toolContext?.currentThreadTs),
+            },
           },
           source: "test",
         },
@@ -42,6 +50,30 @@ describe("extractMessagingToolSend", () => {
                       threadId: typeof args.threadId === "string" ? args.threadId : undefined,
                     }
                   : null;
+              },
+            },
+            threading: {
+              resolveAutoThreadId: ({
+                to,
+                toolContext,
+              }: {
+                to: string;
+                toolContext?: {
+                  currentChannelId?: string;
+                  currentThreadTs?: string;
+                  replyToMode?: "off" | "first" | "all" | "batched";
+                  hasRepliedRef?: { value: boolean };
+                };
+              }) => {
+                if (
+                  to !== toolContext?.currentChannelId ||
+                  toolContext.replyToMode === "off" ||
+                  ((toolContext.replyToMode === "first" || toolContext.replyToMode === "batched") &&
+                    toolContext.hasRepliedRef?.value)
+                ) {
+                  return undefined;
+                }
+                return toolContext.currentThreadTs;
               },
             },
           },
@@ -148,6 +180,84 @@ describe("extractMessagingToolSend", () => {
     });
 
     expect(result?.threadImplicit).toBe(true);
+  });
+
+  it("captures the active session thread for implicit threaded sends", () => {
+    const result = extractMessagingToolSend(
+      "message",
+      {
+        action: "send",
+        provider: "telegram",
+        to: "123",
+        content: "done",
+      },
+      {
+        currentChannelId: "telegram:123",
+        currentThreadId: "456",
+        replyToMode: "all",
+      },
+    );
+
+    expect(result?.threadImplicit).toBe(true);
+    expect(result?.threadId).toBe("456");
+  });
+
+  it("does not attach the ambient thread to an explicit topic target", () => {
+    const result = extractMessagingToolSend(
+      "message",
+      {
+        action: "send",
+        provider: "telegram",
+        to: "-1001:topic:99",
+        content: "done",
+      },
+      {
+        currentChannelId: "telegram:-1001:topic:77",
+        currentThreadId: "77",
+      },
+    );
+
+    expect(result?.threadImplicit).toBeUndefined();
+    expect(result?.threadId).toBeUndefined();
+  });
+
+  it("does not attach the ambient thread when reply mode disables auto-threading", () => {
+    const result = extractMessagingToolSend(
+      "message",
+      {
+        action: "send",
+        provider: "slack",
+        to: "channel:C1",
+        content: "done",
+      },
+      {
+        currentChannelId: "channel:c1",
+        currentThreadId: "171.222",
+        replyToMode: "off",
+      },
+    );
+
+    expect(result?.threadImplicit).toBeUndefined();
+    expect(result?.threadId).toBeUndefined();
+  });
+
+  it("defaults implicit threaded sends to all mode when reply mode is omitted", () => {
+    const result = extractMessagingToolSend(
+      "message",
+      {
+        action: "send",
+        provider: "slack",
+        to: "channel:C1",
+        content: "done",
+      },
+      {
+        currentChannelId: "channel:c1",
+        currentThreadId: "171.222",
+      },
+    );
+
+    expect(result?.threadImplicit).toBe(true);
+    expect(result?.threadId).toBe("171.222");
   });
 
   it("keeps provider-tool extracted thread id evidence", () => {

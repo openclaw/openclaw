@@ -95,6 +95,14 @@ export type SubscribeEmbeddedAgentSessionParams = {
   silentExpected?: boolean;
   config?: OpenClawConfig;
   sessionKey?: string;
+  /** Current transport channel resolved for this run. */
+  currentChannelId?: string;
+  /** Current transport thread resolved for this run. */
+  currentThreadId?: string;
+  /** Reply mode used by transport auto-threading. */
+  replyToMode?: "off" | "first" | "all" | "batched";
+  /** Shared one-shot reply state used by first/batched modes. */
+  hasRepliedRef?: { value: boolean };
   /** Ephemeral session UUID — regenerated on /new and /reset. */
   sessionId?: string;
   /** Agent identity for hook context — resolved from session config in attempt.ts. */

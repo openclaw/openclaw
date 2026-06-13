@@ -6,6 +6,8 @@ import {
   onAgentEvent as registerAgentEventListener,
   resetAgentEventsForTest,
 } from "../infra/agent-events.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import type { MessagingToolSend } from "./embedded-agent-messaging.types.js";
 import {
   handleToolExecutionEnd,
@@ -1515,6 +1517,58 @@ describe("handleToolExecutionEnd derived tool events", () => {
 });
 
 describe("messaging tool media URL tracking", () => {
+  afterEach(() => {
+    setActivePluginRegistry(createTestRegistry());
+  });
+
+  it("captures the current transport thread for implicit message sends", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "slack",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "slack" }),
+            messaging: { normalizeTarget: (raw: string) => raw.trim().toLowerCase() },
+            threading: {
+              resolveAutoThreadId: ({
+                toolContext,
+              }: {
+                toolContext?: {
+                  currentThreadTs?: string;
+                  replyToMode?: "off" | "first" | "all" | "batched";
+                };
+              }) => (toolContext?.replyToMode === "all" ? toolContext.currentThreadTs : undefined),
+            },
+          },
+          source: "test",
+        },
+      ]),
+    );
+    const { ctx } = createTestContext();
+    ctx.params.currentChannelId = "C1";
+    ctx.params.currentThreadId = "171.222";
+    ctx.params.replyToMode = "all";
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-threaded-message",
+      args: {
+        action: "send",
+        provider: "slack",
+        to: "channel:C1",
+        content: "hi",
+      },
+    });
+
+    expect(ctx.state.pendingMessagingTargets.get("tool-threaded-message")).toMatchObject({
+      provider: "slack",
+      to: "channel:c1",
+      threadId: "171.222",
+      threadImplicit: true,
+    });
+  });
+
   it("tracks media arg from messaging tool as pending", async () => {
     const { ctx } = createTestContext();
 

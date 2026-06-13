@@ -6,6 +6,7 @@ import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import {
   createAgentToolResultMiddlewareRunner,
   createCodexAppServerToolResultExtensionRunner,
+  extractMessagingToolSend,
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
   HEARTBEAT_RESPONSE_TOOL_NAME,
@@ -51,6 +52,10 @@ type CodexDynamicToolHookContext = {
   sessionKey?: string;
   runId?: string;
   channelId?: string;
+  currentChannelId?: string;
+  currentThreadId?: string;
+  replyToMode?: "off" | "first" | "all" | "batched";
+  hasRepliedRef?: { value: boolean };
 };
 
 type CodexToolResultHookContext = Omit<CodexDynamicToolHookContext, "config">;
@@ -213,6 +218,17 @@ export function createCodexDynamicToolBridge(params: {
         // Prepare before marking side-effect evidence; argument preparation can
         // fail without the target tool actually starting.
         const preparedArgs = tool.prepareArguments ? tool.prepareArguments(args) : args;
+        const telemetryArgs = isRecord(preparedArgs) ? preparedArgs : args;
+        const messagingTarget =
+          isMessagingTool(toolName) && isMessagingToolSendAction(toolName, telemetryArgs)
+            ? extractMessagingToolSend(toolName, telemetryArgs, {
+                config: params.hookContext?.config,
+                currentChannelId: params.hookContext?.currentChannelId,
+                currentThreadId: params.hookContext?.currentThreadId,
+                replyToMode: params.hookContext?.replyToMode,
+                hasRepliedRef: params.hookContext?.hasRepliedRef,
+              })
+            : undefined;
         didStartExecution = true;
         const rawResult = await tool.execute(call.callId, preparedArgs, signal);
         const rawIsError = isCodexToolResultError(rawResult);
@@ -237,11 +253,12 @@ export function createCodexDynamicToolBridge(params: {
         notifyAgentToolResult(options?.onAgentToolResult, toolName, result, resultIsError);
         collectToolTelemetry({
           toolName,
-          args,
+          args: telemetryArgs,
           result,
           mediaTrustResult: rawResult,
           telemetry,
           isError: resultIsError,
+          messagingTarget,
         });
         void runAgentHarnessAfterToolCallHook({
           toolName,
@@ -631,6 +648,7 @@ function collectToolTelemetry(params: {
   mediaTrustResult?: AgentToolResult<unknown>;
   telemetry: CodexDynamicToolBridge["telemetry"];
   isError: boolean;
+  messagingTarget?: MessagingToolSend;
 }): void {
   if (params.isError) {
     return;
@@ -683,11 +701,13 @@ function collectToolTelemetry(params: {
   const mediaUrls = collectMediaUrls(params.args);
   params.telemetry.messagingToolSentMediaUrls.push(...mediaUrls);
   params.telemetry.messagingToolSentTargets.push({
-    tool: params.toolName,
-    provider: readFirstString(params.args, ["provider", "channel"]) ?? params.toolName,
-    accountId: readFirstString(params.args, ["accountId", "account_id"]),
-    to: readFirstString(params.args, ["to", "target", "recipient"]),
-    threadId: readFirstString(params.args, ["threadId", "thread_id", "messageThreadId"]),
+    ...(params.messagingTarget ?? {
+      tool: params.toolName,
+      provider: readFirstString(params.args, ["provider", "channel"]) ?? params.toolName,
+      accountId: readFirstString(params.args, ["accountId", "account_id"]),
+      to: readFirstString(params.args, ["to", "target", "recipient"]),
+      threadId: readFirstString(params.args, ["threadId", "thread_id", "messageThreadId"]),
+    }),
     ...(text ? { text } : {}),
     ...(mediaUrls.length > 0 ? { mediaUrls } : {}),
   });

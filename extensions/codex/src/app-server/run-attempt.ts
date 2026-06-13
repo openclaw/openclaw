@@ -724,6 +724,10 @@ export async function runCodexAppServerAttempt(
       sessionKey: sandboxSessionKey,
       runId: params.runId,
       channelId: hookChannelId,
+      currentChannelId: params.currentChannelId,
+      currentThreadId: params.currentThreadTs,
+      replyToMode: params.replyToMode,
+      hasRepliedRef: params.hasRepliedRef,
     },
   });
   const hadSessionFile = await pathExists(activeSessionFile);

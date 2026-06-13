@@ -18,6 +18,7 @@ import {
 import {
   createEmptyPluginRegistry,
   createMockPluginRegistry,
+  createTestRegistry,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -794,6 +795,78 @@ describe("createCodexDynamicToolBridge", () => {
         threadId: "thread-ts-1",
         text: "hello from Codex",
         mediaUrls: ["/tmp/reply.png"],
+      },
+    ]);
+  });
+
+  it("records the current transport thread for implicit message sends", async () => {
+    const hasRepliedRef = { value: false };
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "slack",
+          plugin: {
+            id: "slack",
+            messaging: { normalizeTarget: (raw: string) => raw.trim().toLowerCase() },
+            threading: {
+              resolveAutoThreadId: ({
+                toolContext,
+              }: {
+                toolContext?: {
+                  currentThreadTs?: string;
+                  replyToMode?: "off" | "first" | "all" | "batched";
+                  hasRepliedRef?: { value: boolean };
+                };
+              }) => {
+                if (
+                  (toolContext?.replyToMode === "first" ||
+                    toolContext?.replyToMode === "batched") &&
+                  !toolContext.hasRepliedRef?.value
+                ) {
+                  return toolContext.currentThreadTs;
+                }
+                return undefined;
+              },
+            },
+          },
+          source: "test",
+        },
+      ]),
+    );
+    const bridge = createCodexDynamicToolBridge({
+      tools: [
+        createTool({
+          name: "message",
+          execute: vi.fn(async () => {
+            hasRepliedRef.value = true;
+            return textToolResult("Sent.");
+          }),
+        }),
+      ],
+      signal: new AbortController().signal,
+      hookContext: {
+        currentChannelId: "C1",
+        currentThreadId: "171.222",
+        replyToMode: "first",
+        hasRepliedRef,
+      },
+    });
+
+    await handleMessageToolCall(bridge, {
+      action: "send",
+      provider: "slack",
+      to: "channel:C1",
+      text: "hello from Codex",
+    });
+
+    expect(bridge.telemetry.messagingToolSentTargets).toEqual([
+      {
+        tool: "message",
+        provider: "slack",
+        to: "channel:c1",
+        threadId: "171.222",
+        threadImplicit: true,
+        text: "hello from Codex",
       },
     ]);
   });

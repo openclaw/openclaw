@@ -56,7 +56,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     const replyRunRegistryModule = await import("./reply-run-registry.js");
     createReplyOperation = replyRunRegistryModule.createReplyOperation;
     replyRunRegistry = replyRunRegistryModule.replyRunRegistry;
-    resetReplyRunRegistry = replyRunRegistryModule.testing.resetReplyRunRegistry;
+    resetReplyRunRegistry = () => replyRunRegistryModule.testing.resetReplyRunRegistry();
   });
 
   beforeEach(() => {

@@ -9,6 +9,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeTargetForProvider } from "../infra/outbound/target-normalization.js";
 import { redactSensitiveFieldValue, redactToolPayloadText } from "../logging/redact.js";
 import { truncateUtf16Safe } from "../utils.js";
@@ -641,6 +642,13 @@ function resolveMessageToolTarget(args: Record<string, unknown>): string | undef
 export function extractMessagingToolSend(
   toolName: string,
   args: Record<string, unknown>,
+  options?: {
+    config?: OpenClawConfig;
+    currentChannelId?: string;
+    currentThreadId?: string;
+    replyToMode?: "off" | "first" | "all" | "batched";
+    hasRepliedRef?: { value: boolean };
+  },
 ): MessagingToolSend | undefined {
   // Provider docking: new provider tools must implement plugin.actions.extractToolSend.
   const action = normalizeOptionalString(args.action) ?? "";
@@ -661,17 +669,45 @@ export function extractMessagingToolSend(
     const to = normalizeTargetForProvider(provider, toRaw);
     const threadId = normalizeOptionalString(args.threadId);
     const threadSuppressed = args.topLevel === true || args.threadId === null;
+    const autoThreadResolver = providerId
+      ? getChannelPlugin(providerId)?.threading?.resolveAutoThreadId
+      : undefined;
+    const currentChannelId = normalizeOptionalString(options?.currentChannelId);
+    const currentThreadId = normalizeOptionalString(options?.currentThreadId);
+    const replyToMode = options?.replyToMode ?? (currentThreadId ? "all" : undefined);
+    const canResolveCurrentThread = Boolean(currentChannelId && currentThreadId);
+    const resolvedCurrentThreadId =
+      !threadId &&
+      !threadSuppressed &&
+      autoThreadResolver &&
+      canResolveCurrentThread &&
+      typeof to === "string"
+        ? autoThreadResolver({
+            cfg: options?.config ?? {},
+            accountId,
+            to,
+            toolContext: {
+              currentChannelId,
+              currentThreadTs: currentThreadId,
+              replyToMode,
+              hasRepliedRef: options?.hasRepliedRef,
+            },
+          })
+        : undefined;
     const threadImplicit =
       !threadId &&
       !threadSuppressed &&
-      Boolean(providerId && getChannelPlugin(providerId)?.threading?.resolveAutoThreadId);
+      Boolean(autoThreadResolver) &&
+      (!canResolveCurrentThread || Boolean(resolvedCurrentThreadId));
     return to
       ? {
           tool: toolName,
           provider,
           accountId,
           to,
-          ...(threadId ? { threadId } : {}),
+          ...((threadId ?? resolvedCurrentThreadId)
+            ? { threadId: threadId ?? resolvedCurrentThreadId }
+            : {}),
           ...(threadImplicit ? { threadImplicit: true } : {}),
           ...(threadSuppressed ? { threadSuppressed: true } : {}),
         }
