@@ -8,6 +8,7 @@ import { readMemoryHostEvents } from "openclaw/plugin-sdk/memory-host-events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getMemorySearchManagerMockCalls,
+  getMemorySearchManagerMockParams,
   getReadAgentMemoryFileMockCalls,
   resetMemoryToolMockState,
   setMemoryBackend,
@@ -160,6 +161,25 @@ describe("memory tools", () => {
       warning: "Memory search is unavailable because the embedding provider quota is exhausted.",
       action: "Top up or switch embedding provider, then retry memory_search.",
     });
+  });
+
+  it("uses one-shot CLI memory manager mode for memory_search", async () => {
+    setMemoryBackend("qmd");
+    const tool = createMemorySearchToolOrThrow({
+      config: asOpenClawConfig({
+        memory: { backend: "qmd", qmd: { command: "qmd" } },
+        agents: { list: [{ id: "main", default: true }] },
+      }),
+    });
+
+    await tool.execute("call_cli_purpose", { query: "contact phrase" });
+
+    expect(getMemorySearchManagerMockParams()).toEqual([
+      expect.objectContaining({
+        agentId: "main",
+        purpose: "cli",
+      }),
+    ]);
   });
 
   it("returns disabled details when memory_get fails", async () => {

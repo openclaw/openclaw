@@ -404,7 +404,12 @@ export function createMemorySearchTool(options: {
             const memory = shouldQueryMemory
               ? await runUnavailablePhase(
                   "memory",
-                  async () => await getMemoryManagerContext({ cfg, agentId }),
+                  async () =>
+                    await getMemoryManagerContextWithPurpose({
+                      cfg,
+                      agentId,
+                      purpose: "cli",
+                    }),
                 )
               : null;
             if (shouldQueryMemory && memory && "error" in memory && !shouldQuerySupplements) {
