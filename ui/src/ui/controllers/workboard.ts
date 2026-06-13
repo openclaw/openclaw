@@ -3767,7 +3767,7 @@ export async function stopWorkboardCard(params: {
         if (task?.taskId === taskId || task?.id === taskId) {
           state.tasksByCardId.delete(params.card.id);
         }
-        taskStopped = true;
+        taskStopped = !sessionKey;
       }
     }
     let sessionAborted = false;
