@@ -125,6 +125,34 @@ const SLACK_REASONING_TAG_RE = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking
 const SLACK_REASONING_LABEL_PREFIX_RE = /^\s*(?:>\s*)?Reasoning:\s*/iu;
 const SLACK_THINKING_LABEL_PREFIX_RE = /^\s*(?:>\s*)?Thinking\.{0,3}(?=\s*(?:\n|_))/iu;
 
+const SLACK_TOOL_STATUS_LABELS: Record<string, string> = {
+  exec: "Running command…",
+  shell: "Running command…",
+  terminal: "Running command…",
+  web_search: "Searching the web…",
+  web_fetch: "Fetching URL…",
+  Read: "Reading files…",
+  read_file: "Reading files…",
+  write_file: "Writing files…",
+  search_files: "Searching files…",
+  memory_search: "Checking memory…",
+  tts: "Converting to speech…",
+  message: "Sending message…",
+  browser_navigate: "Opening browser…",
+  browser_click: "Interacting with page…",
+  browser_type: "Typing…",
+  browser_snapshot: "Reading page…",
+  browser_scroll: "Scrolling…",
+  image_generate: "Generating image…",
+};
+
+function resolveSlackToolStatusLabel(toolName: string | null | undefined): string | undefined {
+  if (!toolName) {
+    return undefined;
+  }
+  return SLACK_TOOL_STATUS_LABELS[toolName] ?? undefined;
+}
+
 function resolveSlackMessageTimestampMs(message: SlackMessageEvent): number | undefined {
   const ts = message.event_ts ?? message.ts;
   return resolveSlackTimestampMs(ts);
@@ -1683,6 +1711,16 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         onToolStart: async (payload) => {
           if (statusReactionsEnabled) {
             await statusReactions.setTool(payload.name);
+          }
+          if (didSetStatus) {
+            const toolStatus = resolveSlackToolStatusLabel(payload.name);
+            if (toolStatus) {
+              await ctx.setSlackThreadStatus({
+                channelId: message.channel,
+                threadTs: statusThreadTs,
+                status: toolStatus,
+              });
+            }
           }
           await pushPreviewToolProgress(
             buildChannelProgressDraftLineForEntry(
