@@ -1,7 +1,8 @@
 // Covers package update step orchestration.
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { writePackageDistInventory } from "./package-dist-inventory.js";
 import {
@@ -13,6 +14,25 @@ import {
   type CommandRunner,
   type ResolvedGlobalInstallTarget,
 } from "./update-global.js";
+
+const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+let packageUpdateTestStateDir = "";
+
+beforeAll(async () => {
+  packageUpdateTestStateDir = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-package-update-state-"),
+  );
+  process.env.OPENCLAW_STATE_DIR = packageUpdateTestStateDir;
+});
+
+afterAll(async () => {
+  if (originalStateDir === undefined) {
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = originalStateDir;
+  }
+  await fs.rm(packageUpdateTestStateDir, { recursive: true, force: true });
+});
 
 async function writePackageRoot(packageRoot: string, version: string): Promise<void> {
   await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
@@ -276,6 +296,10 @@ describe("runGlobalPackageUpdateSteps", () => {
       expect(path.basename(result.localOverrides?.recoveryDir ?? "")).toMatch(
         /^openclaw-local-overrides-/u,
       );
+      expect(path.dirname(result.localOverrides?.recoveryDir ?? "")).toBe(
+        path.join(packageUpdateTestStateDir, "update-recovery"),
+      );
+      expect(result.localOverrides?.recoveryDir?.startsWith(globalRoot)).toBe(false);
       await expect(fs.readFile(path.join(packageRoot, "dist", "index.js"), "utf8")).resolves.toBe(
         "export {};\n",
       );
@@ -903,74 +927,133 @@ describe("runGlobalPackageUpdateSteps", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32")(
-    "does not delete dependencies still referenced by hardlinked conflicted importers",
-    async () => {
-      await withTempDir(
-        { prefix: "openclaw-package-update-local-hardlink-import-delete-" },
-        async (base) => {
-          const prefix = path.join(base, "prefix");
-          const globalRoot = path.join(prefix, "lib", "node_modules");
-          const packageRoot = path.join(globalRoot, "openclaw");
-          const indexPath = path.join(packageRoot, "dist", "index.js");
-          const helperPath = path.join(packageRoot, "dist", "helper.js");
-          await writePackageRoot(packageRoot, "1.0.0");
-          await fs.writeFile(indexPath, 'import "./helper.js";\n', "utf8");
-          await fs.writeFile(helperPath, "export const helper = true;\n", "utf8");
-          await writePackageDistInventory(packageRoot);
-          await fs.writeFile(indexPath, "export const local = true;\n", "utf8");
-          await fs.rm(helperPath);
+  it("does not replay deletions when a modified override conflicts", async () => {
+    await withTempDir({ prefix: "openclaw-package-update-local-import-delete-" }, async (base) => {
+      const prefix = path.join(base, "prefix");
+      const globalRoot = path.join(prefix, "lib", "node_modules");
+      const packageRoot = path.join(globalRoot, "openclaw");
+      const indexPath = path.join(packageRoot, "dist", "index.js");
+      const helperPath = path.join(packageRoot, "dist", "helper.js");
+      await writePackageRoot(packageRoot, "1.0.0");
+      await fs.writeFile(indexPath, 'import "./helper.js";\n', "utf8");
+      await fs.writeFile(helperPath, "export const helper = true;\n", "utf8");
+      await writePackageDistInventory(packageRoot);
+      await fs.writeFile(indexPath, "export const local = true;\n", "utf8");
+      await fs.rm(helperPath);
 
-          const result = await runGlobalPackageUpdateSteps({
-            installTarget: createNpmTarget(globalRoot),
-            installSpec: "openclaw@2.0.0",
-            packageName: "openclaw",
-            packageRoot,
-            runCommand: createRootRunner(globalRoot),
-            runStep: async ({ name, argv, cwd }): Promise<PackageUpdateStepResult> => {
-              const prefixIndex = argv.indexOf("--prefix");
-              const stagePrefix = argv[prefixIndex + 1];
-              if (!stagePrefix) {
-                throw new Error("missing staged prefix");
-              }
-              const stagedPackageRoot = path.join(stagePrefix, "lib", "node_modules", "openclaw");
-              const stagedIndexPath = path.join(stagedPackageRoot, "dist", "index.js");
-              await writePackageRoot(stagedPackageRoot, "2.0.0");
-              await fs.writeFile(stagedIndexPath, 'import "./helper.js";\n', "utf8");
-              await fs.writeFile(
-                path.join(stagedPackageRoot, "dist", "helper.js"),
-                "export const helper = true;\n",
-                "utf8",
-              );
-              await writePackageDistInventory(stagedPackageRoot);
-              await addHardlinkedPackageFile(stagedPackageRoot, path.join(base, "cache", "staged"));
-              return {
-                name,
-                command: argv.join(" "),
-                cwd: cwd ?? process.cwd(),
-                durationMs: 1,
-                exitCode: 0,
-              };
-            },
-            reapplyLocalOverrides: true,
-            timeoutMs: 1000,
-          });
-
-          expect(result.failedStep).toBeNull();
-          expect(result.localOverrides?.status).toBe("conflict");
-          expect(result.localOverrides?.applied).toBe(0);
-          expect(result.localOverrides?.conflicts).toEqual([
-            { path: "dist/index.js", reason: "target-hardlinked" },
-            { path: "dist/helper.js", reason: "target-changed" },
-          ]);
-          await expect(fs.readFile(indexPath, "utf8")).resolves.toBe('import "./helper.js";\n');
-          await expect(fs.readFile(helperPath, "utf8")).resolves.toBe(
-            "export const helper = true;\n",
+      const result = await runGlobalPackageUpdateSteps({
+        installTarget: createNpmTarget(globalRoot),
+        installSpec: "openclaw@2.0.0",
+        packageName: "openclaw",
+        packageRoot,
+        runCommand: createRootRunner(globalRoot),
+        runStep: async ({ name, argv, cwd }): Promise<PackageUpdateStepResult> => {
+          const prefixIndex = argv.indexOf("--prefix");
+          const stagePrefix = argv[prefixIndex + 1];
+          if (!stagePrefix) {
+            throw new Error("missing staged prefix");
+          }
+          const stagedPackageRoot = path.join(stagePrefix, "lib", "node_modules", "openclaw");
+          const stagedIndexPath = path.join(stagedPackageRoot, "dist", "index.js");
+          await writePackageRoot(stagedPackageRoot, "2.0.0");
+          await fs.writeFile(
+            stagedIndexPath,
+            'import "./helper.js";\nexport const upstream = true;\n',
+            "utf8",
           );
+          await fs.writeFile(
+            path.join(stagedPackageRoot, "dist", "helper.js"),
+            "export const helper = true;\n",
+            "utf8",
+          );
+          await writePackageDistInventory(stagedPackageRoot);
+          return {
+            name,
+            command: argv.join(" "),
+            cwd: cwd ?? process.cwd(),
+            durationMs: 1,
+            exitCode: 0,
+          };
         },
+        reapplyLocalOverrides: true,
+        timeoutMs: 1000,
+      });
+
+      expect(result.failedStep).toBeNull();
+      expect(result.localOverrides?.status).toBe("conflict");
+      expect(result.localOverrides?.applied).toBe(0);
+      expect(result.localOverrides?.conflicts).toEqual([
+        { path: "dist/index.js", reason: "target-changed" },
+        { path: "dist/helper.js", reason: "target-changed" },
+      ]);
+      await expect(fs.readFile(indexPath, "utf8")).resolves.toBe(
+        'import "./helper.js";\nexport const upstream = true;\n',
       );
-    },
-  );
+      await expect(fs.readFile(helperPath, "utf8")).resolves.toBe("export const helper = true;\n");
+    });
+  });
+
+  it("does not replay deletions when an added override conflicts", async () => {
+    await withTempDir({ prefix: "openclaw-package-update-local-added-delete-" }, async (base) => {
+      const prefix = path.join(base, "prefix");
+      const globalRoot = path.join(prefix, "lib", "node_modules");
+      const packageRoot = path.join(globalRoot, "openclaw");
+      const featurePath = path.join(packageRoot, "dist", "feature.js");
+      const helperPath = path.join(packageRoot, "dist", "helper.js");
+      await writePackageRoot(packageRoot, "1.0.0");
+      await fs.writeFile(helperPath, "export const helper = true;\n", "utf8");
+      await writePackageDistInventory(packageRoot);
+      await fs.writeFile(featurePath, "export const local = true;\n", "utf8");
+      await fs.rm(helperPath);
+
+      const result = await runGlobalPackageUpdateSteps({
+        installTarget: createNpmTarget(globalRoot),
+        installSpec: "openclaw@2.0.0",
+        packageName: "openclaw",
+        packageRoot,
+        runCommand: createRootRunner(globalRoot),
+        runStep: async ({ name, argv, cwd }): Promise<PackageUpdateStepResult> => {
+          const prefixIndex = argv.indexOf("--prefix");
+          const stagePrefix = argv[prefixIndex + 1];
+          if (!stagePrefix) {
+            throw new Error("missing staged prefix");
+          }
+          const stagedPackageRoot = path.join(stagePrefix, "lib", "node_modules", "openclaw");
+          await writePackageRoot(stagedPackageRoot, "2.0.0");
+          await fs.writeFile(
+            path.join(stagedPackageRoot, "dist", "feature.js"),
+            'import "./helper.js";\n',
+            "utf8",
+          );
+          await fs.writeFile(
+            path.join(stagedPackageRoot, "dist", "helper.js"),
+            "export const helper = true;\n",
+            "utf8",
+          );
+          await writePackageDistInventory(stagedPackageRoot);
+          return {
+            name,
+            command: argv.join(" "),
+            cwd: cwd ?? process.cwd(),
+            durationMs: 1,
+            exitCode: 0,
+          };
+        },
+        reapplyLocalOverrides: true,
+        timeoutMs: 1000,
+      });
+
+      expect(result.failedStep).toBeNull();
+      expect(result.localOverrides?.status).toBe("conflict");
+      expect(result.localOverrides?.applied).toBe(0);
+      expect(result.localOverrides?.conflicts).toEqual([
+        { path: "dist/feature.js", reason: "target-exists" },
+        { path: "dist/helper.js", reason: "target-changed" },
+      ]);
+      await expect(fs.readFile(featurePath, "utf8")).resolves.toBe('import "./helper.js";\n');
+      await expect(fs.readFile(helperPath, "utf8")).resolves.toBe("export const helper = true;\n");
+    });
+  });
 
   it("returns a structured conflict when updated target inspection fails", async () => {
     await withTempDir(

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolveStateDir } from "../config/paths.js";
 import { pathExists } from "../utils.js";
 import { formatErrorMessage } from "./errors.js";
 import {
@@ -330,9 +331,11 @@ export async function captureLocalPackageOverrides(params: {
   const changes: LocalPackageOverrideChange[] = [];
   let recoveryDir: string | null = null;
   const ensureRecoveryDir = async () => {
-    recoveryDir ??= await fs.mkdtemp(
-      path.join(path.dirname(params.packageRoot), "openclaw-local-overrides-"),
-    );
+    if (!recoveryDir) {
+      const recoveryRoot = path.join(resolveStateDir(), "update-recovery");
+      await fs.mkdir(recoveryRoot, { recursive: true, mode: 0o700 });
+      recoveryDir = await fs.mkdtemp(path.join(recoveryRoot, "openclaw-local-overrides-"));
+    }
     return recoveryDir;
   };
 
@@ -559,16 +562,7 @@ async function preflightLocalOverrides(params: {
       if (change.kind !== "deleted" || conflictPaths.has(change.path)) {
         continue;
       }
-      const hasConflictedHardlinkModification = params.plan.changes.some((candidate) => {
-        const targetProbe = targetProbes.get(candidate.path);
-        return (
-          candidate.kind === "modified" &&
-          conflictPaths.has(candidate.path) &&
-          targetProbe?.status === "present" &&
-          targetProbe.hardlinked
-        );
-      });
-      if (hasConflictedHardlinkModification) {
+      if (conflictPaths.size > 0) {
         conflicts.push({ path: change.path, reason: "target-changed" });
         conflictPaths.add(change.path);
         propagatedConflict = true;
