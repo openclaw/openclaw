@@ -2597,7 +2597,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         });
       };
       const deliverControlDirectorNoResponseFallback = async (reason: string) => {
-        if (controlDirectorFallbackDelivered || !agentRunStarted) {
+        if (controlDirectorFallbackDelivered) {
           return;
         }
         const hasFinalReplyText = deliveredReplies
@@ -2793,6 +2793,10 @@ export const chatHandlers: GatewayRequestHandlers = {
         },
       });
 
+      controlDirectorFallbackTimer = setTimeout(() => {
+        void deliverControlDirectorNoResponseFallback("no-response watchdog timeout");
+      }, 15_000);
+
       void measureDiagnosticsTimelineSpan(
         "gateway.chat_send.dispatch_inbound",
         () =>
@@ -2809,9 +2813,6 @@ export const chatHandlers: GatewayRequestHandlers = {
               fastModeOverride: p.fastMode,
               onAgentRunStart: (runId) => {
                 agentRunStarted = true;
-                controlDirectorFallbackTimer ??= setTimeout(() => {
-                  void deliverControlDirectorNoResponseFallback("no-response watchdog timeout");
-                }, 65_000);
                 if (!hasBeforeAgentRunGate) {
                   void emitUserTranscriptUpdate();
                 }
