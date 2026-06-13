@@ -733,7 +733,7 @@ describe("resolveContextTokensForModel", () => {
             models: {
               providers: {
                 openai: {
-                  models: [{ id: "gpt-5.5", contextWindow: 1_000_000 }],
+                  models: [testModelContextWindow("gpt-5.5", 1_000_000)],
                 },
               },
             },
