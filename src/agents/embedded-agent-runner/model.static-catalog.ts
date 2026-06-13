@@ -233,6 +233,16 @@ type BundledStaticCatalogLookup = {
   modelId: string;
 };
 
+type BundledStaticCatalogContext = {
+  contextWindow?: number;
+  contextTokens?: number;
+};
+
+type BundledStaticCatalogScopedLookup = {
+  lookup: BundledStaticCatalogLookup;
+  pluginIds: string[];
+};
+
 type BundledProviderStaticCatalogResolverParams = {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
@@ -301,12 +311,12 @@ export function resolveBundledStaticCatalogModel(
   })(params);
 }
 
-async function loadBundledProviderStaticCatalogModels(params: {
+function resolveBundledProviderStaticCatalogPluginIds(params: {
   provider: string;
   cfg?: OpenClawConfig;
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
-}): Promise<ProviderRuntimeModel[]> {
+}): string[] {
   const pluginIds = resolveOwningPluginIdsForProviderRef({
     provider: params.provider,
     config: params.cfg,
@@ -323,22 +333,26 @@ async function loadBundledProviderStaticCatalogModels(params: {
       env: params.env,
     }),
   );
-  const scopedPluginIds = pluginIds.filter((pluginId) => bundledPluginIds.has(pluginId));
-  if (scopedPluginIds.length === 0) {
-    return [];
-  }
+  return pluginIds.filter((pluginId) => bundledPluginIds.has(pluginId)).toSorted();
+}
 
+async function loadBundledProviderStaticCatalogModels(params: {
+  pluginIds: string[];
+  cfg?: OpenClawConfig;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+}): Promise<Map<string, ProviderRuntimeModel[]>> {
   const providers = await resolveRuntimePluginDiscoveryProviders({
     config: params.cfg,
     workspaceDir: params.workspaceDir,
     env: params.env,
-    onlyPluginIds: scopedPluginIds,
+    onlyPluginIds: params.pluginIds,
     includeUntrustedWorkspacePlugins: false,
     requireCompleteDiscoveryEntryCoverage: true,
     discoveryEntriesOnly: true,
     includeManifestModelCatalogProviders: false,
   });
-  const models: ProviderRuntimeModel[] = [];
+  const modelsByProvider = new Map<string, ProviderRuntimeModel[]>();
   for (const catalogProvider of providers) {
     const result = await runProviderStaticCatalog({
       provider: catalogProvider,
@@ -351,24 +365,75 @@ async function loadBundledProviderStaticCatalogModels(params: {
       result,
     });
     for (const [providerIdRaw, providerConfig] of Object.entries(normalized)) {
-      if (
-        normalizeProviderId(providerIdRaw) !== params.provider ||
-        !Array.isArray(providerConfig.models)
-      ) {
+      const provider = normalizeProviderId(providerIdRaw);
+      if (!provider || !Array.isArray(providerConfig.models)) {
         continue;
       }
+      const models = modelsByProvider.get(provider) ?? [];
       models.push(
         ...providerConfig.models.map((model) =>
           modelFromProviderStaticCatalog({
-            provider: params.provider,
+            provider,
             providerConfig,
             model,
           }),
         ),
       );
+      modelsByProvider.set(provider, models);
     }
   }
-  return models;
+  return modelsByProvider;
+}
+
+function createScopedBundledProviderStaticCatalogModelResolver(
+  params: BundledProviderStaticCatalogResolverParams = {},
+): (
+  lookup: BundledStaticCatalogLookup,
+  scopedPluginIds?: string[],
+) => Promise<ProviderRuntimeModel | undefined> {
+  const env = params.env ?? process.env;
+  const pluginCatalogs = new Map<string, Promise<Map<string, ProviderRuntimeModel[]>>>();
+  const providerPluginIds = new Map<string, string[]>();
+  return async (lookup, scopedPluginIds) => {
+    const provider = normalizeProviderId(lookup.provider);
+    if (!provider || !lookup.modelId.trim()) {
+      return undefined;
+    }
+    let pluginIds = scopedPluginIds;
+    if (!pluginIds) {
+      pluginIds = providerPluginIds.get(provider);
+    }
+    if (!pluginIds) {
+      pluginIds = resolveBundledProviderStaticCatalogPluginIds({
+        provider,
+        cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
+        env,
+      });
+      providerPluginIds.set(provider, pluginIds);
+    }
+    if (pluginIds.length === 0) {
+      return undefined;
+    }
+    const catalogKey = pluginIds.join("\0");
+    let catalog = pluginCatalogs.get(catalogKey);
+    if (!catalog) {
+      catalog = loadBundledProviderStaticCatalogModels({
+        pluginIds,
+        cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
+        env,
+      });
+      pluginCatalogs.set(catalogKey, catalog);
+    }
+    return ((await catalog).get(provider) ?? []).find((candidate) =>
+      staticModelIdMatches({
+        candidateId: candidate.id,
+        provider,
+        modelId: lookup.modelId,
+      }),
+    );
+  };
 }
 
 /**
@@ -378,30 +443,71 @@ async function loadBundledProviderStaticCatalogModels(params: {
 export function createBundledProviderStaticCatalogModelResolver(
   params: BundledProviderStaticCatalogResolverParams = {},
 ): (lookup: BundledStaticCatalogLookup) => Promise<ProviderRuntimeModel | undefined> {
+  const resolveModel = createScopedBundledProviderStaticCatalogModelResolver(params);
+  return async (lookup) => await resolveModel(lookup);
+}
+
+function resolveOwnedNestedProviderLookup(params: {
+  lookup: BundledStaticCatalogLookup;
+  resolverParams: BundledProviderStaticCatalogResolverParams;
+  env: NodeJS.ProcessEnv;
+}): BundledStaticCatalogScopedLookup | undefined {
+  const provider = normalizeProviderId(params.lookup.provider);
+  const modelId = params.lookup.modelId.trim();
+  const slash = modelId.indexOf("/");
+  if (!provider || slash <= 0 || slash >= modelId.length - 1) {
+    return undefined;
+  }
+  const nestedProvider = normalizeProviderId(modelId.slice(0, slash));
+  const nestedModelId = modelId.slice(slash + 1).trim();
+  if (!nestedProvider || nestedProvider === provider || !nestedModelId) {
+    return undefined;
+  }
+  const resolveBundledOwners = (candidateProvider: string) =>
+    resolveBundledProviderStaticCatalogPluginIds({
+      provider: candidateProvider,
+      cfg: params.resolverParams.cfg,
+      workspaceDir: params.resolverParams.workspaceDir,
+      env: params.env,
+    });
+  const nestedProviderOwners = new Set(resolveBundledOwners(nestedProvider));
+  const sharedPluginIds = resolveBundledOwners(provider).filter((pluginId) =>
+    nestedProviderOwners.has(pluginId),
+  );
+  if (sharedPluginIds.length === 0) {
+    return undefined;
+  }
+  return {
+    lookup: { provider: nestedProvider, modelId: nestedModelId },
+    pluginIds: sharedPluginIds,
+  };
+}
+
+/**
+ * Prepares context-only provider catalog lookup.
+ * Nested provider refs may reuse metadata only when both providers have the same plugin owner.
+ */
+export function createBundledProviderStaticCatalogContextResolver(
+  params: BundledProviderStaticCatalogResolverParams = {},
+): (lookup: BundledStaticCatalogLookup) => Promise<BundledStaticCatalogContext | undefined> {
   const env = params.env ?? process.env;
-  const providerModels = new Map<string, Promise<ProviderRuntimeModel[]>>();
+  const resolveModel = createScopedBundledProviderStaticCatalogModelResolver(params);
   return async (lookup) => {
-    const provider = normalizeProviderId(lookup.provider);
-    if (!provider || !lookup.modelId.trim()) {
+    const exactModel = await resolveModel(lookup);
+    const nested = exactModel
+      ? undefined
+      : resolveOwnedNestedProviderLookup({ lookup, resolverParams: params, env });
+    const model =
+      exactModel ?? (nested ? await resolveModel(nested.lookup, nested.pluginIds) : undefined);
+    if (!model) {
       return undefined;
     }
-    let models = providerModels.get(provider);
-    if (!models) {
-      models = loadBundledProviderStaticCatalogModels({
-        provider,
-        cfg: params.cfg,
-        workspaceDir: params.workspaceDir,
-        env,
-      });
-      providerModels.set(provider, models);
-    }
-    return (await models).find((candidate) =>
-      staticModelIdMatches({
-        candidateId: candidate.id,
-        provider,
-        modelId: lookup.modelId,
-      }),
-    );
+    return {
+      ...(model.contextWindow > 0 ? { contextWindow: model.contextWindow } : {}),
+      ...(typeof model.contextTokens === "number" && model.contextTokens > 0
+        ? { contextTokens: model.contextTokens }
+        : {}),
+    };
   };
 }
 

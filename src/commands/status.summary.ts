@@ -43,7 +43,7 @@ const staticModelCatalogResolverLoader = createLazyImportLoader(async () => {
       // Runtime-discovery manifest rows still provide a cold-cache fallback.
       includeRuntimeDiscovery: true,
     }),
-    createProviderModelResolver: modelCatalog.createBundledProviderStaticCatalogModelResolver,
+    createProviderContextResolver: modelCatalog.createBundledProviderStaticCatalogContextResolver,
   };
 });
 
@@ -199,9 +199,9 @@ export async function getStatusSummary(
     resolveSessionModelRef,
   } = await loadStatusSummaryRuntimeModule();
   const cfg = options.config ?? getRuntimeConfig();
-  const { resolveManifestModel, createProviderModelResolver } =
+  const { resolveManifestModel, createProviderContextResolver } =
     await loadStaticModelCatalogResolvers();
-  const resolveProviderModel = createProviderModelResolver({ cfg });
+  const resolveProviderContext = createProviderContextResolver({ cfg });
   const modelContextCache = new Map<
     string,
     Promise<{ modelContextWindow?: number; modelContextTokens?: number }>
@@ -222,7 +222,7 @@ export async function getStatusSummary(
       try {
         const entry =
           resolveManifestModel({ provider, modelId: model }) ??
-          (await resolveProviderModel({ provider, modelId: model }));
+          (await resolveProviderContext({ provider, modelId: model }));
         return {
           ...(entry?.contextWindow ? { modelContextWindow: entry.contextWindow } : {}),
           ...(entry?.contextTokens ? { modelContextTokens: entry.contextTokens } : {}),

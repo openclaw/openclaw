@@ -39,6 +39,7 @@ const ANTHROPIC_GA_1M_MODEL_PREFIXES = [
   "claude-sonnet-4.6",
 ] as const;
 export const ANTHROPIC_CONTEXT_1M_TOKENS = 1_048_576;
+export const ANTHROPIC_VERTEX_CONTEXT_1M_TOKENS = 1_000_000;
 export const ANTHROPIC_FABLE_CONTEXT_TOKENS = 1_000_000;
 
 type ConfiguredContextTokens = {
@@ -150,12 +151,15 @@ export function resolveAnthropicFixedContextWindow(
   ) {
     return ANTHROPIC_FABLE_CONTEXT_TOKENS;
   }
-  if (provider !== "anthropic" && provider !== "claude-cli") {
+  if (provider !== "anthropic" && provider !== "anthropic-vertex" && provider !== "claude-cli") {
     return undefined;
   }
-  return ANTHROPIC_GA_1M_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix))
-    ? ANTHROPIC_CONTEXT_1M_TOKENS
-    : undefined;
+  if (!ANTHROPIC_GA_1M_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix))) {
+    return undefined;
+  }
+  return provider === "anthropic-vertex"
+    ? ANTHROPIC_VERTEX_CONTEXT_1M_TOKENS
+    : ANTHROPIC_CONTEXT_1M_TOKENS;
 }
 
 export function resolveContextTokensForModelFromCache(

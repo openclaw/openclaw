@@ -37,6 +37,7 @@ vi.mock("../../plugins/provider-discovery.js", async (importOriginal) => ({
 
 import { getModelProviderRequestTransport } from "../provider-request-config.js";
 import {
+  createBundledProviderStaticCatalogContextResolver,
   createBundledProviderStaticCatalogModelResolver,
   createBundledStaticCatalogModelResolver,
   resolveBundledProviderStaticCatalogModel,
@@ -320,6 +321,143 @@ describe("resolveBundledProviderStaticCatalogModel", () => {
 
     expect(providerMocks.resolveRuntimePluginDiscoveryProviders).toHaveBeenCalledTimes(1);
     expect(providerMocks.runProviderStaticCatalog).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves context-only nested model ids within the same owning plugin", async () => {
+    const provider = {
+      id: "google",
+      pluginId: "google",
+      label: "Google",
+      auth: [],
+      staticCatalog: { run: vi.fn() },
+    };
+    providerMocks.resolveOwningPluginIdsForProviderRef.mockImplementation(
+      ({ provider }: { provider: string }) =>
+        provider === "google" || provider === "google-gemini-cli" ? ["google"] : undefined,
+    );
+    providerMocks.resolveBundledProviderCompatPluginIds.mockReturnValue(["google"]);
+    providerMocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([provider]);
+    providerMocks.runProviderStaticCatalog.mockResolvedValue({ marker: "static-result" });
+    providerMocks.normalizePluginDiscoveryResult.mockReturnValue({
+      google: {
+        api: "google-generative-ai",
+        baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+        models: [
+          {
+            id: "gemini-3.1-pro-preview",
+            name: "Gemini 3.1 Pro Preview",
+            contextWindow: 1_048_576,
+            contextTokens: 1_000_000,
+            maxTokens: 65_536,
+          },
+        ],
+      },
+    });
+
+    const resolveContext = createBundledProviderStaticCatalogContextResolver();
+    await expect(
+      resolveContext({
+        provider: "google-gemini-cli",
+        modelId: "google/gemini-3.1-pro-preview",
+      }),
+    ).resolves.toEqual({
+      contextWindow: 1_048_576,
+      contextTokens: 1_000_000,
+    });
+    expect(providerMocks.resolveRuntimePluginDiscoveryProviders).toHaveBeenCalledTimes(1);
+    expect(providerMocks.runProviderStaticCatalog).toHaveBeenCalledTimes(1);
+
+    providerMocks.resolveRuntimePluginDiscoveryProviders.mockClear();
+    providerMocks.runProviderStaticCatalog.mockClear();
+    const resolveModel = createBundledProviderStaticCatalogModelResolver();
+    await expect(
+      resolveModel({
+        provider: "google-gemini-cli",
+        modelId: "google/gemini-3.1-pro-preview",
+      }),
+    ).resolves.toBeUndefined();
+    expect(providerMocks.resolveRuntimePluginDiscoveryProviders).toHaveBeenCalledTimes(1);
+    expect(providerMocks.runProviderStaticCatalog).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not borrow nested provider context across plugin owners", async () => {
+    providerMocks.resolveOwningPluginIdsForProviderRef.mockImplementation(
+      ({ provider }: { provider: string }) => {
+        if (provider === "openrouter") {
+          return ["openrouter"];
+        }
+        if (provider === "anthropic") {
+          return ["anthropic"];
+        }
+        return undefined;
+      },
+    );
+    providerMocks.resolveBundledProviderCompatPluginIds.mockReturnValue([
+      "anthropic",
+      "openrouter",
+    ]);
+    providerMocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([
+      { id: "openrouter", pluginId: "openrouter", label: "OpenRouter", auth: [] },
+    ]);
+    providerMocks.normalizePluginDiscoveryResult.mockReturnValue({});
+
+    const resolveContext = createBundledProviderStaticCatalogContextResolver();
+    await expect(
+      resolveContext({
+        provider: "openrouter",
+        modelId: "anthropic/claude-sonnet-4-6",
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(providerMocks.resolveRuntimePluginDiscoveryProviders).toHaveBeenCalledTimes(1);
+    expect(providerMocks.runProviderStaticCatalog).toHaveBeenCalledTimes(1);
+  });
+
+  it("restricts nested provider context to the shared bundled owner", async () => {
+    providerMocks.resolveOwningPluginIdsForProviderRef.mockImplementation(
+      ({ provider }: { provider: string }) => {
+        if (provider === "outer") {
+          return ["shared"];
+        }
+        if (provider === "nested") {
+          return ["shared", "unrelated"];
+        }
+        return undefined;
+      },
+    );
+    providerMocks.resolveBundledProviderCompatPluginIds.mockReturnValue(["shared", "unrelated"]);
+    providerMocks.resolveRuntimePluginDiscoveryProviders.mockImplementation(
+      async ({ onlyPluginIds }: { onlyPluginIds: string[] }) =>
+        onlyPluginIds.map((pluginId) => ({
+          id: pluginId,
+          pluginId,
+          label: pluginId,
+          auth: [],
+        })),
+    );
+    providerMocks.normalizePluginDiscoveryResult.mockImplementation(
+      ({ provider }: { provider: { pluginId: string } }) =>
+        provider.pluginId === "unrelated"
+          ? {
+              nested: {
+                models: [{ id: "model", name: "Model", contextWindow: 999_999 }],
+              },
+            }
+          : {},
+    );
+
+    const resolveContext = createBundledProviderStaticCatalogContextResolver();
+    await expect(
+      resolveContext({
+        provider: "outer",
+        modelId: "nested/model",
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(providerMocks.resolveRuntimePluginDiscoveryProviders).toHaveBeenCalledTimes(1);
+    expect(providerMocks.resolveRuntimePluginDiscoveryProviders).toHaveBeenCalledWith(
+      expect.objectContaining({ onlyPluginIds: ["shared"] }),
+    );
   });
 
   it("does not load provider catalogs when the provider owner is not bundled and enabled", async () => {

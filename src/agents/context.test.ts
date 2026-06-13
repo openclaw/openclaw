@@ -9,6 +9,7 @@ import {
 import {
   ANTHROPIC_CONTEXT_1M_TOKENS,
   ANTHROPIC_FABLE_CONTEXT_TOKENS,
+  ANTHROPIC_VERTEX_CONTEXT_1M_TOKENS,
   applyConfiguredContextWindows,
   applyDiscoveredContextWindows,
   resetContextWindowCacheForTest,
@@ -437,6 +438,7 @@ describe("resolveContextTokensForModel", () => {
     ["anthropic", "claude-fable-5", ANTHROPIC_FABLE_CONTEXT_TOKENS],
     ["anthropic-vertex", "claude-fable-5", ANTHROPIC_FABLE_CONTEXT_TOKENS],
     ["anthropic", "claude-sonnet-4-6", ANTHROPIC_CONTEXT_1M_TOKENS],
+    ["anthropic-vertex", "claude-sonnet-4-6", ANTHROPIC_VERTEX_CONTEXT_1M_TOKENS],
   ])(
     "returns the fixed context for %s model %s even when config reports 200k",
     (provider, modelId, expectedContextTokens) => {
@@ -733,6 +735,7 @@ describe("resolveContextTokensForModel", () => {
             models: {
               providers: {
                 openai: {
+                  baseUrl: "https://api.openai.com/v1",
                   models: [testModelContextWindow("gpt-5.5", 1_000_000)],
                 },
               },

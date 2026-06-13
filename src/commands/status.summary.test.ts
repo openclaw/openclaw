@@ -90,6 +90,9 @@ vi.mock("../agents/embedded-agent-runner/model.static-catalog.js", () => ({
   createBundledProviderStaticCatalogModelResolver: vi.fn(
     () => statusSummaryMocks.resolveProviderStaticModel,
   ),
+  createBundledProviderStaticCatalogContextResolver: vi.fn(
+    () => statusSummaryMocks.resolveProviderStaticModel,
+  ),
 }));
 
 vi.mock("../config/io.js", () => ({
@@ -336,6 +339,31 @@ describe("getStatusSummary", () => {
     ).toMatchObject({
       provider: "google",
       model: "gemini-3.1-pro-preview",
+      modelContextWindow: 1_048_576,
+      allowAsyncLoad: false,
+    });
+  });
+
+  it("uses context-only static metadata for nested provider-owned model refs", async () => {
+    vi.mocked(statusSummaryRuntime.resolveConfiguredStatusModelRef).mockReturnValue({
+      provider: "google-gemini-cli",
+      model: "google/gemini-3.1-pro-preview",
+    });
+    statusSummaryMocks.resolveProviderStaticModel.mockResolvedValueOnce({
+      contextWindow: 1_048_576,
+    });
+
+    await getStatusSummary();
+
+    expect(statusSummaryMocks.resolveProviderStaticModel).toHaveBeenCalledWith({
+      provider: "google-gemini-cli",
+      modelId: "google/gemini-3.1-pro-preview",
+    });
+    expect(
+      vi.mocked(statusSummaryRuntime.resolveContextTokensForModel).mock.calls[0]?.[0],
+    ).toMatchObject({
+      provider: "google-gemini-cli",
+      model: "google/gemini-3.1-pro-preview",
       modelContextWindow: 1_048_576,
       allowAsyncLoad: false,
     });
