@@ -23,8 +23,15 @@ export type EmitSlackMessageSentHookParams = {
   groupId?: string;
 };
 
-function buildSlackSentHookContext(params: EmitSlackMessageSentHookParams) {
-  return buildCanonicalSentMessageHookContext({
+export function emitSlackMessageSentHooks(params: EmitSlackMessageSentHookParams): void {
+  const sessionKey = params.sessionKeyForInternalHooks;
+  const hookRunner = getGlobalHookRunner();
+  const emitPluginHook = hookRunner?.hasHooks("message_sent") ?? false;
+  if (!emitPluginHook && !sessionKey) {
+    return;
+  }
+
+  const canonical = buildCanonicalSentMessageHookContext({
     to: params.to,
     content: params.content,
     success: params.success,
@@ -32,46 +39,17 @@ function buildSlackSentHookContext(params: EmitSlackMessageSentHookParams) {
     channelId: "slack",
     accountId: params.accountId ?? undefined,
     conversationId: params.to,
-    sessionKey: params.sessionKeyForInternalHooks,
+    sessionKey,
     runId: params.runId,
     messageId: params.messageId,
     isGroup: params.isGroup,
     groupId: params.groupId,
   });
-}
 
-function emitInternalSlackMessageSentHook(params: EmitSlackMessageSentHookParams): void {
-  if (!params.sessionKeyForInternalHooks) {
-    return;
-  }
-  const canonical = buildSlackSentHookContext(params);
-  fireAndForgetHook(
-    triggerInternalHook(
-      createInternalHookEvent(
-        "message",
-        "sent",
-        params.sessionKeyForInternalHooks,
-        toInternalMessageSentContext(canonical),
-      ),
-    ),
-    "slack: message:sent internal hook failed",
-  );
-}
-
-function emitMessageSentHooks(
-  params: EmitSlackMessageSentHookParams & {
-    hookRunner: ReturnType<typeof getGlobalHookRunner>;
-    enabled: boolean;
-  },
-): void {
-  if (!params.enabled && !params.sessionKeyForInternalHooks) {
-    return;
-  }
-  const canonical = buildSlackSentHookContext(params);
-  if (params.enabled) {
+  if (emitPluginHook && hookRunner) {
     fireAndForgetHook(
       Promise.resolve(
-        params.hookRunner!.runMessageSent(
+        hookRunner.runMessageSent(
           toPluginMessageSentEvent(canonical),
           toPluginMessageContext(canonical),
         ),
@@ -79,14 +57,18 @@ function emitMessageSentHooks(
       "slack: message_sent plugin hook failed",
     );
   }
-  emitInternalSlackMessageSentHook(params);
-}
 
-export function emitSlackMessageSentHooks(params: EmitSlackMessageSentHookParams): void {
-  const hookRunner = getGlobalHookRunner();
-  emitMessageSentHooks({
-    ...params,
-    hookRunner,
-    enabled: hookRunner?.hasHooks("message_sent") ?? false,
-  });
+  if (sessionKey) {
+    fireAndForgetHook(
+      triggerInternalHook(
+        createInternalHookEvent(
+          "message",
+          "sent",
+          sessionKey,
+          toInternalMessageSentContext(canonical),
+        ),
+      ),
+      "slack: message:sent internal hook failed",
+    );
+  }
 }
