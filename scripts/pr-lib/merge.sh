@@ -183,6 +183,8 @@ merge_run() {
   pr_title=$(printf '%s\n' "$pr_meta_json" | jq -r .title)
   local pr_number
   pr_number=$(printf '%s\n' "$pr_meta_json" | jq -r .number)
+  local contrib
+  contrib=$(printf '%s\n' "$pr_meta_json" | jq -r .author.login)
   local is_draft
   is_draft=$(printf '%s\n' "$pr_meta_json" | jq -r .isDraft)
   if [ "$is_draft" = "true" ]; then
@@ -194,6 +196,15 @@ merge_run() {
   reviewer=$(gh api user --jq .login)
   local reviewer_id
   reviewer_id=$(gh api user --jq .id)
+
+  local contrib_coauthor_email="${COAUTHOR_EMAIL:-}"
+  if [ -z "$contrib_coauthor_email" ] || [ "$contrib_coauthor_email" = "null" ]; then
+    if contrib_coauthor_email=$(resolve_contributor_coauthor_email "$contrib"); then
+      :
+    else
+      contrib_coauthor_email=""
+    fi
+  fi
 
   local reviewer_email_candidates=()
   local reviewer_email_candidate
@@ -207,11 +218,17 @@ merge_run() {
   fi
 
   local reviewer_email="${reviewer_email_candidates[0]}"
+  local reviewer_coauthor_email="${reviewer_id}+${reviewer}@users.noreply.github.com"
 
   {
     echo "Merged via squash."
     echo
     echo "Prepared head SHA: $PREP_HEAD_SHA"
+    if [ -n "$contrib_coauthor_email" ]; then
+      echo "Co-authored-by: $contrib <$contrib_coauthor_email>"
+    fi
+    echo "Co-authored-by: $reviewer <$reviewer_coauthor_email>"
+    echo "Reviewed-by: @$reviewer"
   } > .local/merge-body.txt
 
   delete_remote_pr_head_branch_after_merge() {
@@ -332,6 +349,15 @@ merge_run() {
     exit 1
   fi
 
+  local commit_body
+  commit_body=$(gh api repos/:owner/:repo/commits/"$merge_sha" --jq .commit.message)
+  if [ -n "$contrib_coauthor_email" ]; then
+    printf '%s\n' "$commit_body" | rg -q "^Co-authored-by: $contrib <" || { echo "Missing PR author co-author trailer"; exit 1; }
+  else
+    echo "Skipping PR author co-author trailer check for bot/app author $contrib."
+  fi
+  printf '%s\n' "$commit_body" | rg -q "^Co-authored-by: $reviewer <" || { echo "Missing reviewer co-author trailer"; exit 1; }
+
   local ok=0
   local comment_output=""
   local attempt
@@ -342,6 +368,10 @@ merge_run() {
         echo
         echo "- Prepared head SHA: [$PREP_HEAD_SHA]($prep_sha_url)"
         echo "- Merge commit: [$merge_sha]($merge_sha_url)"
+        if pr_contributor_allows_human_trailers "$contrib"; then
+          echo
+          echo "Thanks @$contrib!"
+        fi
       } | gh pr comment "$pr" -F - 2>&1
     ); then
       ok=1

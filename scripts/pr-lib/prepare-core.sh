@@ -163,6 +163,12 @@ prepare_push() {
   if [ -z "$contrib" ]; then
     contrib=$(gh pr view "$pr" --json author --jq .author.login)
   fi
+  local coauthor_email=""
+  if coauthor_email=$(resolve_contributor_coauthor_email "$contrib"); then
+    :
+  else
+    coauthor_email=""
+  fi
 
   cat >> .local/prep.md <<EOF_PREP
 - Gates passed and push succeeded to branch $PR_HEAD.
@@ -179,6 +185,7 @@ EOF_PREP
     PR_HEAD "$PR_HEAD" \
     PR_HEAD_SHA_BEFORE "$pushed_from_sha" \
     PREP_HEAD_SHA "$prep_head_sha" \
+    COAUTHOR_EMAIL "$coauthor_email" \
     > .local/prep.env
 
   ls -la .local/prep.md .local/prep.env >/dev/null
@@ -233,6 +240,12 @@ prepare_sync_head() {
   if [ -z "$contrib" ]; then
     contrib=$(gh pr view "$pr" --json author --jq .author.login)
   fi
+  local coauthor_email=""
+  if coauthor_email=$(resolve_contributor_coauthor_email "$contrib"); then
+    :
+  else
+    coauthor_email=""
+  fi
 
   cat >> .local/prep.md <<EOF_PREP
 - Prep head sync completed to branch $PR_HEAD.
@@ -250,6 +263,7 @@ EOF_PREP
     PR_HEAD "$PR_HEAD" \
     PR_HEAD_SHA_BEFORE "$pushed_from_sha" \
     PREP_HEAD_SHA "$prep_head_sha" \
+    COAUTHOR_EMAIL "$coauthor_email" \
     > .local/prep.env
 
   ls -la .local/prep.md .local/prep.env >/dev/null

@@ -18,8 +18,6 @@ Skills own workflows; root owns hard policy and routing.
 - Missing deps: `pnpm install`, retry once, then report first actionable error.
 - CODEOWNERS: maint/refactor/tests ok. Larger behavior/product/security/ownership: owner ask/review.
 - Product/docs/UI/changelog wording: "plugin/plugins"; `extensions/` is internal.
-- Routine PR maintenance, review follow-up, conflict repair, and contributor-branch preparation must not edit `CHANGELOG.md`; release generation owns changelog edits.
-- Do not add assistant, agent, or non-Codex coauthor/credit trailers on OpenClaw PR commits or public PR comments unless Val explicitly asks for that attribution.
 - New channel/plugin/app/doc surface: update `.github/labeler.yml` + GH labels.
 - New `AGENTS.md`: add sibling `CLAUDE.md` symlink; edit `AGENTS.md` only.
 
