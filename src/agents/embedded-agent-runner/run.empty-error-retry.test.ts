@@ -116,7 +116,7 @@ describe("runEmbeddedAgent silent-error retry", () => {
           provider: "plain-provider",
           model: "plain-model",
           content: [],
-          usage: { input: 100, output: 0, totalTokens: 100 },
+          usage: { input: 0, output: 0, totalTokens: 0 },
         } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
       }),
     );
