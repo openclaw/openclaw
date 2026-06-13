@@ -54,6 +54,16 @@ function toNumber(value: unknown): number | undefined {
   return undefined;
 }
 
+function toText(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  return undefined;
+}
+
 function usagePercent(row: unknown): number | undefined {
   const record = asRecord(row);
   if (!record) {
@@ -75,15 +85,15 @@ function isFiveHourLimit(item: KimiUsageLimit): boolean {
   const detail = asRecord(item.detail) ?? {};
   const window = asRecord(item.window) ?? {};
   const label = [item.name, item.title, item.scope, detail.name, detail.title, detail.scope]
-    .filter((value) => value !== undefined && value !== null)
-    .map((value) => String(value).toLowerCase())
+    .map((value) => toText(value)?.toLowerCase())
+    .filter((value) => value !== undefined)
     .join(" ");
   if (label.includes("5h") || label.includes("5 hour") || label.includes("5-hour")) {
     return true;
   }
 
   const duration = toNumber(window.duration ?? item.duration ?? detail.duration);
-  const timeUnit = String(window.timeUnit ?? item.timeUnit ?? detail.timeUnit ?? "").toUpperCase();
+  const timeUnit = toText(window.timeUnit ?? item.timeUnit ?? detail.timeUnit)?.toUpperCase() ?? "";
   return (
     (duration === 300 && timeUnit.includes("MINUTE")) ||
     (duration === 5 && timeUnit.includes("HOUR"))
