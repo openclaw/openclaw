@@ -104,6 +104,7 @@ describe("google gemini cli backend auth bridge", () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-workspace-"));
     const originalUseGca = process.env.GOOGLE_GENAI_USE_GCA;
     const originalCloudAccessToken = process.env.GOOGLE_CLOUD_ACCESS_TOKEN;
+    const originalForceEncryptedFileStorage = process.env.GEMINI_FORCE_ENCRYPTED_FILE_STORAGE;
     let prepared:
       | Awaited<ReturnType<NonNullable<typeof backend.prepareExecution>>>
       | null
@@ -111,6 +112,7 @@ describe("google gemini cli backend auth bridge", () => {
 
     process.env.GOOGLE_GENAI_USE_GCA = "true";
     process.env.GOOGLE_CLOUD_ACCESS_TOKEN = "ambient-cloud-token";
+    process.env.GEMINI_FORCE_ENCRYPTED_FILE_STORAGE = "true";
 
     try {
       prepared = await backend.prepareExecution?.(buildGeminiPrepareContext(workspaceDir));
@@ -119,10 +121,12 @@ describe("google gemini cli backend auth bridge", () => {
       expect(prepared?.clearEnv).toEqual([
         "GOOGLE_GENAI_USE_GCA",
         "GOOGLE_CLOUD_ACCESS_TOKEN",
+        "GEMINI_FORCE_ENCRYPTED_FILE_STORAGE",
       ]);
     } finally {
       restoreEnv("GOOGLE_GENAI_USE_GCA", originalUseGca);
       restoreEnv("GOOGLE_CLOUD_ACCESS_TOKEN", originalCloudAccessToken);
+      restoreEnv("GEMINI_FORCE_ENCRYPTED_FILE_STORAGE", originalForceEncryptedFileStorage);
       await prepared?.cleanup?.();
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }

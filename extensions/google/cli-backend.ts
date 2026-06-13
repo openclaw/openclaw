@@ -13,7 +13,11 @@ const GEMINI_MODEL_ALIASES: Record<string, string> = {
   "flash-lite": "gemini-3.1-flash-lite",
 };
 const GEMINI_CLI_DEFAULT_MODEL_REF = "google-gemini-cli/gemini-3-flash-preview";
-const GEMINI_CLI_GCA_AUTH_ENV = ["GOOGLE_GENAI_USE_GCA", "GOOGLE_CLOUD_ACCESS_TOKEN"];
+const GEMINI_CLI_GCA_AUTH_ENV = [
+  "GOOGLE_GENAI_USE_GCA",
+  "GOOGLE_CLOUD_ACCESS_TOKEN",
+  "GEMINI_FORCE_ENCRYPTED_FILE_STORAGE",
+];
 
 function normalizeString(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
@@ -73,14 +77,11 @@ function requireGeminiOAuthCredential(
 
 async function prepareGeminiCliOAuthHome(
   credential: GeminiAuthProfileCredential | undefined,
-): Promise<
-  | {
-      env: Record<string, string>;
-      clearEnv: string[];
-      cleanup: () => Promise<void>;
-    }
-  | null
-> {
+): Promise<{
+  env: Record<string, string>;
+  clearEnv: string[];
+  cleanup: () => Promise<void>;
+} | null> {
   const oauth = requireGeminiOAuthCredential(credential);
   if (!oauth) {
     return null;
