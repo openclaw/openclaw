@@ -38,6 +38,11 @@ type DiscoverModelsOptions = {
   pluginMetadataSnapshot?: PluginModelCatalogMetadataSnapshot;
   workspaceDir?: string;
   normalizeModels?: boolean;
+  /**
+   * Default/main agent directory used as a read-through fallback for a secondary agent's
+   * generated plugin model catalogs. See `ModelRegistry` `inheritedAgentDir`.
+   */
+  inheritedAgentDir?: string;
 };
 
 /** Applies plugin model normalization and transport hooks to discovered agent models. */
@@ -102,7 +107,10 @@ function createOpenClawModelRegistry(
     allowWorkspaceScopedCurrent: options?.workspaceDir === undefined,
     useRuntimeConfig: options?.config === undefined,
   });
-  const registryOptions = pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {};
+  const registryOptions = {
+    ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
+    ...(options?.inheritedAgentDir ? { inheritedAgentDir: options.inheritedAgentDir } : {}),
+  };
   const registry = ModelRegistry.create(authStorage, modelsJsonPath, registryOptions);
   const getAll = registry.getAll.bind(registry);
   const getAvailable = registry.getAvailable.bind(registry);
