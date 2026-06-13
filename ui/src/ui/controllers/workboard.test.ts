@@ -19,6 +19,7 @@ import {
   refreshWorkboard,
   saveWorkboardCardDraft,
   startWorkboardCard,
+  stopWorkboardLifecycleRefresh,
   stopWorkboardPolling,
   stopWorkboardCard,
   summarizeWorkboardHealth,
@@ -3998,6 +3999,42 @@ describe("workboard controller", () => {
     expect(state.tasksByCardId.get("card-1")).toMatchObject({ status: "completed" });
   });
 
+  it("cancels in-flight lifecycle reconciliation when refresh stops", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const linked = {
+      ...sampleCard,
+      status: "running",
+      sessionKey: sampleTaskSessionKey,
+      runId: "run-1",
+      taskId: "task-1",
+    } satisfies WorkboardCard;
+    state.loaded = true;
+    state.cards = [linked];
+    state.tasksByCardId.set("card-1", sampleTask);
+    const taskList = createDeferred<unknown>();
+    const client = createClient((method) => {
+      if (method === "tasks.list") {
+        return taskList.promise;
+      }
+      if (method === "workboard.cards.update") {
+        return { card: { ...linked, status: "review" } };
+      }
+      return {};
+    });
+
+    const sync = syncWorkboardLifecycle({ host, client: client as never, sessions: [] });
+    await vi.waitFor(() => {
+      expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
+    });
+    stopWorkboardLifecycleRefresh(host);
+    taskList.resolve({ tasks: [{ ...sampleTask, status: "completed" }] });
+    await sync;
+
+    expect(client.request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
+    expect(state.cards[0]?.status).toBe("running");
+  });
+
   it("authoritatively refreshes running linked cards without task ids before lifecycle sync", async () => {
     const host = {};
     const state = getWorkboardState(host);
@@ -4050,7 +4087,8 @@ describe("workboard controller", () => {
     expect(state.lifecycleTasksPrepared).toBe(true);
   });
 
-  it("exact-confirms every task list omission in an authoritative lifecycle refresh", async () => {
+  it("rotates bounded exact confirmations before lifecycle writes", async () => {
+    vi.useFakeTimers();
     const host = {};
     const state = getWorkboardState(host);
     const cards = Array.from({ length: 33 }, (_, index) => ({
@@ -4071,12 +4109,55 @@ describe("workboard controller", () => {
       }
       return {};
     });
+    const requestUpdate = vi.fn();
+
+    await syncWorkboardLifecycle({ host, client: client as never, sessions: [], requestUpdate });
+
+    expect(client.request.mock.calls.filter(([method]) => method === "tasks.get")).toHaveLength(32);
+    expect(client.request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
+    expect(state.lifecycleTasksPrepared).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(requestUpdate).toHaveBeenCalledOnce();
+    vi.clearAllMocks();
+    await syncWorkboardLifecycle({ host, client: client as never, sessions: [], requestUpdate });
+
+    expect(client.request.mock.calls.filter(([method]) => method === "tasks.get")).toHaveLength(1);
+    expect(client.request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
+    expect(state.lifecycleTasksPrepared).toBe(true);
+  });
+
+  it("stops bounded exact confirmations after a transient batch failure", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const cards = Array.from({ length: 33 }, (_, index) => ({
+      ...sampleCard,
+      id: `card-${index}`,
+      status: "running" as const,
+      taskId: `task-${index}`,
+    }));
+    state.loaded = true;
+    state.cards = cards;
+    const client = createClient((method, params) => {
+      if (method === "tasks.list") {
+        return { tasks: [] };
+      }
+      if (method === "tasks.get") {
+        const taskId = (params as { taskId: string }).taskId;
+        if (taskId === "task-0") {
+          throw new Error("task confirmation unavailable");
+        }
+        return { task: { ...sampleTask, id: taskId, taskId } };
+      }
+      return {};
+    });
 
     await syncWorkboardLifecycle({ host, client: client as never, sessions: [] });
 
-    expect(client.request.mock.calls.filter(([method]) => method === "tasks.get")).toHaveLength(33);
+    expect(client.request.mock.calls.filter(([method]) => method === "tasks.get")).toHaveLength(32);
     expect(client.request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
-    expect(state.lifecycleTasksPrepared).toBe(true);
+    expect(state.lifecycleTaskRefreshFailed).toBe(true);
+    expect(state.lifecycleTasksPrepared).toBe(false);
   });
 
   it("exact-confirms a tracked replacement omitted from lifecycle task listing", async () => {

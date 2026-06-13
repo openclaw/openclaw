@@ -19,6 +19,7 @@ import {
   saveWorkboardCardDraft,
   startWorkboardCard,
   stopWorkboardCard,
+  stopWorkboardLifecycleRefresh,
   summarizeWorkboardHealth,
   syncWorkboardLifecycle,
   workboardCardMatchesHealthKey,
@@ -2466,13 +2467,16 @@ function renderColumn(props: WorkboardProps, status: WorkboardStatus, cards: Wor
 
 export function renderWorkboard(props: WorkboardProps) {
   const state = getWorkboardState(props.host);
+  if (!props.connected) {
+    stopWorkboardLifecycleRefresh(props.host);
+  }
   configureWorkboardPolling({
     host: props.host,
     client: props.client,
     enabled: props.connected && props.pluginEnabled === true && state.autoRefreshIntervalMs > 0,
     requestUpdate: props.onRequestUpdate,
   });
-  if (props.pluginEnabled === true) {
+  if (props.connected && props.pluginEnabled === true) {
     void loadWorkboard({
       host: props.host,
       client: props.client,

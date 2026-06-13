@@ -1,7 +1,11 @@
 // Control UI tests cover workboard behavior.
 import { nothing, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import { getWorkboardState, stopWorkboardPolling } from "../controllers/workboard.ts";
+import {
+  getWorkboardState,
+  stopWorkboardLifecycleRefresh,
+  stopWorkboardPolling,
+} from "../controllers/workboard.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import { renderWorkboard } from "./workboard.ts";
 
@@ -91,6 +95,63 @@ describe("renderWorkboard", () => {
       expect(request).not.toHaveBeenCalled();
     } finally {
       stopWorkboardPolling(host);
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops lifecycle refresh and reconciliation while disconnected", async () => {
+    vi.useFakeTimers();
+    const host = {};
+    const state = getWorkboardState(host);
+    const task = {
+      id: "task-1",
+      taskId: "task-1",
+      status: "running" as const,
+      updatedAt: 1,
+    };
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Running card",
+        status: "running",
+        priority: "normal",
+        labels: [],
+        taskId: task.taskId,
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    state.tasksByCardId.set("card-1", task);
+    state.lifecycleTasksPrepared = true;
+    state.lifecycleTasksPreparedAt = Date.now();
+    const request = vi.fn();
+    const requestUpdate = vi.fn();
+    const container = document.createElement("div");
+    const props = {
+      host,
+      client: { request } as unknown as GatewayBrowserClient,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+      onRequestUpdate: requestUpdate,
+    } satisfies WorkboardRenderProps;
+
+    try {
+      renderInto(container, props);
+      await Promise.resolve();
+      renderInto(container, { ...props, connected: false });
+      await vi.advanceTimersByTimeAsync(5000);
+
+      expect(request).not.toHaveBeenCalled();
+      expect(requestUpdate).not.toHaveBeenCalled();
+      expect(state.lifecycleTasksPrepared).toBe(false);
+      expect(state.lifecycleTaskRefreshFailed).toBe(false);
+    } finally {
+      stopWorkboardLifecycleRefresh(host);
       vi.useRealTimers();
     }
   });
