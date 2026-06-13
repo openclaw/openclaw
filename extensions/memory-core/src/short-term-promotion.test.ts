@@ -2010,6 +2010,61 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("honors maxPromotedSnippetTokens when writing archive excerpts", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
+        "Sensitive phrase alpha beta gamma supersecret-tail should stay out of the archive excerpt",
+      ]);
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "sensitive phrase",
+        results: [
+          {
+            path: "memory/2026-04-01.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.92,
+            snippet:
+              "Sensitive phrase alpha beta gamma supersecret-tail should stay out of the archive excerpt",
+            source: "memory",
+          },
+        ],
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: ranked,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        maxPromotedSnippetTokens: 4,
+      });
+
+      expect(applied.applied).toBe(1);
+      const archiveText = await fs.readFile(applied.archivePath, "utf-8");
+      expect(archiveText).toContain("Sensitive phrase...");
+      expect(archiveText).not.toContain("supersecret-tail");
+    });
+  });
+
+  it("normalizes out-of-range apply nowMs values instead of throwing", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await expect(
+        applyShortTermPromotions({
+          workspaceDir,
+          candidates: [],
+          nowMs: Number.MAX_SAFE_INTEGER,
+        }),
+      ).resolves.toMatchObject({ applied: 0, appended: 0 });
+    });
+  });
+
   it("does not re-append candidates that were promoted in a prior run", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await writeDailyMemoryNote(workspaceDir, "2026-04-01", [

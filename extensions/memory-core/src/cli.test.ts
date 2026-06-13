@@ -1997,6 +1997,56 @@ describe("memory cli", () => {
     });
   });
 
+  it("includes archive destinations in promote apply json output", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
+        "Gateway host uses local mode and binds loopback port 18789",
+      ]);
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "network setup",
+        results: [
+          {
+            path: "memory/2026-04-01.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.91,
+            snippet: "Gateway host uses local mode and binds loopback port 18789",
+            source: "memory",
+          },
+        ],
+      });
+
+      const close = vi.fn(async () => {});
+      mockManager({
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      const writeJson = spyRuntimeJson(defaultRuntime);
+      await runMemoryCli([
+        "promote",
+        "--apply",
+        "--json",
+        "--min-score",
+        "0",
+        "--min-recall-count",
+        "0",
+        "--min-unique-queries",
+        "0",
+      ]);
+
+      const payload = firstWrittenJsonArg<{
+        apply?: { archivePath?: string; archiveRelativePath?: string };
+      }>(writeJson);
+      expect(payload?.apply?.archivePath).toContain(path.join(workspaceDir, "memory", "archived"));
+      expect(payload?.apply?.archiveRelativePath).toMatch(
+        /memory[\\/]archived[\\/]\d{4}-Q[1-4][\\/]memory-promoted-short-term-dump-\d{4}-\d{2}-\d{2}\.md/,
+      );
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
   it("prints conceptual promotion signals", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const dayMs = 24 * 60 * 60 * 1000;

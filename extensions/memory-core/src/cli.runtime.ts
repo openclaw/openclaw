@@ -1405,6 +1405,8 @@ export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
                 appended: applyResult.appended,
                 reconciledExisting: applyResult.reconciledExisting,
                 memoryPath: applyResult.memoryPath,
+                archivePath: applyResult.archivePath,
+                archiveRelativePath: applyResult.archiveRelativePath,
                 appliedCandidates: applyResult.appliedCandidates,
               }
             : undefined,

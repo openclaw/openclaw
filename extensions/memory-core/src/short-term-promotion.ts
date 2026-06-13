@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
+  DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
   formatMemoryDreamingDay,
   isSameMemoryDreamingDay,
 } from "openclaw/plugin-sdk/memory-core-host-status";
@@ -37,7 +38,6 @@ import {
 } from "./dreaming-state.js";
 import { resolveMemoryCoreNowMs, resolveMemoryCoreTimestamp } from "./time.js";
 
-
 const SHORT_TERM_PATH_RE = /(?:^|\/)memory\/(?:[^/]+\/)*(\d{4})-(\d{2})-(\d{2})(?:-[^/]+)?\.md$/;
 const DREAMING_MEMORY_PATH_RE = /(?:^|\/)memory\/dreaming\//;
 const SHORT_TERM_SESSION_CORPUS_RE =
@@ -49,6 +49,7 @@ export const DEFAULT_PROMOTION_MIN_SCORE = 0.75;
 export const DEFAULT_PROMOTION_MIN_RECALL_COUNT = 3;
 export const DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES = 2;
 const PROMOTION_MARKER_PREFIX = "openclaw-memory-promotion:";
+const PROMOTED_SNIPPET_CHARS_PER_TOKEN_ESTIMATE = 4;
 const MAX_QUERY_HASHES = 32;
 const MAX_RECALL_DAYS = 16;
 const SHORT_TERM_RECALL_MAX_ENTRIES = 512;
@@ -980,12 +981,17 @@ export function normalizeShortTermPhaseSignalStore(
       typeof entry.lastRemAt === "string" && entry.lastRemAt.trim().length > 0
         ? entry.lastRemAt
         : undefined;
+    const lastRemConsideredAt =
+      typeof entry.lastRemConsideredAt === "string" && entry.lastRemConsideredAt.trim().length > 0
+        ? entry.lastRemConsideredAt
+        : undefined;
     entries[key] = {
       key,
       lightHits,
       remHits,
       ...(lastLightAt ? { lastLightAt } : {}),
       ...(lastRemAt ? { lastRemAt } : {}),
+      ...(lastRemConsideredAt ? { lastRemConsideredAt } : {}),
     };
   }
   return {
@@ -1372,8 +1378,8 @@ export async function recordShortTermRecalls(params: {
     return;
   }
 
-  const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
-  const nowIso = new Date(nowMs).toISOString();
+  const nowMs = resolveMemoryCoreNowMs(params.nowMs);
+  const nowIso = resolveMemoryCoreTimestamp(nowMs);
   const signalType = params.signalType ?? "recall";
   const queryHash = hashQuery(query);
   const todayBucket =
@@ -1516,8 +1522,8 @@ export async function recordGroundedShortTermCandidates(params: {
     return;
   }
 
-  const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
-  const nowIso = new Date(nowMs).toISOString();
+  const nowMs = resolveMemoryCoreNowMs(params.nowMs);
+  const nowIso = resolveMemoryCoreTimestamp(nowMs);
   const fallbackDayBucket = formatMemoryDreamingDay(nowMs, params.timezone);
   await withShortTermLock(workspaceDir, async () => {
     const store = await readStore(workspaceDir, nowIso);
@@ -1693,8 +1699,8 @@ export async function readLightStagedKeys(params: {
   if (!workspaceDir) {
     return new Set();
   }
-  const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
-  const nowIso = new Date(nowMs).toISOString();
+  const nowMs = resolveMemoryCoreNowMs(params.nowMs);
+  const nowIso = resolveMemoryCoreTimestamp(nowMs);
   const store = await readPhaseSignalStore(workspaceDir, nowIso);
   const keys = new Set<string>();
   for (const [key, entry] of Object.entries(store.entries)) {
@@ -1867,8 +1873,8 @@ export async function readShortTermRecallEntries(params: {
   if (!workspaceDir) {
     return [];
   }
-  const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
-  const nowIso = new Date(nowMs).toISOString();
+  const nowMs = resolveMemoryCoreNowMs(params.nowMs);
+  const nowIso = resolveMemoryCoreTimestamp(nowMs);
   const store = await readStore(workspaceDir, nowIso);
   return Object.values(store.entries).filter(
     (entry): entry is ShortTermRecallEntry =>
@@ -2071,21 +2077,62 @@ function buildPromotionSection(
   candidates: PromotionCandidate[],
   nowMs: number,
   timezone?: string,
+  maxPromotedSnippetTokens = DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
 ): string {
   const sectionDate = formatMemoryDreamingDay(nowMs, timezone);
   const lines = ["", `## Promoted From Short-Term Memory (${sectionDate})`, ""];
 
   for (const candidate of candidates) {
     const source = `${candidate.path}:${candidate.startLine}-${candidate.endLine}`;
-    const snippet = candidate.snippet || "(no snippet captured)";
+    const metadata = `[score=${candidate.score.toFixed(3)} recalls=${candidate.recallCount} avg=${candidate.avgScore.toFixed(3)} source=${source}]`;
     lines.push(`<!-- ${PROMOTION_MARKER_PREFIX}${candidate.key} -->`);
+    // Cap only the visible durable excerpt. The recall store keeps the full
+    // rehydrated snippet so ranking, provenance, and dream narratives remain
+    // tied to the source entry instead of this presentation budget.
     lines.push(
-      `- ${snippet} [score=${candidate.score.toFixed(3)} recalls=${candidate.recallCount} avg=${candidate.avgScore.toFixed(3)} source=${source}]`,
+      `- ${formatPromotedSnippetForMemory(candidate.snippet, maxPromotedSnippetTokens)} ${metadata}`,
     );
   }
 
   lines.push("");
   return lines.join("\n");
+}
+
+function resolvePromotedSnippetCharLimit(maxTokens: number): number {
+  const tokenLimit = toFiniteNonNegativeInt(
+    maxTokens,
+    DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
+  );
+  // This is an inexpensive display-size guard, not a tokenizer contract.
+  return tokenLimit * PROMOTED_SNIPPET_CHARS_PER_TOKEN_ESTIMATE;
+}
+
+function truncatePromotedSnippet(snippet: string, maxTokens: number): string {
+  const limit = resolvePromotedSnippetCharLimit(maxTokens);
+  if (limit === 0 || snippet.length <= limit) {
+    return snippet;
+  }
+  const hardLimit = snippet.slice(0, limit);
+  const sentenceBoundary = Math.max(
+    hardLimit.lastIndexOf(". "),
+    hardLimit.lastIndexOf("! "),
+    hardLimit.lastIndexOf("? "),
+  );
+  const wordBoundary = hardLimit.lastIndexOf(" ");
+  const cutAt =
+    sentenceBoundary >= Math.floor(limit * 0.55)
+      ? sentenceBoundary + 1
+      : wordBoundary >= Math.floor(limit * 0.65)
+        ? wordBoundary
+        : limit;
+  return `${hardLimit.slice(0, cutAt).trimEnd()}...`;
+}
+
+function formatPromotedSnippetForMemory(rawSnippet: string, maxTokens: number): string {
+  const normalized = normalizeSnippet(rawSnippet || "(no snippet captured)")
+    .replace(/^[-*+] +/, "")
+    .trim();
+  return truncatePromotedSnippet(normalized || "(no snippet captured)", maxTokens);
 }
 
 // Keep detailed promotion excerpts out of root MEMORY.md by bucketing them
@@ -2356,8 +2403,8 @@ export async function applyShortTermPromotions(
   options: ApplyShortTermPromotionsOptions,
 ): Promise<ApplyShortTermPromotionsResult> {
   const workspaceDir = options.workspaceDir.trim();
-  const nowMs = Number.isFinite(options.nowMs) ? (options.nowMs as number) : Date.now();
-  const nowIso = new Date(nowMs).toISOString();
+  const nowMs = resolveMemoryCoreNowMs(options.nowMs);
+  const nowIso = resolveMemoryCoreTimestamp(nowMs);
   const limit = Number.isFinite(options.limit)
     ? Math.max(0, Math.floor(options.limit as number))
     : options.candidates.length;
@@ -2479,7 +2526,14 @@ export async function applyShortTermPromotions(
         archivedMarkers,
       );
       if (toAppend.length > 0) {
-        sections.push(buildPromotionSection(toAppend, nowMs, options.timezone).trim());
+        sections.push(
+          buildPromotionSection(
+            toAppend,
+            nowMs,
+            options.timezone,
+            options.maxPromotedSnippetTokens,
+          ).trim(),
+        );
       }
       if (sections.length > 0) {
         // Write the archive header only when the day's dump is first created;
