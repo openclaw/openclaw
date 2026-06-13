@@ -39,6 +39,7 @@ import {
 import { startQaLabServer } from "./lab-server.js";
 import { runQaManualLane } from "./manual-lane.runtime.js";
 import { runQaMultipass } from "./multipass.runtime.js";
+import { isQaPlaywrightScenario, runQaPlaywrightScenarios } from "./playwright-scenario-runner.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE, getQaProvider } from "./providers/index.js";
 import {
   QA_FRONTIER_PARITY_BASELINE_LABEL,
@@ -80,6 +81,7 @@ import {
   renderQaToolCoverageMarkdownReport,
   type QaToolCoverageSuiteSummary,
 } from "./tool-coverage-report.js";
+import { isQaVitestScenario, runQaVitestScenarios } from "./vitest-scenario-runner.js";
 
 const QA_SUITE_INFRA_RETRY_LIMIT = 1;
 const QA_SUITE_INFRA_RETRY_NETWORK_ERROR_CODES = new Set([
@@ -228,6 +230,20 @@ function parseQaRuntimeParityTierFilters(input: string[] | undefined): QaRuntime
     }
   }
   return rawValues as QaRuntimeParityTier[];
+}
+
+function selectExplicitQaSuiteScenarios(params: {
+  scenarioIds: readonly string[];
+  scenarios: ReturnType<typeof readQaScenarioPack>["scenarios"];
+}) {
+  const scenarioById = new Map(params.scenarios.map((scenario) => [scenario.id, scenario]));
+  return params.scenarioIds.map((scenarioId) => {
+    const scenario = scenarioById.get(scenarioId);
+    if (!scenario) {
+      throw new Error(`unknown QA scenario id(s): ${scenarioId}`);
+    }
+    return scenario;
+  });
 }
 
 function resolveQaRuntimeParityTierScenarioIds(params: {
@@ -605,14 +621,63 @@ export async function runQaSuiteCommand(opts: {
     runtimeParityTiers,
   });
   const allowFailures = opts.allowFailures === true;
-  if (runner !== "host" && runner !== "multipass") {
-    throw new Error(`--runner must be one of host or multipass, got "${opts.runner}".`);
-  }
   const providerMode = normalizeQaProviderMode(opts.providerMode);
   const runtimePair = parseQaRuntimePair(opts.runtimePair);
   const claudeCliAuthMode = parseQaCliBackendAuthMode(opts.cliAuthMode);
   const primaryModel = normalizeQaOptionalModelRef(opts.primaryModel);
   const alternateModel = normalizeQaOptionalModelRef(opts.alternateModel);
+  const scenarioCatalog = readQaScenarioPack().scenarios;
+  const explicitlySelectedScenarios =
+    scenarioIds.length > 0
+      ? selectExplicitQaSuiteScenarios({ scenarioIds, scenarios: scenarioCatalog })
+      : [];
+  const vitestScenarios = explicitlySelectedScenarios.filter(isQaVitestScenario);
+  const playwrightScenarios = explicitlySelectedScenarios.filter(isQaPlaywrightScenario);
+  const nonFlowScenarioCount = vitestScenarios.length + playwrightScenarios.length;
+  if (nonFlowScenarioCount > 0) {
+    if (nonFlowScenarioCount !== explicitlySelectedScenarios.length) {
+      throw new Error(
+        "qa suite cannot mix qa-flow and Vitest/Playwright scenarios in one invocation.",
+      );
+    }
+    if (vitestScenarios.length > 0 && playwrightScenarios.length > 0) {
+      throw new Error("qa suite cannot mix Vitest and Playwright scenarios in one invocation.");
+    }
+    if (runner !== "host") {
+      throw new Error("Vitest/Playwright scenarios require --runner host.");
+    }
+    if (opts.preflight === true) {
+      throw new Error("--preflight requires qa-flow scenarios.");
+    }
+    const outputDir =
+      resolveRepoRelativeOutputDir(repoRoot, opts.outputDir) ??
+      path.join(repoRoot, ".artifacts", "qa-e2e", `qa-suite-test-${Date.now().toString(36)}`);
+    const scenarioRunnerParams = {
+      repoRoot,
+      outputDir,
+      providerMode,
+      primaryModel: primaryModel ?? defaultQaModelForMode(providerMode),
+    };
+    const result =
+      vitestScenarios.length > 0
+        ? await runQaVitestScenarios({
+            ...scenarioRunnerParams,
+            scenarios: vitestScenarios,
+          })
+        : await runQaPlaywrightScenarios({
+            ...scenarioRunnerParams,
+            scenarios: playwrightScenarios,
+          });
+    process.stdout.write(`QA suite report: ${result.reportPath}\n`);
+    process.stdout.write(`QA suite evidence: ${result.evidencePath}\n`);
+    if (!allowFailures && result.results.some((scenario) => scenario.status !== "pass")) {
+      process.exitCode = 1;
+    }
+    return;
+  }
+  if (runner !== "host" && runner !== "multipass") {
+    throw new Error(`--runner must be one of host or multipass, got "${opts.runner}".`);
+  }
   if (opts.preflight === true && runner !== "host") {
     throw new Error("--preflight requires --runner host.");
   }

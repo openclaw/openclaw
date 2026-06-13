@@ -23,6 +23,8 @@ type QaScenarioSearchMatch = QaCoverageScenarioSummary & {
   coverageIds: string[];
   docsRefs: string[];
   codeRefs: string[];
+  executionKind: QaSeedScenarioWithSource["execution"]["kind"];
+  executionPath?: string;
   runtimeParityTier?: string;
   requiredProviderMode?: string;
   requiredProvider?: string;
@@ -138,6 +140,8 @@ function summarizeScenarioSearchMatch(scenario: QaSeedScenarioWithSource): QaSce
     ].toSorted((left, right) => left.localeCompare(right)),
     docsRefs: [...(scenario.docsRefs ?? [])],
     codeRefs: [...(scenario.codeRefs ?? [])],
+    executionKind: scenario.execution.kind,
+    ...(scenario.execution.kind !== "flow" ? { executionPath: scenario.execution.path } : {}),
     runtimeParityTier: scenario.runtimeParityTier,
     requiredProviderMode: stringifyConfigValue(config.requiredProviderMode),
     requiredProvider: stringifyConfigValue(config.requiredProvider),
@@ -470,6 +474,11 @@ export function renderQaScenarioMatchesMarkdownReport(params: {
     lines.push(`- ${match.id}: ${match.title}`);
     lines.push(`  - source: ${match.sourcePath}`);
     lines.push(`  - surface: ${match.surfaces.join(", ")}`);
+    lines.push(
+      match.executionKind === "flow"
+        ? "  - execution: qa-flow"
+        : `  - execution: ${match.executionKind} ${match.executionPath ?? "missing"}`,
+    );
     lines.push(`  - coverage: ${match.coverageIds.join(", ") || "none"}`);
     lines.push(`  - live requirements: ${formatOptionalScenarioMetadata(match)}`);
     if (match.codeRefs.length > 0) {

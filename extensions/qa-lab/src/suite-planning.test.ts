@@ -18,6 +18,16 @@ import {
 } from "./suite-planning.js";
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
 
+function makePlaywrightQaSuiteTestScenario(id: string): ReturnType<typeof makeQaSuiteTestScenario> {
+  return {
+    ...makeQaSuiteTestScenario(id),
+    execution: {
+      kind: "playwright",
+      path: `ui/src/ui/e2e/${id}.e2e.test.ts`,
+    },
+  };
+}
+
 describe("qa suite planning helpers", () => {
   it("normalizes suite concurrency to a bounded integer", () => {
     const previous = process.env.OPENCLAW_QA_SUITE_CONCURRENCY;
@@ -408,6 +418,39 @@ describe("qa suite planning helpers", () => {
         claudeCliAuthMode: "subscription",
       }).map((scenario) => scenario.id),
     ).toEqual(["generic", "claude-subscription"]);
+  });
+
+  it("keeps Playwright scenarios out of implicit flow suite selections", () => {
+    const scenarios = [
+      makeQaSuiteTestScenario("flow"),
+      makePlaywrightQaSuiteTestScenario("playwright"),
+    ];
+
+    expect(
+      selectQaSuiteScenarios({
+        scenarios,
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.5",
+      }).map((scenario) => scenario.id),
+    ).toEqual(["flow"]);
+  });
+
+  it("rejects explicit Playwright scenarios in the programmatic flow suite", () => {
+    const scenarios = [
+      makeQaSuiteTestScenario("flow"),
+      makePlaywrightQaSuiteTestScenario("playwright"),
+    ];
+
+    expect(() =>
+      selectQaSuiteScenarios({
+        scenarios,
+        scenarioIds: ["playwright"],
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.5",
+      }),
+    ).toThrow(
+      "programmatic qa-flow suite can only run qa-flow scenarios; use qa suite CLI dispatch for Vitest/Playwright scenario(s): playwright (playwright)",
+    );
   });
 
   it("filters provider-mode-specific scenarios from implicit suite selections", () => {

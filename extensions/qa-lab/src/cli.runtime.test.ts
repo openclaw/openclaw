@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   runQaManualLane,
+  runQaPlaywrightScenarios,
+  runQaVitestScenarios,
   runQaSuiteFromRuntime,
   runQaCharacterEval,
   runQaMultipass,
@@ -18,6 +20,8 @@ const {
   defaultQaRuntimeModelForMode,
 } = vi.hoisted(() => ({
   runQaManualLane: vi.fn(),
+  runQaPlaywrightScenarios: vi.fn(),
+  runQaVitestScenarios: vi.fn(),
   runQaSuiteFromRuntime: vi.fn(),
   runQaCharacterEval: vi.fn(),
   runQaMultipass: vi.fn(),
@@ -45,6 +49,16 @@ vi.mock("./character-eval.js", () => ({
 
 vi.mock("./multipass.runtime.js", () => ({
   runQaMultipass,
+}));
+
+vi.mock("./playwright-scenario-runner.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./playwright-scenario-runner.js")>()),
+  runQaPlaywrightScenarios,
+}));
+
+vi.mock("./vitest-scenario-runner.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./vitest-scenario-runner.js")>()),
+  runQaVitestScenarios,
 }));
 
 vi.mock("./live-transports/telegram/telegram-live.runtime.js", () => ({
@@ -160,6 +174,8 @@ describe("qa cli runtime", () => {
     runQaSuiteFromRuntime.mockReset();
     runQaCharacterEval.mockReset();
     runQaManualLane.mockReset();
+    runQaPlaywrightScenarios.mockReset();
+    runQaVitestScenarios.mockReset();
     runQaMultipass.mockReset();
     listTelegramQaScenarioCatalog.mockReset();
     runTelegramQaLive.mockReset();
@@ -186,6 +202,18 @@ describe("qa cli runtime", () => {
       waited: { status: "ok" },
       reply: "done",
       watchUrl: "http://127.0.0.1:43124",
+    });
+    runQaPlaywrightScenarios.mockResolvedValue({
+      outputDir: "/tmp/scenario-playwright",
+      reportPath: "/tmp/scenario-playwright/qa-playwright-report.md",
+      evidencePath: "/tmp/scenario-playwright/qa-evidence.json",
+      results: [{ status: "pass" }],
+    });
+    runQaVitestScenarios.mockResolvedValue({
+      outputDir: "/tmp/scenario-vitest",
+      reportPath: "/tmp/scenario-vitest/qa-vitest-report.md",
+      evidencePath: "/tmp/scenario-vitest/qa-evidence.json",
+      results: [{ status: "pass" }],
     });
     runQaMultipass.mockResolvedValue({
       outputDir: "/tmp/multipass",
@@ -240,6 +268,48 @@ describe("qa cli runtime", () => {
     vi.clearAllMocks();
     await fs.rm(suiteArtifactsDir, { recursive: true, force: true });
     await fs.rm(telegramArtifactsDir, { recursive: true, force: true });
+  });
+
+  it("runs selected Playwright scenarios through the suite command", async () => {
+    await runQaSuiteCommand({
+      repoRoot: process.cwd(),
+      outputDir: ".artifacts/qa-e2e/scenario-test",
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.5",
+      scenarioIds: ["control-ui-chat-flow-playwright"],
+    });
+
+    expect(runQaPlaywrightScenarios).toHaveBeenCalledTimes(1);
+    expect(runQaVitestScenarios).not.toHaveBeenCalled();
+    const call = mockFirstObjectArg(runQaPlaywrightScenarios);
+    expectFields(call, {
+      repoRoot: process.cwd(),
+      outputDir: path.join(process.cwd(), ".artifacts", "qa-e2e", "scenario-test"),
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.5",
+    });
+    expect(
+      (call.scenarios as Array<{ id: string; execution: { kind: string } }>).map((scenario) => ({
+        id: scenario.id,
+        kind: scenario.execution.kind,
+      })),
+    ).toEqual([{ id: "control-ui-chat-flow-playwright", kind: "playwright" }]);
+    expectWriteContains(
+      stdoutWrite,
+      "QA suite evidence: /tmp/scenario-playwright/qa-evidence.json",
+    );
+  });
+
+  it("rejects mixed flow and Vitest or Playwright scenarios in one suite command", async () => {
+    await expect(
+      runQaSuiteCommand({
+        repoRoot: process.cwd(),
+        scenarioIds: ["channel-chat-baseline", "control-ui-chat-flow-playwright"],
+      }),
+    ).rejects.toThrow("qa suite cannot mix qa-flow and Vitest/Playwright scenarios");
+
+    expect(runQaPlaywrightScenarios).not.toHaveBeenCalled();
+    expect(runQaVitestScenarios).not.toHaveBeenCalled();
   });
 
   it("resolves suite repo-root-relative paths before dispatching", async () => {
