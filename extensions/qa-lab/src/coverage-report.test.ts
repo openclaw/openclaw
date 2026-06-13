@@ -164,7 +164,7 @@ describe("qa coverage report", () => {
     });
 
     expect(report).toContain("- Suite commands:");
-    expect(report).toContain("  - qa-flow: `pnpm openclaw qa suite --scenario");
+    expect(report).toContain("  - flow: `pnpm openclaw qa suite --scenario");
     expect(report).toContain(
       "  - playwright: `pnpm openclaw qa suite --scenario control-ui-chat-flow-playwright`",
     );

@@ -469,10 +469,6 @@ function scenarioMatchCommandGroups(matches: readonly QaScenarioSearchMatch[]) {
     .filter((group) => group.matches.length > 0);
 }
 
-function formatExecutionKindForCommand(executionKind: QaScenarioSearchMatch["executionKind"]) {
-  return executionKind === "flow" ? "qa-flow" : executionKind;
-}
-
 export function renderQaScenarioMatchesMarkdownReport(params: {
   query: string;
   matches: readonly QaScenarioSearchMatch[];
@@ -490,9 +486,7 @@ export function renderQaScenarioMatchesMarkdownReport(params: {
   } else if (commandGroups.length > 1) {
     lines.push("- Suite commands:");
     for (const group of commandGroups) {
-      lines.push(
-        `  - ${formatExecutionKindForCommand(group.executionKind)}: \`${formatSuiteCommand(group.matches)}\``,
-      );
+      lines.push(`  - ${group.executionKind}: \`${formatSuiteCommand(group.matches)}\``);
     }
   }
   lines.push("");
@@ -508,7 +502,7 @@ export function renderQaScenarioMatchesMarkdownReport(params: {
     lines.push(`  - surface: ${match.surfaces.join(", ")}`);
     lines.push(
       match.executionKind === "flow"
-        ? "  - execution: qa-flow"
+        ? "  - execution: flow (qa-flow block)"
         : `  - execution: ${match.executionKind} ${match.executionPath ?? "missing"}`,
     );
     lines.push(`  - coverage: ${match.coverageIds.join(", ") || "none"}`);

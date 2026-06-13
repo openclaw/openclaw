@@ -449,7 +449,7 @@ describe("qa suite planning helpers", () => {
         primaryModel: "mock-openai/gpt-5.5",
       }),
     ).toThrow(
-      "qa-flow execution requires execution.kind: flow; unsupported scenario(s): playwright (playwright)",
+      "flow execution requires execution.kind: flow; unsupported scenario(s): playwright (playwright)",
     );
   });
 

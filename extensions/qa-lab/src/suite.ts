@@ -12,6 +12,7 @@ import {
   type QaReportScenario,
 } from "openclaw/plugin-sdk/qa-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { QaSuiteArtifactError } from "./errors.js";
 import { buildQaSuiteEvidenceSummary, QA_EVIDENCE_FILENAME } from "./evidence-summary.js";
 import { startQaGatewayChild, type QaCliBackendAuthMode } from "./gateway-child.js";
 import type {
@@ -692,7 +693,7 @@ async function runQaRuntimeParitySuite(params: {
               runtime,
             );
             const cellStartedAt = Date.now();
-            const cellResult = await runQaSuite({
+            const cellResult = await runQaFlowSuite({
               repoRoot: params.repoRoot,
               outputDir: cellOutputDir,
               providerMode: params.providerMode,
@@ -893,7 +894,27 @@ async function writeQaSuiteArtifacts(params: {
     `${JSON.stringify(buildQaSuiteSummaryJson(params), null, 2)}\n`,
     "utf8",
   );
+  await assertQaSuiteArtifactWritten("report", reportPath);
+  await assertQaSuiteArtifactWritten("summary", summaryPath);
+  if (evidence) {
+    await assertQaSuiteArtifactWritten("evidence", evidencePath);
+  }
   return { evidencePath, report, reportPath, summaryPath };
+}
+
+async function assertQaSuiteArtifactWritten(
+  kind: "evidence" | "report" | "summary",
+  filePath: string,
+) {
+  try {
+    await fs.access(filePath);
+  } catch (error) {
+    throw new QaSuiteArtifactError(
+      `${kind}_missing`,
+      `QA suite did not produce ${kind} artifact at ${filePath}: ${formatErrorMessage(error)}`,
+      { cause: error },
+    );
+  }
 }
 
 function buildQaSuiteRuntimeMetrics(params: {
@@ -1025,7 +1046,7 @@ async function captureGatewayHeapSnapshotCheckpoint(params: {
   };
 }
 
-export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResult> {
+export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuiteResult> {
   const startedAt = new Date();
   const repoRoot = path.resolve(params?.repoRoot ?? process.cwd());
   const providerMode = normalizeQaProviderMode(
@@ -1203,7 +1224,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
           updateScenarioRun();
           try {
             const scenarioOutputDir = path.join(outputDir, "scenarios", scenario.id);
-            const result: QaSuiteResult = await runQaSuite(
+            const result: QaSuiteResult = await runQaFlowSuite(
               buildQaIsolatedScenarioWorkerParams({
                 repoRoot,
                 outputDir: scenarioOutputDir,

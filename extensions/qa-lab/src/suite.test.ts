@@ -7,7 +7,7 @@ import { QA_EVIDENCE_FILENAME, QA_EVIDENCE_SUMMARY_KIND } from "./evidence-summa
 import type { QaLabServerHandle } from "./lab-server.types.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
-import { qaSuiteProgressTesting, runQaSuite } from "./suite.js";
+import { qaSuiteProgressTesting, runQaFlowSuite } from "./suite.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 
@@ -38,7 +38,7 @@ describe("qa suite", () => {
     const startLab = vi.fn();
 
     await expect(
-      runQaSuite({
+      runQaFlowSuite({
         transportId: "qa-nope" as unknown as "qa-channel",
         startLab,
       }),

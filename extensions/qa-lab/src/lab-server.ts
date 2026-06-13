@@ -548,8 +548,8 @@ export async function startQaLabServer(
           };
           activeSuiteRun = (async () => {
             try {
-              const { runQaSuite } = await import("./suite.js");
-              const result = await runQaSuite({
+              const { runQaFlowSuite } = await import("./suite.js");
+              const result = await runQaFlowSuite({
                 lab: labHandle ?? undefined,
                 startLab: startQaLabServer,
                 outputDir: createQaRunOutputDir(repoRoot),

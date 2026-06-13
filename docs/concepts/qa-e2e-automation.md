@@ -787,9 +787,10 @@ the source of truth for one test run and should define:
 - docs and code refs
 - optional plugin requirements
 - optional gateway config patch
-- the executable `qa-flow`
+- an executable `qa-flow` block for flow scenarios, or `execution.kind`/`execution.path`
+  for Vitest and Playwright scenarios
 
-The reusable runtime surface that backs `qa-flow` is allowed to stay generic
+The reusable runtime surface that backs `qa-flow` blocks is allowed to stay generic
 and cross-cutting. For example, markdown scenarios can combine transport-side
 helpers with browser-side helpers that drive the embedded Control UI through the
 Gateway `browser.request` seam without adding a special-case runner.

@@ -3,13 +3,13 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { runQaSuite, runQaTestFileScenarios } = vi.hoisted(() => ({
-  runQaSuite: vi.fn(),
+const { runQaFlowSuite, runQaTestFileScenarios } = vi.hoisted(() => ({
+  runQaFlowSuite: vi.fn(),
   runQaTestFileScenarios: vi.fn(),
 }));
 
 vi.mock("./suite.js", () => ({
-  runQaSuite,
+  runQaFlowSuite,
 }));
 
 vi.mock("./test-file-scenario-runner.js", async (importOriginal) => ({
@@ -29,9 +29,9 @@ async function makeTempRepo(prefix: string) {
 
 describe("qa suite runtime launcher", () => {
   beforeEach(() => {
-    runQaSuite.mockReset();
+    runQaFlowSuite.mockReset();
     runQaTestFileScenarios.mockReset();
-    runQaSuite.mockResolvedValue({
+    runQaFlowSuite.mockResolvedValue({
       outputDir: "/tmp/qa-flow",
       evidencePath: "/tmp/qa-flow/qa-evidence.json",
       reportPath: "/tmp/qa-flow/qa-suite-report.md",
@@ -68,8 +68,8 @@ describe("qa suite runtime launcher", () => {
         summaryPath: "/tmp/qa-flow/qa-suite-summary.json",
       },
     });
-    expect(runQaSuite).toHaveBeenCalledTimes(1);
-    expect(runQaSuite).toHaveBeenCalledWith(
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(1);
+    expect(runQaFlowSuite).toHaveBeenCalledWith(
       expect.objectContaining({
         repoRoot: process.cwd(),
         providerMode: "mock-openai",
@@ -95,7 +95,7 @@ describe("qa suite runtime launcher", () => {
         evidencePath: "/tmp/qa-test-file/qa-evidence.json",
       },
     });
-    expect(runQaSuite).not.toHaveBeenCalled();
+    expect(runQaFlowSuite).not.toHaveBeenCalled();
     expect(runQaTestFileScenarios).toHaveBeenCalledTimes(1);
     const [call] = runQaTestFileScenarios.mock.calls[0] ?? [];
     expect(call).toMatchObject({
@@ -120,7 +120,7 @@ describe("qa suite runtime launcher", () => {
       }),
     ).rejects.toThrow("qa suite cannot mix execution.kind: flow with Vitest/Playwright scenarios");
 
-    expect(runQaSuite).not.toHaveBeenCalled();
+    expect(runQaFlowSuite).not.toHaveBeenCalled();
     expect(runQaTestFileScenarios).not.toHaveBeenCalled();
   });
 
@@ -133,7 +133,7 @@ describe("qa suite runtime launcher", () => {
       }),
     ).rejects.toThrow("--runtime-pair requires execution.kind: flow scenarios");
 
-    expect(runQaSuite).not.toHaveBeenCalled();
+    expect(runQaFlowSuite).not.toHaveBeenCalled();
     expect(runQaTestFileScenarios).not.toHaveBeenCalled();
   });
 
@@ -150,7 +150,7 @@ describe("qa suite runtime launcher", () => {
       }),
     ).rejects.toThrow("QA suite outputDir must not traverse symlinks");
 
-    expect(runQaSuite).not.toHaveBeenCalled();
+    expect(runQaFlowSuite).not.toHaveBeenCalled();
     expect(runQaTestFileScenarios).not.toHaveBeenCalled();
   });
 });

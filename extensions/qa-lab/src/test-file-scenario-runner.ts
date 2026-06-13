@@ -4,6 +4,7 @@ import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { toRepoRelativePath } from "./cli-paths.js";
+import { QaSuiteArtifactError } from "./errors.js";
 import {
   buildPlaywrightEvidenceSummary,
   buildVitestEvidenceSummary,
@@ -352,7 +353,21 @@ async function writeTestFileEvidenceFiles(params: {
     title: params.reportTitle,
   });
   await fs.writeFile(reportPath, report, "utf8");
+  await assertQaTestFileArtifactWritten("evidence", evidencePath);
+  await assertQaTestFileArtifactWritten("report", reportPath);
   return { evidencePath, reportPath };
+}
+
+async function assertQaTestFileArtifactWritten(kind: "evidence" | "report", filePath: string) {
+  try {
+    await fs.access(filePath);
+  } catch (error) {
+    throw new QaSuiteArtifactError(
+      `${kind}_missing`,
+      `QA suite did not produce ${kind} artifact at ${filePath}: ${formatErrorMessage(error)}`,
+      { cause: error },
+    );
+  }
 }
 
 export async function runQaTestFileScenarios(

@@ -91,7 +91,7 @@ function selectQaFlowSuiteScenarios(params: {
         .map((scenario) => `${scenario.id} (${scenario.execution.kind})`)
         .join(", ");
       throw new Error(
-        `qa-flow execution requires execution.kind: flow; unsupported scenario(s): ${scenarioList}`,
+        `flow execution requires execution.kind: flow; unsupported scenario(s): ${scenarioList}`,
       );
     }
     return selectedScenarios;

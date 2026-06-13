@@ -8,6 +8,7 @@ import {
   isQaTestFileScenario,
   runQaTestFileScenarios,
   type QaTestFileExecutionKind,
+  type QaTestFileScenario,
   type QaTestFileScenarioRunResult,
 } from "./test-file-scenario-runner.js";
 
@@ -40,9 +41,9 @@ function resolveRequestedScenarios(params: {
   });
 }
 
-async function runQaTestFileSuiteIfSelected(
+function resolveTestFileScenariosForSuiteDispatch(
   params: QaSuiteRunParams | undefined,
-): Promise<QaTestFileScenarioRunResult | null> {
+): QaTestFileScenario[] | null {
   const scenarioIds = params?.scenarioIds ?? [];
   if (scenarioIds.length === 0) {
     return null;
@@ -58,36 +59,49 @@ async function runQaTestFileSuiteIfSelected(
   if (testFileScenarios.length !== selectedScenarios.length) {
     throw new Error("qa suite cannot mix execution.kind: flow with Vitest/Playwright scenarios.");
   }
-  if (params?.runtimePair) {
+  return testFileScenarios;
+}
+
+async function runQaTestFileSuiteFromRuntime(params: {
+  runParams: QaSuiteRunParams | undefined;
+  scenarios: readonly QaTestFileScenario[];
+}): Promise<QaTestFileScenarioRunResult> {
+  const runParams = params.runParams;
+  if (runParams?.runtimePair) {
     throw new Error("--runtime-pair requires execution.kind: flow scenarios.");
   }
-  if (params?.forcedRuntime) {
+  if (runParams?.forcedRuntime) {
     throw new Error("forced runtime execution requires execution.kind: flow scenarios.");
   }
-  if (params?.captureRuntimeParityCell) {
+  if (runParams?.captureRuntimeParityCell) {
     throw new Error("runtime parity capture requires execution.kind: flow scenarios.");
   }
-  const repoRoot = path.resolve(params?.repoRoot ?? process.cwd());
-  const outputDir = await resolveQaSuiteOutputDir(repoRoot, params?.outputDir);
-  const providerMode = normalizeQaProviderMode(params?.providerMode);
-  const primaryModel = params?.primaryModel?.trim() || defaultQaModelForMode(providerMode);
+  const repoRoot = path.resolve(runParams?.repoRoot ?? process.cwd());
+  const outputDir = await resolveQaSuiteOutputDir(repoRoot, runParams?.outputDir);
+  const providerMode = normalizeQaProviderMode(runParams?.providerMode);
+  const primaryModel = runParams?.primaryModel?.trim() || defaultQaModelForMode(providerMode);
   return await runQaTestFileScenarios({
     repoRoot,
     outputDir,
     providerMode,
     primaryModel,
-    scenarios: testFileScenarios,
+    scenarios: params.scenarios,
   });
 }
 
 export async function runQaSuiteFromRuntime(
   ...args: [QaSuiteRunParams?]
 ): Promise<QaSuiteRuntimeResult> {
-  const testFileResult = await runQaTestFileSuiteIfSelected(args[0]);
-  if (testFileResult) {
+  const runParams = args[0];
+  const testFileScenarios = resolveTestFileScenariosForSuiteDispatch(runParams);
+  if (testFileScenarios) {
+    const result = await runQaTestFileSuiteFromRuntime({
+      runParams,
+      scenarios: testFileScenarios,
+    });
     return {
-      executionKind: testFileResult.executionKind,
-      result: testFileResult,
+      executionKind: result.executionKind,
+      result,
     };
   }
   return {
@@ -99,9 +113,9 @@ export async function runQaSuiteFromRuntime(
 export async function runQaFlowSuiteFromRuntime(
   ...args: [QaSuiteRunParams?]
 ): Promise<QaSuiteResult> {
-  const { runQaSuite } = await import("./suite.js");
+  const { runQaFlowSuite } = await import("./suite.js");
   const params = args[0];
-  return await runQaSuite({
+  return await runQaFlowSuite({
     ...params,
     startLab: params?.startLab ?? (await loadQaLabServerRuntime()),
   });

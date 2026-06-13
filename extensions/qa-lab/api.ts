@@ -106,5 +106,5 @@ export {
   type QaSuiteStartLabFn,
   type QaSuiteSummaryJson,
   type QaSuiteSummaryJsonParams,
-  runQaSuite,
+  runQaFlowSuite,
 } from "./src/suite.js";

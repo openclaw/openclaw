@@ -46,7 +46,7 @@ async function runQaSelfCheck(opts: { repoRoot?: string; output?: string }) {
   await runtime.runQaLabSelfCheckCommand(opts);
 }
 
-async function runQaSuite(opts: {
+async function runQaSuiteCliCommand(opts: {
   repoRoot?: string;
   outputDir?: string;
   transportId?: string;
@@ -372,7 +372,7 @@ export function registerQaLabCli(program: Command) {
         runtimePair?: string;
         runtimeParityTier?: string[];
       }) => {
-        await runQaSuite({
+        await runQaSuiteCliCommand({
           repoRoot: opts.repoRoot,
           outputDir: opts.outputDir,
           transportId: opts.transport,
