@@ -13,6 +13,7 @@ const targets = [
   "packages",
   "ui",
   "apps",
+  "music-creator-v1",
   "docs",
   "qa",
   "security",
