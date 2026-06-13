@@ -2073,7 +2073,7 @@ export async function loadWorkboard(params: {
       if (!isCurrentWorkboardLoadGeneration(params.host, generation)) {
         return false;
       }
-      if (params.taskRefresh === "linked" && state.draggedCardId) {
+      if (params.taskRefresh === "linked" && shouldDeferWorkboardPoll(state)) {
         return false;
       }
       if (nextUnfilteredCursor !== undefined) {
@@ -2317,6 +2317,10 @@ export function stopWorkboardPolling(host: WorkboardHost) {
     return;
   }
   state.pollRefreshInProgress = false;
+  state.loading = false;
+  if (!state.loaded) {
+    state.loadAttempted = false;
+  }
   nextWorkboardLoadGeneration(host);
   workboardLoadPromises.delete(host);
   workboardLoadTokens.delete(host);

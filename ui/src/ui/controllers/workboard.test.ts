@@ -862,6 +862,8 @@ describe("workboard controller", () => {
 
     stopWorkboardPolling(host);
     expect(state.pollRefreshInProgress).toBe(false);
+    expect(state.loading).toBe(false);
+    expect(state.loadAttempted).toBe(false);
 
     configureWorkboardPolling({
       host,
@@ -1257,6 +1259,39 @@ describe("workboard controller", () => {
 
     expect(state.cards).toEqual([initialCard]);
     expect(state.draggedCardId).toBe(initialCard.id);
+    expect(state.lastRefreshAt).toBeNull();
+  });
+
+  it("discards an in-flight poll when an edit draft opens", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const listedCards = createDeferred<unknown>();
+    const initialCard = { ...sampleCard, title: "Edit target" };
+    const refreshedCard = { ...sampleCard, title: "Server refresh" };
+    state.cards = [initialCard];
+    state.loaded = true;
+    const client = createClient((method) => {
+      if (method === "workboard.cards.list") {
+        return listedCards.promise;
+      }
+      return {};
+    });
+
+    const refresh = refreshWorkboard({
+      host,
+      client: client as never,
+      source: "poll",
+    });
+    await Promise.resolve();
+    state.draftOpen = true;
+    state.editingCardId = initialCard.id;
+    state.draftTitle = initialCard.title;
+    listedCards.resolve({ cards: [refreshedCard], statuses: ["todo", "done"] });
+    await refresh;
+
+    expect(state.cards).toEqual([initialCard]);
+    expect(state.editingCardId).toBe(initialCard.id);
+    expect(state.draftTitle).toBe(initialCard.title);
     expect(state.lastRefreshAt).toBeNull();
   });
 
