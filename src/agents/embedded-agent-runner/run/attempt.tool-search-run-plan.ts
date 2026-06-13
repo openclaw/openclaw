@@ -1,6 +1,7 @@
 /**
  * Builds tool-search execution plans from allowlists and available controls.
  */
+import { isToolAllowedByPolicyName } from "../../tool-policy-match.js";
 import { normalizeToolName } from "../../tool-policy.js";
 import {
   TOOL_CALL_RAW_TOOL_NAME,
@@ -80,15 +81,14 @@ function collectExplicitlyAllowedClientToolNames(params: {
   clientTools?: CollectAllowedToolNamesParams["clientTools"];
   explicitAllowlistSources: Array<{ entries: string[] }>;
 }): string[] {
-  const explicitNames = new Set(
-    params.explicitAllowlistSources.flatMap((source) =>
-      source.entries.map((entry) => normalizeToolName(entry)),
-    ),
-  );
   return (params.clientTools ?? [])
     .map((tool) => tool.function?.name)
     .filter((name): name is string => Boolean(name?.trim()))
-    .filter((name) => explicitNames.has(normalizeToolName(name)));
+    .filter((name) =>
+      params.explicitAllowlistSources.some((source) =>
+        isToolAllowedByPolicyName(name, { allow: source.entries }),
+      ),
+    );
 }
 
 /**

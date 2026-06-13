@@ -259,6 +259,34 @@ describe("buildToolSearchRunPlan", () => {
     expect(plan.emptyAllowlistCallableNames).toEqual(["client_pick_file"]);
   });
 
+  it("counts wildcard-allowlisted visible directory client tools", () => {
+    const plan = buildToolSearchRunPlan({
+      visibleTools: [
+        { name: "tool_search" },
+        { name: "tool_describe" },
+        { name: "tool_call" },
+      ] as never,
+      uncompactedTools: [],
+      clientTools: [
+        {
+          type: "function",
+          function: {
+            name: "client_pick_file",
+            parameters: { type: "object", properties: {} },
+          },
+        },
+      ],
+      clientToolsCataloged: false,
+      catalogToolCount: 0,
+      controlsEnabled: true,
+      deferredToolsCallable: true,
+      controlNames: ["tool_search", "tool_describe", "tool_call"],
+      explicitAllowlistSources: [{ entries: ["client_*"] }],
+    });
+
+    expect(plan.emptyAllowlistCallableNames).toEqual(["client_pick_file"]);
+  });
+
   it("keeps client names out of OpenClaw capability guidance", () => {
     const plan = buildToolSearchRunPlan({
       visibleTools: [{ name: "fake_plugin_tool" }] as never,
