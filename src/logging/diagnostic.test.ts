@@ -484,8 +484,8 @@ describe("stuck session diagnostics threshold", () => {
   });
 
   it("keeps scheduling recovery for a recovery-eligible stuck session while warnings are throttled", () => {
-    const stuckEvents: DiagnosticEventPayload[] = [];
-    const recoveryRequests: DiagnosticEventPayload[] = [];
+    const stuckEvents: Array<{ ageMs?: number }> = [];
+    const recoveryRequests: Array<{ ageMs?: number }> = [];
     const recoverStuckSession = vi.fn();
     const unsubscribe = onDiagnosticEvent((event) => {
       if (event.type === "session.stuck") {
@@ -521,9 +521,11 @@ describe("stuck session diagnostics threshold", () => {
 
     // Warning stays throttled: still only the single 60s warning.
     expect(stuckEvents).toHaveLength(1);
+    expect(stuckEvents.map((event) => event.ageMs)).toEqual([60_000]);
     // Recovery was not suppressed by the warning backoff on the 90s tick.
     expect(recoverStuckSession).toHaveBeenCalledTimes(2);
     expect(recoveryRequests).toHaveLength(2);
+    expect(recoveryRequests.map((event) => event.ageMs)).toEqual([60_000, 90_000]);
   });
 
   it("reports active sessions as stalled instead of stuck when active work stops progressing", () => {
