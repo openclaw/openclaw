@@ -2421,6 +2421,71 @@ describe("gateway agent handler", () => {
     expect(call.cleanupBundleMcpOnRunEnd).toBe(true);
   });
 
+  it("forwards toolsAllow from agent RPC into the runner", async () => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+
+    await invokeAgent({
+      message: "tools allow probe",
+      sessionKey: "agent:main:subagent:tools-allow-probe",
+      idempotencyKey: "test-idem-agent-tools-allow",
+      toolsAllow: ["read", "exec"],
+    });
+
+    const call = await waitForAgentCommandCall();
+    expect(call.toolsAllow).toEqual(["read", "exec"]);
+  });
+
+  it("normalizes toolsAllow from agent RPC before forwarding to the runner", async () => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+
+    await invokeAgent({
+      message: "tools allow normalize probe",
+      sessionKey: "agent:main:subagent:tools-allow-normalize-probe",
+      idempotencyKey: "test-idem-agent-tools-allow-normalize",
+      toolsAllow: [" read ", "exec", "  "],
+    });
+
+    const call = await waitForAgentCommandCall();
+    expect(call.toolsAllow).toEqual(["read", "exec"]);
+  });
+
+  it("preserves an explicit empty toolsAllow list from agent RPC", async () => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+
+    await invokeAgent({
+      message: "tools allow empty probe",
+      sessionKey: "agent:main:subagent:tools-allow-empty-probe",
+      idempotencyKey: "test-idem-agent-tools-allow-empty",
+      toolsAllow: [],
+    });
+
+    const call = await waitForAgentCommandCall();
+    expect(call.toolsAllow).toEqual([]);
+  });
+
+  it("rejects malformed toolsAllow entries from agent RPC before starting a run", async () => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "tools allow malformed probe",
+        sessionKey: "agent:main:subagent:tools-allow-malformed-probe",
+        idempotencyKey: "test-idem-agent-tools-allow-malformed",
+        toolsAllow: ["read", 123],
+      } as never,
+      { respond, reqId: "test-idem-agent-tools-allow-malformed" },
+    );
+
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    const error = expectRespondError(respond, {});
+    expectStringFieldContains(error, "message", "invalid agent params");
+  });
+
   it.each(
     (["channel", "replyChannel"] as const).flatMap((field) =>
       (["heartbeat", "cron", "webhook", "voice"] as const).map(

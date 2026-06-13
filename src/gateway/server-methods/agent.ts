@@ -1024,6 +1024,13 @@ function yieldAfterAgentAcceptedAck(): Promise<void> {
   });
 }
 
+function normalizeAgentRunToolsAllow(toolsAllow: string[] | undefined): string[] | undefined {
+  if (toolsAllow === undefined) {
+    return undefined;
+  }
+  return toolsAllow.map((entry) => entry.trim()).filter(Boolean);
+}
+
 export const agentHandlers: GatewayRequestHandlers = {
   agent: async ({ params, respond, context, client, isWebchatConnect }) => {
     const p = params;
@@ -1067,6 +1074,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       extraSystemPrompt?: string;
       modelRun?: boolean;
       promptMode?: "full" | "minimal" | "none";
+      toolsAllow?: string[];
       bootstrapContextMode?: "full" | "lightweight";
       bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
       acpTurnSource?: "manual_spawn";
@@ -1119,6 +1127,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     }
     const providerOverride = allowModelOverride ? request.provider : undefined;
     const modelOverride = allowModelOverride ? request.model : undefined;
+    const normalizedToolsAllow = normalizeAgentRunToolsAllow(request.toolsAllow);
     const cfg = context.getRuntimeConfig();
     const idem = request.idempotencyKey;
     const runId = idem;
@@ -2570,6 +2579,7 @@ export const agentHandlers: GatewayRequestHandlers = {
               lane: request.lane,
               modelRun: request.modelRun === true,
               promptMode: request.promptMode,
+              toolsAllow: normalizedToolsAllow,
               extraSystemPrompt: request.extraSystemPrompt,
               bootstrapContextMode: request.bootstrapContextMode,
               bootstrapContextRunKind: request.bootstrapContextRunKind,

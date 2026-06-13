@@ -153,8 +153,7 @@ function readTelegramLegacyMessageDispatchBuckets(params: {
     // Lock rows persist as `<accountId>:lock` buckets without dedupe entries;
     // track them as removable so cleanup empties the retired namespace.
     const ownsRecord =
-      record.namespace === params.accountId ||
-      record.namespace.startsWith(`${params.accountId}:`);
+      record.namespace === params.accountId || record.namespace.startsWith(`${params.accountId}:`);
     if (!ownsRecord) {
       continue;
     }
