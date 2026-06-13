@@ -83,6 +83,31 @@ class TestGatewayPlugin extends GatewayPlugin {
   }
 }
 
+/**
+ * Inject the stale reconnect state observed on live gateways: an active socket
+ * whose reconnect flag is cleared without an intentional disconnect.
+ *
+ * This state has been reproduced in production (silently dead Discord lane
+ * after an abnormal 1006 close until a manual gateway restart) but the
+ * transition that owns it has not been identified in the current public API
+ * surface: `connect()` re-arms reconnect before creating each socket,
+ * `disconnect()` clears the socket reference alongside the flag, and fatal
+ * close handling only runs on a socket that already closed. Until the owning
+ * transition is found, state injection is the only honest way to pin the
+ * close-handler recovery behavior. See PR #88841 discussion.
+ */
+function injectStaleReconnectState(
+  gateway: GatewayPlugin,
+  { intentionalDisconnect }: { intentionalDisconnect: boolean },
+): void {
+  const internals = gateway as unknown as {
+    shouldReconnect: boolean;
+    intentionalDisconnect: boolean;
+  };
+  internals.shouldReconnect = false;
+  internals.intentionalDisconnect = intentionalDisconnect;
+}
+
 type GatewaySessionState = {
   sessionId: string | null;
   resumeGatewayUrl: string | null;
@@ -300,6 +325,75 @@ describe("GatewayPlugin", () => {
     await vi.advanceTimersByTimeAsync(5_000);
     await third;
     expect(thirdResolved).toBe(true);
+  });
+
+  it("re-arms reconnect for unexpected abnormal closes after reconnect was cleared", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const gateway = new TestGatewayPlugin({
+      autoInteractions: false,
+      url: "wss://gateway.example.test",
+    });
+
+    const debugMessages: string[] = [];
+    gateway.emitter.on("debug", (message) => {
+      debugMessages.push(String(message));
+    });
+
+    gateway.connect(false);
+    const socket = gateway.sockets[0];
+    socket?.emit("open");
+    injectStaleReconnectState(gateway, { intentionalDisconnect: false });
+    socket?.emit("close", 1006);
+
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(gateway.connectCalls).toEqual([false, true]);
+    expect(gateway.sockets).toHaveLength(2);
+    expect(debugMessages).toContain(
+      "Gateway reconnect was disabled at abnormal close 1006 without an intentional disconnect; re-arming reconnect",
+    );
+  });
+
+  it("does not reconnect abnormal closes from intentional disconnects", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const gateway = new TestGatewayPlugin({
+      autoInteractions: false,
+      url: "wss://gateway.example.test",
+    });
+
+    gateway.connect(false);
+    const socket = gateway.sockets[0];
+    socket?.emit("open");
+    injectStaleReconnectState(gateway, { intentionalDisconnect: true });
+    socket?.emit("close", 1006);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(gateway.connectCalls).toEqual([false]);
+    expect(gateway.sockets).toHaveLength(1);
+  });
+
+  it("does not reconnect when a public disconnect() is followed by an abnormal close", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const gateway = new TestGatewayPlugin({
+      autoInteractions: false,
+      url: "wss://gateway.example.test",
+    });
+
+    gateway.connect(false);
+    const socket = gateway.sockets[0];
+    socket?.emit("open");
+    gateway.disconnect();
+    // Real close handshakes can complete abnormally (1006) after disconnect().
+    socket?.emit("close", 1006);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(gateway.connectCalls).toEqual([false]);
+    expect(gateway.sockets).toHaveLength(1);
   });
 
   it("preserves MESSAGE_CREATE author payloads for inbound dispatch", async () => {
