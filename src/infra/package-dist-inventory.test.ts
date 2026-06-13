@@ -105,14 +105,16 @@ describe("package dist inventory", () => {
         let activeReads = 0;
         let maxActiveReads = 0;
         const readFileSpy = vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
-          const filePath = String(args[0]);
+          const filePath = typeof args[0] === "string" ? args[0] : "";
           if (!filePath.includes(`${path.sep}dist${path.sep}file-`)) {
             return await realReadFile(...args);
           }
           activeReads += 1;
           maxActiveReads = Math.max(maxActiveReads, activeReads);
           try {
-            await new Promise((resolve) => setTimeout(resolve, 5));
+            await new Promise<void>((resolve) => {
+              setTimeout(resolve, 5);
+            });
             return await realReadFile(...args);
           } finally {
             activeReads -= 1;

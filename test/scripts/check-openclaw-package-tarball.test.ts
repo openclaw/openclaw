@@ -57,7 +57,17 @@ function withTarball(
     }
     writeFileSync(
       join(packageRoot, "dist", "postinstall-inventory.json"),
-      JSON.stringify(inventory),
+      JSON.stringify(
+        options.includeControlUi === false
+          ? inventory
+          : [
+              ...new Set([
+                ...inventory,
+                "dist/control-ui/index.html",
+                "dist/control-ui/assets/app.js",
+              ]),
+            ],
+      ),
     );
     const tarFiles =
       options.includeControlUi === false
@@ -83,7 +93,14 @@ function withTarball(
       writeFileSync(filePath, body);
     }
     if (options.includeContentInventory !== false) {
-      const contentInventory = inventory
+      const contentInventory = [
+        ...new Set([
+          ...inventory,
+          ...(options.includeControlUi === false
+            ? []
+            : ["dist/control-ui/index.html", "dist/control-ui/assets/app.js"]),
+        ]),
+      ]
         .filter((relativePath) => Object.hasOwn(tarFiles, relativePath))
         .map((relativePath) => {
           const body = tarFiles[relativePath] ?? "";
@@ -362,6 +379,24 @@ describe("check-openclaw-package-tarball", () => {
       },
       "2026.5.21",
       { includeContentInventory: false },
+    );
+  });
+
+  it("rejects packaged dist files omitted from both inventories", () => {
+    withTarball(
+      ["dist/index.js"],
+      {
+        "dist/index.js": "export {};\n",
+        "dist/extra.js": "export const extra = true;\n",
+      },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("inventory omits packaged dist file dist/extra.js");
+        expect(result.stderr).toContain("content inventory omits packaged dist file dist/extra.js");
+      },
+      "2026.5.21",
     );
   });
 

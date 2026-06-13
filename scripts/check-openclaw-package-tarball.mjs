@@ -94,6 +94,11 @@ const LEGACY_PACKAGE_ACCEPTANCE_COMPAT_MAX = { year: 2026, month: 4, day: 25 };
 const LEGACY_LOCAL_BUILD_METADATA_COMPAT_MAX = { year: 2026, month: 4, day: 26 };
 const LEGACY_SHRINKWRAP_COMPAT_MAX = { year: 2026, month: 5, day: 20 };
 const FORBIDDEN_LOCAL_BUILD_METADATA_FILES = new Set(LOCAL_BUILD_METADATA_DIST_PATHS);
+const PACKAGE_DIST_INVENTORY_METADATA_FILES = new Set([
+  "dist/postinstall-inventory.json",
+  "dist/postinstall-content-inventory.json",
+  "dist/plugin-sdk/.tsbuildinfo",
+]);
 
 const LEGACY_OMITTED_PRIVATE_QA_INVENTORY_PREFIXES = [
   "dist/extensions/qa-channel/",
@@ -128,6 +133,17 @@ function isAllowedMissingContentInventoryEntry(relativePath) {
   return (
     isLegacyPackageAcceptanceCompatVersion(packageVersion) &&
     isLegacyOmittedPrivateQaInventoryEntry(relativePath)
+  );
+}
+
+function isExpectedPackageDistInventoryEntry(relativePath) {
+  return (
+    relativePath.startsWith("dist/") &&
+    !relativePath.endsWith("/") &&
+    !relativePath.endsWith(".map") &&
+    !PACKAGE_DIST_INVENTORY_METADATA_FILES.has(relativePath) &&
+    !FORBIDDEN_LOCAL_BUILD_METADATA_FILES.has(relativePath) &&
+    !isAllowedMissingContentInventoryEntry(relativePath)
   );
 }
 
@@ -344,6 +360,9 @@ if (packageEntrySet.has("package.json")) {
     packageVersion = "";
   }
 }
+const expectedPackageDistInventoryEntries = [
+  ...new Set(packageNormalized.filter(isExpectedPackageDistInventoryEntry)),
+].toSorted((left, right) => left.localeCompare(right));
 if (packageEntrySet.has("package-lock.json")) {
   errors.push("package tarball must ship npm-shrinkwrap.json, not package-lock.json");
 }
@@ -421,6 +440,11 @@ if (packageEntrySet.has("dist/postinstall-inventory.json")) {
     } else {
       normalizedInventory = inventory.map((entry) => entry.replace(/\\/gu, "/"));
       const normalizedInventorySet = new Set(normalizedInventory);
+      for (const packagedEntry of expectedPackageDistInventoryEntries) {
+        if (!normalizedInventorySet.has(packagedEntry)) {
+          errors.push(`inventory omits packaged dist file ${packagedEntry}`);
+        }
+      }
       packageDistImports = runPhase("dist import graph", () =>
         collectPackageDistImports({
           files: packageNormalized,
@@ -490,6 +514,11 @@ if (packageEntrySet.has("dist/postinstall-content-inventory.json")) {
         }
       }
       const contentEntryMap = new Map(normalizedContentEntries.map((entry) => [entry.path, entry]));
+      for (const packagedEntry of expectedPackageDistInventoryEntries) {
+        if (!contentEntryMap.has(packagedEntry)) {
+          errors.push(`content inventory omits packaged dist file ${packagedEntry}`);
+        }
+      }
       const normalizedInventorySet = normalizedInventory ? new Set(normalizedInventory) : null;
       if (normalizedInventory) {
         for (const inventoryEntry of normalizedInventory) {

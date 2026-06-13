@@ -458,12 +458,44 @@ describe("runGlobalPackageUpdateSteps", () => {
   });
 
   it.each([
-    { name: "spaced import", source: 'import "./local-helper.js";\n' },
-    { name: "minified import", source: 'import"./local-helper.js";\n' },
-    { name: "minified re-export", source: 'export*from"./local-helper.js";\n' },
+    {
+      helperRelativePath: "dist/local-helper.js",
+      name: "spaced import",
+      source: 'import "./local-helper.js";\n',
+    },
+    {
+      helperRelativePath: "dist/local-helper.js",
+      name: "minified import",
+      source: 'import"./local-helper.js";\n',
+    },
+    {
+      helperRelativePath: "dist/local-helper.js",
+      name: "minified re-export",
+      source: 'export*from"./local-helper.js";\n',
+    },
+    {
+      helperRelativePath: "dist/local-helper.js",
+      name: "commented dynamic import",
+      source: 'void import(/* webpackChunkName: "local" */ "./local-helper.js");\n',
+    },
+    {
+      helperRelativePath: "dist/local-helper.js",
+      name: "template dynamic import",
+      source: "void import(`./local-helper.js`);\n",
+    },
+    {
+      helperRelativePath: "dist/local-helper/index.mjs",
+      name: "extensionless mjs index import",
+      source: 'import "./local-helper";\n',
+    },
+    {
+      helperRelativePath: "dist/local-helper/index.cjs",
+      name: "extensionless cjs index import",
+      source: 'require("./local-helper");\n',
+    },
   ])(
     "does not partially reapply standalone added dependency trees with $name",
-    async ({ source }) => {
+    async ({ helperRelativePath, source }) => {
       await withTempDir(
         { prefix: "openclaw-package-update-local-standalone-tree-" },
         async (base) => {
@@ -471,9 +503,10 @@ describe("runGlobalPackageUpdateSteps", () => {
           const globalRoot = path.join(prefix, "lib", "node_modules");
           const packageRoot = path.join(globalRoot, "openclaw");
           const featurePath = path.join(packageRoot, "dist", "local-feature.js");
-          const helperPath = path.join(packageRoot, "dist", "local-helper.js");
+          const helperPath = path.join(packageRoot, helperRelativePath);
           await writePackageRoot(packageRoot, "1.0.0");
           await fs.writeFile(featurePath, source, "utf8");
+          await fs.mkdir(path.dirname(helperPath), { recursive: true });
           await fs.writeFile(helperPath, "export const local = true;\n", "utf8");
 
           const result = await runGlobalPackageUpdateSteps({
@@ -490,11 +523,9 @@ describe("runGlobalPackageUpdateSteps", () => {
               }
               const stagedPackageRoot = path.join(stagePrefix, "lib", "node_modules", "openclaw");
               await writePackageRoot(stagedPackageRoot, "2.0.0");
-              await fs.writeFile(
-                path.join(stagedPackageRoot, "dist", "local-helper.js"),
-                "export const upstream = true;\n",
-                "utf8",
-              );
+              const stagedHelperPath = path.join(stagedPackageRoot, helperRelativePath);
+              await fs.mkdir(path.dirname(stagedHelperPath), { recursive: true });
+              await fs.writeFile(stagedHelperPath, "export const upstream = true;\n", "utf8");
               await writePackageDistInventory(stagedPackageRoot);
               return {
                 name,
@@ -512,7 +543,7 @@ describe("runGlobalPackageUpdateSteps", () => {
           expect(result.localOverrides?.status).toBe("conflict");
           expect(result.localOverrides?.applied).toBe(0);
           expect(result.localOverrides?.conflicts).toEqual([
-            { path: "dist/local-helper.js", reason: "target-exists" },
+            { path: helperRelativePath, reason: "target-exists" },
             { path: "dist/local-feature.js", reason: "target-changed" },
           ]);
           await expectPathMissing(featurePath);
@@ -1414,7 +1445,7 @@ describe("runGlobalPackageUpdateSteps", () => {
     );
   });
 
-  it("keeps shared added dependency trees with clean partial reapply importers", async () => {
+  it("does not partially reapply shared added trees with incomplete dependency graphs", async () => {
     await withTempDir(
       { prefix: "openclaw-package-update-local-shared-dependency-" },
       async (base) => {
@@ -1494,22 +1525,21 @@ describe("runGlobalPackageUpdateSteps", () => {
 
         expect(result.failedStep).toBeNull();
         expect(result.localOverrides?.status).toBe("conflict");
-        expect(result.localOverrides?.applied).toBe(3);
+        expect(result.localOverrides?.applied).toBe(0);
         expect(result.localOverrides?.conflicts).toEqual([
           { path: "dist/index.js", reason: "target-changed" },
+          { path: "dist/feature.js", reason: "target-changed" },
+          { path: "dist/shared.js", reason: "target-changed" },
+          { path: "dist/nested.js", reason: "target-changed" },
         ]);
         await expect(fs.readFile(path.join(packageRoot, "dist", "index.js"), "utf8")).resolves.toBe(
           "export const upstreamConflict = true;\n",
         );
         await expect(
           fs.readFile(path.join(packageRoot, "dist", "feature.js"), "utf8"),
-        ).resolves.toBe("import './shared.js';\nexport const localClean = true;\n");
-        await expect(
-          fs.readFile(path.join(packageRoot, "dist", "shared.js"), "utf8"),
-        ).resolves.toBe("import './nested.js';\nexport const shared = true;\n");
-        await expect(
-          fs.readFile(path.join(packageRoot, "dist", "nested.js"), "utf8"),
-        ).resolves.toBe("export const nested = true;\n");
+        ).resolves.toBe("export {};\n");
+        await expectPathMissing(path.join(packageRoot, "dist", "shared.js"));
+        await expectPathMissing(path.join(packageRoot, "dist", "nested.js"));
       },
     );
   });
