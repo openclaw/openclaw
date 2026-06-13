@@ -376,7 +376,10 @@ function resolveSupportedThinkingLevelFromProfile(
     return level;
   }
   const requestedRank = THINKING_LEVEL_RANKS[level];
-  const ranked = profile.levels.toSorted((a, b) => b.rank - a.rank);
+  // `adaptive` is a provider strategy, not a budget fallback for medium/high requests.
+  const ranked = profile.levels
+    .filter((entry) => level === "adaptive" || entry.id !== "adaptive")
+    .toSorted((a, b) => b.rank - a.rank);
   return (
     ranked.find((entry) => entry.id !== "off" && entry.rank <= requestedRank)?.id ??
     ranked.find((entry) => entry.id !== "off")?.id ??

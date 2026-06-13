@@ -646,6 +646,33 @@ describe("listThinkingLevels", () => {
       }),
     ).toBe("high");
   });
+
+  it("does not map budget requests to adaptive-only profiles", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(
+      ({ provider, context }) =>
+        provider === "minimax-portal" && context.modelId === "MiniMax-M3"
+          ? {
+              levels: [{ id: "off" }, { id: "adaptive" }],
+              defaultLevel: "adaptive",
+            }
+          : undefined,
+    );
+
+    expect(
+      resolveSupportedThinkingLevel({
+        provider: "minimax-portal",
+        model: "MiniMax-M3",
+        level: "medium",
+      }),
+    ).toBe("off");
+    expect(
+      resolveSupportedThinkingLevel({
+        provider: "minimax-portal",
+        model: "MiniMax-M3",
+        level: "adaptive",
+      }),
+    ).toBe("adaptive");
+  });
 });
 
 describe("listThinkingLevelLabels", () => {
