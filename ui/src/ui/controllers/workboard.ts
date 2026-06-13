@@ -1832,8 +1832,8 @@ export async function loadWorkboard(params: {
           }
         } catch (error) {
           if (isCurrentWorkboardLoadGeneration(params.host, generation)) {
+            applyTaskSummariesToState(state, preparedTaskSummaries);
             if (params.taskRefresh === "linked") {
-              applyTaskSummariesToState(state, preparedTaskSummaries);
               linkedTaskRefreshFailed = true;
             } else {
               // Render-driven lifecycle sync runs after every update. Defer a

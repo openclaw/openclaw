@@ -1601,6 +1601,12 @@ function cardHasActiveOrUnresolvedTask(
   return taskIsActive(task) || Boolean(card.taskId && !task && !missingTaskIds.has(card.taskId));
 }
 
+function cardHasUnresolvedStartedRun(card: WorkboardCard): boolean {
+  const sessionKey = card.sessionKey ?? card.execution?.sessionKey;
+  const runId = card.runId ?? card.execution?.runId;
+  return card.status === "running" && Boolean(sessionKey && runId);
+}
+
 function cardCanStart(
   state: WorkboardUiState,
   sessions: readonly GatewaySessionRow[],
@@ -1610,7 +1616,7 @@ function cardCanStart(
   const session = findWorkboardSession(card, sessions);
   const activeTask = cardHasActiveOrUnresolvedTask(card, task, state.missingTaskIds);
   const linkedSessionKey = card.sessionKey ?? card.execution?.sessionKey;
-  return !activeTask && (!linkedSessionKey || !session);
+  return !activeTask && !cardHasUnresolvedStartedRun(card) && (!linkedSessionKey || !session);
 }
 
 function formatDependencyParent(parent: WorkboardDependencyState["parents"][number]): string {
@@ -2193,6 +2199,7 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
   const activeTask = cardHasActiveOrUnresolvedTask(card, task, state.missingTaskIds);
   const live =
     activeTask ||
+    cardHasUnresolvedStartedRun(card) ||
     session?.hasActiveRun === true ||
     (session?.hasActiveRun !== false && session?.status === "running");
   const linkedSessionKey = card.sessionKey ?? card.execution?.sessionKey;

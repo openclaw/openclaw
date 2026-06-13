@@ -165,6 +165,34 @@ describe("workboard controller", () => {
     });
   });
 
+  it("preserves matching task links when full task enrichment fails", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const linked = {
+      ...sampleCard,
+      status: "running",
+      sessionKey: sampleTaskSessionKey,
+      runId: "run-1",
+    } satisfies WorkboardCard;
+    state.tasksByCardId.set(sampleCard.id, sampleTask);
+    const client = createClient((method) => {
+      if (method === "workboard.cards.list") {
+        return { cards: [linked], statuses: ["todo", "running", "done"] };
+      }
+      if (method === "tasks.list") {
+        throw new Error("task ledger unavailable");
+      }
+      return {};
+    });
+
+    await loadWorkboard({ host, client: client as never, force: true });
+
+    expect(state.cards[0]).toMatchObject({ id: sampleCard.id, taskId: sampleTask.taskId });
+    expect(state.tasksByCardId.get(sampleCard.id)).toEqual(sampleTask);
+    expect(state.lifecycleTaskRefreshFailed).toBe(true);
+    expect(state.lastRefreshError).toBe("task ledger unavailable");
+  });
+
   it("confirms persisted task ids before marking paginated omissions missing", async () => {
     const host = {};
     const linked = {

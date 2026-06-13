@@ -1843,6 +1843,43 @@ describe("renderWorkboard", () => {
     expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(0);
   });
 
+  it("keeps newly started unresolved runs from exposing duplicate starts", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Newly started run",
+        status: "running",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+        sessionKey: "agent:main:subagent:workboard-default-card-1",
+        runId: "run-1",
+      },
+    ];
+    const container = document.createElement("div");
+
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: null,
+        sessions: [],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+
+    expect(container.querySelector('button[title="Stop session"]')).not.toBeNull();
+    expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(0);
+  });
+
   it("allows starts for authoritatively missing historical task links", () => {
     const host = {};
     const state = getWorkboardState(host);
