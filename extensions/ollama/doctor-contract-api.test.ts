@@ -3,6 +3,25 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { legacyConfigRules, normalizeCompatibilityConfig } from "./doctor-contract-api.js";
 
+type ModelDefinition = NonNullable<
+  NonNullable<OpenClawConfig["models"]>["providers"]
+>[string]["models"][number];
+
+const cloudModel: ModelDefinition = {
+  id: "kimi-k2.5:cloud",
+  name: "Kimi K2.5 Cloud",
+  reasoning: false,
+  input: ["text"],
+  cost: {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+  },
+  contextWindow: 131072,
+  maxTokens: 8192,
+};
+
 function readOllamaCloudProvider(config: OpenClawConfig): Record<string, unknown> | undefined {
   return config.models?.providers?.["ollama-cloud"] as Record<string, unknown> | undefined;
 }
@@ -20,11 +39,12 @@ describe("ollama doctor contract", () => {
           "ollama-cloud": {
             baseUrl: "https://ai.ollama.com",
             api: "ollama",
-            models: [{ id: "kimi-k2.5:cloud" }],
+            models: [cloudModel],
           },
           ollama: {
             baseUrl: "http://127.0.0.1:11434",
             api: "ollama",
+            models: [],
           },
         },
       },
@@ -38,7 +58,7 @@ describe("ollama doctor contract", () => {
     expect(readOllamaCloudProvider(result.config)).toEqual({
       baseUrl: "https://ollama.com",
       api: "ollama",
-      models: [{ id: "kimi-k2.5:cloud" }],
+      models: [cloudModel],
     });
     expect(readOllamaCloudProvider(config)?.baseUrl).toBe("https://ai.ollama.com");
   });
@@ -48,8 +68,10 @@ describe("ollama doctor contract", () => {
       models: {
         providers: {
           "ollama-cloud": {
+            baseUrl: "https://ollama.com",
             baseURL: "https://ai.ollama.com/",
             api: "ollama",
+            models: [],
           },
         },
       },
@@ -63,10 +85,13 @@ describe("ollama doctor contract", () => {
     expect(readOllamaCloudProvider(result.config)).toEqual({
       baseUrl: "https://ollama.com",
       api: "ollama",
+      models: [],
     });
     expect(readOllamaCloudProvider(config)).toEqual({
+      baseUrl: "https://ollama.com",
       baseURL: "https://ai.ollama.com/",
       api: "ollama",
+      models: [],
     });
   });
 });
