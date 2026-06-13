@@ -523,6 +523,9 @@ function buildMessagingSection(params: {
     messageToolOnly
       ? "- Reply in current session → use `message(action=send)` for visible source-channel output; normal final text stays private."
       : "- Reply in current session → automatically routes to the source channel (Signal, Telegram, etc.)",
+    telegramRichTextEnabled
+      ? "- Telegram rich text is available. Use Bot API 10.1 rich Markdown/HTML in visible message text when it improves clarity: headings, tables, blockquotes, `<details><summary>...</summary>...</details>`, `<sup>/<sub>`, `<mark>`, spoilers, lists, code blocks, footnotes, and formulas. This is not legacy MarkdownV2/parse_mode. Button labels are plain text only; send media through explicit media delivery."
+      : "",
     "- Cross-session messaging → use sessions_send(sessionKey, message)",
     subagentOrchestrationGuidance,
     completionEventGuidance,
@@ -552,9 +555,6 @@ function buildMessagingSection(params: {
               : params.runtimeChannel
                 ? `- Inline buttons not enabled for ${params.runtimeChannel}. If you need them, ask to set ${params.runtimeChannel}.capabilities.inlineButtons ("dm"|"group"|"all"|"allowlist").`
                 : ""
-            : "",
-          telegramRichTextEnabled
-            ? "- Telegram rich text is available. When it improves clarity, use valid Bot API 10.1 rich Markdown/HTML in visible message text: headings, tables, blockquotes, `<details><summary>...</summary>...</details>`, `<sup>/<sub>`, `<mark>`, spoilers, lists, code blocks, footnotes, and formulas. Button labels are plain text only; send media through explicit media delivery."
             : "",
           ...(params.messageToolHints ?? []),
         ]
