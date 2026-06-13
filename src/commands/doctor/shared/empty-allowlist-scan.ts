@@ -37,6 +37,8 @@ export function scanEmptyAllowlistPolicyWarnings(
     prefix: string,
     channelName: string,
     parent?: DoctorAccountRecord,
+    /** When true, suppress the default empty-group-allowlist warning for this record. */
+    suppressGroupWarning?: boolean,
   ) => {
     const accountDm = asObjectRecord(account.dm);
     const parentDm = asObjectRecord(parent?.dm);
@@ -53,6 +55,11 @@ export function scanEmptyAllowlistPolicyWarnings(
       (parentDm?.allowFrom as DoctorAllowFromList | undefined) ??
       undefined;
 
+    const resolvedSkipGroup =
+      suppressGroupWarning
+        ? () => true
+        : params.shouldSkipDefaultEmptyGroupAllowlistWarning;
+
     warnings.push(
       ...collectEmptyAllowlistPolicyWarningsForAccount({
         account,
@@ -61,8 +68,7 @@ export function scanEmptyAllowlistPolicyWarnings(
         doctorFixCommand: params.doctorFixCommand,
         parent,
         prefix,
-        shouldSkipDefaultEmptyGroupAllowlistWarning:
-          params.shouldSkipDefaultEmptyGroupAllowlistWarning,
+        shouldSkipDefaultEmptyGroupAllowlistWarning: resolvedSkipGroup,
       }),
     );
     if (params.extraWarningsForAccount) {
@@ -88,9 +94,23 @@ export function scanEmptyAllowlistPolicyWarnings(
     if (isDisabledRecord(channelConfig)) {
       continue;
     }
-    checkAccount(channelConfig, `channels.${channelName}`, channelName);
-
     const accounts = asObjectRecord(channelConfig.accounts);
+    const hasActiveAccounts =
+      accounts &&
+      Object.values(accounts).some((a) => !isDisabledRecord(a));
+
+    // When the channel has active per-account configs, the top-level record
+    // serves only as a parent fallback. Suppress the default
+    // empty-group-allowlist warning so an empty top-level groupAllowFrom
+    // does not produce a false positive when every account supplies its own
+    // populated allowlist (issue #92684).
+    checkAccount(
+      channelConfig,
+      `channels.${channelName}`,
+      channelName,
+      undefined,
+      hasActiveAccounts,
+    );
     if (!accounts) {
       continue;
     }
