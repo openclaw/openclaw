@@ -1085,7 +1085,7 @@ function isExplicitPlanningOnlyUserPrompt(text: string): boolean {
   return (
     trimmed.length > 0 &&
     !EXPLICIT_PLAN_AND_EXECUTE_REQUEST_RE.test(trimmed) &&
-    !EXPLICIT_ADVISORY_FOLLOW_UP_ACTION_RE.test(trimmed) &&
+    !hasExplicitAdvisoryFollowUpAction(trimmed) &&
     (EXPLICIT_PLANNING_REQUEST_RE.test(trimmed) ||
       EXPLICIT_PLAN_DESCRIPTION_REQUEST_RE.test(trimmed) ||
       EXPLICIT_PLAN_CREATION_REQUEST_RE.test(trimmed) ||
@@ -1110,6 +1110,23 @@ function isPlanningOnlyProgressClaim(text: string): boolean {
   return PLANNING_ONLY_PROGRESS_CLAIM_RE.test(text) && !PLANNING_ONLY_PROGRESS_RESULT_RE.test(text);
 }
 
+function hasExplicitAdvisoryFollowUpAction(text: string): boolean {
+  if (EXPLICIT_ADVISORY_FOLLOW_UP_ACTION_RE.test(text)) {
+    return true;
+  }
+  const conjunction = /\band\s+(?:then\s+)?(?:please\s+)?/i.exec(text);
+  if (!conjunction || !NON_AUTHORIZING_ADVISORY_PROMPT_RE.test(text)) {
+    return false;
+  }
+  const advisoryText = text.slice(0, conjunction.index);
+  const actionText = text.slice(conjunction.index + conjunction[0].length);
+  return (
+    !/\bhow\s+to\b/i.test(advisoryText) &&
+    !/^(?:how|why|what|which|when|where|whether)\b/i.test(actionText) &&
+    PLANNING_ONLY_ACTION_VERB_RE.test(actionText)
+  );
+}
+
 function isLikelyActionableUserPrompt(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -1120,13 +1137,13 @@ function isLikelyActionableUserPrompt(text: string): boolean {
     isExplicitPlanningOnlyUserPrompt(trimmed) ||
     NON_AUTHORIZING_NEGATED_ACTION_REQUEST_RE.test(trimmed) ||
     (NON_AUTHORIZING_ADVISORY_PROMPT_RE.test(trimmed) &&
-      !EXPLICIT_ADVISORY_FOLLOW_UP_ACTION_RE.test(trimmed))
+      !hasExplicitAdvisoryFollowUpAction(trimmed))
   ) {
     return false;
   }
   return (
     EXPLICIT_PLAN_AND_EXECUTE_REQUEST_RE.test(trimmed) ||
-    EXPLICIT_ADVISORY_FOLLOW_UP_ACTION_RE.test(trimmed) ||
+    hasExplicitAdvisoryFollowUpAction(trimmed) ||
     ACTIONABLE_PROMPT_DIRECTIVE_RE.test(trimmed) ||
     ACTIONABLE_PROMPT_POLITE_DIRECTIVE_RE.test(trimmed) ||
     ACTIONABLE_PROMPT_REQUEST_RE.test(trimmed) ||

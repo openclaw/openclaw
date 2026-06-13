@@ -607,7 +607,7 @@ describe("before_tool_call loop detection behavior", () => {
   ])("does not mark nested %s message outcomes as delivered", async (_label, details) => {
     const onToolOutcome = vi.fn();
     const execute = vi.fn().mockResolvedValue({
-      content: [{ type: "text", text: "not delivered" }],
+      content: [{ type: "text", text: '{"ok":true,"messageId":"message-1"}' }],
       details,
     });
     const tool = createWrappedTool("message", execute, {

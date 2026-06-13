@@ -102,6 +102,7 @@ import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import { resolveSessionSuspensionReason, suspendSession } from "../session-suspension.js";
+import { stableStringify } from "../stable-stringify.js";
 import { NON_DELIVERABLE_TERMINAL_REPLY_TEXT } from "../terminal-reply.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
@@ -247,6 +248,24 @@ function appendBoundedItems<T>(target: T[], items: readonly T[]): void {
   if (target.length > MAX_RETAINED_TOOL_LOOP_SIDE_EFFECT_ITEMS) {
     target.splice(0, target.length - MAX_RETAINED_TOOL_LOOP_SIDE_EFFECT_ITEMS);
   }
+}
+
+function mergeCurrentAttemptObservedItems<T>(params: {
+  liveItems?: readonly T[];
+  observedItems: readonly T[];
+  resolveKey: (item: T) => string;
+}): T[] {
+  const merged = [...(params.liveItems ?? [])];
+  const seen = new Set(merged.map(params.resolveKey));
+  for (const item of params.observedItems) {
+    const key = params.resolveKey(item);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    merged.push(item);
+  }
+  return merged;
 }
 
 function isNoRealConversationCompactionNoop(params: {
@@ -1982,18 +2001,27 @@ export async function runEmbeddedAgent(
             );
             const messagingToolSentTexts = [
               ...accumulatedMessagingToolSentTexts,
-              ...(currentAttemptLiveState?.messagingToolSentTexts ??
-                currentAttemptObservedMessagingToolSentTexts),
+              ...mergeCurrentAttemptObservedItems({
+                liveItems: currentAttemptLiveState?.messagingToolSentTexts,
+                observedItems: currentAttemptObservedMessagingToolSentTexts,
+                resolveKey: (text) => text,
+              }),
             ];
             const messagingToolSentMediaUrls = [
               ...accumulatedMessagingToolSentMediaUrls,
-              ...(currentAttemptLiveState?.messagingToolSentMediaUrls ??
-                currentAttemptObservedMessagingToolSentMediaUrls),
+              ...mergeCurrentAttemptObservedItems({
+                liveItems: currentAttemptLiveState?.messagingToolSentMediaUrls,
+                observedItems: currentAttemptObservedMessagingToolSentMediaUrls,
+                resolveKey: (mediaUrl) => mediaUrl,
+              }),
             ];
             const messagingToolSentTargets = [
               ...accumulatedMessagingToolSentTargets,
-              ...(currentAttemptLiveState?.messagingToolSentTargets ??
-                currentAttemptObservedMessagingToolSentTargets),
+              ...mergeCurrentAttemptObservedItems({
+                liveItems: currentAttemptLiveState?.messagingToolSentTargets,
+                observedItems: currentAttemptObservedMessagingToolSentTargets,
+                resolveKey: stableStringify,
+              }),
             ];
             const didSendViaMessagingTool =
               accumulatedDidSendViaMessagingTool ||

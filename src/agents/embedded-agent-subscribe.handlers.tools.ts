@@ -710,11 +710,14 @@ function hasCommittedMessagingToolSendResult(result: unknown): boolean {
   if (details.dryRun === true) {
     return false;
   }
-  if (hasCommittedMessagingToolResultDetails(details) || contentReceipt) {
+  if (hasCommittedMessagingToolResultDetails(details)) {
     return true;
   }
   if (hasMessagingToolNonDeliveryEvidence(details)) {
     return false;
+  }
+  if (contentReceipt) {
+    return true;
   }
   const status = normalizeOptionalLowercaseString(details?.status);
   return details.ok === true || details.success === true || status === "ok";

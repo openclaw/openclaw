@@ -1090,6 +1090,102 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     ]);
   });
 
+  it("merges late observed deliveries with stale live state after a failed terminal drain", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    const sharedTarget = { tool: "message", provider: "discord", to: "channel-shared" };
+    const lateTarget = { tool: "message", provider: "discord", to: "channel-late" };
+    const terminalDrain = vi.fn();
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (params: unknown) => {
+      const attemptParams = params as {
+        abortSignal?: AbortSignal;
+        onAttemptStateChange?: (state: {
+          replayState: { replayInvalid: boolean; hadPotentialSideEffects: boolean };
+          didSendViaMessagingTool: boolean;
+          didDeliverSourceReplyViaMessageTool: boolean;
+          didSendDeterministicApprovalPrompt: boolean;
+          messagingToolSentTexts: string[];
+          messagingToolSentMediaUrls: string[];
+          messagingToolSentTargets: Array<Record<string, unknown>>;
+          messagingToolSourceReplyPayloads: Array<{ text: string }>;
+          acceptedSessionSpawns: Array<{ runId: string; childSessionKey: string }>;
+          successfulCronAdds: number;
+        }) => void;
+        onTerminalDrainReady?: (drain: () => Promise<void>) => void;
+        onToolOutcome?: (observation: {
+          toolName: string;
+          argsHash: string;
+          resultHash: string;
+          resultText?: string;
+          terminalResultFallback?: { mode: "safe_text"; prefix?: string };
+          didSendViaMessagingTool?: boolean;
+          messagingToolSentTexts?: string[];
+          messagingToolSentMediaUrls?: string[];
+          messagingToolSentTargets?: Array<Record<string, unknown>>;
+          mutatingAction?: boolean;
+          blockedReason?: string;
+          blockedMessage?: string;
+        }) => void;
+      };
+      attemptParams.onAttemptStateChange?.({
+        replayState: { replayInvalid: true, hadPotentialSideEffects: true },
+        didSendViaMessagingTool: true,
+        didDeliverSourceReplyViaMessageTool: false,
+        didSendDeterministicApprovalPrompt: false,
+        messagingToolSentTexts: ["shared sent"],
+        messagingToolSentMediaUrls: ["file:///tmp/shared.png"],
+        messagingToolSentTargets: [sharedTarget],
+        messagingToolSourceReplyPayloads: [],
+        acceptedSessionSpawns: [],
+        successfulCronAdds: 0,
+      });
+      attemptParams.onTerminalDrainReady?.(async () => {
+        terminalDrain();
+        attemptParams.onToolOutcome?.({
+          toolName: "message",
+          argsHash: "late-send",
+          resultHash: "late-send-result",
+          didSendViaMessagingTool: true,
+          messagingToolSentTexts: ["shared sent", "late sent"],
+          messagingToolSentMediaUrls: ["file:///tmp/shared.png", "file:///tmp/late.png"],
+          messagingToolSentTargets: [sharedTarget, lateTarget],
+          mutatingAction: true,
+        });
+        throw new Error("terminal drain failed");
+      });
+      attemptParams.onToolOutcome?.({
+        toolName: "status",
+        argsHash: "current",
+        resultHash: "status-result",
+        resultText: "healthy",
+        terminalResultFallback: { mode: "safe_text", prefix: "Status:" },
+      });
+      attemptParams.onToolOutcome?.({
+        toolName: "status",
+        argsHash: "current",
+        resultHash: "blocked-result",
+        blockedReason: "tool-loop",
+        blockedMessage: "CRITICAL: repeated status calls.",
+      });
+      expect(attemptParams.abortSignal?.aborted).toBe(true);
+      throw new Error("Request was aborted.");
+    });
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "xai",
+      model: "grok-composer-2.5-fast",
+      runId: "run-tool-loop-late-delivery-merge",
+    });
+
+    expect(terminalDrain).toHaveBeenCalledOnce();
+    expect(result.messagingToolSentTexts).toEqual(["shared sent", "late sent"]);
+    expect(result.messagingToolSentMediaUrls).toEqual([
+      "file:///tmp/shared.png",
+      "file:///tmp/late.png",
+    ]);
+    expect(result.messagingToolSentTargets).toEqual([sharedTarget, lateTarget]);
+  });
+
   it("drains late parallel tool outcomes before returning a resolved loop-abort fallback", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     const setTerminalLifecycleMeta = vi.fn();
@@ -7010,6 +7106,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     "Please show me how you would delete old backups",
     "Walk me through deleting the database",
     "Help me understand how to remove the database",
+    "Can you explain the issue and how to fix it?",
     "Explain how to remove the database and then delete old backups",
     "How would you remove the database, then delete old backups?",
   ])("does not treat an advisory question as authorization to act: %s", (prompt) => {
@@ -7031,6 +7128,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     "How would you delete old backups? Then delete them.",
     "Explain how to remove the database. Then remove it.",
     "How will you delete the file? Please delete it.",
+    "Can you explain the issue and fix it?",
+    "Could you describe the failure and then update the config?",
   ])("keeps advisory prompts with a separate execution request actionable: %s", (prompt) => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "openai",

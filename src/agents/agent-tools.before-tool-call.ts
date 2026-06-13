@@ -1101,11 +1101,14 @@ function hasCommittedMessagingToolSendOutcome(params: {
   if (details.dryRun === true) {
     return false;
   }
-  if (hasCommittedMessagingToolResultDetails(details) || contentReceipt) {
+  if (hasCommittedMessagingToolResultDetails(details)) {
     return true;
   }
   if (hasMessagingToolNonDeliveryEvidence(details)) {
     return false;
+  }
+  if (contentReceipt) {
+    return true;
   }
   const status = typeof details.status === "string" ? details.status.trim().toLowerCase() : "";
   return details.ok === true || details.success === true || status === "ok";
