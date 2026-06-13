@@ -74,6 +74,15 @@ describe("resolveGatewayRequestContext", () => {
         defaultMessageChannel: "webchat",
       }),
     ).toThrow(/Unknown agent/);
+
+    expect(() =>
+      resolveGatewayRequestContext({
+        req: createReq({ "x-openclaw-agent-id": "!!!" }),
+        model: "openclaw",
+        sessionPrefix: "openai",
+        defaultMessageChannel: "webchat",
+      }),
+    ).toThrow("Unknown agent '!!!'.");
   });
 });
 

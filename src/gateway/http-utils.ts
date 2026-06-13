@@ -11,7 +11,11 @@ import { modelKey, parseModelRef, resolveDefaultModelForAgent } from "../agents/
 import { createModelVisibilityPolicy } from "../agents/model-visibility-policy.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
-import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-key.js";
+import {
+  buildAgentMainSessionKey,
+  isValidAgentId,
+  normalizeAgentId,
+} from "../routing/session-key.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { getHeader } from "./http-auth-utils.js";
 import { loadGatewayModelCatalog } from "./server-model-catalog.js";
@@ -62,6 +66,9 @@ function resolveAgentIdFromHeader(req: IncomingMessage): string | undefined {
     "";
   if (!raw) {
     return undefined;
+  }
+  if (!isValidAgentId(raw)) {
+    throw new UnknownGatewayAgentError(raw);
   }
   return normalizeAgentId(raw);
 }
