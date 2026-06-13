@@ -776,15 +776,31 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.scopes).toEqual(["operator.read"]);
   });
 
-  it("preserves configured remote credentials instead of sending stored device auth", async () => {
+  it("prefers stored device auth over configured local credentials", async () => {
+    getRuntimeConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        bind: "loopback",
+        auth: { mode: "token", token: "configured-token" },
+      },
+    });
+    setGatewayNetworkDefaults();
+
+    await callGatewayCli({ method: "node.list", useStoredDeviceAuth: true });
+
+    expect(lastClientOptions?.token).toBeUndefined();
+    expect(lastClientOptions?.scopes).toBeUndefined();
+  });
+
+  it("prefers stored device auth over configured remote credentials", async () => {
     getRuntimeConfig.mockReturnValue(makeRemotePasswordGatewayConfig("remote-password"));
     setGatewayNetworkDefaults();
 
     await callGatewayCli({ method: "node.list", useStoredDeviceAuth: true });
 
     expect(lastClientOptions?.url).toBe("wss://remote.example:18789");
-    expect(lastClientOptions?.password).toBe("remote-password");
-    expect(lastClientOptions?.scopes).toEqual(["operator.read"]);
+    expect(lastClientOptions?.password).toBeUndefined();
+    expect(lastClientOptions?.scopes).toBeUndefined();
   });
 
   it("fails before connecting when stored device auth is unavailable", async () => {

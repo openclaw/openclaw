@@ -1020,13 +1020,9 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
   });
   const useStoredDeviceAuth =
     opts.useStoredDeviceAuth === true &&
-    !resolvedCredentials.token &&
-    !resolvedCredentials.password;
-  if (useStoredDeviceAuth && context.urlOverride) {
-    throw new GatewayExplicitAuthRequiredError(
-      "stored device auth is disabled for gateway URL overrides",
-    );
-  }
+    !context.urlOverride &&
+    !context.explicitAuth.token &&
+    !context.explicitAuth.password;
   ensureRemoteModeUrlConfigured(context);
   const connectionDetails = buildGatewayConnectionDetails({
     config: context.config,
