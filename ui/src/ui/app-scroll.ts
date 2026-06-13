@@ -86,10 +86,9 @@ export function scheduleChatScroll(
         manualScroll ||
         autoScrollMode === "always" ||
         (autoScrollMode === "near-bottom" &&
-          !host.chatFollowLocked &&
           (effectiveForce ||
-            host.chatUserNearBottom ||
-            distanceFromBottom < NEAR_BOTTOM_THRESHOLD));
+            (!host.chatFollowLocked &&
+              (host.chatUserNearBottom || distanceFromBottom < NEAR_BOTTOM_THRESHOLD))));
 
       if (!shouldStick) {
         // User is scrolled up — flag that new content arrived below.
@@ -132,10 +131,9 @@ export function scheduleChatScroll(
           manualScroll ||
           autoScrollMode === "always" ||
           (autoScrollMode === "near-bottom" &&
-            !host.chatFollowLocked &&
             (effectiveForce ||
-              host.chatUserNearBottom ||
-              latestDistanceFromBottom < NEAR_BOTTOM_THRESHOLD));
+              (!host.chatFollowLocked &&
+                (host.chatUserNearBottom || latestDistanceFromBottom < NEAR_BOTTOM_THRESHOLD))));
         if (!shouldStickRetry) {
           return;
         }

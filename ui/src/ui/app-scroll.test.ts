@@ -232,6 +232,24 @@ describe("scheduleChatScroll", () => {
     expect(container.scrollTop).toBe(container.scrollHeight);
   });
 
+  it("uses force=true on initial load even after a previous follow lock", async () => {
+    const { host, container } = createScrollHost({
+      scrollHeight: 2000,
+      scrollTop: 500,
+      clientHeight: 400,
+    });
+    host.chatUserNearBottom = false;
+    host.chatFollowLocked = true;
+    host.chatHasAutoScrolled = false;
+
+    scheduleChatScroll(host, true);
+    await host.updateComplete;
+
+    expect(container.scrollTop).toBe(container.scrollHeight);
+    expect(host.chatFollowLocked).toBe(false);
+    expect(host.chatNewMessagesBelow).toBe(false);
+  });
+
   it("sets chatNewMessagesBelow when not scrolling due to user position", async () => {
     const { host } = createScrollHost({
       scrollHeight: 2000,
