@@ -447,8 +447,10 @@ export function createMemorySearchTool(options: {
                   hits: number;
                 }
               | undefined;
-            if (shouldQueryMemory && memory && !("error" in memory)) {
-              await runUnavailablePhase("memory", async () => {
+            // Run memory and supplement searches in parallel for corpus=all
+            // to avoid sequential timeout when each search uses most of the deadline.
+            const memorySearchPromise = (shouldQueryMemory && memory && !("error" in memory))
+              ? runUnavailablePhase("memory", async () => {
                 let activeMemory = memory;
                 const runtimeDebug: MemorySearchRuntimeDebug[] = [];
                 const qmdSearchModeOverride = resolveActiveMemoryQmdSearchModeOverride(
@@ -549,25 +551,33 @@ export function createMemorySearchTool(options: {
                   searchMs: Math.max(0, Date.now() - searchStartedAt),
                   hits: rawResults.length,
                 };
-              });
-              if (pausedIndexIdentityReason) {
-                return jsonResult(
-                  buildPausedMemoryIndexUnavailableResult(pausedIndexIdentityReason),
-                );
-              }
+              })
+              : Promise.resolve(null);
+            // Run supplement search without runUnavailablePhase to avoid
+            // overwriting activeUnavailablePhase from the parallel memory search.
+            const supplementSearchPromise = shouldQuerySupplements
+              ? searchMemoryCorpusSupplements({
+                  query,
+                  maxResults,
+                  agentSessionKey: options.agentSessionKey,
+                  corpus: requestedCorpus,
+                }).catch((error: unknown) => {
+                  // Only set failedUnavailablePhase if memory didn't already fail.
+                  if (!failedUnavailablePhase) {
+                    failedUnavailablePhase = "supplement";
+                  }
+                  throw error;
+                })
+              : Promise.resolve([]);
+            // Start supplement search eagerly, then await memory search.
+            const supplementSearchHandle = supplementSearchPromise;
+            await memorySearchPromise;
+            if (pausedIndexIdentityReason) {
+              return jsonResult(
+                buildPausedMemoryIndexUnavailableResult(pausedIndexIdentityReason),
+              );
             }
-            const supplementResults = shouldQuerySupplements
-              ? await runUnavailablePhase(
-                  "supplement",
-                  async () =>
-                    await searchMemoryCorpusSupplements({
-                      query,
-                      maxResults,
-                      agentSessionKey: options.agentSessionKey,
-                      corpus: requestedCorpus,
-                    }),
-                )
-              : [];
+            const supplementResults = await supplementSearchHandle;
             // Wiki and memory scores use incomparable scales, so corpus=all first
             // balances candidate selection and then backfills any unused slots.
             const effectiveMax = Math.max(1, maxResults ?? 10);
