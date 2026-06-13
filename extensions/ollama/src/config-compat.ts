@@ -68,6 +68,22 @@ export function migrateOllamaCloudRetiredBaseUrl(config: OpenClawConfig): {
   const nextProvider = asRecord(nextProviders[OLLAMA_CLOUD_PROVIDER_ID]) ?? {};
   nextProviders[OLLAMA_CLOUD_PROVIDER_ID] = nextProvider;
 
+  const canonicalBaseUrl = nextProvider.baseUrl;
+  if (
+    retired.key === "baseURL" &&
+    typeof canonicalBaseUrl === "string" &&
+    canonicalBaseUrl.trim() &&
+    !isRetiredOllamaCloudBaseUrl(canonicalBaseUrl)
+  ) {
+    delete nextProvider.baseURL;
+    return {
+      config: nextConfig,
+      changes: [
+        `Removed retired models.providers.ollama-cloud.baseURL ${retired.value} while preserving models.providers.ollama-cloud.baseUrl.`,
+      ],
+    };
+  }
+
   nextProvider.baseUrl = OLLAMA_CLOUD_BASE_URL;
   if (retired.key === "baseURL") {
     delete nextProvider.baseURL;
