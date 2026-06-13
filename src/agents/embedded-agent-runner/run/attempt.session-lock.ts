@@ -1159,7 +1159,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       maxHoldMs: params.lockOptions.maxHoldMs,
     });
 
-  let heldLock: SessionLock | undefined;
+  let heldLock: SessionLock | undefined = await acquireLock();
   const activeWriteLock = new AsyncLocalStorage<ActiveWriteLockState>();
   let ownedPublicationQueue: Promise<void> = Promise.resolve();
   let fenceFingerprint: SessionFileFingerprint | undefined;
