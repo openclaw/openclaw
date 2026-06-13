@@ -114,6 +114,7 @@ const MISSING_TOOL_RESULT_ERROR =
   "OpenClaw recorded a native Codex tool.call without a matching tool.result before the turn completed.";
 const GENERATED_IMAGE_MEDIA_SUBDIR = "tool-image-generation";
 const BYTES_PER_MB = 1024 * 1024;
+const SHELL_INVOCATION_FAILURE_EXIT_CODES = new Set([126, 127]);
 // Match OpenClaw's default image media cap for generated image tool outputs.
 const DEFAULT_GENERATED_IMAGE_MAX_BYTES = 6 * BYTES_PER_MB;
 const TRANSCRIPT_PROGRESS_SUPPRESSED_TOOL_NAMES = new Set([
@@ -2083,6 +2084,9 @@ function itemTitle(item: CodexThreadItem): string {
 function itemStatus(item: CodexThreadItem): "completed" | "failed" | "running" | "blocked" {
   const status = readItemString(item, "status");
   if (status === "failed") {
+    if (isCompletedCommandExit(item)) {
+      return "completed";
+    }
     return "failed";
   }
   if (status === "declined") {
@@ -2100,6 +2104,17 @@ function formatMissingToolResultError(params: { id: string; name: string }): str
 
 function isNonSuccessItemStatus(status: ReturnType<typeof itemStatus>): boolean {
   return status === "failed" || status === "blocked";
+}
+
+function isCompletedCommandExit(item: CodexThreadItem): boolean {
+  // Codex marks nonzero native shell exits as failed. OpenClaw's exec contract
+  // treats process exits as completed tool runs; callers read exitCode/output
+  // for command semantics, while 126/127 still mean the shell could not run it.
+  return (
+    item.type === "commandExecution" &&
+    typeof item.exitCode === "number" &&
+    !SHELL_INVOCATION_FAILURE_EXIT_CODES.has(item.exitCode)
+  );
 }
 
 function itemName(item: CodexThreadItem): string | undefined {
@@ -2245,7 +2260,7 @@ function itemToolResult(item: CodexThreadItem): { result?: Record<string, unknow
   if (item.type === "commandExecution") {
     return {
       result: sanitizeCodexAgentEventRecord({
-        status: item.status,
+        status: itemStatus(item),
         exitCode: item.exitCode,
         durationMs: item.durationMs,
       }),
@@ -2254,7 +2269,7 @@ function itemToolResult(item: CodexThreadItem): { result?: Record<string, unknow
   if (item.type === "fileChange") {
     return {
       result: sanitizeCodexAgentEventRecord({
-        status: item.status,
+        status: itemStatus(item),
         changes: itemFileChanges(item),
       }),
     };
@@ -2262,7 +2277,7 @@ function itemToolResult(item: CodexThreadItem): { result?: Record<string, unknow
   if (item.type === "mcpToolCall") {
     return {
       result: sanitizeCodexAgentEventRecord({
-        status: item.status,
+        status: itemStatus(item),
         durationMs: item.durationMs,
         ...(item.error ? { error: item.error } : {}),
         ...(item.result ? { result: item.result } : {}),
