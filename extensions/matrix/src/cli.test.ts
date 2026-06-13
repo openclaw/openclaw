@@ -401,6 +401,20 @@ describe("matrix CLI verification commands", () => {
     expect(runMatrixSelfVerificationMock).not.toHaveBeenCalled();
   });
 
+  it("rejects non-positive Matrix self-verification timeout values", async () => {
+    const program = buildProgram();
+
+    await program.parseAsync(["matrix", "verify", "self", "--timeout-ms", "-1"], {
+      from: "user",
+    });
+
+    expect(process.exitCode).toBe(1);
+    expect(consoleErrorMock).toHaveBeenCalledWith(
+      "Self-verification failed: --timeout-ms must be >= 1, got -1",
+    );
+    expect(runMatrixSelfVerificationMock).not.toHaveBeenCalled();
+  });
+
   it("requests Matrix self-verification and prints the follow-up SAS commands", async () => {
     requestMatrixVerificationMock.mockResolvedValue(
       mockMatrixVerificationSummary({

@@ -232,7 +232,11 @@ function configureCliLogMode(verbose: boolean): void {
   setMatrixSdkConsoleLogging(verbose);
 }
 
-function parseOptionalInt(value: string | undefined, fieldName: string): number | undefined {
+function parseOptionalInt(
+  value: string | undefined,
+  fieldName: string,
+  opts?: { min?: number },
+): number | undefined {
   const trimmed = value?.trim();
   if (!trimmed) {
     return undefined;
@@ -243,6 +247,9 @@ function parseOptionalInt(value: string | undefined, fieldName: string): number 
   const parsed = parseStrictInteger(trimmed);
   if (parsed === undefined) {
     throw new Error(`${fieldName} must be an integer`);
+  }
+  if (opts?.min !== undefined && parsed < opts.min) {
+    throw new Error(`${fieldName} must be >= ${opts.min}, got ${parsed}`);
   }
   return parsed;
 }
@@ -305,7 +312,9 @@ async function addMatrixAccount(params: {
     accessToken: params.accessToken,
     password: params.password,
     deviceName: params.deviceName,
-    initialSyncLimit: parseOptionalInt(params.initialSyncLimit, "--initial-sync-limit"),
+    initialSyncLimit: parseOptionalInt(params.initialSyncLimit, "--initial-sync-limit", {
+      min: 0,
+    }),
     useEnv: params.useEnv === true,
   };
   const accountId =
@@ -1167,7 +1176,7 @@ async function runMatrixCliSelfVerificationCommand(
       await runMatrixSelfVerification({
         accountId,
         cfg,
-        timeoutMs: parseOptionalInt(options.timeoutMs, "--timeout-ms"),
+        timeoutMs: parseOptionalInt(options.timeoutMs, "--timeout-ms", { min: 1 }),
         onRequested: (summary) => {
           printAccountLabel(accountId);
           printMatrixVerificationSummary(summary);
