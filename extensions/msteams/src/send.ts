@@ -498,9 +498,13 @@ export async function sendPollMSTeams(
     to,
   });
 
+  // DLP (#16): the poll's question and option labels are an agent-reachable card surface too — redact
+  // them before they reach the Adaptive Card so "put the secret in a poll" isn't a loophole around
+  // the text/card-path redaction. Only the visible strings are redacted (not the internal option
+  // indices or the pollId), so vote matching is unaffected. (Review S3 / Codex poll-card follow-up)
   const pollCard = buildMSTeamsPollCard({
-    question,
-    options,
+    question: redactOutboundMSTeamsText(question, cfg),
+    options: options.map((option) => redactOutboundMSTeamsText(option, cfg)),
     maxSelections,
   });
 
