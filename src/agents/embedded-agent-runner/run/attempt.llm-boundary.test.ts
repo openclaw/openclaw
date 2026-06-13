@@ -355,6 +355,46 @@ describe("normalizeMessagesForLlmBoundary", () => {
     expect(input[0]).toHaveProperty("details");
   });
 
+  it("bounds provider replay to the latest 24 tool results", () => {
+    const input = Array.from({ length: 30 }, (_, index) => {
+      const toolCallId = `call_${index}`;
+      return [
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: toolCallId, name: "exec", arguments: {} }],
+          timestamp: index * 2,
+        },
+        {
+          role: "toolResult",
+          toolCallId,
+          toolName: "exec",
+          content: [{ type: "text", text: `output ${index}` }],
+          timestamp: index * 2 + 1,
+        },
+      ];
+    }).flat();
+
+    const output = normalizeMessagesForLlmBoundary(
+      input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+    ) as unknown as Array<Record<string, unknown>>;
+    const toolResults = output.filter((message) => message.role === "toolResult");
+    const keptIds = toolResults.map((message) => message.toolCallId);
+    const assistantToolCallIds = output.flatMap((message) => {
+      if (message.role !== "assistant" || !Array.isArray(message.content)) {
+        return [];
+      }
+      return message.content.flatMap((block) => {
+        const record = block as { type?: unknown; id?: unknown };
+        return record.type === "toolCall" && typeof record.id === "string" ? [record.id] : [];
+      });
+    });
+
+    expect(toolResults).toHaveLength(24);
+    expect(keptIds).toEqual(Array.from({ length: 24 }, (_, index) => `call_${index + 6}`));
+    expect(assistantToolCallIds).toEqual(keptIds);
+    expect(input.filter((message) => message.role === "toolResult")).toHaveLength(30);
+  });
+
   it("collapses single-text-block user content arrays to plain strings", () => {
     // Both current and historical single-text-block user messages must
     // serialize identically — this is the form-canonicalization half of the
