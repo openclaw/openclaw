@@ -53,16 +53,11 @@ profiles:
       - security-auth-pairing-and-secrets.credential-and-secret-hygiene
 categories:
   - id: agent-runtime-and-provider-execution.agent-turn-execution
-    supportStatus: lts-included
-    releaseBlocking: true
     requirement:
       A normal user turn streams, calls tools when needed, finishes once, and records visible
       transcript evidence.
     evidenceRequired: Deterministic QA Lab scenarios plus runtime e2e evidence on the target ref.
     evidence:
-      profiles:
-        - smoke-ci
-        - release
       liveProofRequired: false
       freshness: target-ref
       coverageIds:
@@ -81,14 +76,9 @@ categories:
     taxonomySurfaceId: agent-runtime-and-provider-execution
     taxonomyCategoryName: Agent Turn Execution
   - id: session-memory-and-context-engine.token-management
-    supportStatus: lts-included
-    releaseBlocking: true
     requirement: Long sessions compact or recover without hiding replay-unsafe mutating work.
     evidenceRequired: QA Lab long-context or compaction scenario plus focused runtime e2e proof.
     evidence:
-      profiles:
-        - smoke-ci
-        - release
       liveProofRequired: false
       freshness: target-ref
       coverageIds:
@@ -104,15 +94,10 @@ categories:
     taxonomySurfaceId: session-memory-and-context-engine
     taxonomyCategoryName: Token Management
   - id: browser-automation-and-exec-sandbox-tools.tool-invocation-and-execution
-    supportStatus: lts-included
-    releaseBlocking: true
     requirement: File, shell, patch, search, and session tools execute through production tool paths
       with correct result rendering.
     evidenceRequired: Runtime tool fixture scenarios plus host e2e shard.
     evidence:
-      profiles:
-        - smoke-ci
-        - release
       liveProofRequired: false
       freshness: target-ref
       coverageIds:
@@ -134,14 +119,9 @@ categories:
     taxonomySurfaceId: browser-automation-and-exec-sandbox-tools
     taxonomyCategoryName: Tool Invocation and Execution
   - id: security-auth-pairing-and-secrets.approval-policy-and-tool-safeguards
-    supportStatus: lts-included
-    releaseBlocking: true
     requirement: Approval, denial, retry, and terminal stop paths work through portable actions.
     evidenceRequired: QA Lab approval scenarios plus channel action evidence where a channel claim exists.
     evidence:
-      profiles:
-        - smoke-ci
-        - release
       liveProofRequired: false
       freshness: target-ref-and-release-package
       coverageIds:
@@ -160,8 +140,6 @@ categories:
     taxonomySurfaceId: security-auth-pairing-and-secrets
     taxonomyCategoryName: Approval Policy and Tool Safeguards
   - id: telemetry-diagnostics-and-observability.telemetry-export
-    supportStatus: deferred
-    releaseBlocking: false
     requirement:
       User-visible runs emit bounded trace/run diagnostics with enough IDs to debug release
       failures without leaking secrets.
@@ -170,9 +148,6 @@ categories:
       proposal includes health/logging/session diagnostics first and leaves telemetry export
       hardening for later.
     evidence:
-      profiles:
-        - smoke-ci
-        - release
       liveProofRequired: false
       freshness: target-ref
       coverageIds:
@@ -191,14 +166,10 @@ categories:
     taxonomySurfaceId: telemetry-diagnostics-and-observability
     taxonomyCategoryName: Telemetry Export
   - id: openai-codex-provider-path.responses-and-tool-compatibility
-    supportStatus: lts-included
-    releaseBlocking: true
     requirement: OpenAI auth, streaming, tools, native web search, and error handling work with live
       credentials for release claims.
     evidenceRequired: Live provider evidence and provider/tool e2e for release candidates.
     evidence:
-      profiles:
-        - release
       liveProofRequired: true
       freshness: release-candidate
       coverageIds:
@@ -217,13 +188,9 @@ categories:
     taxonomySurfaceId: openai-codex-provider-path
     taxonomyCategoryName: Responses and Tool Compatibility
   - id: channel-framework.conversation-routing-and-delivery
-    supportStatus: deferred
-    releaseBlocking: false
     requirement: The synthetic channel covers portable channel contract behavior used by normal PR CI.
     evidenceRequired: Deterministic QA Lab qa-channel evidence.
     evidence:
-      profiles:
-        - smoke-ci
       liveProofRequired: false
       freshness: target-ref
       coverageIds:
@@ -247,17 +214,12 @@ categories:
     taxonomySurfaceId: channel-framework
     taxonomyCategoryName: Conversation Routing and Delivery
   - id: session-memory-and-context-engine.memory
-    supportStatus: deferred
-    releaseBlocking: false
     requirement:
       User preference and session memory recall work through normal conversation flow without
       crossing thread or channel boundaries.
     evidenceRequired: QA Lab memory scenarios; deferred because the LTS proposal includes
       session/context categories but explicitly leaves Memory outside the initial slice.
     evidence:
-      profiles:
-        - smoke-ci
-        - release
       liveProofRequired: false
       freshness: target-ref
       coverageIds:
@@ -276,14 +238,9 @@ categories:
     taxonomySurfaceId: session-memory-and-context-engine
     taxonomyCategoryName: Memory
   - id: session-memory-and-context-engine.diagnostics-maintenance-and-recovery
-    supportStatus: deferred
-    releaseBlocking: false
     requirement: Memory store failure produces visible fallback behavior without losing the active turn.
     evidenceRequired: QA Lab memory failure scenario; deferred with Memory until the support boundary is accepted.
     evidence:
-      profiles:
-        - smoke-ci
-        - release
       liveProofRequired: false
       freshness: target-ref
       coverageIds:
@@ -298,8 +255,6 @@ categories:
     taxonomySurfaceId: session-memory-and-context-engine
     taxonomyCategoryName: Diagnostics, Maintenance, and Recovery
   - id: automation-cron-hooks-tasks-polling.cron-jobs
-    supportStatus: deferred
-    releaseBlocking: false
     requirement:
       Natural-language cron creation, due-run execution, duplicate prevention, delivery, and
       run history work end to end.
@@ -307,9 +262,6 @@ categories:
       deferred because Automation is a first-wave non-LTS candidate, not part of the proposed
       initial LTS slice.
     evidence:
-      profiles:
-        - smoke-ci
-        - release
       liveProofRequired: false
       freshness: target-ref-and-release-package
       coverageIds:
@@ -327,15 +279,10 @@ categories:
     taxonomySurfaceId: automation-cron-hooks-tasks-polling
     taxonomyCategoryName: Cron Jobs
   - id: plugin-sdk-and-bundled-plugin-architecture.installing-and-running-plugins
-    supportStatus: lts-included
-    releaseBlocking: true
     requirement: Built-in provider, tool, channel, and service plugins have at least one user-flow
       scenario for behavior users depend on.
     evidenceRequired: QA Lab plugin scenarios plus Kitchen Sink conformance where credentials are available.
     evidence:
-      profiles:
-        - smoke-ci
-        - release
       liveProofRequired: false
       freshness: target-ref-and-release-package
       coverageIds:
@@ -357,17 +304,12 @@ categories:
     taxonomySurfaceId: plugin-sdk-and-bundled-plugin-architecture
     taxonomyCategoryName: Installing and running plugins
   - id: media-understanding-and-media-generation.media-understanding
-    supportStatus: deferred
-    releaseBlocking: false
     requirement:
       Image, audio, or file input is staged, summarized, redacted where needed, and usable in
       a normal agent turn.
     evidenceRequired: QA Lab media scenarios plus live media evidence for release claims; deferred
       because media is outside the proposed initial LTS support boundary.
     evidence:
-      profiles:
-        - smoke-ci
-        - release
       liveProofRequired: false
       freshness: release-candidate
       coverageIds:
@@ -384,8 +326,6 @@ categories:
     taxonomySurfaceId: media-understanding-and-media-generation
     taxonomyCategoryName: Media Understanding
   - id: media-understanding-and-media-generation.media-generation
-    supportStatus: deferred
-    releaseBlocking: false
     requirement:
       Generated image, TTS, or other media output reaches the requested channel or artifact
       path with usable metadata.
@@ -393,9 +333,6 @@ categories:
       QA Lab media generation scenarios plus channel media evidence for release claims;
       deferred because media generation is explicitly outside the initial LTS priority.
     evidence:
-      profiles:
-        - smoke-ci
-        - release
       liveProofRequired: false
       freshness: release-candidate
       coverageIds:
@@ -415,8 +352,6 @@ categories:
     taxonomySurfaceId: media-understanding-and-media-generation
     taxonomyCategoryName: Media Generation
   - id: browser-control-ui-and-webchat.browser-ui
-    supportStatus: deferred
-    releaseBlocking: false
     requirement:
       Control UI can start, observe, and recover Gateway-backed runs with browser proof on
       supported viewports.
@@ -424,9 +359,6 @@ categories:
       Control UI e2e shard or QA Lab Control UI scenario; deferred because Gateway Web
       App is a first-wave non-LTS candidate.
     evidence:
-      profiles:
-        - smoke-ci
-        - release
       liveProofRequired: false
       freshness: target-ref
       coverageIds:
@@ -443,14 +375,9 @@ categories:
     taxonomySurfaceId: browser-control-ui-and-webchat
     taxonomyCategoryName: Browser UI
   - id: security-auth-pairing-and-secrets.credential-and-secret-hygiene
-    supportStatus: lts-included
-    releaseBlocking: true
     requirement: Logs, traces, summaries, transcripts, diagnostics, and PR artifacts do not leak credentials.
     evidenceRequired: QA Lab redaction scenarios plus secret scanning gate.
     evidence:
-      profiles:
-        - smoke-ci
-        - release
       liveProofRequired: false
       freshness: target-ref-and-release-package
       coverageIds:
@@ -468,22 +395,3 @@ categories:
         - src/agents/payload-redaction.ts
     taxonomySurfaceId: security-auth-pairing-and-secrets
     taxonomyCategoryName: Credential and Secret Hygiene
-  - id: clawhub-and-external-plugin-distribution.compatibility-and-trust
-    supportStatus: advisory
-    releaseBlocking: false
-    requirement:
-      External plugin corpus remains advisory unless a release explicitly claims ecosystem
-      compatibility for that package set.
-    evidenceRequired: Crabpot or plugin-inspector advisory summary.
-    evidence:
-      profiles: []
-      liveProofRequired: false
-      freshness: latest-advisory-run
-      coverageIds: []
-      scenarioRefs: []
-      docsRefs:
-        - docs/plugins/architecture.md
-      codeRefs: []
-      notes: Advisory placeholder only; external plugin corpus ownership stays outside OpenClaw core.
-    taxonomySurfaceId: clawhub-and-external-plugin-distribution
-    taxonomyCategoryName: Compatibility and Trust

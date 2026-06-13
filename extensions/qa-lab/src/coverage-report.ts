@@ -328,12 +328,12 @@ function pushScorecardTaxonomyLines(lines: string[], report: QaScorecardTaxonomy
   if (report.scoreSnapshotRef) {
     lines.push(`- Maturity score snapshot: ${report.scoreSnapshotRef}`);
   }
-  lines.push(
-    `- Categories: ${report.categoryCount} (${report.ltsIncludedCategoryCount} LTS-included, ${report.deferredCategoryCount} deferred, ${report.advisoryCategoryCount} advisory)`,
-  );
+  const totalCoverageIds = report.mappedCoverageIdCount + report.unmappedCoverageIdCount;
+  lines.push(`- Categories: ${report.categoryCount}`);
   lines.push(`- Profiles: ${report.profileCount}`);
-  lines.push(`- Release-blocking categories: ${report.releaseBlockingCategoryCount}`);
-  lines.push(`- Mapped coverage IDs: ${report.mappedCoverageIdCount}`);
+  lines.push(
+    `- Mapped coverage IDs: ${report.mappedCoverageIdCount}/${totalCoverageIds} (${report.mappedCoverageIdPercent.toFixed(1)}%)`,
+  );
   lines.push(`- Mapped scenarios: ${report.mappedScenarioCount}`);
   lines.push(`- Unmapped coverage IDs: ${report.unmappedCoverageIdCount}`);
   lines.push(`- Validation warnings: ${report.validationIssueCount}`, "");
@@ -350,13 +350,12 @@ function pushScorecardTaxonomyLines(lines: string[], report: QaScorecardTaxonomy
   if (report.categories.length > 0) {
     lines.push("### Category Mapping", "");
     for (const category of report.categories) {
-      const blocking = category.releaseBlocking ? "release-blocking" : "non-blocking";
       const coverage = category.coverageIds.length > 0 ? category.coverageIds.join(", ") : "none";
       const scenarios =
         category.scenarioRefs.length > 0 ? category.scenarioRefs.join(", ") : "none";
       const profiles = category.profiles.length > 0 ? category.profiles.join(", ") : "none";
       lines.push(
-        `- ${category.id} (${category.taxonomySurfaceId} / ${category.taxonomyCategoryName}; ${category.supportStatus}, ${blocking}, ${category.mappingStatus}): profiles: ${profiles}; coverage: ${coverage}; scenarios: ${scenarios}`,
+        `- ${category.id} (${category.taxonomySurfaceId} / ${category.taxonomyCategoryName}; ${category.mappingStatus}): profiles: ${profiles}; coverage: ${coverage}; scenarios: ${scenarios}`,
       );
     }
     lines.push("");

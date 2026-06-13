@@ -51,12 +51,9 @@ describe("qa coverage report", () => {
     ]);
     expect(inventory.scorecardTaxonomy.taxonomyId).toBe("stable-lts-initial");
     expect(inventory.scorecardTaxonomy.profileCount).toBe(2);
-    expect(inventory.scorecardTaxonomy.categoryCount).toBe(16);
-    expect(inventory.scorecardTaxonomy.ltsIncludedCategoryCount).toBe(7);
-    expect(inventory.scorecardTaxonomy.deferredCategoryCount).toBe(8);
-    expect(inventory.scorecardTaxonomy.advisoryCategoryCount).toBe(1);
-    expect(inventory.scorecardTaxonomy.releaseBlockingCategoryCount).toBe(7);
+    expect(inventory.scorecardTaxonomy.categoryCount).toBe(15);
     expect(inventory.scorecardTaxonomy.mappedCoverageIdCount).toBeGreaterThan(0);
+    expect(inventory.scorecardTaxonomy.mappedCoverageIdPercent).toBeGreaterThan(0);
     expect(inventory.scorecardTaxonomy.mappedScenarioCount).toBeGreaterThan(0);
     expect(inventory.scorecardTaxonomy.unmappedCoverageIdCount).toBeGreaterThan(0);
     expect(inventory.scorecardTaxonomy.validationIssues).toStrictEqual([]);
@@ -80,12 +77,6 @@ describe("qa coverage report", () => {
       "session-memory-and-context-engine.token-management",
       "telemetry-diagnostics-and-observability.telemetry-export",
     ]);
-    expect(
-      inventory.scorecardTaxonomy.categories.find(
-        (category) =>
-          category.id === "clawhub-and-external-plugin-distribution.compatibility-and-trust",
-      )?.profiles,
-    ).toStrictEqual([]);
     expect(inventory.scenarioPacks.map((pack) => pack.id)).toEqual([
       "observability",
       "personal-agent",
@@ -131,13 +122,14 @@ describe("qa coverage report", () => {
     expect(report).toContain("- Mapping ID: stable-lts-initial");
     expect(report).toContain("- Maturity taxonomy: taxonomy.yaml");
     expect(report).toContain("- Maturity score snapshot: docs/maturity-scores.yaml");
-    expect(report).toContain("- Categories: 16 (7 LTS-included, 8 deferred, 1 advisory)");
+    expect(report).toContain("- Categories: 15");
     expect(report).toContain("- Profiles: 2");
+    expect(report).toContain("- Mapped coverage IDs: 42/145 (29.0%)");
     expect(report).toContain(
       "- smoke-ci: 14 categories; agent-runtime-and-provider-execution.agent-turn-execution,",
     );
     expect(report).toContain(
-      "- browser-automation-and-exec-sandbox-tools.tool-invocation-and-execution (browser-automation-and-exec-sandbox-tools / Tool Invocation and Execution; lts-included, release-blocking, mapped): profiles: release, smoke-ci; coverage: tools.apply-patch, tools.exec, tools.fs.read, tools.fs.write, tools.web-search;",
+      "- browser-automation-and-exec-sandbox-tools.tool-invocation-and-execution (browser-automation-and-exec-sandbox-tools / Tool Invocation and Execution; mapped): profiles: release, smoke-ci; coverage: tools.apply-patch, tools.exec, tools.fs.read, tools.fs.write, tools.web-search;",
     );
     expect(report).toContain("### Unmapped Coverage IDs");
     expect(report).toContain("agents.subagents");
@@ -184,12 +176,9 @@ describe("qa coverage report", () => {
           id: TEST_EXECUTABLE_CATEGORY_ID,
           taxonomySurfaceId: "agent-runtime-and-provider-execution",
           taxonomyCategoryName: "Agent Turn Execution",
-          supportStatus: "lts-included",
-          releaseBlocking: true,
           requirement: "Exercise a missing mapping.",
           evidenceRequired: "A real scenario mapping before promotion.",
           evidence: {
-            profiles: ["release"],
             liveProofRequired: false,
             freshness: "target-ref",
             coverageIds: ["runtime.missing-coverage"],
@@ -216,136 +205,6 @@ describe("qa coverage report", () => {
     ]);
   });
 
-  it("reports release-blocking categories missing release profile membership", () => {
-    const taxonomy = parseQaScorecardTaxonomy({
-      version: 1,
-      id: "test-taxonomy",
-      title: "Test taxonomy",
-      taxonomy: TEST_TAXONOMY_REF,
-      scoreSnapshotRef: "docs/maturity-scores.yaml",
-      status: "initial",
-      profiles: testScorecardProfiles(TEST_EXECUTABLE_CATEGORY_ID, "smoke-ci"),
-      categories: [
-        {
-          id: TEST_EXECUTABLE_CATEGORY_ID,
-          taxonomySurfaceId: "agent-runtime-and-provider-execution",
-          taxonomyCategoryName: "Agent Turn Execution",
-          supportStatus: "lts-included",
-          releaseBlocking: true,
-          requirement: "Release-blocking rows must be selected by the release profile.",
-          evidenceRequired: "Release profile membership before promotion.",
-          evidence: {
-            profiles: ["smoke-ci"],
-            liveProofRequired: false,
-            freshness: "target-ref",
-            coverageIds: ["channels.dm"],
-            scenarioRefs: ["qa/scenarios/channels/dm-chat-baseline.md"],
-            docsRefs: ["docs/concepts/qa-e2e-automation.md"],
-            codeRefs: ["extensions/qa-lab/src/suite.ts"],
-          },
-        },
-      ],
-    });
-
-    const report = buildQaScorecardTaxonomyReport({
-      taxonomy,
-      repoRoot: process.cwd(),
-      scenarios: readQaScenarioPack().scenarios,
-    });
-
-    expect(report.validationIssues.map((issue) => issue.code)).toEqual([
-      "release-blocking-category-missing-release-profile",
-    ]);
-  });
-
-  it("reports advisory categories that are accidentally assigned to a runnable profile", () => {
-    const taxonomy = parseQaScorecardTaxonomy({
-      version: 1,
-      id: "test-taxonomy",
-      title: "Test taxonomy",
-      taxonomy: TEST_TAXONOMY_REF,
-      scoreSnapshotRef: "docs/maturity-scores.yaml",
-      status: "initial",
-      profiles: testScorecardProfiles(
-        "clawhub-and-external-plugin-distribution.compatibility-and-trust",
-        "smoke-ci",
-      ),
-      categories: [
-        {
-          id: "clawhub-and-external-plugin-distribution.compatibility-and-trust",
-          taxonomySurfaceId: "clawhub-and-external-plugin-distribution",
-          taxonomyCategoryName: "Compatibility and Trust",
-          supportStatus: "advisory",
-          releaseBlocking: false,
-          requirement: "Keep advisory compatibility out of runnable profiles.",
-          evidenceRequired: "Advisory report metadata only.",
-          evidence: {
-            profiles: [],
-            liveProofRequired: false,
-            freshness: "latest-advisory-run",
-            coverageIds: [],
-            scenarioRefs: [],
-            docsRefs: ["docs/plugins/architecture.md"],
-            codeRefs: [],
-          },
-        },
-      ],
-    });
-
-    const report = buildQaScorecardTaxonomyReport({
-      taxonomy,
-      repoRoot: process.cwd(),
-      scenarios: readQaScenarioPack().scenarios,
-    });
-
-    expect(report.validationIssues.map((issue) => issue.code)).toEqual([
-      "profile-membership-missing-category-profile",
-      "advisory-category-has-profile-membership",
-    ]);
-  });
-
-  it("reports non-advisory categories with no runnable profile membership", () => {
-    const taxonomy = parseQaScorecardTaxonomy({
-      version: 1,
-      id: "test-taxonomy",
-      title: "Test taxonomy",
-      taxonomy: TEST_TAXONOMY_REF,
-      scoreSnapshotRef: "docs/maturity-scores.yaml",
-      status: "initial",
-      profiles: testScorecardProfiles(TEST_EXECUTABLE_CATEGORY_ID, "none"),
-      categories: [
-        {
-          id: TEST_EXECUTABLE_CATEGORY_ID,
-          taxonomySurfaceId: "agent-runtime-and-provider-execution",
-          taxonomyCategoryName: "Agent Turn Execution",
-          supportStatus: "deferred",
-          releaseBlocking: false,
-          requirement: "Non-advisory rows must stay visible to runnable profiles.",
-          evidenceRequired: "At least one smoke-ci or release membership before promotion.",
-          evidence: {
-            profiles: [],
-            liveProofRequired: false,
-            freshness: "target-ref",
-            coverageIds: ["channels.dm"],
-            scenarioRefs: ["qa/scenarios/channels/dm-chat-baseline.md"],
-            docsRefs: ["docs/concepts/qa-e2e-automation.md"],
-            codeRefs: ["extensions/qa-lab/src/suite.ts"],
-          },
-        },
-      ],
-    });
-
-    const report = buildQaScorecardTaxonomyReport({
-      taxonomy,
-      repoRoot: process.cwd(),
-      scenarios: readQaScenarioPack().scenarios,
-    });
-
-    expect(report.validationIssues.map((issue) => issue.code)).toEqual([
-      "non-advisory-category-missing-profile-membership",
-    ]);
-  });
-
   it("reports executable category refs missing from taxonomy.yaml", () => {
     const taxonomy = parseQaScorecardTaxonomy({
       version: 1,
@@ -360,12 +219,9 @@ describe("qa coverage report", () => {
           id: TEST_EXECUTABLE_CATEGORY_ID,
           taxonomySurfaceId: "agent-runtime-and-provider-execution",
           taxonomyCategoryName: "Missing Taxonomy Category",
-          supportStatus: "lts-included",
-          releaseBlocking: true,
           requirement: "Executable refs must resolve against taxonomy.yaml.",
           evidenceRequired: "A valid taxonomy surface/category ref.",
           evidence: {
-            profiles: ["release"],
             liveProofRequired: false,
             freshness: "target-ref",
             coverageIds: ["channels.dm"],
@@ -405,7 +261,7 @@ describe("qa coverage report", () => {
         {
           id: "release",
           description: "Test release profile.",
-          categoryIds: [],
+          categoryIds: [TEST_EXECUTABLE_CATEGORY_ID],
         },
       ],
       categories: [
@@ -413,16 +269,13 @@ describe("qa coverage report", () => {
           id: TEST_EXECUTABLE_CATEGORY_ID,
           taxonomySurfaceId: "agent-runtime-and-provider-execution",
           taxonomyCategoryName: "Agent Turn Execution",
-          supportStatus: "advisory",
-          releaseBlocking: false,
           requirement: "Profile selectors must reference executable category IDs.",
           evidenceRequired: "Invalid selector refs should be reported.",
           evidence: {
-            profiles: [],
             liveProofRequired: false,
             freshness: "latest-advisory-run",
-            coverageIds: [],
-            scenarioRefs: [],
+            coverageIds: ["channels.dm"],
+            scenarioRefs: ["qa/scenarios/channels/dm-chat-baseline.md"],
             docsRefs: ["docs/concepts/qa-e2e-automation.md"],
             codeRefs: ["extensions/qa-lab/src/suite.ts"],
           },
@@ -441,7 +294,7 @@ describe("qa coverage report", () => {
     ]);
   });
 
-  it("reports category profile refs missing from top-level mapping profiles", () => {
+  it("reports mapped categories with no top-level profile membership", () => {
     const taxonomy = parseQaScorecardTaxonomy({
       version: 1,
       id: "test-taxonomy",
@@ -449,18 +302,15 @@ describe("qa coverage report", () => {
       taxonomy: TEST_TAXONOMY_REF,
       scoreSnapshotRef: "docs/maturity-scores.yaml",
       status: "initial",
-      profiles: [...testScorecardProfiles(TEST_EXECUTABLE_CATEGORY_ID, "release")],
+      profiles: testScorecardProfiles(TEST_EXECUTABLE_CATEGORY_ID, "none"),
       categories: [
         {
           id: TEST_EXECUTABLE_CATEGORY_ID,
           taxonomySurfaceId: "agent-runtime-and-provider-execution",
           taxonomyCategoryName: "Agent Turn Execution",
-          supportStatus: "lts-included",
-          releaseBlocking: true,
-          requirement: "Category profile refs must resolve to top-level mapping profiles.",
-          evidenceRequired: "Unknown profile refs should be reported.",
+          requirement: "Mapped executable rows should be selected by a profile.",
+          evidenceRequired: "At least one profile selector before promotion.",
           evidence: {
-            profiles: ["release", "nightly"],
             liveProofRequired: false,
             freshness: "target-ref",
             coverageIds: ["channels.dm"],
@@ -478,10 +328,92 @@ describe("qa coverage report", () => {
       scenarios: readQaScenarioPack().scenarios,
     });
 
-    expect(report.validationIssues.map((issue) => issue.code)).toEqual(["profile-ref-not-found"]);
+    expect(report.validationIssues.map((issue) => issue.code)).toEqual([
+      "mapped-category-missing-profile-membership",
+    ]);
   });
 
-  it("counts declared custom profiles as runnable category membership", () => {
+  it("reports categories with no profile membership or runnable evidence", () => {
+    const taxonomy = parseQaScorecardTaxonomy({
+      version: 1,
+      id: "test-taxonomy",
+      title: "Test taxonomy",
+      taxonomy: TEST_TAXONOMY_REF,
+      scoreSnapshotRef: "docs/maturity-scores.yaml",
+      status: "initial",
+      profiles: testScorecardProfiles(TEST_EXECUTABLE_CATEGORY_ID, "none"),
+      categories: [
+        {
+          id: TEST_EXECUTABLE_CATEGORY_ID,
+          taxonomySurfaceId: "agent-runtime-and-provider-execution",
+          taxonomyCategoryName: "Agent Turn Execution",
+          requirement: "Rows in the evidence map need a profile or runnable evidence.",
+          evidenceRequired: "At least one profile selector, coverage ID, or scenario ref.",
+          evidence: {
+            liveProofRequired: false,
+            freshness: "target-ref",
+            coverageIds: [],
+            scenarioRefs: [],
+            docsRefs: ["docs/concepts/qa-e2e-automation.md"],
+            codeRefs: ["extensions/qa-lab/src/suite.ts"],
+          },
+        },
+      ],
+    });
+
+    const report = buildQaScorecardTaxonomyReport({
+      taxonomy,
+      repoRoot: process.cwd(),
+      scenarios: readQaScenarioPack().scenarios,
+    });
+
+    expect(report.categories[0]?.mappingStatus).toBe("missing");
+    expect(report.validationIssues.map((issue) => issue.code)).toEqual([
+      "category-without-profile-or-evidence",
+    ]);
+  });
+
+  it("reports profile-selected categories with no runnable evidence", () => {
+    const taxonomy = parseQaScorecardTaxonomy({
+      version: 1,
+      id: "test-taxonomy",
+      title: "Test taxonomy",
+      taxonomy: TEST_TAXONOMY_REF,
+      scoreSnapshotRef: "docs/maturity-scores.yaml",
+      status: "initial",
+      profiles: testScorecardProfiles(TEST_EXECUTABLE_CATEGORY_ID, "release"),
+      categories: [
+        {
+          id: TEST_EXECUTABLE_CATEGORY_ID,
+          taxonomySurfaceId: "agent-runtime-and-provider-execution",
+          taxonomyCategoryName: "Agent Turn Execution",
+          requirement: "Selected profile rows need runnable evidence.",
+          evidenceRequired: "At least one coverage ID or scenario ref.",
+          evidence: {
+            liveProofRequired: false,
+            freshness: "target-ref",
+            coverageIds: [],
+            scenarioRefs: [],
+            docsRefs: ["docs/concepts/qa-e2e-automation.md"],
+            codeRefs: ["extensions/qa-lab/src/suite.ts"],
+          },
+        },
+      ],
+    });
+
+    const report = buildQaScorecardTaxonomyReport({
+      taxonomy,
+      repoRoot: process.cwd(),
+      scenarios: readQaScenarioPack().scenarios,
+    });
+
+    expect(report.categories[0]?.mappingStatus).toBe("missing");
+    expect(report.validationIssues.map((issue) => issue.code)).toEqual([
+      "profile-category-missing-evidence-mapping",
+    ]);
+  });
+
+  it("derives category profile membership from top-level profiles", () => {
     const taxonomy = parseQaScorecardTaxonomy({
       version: 1,
       id: "test-taxonomy",
@@ -502,12 +434,9 @@ describe("qa coverage report", () => {
           id: TEST_EXECUTABLE_CATEGORY_ID,
           taxonomySurfaceId: "agent-runtime-and-provider-execution",
           taxonomyCategoryName: "Agent Turn Execution",
-          supportStatus: "deferred",
-          releaseBlocking: false,
           requirement: "Declared profile names can satisfy runnable coverage.",
           evidenceRequired: "Profile names come from taxonomy-mappings.yaml.",
           evidence: {
-            profiles: ["nightly"],
             liveProofRequired: false,
             freshness: "target-ref",
             coverageIds: ["channels.dm"],
@@ -526,6 +455,7 @@ describe("qa coverage report", () => {
     });
 
     expect(report.validationIssues).toStrictEqual([]);
+    expect(report.categories[0]?.profiles).toStrictEqual(["nightly"]);
   });
 
   it("rejects taxonomy refs outside the repository", () => {
@@ -546,12 +476,9 @@ describe("qa coverage report", () => {
             id: TEST_EXECUTABLE_CATEGORY_ID,
             taxonomySurfaceId: "agent-runtime-and-provider-execution",
             taxonomyCategoryName: "Agent Turn Execution",
-            supportStatus: "deferred",
-            releaseBlocking: false,
             requirement: "Reject escaped refs.",
             evidenceRequired: "Parser rejects refs outside the repository.",
             evidence: {
-              profiles: ["smoke-ci"],
               liveProofRequired: false,
               freshness: "target-ref",
               coverageIds: ["runtime.delivery"],

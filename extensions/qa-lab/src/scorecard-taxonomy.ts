@@ -34,8 +34,6 @@ const qaScorecardFreshnessRuleSchema = z.enum([
   "latest-advisory-run",
 ]);
 
-const qaScorecardSupportStatusSchema = z.enum(["lts-included", "deferred", "advisory"]);
-
 const qaScorecardTaxonomyRefSchema = z
   .object({
     sourcePath: qaScorecardRepoRefSchema,
@@ -56,12 +54,9 @@ const qaScorecardCategorySchema = z.object({
   id: qaScorecardIdSchema,
   taxonomySurfaceId: qaScorecardIdSchema,
   taxonomyCategoryName: z.string().trim().min(1),
-  supportStatus: qaScorecardSupportStatusSchema,
-  releaseBlocking: z.boolean(),
   requirement: z.string().trim().min(1),
   evidenceRequired: z.string().trim().min(1),
   evidence: z.object({
-    profiles: z.array(qaScorecardIdSchema).default([]),
     liveProofRequired: z.boolean(),
     freshness: qaScorecardFreshnessRuleSchema,
     coverageIds: z.array(qaScorecardIdSchema).default([]),
@@ -120,21 +115,6 @@ const qaScorecardTaxonomySchema = z
       }
       seenCategoryIds.add(category.id);
 
-      if (category.supportStatus === "lts-included" && !category.releaseBlocking) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["categories", categoryIndex, "releaseBlocking"],
-          message: `LTS-included category ${category.id} must be release-blocking`,
-        });
-      }
-      if (category.supportStatus !== "lts-included" && category.releaseBlocking) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["categories", categoryIndex, "releaseBlocking"],
-          message: `${category.supportStatus} category ${category.id} must not be release-blocking`,
-        });
-      }
-
       const seenCoverageIds = new Set<string>();
       for (const [coverageIndex, coverageId] of category.evidence.coverageIds.entries()) {
         if (seenCoverageIds.has(coverageId)) {
@@ -180,14 +160,10 @@ export type QaScorecardValidationIssueCode =
   | "taxonomy-ref-not-found"
   | "taxonomy-category-ref-not-found"
   | "profile-category-ref-not-found"
+  | "category-without-profile-or-evidence"
+  | "mapped-category-missing-profile-membership"
+  | "profile-category-missing-evidence-mapping"
   | "score-snapshot-ref-not-found"
-  | "blocking-category-without-evidence-mapping"
-  | "non-advisory-category-missing-profile-membership"
-  | "release-blocking-category-missing-release-profile"
-  | "advisory-category-has-profile-membership"
-  | "profile-ref-not-found"
-  | "category-profile-missing-top-level-membership"
-  | "profile-membership-missing-category-profile"
   | "taxonomy-fixture-not-found";
 
 export type QaScorecardValidationIssue = {
@@ -202,8 +178,6 @@ export type QaScorecardCategoryMappingReport = {
   id: string;
   taxonomySurfaceId: string;
   taxonomyCategoryName: string;
-  supportStatus: string;
-  releaseBlocking: boolean;
   mappingStatus: "mapped" | "partial" | "missing";
   profiles: string[];
   liveProofRequired: boolean;
@@ -235,11 +209,8 @@ export type QaScorecardTaxonomyReport = {
   profileCount: number;
   profiles: QaScorecardProfileReport[];
   categoryCount: number;
-  releaseBlockingCategoryCount: number;
-  advisoryCategoryCount: number;
-  ltsIncludedCategoryCount: number;
-  deferredCategoryCount: number;
   mappedCoverageIdCount: number;
+  mappedCoverageIdPercent: number;
   mappedScenarioCount: number;
   unmappedCoverageIdCount: number;
   unmappedCoverageIds: string[];
@@ -402,11 +373,8 @@ export function buildQaScorecardTaxonomyReport(params: {
       profileCount: 0,
       profiles: [],
       categoryCount: 0,
-      releaseBlockingCategoryCount: 0,
-      advisoryCategoryCount: 0,
-      ltsIncludedCategoryCount: 0,
-      deferredCategoryCount: 0,
       mappedCoverageIdCount: 0,
+      mappedCoverageIdPercent: 0,
       mappedScenarioCount: 0,
       unmappedCoverageIdCount: 0,
       unmappedCoverageIds: [],
@@ -436,7 +404,6 @@ export function buildQaScorecardTaxonomyReport(params: {
   const mappedCoverageIds = new Set<string>();
   const mappedScenarioRefs = new Set<string>();
   const categoryIds = new Set(params.taxonomy.categories.map((category) => category.id));
-  const profileIds = new Set(params.taxonomy.profiles.map((profile) => profile.id));
   const maturityTaxonomy = readQaMaturityTaxonomy(
     params.repoRoot,
     params.taxonomy.taxonomy.sourcePath,
@@ -489,10 +456,6 @@ export function buildQaScorecardTaxonomyReport(params: {
   for (const category of params.taxonomy.categories) {
     const missingCoverageIds: string[] = [];
     const missingScenarioRefs: string[] = [];
-    const declaredProfileIds = new Set(category.evidence.profiles);
-    const declaredKnownProfileIds = new Set(
-      [...declaredProfileIds].filter((profileId) => profileIds.has(profileId)),
-    );
     const membershipProfileIds =
       profileCategoryIdsByCategoryId.get(category.id) ?? new Set<string>();
     const sortedMembershipProfileIds = [...membershipProfileIds].toSorted();
@@ -508,79 +471,6 @@ export function buildQaScorecardTaxonomyReport(params: {
         categoryId: category.id,
         ref: `${category.taxonomySurfaceId}/${category.taxonomyCategoryName}`,
         message: `${category.id} references missing maturity taxonomy category ${category.taxonomySurfaceId}/${category.taxonomyCategoryName}`,
-      });
-    }
-
-    for (const profileId of declaredProfileIds) {
-      if (!profileIds.has(profileId)) {
-        issues.push({
-          code: "profile-ref-not-found",
-          severity: "warning",
-          categoryId: category.id,
-          ref: profileId,
-          message: `${category.id} declares profile ${profileId}, but taxonomy-mappings.yaml has no matching top-level profile`,
-        });
-        continue;
-      }
-
-      if (!membershipProfileIds.has(profileId)) {
-        issues.push({
-          code: "category-profile-missing-top-level-membership",
-          severity: "warning",
-          categoryId: category.id,
-          ref: profileId,
-          message: `${category.id} declares ${profileId} evidence, but the taxonomy profile does not include the category`,
-        });
-      }
-    }
-
-    for (const profileId of membershipProfileIds) {
-      if (!declaredProfileIds.has(profileId)) {
-        issues.push({
-          code: "profile-membership-missing-category-profile",
-          severity: "warning",
-          categoryId: category.id,
-          ref: profileId,
-          message: `${category.id} belongs to the ${profileId} taxonomy profile, but its evidence profiles do not declare that selector`,
-        });
-      }
-    }
-
-    if (category.releaseBlocking && !membershipProfileIds.has("release")) {
-      issues.push({
-        code: "release-blocking-category-missing-release-profile",
-        severity: "warning",
-        categoryId: category.id,
-        ref: "release",
-        message: `${category.id} is release-blocking but is not selected by the release profile`,
-      });
-    }
-
-    if (
-      category.supportStatus === "advisory" &&
-      (membershipProfileIds.size > 0 || declaredProfileIds.size > 0)
-    ) {
-      const runnableProfiles = [
-        ...new Set([...membershipProfileIds, ...declaredProfileIds]),
-      ].toSorted();
-      issues.push({
-        code: "advisory-category-has-profile-membership",
-        severity: "warning",
-        categoryId: category.id,
-        message: `${category.id} is advisory metadata but belongs to runnable profile(s): ${runnableProfiles.join(", ")}`,
-      });
-    }
-
-    if (
-      category.supportStatus !== "advisory" &&
-      membershipProfileIds.size === 0 &&
-      declaredKnownProfileIds.size === 0
-    ) {
-      issues.push({
-        code: "non-advisory-category-missing-profile-membership",
-        severity: "warning",
-        categoryId: category.id,
-        message: `${category.id} is ${category.supportStatus} but has no runnable profile membership`,
       });
     }
 
@@ -650,15 +540,40 @@ export function buildQaScorecardTaxonomyReport(params: {
     });
 
     if (
-      category.releaseBlocking &&
+      membershipProfileIds.size === 0 &&
+      (category.evidence.coverageIds.length > 0 || category.evidence.scenarioRefs.length > 0)
+    ) {
+      issues.push({
+        code: "mapped-category-missing-profile-membership",
+        severity: "warning",
+        categoryId: category.id,
+        message: `${category.id} maps runnable evidence but is not selected by any scorecard profile`,
+      });
+    }
+
+    if (
+      membershipProfileIds.size === 0 &&
       category.evidence.coverageIds.length === 0 &&
       category.evidence.scenarioRefs.length === 0
     ) {
       issues.push({
-        code: "blocking-category-without-evidence-mapping",
+        code: "category-without-profile-or-evidence",
         severity: "warning",
         categoryId: category.id,
-        message: `${category.id} is release-blocking but has no coverage IDs or scenario refs`,
+        message: `${category.id} has no scorecard profile membership, coverage IDs, or scenario refs`,
+      });
+    }
+
+    if (
+      membershipProfileIds.size > 0 &&
+      category.evidence.coverageIds.length === 0 &&
+      category.evidence.scenarioRefs.length === 0
+    ) {
+      issues.push({
+        code: "profile-category-missing-evidence-mapping",
+        severity: "warning",
+        categoryId: category.id,
+        message: `${category.id} is selected by scorecard profile(s) ${sortedMembershipProfileIds.join(", ")} but has no coverage IDs or scenario refs`,
       });
     }
 
@@ -672,8 +587,6 @@ export function buildQaScorecardTaxonomyReport(params: {
       id: category.id,
       taxonomySurfaceId: category.taxonomySurfaceId,
       taxonomyCategoryName: category.taxonomyCategoryName,
-      supportStatus: category.supportStatus,
-      releaseBlocking: category.releaseBlocking,
       mappingStatus,
       profiles: sortedMembershipProfileIds,
       liveProofRequired: category.evidence.liveProofRequired,
@@ -689,6 +602,11 @@ export function buildQaScorecardTaxonomyReport(params: {
   const unmappedCoverageIds = allCoverageIds.filter(
     (coverageId) => !mappedCoverageIds.has(coverageId),
   );
+  const totalCoverageIds = mappedCoverageIds.size + unmappedCoverageIds.length;
+  const mappedCoverageIdPercent =
+    totalCoverageIds === 0
+      ? 0
+      : Number(((mappedCoverageIds.size / totalCoverageIds) * 100).toFixed(1));
 
   return {
     taxonomyPath: params.taxonomyPath ?? QA_SCORECARD_TAXONOMY_PATH,
@@ -700,19 +618,8 @@ export function buildQaScorecardTaxonomyReport(params: {
     profileCount: params.taxonomy.profiles.length,
     profiles,
     categoryCount: params.taxonomy.categories.length,
-    releaseBlockingCategoryCount: params.taxonomy.categories.filter(
-      (category) => category.releaseBlocking,
-    ).length,
-    advisoryCategoryCount: params.taxonomy.categories.filter(
-      (category) => category.supportStatus === "advisory",
-    ).length,
-    ltsIncludedCategoryCount: params.taxonomy.categories.filter(
-      (category) => category.supportStatus === "lts-included",
-    ).length,
-    deferredCategoryCount: params.taxonomy.categories.filter(
-      (category) => category.supportStatus === "deferred",
-    ).length,
     mappedCoverageIdCount: mappedCoverageIds.size,
+    mappedCoverageIdPercent,
     mappedScenarioCount: mappedScenarioRefs.size,
     unmappedCoverageIdCount: unmappedCoverageIds.length,
     unmappedCoverageIds,
