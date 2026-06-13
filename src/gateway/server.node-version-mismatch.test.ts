@@ -2,7 +2,8 @@
 // gateway accepts matching node hosts and rejects incompatible local runtimes.
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
+import { WebSocket } from "ws";
 import { approveNodePairing, listNodePairing, requestNodePairing } from "../infra/node-pairing.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
@@ -77,7 +78,7 @@ describe("node host version mismatch guard", () => {
     ).rejects.toThrow(/client version mismatch|version mismatch/i);
   });
 
-  test("rejected local reconnect preserves the active node pending reapproval", async () => {
+  test("rejected local reconnects preserve the active node pending reapproval", async () => {
     const pairedNode = await pairDeviceIdentity({
       name: "node-version-mismatch-pending-reapproval",
       role: "node",
@@ -111,19 +112,14 @@ describe("node host version mismatch guard", () => {
       deviceIdentity: pairedNode.identity,
     });
     try {
-      const pendingBefore = (await listNodePairing()).pending.find(
-        (entry) => entry.nodeId === pairedNode.identity.deviceId,
-      );
-      expect(pendingBefore?.commands).toEqual(["screen.snapshot", "system.run"]);
-
-      await expect(
-        connectGatewayClient({
+      const connectReverted = async (clientVersion: string, clientDisplayName: string) =>
+        await connectGatewayClient({
           url: `ws://127.0.0.1:${port}`,
           token: "secret",
           role: "node",
           clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
-          clientDisplayName: "test-node-reverted-stale",
-          clientVersion: "2020.1.1",
+          clientDisplayName,
+          clientVersion,
           instanceId: TEST_LOCAL_NODE_ID,
           platform: "macos",
           deviceFamily: "Mac",
@@ -132,15 +128,53 @@ describe("node host version mismatch guard", () => {
           commands: ["screen.snapshot"],
           deviceIdentity: pairedNode.identity,
           timeoutMs: 5_000,
-          timeoutMessage: "expected version mismatch rejection",
-        }),
-      ).rejects.toThrow(/client version mismatch|version mismatch/i);
-
-      const pendingAfter = (await listNodePairing()).pending.find(
+          timeoutMessage: "expected rejected reconnect",
+        });
+      const pendingBefore = (await listNodePairing()).pending.find(
         (entry) => entry.nodeId === pairedNode.identity.deviceId,
       );
-      expect(pendingAfter?.requestId).toBe(pendingBefore?.requestId);
-      expect(pendingAfter?.commands).toEqual(["screen.snapshot", "system.run"]);
+      expect(pendingBefore?.commands).toEqual(["screen.snapshot", "system.run"]);
+
+      await expect(connectReverted("2020.1.1", "test-node-reverted-stale")).rejects.toThrow(
+        /client version mismatch|version mismatch/i,
+      );
+
+      const pendingAfterVersionMismatch = (await listNodePairing()).pending.find(
+        (entry) => entry.nodeId === pairedNode.identity.deviceId,
+      );
+      expect(pendingAfterVersionMismatch?.requestId).toBe(pendingBefore?.requestId);
+      expect(pendingAfterVersionMismatch?.commands).toEqual(["screen.snapshot", "system.run"]);
+
+      const originalSend = WebSocket.prototype.send;
+      let failNextHelloOk = true;
+      const sendSpy = vi.spyOn(WebSocket.prototype, "send").mockImplementation(function (
+        this: WebSocket,
+        ...args: Parameters<WebSocket["send"]>
+      ) {
+        if (failNextHelloOk && typeof args[0] === "string" && args[0].includes('"hello-ok"')) {
+          failNextHelloOk = false;
+          const callback = args.findLast((arg) => typeof arg === "function");
+          if (typeof callback === "function") {
+            callback(new Error("test hello-ok send failure"));
+          }
+          return;
+        }
+        Reflect.apply(originalSend, this, args);
+      });
+      try {
+        await expect(
+          connectReverted(gatewayVersion, "test-node-reverted-hello-failure"),
+        ).rejects.toThrow(/gateway closed during connect/i);
+        expect(failNextHelloOk).toBe(false);
+      } finally {
+        sendSpy.mockRestore();
+      }
+
+      const pendingAfterHelloFailure = (await listNodePairing()).pending.find(
+        (entry) => entry.nodeId === pairedNode.identity.deviceId,
+      );
+      expect(pendingAfterHelloFailure?.requestId).toBe(pendingBefore?.requestId);
+      expect(pendingAfterHelloFailure?.commands).toEqual(["screen.snapshot", "system.run"]);
     } finally {
       await upgraded.stopAndWait({ timeoutMs: 2_000 });
     }

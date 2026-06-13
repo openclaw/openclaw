@@ -1858,31 +1858,6 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           const nodeSession = context.nodeRegistry.register(nextClient, {
             remoteIp: reportedClientIp,
           });
-          if (pendingNodePairingCleanup) {
-            try {
-              const resolvedPairings = await rejectPendingNodePairingRequestsForNode(
-                pendingNodePairingCleanup.nodeId,
-                pendingNodePairingCleanup.observed,
-              );
-              const resolvedAt = Date.now();
-              for (const resolved of resolvedPairings) {
-                context.broadcast(
-                  "node.pair.resolved",
-                  {
-                    requestId: resolved.requestId,
-                    nodeId: resolved.nodeId,
-                    decision: "rejected",
-                    ts: resolvedAt,
-                  },
-                  { dropIfSlow: true },
-                );
-              }
-            } catch (error) {
-              logGateway.warn(
-                `failed to clear stale pending pairings for ${pendingNodePairingCleanup.nodeId}: ${formatForLog(error)}`,
-              );
-            }
-          }
           const instanceIdRaw = connectParams.client.instanceId;
           const instanceIdLocal = typeof instanceIdRaw === "string" ? instanceIdRaw.trim() : "";
           const nodeIdsForPairing = new Set<string>([nodeSession.nodeId]);
@@ -2023,6 +1998,32 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           setCloseCause("hello-send-failed", { error: formatForLog(err) });
           close();
           return;
+        }
+        if (pendingNodePairingCleanup) {
+          const context = buildRequestContext();
+          try {
+            const resolvedPairings = await rejectPendingNodePairingRequestsForNode(
+              pendingNodePairingCleanup.nodeId,
+              pendingNodePairingCleanup.observed,
+            );
+            const resolvedAt = Date.now();
+            for (const resolved of resolvedPairings) {
+              context.broadcast(
+                "node.pair.resolved",
+                {
+                  requestId: resolved.requestId,
+                  nodeId: resolved.nodeId,
+                  decision: "rejected",
+                  ts: resolvedAt,
+                },
+                { dropIfSlow: true },
+              );
+            }
+          } catch (error) {
+            logGateway.warn(
+              `failed to clear stale pending pairings for ${pendingNodePairingCleanup.nodeId}: ${formatForLog(error)}`,
+            );
+          }
         }
         logWs("out", "hello-ok", {
           connId,
