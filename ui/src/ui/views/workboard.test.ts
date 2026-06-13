@@ -817,6 +817,38 @@ describe("renderWorkboard", () => {
     }
   });
 
+  it("includes selected values in custom select accessible names", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    const container = document.createElement("div");
+
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: null,
+        sessions: [],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+
+    const selects = [
+      ...container.querySelectorAll<HTMLElement>(".workboard-toolbar__filters .workboard-select"),
+    ];
+    expect(selects).toHaveLength(3);
+    for (const select of selects) {
+      const trigger = select.querySelector<HTMLElement>(".workboard-select__trigger");
+      const menu = select.querySelector<HTMLElement>(".workboard-select__menu");
+      const selectedLabel = trigger?.querySelector(".workboard-select__value")?.textContent?.trim();
+      const fieldLabel = menu?.getAttribute("aria-label");
+      expect(trigger?.getAttribute("aria-label")).toBe(`${fieldLabel}: ${selectedLabel}`);
+    }
+  });
+
   it("supports keyboard navigation and restores dropdown trigger focus", () => {
     const host = {};
     const state = getWorkboardState(host);

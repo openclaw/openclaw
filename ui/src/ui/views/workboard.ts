@@ -1004,7 +1004,7 @@ function renderWorkboardSelect<Value extends string>(params: {
     >
       <summary
         class="input workboard-select__trigger"
-        aria-label=${params.label}
+        aria-label=${`${params.label}: ${selectedLabel}`}
         aria-haspopup="listbox"
       >
         <span class="workboard-select__value">${selectedLabel}</span>
