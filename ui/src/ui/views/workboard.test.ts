@@ -598,6 +598,50 @@ describe("renderWorkboard", () => {
     expect(container.textContent).toContain("Needs proof.");
   });
 
+  it("renders sub-minute heartbeat ages with the duration count interpolation", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-13T12:00:00Z"));
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Active worker",
+        status: "running",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+        metadata: {
+          claim: {
+            ownerId: "agent-1",
+            claimedAt: 1,
+            lastHeartbeatAt: Date.now() - 42_000,
+          },
+        },
+      },
+    ];
+    const container = document.createElement("div");
+
+    try {
+      renderInto(container, {
+        host,
+        client: null,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: null,
+        sessions: [],
+        onOpenSession: () => undefined,
+      });
+
+      expect(container.textContent).toContain("heartbeat 42 s");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("highlights cards matching a clicked health badge", () => {
     const host = {};
     const state = getWorkboardState(host);

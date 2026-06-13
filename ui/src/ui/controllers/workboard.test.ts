@@ -2530,6 +2530,53 @@ describe("workboard controller", () => {
     expect(client.request).not.toHaveBeenCalled();
   });
 
+  it("captures different sessions concurrently", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    const firstSession = { ...sampleSession, key: "agent:main:dashboard:first" };
+    const secondSession = { ...sampleSession, key: "agent:main:dashboard:second" };
+    const firstCard = { ...sampleCard, id: "card-first", sessionKey: firstSession.key };
+    const secondCard = { ...sampleCard, id: "card-second", sessionKey: secondSession.key };
+    const firstCreate = createDeferred<unknown>();
+    const client = createClient((method, params) => {
+      if (method === "chat.history") {
+        return { messages: [] };
+      }
+      if (method === "workboard.cards.create") {
+        return (params as { sessionKey: string }).sessionKey === firstSession.key
+          ? firstCreate.promise
+          : { card: secondCard };
+      }
+      return {};
+    });
+
+    const firstCapture = captureSessionToWorkboard({
+      host,
+      client: client as never,
+      session: firstSession,
+    });
+    await vi.waitFor(() => {
+      expect(client.request).toHaveBeenCalledWith(
+        "workboard.cards.create",
+        expect.objectContaining({ sessionKey: firstSession.key }),
+      );
+    });
+
+    await expect(
+      captureSessionToWorkboard({
+        host,
+        client: client as never,
+        session: secondSession,
+      }),
+    ).resolves.toEqual(secondCard);
+    firstCreate.resolve({ card: firstCard });
+    await expect(firstCapture).resolves.toEqual(firstCard);
+
+    expect(state.cards.map((card) => card.id).toSorted()).toEqual(["card-first", "card-second"]);
+    expect(state.capturingSessionKeys.size).toBe(0);
+  });
+
   it("does not capture sessions while dispatch is active", async () => {
     const host = {};
     const state = getWorkboardState(host);

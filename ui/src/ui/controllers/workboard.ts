@@ -2741,9 +2741,6 @@ export async function captureSessionToWorkboard(params: {
   if (state.capturingSessionKeys.has(params.session.key)) {
     return state.cards.find((card) => workboardCardSessionKey(card) === params.session.key) ?? null;
   }
-  if (workboardHasActiveWrites(state)) {
-    return null;
-  }
   state.error = null;
   let captureStarted = false;
   try {
@@ -2755,7 +2752,7 @@ export async function captureSessionToWorkboard(params: {
         force: true,
       });
     }
-    if (!state.loaded || state.dispatching || workboardHasActiveWrites(state)) {
+    if (!state.loaded || state.dispatching) {
       return null;
     }
     state.capturingSessionKeys.add(params.session.key);
