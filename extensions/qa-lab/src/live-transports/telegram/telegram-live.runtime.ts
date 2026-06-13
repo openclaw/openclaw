@@ -203,11 +203,17 @@ type TelegramReplyMarkup = {
   inline_keyboard?: Array<Array<{ text?: string }>>;
 };
 
+type TelegramRichMessage = {
+  markdown?: string;
+  html?: string;
+};
+
 type TelegramMessage = {
   message_id: number;
   date: number;
   text?: string;
   caption?: string;
+  rich_message?: TelegramRichMessage;
   reply_markup?: TelegramReplyMarkup;
   reply_to_message?: { message_id?: number };
   from?: {
@@ -697,6 +703,16 @@ function detectMediaKinds(message: TelegramMessage) {
   return kinds;
 }
 
+function selectTelegramObservedText(message: TelegramMessage) {
+  return (
+    message.text ||
+    message.caption ||
+    message.rich_message?.markdown ||
+    message.rich_message?.html ||
+    ""
+  );
+}
+
 function normalizeTelegramObservedMessage(update: TelegramUpdate): TelegramObservedMessage | null {
   const message = update.message ?? update.edited_message;
   if (!message?.from?.id) {
@@ -709,7 +725,7 @@ function normalizeTelegramObservedMessage(update: TelegramUpdate): TelegramObser
     senderId: message.from.id,
     senderIsBot: message.from.is_bot === true,
     senderUsername: message.from.username,
-    text: message.text ?? message.caption ?? "",
+    text: selectTelegramObservedText(message),
     caption: message.caption,
     replyToMessageId: message.reply_to_message?.message_id,
     timestamp: message.date * 1000,

@@ -286,6 +286,43 @@ describe("telegram live qa runtime", () => {
     });
   });
 
+  it("normalizes Telegram rich messages as observed text", () => {
+    expect(
+      testing.normalizeTelegramObservedMessage({
+        update_id: 8,
+        message: {
+          message_id: 10,
+          date: 1_700_000_001,
+          rich_message: { markdown: "**hello** rich" },
+          chat: { id: -100123 },
+          from: {
+            id: 88,
+            is_bot: true,
+            username: "sut_bot",
+          },
+          reply_to_message: { message_id: 9 },
+        },
+      })?.text,
+    ).toBe("**hello** rich");
+
+    expect(
+      testing.normalizeTelegramObservedMessage({
+        update_id: 9,
+        message: {
+          message_id: 11,
+          date: 1_700_000_002,
+          rich_message: { html: "<b>hello</b> rich" },
+          chat: { id: -100123 },
+          from: {
+            id: 88,
+            is_bot: true,
+            username: "sut_bot",
+          },
+        },
+      })?.text,
+    ).toBe("<b>hello</b> rich");
+  });
+
   it("ignores unrelated sut replies when matching the canary response", () => {
     expect(
       testing.classifyCanaryReply({
