@@ -1495,6 +1495,10 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
   it.each([
     { name: "no payloads", result: { payloads: [] } },
     {
+      name: "attachment payload without a usable media reference",
+      result: { payloads: [{ attachments: [{}] }] },
+    },
+    {
       name: "tool calls without delivery evidence",
       result: { payloads: [], meta: { toolSummary: { calls: 1 } } },
     },
@@ -1689,6 +1693,98 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       deliver: false,
       sessionKey: "agent:main:cron:media-job:run:run-123",
     });
+  });
+
+  it("keeps dashboard music completions on session-only handoff with generated media evidence", async () => {
+    const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
+      result: {
+        payloads: [
+          {
+            text: "The generated music is ready.",
+            attachments: [
+              {
+                type: "audio",
+                path: "/tmp/generated-night-drive.mp3",
+                mimeType: "audio/mpeg",
+              },
+            ],
+          },
+        ],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    testing.setDepsForTest({
+      dispatchGatewayMethodInProcess,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-session-dashboard",
+        isActive: false,
+      }),
+      getRuntimeConfig: () => ({}) as never,
+      sendMessage,
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:main:dashboard:music-session",
+      targetRequesterSessionKey: "agent:main:dashboard:music-session",
+      triggerMessage: "music done\nMEDIA:/tmp/generated-night-drive.mp3",
+      steerMessage: "music done\nMEDIA:/tmp/generated-night-drive.mp3",
+      requesterOrigin: {
+        channel: "webchat",
+        to: "session:dashboard",
+        accountId: "control-ui",
+      },
+      requesterSessionOrigin: {
+        channel: "webchat",
+        to: "session:dashboard",
+        accountId: "control-ui",
+      },
+      completionDirectOrigin: {
+        channel: "webchat",
+        to: "session:dashboard",
+        accountId: "control-ui",
+      },
+      directOrigin: {
+        channel: "webchat",
+        to: "session:dashboard",
+        accountId: "control-ui",
+      },
+      requesterIsSubagent: false,
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+      directIdempotencyKey: "announce-dashboard-music-media",
+      sourceTool: "music_generate",
+      sourceSessionKey: "music_generate:task-123",
+      sourceChannel: "internal",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "music_generation",
+          childSessionKey: "music_generate:task-123",
+          childSessionId: "task-123",
+          announceType: "music generation task",
+          taskLabel: "night-drive synthwave",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated 1 track.\nMEDIA:/tmp/generated-night-drive.mp3",
+          mediaUrls: ["/tmp/generated-night-drive.mp3"],
+          replyInstruction: "Tell the user the music is ready and include the generated audio.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expectInProcessAgentParams(dispatchGatewayMethodInProcess, {
+      sessionKey: "agent:main:dashboard:music-session",
+      deliver: false,
+      channel: "webchat",
+      accountId: "control-ui",
+      to: "session:dashboard",
+      bestEffortDeliver: true,
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 
   it("keeps announce-agent delivery primary for dormant completion events with child output", async () => {
