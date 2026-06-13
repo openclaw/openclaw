@@ -711,6 +711,9 @@ export type ChannelToolSend = {
   to: string;
   accountId?: string | null;
   threadId?: string | null;
+  /** True when the native provider send may inherit the active conversation thread. */
+  threadImplicit?: boolean;
+  threadSuppressed?: boolean;
 };
 
 export type ChannelMessagePreparedSendPayloadContext = {

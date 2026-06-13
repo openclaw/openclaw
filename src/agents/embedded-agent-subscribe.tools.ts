@@ -639,6 +639,56 @@ function resolveMessageToolTarget(args: Record<string, unknown>): string | undef
   return readStringValue(args.target);
 }
 
+function resolveMessagingToolThreadEvidence(params: {
+  providerId: string;
+  to: string;
+  accountId?: string;
+  threadId?: string;
+  allowImplicitThread: boolean;
+  threadSuppressed: boolean;
+  options?: {
+    config?: OpenClawConfig;
+    currentChannelId?: string;
+    currentThreadId?: string;
+    replyToMode?: "off" | "first" | "all" | "batched";
+    hasRepliedRef?: { value: boolean };
+  };
+}): Pick<MessagingToolSend, "threadId" | "threadImplicit" | "threadSuppressed"> {
+  const autoThreadResolver = params.allowImplicitThread
+    ? getChannelPlugin(params.providerId)?.threading?.resolveAutoThreadId
+    : undefined;
+  const currentChannelId = normalizeOptionalString(params.options?.currentChannelId);
+  const currentThreadId = normalizeOptionalString(params.options?.currentThreadId);
+  const replyToMode = params.options?.replyToMode ?? (currentThreadId ? "all" : undefined);
+  const canResolveCurrentThread = Boolean(currentChannelId && currentThreadId);
+  const resolvedCurrentThreadId =
+    !params.threadId && !params.threadSuppressed && autoThreadResolver && canResolveCurrentThread
+      ? autoThreadResolver({
+          cfg: params.options?.config ?? {},
+          accountId: params.accountId,
+          to: params.to,
+          toolContext: {
+            currentChannelId,
+            currentThreadTs: currentThreadId,
+            replyToMode,
+            hasRepliedRef: params.options?.hasRepliedRef,
+          },
+        })
+      : undefined;
+  const threadImplicit =
+    !params.threadId &&
+    !params.threadSuppressed &&
+    Boolean(autoThreadResolver) &&
+    (!canResolveCurrentThread || Boolean(resolvedCurrentThreadId));
+  return {
+    ...((params.threadId ?? resolvedCurrentThreadId)
+      ? { threadId: params.threadId ?? resolvedCurrentThreadId }
+      : {}),
+    ...(threadImplicit ? { threadImplicit: true } : {}),
+    ...(params.threadSuppressed ? { threadSuppressed: true } : {}),
+  };
+}
+
 export function extractMessagingToolSend(
   toolName: string,
   args: Record<string, unknown>,
@@ -669,47 +719,26 @@ export function extractMessagingToolSend(
     const to = normalizeTargetForProvider(provider, toRaw);
     const threadId = normalizeOptionalString(args.threadId);
     const threadSuppressed = args.topLevel === true || args.threadId === null;
-    const autoThreadResolver = providerId
-      ? getChannelPlugin(providerId)?.threading?.resolveAutoThreadId
-      : undefined;
-    const currentChannelId = normalizeOptionalString(options?.currentChannelId);
-    const currentThreadId = normalizeOptionalString(options?.currentThreadId);
-    const replyToMode = options?.replyToMode ?? (currentThreadId ? "all" : undefined);
-    const canResolveCurrentThread = Boolean(currentChannelId && currentThreadId);
-    const resolvedCurrentThreadId =
-      !threadId &&
-      !threadSuppressed &&
-      autoThreadResolver &&
-      canResolveCurrentThread &&
-      typeof to === "string"
-        ? autoThreadResolver({
-            cfg: options?.config ?? {},
-            accountId,
-            to,
-            toolContext: {
-              currentChannelId,
-              currentThreadTs: currentThreadId,
-              replyToMode,
-              hasRepliedRef: options?.hasRepliedRef,
-            },
-          })
-        : undefined;
-    const threadImplicit =
-      !threadId &&
-      !threadSuppressed &&
-      Boolean(autoThreadResolver) &&
-      (!canResolveCurrentThread || Boolean(resolvedCurrentThreadId));
     return to
       ? {
           tool: toolName,
           provider,
           accountId,
           to,
-          ...((threadId ?? resolvedCurrentThreadId)
-            ? { threadId: threadId ?? resolvedCurrentThreadId }
-            : {}),
-          ...(threadImplicit ? { threadImplicit: true } : {}),
-          ...(threadSuppressed ? { threadSuppressed: true } : {}),
+          ...(providerId
+            ? resolveMessagingToolThreadEvidence({
+                providerId,
+                to,
+                accountId,
+                threadId,
+                allowImplicitThread: true,
+                threadSuppressed,
+                options,
+              })
+            : {
+                ...(threadId ? { threadId } : {}),
+                ...(threadSuppressed ? { threadSuppressed: true } : {}),
+              }),
         }
       : undefined;
   }
@@ -724,13 +753,29 @@ export function extractMessagingToolSend(
   }
   const to = normalizeTargetForProvider(providerId, extracted.to);
   const threadId = normalizeOptionalString(extracted.threadId);
+  const threadSuppressed = extracted.threadSuppressed === true;
+  const extractedAccountId = normalizeOptionalString(extracted.accountId) ?? accountId;
+  const nativeReplyToMode = options?.replyToMode;
+  const nativeSingleUseMode = nativeReplyToMode === "first" || nativeReplyToMode === "batched";
+  const canResolveNativeImplicitThread =
+    extracted.threadImplicit === true &&
+    nativeReplyToMode !== undefined &&
+    (!nativeSingleUseMode || options?.hasRepliedRef !== undefined);
   return to
     ? {
         tool: toolName,
         provider: providerId,
-        accountId: extracted.accountId ?? accountId,
+        accountId: extractedAccountId,
         to,
-        ...(threadId ? { threadId } : {}),
+        ...resolveMessagingToolThreadEvidence({
+          providerId,
+          to,
+          accountId: extractedAccountId,
+          threadId,
+          allowImplicitThread: canResolveNativeImplicitThread,
+          threadSuppressed,
+          options,
+        }),
       }
     : undefined;
 }

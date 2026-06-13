@@ -4,6 +4,7 @@ import type { ChannelMessageActionName } from "openclaw/plugin-sdk/channel-contr
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { extractToolSend, type ChannelToolSend } from "openclaw/plugin-sdk/tool-send";
 import { listEnabledSlackAccounts, resolveSlackAccount } from "./accounts.js";
+import { normalizeSlackThreadTsCandidate } from "./thread-ts.js";
 
 export function listSlackMessageActions(
   cfg: OpenClawConfig,
@@ -55,5 +56,22 @@ export function listSlackMessageActions(
 }
 
 export function extractSlackToolSend(args: Record<string, unknown>): ChannelToolSend | null {
-  return extractToolSend(args, "sendMessage");
+  const action = args.action;
+  if (action !== "sendMessage" && action !== "uploadFile") {
+    return null;
+  }
+  const extracted = extractToolSend(args, action);
+  if (!extracted) {
+    return null;
+  }
+  const threadTs =
+    typeof args.threadTs === "string" ? normalizeSlackThreadTsCandidate(args.threadTs) : undefined;
+  const threadSuppressed =
+    extracted.threadSuppressed === true || args.topLevel === true || args.threadTs === null;
+  return {
+    ...extracted,
+    threadId: threadTs ?? extracted.threadId,
+    ...(!threadTs && !extracted.threadId && !threadSuppressed ? { threadImplicit: true } : {}),
+    ...(threadSuppressed ? { threadSuppressed: true } : {}),
+  };
 }
