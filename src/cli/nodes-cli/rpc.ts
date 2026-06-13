@@ -48,7 +48,8 @@ function isDiagnosticsAuthFallbackError(value: unknown): value is Error {
   if (
     value instanceof Error &&
     (value.name === "GatewayCredentialsRequiredError" ||
-      value.name === "GatewayStoredDeviceAuthUnavailableError")
+      value.name === "GatewayStoredDeviceAuthUnavailableError" ||
+      value.name === "GatewayLocalBackendSharedAuthUnavailableError")
   ) {
     return true;
   }
@@ -90,7 +91,8 @@ export const callGatewayCli = async (
     scopes?: OperatorScope[];
     transportTimeoutMs?: number;
     useStoredDeviceAuth?: boolean;
-    withoutDeviceIdentity?: boolean;
+    requiredStoredDeviceAuthScopes?: OperatorScope[];
+    useLocalBackendSharedAuth?: boolean;
   },
 ) => {
   const runtime = await loadNodesCliRpcRuntime();
@@ -106,6 +108,7 @@ export const callNodeDiagnosticsGatewayCli = async (
   try {
     return await callGatewayCli(method, opts, params, {
       useStoredDeviceAuth: true,
+      requiredStoredDeviceAuthScopes: ["operator.read", "operator.pairing"],
     });
   } catch (error) {
     if (!isDiagnosticsAuthFallbackError(error)) {
@@ -115,7 +118,7 @@ export const callNodeDiagnosticsGatewayCli = async (
   try {
     return await callGatewayCli(method, opts, params, {
       scopes: ["operator.read", "operator.pairing"],
-      withoutDeviceIdentity: true,
+      useLocalBackendSharedAuth: true,
     });
   } catch (error) {
     if (!isDiagnosticsAuthFallbackError(error)) {

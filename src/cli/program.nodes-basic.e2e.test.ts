@@ -15,7 +15,8 @@ type GatewayCallRequest = {
   params?: unknown;
   scopes?: unknown;
   useStoredDeviceAuth?: boolean;
-  deviceIdentity?: unknown;
+  requiredStoredDeviceAuthScopes?: unknown;
+  requireLocalBackendSharedAuth?: boolean;
 };
 
 function formatRuntimeLogCallArg(value: unknown): string {
@@ -590,18 +591,24 @@ describe("cli program (nodes basics)", () => {
     const requests = gatewayRequests().filter((request) => request.method === "node.list");
     expect(requests).toHaveLength(3);
     expect(requests[0]?.useStoredDeviceAuth).toBe(true);
+    expect(requests[0]?.requiredStoredDeviceAuthScopes).toEqual([
+      "operator.read",
+      "operator.pairing",
+    ]);
     expect(requests[1]?.scopes).toEqual(["operator.read", "operator.pairing"]);
-    expect(requests[1]?.deviceIdentity).toBeNull();
+    expect(requests[1]?.clientName).toBe("gateway-client");
+    expect(requests[1]?.mode).toBe("backend");
+    expect(requests[1]?.requireLocalBackendSharedAuth).toBe(true);
     expect(requests[2]?.useStoredDeviceAuth).toBeUndefined();
     expect(requests[2]?.scopes).toBeUndefined();
     expect(getRuntimeOutput()).toContain("Read Only Node");
   });
 
-  it("uses isolated pairing scopes for explicit diagnostic credentials", async () => {
+  it("keeps remote explicit diagnostic credentials on the read-only path", async () => {
     callGateway.mockImplementation(async (...args: unknown[]) => {
       const opts = (args[0] ?? {}) as {
         method?: string;
-        scopes?: string[];
+        requireLocalBackendSharedAuth?: boolean;
         useStoredDeviceAuth?: boolean;
       };
       if (opts.method === "node.list" && opts.useStoredDeviceAuth) {
@@ -609,7 +616,21 @@ describe("cli program (nodes basics)", () => {
           name: "GatewayStoredDeviceAuthUnavailableError",
         });
       }
-      return { nodes: [] };
+      if (opts.method === "node.list" && opts.requireLocalBackendSharedAuth) {
+        throw Object.assign(new Error("local backend shared auth unavailable for remote target"), {
+          name: "GatewayLocalBackendSharedAuthUnavailableError",
+        });
+      }
+      return {
+        nodes: [
+          {
+            nodeId: "remote-read-only-node",
+            displayName: "Remote Read Only Node",
+            paired: true,
+            connected: false,
+          },
+        ],
+      };
     });
 
     await runProgram([
@@ -622,10 +643,18 @@ describe("cli program (nodes basics)", () => {
     ]);
 
     const requests = gatewayRequests().filter((request) => request.method === "node.list");
-    expect(requests).toHaveLength(2);
+    expect(requests).toHaveLength(3);
     expect(requests[0]?.useStoredDeviceAuth).toBe(true);
+    expect(requests[0]?.requiredStoredDeviceAuthScopes).toEqual([
+      "operator.read",
+      "operator.pairing",
+    ]);
     expect(requests[1]?.scopes).toEqual(["operator.read", "operator.pairing"]);
-    expect(requests[1]?.deviceIdentity).toBeNull();
+    expect(requests[1]?.clientName).toBe("gateway-client");
+    expect(requests[1]?.mode).toBe("backend");
+    expect(requests[1]?.requireLocalBackendSharedAuth).toBe(true);
+    expect(requests[2]?.scopes).toBeUndefined();
+    expect(getRuntimeOutput()).toContain("Remote Read Only Node");
   });
 
   it("does not retry node diagnostics after a transport failure", async () => {
@@ -705,7 +734,9 @@ describe("cli program (nodes basics)", () => {
     const requests = gatewayRequests().filter((request) => request.method === "node.list");
     expect(requests).toHaveLength(2);
     expect(requests[1]?.scopes).toEqual(["operator.read", "operator.pairing"]);
-    expect(requests[1]?.deviceIdentity).toBeNull();
+    expect(requests[1]?.clientName).toBe("gateway-client");
+    expect(requests[1]?.mode).toBe("backend");
+    expect(requests[1]?.requireLocalBackendSharedAuth).toBe(true);
     expect(getRuntimeOutput()).toContain("Shared Auth Node");
   });
 

@@ -24,7 +24,8 @@ export async function callGatewayCliRuntime(
     scopes?: OperatorScope[];
     transportTimeoutMs?: number;
     useStoredDeviceAuth?: boolean;
-    withoutDeviceIdentity?: boolean;
+    requiredStoredDeviceAuthScopes?: OperatorScope[];
+    useLocalBackendSharedAuth?: boolean;
   },
 ) {
   // Progress is suppressed for JSON callers so stdout remains structured.
@@ -42,11 +43,15 @@ export async function callGatewayCliRuntime(
         params,
         scopes: callOpts?.scopes,
         useStoredDeviceAuth: callOpts?.useStoredDeviceAuth,
-        surfaceGatewayClientRequestErrors: callOpts?.withoutDeviceIdentity,
-        deviceIdentity: callOpts?.withoutDeviceIdentity ? null : undefined,
+        requiredStoredDeviceAuthScopes: callOpts?.requiredStoredDeviceAuthScopes,
+        requireLocalBackendSharedAuth: callOpts?.useLocalBackendSharedAuth,
         timeoutMs: resolveNodesTransportTimeoutMs(opts, callOpts?.transportTimeoutMs),
-        clientName: GATEWAY_CLIENT_NAMES.CLI,
-        mode: GATEWAY_CLIENT_MODES.CLI,
+        clientName: callOpts?.useLocalBackendSharedAuth
+          ? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT
+          : GATEWAY_CLIENT_NAMES.CLI,
+        mode: callOpts?.useLocalBackendSharedAuth
+          ? GATEWAY_CLIENT_MODES.BACKEND
+          : GATEWAY_CLIENT_MODES.CLI,
       }),
   );
 }

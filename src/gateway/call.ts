@@ -24,6 +24,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadDeviceAuthToken } from "../infra/device-auth-store.js";
 import { loadOrCreateDeviceIdentity, type DeviceIdentity } from "../infra/device-identity.js";
 import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
+import type { DeviceAuthEntry } from "../shared/device-auth.js";
+import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { VERSION } from "../version.js";
 import { resolveGatewayAuth } from "./auth-resolve.js";
@@ -83,7 +85,8 @@ type CallGatewayBaseOptions = {
   mode?: GatewayClientMode;
   approvalRuntimeToken?: string;
   useStoredDeviceAuth?: boolean;
-  surfaceGatewayClientRequestErrors?: boolean;
+  requiredStoredDeviceAuthScopes?: OperatorScope[];
+  requireLocalBackendSharedAuth?: boolean;
   deviceIdentity?: DeviceIdentity | null;
   instanceId?: string;
   minProtocol?: number;
@@ -170,6 +173,13 @@ export class GatewayStoredDeviceAuthUnavailableError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "GatewayStoredDeviceAuthUnavailableError";
+  }
+}
+
+export class GatewayLocalBackendSharedAuthUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "GatewayLocalBackendSharedAuthUnavailableError";
   }
 }
 
@@ -453,21 +463,25 @@ function resolveDeviceIdentityForGatewayCall(params: {
   }
 }
 
-function hasStoredOperatorDeviceAuthToken(deviceIdentity: DeviceIdentity | null): boolean {
+function loadStoredOperatorDeviceAuthToken(
+  deviceIdentity: DeviceIdentity | null,
+): DeviceAuthEntry | null {
   if (!deviceIdentity) {
-    return false;
+    return null;
   }
   try {
-    return Boolean(
-      gatewayCallDeps.loadDeviceAuthToken({
-        deviceId: deviceIdentity.deviceId,
-        role: "operator",
-        env: process.env,
-      })?.token,
-    );
+    return gatewayCallDeps.loadDeviceAuthToken({
+      deviceId: deviceIdentity.deviceId,
+      role: "operator",
+      env: process.env,
+    });
   } catch {
-    return false;
+    return null;
   }
+}
+
+function hasStoredOperatorDeviceAuthToken(deviceIdentity: DeviceIdentity | null): boolean {
+  return Boolean(loadStoredOperatorDeviceAuthToken(deviceIdentity)?.token);
 }
 
 function resolveGatewayCallAuth(config: OpenClawConfig) {
@@ -1023,17 +1037,9 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     opts.timeoutMs,
     context.config.gateway?.handshakeTimeoutMs,
   );
-  const resolvedCredentials = await resolveGatewayCredentials(context);
-  ensureExplicitGatewayAuth({
-    urlOverride: context.urlOverride,
-    urlOverrideSource: context.urlOverrideSource,
-    explicitAuth: context.explicitAuth,
-    resolvedAuth: resolvedCredentials,
-    errorHint: "Fix: pass --token or --password (or gatewayToken in tools).",
-    configPath: context.configPath,
-  });
+  const useStoredDeviceAuth = opts.useStoredDeviceAuth === true;
   if (
-    opts.useStoredDeviceAuth &&
+    useStoredDeviceAuth &&
     (context.urlOverride ||
       context.explicitAuth.token ||
       context.explicitAuth.password ||
@@ -1043,7 +1049,15 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
       "stored device auth is limited to the configured local gateway",
     );
   }
-  const useStoredDeviceAuth = opts.useStoredDeviceAuth === true;
+  const resolvedCredentials = useStoredDeviceAuth ? {} : await resolveGatewayCredentials(context);
+  ensureExplicitGatewayAuth({
+    urlOverride: context.urlOverride,
+    urlOverrideSource: context.urlOverrideSource,
+    explicitAuth: context.explicitAuth,
+    resolvedAuth: resolvedCredentials,
+    errorHint: "Fix: pass --token or --password (or gatewayToken in tools).",
+    configPath: context.configPath,
+  });
   ensureRemoteModeUrlConfigured(context);
   const connectionDetails = buildGatewayConnectionDetails({
     config: context.config,
@@ -1055,15 +1069,38 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
   const tlsFingerprint = await resolveGatewayTlsFingerprint({ opts, context, url });
   const token = useStoredDeviceAuth ? undefined : resolvedCredentials.token;
   const password = useStoredDeviceAuth ? undefined : resolvedCredentials.password;
+  if (
+    opts.requireLocalBackendSharedAuth &&
+    !shouldOmitDeviceIdentityForGatewayCall({ opts, url, token, password })
+  ) {
+    throw new GatewayLocalBackendSharedAuthUnavailableError(
+      "local backend shared auth requires a loopback gateway with token or password credentials",
+    );
+  }
   const deviceIdentity =
     opts.deviceIdentity === undefined
       ? resolveDeviceIdentityForGatewayCall({ opts, url, token, password })
       : opts.deviceIdentity;
-  if (useStoredDeviceAuth && !hasStoredOperatorDeviceAuthToken(deviceIdentity)) {
-    throw new GatewayCredentialsRequiredError({
-      method: opts.method,
-      configPath: context.configPath,
-    });
+  if (useStoredDeviceAuth) {
+    const storedAuth = loadStoredOperatorDeviceAuthToken(deviceIdentity);
+    if (!storedAuth?.token) {
+      throw new GatewayCredentialsRequiredError({
+        method: opts.method,
+        configPath: context.configPath,
+      });
+    }
+    if (
+      Array.isArray(opts.requiredStoredDeviceAuthScopes) &&
+      !roleScopesAllow({
+        role: "operator",
+        requestedScopes: opts.requiredStoredDeviceAuthScopes,
+        allowedScopes: storedAuth.scopes,
+      })
+    ) {
+      throw new GatewayStoredDeviceAuthUnavailableError(
+        "stored device auth does not grant the required operator scopes",
+      );
+    }
   }
   ensureGatewayCallCanAuthenticate({
     opts,
@@ -1085,7 +1122,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     connectionDetails,
     deviceIdentity,
     surfaceGatewayClientRequestErrors:
-      useStoredDeviceAuth || opts.surfaceGatewayClientRequestErrors === true,
+      useStoredDeviceAuth || opts.requireLocalBackendSharedAuth === true,
   });
 }
 

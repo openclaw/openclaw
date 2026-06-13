@@ -795,6 +795,50 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.scopes).toBeUndefined();
   });
 
+  it("does not resolve configured local SecretRefs when using stored device auth", async () => {
+    getRuntimeConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        bind: "loopback",
+        auth: {
+          mode: "password",
+          password: { source: "env", provider: "default", id: "MISSING_LOCAL_PASSWORD" },
+        },
+      },
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+    } as unknown as OpenClawConfig);
+    setGatewayNetworkDefaults();
+
+    await callGatewayCli({ method: "node.list", useStoredDeviceAuth: true });
+
+    expect(lastClientOptions?.password).toBeUndefined();
+    expect(lastClientOptions?.deviceIdentity).toEqual(deviceIdentityState.value);
+  });
+
+  it("rejects stored device auth that lacks caller-required scopes", async () => {
+    setLocalLoopbackGatewayConfig();
+    loadDeviceAuthTokenMock.mockReturnValue({
+      token: "paired-device-token",
+      role: "operator",
+      scopes: ["operator.read"],
+      updatedAtMs: 123,
+    });
+
+    await expect(
+      callGatewayCli({
+        method: "node.list",
+        useStoredDeviceAuth: true,
+        requiredStoredDeviceAuthScopes: ["operator.read", "operator.pairing"],
+      }),
+    ).rejects.toMatchObject({ name: "GatewayStoredDeviceAuthUnavailableError" });
+
+    expect(lastClientOptions).toBeNull();
+  });
+
   it("does not send stored device auth to configured remote gateways", async () => {
     getRuntimeConfig.mockReturnValue(makeRemotePasswordGatewayConfig("remote-password"));
     setGatewayNetworkDefaults();
@@ -819,6 +863,36 @@ describe("callGateway url resolution", () => {
 
     expect(lastClientOptions).toBeNull();
     expect(startCalls).toBe(0);
+  });
+
+  it("uses local backend shared auth without a device identity when required", async () => {
+    setLocalLoopbackGatewayConfig();
+
+    await callGateway({
+      method: "node.list",
+      token: "explicit-token",
+      scopes: ["operator.read", "operator.pairing"],
+      requireLocalBackendSharedAuth: true,
+    });
+
+    expect(lastClientOptions?.clientName).toBe(GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT);
+    expect(lastClientOptions?.mode).toBe(GATEWAY_CLIENT_MODES.BACKEND);
+    expect(lastClientOptions?.scopes).toEqual(["operator.read", "operator.pairing"]);
+    expect(lastClientOptions?.deviceIdentity).toBeNull();
+  });
+
+  it("rejects required local backend shared auth for remote targets", async () => {
+    await expect(
+      callGateway({
+        method: "node.list",
+        url: "wss://remote.example.test",
+        token: "explicit-token",
+        scopes: ["operator.read", "operator.pairing"],
+        requireLocalBackendSharedAuth: true,
+      }),
+    ).rejects.toMatchObject({ name: "GatewayLocalBackendSharedAuthUnavailableError" });
+
+    expect(lastClientOptions).toBeNull();
   });
 
   it("uses backend client metadata for explicit scoped default calls", async () => {

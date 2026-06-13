@@ -10,6 +10,7 @@ import {
 } from "../infra/node-pairing.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { callGateway } from "./call.js";
 import {
   loadDeviceIdentity,
   openTrackedWs,
@@ -340,6 +341,38 @@ describe("gateway node pairing authorization", () => {
   });
 
   describeWithGatewayServer("pending diagnostics scopes", (getStarted) => {
+    test("shows pending pairing records to direct-local backend shared-auth callers", async () => {
+      const pendingOnlyNodeId = "node-local-backend-pending";
+      const pending = await requestNodePairing({
+        nodeId: pendingOnlyNodeId,
+        platform: "macos",
+        commands: ["system.run"],
+      });
+
+      const listed = await callGateway<{
+        nodes?: Array<{
+          nodeId: string;
+          approvalState?: string;
+          pendingRequestId?: string;
+        }>;
+      }>({
+        url: `ws://127.0.0.1:${getStarted().port}`,
+        token: "secret",
+        method: "node.list",
+        scopes: ["operator.read", "operator.pairing"],
+        requireLocalBackendSharedAuth: true,
+        timeoutMs: 2_000,
+      });
+
+      expect(listed.nodes).toContainEqual(
+        expect.objectContaining({
+          nodeId: pendingOnlyNodeId,
+          approvalState: "pending-approval",
+          pendingRequestId: pending.request.requestId,
+        }),
+      );
+    });
+
     test("hides pending pairing records from read-only callers", async () => {
       const pairedNodeId = "node-read-only-paired";
       const pendingOnlyNodeId = "node-read-only-pending";
