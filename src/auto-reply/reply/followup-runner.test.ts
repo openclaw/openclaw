@@ -39,6 +39,7 @@ let setRuntimeConfigSnapshot: typeof import("../../config/config.js").setRuntime
 let createMockFollowupRun: typeof import("./test-helpers.js").createMockFollowupRun;
 let createMockTypingController: typeof import("./test-helpers.js").createMockTypingController;
 let createReplyOperationForTest: typeof import("./reply-run-registry.js").createReplyOperation;
+let abortActiveReplyRunsForTest: typeof import("./reply-run-registry.js").abortActiveReplyRuns;
 let replyRunTestingForTest: typeof import("./reply-run-registry.js").testing;
 let cliBackendsTestingForTest: typeof import("../../agents/cli-backends.js").testing;
 let setReplyPayloadMetadataForTest: typeof import("../reply-payload.js").setReplyPayloadMetadata;
@@ -463,8 +464,11 @@ async function loadFreshFollowupRunnerModuleForTest() {
   ({ clearFollowupQueue, enqueueFollowupRun } = await import("./queue.js"));
   sessionRunAccounting = await import("./session-run-accounting.js");
   ({ createMockFollowupRun, createMockTypingController } = await import("./test-helpers.js"));
-  ({ createReplyOperation: createReplyOperationForTest, testing: replyRunTestingForTest } =
-    await import("./reply-run-registry.js"));
+  ({
+    abortActiveReplyRuns: abortActiveReplyRunsForTest,
+    createReplyOperation: createReplyOperationForTest,
+    testing: replyRunTestingForTest,
+  } = await import("./reply-run-registry.js"));
   ({ setReplyPayloadMetadata: setReplyPayloadMetadataForTest } =
     await import("../reply-payload.js"));
 }
@@ -1597,6 +1601,86 @@ describe("createFollowupRunner runtime config", () => {
     const embeddedCall = requireLastMockCallArg(runEmbeddedAgentMock, "run embedded agent");
     expect(embeddedCall.suppressAssistantErrorPersistence).toBe(false);
     expect(lifecyclePhases).toEqual(["start", "start", "end"]);
+  });
+
+  it("suppresses deferred CLI success after restart cancellation", async () => {
+    const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+      "../../infra/agent-events.js",
+    );
+    const lifecycleEvents: Array<Record<string, unknown>> = [];
+    const unsubscribe = realAgentEvents.onAgentEvent((evt) => {
+      if (evt.stream === "lifecycle") {
+        lifecycleEvents.push(evt.data);
+      }
+    });
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": { command: "claude" },
+          },
+          models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    };
+    let resolveCli: (() => void) | undefined;
+    runCliAgentMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveCli = () =>
+            resolve({
+              payloads: [{ text: "completed after restart" }],
+              meta: {
+                agentMeta: {
+                  provider: "claude-cli",
+                  model: "claude-opus-4-7",
+                },
+              },
+            });
+        }),
+    );
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey: "main",
+      defaultModel: "anthropic/claude-opus-4-7",
+    });
+
+    try {
+      const pending = runner(
+        createQueuedRun({
+          originatingChannel: "telegram",
+          originatingTo: "chat-1",
+          run: {
+            config: runtimeConfig,
+            provider: "anthropic",
+            model: "claude-opus-4-7",
+            messageProvider: "telegram",
+          },
+        }),
+      );
+      await vi.waitFor(() => {
+        expect(runCliAgentMock).toHaveBeenCalledTimes(1);
+      });
+      expect(abortActiveReplyRunsForTest({ mode: "all" })).toBe(true);
+      resolveCli?.();
+      await pending;
+    } finally {
+      unsubscribe();
+    }
+
+    expect(lifecycleEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          phase: "error",
+          aborted: true,
+          stopReason: "restart",
+        }),
+      ]),
+    );
+    expect(routeReplyMock).not.toHaveBeenCalled();
   });
 
   it("uses the active runtime snapshot for queued embedded followup runs", async () => {
@@ -2907,6 +2991,82 @@ describe("createFollowupRunner compaction", () => {
     expect(observedRunId).toBeDefined();
     expect(realAgentEvents.getAgentRunContext(observedRunId ?? "")?.sessionId).toBe("new-session");
     realAgentEvents.resetAgentRunContextForTest();
+  });
+
+  it("captures follow-up lifecycle ownership before asynchronous preflight", async () => {
+    const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+      "../../infra/agent-events.js",
+    );
+    realAgentEvents.resetAgentRunContextForTest();
+    const initialGeneration = realAgentEvents.getAgentEventLifecycleGeneration();
+    let releasePreflight: (() => void) | undefined;
+    runPreflightCompactionIfNeededMock.mockImplementationOnce(
+      async (params: { sessionEntry?: SessionEntry }) => {
+        await new Promise<void>((resolve) => {
+          releasePreflight = resolve;
+        });
+        return params.sessionEntry;
+      },
+    );
+    let observedLifecycleGeneration: string | undefined;
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (params: { lifecycleGeneration?: string }) => {
+        observedLifecycleGeneration = params.lifecycleGeneration;
+        if (params.lifecycleGeneration !== realAgentEvents.getAgentEventLifecycleGeneration()) {
+          const error = new Error("Agent run belongs to a stale gateway lifecycle");
+          error.name = "AbortError";
+          throw error;
+        }
+        return {
+          payloads: [{ text: "final" }],
+          meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+        };
+      },
+    );
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry: {
+        sessionId: "preflight-session",
+        updatedAt: Date.now(),
+      },
+      sessionKey: "main",
+      defaultModel: "anthropic/claude",
+    });
+
+    try {
+      const pending = runner(
+        createQueuedRun({
+          run: {
+            sessionId: "preflight-session",
+            sessionKey: "main",
+            provider: "anthropic",
+            model: "claude",
+          },
+        }),
+      );
+      await vi.waitFor(() => {
+        expect(runPreflightCompactionIfNeededMock).toHaveBeenCalledTimes(1);
+      });
+      const [registeredRun] = realAgentEvents.listAgentRunsForSession({
+        sessionKey: "main",
+        sessionId: "preflight-session",
+      });
+      expect(registeredRun).toEqual(
+        expect.objectContaining({
+          lifecycleGeneration: initialGeneration,
+        }),
+      );
+
+      realAgentEvents.rotateAgentEventLifecycleGeneration();
+      releasePreflight?.();
+      await pending;
+
+      expect(observedLifecycleGeneration).toBe(initialGeneration);
+      expect(realAgentEvents.getAgentRunContext(registeredRun?.runId ?? "")).toBeUndefined();
+    } finally {
+      realAgentEvents.resetAgentRunContextForTest();
+    }
   });
 });
 

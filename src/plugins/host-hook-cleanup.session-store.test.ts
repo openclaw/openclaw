@@ -2,7 +2,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { clearSessionStoreCacheForTest, saveSessionStore } from "../config/sessions/store.js";
+import {
+  clearSessionStoreCacheForTest,
+  loadSessionStore,
+  saveSessionStore,
+} from "../config/sessions/store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import * as jsonFiles from "../infra/json-files.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
@@ -55,5 +59,46 @@ describe("plugin host cleanup session stores", () => {
 
     expect(result).toEqual({ cleanupCount: 0, failures: [] });
     expect(writeSpy).not.toHaveBeenCalled();
+  });
+
+  it("can defer persistent session-state cleanup to an atomic owner", async () => {
+    stateDir = await fs.mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-cleanup-deferred-"),
+    );
+    previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    const storePath = path.join(stateDir, "sessions.json");
+    await saveSessionStore(
+      storePath,
+      {
+        "agent:main:main": {
+          sessionId: "session-id",
+          updatedAt: Date.now(),
+          pluginExtensions: {
+            test: {
+              state: { active: true },
+            },
+          },
+        } satisfies SessionEntry,
+      },
+      { skipMaintenance: true },
+    );
+
+    const result = await runPluginHostCleanup({
+      cfg: { session: { store: storePath } },
+      registry: createEmptyPluginRegistry(),
+      reason: "reset",
+      sessionKey: "agent:main:main",
+      skipPersistentSessionState: true,
+    });
+
+    expect(result).toEqual({ cleanupCount: 0, failures: [] });
+    expect(
+      loadSessionStore(storePath, { skipCache: true })["agent:main:main"]?.pluginExtensions,
+    ).toEqual({
+      test: {
+        state: { active: true },
+      },
+    });
   });
 });

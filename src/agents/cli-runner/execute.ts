@@ -4,7 +4,10 @@
  */
 import crypto from "node:crypto";
 import { shouldLogVerbose } from "../../globals.js";
-import { emitAgentEvent } from "../../infra/agent-events.js";
+import {
+  assertAgentRunLifecycleGenerationCurrent,
+  emitAgentEvent,
+} from "../../infra/agent-events.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import {
   resolveEventSessionKeyForPolicy,
@@ -387,6 +390,9 @@ export async function executePreparedCliRun(
 
   try {
     return await enqueueCliRun(queueKey, async () => {
+      if (params.lifecycleGeneration) {
+        assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
+      }
       const cliTurnStartedAt = Date.now();
       const restoreSkillEnv = params.skillsSnapshot
         ? applySkillEnvOverridesFromSnapshot({

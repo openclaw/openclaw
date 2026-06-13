@@ -29,6 +29,8 @@ export type {
 export type SubscribeEmbeddedAgentSessionParams = {
   session: AgentSession;
   runId: string;
+  /** Immutable gateway lifecycle ownership for this execution. */
+  lifecycleGeneration?: string;
   /** Originating message channel used for subsystem log attribution. */
   messageChannel?: string;
   initialReplayState?: EmbeddedRunReplayState;
@@ -73,6 +75,8 @@ export type SubscribeEmbeddedAgentSessionParams = {
   terminalLifecyclePhase?: "end" | "finishing";
   /** Read immediately before terminal lifecycle emission. */
   isTerminalAborted?: () => boolean | undefined;
+  /** Override the terminal stop reason from the current abort owner. */
+  resolveTerminalStopReason?: () => string | undefined;
   /** Gate final block delivery/lifecycle after the natural answer is known. */
   onBeforeTerminalDelivery?: (event: {
     messages: AgentMessage[];

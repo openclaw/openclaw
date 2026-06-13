@@ -108,6 +108,8 @@ export type AgentCommandOpts = {
   abortSignal?: AbortSignal;
   lane?: string;
   runId?: string;
+  /** Immutable gateway lifecycle ownership captured when this run was admitted. */
+  lifecycleGeneration?: string;
   extraSystemPrompt?: string;
   /** Bootstrap workspace context injection mode for this run. */
   bootstrapContextMode?: "full" | "lightweight";
@@ -141,6 +143,8 @@ export type AgentCommandOpts = {
   resultMetaOverrides?: AgentCommandResultMetaOverrides;
   /** Called when the actual run model is selected, including fallback retries. */
   onActiveModelSelected?: (ctx: { provider: string; model: string }) => void;
+  /** Called when compaction rotates the active run onto a successor session. */
+  onSessionIdChanged?: (sessionId: string) => void;
   /** Internal one-shot model probe mode: no tools, no workspace/chat prompt policy. */
   modelRun?: boolean;
   /** Internal prompt-mode override for trusted local/gateway callsites. */
