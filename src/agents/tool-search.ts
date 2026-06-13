@@ -1132,16 +1132,15 @@ function formatToolDirectoryIdentifier(value: string | undefined): string | unde
 }
 
 function formatToolDirectoryEntry(entry: ReturnType<typeof compactEntry>): string | undefined {
+  if (entry.source !== "openclaw") {
+    return undefined;
+  }
   const name = formatToolDirectoryIdentifier(entry.name);
   if (!name) {
     return undefined;
   }
-  const description =
-    entry.source === "openclaw"
-      ? compactDirectoryDescription(entry.description)
-      : "External tool; use tool_describe to inspect its schema.";
-  const ownerName =
-    entry.source === "openclaw" ? formatToolDirectoryIdentifier(entry.sourceName) : undefined;
+  const description = compactDirectoryDescription(entry.description);
+  const ownerName = formatToolDirectoryIdentifier(entry.sourceName);
   const owner = ownerName ? ` (${ownerName})` : "";
   return `- ${name}${owner}: ${description || "No description."}`;
 }
