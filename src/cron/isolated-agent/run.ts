@@ -335,6 +335,7 @@ function resolveCronSourceDeliveryPlan(params: {
     target,
     messageToolEnabled: true,
     messageToolForced: false,
+    requireExplicitMessageTargetEvidence: true,
     directFallback: true,
     skipFallbackWhenMessageToolSentToTarget: params.resolvedDelivery.ok,
   });
