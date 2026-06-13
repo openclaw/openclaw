@@ -55,6 +55,35 @@ describe("resolveGatewayRequestContext", () => {
 
     expect(result.sessionKey).toContain("openresponses-user:alice");
   });
+
+  it("does not build session state for explicit unknown agent ids", () => {
+    expect(() =>
+      resolveGatewayRequestContext({
+        req: createReq({ "x-openclaw-agent-id": "missing-agent" }),
+        model: "openclaw",
+        sessionPrefix: "openai",
+        defaultMessageChannel: "webchat",
+      }),
+    ).toThrow(/Unknown agent/);
+
+    expect(() =>
+      resolveGatewayRequestContext({
+        req: createReq(),
+        model: "openclaw/missing-agent",
+        sessionPrefix: "openai",
+        defaultMessageChannel: "webchat",
+      }),
+    ).toThrow(/Unknown agent/);
+
+    expect(() =>
+      resolveGatewayRequestContext({
+        req: createReq({ "x-openclaw-agent-id": "!!!" }),
+        model: "openclaw",
+        sessionPrefix: "openai",
+        defaultMessageChannel: "webchat",
+      }),
+    ).toThrow("Unknown agent '!!!'.");
+  });
 });
 
 describe("resolveTrustedHttpOperatorScopes", () => {

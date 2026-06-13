@@ -1236,6 +1236,7 @@ export async function runEmbeddedAttempt(
                 : undefined,
             sessionId: params.sessionId,
             runId: params.runId,
+            oneShotCliRun: params.oneShotCliRun,
             toolSearchCatalogRef,
             agentDir,
             cwd: effectiveCwd,
@@ -1799,6 +1800,8 @@ export async function runEmbeddedAttempt(
       workspaceDir: effectiveWorkspace,
       cwd: effectiveCwd,
       runtime: {
+        sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
         host: machineName,
         os: `${os.type()} ${os.release()}`,
         arch: os.arch(),

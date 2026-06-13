@@ -7,6 +7,7 @@ type AgentPayloadLike = {
   presentation?: unknown;
   interactive?: unknown;
   channelData?: unknown;
+  attachments?: unknown;
   isError?: unknown;
   isReasoning?: unknown;
 };
@@ -46,11 +47,13 @@ export function hasVisibleReplyShape(value: unknown): boolean {
     presentation?: unknown;
     interactive?: unknown;
     channelData?: unknown;
+    attachments?: unknown;
   };
   return Boolean(
     hasNonEmptyString(record.text) ||
     hasNonEmptyString(record.mediaUrl) ||
     hasNonEmptyStringArray(record.mediaUrls) ||
+    hasVisibleAttachmentReference(record.attachments) ||
     record.presentation ||
     record.interactive ||
     record.channelData,
@@ -73,6 +76,19 @@ function hasVisibleMessagingTargetEvidence(value: unknown): boolean {
     return false;
   }
   return value.some(hasVisibleReplyShape);
+}
+
+function hasVisibleAttachmentReference(value: unknown): boolean {
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  const urls = new Set<string>();
+  for (const attachment of value) {
+    if (attachment && typeof attachment === "object" && !Array.isArray(attachment)) {
+      collectMediaUrlsFromRecord(attachment as Record<string, unknown>, urls);
+    }
+  }
+  return urls.size > 0;
 }
 
 function collectStringValues(value: unknown, output: Set<string>) {

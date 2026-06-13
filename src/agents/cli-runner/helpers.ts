@@ -128,6 +128,8 @@ export function buildCliAgentSystemPrompt(params: {
   skillsPrompt?: string;
   modelDisplay: string;
   agentId?: string;
+  sessionKey?: string;
+  sessionId?: string;
 }) {
   const runtimeWorkspaceDir = params.cwd?.trim() || params.workspaceDir;
   const defaultModelRef = resolveDefaultModelForAgent({
@@ -141,6 +143,8 @@ export function buildCliAgentSystemPrompt(params: {
     workspaceDir: runtimeWorkspaceDir,
     cwd: runtimeWorkspaceDir,
     runtime: {
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
       host: "openclaw",
       os: `${os.type()} ${os.release()}`,
       arch: os.arch(),

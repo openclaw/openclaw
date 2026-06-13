@@ -1786,6 +1786,12 @@ export async function runReplyAgent(params: {
     }
 
     const usage = runResult.meta?.agentMeta?.usage;
+    const hasBillableUsageBuckets =
+      usage &&
+      (usage.input !== undefined ||
+        usage.output !== undefined ||
+        usage.cacheRead !== undefined ||
+        usage.cacheWrite !== undefined);
     const promptTokens = runResult.meta?.agentMeta?.promptTokens;
     const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? defaultModel;
     const providerUsed =
@@ -1821,7 +1827,7 @@ export async function runReplyAgent(params: {
           followupRun.run.provider && followupRun.run.model
             ? `${followupRun.run.provider}/${followupRun.run.model}`
             : undefined,
-        turnUsd: usage
+        turnUsd: hasBillableUsageBuckets
           ? estimateUsageCost({
               usage,
               cost: resolveModelCostConfig({
@@ -2214,7 +2220,9 @@ export async function runReplyAgent(params: {
         model: modelUsed,
         config: cfg,
       });
-      const costUsd = estimateUsageCost({ usage, cost: costConfig });
+      const costUsd = hasBillableUsageBuckets
+        ? estimateUsageCost({ usage, cost: costConfig })
+        : undefined;
       emitTrustedDiagnosticEvent({
         type: "model.usage",
         ...(runResult.diagnosticTrace

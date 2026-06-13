@@ -48,6 +48,7 @@ import {
   authorizeOpenAiCompatibleHttpModelOverride,
   getBearerToken,
   getHeader,
+  isUnknownGatewayAgentError,
   resolveAgentIdForRequest,
   resolveGatewayRequestContext,
   resolveOpenAiCompatModelOverride,
@@ -489,7 +490,18 @@ export async function handleOpenResponsesHttpRequest(
   const stream = Boolean(payload.stream);
   const model = payload.model;
   const user = payload.user;
-  const agentId = resolveAgentIdForRequest({ req, model });
+  let agentId: string;
+  try {
+    agentId = resolveAgentIdForRequest({ req, model });
+  } catch (err) {
+    if (isUnknownGatewayAgentError(err)) {
+      sendJson(res, 400, {
+        error: { message: err.message, type: "invalid_request_error" },
+      });
+      return true;
+    }
+    throw err;
+  }
   const { modelOverride, errorMessage: modelError } = await resolveOpenAiCompatModelOverride({
     req,
     agentId,
@@ -636,14 +648,25 @@ export async function handleOpenResponsesHttpRequest(
     });
     return true;
   }
-  const resolved = resolveGatewayRequestContext({
-    req,
-    model,
-    user,
-    sessionPrefix: "openresponses",
-    defaultMessageChannel: "webchat",
-    useMessageChannelHeader: true,
-  });
+  let resolved: ReturnType<typeof resolveGatewayRequestContext>;
+  try {
+    resolved = resolveGatewayRequestContext({
+      req,
+      model,
+      user,
+      sessionPrefix: "openresponses",
+      defaultMessageChannel: "webchat",
+      useMessageChannelHeader: true,
+    });
+  } catch (err) {
+    if (isUnknownGatewayAgentError(err)) {
+      sendJson(res, 400, {
+        error: { message: err.message, type: "invalid_request_error" },
+      });
+      return true;
+    }
+    throw err;
+  }
   const responseSessionScope = createResponseSessionScope({
     req,
     auth: opts.auth,
