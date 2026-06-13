@@ -448,8 +448,9 @@ function isAsyncTaskTerminalError(
 ): boolean {
   const status = normalizeOptionalString(task.status)?.toLowerCase();
   const outcome = normalizeOptionalString(task.terminalOutcome)?.toLowerCase();
-  return Boolean(
-    (status && ASYNC_TASK_TERMINAL_ERROR_STATUSES.has(status)) || outcome === "blocked",
+  return (
+    (status !== undefined && ASYNC_TASK_TERMINAL_ERROR_STATUSES.has(status)) ||
+    outcome === "blocked"
   );
 }
 
@@ -491,10 +492,7 @@ function buildAsyncTaskTerminalPayloads(
         .filter(Boolean)
         .join("/");
       const text = `${taskLabel}${statusText ? ` finished with ${statusText}` : " finished"}.`;
-      return {
-        text,
-        ...(isAsyncTaskTerminalError(task) ? { isError: true } : {}),
-      };
+      return isAsyncTaskTerminalError(task) ? { text, isError: true } : { text };
     })
     .filter((payload) => payload.text.trim().length > 0);
   if (terminalTaskPayloads.length > 0) {
@@ -554,6 +552,7 @@ function shouldSurfaceNonDeliverableTerminalReply(params: {
     params.attempt.clientToolCalls?.length ||
     params.attempt.yieldDetected ||
     hasAsyncStartedTerminalProgress(params.attempt) ||
+    hasSideEffectProgressEvidence(params.attempt) ||
     hasVisibleAssistantTextForTerminalProgress(params.attempt) ||
     hasVisibleOutboundDeliveryEvidence(params.attempt)
   ) {
@@ -1850,7 +1849,9 @@ export async function runEmbeddedAgent(
             );
             const hadPotentialSideEffects = currentAttemptToolLoopObservations.some(
               (observation) =>
-                observation.mutatingAction === true || observation.didSendViaMessagingTool === true,
+                observation.mutatingAction === true ||
+                observation.asyncStarted === true ||
+                observation.didSendViaMessagingTool === true,
             );
             const agentMeta = buildErrorAgentMeta({
               sessionId: activeSessionId,

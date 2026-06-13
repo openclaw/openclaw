@@ -18,6 +18,7 @@ export type ToolLoopObservation = Omit<PostCompactionGuardObservation, "resultHa
   messagingToolSentMediaUrls?: string[];
   messagingToolSentTargets?: MessagingToolSend[];
   mutatingAction?: boolean;
+  asyncStarted?: boolean;
   failed?: boolean;
   blockedReason?: string;
   blockedMessage?: string;
@@ -294,15 +295,21 @@ function isSuccessfulObservation(observation: ToolLoopObservation): boolean {
 export function resolveToolLoopAbortFallback(params: {
   observations: readonly ToolLoopObservation[];
 }): ToolLoopFallbackResolution | undefined {
-  const blockedObservation = params.observations.find(isTerminalLoopBlockedObservation);
+  const blockedObservationIndex = params.observations.findIndex(isTerminalLoopBlockedObservation);
+  const blockedObservation = params.observations[blockedObservationIndex];
   if (!blockedObservation) {
     return undefined;
   }
 
-  const successfulObservations = params.observations.filter(isSuccessfulObservation);
-  const blockedToolSuccessfulObservations = successfulObservations.filter(
-    (observation) => observation.toolName === blockedObservation.toolName,
+  const blockedToolObservations = params.observations
+    .slice(0, blockedObservationIndex)
+    .filter((observation) => observation.toolName === blockedObservation.toolName);
+  const lastFailureIndex = blockedToolObservations.findLastIndex(
+    (observation) => observation.failed === true,
   );
+  const blockedToolSuccessfulObservations = blockedToolObservations
+    .slice(lastFailureIndex + 1)
+    .filter(isSuccessfulObservation);
   const toolOwnedPublicPayload = resolveToolOwnedPublicPayload({
     successfulObservations: blockedToolSuccessfulObservations,
   });

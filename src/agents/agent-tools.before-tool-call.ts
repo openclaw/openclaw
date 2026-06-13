@@ -89,6 +89,7 @@ export type ToolOutcomeObservation = {
   messagingToolSentMediaUrls?: string[];
   messagingToolSentTargets?: MessagingToolSend[];
   mutatingAction?: boolean;
+  asyncStarted?: boolean;
   failed?: boolean;
   blockedReason?: string;
   blockedMessage?: string;
@@ -979,6 +980,8 @@ export async function recordToolLoopOutcome(args: {
         !blockedReason &&
         !failed &&
         buildToolMutationState(record?.toolName ?? args.toolName, args.toolParams).mutatingAction;
+      const asyncStarted =
+        !blockedReason && !failed && details?.async === true && details.status === "started";
       const resultText = blockedReason
         ? undefined
         : (readToolResultText(args.result) ?? readToolErrorText(args.error));
@@ -1026,6 +1029,7 @@ export async function recordToolLoopOutcome(args: {
           : {}),
         ...(messagingTarget ? { messagingToolSentTargets: [messagingTarget] } : {}),
         ...(mutatingAction ? { mutatingAction } : {}),
+        ...(asyncStarted ? { asyncStarted } : {}),
         ...(failed ? { failed } : {}),
         ...(args.terminalResultFallback
           ? { terminalResultFallback: args.terminalResultFallback }

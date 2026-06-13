@@ -425,6 +425,30 @@ describe("before_tool_call loop detection behavior", () => {
     );
   });
 
+  it("marks successful async-started tool outcomes for replay-safety handling", async () => {
+    const onToolOutcome = vi.fn();
+    const execute = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: "generation started" }],
+      details: { async: true, status: "started", taskId: "task-image-1" },
+    });
+    const tool = createWrappedTool("image_generate", execute, {
+      ...enabledLoopDetectionContext,
+      runId: "run-async-started-outcome-observer",
+      onToolOutcome,
+    });
+
+    await expectUnblockedToolExecution(tool, "image-generate-observer", {
+      prompt: "A mountain at sunrise",
+    });
+
+    expect(onToolOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "image_generate",
+        asyncStarted: true,
+      }),
+    );
+  });
+
   it("does not carry loop history across run ids", async () => {
     const execute = vi.fn().mockResolvedValue({
       content: [{ type: "text", text: "same output" }],

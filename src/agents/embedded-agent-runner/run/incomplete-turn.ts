@@ -15,6 +15,7 @@ import {
   hasCommittedMessagingToolDeliveryEvidence,
   hasMessagingToolDeliveryEvidence,
   hasMessagingToolSideEffectEvidence,
+  hasSideEffectProgressEvidence,
 } from "../delivery-evidence.js";
 import { isZeroUsageEmptyStopAssistantTurn } from "../empty-assistant-turn.js";
 import { assessLastAssistantMessage } from "../thinking.js";
@@ -53,6 +54,7 @@ type IncompleteTurnAttempt = Pick<
   | "itemLifecycle"
   | "replayMetadata"
   | "promptErrorSource"
+  | "successfulCronAdds"
   | "timedOutDuringCompaction"
   | "toolMetas"
 > &
@@ -323,6 +325,14 @@ export function resolveAttemptReplayMetadata(attempt: {
   return attempt.replayMetadata ?? REPLAY_UNSAFE_FALLBACK_METADATA;
 }
 
+function hasCompletedSideEffectProgressEvidence(attempt: IncompleteTurnAttempt): boolean {
+  return hasSideEffectProgressEvidence({
+    messagingToolSentTargets: attempt.messagingToolSentTargets,
+    successfulCronAdds: attempt.successfulCronAdds,
+    acceptedSessionSpawns: attempt.acceptedSessionSpawns,
+  });
+}
+
 export function resolveIncompleteTurnPayloadText(params: {
   payloadCount: number;
   aborted: boolean;
@@ -364,6 +374,10 @@ export function resolveIncompleteTurnPayloadText(params: {
   }
 
   if (hasOnlySilentAssistantReply(params.attempt.assistantTexts)) {
+    return null;
+  }
+
+  if (hasCompletedSideEffectProgressEvidence(params.attempt)) {
     return null;
   }
 

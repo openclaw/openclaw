@@ -271,6 +271,45 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expectWarnMessageWith("non-deliverable terminal turn detected");
   });
 
+  it.each([
+    {
+      name: "successful cron add",
+      attempt: { successfulCronAdds: 1 },
+    },
+    {
+      name: "committed messaging target",
+      attempt: {
+        messagingToolSentTargets: [{ tool: "message", provider: "discord", to: "channel-1" }],
+      },
+    },
+  ])("leaves $name side-effect progress payload-free for the outer runner", async ({ attempt }) => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        ...attempt,
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.5",
+          content: [],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: `run-side-effect-progress-${attempt.successfulCronAdds ? "cron" : "target"}`,
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads).toBeUndefined();
+    expectNoWarnMessageWith("non-deliverable terminal turn detected");
+  });
+
   it("synthesizes a silent cron payload from a trailing current-attempt NO_REPLY tool result", () => {
     const payload = resolveSilentToolResultReplyPayload({
       isCronTrigger: true,
@@ -821,6 +860,66 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       provider: "xai",
       model: "grok-composer-2.5-fast",
       runId: "run-tool-loop-after-mutation",
+    });
+
+    expect(result.payloads).toEqual([
+      { text: "Status:\nhealthy" },
+      {
+        text: "⚠️ Some tool actions may have already been executed — please verify before retrying.",
+        isError: true,
+      },
+    ]);
+    expect(result.meta.livenessState).toBe("blocked");
+    expect(result.meta.replayInvalid).toBe(true);
+  });
+
+  it("warns about a prior async start when a later tool loop aborts", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (params: unknown) => {
+      const attemptParams = params as {
+        abortSignal?: AbortSignal;
+        onToolOutcome?: (observation: {
+          toolName: string;
+          argsHash: string;
+          resultHash: string;
+          resultText?: string;
+          terminalResultFallback?: { mode: "safe_text"; prefix?: string };
+          asyncStarted?: boolean;
+          blockedReason?: string;
+          blockedMessage?: string;
+        }) => void;
+      };
+      attemptParams.onToolOutcome?.({
+        toolName: "image_generate",
+        argsHash: "image",
+        resultHash: "image-result",
+        resultText: "generation started",
+        asyncStarted: true,
+      });
+      attemptParams.onToolOutcome?.({
+        toolName: "status_probe",
+        argsHash: "current",
+        resultHash: "status-result",
+        resultText: "healthy",
+        terminalResultFallback: { mode: "safe_text", prefix: "Status:" },
+      });
+      attemptParams.onToolOutcome?.({
+        toolName: "status_probe",
+        argsHash: "current",
+        resultHash: "blocked-result",
+        blockedReason: "tool-loop",
+        blockedMessage:
+          "CRITICAL: You are alternating between repeated tool-call patterns with no progress.",
+      });
+      expect(attemptParams.abortSignal?.aborted).toBe(true);
+      throw new Error("Request was aborted.");
+    });
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "xai",
+      model: "grok-composer-2.5-fast",
+      runId: "run-tool-loop-after-async-start",
     });
 
     expect(result.payloads).toEqual([

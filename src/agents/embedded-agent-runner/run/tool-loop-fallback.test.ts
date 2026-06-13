@@ -104,6 +104,70 @@ describe("tool-loop terminal fallback", () => {
     ).toBeUndefined();
   });
 
+  it("does not reuse a stale success after the blocked tool later fails", () => {
+    expect(
+      resolveToolLoopAbortFallbackPayload({
+        observations: [
+          {
+            toolName: "status",
+            argsHash: "first",
+            resultHash: "success-result",
+            resultText: "healthy",
+            terminalResultFallback: { mode: "safe_text", prefix: "Status:" },
+          },
+          {
+            toolName: "status",
+            argsHash: "second",
+            resultHash: "failed-result",
+            resultText: "network unavailable",
+            failed: true,
+            terminalResultFallback: { mode: "safe_text", prefix: "Status:" },
+          },
+          {
+            toolName: "status",
+            argsHash: "third",
+            resultHash: "blocked",
+            blockedReason: "tool-loop",
+          },
+        ],
+      }),
+    ).toEqual({
+      text:
+        "I stopped because status repeated the same tool call without progress. " +
+        "No user-facing result text was provided.",
+    });
+  });
+
+  it("uses a blocked tool success that occurred after its latest failure", () => {
+    expect(
+      resolveToolLoopAbortFallbackPayload({
+        observations: [
+          {
+            toolName: "status",
+            argsHash: "first",
+            resultHash: "failed-result",
+            resultText: "network unavailable",
+            failed: true,
+            terminalResultFallback: { mode: "safe_text", prefix: "Status:" },
+          },
+          {
+            toolName: "status",
+            argsHash: "second",
+            resultHash: "success-result",
+            resultText: "healthy",
+            terminalResultFallback: { mode: "safe_text", prefix: "Status:" },
+          },
+          {
+            toolName: "status",
+            argsHash: "third",
+            resultHash: "blocked",
+            blockedReason: "tool-loop",
+          },
+        ],
+      }),
+    ).toEqual({ text: "Status:\nhealthy" });
+  });
+
   it("parses raw JSON before truncating structured fallback output", () => {
     const resolution = resolveToolLoopAbortFallback({
       observations: [
