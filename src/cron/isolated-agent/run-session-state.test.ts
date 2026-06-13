@@ -8,6 +8,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import {
   adoptCronRunSessionMetadata,
   createPersistCronSessionEntry,
+  setCronSessionDeliveryContextFromResolvedDelivery,
   type MutableCronSession,
 } from "./run-session-state.js";
 
@@ -213,6 +214,70 @@ describe("createPersistCronSessionEntry", () => {
       updatedAt: 1000,
       systemSent: true,
     });
+  });
+});
+
+describe("setCronSessionDeliveryContextFromResolvedDelivery", () => {
+  it("persists a resolved explicit delivery target on the session entry", () => {
+    const cronSession = makeCronSession();
+    setCronSessionDeliveryContextFromResolvedDelivery(cronSession.sessionEntry, {
+      ok: true,
+      channel: "webchat",
+      to: "user@example.com",
+      accountId: "account-1",
+      threadId: "thread-1",
+      mode: "explicit",
+    });
+    expect(cronSession.sessionEntry.deliveryContext).toEqual({
+      channel: "webchat",
+      to: "user@example.com",
+      accountId: "account-1",
+      threadId: "thread-1",
+    });
+  });
+
+  it("persists the resolved target without optional account/thread fields", () => {
+    const cronSession = makeCronSession();
+    setCronSessionDeliveryContextFromResolvedDelivery(cronSession.sessionEntry, {
+      ok: true,
+      channel: "webchat",
+      to: "user@example.com",
+      mode: "explicit",
+    });
+    expect(cronSession.sessionEntry.deliveryContext).toEqual({
+      channel: "webchat",
+      to: "user@example.com",
+    });
+  });
+
+  it("leaves deliveryContext unchanged when target resolution fails", () => {
+    const cronSession = makeCronSession(
+      makeSessionEntry({ deliveryContext: { channel: "webchat", to: "stale" } }),
+    );
+    setCronSessionDeliveryContextFromResolvedDelivery(cronSession.sessionEntry, {
+      ok: false,
+      channel: undefined,
+      to: undefined,
+      accountId: undefined,
+      threadId: undefined,
+      mode: "implicit",
+      error: new Error("Channel is required"),
+    });
+    expect(cronSession.sessionEntry.deliveryContext).toEqual({
+      channel: "webchat",
+      to: "stale",
+    });
+  });
+
+  it("does not create an empty deliveryContext when the resolved target has no routable channel", () => {
+    const cronSession = makeCronSession();
+    setCronSessionDeliveryContextFromResolvedDelivery(cronSession.sessionEntry, {
+      ok: true,
+      channel: "webchat",
+      to: "",
+      mode: "explicit",
+    });
+    expect(cronSession.sessionEntry.deliveryContext).toBeUndefined();
   });
 });
 

@@ -63,6 +63,7 @@ import {
   createPersistCronSessionEntry,
   markCronSessionPreRun,
   persistCronSkillsSnapshotIfChanged,
+  setCronSessionDeliveryContextFromResolvedDelivery,
   type CronLiveSelection,
   type MutableCronSession,
   type PersistCronSessionEntry,
@@ -780,6 +781,7 @@ async function prepareCronRunContext(params: {
       job: input.job,
       agentId,
     });
+  setCronSessionDeliveryContextFromResolvedDelivery(cronSession.sessionEntry, resolvedDelivery);
 
   const { formattedTime, timeLine } = resolveCronStyleNow(input.cfg, now);
   const message = resolveCronAgentTurnMessage(input);

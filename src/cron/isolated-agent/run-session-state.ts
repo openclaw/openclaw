@@ -4,6 +4,8 @@ import type { LiveSessionModelSelection } from "../../agents/live-model-switch.j
 import type { SessionEntry } from "../../config/sessions.js";
 import { isCronSessionKey } from "../../sessions/session-key-utils.js";
 import type { SkillSnapshot } from "../../skills/types.js";
+import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
+import type { DeliveryTargetResolution } from "./delivery-target.js";
 import type { resolveCronSession } from "./session.js";
 
 type MutableSessionStore = Record<string, SessionEntry>;
@@ -112,6 +114,27 @@ export function adoptCronRunSessionMetadata(params: {
   }
 
   return changed;
+}
+
+/** Writes a resolved cron delivery target into the isolated session entry so later
+ * completion-announce paths can recover the explicit channel/account/thread without
+ * re-resolving from an empty main session. */
+export function setCronSessionDeliveryContextFromResolvedDelivery(
+  entry: MutableCronSessionEntry,
+  resolvedDelivery: DeliveryTargetResolution,
+): void {
+  if (!resolvedDelivery.ok) {
+    return;
+  }
+  const context = normalizeDeliveryContext({
+    channel: resolvedDelivery.channel,
+    to: resolvedDelivery.to,
+    accountId: resolvedDelivery.accountId,
+    threadId: resolvedDelivery.threadId,
+  });
+  if (context?.to) {
+    entry.deliveryContext = context;
+  }
 }
 
 /** Persists a changed skills snapshot onto the cron session entry outside fast tests. */
