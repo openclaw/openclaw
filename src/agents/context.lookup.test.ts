@@ -278,14 +278,27 @@ describe("lookupContextTokens", () => {
       .mockImplementationOnce(async () => {
         modelsJsonEvents.push("new:start", "new:end");
       });
-    mockDiscoveryDeps([{ provider: "openrouter", id: "claude-sonnet", contextWindow: 654_321 }], {
-      openrouter: {
-        models: [{ id: "claude-sonnet", contextWindow: 321_000 }],
-      },
+    mockContextDeps({
+      getRuntimeConfig: () => ({
+        models: {
+          providers: {
+            openrouter: {
+              models: [
+                {
+                  id: "claude-sonnet",
+                  contextWindow: 321_000,
+                  contextTokens: 111_000,
+                },
+              ],
+            },
+          },
+        },
+      }),
+      discoveredModels: [{ provider: "openrouter", id: "claude-sonnet", contextWindow: 654_321 }],
     });
 
     const { lookupContextTokens, refreshContextWindowCache } = await importContextModule();
-    expect(lookupContextTokens("claude-sonnet")).toBe(321_000);
+    expect(lookupContextTokens("claude-sonnet")).toBe(111_000);
     await vi.waitFor(() => {
       expect(modelsJsonEvents).toEqual(["old:start"]);
     });
@@ -297,6 +310,7 @@ describe("lookupContextTokens", () => {
     const refreshPromise = refreshContextWindowCache(nextConfig);
     await Promise.resolve();
     expect(modelsJsonEvents).toEqual(["old:start"]);
+    expect(lookupContextTokens("claude-sonnet", { allowAsyncLoad: false })).toBe(222_000);
 
     releaseModelsJson?.();
     await refreshPromise;

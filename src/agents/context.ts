@@ -15,6 +15,7 @@ import {
   lookupCachedContextTokens,
   lookupCachedContextWindow,
   minPositiveContextTokens,
+  MODEL_CONFIGURED_CONTEXT_TOKEN_CACHE,
   MODEL_CONTEXT_TOKEN_CACHE,
   MODEL_CONTEXT_WINDOW_CACHE,
   providerContextTokenCacheKey,
@@ -25,7 +26,10 @@ import {
   resolveAnthropicFixedContextWindow,
   resolveContextTokensForModelFromCache,
 } from "./context-resolution.js";
-import { CONTEXT_WINDOW_RUNTIME_STATE, resetContextWindowCache } from "./context-runtime-state.js";
+import {
+  beginContextWindowCacheRefresh,
+  CONTEXT_WINDOW_RUNTIME_STATE,
+} from "./context-runtime-state.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 export {
@@ -159,7 +163,7 @@ function loadModelsConfigRuntime() {
 
 function primeConfiguredContextWindowsFromConfig(cfg: OpenClawConfig): OpenClawConfig {
   applyConfiguredContextWindows({
-    cache: MODEL_CONTEXT_TOKEN_CACHE,
+    cache: MODEL_CONFIGURED_CONTEXT_TOKEN_CACHE,
     windowCache: MODEL_CONTEXT_WINDOW_CACHE,
     modelsConfig: cfg.models as ModelsConfig | undefined,
   });
@@ -204,6 +208,7 @@ export function ensureContextWindowCacheLoaded(): Promise<void> {
     return Promise.resolve();
   }
   const previousLoad = CONTEXT_WINDOW_RUNTIME_STATE.loadPromise;
+  const stagedTokenCache = new Map<string, number>();
 
   CONTEXT_WINDOW_RUNTIME_STATE.loadPromise = (async () => {
     // A reset may happen while models.json is being prepared. Serialize the
@@ -219,6 +224,9 @@ export function ensureContextWindowCacheLoaded(): Promise<void> {
         await loadModelsConfigRuntime()
       ).ensureOpenClawModelsJson(cfg, agentDir, {
         workspaceDir,
+        // Context resolution needs deterministic local metadata, not live
+        // provider catalog calls that can stall gateway reloads.
+        providerDiscoveryEntriesOnly: true,
       });
     } catch {
       // Continue with best-effort discovery/overrides.
@@ -238,7 +246,7 @@ export function ensureContextWindowCacheLoaded(): Promise<void> {
         return;
       }
       applyDiscoveredContextWindows({
-        cache: MODEL_CONTEXT_TOKEN_CACHE,
+        cache: stagedTokenCache,
         models,
       });
     } catch {
@@ -248,11 +256,10 @@ export function ensureContextWindowCacheLoaded(): Promise<void> {
     if (CONTEXT_WINDOW_RUNTIME_STATE.generation !== generation) {
       return;
     }
-    applyConfiguredContextWindows({
-      cache: MODEL_CONTEXT_TOKEN_CACHE,
-      windowCache: MODEL_CONTEXT_WINDOW_CACHE,
-      modelsConfig: cfg.models as ModelsConfig | undefined,
-    });
+    MODEL_CONTEXT_TOKEN_CACHE.clear();
+    for (const [key, value] of stagedTokenCache) {
+      MODEL_CONTEXT_TOKEN_CACHE.set(key, value);
+    }
   })().catch(() => {
     // Keep lookup best-effort.
   });
@@ -262,7 +269,9 @@ export function ensureContextWindowCacheLoaded(): Promise<void> {
 
 /** Replace cached model context metadata for the active runtime configuration. */
 export async function refreshContextWindowCache(cfg: OpenClawConfig): Promise<void> {
-  resetContextWindowCache();
+  beginContextWindowCacheRefresh();
+  MODEL_CONFIGURED_CONTEXT_TOKEN_CACHE.clear();
+  MODEL_CONTEXT_WINDOW_CACHE.clear();
   primeConfiguredContextWindowsFromConfig(cfg);
   await ensureContextWindowCacheLoaded();
 }

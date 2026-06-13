@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createSessionManagerRuntimeRegistry } from "./agent-hooks/session-manager-runtime-registry.js";
 import {
+  MODEL_CONFIGURED_CONTEXT_TOKEN_CACHE,
   MODEL_CONTEXT_TOKEN_CACHE,
   MODEL_CONTEXT_WINDOW_CACHE,
   providerContextTokenCacheKey,
@@ -699,7 +700,7 @@ describe("resolveContextTokensForModel", () => {
     }
   });
 
-  it("keeps configured provider caps authoritative over discovery", () => {
+  it("keeps configured contextTokens authoritative over lower discovery", () => {
     resetContextWindowCacheForTest();
     try {
       applyDiscoveredContextWindows({
@@ -707,12 +708,12 @@ describe("resolveContextTokensForModel", () => {
         models: [{ provider: "openai", id: "gpt-5.5", contextWindow: 272_000 }],
       });
       applyConfiguredContextWindows({
-        cache: MODEL_CONTEXT_TOKEN_CACHE,
+        cache: MODEL_CONFIGURED_CONTEXT_TOKEN_CACHE,
         windowCache: MODEL_CONTEXT_WINDOW_CACHE,
         modelsConfig: {
           providers: {
             openai: {
-              models: [{ id: "gpt-5.5", contextTokens: 128_000 }],
+              models: [{ id: "gpt-5.5", contextTokens: 350_000 }],
             },
           },
         },
@@ -725,7 +726,7 @@ describe("resolveContextTokensForModel", () => {
           contextTokensOverride: 1_000_000,
           allowAsyncLoad: false,
         }),
-      ).toBe(128_000);
+      ).toBe(350_000);
     } finally {
       resetContextWindowCacheForTest();
     }
