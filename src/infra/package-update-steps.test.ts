@@ -231,6 +231,44 @@ describe("runGlobalPackageUpdateSteps", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "reapplies overrides when Windows reports synthetic installed modes",
+    async () => {
+      await withTempDir({ prefix: "openclaw-package-update-local-windows-mode-" }, async (base) => {
+        const packageRoot = path.join(base, "package");
+        const indexPath = path.join(packageRoot, "dist", "index.js");
+        await writePackageRoot(packageRoot, "1.0.0");
+        await fs.chmod(indexPath, 0o644);
+        await writePackageDistInventory(packageRoot);
+        await fs.writeFile(indexPath, "export const local = true;\n", "utf8");
+
+        const plan = await captureLocalPackageOverrides({ packageRoot });
+        expect(plan).not.toBeNull();
+        await fs.writeFile(indexPath, "export {};\n", "utf8");
+        await fs.chmod(indexPath, 0o644);
+        await writePackageDistInventory(packageRoot);
+        await fs.chmod(indexPath, 0o666);
+
+        const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+        let result;
+        try {
+          result = await applyLocalPackageOverrides({
+            packageRoot,
+            plan,
+            reapply: true,
+          });
+        } finally {
+          platformSpy.mockRestore();
+        }
+
+        expect(result.status).toBe("applied");
+        expect(result.applied).toBe(1);
+        expect(result.conflicts).toEqual([]);
+        await expect(fs.readFile(indexPath, "utf8")).resolves.toBe("export const local = true;\n");
+      });
+    },
+  );
+
   it("installs npm updates into a clean staged prefix before swapping the global package", async () => {
     await withTempDir({ prefix: "openclaw-package-update-staged-" }, async (base) => {
       const prefix = path.join(base, "prefix");

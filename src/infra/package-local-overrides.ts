@@ -543,7 +543,7 @@ async function preflightLocalOverrides(params: {
     if (
       nextEntry.sha256 !== change.baseline.sha256 ||
       nextEntry.mode !== normalizeFileMode(change.baseline.mode) ||
-      targetProbe.mode !== normalizeFileMode(nextEntry.mode)
+      (process.platform !== "win32" && targetProbe.mode !== normalizeFileMode(nextEntry.mode))
     ) {
       conflicts.push({ path: change.path, reason: "target-changed" });
     }
