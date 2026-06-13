@@ -468,6 +468,580 @@ describe("runGlobalPackageUpdateSteps", () => {
     });
   });
 
+  it("does not reapply case-aliased delete and add changes independently", async () => {
+    await withTempDir({ prefix: "openclaw-package-update-local-case-alias-" }, async (base) => {
+      const prefix = path.join(base, "prefix");
+      const globalRoot = path.join(prefix, "lib", "node_modules");
+      const packageRoot = path.join(globalRoot, "openclaw");
+      const originalPath = path.join(packageRoot, "dist", "index.js");
+      const renamedPath = path.join(packageRoot, "dist", "Index.js");
+      await writePackageRoot(packageRoot, "1.0.0");
+      await fs.rename(originalPath, renamedPath);
+
+      const runStep = vi.fn(
+        async ({ name, argv, cwd, timeoutMs }): Promise<PackageUpdateStepResult> => {
+          expect(timeoutMs).toBe(1000);
+          if (name !== "global update") {
+            throw new Error(`unexpected step ${name}`);
+          }
+          const prefixIndex = argv.indexOf("--prefix");
+          const stagePrefix = argv[prefixIndex + 1];
+          if (!stagePrefix) {
+            throw new Error("missing staged prefix");
+          }
+          await writePackageRoot(
+            path.join(stagePrefix, "lib", "node_modules", "openclaw"),
+            "2.0.0",
+          );
+          return {
+            name,
+            command: argv.join(" "),
+            cwd: cwd ?? process.cwd(),
+            durationMs: 1,
+            exitCode: 0,
+          };
+        },
+      );
+      const realLstat = fs.lstat.bind(fs);
+      const lstatSpy = vi
+        .spyOn(fs, "lstat")
+        .mockImplementation(async (...args: Parameters<typeof fs.lstat>) => {
+          const targetPath = String(args[0]);
+          if (targetPath === originalPath || targetPath === renamedPath) {
+            const packageVersion = JSON.parse(
+              await fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
+            ).version;
+            if (packageVersion === "2.0.0") {
+              const stats = await realLstat(originalPath, { bigint: true });
+              return Object.assign(Object.create(Object.getPrototypeOf(stats)), stats, {
+                ino: 0n,
+                ...(targetPath === renamedPath && process.platform === "win32" ? { dev: 0n } : {}),
+              }) as never;
+            }
+          }
+          return await realLstat(...args);
+        });
+      const realRealpath = fs.realpath.bind(fs);
+      const realpathSpy = vi
+        .spyOn(fs, "realpath")
+        .mockImplementation(async (...args: Parameters<typeof fs.realpath>) => {
+          if (String(args[0]) === renamedPath) {
+            const packageVersion = JSON.parse(
+              await fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
+            ).version;
+            if (packageVersion === "2.0.0") {
+              return (await realRealpath(originalPath)) as never;
+            }
+          }
+          return await realRealpath(...args);
+        });
+
+      try {
+        const result = await runGlobalPackageUpdateSteps({
+          installTarget: createNpmTarget(globalRoot),
+          installSpec: "openclaw@2.0.0",
+          packageName: "openclaw",
+          packageRoot,
+          runCommand: createRootRunner(globalRoot),
+          runStep,
+          reapplyLocalOverrides: true,
+          timeoutMs: 1000,
+        });
+
+        expect(result.failedStep).toBeNull();
+        expect(result.localOverrides?.status).toBe("conflict");
+        expect(result.localOverrides?.applied).toBe(0);
+        expect(
+          result.localOverrides?.conflicts.map((conflict) => conflict.path).toSorted(),
+        ).toEqual(["dist/Index.js", "dist/index.js"]);
+        await expect(fs.readFile(originalPath, "utf8")).resolves.toBe("export {};\n");
+      } finally {
+        lstatSpy.mockRestore();
+        realpathSpy.mockRestore();
+      }
+    });
+  });
+
+  it("reports a conflict when an updated file blocks a nested added override", async () => {
+    await withTempDir({ prefix: "openclaw-package-update-local-added-enotdir-" }, async (base) => {
+      const prefix = path.join(base, "prefix");
+      const globalRoot = path.join(prefix, "lib", "node_modules");
+      const packageRoot = path.join(globalRoot, "openclaw");
+      const featurePath = path.join(packageRoot, "dist", "feature");
+      const localFeaturePath = path.join(packageRoot, "dist", "Feature", "local.js");
+      await writePackageRoot(packageRoot, "1.0.0");
+      await fs.writeFile(featurePath, "export const baseline = true;\n", "utf8");
+      await writePackageDistInventory(packageRoot);
+      await fs.rm(featurePath);
+      await fs.mkdir(path.dirname(localFeaturePath), { recursive: true });
+      await fs.writeFile(localFeaturePath, "export const local = true;\n", "utf8");
+
+      const runStep = vi.fn(
+        async ({ name, argv, cwd, timeoutMs }): Promise<PackageUpdateStepResult> => {
+          expect(timeoutMs).toBe(1000);
+          if (name !== "global update") {
+            throw new Error(`unexpected step ${name}`);
+          }
+          const prefixIndex = argv.indexOf("--prefix");
+          const stagePrefix = argv[prefixIndex + 1];
+          if (!stagePrefix) {
+            throw new Error("missing staged prefix");
+          }
+          const stagedPackageRoot = path.join(stagePrefix, "lib", "node_modules", "openclaw");
+          await writePackageRoot(stagedPackageRoot, "2.0.0");
+          await fs.writeFile(
+            path.join(stagedPackageRoot, "dist", "feature"),
+            "export const baseline = true;\n",
+            "utf8",
+          );
+          await writePackageDistInventory(stagedPackageRoot);
+          return {
+            name,
+            command: argv.join(" "),
+            cwd: cwd ?? process.cwd(),
+            durationMs: 1,
+            exitCode: 0,
+          };
+        },
+      );
+
+      const realLstat = fs.lstat.bind(fs);
+      const lstatSpy = vi
+        .spyOn(fs, "lstat")
+        .mockImplementation(async (...args: Parameters<typeof fs.lstat>) => {
+          const targetPath = String(args[0]);
+          if (targetPath === localFeaturePath) {
+            const packageVersion = JSON.parse(
+              await fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
+            ).version;
+            if (packageVersion === "2.0.0") {
+              throw createFsError("ENOTDIR", "case-aliased ancestor is a file");
+            }
+          }
+          return await realLstat(...args);
+        });
+      const realRealpath = fs.realpath.bind(fs);
+      const realpathSpy = vi
+        .spyOn(fs, "realpath")
+        .mockImplementation(async (...args: Parameters<typeof fs.realpath>) => {
+          if (String(args[0]) === path.dirname(localFeaturePath)) {
+            const packageVersion = JSON.parse(
+              await fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
+            ).version;
+            if (packageVersion === "2.0.0") {
+              return (await realRealpath(featurePath)) as never;
+            }
+          }
+          return await realRealpath(...args);
+        });
+
+      try {
+        const result = await runGlobalPackageUpdateSteps({
+          installTarget: createNpmTarget(globalRoot),
+          installSpec: "openclaw@2.0.0",
+          packageName: "openclaw",
+          packageRoot,
+          runCommand: createRootRunner(globalRoot),
+          runStep,
+          reapplyLocalOverrides: true,
+          timeoutMs: 1000,
+        });
+
+        expect(result.failedStep).toBeNull();
+        expect(result.localOverrides?.status).toBe("conflict");
+        expect(result.localOverrides?.applied).toBe(0);
+        expect(result.localOverrides?.conflicts).toEqual(
+          expect.arrayContaining([
+            { path: "dist/feature", reason: "target-changed" },
+            { path: "dist/Feature/local.js", reason: "target-exists" },
+          ]),
+        );
+        await expect(fs.readFile(featurePath, "utf8")).resolves.toBe(
+          "export const baseline = true;\n",
+        );
+      } finally {
+        lstatSpy.mockRestore();
+        realpathSpy.mockRestore();
+      }
+    });
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "does not reapply local overrides onto hardlinked updated files",
+    async () => {
+      await withTempDir(
+        { prefix: "openclaw-package-update-local-hardlink-conflict-" },
+        async (base) => {
+          const prefix = path.join(base, "prefix");
+          const globalRoot = path.join(prefix, "lib", "node_modules");
+          const packageRoot = path.join(globalRoot, "openclaw");
+          const stagedCache = path.join(base, "cache", "staged");
+          await writePackageRoot(packageRoot, "1.0.0");
+          await fs.writeFile(
+            path.join(packageRoot, "dist", "index.js"),
+            "export const local = true;\n",
+            "utf8",
+          );
+
+          const result = await runGlobalPackageUpdateSteps({
+            installTarget: createNpmTarget(globalRoot),
+            installSpec: "openclaw@2.0.0",
+            packageName: "openclaw",
+            packageRoot,
+            runCommand: createRootRunner(globalRoot),
+            runStep: async ({ name, argv, cwd }): Promise<PackageUpdateStepResult> => {
+              const prefixIndex = argv.indexOf("--prefix");
+              const stagePrefix = argv[prefixIndex + 1];
+              if (!stagePrefix) {
+                throw new Error("missing staged prefix");
+              }
+              const stagedPackageRoot = path.join(stagePrefix, "lib", "node_modules", "openclaw");
+              await writePackageRoot(stagedPackageRoot, "2.0.0");
+              await addHardlinkedPackageFile(stagedPackageRoot, stagedCache);
+              return {
+                name,
+                command: argv.join(" "),
+                cwd: cwd ?? process.cwd(),
+                durationMs: 1,
+                exitCode: 0,
+              };
+            },
+            reapplyLocalOverrides: true,
+            timeoutMs: 1000,
+          });
+
+          expect(result.failedStep).toBeNull();
+          expect(result.localOverrides?.status).toBe("conflict");
+          expect(result.localOverrides?.applied).toBe(0);
+          expect(result.localOverrides?.conflicts).toEqual([
+            { path: "dist/index.js", reason: "target-hardlinked" },
+          ]);
+          await expect(
+            fs.readFile(path.join(packageRoot, "dist", "index.js"), "utf8"),
+          ).resolves.toBe("export {};\n");
+          await expect(
+            fs.readFile(path.join(stagedCache, "openclaw-index.js"), "utf8"),
+          ).resolves.toBe("export {};\n");
+        },
+      );
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "reapplies deleted overrides by unlinking hardlinked updated files",
+    async () => {
+      await withTempDir(
+        { prefix: "openclaw-package-update-local-hardlink-delete-" },
+        async (base) => {
+          const prefix = path.join(base, "prefix");
+          const globalRoot = path.join(prefix, "lib", "node_modules");
+          const packageRoot = path.join(globalRoot, "openclaw");
+          const stagedCache = path.join(base, "cache", "staged");
+          await writePackageRoot(packageRoot, "1.0.0");
+          await fs.rm(path.join(packageRoot, "dist", "index.js"));
+
+          const result = await runGlobalPackageUpdateSteps({
+            installTarget: createNpmTarget(globalRoot),
+            installSpec: "openclaw@2.0.0",
+            packageName: "openclaw",
+            packageRoot,
+            runCommand: createRootRunner(globalRoot),
+            runStep: async ({ name, argv, cwd }): Promise<PackageUpdateStepResult> => {
+              const prefixIndex = argv.indexOf("--prefix");
+              const stagePrefix = argv[prefixIndex + 1];
+              if (!stagePrefix) {
+                throw new Error("missing staged prefix");
+              }
+              const stagedPackageRoot = path.join(stagePrefix, "lib", "node_modules", "openclaw");
+              await writePackageRoot(stagedPackageRoot, "2.0.0");
+              await addHardlinkedPackageFile(stagedPackageRoot, stagedCache);
+              return {
+                name,
+                command: argv.join(" "),
+                cwd: cwd ?? process.cwd(),
+                durationMs: 1,
+                exitCode: 0,
+              };
+            },
+            reapplyLocalOverrides: true,
+            timeoutMs: 1000,
+          });
+
+          expect(result.failedStep).toBeNull();
+          expect(result.localOverrides?.status).toBe("applied");
+          expect(result.localOverrides?.applied).toBe(1);
+          expect(result.localOverrides?.conflicts).toEqual([]);
+          await expectPathMissing(path.join(packageRoot, "dist", "index.js"));
+          await expect(
+            fs.readFile(path.join(stagedCache, "openclaw-index.js"), "utf8"),
+          ).resolves.toBe("export {};\n");
+        },
+      );
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "reapplies groups containing only deleted hardlinked overrides",
+    async () => {
+      await withTempDir(
+        { prefix: "openclaw-package-update-local-hardlink-delete-group-" },
+        async (base) => {
+          const prefix = path.join(base, "prefix");
+          const globalRoot = path.join(prefix, "lib", "node_modules");
+          const packageRoot = path.join(globalRoot, "openclaw");
+          const indexPath = path.join(packageRoot, "dist", "index.js");
+          const aliasPath = path.join(packageRoot, "dist", "index-alias.js");
+          await writePackageRoot(packageRoot, "1.0.0");
+          await fs.link(indexPath, aliasPath);
+          await writePackageDistInventory(packageRoot);
+          await fs.rm(indexPath);
+          await fs.rm(aliasPath);
+
+          const result = await runGlobalPackageUpdateSteps({
+            installTarget: createNpmTarget(globalRoot),
+            installSpec: "openclaw@2.0.0",
+            packageName: "openclaw",
+            packageRoot,
+            runCommand: createRootRunner(globalRoot),
+            runStep: async ({ name, argv, cwd }): Promise<PackageUpdateStepResult> => {
+              const prefixIndex = argv.indexOf("--prefix");
+              const stagePrefix = argv[prefixIndex + 1];
+              if (!stagePrefix) {
+                throw new Error("missing staged prefix");
+              }
+              const stagedPackageRoot = path.join(stagePrefix, "lib", "node_modules", "openclaw");
+              const stagedIndexPath = path.join(stagedPackageRoot, "dist", "index.js");
+              await writePackageRoot(stagedPackageRoot, "2.0.0");
+              await fs.link(
+                stagedIndexPath,
+                path.join(stagedPackageRoot, "dist", "index-alias.js"),
+              );
+              await writePackageDistInventory(stagedPackageRoot);
+              return {
+                name,
+                command: argv.join(" "),
+                cwd: cwd ?? process.cwd(),
+                durationMs: 1,
+                exitCode: 0,
+              };
+            },
+            reapplyLocalOverrides: true,
+            timeoutMs: 1000,
+          });
+
+          expect(result.failedStep).toBeNull();
+          expect(result.localOverrides?.status).toBe("applied");
+          expect(result.localOverrides?.applied).toBe(2);
+          expect(result.localOverrides?.conflicts).toEqual([]);
+          await expectPathMissing(indexPath);
+          await expectPathMissing(aliasPath);
+        },
+      );
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "preserves deletions when a hardlinked modification conflicts",
+    async () => {
+      await withTempDir(
+        { prefix: "openclaw-package-update-local-hardlink-mixed-" },
+        async (base) => {
+          const prefix = path.join(base, "prefix");
+          const globalRoot = path.join(prefix, "lib", "node_modules");
+          const packageRoot = path.join(globalRoot, "openclaw");
+          const indexPath = path.join(packageRoot, "dist", "index.js");
+          const aliasPath = path.join(packageRoot, "dist", "index-alias.js");
+          await writePackageRoot(packageRoot, "1.0.0");
+          await fs.link(indexPath, aliasPath);
+          await writePackageDistInventory(packageRoot);
+          await fs.rm(indexPath);
+          await fs.writeFile(aliasPath, "export const local = true;\n", "utf8");
+
+          const result = await runGlobalPackageUpdateSteps({
+            installTarget: createNpmTarget(globalRoot),
+            installSpec: "openclaw@2.0.0",
+            packageName: "openclaw",
+            packageRoot,
+            runCommand: createRootRunner(globalRoot),
+            runStep: async ({ name, argv, cwd }): Promise<PackageUpdateStepResult> => {
+              const prefixIndex = argv.indexOf("--prefix");
+              const stagePrefix = argv[prefixIndex + 1];
+              if (!stagePrefix) {
+                throw new Error("missing staged prefix");
+              }
+              const stagedPackageRoot = path.join(stagePrefix, "lib", "node_modules", "openclaw");
+              const stagedIndexPath = path.join(stagedPackageRoot, "dist", "index.js");
+              await writePackageRoot(stagedPackageRoot, "2.0.0");
+              await fs.link(
+                stagedIndexPath,
+                path.join(stagedPackageRoot, "dist", "index-alias.js"),
+              );
+              await writePackageDistInventory(stagedPackageRoot);
+              return {
+                name,
+                command: argv.join(" "),
+                cwd: cwd ?? process.cwd(),
+                durationMs: 1,
+                exitCode: 0,
+              };
+            },
+            reapplyLocalOverrides: true,
+            timeoutMs: 1000,
+          });
+
+          expect(result.failedStep).toBeNull();
+          expect(result.localOverrides?.status).toBe("conflict");
+          expect(result.localOverrides?.applied).toBe(0);
+          expect(result.localOverrides?.conflicts).toEqual([
+            { path: "dist/index-alias.js", reason: "target-hardlinked" },
+            { path: "dist/index.js", reason: "target-changed" },
+          ]);
+          await expect(fs.readFile(indexPath, "utf8")).resolves.toBe("export {};\n");
+          await expect(fs.readFile(aliasPath, "utf8")).resolves.toBe("export {};\n");
+        },
+      );
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "does not delete dependencies still referenced by hardlinked conflicted importers",
+    async () => {
+      await withTempDir(
+        { prefix: "openclaw-package-update-local-hardlink-import-delete-" },
+        async (base) => {
+          const prefix = path.join(base, "prefix");
+          const globalRoot = path.join(prefix, "lib", "node_modules");
+          const packageRoot = path.join(globalRoot, "openclaw");
+          const indexPath = path.join(packageRoot, "dist", "index.js");
+          const helperPath = path.join(packageRoot, "dist", "helper.js");
+          await writePackageRoot(packageRoot, "1.0.0");
+          await fs.writeFile(indexPath, 'import "./helper.js";\n', "utf8");
+          await fs.writeFile(helperPath, "export const helper = true;\n", "utf8");
+          await writePackageDistInventory(packageRoot);
+          await fs.writeFile(indexPath, "export const local = true;\n", "utf8");
+          await fs.rm(helperPath);
+
+          const result = await runGlobalPackageUpdateSteps({
+            installTarget: createNpmTarget(globalRoot),
+            installSpec: "openclaw@2.0.0",
+            packageName: "openclaw",
+            packageRoot,
+            runCommand: createRootRunner(globalRoot),
+            runStep: async ({ name, argv, cwd }): Promise<PackageUpdateStepResult> => {
+              const prefixIndex = argv.indexOf("--prefix");
+              const stagePrefix = argv[prefixIndex + 1];
+              if (!stagePrefix) {
+                throw new Error("missing staged prefix");
+              }
+              const stagedPackageRoot = path.join(stagePrefix, "lib", "node_modules", "openclaw");
+              const stagedIndexPath = path.join(stagedPackageRoot, "dist", "index.js");
+              await writePackageRoot(stagedPackageRoot, "2.0.0");
+              await fs.writeFile(stagedIndexPath, 'import "./helper.js";\n', "utf8");
+              await fs.writeFile(
+                path.join(stagedPackageRoot, "dist", "helper.js"),
+                "export const helper = true;\n",
+                "utf8",
+              );
+              await writePackageDistInventory(stagedPackageRoot);
+              await addHardlinkedPackageFile(stagedPackageRoot, path.join(base, "cache", "staged"));
+              return {
+                name,
+                command: argv.join(" "),
+                cwd: cwd ?? process.cwd(),
+                durationMs: 1,
+                exitCode: 0,
+              };
+            },
+            reapplyLocalOverrides: true,
+            timeoutMs: 1000,
+          });
+
+          expect(result.failedStep).toBeNull();
+          expect(result.localOverrides?.status).toBe("conflict");
+          expect(result.localOverrides?.applied).toBe(0);
+          expect(result.localOverrides?.conflicts).toEqual([
+            { path: "dist/index.js", reason: "target-hardlinked" },
+            { path: "dist/helper.js", reason: "target-changed" },
+          ]);
+          await expect(fs.readFile(indexPath, "utf8")).resolves.toBe('import "./helper.js";\n');
+          await expect(fs.readFile(helperPath, "utf8")).resolves.toBe(
+            "export const helper = true;\n",
+          );
+        },
+      );
+    },
+  );
+
+  it("returns a structured conflict when updated target inspection fails", async () => {
+    await withTempDir(
+      { prefix: "openclaw-package-update-local-inspection-conflict-" },
+      async (base) => {
+        const prefix = path.join(base, "prefix");
+        const globalRoot = path.join(prefix, "lib", "node_modules");
+        const packageRoot = path.join(globalRoot, "openclaw");
+        const indexPath = path.join(packageRoot, "dist", "index.js");
+        await writePackageRoot(packageRoot, "1.0.0");
+        await fs.writeFile(indexPath, "export const local = true;\n", "utf8");
+
+        const realLstat = fs.lstat.bind(fs);
+        const lstatSpy = vi
+          .spyOn(fs, "lstat")
+          .mockImplementation(async (...args: Parameters<typeof fs.lstat>) => {
+            if (String(args[0]) === indexPath) {
+              const packageVersion = JSON.parse(
+                await fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
+              ).version;
+              if (packageVersion === "2.0.0") {
+                throw createFsError("EACCES", "target inspection failed");
+              }
+            }
+            return await realLstat(...args);
+          });
+
+        try {
+          const result = await runGlobalPackageUpdateSteps({
+            installTarget: createNpmTarget(globalRoot),
+            installSpec: "openclaw@2.0.0",
+            packageName: "openclaw",
+            packageRoot,
+            runCommand: createRootRunner(globalRoot),
+            runStep: async ({ name, argv, cwd }): Promise<PackageUpdateStepResult> => {
+              const prefixIndex = argv.indexOf("--prefix");
+              const stagePrefix = argv[prefixIndex + 1];
+              if (!stagePrefix) {
+                throw new Error("missing staged prefix");
+              }
+              await writePackageRoot(
+                path.join(stagePrefix, "lib", "node_modules", "openclaw"),
+                "2.0.0",
+              );
+              return {
+                name,
+                command: argv.join(" "),
+                cwd: cwd ?? process.cwd(),
+                durationMs: 1,
+                exitCode: 0,
+              };
+            },
+            reapplyLocalOverrides: true,
+            timeoutMs: 1000,
+          });
+
+          expect(result.failedStep).toBeNull();
+          expect(result.localOverrides?.status).toBe("conflict");
+          expect(result.localOverrides?.applied).toBe(0);
+          expect(result.localOverrides?.recoveryDir).toBeDefined();
+          expect(result.localOverrides?.conflicts).toEqual([
+            { path: "dist/index.js", reason: "target-inspection-failed" },
+          ]);
+          await expect(fs.readFile(indexPath, "utf8")).resolves.toBe("export {};\n");
+        } finally {
+          lstatSpy.mockRestore();
+        }
+      },
+    );
+  });
+
   it("aborts before package-manager work for unsafe inventory paths", async () => {
     await withTempDir({ prefix: "openclaw-package-update-local-inventory-path-" }, async (base) => {
       const prefix = path.join(base, "prefix");
@@ -2096,6 +2670,196 @@ describe("runGlobalPackageUpdateSteps", () => {
         mkdtempSpy.mockRestore();
       }
     });
+  });
+
+  it("reports and preserves rollback data when reapply rollback is incomplete", async () => {
+    await withTempDir({ prefix: "openclaw-package-update-local-rollback-fail-" }, async (base) => {
+      const prefix = path.join(base, "prefix");
+      const globalRoot = path.join(prefix, "lib", "node_modules");
+      const packageRoot = path.join(globalRoot, "openclaw");
+      const indexPath = path.join(packageRoot, "dist", "index.js");
+      const helperPath = path.join(packageRoot, "dist", "local-helper.js");
+      await writePackageRoot(packageRoot, "1.0.0");
+      await fs.writeFile(indexPath, "export const local = true;\n", "utf8");
+      await fs.writeFile(helperPath, "export const helper = true;\n", "utf8");
+
+      const runStep = vi.fn(
+        async ({ name, argv, cwd, timeoutMs }): Promise<PackageUpdateStepResult> => {
+          expect(timeoutMs).toBe(1000);
+          if (name !== "global update") {
+            throw new Error(`unexpected step ${name}`);
+          }
+          const prefixIndex = argv.indexOf("--prefix");
+          const stagePrefix = argv[prefixIndex + 1];
+          if (!stagePrefix) {
+            throw new Error("missing staged prefix");
+          }
+          await writePackageRoot(
+            path.join(stagePrefix, "lib", "node_modules", "openclaw"),
+            "2.0.0",
+          );
+          return {
+            name,
+            command: argv.join(" "),
+            cwd: cwd ?? process.cwd(),
+            durationMs: 1,
+            exitCode: 0,
+          };
+        },
+      );
+      const realCopyFile = fs.copyFile.bind(fs);
+      let applyFailureTriggered = false;
+      const copyFileSpy = vi
+        .spyOn(fs, "copyFile")
+        .mockImplementation(async (...args: Parameters<typeof fs.copyFile>) => {
+          const [source, destination] = args.map(String);
+          if (destination === helperPath) {
+            applyFailureTriggered = true;
+            throw createFsError("EIO", "reapply copy failed");
+          }
+          if (
+            applyFailureTriggered &&
+            source.includes(`${path.sep}rollback-`) &&
+            destination === indexPath
+          ) {
+            throw createFsError("EACCES", "rollback restore failed");
+          }
+          return await realCopyFile(...args);
+        });
+
+      try {
+        const result = await runGlobalPackageUpdateSteps({
+          installTarget: createNpmTarget(globalRoot),
+          installSpec: "openclaw@2.0.0",
+          packageName: "openclaw",
+          packageRoot,
+          runCommand: createRootRunner(globalRoot),
+          runStep,
+          reapplyLocalOverrides: true,
+          timeoutMs: 1000,
+        });
+
+        expect(result.failedStep?.name).toBe("local overrides");
+        expect(result.localOverrides?.status).toBe("error");
+        expect(result.localOverrides?.applied).toBe(0);
+        expect(result.localOverrides?.conflicts).toEqual([
+          { path: "dist/index.js", reason: "rollback-failed" },
+          { path: "dist/local-helper.js", reason: "apply-failed" },
+        ]);
+        expect(result.localOverrides?.warnings.join("\n")).toContain(
+          "package may be partially modified",
+        );
+        expect(result.localOverrides?.warnings.join("\n")).toContain(
+          "Rollback failed for dist/index.js",
+        );
+        await expectPathMissing(indexPath);
+        const rollbackDir = (await fs.readdir(result.localOverrides?.recoveryDir ?? "")).find(
+          (entry) => entry.startsWith("rollback-"),
+        );
+        expect(rollbackDir).toBeDefined();
+        await expect(
+          fs.readFile(
+            path.join(result.localOverrides?.recoveryDir ?? "", rollbackDir ?? "", "dist/index.js"),
+            "utf8",
+          ),
+        ).resolves.toBe("export {};\n");
+      } finally {
+        copyFileSpy.mockRestore();
+      }
+    });
+  });
+
+  it("records rollback removal failures even when byte restoration succeeds", async () => {
+    await withTempDir(
+      { prefix: "openclaw-package-update-local-rollback-remove-" },
+      async (base) => {
+        const prefix = path.join(base, "prefix");
+        const globalRoot = path.join(prefix, "lib", "node_modules");
+        const packageRoot = path.join(globalRoot, "openclaw");
+        const indexPath = path.join(packageRoot, "dist", "index.js");
+        const helperPath = path.join(packageRoot, "dist", "local-helper.js");
+        await writePackageRoot(packageRoot, "1.0.0");
+        await fs.writeFile(indexPath, "export const local = true;\n", "utf8");
+        await fs.writeFile(helperPath, "export const helper = true;\n", "utf8");
+
+        const runStep = vi.fn(
+          async ({ name, argv, cwd, timeoutMs }): Promise<PackageUpdateStepResult> => {
+            expect(timeoutMs).toBe(1000);
+            if (name !== "global update") {
+              throw new Error(`unexpected step ${name}`);
+            }
+            const prefixIndex = argv.indexOf("--prefix");
+            const stagePrefix = argv[prefixIndex + 1];
+            if (!stagePrefix) {
+              throw new Error("missing staged prefix");
+            }
+            await writePackageRoot(
+              path.join(stagePrefix, "lib", "node_modules", "openclaw"),
+              "2.0.0",
+            );
+            return {
+              name,
+              command: argv.join(" "),
+              cwd: cwd ?? process.cwd(),
+              durationMs: 1,
+              exitCode: 0,
+            };
+          },
+        );
+        const realCopyFile = fs.copyFile.bind(fs);
+        const realRm = fs.rm.bind(fs);
+        let applyFailureTriggered = false;
+        const copyFileSpy = vi
+          .spyOn(fs, "copyFile")
+          .mockImplementation(async (...args: Parameters<typeof fs.copyFile>) => {
+            if (String(args[1]) === helperPath) {
+              applyFailureTriggered = true;
+              throw createFsError("EIO", "reapply copy failed");
+            }
+            return await realCopyFile(...args);
+          });
+        const rmSpy = vi
+          .spyOn(fs, "rm")
+          .mockImplementation(async (...args: Parameters<typeof fs.rm>) => {
+            if (applyFailureTriggered && String(args[0]) === indexPath) {
+              throw createFsError("EACCES", "rollback remove failed");
+            }
+            return await realRm(...args);
+          });
+
+        try {
+          const result = await runGlobalPackageUpdateSteps({
+            installTarget: createNpmTarget(globalRoot),
+            installSpec: "openclaw@2.0.0",
+            packageName: "openclaw",
+            packageRoot,
+            runCommand: createRootRunner(globalRoot),
+            runStep,
+            reapplyLocalOverrides: true,
+            timeoutMs: 1000,
+          });
+
+          expect(result.failedStep?.name).toBe("local overrides");
+          expect(result.localOverrides?.status).toBe("error");
+          expect(result.localOverrides?.applied).toBe(0);
+          expect(result.localOverrides?.conflicts).toEqual([
+            { path: "dist/index.js", reason: "rollback-failed" },
+            { path: "dist/local-helper.js", reason: "apply-failed" },
+          ]);
+          expect(result.localOverrides?.warnings.join("\n")).toContain(
+            "Rollback failed for dist/index.js: remove partial target",
+          );
+          await expect(fs.readFile(indexPath, "utf8")).resolves.toBe("export {};\n");
+          const rollbackDir = (await fs.readdir(result.localOverrides?.recoveryDir ?? "")).find(
+            (entry) => entry.startsWith("rollback-"),
+          );
+          expect(rollbackDir).toBeDefined();
+        } finally {
+          copyFileSpy.mockRestore();
+          rmSpy.mockRestore();
+        }
+      },
+    );
   });
 
   it("keeps a successful staged swap when old package cleanup hits a transient Windows native module error", async () => {

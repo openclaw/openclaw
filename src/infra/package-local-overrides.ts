@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathExists } from "../utils.js";
+import { formatErrorMessage } from "./errors.js";
 import {
   collectPackageDistInventory,
   isLegacyContentInventoryCompatVersion,
@@ -12,6 +13,14 @@ import {
 import { readPackageVersion } from "./package-json.js";
 
 type LocalPackageOverrideKind = "added" | "modified" | "deleted";
+type LocalPackageOverrideConflictReason =
+  | "target-changed"
+  | "target-exists"
+  | "target-missing"
+  | "target-hardlinked"
+  | "target-inspection-failed"
+  | "apply-failed"
+  | "rollback-failed";
 
 type LocalPackageOverrideChange = {
   kind: LocalPackageOverrideKind;
@@ -30,7 +39,7 @@ export type LocalPackageOverridesResult = {
   applied: number;
   conflicts: Array<{
     path: string;
-    reason: "target-changed" | "target-exists" | "target-missing" | "apply-failed";
+    reason: LocalPackageOverrideConflictReason;
   }>;
   recoveryDir?: string;
   warnings: string[];
@@ -65,6 +74,65 @@ async function packageRootExists(packageRoot: string): Promise<boolean> {
     }
     throw error;
   }
+}
+
+function isMissingPathError(error: unknown): boolean {
+  return ["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "");
+}
+
+type LocalPackageOverrideTargetProbe =
+  | { status: "missing" }
+  | { status: "blocked" }
+  | { status: "error" }
+  | {
+      status: "present";
+      hardlinked: boolean;
+      safeFile: boolean;
+    };
+
+async function probeLocalOverrideTarget(
+  targetPath: string,
+): Promise<LocalPackageOverrideTargetProbe> {
+  try {
+    const stats = await fs.lstat(targetPath, { bigint: true });
+    return {
+      status: "present",
+      hardlinked: stats.nlink > 1n,
+      safeFile: stats.isFile() && !stats.isSymbolicLink(),
+    };
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") {
+      return { status: "missing" };
+    }
+    if (code === "ENOTDIR") {
+      return { status: "blocked" };
+    }
+    return { status: "error" };
+  }
+}
+
+async function resolveLocalOverrideTopologyPath(
+  packageRoot: string,
+  relativePath: string,
+): Promise<string> {
+  const segments = normalizeDistPath(relativePath).split("/");
+  for (
+    let existingSegmentCount = segments.length;
+    existingSegmentCount >= 0;
+    existingSegmentCount--
+  ) {
+    const existingPath = path.join(packageRoot, ...segments.slice(0, existingSegmentCount));
+    try {
+      const realExistingPath = await fs.realpath(existingPath);
+      return path.resolve(realExistingPath, ...segments.slice(existingSegmentCount));
+    } catch (error) {
+      if (!isMissingPathError(error)) {
+        throw error;
+      }
+    }
+  }
+  throw new Error(`could not resolve local override topology for ${relativePath}`);
 }
 
 function countChanges(changes: LocalPackageOverrideChange[]) {
@@ -367,11 +435,18 @@ async function preflightLocalOverrides(params: {
     await readPackageDistContentInventoryIfPresent(params.packageRoot),
   );
   const conflicts: LocalPackageOverridesResult["conflicts"] = [];
+  const targetProbes = new Map<string, LocalPackageOverrideTargetProbe>();
   for (const change of params.plan.changes) {
     const targetPath = resolveSafePackagePath(params.packageRoot, change.path);
     const nextEntry = nextInventory.get(change.path);
+    const targetProbe = await probeLocalOverrideTarget(targetPath);
+    targetProbes.set(change.path, targetProbe);
+    if (targetProbe.status === "error") {
+      conflicts.push({ path: change.path, reason: "target-inspection-failed" });
+      continue;
+    }
     if (change.kind === "added") {
-      if (nextEntry || (await pathExists(targetPath))) {
+      if (nextEntry || targetProbe.status !== "missing") {
         conflicts.push({ path: change.path, reason: "target-exists" });
       }
       continue;
@@ -380,25 +455,82 @@ async function preflightLocalOverrides(params: {
       conflicts.push({ path: change.path, reason: "target-missing" });
       continue;
     }
-    const targetExists = await pathExists(targetPath);
-    if (!nextEntry || !targetExists) {
-      if (change.kind === "deleted" && !targetExists) {
+    if (targetProbe.status === "blocked") {
+      conflicts.push({ path: change.path, reason: "target-changed" });
+      continue;
+    }
+    if (!nextEntry || targetProbe.status === "missing") {
+      if (change.kind === "deleted" && targetProbe.status === "missing") {
         continue;
       }
       conflicts.push({
         path: change.path,
-        reason: nextEntry ? "target-missing" : "target-changed",
+        reason: nextEntry && targetProbe.status === "missing" ? "target-missing" : "target-changed",
       });
+      continue;
+    }
+    if (!targetProbe.safeFile) {
+      conflicts.push({ path: change.path, reason: "target-changed" });
+      continue;
+    }
+    if (targetProbe.hardlinked && change.kind !== "deleted") {
+      conflicts.push({ path: change.path, reason: "target-hardlinked" });
       continue;
     }
     if (nextEntry.sha256 !== change.baseline.sha256) {
       conflicts.push({ path: change.path, reason: "target-changed" });
     }
   }
+  const conflictingPaths = new Set(conflicts.map((conflict) => conflict.path));
+  const topologyPaths = new Map<string, string>();
+  let topologyResolutionFailed = false;
+  for (const change of params.plan.changes) {
+    try {
+      topologyPaths.set(
+        change.path,
+        await resolveLocalOverrideTopologyPath(params.packageRoot, change.path),
+      );
+    } catch {
+      topologyResolutionFailed = true;
+    }
+  }
+  if (topologyResolutionFailed) {
+    for (const change of params.plan.changes) {
+      if (conflictingPaths.has(change.path)) {
+        continue;
+      }
+      conflicts.push({ path: change.path, reason: "target-inspection-failed" });
+    }
+    return conflicts;
+  }
   const conflictPaths = new Set(conflicts.map((conflict) => conflict.path));
+  const pathsShareTopology = (left: string, right: string) => {
+    const normalizedLeft = topologyPaths.get(left);
+    const normalizedRight = topologyPaths.get(right);
+    if (!normalizedLeft || !normalizedRight) {
+      return false;
+    }
+    return (
+      normalizedLeft === normalizedRight ||
+      normalizedLeft.startsWith(`${normalizedRight}${path.sep}`) ||
+      normalizedRight.startsWith(`${normalizedLeft}${path.sep}`)
+    );
+  };
   let propagatedConflict = true;
   while (propagatedConflict) {
     propagatedConflict = false;
+    for (const change of params.plan.changes) {
+      if (conflictPaths.has(change.path)) {
+        continue;
+      }
+      if (
+        [...conflictPaths].some((conflictPath) => pathsShareTopology(change.path, conflictPath))
+      ) {
+        conflicts.push({ path: change.path, reason: "target-changed" });
+        conflictPaths.add(change.path);
+        propagatedConflict = true;
+      }
+    }
     for (const change of params.plan.changes) {
       if (change.kind !== "modified" || conflictPaths.has(change.path)) {
         continue;
@@ -418,6 +550,25 @@ async function preflightLocalOverrides(params: {
           candidate.kind === "modified" && (candidate.dependencies ?? []).includes(change.path),
       );
       if (importers.length > 0 && importers.every((importer) => conflictPaths.has(importer.path))) {
+        conflicts.push({ path: change.path, reason: "target-changed" });
+        conflictPaths.add(change.path);
+        propagatedConflict = true;
+      }
+    }
+    for (const change of params.plan.changes) {
+      if (change.kind !== "deleted" || conflictPaths.has(change.path)) {
+        continue;
+      }
+      const hasConflictedHardlinkModification = params.plan.changes.some((candidate) => {
+        const targetProbe = targetProbes.get(candidate.path);
+        return (
+          candidate.kind === "modified" &&
+          conflictPaths.has(candidate.path) &&
+          targetProbe?.status === "present" &&
+          targetProbe.hardlinked
+        );
+      });
+      if (hasConflictedHardlinkModification) {
         conflicts.push({ path: change.path, reason: "target-changed" });
         conflictPaths.add(change.path);
         propagatedConflict = true;
@@ -468,6 +619,7 @@ export async function applyLocalPackageOverrides(params: {
   let rollbackDir: string | null = null;
   const rollbackEntries: Array<{ path: string; backupPath?: string }> = [];
   let applied = 0;
+  let preserveRollbackDir = false;
   try {
     rollbackDir = await fs.mkdtemp(path.join(params.plan.recoveryDir, "rollback-"));
     for (const change of changesToApply) {
@@ -491,25 +643,63 @@ export async function applyLocalPackageOverrides(params: {
       applied += 1;
     }
   } catch {
+    const rollbackFailures = new Map<string, string[]>();
+    const recordRollbackFailure = (relativePath: string, action: string, error: unknown) => {
+      const messages = rollbackFailures.get(relativePath) ?? [];
+      messages.push(`${action}: ${formatErrorMessage(error)}`);
+      rollbackFailures.set(relativePath, messages);
+    };
     for (const entry of rollbackEntries.toReversed()) {
       const targetPath = resolveSafePackagePath(params.packageRoot, entry.path);
-      await fs.rm(targetPath, { force: true }).catch(() => undefined);
+      let removeError: unknown;
+      try {
+        await fs.rm(targetPath, { force: true });
+      } catch (error) {
+        if (!isMissingPathError(error)) {
+          removeError = error;
+        }
+      }
+      if (removeError) {
+        recordRollbackFailure(entry.path, "remove partial target", removeError);
+      }
       if (entry.backupPath) {
-        await copyFileWithMode(entry.backupPath, targetPath).catch(() => undefined);
+        try {
+          await copyFileWithMode(entry.backupPath, targetPath);
+        } catch (error) {
+          recordRollbackFailure(entry.path, "restore original target", error);
+        }
       }
     }
+    preserveRollbackDir = rollbackFailures.size > 0;
+    const failureReasonByPath = new Map<string, LocalPackageOverrideConflictReason>(
+      changesToApply.map((change) => [change.path, "apply-failed"]),
+    );
+    for (const relativePath of rollbackFailures.keys()) {
+      failureReasonByPath.set(relativePath, "rollback-failed");
+    }
+    const rollbackWarnings = [...rollbackFailures].map(
+      ([relativePath, messages]) => `Rollback failed for ${relativePath}: ${messages.join("; ")}`,
+    );
     return {
       ...params.plan.result,
       status: "error",
       applied: 0,
-      conflicts: changesToApply.map((change) => ({
-        path: change.path,
-        reason: "apply-failed",
+      conflicts: [...failureReasonByPath].map(([relativePath, reason]) => ({
+        path: relativePath,
+        reason,
       })),
-      warnings: ["Local OpenClaw changes were preserved but could not be reapplied."],
+      warnings: [
+        "Local OpenClaw changes were preserved but could not be reapplied.",
+        ...(rollbackFailures.size > 0
+          ? [
+              `Rollback could not fully restore ${rollbackFailures.size} installed file(s); the package may be partially modified. Inspect the preserved rollback data before retrying.`,
+              ...rollbackWarnings,
+            ]
+          : []),
+      ],
     };
   } finally {
-    if (rollbackDir) {
+    if (rollbackDir && !preserveRollbackDir) {
       await fs.rm(rollbackDir, { recursive: true, force: true }).catch(() => undefined);
     }
   }
