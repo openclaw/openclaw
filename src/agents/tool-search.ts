@@ -47,6 +47,7 @@ const DEFAULT_SEARCH_LIMIT = 8;
 const DEFAULT_MAX_SEARCH_LIMIT = 20;
 const MAX_REUSABLE_CATALOG_SNAPSHOTS = 256;
 const MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS = 18_000;
+const TOOL_DIRECTORY_IDENTIFIER_RE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/u;
 
 type ToolSearchMode = "code" | "tools" | "directory";
 type CatalogSource = "openclaw" | "mcp" | "client";
@@ -1108,13 +1109,24 @@ function compactDirectoryDescription(description: string): string {
   return `${normalized.slice(0, 177).trimEnd()}...`;
 }
 
-function formatToolDirectoryEntry(entry: ReturnType<typeof compactEntry>): string {
+function formatToolDirectoryIdentifier(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed && TOOL_DIRECTORY_IDENTIFIER_RE.test(trimmed) ? trimmed : undefined;
+}
+
+function formatToolDirectoryEntry(entry: ReturnType<typeof compactEntry>): string | undefined {
+  const name = formatToolDirectoryIdentifier(entry.name);
+  if (!name) {
+    return undefined;
+  }
   const description =
     entry.source === "openclaw"
       ? compactDirectoryDescription(entry.description)
       : "External tool; use tool_describe to inspect its schema.";
-  const owner = entry.sourceName ? ` (${entry.sourceName})` : "";
-  return `- ${entry.name}${owner}: ${description || "No description."}`;
+  const ownerName =
+    entry.source === "openclaw" ? formatToolDirectoryIdentifier(entry.sourceName) : undefined;
+  const owner = ownerName ? ` (${ownerName})` : "";
+  return `- ${name}${owner}: ${description || "No description."}`;
 }
 
 function renderToolSearchCatalogDirectory(lines: string[], total: number): string {
@@ -1132,7 +1144,8 @@ function formatToolSearchCatalogDirectory(entries: Array<ReturnType<typeof compa
   }
   const lines = entries
     .toSorted((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
-    .map(formatToolDirectoryEntry);
+    .map(formatToolDirectoryEntry)
+    .filter((line): line is string => Boolean(line));
   const fullDirectory = renderToolSearchCatalogDirectory(lines, entries.length);
   if (fullDirectory.length <= MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS) {
     return fullDirectory;
