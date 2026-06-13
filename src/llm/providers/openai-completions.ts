@@ -50,6 +50,7 @@ import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.js"
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
 import { buildBaseOptions } from "./simple-options.js";
+import { isLiteLLMAnthropicModel } from "./stream-wrappers/anthropic-family-cache-semantics.js";
 import { transformMessages } from "./transform-messages.js";
 
 /**
@@ -1303,8 +1304,12 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
   const isGrok = provider === "xai" || baseUrl.includes("api.x.ai");
   const isDeepSeek = provider === "deepseek" || baseUrl.includes("deepseek.com");
   const isXiaomi = provider === "xiaomi" || baseUrl.includes("xiaomimimo.com");
+  const isLiteLLM = provider === "litellm";
   const cacheControlFormat =
-    provider === "openrouter" && model.id.startsWith("anthropic/") ? "anthropic" : undefined;
+    (provider === "openrouter" && model.id.startsWith("anthropic/")) ||
+    (isLiteLLM && isLiteLLMAnthropicModel(model.id))
+      ? "anthropic"
+      : undefined;
 
   return {
     supportsStore: !isNonStandard,

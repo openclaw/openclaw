@@ -46,6 +46,19 @@ export function isAnthropicBedrockModel(modelId: string): boolean {
   return false;
 }
 
+export function isOpenRouterAnthropicModelRef(provider: string, modelId: string): boolean {
+  return (
+    normalizeOptionalLowercaseString(provider) === "openrouter" && isAnthropicModelRef(modelId)
+  );
+}
+
+/** Matches LiteLLM model IDs that refer to Anthropic Claude models. */
+export function isLiteLLMAnthropicModel(modelId: string): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(modelId);
+  return normalized.includes("claude") || normalized.startsWith("anthropic/");
+}
+
+
 export function isAnthropicFamilyCacheTtlEligible(params: {
   provider: string;
   modelApi?: string;
