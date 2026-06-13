@@ -238,7 +238,7 @@ class MemoryDB {
       : {};
     this.db = await lancedb.connect(this.dbPath, connectionOptions);
 
-    // Retry mechanism for Windows Docker bind mount sync delays
+    // Retry transient table metadata errors seen with Docker bind mounts.
     const maxRetries = 3;
     const retryDelayMs = 100;
     let lastError: unknown;
@@ -248,9 +248,11 @@ class MemoryDB {
         const tables = await this.db.tableNames();
 
         if (tables.includes(TABLE_NAME)) {
-          this.table = await this.db.openTable(TABLE_NAME);
+          const table = await this.db.openTable(TABLE_NAME);
+          await table.delete('id = "__schema__"');
+          this.table = table;
         } else {
-          this.table = await this.db.createTable(TABLE_NAME, [
+          const table = await this.db.createTable(TABLE_NAME, [
             {
               id: "__schema__",
               text: "",
@@ -260,7 +262,8 @@ class MemoryDB {
               createdAt: 0,
             },
           ]);
-          await this.table.delete('id = "__schema__"');
+          await table.delete('id = "__schema__"');
+          this.table = table;
         }
         return;
       } catch (error) {
@@ -271,12 +274,10 @@ class MemoryDB {
       }
     }
 
-    // All retries exhausted - throw with helpful Windows message if applicable
+    // All retries exhausted: surface a Docker bind-mount hint for the common sync-delay case.
     const error = lastError instanceof Error ? lastError : new Error(String(lastError));
-    if (process.platform === "win32") {
-      error.message +=
-        "\n\nWindows users: If using Docker, try using volumes instead of bind mounts for the LanceDB data directory.";
-    }
+    error.message +=
+      "\n\nIf the LanceDB data directory is backed by a Docker bind mount, try using a named Docker volume instead.";
     throw error;
   }
 
