@@ -96,7 +96,7 @@ function createBot(api: Record<string, unknown> = {}): Bot {
           throw new Error("sendMessage mock missing");
         }
         const { chat_id, rich_message, ...richParams } = params;
-        const sendParams = {
+        const sendParams: Record<string, unknown> = {
           parse_mode: "HTML",
           ...(rich_message.skip_entity_detection === true ? { skip_entity_detection: true } : {}),
           ...richParams,
