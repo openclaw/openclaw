@@ -685,7 +685,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       maxHoldMs: params.lockOptions.maxHoldMs,
     });
 
-  let heldLock: SessionLock | undefined;
+  let heldLock: SessionLock | undefined = await acquireLock();
   const activeWriteLock = new AsyncLocalStorage<ActiveWriteLockState>();
   let fenceFingerprint: SessionFileFingerprint | undefined;
   let fenceSnapshot: SessionFileFenceSnapshot | undefined;
