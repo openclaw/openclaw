@@ -2,6 +2,7 @@
 import type { HistoryPort } from "../../adapter/history.port.js";
 import type { QQBotInboundAccess } from "../../adapter/index.js";
 import type { MentionGatePort } from "../../adapter/mention-gate.port.js";
+import { classifyCoreCommandForGroup } from "../../commands/command-visibility.js";
 import { DEFAULT_GROUP_PROMPT, resolveGroupSettings } from "../../config/group.js";
 import { resolveGroupActivation } from "../../group/activation.js";
 import { toAttachmentSummaries, type HistoryEntry } from "../../group/history.js";
@@ -95,6 +96,7 @@ export function runGroupGateStage(input: GroupGateStageInput): GroupGateStageRes
   const groupInfo: InboundGroupInfo = {
     gate,
     activation,
+    commandLevel: settings.config.commandLevel,
     historyLimit,
     isMerged: isMergedTurn(event),
     mergedMessages: event.merge?.messages,
@@ -105,6 +107,11 @@ export function runGroupGateStage(input: GroupGateStageInput): GroupGateStageRes
       behaviorPrompt,
     },
   };
+
+  const commandVisibility = classifyCoreCommandForGroup(content, settings.config.commandLevel);
+  if (commandAuthorized && commandVisibility.visibility === "private") {
+    return { kind: "skip", groupInfo, skipReason: "private_command_only" };
+  }
 
   if (gate.action === "pass") {
     return { kind: "pass", groupInfo };
