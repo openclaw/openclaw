@@ -116,12 +116,6 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
       }),
     },
     {
-      name: "tool summary side effect",
-      result: createContractRunResult({
-        meta: { durationMs: 1, toolSummary: { calls: 1, tools: ["message"] } },
-      }),
-    },
-    {
       name: "messaging text side effect",
       result: createContractRunResult({
         messagingToolSentTexts: ["sent out of band"],
@@ -178,6 +172,21 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
         }),
       ).toBeNull();
     }
+  });
+
+  it("classifies replay-safe tool activity without visible output for fallback", () => {
+    expect(
+      classifyEmbeddedAgentRunResultForModelFallback({
+        provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryProvider,
+        model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
+        result: createContractRunResult({
+          meta: { durationMs: 1, toolSummary: { calls: 1, tools: ["read"] } },
+        }),
+      }),
+    ).toMatchObject({
+      reason: "format",
+      code: "empty_result",
+    });
   });
 
   it("keeps running on the primary when terminal output is not classified as fallback", async () => {

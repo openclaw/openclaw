@@ -66,6 +66,7 @@ import {
   parseImageSizeError,
   pickFallbackThinkingLevel,
 } from "../embedded-agent-helpers.js";
+import type { EmbeddedAgentAttemptLiveState } from "../embedded-agent-subscribe.types.js";
 import { isStrictAgenticExecutionContractActive } from "../execution-contract.js";
 import {
   coerceToFailoverError,
@@ -1433,6 +1434,7 @@ export async function runEmbeddedAgent(
       let postCompactionAbortController: AbortController | undefined;
       let toolLoopAbortError: Error | undefined;
       let currentAttemptToolLoopObservations: ToolLoopObservation[] = [];
+      let currentAttemptLiveState: EmbeddedAgentAttemptLiveState | undefined;
       const observePostCompactionToolOutcome = (observation: ToolLoopObservation): void => {
         currentAttemptToolLoopObservations.push(observation);
         if (observation.blockedReason === "tool-loop") {
@@ -1767,6 +1769,7 @@ export async function runEmbeddedAgent(
           }
           runLoopIterations += 1;
           currentAttemptToolLoopObservations = [];
+          currentAttemptLiveState = undefined;
           const runtimeAuthRetry = authRetryPending;
           authRetryPending = false;
           attemptedThinking.add(thinkLevel);
@@ -1860,32 +1863,43 @@ export async function runEmbeddedAgent(
             );
             const messagingToolSentTexts = [
               ...accumulatedMessagingToolSentTexts,
-              ...currentAttemptToolLoopObservations.flatMap(
-                (observation) => observation.messagingToolSentTexts ?? [],
-              ),
+              ...(currentAttemptLiveState?.messagingToolSentTexts ??
+                currentAttemptToolLoopObservations.flatMap(
+                  (observation) => observation.messagingToolSentTexts ?? [],
+                )),
             ];
             const messagingToolSentMediaUrls = [
               ...accumulatedMessagingToolSentMediaUrls,
-              ...currentAttemptToolLoopObservations.flatMap(
-                (observation) => observation.messagingToolSentMediaUrls ?? [],
-              ),
+              ...(currentAttemptLiveState?.messagingToolSentMediaUrls ??
+                currentAttemptToolLoopObservations.flatMap(
+                  (observation) => observation.messagingToolSentMediaUrls ?? [],
+                )),
             ];
             const messagingToolSentTargets = [
               ...accumulatedMessagingToolSentTargets,
-              ...currentAttemptToolLoopObservations.flatMap(
-                (observation) => observation.messagingToolSentTargets ?? [],
-              ),
+              ...(currentAttemptLiveState?.messagingToolSentTargets ??
+                currentAttemptToolLoopObservations.flatMap(
+                  (observation) => observation.messagingToolSentTargets ?? [],
+                )),
             ];
             const didSendViaMessagingTool =
               accumulatedDidSendViaMessagingTool ||
+              currentAttemptLiveState?.didSendViaMessagingTool === true ||
               currentAttemptToolLoopObservations.some(
                 (observation) => observation.didSendViaMessagingTool === true,
               );
+            const successfulCronAdds =
+              accumulatedSuccessfulCronAdds + (currentAttemptLiveState?.successfulCronAdds ?? 0);
+            const acceptedSessionSpawns = [
+              ...accumulatedAcceptedSessionSpawns,
+              ...(currentAttemptLiveState?.acceptedSessionSpawns ?? []),
+            ];
             const hadPotentialSideEffects =
               accumulatedReplayState.hadPotentialSideEffects ||
+              currentAttemptLiveState?.replayState.hadPotentialSideEffects === true ||
               didSendViaMessagingTool ||
-              accumulatedSuccessfulCronAdds > 0 ||
-              accumulatedAcceptedSessionSpawns.length > 0 ||
+              successfulCronAdds > 0 ||
+              acceptedSessionSpawns.length > 0 ||
               toolMetasHavePotentialSideEffects(
                 currentAttemptToolLoopObservations.filter(
                   (observation) => !observation.blockedReason,
@@ -1927,14 +1941,21 @@ export async function runEmbeddedAgent(
               },
               didSendViaMessagingTool,
               didDeliverSourceReplyViaMessageTool:
-                accumulatedDidDeliverSourceReplyViaMessageTool || undefined,
-              didSendDeterministicApprovalPrompt: accumulatedDidSendDeterministicApprovalPrompt,
+                accumulatedDidDeliverSourceReplyViaMessageTool ||
+                currentAttemptLiveState?.didDeliverSourceReplyViaMessageTool ||
+                undefined,
+              didSendDeterministicApprovalPrompt:
+                accumulatedDidSendDeterministicApprovalPrompt ||
+                currentAttemptLiveState?.didSendDeterministicApprovalPrompt === true,
               messagingToolSentTexts,
               messagingToolSentMediaUrls,
               messagingToolSentTargets,
-              messagingToolSourceReplyPayloads: accumulatedMessagingToolSourceReplyPayloads,
-              successfulCronAdds: accumulatedSuccessfulCronAdds,
-              acceptedSessionSpawns: accumulatedAcceptedSessionSpawns,
+              messagingToolSourceReplyPayloads: [
+                ...accumulatedMessagingToolSourceReplyPayloads,
+                ...(currentAttemptLiveState?.messagingToolSourceReplyPayloads ?? []),
+              ],
+              successfulCronAdds,
+              acceptedSessionSpawns,
             };
           };
           const rawAttempt = await runEmbeddedAttemptWithBackend({
@@ -2012,6 +2033,9 @@ export async function runEmbeddedAgent(
             authProfileId: lastProfileId,
             authProfileIdSource: lockedProfileId ? "user" : "auto",
             initialReplayState: accumulatedReplayState,
+            onAttemptStateChange: (state) => {
+              currentAttemptLiveState = state;
+            },
             authStorage,
             authProfileStore: runAttemptAuthProfileStore,
             // These harnesses build OpenClaw tools internally. Keep transport auth

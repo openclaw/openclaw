@@ -334,6 +334,14 @@ export function resolveSuccessfulToolTerminalFallback(params: {
   if (successfulObservations.length === 0) {
     return undefined;
   }
+  if (
+    params.requireDeclaredPresentableFallback &&
+    !successfulObservations.every((observation) =>
+      resolveToolOwnedPublicPayload({ successfulObservations: [observation] }),
+    )
+  ) {
+    return undefined;
+  }
   const allSuccessfulToolNames = new Set(
     successfulObservations.map((observation) => observation.toolName),
   );

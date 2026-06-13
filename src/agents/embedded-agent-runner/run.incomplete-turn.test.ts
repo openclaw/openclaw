@@ -5861,6 +5861,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     "Please tell me your plan for deleting old backups",
     "Can you please show me your approach for deleting old backups?",
     "Could you explain your strategy for deleting old backups?",
+    "Please make a plan for migrating the database",
+    "Can you prepare an approach for migrating the database?",
   ])("does not retry when the user explicitly asked only for a plan: %s", (prompt) => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "custom-provider",

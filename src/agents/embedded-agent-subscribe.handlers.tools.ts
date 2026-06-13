@@ -39,6 +39,7 @@ import { isDeliveredMessageToolOnlySourceReplyResult } from "./embedded-agent-me
 import { isMessagingTool, isMessagingToolSendAction } from "./embedded-agent-messaging.js";
 import type { MessagingToolSourceReplyPayload } from "./embedded-agent-messaging.types.js";
 import {
+  hasCommittedMessagingToolDeliveryEvidence,
   hasCommittedMessagingToolResultContent,
   hasCommittedMessagingToolResultDetails,
 } from "./embedded-agent-runner/delivery-evidence.js";
@@ -1668,6 +1669,24 @@ export async function handleToolExecutionEnd(
     isToolError,
     result,
     sanitizedResult,
+  });
+
+  ctx.params.onAttemptStateChange?.({
+    replayState: { ...ctx.state.replayState },
+    didSendViaMessagingTool: hasCommittedMessagingToolDeliveryEvidence({
+      messagingToolSentTexts: ctx.state.messagingToolSentTexts,
+      messagingToolSentMediaUrls: ctx.state.messagingToolSentMediaUrls,
+      messagingToolSentTargets: ctx.state.messagingToolSentTargets,
+      messagingToolSourceReplyPayloads: ctx.state.messagingToolSourceReplyPayloads,
+    }),
+    didDeliverSourceReplyViaMessageTool: ctx.state.messageToolOnlySourceReplyDelivered,
+    didSendDeterministicApprovalPrompt: ctx.state.deterministicApprovalPromptSent,
+    messagingToolSentTexts: ctx.state.messagingToolSentTexts.slice(),
+    messagingToolSentMediaUrls: ctx.state.messagingToolSentMediaUrls.slice(),
+    messagingToolSentTargets: ctx.state.messagingToolSentTargets.slice(),
+    messagingToolSourceReplyPayloads: ctx.state.messagingToolSourceReplyPayloads.slice(),
+    acceptedSessionSpawns: ctx.state.acceptedSessionSpawns.slice(),
+    successfulCronAdds: ctx.state.successfulCronAdds,
   });
 
   // Run after_tool_call plugin hook (fire-and-forget)

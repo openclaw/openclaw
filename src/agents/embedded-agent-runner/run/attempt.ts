@@ -3319,6 +3319,7 @@ export async function runEmbeddedAttempt(
           onExecutionPhase: params.onExecutionPhase,
           onAgentEvent: params.onAgentEvent,
           onToolOutcome: params.onToolOutcome,
+          onAttemptStateChange: params.onAttemptStateChange,
           terminalLifecyclePhase: params.deferTerminalLifecycleEnd ? "finishing" : "end",
           isTerminalAborted: () => aborted,
           onBeforeLifecycleTerminal: () => {

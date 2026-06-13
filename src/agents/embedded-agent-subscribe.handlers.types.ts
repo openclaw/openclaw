@@ -281,6 +281,7 @@ type ToolHandlerParams = Pick<
   | "toolResultFormat"
   | "toolProgressDetail"
   | "onToolOutcome"
+  | "onAttemptStateChange"
   | "sourceReplyDeliveryMode"
 >;
 

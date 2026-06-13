@@ -1486,7 +1486,7 @@ describe("runWithModelFallback", () => {
     expect(result.attempts).toStrictEqual([]);
   });
 
-  it("keeps tool-executing empty GPT-5 runs out of fallback", () => {
+  it("classifies replay-safe tool-executing empty GPT-5 runs for fallback", () => {
     const runResult: EmbeddedAgentRunResult = {
       payloads: [],
       meta: {
@@ -1504,7 +1504,10 @@ describe("runWithModelFallback", () => {
         model: "gpt-5.4",
         result: runResult,
       }),
-    ).toBeNull();
+    ).toMatchObject({
+      reason: "format",
+      code: "empty_result",
+    });
   });
 
   it("keeps normalized silent GPT-5 terminal replies out of fallback", () => {

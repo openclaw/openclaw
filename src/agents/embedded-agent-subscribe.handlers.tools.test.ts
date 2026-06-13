@@ -430,6 +430,73 @@ describe("handleToolExecutionEnd cron.add commitment tracking", () => {
       expect(ctx.state.successfulCronAdds).toBe(0);
     },
   );
+
+  it("emits current attempt delivery and side-effect state after tool completion", async () => {
+    const { ctx } = createTestContext();
+    const onAttemptStateChange = vi.fn();
+    ctx.params.onAttemptStateChange = onAttemptStateChange;
+    ctx.state.replayState = { replayInvalid: true, hadPotentialSideEffects: true };
+    ctx.state.messageToolOnlySourceReplyDelivered = true;
+    ctx.state.deterministicApprovalPromptSent = true;
+    ctx.state.messagingToolSentTexts.push("already sent");
+    ctx.state.messagingToolSentMediaUrls.push("file:///tmp/proof.png");
+    ctx.state.messagingToolSentTargets.push({
+      tool: "message",
+      provider: "discord",
+      to: "channel:123",
+      text: "already sent",
+    });
+    ctx.state.messagingToolSourceReplyPayloads.push({ text: "source reply" });
+    ctx.state.acceptedSessionSpawns.push({
+      runId: "run-child",
+      childSessionKey: "agent:qa:subagent:child",
+    });
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "cron",
+        toolCallId: "tool-cron-live-state",
+        args: { action: "add", job: { name: "reminder" } },
+      } as never,
+    );
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "cron",
+        toolCallId: "tool-cron-live-state",
+        isError: false,
+        result: { details: { status: "ok" } },
+      } as never,
+    );
+
+    expect(onAttemptStateChange).toHaveBeenLastCalledWith({
+      replayState: { replayInvalid: true, hadPotentialSideEffects: true },
+      didSendViaMessagingTool: true,
+      didDeliverSourceReplyViaMessageTool: true,
+      didSendDeterministicApprovalPrompt: true,
+      messagingToolSentTexts: ["already sent"],
+      messagingToolSentMediaUrls: ["file:///tmp/proof.png"],
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: "discord",
+          to: "channel:123",
+          text: "already sent",
+        },
+      ],
+      messagingToolSourceReplyPayloads: [{ text: "source reply" }],
+      acceptedSessionSpawns: [
+        {
+          runId: "run-child",
+          childSessionKey: "agent:qa:subagent:child",
+        },
+      ],
+      successfulCronAdds: 1,
+    });
+  });
 });
 
 describe("handleToolExecutionEnd terminal fallback observations", () => {

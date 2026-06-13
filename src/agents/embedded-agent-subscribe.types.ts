@@ -7,7 +7,12 @@ import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookRunner } from "../plugins/hooks.js";
+import type { AcceptedSessionSpawn } from "./accepted-session-spawn.js";
 import type { ToolOutcomeObserver } from "./agent-tools.before-tool-call.js";
+import type {
+  MessagingToolSend,
+  MessagingToolSourceReplyPayload,
+} from "./embedded-agent-messaging.types.js";
 import type { BlockReplyPayload } from "./embedded-agent-payloads.js";
 import type { EmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
 import type {
@@ -23,6 +28,19 @@ export type {
   ToolProgressDetailMode,
   ToolResultFormat,
 } from "./embedded-agent-subscribe.shared-types.js";
+
+export type EmbeddedAgentAttemptLiveState = {
+  replayState: EmbeddedRunReplayState;
+  didSendViaMessagingTool: boolean;
+  didDeliverSourceReplyViaMessageTool: boolean;
+  didSendDeterministicApprovalPrompt: boolean;
+  messagingToolSentTexts: string[];
+  messagingToolSentMediaUrls: string[];
+  messagingToolSentTargets: MessagingToolSend[];
+  messagingToolSourceReplyPayloads: MessagingToolSourceReplyPayload[];
+  acceptedSessionSpawns: AcceptedSessionSpawn[];
+  successfulCronAdds: number;
+};
 
 export type SubscribeEmbeddedAgentSessionParams = {
   session: AgentSession;
@@ -69,6 +87,7 @@ export type SubscribeEmbeddedAgentSessionParams = {
   }) => void | Promise<void>;
   onHeartbeatToolResponse?: (response: HeartbeatToolResponse) => void | Promise<void>;
   onToolOutcome?: ToolOutcomeObserver;
+  onAttemptStateChange?: (state: EmbeddedAgentAttemptLiveState) => void;
   terminalLifecyclePhase?: "end" | "finishing";
   /** Read immediately before terminal lifecycle emission. */
   isTerminalAborted?: () => boolean | undefined;

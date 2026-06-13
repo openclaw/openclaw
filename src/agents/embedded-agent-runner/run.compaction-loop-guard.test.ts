@@ -327,6 +327,76 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
     expect(result.successfulCronAdds).toBe(1);
   });
 
+  it("preserves current-attempt live side effects when that attempt aborts in a loop", async () => {
+    const overflowError = makeOverflowError();
+    const sourceReplyPayload = { text: "approval already delivered" };
+    const acceptedSessionSpawn = {
+      runId: "run-child",
+      childSessionKey: "agent:qa:subagent:child",
+    };
+
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async () =>
+      makeAttemptResult({ promptError: overflowError }),
+    );
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams: unknown) => {
+      const { onAttemptStateChange, onToolOutcome } = attemptParams as {
+        onAttemptStateChange?: (state: {
+          replayState: { replayInvalid: boolean; hadPotentialSideEffects: boolean };
+          didSendViaMessagingTool: boolean;
+          didDeliverSourceReplyViaMessageTool: boolean;
+          didSendDeterministicApprovalPrompt: boolean;
+          messagingToolSentTexts: string[];
+          messagingToolSentMediaUrls: string[];
+          messagingToolSentTargets: [];
+          messagingToolSourceReplyPayloads: Array<{ text: string }>;
+          acceptedSessionSpawns: Array<{ runId: string; childSessionKey: string }>;
+          successfulCronAdds: number;
+        }) => void;
+        onToolOutcome?: ToolOutcomeObserver;
+      };
+      onAttemptStateChange?.({
+        replayState: { replayInvalid: true, hadPotentialSideEffects: true },
+        didSendViaMessagingTool: false,
+        didDeliverSourceReplyViaMessageTool: true,
+        didSendDeterministicApprovalPrompt: true,
+        messagingToolSentTexts: [],
+        messagingToolSentMediaUrls: [],
+        messagingToolSentTargets: [],
+        messagingToolSourceReplyPayloads: [sourceReplyPayload],
+        acceptedSessionSpawns: [acceptedSessionSpawn],
+        successfulCronAdds: 1,
+      });
+      for (let i = 0; i < 3; i += 1) {
+        await executeWrappedToolOutcome(
+          "read",
+          { path: "/tmp/status" },
+          "same result",
+          onToolOutcome,
+        );
+      }
+      return makeAttemptResult();
+    });
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "Compacted session",
+        firstKeptEntryId: "entry-5",
+        tokensBefore: 150000,
+      }),
+    );
+
+    const result = await runEmbeddedAgent(baseParams);
+
+    expect(result.payloads).toContainEqual({
+      text: "⚠️ Some tool actions may have already been executed — please verify before retrying.",
+      isError: true,
+    });
+    expect(result.didDeliverSourceReplyViaMessageTool).toBe(true);
+    expect(result.didSendDeterministicApprovalPrompt).toBe(true);
+    expect(result.messagingToolSourceReplyPayloads).toEqual([sourceReplyPayload]);
+    expect(result.acceptedSessionSpawns).toEqual([acceptedSessionSpawn]);
+    expect(result.successfulCronAdds).toBe(1);
+  });
+
   it("does not abort when the result hash changes across post-compaction attempts (progress was made)", async () => {
     const overflowError = makeOverflowError();
     // Attempt 1: overflow → triggers compaction.
