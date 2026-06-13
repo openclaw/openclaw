@@ -95,7 +95,6 @@ empty (so a `when` guard or a `|fallback` keeps the piece clean).
 | `usage.input_tokens` / `usage.output_tokens` / `usage.cache_hit_pct`                | turn aggregate                         |
 | `usage.last.input_tokens` / `usage.last.output_tokens` / `usage.last.cache_hit_pct` | final model call only                  |
 | `cost.turn_usd`                                                                     | estimated turn cost                    |
-| `timing.duration_ms`                                                                | wall-clock ms                          |
 | `identity.name` / `identity.emoji`                                                  | agent name / chosen emoji              |
 
 (Provider rate-limit windows are **not** in this contract.)
