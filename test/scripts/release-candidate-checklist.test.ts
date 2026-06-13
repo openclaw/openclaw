@@ -6,6 +6,7 @@ import {
   parseArgs,
   parseRunIdFromDispatchOutput,
   resolveArtifactName,
+  validateWindowsSourceRelease,
 } from "../../scripts/release-candidate-checklist.mjs";
 
 describe("release candidate checklist", () => {
@@ -69,6 +70,116 @@ describe("release candidate checklist", () => {
     expect(buildPublishCommand(options)).toContain("'preflight_run_id=222'");
     expect(buildPublishCommand(options)).toContain("'tag=v2026.5.14-beta.3'");
     expect(buildPublishCommand(options)).toContain("'plugin_publish_scope=all-publishable'");
+    expect(buildPublishCommand(options)).not.toContain("windows_node_tag=");
+  });
+
+  it("requires and carries an exact Windows Node tag for stable release candidates", () => {
+    expect(() => parseArgs(["--tag", "v2026.5.14"])).toThrow(
+      "stable release candidates require --windows-node-tag",
+    );
+    expect(() => parseArgs(["--tag", "v2026.5.14", "--windows-node-tag", "latest"])).toThrow(
+      "--windows-node-tag must be an explicit version tag, not latest",
+    );
+
+    const options = {
+      ...parseArgs([
+        "--tag",
+        "v2026.5.14",
+        "--windows-node-tag",
+        "v0.6.3",
+        "--workflow-ref",
+        "release/2026.5.14",
+      ]),
+      workflowRef: "release/2026.5.14",
+      windowsNodeInstallerDigests: JSON.stringify({
+        "OpenClawCompanion-Setup-x64.exe": `sha256:${"a".repeat(64)}`,
+        "OpenClawCompanion-Setup-arm64.exe": `sha256:${"b".repeat(64)}`,
+      }),
+    };
+
+    expect(buildPublishCommand(options)).toContain("'windows_node_tag=v0.6.3'");
+    expect(buildPublishCommand(options)).toContain(
+      `'windows_node_installer_digests={"OpenClawCompanion-Setup-x64.exe":"sha256:${"a".repeat(64)}","OpenClawCompanion-Setup-arm64.exe":"sha256:${"b".repeat(64)}"}'`,
+    );
+  });
+
+  it("validates the stable Windows source release and immutable installer digests", async () => {
+    const assets = [
+      {
+        name: "OpenClawCompanion-Setup-x64.exe",
+        digest: `sha256:${"a".repeat(64)}`,
+      },
+      {
+        name: "OpenClawCompanion-Setup-arm64.exe",
+        digest: `sha256:${"b".repeat(64)}`,
+      },
+    ];
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        tag_name: "v0.6.3",
+        draft: false,
+        prerelease: false,
+        html_url: "https://github.com/openclaw/openclaw-windows-node/releases/tag/v0.6.3",
+        assets,
+      }),
+    }));
+
+    await expect(
+      validateWindowsSourceRelease("v0.6.3", {
+        fetchImpl,
+        timeoutMs: 1234,
+        token: "test-token",
+      }),
+    ).resolves.toEqual({
+      tag: "v0.6.3",
+      url: "https://github.com/openclaw/openclaw-windows-node/releases/tag/v0.6.3",
+      assets,
+    });
+  });
+
+  it.each([
+    [{ draft: true }, "must be published"],
+    [{ prerelease: true }, "must not be a prerelease"],
+    [{ assets: [] }, "is missing required asset OpenClawCompanion-Setup-x64.exe"],
+    [
+      {
+        assets: [
+          { name: "OpenClawCompanion-Setup-x64.exe", digest: "" },
+          { name: "OpenClawCompanion-Setup-arm64.exe", digest: `sha256:${"b".repeat(64)}` },
+        ],
+      },
+      "asset OpenClawCompanion-Setup-x64.exe is missing its SHA-256 digest",
+    ],
+  ])("rejects an invalid stable Windows source release", async (override, message) => {
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        tag_name: "v0.6.3",
+        draft: false,
+        prerelease: false,
+        html_url: "https://github.com/openclaw/openclaw-windows-node/releases/tag/v0.6.3",
+        assets: [
+          {
+            name: "OpenClawCompanion-Setup-x64.exe",
+            digest: `sha256:${"a".repeat(64)}`,
+          },
+          {
+            name: "OpenClawCompanion-Setup-arm64.exe",
+            digest: `sha256:${"b".repeat(64)}`,
+          },
+        ],
+        ...override,
+      }),
+    }));
+
+    await expect(
+      validateWindowsSourceRelease("v0.6.3", {
+        fetchImpl,
+        timeoutMs: 1234,
+        token: "test-token",
+      }),
+    ).rejects.toThrow(message);
   });
 
   it("carries the Telegram proof run into the publish command when available", () => {

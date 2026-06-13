@@ -15,6 +15,13 @@ const DEFAULT_NPM_DIST_TAG = "beta";
 const DEFAULT_PLUGIN_SCOPE = "all-publishable";
 const DEFAULT_TELEGRAM_PROVIDER_MODE = "mock-openai";
 const DEFAULT_GITHUB_API_TIMEOUT_MS = 30_000;
+const WINDOWS_NODE_TAG_PATTERN = /^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$/u;
+const WINDOWS_NODE_REPO = "openclaw/openclaw-windows-node";
+const WINDOWS_NODE_REQUIRED_ASSETS = [
+  "OpenClawCompanion-Setup-x64.exe",
+  "OpenClawCompanion-Setup-arm64.exe",
+];
+const SHA256_DIGEST_PATTERN = /^sha256:[a-f0-9]{64}$/u;
 
 function usage() {
   return `Usage: pnpm release:candidate -- --tag vYYYY.M.PATCH-beta.N [options]
@@ -29,6 +36,7 @@ Options:
   --repo <owner/repo>                 GitHub repo. Default: ${DEFAULT_REPO}
   --full-release-run <id>             Reuse successful Full Release Validation run.
   --npm-preflight-run <id>            Reuse successful OpenClaw NPM Release preflight run.
+  --windows-node-tag <tag>            Exact Windows Node release tag. Required for stable.
   --skip-dispatch                     Require both run ids; do not dispatch workflows.
   --skip-local-generated-check        Do not run local generated release baseline checks before dispatch.
   --skip-parallels                   Do not run local Parallels fresh/update beta smoke.
@@ -74,6 +82,8 @@ export function parseArgs(argv) {
     workflowRef: "",
     fullReleaseRunId: "",
     npmPreflightRunId: "",
+    windowsNodeTag: "",
+    windowsNodeInstallerDigests: "",
     outputDir: "",
   };
   parseArgv: for (let index = 0; index < args.length; index += 1) {
@@ -95,6 +105,9 @@ export function parseArgs(argv) {
         break;
       case "--npm-preflight-run":
         options.npmPreflightRunId = requireValue(args, ++index, arg);
+        break;
+      case "--windows-node-tag":
+        options.windowsNodeTag = requireValue(args, ++index, arg);
         break;
       case "--skip-dispatch":
         options.skipDispatch = true;
@@ -156,6 +169,16 @@ export function parseArgs(argv) {
   }
   if (options.pluginPublishScope === "all-publishable" && options.plugins.trim()) {
     throw new Error("--plugins is only valid with --plugin-publish-scope selected");
+  }
+  if (options.windowsNodeTag && !WINDOWS_NODE_TAG_PATTERN.test(options.windowsNodeTag)) {
+    throw new Error("--windows-node-tag must be an explicit version tag, not latest");
+  }
+  if (
+    !options.tag.includes("-alpha.") &&
+    !options.tag.includes("-beta.") &&
+    !options.windowsNodeTag
+  ) {
+    throw new Error("stable release candidates require --windows-node-tag");
   }
   if (!["mock-openai", "live-frontier"].includes(options.telegramProviderMode)) {
     throw new Error("--telegram-provider-mode must be mock-openai or live-frontier");
@@ -232,6 +255,43 @@ export async function githubApi(path, options = {}) {
     throw new Error(`GitHub API ${path} failed with ${response.status}: ${await response.text()}`);
   }
   return response.json();
+}
+
+/**
+ * Validates the immutable Windows source release contract for a stable candidate.
+ */
+export async function validateWindowsSourceRelease(tag, options = {}) {
+  const release = await githubApi(
+    `repos/${WINDOWS_NODE_REPO}/releases/tags/${encodeURIComponent(tag)}`,
+    options,
+  );
+  if (release.tag_name !== tag) {
+    throw new Error(
+      `Windows source release tag mismatch: expected ${tag}, got ${release.tag_name}`,
+    );
+  }
+  if (release.draft) {
+    throw new Error(`Windows source release ${tag} must be published`);
+  }
+  if (release.prerelease) {
+    throw new Error(`Windows source release ${tag} must not be a prerelease`);
+  }
+
+  const assets = WINDOWS_NODE_REQUIRED_ASSETS.map((name) => {
+    const asset = (release.assets ?? []).find((entry) => entry.name === name);
+    if (!asset) {
+      throw new Error(`Windows source release ${tag} is missing required asset ${name}`);
+    }
+    if (!SHA256_DIGEST_PATTERN.test(asset.digest ?? "")) {
+      throw new Error(`Windows source release ${tag} asset ${name} is missing its SHA-256 digest`);
+    }
+    return { name, digest: asset.digest };
+  });
+  return {
+    tag,
+    url: release.html_url,
+    assets,
+  };
 }
 
 function currentBranch() {
@@ -529,6 +589,12 @@ export function buildPublishCommand(options) {
   if (options.npmTelegramRunId) {
     fields.push(["npm_telegram_run_id", options.npmTelegramRunId]);
   }
+  if (options.windowsNodeTag) {
+    fields.push(["windows_node_tag", options.windowsNodeTag]);
+  }
+  if (options.windowsNodeInstallerDigests) {
+    fields.push(["windows_node_installer_digests", options.windowsNodeInstallerDigests]);
+  }
   if (options.plugins.trim()) {
     fields.push(["plugins", options.plugins]);
   }
@@ -642,6 +708,16 @@ async function main() {
   options.workflowRef ||= currentBranch();
   options.outputDir ||= join(".artifacts", "release-candidate", options.tag);
   const targetSha = gitRevParse(`${options.tag}^{}`);
+  const windowsNodeSourceRelease = options.windowsNodeTag
+    ? await validateWindowsSourceRelease(options.windowsNodeTag)
+    : undefined;
+  options.windowsNodeInstallerDigests = windowsNodeSourceRelease
+    ? JSON.stringify(
+        Object.fromEntries(
+          windowsNodeSourceRelease.assets.map((asset) => [asset.name, asset.digest]),
+        ),
+      )
+    : "";
   const localGeneratedCheck = runLocalGeneratedCheckIfNeeded(options);
 
   if (!options.fullReleaseRunId && !options.skipDispatch) {
@@ -749,6 +825,8 @@ async function main() {
     npmDistTag: options.npmDistTag,
     fullReleaseValidationRunId: options.fullReleaseRunId,
     npmPreflightRunId: options.npmPreflightRunId,
+    windowsNodeTag: options.windowsNodeTag || undefined,
+    windowsNodeSourceRelease,
     fullReleaseValidationUrl: fullRun.url,
     npmPreflightUrl: npmRun.url,
     artifacts: {
@@ -779,6 +857,14 @@ async function main() {
       `- target SHA: ${targetSha}`,
       `- full release validation: ${options.fullReleaseRunId} ${fullRun.url}`,
       `- npm preflight: ${options.npmPreflightRunId} ${npmRun.url}`,
+      ...(windowsNodeSourceRelease
+        ? [
+            `- Windows Node source release: ${windowsNodeSourceRelease.tag} ${windowsNodeSourceRelease.url}`,
+            ...windowsNodeSourceRelease.assets.map(
+              (asset) => `- Windows Node source asset: ${asset.name} ${asset.digest}`,
+            ),
+          ]
+        : []),
       `- npm preflight artifact: ${npmArtifactName}`,
       `- full release artifact: ${fullArtifactName}`,
       `- local generated release checks: ${localGeneratedCheck.status}${
