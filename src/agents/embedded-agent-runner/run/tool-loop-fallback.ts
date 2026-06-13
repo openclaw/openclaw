@@ -32,6 +32,7 @@ export type ToolLoopFallbackResolution = {
 
 export type ToolLoopObservationRetentionState = {
   readonly unresolvedFailureActions: Set<string>;
+  hasEvictedSuccessfulActionWithoutPresentableFallback: boolean;
 };
 
 const TERMINAL_LOOP_BLOCKED_REASONS = new Set(["tool-loop", "post-compaction-loop"]);
@@ -143,7 +144,9 @@ function boundToolLoopObservation(observation: ToolLoopObservation): ToolLoopObs
     ...(messagingToolSentTexts ? { messagingToolSentTexts } : {}),
     ...(messagingToolSentMediaUrls ? { messagingToolSentMediaUrls } : {}),
     ...(messagingToolSentTargets?.length ? { messagingToolSentTargets } : {}),
-    ...(observation.mutatingAction === true ? { mutatingAction: true } : {}),
+    ...(observation.mutatingAction !== undefined
+      ? { mutatingAction: observation.mutatingAction }
+      : {}),
     ...(observation.asyncStarted === true ? { asyncStarted: true } : {}),
     ...(observation.failed === true ? { failed: true } : {}),
     ...(observation.blockedReason
@@ -169,7 +172,10 @@ function resolveToolActionIdentity(observation: ToolLoopObservation): string {
 }
 
 export function createToolLoopObservationRetentionState(): ToolLoopObservationRetentionState {
-  return { unresolvedFailureActions: new Set() };
+  return {
+    unresolvedFailureActions: new Set(),
+    hasEvictedSuccessfulActionWithoutPresentableFallback: false,
+  };
 }
 
 export function appendBoundedToolLoopObservation(
@@ -191,7 +197,20 @@ export function appendBoundedToolLoopObservation(
   }
   observations.push(boundedObservation);
   if (observations.length > MAX_RETAINED_TOOL_LOOP_OBSERVATIONS) {
-    observations.splice(0, observations.length - MAX_RETAINED_TOOL_LOOP_OBSERVATIONS);
+    const evictedObservations = observations.splice(
+      0,
+      observations.length - MAX_RETAINED_TOOL_LOOP_OBSERVATIONS,
+    );
+    if (
+      retentionState &&
+      evictedObservations.some(
+        (evictedObservation) =>
+          isSuccessfulObservation(evictedObservation) &&
+          !resolveToolOwnedPublicPayload({ successfulObservations: [evictedObservation] }),
+      )
+    ) {
+      retentionState.hasEvictedSuccessfulActionWithoutPresentableFallback = true;
+    }
   }
 }
 
@@ -520,7 +539,11 @@ export function resolveSuccessfulToolTerminalFallback(params: {
   retentionState?: ToolLoopObservationRetentionState;
   requireDeclaredPresentableFallback?: boolean;
 }): ToolLoopFallbackResolution | undefined {
-  if ((params.retentionState?.unresolvedFailureActions.size ?? 0) > 0) {
+  if (
+    (params.retentionState?.unresolvedFailureActions.size ?? 0) > 0 ||
+    (params.requireDeclaredPresentableFallback &&
+      params.retentionState?.hasEvictedSuccessfulActionWithoutPresentableFallback === true)
+  ) {
     return undefined;
   }
   const coverageObservations = selectSuccessfulObservationsAfterLatestToolFailure(

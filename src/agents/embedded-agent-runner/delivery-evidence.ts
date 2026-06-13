@@ -317,18 +317,16 @@ function hasCommittedMessagingToolResultDetailsAtDepth(details: unknown, depth: 
   if (status && status !== "partial_failed" && isKnownNonSentDeliveryStatus(status)) {
     return false;
   }
-  if (
-    (deliveryStatus === "sent" || status === "sent") &&
-    hasNestedExplicitNonDeliveryEvidence(record, depth)
-  ) {
+  const hasNestedNonDeliveryEvidence = hasNestedExplicitNonDeliveryEvidence(record, depth);
+  if ((deliveryStatus === "sent" || status === "sent") && hasNestedNonDeliveryEvidence) {
     return false;
   }
   if (deliveryStatus === "sent" || status === "sent") {
     return true;
   }
   return (
-    hasMessageIdEvidence(record) ||
-    hasPositiveNumber(record.resultCount) ||
+    (!hasNestedNonDeliveryEvidence &&
+      (hasMessageIdEvidence(record) || hasPositiveNumber(record.resultCount))) ||
     hasResultArrayEvidence(record.results, depth) ||
     hasSentPayloadOutcomeEvidence(record.payloadOutcomes, depth) ||
     hasInternalSourceReplyEvidence(record) ||

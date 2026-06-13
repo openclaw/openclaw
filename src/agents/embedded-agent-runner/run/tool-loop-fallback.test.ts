@@ -20,6 +20,7 @@ describe("tool-loop terminal fallback", () => {
           privacy: "public",
           text: "s".repeat(5_000),
         },
+        mutatingAction: false,
         messagingToolSentTexts: Array.from({ length: 20 }, () => "t".repeat(5_000)),
         messagingToolSentTargets: Array.from({ length: 20 }, () => ({
           tool: "message",
@@ -40,6 +41,7 @@ describe("tool-loop terminal fallback", () => {
     expect(observations.at(-1)?.messagingToolSentTargets).toHaveLength(16);
     expect(observations.at(-1)?.messagingToolSentTargets?.[0]?.text).toHaveLength(4_000);
     expect(observations.at(-1)?.messagingToolSentTargets?.[0]?.channelData).toBeUndefined();
+    expect(observations.at(-1)?.mutatingAction).toBe(false);
   });
 
   it("preserves unresolved failure identity after its observation is evicted", () => {
@@ -86,6 +88,69 @@ describe("tool-loop terminal fallback", () => {
       payload: expect.objectContaining({
         text: expect.stringContaining("Status recovered"),
       }),
+    });
+  });
+
+  it("preserves missing successful fallback coverage after its observation is evicted", () => {
+    const observations: Parameters<typeof appendBoundedToolLoopObservation>[0] = [];
+    const retentionState = createToolLoopObservationRetentionState();
+    appendBoundedToolLoopObservation(
+      observations,
+      {
+        toolName: "write",
+        argsHash: "report",
+        resultHash: "write-result",
+        mutatingAction: true,
+      },
+      retentionState,
+    );
+    for (let index = 0; index < 70; index += 1) {
+      appendBoundedToolLoopObservation(
+        observations,
+        {
+          toolName: "status_probe",
+          argsHash: `status-${index}`,
+          resultHash: `status-result-${index}`,
+          terminalSummary: { privacy: "public", text: `Status ${index}: healthy` },
+        },
+        retentionState,
+      );
+    }
+
+    expect(
+      resolveSuccessfulToolTerminalFallback({
+        observations,
+        retentionState,
+        requireDeclaredPresentableFallback: true,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("allows covered successful fallback observations after eviction", () => {
+    const observations: Parameters<typeof appendBoundedToolLoopObservation>[0] = [];
+    const retentionState = createToolLoopObservationRetentionState();
+    for (let index = 0; index < 70; index += 1) {
+      appendBoundedToolLoopObservation(
+        observations,
+        {
+          toolName: "status_probe",
+          argsHash: `status-${index}`,
+          resultHash: `status-result-${index}`,
+          terminalSummary: { privacy: "public", text: `Status ${index}: healthy` },
+        },
+        retentionState,
+      );
+    }
+
+    expect(
+      resolveSuccessfulToolTerminalFallback({
+        observations,
+        retentionState,
+        requireDeclaredPresentableFallback: true,
+      }),
+    ).toEqual({
+      toolName: "status_probe",
+      payload: { text: "Status 69: healthy" },
     });
   });
 

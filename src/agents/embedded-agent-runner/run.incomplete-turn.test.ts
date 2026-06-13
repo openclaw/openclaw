@@ -978,6 +978,51 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     });
   });
 
+  it("does not warn about side effects for an explicitly read-only tool loop", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (params: unknown) => {
+      const attemptParams = params as {
+        abortSignal?: AbortSignal;
+        onToolOutcome?: (observation: {
+          toolName: string;
+          argsHash: string;
+          resultHash: string;
+          resultText?: string;
+          terminalResultFallback?: { mode: "safe_text"; prefix?: string };
+          mutatingAction?: boolean;
+          blockedReason?: string;
+          blockedMessage?: string;
+        }) => void;
+      };
+      attemptParams.onToolOutcome?.({
+        toolName: "cron",
+        argsHash: "status",
+        resultHash: "status-result",
+        resultText: "healthy",
+        terminalResultFallback: { mode: "safe_text", prefix: "Status:" },
+        mutatingAction: false,
+      });
+      attemptParams.onToolOutcome?.({
+        toolName: "cron",
+        argsHash: "status",
+        resultHash: "blocked-result",
+        blockedReason: "tool-loop",
+        blockedMessage: "CRITICAL: repeated cron status calls.",
+      });
+      expect(attemptParams.abortSignal?.aborted).toBe(true);
+      throw new Error("Request was aborted.");
+    });
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "xai",
+      model: "grok-composer-2.5-fast",
+      runId: "run-read-only-tool-loop-declared-fallback",
+    });
+
+    expect(result.payloads).toEqual([{ text: "Status:\nhealthy" }]);
+  });
+
   it("drains late parallel tool outcomes before returning a loop-abort fallback", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     const terminalDrain = vi.fn();
@@ -5665,6 +5710,24 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         result: {
           dryRun: true,
           messageId: "dry-run-message",
+        },
+      }),
+    ).toBe(false);
+    expect(
+      hasCommittedMessagingToolResultDetails({
+        ok: true,
+        messageId: "request-id",
+        result: {
+          dryRun: true,
+        },
+      }),
+    ).toBe(false);
+    expect(
+      hasCommittedMessagingToolResultDetails({
+        success: true,
+        resultCount: 1,
+        result: {
+          status: "failed",
         },
       }),
     ).toBe(false);
