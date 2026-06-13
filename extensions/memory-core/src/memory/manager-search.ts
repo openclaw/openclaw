@@ -368,7 +368,7 @@ export async function searchKeyword(params: {
       if (rows.length === 0) {
         const queryTokens = normalizeStringEntries(params.query.match(FTS_QUERY_TOKEN_RE) ?? []);
         const allTerms = uniqueStrings([...queryTokens, ...plan.substringTerms]);
-        const fbLike = allTerms.map(() => " OR text LIKE ? ESCAPE '\'").join("");
+        const fbLike = allTerms.map(() => " OR text LIKE ? ESCAPE '\\'").join("");
         const fbParams = allTerms.map((term) => `%${escapeLikePattern(term)}%`);
         rows = params.db
           .prepare(
