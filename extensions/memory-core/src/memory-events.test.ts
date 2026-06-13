@@ -1,7 +1,10 @@
 // Memory Core tests cover memory events plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { readMemoryHostEvents } from "openclaw/plugin-sdk/memory-host-events";
+import {
+  readMemoryHostEventRecords,
+  readMemoryHostEvents,
+} from "openclaw/plugin-sdk/memory-host-events";
 import { describe, expect, it } from "vitest";
 import { writeDailyDreamingPhaseBlock } from "./dreaming-markdown.js";
 import {
@@ -135,7 +138,7 @@ describe("memory host event journal integration", () => {
       minUniqueQueries: 0,
       nowMs: Date.UTC(2026, 5, 13, 9, 5, 0),
     });
-    const events = await readMemoryHostEvents({ workspaceDir });
+    const events = await readMemoryHostEventRecords({ workspaceDir });
 
     expect(candidates).toEqual([]);
     expect(events.map((event) => event.type)).toEqual(["memory.recall.skipped"]);
