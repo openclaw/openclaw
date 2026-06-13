@@ -11,8 +11,12 @@ import plugin from "./index.js";
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
 const OPENROUTER_MISTRAL_PROVIDER_PREFIX = "mistralai/";
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY ?? "";
-const LIVE_MODEL_ID =
-  process.env.OPENCLAW_LIVE_OPENROUTER_PLUGIN_MODEL?.trim() || "openai/gpt-5.4-nano";
+const LIVE_MODEL_REF =
+  process.env.OPENCLAW_LIVE_OPENROUTER_PLUGIN_MODEL?.trim() ||
+  "openrouter/anthropic/claude-sonnet-4.6";
+const LIVE_MODEL_ID = LIVE_MODEL_REF.startsWith("openrouter/")
+  ? LIVE_MODEL_REF
+  : `openrouter/${LIVE_MODEL_REF}`;
 const LIVE_CACHE_MODEL_ID =
   process.env.OPENCLAW_LIVE_OPENROUTER_CACHE_MODEL?.trim() || "deepseek/deepseek-v3.2";
 const liveEnabled = OPENROUTER_API_KEY.trim().length > 0 && process.env.OPENCLAW_LIVE_TEST === "1";
@@ -69,7 +73,7 @@ async function fetchOpenRouterModelIds(): Promise<string[]> {
 }
 
 describeLive("openrouter plugin live", () => {
-  it("registers an OpenRouter provider that can complete a live request", async () => {
+  it("normalizes a prefixed OpenRouter model and completes a live tool call", async () => {
     const { providers } = await registerOpenRouterPlugin();
     const provider = requireRegisteredProvider(providers, "openrouter");
 
@@ -87,17 +91,51 @@ describeLive("openrouter plugin live", () => {
     expect(resolved.api).toBe("openai-completions");
     expect(resolved.baseUrl).toBe("https://openrouter.ai/api/v1");
 
+    const normalized = provider.normalizeResolvedModel?.({
+      provider: "openrouter",
+      modelId: resolved.id,
+      model: resolved,
+    });
+    if (!normalized) {
+      throw new Error(`openrouter provider did not normalize ${LIVE_MODEL_ID}`);
+    }
+    expect(normalized.id).toBe(LIVE_MODEL_ID.slice("openrouter/".length));
+
     const client = new OpenAI({
       apiKey: OPENROUTER_API_KEY,
-      baseURL: resolved.baseUrl,
+      baseURL: normalized.baseUrl,
     });
     const response = await client.chat.completions.create({
-      model: resolved.id,
-      messages: [{ role: "user", content: "Reply with exactly OK." }],
-      max_tokens: 16,
+      model: normalized.id,
+      messages: [{ role: "user", content: "Call get_weather for Paris." }],
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "get_weather",
+            description: "Get the weather for a city.",
+            parameters: {
+              type: "object",
+              properties: { city: { type: "string" } },
+              required: ["city"],
+              additionalProperties: false,
+            },
+          },
+        },
+      ],
+      tool_choice: {
+        type: "function",
+        function: { name: "get_weather" },
+      },
+      max_tokens: 64,
     });
 
-    expect(response.choices[0]?.message?.content?.trim()).toMatch(/^OK[.!]?$/);
+    const toolCall = response.choices[0]?.message?.tool_calls?.find(
+      (call) => call.type === "function",
+    );
+    expect(toolCall?.type).toBe("function");
+    expect(toolCall?.function.name).toBe("get_weather");
+    expect(JSON.parse(toolCall?.function.arguments ?? "{}")).toMatchObject({ city: "Paris" });
   }, 30_000);
 });
 
