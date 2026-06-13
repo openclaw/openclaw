@@ -52,6 +52,19 @@ function hasNonEmptyStringArray(value: unknown): boolean {
   return Array.isArray(value) && value.some(hasNonEmptyString);
 }
 
+function hasVisibleAttachmentReference(value: unknown): boolean {
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  const urls = new Set<string>();
+  for (const attachment of value) {
+    if (attachment && typeof attachment === "object" && !Array.isArray(attachment)) {
+      collectMediaUrlsFromRecord(attachment as Record<string, unknown>, urls);
+    }
+  }
+  return urls.size > 0;
+}
+
 function collectStringValues(value: unknown, output: Set<string>) {
   if (typeof value === "string" && value.trim()) {
     output.add(value.trim());
@@ -171,7 +184,7 @@ export function hasVisibleAgentPayload(
       hasNonEmptyString(record.text) ||
       hasNonEmptyString(record.mediaUrl) ||
       hasNonEmptyStringArray(record.mediaUrls) ||
-      hasNonEmptyArray(record.attachments) ||
+      hasVisibleAttachmentReference(record.attachments) ||
       record.presentation ||
       record.interactive ||
       record.channelData,

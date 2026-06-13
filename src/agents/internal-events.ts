@@ -53,6 +53,16 @@ function sanitizeMultilineField(value: string, fallback: string): string {
   return sanitized || fallback;
 }
 
+function sanitizeMediaDirectiveValue(value: string): string | null {
+  let singleLine = "";
+  for (const char of escapeInternalRuntimeContextDelimiters(value).replace(/\r?\n/g, " ")) {
+    const code = char.charCodeAt(0);
+    singleLine += code < 32 || code === 127 ? " " : char;
+  }
+  const sanitized = singleLine.trim();
+  return sanitized || null;
+}
+
 function formatChildResultDataBlock(value: string): string {
   return (
     wrapPromptDataBlock({
@@ -64,8 +74,12 @@ function formatChildResultDataBlock(value: string): string {
 
 function formatGeneratedMediaDirectiveLines(event: AgentTaskCompletionInternalEvent): string[] {
   const mediaUrls = Array.from(
-    new Set([...(event.mediaUrls ?? []), ...mediaUrlsFromGeneratedAttachments(event.attachments)]),
-  ).filter((value) => value.trim().length > 0);
+    new Set(
+      [...(event.mediaUrls ?? []), ...mediaUrlsFromGeneratedAttachments(event.attachments)]
+        .map(sanitizeMediaDirectiveValue)
+        .filter((value): value is string => value !== null),
+    ),
+  );
   if (mediaUrls.length === 0) {
     return [];
   }

@@ -1495,6 +1495,10 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
   it.each([
     { name: "no payloads", result: { payloads: [] } },
     {
+      name: "attachment payload without a usable media reference",
+      result: { payloads: [{ attachments: [{}] }] },
+    },
+    {
       name: "tool calls without delivery evidence",
       result: { payloads: [], meta: { toolSummary: { calls: 1 } } },
     },
