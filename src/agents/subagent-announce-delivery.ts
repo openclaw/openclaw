@@ -911,6 +911,16 @@ function resolveTextCompletionDirectFallback(events: readonly AgentInternalEvent
   return undefined;
 }
 
+/** Maximum character length for direct text completion delivery. */
+const DIRECT_TEXT_COMPLETION_MAX_LENGTH = 4_000;
+
+function capDirectTextContent(content: string): string {
+  if (content.length <= DIRECT_TEXT_COMPLETION_MAX_LENGTH) {
+    return content;
+  }
+  return `${content.slice(0, DIRECT_TEXT_COMPLETION_MAX_LENGTH)}\n\n…(truncated ${content.length - DIRECT_TEXT_COMPLETION_MAX_LENGTH} chars)`;
+}
+
 function hasFailedSubagentNoOutputCompletion(events: readonly AgentInternalEvent[] | undefined) {
   return (
     events?.some(
@@ -936,9 +946,9 @@ async function deliverTextCompletionDirect(params: {
   };
   internalEvents?: readonly AgentInternalEvent[];
 }): Promise<SubagentAnnounceDeliveryResult | undefined> {
-  const content = resolveTextCompletionDirectFallback(params.internalEvents);
+  const rawContent = resolveTextCompletionDirectFallback(params.internalEvents);
   if (
-    !content ||
+    !rawContent ||
     !params.deliveryTarget.deliver ||
     !params.deliveryTarget.channel ||
     !params.deliveryTarget.to ||
@@ -946,6 +956,7 @@ async function deliverTextCompletionDirect(params: {
   ) {
     return undefined;
   }
+  const content = capDirectTextContent(rawContent);
   const agentId = resolveAgentIdFromSessionKey(params.requesterSessionKey);
   const idempotencyKey = `${params.directIdempotencyKey}:text-direct`;
   try {

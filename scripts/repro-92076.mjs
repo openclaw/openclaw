@@ -52,22 +52,22 @@ const staleError = new SessionWriteLockStaleError(
 const unrelatedError = new Error("unrelated error");
 
 assert(
-  isSessionWriteLockAcquireError(lockError) === true,
+  isSessionWriteLockAcquireError(lockError),
   "SessionWriteLockTimeoutError detected as lock error"
 );
 assert(
-  isSessionWriteLockAcquireError(staleError) === true,
+  isSessionWriteLockAcquireError(staleError),
   "SessionWriteLockStaleError detected as lock error"
 );
 assert(
-  isSessionWriteLockAcquireError(unrelatedError) === false,
+  !isSessionWriteLockAcquireError(unrelatedError),
   "Unrelated error NOT detected as lock error"
 );
 
 // 3. Requester session classification
 console.log("\n3. Session key classification:");
 assert(
-  isInternalAnnounceRequesterSession(undefined) === false,
+  !isInternalAnnounceRequesterSession(undefined),
   "undefined sessionKey → false"
 );
 assert(

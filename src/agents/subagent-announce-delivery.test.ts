@@ -4089,6 +4089,73 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     );
   });
 
+  it("caps direct text completion delivery at 4000 characters", async () => {
+    const callGateway = createGatewayMock({
+      result: { payloads: [] },
+    });
+    const sendMessage = createSendMessageMock();
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeSequenceMock([
+      "transcript_commit_wait_unsupported",
+      "no_active_run",
+    ]);
+    const longResult = "x".repeat(5_000);
+    const origin = {
+      channel: "discord",
+      to: "dm:U123",
+      accountId: "acct-1",
+    };
+    testing.setDepsForTest({
+      callGateway,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-session-dm-cap",
+        isActive: true,
+      }),
+      getRuntimeConfig: () => ({}) as never,
+      sendMessage,
+      queueEmbeddedAgentMessageWithOutcome,
+    });
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:main:discord:dm:U123",
+      targetRequesterSessionKey: "agent:main:discord:dm:U123",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterOrigin: origin,
+      requesterSessionOrigin: origin,
+      completionDirectOrigin: origin,
+      directOrigin: origin,
+      requesterIsSubagent: false,
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+      directIdempotencyKey: "announce-dm-cap-text",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "dm cap test",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: longResult,
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    const sentContent = (sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][0]
+      .content as string;
+    expect(sentContent.length).toBeLessThan(longResult.length);
+    expect(sentContent).toContain("…(truncated");
+    // First 4000 chars preserved
+    expect(sentContent.startsWith("x".repeat(4_000))).toBe(true);
+  });
+
   it("directly delivers stale isolated cron run media completions", async () => {
     const callGateway = createGatewayMock();
     const sendMessage = createSendMessageMock();
