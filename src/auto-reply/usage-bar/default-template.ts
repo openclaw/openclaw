@@ -35,9 +35,10 @@ export const DEFAULT_USAGE_BAR_TEMPLATE: UsageBarTemplate = {
         text: " | 📚 [{context.pct_used|meter:5:braille}]{context.max_tokens|num}",
       },
       {
-        when: "usage.has_tokens",
+        when: "usage.has_split_tokens",
         text: " ↕️ {usage.input_tokens|num|?}/{usage.output_tokens|num|?}",
       },
+      { when: "usage.has_total_only_tokens", text: " ↕️ {usage.total_tokens|num}" },
       { when: "usage.cache_hit_pct", text: " 🗄 {usage.cache_hit_pct|pct}" },
       { when: "cost.turn_usd", text: " 💰{cost.turn_usd|fixed:4}" },
     ],
@@ -54,9 +55,10 @@ export const DEFAULT_USAGE_BAR_TEMPLATE: UsageBarTemplate = {
           text: " | 📚 [{context.pct_used|meter:5:braille}]{context.max_tokens|num}",
         },
         {
-          when: "usage.has_tokens",
+          when: "usage.has_split_tokens",
           text: " ↕️ {usage.input_tokens|num|?}/{usage.output_tokens|num|?}",
         },
+        { when: "usage.has_total_only_tokens", text: " ↕️ {usage.total_tokens|num}" },
         { when: "usage.cache_hit_pct", text: " 🗄 {usage.cache_hit_pct|pct}" },
         { when: "cost.turn_usd", text: " 💰{cost.turn_usd|fixed:4}" },
       ],

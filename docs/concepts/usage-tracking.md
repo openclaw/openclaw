@@ -48,8 +48,87 @@ footer when valid:
 }
 ```
 
-Missing, unreadable, invalid, or empty templates fall back to the built-in
-footer.
+Missing or empty templates fall back to the built-in footer quietly. Unreadable
+or invalid configured templates also fall back to the built-in footer and emit an
+operator warning.
+
+Start custom templates from the built-in shape, then edit the parts you want to
+change:
+
+```jsonc
+{
+  "schema": "openclaw.usageBar.v1",
+  "scales": {
+    "braille": "⠐⡀⡄⡆⡇⣇⣧⣷⣿",
+    "block": "░▏▎▍▌▋▊▉█",
+    "shade": "░▒▓█",
+    "moon": "🌑🌘🌗🌖🌕",
+    "level": "▁▂▃▄▅▆▇█",
+    "weather": ["🥶", "☁️", "🌥", "⛅️", "🌤", "☀️"],
+    "plants": ["🪾", "🍂", "🌱", "☘️", "🍀", "🌿"],
+    "moons6": ["🌑", "🌚", "🌘", "🌗", "🌖", "🌝"],
+  },
+  "aliases": {
+    "models": {
+      "claude-opus-4-6": "opus46",
+      "claude-opus-4-8": "opus48",
+      "claude-sonnet-4-6": "sonnet46",
+      "claude-haiku-4-5": "haiku45",
+      "gpt-5.5": "gpt5.5",
+    },
+    "reasoning": {
+      "off": "🌑",
+      "minimal": "🌚",
+      "low": "🌘",
+      "medium": "🌗",
+      "high": "🌕",
+      "xhigh": "🌝",
+    },
+  },
+  "output": {
+    "sep": "",
+    "default": [
+      { "text": "{model.provider}{identity.emoji|🤖} {model.display_name|alias:models}" },
+      { "map": "model.is_fallback", "cases": { "true": " 🔄" } },
+      { "map": "model.is_override", "cases": { "true": " 📌" } },
+      { "when": "model.reasoning", "text": " {model.reasoning|alias:reasoning}" },
+      { "map": "state.fast_mode", "cases": { "true": " ⚡", "false": " 🐌" } },
+      {
+        "when": "context.max_tokens",
+        "text": " | 📚 [{context.pct_used|meter:5:braille}]{context.max_tokens|num}",
+      },
+      {
+        "when": "usage.has_split_tokens",
+        "text": " ↕️ {usage.input_tokens|num|?}/{usage.output_tokens|num|?}",
+      },
+      { "when": "usage.has_total_only_tokens", "text": " ↕️ {usage.total_tokens|num}" },
+      { "when": "usage.cache_hit_pct", "text": " 🗄 {usage.cache_hit_pct|pct}" },
+      { "when": "cost.turn_usd", "text": " 💰{cost.turn_usd|fixed:4}" },
+    ],
+    "surfaces": {
+      "discord": [
+        { "text": "-# -\n" },
+        { "text": "-# {model.provider}{identity.emoji|🤖} {model.display_name|alias:models}" },
+        { "map": "model.is_fallback", "cases": { "true": "🔄" } },
+        { "map": "model.is_override", "cases": { "true": "📌" } },
+        { "when": "model.reasoning", "text": " {model.reasoning|alias:reasoning}" },
+        { "map": "state.fast_mode", "cases": { "true": " ⚡️", "false": " 🐌" } },
+        {
+          "when": "context.max_tokens",
+          "text": " | 📚 [{context.pct_used|meter:5:braille}]{context.max_tokens|num}",
+        },
+        {
+          "when": "usage.has_split_tokens",
+          "text": " ↕️ {usage.input_tokens|num|?}/{usage.output_tokens|num|?}",
+        },
+        { "when": "usage.has_total_only_tokens", "text": " ↕️ {usage.total_tokens|num}" },
+        { "when": "usage.cache_hit_pct", "text": " 🗄 {usage.cache_hit_pct|pct}" },
+        { "when": "cost.turn_usd", "text": " 💰{cost.turn_usd|fixed:4}" },
+      ],
+    },
+  },
+}
+```
 
 ### Shape
 
@@ -92,7 +171,8 @@ empty (so a `when` guard or a `|fallback` keeps the piece clean).
 | `model.is_fallback` / `model.is_override`                                           | bool: fallback used / model pinned     |
 | `state.fast_mode`                                                                   | bool: fast vs slow                     |
 | `context.max_tokens` / `context.pct_used`                                           | window budget / 0-100 used             |
-| `usage.input_tokens` / `usage.output_tokens` / `usage.cache_hit_pct`                | turn aggregate                         |
+| `usage.input_tokens` / `usage.output_tokens` / `usage.total_tokens`                 | turn aggregate                         |
+| `usage.has_split_tokens` / `usage.has_total_only_tokens` / `usage.cache_hit_pct`    | token display guards and cache percent |
 | `usage.last.input_tokens` / `usage.last.output_tokens` / `usage.last.cache_hit_pct` | final model call only                  |
 | `cost.turn_usd`                                                                     | estimated turn cost                    |
 | `identity.name` / `identity.emoji`                                                  | agent name / chosen emoji              |
