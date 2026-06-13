@@ -120,14 +120,22 @@ describe("slack doctor", () => {
       warning.includes("Re-key it with the channel's"),
     );
     expect(nameKeyWarnings).toHaveLength(3);
-    expect(nameKeyWarnings[0]).toContain('channels.slack.channels."root-room"');
-    expect(nameKeyWarnings[0]).toContain("messages from the channel are dropped");
-    expect(nameKeyWarnings[1]).toContain(
-      'channels.slack.accounts.explicitAllowlist.channels."engineering"',
+    const rootWarning = nameKeyWarnings.find((warning) =>
+      warning.includes('channels.slack.channels."root-room"'),
     );
-    expect(nameKeyWarnings[2]).toContain(
-      'channels.slack.accounts.nameMatching.channels."channel:customers" is ambiguous',
-    );
+    expect(rootWarning).toContain("messages from the channel are dropped");
+    expect(
+      nameKeyWarnings.some((warning) =>
+        warning.includes('channels.slack.accounts.explicitAllowlist.channels."engineering"'),
+      ),
+    ).toBe(true);
+    expect(
+      nameKeyWarnings.some((warning) =>
+        warning.includes(
+          'channels.slack.accounts.nameMatching.channels."channel:customers" is ambiguous',
+        ),
+      ),
+    ).toBe(true);
 
     const sharedOpenWarnings = await collectSlackWarnings(
       { channels: { "shared-room": {} } },
@@ -136,6 +144,35 @@ describe("slack doctor", () => {
     expect(
       sharedOpenWarnings.some((warning) => warning.includes("not a routable Slack channel ID")),
     ).toBe(true);
+  });
+
+  it("warns when an open-policy override is keyed by channel name (#81665)", async () => {
+    const warnings = await collectSlackWarnings({
+      groupPolicy: "open",
+      channels: {
+        "private-room": { enabled: false },
+      },
+    });
+
+    expect(warnings).toEqual([expect.stringContaining('channels.slack.channels."private-room"')]);
+    expect(warnings[0]).toContain("the channel remains allowed");
+  });
+
+  it("does not audit provider defaults as a standalone named account (#81665)", async () => {
+    const warnings = await collectSlackWarnings({
+      channels: {
+        "provider-room": { enabled: false },
+      },
+      accounts: {
+        work: {
+          channels: {
+            C0AL2GDUA7J: {},
+          },
+        },
+      },
+    });
+
+    expect(warnings.some((warning) => warning.includes("provider-room"))).toBe(false);
   });
 
   it("normalizes legacy slack streaming aliases into the nested streaming shape", () => {

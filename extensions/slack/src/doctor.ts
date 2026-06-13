@@ -2,7 +2,7 @@
 import type { ChannelDoctorAdapter } from "openclaw/plugin-sdk/channel-contract";
 import { createDangerousNameMatchingMutableAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
 import type { GroupPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { collectProviderDangerousNameMatchingScopes } from "openclaw/plugin-sdk/runtime-doctor";
+import { listSlackAccountIds, mergeSlackAccountConfig } from "./accounts.js";
 import {
   legacyConfigRules as SLACK_LEGACY_CONFIG_RULES,
   normalizeCompatibilityConfig as normalizeSlackCompatibilityConfig,
@@ -70,49 +70,57 @@ function looksLikeSlackChannelId(channelKey: string): boolean {
 function collectSlackNameKeyedChannelWarnings({ cfg }: { cfg: OpenClawConfig }): string[] {
   const warnings = new Set<string>();
   const slackCfg = asObjectRecord(asObjectRecord(cfg.channels)?.slack);
-  const providerGroupPolicy =
-    slackCfg && typeof slackCfg.groupPolicy === "string"
-      ? (slackCfg.groupPolicy as GroupPolicy)
-      : undefined;
   const providerChannels = asObjectRecord(slackCfg?.channels);
-  for (const scope of collectProviderDangerousNameMatchingScopes(cfg, "slack")) {
-    const scopedGroupPolicy =
-      typeof scope.account.groupPolicy === "string"
-        ? (scope.account.groupPolicy as GroupPolicy)
-        : providerGroupPolicy;
-    // Slack's schema materializes this provider default before runtime account merging.
-    const effectiveGroupPolicy = scopedGroupPolicy ?? "allowlist";
-    if (effectiveGroupPolicy !== "allowlist") {
+  const accounts = asObjectRecord(slackCfg?.accounts);
+  for (const accountId of listSlackAccountIds(cfg)) {
+    const account = asObjectRecord(mergeSlackAccountConfig(cfg, accountId));
+    if (!account || slackCfg?.enabled === false || account.enabled === false) {
       continue;
     }
-    const accountChannels = asObjectRecord(scope.account.channels);
+    const scopedGroupPolicy =
+      typeof account.groupPolicy === "string" ? (account.groupPolicy as GroupPolicy) : undefined;
+    // Slack's schema materializes this provider default before runtime account merging.
+    const effectiveGroupPolicy = scopedGroupPolicy ?? "allowlist";
+    if (effectiveGroupPolicy === "disabled") {
+      continue;
+    }
+    const rawAccount = asObjectRecord(accounts?.[accountId]);
+    const accountChannels = asObjectRecord(rawAccount?.channels);
     const channels = accountChannels ?? providerChannels;
     if (!channels) {
       continue;
     }
-    const channelsPrefix = accountChannels ? scope.prefix : "channels.slack";
+    const channelsPrefix = accountChannels
+      ? `channels.slack.accounts.${accountId}`
+      : "channels.slack";
     const fallbackDescription = Object.hasOwn(channels, "*")
       ? `${channelsPrefix}.channels."*" applies instead and this entry's overrides are ignored`
-      : "messages from the channel are dropped";
+      : effectiveGroupPolicy === "open"
+        ? 'this entry\'s overrides are ignored and the channel remains allowed by groupPolicy: "open"'
+        : "messages from the channel are dropped";
     for (const channelKey of Object.keys(channels)) {
       if (channelKey === "*" || looksLikeSlackChannelId(channelKey)) {
         continue;
       }
+      const channelConfig = asObjectRecord(channels[channelKey]);
+      if (effectiveGroupPolicy === "open" && Object.keys(channelConfig ?? {}).length === 0) {
+        continue;
+      }
       const hasChannelPrefix = channelKey.toLowerCase().startsWith("channel:");
-      if (scope.dangerousNameMatchingEnabled && !hasChannelPrefix) {
+      if (account.dangerouslyAllowNameMatching === true && !hasChannelPrefix) {
         continue;
       }
       if (SLACK_AMBIGUOUS_LOWERCASE_CHANNEL_ID_RE.test(channelKey)) {
         warnings.add(
           `${channelsPrefix}.channels."${channelKey}" is ambiguous: it may be a lowercase Slack channel ID or a channel name. ` +
-            `If it is a channel name, inbound allowlist routing will not match it and ${fallbackDescription}. ` +
+            `If it is a channel name, inbound routing will not match it and ${fallbackDescription}. ` +
             `Re-key it with the channel's stable ID (e.g. C0123ABCD, from the channel's About details or conversations.info).`,
         );
         continue;
       }
       warnings.add(
         `${channelsPrefix}.channels."${channelKey}" is keyed by a channel name or non-canonical ID form, not a routable Slack channel ID; ` +
-          `under groupPolicy: "allowlist" inbound routing does not match this entry, so ${fallbackDescription}. ` +
+          `under groupPolicy: "${effectiveGroupPolicy}" inbound routing does not match this entry, so ${fallbackDescription}. ` +
           `Re-key it with the channel's ID (e.g. C0123ABCD, from the channel's About details or conversations.info).`,
       );
     }
