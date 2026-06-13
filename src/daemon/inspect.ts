@@ -199,7 +199,10 @@ function isOpenClawGatewaySystemdService(name: string, contents: string): boolea
 }
 
 function isOpenClawGatewayTaskName(name: string): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(name);
+  // Windows schtasks may report names with a leading backslash
+  // (e.g. "\OpenClaw Gateway"); strip it before comparison.
+  const stripped = name.replace(/^\\/u, "");
+  const normalized = normalizeLowercaseStringOrEmpty(stripped);
   if (!normalized) {
     return false;
   }
