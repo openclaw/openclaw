@@ -58,6 +58,7 @@ const TOOL_ERROR_PARAM_PREVIEW_MAX_CHARS = 600;
 const TOOL_ERROR_EXEC_COMMAND_HASH_CHARS = 16;
 const SENSITIVE_EXEC_ENV_VALUE = "[omitted exec env value]";
 const EXEC_COMMAND_PARAM_KEYS = new Set(["command", "cmd"]);
+const EMPTY_OBJECT_TOOL_PARAMETERS = { type: "object", properties: {} } as ToolDefinition["parameters"];
 
 export type ClientToolCallRecorder =
   | ((toolName: string, params: Record<string, unknown>) => void)
@@ -138,6 +139,32 @@ function kindForLog(value: unknown): string {
     return "null";
   }
   return typeof value;
+}
+
+function resolveAgentToolParameters(tool: AnyAgentTool): ToolDefinition["parameters"] {
+  try {
+    return tool.parameters;
+  } catch (err) {
+    const described = describeToolExecutionError(err);
+    logDebug(
+      `tools: ${tool.name || "tool"} has unreadable parameter schema; using empty object schema: ${described.message}`,
+    );
+    return EMPTY_OBJECT_TOOL_PARAMETERS;
+  }
+}
+
+function resolveClientToolParameters(
+  func: ClientToolDefinition["function"],
+): ToolDefinition["parameters"] {
+  try {
+    return func.parameters as ToolDefinition["parameters"];
+  } catch (err) {
+    const described = describeToolExecutionError(err);
+    logDebug(
+      `tools: ${func.name || "client_tool"} has unreadable client parameter schema; using empty object schema: ${described.message}`,
+    );
+    return EMPTY_OBJECT_TOOL_PARAMETERS;
+  }
 }
 
 function summarizeSensitiveValueForLog(params: {
@@ -367,7 +394,7 @@ export function toToolDefinitions(
       name,
       label: tool.label ?? name,
       description: tool.description ?? "",
-      parameters: tool.parameters,
+      parameters: resolveAgentToolParameters(tool),
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
         const { toolCallId, params, onUpdate, signal } = splitToolExecuteArgs(args);
         let executeParams = params;
@@ -498,7 +525,7 @@ export function toClientToolDefinitions(
       name: func.name,
       label: func.name,
       description: func.description ?? "",
-      parameters: func.parameters as ToolDefinition["parameters"],
+      parameters: resolveClientToolParameters(func),
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
         const { toolCallId, params } = splitToolExecuteArgs(args);
         if (onClientToolCall && typeof onClientToolCall !== "function") {

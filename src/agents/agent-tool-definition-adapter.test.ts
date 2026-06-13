@@ -48,6 +48,24 @@ async function executeTool(tool: AgentTool, callId: string) {
 }
 
 describe("agent tool definition adapter", () => {
+  it("uses an empty object schema when an agent tool parameter getter throws", () => {
+    const tool = {
+      name: "hostile_schema",
+      label: "Hostile Schema",
+      description: "throws while reading parameters",
+      execute: async () => ({ content: [] }),
+    } as unknown as AgentTool;
+    Object.defineProperty(tool, "parameters", {
+      get() {
+        throw new Error("schema unavailable");
+      },
+    });
+
+    const [def] = toToolDefinitions([tool]);
+
+    expect(def?.parameters).toEqual({ type: "object", properties: {} });
+  });
+
   it("wraps tool errors into a tool result", async () => {
     const result = await executeThrowingTool("boom", "call1");
 
@@ -145,6 +163,22 @@ async function executeClientTool(params: unknown): Promise<{
 }
 
 describe("toClientToolDefinitions – param coercion", () => {
+  it("uses an empty object schema when a client tool parameter getter throws", () => {
+    const func = {
+      name: "client_schema",
+      description: "throws while reading parameters",
+    } as ClientToolDefinition["function"];
+    Object.defineProperty(func, "parameters", {
+      get() {
+        throw new Error("schema unavailable");
+      },
+    });
+
+    const [def] = toClientToolDefinitions([{ type: "function", function: func }]);
+
+    expect(def?.parameters).toEqual({ type: "object", properties: {} });
+  });
+
   it("returns terminal pending results for each client tool in a batch", async () => {
     const completed: Array<{ id: string; name: string; params: Record<string, unknown> }> = [];
     const defs = toClientToolDefinitions([makeClientTool("search"), makeClientTool("lookup")], {
