@@ -427,9 +427,10 @@ describe("deliverReplies message_sent hook", () => {
     messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
     sendMock.mockResolvedValue({ messageId: "1700000000.000100", channelId: "C123" });
 
-    await deliverReplies(baseParams({ replies: [{ text: "shipped" }] }));
+    const result = await deliverReplies(baseParams({ replies: [{ text: "shipped" }] }));
 
     expect(sendMock).toHaveBeenCalledOnce();
+    expect(result).toEqual({ messageId: "1700000000.000100", channelId: "C123" });
     expect(messageHookRunner.runMessageSent).toHaveBeenCalledOnce();
     const event = messageHookRunner.runMessageSent.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(event).toMatchObject({
@@ -440,6 +441,17 @@ describe("deliverReplies message_sent hook", () => {
     });
     const context = messageHookRunner.runMessageSent.mock.calls[0]?.[1] as Record<string, unknown>;
     expect(context).toMatchObject({ channelId: "slack" });
+  });
+
+  it("reports the trimmed content sent for text-only replies", async () => {
+    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
+    sendMock.mockResolvedValue({ messageId: "ts", channelId: "C123" });
+
+    await deliverReplies(baseParams({ replies: [{ text: "  shipped  " }] }));
+
+    expect(sendMock).toHaveBeenCalledWith("C123", "shipped", expect.anything());
+    const event = messageHookRunner.runMessageSent.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(event).toMatchObject({ content: "shipped", success: true });
   });
 
   it("threads the session key into the message_sent plugin context for correlation", async () => {
@@ -474,6 +486,112 @@ describe("deliverReplies message_sent hook", () => {
     const event = messageHookRunner.runMessageSent.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(event).toMatchObject({ success: false, content: "boom" });
     expect(String(event.error)).toMatch(/channel_not_found/);
+  });
+
+  it("defers both success and failure hooks for caller-owned terminal delivery", async () => {
+    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
+    sendMock.mockResolvedValueOnce({ messageId: "ts", channelId: "C123" });
+
+    await deliverReplies(
+      baseParams({
+        replies: [{ text: "deferred success" }],
+        sessionKeyForInternalHooks: "slack:C123:U1",
+        deferMessageSentHooks: true,
+      }),
+    );
+
+    sendMock.mockRejectedValueOnce(new Error("deferred failure"));
+    await expect(
+      deliverReplies(
+        baseParams({
+          replies: [{ text: "deferred failure" }],
+          sessionKeyForInternalHooks: "slack:C123:U1",
+          deferMessageSentHooks: true,
+        }),
+      ),
+    ).rejects.toThrow(/deferred failure/);
+
+    expect(messageHookRunner.runMessageSent).not.toHaveBeenCalled();
+    expect(triggerInternalHook).not.toHaveBeenCalled();
+  });
+
+  it("emits one message_sent event after a multi-media reply succeeds", async () => {
+    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
+    sendMock
+      .mockResolvedValueOnce({ messageId: "media-1", channelId: "C123" })
+      .mockResolvedValueOnce({ messageId: "media-2", channelId: "C123" });
+
+    await deliverReplies(
+      baseParams({
+        replies: [
+          {
+            text: "two attachments",
+            mediaUrls: ["https://example.com/one.png", "https://example.com/two.png"],
+          },
+        ],
+      }),
+    );
+
+    expect(sendMock).toHaveBeenCalledTimes(2);
+    expect(messageHookRunner.runMessageSent).toHaveBeenCalledTimes(1);
+    const event = messageHookRunner.runMessageSent.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(event).toMatchObject({
+      content: "two attachments",
+      success: true,
+      messageId: "media-2",
+    });
+  });
+
+  it("reports spoken text for media-only TTS supplements", async () => {
+    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
+    sendMock.mockResolvedValue({ messageId: "tts-1", channelId: "C123" });
+
+    await deliverReplies(
+      baseParams({
+        replies: [
+          {
+            mediaUrl: "https://example.com/tts.mp3",
+            spokenText: "Spoken answer",
+            ttsSupplement: { spokenText: "Spoken answer" },
+          },
+        ],
+      }),
+    );
+
+    expect(messageHookRunner.runMessageSent).toHaveBeenCalledOnce();
+    const event = messageHookRunner.runMessageSent.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(event).toMatchObject({
+      content: "Spoken answer",
+      success: true,
+      messageId: "tts-1",
+    });
+  });
+
+  it("emits only failure when a later attachment in the payload fails", async () => {
+    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
+    sendMock
+      .mockResolvedValueOnce({ messageId: "media-1", channelId: "C123" })
+      .mockRejectedValueOnce(new Error("second_upload_failed"));
+
+    await expect(
+      deliverReplies(
+        baseParams({
+          replies: [
+            {
+              text: "two attachments",
+              mediaUrls: ["https://example.com/one.png", "https://example.com/two.png"],
+            },
+          ],
+        }),
+      ),
+    ).rejects.toThrow(/second_upload_failed/);
+
+    expect(messageHookRunner.runMessageSent).toHaveBeenCalledTimes(1);
+    const event = messageHookRunner.runMessageSent.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(event).toMatchObject({
+      content: "two attachments",
+      success: false,
+    });
   });
 
   it("does not emit the plugin hook when no listener observes message_sent", async () => {

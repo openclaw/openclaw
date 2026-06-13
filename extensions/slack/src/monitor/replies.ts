@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/reply-chunking";
 import {
   deliverTextOrMediaReply,
+  getReplyPayloadTtsSupplement,
   resolveSendableOutboundReplyParts,
   type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
@@ -58,7 +59,13 @@ export async function deliverReplies(params: {
   isGroup?: boolean;
   /** Group/channel id for the `message_sent` event when `isGroup` is true. */
   groupId?: string;
+  /**
+   * Defer hook emission to a caller that must resolve another delivery path
+   * before reporting the terminal outcome.
+   */
+  deferMessageSentHooks?: true;
 }) {
+  let latestResult: SlackSendResult | undefined;
   for (const payload of params.replies) {
     if (payload.isReasoning === true) {
       continue;
@@ -79,6 +86,9 @@ export async function deliverReplies(params: {
     // `emitSlackMessageSentHooks` self-gates on registered listeners, so this is
     // a no-op when no plugin observes `message_sent`.
     const emitSent = (content: string, result?: SlackSendResult) => {
+      if (params.deferMessageSentHooks) {
+        return;
+      }
       emitSlackMessageSentHooks({
         sessionKeyForInternalHooks: params.sessionKeyForInternalHooks,
         to: params.target,
@@ -91,6 +101,9 @@ export async function deliverReplies(params: {
       });
     };
     const emitFailed = (content: string, error: unknown) => {
+      if (params.deferMessageSentHooks) {
+        return;
+      }
       emitSlackMessageSentHooks({
         sessionKeyForInternalHooks: params.sessionKeyForInternalHooks,
         to: params.target,
@@ -127,26 +140,31 @@ export async function deliverReplies(params: {
         throw error;
       }
       emitSent(trimmed, result);
+      latestResult = result;
       params.runtime.log?.(`delivered reply to ${params.target}`);
       continue;
     }
 
-    const delivered = await deliverTextOrMediaReply({
-      payload,
-      text: reply.text,
-      chunkText: !reply.hasMedia
-        ? (value) => {
-            const trimmed = value.trim();
-            if (!trimmed || isSilentReplyText(trimmed, SILENT_REPLY_TOKEN)) {
-              return [];
+    const hookContent = reply.hasMedia
+      ? (getReplyPayloadTtsSupplement(payload)?.spokenText ?? reply.text)
+      : reply.trimmedText;
+    let lastResult: SlackSendResult | undefined;
+    let delivered: Awaited<ReturnType<typeof deliverTextOrMediaReply>>;
+    try {
+      delivered = await deliverTextOrMediaReply({
+        payload,
+        text: reply.text,
+        chunkText: !reply.hasMedia
+          ? (value) => {
+              const trimmed = value.trim();
+              if (!trimmed || isSilentReplyText(trimmed, SILENT_REPLY_TOKEN)) {
+                return [];
+              }
+              return [trimmed];
             }
-            return [trimmed];
-          }
-        : undefined,
-      sendText: async (trimmed) => {
-        let result: SlackSendResult;
-        try {
-          result = await sendMessageSlack(params.target, trimmed, {
+          : undefined,
+        sendText: async (trimmed) => {
+          lastResult = await sendMessageSlack(params.target, trimmed, {
             cfg: params.cfg,
             token: params.token,
             threadTs,
@@ -154,17 +172,9 @@ export async function deliverReplies(params: {
             ...(params.identity ? { identity: params.identity } : {}),
             ...(params.metadata ? { metadata: params.metadata } : {}),
           });
-        } catch (error) {
-          emitFailed(trimmed, error);
-          throw error;
-        }
-        emitSent(trimmed, result);
-      },
-      sendMedia: async ({ mediaUrl, caption }) => {
-        const content = caption ?? "";
-        let result: SlackSendResult;
-        try {
-          result = await sendMessageSlack(params.target, content, {
+        },
+        sendMedia: async ({ mediaUrl, caption }) => {
+          lastResult = await sendMessageSlack(params.target, caption ?? "", {
             cfg: params.cfg,
             token: params.token,
             mediaUrl,
@@ -173,17 +183,19 @@ export async function deliverReplies(params: {
             ...(params.identity ? { identity: params.identity } : {}),
             ...(params.metadata ? { metadata: params.metadata } : {}),
           });
-        } catch (error) {
-          emitFailed(content, error);
-          throw error;
-        }
-        emitSent(content, result);
-      },
-    });
+        },
+      });
+    } catch (error) {
+      emitFailed(hookContent, error);
+      throw error;
+    }
     if (delivered !== "empty") {
+      emitSent(hookContent, lastResult);
+      latestResult = lastResult;
       params.runtime.log?.(`delivered reply to ${params.target}`);
     }
   }
+  return latestResult;
 }
 
 export type SlackRespondFn = (payload: {

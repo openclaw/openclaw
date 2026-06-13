@@ -309,7 +309,7 @@ describe("stopSlackStream finalize error handling", () => {
     );
   });
 
-  it("marks fallback-delivered sessions stopped only when no native stream exists", () => {
+  it("retires fallback-delivered sessions so buffered text cannot be resent", () => {
     const neverDelivered = makeSession({});
     markSlackStreamFallbackDelivered(neverDelivered);
     expect(neverDelivered.delivered).toBe(true);
@@ -321,7 +321,7 @@ describe("stopSlackStream finalize error handling", () => {
     markSlackStreamFallbackDelivered(alreadyDelivered);
     expect(alreadyDelivered.delivered).toBe(true);
     expect(alreadyDelivered.pendingText).toBe("");
-    expect(alreadyDelivered.stopped).toBe(false);
+    expect(alreadyDelivered.stopped).toBe(true);
   });
 });
 

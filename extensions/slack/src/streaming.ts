@@ -353,10 +353,9 @@ export function extractSlackErrorCode(err: unknown): string | undefined {
 }
 
 export function markSlackStreamFallbackDelivered(session: SlackStreamSession): void {
-  const hadNativeDelivery = session.delivered;
   session.pendingText = "";
   session.delivered = true;
-  if (!hadNativeDelivery) {
-    session.stopped = true;
-  }
+  // The SDK retains text after a failed flush. Once normal delivery owns that
+  // text, retiring the streamer prevents a later stop from sending it again.
+  session.stopped = true;
 }
