@@ -643,6 +643,7 @@ export function runAgentAttempt(params: {
         toolsAllow: params.opts.toolsAllow,
         cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
         cleanupCliLiveSessionOnRunEnd: params.opts.cleanupCliLiveSessionOnRunEnd,
+        oneShotCliRun: params.opts.oneShotCliRun,
         ...(mutableCliSessionStore
           ? {
               onBeforeFreshCliSessionRetry: async (retry) => {
@@ -746,6 +747,7 @@ export function runAgentAttempt(params: {
     agentDir: params.agentDir,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
     cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
+    oneShotCliRun: params.opts.oneShotCliRun,
     modelRun: params.opts.modelRun,
     promptMode: params.opts.promptMode,
     disableTools: params.opts.modelRun === true,

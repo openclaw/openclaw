@@ -8,6 +8,7 @@ import { createClientToolNameConflictError } from "../agents/agent-tool-definiti
 import { FailoverError } from "../agents/failover-error.js";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
+import { resetConfigRuntimeState } from "../config/config.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
 import {
@@ -15,6 +16,7 @@ import {
   getFreePort,
   installGatewayTestHooks,
   startGatewayServerWithRetries,
+  testState,
 } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
@@ -263,6 +265,9 @@ describe("OpenResponses HTTP API (e2e)", () => {
     };
 
     try {
+      testState.agentsConfig = { list: [{ id: "main" }, { id: "beta" }] };
+      resetConfigRuntimeState();
+
       const resNonPost = await fetch(`http://127.0.0.1:${port}/v1/responses`, {
         method: "GET",
         headers: { authorization: "Bearer secret" },
@@ -332,6 +337,30 @@ describe("OpenResponses HTTP API (e2e)", () => {
         /^agent:main:/,
       );
       await ensureResponseConsumed(resDefaultAlias);
+
+      {
+        agentCommand.mockClear();
+        const res = await postResponses(
+          port,
+          { model: "openclaw", input: "hi" },
+          { "x-openclaw-agent-id": "missing-agent" },
+        );
+        expect(res.status).toBe(400);
+        const json = (await res.json()) as { error?: { type?: string; message?: string } };
+        expect(json.error?.type).toBe("invalid_request_error");
+        expect(json.error?.message).toBe("Unknown agent 'missing-agent'.");
+        expect(agentCommand).toHaveBeenCalledTimes(0);
+      }
+
+      {
+        agentCommand.mockClear();
+        const res = await postResponses(port, { model: "openclaw/missing-agent", input: "hi" });
+        expect(res.status).toBe(400);
+        const json = (await res.json()) as { error?: { type?: string; message?: string } };
+        expect(json.error?.type).toBe("invalid_request_error");
+        expect(json.error?.message).toBe("Unknown agent 'missing-agent'.");
+        expect(agentCommand).toHaveBeenCalledTimes(0);
+      }
 
       mockAgentOnce([{ text: "hello" }]);
       const resChannelHeader = await postResponses(
@@ -818,7 +847,8 @@ describe("OpenResponses HTTP API (e2e)", () => {
       );
       await ensureResponseConsumed(resNoUser);
     } finally {
-      // shared server
+      testState.agentsConfig = undefined;
+      resetConfigRuntimeState();
     }
   });
 

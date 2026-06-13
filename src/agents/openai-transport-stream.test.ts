@@ -3839,6 +3839,104 @@ describe("openai transport stream", () => {
     });
   });
 
+  it("preserves Responses replay item ids for store-capable third-party opt-in routes", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "store-capable-model",
+        name: "Store-capable model",
+        api: "openai-responses",
+        provider: "custom-openai-responses",
+        baseUrl: "https://custom.example.com/v1",
+        compat: { supportsStore: true } as never,
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            api: "openai-responses",
+            provider: "custom-openai-responses",
+            model: "store-capable-model",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            timestamp: 1,
+            content: [
+              {
+                type: "thinking",
+                thinking: "Need a tool.",
+                thinkingSignature: JSON.stringify({
+                  type: "reasoning",
+                  id: "rs_prior",
+                  summary: [],
+                }),
+              },
+              {
+                type: "text",
+                text: "Checking the price.",
+                textSignature: JSON.stringify({
+                  v: 1,
+                  id: "msg_prior",
+                  phase: "commentary",
+                }),
+              },
+              {
+                type: "toolCall",
+                id: "call_abc|fc_prior",
+                name: "price_lookup",
+                arguments: { symbol: "SOL" },
+              },
+            ],
+          },
+        ],
+        tools: [],
+      } as never,
+      { replayResponsesItemIds: true, sessionId: "session-123" },
+    ) as {
+      input?: Array<{
+        type?: string;
+        role?: string;
+        id?: string;
+        call_id?: string;
+        phase?: string;
+        summary?: unknown;
+      }>;
+    };
+
+    const reasoningItem = params.input?.find((item) => item.type === "reasoning");
+    expectRecordFields(reasoningItem, {
+      type: "reasoning",
+      id: "rs_prior",
+      summary: [],
+    });
+    const assistantMessage = params.input?.find(
+      (item) => item.type === "message" && item.role === "assistant",
+    );
+    expectRecordFields(assistantMessage, {
+      type: "message",
+      role: "assistant",
+      id: "msg_prior",
+      phase: "commentary",
+    });
+    const functionCall = params.input?.find((item) => item.type === "function_call");
+    expectRecordFields(functionCall, {
+      type: "function_call",
+      id: "fc_prior",
+      call_id: "call_abc",
+    });
+  });
+
   it("omits prior Responses replay item ids when store is disabled for custom Codex-compatible responses", () => {
     const model = {
       id: "gpt-5.4",
