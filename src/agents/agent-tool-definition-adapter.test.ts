@@ -15,6 +15,7 @@ import {
   toToolDefinitions,
 } from "./agent-tool-definition-adapter.js";
 import type { ClientToolDefinition } from "./embedded-agent-runner/run/params.js";
+import { inspectRuntimeToolInputSchemas } from "./tool-schema-projection.js";
 
 type ToolExecute = ReturnType<typeof toToolDefinitions>[number]["execute"];
 const extensionContext = {} as Parameters<ToolExecute>[4];
@@ -48,6 +49,28 @@ async function executeTool(tool: AgentTool, callId: string) {
 }
 
 describe("agent tool definition adapter", () => {
+  it("keeps unreadable tool parameter schemas quarantinable", () => {
+    const tool = {
+      name: "fuzzplugin_move_angles",
+      label: "Fuzz Tool",
+      description: "bad schema",
+      get parameters() {
+        throw new Error("schema getter exploded");
+      },
+      execute: async () => ({ content: [] }),
+    } as unknown as AgentTool;
+
+    const defs = toToolDefinitions([tool]);
+    expect(defs[0]?.name).toBe("fuzzplugin_move_angles");
+    expect(inspectRuntimeToolInputSchemas(defs)).toEqual([
+      {
+        toolName: "fuzzplugin_move_angles",
+        toolIndex: 0,
+        violations: ['fuzzplugin_move_angles.parameters.type must be "object"'],
+      },
+    ]);
+  });
+
   it("wraps tool errors into a tool result", async () => {
     const result = await executeThrowingTool("boom", "call1");
 

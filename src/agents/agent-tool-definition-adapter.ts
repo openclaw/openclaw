@@ -58,6 +58,10 @@ const TOOL_ERROR_PARAM_PREVIEW_MAX_CHARS = 600;
 const TOOL_ERROR_EXEC_COMMAND_HASH_CHARS = 16;
 const SENSITIVE_EXEC_ENV_VALUE = "[omitted exec env value]";
 const EXEC_COMMAND_PARAM_KEYS = new Set(["command", "cmd"]);
+const UNREADABLE_TOOL_PARAMETERS_SCHEMA = Object.freeze({
+  type: "array",
+  description: "Unreadable source tool parameter schema",
+}) as unknown as ToolDefinition["parameters"];
 
 export type ClientToolCallRecorder =
   | ((toolName: string, params: Record<string, unknown>) => void)
@@ -69,6 +73,39 @@ export type ClientToolCallRecorder =
 
 function isAbortSignal(value: unknown): value is AbortSignal {
   return typeof value === "object" && value !== null && "aborted" in value;
+}
+
+function readAgentToolField<TField extends keyof AnyAgentTool>(
+  tool: AnyAgentTool,
+  field: TField,
+): { ok: true; value: AnyAgentTool[TField] } | { ok: false } {
+  try {
+    return { ok: true, value: tool[field] };
+  } catch {
+    return { ok: false };
+  }
+}
+
+function readAgentToolName(tool: AnyAgentTool): string {
+  const field = readAgentToolField(tool, "name");
+  if (!field.ok || typeof field.value !== "string" || !field.value) {
+    return "tool";
+  }
+  return field.value;
+}
+
+function readAgentToolStringField(
+  tool: AnyAgentTool,
+  field: "label" | "description",
+  fallback: string,
+): string {
+  const value = readAgentToolField(tool, field);
+  return value.ok && typeof value.value === "string" ? value.value : fallback;
+}
+
+function readAgentToolParameters(tool: AnyAgentTool): ToolDefinition["parameters"] {
+  const value = readAgentToolField(tool, "parameters");
+  return value.ok ? value.value : UNREADABLE_TOOL_PARAMETERS_SCHEMA;
 }
 
 function isLegacyToolExecuteArgs(args: ToolExecuteArgsAny): args is ToolExecuteArgsLegacy {
@@ -360,14 +397,15 @@ export function toToolDefinitions(
   hookContext?: HookContext,
 ): ToolDefinition[] {
   return tools.map((tool) => {
-    const name = tool.name || "tool";
+    const name = readAgentToolName(tool);
     const normalizedName = normalizeToolName(name);
     const beforeHookWrapped = isToolWrappedWithBeforeToolCallHook(tool);
+    const parameters = readAgentToolParameters(tool);
     return {
       name,
-      label: tool.label ?? name,
-      description: tool.description ?? "",
-      parameters: tool.parameters,
+      label: readAgentToolStringField(tool, "label", name),
+      description: readAgentToolStringField(tool, "description", ""),
+      parameters,
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
         const { toolCallId, params, onUpdate, signal } = splitToolExecuteArgs(args);
         let executeParams = params;
