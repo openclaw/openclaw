@@ -1,3 +1,5 @@
+// 多人协作 PULL REQUEST 测试
+
 /** Tests ACP tool approval classification and spoofing backstops. */
 import { describe, expect, it } from "vitest";
 import { classifyAcpToolApproval } from "./approval-classifier.js";
