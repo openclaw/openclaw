@@ -134,17 +134,18 @@ export async function checkGatewayHealth(params: {
   return { healthOk, authenticated: false, status };
 }
 
-/** Probes gateway memory readiness without forcing deep embedding checks. */
+/** Probes gateway memory readiness. When deep is true, forces embedding checks. */
 export async function probeGatewayMemoryStatus(params: {
   cfg: OpenClawConfig;
   timeoutMs?: number;
+  deep?: boolean;
 }): Promise<GatewayMemoryProbe> {
   const timeoutMs =
     typeof params.timeoutMs === "number" && params.timeoutMs > 0 ? params.timeoutMs : 8_000;
   try {
     const payload = await callGateway<DoctorMemoryStatusPayload>({
       method: "doctor.memory.status",
-      params: { probe: false },
+      params: { probe: params.deep === true },
       timeoutMs,
       config: params.cfg,
     });
