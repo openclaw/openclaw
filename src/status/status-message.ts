@@ -623,8 +623,12 @@ export function buildStatusMessage(args: StatusArgs): string {
       contextLookupProvider = activeProvider;
       contextLookupModel = activeModel;
     } else {
-      contextLookupProvider = undefined;
-      contextLookupModel = runtimeModelRaw;
+      // When entry.modelProvider is empty but the model string contains an
+      // embedded provider prefix (e.g. "openrouter/anthropic/claude-sonnet-4"),
+      // extract the provider from the first segment so the resolution chain
+      // can look up the correct context window.
+      contextLookupProvider = embeddedProvider || undefined;
+      contextLookupModel = runtimeModelRaw.slice(slashIndex + 1);
     }
   }
 
