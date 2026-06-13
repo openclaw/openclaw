@@ -632,13 +632,14 @@ export function buildStatusMessage(args: StatusArgs): string {
   let outputTokens = entry?.outputTokens;
   let cacheRead = entry?.cacheRead;
   let cacheWrite = entry?.cacheWrite;
-  const freshTotalTokens =
-    entry?.totalTokensFresh === true ? resolveFreshSessionTotalTokens(entry) : undefined;
+  const freshTotalTokens = resolveFreshSessionTotalTokens(entry);
+  // Undefined freshness is legacy, not stale: keep persisted totals for /status,
+  // but let a fresh transcript prompt snapshot replace them when available.
   const allowTranscriptContextUsage = entry?.totalTokensFresh !== false;
   let totalTokens = freshTotalTokens;
 
-  // Context percentages need a fresh prompt snapshot; cumulative session/cache
-  // usage can still hydrate Tokens/Cache lines but must not become Context.
+  // Explicitly stale session/cache usage can still hydrate Tokens/Cache lines
+  // but must not become Context.
   if (args.includeTranscriptUsage) {
     const logUsage = readUsageFromSessionLog(
       entry?.sessionId,
@@ -655,7 +656,10 @@ export function buildStatusMessage(args: StatusArgs): string {
         allowTranscriptContextUsage &&
         candidate !== undefined &&
         candidate > 0 &&
-        (!totalTokens || totalTokens === 0 || candidate > totalTokens)
+        (entry?.totalTokensFresh !== true ||
+          !totalTokens ||
+          totalTokens === 0 ||
+          candidate > totalTokens)
       ) {
         totalTokens = candidate;
       }

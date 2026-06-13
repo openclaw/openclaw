@@ -222,6 +222,30 @@ describe("buildStatusMessage", () => {
     expect(normalized).not.toContain("Context: 3.8m/1.0m");
   });
 
+  it("preserves legacy unknown-freshness totalTokens as context usage", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "anthropic/test:opus",
+        contextTokens: 1_000_000,
+      },
+      sessionEntry: {
+        sessionId: "abc",
+        updatedAt: 0,
+        totalTokens: 25_000,
+        contextTokens: 1_000_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+      now: 10 * 60_000,
+    });
+    const normalized = normalizeTestText(text);
+
+    expect(normalized).toContain("Context: 25k/1.0m");
+    expect(normalized).not.toContain("Context: ?/1.0m");
+  });
+
   it("uses estimated context budget status when fresh totalTokens are unavailable", () => {
     const text = buildStatusMessage({
       agent: {
