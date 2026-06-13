@@ -1132,6 +1132,7 @@ describe("createFollowupRunner runtime config", () => {
     expect(runCliAgentMock).toHaveBeenCalledOnce();
     const call = requireLastMockCallArg(runCliAgentMock, "run cli agent");
     expect(call.currentInboundEventKind).toBe("room_event");
+    expect(call.persistAssistantTranscript).toBe(false);
     expect(call.currentInboundAudio).toBe(true);
     expect(call.suppressNextUserMessagePersistence).toBe(true);
     expect(call.sourceReplyDeliveryMode).toBe("message_tool_only");
@@ -1309,6 +1310,7 @@ describe("createFollowupRunner runtime config", () => {
       typing: createMockTypingController(),
       typingMode: "instant",
       sessionKey: "main",
+      storePath: "/tmp/sessions.json",
       defaultModel: "anthropic/claude-opus-4-7",
     });
 
@@ -1325,6 +1327,8 @@ describe("createFollowupRunner runtime config", () => {
 
     expect(runCliAgentMock).toHaveBeenCalledOnce();
     const mediaCall = requireLastMockCallArg(runCliAgentMock, "run cli agent");
+    expect(mediaCall.persistAssistantTranscript).toBe(true);
+    expect(mediaCall.storePath).toBe("/tmp/sessions.json");
     const recorder = requireRecord(mediaCall.userTurnTranscriptRecorder, "cli user turn recorder");
     expect(recorder.message).toBe(preparedUserTurnMessage);
   });

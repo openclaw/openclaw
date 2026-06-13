@@ -22,6 +22,7 @@ import {
   resolveInheritedToolPolicyForSession,
   resolveSubagentToolPolicyForSession,
 } from "../../agents/agent-tools.policy.js";
+import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { selectAgentHarness } from "../../agents/harness/selection.js";
 import {
   buildModelAliasIndex,
@@ -43,7 +44,10 @@ import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { shouldSuppressLocalExecApprovalPrompt } from "../../channels/plugins/exec-approval-local.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
-import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
+import {
+  appendAssistantMessageToSessionTranscript,
+  type SessionTranscriptDeliveryMirror,
+} from "../../config/sessions/transcript.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
@@ -169,7 +173,10 @@ type SourceReplyTranscriptMirror = NonNullable<
   NonNullable<ReturnType<typeof getReplyPayloadMetadata>>["sourceReplyTranscriptMirror"]
 >;
 type TranscriptMirror = SourceReplyTranscriptMirror & {
+  expectedSessionId?: string;
   storePath?: string;
+  preferText?: boolean;
+  deliveryMirror?: SessionTranscriptDeliveryMirror;
 };
 type InternalReplyResolverOptions = {
   onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
@@ -743,7 +750,7 @@ async function clearPendingFinalDeliveryAfterSuccess(params: {
   });
 }
 
-async function mirrorInternalSourceReplyToTranscript(params: {
+async function mirrorDeliveredReplyToTranscript(params: {
   metadata?: TranscriptMirror;
   cfg: OpenClawConfig;
 }): Promise<void> {
@@ -751,18 +758,27 @@ async function mirrorInternalSourceReplyToTranscript(params: {
   if (!mirror) {
     return;
   }
-  const result = await appendAssistantMessageToSessionTranscript({
-    sessionKey: mirror.sessionKey,
-    agentId: mirror.agentId,
-    text: mirror.text,
-    mediaUrls: mirror.mediaUrls,
-    idempotencyKey: mirror.idempotencyKey,
-    ...(mirror.storePath ? { storePath: mirror.storePath } : {}),
-    updateMode: "inline",
-    config: params.cfg,
-  });
-  if (!result.ok) {
-    logVerbose(`dispatch-from-config: internal source reply mirror skipped: ${result.reason}`);
+  try {
+    const result = await appendAssistantMessageToSessionTranscript({
+      sessionKey: mirror.sessionKey,
+      agentId: mirror.agentId,
+      ...(mirror.expectedSessionId ? { expectedSessionId: mirror.expectedSessionId } : {}),
+      text: mirror.text,
+      mediaUrls: mirror.preferText && mirror.text ? undefined : mirror.mediaUrls,
+      idempotencyKey: mirror.idempotencyKey,
+      ...(mirror.deliveryMirror ? { deliveryMirror: mirror.deliveryMirror } : {}),
+      ...(mirror.storePath ? { storePath: mirror.storePath } : {}),
+      updateMode: "inline",
+      config: params.cfg,
+      beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+    });
+    if (!result.ok) {
+      logVerbose(`dispatch-from-config: transcript mirror skipped: ${result.reason}`);
+    }
+  } catch (error) {
+    logVerbose(
+      `dispatch-from-config: transcript mirror failed after delivery: ${formatErrorMessage(error)}`,
+    );
   }
 }
 
@@ -840,10 +856,14 @@ function captureDeliveredTranscriptMirror(params: {
       payloadMetadata.sessionKey === sessionKey
     ) {
       deliveredMetadata = transcriptMirrorForDeliveredPayload(
-        { ...payloadMetadata, storePath: metadata.storePath },
+        {
+          ...payloadMetadata,
+          ...(metadata.expectedSessionId ? { expectedSessionId: metadata.expectedSessionId } : {}),
+          storePath: metadata.storePath,
+        },
         payload,
       );
-    } else if (!payloadMetadata && !idempotencyKey) {
+    } else if (!payloadMetadata && (!idempotencyKey || metadata.deliveryMirror)) {
       deliveredMetadata = transcriptMirrorForDeliveredPayload(metadata, payload);
     }
     return payload;
@@ -866,7 +886,7 @@ async function mirrorTranscriptAfterDispatcherDelivery(params: {
   if (!metadata) {
     return;
   }
-  await mirrorInternalSourceReplyToTranscript({
+  await mirrorDeliveredReplyToTranscript({
     metadata,
     cfg: params.cfg,
   });
@@ -2217,7 +2237,7 @@ export async function dispatchReplyFromConfig(
     };
     const sendFinalPayload = async (
       payload: ReplyPayload,
-      options: { abortSignal?: AbortSignal } = {},
+      options: { abortSignal?: AbortSignal; deliveryId?: string } = {},
     ): Promise<{ queuedFinal: boolean; routedFinalCount: number }> => {
       const abortSignal = options.abortSignal ?? getDispatchAbortSignal();
       const throwIfFinalDeliveryAborted = () => {
@@ -2229,8 +2249,20 @@ export async function dispatchReplyFromConfig(
       // Trailing commentary must land ahead of the final answer.
       await flushPendingCommentaryProgress();
       throwIfFinalDeliveryAborted();
-      const sourceReplyTranscriptMirror =
-        getReplyPayloadMetadata(payload)?.sourceReplyTranscriptMirror;
+      const payloadMetadata = getReplyPayloadMetadata(payload);
+      const sourceReplyTranscriptMirror = payloadMetadata?.sourceReplyTranscriptMirror
+        ? {
+            ...payloadMetadata.sourceReplyTranscriptMirror,
+            ...(payloadMetadata.sourceReplyTranscriptMirror.sessionKey ===
+              sessionStoreEntry.sessionKey && sessionStoreEntry.entry?.sessionId
+              ? { expectedSessionId: sessionStoreEntry.entry.sessionId }
+              : {}),
+            storePath: sessionStoreEntry.storePath,
+          }
+        : undefined;
+      const hasTranscriptOwner =
+        payloadMetadata?.assistantMessageIndex !== undefined ||
+        payloadMetadata?.assistantTranscriptOwned === true;
       const hasVisibleFinalContent = hasOutboundReplyContent(payload, { trimText: true });
       if (hasVisibleFinalContent) {
         markInboundDedupeReplayUnsafe();
@@ -2249,20 +2281,6 @@ export async function dispatchReplyFromConfig(
       throwIfFinalDeliveryAborted();
       const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
       throwIfFinalDeliveryAborted();
-      const transcriptMirrorSessionKey =
-        acpDispatchSessionKey ?? sessionStoreEntry.sessionKey ?? sessionKey;
-      const transcriptMirror =
-        sourceReplyTranscriptMirror ??
-        (!isInternalWebchatTurn && hasVisibleFinalContent && transcriptMirrorSessionKey
-          ? transcriptMirrorForDeliveredPayload(
-              {
-                sessionKey: transcriptMirrorSessionKey,
-                agentId: sessionAgentId,
-                storePath: sessionStoreEntry.storePath,
-              },
-              normalizedPayload,
-            )
-          : undefined);
       const result = await routeReplyToOriginating(normalizedPayload, {
         abortSignal,
         kind: "final",
@@ -2274,7 +2292,7 @@ export async function dispatchReplyFromConfig(
           );
         }
         if (isRoutedReplyDelivered(result)) {
-          await mirrorInternalSourceReplyToTranscript({
+          await mirrorDeliveredReplyToTranscript({
             metadata: sourceReplyTranscriptMirror,
             cfg,
           });
@@ -2285,6 +2303,40 @@ export async function dispatchReplyFromConfig(
         };
       }
       throwIfFinalDeliveryAborted();
+      const transcriptMirrorSessionKey =
+        acpDispatchSessionKey ?? sessionStoreEntry.sessionKey ?? sessionKey;
+      const transcriptMirrorSourceId =
+        normalizeOptionalString(messageIdForHook) ??
+        normalizeOptionalString(params.replyOptions?.runId);
+      const transcriptMirror =
+        sourceReplyTranscriptMirror ??
+        (!hasTranscriptOwner &&
+        normalizedCurrentSurface === "slack" &&
+        hasVisibleFinalContent &&
+        transcriptMirrorSessionKey
+          ? transcriptMirrorForDeliveredPayload(
+              {
+                sessionKey: transcriptMirrorSessionKey,
+                agentId: sessionAgentId,
+                ...(transcriptMirrorSessionKey === sessionStoreEntry.sessionKey &&
+                sessionStoreEntry.entry?.sessionId
+                  ? { expectedSessionId: sessionStoreEntry.entry.sessionId }
+                  : {}),
+                storePath: sessionStoreEntry.storePath,
+                preferText: true,
+                idempotencyKey: transcriptMirrorSourceId
+                  ? `channel-final:${transcriptMirrorSourceId}:${options.deliveryId ?? "single"}`
+                  : undefined,
+                deliveryMirror: {
+                  kind: "channel-final",
+                  ...(transcriptMirrorSourceId
+                    ? { sourceMessageId: transcriptMirrorSourceId }
+                    : {}),
+                },
+              },
+              normalizedPayload,
+            )
+          : undefined);
       markInboundDedupeReplayUnsafe();
       const finalOutcomeBefore = getDispatcherFinalOutcomeCounts(dispatcher);
       const deliveredTranscriptMirror = captureDeliveredTranscriptMirror({
@@ -2347,7 +2399,10 @@ export async function dispatchReplyFromConfig(
         if (text && !suppressDelivery) {
           const handledReply = await sendFinalPayload(
             { text },
-            { abortSignal: getPreDispatchAbortSignal() },
+            {
+              abortSignal: getPreDispatchAbortSignal(),
+              deliveryId: "before-dispatch",
+            },
           );
           queuedFinal = handledReply.queuedFinal;
           routedFinalCount += handledReply.routedFinalCount;
@@ -3129,7 +3184,7 @@ export async function dispatchReplyFromConfig(
       !sendPolicyDenied &&
       getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression === true &&
       (ctx.InboundEventKind !== "room_event" || explicitCommandTurnCtx);
-    for (const reply of replies) {
+    for (const [replyIndex, reply] of replies.entries()) {
       throwIfDispatchOperationAborted();
       // Suppress reasoning payloads from channel delivery — channels using this
       // generic dispatch path do not have a dedicated reasoning lane.
@@ -3154,7 +3209,7 @@ export async function dispatchReplyFromConfig(
         continue;
       }
       attemptedFinalDelivery = true;
-      const finalReply = await sendFinalPayload(reply);
+      const finalReply = await sendFinalPayload(reply, { deliveryId: String(replyIndex) });
       queuedFinal = finalReply.queuedFinal || queuedFinal;
       routedFinalCount += finalReply.routedFinalCount;
       if (!finalReply.queuedFinal && finalReply.routedFinalCount === 0) {

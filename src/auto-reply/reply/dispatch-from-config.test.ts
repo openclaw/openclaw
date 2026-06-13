@@ -1229,10 +1229,9 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
-  it("mirrors same-channel Slack final replies into the session transcript", async () => {
+  it("mirrors ownerless same-channel Slack finals after successful delivery", async () => {
     setNoAbort();
     mocks.routeReply.mockClear();
-    const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
       Provider: "slack",
@@ -1241,102 +1240,116 @@ describe("dispatchReplyFromConfig", () => {
       OriginatingTo: "channel:C123",
       ChatType: "group",
       SessionKey: "agent:main:slack:channel:C123",
+      MessageSid: "slack-message-1",
     });
-
-    const replyResolver = vi.fn(
-      async () => ({ text: "Slack channel reply" }) satisfies ReplyPayload,
-    );
     transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
 
-    const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyOptions: { runId: "slack-run-1" },
+      replyResolver: async () => ({ text: "Slack command reply" }),
+    });
 
     expect(result.queuedFinal).toBe(true);
     expect(mocks.routeReply).not.toHaveBeenCalled();
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "Slack channel reply" });
     expect(transcriptMocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
       sessionKey: "agent:main:slack:channel:C123",
       agentId: "main",
-      text: "Slack channel reply",
+      text: "Slack command reply",
       mediaUrls: undefined,
-      idempotencyKey: undefined,
+      idempotencyKey: "channel-final:slack-message-1:0",
+      deliveryMirror: {
+        kind: "channel-final",
+        sourceMessageId: "slack-message-1",
+      },
       storePath: "/tmp/mock-sessions.json",
       updateMode: "inline",
-      config: cfg,
+      config: emptyConfig,
+      beforeMessageWrite: expect.any(Function),
     });
   });
 
-  it("mirrors same-channel Slack final replies after dispatcher hook rewrites", async () => {
+  it.each([
+    ["embedded", { assistantMessageIndex: 7 }],
+    ["CLI", { assistantTranscriptOwned: true }],
+  ])("does not mirror %s finals with a runtime transcript owner", async (_name, metadata) => {
     setNoAbort();
-    mocks.routeReply.mockClear();
-    const cfg = emptyConfig;
     const dispatcher = createDispatcher();
-    dispatcher.appendBeforeDeliver?.((payload, info) => {
-      if (info.kind !== "final") {
-        return payload;
-      }
-      return { ...payload, text: "Redacted Slack reply" };
-    });
-    const ctx = buildTestCtx({
-      Provider: "slack",
-      Surface: "slack",
-      OriginatingChannel: "slack",
-      OriginatingTo: "channel:C123",
-      ChatType: "group",
-      SessionKey: "agent:main:slack:channel:C123",
-    });
-
-    const replyResolver = vi.fn(
-      async () => ({ text: "Secret Slack reply" }) satisfies ReplyPayload,
-    );
     transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
 
-    const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "slack",
+        Surface: "slack",
+        OriginatingChannel: "slack",
+        OriginatingTo: "channel:C123",
+        SessionKey: "agent:main:slack:channel:C123",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () =>
+        setReplyPayloadMetadata({ text: "Persisted runtime reply" }, metadata),
+    });
 
     expect(result.queuedFinal).toBe(true);
-    expect(mocks.routeReply).not.toHaveBeenCalled();
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "Secret Slack reply" });
-    expect(transcriptMocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
-      sessionKey: "agent:main:slack:channel:C123",
-      agentId: "main",
-      text: "Redacted Slack reply",
-      mediaUrls: undefined,
-      idempotencyKey: undefined,
-      storePath: "/tmp/mock-sessions.json",
-      updateMode: "inline",
-      config: cfg,
-    });
+    expect(transcriptMocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
   });
 
-  it("does not mirror same-channel Slack final replies stripped by dispatcher hooks", async () => {
+  it("mirrors the delivered ownerless Slack text after dispatcher hook rewrites", async () => {
     setNoAbort();
-    mocks.routeReply.mockClear();
-    const cfg = emptyConfig;
     const dispatcher = createDispatcher();
-    dispatcher.appendBeforeDeliver?.((payload, info) => {
-      if (info.kind !== "final") {
-        return payload;
-      }
-      return { ...payload, text: "", mediaUrl: undefined, mediaUrls: undefined };
-    });
-    const ctx = buildTestCtx({
-      Provider: "slack",
-      Surface: "slack",
-      OriginatingChannel: "slack",
-      OriginatingTo: "channel:C123",
-      ChatType: "group",
-      SessionKey: "agent:main:slack:channel:C123",
-    });
-
-    const replyResolver = vi.fn(
-      async () => ({ text: "Secret Slack reply" }) satisfies ReplyPayload,
+    dispatcher.appendBeforeDeliver?.((payload, info) =>
+      info.kind === "final" ? { ...payload, text: "Redacted Slack reply" } : payload,
     );
     transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
 
-    const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "slack",
+        Surface: "slack",
+        OriginatingChannel: "slack",
+        OriginatingTo: "channel:C123",
+        SessionKey: "agent:main:slack:channel:C123",
+        MessageSid: "slack-message-2",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => ({ text: "Secret Slack reply" }),
+    });
 
-    expect(result.queuedFinal).toBe(true);
-    expect(mocks.routeReply).not.toHaveBeenCalled();
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "Secret Slack reply" });
+    expect(transcriptMocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Redacted Slack reply",
+        idempotencyKey: "channel-final:slack-message-2:0",
+      }),
+    );
+  });
+
+  it("does not mirror ownerless Slack finals removed by dispatcher hooks", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    dispatcher.appendBeforeDeliver?.((payload, info) =>
+      info.kind === "final"
+        ? { ...payload, text: "", mediaUrl: undefined, mediaUrls: undefined }
+        : payload,
+    );
+    transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "slack",
+        Surface: "slack",
+        OriginatingChannel: "slack",
+        OriginatingTo: "channel:C123",
+        SessionKey: "agent:main:slack:channel:C123",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => ({ text: "Hidden Slack reply" }),
+    });
+
     expect(transcriptMocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
   });
 
@@ -8866,8 +8879,11 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       text: "message tool reply",
       mediaUrls: undefined,
       idempotencyKey: "run-1:internal-source-reply:0",
+      expectedSessionId: "s1",
+      storePath: "/tmp/mock-sessions.json",
       updateMode: "inline",
       config: emptyConfig,
+      beforeMessageWrite: expect.any(Function),
     });
   });
 
@@ -8927,8 +8943,11 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       text: "redacted hook reply",
       mediaUrls: ["https://example.com/redacted.png"],
       idempotencyKey: "run-1:internal-source-reply:rewritten",
+      expectedSessionId: "s1",
+      storePath: "/tmp/mock-sessions.json",
       updateMode: "inline",
       config: emptyConfig,
+      beforeMessageWrite: expect.any(Function),
     });
   });
 
