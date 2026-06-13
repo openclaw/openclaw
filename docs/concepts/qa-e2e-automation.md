@@ -318,17 +318,17 @@ Matrix has a [dedicated page](/concepts/qa-matrix) because of its scenario count
 
 These lanes register through `extensions/qa-lab/src/live-transports/shared/live-transport-cli.ts` and accept the same flags:
 
-| Flag                                  | Default                                            | Description                                                                                                           |
-| ------------------------------------- | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `--scenario <id>`                     | -                                                  | Run only this scenario. Repeatable.                                                                                   |
-| `--output-dir <path>`                 | `<repo>/.artifacts/qa-e2e/<transport>-<timestamp>` | Where reports/summary/observed messages and the output log are written. Relative paths resolve against `--repo-root`. |
-| `--repo-root <path>`                  | `process.cwd()`                                    | Repository root when invoking from a neutral cwd.                                                                     |
-| `--sut-account <id>`                  | `sut`                                              | Temporary account id inside the QA gateway config.                                                                    |
-| `--provider-mode <mode>`              | `live-frontier`                                    | `mock-openai` or `live-frontier` (legacy `live-openai` still works).                                                  |
-| `--model <ref>` / `--alt-model <ref>` | provider default                                   | Primary/alternate model refs.                                                                                         |
-| `--fast`                              | off                                                | Provider fast mode where supported.                                                                                   |
-| `--credential-source <env\|convex>`   | `env`                                              | See [Convex credential pool](#convex-credential-pool).                                                                |
-| `--credential-role <maintainer\|ci>`  | `ci` in CI, `maintainer` otherwise                 | Role used when `--credential-source convex`.                                                                          |
+| Flag                                  | Default                                            | Description                                                                                                                                     |
+| ------------------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--scenario <id>`                     | -                                                  | Run only this scenario. Repeatable.                                                                                                             |
+| `--output-dir <path>`                 | `<repo>/.artifacts/qa-e2e/<transport>-<timestamp>` | Where reports, summaries, evidence, transport-specific artifacts, and the output log are written. Relative paths resolve against `--repo-root`. |
+| `--repo-root <path>`                  | `process.cwd()`                                    | Repository root when invoking from a neutral cwd.                                                                                               |
+| `--sut-account <id>`                  | `sut`                                              | Temporary account id inside the QA gateway config.                                                                                              |
+| `--provider-mode <mode>`              | `live-frontier`                                    | `mock-openai` or `live-frontier` (legacy `live-openai` still works).                                                                            |
+| `--model <ref>` / `--alt-model <ref>` | provider default                                   | Primary/alternate model refs.                                                                                                                   |
+| `--fast`                              | off                                                | Provider fast mode where supported.                                                                                                             |
+| `--credential-source <env\|convex>`   | `env`                                              | See [Convex credential pool](#convex-credential-pool).                                                                                          |
+| `--credential-role <maintainer\|ci>`  | `ci` in CI, `maintainer` otherwise                 | Role used when `--credential-source convex`.                                                                                                    |
 
 Each lane exits non-zero on any failed scenario. `--allow-failures` writes artifacts without setting a failing exit code.
 

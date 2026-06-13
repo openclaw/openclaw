@@ -351,11 +351,11 @@ gh workflow run package-acceptance.yml --ref main \
     want artifacts without a failing exit code.
   - Requires two distinct bots in the same private group, with the SUT bot exposing a Telegram username.
   - For stable bot-to-bot observation, enable Bot-to-Bot Communication Mode in `@BotFather` for both bots and ensure the driver bot can observe group bot traffic.
-  - Writes a Telegram QA report, summary, and observed-messages artifact under `.artifacts/qa-e2e/...`. Replying scenarios include RTT from driver send request to observed SUT reply.
+  - Writes a Telegram QA report, summary, and `qa-evidence.json` under `.artifacts/qa-e2e/...`. Replying scenarios include RTT from driver send request to observed SUT reply.
 
 `Mantis Telegram Live` is the PR-evidence wrapper around this lane. It runs the
-candidate ref with Convex-leased Telegram credentials, renders the redacted
-observed-message transcript in a Crabbox desktop browser, records MP4 evidence,
+candidate ref with Convex-leased Telegram credentials, renders the redacted QA
+report/evidence bundle in a Crabbox desktop browser, records MP4 evidence,
 generates a motion-trimmed GIF, uploads the artifact bundle, and posts inline PR
 evidence through the Mantis GitHub App when `pr_number` is set. Maintainers can
 start it from the Actions UI through `Mantis Scenario` (`scenario_id:
