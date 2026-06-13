@@ -533,8 +533,144 @@ describe("logs cli", () => {
       );
       const output = stdoutWrites.join("");
       expect(output).toContain("journal bridge line");
+      expect(output).toContain("Log file: /tmp/openclaw.log");
       expect(output).toContain("rpc recovered line");
       expect(output).toContain("2026-05-29T20:00:00.000");
+      expect(exitSpy).toHaveBeenCalledWith(1);
+    });
+
+    it("prints source changes when Gateway RPC falls back to journal and recovers", async () => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      const closeError = new GatewayTransportError({
+        kind: "closed",
+        code: 1006,
+        reason: "abnormal closure",
+        connectionDetails: {
+          url: "ws://127.0.0.1:18789",
+          urlSource: "local loopback",
+          message: "",
+        },
+        message: "gateway closed (1006 abnormal closure): abnormal closure",
+      });
+      callGatewayFromCli
+        .mockResolvedValueOnce({
+          file: "/tmp/openclaw.log",
+          cursor: 5,
+          lines: ["initial rpc line"],
+        })
+        .mockRejectedValueOnce(closeError)
+        .mockResolvedValueOnce({
+          file: "/tmp/openclaw.log",
+          cursor: 10,
+          lines: ["recovered rpc line"],
+        })
+        .mockRejectedValueOnce(new Error("stop after recovered cursor probe"));
+      readSystemdServiceRuntime.mockResolvedValue({ status: "running", pid: 2557 });
+      execFileUtf8Tail.mockResolvedValueOnce({
+        stdout: ["journal bridge line", "-- cursor: s=abc"].join("\n"),
+        stderr: "",
+        code: 0,
+        truncated: false,
+      });
+
+      const stderrWrites = captureStderrWrites();
+      const stdoutWrites = captureStdoutWrites();
+      const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+
+      await runLogsCli(["logs", "--follow", "--plain", "--interval", "1"]);
+
+      expect(readConfiguredLogTail).not.toHaveBeenCalled();
+      expect(callGatewayFromCli).toHaveBeenCalledTimes(4);
+      expect(execFileUtf8Tail).toHaveBeenCalledTimes(1);
+      const output = stdoutWrites.join("");
+      expect(output.match(/Log file: \/tmp\/openclaw\.log/g)).toHaveLength(2);
+      expect(output).toContain(
+        "Log source: journalctl --user --boot --user-unit=openclaw-gateway.service _PID=2557",
+      );
+      expect(output).toContain("initial rpc line");
+      expect(output).toContain("journal bridge line");
+      expect(output).toContain("recovered rpc line");
+      expect(stderrWrites.join("")).toContain("reading active systemd gateway journal");
+      expect(exitSpy).toHaveBeenCalledWith(1);
+    });
+
+    it("emits source meta records in --follow --json when fallback recovers", async () => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      const closeError = new GatewayTransportError({
+        kind: "closed",
+        code: 1006,
+        reason: "abnormal closure",
+        connectionDetails: {
+          url: "ws://127.0.0.1:18789",
+          urlSource: "local loopback",
+          message: "",
+        },
+        message: "gateway closed (1006 abnormal closure): abnormal closure",
+      });
+      callGatewayFromCli
+        .mockResolvedValueOnce({
+          file: "/tmp/openclaw.log",
+          cursor: 5,
+          lines: ["initial rpc line"],
+        })
+        .mockRejectedValueOnce(closeError)
+        .mockResolvedValueOnce({
+          file: "/tmp/openclaw.log",
+          cursor: 10,
+          lines: ["recovered rpc line"],
+        })
+        .mockRejectedValueOnce(new Error("stop after recovered cursor probe"));
+      readSystemdServiceRuntime.mockResolvedValue({ status: "running", pid: 2557 });
+      execFileUtf8Tail.mockResolvedValueOnce({
+        stdout: ["journal bridge line", "-- cursor: s=abc"].join("\n"),
+        stderr: "",
+        code: 0,
+        truncated: false,
+      });
+
+      const stderrWrites = captureStderrWrites();
+      const stdoutWrites = captureStdoutWrites();
+      const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+
+      await runLogsCli(["logs", "--follow", "--json", "--interval", "1"]);
+
+      const records = stdoutWrites
+        .join("")
+        .split("\n")
+        .filter((line) => line.length > 0)
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      const metaRecords = records.filter((record) => record.type === "meta");
+      expect(metaRecords).toEqual([
+        expect.objectContaining({
+          type: "meta",
+          file: "/tmp/openclaw.log",
+          sourceKind: "file",
+          cursor: 5,
+        }),
+        expect.objectContaining({
+          type: "meta",
+          source:
+            "journalctl --user --boot --user-unit=openclaw-gateway.service _PID=2557",
+          sourceKind: "journal",
+          service: { pid: 2557, unit: "openclaw-gateway.service" },
+          cursor: "s=abc",
+          localFallback: true,
+        }),
+        expect.objectContaining({
+          type: "meta",
+          file: "/tmp/openclaw.log",
+          sourceKind: "file",
+          cursor: 10,
+        }),
+      ]);
+      expect(records).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ type: "raw", raw: "initial rpc line" }),
+          expect.objectContaining({ type: "raw", raw: "journal bridge line" }),
+          expect.objectContaining({ type: "raw", raw: "recovered rpc line" }),
+        ]),
+      );
+      expect(stderrWrites.join("")).toContain("Gateway not reachable");
       expect(exitSpy).toHaveBeenCalledWith(1);
     });
 
