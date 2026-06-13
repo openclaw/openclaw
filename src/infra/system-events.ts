@@ -24,9 +24,6 @@ export type SystemEvent = {
   deliveryContext?: DeliveryContext;
   sessionDeliveryAckId?: string;
   sessionDeliveryAckStateDir?: string;
-  forceSenderIsOwnerFalse?: boolean;
-  /** @deprecated Use forceSenderIsOwnerFalse. Kept for installed plugin compatibility. */
-  trusted?: boolean;
   /**
    * W3C `traceparent` captured at enqueue-time so the substrate-queue drain can
    * reconstruct the producer trace at announce/deliver time. Per RFC §6.7 the
@@ -56,8 +53,12 @@ type SystemEventOptions = {
   deliveryContext?: DeliveryContext;
   sessionDeliveryAckId?: string;
   sessionDeliveryAckStateDir?: string;
-  forceSenderIsOwnerFalse?: boolean;
-  /** @deprecated Use forceSenderIsOwnerFalse. Kept for installed plugin compatibility. */
+  /**
+   * Trusted-internal enrichment marker (continuation/OCR/transcripts). Accepted
+   * for source compatibility with continuation producers; the anti-spoof guard
+   * is now unconditional at the queue boundary (`sanitizeInboundSystemTags`), so
+   * this flag no longer gates sanitization.
+   */
   trusted?: boolean;
   /**
    * Optional W3C `traceparent` to attach to the queued event for cross-boundary
@@ -143,19 +144,9 @@ export function enqueueSystemEventEntry(
 ): SystemEvent | null {
   const key = requireSessionKey(options.sessionKey);
   const entry = getOrCreateSessionQueue(key);
-  // Untrusted producers (channel/plugin payloads downgraded via
-  // `forceSenderIsOwnerFalse`/legacy `trusted:false`) get their nested
-  // system-marker spoofs neutralized at the queue boundary, restoring the
-  // guard removed in b7273f36d7. This is defense-in-depth alongside the
-  // drain-layer sanitizer (`session-system-events.ts`): even if a queued
-  // entry is later rendered via an alternate drain/heartbeat path that does
-  // not re-apply the trust-gated sanitizer, a stored spoof can never reach a
-  // prompt. Trusted-internal enrichment (OCR/transcripts/continuation) is
-  // preserved verbatim by deliberate design — see the trusted-default
-  // regression anchors in system-events.test.ts. The drain-layer sanitizer is
-  // idempotent, so double-sanitizing the untrusted path is a no-op.
-  const rawText = resolveEventOwnerDowngrade(options) ? sanitizeInboundSystemTags(text) : text;
-  const cleaned = rawText.trim();
+  // These entries are rendered as `System:` lines, so strip nested system-marker
+  // spoofs at the queue boundary before any plugin/channel text reaches a prompt.
+  const cleaned = sanitizeInboundSystemTags(text).trim();
   if (!cleaned) {
     return null;
   }
@@ -165,10 +156,6 @@ export function enqueueSystemEventEntry(
     return null;
   } // skip consecutive duplicates
   const normalizedTraceparent = normalizeTraceparent(options?.traceparent);
-  const forceSenderIsOwnerFalse =
-    options.forceSenderIsOwnerFalse ??
-    // Preserve the old plugin SDK contract without carrying trust labels into prompts.
-    options.trusted === false;
   applyContextKeyPolicy(entry, normalizedContextKey);
   const event: SystemEvent = {
     text: cleaned,
@@ -179,7 +166,6 @@ export function enqueueSystemEventEntry(
     ...(options.sessionDeliveryAckStateDir
       ? { sessionDeliveryAckStateDir: options.sessionDeliveryAckStateDir }
       : {}),
-    forceSenderIsOwnerFalse,
     ...(normalizedTraceparent ? { traceparent: normalizedTraceparent } : {}),
   };
   entry.queue.push(event);
@@ -216,12 +202,6 @@ function areDeliveryContextsEqual(left?: DeliveryContext, right?: DeliveryContex
   return channelRouteDedupeKey(left) === channelRouteDedupeKey(right);
 }
 
-export function resolveEventOwnerDowngrade(
-  event: Pick<SystemEvent, "forceSenderIsOwnerFalse" | "trusted">,
-): boolean {
-  return event.forceSenderIsOwnerFalse ?? event.trusted === false;
-}
-
 function isDuplicateSystemEvent(
   existing: SystemEvent,
   incoming: Pick<SystemEvent, "text" | "contextKey" | "deliveryContext">,
@@ -240,7 +220,6 @@ function areSystemEventsEqual(left: SystemEvent, right: SystemEvent): boolean {
     (left.contextKey ?? null) === (right.contextKey ?? null) &&
     left.sessionDeliveryAckId === right.sessionDeliveryAckId &&
     left.sessionDeliveryAckStateDir === right.sessionDeliveryAckStateDir &&
-    left.forceSenderIsOwnerFalse === resolveEventOwnerDowngrade(right) &&
     (left.traceparent ?? undefined) === (right.traceparent ?? undefined) &&
     areDeliveryContextsEqual(left.deliveryContext, right.deliveryContext)
   );

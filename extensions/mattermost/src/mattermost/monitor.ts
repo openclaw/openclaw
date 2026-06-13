@@ -2061,7 +2061,6 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     core.system.enqueueSystemEvent(eventText, {
       sessionKey,
       contextKey: `mattermost:reaction:${postId}:${emojiName}:${userId}:${action}`,
-      forceSenderIsOwnerFalse: true,
     });
 
     logVerboseMessage(
