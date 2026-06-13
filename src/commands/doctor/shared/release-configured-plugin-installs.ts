@@ -367,7 +367,7 @@ export async function maybeRunConfiguredPluginInstallReleaseStep(params: {
     });
     const postInstallDoctorResult = createPostInstallDoctorResultForDeferredRepair({
       updateInProgress,
-      changes: repaired.changes,
+      details: repaired.deferredRepairDetails ?? [],
       warnings: repaired.warnings,
     });
     return {
@@ -391,7 +391,7 @@ export async function maybeRunConfiguredPluginInstallReleaseStep(params: {
   const completed = repaired.warnings.length === 0 && !updateInProgress;
   const postInstallDoctorResult = createPostInstallDoctorResultForDeferredRepair({
     updateInProgress,
-    changes: repaired.changes,
+    details: repaired.deferredRepairDetails ?? [],
     warnings: repaired.warnings,
   });
   return {
@@ -405,11 +405,11 @@ export async function maybeRunConfiguredPluginInstallReleaseStep(params: {
 
 function createPostInstallDoctorResultForDeferredRepair(params: {
   updateInProgress: boolean;
-  changes: readonly string[];
+  details: readonly string[];
   warnings: readonly string[];
 }): UpdatePostInstallDoctorResult | undefined {
-  if (!params.updateInProgress || params.warnings.length > 0 || params.changes.length === 0) {
+  if (!params.updateInProgress || params.warnings.length > 0 || params.details.length === 0) {
     return undefined;
   }
-  return createDeferredConfiguredPluginRepairDoctorResult(params.changes);
+  return createDeferredConfiguredPluginRepairDoctorResult(params.details);
 }

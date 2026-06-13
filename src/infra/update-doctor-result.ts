@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 // IPC contract between package update parents and the post-install doctor child.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 
 export const UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV =
   "OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH";
@@ -28,7 +28,10 @@ export type UpdatePostInstallDoctorResult = {
 };
 
 export function createUpdatePostInstallDoctorResultPath(): string {
-  return path.join(os.tmpdir(), `openclaw-update-doctor-${process.pid}-${randomUUID()}.json`);
+  return path.join(
+    resolvePreferredOpenClawTmpDir(),
+    `openclaw-update-doctor-${process.pid}-${randomUUID()}.json`,
+  );
 }
 
 export function createDeferredConfiguredPluginRepairDoctorResult(
