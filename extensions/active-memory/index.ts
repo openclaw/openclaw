@@ -96,6 +96,7 @@ const DEFAULT_PARTIAL_TRANSCRIPT_MAX_CHARS = 32_000;
 const DEFAULT_TRANSCRIPT_READ_MAX_LINES = 2_000;
 const DEFAULT_TRANSCRIPT_READ_MAX_BYTES = 50 * 1024 * 1024;
 const TIMEOUT_PARTIAL_DATA_GRACE_MS = 500;
+const HOOK_TIMEOUT_RECOVERY_GRACE_MS = TIMEOUT_PARTIAL_DATA_GRACE_MS + 1_000;
 const MAX_ACTIVE_MEMORY_SEARCH_QUERY_CHARS = 480;
 const TERMINAL_MEMORY_SEARCH_POLL_INTERVAL_MS = 25;
 
@@ -1788,6 +1789,44 @@ function hasUsableMemoryResultInSessionRecord(
     const text = normalizeOptionalString(details?.text);
     return text !== undefined ? text.length > 0 : /"text"\s*:\s*"(?!")/.test(content);
   }
+  if (toolName === "lcm_grep") {
+    if (
+      typeof details?.totalMatches === "number" &&
+      Number.isFinite(details.totalMatches) &&
+      details.totalMatches > 0
+    ) {
+      return true;
+    }
+    return /^## LCM Grep Results[\s\S]*^\*\*Total matches:\*\*\s+[1-9]\d*$/m.test(content);
+  }
+  if (toolName === "lcm_describe") {
+    const type = normalizeOptionalString(details?.type);
+    if (normalizeOptionalString(details?.id) && (type === "summary" || type === "file")) {
+      return true;
+    }
+    return /^LCM_SUMMARY \S+/m.test(content) || /^## LCM File: \S+/m.test(content);
+  }
+  if (toolName === "lcm_expand_query") {
+    if (
+      typeof details?.expandedSummaryCount === "number" &&
+      Number.isFinite(details.expandedSummaryCount) &&
+      details.expandedSummaryCount > 0 &&
+      Boolean(normalizeOptionalString(details?.answer))
+    ) {
+      return true;
+    }
+    try {
+      const parsed = asRecord(JSON.parse(content));
+      return (
+        typeof parsed?.expandedSummaryCount === "number" &&
+        Number.isFinite(parsed.expandedSummaryCount) &&
+        parsed.expandedSummaryCount > 0 &&
+        Boolean(normalizeOptionalString(parsed?.answer))
+      );
+    } catch {
+      return false;
+    }
+  }
   return false;
 }
 
@@ -2877,19 +2916,13 @@ async function maybeResolveActiveRecall(params: {
     }
 
     if (raceResult === TIMEOUT_SENTINEL) {
-      const result: ActiveRecallResult = fallbackHasUsableMemoryResult
-        ? {
-            status: "timeout",
-            elapsedMs: Date.now() - startedAt,
-            summary: null,
-            searchDebug: fallbackSearchDebug,
-          }
-        : await buildTimeoutRecallResult({
-            elapsedMs: Date.now() - startedAt,
-            maxSummaryChars: params.config.maxSummaryChars,
-            sessionFile,
-            subagentPromise,
-          });
+      const result = await buildTimeoutRecallResult({
+        elapsedMs: Date.now() - startedAt,
+        maxSummaryChars: params.config.maxSummaryChars,
+        sessionFile,
+        searchDebug: fallbackSearchDebug,
+        subagentPromise,
+      });
       if (params.config.logging) {
         params.api.logger.info?.(
           `${logPrefix} done status=${result.status} elapsedMs=${String(result.elapsedMs)} summaryChars=${String(result.summary?.length ?? 0)}`,
@@ -3149,7 +3182,10 @@ export default definePluginEntry({
       },
     });
 
-    const beforePromptBuildTimeoutMs = config.timeoutMs + config.setupGraceTimeoutMs;
+    // The recall watchdog owns the configured deadline. The hook needs a small
+    // completion allowance for bounded abort recovery and transcript reading.
+    const beforePromptBuildTimeoutMs =
+      config.timeoutMs + config.setupGraceTimeoutMs + HOOK_TIMEOUT_RECOVERY_GRACE_MS;
     api.on(
       "before_prompt_build",
       async (event, ctx) => {

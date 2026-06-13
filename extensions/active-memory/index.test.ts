@@ -394,8 +394,8 @@ describe("active-memory plugin", () => {
     const [hookName, handler, options] = firstHookRegistration();
     expect(hookName).toBe("before_prompt_build");
     expect(typeof handler).toBe("function");
-    expect(options).toEqual({ timeoutMs: 15_000 });
-    expect(hookOptions.before_prompt_build?.timeoutMs).toBe(15_000);
+    expect(options).toEqual({ timeoutMs: 16_500 });
+    expect(hookOptions.before_prompt_build?.timeoutMs).toBe(16_500);
   });
 
   it("registers before_prompt_build with the configured recall timeout", () => {
@@ -405,7 +405,7 @@ describe("active-memory plugin", () => {
     };
     plugin.register(api as unknown as OpenClawPluginApi);
 
-    expect(hookOptions.before_prompt_build?.timeoutMs).toBe(90_000);
+    expect(hookOptions.before_prompt_build?.timeoutMs).toBe(91_500);
   });
 
   it("registers before_prompt_build with explicit setup grace when configured", () => {
@@ -416,7 +416,7 @@ describe("active-memory plugin", () => {
     };
     plugin.register(api as unknown as OpenClawPluginApi);
 
-    expect(hookOptions.before_prompt_build?.timeoutMs).toBe(120_000);
+    expect(hookOptions.before_prompt_build?.timeoutMs).toBe(121_500);
   });
 
   it("runs recall without recording shared auth-profile failures", async () => {
@@ -2182,6 +2182,108 @@ describe("active-memory plugin", () => {
         ["memory_lookup_custom"],
       ),
     ).toBe(false);
+    expect(
+      testing.hasUsableMemoryResultInSessionRecord(
+        {
+          message: {
+            role: "toolResult",
+            toolName: "lcm_grep",
+            details: { totalMatches: 1, messageCount: 1, summaryCount: 0 },
+            content: [{ type: "text", text: "User usually orders ramen." }],
+          },
+        },
+        ["lcm_grep"],
+      ),
+    ).toBe(true);
+    expect(
+      testing.hasUsableMemoryResultInSessionRecord(
+        {
+          message: {
+            role: "toolResult",
+            toolName: "lcm_grep",
+            details: { totalMatches: 0, messageCount: 0, summaryCount: 0 },
+            content: [{ type: "text", text: "No matches found." }],
+          },
+        },
+        ["lcm_grep"],
+      ),
+    ).toBe(false);
+    expect(
+      testing.hasUsableMemoryResultInSessionRecord(
+        {
+          message: {
+            role: "toolResult",
+            toolName: "lcm_describe",
+            details: { id: "sum_123", type: "summary", summary: { tokenCount: 12 } },
+            content: [{ type: "text", text: "User usually orders ramen." }],
+          },
+        },
+        ["lcm_describe"],
+      ),
+    ).toBe(true);
+    expect(
+      testing.hasUsableMemoryResultInSessionRecord(
+        {
+          message: {
+            role: "toolResult",
+            toolName: "lcm_expand_query",
+            details: {
+              answer: "User usually orders ramen.",
+              expandedSummaryCount: 1,
+              citedIds: ["sum_123"],
+            },
+            content: [{ type: "text", text: '{"answer":"User usually orders ramen."}' }],
+          },
+        },
+        ["lcm_expand_query"],
+      ),
+    ).toBe(true);
+    expect(
+      testing.hasUsableMemoryResultInSessionRecord(
+        {
+          message: {
+            role: "toolResult",
+            toolName: "lcm_grep",
+            details: {
+              persistedDetailsTruncated: true,
+              originalDetailKeys: ["totalMatches", "messages", "summaries"],
+            },
+            content: [
+              {
+                type: "text",
+                text: "## LCM Grep Results\n**Pattern:** `ramen`\n**Total matches:** 2\n\n### Messages",
+              },
+            ],
+          },
+        },
+        ["lcm_grep"],
+      ),
+    ).toBe(true);
+    expect(
+      testing.hasUsableMemoryResultInSessionRecord(
+        {
+          message: {
+            role: "toolResult",
+            toolName: "lcm_expand_query",
+            details: {
+              persistedDetailsTruncated: true,
+              originalDetailKeys: ["answer", "expandedSummaryCount"],
+            },
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  answer: "User usually orders ramen.",
+                  expandedSummaryCount: 1,
+                  citedIds: ["sum_123"],
+                }),
+              },
+            ],
+          },
+        },
+        ["lcm_expand_query"],
+      ),
+    ).toBe(true);
   });
 
   it("replaces stale structured active-memory lines on a later empty run", async () => {
@@ -3329,6 +3431,106 @@ describe("active-memory plugin", () => {
     const lines = getActiveMemoryLines(sessionKey);
     expect(lines).toHaveLength(2);
     expectLinesToContain(lines, "Active Memory: status=ok");
+  });
+
+  it("returns grounded partial text when a later unavailable search reaches the timeout", async () => {
+    testing.setMinimumTimeoutMsForTests(1);
+    testing.setSetupGraceTimeoutMsForTests(0);
+    testing.setTimeoutPartialDataGraceMsForTests(100);
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: 250,
+      logging: true,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    const sessionKey = "agent:main:grounded-terminal-timeout-partial";
+    hoisted.sessionStore[sessionKey] = {
+      sessionId: "s-grounded-terminal-timeout-partial",
+      updatedAt: 0,
+    };
+    runEmbeddedAgent.mockImplementationOnce(
+      async (params: { sessionFile: string; abortSignal?: AbortSignal }) => {
+        await writeTranscriptJsonl(params.sessionFile, [
+          {
+            message: {
+              role: "toolResult",
+              toolName: "memory_search",
+              details: {
+                results: [{ path: "memory/food.md", text: "User usually orders ramen." }],
+              },
+            },
+          },
+          {
+            message: {
+              role: "toolResult",
+              toolName: "memory_search",
+              details: { disabled: true, error: "embedding request failed" },
+            },
+          },
+          {
+            message: {
+              role: "assistant",
+              content: "User usually orders ramen after late flights.",
+            },
+          },
+        ]);
+        return await waitForAbort(params.abortSignal);
+      },
+    );
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what food do i usually order? grounded timeout", messages: [] },
+      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+    );
+
+    expectPrependContextContains(result, "User usually orders ramen after late flights.");
+    const lines = getActiveMemoryLines(sessionKey);
+    expectLinesToContain(lines, "Active Memory: status=timeout_partial");
+  });
+
+  it("uses successful configured custom-tool output as recall evidence", async () => {
+    testing.setMinimumTimeoutMsForTests(1);
+    testing.setSetupGraceTimeoutMsForTests(0);
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: 1_000,
+      toolsAllow: ["lcm_grep", "memory_search"],
+      logging: true,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    const sessionKey = "agent:main:custom-tool-evidence";
+    hoisted.sessionStore[sessionKey] = {
+      sessionId: "s-custom-tool-evidence",
+      updatedAt: 0,
+    };
+    runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
+      await writeTranscriptJsonl(params.sessionFile, [
+        {
+          message: {
+            role: "toolResult",
+            toolName: "lcm_grep",
+            details: { totalMatches: 1, messageCount: 1, summaryCount: 0 },
+            content: [{ type: "text", text: "User usually orders ramen." }],
+          },
+        },
+        {
+          message: {
+            role: "toolResult",
+            toolName: "memory_search",
+            details: { disabled: true, error: "embedding request failed" },
+          },
+        },
+      ]);
+      return { payloads: [{ text: "User usually orders ramen." }] };
+    });
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what food do i usually order? custom evidence", messages: [] },
+      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+    );
+
+    expectPrependContextContains(result, "User usually orders ramen.");
+    expectLinesToContain(getActiveMemoryLines(sessionKey), "Active Memory: status=ok");
   });
 
   it("does not recover arbitrary assistant text without successful memory evidence", async () => {
