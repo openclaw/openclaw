@@ -464,6 +464,7 @@ export async function buildTelegramInboundContextPayload(params: {
       ...(senderId ? { id: senderId } : {}),
       name: senderName,
       username: senderUsername || undefined,
+      isBot: msg.from?.is_bot === true,
     },
     conversation: {
       kind: conversationKind,
