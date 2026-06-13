@@ -596,4 +596,36 @@ describe("deliverReplies message_sent hook", () => {
       expect.objectContaining({ channelId: "slack" }),
     );
   });
+
+  it("uses spoken TTS text as message_sent content for audio-only media replies", async () => {
+    messageHookRunner.hasHooks.mockImplementation((name) => name === "message_sent");
+    sendMock.mockResolvedValue({ messageId: "1700000000.000108", channelId: "C123" });
+
+    await deliverReplies(
+      baseParams({
+        replies: [
+          {
+            mediaUrl: "https://example.com/tts.mp3",
+            audioAsVoice: true,
+            spokenText: "Spoken answer",
+            ttsSupplement: { spokenText: "Spoken answer" },
+          },
+        ],
+      }),
+    );
+
+    expect(sendMock).toHaveBeenCalledWith(
+      "C123",
+      "",
+      expect.objectContaining({ mediaUrl: "https://example.com/tts.mp3" }),
+    );
+    expect(messageHookRunner.runMessageSent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "Spoken answer",
+        success: true,
+        messageId: "1700000000.000108",
+      }),
+      expect.objectContaining({ channelId: "slack" }),
+    );
+  });
 });

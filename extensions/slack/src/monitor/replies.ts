@@ -25,6 +25,10 @@ export function readSlackReplyBlocks(payload: ReplyPayload) {
   return resolveSlackReplyBlocks(payload);
 }
 
+function resolveSentHookContent(payload: ReplyPayload, text: string): string {
+  return text || payload.spokenText?.trim() || payload.ttsSupplement?.spokenText?.trim() || "";
+}
+
 export function resolveDeliveredSlackReplyThreadTs(params: {
   replyToMode: "off" | "first" | "all" | "batched";
   payloadReplyToId?: string;
@@ -121,7 +125,7 @@ export async function deliverReplies(params: {
       continue;
     }
 
-    let contentForSentHook = reply.text;
+    let contentForSentHook = resolveSentHookContent(payload, reply.text);
     let lastSendResult: SlackSendResult | undefined;
     let delivered;
     try {
