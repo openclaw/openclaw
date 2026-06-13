@@ -52,7 +52,10 @@ run_logged_print_heartbeat() {
   previous_term_trap="$(trap -p TERM || true)"
   previous_hup_trap="$(trap -p HUP || true)"
   terminate_heartbeat_command() {
-    kill -TERM "$command_pid" 2>/dev/null || true
+    # Terminate the whole child process group when possible. Some GitHub-hosted
+    # runners can leave the shell wrapper alive if only the recorded command pid
+    # receives TERM while it is waiting on its own foreground child.
+    kill -TERM -- "-$command_pid" 2>/dev/null || kill -TERM "$command_pid" 2>/dev/null || true
     local grace_seconds="${OPENCLAW_DOCKER_E2E_HEARTBEAT_TERM_GRACE_SECONDS:-30}"
     if ! [[ "$grace_seconds" =~ ^[0-9]+$ ]] || [ "$grace_seconds" -lt 1 ]; then
       grace_seconds="30"
@@ -66,7 +69,7 @@ run_logged_print_heartbeat() {
       fi
       /bin/sleep 0.1
     done
-    kill -KILL "$command_pid" 2>/dev/null || true
+    kill -KILL -- "-$command_pid" 2>/dev/null || kill -KILL "$command_pid" 2>/dev/null || true
   }
   restore_heartbeat_traps() {
     if [ -n "$previous_int_trap" ]; then
