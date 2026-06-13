@@ -98,6 +98,8 @@ export function buildAgentSessionKey(params: {
   peer?: RoutePeer | null;
   /** DM session scope. */
   dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
+  /** Group session scope. "main" folds group chats into the agent main session. */
+  groupScope?: "main" | "per-group";
   identityLinks?: Record<string, string[]>;
 }): string {
   const channel = normalizeToken(params.channel) || "unknown";
@@ -110,6 +112,7 @@ export function buildAgentSessionKey(params: {
     peerKind: peer?.kind ?? "direct",
     peerId: peer ? normalizeId(peer.id) || "unknown" : null,
     dmScope: params.dmScope,
+    groupScope: params.groupScope,
     identityLinks: params.identityLinks,
   });
 }
@@ -571,8 +574,9 @@ function buildResolvedRouteCacheKey(params: {
   teamId: string;
   memberRoleIds: string[];
   dmScope: string;
+  groupScope: string;
 }): string {
-  return `${params.channel}\t${params.accountId}\t${formatRouteCachePeer(params.peer)}\t${formatRouteCachePeer(params.parentPeer)}\t${params.guildId || "-"}\t${params.teamId || "-"}\t${formatRoleIdsCacheKey(params.memberRoleIds)}\t${params.dmScope}`;
+  return `${params.channel}\t${params.accountId}\t${formatRouteCachePeer(params.peer)}\t${formatRouteCachePeer(params.parentPeer)}\t${params.guildId || "-"}\t${params.teamId || "-"}\t${formatRoleIdsCacheKey(params.memberRoleIds)}\t${params.dmScope}\t${params.groupScope}`;
 }
 
 function hasGuildConstraint(match: NormalizedBindingMatch): boolean {
@@ -608,6 +612,161 @@ function matchesBindingScope(match: NormalizedBindingMatch, scope: BindingScope)
   return routeBindingScopeMatches(match, scope);
 }
 
+/** Per-binding session-scope override carried by the matched binding. */
+type BindingSessionOverride = {
+  dmScope?: Parameters<typeof buildAgentSessionKey>[0]["dmScope"];
+  groupScope?: Parameters<typeof buildAgentSessionKey>[0]["groupScope"];
+};
+
+/**
+ * Single source of truth for binding matching. Builds the same tier list used
+ * by inbound route resolution and returns the first matching binding (with the
+ * tier that matched it), or null when nothing matches. Shared by
+ * `resolveAgentRoute` (inbound) and `resolveOutboundBindingSessionScope`
+ * (outbound) so both resolve to the same binding for a given peer/scope.
+ */
+function findMatchingBinding(
+  cfg: OpenClawConfig,
+  channel: string,
+  accountId: string,
+  scope: {
+    peer: RoutePeer | null;
+    parentPeer: RoutePeer | null;
+    guildId: string;
+    teamId: string;
+    memberRoleIds: Set<string>;
+  },
+): {
+  binding: EvaluatedBinding["binding"];
+  matchedBy: Exclude<ResolvedAgentRoute["matchedBy"], "default">;
+} | null {
+  const { peer, parentPeer, guildId, teamId, memberRoleIds } = scope;
+  const bindingsIndex = getEvaluatedBindingIndexForChannelAccount(cfg, channel, accountId);
+
+  const baseScope = {
+    guildId,
+    teamId,
+    memberRoleIds,
+  };
+
+  const tiers: Array<{
+    matchedBy: Exclude<ResolvedAgentRoute["matchedBy"], "default">;
+    enabled: boolean;
+    scopePeer: RoutePeer | null;
+    candidates: EvaluatedBinding[];
+    predicate: (candidate: EvaluatedBinding) => boolean;
+  }> = [
+    {
+      matchedBy: "binding.peer",
+      enabled: Boolean(peer),
+      scopePeer: peer,
+      candidates: collectPeerIndexedBindings(bindingsIndex, peer),
+      predicate: (candidate) => candidate.match.peer.state === "valid",
+    },
+    {
+      matchedBy: "binding.peer.parent",
+      enabled: Boolean(parentPeer && parentPeer.id),
+      scopePeer: parentPeer && parentPeer.id ? parentPeer : null,
+      candidates: collectPeerIndexedBindings(bindingsIndex, parentPeer),
+      predicate: (candidate) => candidate.match.peer.state === "valid",
+    },
+    {
+      matchedBy: "binding.peer.wildcard",
+      enabled: Boolean(peer),
+      scopePeer: peer,
+      candidates: bindingsIndex.byPeerWildcard,
+      predicate: (candidate) => candidate.match.peer.state === "wildcard-kind",
+    },
+    {
+      matchedBy: "binding.guild+roles",
+      enabled: Boolean(guildId && memberRoleIds.size > 0),
+      scopePeer: peer,
+      candidates: guildId ? (bindingsIndex.byGuildWithRoles.get(guildId) ?? []) : [],
+      predicate: (candidate) =>
+        hasGuildConstraint(candidate.match) && hasRolesConstraint(candidate.match),
+    },
+    {
+      matchedBy: "binding.guild",
+      enabled: Boolean(guildId),
+      scopePeer: peer,
+      candidates: guildId ? (bindingsIndex.byGuild.get(guildId) ?? []) : [],
+      predicate: (candidate) =>
+        hasGuildConstraint(candidate.match) && !hasRolesConstraint(candidate.match),
+    },
+    {
+      matchedBy: "binding.team",
+      enabled: Boolean(teamId),
+      scopePeer: peer,
+      candidates: teamId ? (bindingsIndex.byTeam.get(teamId) ?? []) : [],
+      predicate: (candidate) => hasTeamConstraint(candidate.match),
+    },
+    {
+      matchedBy: "binding.account",
+      enabled: true,
+      scopePeer: peer,
+      candidates: bindingsIndex.byAccount,
+      predicate: (candidate) => candidate.match.accountPattern !== "*",
+    },
+    {
+      matchedBy: "binding.channel",
+      enabled: true,
+      scopePeer: peer,
+      candidates: bindingsIndex.byChannel,
+      predicate: (candidate) => candidate.match.accountPattern === "*",
+    },
+  ];
+
+  for (const tier of tiers) {
+    if (!tier.enabled) {
+      continue;
+    }
+    const matched = tier.candidates.find(
+      (candidate) =>
+        tier.predicate(candidate) &&
+        matchesBindingScope(candidate.match, {
+          ...baseScope,
+          peer: tier.scopePeer,
+        }),
+    );
+    if (matched) {
+      return { binding: matched.binding, matchedBy: tier.matchedBy };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Resolves the per-binding session-scope override (`dmScope`/`groupScope`) for
+ * an outbound target peer, mirroring inbound binding matching. Returns the
+ * matched binding's `session` override object, or undefined when no binding
+ * matches. Outbound key building uses this to keep inbound and outbound on the
+ * same session for peers/groups with a per-binding override.
+ */
+export function resolveOutboundBindingSessionScope(
+  cfg: OpenClawConfig,
+  channel: string,
+  accountId: string | null | undefined,
+  peer: RoutePeer | null,
+): BindingSessionOverride | undefined {
+  const normalizedChannel = normalizeToken(channel);
+  const normalizedAccountId = normalizeAccountId(accountId);
+  const normalizedPeer = peer
+    ? {
+        kind: normalizeChatType(peer.kind) ?? peer.kind,
+        id: normalizeId(peer.id),
+      }
+    : null;
+  const matched = findMatchingBinding(cfg, normalizedChannel, normalizedAccountId, {
+    peer: normalizedPeer,
+    parentPeer: null,
+    guildId: "",
+    teamId: "",
+    memberRoleIds: new Set(),
+  });
+  return matched?.binding.session;
+}
+
 export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentRoute {
   const channel = normalizeToken(input.channel);
   const accountId = normalizeAccountId(input.accountId);
@@ -622,6 +781,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   const memberRoleIds = input.memberRoleIds ?? [];
   const memberRoleIdSet = new Set(memberRoleIds);
   const dmScope = input.cfg.session?.dmScope ?? "main";
+  const groupScope = input.cfg.session?.groupScope;
   const identityLinks = input.cfg.session?.identityLinks;
   const shouldLogDebug = shouldLogVerbose();
   const parentPeer = input.parentPeer
@@ -643,6 +803,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
         teamId,
         memberRoleIds,
         dmScope,
+        groupScope: groupScope ?? "per-group",
       })
     : "";
   if (routeCache && routeCacheKey) {
@@ -653,21 +814,25 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   }
 
   const bindings = getEvaluatedBindingsForChannelAccount(input.cfg, channel, accountId);
-  const bindingsIndex = getEvaluatedBindingIndexForChannelAccount(input.cfg, channel, accountId);
 
   const choose = (
     agentId: string,
     matchedBy: ResolvedAgentRoute["matchedBy"],
-    sessionOverride?: { dmScope?: Parameters<typeof buildAgentSessionKey>[0]["dmScope"] },
+    sessionOverride?: {
+      dmScope?: Parameters<typeof buildAgentSessionKey>[0]["dmScope"];
+      groupScope?: Parameters<typeof buildAgentSessionKey>[0]["groupScope"];
+    },
   ) => {
     const resolvedAgentId = pickFirstExistingAgentId(input.cfg, agentId);
     const effectiveDmScope = sessionOverride?.dmScope ?? dmScope;
+    const effectiveGroupScope = sessionOverride?.groupScope ?? groupScope;
     const sessionKey = buildAgentSessionKey({
       agentId: resolvedAgentId,
       channel,
       accountId,
       peer,
       dmScope: effectiveDmScope,
+      groupScope: effectiveGroupScope,
       identityLinks,
     });
     const mainSessionKey = normalizeLowercaseStringOrEmpty(
@@ -720,98 +885,21 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
       );
     }
   }
-  // Thread parent inheritance: if peer (thread) didn't match, check parent peer binding
-  const baseScope = {
+  // Thread parent inheritance: if peer (thread) didn't match, check parent peer binding.
+  const matched = findMatchingBinding(input.cfg, channel, accountId, {
+    peer,
+    parentPeer,
     guildId,
     teamId,
     memberRoleIds: memberRoleIdSet,
-  };
-
-  const tiers: Array<{
-    matchedBy: Exclude<ResolvedAgentRoute["matchedBy"], "default">;
-    enabled: boolean;
-    scopePeer: RoutePeer | null;
-    candidates: EvaluatedBinding[];
-    predicate: (candidate: EvaluatedBinding) => boolean;
-  }> = [
-    {
-      matchedBy: "binding.peer",
-      enabled: Boolean(peer),
-      scopePeer: peer,
-      candidates: collectPeerIndexedBindings(bindingsIndex, peer),
-      predicate: (candidate) => candidate.match.peer.state === "valid",
-    },
-    {
-      matchedBy: "binding.peer.parent",
-      enabled: Boolean(parentPeer && parentPeer.id),
-      scopePeer: parentPeer && parentPeer.id ? parentPeer : null,
-      candidates: collectPeerIndexedBindings(bindingsIndex, parentPeer),
-      predicate: (candidate) => candidate.match.peer.state === "valid",
-    },
-    {
-      matchedBy: "binding.peer.wildcard",
-      enabled: Boolean(peer),
-      scopePeer: peer,
-      candidates: bindingsIndex.byPeerWildcard,
-      predicate: (candidate) => candidate.match.peer.state === "wildcard-kind",
-    },
-    {
-      matchedBy: "binding.guild+roles",
-      enabled: Boolean(guildId && memberRoleIds.length > 0),
-      scopePeer: peer,
-      candidates: guildId ? (bindingsIndex.byGuildWithRoles.get(guildId) ?? []) : [],
-      predicate: (candidate) =>
-        hasGuildConstraint(candidate.match) && hasRolesConstraint(candidate.match),
-    },
-    {
-      matchedBy: "binding.guild",
-      enabled: Boolean(guildId),
-      scopePeer: peer,
-      candidates: guildId ? (bindingsIndex.byGuild.get(guildId) ?? []) : [],
-      predicate: (candidate) =>
-        hasGuildConstraint(candidate.match) && !hasRolesConstraint(candidate.match),
-    },
-    {
-      matchedBy: "binding.team",
-      enabled: Boolean(teamId),
-      scopePeer: peer,
-      candidates: teamId ? (bindingsIndex.byTeam.get(teamId) ?? []) : [],
-      predicate: (candidate) => hasTeamConstraint(candidate.match),
-    },
-    {
-      matchedBy: "binding.account",
-      enabled: true,
-      scopePeer: peer,
-      candidates: bindingsIndex.byAccount,
-      predicate: (candidate) => candidate.match.accountPattern !== "*",
-    },
-    {
-      matchedBy: "binding.channel",
-      enabled: true,
-      scopePeer: peer,
-      candidates: bindingsIndex.byChannel,
-      predicate: (candidate) => candidate.match.accountPattern === "*",
-    },
-  ];
-
-  for (const tier of tiers) {
-    if (!tier.enabled) {
-      continue;
+  });
+  if (matched) {
+    if (shouldLogDebug) {
+      logDebug(
+        `[routing] match: matchedBy=${matched.matchedBy} agentId=${matched.binding.agentId}`,
+      );
     }
-    const matched = tier.candidates.find(
-      (candidate) =>
-        tier.predicate(candidate) &&
-        matchesBindingScope(candidate.match, {
-          ...baseScope,
-          peer: tier.scopePeer,
-        }),
-    );
-    if (matched) {
-      if (shouldLogDebug) {
-        logDebug(`[routing] match: matchedBy=${tier.matchedBy} agentId=${matched.binding.agentId}`);
-      }
-      return choose(matched.binding.agentId, tier.matchedBy, matched.binding.session);
-    }
+    return choose(matched.binding.agentId, matched.matchedBy, matched.binding.session);
   }
 
   return choose(resolveDefaultAgentId(input.cfg), "default");

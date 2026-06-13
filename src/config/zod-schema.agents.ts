@@ -46,6 +46,7 @@ const BindingSessionSchema = z
         z.literal("per-account-channel-peer"),
       ])
       .optional(),
+    groupScope: z.union([z.literal("main"), z.literal("per-group")]).optional(),
   })
   .strict();
 

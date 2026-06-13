@@ -12,13 +12,13 @@ session based on where it came from -- DMs, group chats, cron jobs, etc.
 
 ## How messages are routed
 
-| Source          | Behavior                  |
-| --------------- | ------------------------- |
-| Direct messages | Shared session by default |
-| Group chats     | Isolated per group        |
-| Rooms/channels  | Isolated per room         |
-| Cron jobs       | Fresh session per run     |
-| Webhooks        | Isolated per hook         |
+| Source          | Behavior                                       |
+| --------------- | ---------------------------------------------- |
+| Direct messages | Shared session by default                      |
+| Group chats     | Isolated per group (optionally folded to main) |
+| Rooms/channels  | Isolated per room                              |
+| Cron jobs       | Fresh session per run                          |
+| Webhooks        | Isolated per hook                              |
 
 ## DM isolation
 
@@ -61,6 +61,32 @@ another linked channel without starting a new session. See
 troubleshooting.
 
 Verify your setup with `openclaw security audit`.
+
+## Group isolation
+
+By default, each group chat (group, room, or channel) gets its own session, so
+conversations in different groups stay separate. Folding group chats into the
+agent's main session is opt-in.
+
+**To fold group chats into the main session:**
+
+```json5
+{
+  session: {
+    groupScope: "main", // group chats share the agent main session
+  },
+}
+```
+
+Options:
+
+- `per-group` (default) -- each group chat gets its own session.
+- `main` -- all group chats fold into the agent's main session
+  (`agent:<id>:main`), sharing context with the main conversation.
+
+This mirrors `dmScope` but applies to non-direct (group/room/channel) peers.
+`dmScope` and `groupScope` are independent: you can isolate DMs while folding
+groups into main, or vice versa.
 
 ## Session lifecycle
 

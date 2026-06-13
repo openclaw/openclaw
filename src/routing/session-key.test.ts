@@ -255,6 +255,56 @@ describe("session key canonicalization", () => {
   });
 });
 
+describe("buildAgentPeerSessionKey groupScope", () => {
+  it("folds group peers into the agent main session when groupScope is main", () => {
+    expect(
+      buildAgentPeerSessionKey({
+        agentId: "main",
+        channel: "telegram",
+        peerKind: "group",
+        peerId: "-1001234567890",
+        groupScope: "main",
+      }),
+    ).toBe("agent:main:main");
+  });
+
+  it("keeps the group's own session key when groupScope is per-group", () => {
+    expect(
+      buildAgentPeerSessionKey({
+        agentId: "main",
+        channel: "telegram",
+        peerKind: "group",
+        peerId: "-1001234567890",
+        groupScope: "per-group",
+      }),
+    ).toBe("agent:main:telegram:group:-1001234567890");
+  });
+
+  it("defaults to per-group when groupScope is unset", () => {
+    expect(
+      buildAgentPeerSessionKey({
+        agentId: "main",
+        channel: "telegram",
+        peerKind: "group",
+        peerId: "-1001234567890",
+      }),
+    ).toBe("agent:main:telegram:group:-1001234567890");
+  });
+
+  it("does not affect direct peers", () => {
+    expect(
+      buildAgentPeerSessionKey({
+        agentId: "main",
+        channel: "telegram",
+        peerKind: "direct",
+        peerId: "7550356539",
+        dmScope: "per-peer",
+        groupScope: "main",
+      }),
+    ).toBe("agent:main:direct:7550356539");
+  });
+});
+
 describe("scopedHeartbeatWakeOptions", () => {
   it("remaps ephemeral cron run sessions to agent main key", () => {
     const result = scopedHeartbeatWakeOptions("agent:main:cron:backup:run:abc", {
