@@ -114,27 +114,29 @@ export function loadProjectContextFiles(options: {
   // Only walk ancestor directories if cwd is inside the home boundary.
   // This prevents untrusted AGENTS.md files placed outside the user's home
   // from being injected into context (e.g. on multi-tenant or shared systems).
-  const cwdWithinBoundary =
+  const startsWithinBoundary =
     currentDir === homeBoundary || currentDir.startsWith(homeBoundary + "/");
 
-  while (cwdWithinBoundary) {
-    const contextFile = loadContextFileFromDir(currentDir);
-    if (contextFile && !seenPaths.has(contextFile.path)) {
-      ancestorContextFiles.unshift(contextFile);
-      seenPaths.add(contextFile.path);
-    }
+  if (startsWithinBoundary) {
+    while (true) {
+      const contextFile = loadContextFileFromDir(currentDir);
+      if (contextFile && !seenPaths.has(contextFile.path)) {
+        ancestorContextFiles.unshift(contextFile);
+        seenPaths.add(contextFile.path);
+      }
 
-    // Stop at the home directory boundary: load context from the home dir
-    // itself but do not walk above it.
-    if (currentDir === homeBoundary || currentDir === root) {
-      break;
-    }
+      // Stop at the home directory boundary: load context from the home dir
+      // itself but do not walk above it.
+      if (currentDir === homeBoundary || currentDir === root) {
+        break;
+      }
 
-    const parentDir = resolve(currentDir, "..");
-    if (parentDir === currentDir) {
-      break;
+      const parentDir = resolve(currentDir, "..");
+      if (parentDir === currentDir) {
+        break;
+      }
+      currentDir = parentDir;
     }
-    currentDir = parentDir;
   }
 
   contextFiles.push(...ancestorContextFiles);

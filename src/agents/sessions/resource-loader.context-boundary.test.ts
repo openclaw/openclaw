@@ -12,13 +12,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // var is function-scoped and hoisted (no TDZ), so vi.mock factory can read it.
 // eslint-disable-next-line no-var
-var __homedirOverride: string | undefined;
+var homedirOverride: string | undefined;
 
 vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:os")>();
   return {
     ...actual,
-    homedir: () => __homedirOverride ?? actual.homedir(),
+    homedir: () => homedirOverride ?? actual.homedir(),
   };
 });
 
@@ -55,11 +55,11 @@ describe("loadProjectContextFiles ancestor boundary", () => {
     fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), OUTSIDE_AGENTS_MD, "utf8");
 
     // Set the homedir override for boundary enforcement
-    __homedirOverride = fakeHomeDir;
+    homedirOverride = fakeHomeDir;
   });
 
   afterEach(() => {
-    __homedirOverride = undefined;
+    homedirOverride = undefined;
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
