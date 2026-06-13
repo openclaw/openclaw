@@ -1753,7 +1753,7 @@
   background: var(--ok);
 }
 
-.cfg-toggle input:focus + .cfg-toggle__track {
+.cfg-toggle input:focus-visible + .cfg-toggle__track {
   box-shadow: var(--focus-ring);
 }
 
