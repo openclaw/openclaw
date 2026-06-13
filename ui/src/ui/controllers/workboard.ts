@@ -3343,7 +3343,7 @@ export async function stopWorkboardCard(params: {
           );
         }
       } catch (error) {
-        if (!sessionKey) {
+        if (!sessionKey || !isMissingTaskLookupError(error, taskId)) {
           throw error;
         }
         taskCancellationError = error;

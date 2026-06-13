@@ -4451,7 +4451,10 @@ describe("workboard controller", () => {
     state.cards = [linked];
     const client = createClient((method) => {
       if (method === "tasks.cancel") {
-        throw new Error("task not found: task-pruned");
+        throw new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: "task not found: task-pruned",
+        });
       }
       if (method === "chat.abort") {
         return { aborted: true, runIds: ["run-1"] };
@@ -4475,6 +4478,39 @@ describe("workboard controller", () => {
     });
     expect(state.cards).toEqual([blocked]);
     expect(state.error).toBeNull();
+  });
+
+  it("reports task cancellation errors without aborting the linked session", async () => {
+    const host = {};
+    const linked = {
+      ...sampleCard,
+      status: "running" as const,
+      sessionKey: sampleTaskSessionKey,
+      runId: "run-1",
+      taskId: "task-1",
+    };
+    const state = getWorkboardState(host);
+    state.cards = [linked];
+    state.tasksByCardId.set(linked.id, sampleTask);
+    const client = createClient((method) => {
+      if (method === "tasks.cancel") {
+        throw new Error("task ledger unavailable");
+      }
+      if (method === "chat.abort") {
+        return { aborted: true, runIds: ["run-1"] };
+      }
+      return { card: { ...linked, status: "blocked" } };
+    });
+
+    await stopWorkboardCard({ host, client: client as never, card: linked });
+
+    expect(client.request).toHaveBeenCalledOnce();
+    expect(client.request).toHaveBeenCalledWith("tasks.cancel", {
+      taskId: "task-1",
+      reason: "Stopped from Workboard.",
+    });
+    expect(state.cards).toEqual([linked]);
+    expect(state.error).toBe("task ledger unavailable");
   });
 
   it("marks task-linked cards blocked when task cancellation already stopped the session", async () => {
