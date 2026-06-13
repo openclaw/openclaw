@@ -147,11 +147,11 @@ const PLANNING_ONLY_MAX_VISIBLE_TEXT = 700;
 const PLANNING_ONLY_ACTION_VERB_RE =
   /\b(?:inspect(?:ing)?|investigat(?:e|ing)|check(?:ing)?|look(?:ing)?(?:\s+into|\s+at)?|read(?:ing)?|search(?:ing)?|find(?:ing)?|debug(?:ging)?|fix(?:ing)?|patch(?:ing)?|updat(?:e|ing)|chang(?:e|ing)|edit(?:ing)?|writ(?:e|ing)|implement(?:ing)?|runn?ing|run|test(?:ing)?|verify|verifying|review(?:ing)?|analy(?:s|z)(?:e|ing)|summari(?:s|z)(?:e|ing)|explain(?:ing)?|answer(?:ing)?|show(?:ing)?|shar(?:e|ing)|report(?:ing)?|prepar(?:e|ing)|captur(?:e|ing)|tak(?:e|ing)|handl(?:e|ing)|sort(?:ing|ed)?|follow(?:ing)?\s+up|get(?:ting)?\s+back|start(?:ing)?|launch(?:ing)?|send(?:ing)?|monitor(?:ing)?|refactor(?:ing)?|restart(?:ing)?|deploy(?:ing)?|ship(?:ping)?)\b/i;
 const ACTIONABLE_PROMPT_DIRECTIVE_RE =
-  /^\s*(?:(?:ok(?:ay)?|please|pls)\s+)?(?:check|look(?:\s+into|\s+at)?|read|write|edit|update|fix|investigate|debug|run|search|find|implement|add|remove|refactor|explain|summari(?:s|z)e|analy(?:s|z)e|review|tell|show|make|restart|deploy|prepare|generate|start|launch|send|monitor|set|load|hit|ask|wire|channel)\b/i;
+  /^\s*(?:(?:ok(?:ay)?|please|pls)\s+)?(?:check|inspect|look(?:\s+into|\s+at)?|read|write|edit|update|fix|investigate|debug|run|search|find|implement|add|remove|refactor|explain|summari(?:s|z)e|analy(?:s|z)e|review|tell|show|make|restart|deploy|prepare|generate|start|launch|send|monitor|set|load|hit|ask|wire|channel)\b/i;
 const ACTIONABLE_PROMPT_REQUEST_RE =
-  /\b(?:can|could|would|will|should)\s+you\b|\b(?:please|pls)\b|\b(?:help|tell|show)\s+me\b|\bwalk me through\b|\b(?:i|we)\s+(?:need|want|would like)\s+you\b/i;
+  /\b(?:can|could|would|will|should)\s+you\b|\b(?:help|tell|show)\s+me\b|\bwalk me through\b|\b(?:i|we)\s+(?:need|want|would like)\s+you\b/i;
 const ACTIONABLE_PROMPT_TERSE_REQUEST_RE =
-  /^(?!\s*(?:the|this|that|status update|fyi|heads up)\b).{0,120}\b(?:results?|proof)\b.{0,80}\b(?:now|after)\b/i;
+  /^(?!\s*(?:the|this|that|status update|fyi|heads up)\b)(?:.{0,120}\b(?:results?|proof)\b.{0,80}\b(?:now|after)\b|.{0,120}\bdefault\s+for\s+(?:the\s+)?agent\b)/i;
 const PLANNING_ONLY_SHORT_PLACEHOLDER_RE =
   /\bi(?:'ll| will)\s+(?:do|handle|take care of|work on)\s+(?:it|that|this)\b/i;
 const PLANNING_ONLY_WAIT_PLACEHOLDER_RE =
@@ -172,13 +172,32 @@ const SINGLE_ACTION_MULTI_STEP_PROMISE_RE =
   /\bi(?:'ll| will)\b(?=[^.!?]{0,160}\b(?:next|then|after(?:wards)?|once)\b)/i;
 const SINGLE_ACTION_RESULT_STYLE_RE =
   /\b(?:i(?:'ll| will)\s+(?:summarize|explain|share|show|report|describe|clarify|answer|recap)(?:\s+\w+){0,4}\s*:|(?:here(?:'s| is)|summary|result|answer|findings?|root cause)\s*:)/i;
-const SINGLE_ACTION_RETRY_SAFE_TOOL_NAMES = new Set([
+const RETRY_SAFE_TOOL_NAMES = new Set([
   "read",
   "search",
   "find",
   "grep",
   "glob",
   "ls",
+  "web_fetch",
+  "web_search",
+  "memory_get",
+  "memory_search",
+  "process.poll",
+  "sessions_history",
+  "sessions_list",
+  "update_plan",
+]);
+const ACTION_CLASSIFIED_RETRY_SAFE_TOOL_NAMES = new Set([
+  "bash",
+  "canvas",
+  "cron",
+  "exec",
+  "gateway",
+  "nodes",
+  "process",
+  "session_status",
+  "subagents",
 ]);
 // Ollama native `/api/chat` can finish with only thinking/internal blocks when
 // constrained; keep a direct non-visible retry gate for those local-model turns.
@@ -284,12 +303,12 @@ export type PlanningOnlyPlanDetails = {
 export function buildAttemptReplayMetadata(
   params: ReplayMetadataAttempt,
 ): EmbeddedRunAttemptResult["replayMetadata"] {
-  const hadMutatingTools = params.toolMetas.some(
-    (t) => t.mutatingAction ?? isLikelyMutatingToolName(t.toolName),
+  const hadUnsafeToolActivity = params.toolMetas.some(
+    (toolMeta) => !isReplaySafeToolMeta(toolMeta),
   );
   const hadAsyncStartedTool = params.toolMetas.some((t) => t.asyncStarted === true);
   const hadPotentialSideEffects =
-    hadMutatingTools ||
+    hadUnsafeToolActivity ||
     hadAsyncStartedTool ||
     hasMessagingToolSideEffectEvidence(params) ||
     hasAcceptedSessionSpawn(params.acceptedSessionSpawns) ||
@@ -774,7 +793,10 @@ export function resolveReasoningOnlyRetryInstruction(params: {
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
 }): string | null {
-  if (shouldSkipPlanningOnlyRetry(params)) {
+  if (
+    shouldSkipPlanningOnlyRetry(params) ||
+    params.attempt.toolMetas.some((toolMeta) => !isReplaySafeToolMeta(toolMeta))
+  ) {
     return null;
   }
 
@@ -816,7 +838,10 @@ export function resolveEmptyResponseRetryInstruction(params: {
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
 }): string | null {
-  if (shouldSkipPlanningOnlyRetry(params)) {
+  if (
+    shouldSkipPlanningOnlyRetry(params) ||
+    params.attempt.toolMetas.some((toolMeta) => !isReplaySafeToolMeta(toolMeta))
+  ) {
     return null;
   }
 
@@ -1043,17 +1068,17 @@ function hasSingleRetrySafeNonPlanTool(toolMetas?: PlanningOnlyAttempt["toolMeta
   if (!nonPlanTool) {
     return false;
   }
-  const nonPlanToolName = normalizeLowercaseStringOrEmpty(nonPlanTool.toolName);
-  return (
-    SINGLE_ACTION_RETRY_SAFE_TOOL_NAMES.has(nonPlanToolName) ||
-    isPlanningRetrySafeToolMeta(nonPlanTool)
-  );
+  return isReplaySafeToolMeta(nonPlanTool);
 }
 
-function isPlanningRetrySafeToolMeta(toolMeta: PlanningOnlyToolMeta): boolean {
+function isReplaySafeToolMeta(toolMeta: PlanningOnlyToolMeta): boolean {
+  const toolName = normalizeLowercaseStringOrEmpty(toolMeta.toolName);
+  if (toolMeta.mutatingAction === true) {
+    return false;
+  }
   return (
-    toolMeta.mutatingAction === false ||
-    SINGLE_ACTION_RETRY_SAFE_TOOL_NAMES.has(normalizeLowercaseStringOrEmpty(toolMeta.toolName))
+    RETRY_SAFE_TOOL_NAMES.has(toolName) ||
+    (ACTION_CLASSIFIED_RETRY_SAFE_TOOL_NAMES.has(toolName) && toolMeta.mutatingAction === false)
   );
 }
 
@@ -1070,7 +1095,7 @@ function hasCompletedRetrySafeNonPlanToolActivity(
   if (completedCount < nonPlanTools.length) {
     return false;
   }
-  return nonPlanTools.every(isPlanningRetrySafeToolMeta);
+  return nonPlanTools.every(isReplaySafeToolMeta);
 }
 
 /**

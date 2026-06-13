@@ -920,7 +920,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         }) => void;
       };
       attemptParams.onToolOutcome?.({
-        toolName: "status_probe",
+        toolName: "read",
         argsHash: "status",
         resultHash: "status-result",
         resultText: "healthy",
@@ -928,7 +928,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       });
       return makeAttemptResult({
         assistantTexts: [],
-        toolMetas: [{ toolName: "status_probe", mutatingAction: false }],
+        toolMetas: [{ toolName: "read", mutatingAction: false }],
         lastAssistant: {
           role: "assistant",
           stopReason: "toolUse",
@@ -1143,12 +1143,12 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         }) => void;
       };
       attemptParams.onToolOutcome?.({
-        toolName: "status_probe",
+        toolName: "read",
         argsHash: "current",
         resultHash: "result-1",
         resultText: "TOKEN=secret-value\nstatus: ok",
       });
-      const toolMetas = [{ toolName: "status_probe", mutatingAction: false }];
+      const toolMetas = [{ toolName: "read", mutatingAction: false }];
       return makeAttemptResult({
         assistantTexts: [],
         timedOut: true,
@@ -1186,7 +1186,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(result.payloads).toEqual([
       {
         text:
-          "status_probe completed, but the model did not provide a final answer. " +
+          "read completed, but the model did not provide a final answer. " +
           "No user-facing result text was provided.",
       },
       {
@@ -1450,7 +1450,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         }) => void;
       };
       attemptParams.onToolOutcome?.({
-        toolName: "status_probe",
+        toolName: "read",
         argsHash: "current",
         resultHash: "status-result",
         resultText: "TOKEN=secret-value\nscheduler healthy",
@@ -1462,9 +1462,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
           completedCount: 1,
           activeCount: 0,
         },
-        toolMetas: [{ toolName: "status_probe", mutatingAction: false }],
+        toolMetas: [{ toolName: "read", mutatingAction: false }],
         replayMetadata: buildAttemptReplayMetadata({
-          toolMetas: [{ toolName: "status_probe", mutatingAction: false }],
+          toolMetas: [{ toolName: "read", mutatingAction: false }],
           didSendViaMessagingTool: false,
           messagingToolSentTexts: [],
           messagingToolSentMediaUrls: [],
@@ -1487,12 +1487,12 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(result.payloads).toEqual([
       {
         text:
-          "status_probe completed, but the model did not provide a final answer. " +
+          "read completed, but the model did not provide a final answer. " +
           "No user-facing result text was provided.",
       },
     ]);
     expect(result.meta.livenessState).toBe("working");
-    expectWarnMessageWith("surfacing status_probe tool fallback");
+    expectWarnMessageWith("surfacing read tool fallback");
   });
 
   it("does not reuse tool fallback observations from earlier retry attempts", async () => {
@@ -1508,7 +1508,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
           }) => void;
         };
         attemptParams.onToolOutcome?.({
-          toolName: "status_probe",
+          toolName: "read",
           argsHash: "current",
           resultHash: "status-result",
           resultText: "scheduler healthy",
@@ -1520,9 +1520,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
             completedCount: 1,
             activeCount: 0,
           },
-          toolMetas: [{ toolName: "status_probe", mutatingAction: false }],
+          toolMetas: [{ toolName: "read", mutatingAction: false }],
           replayMetadata: buildAttemptReplayMetadata({
-            toolMetas: [{ toolName: "status_probe", mutatingAction: false }],
+            toolMetas: [{ toolName: "read", mutatingAction: false }],
             didSendViaMessagingTool: false,
             messagingToolSentTexts: [],
             messagingToolSentMediaUrls: [],
@@ -1559,7 +1559,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
     expect(result.payloads).toEqual([{ text: PLANNING_ONLY_BLOCKED_TEXT, isError: true }]);
-    expect(JSON.stringify(result.payloads)).not.toContain("status_probe completed");
+    expect(JSON.stringify(result.payloads)).not.toContain("read completed");
     expect(result.meta.livenessState).toBe("blocked");
   });
 
@@ -1575,7 +1575,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         }) => void;
       };
       attemptParams.onToolOutcome?.({
-        toolName: "scheduler_status",
+        toolName: "cron",
         argsHash: "current",
         resultHash: "status-result",
         resultText: "TOKEN=secret-value\njobs: 0",
@@ -1587,9 +1587,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
           completedCount: 1,
           activeCount: 0,
         },
-        toolMetas: [{ toolName: "scheduler_status", mutatingAction: false }],
+        toolMetas: [{ toolName: "cron", mutatingAction: false }],
         replayMetadata: buildAttemptReplayMetadata({
-          toolMetas: [{ toolName: "scheduler_status", mutatingAction: false }],
+          toolMetas: [{ toolName: "cron", mutatingAction: false }],
           didSendViaMessagingTool: false,
           messagingToolSentTexts: [],
           messagingToolSentMediaUrls: [],
@@ -1617,7 +1617,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(result.payloads).toEqual([
       {
         text:
-          "scheduler_status completed, but the model did not provide a final answer. " +
+          "cron completed, but the model did not provide a final answer. " +
           "No user-facing result text was provided.",
       },
     ]);
@@ -2332,12 +2332,12 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         }) => void;
       };
       attemptParams.onToolOutcome?.({
-        toolName: "status_probe",
+        toolName: "read",
         argsHash: "current",
         resultHash: "result-1",
         resultText: "TOKEN=secret-value\nstatus: ok",
       });
-      const toolMetas = [{ toolName: "status_probe", mutatingAction: false }];
+      const toolMetas = [{ toolName: "read", mutatingAction: false }];
       return makeAttemptResult({
         assistantTexts: [],
         itemLifecycle: {
@@ -2384,7 +2384,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(result.payloads).toEqual([
       {
         text:
-          "status_probe completed, but the model did not provide a final answer. " +
+          "read completed, but the model did not provide a final answer. " +
           "No user-facing result text was provided.",
       },
     ]);
@@ -2643,6 +2643,27 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         timedOut: false,
         attempt: makeAttemptResult({
           assistantTexts: ["Got it."],
+        }),
+      });
+
+      expect(retryInstruction).toBeNull();
+    },
+  );
+
+  it.each([
+    { prompt: "Please be concise.", assistantText: "Okay." },
+    { prompt: "Please wait.", assistantText: "Understood." },
+  ])(
+    "does not classify preference-only polite request $prompt as planning-only",
+    ({ prompt, assistantText }) => {
+      const retryInstruction = resolvePlanningOnlyRetryInstruction({
+        provider: "custom-provider",
+        modelId: "custom-model",
+        prompt,
+        aborted: false,
+        timedOut: false,
+        attempt: makeAttemptResult({
+          assistantTexts: [assistantText],
         }),
       });
 
@@ -3529,6 +3550,46 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(retryInstruction).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
   });
 
+  it("does not retry reasoning-only turns after unknown plugin tool activity", () => {
+    const toolMetas = [{ toolName: "charge_customer", mutatingAction: false }];
+    const retryInstruction = resolveReasoningOnlyRetryInstruction({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        itemLifecycle: {
+          startedCount: 1,
+          completedCount: 1,
+          activeCount: 0,
+        },
+        toolMetas,
+        replayMetadata: buildAttemptReplayMetadata({
+          toolMetas,
+          didSendViaMessagingTool: false,
+          messagingToolSentTexts: [],
+          messagingToolSentMediaUrls: [],
+        }),
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "end_turn",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [
+            {
+              type: "thinking",
+              thinking: "internal reasoning",
+              thinkingSignature: JSON.stringify({ id: "rs_plugin_tool", type: "reasoning" }),
+            },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(retryInstruction).toBeNull();
+  });
+
   it("detects reasoning-only Gemini turns from signed thinking blocks", () => {
     const retryInstruction = resolveReasoningOnlyRetryInstruction({
       provider: "google",
@@ -3780,6 +3841,43 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
   });
 
+  it("does not retry empty turns after unknown plugin tool activity", () => {
+    const toolMetas = [{ toolName: "charge_customer", mutatingAction: false }];
+    const retryInstruction = resolveEmptyResponseRetryInstruction({
+      provider: "openai",
+      modelId: "gpt-5.5",
+      modelApi: "openai-responses",
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        itemLifecycle: {
+          startedCount: 1,
+          completedCount: 1,
+          activeCount: 0,
+        },
+        toolMetas,
+        replayMetadata: buildAttemptReplayMetadata({
+          toolMetas,
+          didSendViaMessagingTool: false,
+          messagingToolSentTexts: [],
+          messagingToolSentMediaUrls: [],
+        }),
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.5",
+          content: [],
+          usage: { input: 5000, output: 200, totalTokens: 5200 },
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(retryInstruction).toBeNull();
+  });
+
   it("retries empty openai-responses turns after read-only cron tools and pre-tool text", () => {
     const toolMetas = [{ toolName: "cron", mutatingAction: false }];
     const replayMetadata = buildAttemptReplayMetadata({
@@ -3894,11 +3992,11 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(incompleteTurnText).toBe("⚠️ Agent couldn't generate a response. Please try again.");
   });
 
-  it("retries empty openai-responses turns after non-mutating missing tools and pre-tool text", () => {
+  it("retries empty openai-responses turns after a replay-safe missing tool and pre-tool text", () => {
     const toolMetas = [
       {
-        toolName: "shell",
-        meta: "openclaw cron list 2>/dev/null",
+        toolName: "read",
+        meta: "path /app/docs/cron.md",
       },
       {
         toolName: "grep",
@@ -4490,6 +4588,16 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(
       buildAttemptReplayMetadata({
         toolMetas: [{ toolName: "cron", mutatingAction: true }],
+        didSendViaMessagingTool: false,
+        messagingToolSentTexts: [],
+        messagingToolSentMediaUrls: [],
+        successfulCronAdds: 0,
+      }),
+    ).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
+
+    expect(
+      buildAttemptReplayMetadata({
+        toolMetas: [{ toolName: "charge_customer", mutatingAction: false }],
         didSendViaMessagingTool: false,
         messagingToolSentTexts: [],
         messagingToolSentMediaUrls: [],
@@ -5569,6 +5677,39 @@ describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
     });
 
     expect(result).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
+  });
+
+  it("fails closed for unknown plugin tools that declare read-only metadata", () => {
+    const toolMetas = [{ toolName: "charge_customer", mutatingAction: false }];
+    const attempt = {
+      ...makeAttemptWithTools(["charge_customer"], "I'll verify the charge next."),
+      toolMetas,
+      replayMetadata: buildAttemptReplayMetadata({
+        toolMetas,
+        didSendViaMessagingTool: false,
+        messagingToolSentTexts: [],
+        messagingToolSentMediaUrls: [],
+      }),
+    };
+
+    expect(
+      resolvePlanningOnlyRetryInstruction({
+        ...openaiParams,
+        prompt: "Please charge the customer and tell me the result.",
+        aborted: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toBeNull();
+    expect(
+      resolvePlanningOnlyBlockedPayloadText({
+        ...openaiParams,
+        prompt: "Please charge the customer and tell me the result.",
+        aborted: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toBe(PLANNING_ONLY_BLOCKED_TEXT);
   });
 
   it("blocks planning-only text after non-replay-safe tool activity", () => {
