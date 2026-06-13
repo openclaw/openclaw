@@ -182,6 +182,78 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.history synthesizes Control Director guarded status from liveness diagnostics", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+            controlDirectorLivenessAudit: [
+              {
+                runId: "run-control-director-no-response",
+                ts: Date.now(),
+                action: "synthesized_blocked_no_visible_output",
+                reason: "empty final response",
+                nextStatus: "blocked",
+                continuationCount: 0,
+                continuationQueued: false,
+                payloadsChecked: 0,
+                payloadsSynthesized: 1,
+              },
+            ],
+            controlDirectorMissionLedger: [
+              {
+                missionId: "control-director:run-control-director-no-response",
+                runId: "run-control-director-no-response",
+                requestSummary: "empty response exhaustion qa check",
+                status: "blocked",
+                startedAt: Date.now(),
+                updatedAt: Date.now(),
+                continuationCount: 0,
+                finalStatus: "blocked",
+                verifiedEvidenceSummary: "No user-visible payload was delivered.",
+                nextBuildGap: "Surface the liveness status in chat history.",
+                completionGrade: 7,
+                criticality: 10,
+                watchdogActions: ["synthesized_blocked_no_visible_output"],
+              },
+            ],
+          },
+        },
+      });
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({
+          type: "message",
+          id: "user-1",
+          parentId: null,
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "empty response exhaustion qa check" }],
+            timestamp: Date.now(),
+          },
+        }),
+      ]);
+
+      const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+        sessionKey: "main",
+        targetRunId: "run-control-director-no-response",
+        limit: 20,
+      });
+
+      expect(historyRes.ok).toBe(true);
+      const texts = (historyRes.payload?.messages ?? []).map(extractFirstTextBlock);
+      expect(texts.join("\n")).toContain("Verified state: No user-visible payload was delivered.");
+      expect(texts.join("\n")).toContain(
+        "Next build gap: Surface the liveness status in chat history.",
+      );
+      expect(texts.join("\n")).toContain("Completion Grade: 7/10");
+      expect(texts.join("\n")).toContain("Criticality: 10/10");
+      expect(texts.join("\n")).toContain("Status: blocked");
+    });
+  });
+
   test("chat.history does not wait for model catalog discovery to return history", async () => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     try {
