@@ -2788,6 +2788,7 @@ export async function runEmbeddedAttempt(
               mode,
               allowedToolNames: replayAllowedToolNames,
               preserveNativeAnthropicToolUseIds: transcriptPolicy.preserveNativeAnthropicToolUseIds,
+              duplicateToolCallIdStyle: transcriptPolicy.duplicateToolCallIdStyle,
               preserveReplaySafeThinkingToolCallIds: shouldAllowProviderOwnedThinkingReplay({
                 modelApi: (model as { api?: unknown })?.api as string | null | undefined,
                 provider: params.provider,
