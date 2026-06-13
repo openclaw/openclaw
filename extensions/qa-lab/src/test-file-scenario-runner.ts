@@ -21,7 +21,7 @@ export type QaTestFileScenario = QaSeedScenarioWithSource & {
   execution: Extract<QaSeedScenarioWithSource["execution"], { kind: "vitest" | "playwright" }>;
 };
 
-type QaTestFileExecutionKind = QaTestFileScenario["execution"]["kind"];
+export type QaTestFileExecutionKind = "vitest" | "playwright";
 
 export type QaTestFileScenarioRunParams = {
   env?: NodeJS.ProcessEnv;
@@ -66,6 +66,7 @@ type QaTestFileScenarioResult = {
 
 export type QaTestFileScenarioRunResult = {
   evidencePath: string;
+  executionKind: QaTestFileExecutionKind;
   outputDir: string;
   reportPath: string;
   results: QaTestFileScenarioResult[];
@@ -408,6 +409,7 @@ export async function runQaTestFileScenarios(
   });
   return {
     ...paths,
+    executionKind: kind,
     outputDir: params.outputDir,
     results,
   };

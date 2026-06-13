@@ -75,6 +75,7 @@ describe("qa test file scenario runner", () => {
       } as NodeJS.ProcessEnv,
     });
 
+    expect(result.executionKind).toBe("playwright");
     expect(commands.map((command) => command.args)).toEqual([
       ["scripts/ensure-playwright-chromium.mjs"],
       [
@@ -168,6 +169,7 @@ describe("qa test file scenario runner", () => {
       },
     });
 
+    expect(result.executionKind).toBe("vitest");
     expect(commands.map((command) => command.args)).toEqual([
       [
         "scripts/run-vitest.mjs",

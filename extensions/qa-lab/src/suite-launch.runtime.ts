@@ -7,6 +7,7 @@ import type { QaSuiteResult, QaSuiteRunParams } from "./suite.js";
 import {
   isQaTestFileScenario,
   runQaTestFileScenarios,
+  type QaTestFileExecutionKind,
   type QaTestFileScenarioRunResult,
 } from "./test-file-scenario-runner.js";
 
@@ -16,7 +17,7 @@ export type QaSuiteRuntimeResult =
       result: QaSuiteResult;
     }
   | {
-      executionKind: "test-file";
+      executionKind: QaTestFileExecutionKind;
       result: QaTestFileScenarioRunResult;
     };
 
@@ -55,7 +56,7 @@ async function runQaTestFileSuiteIfSelected(
     return null;
   }
   if (testFileScenarios.length !== selectedScenarios.length) {
-    throw new Error("qa suite cannot mix execution.kind: flow and test-file scenarios.");
+    throw new Error("qa suite cannot mix execution.kind: flow with Vitest/Playwright scenarios.");
   }
   if (params?.runtimePair) {
     throw new Error("--runtime-pair requires execution.kind: flow scenarios.");
@@ -85,7 +86,7 @@ export async function runQaSuiteFromRuntime(
   const testFileResult = await runQaTestFileSuiteIfSelected(args[0]);
   if (testFileResult) {
     return {
-      executionKind: "test-file",
+      executionKind: testFileResult.executionKind,
       result: testFileResult,
     };
   }

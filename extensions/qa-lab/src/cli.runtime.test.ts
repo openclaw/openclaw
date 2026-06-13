@@ -119,6 +119,7 @@ function expectWriteContains(mock: unknown, fragment: string): void {
 }
 
 function flowSuiteRuntimeResult(params: {
+  evidencePath?: string;
   reportPath: string;
   summaryPath: string;
   scenarios?: unknown[];
@@ -127,6 +128,8 @@ function flowSuiteRuntimeResult(params: {
     executionKind: "flow",
     result: {
       outputDir: path.dirname(params.reportPath),
+      evidencePath:
+        params.evidencePath ?? path.join(path.dirname(params.reportPath), "qa-evidence.json"),
       reportPath: params.reportPath,
       summaryPath: params.summaryPath,
       report: "# QA Suite Report\n",
@@ -138,14 +141,16 @@ function flowSuiteRuntimeResult(params: {
 
 function testFileSuiteRuntimeResult(params: {
   evidencePath: string;
+  executionKind?: "vitest" | "playwright";
   outputDir: string;
   reportPath: string;
   results?: unknown[];
 }) {
   return {
-    executionKind: "test-file",
+    executionKind: params.executionKind ?? "playwright",
     result: {
       outputDir: params.outputDir,
+      executionKind: params.executionKind ?? "playwright",
       reportPath: params.reportPath,
       evidencePath: params.evidencePath,
       results: params.results ?? [{ status: "pass" }],
@@ -157,6 +162,7 @@ describe("qa cli runtime", () => {
   let stdoutWrite: ReturnType<typeof vi.spyOn>;
   let stderrWrite: ReturnType<typeof vi.spyOn>;
   let suiteArtifactsDir: string;
+  let suiteEvidencePath: string;
   let suiteReportPath: string;
   let suiteSummaryPath: string;
   let telegramArtifactsDir: string;
@@ -164,11 +170,13 @@ describe("qa cli runtime", () => {
 
   beforeEach(async () => {
     suiteArtifactsDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-suite-runtime-"));
+    suiteEvidencePath = path.join(suiteArtifactsDir, "qa-evidence.json");
     suiteReportPath = path.join(suiteArtifactsDir, "qa-suite-report.md");
     suiteSummaryPath = path.join(suiteArtifactsDir, "qa-suite-summary.json");
     telegramArtifactsDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-telegram-runtime-"));
     telegramSummaryPath = path.join(telegramArtifactsDir, QA_EVIDENCE_FILENAME);
     await fs.writeFile(suiteReportPath, "# QA Suite Report\n", "utf8");
+    await fs.writeFile(suiteEvidencePath, JSON.stringify({ entries: [] }), "utf8");
     await fs.writeFile(
       suiteSummaryPath,
       JSON.stringify({
@@ -217,6 +225,8 @@ describe("qa cli runtime", () => {
       }),
     );
     runQaFlowSuiteFromRuntime.mockResolvedValue({
+      outputDir: suiteArtifactsDir,
+      evidencePath: suiteEvidencePath,
       watchUrl: "http://127.0.0.1:43124",
       reportPath: suiteReportPath,
       summaryPath: suiteSummaryPath,
@@ -588,6 +598,7 @@ describe("qa cli runtime", () => {
       scenarioIds: ["channel-chat-baseline", "thread-follow-up"],
       concurrency: 3,
     });
+    expectWriteContains(stdoutWrite, `QA suite evidence: ${suiteEvidencePath}`);
   });
 
   it("rejects fractional suite concurrency from programmatic callers", async () => {
@@ -846,6 +857,8 @@ describe("qa cli runtime", () => {
       "utf8",
     );
     runQaFlowSuiteFromRuntime.mockResolvedValueOnce({
+      outputDir: suiteArtifactsDir,
+      evidencePath: suiteEvidencePath,
       watchUrl: "http://127.0.0.1:43124",
       reportPath: suiteReportPath,
       summaryPath: suiteSummaryPath,
@@ -876,6 +889,8 @@ describe("qa cli runtime", () => {
       "utf8",
     );
     runQaFlowSuiteFromRuntime.mockResolvedValueOnce({
+      outputDir: suiteArtifactsDir,
+      evidencePath: suiteEvidencePath,
       watchUrl: "http://127.0.0.1:43124",
       reportPath: suiteReportPath,
       summaryPath: suiteSummaryPath,

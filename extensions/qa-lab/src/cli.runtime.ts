@@ -295,16 +295,20 @@ async function assertQaSuiteReportArtifact(result: { reportPath: string }) {
 
 async function assertQaFlowSuiteArtifacts(result: QaSuiteResult) {
   await assertQaSuiteReportArtifact(result);
+  await fs.access(result.evidencePath);
   await readQaSuiteFailedOrSkippedScenarioCountFromFile(result.summaryPath);
 }
 
 async function assertQaSuiteArtifacts(result: QaSuiteRuntimeResult) {
-  if (result.executionKind === "test-file") {
-    await assertQaSuiteReportArtifact(result.result);
-    await fs.access(result.result.evidencePath);
-    return;
+  switch (result.executionKind) {
+    case "flow":
+      await assertQaFlowSuiteArtifacts(result.result);
+      return;
+    case "vitest":
+    case "playwright":
+      await assertQaSuiteReportArtifact(result.result);
+      await fs.access(result.result.evidencePath);
   }
-  await assertQaFlowSuiteArtifacts(result.result);
 }
 
 async function runQaSuiteFromRuntimeWithInfraRetry(
@@ -734,24 +738,30 @@ export async function runQaSuiteCommand(opts: {
       : {}),
     ...(runtimePair ? { runtimePair } : {}),
   });
-  if (runtimeResult.executionKind === "test-file") {
-    const result = runtimeResult.result;
-    process.stdout.write(`QA suite report: ${result.reportPath}\n`);
-    process.stdout.write(`QA suite evidence: ${result.evidencePath}\n`);
-    if (!allowFailures && result.results.some((scenario) => scenario.status !== "pass")) {
-      process.exitCode = 1;
+  switch (runtimeResult.executionKind) {
+    case "vitest":
+    case "playwright": {
+      const result = runtimeResult.result;
+      process.stdout.write(`QA suite report: ${result.reportPath}\n`);
+      process.stdout.write(`QA suite evidence: ${result.evidencePath}\n`);
+      if (!allowFailures && result.results.some((scenario) => scenario.status !== "pass")) {
+        process.exitCode = 1;
+      }
+      return;
     }
-    return;
-  }
-  const result = runtimeResult.result;
-  process.stdout.write(`QA suite watch: ${result.watchUrl}\n`);
-  process.stdout.write(`QA suite report: ${result.reportPath}\n`);
-  process.stdout.write(`QA suite summary: ${result.summaryPath}\n`);
-  const blockingScenarioCount = await readQaSuiteFailedOrSkippedScenarioCountFromFile(
-    result.summaryPath,
-  );
-  if (!allowFailures && blockingScenarioCount > 0) {
-    process.exitCode = 1;
+    case "flow": {
+      const result = runtimeResult.result;
+      process.stdout.write(`QA suite watch: ${result.watchUrl}\n`);
+      process.stdout.write(`QA suite report: ${result.reportPath}\n`);
+      process.stdout.write(`QA suite evidence: ${result.evidencePath}\n`);
+      process.stdout.write(`QA suite summary: ${result.summaryPath}\n`);
+      const blockingScenarioCount = await readQaSuiteFailedOrSkippedScenarioCountFromFile(
+        result.summaryPath,
+      );
+      if (!allowFailures && blockingScenarioCount > 0) {
+        process.exitCode = 1;
+      }
+    }
   }
 }
 

@@ -565,6 +565,7 @@ export async function startQaLabServer(
                 finishedAt: new Date().toISOString(),
                 artifacts: {
                   outputDir: result.outputDir,
+                  evidencePath: result.evidencePath,
                   reportPath: result.reportPath,
                   summaryPath: result.summaryPath,
                   watchUrl: result.watchUrl,

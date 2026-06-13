@@ -33,6 +33,7 @@ describe("qa suite runtime launcher", () => {
     runQaTestFileScenarios.mockReset();
     runQaSuite.mockResolvedValue({
       outputDir: "/tmp/qa-flow",
+      evidencePath: "/tmp/qa-flow/qa-evidence.json",
       reportPath: "/tmp/qa-flow/qa-suite-report.md",
       summaryPath: "/tmp/qa-flow/qa-suite-summary.json",
       report: "# QA Suite Report\n",
@@ -41,6 +42,7 @@ describe("qa suite runtime launcher", () => {
     });
     runQaTestFileScenarios.mockResolvedValue({
       outputDir: "/tmp/qa-test-file",
+      executionKind: "playwright",
       reportPath: "/tmp/qa-test-file/qa-playwright-report.md",
       evidencePath: "/tmp/qa-test-file/qa-evidence.json",
       results: [{ status: "pass" }],
@@ -77,7 +79,7 @@ describe("qa suite runtime launcher", () => {
     expect(runQaTestFileScenarios).not.toHaveBeenCalled();
   });
 
-  it("routes selected Playwright scenarios to the test-file scenario runner", async () => {
+  it("routes selected Playwright scenarios to the Playwright scenario runner", async () => {
     const repoRoot = await makeTempRepo("qa-suite-launch-");
     const result = await runQaSuiteFromRuntime({
       repoRoot,
@@ -88,7 +90,7 @@ describe("qa suite runtime launcher", () => {
     });
 
     expect(result).toMatchObject({
-      executionKind: "test-file",
+      executionKind: "playwright",
       result: {
         evidencePath: "/tmp/qa-test-file/qa-evidence.json",
       },
@@ -110,19 +112,19 @@ describe("qa suite runtime launcher", () => {
     ).toEqual([{ id: "control-ui-chat-flow-playwright", kind: "playwright" }]);
   });
 
-  it("rejects mixed flow and test-file scenarios", async () => {
+  it("rejects mixed flow and Vitest/Playwright scenarios", async () => {
     await expect(
       runQaSuiteFromRuntime({
         repoRoot: process.cwd(),
         scenarioIds: ["channel-chat-baseline", "control-ui-chat-flow-playwright"],
       }),
-    ).rejects.toThrow("qa suite cannot mix execution.kind: flow and test-file scenarios");
+    ).rejects.toThrow("qa suite cannot mix execution.kind: flow with Vitest/Playwright scenarios");
 
     expect(runQaSuite).not.toHaveBeenCalled();
     expect(runQaTestFileScenarios).not.toHaveBeenCalled();
   });
 
-  it("rejects runtime-pair requests for test-file scenarios", async () => {
+  it("rejects runtime-pair requests for Vitest/Playwright scenarios", async () => {
     await expect(
       runQaSuiteFromRuntime({
         repoRoot: process.cwd(),
@@ -135,7 +137,7 @@ describe("qa suite runtime launcher", () => {
     expect(runQaTestFileScenarios).not.toHaveBeenCalled();
   });
 
-  it("rejects repo-local symlink output directories before running test-file scenarios", async () => {
+  it("rejects repo-local symlink output directories before running Vitest/Playwright scenarios", async () => {
     const repoRoot = await makeTempRepo("qa-suite-symlink-root-");
     const outsideRoot = await makeTempRepo("qa-suite-symlink-outside-");
     await fs.symlink(outsideRoot, path.join(repoRoot, "artifacts-link"));

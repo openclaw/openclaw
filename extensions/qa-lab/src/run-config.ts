@@ -25,6 +25,7 @@ type QaLabRunSelection = {
 
 type QaLabRunArtifacts = {
   outputDir: string;
+  evidencePath: string;
   reportPath: string;
   summaryPath: string;
   watchUrl: string;

@@ -12,7 +12,7 @@ import {
   type QaReportScenario,
 } from "openclaw/plugin-sdk/qa-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { buildQaSuiteEvidenceSummary } from "./evidence-summary.js";
+import { buildQaSuiteEvidenceSummary, QA_EVIDENCE_FILENAME } from "./evidence-summary.js";
 import { startQaGatewayChild, type QaCliBackendAuthMode } from "./gateway-child.js";
 import type {
   QaLabLatestReport,
@@ -274,6 +274,7 @@ function liveTurnTimeoutMs(
 
 export type QaSuiteResult = {
   outputDir: string;
+  evidencePath: string;
   reportPath: string;
   summaryPath: string;
   report: string;
@@ -784,7 +785,7 @@ async function runQaRuntimeParitySuite(params: {
     );
 
     const finishedAt = new Date();
-    const { report, reportPath, summaryPath } = await writeQaSuiteArtifacts({
+    const { evidencePath, report, reportPath, summaryPath } = await writeQaSuiteArtifacts({
       outputDir: params.outputDir,
       startedAt: params.startedAt,
       finishedAt,
@@ -816,6 +817,7 @@ async function runQaRuntimeParitySuite(params: {
     });
     return {
       outputDir: params.outputDir,
+      evidencePath,
       reportPath,
       summaryPath,
       report,
@@ -852,6 +854,7 @@ async function writeQaSuiteArtifacts(params: {
 }) {
   const reportPath = path.join(params.outputDir, "qa-suite-report.md");
   const summaryPath = path.join(params.outputDir, "qa-suite-summary.json");
+  const evidencePath = path.join(params.outputDir, QA_EVIDENCE_FILENAME);
   const report = renderQaMarkdownReport({
     title: "OpenClaw QA Scenario Suite",
     startedAt: params.startedAt,
@@ -882,12 +885,15 @@ async function writeQaSuiteArtifacts(params: {
         })
       : undefined;
   await fs.writeFile(reportPath, report, "utf8");
+  if (evidence) {
+    await fs.writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`, "utf8");
+  }
   await fs.writeFile(
     summaryPath,
-    `${JSON.stringify(buildQaSuiteSummaryJson({ ...params, evidence }), null, 2)}\n`,
+    `${JSON.stringify(buildQaSuiteSummaryJson(params), null, 2)}\n`,
     "utf8",
   );
-  return { report, reportPath, summaryPath };
+  return { evidencePath, report, reportPath, summaryPath };
 }
 
 function buildQaSuiteRuntimeMetrics(params: {
@@ -1287,7 +1293,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
         finishedAt: finishedAt.toISOString(),
         scenarios: [...liveScenarioOutcomes],
       });
-      const { report, reportPath, summaryPath } = await writeQaSuiteArtifacts({
+      const { evidencePath, report, reportPath, summaryPath } = await writeQaSuiteArtifacts({
         outputDir,
         startedAt,
         finishedAt,
@@ -1322,6 +1328,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
       );
       return {
         outputDir,
+        evidencePath,
         reportPath,
         summaryPath,
         report,
@@ -1546,7 +1553,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
       finishedAt: finishedAt.toISOString(),
       scenarios: [...liveScenarioOutcomes],
     });
-    const { report, reportPath, summaryPath } = await writeQaSuiteArtifacts({
+    const { evidencePath, report, reportPath, summaryPath } = await writeQaSuiteArtifacts({
       outputDir,
       startedAt,
       finishedAt,
@@ -1580,6 +1587,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
 
     return {
       outputDir,
+      evidencePath,
       reportPath,
       summaryPath,
       report,
@@ -1626,4 +1634,5 @@ export const qaSuiteProgressTesting = {
   shouldRunQaSuiteWithIsolatedScenarioWorkers,
   shouldLogQaSuiteProgress,
   waitForQaLabReadyOrStopOwned,
+  writeQaSuiteArtifacts,
 };
