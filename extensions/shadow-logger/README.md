@@ -2,7 +2,7 @@
 
 ## Overview
 
-The `shadow-logger` is a core component of the OpenClaw multi-layered memory system. It implements **Layer 1: Shadow Logging**, acting as a passive, high-reliability recorder of all dialogue events within the system.
+The `shadow-logger` is a core component of the OpenClaw multi-layered memory system. It implements **Layer 1: Shadow Logging**, acting as a passive, high-reliability recorder of all message events within the system.
 
 ## Architecture
 

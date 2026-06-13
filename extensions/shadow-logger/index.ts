@@ -7,7 +7,7 @@ import { createSupabaseClient } from "./supabase-client.js";
 /**
  * ShadowLoggerPlugin
  * 
- * Captures inbound and outbound messages via internal hooks and 
+ * Captures received and sent messages via internal hooks and 
  * persists them to Supabase for long-term memory distillation.
  * 
  * See ./README.md for the full technical specification.

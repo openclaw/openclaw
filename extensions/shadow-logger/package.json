@@ -1,7 +1,7 @@
 {
   "name": "@openclaw/shadow-logger",
   "version": "0.1.0",
-  "description": "Logs all incoming and outgoing messages to Supabase for long-term memory distillation.",
+  "description": "Logs all received and sent messages to Supabase for long-term memory distillation.",
   "main": "index.ts",
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0"
