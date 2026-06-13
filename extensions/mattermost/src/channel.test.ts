@@ -450,6 +450,50 @@ describe("mattermostPlugin", () => {
       expect(options.replyToId).toBe("post-root");
     });
 
+    it("uses threadId as replyToId fallback for direct send actions", async () => {
+      const cfg = createMattermostTestConfig();
+
+      await mattermostPlugin.actions?.handleAction?.(
+        createMattermostActionContext({
+          action: "send",
+          params: {
+            to: "channel:CHAN1",
+            message: "hello",
+            threadId: " post-root ",
+          },
+          cfg,
+          accountId: "default",
+        }),
+      );
+
+      const options = expectSingleMattermostSend("channel:CHAN1", "hello");
+      expect(options.accountId).toBe("default");
+      expect(options.replyToId).toBe("post-root");
+    });
+
+    it("preserves replyToId precedence over threadId for direct send actions", async () => {
+      const cfg = createMattermostTestConfig();
+
+      await mattermostPlugin.actions?.handleAction?.(
+        createMattermostActionContext({
+          action: "send",
+          params: {
+            to: "channel:CHAN1",
+            message: "hello",
+            replyToId: " explicit-root ",
+            threadId: " thread-root ",
+            replyTo: " legacy-root ",
+          },
+          cfg,
+          accountId: "default",
+        }),
+      );
+
+      const options = expectSingleMattermostSend("channel:CHAN1", "hello");
+      expect(options.accountId).toBe("default");
+      expect(options.replyToId).toBe("explicit-root");
+    });
+
     it("routes filePath send actions through Mattermost media upload options", async () => {
       const cfg = createMattermostTestConfig();
       const mediaReadFile = vi.fn(async () => Buffer.from("report"));
