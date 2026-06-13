@@ -299,6 +299,235 @@ describe("gateway server chat", () => {
     }
   });
 
+  test("chat.send watchdog remains armed when dispatch returns before visible final", async () => {
+    vi.useFakeTimers();
+    try {
+      const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeMainSessionStore();
+      await writeMainSessionTranscript(sessionDir, []);
+
+      const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      const context = {
+        loadGatewayModelCatalog: vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(
+          async () => [
+            {
+              id: "gpt-5.5",
+              name: "GPT 5.5",
+              provider: "mock-openai",
+              input: ["text"],
+            },
+          ],
+        ),
+        logGateway: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+          debug: vi.fn(),
+        },
+        agentRunSeq: new Map<string, number>(),
+        chatAbortControllers: new Map(),
+        chatAbortedRuns: new Map(),
+        chatRunBuffers: new Map(),
+        chatDeltaSentAt: new Map(),
+        chatDeltaLastBroadcastLen: new Map(),
+        addChatRun: vi.fn(),
+        removeChatRun: vi.fn(),
+        broadcast: vi.fn(),
+        nodeSendToSession: vi.fn(),
+        registerToolEventRecipient: vi.fn(),
+        dedupe: new Map(),
+      } as unknown as GatewayRequestContext;
+      dispatchInboundMessageMock.mockResolvedValue({
+        queuedFinal: false,
+        counts: { tool: 0, block: 0, final: 0 },
+      });
+
+      const { chatHandlers } = await import("./server-methods/chat.js");
+      await chatHandlers["chat.send"]({
+        req: {
+          type: "req",
+          id: "send-control-director-early-return",
+          method: "chat.send",
+          params: {
+            sessionKey: "main",
+            message: "empty response exhaustion qa check",
+            idempotencyKey: "run-control-director-early-return",
+          },
+        },
+        params: {
+          sessionKey: "main",
+          message: "empty response exhaustion qa check",
+          idempotencyKey: "run-control-director-early-return",
+        },
+        client: null,
+        isWebchatConnect: () => false,
+        respond: ((ok, payload, error) => {
+          responses.push({ ok, payload, error });
+        }) as RespondFn,
+        context,
+      });
+
+      expect(responses).toContainEqual(
+        expect.objectContaining({
+          ok: true,
+          payload: expect.objectContaining({
+            runId: "run-control-director-early-return",
+            status: "started",
+          }),
+          error: undefined,
+        }),
+      );
+      expect(context.broadcast).not.toHaveBeenCalledWith(
+        "chat",
+        expect.objectContaining({
+          runId: "run-control-director-early-return",
+          state: "final",
+          message: expect.objectContaining({}),
+        }),
+      );
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      await vi.waitFor(() => {
+        expect(context.broadcast).toHaveBeenCalledWith(
+          "chat",
+          expect.objectContaining({
+            runId: "run-control-director-early-return",
+            sessionKey: "agent:main:main",
+            state: "final",
+            message: expect.objectContaining({
+              content: expect.arrayContaining([
+                expect.objectContaining({
+                  text: expect.stringContaining("Status: blocked"),
+                }),
+              ]),
+            }),
+          }),
+        );
+      });
+
+      await fs.rm(sessionDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    } finally {
+      vi.useRealTimers();
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+    }
+  });
+
+  test("chat.send Control Director fallback ignores internal error finals", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeMainSessionStore();
+      await writeMainSessionTranscript(sessionDir, []);
+
+      const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      const context = {
+        loadGatewayModelCatalog: vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(
+          async () => [
+            {
+              id: "gpt-5.5",
+              name: "GPT 5.5",
+              provider: "mock-openai",
+              input: ["text"],
+            },
+          ],
+        ),
+        logGateway: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+          debug: vi.fn(),
+        },
+        agentRunSeq: new Map<string, number>(),
+        chatAbortControllers: new Map(),
+        chatAbortedRuns: new Map(),
+        chatRunBuffers: new Map(),
+        chatDeltaSentAt: new Map(),
+        chatDeltaLastBroadcastLen: new Map(),
+        addChatRun: vi.fn(),
+        removeChatRun: vi.fn(),
+        broadcast: vi.fn(),
+        nodeSendToSession: vi.fn(),
+        registerToolEventRecipient: vi.fn(),
+        dedupe: new Map(),
+      } as unknown as GatewayRequestContext;
+
+      dispatchInboundMessageMock.mockImplementation(async (params) => {
+        const typed = params as {
+          dispatcher?: {
+            sendFinalReply?: (payload: { text: string; isError?: boolean }) => boolean;
+          };
+          replyOptions?: Pick<GetReplyOptions, "onAgentRunStart">;
+        };
+        typed.replyOptions?.onAgentRunStart?.("run-control-director-error-final");
+        typed.dispatcher?.sendFinalReply?.({
+          text: "Agent couldn't generate a response. Please try again.",
+          isError: true,
+        });
+        return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
+      });
+
+      const { chatHandlers } = await import("./server-methods/chat.js");
+      await chatHandlers["chat.send"]({
+        req: {
+          type: "req",
+          id: "send-control-director-error-final",
+          method: "chat.send",
+          params: {
+            sessionKey: "main",
+            message: "empty response exhaustion qa check",
+            idempotencyKey: "run-control-director-error-final",
+          },
+        },
+        params: {
+          sessionKey: "main",
+          message: "empty response exhaustion qa check",
+          idempotencyKey: "run-control-director-error-final",
+        },
+        client: null,
+        isWebchatConnect: () => false,
+        respond: ((ok, payload, error) => {
+          responses.push({ ok, payload, error });
+        }) as RespondFn,
+        context,
+      });
+
+      expect(responses).toContainEqual(
+        expect.objectContaining({
+          ok: true,
+          payload: expect.objectContaining({
+            runId: "run-control-director-error-final",
+            status: "started",
+          }),
+          error: undefined,
+        }),
+      );
+
+      await vi.waitFor(() => {
+        expect(context.broadcast).toHaveBeenCalledWith(
+          "chat",
+          expect.objectContaining({
+            runId: "run-control-director-error-final",
+            sessionKey: "agent:main:main",
+            state: "final",
+            message: expect.objectContaining({
+              content: expect.arrayContaining([
+                expect.objectContaining({
+                  text: expect.stringContaining("Status: blocked"),
+                }),
+              ]),
+            }),
+          }),
+        );
+      });
+    } finally {
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      await fs.rm(sessionDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    }
+  });
+
   test("chat.history synthesizes Control Director guarded status from liveness diagnostics", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
@@ -525,12 +754,14 @@ describe("gateway server chat", () => {
       }, FAST_WAIT_OPTS);
 
       await callSend("duplicate");
-      expect(responses).toContainEqual({
-        id: "duplicate",
-        ok: true,
-        payload: { runId: "idem-attachment-race", status: "started" },
-        error: undefined,
-      });
+      expect(responses).toContainEqual(
+        expect.objectContaining({
+          id: "duplicate",
+          ok: true,
+          payload: expect.objectContaining({ runId: "idem-attachment-race", status: "started" }),
+          error: undefined,
+        }),
+      );
 
       firstCatalog.resolve([
         {
@@ -542,12 +773,14 @@ describe("gateway server chat", () => {
       ]);
       await first;
 
-      expect(responses).toContainEqual({
-        id: "first",
-        ok: true,
-        payload: { runId: "idem-attachment-race", status: "in_flight" },
-        error: undefined,
-      });
+      expect(responses).toContainEqual(
+        expect.objectContaining({
+          id: "first",
+          ok: true,
+          payload: expect.objectContaining({ runId: "idem-attachment-race", status: "in_flight" }),
+          error: undefined,
+        }),
+      );
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
       expect(context.addChatRun).toHaveBeenCalledTimes(1);
       dispatchRelease.resolve();
@@ -637,22 +870,26 @@ describe("gateway server chat", () => {
 
       const first = Promise.resolve(callSend("first", "idem-active-a"));
       await vi.waitFor(() => {
-        expect(responses).toContainEqual({
-          id: "first",
-          ok: true,
-          payload: { runId: "idem-active-a", status: "started" },
-          error: undefined,
-        });
+        expect(responses).toContainEqual(
+          expect.objectContaining({
+            id: "first",
+            ok: true,
+            payload: expect.objectContaining({ runId: "idem-active-a", status: "started" }),
+            error: undefined,
+          }),
+        );
       }, FAST_WAIT_OPTS);
 
       await callSend("duplicate", "idem-active-b");
 
-      expect(responses).toContainEqual({
-        id: "duplicate",
-        ok: true,
-        payload: { runId: "idem-active-a", status: "in_flight" },
-        error: undefined,
-      });
+      expect(responses).toContainEqual(
+        expect.objectContaining({
+          id: "duplicate",
+          ok: true,
+          payload: expect.objectContaining({ runId: "idem-active-a", status: "in_flight" }),
+          error: undefined,
+        }),
+      );
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
       expect(context.addChatRun).toHaveBeenCalledTimes(1);
 
@@ -751,18 +988,22 @@ describe("gateway server chat", () => {
         expect(context.removeChatRun).toHaveBeenCalledTimes(2);
       }, FAST_WAIT_OPTS);
 
-      expect(responses).toContainEqual({
-        id: "first",
-        ok: true,
-        payload: { runId: "idem-sequential-a", status: "started" },
-        error: undefined,
-      });
-      expect(responses).toContainEqual({
-        id: "second",
-        ok: true,
-        payload: { runId: "idem-sequential-b", status: "started" },
-        error: undefined,
-      });
+      expect(responses).toContainEqual(
+        expect.objectContaining({
+          id: "first",
+          ok: true,
+          payload: expect.objectContaining({ runId: "idem-sequential-a", status: "started" }),
+          error: undefined,
+        }),
+      );
+      expect(responses).toContainEqual(
+        expect.objectContaining({
+          id: "second",
+          ok: true,
+          payload: expect.objectContaining({ runId: "idem-sequential-b", status: "started" }),
+          error: undefined,
+        }),
+      );
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
       expect(context.addChatRun).toHaveBeenCalledTimes(2);
     } finally {

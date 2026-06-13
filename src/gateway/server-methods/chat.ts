@@ -146,10 +146,22 @@ type TranscriptAppendResult = {
 
 type AbortOrigin = "rpc" | "stop-command";
 
+function isUserVisibleFinalReplyPayload(payload: ReplyPayload): boolean {
+  if (
+    payload.isError === true ||
+    payload.isReasoning === true ||
+    payload.isCompactionNotice === true
+  ) {
+    return false;
+  }
+  return Boolean((payload.text ?? payload.spokenText ?? "").trim());
+}
+
 function collectFinalTextFromReplyPayloads(
   replies: readonly { payload: ReplyPayload; kind: "block" | "final" }[],
 ): string {
   return replies
+    .filter((entry) => entry.kind === "final" && isUserVisibleFinalReplyPayload(entry.payload))
     .map((entry) => entry.payload.text ?? entry.payload.spokenText ?? "")
     .map((text) => text.trim())
     .filter(Boolean)
@@ -2602,7 +2614,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         }
         const hasFinalReplyText = deliveredReplies
           .filter((entry) => entry.kind === "final")
-          .some((entry) => (entry.payload.text ?? entry.payload.spokenText ?? "").trim());
+          .some((entry) => isUserVisibleFinalReplyPayload(entry.payload));
         if (hasFinalReplyText) {
           return;
         }
@@ -2793,6 +2805,17 @@ export const chatHandlers: GatewayRequestHandlers = {
         },
       });
 
+      const clearControlDirectorFallbackTimerIfVisibleFinal = () => {
+        const hasFinalReplyText = deliveredReplies
+          .filter((entry) => entry.kind === "final")
+          .some((entry) => isUserVisibleFinalReplyPayload(entry.payload));
+        if (!hasFinalReplyText || !controlDirectorFallbackTimer) {
+          return;
+        }
+        clearTimeout(controlDirectorFallbackTimer);
+        controlDirectorFallbackTimer = undefined;
+      };
+
       controlDirectorFallbackTimer = setTimeout(() => {
         void deliverControlDirectorNoResponseFallback("no-response watchdog timeout");
       }, 15_000);
@@ -2843,10 +2866,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         },
       )
         .then(async () => {
-          if (controlDirectorFallbackTimer) {
-            clearTimeout(controlDirectorFallbackTimer);
-            controlDirectorFallbackTimer = undefined;
-          }
+          clearControlDirectorFallbackTimerIfVisibleFinal();
           await measureDiagnosticsTimelineSpan(
             "gateway.chat_send.post_dispatch",
             async () => {
@@ -3102,7 +3122,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                   const sessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
                   const hasFinalReplyText = deliveredReplies
                     .filter((entry) => entry.kind === "final")
-                    .some((entry) => (entry.payload.text ?? entry.payload.spokenText ?? "").trim());
+                    .some((entry) => isUserVisibleFinalReplyPayload(entry.payload));
                   const synthesizedGuard = hasFinalReplyText
                     ? undefined
                     : await applyControlDirectorDeliveryGuards<ReplyPayload>({
@@ -3169,6 +3189,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                   });
                 }
               }
+              clearControlDirectorFallbackTimerIfVisibleFinal();
               if (!context.chatAbortedRuns.has(clientRunId)) {
                 const finalText = collectFinalTextFromReplyPayloads(deliveredReplies);
                 const artifactIds = collectArtifactIdsFromReplyPayloads(deliveredReplies);
@@ -3240,7 +3261,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               const sessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
               const hasFinalReplyText = deliveredReplies
                 .filter((entry) => entry.kind === "final")
-                .some((entry) => (entry.payload.text ?? entry.payload.spokenText ?? "").trim());
+                .some((entry) => isUserVisibleFinalReplyPayload(entry.payload));
               if (!hasFinalReplyText) {
                 const synthesizedGuard = await applyControlDirectorDeliveryGuards<ReplyPayload>({
                   agentId,
