@@ -238,6 +238,37 @@ const EXTERNAL_CONTENT_SOURCE_BY_LABEL = new Map<string, ToolHookExternalContent
   ["external", "unknown"],
 ]);
 
+function collectToolHookExternalContentSourcesFromString(
+  value: string,
+  sources: Set<ToolHookExternalContentSource>,
+): void {
+  const lines = value.split("\n");
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    if (!line.includes(EXTERNAL_CONTENT_MARKER) || !line.includes(" BEGIN>>>")) {
+      continue;
+    }
+    sources.add("unknown");
+    for (let metadataIndex = index + 1; metadataIndex < lines.length; metadataIndex += 1) {
+      const metadataLine = lines[metadataIndex] ?? "";
+      if (metadataLine.trim() === "---" || metadataLine.includes(EXTERNAL_CONTENT_MARKER)) {
+        break;
+      }
+      if (!metadataLine.toLowerCase().startsWith("source:")) {
+        continue;
+      }
+      const label = metadataLine.slice("Source:".length).trim().toLowerCase();
+      const source = EXTERNAL_CONTENT_SOURCE_BY_LABEL.get(label);
+      if (source) {
+        sources.add(source);
+      }
+    }
+  }
+  if (sources.size > 1) {
+    sources.delete("unknown");
+  }
+}
+
 function collectToolHookExternalContentSources(
   value: unknown,
   sources: Set<ToolHookExternalContentSource>,
@@ -249,19 +280,7 @@ function collectToolHookExternalContentSources(
   }
 
   if (typeof value === "string") {
-    if (!value.includes(EXTERNAL_CONTENT_MARKER)) {
-      return;
-    }
-    sources.add("unknown");
-    for (const match of value.matchAll(/^Source:\s*([^\r\n]+)/gim)) {
-      const source = EXTERNAL_CONTENT_SOURCE_BY_LABEL.get(match[1]?.trim().toLowerCase() ?? "");
-      if (source) {
-        sources.add(source);
-      }
-    }
-    if (sources.size > 1) {
-      sources.delete("unknown");
-    }
+    collectToolHookExternalContentSourcesFromString(value, sources);
     return;
   }
 
