@@ -316,6 +316,7 @@ import {
 } from "./attempt-trajectory-status.js";
 import {
   requiresCompletionRequiredAsyncTaskWait,
+  shouldWaitForCompletionRequiredAsyncTasks,
   waitForCompletionRequiredAsyncTasks,
   type AsyncStartedToolMeta,
   type CompletionRequiredAsyncTaskWaitResult,
@@ -4571,9 +4572,10 @@ export async function runEmbeddedAttempt(
         await sessionLockController.releaseForPrompt();
 
         if (
-          requiresCompletionRequiredAsyncTaskWait({
+          shouldWaitForCompletionRequiredAsyncTasks({
             sessionKey: params.sessionKey,
             toolMetas,
+            yieldDetected: yieldAborted,
           })
         ) {
           const getAsyncStartedToolMetas = () =>
