@@ -339,6 +339,81 @@ describe("gateway node pairing authorization", () => {
     });
   });
 
+  describeWithGatewayServer("pending diagnostics scopes", (getStarted) => {
+    test("hides pending pairing records from read-only callers", async () => {
+      const pairedNodeId = "node-read-only-paired";
+      const pendingOnlyNodeId = "node-read-only-pending";
+      const initial = await requestNodePairing({
+        nodeId: pairedNodeId,
+        platform: "macos",
+        commands: ["screen.snapshot"],
+      });
+      await approveNodePairing(initial.request.requestId, {
+        callerScopes: ["operator.pairing", "operator.write"],
+      });
+      await requestNodePairing({
+        nodeId: pairedNodeId,
+        platform: "macos",
+        commands: ["screen.snapshot", "system.run"],
+      });
+      await requestNodePairing({
+        nodeId: pendingOnlyNodeId,
+        platform: "macos",
+        commands: ["system.run"],
+      });
+
+      const ws = await openTrackedWs(getStarted().port);
+      try {
+        await connectOk(ws, {
+          token: "secret",
+          scopes: ["operator.read"],
+          deviceIdentityPath: `${await makeNodePairingStateDir()}/read-only.json`,
+        });
+
+        type NodeDiagnostics = {
+          nodeId: string;
+          approvalState?: string;
+          pendingRequestId?: string;
+          pendingDeclaredCommands?: string[];
+        };
+        const listed = await rpcReq<{ nodes?: NodeDiagnostics[] }>(ws, "node.list", {});
+        expect(listed.ok).toBe(true);
+        const nodes = listed.payload?.nodes ?? [];
+        expect(nodes.some((node) => node.nodeId === pendingOnlyNodeId)).toBe(false);
+        expect(nodes.find((node) => node.nodeId === pairedNodeId)).toEqual(
+          expect.objectContaining({
+            nodeId: pairedNodeId,
+            approvalState: "approved",
+          }),
+        );
+        expect(nodes.find((node) => node.nodeId === pairedNodeId)).not.toHaveProperty(
+          "pendingRequestId",
+        );
+        expect(nodes.find((node) => node.nodeId === pairedNodeId)).not.toHaveProperty(
+          "pendingDeclaredCommands",
+        );
+
+        const described = await rpcReq<NodeDiagnostics>(ws, "node.describe", {
+          nodeId: pairedNodeId,
+        });
+        expect(described.payload).toEqual(
+          expect.objectContaining({
+            nodeId: pairedNodeId,
+            approvalState: "approved",
+          }),
+        );
+        expect(described.payload).not.toHaveProperty("pendingRequestId");
+        expect(described.payload).not.toHaveProperty("pendingDeclaredCommands");
+
+        const pendingOnly = await rpcReq(ws, "node.describe", { nodeId: pendingOnlyNodeId });
+        expect(pendingOnly.ok).toBe(false);
+        expect(pendingOnly.error?.message).toContain("unknown nodeId");
+      } finally {
+        ws.close();
+      }
+    });
+  });
+
   describeWithGatewayServer("paired node reconnects", (getStarted) => {
     test("requests re-pairing when a paired node reconnects with upgraded commands", async () => {
       await expectRePairingRequest({

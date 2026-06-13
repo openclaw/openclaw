@@ -266,6 +266,34 @@ describe("gateway/node-catalog", () => {
     expect(node?.permissions).toBeUndefined();
   });
 
+  it("preserves pending first approval when a metadata reconnect omits permissions", () => {
+    const catalog = createKnownNodeCatalog({
+      pairedDevices: [pairedDevice({ deviceId: "new-node" })],
+      pairedNodes: [],
+      pendingNodes: [pendingNode({ nodeId: "new-node" })],
+      connectedNodes: [
+        {
+          nodeId: "new-node",
+          connId: "conn-1",
+          client: {} as never,
+          displayName: "New Node",
+          platform: "macos",
+          declaredCaps: ["camera", "screen"],
+          caps: [],
+          declaredCommands: ["screen.snapshot", "system.run"],
+          commands: [],
+          connectedAtMs: 1,
+        },
+      ],
+    });
+
+    const node = getKnownNode(catalog, "new-node");
+    expect(node?.approvalState).toBe("pending-approval");
+    expect(node?.pendingRequestId).toBe("request-1");
+    expect(node?.pendingDeclaredPermissions).toEqual({ camera: true, screen: true });
+    expect(node?.permissions).toBeUndefined();
+  });
+
   it("reports pending reapproval without making declarations effective", () => {
     const catalog = createKnownNodeCatalog({
       pairedDevices: [pairedDevice()],

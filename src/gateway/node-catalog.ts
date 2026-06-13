@@ -114,15 +114,20 @@ function buildPendingNodeSource(entry: NodePairingPendingRequest): KnownNodePend
 
 function resolveCurrentPendingNodePairing(params: {
   pending?: KnownNodePendingSource;
+  nodePairing?: KnownNodeApprovedSource;
   live?: NodeSession;
 }): KnownNodePendingSource | undefined {
-  const { pending, live } = params;
+  const { pending, nodePairing, live } = params;
   if (!pending || !live) {
     return pending;
   }
+  const declaredPermissions =
+    !nodePairing && live.declaredPermissions === undefined
+      ? pending.permissions
+      : live.declaredPermissions;
   return sameNodeApprovalSurfaceSet(pending.caps, live.declaredCaps) &&
     sameNodeApprovalSurfaceSet(pending.commands, live.declaredCommands) &&
-    sameNodePermissionSurface(pending.permissions, live.declaredPermissions)
+    sameNodePermissionSurface(pending.permissions, declaredPermissions)
     ? pending
     : undefined;
 }
@@ -259,6 +264,7 @@ export function createKnownNodeCatalog(params: {
     const live = liveById.get(nodeId);
     const pendingNodePairing = resolveCurrentPendingNodePairing({
       pending: pendingNodePairingById.get(nodeId),
+      nodePairing,
       live,
     });
     entriesById.set(nodeId, {
