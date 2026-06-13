@@ -100,6 +100,9 @@ export type AppViewState = {
   chatMessage: string;
   chatAttachments: ChatAttachment[];
   chatMessages: unknown[];
+  chatHistoryBeforeSeq: number | null;
+  chatHistoryHasMore: boolean;
+  chatHistoryLoadingMore: boolean;
   chatToolMessages: unknown[];
   activityEntries: ActivityEntry[];
   activityFilterText: string;

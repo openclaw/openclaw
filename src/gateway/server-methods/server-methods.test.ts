@@ -623,6 +623,41 @@ describe("augmentChatHistoryWithCanvasBlocks", () => {
 
     expect(augmentChatHistoryWithCanvasBlocks(messages)).toEqual(messages);
   });
+
+  it("can leave pending canvas previews unattached at page boundaries", () => {
+    const previewJson = JSON.stringify({
+      kind: "canvas",
+      view: {
+        backend: "canvas",
+        id: "cv_boundary",
+        url: "/__openclaw__/canvas/documents/cv_boundary/index.html",
+        title: "Boundary preview",
+        preferred_height: 240,
+      },
+      presentation: {
+        target: "assistant_message",
+      },
+    });
+
+    const messages = [
+      {
+        role: "assistant",
+        content: "Previous assistant",
+        timestamp: 1,
+      },
+      {
+        role: "tool",
+        toolName: "openclaw_canvas",
+        content: [{ type: "tool_result", text: previewJson }],
+        timestamp: 2,
+      },
+    ];
+
+    expect(
+      augmentChatHistoryWithCanvasBlocks(messages, { flushPendingToLastAssistant: false }),
+    ).toEqual(messages);
+    expect(JSON.stringify(augmentChatHistoryWithCanvasBlocks(messages))).toContain("cv_boundary");
+  });
 });
 
 describe("injectTimestamp", () => {

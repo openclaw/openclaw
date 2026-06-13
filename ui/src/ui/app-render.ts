@@ -54,7 +54,7 @@ import {
 } from "./controllers/agents.ts";
 import { setAssistantAvatarOverride } from "./controllers/assistant-identity.ts";
 import { loadChannels } from "./controllers/channels.ts";
-import { loadChatHistory } from "./controllers/chat.ts";
+import { loadChatHistory, loadOlderChatHistory } from "./controllers/chat.ts";
 import {
   applyConfig,
   ensureAgentConfigEntry,
@@ -1285,6 +1285,43 @@ function buildWorkspaceFileSidebarContent(name: string, content: string): string
   }
   const language = name.match(/\.([a-z0-9_-]+)$/i)?.[1]?.toLowerCase() ?? "";
   return `# ${name}\n\n\`\`\`${language}\n${content}\n\`\`\``;
+}
+
+async function loadOlderChatHistoryPreservingScroll(
+  state: AppViewState,
+  requestHostUpdate: (() => void) | undefined,
+) {
+  const host = state as AppViewState & {
+    querySelector?: (selectors: string) => Element | null;
+    updateComplete?: Promise<unknown>;
+  };
+  const scroller =
+    typeof host.querySelector === "function"
+      ? (host.querySelector(".chat-thread") as HTMLElement | null)
+      : null;
+  const previousHeight = scroller?.scrollHeight;
+  const previousTop = scroller?.scrollTop;
+
+  const loadPromise = loadOlderChatHistory(state);
+  requestHostUpdate?.();
+  await loadPromise;
+  requestHostUpdate?.();
+
+  if (
+    !scroller ||
+    typeof previousHeight !== "number" ||
+    typeof previousTop !== "number" ||
+    !host.updateComplete
+  ) {
+    return;
+  }
+  await host.updateComplete;
+  requestAnimationFrame(() => {
+    const heightDelta = scroller.scrollHeight - previousHeight;
+    if (heightDelta > 0) {
+      scroller.scrollTop = previousTop + heightDelta;
+    }
+  });
 }
 
 export function renderApp(state: AppViewState) {
@@ -3562,6 +3599,11 @@ export function renderApp(state: AppViewState) {
                     state.chatSideResult = null;
                     state.resetToolStream();
                     void refreshChat(state, { awaitHistory: true, scheduleScroll: false });
+                  },
+                  historyHasMore: state.chatHistoryHasMore,
+                  historyLoadingMore: state.chatHistoryLoadingMore,
+                  onLoadOlderHistory: async () => {
+                    await loadOlderChatHistoryPreservingScroll(state, requestHostUpdate);
                   },
                   onChatScroll: (event) => state.handleChatScroll(event),
                   getDraft: () => state.chatMessage,

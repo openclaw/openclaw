@@ -97,6 +97,9 @@ export type ChatHost = ChatInputHistoryState & {
   chatStream: string | null;
   connected: boolean;
   chatAttachments: ChatAttachment[];
+  chatHistoryBeforeSeq: number | null;
+  chatHistoryHasMore: boolean;
+  chatHistoryLoadingMore: boolean;
   chatQueue: ChatQueueItem[];
   chatQueueBySession?: Record<string, ChatQueueItem[]>;
   chatRunId: string | null;
@@ -1969,6 +1972,9 @@ async function clearChatHistory(host: ChatHost) {
       ...scopedAgentParamsForSession(host, host.sessionKey),
     });
     host.chatMessages = [];
+    host.chatHistoryBeforeSeq = null;
+    host.chatHistoryHasMore = false;
+    host.chatHistoryLoadingMore = false;
     host.chatSideResult = null;
     reconcileChatRunLifecycle(host as unknown as Parameters<typeof reconcileChatRunLifecycle>[0], {
       outcome: hadActiveRun ? "interrupted" : undefined,

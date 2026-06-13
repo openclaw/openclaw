@@ -115,6 +115,7 @@ export {
   archiveSessionTranscripts,
   attachOpenClawTranscriptMeta,
   capArrayByJsonBytes,
+  readBoundedRecentSessionMessagesWithSeqAsync,
   readFirstUserMessageFromTranscript,
   readLatestSessionUsageFromTranscriptAsync,
   readLatestRecentSessionUsageFromTranscriptAsync,
@@ -130,6 +131,7 @@ export {
   readSessionPreviewItemsFromTranscript,
   readSessionMessagesAsync,
   visitSessionMessagesAsync,
+  visitSessionMessagesReverseAsync,
   resolveSessionTranscriptCandidates,
 } from "./session-utils.fs.js";
 export type { ReadSessionMessagesAsyncOptions } from "./session-utils.fs.js";

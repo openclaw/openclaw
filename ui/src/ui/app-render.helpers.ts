@@ -150,6 +150,9 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
   state.chatMessage = "";
   state.chatAttachments = [];
   state.chatMessages = [];
+  state.chatHistoryBeforeSeq = null;
+  state.chatHistoryHasMore = false;
+  state.chatHistoryLoadingMore = false;
   state.chatToolMessages = [];
   state.activityEntries = [];
   state.activityExpandedIds = new Set();

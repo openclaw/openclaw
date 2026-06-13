@@ -50,6 +50,7 @@ const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
   "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.";
 const CHAT_HISTORY_REQUEST_LIMIT = 100;
+const CHAT_HISTORY_REQUEST_MAX_CHARS = 4000;
 const STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS = 60_000;
 const STARTUP_CHAT_HISTORY_DEFAULT_RETRY_MS = 500;
 const STARTUP_CHAT_HISTORY_MAX_RETRY_MS = 5_000;
@@ -395,6 +396,9 @@ export type ChatState = {
   sessionKey: string;
   currentSessionId?: string | null;
   chatLoading: boolean;
+  chatHistoryBeforeSeq: number | null;
+  chatHistoryHasMore: boolean;
+  chatHistoryLoadingMore: boolean;
   chatMessages: unknown[];
   chatThinkingLevel: string | null;
   chatSending: boolean;
@@ -418,7 +422,11 @@ type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
 };
 
 export type ChatHistoryResult = {
+  hasMore?: boolean;
   messages?: Array<unknown>;
+  newestSeq?: number;
+  nextBeforeSeq?: number | null;
+  oldestSeq?: number;
   sessionId?: string;
   thinkingLevel?: string;
   defaults?: GatewaySessionsDefaults;
@@ -445,6 +453,43 @@ export type ChatEventPayload = {
 function setChatError(state: ChatState, error: string | null) {
   state.lastError = error;
   state.chatError = error;
+}
+
+function extractTranscriptSeq(message: unknown): number | null {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return null;
+  }
+  const marker = (message as Record<string, unknown>)["__openclaw"];
+  if (!marker || typeof marker !== "object" || Array.isArray(marker)) {
+    return null;
+  }
+  const seq = (marker as { seq?: unknown }).seq;
+  return typeof seq === "number" && Number.isInteger(seq) && seq > 0 ? seq : null;
+}
+
+function applyChatHistoryPaginationState(state: ChatState, res: ChatHistoryResult): void {
+  state.chatHistoryHasMore = res.hasMore === true;
+  state.chatHistoryBeforeSeq =
+    state.chatHistoryHasMore && typeof res.nextBeforeSeq === "number" ? res.nextBeforeSeq : null;
+  state.chatHistoryLoadingMore = false;
+}
+
+function prependOlderHistoryMessages(
+  olderMessages: unknown[],
+  currentMessages: unknown[],
+): unknown[] {
+  const currentSeqs = new Set<number>();
+  for (const message of currentMessages) {
+    const seq = extractTranscriptSeq(message);
+    if (typeof seq === "number") {
+      currentSeqs.add(seq);
+    }
+  }
+  const older = olderMessages.filter((message) => {
+    const seq = extractTranscriptSeq(message);
+    return typeof seq !== "number" || !currentSeqs.has(seq);
+  });
+  return older.length > 0 ? [...older, ...currentMessages] : currentMessages;
 }
 
 function isGlobalSessionKey(sessionKey: string | undefined | null): boolean {
@@ -669,6 +714,9 @@ async function loadChatHistoryUncached(
   // Any pending input-history snapshot becomes invalid once we start reloading transcript state.
   state.resetChatInputHistoryNavigation?.();
   state.chatLoading = true;
+  state.chatHistoryHasMore = false;
+  state.chatHistoryBeforeSeq = null;
+  state.chatHistoryLoadingMore = false;
   setChatError(state, null);
   try {
     let res: ChatHistoryResult;
@@ -731,6 +779,7 @@ async function loadChatHistoryUncached(
     if (lateOptimisticTail.length > 0) {
       state.chatMessages = [...state.chatMessages, ...lateOptimisticTail];
     }
+    applyChatHistoryPaginationState(state, res);
     state.currentSessionId =
       typeof res.sessionInfo?.sessionId === "string" && res.sessionInfo.sessionId.trim()
         ? res.sessionInfo.sessionId
@@ -834,6 +883,9 @@ async function loadChatHistoryUncached(
     if (isMissingOperatorReadScopeError(err)) {
       state.chatMessages = [];
       state.chatThinkingLevel = null;
+      state.chatHistoryHasMore = false;
+      state.chatHistoryBeforeSeq = null;
+      state.chatHistoryLoadingMore = false;
       setChatError(state, formatMissingOperatorReadScopeMessage("existing chat history"));
     } else {
       setChatError(state, String(err));
@@ -844,6 +896,58 @@ async function loadChatHistoryUncached(
     }
   }
   return undefined;
+}
+
+export async function loadOlderChatHistory(state: ChatState): Promise<void> {
+  if (
+    !state.client ||
+    !state.connected ||
+    state.chatLoading ||
+    state.chatHistoryLoadingMore ||
+    !state.chatHistoryHasMore ||
+    typeof state.chatHistoryBeforeSeq !== "number"
+  ) {
+    return;
+  }
+  const sessionKey = state.sessionKey;
+  const beforeSeq = state.chatHistoryBeforeSeq;
+  const requestAgentId = isSelectedGlobalEventSessionKey(sessionKey)
+    ? resolveSelectedAgentId(state)
+    : undefined;
+  const requestVersion = beginChatHistoryRequest(state);
+  state.chatHistoryLoadingMore = true;
+  setChatError(state, null);
+  try {
+    const res = await state.client.request<ChatHistoryResult>("chat.history", {
+      sessionKey,
+      ...(requestAgentId ? { agentId: requestAgentId } : {}),
+      limit: CHAT_HISTORY_REQUEST_LIMIT,
+      maxChars: CHAT_HISTORY_REQUEST_MAX_CHARS,
+      beforeSeq,
+    });
+    if (!shouldApplyChatHistoryResult(state, requestVersion, sessionKey, requestAgentId)) {
+      return;
+    }
+    const messages = Array.isArray(res.messages) ? res.messages : [];
+    const visibleMessages = messages.filter((message) => !shouldHideHistoryMessage(message));
+    state.chatMessages = prependOlderHistoryMessages(visibleMessages, state.chatMessages);
+    applyChatHistoryPaginationState(state, res);
+  } catch (err) {
+    if (!shouldApplyChatHistoryResult(state, requestVersion, sessionKey, requestAgentId)) {
+      return;
+    }
+    if (isMissingOperatorReadScopeError(err)) {
+      state.chatHistoryHasMore = false;
+      state.chatHistoryBeforeSeq = null;
+      setChatError(state, formatMissingOperatorReadScopeMessage("older chat history"));
+    } else {
+      setChatError(state, String(err));
+    }
+  } finally {
+    if (isLatestChatHistoryRequest(state, requestVersion)) {
+      state.chatHistoryLoadingMore = false;
+    }
+  }
 }
 
 function dataUrlToBase64(dataUrl: string): { content: string; mimeType: string } | null {

@@ -172,7 +172,10 @@ function messageContainsToolHistoryContent(message: unknown): boolean {
   });
 }
 
-export function augmentChatHistoryWithCanvasBlocks(messages: unknown[]): unknown[] {
+export function augmentChatHistoryWithCanvasBlocks(
+  messages: unknown[],
+  options?: { flushPendingToLastAssistant?: boolean },
+): unknown[] {
   if (messages.length === 0) {
     return messages;
   }
@@ -230,7 +233,7 @@ export function augmentChatHistoryWithCanvasBlocks(messages: unknown[]): unknown
       rawText: text ?? null,
     });
   }
-  if (pending.length > 0) {
+  if (pending.length > 0 && options?.flushPendingToLastAssistant !== false) {
     const targetIndex =
       lastRenderableAssistantIndex >= 0 ? lastRenderableAssistantIndex : lastAssistantIndex;
     if (targetIndex >= 0) {

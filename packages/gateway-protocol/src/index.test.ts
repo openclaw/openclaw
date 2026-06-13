@@ -742,6 +742,19 @@ describe("validateModelsListParams", () => {
   });
 });
 
+describe("validateChatHistoryParams", () => {
+  it("accepts bounded history pagination params", () => {
+    expect(validateChatHistoryParams({ sessionKey: "main" })).toBe(true);
+    expect(validateChatHistoryParams({ sessionKey: "main", limit: 25, beforeSeq: 101 })).toBe(true);
+  });
+
+  it("rejects invalid history pagination params", () => {
+    expect(validateChatHistoryParams({ sessionKey: "main", beforeSeq: 0 })).toBe(false);
+    expect(validateChatHistoryParams({ sessionKey: "main", beforeSeq: 1.5 })).toBe(false);
+    expect(validateChatHistoryParams({ sessionKey: "main", beforeSeq: "101" })).toBe(false);
+  });
+});
+
 describe("validateTasksListParams", () => {
   it("accepts SDK task ledger filters", () => {
     expect(

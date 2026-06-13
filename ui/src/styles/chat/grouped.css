@@ -164,6 +164,16 @@
   white-space: nowrap;
 }
 
+.chat-history-load-more-row {
+  display: flex;
+  justify-content: center;
+  margin: 12px 8px 18px;
+}
+
+.chat-history-load-more {
+  white-space: nowrap;
+}
+
 /* Avatar Styles */
 .chat-avatar {
   width: 36px;

@@ -151,8 +151,14 @@ function buildSearchSessionListCases(
   return searchTerms.flatMap((search) => buildSessionListCases(sessions, { search }));
 }
 
-function chatHistoryMessage(role: "assistant" | "user", text: string, timestamp: number) {
+function chatHistoryMessage(
+  role: "assistant" | "user",
+  text: string,
+  timestamp: number,
+  seq?: number,
+) {
   return {
+    ...(typeof seq === "number" ? { __openclaw: { seq } } : {}),
     content: [{ text, type: "text" }],
     role,
     timestamp,
@@ -187,6 +193,69 @@ function buildScrollableChatHistory(baseTime: number): unknown[] {
   }
 
   return messages;
+}
+
+function buildToolHeavyHistoryPage({
+  baseTime,
+  count,
+  label,
+  startOffsetMs,
+  startSeq,
+}: {
+  baseTime: number;
+  count: number;
+  label: "middle" | "oldest" | "recent";
+  startOffsetMs: number;
+  startSeq: number;
+}): unknown[] {
+  const messages: unknown[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const role = index % 2 === 0 ? "user" : "assistant";
+    const seq = startSeq + index;
+    messages.push(
+      chatHistoryMessage(
+        role,
+        `${label} page ${String(index + 1).padStart(2, "0")} / seq ${seq}: ${
+          role === "user"
+            ? "user turn preserved across Codex tool-heavy history pagination."
+            : "assistant response restored without loading the entire transcript."
+        }`,
+        baseTime + startOffsetMs + index * 30_000,
+        seq,
+      ),
+    );
+  }
+  return messages;
+}
+
+function buildToolHeavyRecentHistory(baseTime: number): unknown[] {
+  return buildToolHeavyHistoryPage({
+    baseTime,
+    count: 8,
+    label: "recent",
+    startOffsetMs: 20_000,
+    startSeq: 30,
+  });
+}
+
+function buildToolHeavyMiddleHistory(baseTime: number): unknown[] {
+  return buildToolHeavyHistoryPage({
+    baseTime,
+    count: 8,
+    label: "middle",
+    startOffsetMs: -260_000,
+    startSeq: 16,
+  });
+}
+
+function buildToolHeavyOldestHistory(baseTime: number): unknown[] {
+  return buildToolHeavyHistoryPage({
+    baseTime,
+    count: 8,
+    label: "oldest",
+    startOffsetMs: -620_000,
+    startSeq: 1,
+  });
 }
 
 function searchPrefixes(term: string): string[] {
@@ -287,6 +356,45 @@ function createChatPickerScenario(): ControlUiMockGatewayScenario {
       },
       "agents.files.list": {
         cases: workspaceListCases,
+      },
+      "chat.history": {
+        cases: [
+          {
+            match: { beforeSeq: 16 },
+            response: {
+              messages: buildToolHeavyOldestHistory(baseTime),
+              hasMore: false,
+              nextBeforeSeq: null,
+              oldestSeq: 1,
+              newestSeq: 8,
+              sessionId: "control-ui-mock-session",
+              thinkingLevel: null,
+            },
+          },
+          {
+            match: { beforeSeq: 30 },
+            response: {
+              messages: buildToolHeavyMiddleHistory(baseTime),
+              hasMore: true,
+              nextBeforeSeq: 16,
+              oldestSeq: 16,
+              newestSeq: 23,
+              sessionId: "control-ui-mock-session",
+              thinkingLevel: null,
+            },
+          },
+          {
+            response: {
+              messages: buildToolHeavyRecentHistory(baseTime),
+              hasMore: true,
+              nextBeforeSeq: 30,
+              oldestSeq: 30,
+              newestSeq: 37,
+              sessionId: "control-ui-mock-session",
+              thinkingLevel: null,
+            },
+          },
+        ],
       },
       "sessions.list": {
         cases: [

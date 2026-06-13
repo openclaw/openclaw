@@ -8,6 +8,7 @@ import { GatewayRequestError } from "../gateway.ts";
 import {
   abortChatRun,
   handleChatEvent,
+  loadOlderChatHistory,
   loadChatHistory,
   requestChatSend,
   requestSkillWorkshopRevisionChatSend,
@@ -24,6 +25,9 @@ function createState(overrides: Partial<ChatState> = {}): ChatState {
     chatLoading: false,
     chatMessage: "",
     chatMessages: [],
+    chatHistoryBeforeSeq: null,
+    chatHistoryHasMore: false,
+    chatHistoryLoadingMore: false,
     chatRunId: null,
     chatSending: false,
     chatStream: null,
@@ -2246,6 +2250,10 @@ describe("loadChatHistory retry handling", () => {
         { role: "assistant", content: [{ type: "text", text: "visible answer" }] },
         { role: "user", content: [{ type: "text", text: "NO_REPLY" }] },
       ],
+      hasMore: true,
+      nextBeforeSeq: 41,
+      oldestSeq: 41,
+      newestSeq: 43,
       thinkingLevel: "low",
     });
     const state = createState({
@@ -2263,9 +2271,76 @@ describe("loadChatHistory retry handling", () => {
       { role: "assistant", content: [{ type: "text", text: "visible answer" }] },
       { role: "user", content: [{ type: "text", text: "NO_REPLY" }] },
     ]);
+    expect(state.chatHistoryHasMore).toBe(true);
+    expect(state.chatHistoryBeforeSeq).toBe(41);
+    expect(state.chatHistoryLoadingMore).toBe(false);
     expect(state.chatThinkingLevel).toBe("low");
     expect(state.chatLoading).toBe(false);
     expect(state.lastError).toBeNull();
+  });
+
+  it("prepends older chat history pages without resetting active stream state", async () => {
+    const request = vi.fn().mockResolvedValue({
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "older question" }],
+          __openclaw: { seq: 1 },
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "existing latest" }],
+          __openclaw: { seq: 5 },
+        },
+      ],
+      hasMore: false,
+      nextBeforeSeq: null,
+      oldestSeq: 1,
+      newestSeq: 5,
+    });
+    const state = createState({
+      chatMessages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "existing latest" }],
+          __openclaw: { seq: 5 },
+        },
+      ],
+      chatHistoryBeforeSeq: 5,
+      chatHistoryHasMore: true,
+      chatRunId: "run-live",
+      chatStream: "still streaming",
+      chatStreamStartedAt: 123,
+      client: { request } as unknown as ChatState["client"],
+      connected: true,
+    });
+
+    await loadOlderChatHistory(state);
+
+    expect(request).toHaveBeenCalledWith("chat.history", {
+      sessionKey: "main",
+      limit: 100,
+      maxChars: 4000,
+      beforeSeq: 5,
+    });
+    expect(state.chatMessages).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "older question" }],
+        __openclaw: { seq: 1 },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "existing latest" }],
+        __openclaw: { seq: 5 },
+      },
+    ]);
+    expect(state.chatHistoryHasMore).toBe(false);
+    expect(state.chatHistoryBeforeSeq).toBeNull();
+    expect(state.chatHistoryLoadingMore).toBe(false);
+    expect(state.chatRunId).toBe("run-live");
+    expect(state.chatStream).toBe("still streaming");
+    expect(state.chatStreamStartedAt).toBe(123);
   });
 
   it("filters heartbeat acknowledgements and internal-only user messages", async () => {

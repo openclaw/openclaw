@@ -16,6 +16,7 @@ import {
   readLatestRecentSessionUsageFromTranscriptAsync,
   readRecentSessionUsageFromTranscriptAsync,
   readRecentSessionUsageFromTranscript,
+  readBoundedRecentSessionMessagesWithSeqAsync,
   readRecentSessionMessagesAsync,
   readRecentSessionMessages,
   readRecentSessionMessagesWithStatsAsync,
@@ -151,6 +152,12 @@ function expectMessageFields(
       expect(metadata[key]).toEqual(value);
     }
   }
+}
+
+function readTranscriptSeq(message: unknown): number | undefined {
+  const record = requireRecord(message, "message");
+  const metadata = requireRecord(record["__openclaw"], "message metadata");
+  return typeof metadata.seq === "number" ? metadata.seq : undefined;
 }
 
 function expectUsageFields(usage: unknown, fields: Record<string, unknown>) {
@@ -735,6 +742,9 @@ describe("readSessionMessages", () => {
     writeTranscript(tmpDir, sessionId, [
       { type: "session", version: 3, id: sessionId },
       {
+        message: { role: "assistant", content: "legacy abandoned" },
+      },
+      {
         type: "message",
         id: "user-1",
         parentId: null,
@@ -780,6 +790,128 @@ describe("readSessionMessages", () => {
       sessionManagerOpenSpy.mockRestore();
       readFileSpy.mockRestore();
     }
+  });
+
+  test("paginates bounded tree history on the active branch", async () => {
+    const sessionId = "test-session-tree-page";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 3, id: sessionId },
+      {
+        message: { role: "assistant", content: "legacy abandoned" },
+      },
+      {
+        type: "message",
+        id: "user-1",
+        parentId: null,
+        message: { role: "user", content: "root" },
+      },
+      {
+        type: "message",
+        id: "assistant-1",
+        parentId: "user-1",
+        message: { role: "assistant", content: "active branch" },
+      },
+      {
+        type: "message",
+        id: "assistant-inactive",
+        parentId: "user-1",
+        message: { role: "assistant", content: "inactive branch" },
+      },
+      {
+        type: "message",
+        id: "user-2",
+        parentId: "assistant-1",
+        message: { role: "user", content: "latest active" },
+      },
+    ]);
+    clearSessionTranscriptIndexCache();
+
+    const recent = await readBoundedRecentSessionMessagesWithSeqAsync(
+      sessionId,
+      storePath,
+      undefined,
+      { maxMessages: 2, maxBytes: 4096 },
+    );
+    expect(recent.messages.map((message) => (message as { content?: unknown }).content)).toEqual([
+      "active branch",
+      "latest active",
+    ]);
+    const oldestRecentSeq = readTranscriptSeq(recent.messages[0]);
+    expect(typeof oldestRecentSeq).toBe("number");
+    if (typeof oldestRecentSeq !== "number") {
+      throw new Error("Expected oldest recent sequence");
+    }
+
+    const older = await readBoundedRecentSessionMessagesWithSeqAsync(
+      sessionId,
+      storePath,
+      undefined,
+      { beforeSeq: oldestRecentSeq, maxMessages: 2, maxBytes: 4096 },
+    );
+    expect(older.messages.map((message) => (message as { content?: unknown }).content)).toEqual([
+      "root",
+    ]);
+    const rootSeq = readTranscriptSeq(older.messages[0]);
+    expect(typeof rootSeq).toBe("number");
+    if (typeof rootSeq !== "number") {
+      throw new Error("Expected root sequence");
+    }
+    const beforeRoot = await readBoundedRecentSessionMessagesWithSeqAsync(
+      sessionId,
+      storePath,
+      undefined,
+      { beforeSeq: rootSeq, maxMessages: 2, maxBytes: 4096 },
+    );
+    expect(beforeRoot.messages).toEqual([]);
+  });
+
+  test("does not expose inactive tree rows when the active parent needs bounded lookback", async () => {
+    const sessionId = "test-session-tree-page-parent-lookback";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 3, id: sessionId },
+      {
+        type: "message",
+        id: "user-1",
+        parentId: null,
+        message: { role: "user", content: `root ${"r".repeat(400)}` },
+      },
+      {
+        type: "message",
+        id: "assistant-inactive",
+        parentId: "user-1",
+        message: { role: "assistant", content: `inactive branch ${"i".repeat(850)}` },
+      },
+      {
+        type: "message",
+        id: "assistant-1",
+        parentId: "user-1",
+        message: { role: "assistant", content: "active branch" },
+      },
+    ]);
+    clearSessionTranscriptIndexCache();
+
+    const recent = await readBoundedRecentSessionMessagesWithSeqAsync(
+      sessionId,
+      storePath,
+      undefined,
+      { maxMessages: 1, maxBytes: 4096 },
+    );
+    const activeSeq = readTranscriptSeq(recent.messages[0]);
+    expect(typeof activeSeq).toBe("number");
+    if (typeof activeSeq !== "number") {
+      throw new Error("Expected active message sequence");
+    }
+
+    const older = await readBoundedRecentSessionMessagesWithSeqAsync(
+      sessionId,
+      storePath,
+      undefined,
+      { beforeSeq: activeSeq, maxMessages: 2, maxBytes: 1024 },
+    );
+    const olderText = older.messages.map((message) => (message as { content?: unknown }).content);
+    expect(olderText).toHaveLength(1);
+    expect(String(olderText[0])).toContain("root");
+    expect(JSON.stringify(older.messages)).not.toContain("inactive branch");
   });
 
   test("keeps async active branch rows when imported parent links are incomplete", async () => {

@@ -251,6 +251,9 @@ export class OpenClawApp extends LitElement {
   @state() chatSending = false;
   @state() chatMessage = "";
   @state() chatMessages: unknown[] = [];
+  @state() chatHistoryBeforeSeq: number | null = null;
+  @state() chatHistoryHasMore = false;
+  @state() chatHistoryLoadingMore = false;
   @state() chatToolMessages: unknown[] = [];
   @state() activityEntries: ActivityEntry[] = [];
   @state() activityFilterText = "";

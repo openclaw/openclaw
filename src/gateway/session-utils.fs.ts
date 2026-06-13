@@ -184,11 +184,21 @@ type ReadRecentSessionMessagesResult = {
 };
 
 const RECENT_SESSION_MESSAGES_DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
+const BOUNDED_TREE_PARENT_LOOKBACK_CHUNKS = 4;
 
 type TailTranscriptRecord = {
   id?: string;
   parentId?: string | null;
   record: Record<string, unknown>;
+};
+
+type SequencedTailTranscriptRecord = TailTranscriptRecord & {
+  seq: number;
+};
+
+type TailTranscriptLine = {
+  line: string;
+  offset: number;
 };
 
 function normalizeRecentSessionReadOptions(opts?: Partial<ReadRecentSessionMessagesOptions>) {
@@ -271,6 +281,120 @@ async function readRecentTranscriptTailLinesAsync(
       .slice(readStart > 0 ? 1 : 0)
       .filter((line) => line.trim().length > 0)
       .slice(-maxLines);
+  } finally {
+    await handle.close();
+  }
+}
+
+async function readRecentTranscriptTailLineEntriesAsync(
+  filePath: string,
+  stat: fs.Stats,
+  opts: ReadRecentSessionMessagesOptions & { beforeSeq?: number },
+): Promise<TailTranscriptLine[]> {
+  const maxMessages = Math.max(0, Math.floor(opts.maxMessages));
+  const maxBytes = Math.max(
+    1024,
+    Math.floor(opts.maxBytes ?? RECENT_SESSION_MESSAGES_DEFAULT_MAX_BYTES),
+  );
+  const readEnd =
+    typeof opts.beforeSeq === "number"
+      ? Math.max(0, Math.min(stat.size, Math.floor(opts.beforeSeq) - 1))
+      : stat.size;
+  if (maxMessages === 0 || readEnd <= 0) {
+    return [];
+  }
+  const readLen = Math.min(readEnd, maxBytes);
+  const readStart = Math.max(0, readEnd - readLen);
+  const maxLines = Math.max(maxMessages, Math.floor(opts.maxLines ?? maxMessages * 20 + 20));
+  const handle = await fs.promises.open(filePath, "r");
+  try {
+    const buffer = Buffer.alloc(readLen);
+    const { bytesRead } = await handle.read(buffer, 0, readLen, readStart);
+    if (bytesRead <= 0) {
+      return [];
+    }
+    const text = buffer.toString("utf-8", 0, bytesRead);
+    const parts = text.split("\n");
+    const out: TailTranscriptLine[] = [];
+    let offset = readStart;
+    for (let index = 0; index < parts.length; index += 1) {
+      const rawLine = parts[index] ?? "";
+      const hasNewline = index < parts.length - 1;
+      const byteLength = Buffer.byteLength(rawLine, "utf8");
+      const lineOffset = offset;
+      offset += byteLength + (hasNewline ? 1 : 0);
+      if (index === 0 && readStart > 0) {
+        continue;
+      }
+      if (!hasNewline && readEnd < stat.size) {
+        continue;
+      }
+      const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+      if (line.trim()) {
+        out.push({ line, offset: lineOffset });
+      }
+    }
+    return out.slice(-maxLines);
+  } finally {
+    await handle.close();
+  }
+}
+
+async function readTranscriptLineEntriesFromSeqAsync(
+  filePath: string,
+  stat: fs.Stats,
+  opts: ReadRecentSessionMessagesOptions & { fromSeq: number },
+): Promise<TailTranscriptLine[]> {
+  const maxMessages = Math.max(0, Math.floor(opts.maxMessages));
+  const maxBytes = Math.max(
+    1024,
+    Math.floor(opts.maxBytes ?? RECENT_SESSION_MESSAGES_DEFAULT_MAX_BYTES),
+  );
+  const readStart = Math.max(0, Math.min(stat.size, Math.floor(opts.fromSeq) - 1));
+  if (maxMessages === 0 || readStart >= stat.size) {
+    return [];
+  }
+  const readLen = Math.min(stat.size - readStart, maxBytes);
+  const maxLines = Math.max(maxMessages, Math.floor(opts.maxLines ?? maxMessages * 20 + 20));
+  const handle = await fs.promises.open(filePath, "r");
+  try {
+    let startsAtLineBoundary = readStart === 0;
+    if (!startsAtLineBoundary) {
+      const previousByte = Buffer.alloc(1);
+      const { bytesRead } = await handle.read(previousByte, 0, 1, readStart - 1);
+      startsAtLineBoundary = bytesRead === 1 && previousByte[0] === 0x0a;
+    }
+
+    const buffer = Buffer.alloc(readLen);
+    const { bytesRead } = await handle.read(buffer, 0, readLen, readStart);
+    if (bytesRead <= 0) {
+      return [];
+    }
+    const text = buffer.toString("utf-8", 0, bytesRead);
+    const parts = text.split("\n");
+    const out: TailTranscriptLine[] = [];
+    let offset = readStart;
+    for (let index = 0; index < parts.length; index += 1) {
+      const rawLine = parts[index] ?? "";
+      const hasNewline = index < parts.length - 1;
+      const byteLength = Buffer.byteLength(rawLine, "utf8");
+      const lineOffset = offset;
+      offset += byteLength + (hasNewline ? 1 : 0);
+      if (index === 0 && !startsAtLineBoundary) {
+        continue;
+      }
+      if (!hasNewline && readStart + bytesRead < stat.size) {
+        continue;
+      }
+      const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+      if (line.trim()) {
+        out.push({ line, offset: lineOffset });
+      }
+      if (out.length >= maxLines) {
+        break;
+      }
+    }
+    return out;
   } finally {
     await handle.close();
   }
@@ -383,8 +507,8 @@ function tailRecordHasTreeLink(entry: TailTranscriptRecord): boolean {
   );
 }
 
-function selectBoundedActiveTailRecords(entries: TailTranscriptRecord[]): TailTranscriptRecord[] {
-  const byId = new Map<string, TailTranscriptRecord>();
+function selectBoundedActiveTailRecords<T extends TailTranscriptRecord>(entries: T[]): T[] {
+  const byId = new Map<string, T>();
   let leafId: string | undefined;
   for (const entry of entries) {
     if (entry.id) {
@@ -398,7 +522,7 @@ function selectBoundedActiveTailRecords(entries: TailTranscriptRecord[]): TailTr
     return entries;
   }
 
-  const selected: TailTranscriptRecord[] = [];
+  const selected: T[] = [];
   const seen = new Set<string>();
   let currentId: string | undefined = leafId;
   while (currentId) {
@@ -427,6 +551,34 @@ function selectBoundedActiveTailRecords(entries: TailTranscriptRecord[]): TailTr
   return activeBranch;
 }
 
+function selectBoundedActiveTailRecordsToLeaf<T extends TailTranscriptRecord>(
+  entries: T[],
+  leafId: string,
+): T[] {
+  const byId = new Map<string, T>();
+  for (const entry of entries) {
+    if (entry.id) {
+      byId.set(entry.id, entry);
+    }
+  }
+  const selected: T[] = [];
+  const seen = new Set<string>();
+  let currentId: string | undefined = leafId;
+  while (currentId) {
+    if (seen.has(currentId)) {
+      return [];
+    }
+    seen.add(currentId);
+    const entry = byId.get(currentId);
+    if (!entry) {
+      break;
+    }
+    selected.push(entry);
+    currentId = entry.parentId ?? undefined;
+  }
+  return selected.toReversed();
+}
+
 function readTranscriptRecords(filePath: string): TailTranscriptRecord[] {
   const records: TailTranscriptRecord[] = [];
   visitTranscriptLines(filePath, (line) => {
@@ -441,7 +593,7 @@ function readTranscriptRecords(filePath: string): TailTranscriptRecord[] {
   return records;
 }
 
-function selectActiveTranscriptRecords(records: TailTranscriptRecord[]): TailTranscriptRecord[] {
+function selectActiveTranscriptRecords<T extends TailTranscriptRecord>(records: T[]): T[] {
   return records.some(tailRecordHasTreeLink) ? selectBoundedActiveTailRecords(records) : records;
 }
 
@@ -472,6 +624,32 @@ function parseRecentTranscriptTailMessages(lines: string[], maxMessages: number)
     return entry ? [entry] : [];
   });
   return transcriptRecordsToMessages(selectActiveTranscriptRecords(entries)).slice(-maxMessages);
+}
+
+function parseSequencedTailTranscriptRecords(
+  lines: TailTranscriptLine[],
+): SequencedTailTranscriptRecord[] {
+  const records: SequencedTailTranscriptRecord[] = [];
+  for (const { line, offset } of lines) {
+    const entry = parseTailTranscriptRecord(line);
+    if (entry && entry.record.type !== "session") {
+      records.push({ ...entry, seq: offset + 1 });
+    }
+  }
+  return records;
+}
+
+function sequencedTailRecordsToMessages(records: SequencedTailTranscriptRecord[]): unknown[] {
+  return records.flatMap((entry) => {
+    const message = parsedSessionEntryToMessage(entry.record, entry.seq);
+    return message ? [message] : [];
+  });
+}
+
+function parseRecentTranscriptTailMessagesWithSeq(lines: TailTranscriptLine[]): unknown[] {
+  const entries = parseSequencedTailTranscriptRecords(lines);
+  const selected = selectActiveTranscriptRecords(entries);
+  return sequencedTailRecordsToMessages(selected);
 }
 
 function visitTranscriptLines(filePath: string, visit: (line: string) => void): void {
@@ -643,6 +821,35 @@ export async function visitSessionMessagesAsync(
   return index.entries.length;
 }
 
+export async function visitSessionMessagesReverseAsync(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile: string | undefined,
+  visit: (message: unknown, seq: number) => boolean | void,
+  _opts: { mode: "full"; reason: string },
+): Promise<number> {
+  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile);
+  if (!filePath) {
+    return 0;
+  }
+  const index = await readSessionTranscriptIndex(filePath);
+  if (!index) {
+    return 0;
+  }
+  for (let entryIndex = index.entries.length - 1; entryIndex >= 0; entryIndex -= 1) {
+    const entry = index.entries[entryIndex];
+    const message = indexedTranscriptEntryToMessage(entry);
+    if (!message) {
+      continue;
+    }
+    const shouldContinue = visit(message, entry.seq);
+    if (shouldContinue === false) {
+      break;
+    }
+  }
+  return index.entries.length;
+}
+
 export async function readSessionMessageCountAsync(
   sessionId: string,
   storePath: string | undefined,
@@ -730,6 +937,83 @@ export async function readRecentSessionMessagesWithStatsAsync(
     attachOpenClawTranscriptMeta(message, { seq: firstSeq + index }),
   );
   return { messages: messagesWithSeq, totalMessages };
+}
+
+export async function readBoundedRecentSessionMessagesWithSeqAsync(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile: string | undefined,
+  opts: ReadRecentSessionMessagesOptions & { beforeSeq?: number },
+): Promise<ReadRecentSessionMessagesResult> {
+  const maxMessages = Math.max(0, Math.floor(opts.maxMessages));
+  if (maxMessages === 0) {
+    return { messages: [], totalMessages: 0 };
+  }
+  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile);
+  if (!filePath) {
+    return { messages: [], totalMessages: 0 };
+  }
+  let stat: fs.Stats;
+  try {
+    stat = await fs.promises.stat(filePath);
+  } catch {
+    return { messages: [], totalMessages: 0 };
+  }
+  if (stat.size === 0) {
+    return { messages: [], totalMessages: 0 };
+  }
+  const lines = await readRecentTranscriptTailLineEntriesAsync(filePath, stat, {
+    ...opts,
+    maxMessages,
+  });
+  const tailRecords = parseSequencedTailTranscriptRecords(lines);
+  if (typeof opts.beforeSeq === "number") {
+    const contextLines = await readTranscriptLineEntriesFromSeqAsync(filePath, stat, {
+      ...opts,
+      fromSeq: opts.beforeSeq,
+      maxMessages,
+    });
+    const contextRecords = contextLines.flatMap(({ line }) => {
+      const entry = parseTailTranscriptRecord(line);
+      return entry && entry.record.type !== "session" ? [entry] : [];
+    });
+    if (contextRecords.some(tailRecordHasTreeLink)) {
+      const contextActive = selectActiveTranscriptRecords(contextRecords);
+      const parentId = contextActive[0]?.parentId;
+      if (typeof parentId !== "string") {
+        return { messages: [], totalMessages: 0 };
+      }
+      const branchRecords = tailRecords;
+      let selected = selectBoundedActiveTailRecordsToLeaf(branchRecords, parentId);
+      let beforeSeq = branchRecords[0]?.seq;
+      for (
+        let chunkIndex = 0;
+        selected.length === 0 &&
+        typeof beforeSeq === "number" &&
+        chunkIndex < BOUNDED_TREE_PARENT_LOOKBACK_CHUNKS;
+        chunkIndex += 1
+      ) {
+        const olderLines = await readRecentTranscriptTailLineEntriesAsync(filePath, stat, {
+          ...opts,
+          beforeSeq,
+          maxMessages,
+        });
+        const olderRecords = parseSequencedTailTranscriptRecords(olderLines);
+        if (olderRecords.length === 0) {
+          break;
+        }
+        branchRecords.unshift(...olderRecords);
+        selected = selectBoundedActiveTailRecordsToLeaf(branchRecords, parentId);
+        beforeSeq = olderRecords[0]?.seq;
+      }
+      // Never emit unfiltered tree rows here: abandoned rewrite branches may sit in the
+      // same bounded window when the active parent is still farther back.
+      const messages = sequencedTailRecordsToMessages(selected);
+      return { messages: messages.slice(-maxMessages), totalMessages: messages.length };
+    }
+  }
+  const messages = parseRecentTranscriptTailMessagesWithSeq(lines).slice(-maxMessages);
+  return { messages, totalMessages: messages.length };
 }
 
 export function readRecentSessionTranscriptLines(params: {

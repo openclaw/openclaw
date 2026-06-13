@@ -6959,17 +6959,20 @@ public struct ChatHistoryParams: Codable, Sendable {
     public let agentid: String?
     public let limit: Int?
     public let maxchars: Int?
+    public let beforeseq: Int?
 
     public init(
         sessionkey: String,
         agentid: String? = nil,
         limit: Int?,
-        maxchars: Int?)
+        maxchars: Int?,
+        beforeseq: Int?)
     {
         self.sessionkey = sessionkey
         self.agentid = agentid
         self.limit = limit
         self.maxchars = maxchars
+        self.beforeseq = beforeseq
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -6977,6 +6980,7 @@ public struct ChatHistoryParams: Codable, Sendable {
         case agentid = "agentId"
         case limit
         case maxchars = "maxChars"
+        case beforeseq = "beforeSeq"
     }
 }
 
