@@ -133,14 +133,14 @@ describe("tool-loop terminal fallback", () => {
         observations: [
           {
             toolName: "status",
-            argsHash: "first",
+            argsHash: "current",
             resultHash: "failed-result",
             resultText: "network unavailable",
             failed: true,
           },
           {
             toolName: "status",
-            argsHash: "second",
+            argsHash: "current",
             resultHash: "success-result",
             resultText: "healthy",
             terminalResultFallback: { mode: "safe_text", prefix: "Status:" },
@@ -151,6 +151,31 @@ describe("tool-loop terminal fallback", () => {
       toolName: "status",
       payload: { text: "Status:\nhealthy" },
     });
+  });
+
+  it("does not resolve a failed action with an unrelated same-tool success", () => {
+    expect(
+      resolveSuccessfulToolTerminalFallback({
+        observations: [
+          {
+            toolName: "cron",
+            argsHash: "add",
+            resultHash: "failed-add-result",
+            failed: true,
+            mutatingAction: true,
+          },
+          {
+            toolName: "cron",
+            argsHash: "status",
+            resultHash: "status-result",
+            terminalSummary: {
+              text: "Scheduler has 2 jobs.",
+              privacy: "public",
+            },
+          },
+        ],
+      }),
+    ).toBeUndefined();
   });
 
   it("does not reuse a stale success after the blocked tool later fails", () => {
@@ -193,7 +218,7 @@ describe("tool-loop terminal fallback", () => {
         observations: [
           {
             toolName: "status",
-            argsHash: "first",
+            argsHash: "current",
             resultHash: "failed-result",
             resultText: "network unavailable",
             failed: true,
@@ -201,7 +226,7 @@ describe("tool-loop terminal fallback", () => {
           },
           {
             toolName: "status",
-            argsHash: "second",
+            argsHash: "current",
             resultHash: "success-result",
             resultText: "healthy",
             terminalResultFallback: { mode: "safe_text", prefix: "Status:" },

@@ -558,6 +558,31 @@ describe("before_tool_call loop detection behavior", () => {
     expect(onToolOutcome.mock.calls.at(-1)?.[0]).not.toHaveProperty("didSendViaMessagingTool");
   });
 
+  it.each([
+    ["dry-run", { ok: true, result: { dryRun: true } }],
+    ["failure", { status: "ok", result: { status: "failed" } }],
+  ])("does not mark nested %s message outcomes as delivered", async (_label, details) => {
+    const onToolOutcome = vi.fn();
+    const execute = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: "not delivered" }],
+      details,
+    });
+    const tool = createWrappedTool("message", execute, {
+      ...enabledLoopDetectionContext,
+      runId: "run-nested-non-delivery-message-outcome",
+      onToolOutcome,
+    });
+
+    await expectUnblockedToolExecution(tool, "message-nested-non-delivery", {
+      action: "send",
+      to: "channel:123",
+      content: "not delivered",
+    });
+
+    expect(onToolOutcome).toHaveBeenCalledWith(expect.objectContaining({ toolName: "message" }));
+    expect(onToolOutcome.mock.calls.at(-1)?.[0]).not.toHaveProperty("didSendViaMessagingTool");
+  });
+
   it("marks successful async-started tool outcomes for replay-safety handling", async () => {
     const onToolOutcome = vi.fn();
     const execute = vi.fn().mockResolvedValue({

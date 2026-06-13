@@ -980,6 +980,38 @@ function hasFailedToolResultStatus(details: Record<string, unknown> | undefined)
   );
 }
 
+function hasMessagingToolNonDeliveryEvidence(value: unknown, depth = 0): boolean {
+  if (Array.isArray(value)) {
+    return (
+      depth < 3 && value.some((entry) => hasMessagingToolNonDeliveryEvidence(entry, depth + 1))
+    );
+  }
+  if (!isPlainObject(value)) {
+    return false;
+  }
+  const deliveryStatus =
+    typeof value.deliveryStatus === "string"
+      ? value.deliveryStatus.trim().toLowerCase()
+      : typeof value.delivery_status === "string"
+        ? value.delivery_status.trim().toLowerCase()
+        : "";
+  const status = typeof value.status === "string" ? value.status.trim().toLowerCase() : "";
+  if (
+    value.dryRun === true ||
+    hasFailedToolResultStatus(value) ||
+    (deliveryStatus && deliveryStatus !== "sent" && deliveryStatus !== "partial_failed") ||
+    (status && status !== "ok" && status !== "sent" && status !== "partial_failed")
+  ) {
+    return true;
+  }
+  if (depth >= 3) {
+    return false;
+  }
+  return [value.result, value.results, value.payloadOutcomes].some((entry) =>
+    hasMessagingToolNonDeliveryEvidence(entry, depth + 1),
+  );
+}
+
 function readNonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
@@ -1063,8 +1095,11 @@ function hasCommittedMessagingToolSendOutcome(params: {
   if (details.dryRun === true) {
     return false;
   }
-  if (hasCommittedMessagingToolResultDetails(details)) {
+  if (hasCommittedMessagingToolResultDetails(details) || contentReceipt) {
     return true;
+  }
+  if (hasMessagingToolNonDeliveryEvidence(details)) {
+    return false;
   }
   const deliveryStatus =
     typeof details.deliveryStatus === "string"
@@ -1091,7 +1126,7 @@ function hasCommittedMessagingToolSendOutcome(params: {
   if (details.ok === false || details.success === false || (status && status !== "ok")) {
     return false;
   }
-  return details.ok === true || details.success === true || status === "ok" || contentReceipt;
+  return details.ok === true || details.success === true || status === "ok";
 }
 
 function summarizeToolParams(params: unknown): DiagnosticToolParamsSummary {

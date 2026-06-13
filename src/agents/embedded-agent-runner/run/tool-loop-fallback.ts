@@ -284,27 +284,32 @@ function isSuccessfulObservation(observation: ToolLoopObservation): boolean {
   return !observation.blockedReason && observation.failed !== true;
 }
 
+function resolveToolActionIdentity(observation: ToolLoopObservation): string {
+  return JSON.stringify([observation.toolName, observation.argsHash]);
+}
+
 function selectSuccessfulObservationsAfterLatestToolFailure(
   observations: readonly ToolLoopObservation[],
 ): ToolLoopObservation[] | undefined {
-  const latestFailureIndexByTool = new Map<string, number>();
-  const latestSuccessIndexByTool = new Map<string, number>();
+  const latestFailureIndexByAction = new Map<string, number>();
+  const latestSuccessIndexByAction = new Map<string, number>();
   for (const [index, observation] of observations.entries()) {
+    const actionIdentity = resolveToolActionIdentity(observation);
     if (observation.failed === true) {
-      latestFailureIndexByTool.set(observation.toolName, index);
+      latestFailureIndexByAction.set(actionIdentity, index);
     } else if (isSuccessfulObservation(observation)) {
-      latestSuccessIndexByTool.set(observation.toolName, index);
+      latestSuccessIndexByAction.set(actionIdentity, index);
     }
   }
-  for (const [toolName, failureIndex] of latestFailureIndexByTool) {
-    if ((latestSuccessIndexByTool.get(toolName) ?? -1) < failureIndex) {
+  for (const [actionIdentity, failureIndex] of latestFailureIndexByAction) {
+    if ((latestSuccessIndexByAction.get(actionIdentity) ?? -1) < failureIndex) {
       return undefined;
     }
   }
   return observations.filter(
     (observation, index) =>
       isSuccessfulObservation(observation) &&
-      index > (latestFailureIndexByTool.get(observation.toolName) ?? -1),
+      index > (latestFailureIndexByAction.get(resolveToolActionIdentity(observation)) ?? -1),
   );
 }
 
