@@ -801,6 +801,9 @@ function hasFailedToolResultStatus(details: Record<string, unknown> | undefined)
   if (!details) {
     return false;
   }
+  if (details.ok === false || details.success === false) {
+    return true;
+  }
   const status = typeof details.status === "string" ? details.status.trim().toLowerCase() : "";
   const deliveryStatus =
     typeof details.deliveryStatus === "string" ? details.deliveryStatus.trim().toLowerCase() : "";

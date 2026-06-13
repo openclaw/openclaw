@@ -1296,7 +1296,6 @@ export async function handleToolExecutionEnd(
   // Commit messaging tool evidence on success, discard on error.
   const pendingText = ctx.state.pendingMessagingTexts.get(toolCallId);
   const pendingTarget = ctx.state.pendingMessagingTargets.get(toolCallId);
-  const pendingMediaUrls = ctx.state.pendingMessagingMediaUrls.get(toolCallId) ?? [];
   const executedMessagingSend =
     isMessagingTool(toolName) && isMessagingToolSendAction(toolName, executedArgs);
   const executedMessagingTarget = executedMessagingSend
@@ -1327,15 +1326,13 @@ export async function handleToolExecutionEnd(
       Boolean(executedMessagingText) ||
       Boolean(executedMessagingMediaUrl) ||
       executedMessagingMediaUrls.length > 0 ||
-      hasExecutedRichMessagingPayload ||
-      pendingMediaUrls.length > 0);
+      hasExecutedRichMessagingPayload);
   const hasCommittedMessagingSend =
     !isToolError && isMessagingSend && hasCommittedMessagingToolSendResult(result);
   const committedMediaUrls = hasCommittedMessagingSend
     ? [
         ...new Set([
           ...executedMessagingMediaUrls,
-          ...pendingMediaUrls,
           ...collectMessagingMediaUrlsFromToolResult(result),
         ]),
       ]

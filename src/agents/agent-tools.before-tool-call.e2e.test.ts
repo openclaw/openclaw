@@ -502,6 +502,35 @@ describe("before_tool_call loop detection behavior", () => {
     );
   });
 
+  it.each([{ ok: false }, { success: false }])(
+    "marks explicit false result flags as failed replay-safety observations",
+    async (details) => {
+      const onToolOutcome = vi.fn();
+      const execute = vi.fn().mockResolvedValue({
+        content: [{ type: "text", text: "write failed after partial update" }],
+        details,
+      });
+      const tool = createWrappedTool("write", execute, {
+        ...enabledLoopDetectionContext,
+        runId: "run-returned-false-mutating-outcome-observer",
+        onToolOutcome,
+      });
+
+      await expectUnblockedToolExecution(tool, "write-returned-false-observer", {
+        path: "report.md",
+        content: "updated",
+      });
+
+      expect(onToolOutcome).toHaveBeenCalledWith(
+        expect.objectContaining({
+          toolName: "write",
+          mutatingAction: true,
+          failed: true,
+        }),
+      );
+    },
+  );
+
   it("marks successful async-started tool outcomes for replay-safety handling", async () => {
     const onToolOutcome = vi.fn();
     const execute = vi.fn().mockResolvedValue({

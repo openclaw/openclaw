@@ -172,6 +172,7 @@ import {
   resolveAttemptReplayMetadata,
   extractPlanningOnlyPlanDetails,
   isPlanningOnlyAssistantText,
+  isPlanningOnlyAssistantTextForPrompt,
   resolveEmptyResponseRetryInstruction,
   resolveIncompleteTurnPayloadText,
   PLANNING_ONLY_BLOCKED_TEXT,
@@ -3345,7 +3346,10 @@ export async function runEmbeddedAgent(
               : undefined;
           const recoveredFinalAssistantTextAfterPromptTimeout =
             recoveredFinalAssistantCandidateAfterPromptTimeout &&
-            !isPlanningOnlyAssistantText([recoveredFinalAssistantCandidateAfterPromptTimeout])
+            !isPlanningOnlyAssistantTextForPrompt({
+              assistantTexts: [recoveredFinalAssistantCandidateAfterPromptTimeout],
+              prompt: params.prompt,
+            })
               ? recoveredFinalAssistantCandidateAfterPromptTimeout
               : undefined;
           const payloadAlreadyContainsRecoveredFinalAssistant =

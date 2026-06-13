@@ -104,6 +104,55 @@ describe("tool-loop terminal fallback", () => {
     ).toBeUndefined();
   });
 
+  it("does not reuse a successful terminal fallback that precedes a later failure", () => {
+    expect(
+      resolveSuccessfulToolTerminalFallback({
+        observations: [
+          {
+            toolName: "status",
+            argsHash: "first",
+            resultHash: "success-result",
+            resultText: "healthy",
+            terminalResultFallback: { mode: "safe_text", prefix: "Status:" },
+          },
+          {
+            toolName: "status",
+            argsHash: "second",
+            resultHash: "failed-result",
+            resultText: "network unavailable",
+            failed: true,
+          },
+        ],
+      }),
+    ).toBeUndefined();
+  });
+
+  it("uses a successful terminal fallback that follows the latest failure", () => {
+    expect(
+      resolveSuccessfulToolTerminalFallback({
+        observations: [
+          {
+            toolName: "status",
+            argsHash: "first",
+            resultHash: "failed-result",
+            resultText: "network unavailable",
+            failed: true,
+          },
+          {
+            toolName: "status",
+            argsHash: "second",
+            resultHash: "success-result",
+            resultText: "healthy",
+            terminalResultFallback: { mode: "safe_text", prefix: "Status:" },
+          },
+        ],
+      }),
+    ).toEqual({
+      toolName: "status",
+      payload: { text: "Status:\nhealthy" },
+    });
+  });
+
   it("does not reuse a stale success after the blocked tool later fails", () => {
     expect(
       resolveToolLoopAbortFallbackPayload({

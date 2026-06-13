@@ -1993,6 +1993,47 @@ describe("messaging tool media URL tracking", () => {
     });
   });
 
+  it("does not commit media removed by adjusted before-tool-call params", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-message-adjusted-media",
+      args: {
+        action: "send",
+        to: "channel:original",
+        content: "original text",
+        mediaUrls: ["file:///original.jpg"],
+      },
+    });
+    recordAdjustedParamsForToolCall(
+      "tool-message-adjusted-media",
+      {
+        action: "send",
+        to: "channel:adjusted",
+        content: "adjusted text",
+      },
+      ctx.params.runId,
+    );
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-message-adjusted-media",
+      isError: false,
+      result: committedMessageToolResult(),
+    });
+
+    expect(ctx.state.messagingToolSentMediaUrls).toHaveLength(0);
+    const target = requireSingleMessagingTarget(ctx);
+    expectRecordFields(target, "messaging target", {
+      to: "channel:adjusted",
+      text: "adjusted text",
+    });
+    expect(target).not.toHaveProperty("mediaUrls");
+  });
+
   it("uses adjusted before-tool-call params when classifying source replies", async () => {
     const explicitRoute = createTestContext().ctx;
     explicitRoute.params.sourceReplyDeliveryMode = "message_tool_only";

@@ -1322,6 +1322,41 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     });
   });
 
+  it.each([
+    { prompt: "Will you keep replies short?", finalText: "Got it." },
+    { prompt: "Does this approach make sense?", finalText: "Absolutely." },
+  ])(
+    "promotes concise direct answer $finalText when a prompt timeout races completion",
+    async ({ prompt, finalText }) => {
+      mockedClassifyFailoverReason.mockReturnValue(null);
+      mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: [],
+          timedOut: true,
+          lastAssistant: {
+            role: "assistant",
+            stopReason: "stop",
+            provider: "openai",
+            model: "gpt-5.5",
+            content: [{ type: "text", text: finalText }],
+          } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
+      );
+
+      const result = await runEmbeddedAgent({
+        ...overflowBaseRunParams,
+        prompt,
+        provider: "openai",
+        model: "gpt-5.5",
+        runId: "run-prompt-timeout-concise-direct-answer-recovered",
+      });
+
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+      expect(result.payloads).toEqual([{ text: finalText }]);
+      expect(result.meta.finalAssistantVisibleText).toBe(finalText);
+    },
+  );
+
   it("includes tool fallback before timeout error when final answer times out after tool work", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedRunEmbeddedAttempt.mockImplementationOnce(async (params: unknown) => {
@@ -2650,6 +2685,21 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       timedOut: false,
       attempt: makeAttemptResult({
         assistantTexts: [assistantText],
+      }),
+    });
+
+    expect(retryInstruction).toBeNull();
+  });
+
+  it("does not classify a direct progress-status answer as planning-only", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "custom-provider",
+      modelId: "custom-model",
+      prompt: "Are you monitoring it?",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["Monitoring it now."],
       }),
     });
 

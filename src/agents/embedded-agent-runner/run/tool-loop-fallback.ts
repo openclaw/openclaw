@@ -325,7 +325,12 @@ export function resolveSuccessfulToolTerminalFallback(params: {
   observations: readonly ToolLoopObservation[];
   requireDeclaredPresentableFallback?: boolean;
 }): ToolLoopFallbackResolution | undefined {
-  const successfulObservations = params.observations.filter(isSuccessfulObservation);
+  const lastFailureIndex = params.observations.findLastIndex(
+    (observation) => observation.failed === true,
+  );
+  const successfulObservations = params.observations
+    .slice(lastFailureIndex + 1)
+    .filter(isSuccessfulObservation);
   if (successfulObservations.length === 0) {
     return undefined;
   }
