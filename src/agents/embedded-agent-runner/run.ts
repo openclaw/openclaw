@@ -475,6 +475,8 @@ function areTerminalPayloadsPlanningOnlyText(
       payload.isError === true ||
       payload.isReasoning === true ||
       hasPayloadMedia(payload) ||
+      payload.presentation ||
+      payload.interactive ||
       payload.channelData
     ) {
       return false;
@@ -3604,26 +3606,28 @@ export async function runEmbeddedAgent(
             areTerminalPayloadsPlanningOnlyText(payloadsForTerminalPath);
           const assistantTextsForTerminalPathArePlanningOnlyText =
             payloadCount === 0 && isPlanningOnlyAssistantText(attempt.assistantTexts);
+          const terminalPathHasPlanningOnlyText =
+            payloadsForTerminalPathArePlanningOnlyText ||
+            assistantTextsForTerminalPathArePlanningOnlyText;
           const completedToolFallbackForPlanningOnlyPayload =
-            (payloadsForTerminalPathArePlanningOnlyText ||
-              assistantTextsForTerminalPathArePlanningOnlyText) &&
-            canUseAttemptTerminalFallback
+            terminalPathHasPlanningOnlyText && canUseAttemptTerminalFallback
               ? resolveAttemptSuccessfulToolTerminalFallback({
                   attempt,
                   observations: currentAttemptToolLoopObservations,
                 })
               : undefined;
-          const nextPlanningOnlyRetryInstruction = emptyAssistantReplyIsSilent
-            ? null
-            : resolvePlanningOnlyRetryInstruction({
-                provider,
-                modelId,
-                executionContract,
-                prompt: params.prompt,
-                aborted,
-                timedOut,
-                attempt,
-              });
+          const nextPlanningOnlyRetryInstruction =
+            emptyAssistantReplyIsSilent || !terminalPathHasPlanningOnlyText
+              ? null
+              : resolvePlanningOnlyRetryInstruction({
+                  provider,
+                  modelId,
+                  executionContract,
+                  prompt: params.prompt,
+                  aborted,
+                  timedOut,
+                  attempt,
+                });
           const nextReasoningOnlyRetryInstruction = emptyAssistantReplyIsSilent
             ? null
             : resolveReasoningOnlyRetryInstruction({
@@ -3848,14 +3852,16 @@ export async function runEmbeddedAgent(
               acceptedSessionSpawns: attempt.acceptedSessionSpawns,
             };
           }
-          const nonRetryablePlanningOnlyText = resolvePlanningOnlyBlockedPayloadText({
-            provider: activeErrorContext.provider,
-            modelId: activeErrorContext.model,
-            prompt,
-            aborted,
-            timedOut,
-            attempt,
-          });
+          const nonRetryablePlanningOnlyText = terminalPathHasPlanningOnlyText
+            ? resolvePlanningOnlyBlockedPayloadText({
+                provider: activeErrorContext.provider,
+                modelId: activeErrorContext.model,
+                prompt,
+                aborted,
+                timedOut,
+                attempt,
+              })
+            : null;
           const nonRetryablePlanningOnlyAsyncFallback =
             nonRetryablePlanningOnlyText && canUseAttemptTerminalFallback
               ? buildAsyncTaskTerminalPayloads(attempt)

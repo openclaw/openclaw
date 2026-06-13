@@ -401,6 +401,35 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     });
   });
 
+  it("does not reuse an older tool result when a newer tool call is pending", () => {
+    const payload = resolveTerminalToolResultReplyPayload({
+      isCronTrigger: false,
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "exec" }],
+        messagesSnapshot: [
+          {
+            role: "toolResult",
+            content: [{ type: "text", text: "first command completed" }],
+            details: { aggregated: "first command completed" },
+          } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+          {
+            role: "assistant",
+            stopReason: "toolUse",
+            provider: "openai",
+            model: "gpt-5.4",
+            content: [{ type: "toolCall", id: "call-b", name: "exec", arguments: {} }],
+          } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+        ],
+      }),
+    });
+
+    expect(payload).toBeNull();
+  });
+
   it("does not synthesize a completed terminal reply from failed trailing tool output", () => {
     const payload = resolveTerminalToolResultReplyPayload({
       isCronTrigger: false,
@@ -1703,6 +1732,49 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expect(result.payloads).toEqual([{ text: PLANNING_ONLY_BLOCKED_TEXT, isError: true }]);
     expect(result.meta.livenessState).toBe("blocked");
+  });
+
+  it.each([
+    ["presentation", { presentation: { title: "Status", blocks: [] } }],
+    ["interactive", { interactive: { blocks: [{ type: "buttons", buttons: [] }] } }],
+  ] as const)("preserves planning-like text with a %s payload", async (_name, richPayload) => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    const payload = { text: "Checking the deployment status now.", ...richPayload };
+    mockedBuildEmbeddedRunPayloads.mockReturnValue([payload]);
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        assistantTexts: [payload.text],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "mock-openai",
+          model: "gpt-5.4",
+          content: [{ type: "text", text: payload.text }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      prompt: "Please check the deployment status.",
+      provider: "mock-openai",
+      model: "gpt-5.4",
+      runId: `run-preserve-planning-like-${_name}`,
+      config: {
+        agents: {
+          defaults: {
+            embeddedAgent: {
+              executionContract: "strict-agentic",
+            },
+          },
+          list: [{ id: "main" }],
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads).toEqual([payload]);
+    expect(result.meta.livenessState).toBe("working");
   });
 
   it("does not apply planning-only classification to OpenAI-compatible xAI models", async () => {
@@ -5931,11 +6003,15 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(retryInstruction).toBeNull();
   });
 
-  it("keeps a direct plan-and-execute request actionable", () => {
+  it.each([
+    "Could you plan and then delete old backups?",
+    "Please make a plan and then delete old backups.",
+    "Can you outline a plan and then delete old backups?",
+  ])("keeps plan-and-execute request actionable: %s", (prompt) => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "openai",
       modelId: "gpt-5.4",
-      prompt: "Could you plan and then delete old backups?",
+      prompt,
       aborted: false,
       timedOut: false,
       attempt: makeAttemptResult({

@@ -290,6 +290,8 @@ const EXPLICIT_PLAN_CREATION_REQUEST_RE =
   /^(?:please\s+)?(?:(?:can|could|would|will)\s+you\s+)?(?:please\s+)?(?:make|create|prepare|draft|write|send)\s+(?:me\s+)?(?:(?:a|an|the)\s+)?(?:plan|approach|outline|strategy)\b/i;
 const EXPLICIT_DIRECT_PLANNING_REQUEST_RE =
   /^(?:please\s+)?(?:(?:can|could|would|will)\s+you\s+)?(?:please\s+)?(?:plan\b(?![\s,;:-]+(?:and|then)\b)|outline\s+(?:a\s+)?plan\b)/i;
+const EXPLICIT_PLAN_AND_EXECUTE_REQUEST_RE =
+  /\b(?:plan|approach|outline|steps|strategy)\b[\s,;:-]+(?:and|then)\b/i;
 const NON_ACTIONABLE_CONTEXT_UPDATE_RE =
   /^\s*(?:i|we)\b(?!.{0,120}\b(?:need|want|would like)\s+you\b).{0,180}\b(?:haven't|have not|am not|ain't|haven’t)\b.{0,120}\b(?:yet|though|fyi|heads up)\b/i;
 const NON_ACTIONABLE_PROMPT_NORMALIZED_SET = new Set([
@@ -536,6 +538,20 @@ function readToolResultAggregatedText(message: AgentMessage): string | undefined
   return trimmed || undefined;
 }
 
+function hasToolCallContent(message: AgentMessage): boolean {
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  return content.some((block) => {
+    if (!block || typeof block !== "object" || Array.isArray(block)) {
+      return false;
+    }
+    const type = normalizeLowercaseStringOrEmpty((block as { type?: unknown }).type);
+    return type === "toolcall" || type === "tool_call" || type === "tooluse" || type === "tool_use";
+  });
+}
+
 function hasTerminalToolResultFailure(message: AgentMessage): boolean {
   const details =
     message && typeof message === "object" && !Array.isArray(message)
@@ -574,8 +590,13 @@ function resolveTrailingToolResultText(messages: readonly AgentMessage[]): strin
       const text = readMessageTextContent(message) ?? readToolResultAggregatedText(message);
       return text ?? null;
     }
-    if (role === "assistant" && !readMessageTextContent(message)) {
-      continue;
+    if (role === "assistant") {
+      if (hasToolCallContent(message)) {
+        return null;
+      }
+      if (!readMessageTextContent(message)) {
+        continue;
+      }
     }
     return null;
   }
@@ -1026,6 +1047,7 @@ function isExplicitPlanningOnlyUserPrompt(text: string): boolean {
   const trimmed = text.trim();
   return (
     trimmed.length > 0 &&
+    !EXPLICIT_PLAN_AND_EXECUTE_REQUEST_RE.test(trimmed) &&
     (EXPLICIT_PLANNING_REQUEST_RE.test(trimmed) ||
       EXPLICIT_PLAN_DESCRIPTION_REQUEST_RE.test(trimmed) ||
       EXPLICIT_PLAN_CREATION_REQUEST_RE.test(trimmed) ||
