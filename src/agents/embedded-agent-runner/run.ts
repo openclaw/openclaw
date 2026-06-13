@@ -426,8 +426,32 @@ function buildAssistantTextTerminalPayloads(
 
 type EmbeddedRunReplyPayload = NonNullable<EmbeddedAgentRunResult["payloads"]>[number];
 
+const ASYNC_TASK_TERMINAL_ERROR_STATUSES = new Set(["failed", "timed_out", "cancelled", "lost"]);
+
 function hasPayloadMedia(payload: EmbeddedRunReplyPayload): boolean {
   return Boolean(payload.mediaUrl?.trim() || payload.mediaUrls?.some((url) => url.trim()));
+}
+
+function terminalPayloadsHaveError(
+  payloads: EmbeddedAgentRunResult["payloads"] | undefined,
+): boolean {
+  return payloads?.some((payload) => payload.isError === true) === true;
+}
+
+function resolveTerminalFallbackLivenessState(
+  payloads: EmbeddedAgentRunResult["payloads"],
+): EmbeddedRunLivenessState {
+  return terminalPayloadsHaveError(payloads) ? "blocked" : "working";
+}
+
+function isAsyncTaskTerminalError(
+  task: NonNullable<EmbeddedRunAttemptForRunner["asyncTaskTerminalResults"]>[number],
+): boolean {
+  const status = normalizeOptionalString(task.status)?.toLowerCase();
+  const outcome = normalizeOptionalString(task.terminalOutcome)?.toLowerCase();
+  return Boolean(
+    (status && ASYNC_TASK_TERMINAL_ERROR_STATUSES.has(status)) || outcome === "blocked",
+  );
 }
 
 function areTerminalPayloadsPlanningOnlyText(
@@ -470,15 +494,18 @@ function buildAsyncTaskTerminalPayloads(
       const statusText = [status, outcome && outcome !== status ? outcome : undefined]
         .filter(Boolean)
         .join("/");
-      return [
+      const text = [
         `${taskLabel} ${taskRef}${statusText ? ` finished with ${statusText}` : " finished"}.`,
         summary,
       ]
         .filter((line): line is string => Boolean(line))
         .join("\n");
+      return {
+        text,
+        ...(isAsyncTaskTerminalError(task) ? { isError: true } : {}),
+      };
     })
-    .filter((text) => text.trim().length > 0)
-    .map((text) => ({ text }));
+    .filter((payload) => payload.text.trim().length > 0);
   if (terminalTaskPayloads.length > 0) {
     return terminalTaskPayloads;
   }
@@ -3779,7 +3806,7 @@ export async function runEmbeddedAgent(
             );
             const replayInvalid = resolveReplayInvalidForAttempt(null);
             const livenessState: EmbeddedRunLivenessState = planningOnlyFallbackPayloads
-              ? "working"
+              ? resolveTerminalFallbackLivenessState(planningOnlyFallbackPayloads)
               : "blocked";
             setTerminalLifecycleMeta({
               replayInvalid,
@@ -3834,8 +3861,9 @@ export async function runEmbeddedAgent(
                 ? null
                 : "⚠️ Agent couldn't generate a response. Please try again.",
             );
-            const livenessState: EmbeddedRunLivenessState =
-              reasoningOnlyAsyncFallback || reasoningOnlyToolFallback
+            const livenessState: EmbeddedRunLivenessState = reasoningOnlyAsyncFallback
+              ? resolveTerminalFallbackLivenessState(reasoningOnlyAsyncFallback)
+              : reasoningOnlyToolFallback
                 ? "working"
                 : resolveRunLivenessState({
                     payloadCount: 0,
@@ -3963,11 +3991,17 @@ export async function runEmbeddedAgent(
                 ? null
                 : incompleteTurnText,
             );
+            const incompleteTurnPayloads =
+              incompleteTurnPayloadsFromExistingError ??
+              incompleteTurnAsyncTaskPayloads ??
+              (incompleteTurnToolFallback
+                ? [incompleteTurnToolFallback.payload]
+                : [{ text: incompleteTurnText, isError: true }]);
             const livenessState: EmbeddedRunLivenessState =
               incompleteTurnPayloadsFromExistingError ||
               incompleteTurnAsyncTaskPayloads ||
               incompleteTurnToolFallback
-                ? "working"
+                ? resolveTerminalFallbackLivenessState(incompleteTurnPayloads)
                 : resolveRunLivenessState({
                     payloadCount,
                     aborted,
@@ -3975,12 +4009,6 @@ export async function runEmbeddedAgent(
                     attempt,
                     incompleteTurnText,
                   });
-            const incompleteTurnPayloads =
-              incompleteTurnPayloadsFromExistingError ??
-              incompleteTurnAsyncTaskPayloads ??
-              (incompleteTurnToolFallback
-                ? [incompleteTurnToolFallback.payload]
-                : [{ text: incompleteTurnText, isError: true }]);
             const incompleteTurnSurface = incompleteTurnPayloadsFromExistingError
               ? "existing error payload"
               : incompleteTurnAsyncTaskPayloads
@@ -4238,6 +4266,9 @@ export async function runEmbeddedAgent(
               `planning-only terminal reply suppressed: runId=${params.runId} sessionId=${params.sessionId} ` +
                 `provider=${activeErrorContext.provider}/${activeErrorContext.model} stopReason=${stopReason ?? "missing"} — surfacing blocked state`,
             );
+          }
+          if (terminalPayloadsHaveError(asyncTaskTerminalPayloads)) {
+            livenessState = "blocked";
           }
           setTerminalLifecycleMeta({
             replayInvalid,

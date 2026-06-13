@@ -358,7 +358,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(payload).toEqual({
       text:
         "exec completed, but the model did not provide a final answer. " +
-      "No user-facing result text was provided.",
+        "No user-facing result text was provided.",
     });
   });
 
@@ -2566,6 +2566,46 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     },
   );
 
+  it.each([
+    { prompt: "Does the proposed config sound good?", assistantText: "Sounds good." },
+    { prompt: "Is that okay?", assistantText: "Okay." },
+    { prompt: "Does this approach make sense?", assistantText: "Absolutely." },
+    { prompt: "Would this work for you?", assistantText: "Sure thing." },
+    { prompt: "Are we ready?", assistantText: "Absolutely." },
+    { prompt: "Do you agree?", assistantText: "Absolutely." },
+  ])(
+    "does not classify direct acknowledgement answer $assistantText as planning-only",
+    ({ prompt, assistantText }) => {
+      const retryInstruction = resolvePlanningOnlyRetryInstruction({
+        provider: "custom-provider",
+        modelId: "custom-model",
+        prompt,
+        aborted: false,
+        timedOut: false,
+        attempt: makeAttemptResult({
+          assistantTexts: [assistantText],
+        }),
+      });
+
+      expect(retryInstruction).toBeNull();
+    },
+  );
+
+  it("keeps acknowledgement placeholders planning-only for action-request questions", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "custom-provider",
+      modelId: "custom-model",
+      prompt: "Can you check whether the proposed config looks good?",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["Okay."],
+      }),
+    });
+
+    expect(retryInstruction).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
+  });
+
   it("does not classify capability chatter for non-actionable prompts", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "custom-provider",
@@ -3111,6 +3151,68 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     ]);
     expect(result.meta.livenessState).toBe("working");
   });
+
+  it.each([
+    { status: "failed", terminalOutcome: undefined, statusText: "failed" },
+    { status: "timed_out", terminalOutcome: undefined, statusText: "timed_out" },
+    { status: "cancelled", terminalOutcome: undefined, statusText: "cancelled" },
+    { status: "lost", terminalOutcome: undefined, statusText: "lost" },
+    { status: "succeeded", terminalOutcome: "blocked", statusText: "succeeded/blocked" },
+  ])(
+    "surfaces terminal async task $status/$terminalOutcome as a blocked error",
+    async ({ status, terminalOutcome, statusText }) => {
+      mockedClassifyFailoverReason.mockReturnValue(null);
+      mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: ["Waiting for image generation to finish."],
+          toolMetas: [
+            {
+              toolName: "image_generate",
+              asyncStarted: true,
+              asyncTaskId: "task-image-failed",
+              asyncTaskRunId: "tool:image_generate:run-failed",
+            },
+          ],
+          asyncTaskTerminalResults: [
+            {
+              taskId: "task-image-failed",
+              runId: "tool:image_generate:run-failed",
+              status,
+              taskKind: "image_generation",
+              terminalSummary: "Image generation needs follow-up.",
+              ...(terminalOutcome ? { terminalOutcome } : {}),
+            },
+          ],
+          lastAssistant: {
+            role: "assistant",
+            stopReason: "toolUse",
+            provider: "openai",
+            model: "gpt-5.4",
+            content: [{ type: "text", text: "Waiting for image generation to finish." }],
+          } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
+      );
+
+      const result = await runEmbeddedAgent({
+        ...overflowBaseRunParams,
+        trigger: "manual",
+        provider: "openai",
+        model: "gpt-5.4",
+        runId: `run-async-terminal-${status}-${terminalOutcome ?? "none"}`,
+      });
+
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+      expect(result.payloads).toEqual([
+        {
+          text:
+            `image_generation task task-image-failed finished with ${statusText}.\n` +
+            "Image generation needs follow-up.",
+          isError: true,
+        },
+      ]);
+      expect(result.meta.livenessState).toBe("blocked");
+    },
+  );
 
   it("keeps a real final assistant reply instead of replacing it with async task metadata", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
