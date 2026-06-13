@@ -2521,6 +2521,8 @@ export const chatHandlers: GatewayRequestHandlers = {
       let appendedWebchatAgentMedia = false;
       let userTranscriptUpdatePromise: Promise<void> | null = null;
       let agentRunStarted = false;
+      let controlDirectorFallbackDelivered = false;
+      let controlDirectorFallbackTimer: ReturnType<typeof setTimeout> | undefined;
       const hasBeforeAgentRunGate = getGlobalHookRunner()?.hasHooks("before_agent_run") === true;
       const emitUserTranscriptUpdate = async () => {
         if (userTranscriptUpdatePromise) {
@@ -2594,6 +2596,90 @@ export const chatHandlers: GatewayRequestHandlers = {
           cfg,
         });
       };
+      const deliverControlDirectorNoResponseFallback = async (reason: string) => {
+        if (controlDirectorFallbackDelivered || !agentRunStarted) {
+          return;
+        }
+        const hasFinalReplyText = deliveredReplies
+          .filter((entry) => entry.kind === "final")
+          .some((entry) => (entry.payload.text ?? entry.payload.spokenText ?? "").trim());
+        if (hasFinalReplyText) {
+          return;
+        }
+        controlDirectorFallbackDelivered = true;
+        try {
+          const {
+            storePath: latestStorePath,
+            store: latestStore,
+            entry: latestEntry,
+          } = loadSessionEntry(sessionKey);
+          const sessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
+          const synthesizedGuard = await applyControlDirectorDeliveryGuards<ReplyPayload>({
+            agentId,
+            payloads: [],
+            finalAssistantVisibleText: "",
+            classification: "empty",
+            canQueueContinuation: true,
+            runId: clientRunId,
+            sessionId,
+            sessionKey,
+            sessionEntry: latestEntry,
+            sessionStore: latestStore,
+            storePath: latestStorePath,
+            requestBody: parsedMessage,
+          });
+          const guardedStatusText =
+            buildTranscriptReplyText(synthesizedGuard.payloads) ||
+            buildControlDirectorGuardedStatusTextFromSessionEntry(
+              synthesizedGuard.sessionEntry ?? latestEntry,
+              clientRunId,
+            );
+          if (!guardedStatusText) {
+            controlDirectorFallbackDelivered = false;
+            return;
+          }
+          const guardedEntry = synthesizedGuard.sessionEntry ?? latestEntry;
+          const appended = await appendAssistantTranscriptMessage({
+            message: guardedStatusText,
+            sessionId,
+            storePath: latestStorePath,
+            sessionFile: guardedEntry?.sessionFile,
+            agentId,
+            createIfMissing: true,
+            idempotencyKey: `${clientRunId}:control-director-no-response-fallback`,
+            cfg,
+          });
+          const now = Date.now();
+          const message = appended.ok
+            ? appended.message
+            : {
+                role: "assistant",
+                content: [{ type: "text", text: guardedStatusText }],
+                text: guardedStatusText,
+                timestamp: now,
+                stopReason: "stop",
+                usage: { input: 0, output: 0, totalTokens: 0 },
+              };
+          if (!appended.ok) {
+            context.logGateway.warn(
+              `webchat Control Director ${reason} transcript append failed: ${appended.error ?? "unknown error"}`,
+            );
+          }
+          deliveredReplies.push({ payload: { text: guardedStatusText }, kind: "final" });
+          broadcastChatFinal({
+            context,
+            runId: clientRunId,
+            sessionKey,
+            message,
+          });
+        } catch (guardErr) {
+          controlDirectorFallbackDelivered = false;
+          context.logGateway.warn(
+            `webchat Control Director ${reason} synthesis failed: ${formatForLog(guardErr)}`,
+          );
+        }
+      };
+
       const appendWebchatAgentMediaTranscriptIfNeeded = async (payload: ReplyPayload) => {
         if (!agentRunStarted || appendedWebchatAgentMedia || !isMediaBearingPayload(payload)) {
           return;
@@ -2723,6 +2809,9 @@ export const chatHandlers: GatewayRequestHandlers = {
               fastModeOverride: p.fastMode,
               onAgentRunStart: (runId) => {
                 agentRunStarted = true;
+                controlDirectorFallbackTimer ??= setTimeout(() => {
+                  void deliverControlDirectorNoResponseFallback("no-response watchdog timeout");
+                }, 65_000);
                 if (!hasBeforeAgentRunGate) {
                   void emitUserTranscriptUpdate();
                 }
@@ -2753,6 +2842,10 @@ export const chatHandlers: GatewayRequestHandlers = {
         },
       )
         .then(async () => {
+          if (controlDirectorFallbackTimer) {
+            clearTimeout(controlDirectorFallbackTimer);
+            controlDirectorFallbackTimer = undefined;
+          }
           await measureDiagnosticsTimelineSpan(
             "gateway.chat_send.post_dispatch",
             async () => {
@@ -3118,6 +3211,10 @@ export const chatHandlers: GatewayRequestHandlers = {
           );
         })
         .catch(async (err) => {
+          if (controlDirectorFallbackTimer) {
+            clearTimeout(controlDirectorFallbackTimer);
+            controlDirectorFallbackTimer = undefined;
+          }
           void rewriteUserTranscriptMedia().catch((rewriteErr) => {
             context.logGateway.warn(
               `webchat transcript media rewrite failed after error: ${formatForLog(rewriteErr)}`,
@@ -3132,6 +3229,102 @@ export const chatHandlers: GatewayRequestHandlers = {
               `webchat user transcript update failed after error: ${formatForLog(transcriptErr)}`,
             );
           });
+          if (agentRunStarted) {
+            try {
+              const {
+                storePath: latestStorePath,
+                store: latestStore,
+                entry: latestEntry,
+              } = loadSessionEntry(sessionKey);
+              const sessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
+              const hasFinalReplyText = deliveredReplies
+                .filter((entry) => entry.kind === "final")
+                .some((entry) => (entry.payload.text ?? entry.payload.spokenText ?? "").trim());
+              if (!hasFinalReplyText) {
+                const synthesizedGuard = await applyControlDirectorDeliveryGuards<ReplyPayload>({
+                  agentId,
+                  payloads: [],
+                  finalAssistantVisibleText: "",
+                  classification: "empty",
+                  canQueueContinuation: true,
+                  runId: clientRunId,
+                  sessionId,
+                  sessionKey,
+                  sessionEntry: latestEntry,
+                  sessionStore: latestStore,
+                  storePath: latestStorePath,
+                  requestBody: parsedMessage,
+                });
+                const guardedStatusText =
+                  buildTranscriptReplyText(synthesizedGuard.payloads) ||
+                  buildControlDirectorGuardedStatusTextFromSessionEntry(
+                    synthesizedGuard.sessionEntry ?? latestEntry,
+                    clientRunId,
+                  );
+                if (guardedStatusText) {
+                  const guardedEntry = synthesizedGuard.sessionEntry ?? latestEntry;
+                  const appended = await appendAssistantTranscriptMessage({
+                    message: guardedStatusText,
+                    sessionId,
+                    storePath: latestStorePath,
+                    sessionFile: guardedEntry?.sessionFile,
+                    agentId,
+                    createIfMissing: true,
+                    cfg,
+                  });
+                  const now = Date.now();
+                  const message = appended.ok
+                    ? appended.message
+                    : {
+                        role: "assistant",
+                        content: [{ type: "text", text: guardedStatusText }],
+                        text: guardedStatusText,
+                        timestamp: now,
+                        stopReason: "stop",
+                        usage: { input: 0, output: 0, totalTokens: 0 },
+                      };
+                  if (!appended.ok) {
+                    context.logGateway.warn(
+                      `webchat guarded error-status transcript append failed: ${appended.error ?? "unknown error"}`,
+                    );
+                  }
+                  deliveredReplies.push({ payload: { text: guardedStatusText }, kind: "final" });
+                  broadcastChatFinal({
+                    context,
+                    runId: clientRunId,
+                    sessionKey,
+                    message,
+                  });
+                  finalizeUserVisibleWorkRun({
+                    runId: clientRunId,
+                    status: "succeeded",
+                    terminalSummary: "blocked",
+                    finalText: guardedStatusText,
+                    userRequest: parsedMessage,
+                    expectedDeliverable: inferExpectedDeliverableFromUserRequest(parsedMessage),
+                  });
+                  setGatewayDedupeEntry({
+                    dedupe: context.dedupe,
+                    key: `chat:${clientRunId}`,
+                    entry: {
+                      ts: Date.now(),
+                      ok: true,
+                      payload: {
+                        runId: clientRunId,
+                        status: "ok" as const,
+                        ...(trackedTaskId ? { taskId: trackedTaskId } : {}),
+                      },
+                    },
+                  });
+                  return;
+                }
+              }
+            } catch (guardErr) {
+              context.logGateway.warn(
+                `webchat guarded error-status synthesis failed: ${formatForLog(guardErr)}`,
+              );
+            }
+          }
           const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
           finalizeUserVisibleWorkRun({
             runId: clientRunId,

@@ -182,6 +182,123 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.send watchdog surfaces Control Director no-response runs when dispatch hangs", async () => {
+    vi.useFakeTimers();
+    try {
+      const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeMainSessionStore();
+      await writeMainSessionTranscript(sessionDir, []);
+
+      const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      const context = {
+        loadGatewayModelCatalog: vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(
+          async () => [
+            {
+              id: "gpt-5.5",
+              name: "GPT 5.5",
+              provider: "mock-openai",
+              input: ["text"],
+            },
+          ],
+        ),
+        logGateway: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+          debug: vi.fn(),
+        },
+        agentRunSeq: new Map<string, number>(),
+        chatAbortControllers: new Map(),
+        chatAbortedRuns: new Map(),
+        chatRunBuffers: new Map(),
+        chatDeltaSentAt: new Map(),
+        chatDeltaLastBroadcastLen: new Map(),
+        addChatRun: vi.fn(),
+        removeChatRun: vi.fn(),
+        broadcast: vi.fn(),
+        nodeSendToSession: vi.fn(),
+        registerToolEventRecipient: vi.fn(),
+        dedupe: new Map(),
+      } as unknown as GatewayRequestContext;
+      dispatchInboundMessageMock.mockImplementation(async (params) => {
+        (
+          params as { replyOptions?: Pick<GetReplyOptions, "onAgentRunStart"> }
+        ).replyOptions?.onAgentRunStart?.("run-control-director-hung");
+        await new Promise(() => undefined);
+        return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+      });
+
+      const { chatHandlers } = await import("./server-methods/chat.js");
+      await chatHandlers["chat.send"]({
+        req: {
+          type: "req",
+          id: "send-control-director-hung",
+          method: "chat.send",
+          params: {
+            sessionKey: "main",
+            message: "empty response exhaustion qa check",
+            idempotencyKey: "run-control-director-hung",
+          },
+        },
+        params: {
+          sessionKey: "main",
+          message: "empty response exhaustion qa check",
+          idempotencyKey: "run-control-director-hung",
+        },
+        client: null,
+        isWebchatConnect: () => false,
+        respond: ((ok, payload, error) => {
+          responses.push({ ok, payload, error });
+        }) as RespondFn,
+        context,
+      });
+
+      expect(responses).toContainEqual(
+        expect.objectContaining({
+          ok: true,
+          payload: expect.objectContaining({
+            runId: "run-control-director-hung",
+            status: "started",
+          }),
+          error: undefined,
+        }),
+      );
+
+      await vi.advanceTimersByTimeAsync(65_000);
+      await vi.waitFor(() => {
+        expect(context.broadcast).toHaveBeenCalledWith(
+          "chat",
+          expect.objectContaining({
+            runId: "run-control-director-hung",
+            sessionKey: "agent:main:main",
+            state: "final",
+            message: expect.objectContaining({
+              content: expect.arrayContaining([
+                expect.objectContaining({
+                  text: expect.stringContaining("Status: blocked"),
+                }),
+              ]),
+            }),
+          }),
+        );
+      });
+
+      const stored = JSON.parse(await fs.readFile(testState.sessionStorePath, "utf-8")) as Record<
+        string,
+        { controlDirectorLivenessAudit?: unknown[]; controlDirectorMissionLedger?: unknown[] }
+      >;
+      expect(stored["agent:main:main"]?.controlDirectorLivenessAudit?.length).toBeGreaterThan(0);
+      expect(stored["agent:main:main"]?.controlDirectorMissionLedger?.length).toBeGreaterThan(0);
+
+      await fs.rm(sessionDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    } finally {
+      vi.useRealTimers();
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+    }
+  });
+
   test("chat.history synthesizes Control Director guarded status from liveness diagnostics", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
