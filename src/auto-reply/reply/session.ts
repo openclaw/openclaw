@@ -97,7 +97,7 @@ function stripThreadFromSessionRoute(route: SessionEntry["route"]): SessionEntry
 
 type ReplySessionEndReason = Extract<
   PluginHookSessionEndReason,
-  "new" | "reset" | "idle" | "daily" | "unknown"
+  "new" | "reset" | "idle" | "daily" | "adaptive" | "unknown"
 >;
 
 function stripThreadIdFromDeliveryContext(
