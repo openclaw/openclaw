@@ -13,8 +13,10 @@ import { hasConnectedTalkNode } from "./server-talk-nodes.js";
 /** Creates node registry/subscription runtime state for a gateway server. */
 export function createGatewayNodeSessionRuntime(params: {
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
+  /** Default node.invoke timeout (ms) from gateway.nodes.invokeTimeoutMs. */
+  defaultInvokeTimeoutMs?: number;
 }) {
-  const nodeRegistry = new NodeRegistry();
+  const nodeRegistry = new NodeRegistry({ defaultInvokeTimeoutMs: params.defaultInvokeTimeoutMs });
   const nodePresenceTimers = new Map<string, ReturnType<typeof setInterval>>();
   const nodeSubscriptions = createNodeSubscriptionManager();
   const sessionEventSubscribers = createSessionEventSubscriberRegistry();

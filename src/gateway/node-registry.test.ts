@@ -491,6 +491,73 @@ describe("gateway/node-registry", () => {
     void second.catch(() => {});
   });
 
+  it("uses the configured default invoke timeout when the call omits timeoutMs", async () => {
+    vi.useFakeTimers();
+    const registry = new NodeRegistry({ defaultInvokeTimeoutMs: 5_000 });
+    try {
+      registerNode(registry);
+      let settled = false;
+      const invoke = registry.invoke({ nodeId: "node-1", command: "demo.run" }).then((result) => {
+        settled = true;
+        return result;
+      });
+
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settled).toBe(true);
+      await expect(invoke).resolves.toEqual({
+        ok: false,
+        error: { code: "TIMEOUT", message: "node invoke timed out" },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("falls back to the 30s default when the configured invoke timeout is invalid", async () => {
+    vi.useFakeTimers();
+    const registry = new NodeRegistry({ defaultInvokeTimeoutMs: 0 });
+    try {
+      registerNode(registry);
+      let settled = false;
+      const invoke = registry.invoke({ nodeId: "node-1", command: "demo.run" }).then((result) => {
+        settled = true;
+        return result;
+      });
+
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settled).toBe(true);
+      await expect(invoke).resolves.toEqual({
+        ok: false,
+        error: { code: "TIMEOUT", message: "node invoke timed out" },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("lets an explicit call timeoutMs override the configured default", async () => {
+    vi.useFakeTimers();
+    const registry = new NodeRegistry({ defaultInvokeTimeoutMs: 60_000 });
+    try {
+      registerNode(registry);
+      const invoke = registry.invoke({ nodeId: "node-1", command: "demo.run", timeoutMs: 10 });
+
+      await vi.advanceTimersByTimeAsync(10);
+      await expect(invoke).resolves.toEqual({
+        ok: false,
+        error: { code: "TIMEOUT", message: "node invoke timed out" },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("sends raw event payload JSON without changing the envelope shape", () => {
     const registry = new NodeRegistry();
     const frames: string[] = [];

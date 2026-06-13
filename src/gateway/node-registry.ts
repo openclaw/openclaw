@@ -132,6 +132,22 @@ function normalizeSystemRunTimeoutMs(value: unknown): number | null | undefined 
   return timeoutMs > 0 ? resolveTimerTimeoutMs(timeoutMs, 1) : null;
 }
 
+/** Built-in fallback timeout (ms) for node.invoke calls without an explicit timeout. */
+export const DEFAULT_NODE_INVOKE_TIMEOUT_MS = 30_000;
+
+/**
+ * Normalize a configured default invoke timeout. Returns a positive integer
+ * (capped to the safe timer range) or undefined when the value is unusable, so
+ * callers fall back to {@link DEFAULT_NODE_INVOKE_TIMEOUT_MS}.
+ */
+function normalizeDefaultInvokeTimeoutMs(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  const timeoutMs = Math.trunc(value);
+  return timeoutMs > 0 ? resolveTimerTimeoutMs(timeoutMs, 1) : undefined;
+}
+
 /** Extract system.run event auth metadata from invoke params. */
 function resolvePendingSystemRunEvent(params: {
   command: string;
@@ -177,6 +193,14 @@ export class NodeRegistry {
   private nodesByConn = new Map<string, string>();
   private pendingInvokes = new Map<string, PendingInvoke>();
   private authorizedSystemRunEvents = new Map<string, AuthorizedSystemRunEvent>();
+  private defaultInvokeTimeoutMs: number = DEFAULT_NODE_INVOKE_TIMEOUT_MS;
+
+  constructor(opts?: { defaultInvokeTimeoutMs?: number }) {
+    const configured = normalizeDefaultInvokeTimeoutMs(opts?.defaultInvokeTimeoutMs);
+    if (configured !== undefined) {
+      this.defaultInvokeTimeoutMs = configured;
+    }
+  }
 
   /** Register a websocket client as the current connection for its node id. */
   register(client: GatewayWsClient, opts: { remoteIp?: string | undefined }) {
@@ -469,7 +493,7 @@ export class NodeRegistry {
         ...systemRunEvent,
       });
     }
-    const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 30_000, 0);
+    const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, this.defaultInvokeTimeoutMs, 0);
     return await new Promise<NodeInvokeResult>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingInvokes.delete(requestId);
