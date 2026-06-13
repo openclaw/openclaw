@@ -1730,6 +1730,7 @@ describe("runPreparedReply media-only handling", () => {
       async () => await authPromise.then(() => undefined),
     );
     vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
+    const onSessionPrepared = vi.fn();
 
     const runPromise = runPreparedReply(
       baseParams({
@@ -1737,6 +1738,8 @@ describe("runPreparedReply media-only handling", () => {
         sessionId: "session-before-rotation",
         sessionEntry: sessionStore["session-key"],
         sessionStore,
+        storePath: "/tmp/sessions.json",
+        opts: { onSessionPrepared } as never,
       }),
     );
 
@@ -1768,6 +1771,11 @@ describe("runPreparedReply media-only handling", () => {
     await expect(runPromise).resolves.toEqual({ text: "ok" });
     const call = requireLastRunReplyAgentCall();
     expect(call?.followupRun.run.sessionId).toBe("session-after-rotation");
+    expect(onSessionPrepared).toHaveBeenLastCalledWith({
+      sessionKey: "session-key",
+      sessionId: "session-after-rotation",
+      storePath: "/tmp/sessions.json",
+    });
   });
   it("reports still shutting down when a new owner appears after waiting", async () => {
     vi.useFakeTimers();
