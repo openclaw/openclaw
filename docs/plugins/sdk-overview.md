@@ -175,6 +175,51 @@ guidance remain available to non-Codex prompt surfaces for compatibility.
 | `api.registerMemoryPromptSupplement(builder)`  | Additive memory-adjacent prompt section |
 | `api.registerMemoryCorpusSupplement(adapter)`  | Additive memory search/read corpus      |
 
+### Channel mirror dispatcher
+
+These are **direct function exports** from `openclaw/plugin-sdk/channel-outbound`,
+not `api.*` methods. They are the seam a messaging channel implements to support
+**pin-from-here turn mirroring** — when a session turn driven from one thread is
+re-rendered natively in another thread of the same session that ran `/pin on`.
+
+```ts
+import {
+  registerChannelMirrorDispatcher,
+  unregisterChannelMirrorDispatcher,
+  type MirrorDispatcher,
+} from "openclaw/plugin-sdk/channel-outbound";
+```
+
+| Export                                                            | Contract it owns                                                                                                                               |
+| ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `registerChannelMirrorDispatcher(channel, accountId, dispatcher)` | Make `channel`'s account mirror-capable. One dispatcher **per account** the channel serves (each closes over that account's live bot/runtime). |
+| `unregisterChannelMirrorDispatcher(channel, accountId)`           | Drop that account's dispatcher. No-op if absent.                                                                                               |
+| `MirrorDispatcher`                                                | Type of the callback: `({ cfg, target, replyResolver, sessionKey }) => void \| Promise<void>`.                                                 |
+
+**Lifecycle.** Register from the account's start path and `unregister` from its
+stop path. Registration is **last-wins**: re-registering for the same
+`(channel, accountId)` replaces the previous dispatcher, so an in-process account
+reload supersedes the stale runtime instead of mirroring through a stopped bot.
+
+**What the dispatcher must do.** It re-homes the mirrored turn onto the channel's
+**own** inbound dispatch, passing the supplied `replyResolver` in place of the
+model. The resolver replays the origin run's event stream off the agent-event
+bus, so the turn renders + persists through the channel's normal pipeline
+(streaming, drafts, formatting, verbose) under **that account's own config** —
+nothing is reimplemented per channel.
+
+**Account + revocation behavior (security-sensitive).** Dispatcher resolution is
+by exact `(channel, accountId)`. A wildcard target (no pinned account) may use a
+single-account install's sole dispatcher, but a target pinning an **explicit**
+account that does not match **fails closed** — a mirror is never rendered through
+a different account than the target pinned. For a mirror-capable channel the
+native dispatcher is the **sole delivery authority**: the host suppresses the
+post-hoc raw echo for it, because that raw send bypasses the channel's
+enablement/revocation checks. The dispatcher MUST therefore run the synthesized
+inbound through the channel's normal admission path so a **revoked** destination
+(group/topic disabled, `requireTopic` unmet) is dropped — if it instead delivered
+unconditionally, content could leak to a destination whose access was disabled.
+
 ### Host hooks for workflow plugins
 
 Host hooks are the SDK seams for plugins that need to participate in the host
