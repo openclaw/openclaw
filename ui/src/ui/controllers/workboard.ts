@@ -3320,6 +3320,7 @@ export async function dispatchWorkboard(params: {
     try {
       applyTaskSummariesToState(state, await listWorkboardTasks(params.client));
       setWorkboardLifecycleTaskRefreshFailed(state, false, { host: params.host });
+      state.lifecycleTaskRefreshError = null;
     } catch (error) {
       setWorkboardLifecycleTaskRefreshFailed(state, true, {
         host: params.host,

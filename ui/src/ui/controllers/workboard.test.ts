@@ -1094,6 +1094,7 @@ describe("workboard controller", () => {
     const state = getWorkboardState(host);
     state.loading = true;
     state.lifecycleTaskRefreshFailed = true;
+    state.lifecycleTaskRefreshError = "task ledger unavailable";
     const requestUpdates: Array<[loading: boolean, dispatching: boolean]> = [];
     const client = createClient({
       "workboard.cards.dispatch": {
@@ -1118,6 +1119,7 @@ describe("workboard controller", () => {
     expect(state.loading).toBe(true);
     expect(state.dispatching).toBe(false);
     expect(state.lifecycleTaskRefreshFailed).toBe(false);
+    expect(state.lifecycleTaskRefreshError).toBeNull();
     expect(client.request).toHaveBeenCalledWith("workboard.cards.dispatch", {});
   });
 
