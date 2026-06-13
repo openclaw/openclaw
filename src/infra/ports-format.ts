@@ -3,8 +3,8 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { formatCliCommand } from "../cli/command-format.js";
 import type { PortListener, PortListenerKind, PortUsage } from "./ports-types.js";
 
-/** Classifies a listener as OpenClaw Gateway, SSH tunnel, or unknown process. */
-export function classifyPortListener(listener: PortListener, port: number): PortListenerKind {
+/** Classifies a listener as OpenClaw Gateway, SSH tunnel, known non-gateway, or unknown. */
+export function classifyPortListener(listener: PortListener, _port: number): PortListenerKind {
   const raw = normalizeLowercaseStringOrEmpty(
     `${listener.commandLine ?? ""} ${listener.command ?? ""}`,
   );
@@ -26,6 +26,16 @@ export function classifyPortListener(listener: PortListener, port: number): Port
     // The probe row already proves this process owns the queried port. Exact
     // ssh executables may get their forwards from ssh_config or host aliases.
     return "ssh";
+  }
+  if (
+    command === "sshd" ||
+    /(?:^|[/\\])sshd(?:\.exe)?$/.test(command) ||
+    /(?:^|[/\\])[^/\\\s]*ssh[^/\\\s]*(?:\.exe)?$/.test(command)
+  ) {
+    return "non_gateway";
+  }
+  if (/(?:^|[/\\\s])[^/\\\s]*ssh[^/\\\s]*(?:\.exe)?(?:[/\\\s"']|$)/.test(commandLine)) {
+    return "non_gateway";
   }
   return "unknown";
 }
@@ -165,7 +175,7 @@ export function buildPortHints(listeners: PortListener[], port: number): string[
       "SSH tunnel already bound to this port. Close the tunnel or use a different local port in -L.",
     );
   }
-  if (kinds.has("unknown")) {
+  if (kinds.has("unknown") || kinds.has("non_gateway")) {
     hints.push("Another process is listening on this port.");
   }
   if (listeners.length > 1 && !expectedGatewayListeners) {

@@ -36,11 +36,12 @@ describe("ports-format", () => {
     [{ command: "ssh" }, "ssh"],
     // ssh-named processes that do not forward *this* port are not tunnels; the
     // "close the tunnel / change -L port" remediation does not apply to them.
-    [{ command: "sshd" }, "unknown"],
-    [{ commandLine: "/opt/fast-ssh/server --listen 18789" }, "unknown"],
+    [{ command: "sshd" }, "non_gateway"],
+    [{ command: "sshd-session.exe" }, "non_gateway"],
+    [{ commandLine: "/opt/fast-ssh/server --listen 18789" }, "non_gateway"],
     // ssh-named non-tunnel that merely mentions the queried port with a colon: there
     // is no -L/-R forward, so it must not classify as a tunnel or emit the hint.
-    [{ commandLine: "/opt/fast-ssh/server --listen 127.0.0.1:18789" }, "unknown"],
+    [{ commandLine: "/opt/fast-ssh/server --listen 127.0.0.1:18789" }, "non_gateway"],
     [{ commandLine: "ssh -N -L 9999:remote:22 host" }, "ssh"],
     [{ commandLine: "node /Users/me/Projects/openclaw/dist/entry.js gateway" }, "gateway"],
     [{ commandLine: "python -m http.server 18789" }, "unknown"],
