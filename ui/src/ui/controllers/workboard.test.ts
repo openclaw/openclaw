@@ -343,6 +343,7 @@ describe("workboard controller", () => {
     state.lifecycleTaskRefreshFailed = true;
     state.lifecycleTaskRefreshRetryAt = Date.now() + 5000;
     state.lifecycleTaskRefreshError = "tasks unavailable";
+    state.lastRefreshError = "tasks unavailable";
     const client = createClient({
       "workboard.cards.list": { cards: [], statuses: ["todo", "running", "done"] },
     });
@@ -352,6 +353,26 @@ describe("workboard controller", () => {
     expect(state.lifecycleTaskRefreshFailed).toBe(false);
     expect(state.lifecycleTaskRefreshRetryAt).toBeNull();
     expect(state.lifecycleTaskRefreshError).toBeNull();
+    expect(state.lastRefreshError).toBeNull();
+  });
+
+  it("clears lifecycle task errors when linked polls find no cards needing task data", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.lifecycleTaskRefreshFailed = true;
+    state.lifecycleTaskRefreshRetryAt = Date.now() + 5000;
+    state.lifecycleTaskRefreshError = "tasks unavailable";
+    state.lastRefreshError = "tasks unavailable";
+    const client = createClient({
+      "workboard.cards.list": { cards: [sampleCard], statuses: ["todo", "running", "done"] },
+    });
+
+    await loadWorkboard({ host, client: client as never, force: true, taskRefresh: "linked" });
+
+    expect(state.lifecycleTaskRefreshFailed).toBe(false);
+    expect(state.lifecycleTaskRefreshRetryAt).toBeNull();
+    expect(state.lifecycleTaskRefreshError).toBeNull();
+    expect(state.lastRefreshError).toBeNull();
   });
 
   it("reuses exact-confirmed full-load tasks for the next lifecycle sync", async () => {

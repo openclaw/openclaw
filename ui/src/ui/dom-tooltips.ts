@@ -156,12 +156,14 @@ function getFloatingTooltip(): HTMLElement {
   tooltip.id = FLOATING_TOOLTIP_ID;
   tooltip.className = FLOATING_TOOLTIP_CLASS;
   tooltip.setAttribute("role", "tooltip");
+  tooltip.setAttribute("aria-hidden", "true");
   document.body.append(tooltip);
   return tooltip;
 }
 
 function showFloatingTooltip(element: HTMLElement, text: string) {
   const tooltip = getFloatingTooltip();
+  tooltip.removeAttribute("aria-hidden");
   if (activeFloatingTooltipOwner && activeFloatingTooltipOwner !== element) {
     restoreFloatingTooltipDescription(activeFloatingTooltipOwner);
   }
@@ -197,6 +199,7 @@ function hideFloatingTooltip() {
     return;
   }
   tooltip.dataset.open = "false";
+  tooltip.setAttribute("aria-hidden", "true");
 }
 
 export function clearActiveFloatingTooltips(root: ParentNode = document): void {

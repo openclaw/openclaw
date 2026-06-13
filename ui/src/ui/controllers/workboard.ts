@@ -1848,7 +1848,7 @@ function applyTaskSummariesToState(
   state.missingTaskIds = new Set([...missingTaskIds].filter((taskId) => linkedTaskIds.has(taskId)));
 }
 
-function workboardLifecycleRequiresTaskRefresh(state: WorkboardUiState): boolean {
+function workboardLifecycleRequiresTaskRefresh(state: WorkboardTaskLinkState): boolean {
   return (
     state.tasksByCardId.size > 0 ||
     state.cards.some((card) => {
@@ -1858,7 +1858,7 @@ function workboardLifecycleRequiresTaskRefresh(state: WorkboardUiState): boolean
   );
 }
 
-function shouldRefreshWorkboardTasksForLifecycle(state: WorkboardUiState): boolean {
+function shouldRefreshWorkboardTasksForLifecycle(state: WorkboardTaskLinkState): boolean {
   return (
     workboardLifecycleRequiresTaskRefresh(state) ||
     state.cards.some((card) => card.status === "running" && Boolean(workboardCardSessionKey(card)))
@@ -1930,6 +1930,7 @@ export async function loadWorkboard(params: {
       : result;
   }
   const generation = nextWorkboardLoadGeneration(params.host);
+  const lastRefreshErrorBeforeLoad = state.lastRefreshError;
   state.loadAttempted = true;
   state.loading = true;
   if (!params.preserveError) {
@@ -2025,7 +2026,8 @@ export async function loadWorkboard(params: {
           preserveLifecycleTaskRefreshFailure =
             params.taskRefresh === "linked" &&
             state.lifecycleTaskRefreshFailed &&
-            !taskRefreshError;
+            !taskRefreshError &&
+            shouldRefreshWorkboardTasksForLifecycle(taskLinkState);
           lifecycleTaskRefreshFailed =
             Boolean(taskRefreshError) || preserveLifecycleTaskRefreshFailure;
           if (taskRefreshError) {
@@ -2059,6 +2061,8 @@ export async function loadWorkboard(params: {
       state.tasksByCardId = taskLinkState.tasksByCardId;
       state.missingTaskIds = taskLinkState.missingTaskIds;
       resetWorkboardLifecycleTaskConfirmations(state);
+      const recoveredFromLifecycleTaskRefresh =
+        state.lifecycleTaskRefreshFailed && !lifecycleTaskRefreshFailed;
       if (!preserveLifecycleTaskRefreshFailure) {
         setWorkboardLifecycleTaskRefreshFailed(state, lifecycleTaskRefreshFailed, {
           host: params.host,
@@ -2067,6 +2071,12 @@ export async function loadWorkboard(params: {
       }
       if (!lifecycleTaskRefreshFailed) {
         state.lifecycleTaskRefreshError = null;
+        if (
+          recoveredFromLifecycleTaskRefresh &&
+          state.lastRefreshError === lastRefreshErrorBeforeLoad
+        ) {
+          state.lastRefreshError = null;
+        }
       }
       if (nextTaskRefreshError) {
         state.lastRefreshError = nextTaskRefreshError;

@@ -226,6 +226,29 @@ describe("native title tooltip promotion", () => {
     );
   });
 
+  it("hides dismissed floating tooltips from assistive technology", () => {
+    const root = document.createElement("div");
+    const button = document.createElement("button");
+    button.className = "btn";
+    button.title = "View details";
+    root.append(button);
+
+    promoteNativeTitleTooltip(button, root, "pointer");
+
+    const tooltip = document.querySelector<HTMLElement>(".control-ui-floating-tooltip");
+    expect(tooltip?.getAttribute("aria-hidden")).toBeNull();
+
+    restoreNativeTitleTooltip(button, root, "pointer");
+
+    expect(tooltip?.dataset.open).toBe("false");
+    expect(tooltip?.getAttribute("aria-hidden")).toBe("true");
+
+    promoteNativeTitleTooltip(button, root, "pointer");
+
+    expect(tooltip?.dataset.open).toBe("true");
+    expect(tooltip?.getAttribute("aria-hidden")).toBeNull();
+  });
+
   it("positions the floating tooltip below the button midpoint", () => {
     vi.spyOn(window, "innerWidth", "get").mockReturnValue(1024);
     const root = document.createElement("div");
