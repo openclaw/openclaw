@@ -57,9 +57,16 @@ export function normalizeMessagesForLlmBoundary(
 
 function pruneExcessToolResultsForProviderBoundary(messages: AgentMessage[]): AgentMessage[] {
   const toolResultIndexes: number[] = [];
+  const toolCallAssistantIndexes = new Map<string, number>();
   for (let index = 0; index < messages.length; index += 1) {
-    if (isBoundaryToolResultMessage(messages[index])) {
+    const message = messages[index];
+    if (isBoundaryToolResultMessage(message)) {
       toolResultIndexes.push(index);
+    }
+    if (message?.role === "assistant") {
+      for (const toolCallId of extractAssistantToolCallIds(message)) {
+        toolCallAssistantIndexes.set(toolCallId, index);
+      }
     }
   }
 
@@ -67,9 +74,36 @@ function pruneExcessToolResultsForProviderBoundary(messages: AgentMessage[]): Ag
     return messages;
   }
 
-  const keptToolResultIndexes = new Set(
-    toolResultIndexes.slice(-LLM_BOUNDARY_MAX_TOOL_RESULT_MESSAGES),
+  let latestToolResultAssistantIndex = -1;
+  for (const index of toolResultIndexes) {
+    const id = extractBoundaryToolResultId(messages[index]);
+    if (!id) {
+      continue;
+    }
+    const assistantIndex = toolCallAssistantIndexes.get(id);
+    if (assistantIndex !== undefined && assistantIndex > latestToolResultAssistantIndex) {
+      latestToolResultAssistantIndex = assistantIndex;
+    }
+  }
+
+  const currentBatchToolResultIndexes =
+    latestToolResultAssistantIndex >= 0
+      ? toolResultIndexes.filter((index) => {
+          const id = extractBoundaryToolResultId(messages[index]);
+          return id ? toolCallAssistantIndexes.get(id) === latestToolResultAssistantIndex : false;
+        })
+      : [];
+  const olderToolResultIndexes = toolResultIndexes.filter(
+    (index) => !currentBatchToolResultIndexes.includes(index),
   );
+  const olderToolResultBudget = Math.max(
+    0,
+    LLM_BOUNDARY_MAX_TOOL_RESULT_MESSAGES - currentBatchToolResultIndexes.length,
+  );
+  const keptToolResultIndexes = new Set([
+    ...(olderToolResultBudget > 0 ? olderToolResultIndexes.slice(-olderToolResultBudget) : []),
+    ...currentBatchToolResultIndexes,
+  ]);
   const droppedToolResultIndexes = new Set(
     toolResultIndexes.filter((index) => !keptToolResultIndexes.has(index)),
   );
@@ -170,6 +204,19 @@ function isAssistantToolCallType(type: unknown): boolean {
     type === "tool_use" ||
     type === "function_call"
   );
+}
+
+function extractAssistantToolCallIds(
+  message: Extract<AgentMessage, { role: "assistant" }>,
+): string[] {
+  const content = message.content;
+  if (!Array.isArray(content)) {
+    return [];
+  }
+  return content.flatMap((block) => {
+    const id = extractAssistantToolCallBlockId(block);
+    return id ? [id] : [];
+  });
 }
 
 function extractAssistantToolCallBlockId(block: unknown): string | null {

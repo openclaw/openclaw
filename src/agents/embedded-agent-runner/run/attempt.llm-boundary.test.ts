@@ -395,6 +395,66 @@ describe("normalizeMessagesForLlmBoundary", () => {
     expect(input.filter((message) => message.role === "toolResult")).toHaveLength(30);
   });
 
+  it("preserves an oversized latest assistant tool-call batch before pruning older results", () => {
+    const historicalBatch = Array.from({ length: 10 }, (_, index) => {
+      const toolCallId = `old_call_${index}`;
+      return [
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: toolCallId, name: "exec", arguments: {} }],
+          timestamp: index * 2,
+        },
+        {
+          role: "toolResult",
+          toolCallId,
+          toolName: "exec",
+          content: [{ type: "text", text: `old output ${index}` }],
+          timestamp: index * 2 + 1,
+        },
+      ];
+    }).flat();
+    const latestCallIds = Array.from({ length: 25 }, (_, index) => `latest_call_${index}`);
+    const latestBatch = [
+      {
+        role: "assistant",
+        content: latestCallIds.map((id) => ({
+          type: "toolCall",
+          id,
+          name: "exec",
+          arguments: {},
+        })),
+        timestamp: 100,
+      },
+      ...latestCallIds.map((toolCallId, index) => ({
+        role: "toolResult",
+        toolCallId,
+        toolName: "exec",
+        content: [{ type: "text", text: `latest output ${index}` }],
+        timestamp: 101 + index,
+      })),
+    ];
+    const input = [...historicalBatch, ...latestBatch];
+
+    const output = normalizeMessagesForLlmBoundary(
+      input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+    ) as unknown as Array<Record<string, unknown>>;
+    const keptToolResultIds = output
+      .filter((message) => message.role === "toolResult")
+      .map((message) => message.toolCallId);
+    const keptAssistantToolCallIds = output.flatMap((message) => {
+      if (message.role !== "assistant" || !Array.isArray(message.content)) {
+        return [];
+      }
+      return message.content.flatMap((block) => {
+        const record = block as { type?: unknown; id?: unknown };
+        return record.type === "toolCall" && typeof record.id === "string" ? [record.id] : [];
+      });
+    });
+
+    expect(keptToolResultIds).toEqual(latestCallIds);
+    expect(keptAssistantToolCallIds).toEqual(latestCallIds);
+  });
+
   it("collapses single-text-block user content arrays to plain strings", () => {
     // Both current and historical single-text-block user messages must
     // serialize identically — this is the form-canonicalization half of the
