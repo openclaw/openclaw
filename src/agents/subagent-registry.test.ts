@@ -2399,6 +2399,190 @@ describe("subagent registry seam flow", () => {
     expect(run?.cleanupCompletedAt).toBeTypeOf("number");
   });
 
+  it("recovers a genuine terminal child result on lost-context sweep instead of reporting failed (#90299)", async () => {
+    // Session store has NOT settled a terminal status (still effectively running),
+    // so session-store reconciliation returns null and the sweep reaches the
+    // lost-context branch. But the child transcript carries a real final result,
+    // so the run must settle as `ok` rather than emitting
+    // `failed: subagent run lost active execution context` alongside that result.
+    mocks.loadSessionStore.mockReturnValue({
+      "agent:main:subagent:child": { sessionId: "sess-child", updatedAt: 1 },
+    });
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        return { status: "pending" };
+      }
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              stopReason: "stop",
+              content: [{ type: "text", text: "# ARCHITECTURE.md\nDesign complete." }],
+            },
+          ],
+        };
+      }
+      return {};
+    });
+
+    const createdAt = Date.parse("2026-03-24T11:59:00Z");
+    vi.setSystemTime(createdAt);
+    mod.registerSubagentRun({
+      runId: "run-lost-context-with-result",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "deliver result then lose context",
+      cleanup: "keep",
+    });
+
+    vi.setSystemTime(createdAt + 120_000);
+    await mod.testing.sweepOnceForTests();
+
+    await waitForFast(() => {
+      const announceParams = findRecordCallArg(
+        mocks.runSubagentAnnounceFlow,
+        0,
+        "lost-context recovery announce",
+        (record) => record.childRunId === "run-lost-context-with-result",
+      );
+      expectRecordFields(
+        announceParams.outcome,
+        { status: "ok" },
+        "lost-context recovery announce outcome",
+      );
+    });
+
+    const run = mod
+      .listSubagentRunsForRequester("agent:main:main")
+      .find((entry) => entry.runId === "run-lost-context-with-result");
+    expect(run?.outcome?.status).toBe("ok");
+    expect(run?.outcome?.error).toBeUndefined();
+  });
+
+  it("keeps the lost-context error when the stale child only made tool calls (#90299)", async () => {
+    // Same lost-context window, but the transcript has no genuine terminal result
+    // (tool-call-only). The strict predicate must NOT recover this as ok — the run
+    // stays on the existing lost-context error path so the parent is not misled.
+    mocks.loadSessionStore.mockReturnValue({
+      "agent:main:subagent:child": { sessionId: "sess-child", updatedAt: 1 },
+    });
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        return { status: "pending" };
+      }
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              stopReason: "toolUse",
+              content: [{ type: "toolCall", id: "call-read", name: "read", arguments: {} }],
+            },
+          ],
+        };
+      }
+      return {};
+    });
+
+    const createdAt = Date.parse("2026-03-24T11:59:00Z");
+    vi.setSystemTime(createdAt);
+    mod.registerSubagentRun({
+      runId: "run-lost-context-tool-only",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "tool calls then lose context",
+      cleanup: "keep",
+    });
+
+    vi.setSystemTime(createdAt + 120_000);
+    await mod.testing.sweepOnceForTests();
+
+    await waitForFast(() => {
+      const announceParams = findRecordCallArg(
+        mocks.runSubagentAnnounceFlow,
+        0,
+        "lost-context tool-only announce",
+        (record) => record.childRunId === "run-lost-context-tool-only",
+      );
+      expectRecordFields(
+        announceParams.outcome,
+        { status: "error", error: "subagent run lost active execution context" },
+        "lost-context tool-only announce outcome",
+      );
+    });
+
+    const run = mod
+      .listSubagentRunsForRequester("agent:main:main")
+      .find((entry) => entry.runId === "run-lost-context-tool-only");
+    expect(run?.outcome?.status).toBe("error");
+    expect(run?.outcome?.error).toBe("subagent run lost active execution context");
+  });
+
+  it("keeps the lost-context error when the stale child's latest turn is text plus a pending tool call (#90299)", async () => {
+    // ClawSweeper P1 on #92791: a toolUse turn with visible pre-tool text is NOT a
+    // terminal result; the sweeper must not recover it as ok.
+    mocks.loadSessionStore.mockReturnValue({
+      "agent:main:subagent:child": { sessionId: "sess-child", updatedAt: 1 },
+    });
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        return { status: "pending" };
+      }
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              stopReason: "toolUse",
+              content: [
+                { type: "text", text: "Let me read the brief first." },
+                { type: "toolCall", id: "call-read", name: "read", arguments: {} },
+              ],
+            },
+          ],
+        };
+      }
+      return {};
+    });
+
+    const createdAt = Date.parse("2026-03-24T11:59:00Z");
+    vi.setSystemTime(createdAt);
+    mod.registerSubagentRun({
+      runId: "run-lost-context-pretool",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "pre-tool text then lose context",
+      cleanup: "keep",
+    });
+
+    vi.setSystemTime(createdAt + 120_000);
+    await mod.testing.sweepOnceForTests();
+
+    await waitForFast(() => {
+      const announceParams = findRecordCallArg(
+        mocks.runSubagentAnnounceFlow,
+        0,
+        "lost-context pre-tool announce",
+        (record) => record.childRunId === "run-lost-context-pretool",
+      );
+      expectRecordFields(
+        announceParams.outcome,
+        { status: "error", error: "subagent run lost active execution context" },
+        "lost-context pre-tool announce outcome",
+      );
+    });
+
+    const run = mod
+      .listSubagentRunsForRequester("agent:main:main")
+      .find((entry) => entry.runId === "run-lost-context-pretool");
+    expect(run?.outcome?.status).toBe("error");
+    expect(run?.outcome?.error).toBe("subagent run lost active execution context");
+  });
+
   it("uses session-store start time when sweeping stale explicit-timeout runs", async () => {
     mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
       if (request.method === "agent.wait") {

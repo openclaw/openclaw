@@ -7,6 +7,8 @@ import {
   buildCompactAnnounceStatsLine,
   buildChildCompletionFindings,
   readSubagentOutput,
+  readTerminalChildResult,
+  resolveTerminalChildResultText,
 } from "./subagent-announce-output.js";
 
 type CallGateway = typeof import("../gateway/call.js").callGateway;
@@ -413,5 +415,139 @@ describe("applySubagentWaitOutcome", () => {
       endedAt: 150,
       elapsedMs: 50,
     });
+  });
+});
+
+function assistantTextTurn(text: string) {
+  return {
+    role: "assistant",
+    stopReason: "stop",
+    content: [{ type: "text", text }],
+  };
+}
+
+function toolCallOnlyTurn(name = "read") {
+  return {
+    role: "assistant",
+    stopReason: "toolUse",
+    content: [{ type: "toolCall", id: `call-${name}`, name, arguments: {} }],
+  };
+}
+
+describe("resolveTerminalChildResultText", () => {
+  it("returns the final visible assistant result for a genuine terminal turn", () => {
+    expect(
+      resolveTerminalChildResultText([assistantTextTurn("# ARCHITECTURE.md\nDesign complete.")]),
+    ).toBe("# ARCHITECTURE.md\nDesign complete.");
+  });
+
+  it("returns undefined for a toolUse turn that has visible pre-tool text plus a tool call", () => {
+    // Regression for ClawSweeper P1 on #92791: a normal assistant turn can carry
+    // progress text AND a tool call (stopReason "toolUse"); the model expected to
+    // continue after tool results, so that text is NOT a terminal result.
+    const mixedTurn = {
+      role: "assistant",
+      stopReason: "toolUse",
+      content: [
+        { type: "text", text: "Let me read the brief first." },
+        { type: "toolCall", id: "call-read", name: "read", arguments: {} },
+      ],
+    };
+    expect(resolveTerminalChildResultText([mixedTurn])).toBeUndefined();
+  });
+
+  it("returns undefined when a terminal text turn is followed by a trailing tool-only turn", () => {
+    // The child produced text but then kept working (more tool calls) → not done.
+    expect(
+      resolveTerminalChildResultText([
+        assistantTextTurn("Draft ready, verifying…"),
+        toolCallOnlyTurn(),
+      ]),
+    ).toBeUndefined();
+  });
+
+  it("returns undefined for a tool-call-only history (no visible result)", () => {
+    // Regression for #90299 / PR #90492: the broad display helper would surface a
+    // synthetic "1 tool call(s) made without visible output." string here, which
+    // must NOT count as a terminal result.
+    expect(resolveTerminalChildResultText([toolCallOnlyTurn()])).toBeUndefined();
+  });
+
+  it("returns undefined for a sessions_yield waiting turn", () => {
+    // Regression for #90299 / PR #91400: a child parked on sessions_yield is
+    // waiting on descendants, not finished, and must not be recovered as ok.
+    expect(resolveTerminalChildResultText(sessionsYieldTurn())).toBeUndefined();
+  });
+
+  it("returns the final assistant result that arrives after a sessions_yield wait", () => {
+    expect(
+      resolveTerminalChildResultText([
+        ...sessionsYieldTurn(),
+        assistantTextTurn("Final report ready."),
+      ]),
+    ).toBe("Final report ready.");
+  });
+
+  it("returns undefined for whitespace-only assistant text", () => {
+    expect(resolveTerminalChildResultText([assistantTextTurn("   ")])).toBeUndefined();
+  });
+
+  it("returns undefined for an empty history", () => {
+    expect(resolveTerminalChildResultText([])).toBeUndefined();
+  });
+});
+
+describe("readTerminalChildResult", () => {
+  afterEach(() => {
+    testing.setDepsForTest();
+  });
+
+  it("reads gateway history and returns the genuine terminal result", async () => {
+    const deps = installOutputDeps({
+      messages: [assistantTextTurn("# ARCHITECTURE.md\nDesign complete.")],
+    });
+    await expect(readTerminalChildResult("agent:main:subagent:child")).resolves.toBe(
+      "# ARCHITECTURE.md\nDesign complete.",
+    );
+    expect(deps.callGateway).toHaveBeenCalledOnce();
+  });
+
+  it("returns undefined for a tool-call-only history while readSubagentOutput surfaces a summary", async () => {
+    // Same transcript, two predicates: the display helper still reports a
+    // tool-call summary, but the strict terminal predicate reports no result —
+    // this is exactly the boundary the lost-context sweeper must respect.
+    installOutputDeps({ messages: [toolCallOnlyTurn()] });
+    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBe(
+      "1 tool call(s) made without visible output.",
+    );
+
+    installOutputDeps({ messages: [toolCallOnlyTurn()] });
+    await expect(readTerminalChildResult("agent:main:subagent:child")).resolves.toBeUndefined();
+  });
+
+  it("returns undefined for a sessions_yield waiting transcript", async () => {
+    installOutputDeps({ messages: sessionsYieldTurn() });
+    await expect(readTerminalChildResult("agent:main:subagent:child")).resolves.toBeUndefined();
+  });
+
+  it("returns undefined for a toolUse turn while readSubagentOutput keeps the display text", async () => {
+    const mixed = [
+      {
+        role: "assistant",
+        stopReason: "toolUse",
+        content: [
+          { type: "text", text: "Let me read the brief first." },
+          { type: "toolCall", id: "call-read", name: "read", arguments: {} },
+        ],
+      },
+    ];
+    // Display behavior is intentionally unchanged: it still shows the visible text.
+    installOutputDeps({ messages: mixed });
+    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBe(
+      "Let me read the brief first.",
+    );
+    // But the lifecycle predicate refuses to treat that pre-tool text as terminal.
+    installOutputDeps({ messages: mixed });
+    await expect(readTerminalChildResult("agent:main:subagent:child")).resolves.toBeUndefined();
   });
 });

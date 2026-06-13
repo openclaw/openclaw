@@ -25,7 +25,7 @@ import {
 import { removeInternalSessionEffectsTranscript } from "./internal-session-effects.js";
 import { isAbortedAgentStopReason } from "./run-termination.js";
 import type { ensureRuntimePluginsLoaded as ensureRuntimePluginsLoadedFn } from "./runtime-plugins.js";
-import type { SubagentRunOutcome } from "./subagent-announce-output.js";
+import { readTerminalChildResult, type SubagentRunOutcome } from "./subagent-announce-output.js";
 import {
   ensureCompletionState,
   ensureDeliveryState,
@@ -956,6 +956,40 @@ async function sweepSubagentRuns() {
 
           if (sessionEntry?.abortedLastRun === true) {
             scheduleSubagentOrphanRecovery({ delayMs: 1_000 });
+            continue;
+          }
+
+          // The run's in-memory context is gone and the session store has not
+          // settled a terminal status, but the child may still have produced a
+          // genuine final result that the announce path already captured. Recover
+          // that result here so the parent never receives a `failed: lost active
+          // execution context` status alongside a real child result (issue #90299).
+          // A read failure must NOT abort the sweep — fall through to the existing
+          // lost-context error so the run is still settled.
+          let recoveredTerminalResult: string | undefined;
+          try {
+            recoveredTerminalResult = await readTerminalChildResult(entry.childSessionKey);
+          } catch (error) {
+            recoveredTerminalResult = undefined;
+            log.debug("sweeper lost-context terminal-result read failed", {
+              runId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+          if (recoveredTerminalResult) {
+            await completeSubagentRunWithRecovery(
+              {
+                runId,
+                startedAt: entry.startedAt,
+                endedAt: now,
+                outcome: { status: "ok" },
+                reason: SUBAGENT_ENDED_REASON_COMPLETE,
+                sendFarewell: true,
+                accountId: entry.requesterOrigin?.accountId,
+                triggerCleanup: true,
+              },
+              "sweeper-lost-context-recovered",
+            );
             continue;
           }
 

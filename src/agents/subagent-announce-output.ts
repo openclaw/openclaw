@@ -54,6 +54,14 @@ type SubagentOutputSnapshot = {
   latestSilentText?: string;
   latestToolCallCount?: number;
   waitingForContinuation?: boolean;
+  /**
+   * Whether the latest assistant activity was a genuine terminal turn: visible
+   * text with no tool calls and no `toolUse` stop reason. A `toolUse` turn (even
+   * one carrying visible pre-tool text) and any trailing tool-only turn are
+   * non-terminal — the model expected to continue after tool results. Used only
+   * by the lifecycle terminal-result predicate; display selection ignores it.
+   */
+  latestAssistantTurnTerminal?: boolean;
 };
 
 type AgentWaitResult = {
@@ -155,6 +163,7 @@ function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutpu
         snapshot.latestToolCallCount =
           (snapshot.latestToolCallCount ?? 0) + countAssistantToolCalls(message);
         snapshot.waitingForContinuation = false;
+        snapshot.latestAssistantTurnTerminal = false;
         previousAssistantCalledYield = false;
         continue;
       }
@@ -168,6 +177,9 @@ function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutpu
       snapshot.latestSilentText = undefined;
       snapshot.latestAssistantText = text;
       snapshot.waitingForContinuation = false;
+      const stopReason = (message as { stopReason?: unknown }).stopReason;
+      snapshot.latestAssistantTurnTerminal =
+        countAssistantToolCalls(message) === 0 && stopReason !== "toolUse";
       previousAssistantCalledYield = false;
       continue;
     }
@@ -199,11 +211,10 @@ function selectSubagentOutputText(snapshot: SubagentOutputSnapshot): string | un
   return undefined;
 }
 
-export async function readSubagentOutput(
+async function loadSubagentHistoryMessages(
   sessionKey: string,
-  _outcome?: SubagentRunOutcome,
   options?: { sessionFile?: string },
-): Promise<string | undefined> {
+): Promise<unknown[]> {
   let messages: unknown[] | undefined;
   if (options?.sessionFile) {
     const transcriptMessages = await subagentAnnounceOutputDeps.readSessionMessagesAsync(
@@ -225,13 +236,68 @@ export async function readSubagentOutput(
           params: { sessionKey, limit: 100 },
         })
       : undefined;
-  const sourceMessages = messages ?? (Array.isArray(history?.messages) ? history.messages : []);
+  return messages ?? (Array.isArray(history?.messages) ? history.messages : []);
+}
+
+export async function readSubagentOutput(
+  sessionKey: string,
+  _outcome?: SubagentRunOutcome,
+  options?: { sessionFile?: string },
+): Promise<string | undefined> {
+  const sourceMessages = await loadSubagentHistoryMessages(sessionKey, options);
   const snapshot = summarizeSubagentOutputHistory(sourceMessages);
   const selected = selectSubagentOutputText(snapshot);
   if (selected?.trim()) {
     return selected;
   }
   return undefined;
+}
+
+/**
+ * Strict terminal-result predicate for lifecycle reconciliation.
+ *
+ * Unlike {@link selectSubagentOutputText} / {@link readSubagentOutput} — display
+ * helpers that also surface a synthetic "N tool call(s) made without visible
+ * output." summary and silent-reply markers — this returns the child's final
+ * visible assistant result ONLY when the transcript shows a genuine terminal turn.
+ * It deliberately returns `undefined` for:
+ *   - `sessions_yield` waiting turns (`waitingForContinuation`) — the child is
+ *     parked waiting on descendants, not finished;
+ *   - `toolUse` assistant turns that carry visible pre-tool text plus a tool
+ *     call — the model expected to continue after tool results, so the text is
+ *     progress, not a final result;
+ *   - tool-call-only histories with no visible assistant text;
+ *   - silent-reply / announce-skip markers (no deliverable result).
+ *
+ * Used by the registry sweeper to decide whether a stale, context-lost run
+ * actually delivered a result before falling back to a lost-context error, so a
+ * non-terminal run is never recovered as a successful completion.
+ */
+export function resolveTerminalChildResultText(messages: Array<unknown>): string | undefined {
+  const snapshot = summarizeSubagentOutputHistory(messages);
+  if (snapshot.waitingForContinuation) {
+    return undefined;
+  }
+  // A `toolUse` assistant turn (even with visible pre-tool text) and any trailing
+  // tool-only turn are mid-work, not a finished result — never recover those as ok.
+  if (snapshot.latestAssistantTurnTerminal !== true) {
+    return undefined;
+  }
+  const text = snapshot.latestAssistantText?.trim();
+  return text ? text : undefined;
+}
+
+/**
+ * Read a child session and return its final terminal result text, or `undefined`
+ * when the child has not produced a genuine terminal result (waiting / tool-only /
+ * silent / empty). Reuses the same history source as {@link readSubagentOutput}.
+ */
+export async function readTerminalChildResult(
+  sessionKey: string,
+  options?: { sessionFile?: string },
+): Promise<string | undefined> {
+  const sourceMessages = await loadSubagentHistoryMessages(sessionKey, options);
+  return resolveTerminalChildResultText(sourceMessages);
 }
 
 export async function readLatestSubagentOutputWithRetry(params: {
