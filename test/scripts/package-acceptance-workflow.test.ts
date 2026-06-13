@@ -1576,7 +1576,7 @@ describe("package artifact reuse", () => {
     expect(packageJson.scripts?.["release:fast-pretag-check"]).toBe(
       "bash scripts/release-fast-pretag-check.sh",
     );
-    expect(clawHubWorkflow).toContain('CLAWHUB_CLI_PACKAGE: "clawhub@0.20.2"');
+    expect(clawHubWorkflow).toContain('CLAWHUB_CLI_PACKAGE: "clawhub@0.21.0"');
     expect(clawHubWorkflow).not.toContain("CLAWHUB_REPOSITORY:");
     expect(clawHubWorkflow).not.toContain("CLAWHUB_REF:");
     expect(clawHubWorkflow).toContain("pack_plugins_clawhub_artifacts:");
@@ -1722,7 +1722,7 @@ describe("package artifact reuse", () => {
     expect(pluginNpmWorkflow).toContain("environment: npm-release");
     expect(clawHubWorkflow.match(/environment: clawhub-plugin-release/g)?.length).toBe(1);
     expect(clawHubNewWorkflow).toContain("name: Plugin ClawHub New");
-    expect(clawHubNewWorkflow).toContain('CLAWHUB_CLI_PACKAGE: "clawhub@0.20.2"');
+    expect(clawHubNewWorkflow).toContain('CLAWHUB_CLI_PACKAGE: "clawhub@0.21.0"');
     expect(clawHubNewWorkflow).not.toContain("CLAWHUB_REPOSITORY:");
     expect(clawHubNewWorkflow).not.toContain("CLAWHUB_REF:");
     expect(clawHubNewWorkflow).toContain("environment: clawhub-plugin-bootstrap");
