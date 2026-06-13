@@ -54,6 +54,7 @@ import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
 import { createReplyTimingTracker } from "./reply-timing-tracker.js";
 import { initSessionState } from "./session.js";
 import {
+  isStaleAutoFallbackOriginOverride,
   isStaleHeartbeatAutoFallbackOverride,
   resolveStoredModelOverride,
 } from "./stored-model-override.js";
@@ -622,19 +623,30 @@ export async function getReplyFromConfig(
     primaryProvider,
     primaryModel,
   });
+  const staleAutoFallbackOriginOverride = isStaleAutoFallbackOriginOverride({
+    sessionEntry,
+    storedOverride: storedModelOverride,
+    defaultProvider,
+    defaultModel,
+    primaryProvider,
+    primaryModel,
+  });
   const staleLegacyAutoFallbackWithoutOrigin =
     storedModelOverride?.source === "session" && hasLegacyAutoFallbackWithoutOrigin(sessionEntry);
   if (
     storedModelOverride?.model &&
     !hasResolvedHeartbeatModelOverride &&
     !staleHeartbeatAutoFallbackOverride &&
+    !staleAutoFallbackOriginOverride &&
     !staleLegacyAutoFallbackWithoutOrigin
   ) {
     provider = storedModelOverride.provider ?? defaultProvider;
     model = storedModelOverride.model;
   }
   const canApplyAutoFallbackPrimaryProbe =
-    !hasResolvedHeartbeatModelOverride && !staleHeartbeatAutoFallbackOverride;
+    !hasResolvedHeartbeatModelOverride &&
+    !staleHeartbeatAutoFallbackOverride &&
+    !staleAutoFallbackOriginOverride;
   const autoFallbackPrimaryProbe = canApplyAutoFallbackPrimaryProbe
     ? resolveAutoFallbackPrimaryProbe({
         entry: sessionEntry,
@@ -646,6 +658,7 @@ export async function getReplyFromConfig(
   const hasEffectiveSessionModelOverride =
     hasSessionModelOverride &&
     !staleHeartbeatAutoFallbackOverride &&
+    !staleAutoFallbackOriginOverride &&
     !staleLegacyAutoFallbackWithoutOrigin;
   if (
     !hasResolvedHeartbeatModelOverride &&

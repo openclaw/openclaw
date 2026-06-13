@@ -1156,6 +1156,30 @@ describe("createModelSelectionState auto-failover overrides", () => {
     expect(sessionStore[sessionKey]?.modelOverrideSource).toBe("auto");
   });
 
+  it("clears polluted-origin auto-failover overrides on normal turns", async () => {
+    const { state, sessionStore } = await resolveStateWithOverride({
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-7",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "anthropic",
+      modelOverrideFallbackOriginModel: "claude-haiku-4-5",
+      primaryProvider: "anthropic",
+      primaryModel: "claude-opus-4-8",
+      provider: "anthropic",
+      model: "claude-opus-4-7",
+    });
+
+    expect(state.provider).toBe("anthropic");
+    expect(state.model).toBe("claude-opus-4-8");
+    expect(state.resetModelOverride).toBe(true);
+    expect(state.resetModelOverrideRef).toBe("anthropic/claude-opus-4-7");
+    expect(sessionStore[sessionKey]?.providerOverride).toBeUndefined();
+    expect(sessionStore[sessionKey]?.modelOverride).toBeUndefined();
+    expect(sessionStore[sessionKey]?.modelOverrideSource).toBeUndefined();
+    expect(sessionStore[sessionKey]?.modelOverrideFallbackOriginProvider).toBeUndefined();
+    expect(sessionStore[sessionKey]?.modelOverrideFallbackOriginModel).toBeUndefined();
+  });
+
   it("keeps a legacy auto pin when the current selection already matches it", async () => {
     const { state, sessionStore } = await resolveStateWithOverride({
       providerOverride: "openrouter",

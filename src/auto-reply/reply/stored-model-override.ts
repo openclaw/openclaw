@@ -142,3 +142,44 @@ export function isStaleHeartbeatAutoFallbackOverride(params: {
   });
   return storedOverrideKey !== null && storedOverrideKey !== primaryKey;
 }
+
+/** Detects auto-fallback pins whose recorded primary origin no longer matches the current primary. */
+export function isStaleAutoFallbackOriginOverride(params: {
+  sessionEntry?: SessionEntry;
+  storedOverride?: StoredModelOverride | null;
+  defaultProvider: string;
+  defaultModel: string;
+  primaryProvider?: string;
+  primaryModel?: string;
+}): boolean {
+  if (params.storedOverride?.source !== "session") {
+    return false;
+  }
+  const entry = params.sessionEntry;
+  const recoveredAutoFallbackOverride =
+    entry !== undefined &&
+    entry.modelOverrideSource === undefined &&
+    hasSessionAutoModelFallbackProvenance(entry);
+  if (entry?.modelOverrideSource !== "auto" && !recoveredAutoFallbackOverride) {
+    return false;
+  }
+  if (!entry) {
+    return false;
+  }
+
+  const primaryKey = resolveModelRefKey({
+    defaultProvider: params.defaultProvider,
+    overrideProvider: params.primaryProvider ?? params.defaultProvider,
+    overrideModel: params.primaryModel ?? params.defaultModel,
+  });
+  if (!primaryKey) {
+    return false;
+  }
+
+  const originKey = resolveModelRefKey({
+    defaultProvider: params.defaultProvider,
+    overrideProvider: entry.modelOverrideFallbackOriginProvider,
+    overrideModel: entry.modelOverrideFallbackOriginModel,
+  });
+  return originKey !== null && originKey !== primaryKey;
+}

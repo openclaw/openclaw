@@ -39,6 +39,7 @@ export {
   type ModelDirectiveSelection,
 } from "./model-selection-directive.js";
 import {
+  isStaleAutoFallbackOriginOverride,
   isStaleHeartbeatAutoFallbackOverride,
   resolveStoredModelOverride,
 } from "./stored-model-override.js";
@@ -206,6 +207,14 @@ export async function createModelSelectionState(params: {
     primaryProvider: params.primaryProvider,
     primaryModel: params.primaryModel,
   });
+  const staleAutoFallbackOriginOverride = isStaleAutoFallbackOriginOverride({
+    sessionEntry,
+    storedOverride: directStoredModelOverride,
+    defaultProvider,
+    defaultModel,
+    primaryProvider: params.primaryProvider,
+    primaryModel: params.primaryModel,
+  });
   const primaryHarnessPolicy = resolveAgentHarnessPolicy({
     provider: primaryProvider,
     modelId: primaryModel,
@@ -236,6 +245,7 @@ export async function createModelSelectionState(params: {
       modelKey(normalizedDirectOverride.provider, normalizedDirectOverride.model);
   const staleDirectStoredOverride =
     staleHeartbeatAutoFallbackOverride ||
+    staleAutoFallbackOriginOverride ||
     staleLegacyOpenAICodexAutoOverride ||
     staleLegacyAutoFallbackWithoutOrigin;
 
