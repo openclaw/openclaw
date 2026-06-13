@@ -71,6 +71,8 @@ export interface ReadToolInput {
   path: string;
   offset?: number;
   limit?: number;
+  /** File encoding label (e.g. utf-8, gbk, shift_jis, latin1). Defaults to utf-8. */
+  encoding?: string;
 }
 
 export interface ReadToolDetails {
