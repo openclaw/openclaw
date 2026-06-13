@@ -213,20 +213,23 @@ describe("check-openclaw-package-tarball", () => {
     );
   });
 
-  it("rejects missing content inventory", () => {
-    withTarball(
-      ["dist/index.js"],
-      { "dist/index.js": "export {};\n" },
-      (tarball) => {
-        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+  it.each(["2026.6.7", "2026.6.10-alpha.3"])(
+    "rejects missing content inventory for package %s",
+    (version) => {
+      withTarball(
+        ["dist/index.js"],
+        { "dist/index.js": "export {};\n" },
+        (tarball) => {
+          const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
 
-        expect(result.status).not.toBe(0);
-        expect(result.stderr).toContain("missing dist/postinstall-content-inventory.json");
-      },
-      "2026.6.6",
-      { includeContentInventory: false },
-    );
-  });
+          expect(result.status).not.toBe(0);
+          expect(result.stderr).toContain("missing dist/postinstall-content-inventory.json");
+        },
+        version,
+        { includeContentInventory: false },
+      );
+    },
+  );
 
   it("rejects content inventory outside the package root", () => {
     const body = "export {};\n";
@@ -239,7 +242,7 @@ describe("check-openclaw-package-tarball", () => {
         expect(result.status).not.toBe(0);
         expect(result.stderr).toContain("missing dist/postinstall-content-inventory.json");
       },
-      "2026.6.6",
+      "2026.6.7",
       {
         includeContentInventory: false,
         extraRootFiles: {
@@ -279,7 +282,7 @@ describe("check-openclaw-package-tarball", () => {
           "content inventory references missing tar entry dist/index.js",
         );
       },
-      "2026.6.6",
+      "2026.6.7",
       {
         includeContentInventory: false,
         extraRootFiles: { "dist/index.js": body },
@@ -287,26 +290,30 @@ describe("check-openclaw-package-tarball", () => {
     );
   });
 
-  it.each(["2026.6.5", "2026.6.5-beta.6"])(
-    "allows published package %s without content inventory",
-    (version) => {
-      withTarball(
-        ["dist/index.js"],
-        { "dist/index.js": "export {};\n" },
-        (tarball) => {
-          const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+  it.each([
+    "2026.6.5",
+    "2026.6.5-beta.6",
+    "2026.6.6",
+    "2026.6.6-beta.2",
+    "2026.6.7-alpha.5",
+    "2026.6.10-alpha.2",
+  ])("allows published package %s without content inventory", (version) => {
+    withTarball(
+      ["dist/index.js"],
+      { "dist/index.js": "export {};\n" },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
 
-          expect(result.status, result.stderr).toBe(0);
-          expect(result.stderr).toContain(
-            "legacy package omits dist/postinstall-content-inventory.json",
-          );
-          expect(result.stdout).toContain("OpenClaw package tarball integrity passed.");
-        },
-        version,
-        { includeContentInventory: false },
-      );
-    },
-  );
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stderr).toContain(
+          "legacy package omits dist/postinstall-content-inventory.json",
+        );
+        expect(result.stdout).toContain("OpenClaw package tarball integrity passed.");
+      },
+      version,
+      { includeContentInventory: false },
+    );
+  });
 
   it("rejects stale content inventory hashes", () => {
     withTarball(

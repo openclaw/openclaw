@@ -3,11 +3,13 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { isLegacyContentInventoryCompatVersion } from "../../scripts/lib/content-inventory-compat.mjs";
 import { isLocalBuildMetadataDistPath } from "../../scripts/lib/local-build-metadata-paths.mjs";
 import { readJsonIfExists, writeJson } from "./json-files.js";
 import { readPackageVersion } from "./package-json.js";
 
 export { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mjs";
+export { isLegacyContentInventoryCompatVersion } from "../../scripts/lib/content-inventory-compat.mjs";
 
 export const PACKAGE_DIST_INVENTORY_RELATIVE_PATH = "dist/postinstall-inventory.json";
 export const PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH =
@@ -85,7 +87,6 @@ const OMITTED_DIST_SUBTREE_PATTERNS = [
   new RegExp(`^dist/plugin-sdk/extensions/${LEGACY_QA_LAB_DIR}(?:/|$)`, "u"),
 ] as const;
 const INSTALL_STAGE_DEBRIS_DIR_PATTERN = /^\.openclaw-install-stage(?:-[^/]+)?$/iu;
-const LEGACY_CONTENT_INVENTORY_COMPAT_MAX = { year: 2026, month: 6, day: 5 };
 type ExternalizedBundledExtensionIds = ReadonlySet<string>;
 type PackageDistExclusionRules = {
   files: ReadonlySet<string>;
@@ -141,36 +142,6 @@ function normalizeRelativePath(value: string): string {
 
 function isInstallStageDirName(value: string): boolean {
   return INSTALL_STAGE_DEBRIS_DIR_PATTERN.test(value);
-}
-
-function parseCalver(version: string | null | undefined) {
-  const match = /^(\d{4})\.(\d{1,2})\.(\d{1,2})(?:[-+].*)?$/u.exec(version ?? "");
-  if (!match) {
-    return null;
-  }
-  return {
-    year: Number(match[1]),
-    month: Number(match[2]),
-    day: Number(match[3]),
-  };
-}
-
-function compareCalver(
-  left: { year: number; month: number; day: number },
-  right: { year: number; month: number; day: number },
-): number {
-  if (left.year !== right.year) {
-    return left.year - right.year;
-  }
-  if (left.month !== right.month) {
-    return left.month - right.month;
-  }
-  return left.day - right.day;
-}
-
-function isLegacyContentInventoryCompatVersion(version: string | null | undefined): boolean {
-  const parsed = parseCalver(version);
-  return parsed ? compareCalver(parsed, LEGACY_CONTENT_INVENTORY_COMPAT_MAX) <= 0 : false;
 }
 
 function splitRelativePath(relativePath: string): string[] {

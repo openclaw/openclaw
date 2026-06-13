@@ -4,9 +4,12 @@ import path from "node:path";
 import { pathExists } from "../utils.js";
 import {
   collectPackageDistInventory,
+  isLegacyContentInventoryCompatVersion,
+  PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH,
   readPackageDistContentInventoryIfPresent,
   type PackageDistContentInventoryEntry,
 } from "./package-dist-inventory.js";
+import { readPackageVersion } from "./package-json.js";
 
 type LocalPackageOverrideKind = "added" | "modified" | "deleted";
 
@@ -50,6 +53,18 @@ function emptyResult(status: LocalPackageOverridesResult["status"]): LocalPackag
     conflicts: [],
     warnings: [],
   };
+}
+
+async function packageRootExists(packageRoot: string): Promise<boolean> {
+  try {
+    await fs.lstat(packageRoot);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
 }
 
 function countChanges(changes: LocalPackageOverrideChange[]) {
@@ -228,9 +243,18 @@ async function collectReferencedAddedOverridePaths(params: {
 export async function captureLocalPackageOverrides(params: {
   packageRoot: string;
 }): Promise<LocalPackageOverridesPlan | null> {
+  if (!(await packageRootExists(params.packageRoot))) {
+    return null;
+  }
   const baseline = await readPackageDistContentInventoryIfPresent(params.packageRoot);
   if (baseline === null) {
-    return null;
+    const packageVersion = await readPackageVersion(params.packageRoot);
+    if (isLegacyContentInventoryCompatVersion(packageVersion)) {
+      return null;
+    }
+    throw new Error(
+      `missing package dist content inventory ${PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH}`,
+    );
   }
 
   const actualFiles = await collectPackageDistInventory(params.packageRoot);

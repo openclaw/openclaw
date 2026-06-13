@@ -973,7 +973,7 @@ describe("runGlobalPackageUpdateSteps", () => {
               throw new Error("missing staged prefix");
             }
             const stagedPackageRoot = path.join(stagePrefix, "lib", "node_modules", "openclaw");
-            await writePackageRoot(stagedPackageRoot, "2026.6.5");
+            await writePackageRoot(stagedPackageRoot, "2026.6.6");
             await fs.rm(path.join(stagedPackageRoot, "dist", "postinstall-content-inventory.json"));
             return {
               name,
@@ -987,7 +987,7 @@ describe("runGlobalPackageUpdateSteps", () => {
 
         const result = await runGlobalPackageUpdateSteps({
           installTarget: createNpmTarget(globalRoot),
-          installSpec: "openclaw@2026.6.5",
+          installSpec: "openclaw@2026.6.6",
           packageName: "openclaw",
           packageRoot,
           runCommand: createRootRunner(globalRoot),
@@ -1035,7 +1035,7 @@ describe("runGlobalPackageUpdateSteps", () => {
               throw new Error("missing staged prefix");
             }
             const stagedPackageRoot = path.join(stagePrefix, "lib", "node_modules", "openclaw");
-            await writePackageRoot(stagedPackageRoot, "2026.6.6");
+            await writePackageRoot(stagedPackageRoot, "2026.6.7");
             await fs.rm(path.join(stagedPackageRoot, "dist", "postinstall-content-inventory.json"));
             return {
               name,
@@ -1049,7 +1049,7 @@ describe("runGlobalPackageUpdateSteps", () => {
 
         const result = await runGlobalPackageUpdateSteps({
           installTarget: createNpmTarget(globalRoot),
-          installSpec: "openclaw@2026.6.6",
+          installSpec: "openclaw@2026.6.7",
           packageName: "openclaw",
           packageRoot,
           runCommand: createRootRunner(globalRoot),
@@ -1708,6 +1708,145 @@ describe("runGlobalPackageUpdateSteps", () => {
           await expect(
             fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
           ).resolves.toContain('"version":"1.0.0"');
+        },
+      );
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
+  it("aborts in-place updates when the installed package root cannot be inspected", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    try {
+      await withTempDir(
+        { prefix: "openclaw-package-update-in-place-root-inspection-fail-" },
+        async (base) => {
+          const globalDir = path.join(base, "pnpm", "global");
+          const globalRoot = path.join(globalDir, "5", "node_modules");
+          const packageRoot = path.join(globalRoot, "openclaw");
+          await writePackageRoot(packageRoot, "2026.6.7");
+
+          const realLstat = fs.lstat.bind(fs);
+          const lstatSpy = vi
+            .spyOn(fs, "lstat")
+            .mockImplementation(async (...args: Parameters<typeof fs.lstat>) => {
+              if (String(args[0]) === packageRoot) {
+                throw createFsError("EACCES", "permission denied");
+              }
+              return await realLstat(...args);
+            });
+          const runStep = vi.fn();
+
+          try {
+            const result = await runGlobalPackageUpdateSteps({
+              installTarget: createPnpmTarget(globalRoot),
+              installSpec: "openclaw@2026.6.8",
+              packageName: "openclaw",
+              packageRoot,
+              runCommand: createRootRunner(globalRoot),
+              runStep,
+              timeoutMs: 1000,
+            });
+
+            expect(result.failedStep?.name).toBe("local overrides");
+            expect(result.failedStep?.stderrTail).toContain("permission denied");
+            expect(result.afterVersion).toBeNull();
+            expect(result.steps.map((step) => step.name)).toEqual(["local overrides"]);
+            expect(runStep).not.toHaveBeenCalled();
+          } finally {
+            lstatSpy.mockRestore();
+          }
+        },
+      );
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
+  it("aborts in-place updates before package-manager work when required inventory is missing", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    try {
+      await withTempDir(
+        { prefix: "openclaw-package-update-in-place-missing-inventory-" },
+        async (base) => {
+          const globalDir = path.join(base, "pnpm", "global");
+          const globalRoot = path.join(globalDir, "5", "node_modules");
+          const packageRoot = path.join(globalRoot, "openclaw");
+          await writePackageRoot(packageRoot, "2026.6.7");
+          await fs.rm(path.join(packageRoot, "dist", "postinstall-content-inventory.json"));
+          await fs.writeFile(
+            path.join(packageRoot, "dist", "index.js"),
+            "export const local = true;\n",
+            "utf8",
+          );
+
+          const runStep = vi.fn();
+
+          const result = await runGlobalPackageUpdateSteps({
+            installTarget: createPnpmTarget(globalRoot),
+            installSpec: "openclaw@2026.6.8",
+            packageName: "openclaw",
+            packageRoot,
+            runCommand: createRootRunner(globalRoot),
+            runStep,
+            timeoutMs: 1000,
+          });
+
+          expect(result.failedStep?.name).toBe("local overrides");
+          expect(result.failedStep?.stderrTail).toContain("missing package dist content inventory");
+          expect(result.afterVersion).toBeNull();
+          expect(result.localOverrides).toBeUndefined();
+          expect(result.steps.map((step) => step.name)).toEqual(["local overrides"]);
+          expect(runStep).not.toHaveBeenCalled();
+          await expect(
+            fs.readFile(path.join(packageRoot, "dist", "index.js"), "utf8"),
+          ).resolves.toBe("export const local = true;\n");
+          await expect(
+            fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
+          ).resolves.toContain('"version":"2026.6.7"');
+        },
+      );
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
+  it("allows in-place updates for legacy installed packages without content inventory", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    try {
+      await withTempDir(
+        { prefix: "openclaw-package-update-in-place-legacy-missing-inventory-" },
+        async (base) => {
+          const globalDir = path.join(base, "pnpm", "global");
+          const globalRoot = path.join(globalDir, "5", "node_modules");
+          const packageRoot = path.join(globalRoot, "openclaw");
+          await writePackageRoot(packageRoot, "2026.6.6");
+          await fs.rm(path.join(packageRoot, "dist", "postinstall-content-inventory.json"));
+
+          const runStep = vi.fn(async ({ name, argv, cwd }): Promise<PackageUpdateStepResult> => {
+            await writePackageRoot(packageRoot, "2026.6.8");
+            return {
+              name,
+              command: argv.join(" "),
+              cwd: cwd ?? process.cwd(),
+              durationMs: 1,
+              exitCode: 0,
+            };
+          });
+
+          const result = await runGlobalPackageUpdateSteps({
+            installTarget: createPnpmTarget(globalRoot),
+            installSpec: "openclaw@2026.6.8",
+            packageName: "openclaw",
+            packageRoot,
+            runCommand: createRootRunner(globalRoot),
+            runStep,
+            timeoutMs: 1000,
+          });
+
+          expect(result.failedStep).toBeNull();
+          expect(result.afterVersion).toBe("2026.6.8");
+          expect(runStep).toHaveBeenCalledTimes(1);
         },
       );
     } finally {

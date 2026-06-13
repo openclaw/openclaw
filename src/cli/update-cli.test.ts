@@ -3362,6 +3362,9 @@ describe("update-cli", () => {
       JSON.stringify({ name: "openclaw", version: "1.0.0" }),
       "utf-8",
     );
+    await fs.mkdir(path.join(pkgRoot, "dist"), { recursive: true });
+    await fs.writeFile(path.join(pkgRoot, "dist", "index.js"), "export {};\n", "utf-8");
+    await writePackageDistInventory(pkgRoot);
 
     vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
       if (Array.isArray(argv) && argv[0] === "npm" && argv[1] === "root" && argv[2] === "-g") {
