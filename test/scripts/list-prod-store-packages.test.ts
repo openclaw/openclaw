@@ -101,6 +101,47 @@ describe("list-prod-store-packages", () => {
     expect(result.stdout).toBe("source-map-support@0.5.21\nsource-map@0.6.1");
   });
 
+  it("adds prod importer dependencies missing from pnpm list output", () => {
+    const cwd = makeTempRepoRoot(tempDirs, "openclaw-prod-store-packages-");
+    writeFileSync(
+      join(cwd, "pnpm-lock.yaml"),
+      [
+        "lockfileVersion: '10.0'",
+        "",
+        "importers:",
+        "  extensions/bonjour:",
+        "    dependencies:",
+        "      '@homebridge/ciao':",
+        "        specifier: 1.3.9",
+        "        version: 1.3.9",
+        "",
+        "packages:",
+        "  '@homebridge/ciao@1.3.9':",
+        "    resolution: {integrity: sha512-test}",
+        "  source-map-support@0.5.21:",
+        "    resolution: {integrity: sha512-test}",
+        "  source-map@0.6.1:",
+        "    resolution: {integrity: sha512-test}",
+        "",
+        "snapshots:",
+        "  '@homebridge/ciao@1.3.9':",
+        "    dependencies:",
+        "      source-map-support: 0.5.21",
+        "  source-map-support@0.5.21:",
+        "    dependencies:",
+        "      source-map: 0.6.1",
+        "  source-map@0.6.1: {}",
+        "",
+      ].join("\n"),
+    );
+    const result = runListProdStorePackages({ dependencies: {} }, cwd);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe(
+      "@homebridge/ciao@1.3.9\nsource-map-support@0.5.21\nsource-map@0.6.1",
+    );
+  });
+
   it("adds target optional dependencies from peer-resolved lockfile snapshots", () => {
     const cwd = makeTempRepoRoot(tempDirs, "openclaw-prod-store-packages-");
     const platformPackages = [

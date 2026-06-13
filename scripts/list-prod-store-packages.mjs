@@ -144,10 +144,21 @@ function addSnapshotClosure(lockfile) {
   }
 }
 
+function addImporterProdDeps(lockfile) {
+  for (const importer of Object.values(lockfile?.importers ?? {})) {
+    for (const deps of [importer.dependencies, importer.optionalDependencies]) {
+      for (const [name, dep] of Object.entries(deps ?? {})) {
+        addSpec(lockfile, packageSpec(name, typeof dep === "string" ? dep : dep?.version));
+      }
+    }
+  }
+}
+
 const lockfile = readLockfile();
 for (const root of roots) {
   visitListNode(lockfile, root);
 }
+addImporterProdDeps(lockfile);
 addSnapshotClosure(lockfile);
 
 process.stdout.write([...specs].toSorted((a, b) => a.localeCompare(b)).join("\n"));
