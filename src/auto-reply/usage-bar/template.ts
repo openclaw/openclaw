@@ -1,9 +1,13 @@
 import { type FSWatcher, readFileSync, watch } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
+import { DEFAULT_USAGE_BAR_TEMPLATE } from "./default-template.js";
 import type { UsageBarTemplate } from "./translator.js";
 
 export type UsageTemplateConfig = string | Record<string, unknown> | undefined;
+
+/** Sentinel value of `messages.usageTemplate` that selects the built-in default. */
+const DEFAULT_SENTINEL = "default";
 
 type CacheEntry = { template: UsageBarTemplate | undefined; watcher?: FSWatcher };
 const fileCache = new Map<string, CacheEntry>();
@@ -69,6 +73,9 @@ export function loadUsageBarTemplate(
   }
   if (typeof configured === "object") {
     return isUsableTemplate(configured) ? configured : undefined;
+  }
+  if (configured === DEFAULT_SENTINEL) {
+    return DEFAULT_USAGE_BAR_TEMPLATE;
   }
   const path = expandPath(configured);
   const cached = fileCache.get(path);

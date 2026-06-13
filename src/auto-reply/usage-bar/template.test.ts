@@ -34,6 +34,12 @@ describe("loadUsageBarTemplate", () => {
     expect(loadUsageBarTemplate(undefined)).toBeUndefined();
   });
 
+  it('resolves the "default" sentinel to the built-in usable template', () => {
+    const tpl = loadUsageBarTemplate("default");
+    expect(tpl).toBeDefined();
+    expect((tpl as { output?: unknown }).output).toBeDefined();
+  });
+
   it("loads and parses a template file", () => {
     const path = tmpFile("t.json", JSON.stringify(tplA));
     expect(loadUsageBarTemplate(path)).toMatchObject(tplA);
