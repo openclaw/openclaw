@@ -31,7 +31,11 @@ vi.mock("./schtasks-exec.js", () => ({
         }
       }
     }
-    return schtasksResponses.shift() ?? { code: 0, stdout: "", stderr: "" };
+    return schtasksResponses.shift() ?? {
+      code: 0,
+      stdout: "Status: Running\r\nLast Run Result: 0x41301",
+      stderr: "",
+    };
   },
 }));
 
