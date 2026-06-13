@@ -137,7 +137,7 @@ import {
   type PostCompactionGuardObservation,
 } from "./post-compaction-loop-guard.js";
 import { createEmbeddedRunReplayState, observeReplayMetadata } from "./replay-state.js";
-import { handleAssistantFailover } from "./run/assistant-failover.js";
+import { handleAssistantFailover, isShortWindowRateLimitMessage } from "./run/assistant-failover.js";
 import {
   createEmbeddedRunStageTracker,
   EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE,
@@ -1418,11 +1418,12 @@ async function runEmbeddedAgentInternal(
       };
       const resolveRunAuthProfileFailureReason = (
         failoverReason: FailoverReason | null,
-        opts?: { providerStarted?: boolean },
+        opts?: { providerStarted?: boolean; transientRateLimit?: boolean },
       ) =>
         resolveAuthProfileFailureReason({
           failoverReason,
           providerStarted: opts?.providerStarted,
+          transientRateLimit: opts?.transientRateLimit,
           policy: params.authProfileFailurePolicy,
         });
       const maybeBackoffBeforeOverloadFailover = async (reason: FailoverReason | null) => {
@@ -2695,6 +2696,9 @@ async function runEmbeddedAgentInternal(
               promptFailoverReason,
               {
                 providerStarted: promptErrorSource === "prompt",
+                transientRateLimit:
+                  promptFailoverReason === "rate_limit" &&
+                  isShortWindowRateLimitMessage(errorText),
               },
             );
             const promptFailoverFailure =
@@ -2865,6 +2869,9 @@ async function runEmbeddedAgentInternal(
             assistantProfileFailoverReason,
             {
               providerStarted: assistantProviderStarted,
+              transientRateLimit:
+                assistantProfileFailoverReason === "rate_limit" &&
+                isShortWindowRateLimitMessage(assistantForFailover?.errorMessage),
             },
           );
           const cloudCodeAssistFormatError = attempt.cloudCodeAssistFormatError;
