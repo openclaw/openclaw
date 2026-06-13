@@ -7,6 +7,7 @@ import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AssistantMessage } from "../../llm/types.js";
+import { configuredModelInputSupportsImage } from "../../media-understanding/known-model-capabilities.js";
 import { extractAssistantText } from "../embedded-agent-utils.js";
 import { isMinimaxVlmProvider } from "../minimax-vlm.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
@@ -187,7 +188,14 @@ function findConfiguredImageModelMatches(params: { cfg?: OpenClawConfig; ref: st
     }
     for (const entry of providerConfig.models) {
       const modelId = entry?.id?.trim();
-      if (!modelId || !Array.isArray(entry?.input) || !entry.input.includes("image")) {
+      if (
+        !modelId ||
+        !configuredModelInputSupportsImage({
+          providerId: provider,
+          modelId,
+          input: entry?.input,
+        })
+      ) {
         continue;
       }
       if (!modelIdMatchesProviderlessRef({ provider, modelId, ref: params.ref })) {
@@ -260,7 +268,17 @@ export function resolveProviderVisionModelFromConfig(params: {
     params.provider,
   ) as unknown as { models?: Array<{ id?: string; input?: string[] }> } | undefined;
   const models = providerCfg?.models ?? [];
-  const picked = models.find((m) => Boolean((m?.id ?? "").trim()) && m.input?.includes("image"));
+  const picked = models.find((m) => {
+    const id = (m?.id ?? "").trim();
+    return Boolean(
+      id &&
+      configuredModelInputSupportsImage({
+        providerId: params.provider,
+        modelId: id,
+        input: m.input,
+      }),
+    );
+  });
   const id = (picked?.id ?? "").trim();
   if (!id) {
     return null;

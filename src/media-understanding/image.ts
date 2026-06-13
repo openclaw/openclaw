@@ -23,6 +23,7 @@ import {
   COPILOT_INTEGRATION_ID,
   resolveCopilotApiToken,
 } from "../plugin-sdk/provider-auth.js";
+import { isKnownNonImageModel } from "./known-model-capabilities.js";
 import { normalizeMediaProviderId } from "./provider-id.js";
 import type {
   ImageDescriptionRequest,
@@ -65,6 +66,13 @@ function isNativeResponsesReasoningPayload(model: Model): boolean {
 
 function formatModelInputCapabilities(input: Model["input"] | undefined): string {
   return input && input.length > 0 ? input.join(", ") : "none";
+}
+
+function resolvedModelSupportsImage(model: Model | undefined): model is Model {
+  return Boolean(
+    model?.input?.includes("image") &&
+    !isKnownNonImageModel({ providerId: model.provider, modelId: model.id }),
+  );
 }
 
 function removeReasoningInclude(value: unknown): unknown {
@@ -159,7 +167,7 @@ async function resolveImageRuntime(params: {
       ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     },
   );
-  if (fastResolved.model?.input?.includes("image")) {
+  if (resolvedModelSupportsImage(fastResolved.model)) {
     const normalizedResolved = await resolveModelAsync(
       resolvedRef.provider,
       resolvedRef.model,
@@ -171,7 +179,7 @@ async function resolveImageRuntime(params: {
         ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
       },
     );
-    if (normalizedResolved.model?.input?.includes("image")) {
+    if (resolvedModelSupportsImage(normalizedResolved.model)) {
       return await prepareResolvedImageRuntime(
         params,
         normalizedResolved.model,
@@ -197,7 +205,7 @@ async function resolveImageRuntime(params: {
   if (!model) {
     throw new Error(`Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`);
   }
-  if (!model.input?.includes("image")) {
+  if (!resolvedModelSupportsImage(model)) {
     // resolveModelWithRegistry may synthesize a text-only fallback for configured
     // providers, which would change "Unknown model" → "Model does not support images"
     // and skip the MiniMax VLM recovery path. Throw Unknown model for MiniMax VLM

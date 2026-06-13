@@ -535,6 +535,66 @@ describe("runCapability image skip", () => {
     );
   });
 
+  it("falls back from a Qwen text-only active model to the provider image default", async () => {
+    catalog = [
+      {
+        id: "qwen3.7-max",
+        name: "qwen3.7-max",
+        provider: "qwen",
+        input: ["text"] as const,
+      },
+      {
+        id: "qwen3.5-plus",
+        name: "qwen3.5-plus",
+        provider: "qwen",
+        input: ["text", "image"] as const,
+      },
+    ];
+    vi.stubEnv("DASHSCOPE_API_KEY", "test-qwen-key");
+    const cfg = {
+      models: {
+        providers: {
+          qwen: {
+            models: [
+              {
+                id: "qwen3.7-max",
+                input: ["text", "image"],
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const pluginRegistry = createEmptyPluginRegistry();
+    pluginRegistry.mediaUnderstandingProviders.push({
+      pluginId: "qwen",
+      pluginName: "Qwen Provider",
+      source: "test",
+      provider: {
+        id: "qwen",
+        capabilities: ["image"],
+        defaultModels: { image: "qwen3.5-plus" },
+        describeImage: async (req) => ({ text: "qwen image ok", model: req.model }),
+      },
+    });
+    setCompatibleActiveMediaUnderstandingRegistry(pluginRegistry, cfg);
+
+    try {
+      await expect(
+        resolveAutoImageModel({
+          cfg,
+          activeModel: { provider: "qwen", model: "qwen3.7-max" },
+        }),
+      ).resolves.toEqual({
+        provider: "qwen",
+        model: "qwen3.5-plus",
+      });
+    } finally {
+      setActivePluginRegistry(createEmptyPluginRegistry());
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("falls back from a MiniMax chat model to the provider image default", async () => {
     catalog = [
       {

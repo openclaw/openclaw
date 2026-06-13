@@ -42,6 +42,9 @@ vi.mock("./model-config.helpers.js", () => ({
     ) {
       return Boolean(process.env.MINIMAX_API_KEY);
     }
+    if (provider === "qwen") {
+      return Boolean(process.env.DASHSCOPE_API_KEY || process.env.QWEN_API_KEY);
+    }
     return false;
   },
   resolveDefaultModelRef: (cfg?: OpenClawConfig) => {
@@ -303,5 +306,33 @@ describe("resolvePdfModelConfigForTool", () => {
     expect(resolvePdfModelConfigForTool({ cfg, agentDir: TEST_AGENT_DIR })).toEqual({
       primary: "hatchery/vision-1",
     });
+  });
+
+  it("does not use configured Qwen max chat metadata as a PDF image fallback", () => {
+    vi.stubEnv("DASHSCOPE_API_KEY", "qwen-test");
+    const cfg = {
+      ...withDefaultModel("qwen/qwen3.7-max"),
+      models: {
+        providers: {
+          qwen: {
+            baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            api: "openai-completions",
+            models: [
+              {
+                id: "qwen3.7-max",
+                name: "qwen3.7-max",
+                reasoning: false,
+                input: ["text", "image"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 262_144,
+                maxTokens: 65_536,
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolvePdfModelConfigForTool({ cfg, agentDir: TEST_AGENT_DIR })).toBeNull();
   });
 });

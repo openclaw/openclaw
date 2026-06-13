@@ -76,7 +76,7 @@ export function buildQwenMediaUnderstandingProvider(): MediaUnderstandingProvide
     id: "qwen",
     capabilities: ["image", "video"],
     defaultModels: {
-      image: "qwen-vl-max-latest",
+      image: "qwen3.5-plus",
       video: DEFAULT_QWEN_VIDEO_MODEL,
     },
     autoPriority: {

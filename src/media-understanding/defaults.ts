@@ -4,6 +4,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveRuntimeConfigCacheKey } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { configuredModelInputSupportsImage } from "./known-model-capabilities.js";
 import { buildMediaUnderstandingManifestMetadataRegistry } from "./manifest-metadata.js";
 import {
   normalizeMediaExecutionProviderId,
@@ -83,12 +84,17 @@ function resolveConfiguredImageProviderModel(params: {
       continue;
     }
     const models = providerCfg?.models ?? [];
-    const match = models.find(
-      (model) =>
-        Boolean(normalizeOptionalString(model?.id)) &&
-        Array.isArray(model?.input) &&
-        model.input.includes("image"),
-    );
+    const match = models.find((model) => {
+      const id = normalizeOptionalString(model?.id);
+      return Boolean(
+        id &&
+        configuredModelInputSupportsImage({
+          providerId: providerKey,
+          modelId: id,
+          input: model?.input,
+        }),
+      );
+    });
     return normalizeOptionalString(match?.id);
   }
   return undefined;
@@ -106,9 +112,17 @@ function resolveConfiguredImageProviderIds(cfg?: OpenClawConfig): string[] {
       continue;
     }
     const models = providerCfg?.models ?? [];
-    const hasImageModel = models.some(
-      (model) => Array.isArray(model?.input) && model.input.includes("image"),
-    );
+    const hasImageModel = models.some((model) => {
+      const id = normalizeOptionalString(model?.id);
+      return Boolean(
+        id &&
+        configuredModelInputSupportsImage({
+          providerId: providerKey,
+          modelId: id,
+          input: model?.input,
+        }),
+      );
+    });
     if (hasImageModel) {
       configured.push(normalizedProviderId);
     }
