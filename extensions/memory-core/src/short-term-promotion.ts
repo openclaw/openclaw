@@ -362,7 +362,8 @@ function isMarkdownPlaceholderLine(line: string): boolean {
     /^`{3,}$/.test(compact) ||
     /^~{3,}$/.test(compact) ||
     /^\|+$/.test(compact) ||
-    /^\|?:?-{3,}:?(?:\|:?-{3,}:?)*\|?$/.test(compact)
+    /^\|?:?-{3,}:?(?:\|:?-{3,}:?)*\|?$/.test(compact) ||
+    /^[-*+]?\[\]$/.test(compact)
   );
 }
 

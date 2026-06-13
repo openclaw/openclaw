@@ -1502,6 +1502,14 @@ describe("short-term promotion", () => {
             snippet: "```",
             source: "memory",
           },
+          {
+            path: "memory/2026-04-03.md",
+            startLine: 10,
+            endLine: 10,
+            score: 0.96,
+            snippet: "[ ]",
+            source: "memory",
+          },
         ],
       });
       await recordGroundedShortTermCandidates({
@@ -1510,24 +1518,38 @@ describe("short-term promotion", () => {
         items: [
           {
             path: "memory/2026-04-03.md",
-            startLine: 10,
-            endLine: 10,
-            score: 0.96,
-            snippet: "*",
-          },
-          {
-            path: "memory/2026-04-03.md",
             startLine: 11,
             endLine: 11,
             score: 0.96,
-            snippet: "---",
+            snippet: "*",
           },
           {
             path: "memory/2026-04-03.md",
             startLine: 12,
             endLine: 12,
             score: 0.96,
+            snippet: "---",
+          },
+          {
+            path: "memory/2026-04-03.md",
+            startLine: 13,
+            endLine: 13,
+            score: 0.96,
             snippet: "|---|",
+          },
+          {
+            path: "memory/2026-04-03.md",
+            startLine: 14,
+            endLine: 14,
+            score: 0.96,
+            snippet: "[]",
+          },
+          {
+            path: "memory/2026-04-03.md",
+            startLine: 15,
+            endLine: 15,
+            score: 0.96,
+            snippet: "- [ ]",
           },
         ],
       });
@@ -1579,6 +1601,55 @@ describe("short-term promotion", () => {
       expect(applied.applied).toBe(1);
       const memory = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
       expect(memory).toContain("API keys rotated");
+    });
+  });
+
+  it("keeps checkbox snippets with content promotable", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-05", [
+        "- [ ] rotate API keys",
+        "- [x] backups verified",
+      ]);
+      await recordGroundedShortTermCandidates({
+        workspaceDir,
+        query: "checkbox memory",
+        items: [
+          {
+            path: "memory/2026-04-05.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.97,
+            snippet: "- [ ] rotate API keys",
+          },
+          {
+            path: "memory/2026-04-05.md",
+            startLine: 2,
+            endLine: 2,
+            score: 0.97,
+            snippet: "- [x] backups verified",
+          },
+        ],
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+      expect(ranked).toHaveLength(2);
+
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: ranked,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+      expect(applied.applied).toBe(2);
+      const memory = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+      expect(memory).toContain("rotate API keys");
+      expect(memory).toContain("backups verified");
     });
   });
 
