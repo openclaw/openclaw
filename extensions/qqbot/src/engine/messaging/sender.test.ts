@@ -106,11 +106,12 @@ describe("qqbot unified sender media upload dispatch", () => {
       });
 
       expect(result).toBe(MESSAGE_RESPONSE);
-      expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith({
+      const guardedFetchCall = fetchWithSsrFGuardMock.mock.calls[0]?.[0];
+      expect(guardedFetchCall).toMatchObject({
         url: mediaUrl,
         maxRedirects: 0,
-        signal: expect.any(AbortSignal),
       });
+      expect(guardedFetchCall?.signal).toBeInstanceOf(AbortSignal);
       expect(uploadMediaSpy).not.toHaveBeenCalled();
       expect(uploadChunkedSpy).toHaveBeenCalledOnce();
       expect(uploadChunkedSpy).toHaveBeenCalledWith(
