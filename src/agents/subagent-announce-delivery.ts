@@ -836,6 +836,16 @@ function normalizeTargetField(value: string | number | null | undefined): string
   return String(value).trim() || undefined;
 }
 
+function extractTopicThreadIdFromTarget(value?: string): string | undefined {
+  return value?.match(/:topic:(\d+)$/i)?.[1];
+}
+
+function normalizeObservedSourceDeliveryThreadId(
+  target: SourceDeliveryMessageToolTarget,
+): string | undefined {
+  return normalizeTargetField(target.threadId) ?? extractTopicThreadIdFromTarget(target.to);
+}
+
 function sourceDeliveryTargetsMatchExact(
   target: SourceDeliveryMessageToolTarget,
   deliveryTarget: {
@@ -853,8 +863,12 @@ function sourceDeliveryTargetsMatchExact(
     return false;
   }
   const expectedThreadId = normalizeTargetField(deliveryTarget.threadId);
-  if (expectedThreadId && normalizeTargetField(target.threadId) !== expectedThreadId) {
-    return false;
+  if (expectedThreadId) {
+    const observedThreadId = normalizeObservedSourceDeliveryThreadId(target);
+    if (observedThreadId) {
+      return observedThreadId === expectedThreadId;
+    }
+    return target.threadImplicit === true && target.threadSuppressed !== true;
   }
   return true;
 }

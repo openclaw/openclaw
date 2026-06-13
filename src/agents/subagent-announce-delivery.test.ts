@@ -1463,6 +1463,117 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
   });
 
+  it("accepts message-tool completion evidence with a topic-encoded target", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "The subagent is done: child completion output" }],
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: ["The subagent is done: child completion output"],
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "discord",
+            accountId: "acct-1",
+            to: "channel:C123:topic:456",
+            text: "The subagent is done: child completion output",
+          },
+        ],
+      },
+    });
+
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sessionId: "requester-session-discord-thread-topic-target",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-discord-thread-message-tool-topic-target",
+      requesterSessionKey: "agent:main:discord:channel:C123:thread:456",
+      requesterOrigin: {
+        channel: "discord",
+        to: "channel:C123",
+        accountId: "acct-1",
+        threadId: "456",
+      },
+      sourceTool: "subagent_announce",
+      runtimeConfig: { messages: { groupChat: { visibleReplies: "message_tool" } } },
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "discord topic target completion smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "child completion output",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+  });
+
+  it("accepts message-tool completion evidence that implicitly used the requester thread", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "The subagent is done: child completion output" }],
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: ["The subagent is done: child completion output"],
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "discord",
+            accountId: "acct-1",
+            to: "channel:C123",
+            threadImplicit: true,
+            text: "The subagent is done: child completion output",
+          },
+        ],
+      },
+    });
+
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sessionId: "requester-session-discord-thread-implicit-target",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-discord-thread-message-tool-implicit-target",
+      requesterSessionKey: "agent:main:discord:channel:C123:thread:T456",
+      requesterOrigin: {
+        channel: "discord",
+        to: "channel:C123",
+        accountId: "acct-1",
+        threadId: "T456",
+      },
+      sourceTool: "subagent_announce",
+      runtimeConfig: { messages: { groupChat: { visibleReplies: "message_tool" } } },
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "discord implicit thread completion smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "child completion output",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+  });
+
   it("directly delivers direct-message subagent text when the announce agent omits the result", async () => {
     const callGateway = createGatewayMock({
       result: {
@@ -5533,6 +5644,63 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       accountId: "acct-1",
       to: "channel:C123",
       threadId: "T456",
+    });
+  });
+
+  it("counts automatic completion delivery with a topic-encoded target as delivered", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "delegated task output" }],
+        deliveryStatus: {
+          status: "sent",
+          payloadOutcomes: [
+            {
+              index: 0,
+              status: "sent",
+              target: {
+                provider: "discord",
+                accountId: "acct-1",
+                to: "channel:C123:topic:456",
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sessionId: "requester-session-discord-thread-auto-topic-target",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-discord-thread-auto-topic-target",
+      requesterSessionKey: "agent:main:discord:channel:C123:thread:456",
+      requesterOrigin: {
+        channel: "discord",
+        to: "channel:C123",
+        accountId: "acct-1",
+        threadId: "456",
+      },
+      sourceTool: "agent_harness_task",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:codex:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "ACP task",
+          taskLabel: "discord topic target ACP completion smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "delegated task output",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
     });
   });
 
