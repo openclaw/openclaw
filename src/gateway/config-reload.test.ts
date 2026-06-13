@@ -860,28 +860,46 @@ describe("startGatewayConfigReloader", () => {
     }
   });
 
-  it("skips invalid external config edits without recovery", async () => {
-    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
-      makeSnapshot({
-        valid: false,
-        raw: "{ gateway: { mode: 123 } }",
-        issues: [{ path: "gateway.mode", message: "Expected string" }],
-        hash: "bad-1",
-      }),
-    );
+  it("retries invalid external config edits before applying a stable snapshot", async () => {
+    const acceptedSnapshot = makeSnapshot({
+      config: {
+        gateway: { reload: { debounceMs: 0 } },
+        hooks: { enabled: true },
+      },
+      hash: "good-1",
+    });
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValueOnce(
+        makeSnapshot({
+          valid: false,
+          raw: "{ gateway: { mode: 123 } }",
+          issues: [{ path: "gateway.mode", message: "Expected string" }],
+          hash: "bad-1",
+        }),
+      )
+      .mockResolvedValueOnce(acceptedSnapshot);
     const promoteSnapshot = vi.fn(async (_snapshot: ConfigFileSnapshot, _reason: string) => true);
     const { watcher, onHotReload, onRestart, log, reloader } = createReloaderHarness(readSnapshot, {
       promoteSnapshot,
     });
 
     watcher.emit("change");
-    await vi.runAllTimersAsync();
+    await vi.runOnlyPendingTimersAsync();
 
     expect(readSnapshot).toHaveBeenCalledTimes(1);
     expect(onHotReload).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledWith(
+      "config reload retry (1/2): config file is not valid yet: gateway.mode: Expected string",
+    );
+
+    await vi.advanceTimersByTimeAsync(150);
+
+    expect(readSnapshot).toHaveBeenCalledTimes(2);
+    expect(onHotReload).toHaveBeenCalledTimes(1);
     expect(onRestart).not.toHaveBeenCalled();
-    expect(promoteSnapshot).not.toHaveBeenCalled();
-    expect(log.warn).toHaveBeenCalledWith(
+    expect(promoteSnapshot).toHaveBeenCalledWith(acceptedSnapshot, "valid-config");
+    expect(log.warn).not.toHaveBeenCalledWith(
       "config reload skipped (invalid config): gateway.mode: Expected string",
     );
 
@@ -918,7 +936,7 @@ describe("startGatewayConfigReloader", () => {
     });
     const readSnapshot = vi
       .fn<() => Promise<ConfigFileSnapshot>>()
-      .mockResolvedValueOnce(invalidSnapshot);
+      .mockResolvedValue(invalidSnapshot);
     const promoteSnapshot = vi.fn(async (_snapshot: ConfigFileSnapshot, _reason: string) => true);
     const previousConfig: OpenClawConfig = {
       ...activeConfig,
@@ -939,10 +957,16 @@ describe("startGatewayConfigReloader", () => {
     watcher.emit("change");
     await vi.runAllTimersAsync();
 
-    expect(readSnapshot).toHaveBeenCalledTimes(1);
+    expect(readSnapshot).toHaveBeenCalledTimes(3);
     expect(onRestart).not.toHaveBeenCalled();
     expect(onHotReload).not.toHaveBeenCalled();
     expect(promoteSnapshot).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledWith(
+      "config reload retry (1/2): config file is not valid yet: plugins.entries.lossless-claw.config.cacheAwareCompaction: invalid config: must NOT have additional properties",
+    );
+    expect(log.info).toHaveBeenCalledWith(
+      "config reload retry (2/2): config file is not valid yet: plugins.entries.lossless-claw.config.cacheAwareCompaction: invalid config: must NOT have additional properties",
+    );
     expect(
       log.warn.mock.calls.some(([message]) =>
         message.includes(

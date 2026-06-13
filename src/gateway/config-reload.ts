@@ -32,6 +32,8 @@ export {
 export type { ChannelKind, GatewayReloadPlan } from "./config-reload-plan.js";
 const MISSING_CONFIG_RETRY_DELAY_MS = 150;
 const MISSING_CONFIG_MAX_RETRIES = 2;
+const INVALID_CONFIG_RETRY_DELAY_MS = 150;
+const INVALID_CONFIG_MAX_RETRIES = 2;
 
 // Watcher 'error' events (for example EMFILE/ENOSPC inotify exhaustion) close
 // the chokidar watcher. Re-create it with bounded backoff so a transient fault
@@ -125,6 +127,7 @@ export function startGatewayConfigReloader(opts: {
   let stopped = false;
   let restartQueued = false;
   let missingConfigRetries = 0;
+  let invalidConfigRetries = 0;
   let pendingInProcessConfig: {
     config: OpenClawConfig;
     compareConfig: OpenClawConfig;
@@ -175,6 +178,7 @@ export function startGatewayConfigReloader(opts: {
       missingConfigRetries = 0;
       return false;
     }
+    invalidConfigRetries = 0;
     if (missingConfigRetries < MISSING_CONFIG_MAX_RETRIES) {
       missingConfigRetries += 1;
       opts.log.info(
@@ -189,9 +193,18 @@ export function startGatewayConfigReloader(opts: {
 
   const handleInvalidSnapshot = (snapshot: ConfigFileSnapshot): boolean => {
     if (snapshot.valid) {
+      invalidConfigRetries = 0;
       return false;
     }
     const issues = formatConfigIssueLines(snapshot.issues, "").join(", ");
+    if (invalidConfigRetries < INVALID_CONFIG_MAX_RETRIES) {
+      invalidConfigRetries += 1;
+      opts.log.info(
+        `config reload retry (${invalidConfigRetries}/${INVALID_CONFIG_MAX_RETRIES}): config file is not valid yet: ${issues}`,
+      );
+      scheduleAfter(INVALID_CONFIG_RETRY_DELAY_MS);
+      return true;
+    }
     opts.log.warn(`config reload skipped (invalid config): ${issues}`);
     return true;
   };
@@ -385,6 +398,7 @@ export function startGatewayConfigReloader(opts: {
   };
 
   const scheduleFromWatcher = () => {
+    invalidConfigRetries = 0;
     schedule();
   };
 

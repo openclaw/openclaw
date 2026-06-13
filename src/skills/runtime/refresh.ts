@@ -548,17 +548,24 @@ function createSkillsPathWatcher(target: WatchTarget, debounceMs: number): Skill
       }
     }, debounceMs);
   };
-  const scheduleRawSkillFile = (changedPath: string) => {
+  const scheduleStableSkillFile = (changedPath: string) => {
     void waitForStableSkillFile(changedPath, debounceMs)
       .catch((err: unknown) => {
         log.warn(`skills watcher stability check failed (${changedPath}): ${String(err)}`);
       })
       .then(() => schedule(changedPath));
   };
+  const schedulePolledSkillFile = (changedPath: string) => {
+    if (usePolling && isSkillFileWatchPath(changedPath)) {
+      scheduleStableSkillFile(changedPath);
+      return;
+    }
+    schedule(changedPath);
+  };
 
   watcher.on("addDir", (p) => schedule(p));
-  watcher.on("add", (p) => schedule(p));
-  watcher.on("change", (p) => schedule(p));
+  watcher.on("add", schedulePolledSkillFile);
+  watcher.on("change", schedulePolledSkillFile);
   watcher.on("unlink", (p) => schedule(p));
   watcher.on("unlinkDir", (p) => schedule(p));
   watcher.on("raw", (_eventName, rawPath, details) => {
@@ -575,7 +582,7 @@ function createSkillsPathWatcher(target: WatchTarget, debounceMs: number): Skill
       if (usePolling) {
         return;
       }
-      scheduleRawSkillFile(changedPath);
+      scheduleStableSkillFile(changedPath);
     }
   });
   watcher.on("error", (err) => {

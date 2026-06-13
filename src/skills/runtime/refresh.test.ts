@@ -191,6 +191,48 @@ describe("ensureSkillsWatcher", () => {
     }
   });
 
+  it("waits for polling SKILL.md file events to stabilize before refreshing", async () => {
+    vi.useFakeTimers();
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-watch-polling-stable-"));
+    const skillDir = path.join(workspaceDir, "skills", "demo");
+    const skillFile = path.join(skillDir, "SKILL.md");
+    const previousPolling = process.env.CHOKIDAR_USEPOLLING;
+    const seen: SkillsChangeEvent[] = [];
+    try {
+      process.env.CHOKIDAR_USEPOLLING = "true";
+      await fs.mkdir(skillDir, { recursive: true });
+      await fs.writeFile(skillFile, "---\nname: demo\ndescription: Demo\n---\n");
+      refreshModule.registerSkillsChangeListener((change) => {
+        seen.push(change);
+      });
+      refreshModule.ensureSkillsWatcher({
+        workspaceDir,
+        config: { skills: { load: { watchDebounceMs: 10 } } },
+      });
+
+      createdWatchers[0]?.emit("change", skillFile);
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(10);
+      expect(seen).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(10);
+      expect(seen).toEqual([
+        {
+          workspaceDir,
+          reason: "watch",
+          changedPath: skillFile,
+        },
+      ]);
+    } finally {
+      if (previousPolling === undefined) {
+        delete process.env.CHOKIDAR_USEPOLLING;
+      } else {
+        process.env.CHOKIDAR_USEPOLLING = previousPolling;
+      }
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps grouped skill folders within the watcher traversal depth", async () => {
     vi.useFakeTimers();
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-watch-depth-"));
