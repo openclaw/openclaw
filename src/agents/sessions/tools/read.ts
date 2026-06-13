@@ -30,6 +30,7 @@ import { normalizePositiveLimit } from "./limits.js";
 import { resolveReadPath } from "./path-utils.js";
 import { getTextOutput, invalidArgText, replaceTabs, shortenPath, str } from "./render-utils.js";
 import type { ReadToolDetails } from "./tool-contracts.js";
+import { detectEncoding } from "./encoding-detection.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateHead } from "./truncate.js";
 
@@ -339,7 +340,11 @@ export function createReadToolDefinition(
             } else {
               // Read text content.
               const buffer = await ops.readFile(absolutePath);
-              const textContent = buffer.toString("utf-8");
+              // Auto-detect encoding to handle GBK, Shift-JIS, and other legacy encodings
+              const encodingResult = detectEncoding(buffer);
+              const textContent = encodingResult.encoding === "utf-8"
+                ? buffer.toString("utf-8")
+                : buffer.toString(encodingResult.encoding as BufferEncoding);
               const allLines = textContent.split("\n");
               const totalFileLines = allLines.length;
               // Apply offset if specified. Convert from 1-indexed input to 0-indexed array access.
