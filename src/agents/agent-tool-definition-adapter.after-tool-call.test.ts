@@ -114,6 +114,46 @@ describe("agent tool definition adapter after_tool_call", () => {
     expect(hookMocks.runner.runAfterToolCall).not.toHaveBeenCalled();
   });
 
+  it("does not crash on unreadable tool definition descriptors", () => {
+    const descriptorTool = {
+      name: "descriptor_probe",
+      get label(): string {
+        throw new Error("tool label getter exploded");
+      },
+      get description(): string {
+        throw new Error("tool description getter exploded");
+      },
+      parameters: Type.Object({}),
+      execute: vi.fn(async () => ({ content: [], details: { ok: true } })),
+    } satisfies AgentTool;
+    const badNameTool = {
+      get name(): string {
+        throw new Error("tool name getter exploded");
+      },
+      label: "Bad",
+      description: "bad",
+      parameters: Type.Object({}),
+      execute: vi.fn(async () => ({ content: [] })),
+    } satisfies AgentTool;
+    const badParametersTool = {
+      name: "bad_parameters",
+      label: "Bad Parameters",
+      description: "bad",
+      get parameters(): AgentTool["parameters"] {
+        throw new Error("tool parameters getter exploded");
+      },
+      execute: vi.fn(async () => ({ content: [] })),
+    } satisfies AgentTool;
+
+    expect(toToolDefinitions([descriptorTool, badNameTool, badParametersTool])).toMatchObject([
+      {
+        name: "descriptor_probe",
+        label: "descriptor_probe",
+        description: "",
+      },
+    ]);
+  });
+
   it("does not consume adjusted params in adapter for wrapped tools", async () => {
     hookMocks.isToolWrappedWithBeforeToolCallHook.mockReturnValue(true);
     const defs = toToolDefinitions([createReadTool()]);

@@ -359,15 +359,20 @@ export function toToolDefinitions(
   tools: AnyAgentTool[],
   hookContext?: HookContext,
 ): ToolDefinition[] {
-  return tools.map((tool) => {
-    const name = tool.name || "tool";
+  const definitions: ToolDefinition[] = [];
+  for (const tool of tools) {
+    const name = readToolDefinitionName(tool);
+    const parameters = readToolDefinitionParameters(tool);
+    if (!name || !parameters) {
+      continue;
+    }
     const normalizedName = normalizeToolName(name);
     const beforeHookWrapped = isToolWrappedWithBeforeToolCallHook(tool);
-    return {
+    definitions.push({
       name,
-      label: tool.label ?? name,
-      description: tool.description ?? "",
-      parameters: tool.parameters,
+      label: readToolDefinitionString(tool, "label") ?? name,
+      description: readToolDefinitionString(tool, "description") ?? "",
+      parameters,
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
         const { toolCallId, params, onUpdate, signal } = splitToolExecuteArgs(args);
         let executeParams = params;
@@ -450,8 +455,41 @@ export function toToolDefinitions(
           });
         }
       },
-    } satisfies ToolDefinition;
-  });
+    } satisfies ToolDefinition);
+  }
+  return definitions;
+}
+
+function readToolDefinitionName(tool: AnyAgentTool): string | undefined {
+  try {
+    const name = tool.name;
+    if (typeof name !== "string") {
+      return undefined;
+    }
+    return name.trim() ? name : "tool";
+  } catch {
+    return undefined;
+  }
+}
+
+function readToolDefinitionString(
+  tool: AnyAgentTool,
+  field: "description" | "label",
+): string | undefined {
+  try {
+    const value = tool[field];
+    return typeof value === "string" ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readToolDefinitionParameters(tool: AnyAgentTool): AnyAgentTool["parameters"] | undefined {
+  try {
+    return tool.parameters;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
