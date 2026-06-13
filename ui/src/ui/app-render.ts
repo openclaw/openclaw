@@ -701,7 +701,7 @@ function getChatWorkspaceFilesState(state: AppViewState, agentId: string): ChatW
   const next = {
     activeName: null,
     agentId,
-    collapsed: false,
+    collapsed: true,
     error: null,
     list: null,
     loading: false,
