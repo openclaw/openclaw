@@ -521,7 +521,7 @@ function buildMessagingSection(params: {
   return [
     "## Messaging",
     messageToolOnly
-      ? "- Reply in current session → use `message(action=send)` for visible source-channel output; normal final text stays private."
+      ? "- Reply in current session → use `message(action=send)` for visible source-channel output; normal final text stays private, but interim assistant text between tool calls is still shown to the user as progress narration."
       : "- Reply in current session → automatically routes to the source channel (Signal, Telegram, etc.)",
     telegramRichTextEnabled
       ? "- Telegram rich text is available. Use Bot API 10.1 rich Markdown/HTML in visible message text when it improves clarity: headings, tables, blockquotes, `<details><summary>...</summary>...</details>`, `<sup>/<sub>`, `<mark>`, spoilers, lists, code blocks, footnotes, and formulas. This is not legacy MarkdownV2/parse_mode. Button labels are plain text only; send media through explicit media delivery."

@@ -2622,6 +2622,11 @@ describe("message tool internal-runtime-context sanitization", () => {
         "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
     },
     {
+      name: "narration-aware delivery hint only",
+      message:
+        "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send the final user-visible answer. Interim assistant text between tool calls is still shown to the user as progress narration, so narrate your work as you go.",
+    },
+    {
       name: "inbound metadata only",
       message: [
         "Conversation info (untrusted metadata):",

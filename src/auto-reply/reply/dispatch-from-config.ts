@@ -2738,7 +2738,6 @@ export async function dispatchReplyFromConfig(
       return (
         !suppressAutomaticSourceDelivery ||
         (allowSuppressedSourceProgressCallbacks &&
-          ctx.InboundEventKind !== "room_event" &&
           !sendPolicyDenied &&
           options?.forwardWhenSourceDeliverySuppressed === true)
       );
@@ -2856,7 +2855,11 @@ export async function dispatchReplyFromConfig(
             }),
             onItemEvent,
             commentaryProgressEnabled:
-              deliverStandaloneCommentaryProgress || params.replyOptions?.commentaryProgressEnabled,
+              deliverStandaloneCommentaryProgress ||
+              (suppressAutomaticSourceDelivery &&
+                allowSuppressedSourceProgressCallbacks &&
+                Boolean(forwardItemEvent)) ||
+              params.replyOptions?.commentaryProgressEnabled,
             onCommandOutput: wrapProgressCallback(params.replyOptions?.onCommandOutput, {
               forwardWhenSourceDeliverySuppressed: true,
               requiresToolSummaryVisibility: true,
