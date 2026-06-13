@@ -7,6 +7,7 @@ import {
 import { readMemoryHostEvents } from "openclaw/plugin-sdk/memory-host-events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  getMemoryCloseMockCalls,
   getMemorySearchManagerMockCalls,
   getMemorySearchManagerMockParams,
   getReadAgentMemoryFileMockCalls,
@@ -180,6 +181,7 @@ describe("memory tools", () => {
         purpose: "cli",
       }),
     ]);
+    expect(getMemoryCloseMockCalls()).toBe(1);
   });
 
   it("returns disabled details when memory_get fails", async () => {

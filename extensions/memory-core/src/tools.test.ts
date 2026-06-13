@@ -1,6 +1,7 @@
 // Memory Core tests cover tools plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  getMemoryCloseMockCalls,
   getMemorySearchManagerMockCalls,
   getMemorySearchManagerMockConfigs,
   getMemorySearchManagerMockParams,
@@ -257,6 +258,11 @@ describe("memory_search unavailable payloads", () => {
     ]);
     expect(searchCalls).toBe(2);
     expect(getMemorySearchManagerMockCalls()).toBe(2);
+    expect(getMemorySearchManagerMockParams()).toEqual([
+      expect.objectContaining({ purpose: "cli" }),
+      expect.objectContaining({ purpose: "cli" }),
+    ]);
+    expect(getMemoryCloseMockCalls()).toBe(1);
   });
 
   it("forces a sync and retries once when the first search has zero hits", async () => {
