@@ -79,6 +79,16 @@ export function applyDiscoveredContextWindows(params: {
     if (existing === undefined || contextTokens < existing) {
       params.cache.set(model.id, contextTokens);
     }
+    // Also store a provider-qualified key so provider-aware lookups
+    // (resolveContextTokensForModel Path 1) can disambiguate the same
+    // base model ID from different providers.
+    if (typeof model.provider === "string") {
+      const qualifiedKey = `${normalizeProviderId(model.provider)}/${model.id}`;
+      const qualifiedExisting = params.cache.get(qualifiedKey);
+      if (qualifiedExisting === undefined || contextTokens < qualifiedExisting) {
+        params.cache.set(qualifiedKey, contextTokens);
+      }
+    }
   }
 }
 
