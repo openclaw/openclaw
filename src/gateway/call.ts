@@ -818,6 +818,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
   safeTimerTimeoutMs: number;
   connectionDetails: GatewayConnectionDetails;
   deviceIdentity: DeviceIdentity | null;
+  surfaceGatewayClientRequestErrors: boolean;
 }): Promise<T> {
   const {
     opts,
@@ -830,6 +831,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
     timeoutMs,
     safeTimerTimeoutMs,
     deviceIdentity,
+    surfaceGatewayClientRequestErrors,
   } = params;
   return await new Promise<T>((resolve, reject) => {
     if (opts.signal?.aborted) {
@@ -956,7 +958,10 @@ async function executeGatewayRequestWithScopes<T>(params: {
         );
       },
       onConnectError: (err) => {
-        if (settled || !isGatewayConnectAssemblyError(err)) {
+        const shouldSurface =
+          isGatewayConnectAssemblyError(err) ||
+          (surfaceGatewayClientRequestErrors && err.name === "GatewayClientRequestError");
+        if (settled || !shouldSurface) {
           return;
         }
         ignoreClose = true;
@@ -1064,6 +1069,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     safeTimerTimeoutMs,
     connectionDetails,
     deviceIdentity,
+    surfaceGatewayClientRequestErrors: useStoredDeviceAuth,
   });
 }
 

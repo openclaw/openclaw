@@ -592,6 +592,40 @@ describe("cli program (nodes basics)", () => {
     expect(requests[0]?.useStoredDeviceAuth).toBe(true);
   });
 
+  it("falls back to configured auth after stored device auth is rejected", async () => {
+    callGateway.mockImplementation(async (...args: unknown[]) => {
+      const opts = (args[0] ?? {}) as { method?: string; useStoredDeviceAuth?: boolean };
+      if (opts.method === "node.list" && opts.useStoredDeviceAuth) {
+        throw Object.assign(new Error("unauthorized: device token mismatch"), {
+          name: "GatewayClientRequestError",
+          gatewayCode: "INVALID_REQUEST",
+          details: { code: "AUTH_DEVICE_TOKEN_MISMATCH" },
+        });
+      }
+      if (opts.method === "node.list") {
+        return {
+          nodes: [
+            {
+              nodeId: "configured-auth-node",
+              displayName: "Configured Auth Node",
+              paired: true,
+              connected: false,
+            },
+          ],
+        };
+      }
+      return { ok: true };
+    });
+
+    await runProgram(["nodes", "status"]);
+
+    const requests = gatewayRequests().filter((request) => request.method === "node.list");
+    expect(requests).toHaveLength(2);
+    expect(requests[0]?.useStoredDeviceAuth).toBe(true);
+    expect(requests[1]?.useStoredDeviceAuth).toBeUndefined();
+    expect(getRuntimeOutput()).toContain("Configured Auth Node");
+  });
+
   it("describes pending-only nodes through the pairing diagnostics view", async () => {
     callGateway.mockImplementation(async (...args: unknown[]) => {
       const opts = (args[0] ?? {}) as {

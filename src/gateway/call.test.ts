@@ -94,6 +94,7 @@ let startCalls = 0;
 let closeCode = 1006;
 let closeReason = "";
 let helloMethods: string[] | undefined = ["health", "secrets.resolve"];
+let connectError: Error | null = null;
 
 vi.mock("./client.js", () => ({
   describeGatewayCloseCode: (code: number) => {
@@ -147,7 +148,7 @@ vi.mock("./client.js", () => ({
         });
       } else if (startMode === "connect-error") {
         lastClientOptions?.onConnectError?.(
-          connectAssemblyErrorState.create("device private key invalid"),
+          connectError ?? connectAssemblyErrorState.create("device private key invalid"),
         );
       } else if (startMode === "close") {
         lastClientOptions?.onClose?.(closeCode, closeReason);
@@ -223,7 +224,7 @@ class StubGatewayClient {
       });
     } else if (startMode === "connect-error") {
       lastClientOptions?.onConnectError?.(
-        connectAssemblyErrorState.create("device private key invalid"),
+        connectError ?? connectAssemblyErrorState.create("device private key invalid"),
       );
     } else if (startMode === "close") {
       lastClientOptions?.onClose?.(closeCode, closeReason);
@@ -254,6 +255,7 @@ function resetGatewayCallMocks() {
   closeCode = 1006;
   closeReason = "";
   helloMethods = ["health", "secrets.resolve"];
+  connectError = null;
   const loadConfigForTests = getRuntimeConfig as unknown as () => OpenClawConfig;
   const resolveGatewayPortForTests = resolveGatewayPort as unknown as (
     cfg?: OpenClawConfig,
@@ -1239,6 +1241,30 @@ describe("callGateway error details", () => {
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message).toBe("device private key invalid");
     expect(lastRequestOptions).toBeNull();
+  });
+
+  it("surfaces stored device auth handshake failures for credential fallback", async () => {
+    startMode = "connect-error";
+    connectError = Object.assign(new Error("unauthorized: device token mismatch"), {
+      name: "GatewayClientRequestError",
+      gatewayCode: "INVALID_REQUEST",
+      details: { code: "AUTH_DEVICE_TOKEN_MISMATCH" },
+    });
+    setLocalLoopbackGatewayConfig();
+
+    vi.useFakeTimers();
+    const promise = callGatewayCli({
+      method: "node.list",
+      timeoutMs: 5,
+      useStoredDeviceAuth: true,
+    });
+    const rejection = expect(promise).rejects.toMatchObject({
+      name: "GatewayClientRequestError",
+      details: { code: "AUTH_DEVICE_TOKEN_MISMATCH" },
+    });
+    await vi.advanceTimersByTimeAsync(5);
+
+    await rejection;
   });
 
   it("includes connection details on timeout", async () => {

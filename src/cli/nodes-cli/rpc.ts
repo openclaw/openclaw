@@ -23,8 +23,33 @@ async function loadNodesCliRpcRuntime(): Promise<NodesCliRpcRuntimeModule> {
   return nodesCliRpcRuntimeLoader.load();
 }
 
-function isGatewayCredentialsRequiredError(value: unknown): value is Error {
-  return value instanceof Error && value.name === "GatewayCredentialsRequiredError";
+const STORED_DEVICE_AUTH_FALLBACK_DETAIL_CODES = new Set([
+  "AUTH_REQUIRED",
+  "AUTH_UNAUTHORIZED",
+  "AUTH_TOKEN_MISMATCH",
+  "AUTH_DEVICE_TOKEN_MISMATCH",
+  "AUTH_SCOPE_MISMATCH",
+  "PAIRING_REQUIRED",
+]);
+
+function readGatewayClientRequestDetailCode(value: unknown): string | null {
+  if (!(value instanceof Error) || value.name !== "GatewayClientRequestError") {
+    return null;
+  }
+  const details = (value as Error & { details?: unknown }).details;
+  if (!details || typeof details !== "object") {
+    return null;
+  }
+  const code = (details as { code?: unknown }).code;
+  return typeof code === "string" ? code : null;
+}
+
+function isStoredDeviceAuthFallbackError(value: unknown): value is Error {
+  if (value instanceof Error && value.name === "GatewayCredentialsRequiredError") {
+    return true;
+  }
+  const detailCode = readGatewayClientRequestDetailCode(value);
+  return detailCode !== null && STORED_DEVICE_AUTH_FALLBACK_DETAIL_CODES.has(detailCode);
 }
 
 function isUnknownGatewayMethodError(value: unknown, method: string): value is Error {
@@ -66,7 +91,7 @@ export const callNodeDiagnosticsGatewayCli = async (
       useStoredDeviceAuth: true,
     });
   } catch (error) {
-    if (!isGatewayCredentialsRequiredError(error)) {
+    if (!isStoredDeviceAuthFallbackError(error)) {
       throw error;
     }
     return await callGatewayCli(method, opts, params);
