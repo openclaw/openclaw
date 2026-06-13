@@ -1,9 +1,11 @@
 // Channel doctor tests cover shared channel health checks and repair hints.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { normalizeResolvedSecretInputString } from "../../../config/types.secrets.js";
 import {
   collectChannelDoctorCompatibilityMutations,
   collectChannelDoctorEmptyAllowlistExtraWarnings,
   collectChannelDoctorMutableAllowlistWarnings,
+  collectChannelDoctorPreviewWarnings,
   collectChannelDoctorStaleConfigMutations,
   createChannelDoctorEmptyAllowlistPolicyHooks,
 } from "./channel-doctor.js";
@@ -175,6 +177,28 @@ describe("channel doctor compatibility mutations", () => {
     expect(normalizeCompatibilityConfig).toHaveBeenCalledTimes(1);
     expectMatrixDoctorLookupCalls(cfg);
     expect(mocks.getBundledChannelSetupPlugin).not.toHaveBeenCalledWith("discord");
+  });
+
+  it("keeps unresolved SecretRef preview reads non-fatal", async () => {
+    const collectPreviewWarnings = vi.fn(() => {
+      normalizeResolvedSecretInputString({
+        value: { source: "exec", provider: "default", id: "matrix/access-token" },
+        path: "channels.matrix.accessToken",
+      });
+      return ["unreachable"];
+    });
+    mockReadOnlyMatrixPlugin({ collectPreviewWarnings });
+    const cfg = createMatrixEnabledConfig();
+
+    const result = await collectChannelDoctorPreviewWarnings({
+      cfg: cfg as never,
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(result).toEqual([
+      "- channels.matrix: configured SecretRef at channels.matrix.accessToken is unavailable in doctor preview; skipping secret-backed channel preview checks.",
+    ]);
+    expect(collectPreviewWarnings).toHaveBeenCalledTimes(1);
   });
 
   it("merges partial doctor adapters instead of masking runtime-only hooks", async () => {

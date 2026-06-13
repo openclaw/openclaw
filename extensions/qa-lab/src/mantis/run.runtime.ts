@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
+import { QA_EVIDENCE_FILENAME, validateQaEvidenceSummaryJson } from "../evidence-summary.js";
 
 export type MantisBeforeAfterOptions = {
   allowFailures?: boolean;
@@ -45,6 +46,14 @@ type DiscordQaSummary = {
     status?: string;
     title?: string;
   }[];
+};
+
+type NormalizedScenarioSummary = {
+  details?: string;
+  screenshotPath?: string;
+  status: string;
+  summaryPath: string;
+  videoPath?: string;
 };
 
 type LaneResult = {
@@ -194,6 +203,18 @@ async function readLaneResult(params: {
   publishedLaneDir: string;
   scenario: string;
 }) {
+  const normalized = await readNormalizedLaneResult(params);
+  if (normalized) {
+    return {
+      outputDir: params.publishedLaneDir,
+      scenarioDetails: normalized.details,
+      screenshotPath: normalized.screenshotPath,
+      status: normalized.status,
+      summaryPath: normalized.summaryPath,
+      videoPath: normalized.videoPath,
+    } satisfies LaneResult;
+  }
+
   const summaryPath = path.join(params.publishedLaneDir, "discord-qa-summary.json");
   const summary = JSON.parse(await fs.readFile(summaryPath, "utf8")) as DiscordQaSummary;
   const scenarioSummary =
@@ -209,6 +230,35 @@ async function readLaneResult(params: {
     summaryPath,
     videoPath,
   } satisfies LaneResult;
+}
+
+async function readNormalizedLaneResult(params: {
+  publishedLaneDir: string;
+  scenario: string;
+}): Promise<NormalizedScenarioSummary | undefined> {
+  const summaryPath = path.join(params.publishedLaneDir, QA_EVIDENCE_FILENAME);
+  let rawSummary: string;
+  try {
+    rawSummary = await fs.readFile(summaryPath, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  }
+
+  const summary = validateQaEvidenceSummaryJson(JSON.parse(rawSummary));
+  const entry =
+    summary.entries.find((candidate) => candidate.test.id === params.scenario) ??
+    summary.entries[0];
+  const artifacts = entry?.execution.artifacts ?? [];
+  return {
+    details: entry?.result.failure?.reason,
+    screenshotPath: artifacts.find((artifact) => artifact.kind === "screenshot")?.path,
+    status: entry?.result.status ?? "fail",
+    summaryPath,
+    videoPath: artifacts.find((artifact) => artifact.kind === "video")?.path,
+  };
 }
 
 function renderReport(params: {

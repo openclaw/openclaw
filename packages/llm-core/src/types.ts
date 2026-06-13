@@ -296,6 +296,9 @@ export interface AssistantMessage {
   usage: Usage;
   stopReason: StopReason;
   errorMessage?: string;
+  errorCode?: string;
+  errorType?: string;
+  errorBody?: string;
   timestamp: number; // Unix timestamp in milliseconds
 }
 

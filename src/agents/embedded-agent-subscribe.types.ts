@@ -41,6 +41,8 @@ export type SubscribeEmbeddedAgentSessionParams = {
   shouldEmitToolResult?: () => boolean;
   shouldEmitToolOutput?: () => boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  /** Attempt-owned delivery proof for message-tool-only source replies. */
+  hasDeliveredMessageToolOnlySourceReply?: () => boolean;
   onToolResult?: (payload: ReplyPayload) => void | Promise<void>;
   onReasoningStream?: (payload: {
     text?: string;

@@ -41,6 +41,7 @@ let createMockTypingController: typeof import("./test-helpers.js").createMockTyp
 let createReplyOperationForTest: typeof import("./reply-run-registry.js").createReplyOperation;
 let replyRunTestingForTest: typeof import("./reply-run-registry.js").testing;
 let cliBackendsTestingForTest: typeof import("../../agents/cli-backends.js").testing;
+let setReplyPayloadMetadataForTest: typeof import("../reply-payload.js").setReplyPayloadMetadata;
 const FOLLOWUP_DEBUG = process.env.OPENCLAW_DEBUG_FOLLOWUP_RUNNER_TEST === "1";
 const FOLLOWUP_TEST_QUEUES = new Map<
   string,
@@ -464,6 +465,8 @@ async function loadFreshFollowupRunnerModuleForTest() {
   ({ createMockFollowupRun, createMockTypingController } = await import("./test-helpers.js"));
   ({ createReplyOperation: createReplyOperationForTest, testing: replyRunTestingForTest } =
     await import("./reply-run-registry.js"));
+  ({ setReplyPayloadMetadata: setReplyPayloadMetadataForTest } =
+    await import("../reply-payload.js"));
 }
 
 function setFastFollowupCliBackendDeps(): void {
@@ -1132,6 +1135,7 @@ describe("createFollowupRunner runtime config", () => {
     expect(runCliAgentMock).toHaveBeenCalledOnce();
     const call = requireLastMockCallArg(runCliAgentMock, "run cli agent");
     expect(call.currentInboundEventKind).toBe("room_event");
+    expect(call.persistAssistantTranscript).toBe(false);
     expect(call.currentInboundAudio).toBe(true);
     expect(call.suppressNextUserMessagePersistence).toBe(true);
     expect(call.sourceReplyDeliveryMode).toBe("message_tool_only");
@@ -1309,6 +1313,7 @@ describe("createFollowupRunner runtime config", () => {
       typing: createMockTypingController(),
       typingMode: "instant",
       sessionKey: "main",
+      storePath: "/tmp/sessions.json",
       defaultModel: "anthropic/claude-opus-4-7",
     });
 
@@ -1325,8 +1330,59 @@ describe("createFollowupRunner runtime config", () => {
 
     expect(runCliAgentMock).toHaveBeenCalledOnce();
     const mediaCall = requireLastMockCallArg(runCliAgentMock, "run cli agent");
+    expect(mediaCall.persistAssistantTranscript).toBe(true);
+    expect(mediaCall.storePath).toBe("/tmp/sessions.json");
     const recorder = requireRecord(mediaCall.userTurnTranscriptRecorder, "cli user turn recorder");
     expect(recorder.message).toBe(preparedUserTurnMessage);
+  });
+
+  it("disables routed delivery mirrors for CLI-owned followup payloads", async () => {
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": { command: "claude" },
+          },
+          models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    };
+    runCliAgentMock.mockResolvedValueOnce({
+      payloads: [
+        setReplyPayloadMetadataForTest(
+          { text: "persisted CLI followup" },
+          { assistantTranscriptOwned: true },
+        ),
+      ],
+      meta: {},
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey: "main",
+      defaultModel: "anthropic/claude-opus-4-7",
+    });
+
+    await runner(
+      createQueuedRun({
+        originatingChannel: "telegram",
+        originatingTo: "telegram:-100123",
+        run: {
+          config: runtimeConfig,
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+        },
+      }),
+    );
+
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: { text: "persisted CLI followup" },
+        mirror: false,
+      }),
+    );
   });
 
   it("keeps queued CLI tool progress quiet when verbose progress is disabled", async () => {

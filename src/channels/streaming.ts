@@ -553,6 +553,8 @@ export function createChannelProgressDraftGate(params: {
   onStart: () => void | Promise<void>;
   /** Delay before first work event starts a draft; second work event starts immediately. */
   initialDelayMs?: number;
+  /** Reports timer-fired startup failures, which have no awaiting caller. */
+  onStartError?: (error: unknown) => void;
   /** Timer implementation, injectable for tests. */
   setTimeoutFn?: typeof setTimeout;
   /** Timer clearer, injectable for tests. */
@@ -561,6 +563,12 @@ export function createChannelProgressDraftGate(params: {
   const initialDelayMs = params.initialDelayMs ?? DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS;
   const setTimeoutFn = params.setTimeoutFn ?? setTimeout;
   const clearTimeoutFn = params.clearTimeoutFn ?? clearTimeout;
+  // Timer starts have no awaiting caller, so preserve observability at this SDK boundary.
+  const reportStartError =
+    params.onStartError ??
+    ((error: unknown) => {
+      console.warn(`[progress-draft] channel progress draft failed to start: ${String(error)}`);
+    });
   let started = false;
   let disposed = false;
   let workEvents = 0;
@@ -612,7 +620,10 @@ export function createChannelProgressDraftGate(params: {
     }
     timer = setTimeoutFn(() => {
       timer = undefined;
-      void start().catch(() => {});
+      // Explicit starts rethrow to callers; timer starts must report at the boundary.
+      void start().catch((error: unknown) => {
+        reportStartError(error);
+      });
     }, initialDelayMs);
   };
 

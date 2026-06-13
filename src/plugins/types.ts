@@ -790,6 +790,7 @@ export type ProviderReplayPolicy = {
   sanitizeMode?: ProviderReplaySanitizeMode;
   sanitizeToolCallIds?: boolean;
   toolCallIdMode?: ProviderReplayToolCallIdMode;
+  duplicateToolCallIdStyle?: "openai";
   preserveNativeAnthropicToolUseIds?: boolean;
   preserveSignatures?: boolean;
   sanitizeThoughtSignatures?: {
@@ -1477,6 +1478,13 @@ export type ProviderPlugin = {
    * transport implementation.
    */
   wrapStreamFn?: (ctx: ProviderWrapStreamFnContext) => StreamFn | null | undefined;
+  /**
+   * Provider-owned wrapper for direct `completeSimple` callers.
+   *
+   * Opt in only when the provider must enforce the same wire contract outside
+   * the embedded agent runtime.
+   */
+  wrapSimpleCompletionStreamFn?: (ctx: ProviderWrapStreamFnContext) => StreamFn | null | undefined;
   /**
    * Provider-owned native transport turn identity.
    *
