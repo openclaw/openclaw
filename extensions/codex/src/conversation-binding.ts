@@ -17,6 +17,10 @@ import {
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveCodexAppServerForModelProvider } from "./app-server/app-server-policy.js";
+import {
+  CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+  unsubscribeCodexThreadBestEffort,
+} from "./app-server/attempt-client-cleanup.js";
 import { resolveCodexAppServerAuthProfileIdForAgent } from "./app-server/auth-bridge.js";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
 import {
@@ -669,6 +673,10 @@ async function runBoundTurn(params: {
       },
     };
   } finally {
+    await unsubscribeCodexThreadBestEffort(client, {
+      threadId,
+      timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+    });
     notificationCleanup();
     requestCleanup();
     releaseLeasedSharedCodexAppServerClient(client);
