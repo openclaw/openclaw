@@ -167,6 +167,20 @@ function isAgentToolResult(value: unknown): value is AgentToolResult<unknown> {
   );
 }
 
+function applyFactoryTerminalResultFallback(
+  result: AnyAgentTool | AnyAgentTool[] | null | undefined,
+  terminalResultFallback: AgentToolTerminalResultFallback | undefined,
+): AnyAgentTool | AnyAgentTool[] | null | undefined {
+  if (!result || !terminalResultFallback) {
+    return result;
+  }
+  const applyFallback = (tool: AnyAgentTool): AnyAgentTool => ({
+    ...tool,
+    terminalResultFallback,
+  });
+  return Array.isArray(result) ? result.map(applyFallback) : applyFallback(result);
+}
+
 function createToolPluginToolFactory<TConfig>(): ToolPluginToolFactory<TConfig> {
   return ((definition: ToolPluginToolDefinition<TConfig, TSchema>) => ({
     name: definition.name,
@@ -221,11 +235,14 @@ export function defineToolPlugin<TConfigSchema extends TSchema | undefined = und
         if (tool.factory) {
           api.registerTool(
             (toolContext) =>
-              tool.factory?.({
-                api,
-                config,
-                toolContext,
-              }),
+              applyFactoryTerminalResultFallback(
+                tool.factory?.({
+                  api,
+                  config,
+                  toolContext,
+                }),
+                tool.terminalResultFallback,
+              ),
             opts,
           );
           continue;

@@ -385,6 +385,7 @@ describe("defineToolPlugin", () => {
           description: "Echo input.",
           parameters: Type.Object({ input: Type.String() }),
           optional: true,
+          terminalResultFallback: { mode: "safe_text", prefix: "Echo:" },
           factory({ config, toolContext }) {
             if (toolContext.sandboxed) {
               return null;
@@ -432,7 +433,10 @@ describe("defineToolPlugin", () => {
 
     const factory = registerTool.mock.calls[0]?.[0] as (ctx: { sandboxed?: boolean }) => unknown;
     expect(factory({ sandboxed: true })).toBeNull();
-    expect(factory({ sandboxed: false })).toMatchObject({ name: "factory_echo" });
+    expect(factory({ sandboxed: false })).toMatchObject({
+      name: "factory_echo",
+      terminalResultFallback: { mode: "safe_text", prefix: "Echo:" },
+    });
   });
 
   it("defaults author config to a strict empty object schema", () => {

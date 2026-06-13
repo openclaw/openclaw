@@ -240,6 +240,31 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     expect(result).toBeNull();
   });
 
+  it.each(["empty", "reasoning-only", "planning-only"] as const)(
+    "does not classify %s harness results after replay-invalid tool activity",
+    (agentHarnessResultClassification) => {
+      const result = classifyEmbeddedAgentRunResultForModelFallback({
+        provider: "xai",
+        model: "grok-composer-2.5-fast",
+        result: {
+          payloads: [],
+          meta: {
+            durationMs: 42,
+            replayInvalid: true,
+            agentHarnessResultClassification,
+            toolSummary: {
+              tools: ["write"],
+              calls: 1,
+              hadFailure: false,
+            },
+          },
+        },
+      });
+
+      expect(result).toBeNull();
+    },
+  );
+
   it("classifies unclassified non-GPT reasoning-only terminal results", () => {
     const result = classifyEmbeddedAgentRunResultForModelFallback({
       provider: "xai",

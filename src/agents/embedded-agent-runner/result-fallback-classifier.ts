@@ -93,6 +93,9 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
   ) {
     return null;
   }
+  if (params.result.meta.replayInvalid === true) {
+    return null;
+  }
   if (hasSideEffectProgressEvidence(params.result)) {
     return null;
   }
@@ -123,12 +126,6 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
     .map((payload) => (typeof payload.text === "string" ? payload.text : ""))
     .join("\n");
   if (EMPTY_TERMINAL_REPLY_RE.test(errorText)) {
-    if (
-      params.result.meta.replayInvalid === true &&
-      hasCompletedToolActivityEvidence(params.result)
-    ) {
-      return null;
-    }
     return {
       message: `${params.provider}/${params.model} ended with an incomplete terminal response`,
       reason: "format",
