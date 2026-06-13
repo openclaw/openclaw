@@ -2,6 +2,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { summarizeLiveTransportRttSamples } from "../shared/live-transport-rtt.js";
 import {
   LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS,
   findMissingLiveTransportStandardScenarios,
@@ -159,45 +160,45 @@ describe("telegram live qa runtime", () => {
     }
   });
 
-  it("normalizes Telegram repeated sample options", () => {
-    expect(testing.normalizeTelegramQaSampleOptions({})).toBeUndefined();
+  it("normalizes Telegram RTT options", () => {
+    expect(testing.normalizeTelegramQaRttOptions({})).toBeUndefined();
     expect(
-      testing.normalizeTelegramQaSampleOptions({
+      testing.normalizeTelegramQaRttOptions({
         count: 3,
         timeoutMs: 45_000,
       }),
     ).toEqual({
       count: 3,
       maxFailures: 3,
-      scenarioIds: new Set(["telegram-mentioned-message-reply"]),
+      checkIds: new Set(["telegram-mentioned-message-reply"]),
       timeoutMs: 45_000,
     });
     expect(
-      testing.normalizeTelegramQaSampleOptions({
+      testing.normalizeTelegramQaRttOptions({
+        checkIds: ["telegram-mentioned-message-reply"],
         count: 3,
         maxFailures: 1,
-        scenarioIds: ["telegram-mentioned-message-reply"],
       }),
     ).toEqual({
       count: 3,
       maxFailures: 1,
-      scenarioIds: new Set(["telegram-mentioned-message-reply"]),
+      checkIds: new Set(["telegram-mentioned-message-reply"]),
       timeoutMs: 30_000,
     });
   });
 
-  it("rejects unknown Telegram repeated sample scenarios", () => {
+  it("rejects unknown Telegram RTT checks", () => {
     expect(() =>
-      testing.normalizeTelegramQaSampleOptions({
+      testing.normalizeTelegramQaRttOptions({
+        checkIds: ["telegram-rtt-only"],
         count: 1,
-        scenarioIds: ["telegram-sample-only"],
       }),
-    ).toThrow("unknown Telegram QA sample scenario: telegram-sample-only");
+    ).toThrow("unknown Telegram QA RTT check: telegram-rtt-only");
   });
 
-  it("summarizes Telegram repeated sample timing", () => {
+  it("summarizes live transport RTT timing", () => {
     expect(
-      testing.summarizeTelegramQaSamples([
+      summarizeLiveTransportRttSamples([
         { status: "pass", rttMs: 1000 },
         { status: "pass", rttMs: 2000 },
         { status: "pass", rttMs: 4000 },
@@ -1199,157 +1200,6 @@ describe("telegram live qa runtime", () => {
     expect(observedMessages[0]?.scenarioId).toBe("telegram-whoami-command");
   });
 
-  it("redacts observed message content by default in artifacts", () => {
-    expect(
-      testing.buildObservedMessagesArtifact({
-        includeContent: false,
-        redactMetadata: false,
-        observedMessages: [
-          {
-            updateId: 1,
-            messageId: 9,
-            chatId: -100123,
-            senderId: 42,
-            senderIsBot: true,
-            senderUsername: "driver_bot",
-            text: "secret text",
-            caption: "secret caption",
-            replyToMessageId: 8,
-            timestamp: 1_700_000_000_000,
-            inlineButtons: ["Approve"],
-            mediaKinds: ["photo"],
-          },
-        ],
-      }),
-    ).toEqual([
-      {
-        updateId: 1,
-        messageId: 9,
-        chatId: -100123,
-        senderId: 42,
-        senderIsBot: true,
-        senderUsername: "driver_bot",
-        replyToMessageId: 8,
-        timestamp: 1_700_000_000_000,
-        inlineButtons: ["Approve"],
-        mediaKinds: ["photo"],
-      },
-    ]);
-  });
-
-  it("keeps observed message content in public mode when capture is requested", () => {
-    const redacted = testing.buildObservedMessagesArtifact({
-      includeContent: true,
-      redactMetadata: true,
-      observedMessages: [
-        {
-          updateId: 1,
-          messageId: 9,
-          chatId: -100123,
-          senderId: 42,
-          senderIsBot: true,
-          senderUsername: "driver_bot",
-          text: "secret text",
-          caption: "secret caption",
-          replyToMessageId: 8,
-          timestamp: 1_700_000_000_000,
-          inlineButtons: ["Approve"],
-          mediaKinds: ["photo"],
-        },
-      ],
-    });
-
-    expect(redacted).toEqual([
-      {
-        senderIsBot: true,
-        inlineButtonCount: 1,
-        mediaKinds: ["photo"],
-        text: "secret text",
-        caption: "secret caption",
-      },
-    ]);
-    expect(redacted[0]).not.toHaveProperty("timestamp");
-    expect(redacted[0]).not.toHaveProperty("inlineButtons");
-    expect(redacted[0]).not.toHaveProperty("senderId");
-    expect(redacted[0]).not.toHaveProperty("senderUsername");
-  });
-
-  it("keeps raw timestamp and inline button text when metadata redaction is disabled", () => {
-    expect(
-      testing.buildObservedMessagesArtifact({
-        includeContent: true,
-        redactMetadata: false,
-        observedMessages: [
-          {
-            updateId: 1,
-            messageId: 9,
-            chatId: -100123,
-            senderId: 42,
-            senderIsBot: true,
-            senderUsername: "driver_bot",
-            text: "secret text",
-            caption: "secret caption",
-            replyToMessageId: 8,
-            timestamp: 1_700_000_000_000,
-            inlineButtons: ["Approve"],
-            mediaKinds: ["photo"],
-          },
-        ],
-      }),
-    ).toEqual([
-      {
-        updateId: 1,
-        messageId: 9,
-        chatId: -100123,
-        senderId: 42,
-        senderIsBot: true,
-        timestamp: 1_700_000_000_000,
-        inlineButtons: ["Approve"],
-        senderUsername: "driver_bot",
-        replyToMessageId: 8,
-        text: "secret text",
-        caption: "secret caption",
-        mediaKinds: ["photo"],
-      },
-    ]);
-  });
-
-  it("adds scenario context to observed message artifacts", () => {
-    expect(
-      testing.buildObservedMessagesArtifact({
-        includeContent: false,
-        redactMetadata: true,
-        observedMessages: [
-          {
-            updateId: 11,
-            messageId: 21,
-            chatId: -100123,
-            senderId: 88,
-            senderIsBot: true,
-            senderUsername: "sut_bot",
-            scenarioId: "telegram-commands-command",
-            scenarioTitle: "Telegram commands list reply",
-            matchedScenario: false,
-            text: "noise from previous turn",
-            replyToMessageId: 19,
-            timestamp: 1_700_000_003_000,
-            inlineButtons: [],
-            mediaKinds: [],
-          },
-        ],
-      }),
-    ).toEqual([
-      {
-        scenarioId: "telegram-commands-command",
-        scenarioTitle: "Telegram commands list reply",
-        matchedScenario: false,
-        senderIsBot: true,
-        inlineButtonCount: 0,
-        mediaKinds: [],
-      },
-    ]);
-  });
-
   it("prints Telegram scenario RTT in the Markdown report", () => {
     expect(
       testing.renderTelegramQaMarkdown({
@@ -1372,7 +1222,7 @@ describe("telegram live qa runtime", () => {
     ).toContain("- RTT: 4321ms");
   });
 
-  it("prints Telegram repeated sample timing in the Markdown report", () => {
+  it("prints Telegram repeated RTT timing in the Markdown report", () => {
     const report = testing.renderTelegramQaMarkdown({
       cleanupIssues: [],
       credentialSource: "env",
@@ -1385,7 +1235,7 @@ describe("telegram live qa runtime", () => {
           id: "telegram-mentioned-message-reply",
           title: "Telegram mentioned message gets a reply",
           status: "pass",
-          details: "reply matched; 3/4 samples passed",
+          details: "reply matched; 3/4 RTT checks passed",
           rttMs: 2000,
           timing: {
             avgMs: 2333,

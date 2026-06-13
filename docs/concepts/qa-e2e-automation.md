@@ -346,10 +346,6 @@ Required env when `--credential-source env`:
 - `OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN`
 - `OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN`
 
-Optional:
-
-- `OPENCLAW_QA_TELEGRAM_CAPTURE_CONTENT=1` keeps message bodies in observed-message artifacts (default redacts).
-
 Scenarios (`extensions/qa-lab/src/live-transports/telegram/telegram-live.runtime.ts`):
 
 - `telegram-canary`
@@ -375,12 +371,11 @@ Output artifacts:
 
 - `telegram-qa-report.md`
 - `qa-evidence.json` - evidence entries for the live transport checks, including profile, coverage, provider, channel, artifacts, result, and RTT fields.
-- `telegram-qa-observed-messages.json` - bodies redacted unless `OPENCLAW_QA_TELEGRAM_CAPTURE_CONTENT=1`.
 
-Package Telegram runs use the same Telegram credential contract. For repeated
-RTT samples, run the normal package Telegram live lane and set the sample
-controls; the samples are folded into `qa-evidence.json` under
-`result.timing` for the sampled Telegram scenario.
+Package Telegram runs use the same Telegram credential contract. Repeated RTT
+measurement is part of the normal package Telegram live lane; the RTT
+distribution is folded into `qa-evidence.json` under `result.timing` for the
+selected RTT check.
 
 ```bash
 OPENCLAW_QA_CREDENTIAL_SOURCE=convex \
@@ -390,11 +385,11 @@ pnpm test:docker:npm-telegram-live
 When `OPENCLAW_QA_CREDENTIAL_SOURCE=convex` is set, the package live wrapper
 leases a `kind: "telegram"` credential, exports the leased group/driver/SUT bot
 env into the installed-package run, heartbeats the lease, and releases it on
-shutdown. The package wrapper defaults to 20 repeated samples of
-`telegram-mentioned-message-reply`, a 30s sample timeout, and Convex role
+shutdown. The package wrapper defaults to 20 RTT checks of
+`telegram-mentioned-message-reply`, a 30s RTT timeout, and Convex role
 `maintainer` outside CI when Convex is selected. Override
-`OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES`, `OPENCLAW_NPM_TELEGRAM_SAMPLE_TIMEOUT_MS`,
-or `OPENCLAW_NPM_TELEGRAM_MAX_FAILURES` to tune repeated sampling without
+`OPENCLAW_NPM_TELEGRAM_RTT_SAMPLES`, `OPENCLAW_NPM_TELEGRAM_RTT_TIMEOUT_MS`,
+or `OPENCLAW_NPM_TELEGRAM_RTT_MAX_FAILURES` to tune RTT measurement without
 creating a separate RTT command or Telegram-specific summary format.
 
 ### Discord QA

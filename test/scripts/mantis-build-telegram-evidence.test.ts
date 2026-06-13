@@ -177,6 +177,22 @@ describe("scripts/mantis/build-telegram-evidence", () => {
     );
   });
 
+  it("does not require observed-message artifacts for current evidence summaries", () => {
+    const dir = makeTelegramOutput();
+    rmSync(path.join(dir, "telegram-qa-observed-messages.json"), { force: true });
+
+    const result = writeTelegramEvidence(["--output-dir", dir]);
+
+    expect(readFileSync(result.transcriptPath, "utf8")).toContain(
+      "No observed Telegram messages were recorded.",
+    );
+    const targetPaths = result.manifest.artifacts.map((artifact) => artifact.targetPath);
+    expect(targetPaths).toContain("summary.json");
+    expect(targetPaths).toContain("telegram-live-transcript.html");
+    expect(targetPaths).toContain("report.md");
+    expect(targetPaths).not.toContain("observed-messages.json");
+  });
+
   it("renders historical Telegram summaries when evidence summaries are absent", () => {
     const dir = makeLegacyTelegramOutput();
 

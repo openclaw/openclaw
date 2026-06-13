@@ -133,7 +133,6 @@ describe("evidence summary", () => {
       artifactPaths: [
         { kind: "summary", path: QA_EVIDENCE_FILENAME },
         { kind: "report", path: "telegram-qa-report.md" },
-        { kind: "transport-observations", path: "telegram-qa-observed-messages.json" },
       ],
       env: {
         OPENCLAW_QA_RUNNER: "crabbox",
@@ -204,11 +203,6 @@ describe("evidence summary", () => {
             {
               kind: "report",
               path: "telegram-qa-report.md",
-              source: "telegram-live-transport",
-            },
-            {
-              kind: "transport-observations",
-              path: "telegram-qa-observed-messages.json",
               source: "telegram-live-transport",
             },
           ],

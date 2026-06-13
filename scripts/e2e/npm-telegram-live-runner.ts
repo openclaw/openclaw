@@ -40,17 +40,17 @@ function resolveCredentialRole(env: NodeJS.ProcessEnv) {
   return env.OPENCLAW_NPM_TELEGRAM_CREDENTIAL_ROLE ?? env.OPENCLAW_QA_CREDENTIAL_ROLE;
 }
 
-function resolveSampleOptions(env: NodeJS.ProcessEnv) {
-  const sampleCount = parsePositiveIntegerEnv(env, "OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES");
-  if (sampleCount === undefined) {
+function resolveRttOptions(env: NodeJS.ProcessEnv) {
+  const rttCount = parsePositiveIntegerEnv(env, "OPENCLAW_NPM_TELEGRAM_RTT_SAMPLES");
+  if (rttCount === undefined) {
     return {};
   }
   return {
-    sampleCount,
-    sampleTimeoutMs: parsePositiveIntegerEnv(env, "OPENCLAW_NPM_TELEGRAM_SAMPLE_TIMEOUT_MS"),
-    maxSampleFailures:
-      parsePositiveIntegerEnv(env, "OPENCLAW_NPM_TELEGRAM_MAX_FAILURES") ?? sampleCount,
-    sampleScenarioIds: splitCsv(env.OPENCLAW_NPM_TELEGRAM_SAMPLE_SCENARIOS),
+    rttCount,
+    rttTimeoutMs: parsePositiveIntegerEnv(env, "OPENCLAW_NPM_TELEGRAM_RTT_TIMEOUT_MS"),
+    maxRttFailures:
+      parsePositiveIntegerEnv(env, "OPENCLAW_NPM_TELEGRAM_RTT_MAX_FAILURES") ?? rttCount,
+    rttCheckIds: splitCsv(env.OPENCLAW_NPM_TELEGRAM_RTT_CHECKS),
   };
 }
 
@@ -104,16 +104,16 @@ async function main() {
     process.env.OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR?.trim() ||
     path.join(repoRoot, ".artifacts", "qa-e2e", `npm-telegram-live-${Date.now().toString(36)}`);
   const result = await runTelegramQaLive({
+    env: process.env,
     repoRoot,
     outputDir,
     sutOpenClawCommand,
-    preflightInstalledOnboarding: true,
     providerMode: process.env.OPENCLAW_NPM_TELEGRAM_PROVIDER_MODE,
     primaryModel: process.env.OPENCLAW_NPM_TELEGRAM_MODEL,
     alternateModel: process.env.OPENCLAW_NPM_TELEGRAM_ALT_MODEL,
     fastMode: parseBoolean(process.env.OPENCLAW_NPM_TELEGRAM_FAST),
     scenarioIds: splitCsv(process.env.OPENCLAW_NPM_TELEGRAM_SCENARIOS),
-    ...resolveSampleOptions(process.env),
+    ...resolveRttOptions(process.env),
     sutAccountId: process.env.OPENCLAW_NPM_TELEGRAM_SUT_ACCOUNT,
     credentialSource: resolveCredentialSource(process.env),
     credentialRole: resolveCredentialRole(process.env),
@@ -121,7 +121,6 @@ async function main() {
 
   process.stdout.write(`Package Telegram QA report: ${result.reportPath}\n`);
   process.stdout.write(`Package Telegram QA summary: ${result.summaryPath}\n`);
-  process.stdout.write(`Package Telegram QA observed messages: ${result.observedMessagesPath}\n`);
   if (await shouldFailPackageTelegramRun(result)) {
     process.exitCode = 1;
   }
@@ -149,7 +148,7 @@ export const testing = {
   parsePositiveIntegerEnv,
   resolveCredentialRole,
   resolveCredentialSource,
-  resolveSampleOptions,
+  resolveRttOptions,
   shouldFailPackageTelegramRun,
 };
 export { testing as __testing };
