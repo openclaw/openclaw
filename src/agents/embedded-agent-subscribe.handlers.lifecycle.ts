@@ -256,6 +256,9 @@ export function handleAgentEnd(
 
   const deliverTerminal = () => {
     ctx.state.deferBlockReplyDelivery = false;
+    ctx.log.warn(
+      `[DEDUPE] deliverTerminal runId=${ctx.params.runId} deferredEvents=${ctx.state.deferredAssistantEvents.length} hasBlockReply=${ctx.params.onBlockReply != null} hasOnPartialReply=${ctx.params.onPartialReply != null}`,
+    );
     ctx.flushDeferredAssistantEvents();
     ctx.flushDeferredBlockReplies();
     const flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer({ final: true });

@@ -156,8 +156,13 @@ type GatewayHost = {
   controlUiBootstrapReady?: Promise<void> | null;
 };
 
+type PendingTranscriptSync = {
+  sessionKey: string;
+  runId: string;
+};
+
 type GatewayHostWithDeferredSessionMessageReload = GatewayHost & {
-  pendingSessionMessageReloadSessionKey?: string | null;
+  pendingTranscriptSync?: PendingTranscriptSync | null;
 };
 
 type SessionDefaultsSnapshot = {
@@ -178,8 +183,6 @@ type GatewayHostWithSideResults = GatewayHost & {
 };
 
 const SESSIONS_CHANGED_RELOAD_DEBOUNCE_MS = 5_000;
-const DEFERRED_SESSION_MESSAGE_REPLAY_POLL_MS = 250;
-const DEFERRED_SESSION_MESSAGE_REPLAY_TIMEOUT_MS = 10_000;
 const UPDATE_RESTART_VERIFICATION_POLL_MS = 250;
 const UPDATE_RESTART_VERIFICATION_TIMEOUT_MS = 10_000;
 const UPDATE_HANDOFF_POLL_MS = 1_000;
@@ -1067,30 +1070,34 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
   );
   const historyReloaded = handleTerminalChatEvent(host, payload, state, activeRunIdBeforeEvent);
   const deferredReloadHost = host as GatewayHostWithDeferredSessionMessageReload;
-  const deferredSessionKey = deferredReloadHost.pendingSessionMessageReloadSessionKey?.trim();
   const payloadSessionKey = payload?.sessionKey?.trim();
   const finalEventNeedsHistoryReload =
     state === "final" && shouldReloadHistoryForFinalEvent(payload);
-  const shouldResolveDeferredSessionMessageReload = Boolean(
-    deferredSessionKey &&
+
+  // Consume pending transcript sync when the terminal event matches.
+  // session.message arrivals during the run set this flag; the terminal handler
+  // is the sole owner of reconciling transcript state after the final message is
+  // committed. This avoids concurrent writes to chatMessages.
+  const pendingSync = deferredReloadHost.pendingTranscriptSync;
+  const shouldConsumePendingTranscriptSync = Boolean(
+    pendingSync &&
     payloadSessionKey &&
-    areUiSessionKeysEquivalent(deferredSessionKey, payloadSessionKey) &&
+    areUiSessionKeysEquivalent(pendingSync.sessionKey, payloadSessionKey) &&
+    typeof payload?.runId === "string" &&
+    pendingSync.runId === payload.runId &&
     isTerminalChatState(state) &&
     !terminalEventIsForDifferentActiveRun &&
-    areUiSessionKeysEquivalent(payloadSessionKey, host.sessionKey) &&
     !host.chatRunId,
   );
-  const shouldReplayDeferredSessionMessageReload =
-    shouldResolveDeferredSessionMessageReload &&
-    (state !== "final" || finalEventNeedsHistoryReload);
-  if (shouldResolveDeferredSessionMessageReload) {
-    deferredReloadHost.pendingSessionMessageReloadSessionKey = null;
+  if (shouldConsumePendingTranscriptSync) {
+    deferredReloadHost.pendingTranscriptSync = null;
   }
+
   if (finalEventNeedsHistoryReload && !historyReloaded && !terminalEventIsForDifferentActiveRun) {
     void loadChatHistory(host as unknown as ChatState);
     return;
   }
-  if (shouldReplayDeferredSessionMessageReload && !historyReloaded) {
+  if (shouldConsumePendingTranscriptSync && !historyReloaded) {
     void loadChatHistory(host as unknown as ChatState);
   }
 }
@@ -1125,15 +1132,15 @@ function flushChatQueueAfterSessionRunReconcile(
     });
   };
   const deferredReloadHost = host as GatewayHostWithDeferredSessionMessageReload;
-  const pendingSessionKey = deferredReloadHost.pendingSessionMessageReloadSessionKey?.trim();
+  const pendingSync = deferredReloadHost.pendingTranscriptSync;
   const eventSessionKey = typeof payload?.sessionKey === "string" ? payload.sessionKey.trim() : "";
   if (
-    pendingSessionKey &&
-    areUiSessionKeysEquivalent(pendingSessionKey, host.sessionKey) &&
-    (!eventSessionKey || areUiSessionKeysEquivalent(eventSessionKey, pendingSessionKey))
+    pendingSync &&
+    areUiSessionKeysEquivalent(pendingSync.sessionKey, host.sessionKey) &&
+    (!eventSessionKey || areUiSessionKeysEquivalent(eventSessionKey, pendingSync.sessionKey))
   ) {
-    deferredReloadHost.pendingSessionMessageReloadSessionKey = null;
-    const reloadSessionKey = pendingSessionKey;
+    deferredReloadHost.pendingTranscriptSync = null;
+    const reloadSessionKey = pendingSync.sessionKey;
     void Promise.resolve(loadChatHistory(host as unknown as ChatState)).finally(() => {
       if (areUiSessionKeysEquivalent(host.sessionKey, reloadSessionKey)) {
         publishRunStatus();
@@ -1151,111 +1158,38 @@ function handleSessionMessageGatewayEvent(
   host: GatewayHost,
   payload: { sessionKey?: string; agentId?: string; runId?: unknown } | undefined,
 ) {
-  const deferredReloadHost = host as GatewayHostWithDeferredSessionMessageReload;
   const sessionKey = payload?.sessionKey?.trim();
   if (!globalAgentScopeMatches(host, sessionKey, payload?.agentId)) {
     return;
   }
   const sessionMatchesHost = sessionMessageMatchesHost(host, sessionKey, payload?.agentId);
-  const runIdBeforeApply = host.chatRunId;
-  const result = applySessionsChangedEvent(host as unknown as SessionsState, payload);
-  if (result.applied && result.clearedChatRun) {
-    if (sessionMatchesHost) {
-      deferredReloadHost.pendingSessionMessageReloadSessionKey = sessionKey;
-    }
-    if (flushChatQueueAfterSessionRunReconcile(host, result, payload, runIdBeforeApply)) {
-      return;
-    }
-  }
+
+  // Apply session metadata snapshot, but never reconcile the chat run from a
+  // session.message event. Only the chat terminal event (final/error/aborted)
+  // owns ending the local run and committing the terminal message.
+  applySessionsChangedEvent(host as unknown as SessionsState, payload, {
+    reconcileCurrentChatRun: false,
+  });
+
   if (!sessionKey || !sessionMatchesHost) {
     return;
   }
-  // Skip history reload while a chat run is active. The chat event handler
-  // manages streaming state and appends the final assistant message. Reloading
-  // history mid-run races with the optimistic user-message update and resets
-  // chatStream, which delays the user message card from appearing until the
-  // first LLM delta arrives.
-  if (host.chatRunId) {
-    deferredReloadHost.pendingSessionMessageReloadSessionKey = sessionKey;
-    const refreshStartedAt = Date.now();
-    const runIdBeforeRefresh = host.chatRunId;
-    void loadSessions(host as unknown as SessionsState, {
-      ...createChatSessionsLoadOverrides(host),
-      ...scopedAgentListParamsForSession(host, host.sessionKey),
-      publishChatRunStatus: false,
-    }).finally(() =>
-      replayDeferredSessionMessageReloadAfterSessionsRefresh(
-        host,
-        sessionKey,
-        payload?.agentId,
-        refreshStartedAt,
-        runIdBeforeRefresh,
-      ),
-    );
-    return;
-  }
-  deferredReloadHost.pendingSessionMessageReloadSessionKey = null;
-  void loadChatHistory(host as unknown as ChatState);
-}
 
-function replayDeferredSessionMessageReloadAfterSessionsRefresh(
-  host: GatewayHost,
-  sessionKey: string,
-  agentId: string | undefined | null,
-  startedAt: number,
-  completedRunId?: string | null,
-) {
-  const deferredReloadHost = host as GatewayHostWithDeferredSessionMessageReload;
-  if (
-    !areUiSessionKeysEquivalent(
-      deferredReloadHost.pendingSessionMessageReloadSessionKey?.trim() ?? "",
-      sessionKey,
-    ) ||
-    !sessionMessageMatchesHost(host, sessionKey, agentId)
-  ) {
-    return;
-  }
   if (host.chatRunId) {
-    if (
-      host.sessionsLoading === true &&
-      Date.now() - startedAt < DEFERRED_SESSION_MESSAGE_REPLAY_TIMEOUT_MS
-    ) {
-      globalThis.setTimeout(
-        () =>
-          replayDeferredSessionMessageReloadAfterSessionsRefresh(
-            host,
-            sessionKey,
-            agentId,
-            startedAt,
-            completedRunId,
-          ),
-        DEFERRED_SESSION_MESSAGE_REPLAY_POLL_MS,
-      );
-    }
+    // Active run: record that the transcript changed during this run. The
+    // terminal handler will consume this and reconcile history once after the
+    // final message is committed, avoiding concurrent writes to chatMessages.
+    const deferredReloadHost = host as GatewayHostWithDeferredSessionMessageReload;
+    deferredReloadHost.pendingTranscriptSync = {
+      sessionKey,
+      runId: host.chatRunId,
+    };
     return;
   }
-  const row = (host as unknown as SessionsState).sessionsResult?.sessions.find((session) =>
-    areUiSessionKeysEquivalent(session.key, sessionKey),
-  );
-  flushChatQueueAfterSessionRunReconcile(
-    host,
-    {
-      applied: true,
-      change: "updated",
-      clearedChatRun: true,
-      ...(row
-        ? {
-            clearedChatRunStatus: {
-              phase: row.status === "done" ? "done" : "interrupted",
-              runId: completedRunId ?? null,
-              sessionKey,
-            },
-          }
-        : {}),
-    },
-    { sessionKey },
-    completedRunId,
-  );
+
+  // No active run: transcript update is from another client or a background
+  // write. Sync history immediately.
+  void loadChatHistory(host as unknown as ChatState);
 }
 
 function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {

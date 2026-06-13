@@ -1473,6 +1473,63 @@ describe("handleChatEvent", () => {
   });
 });
 
+describe("handleChatEvent terminal dedup regression", () => {
+  it("preserves two different turns with identical assistant text", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+    });
+
+    // First turn: assistant replies "ok"
+    const turn1: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: { role: "assistant", text: "ok" },
+    };
+    expect(handleChatEvent(state, turn1)).toBe("final");
+    expect(state.chatMessages).toHaveLength(1);
+
+    // Second turn: user asks again, assistant replies "ok" again
+    state.chatRunId = "run-2";
+    const turn2: ChatEventPayload = {
+      runId: "run-2",
+      sessionKey: "main",
+      state: "final",
+      message: { role: "assistant", text: "ok" },
+    };
+    expect(handleChatEvent(state, turn2)).toBe("final");
+
+    // Both messages must be preserved — text identity does not mean message identity
+    expect(state.chatMessages).toHaveLength(2);
+    expect((state.chatMessages[0] as { text?: string }).text).toBe("ok");
+    expect((state.chatMessages[1] as { text?: string }).text).toBe("ok");
+  });
+
+  it("does not deduplicate terminal messages based solely on text content", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatMessages: [
+        { role: "user", content: [{ type: "text", text: "help" }] },
+        { role: "assistant", content: [{ type: "text", text: "sure" }] },
+      ],
+    });
+
+    // New final event carries same text as existing message but is from a new turn
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: { role: "assistant", content: [{ type: "text", text: "sure" }] },
+    };
+    expect(handleChatEvent(state, payload)).toBe("final");
+
+    // The new message should be appended — not dropped because text matches an old message
+    expect(state.chatMessages).toHaveLength(3);
+  });
+});
+
 describe("loadChatHistory filtering", () => {
   it("filters legacy silent assistant messages from history", async () => {
     const messages = [

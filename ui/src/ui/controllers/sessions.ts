@@ -708,6 +708,7 @@ export type SessionsChangedApplyResult =
 export function applySessionsChangedEvent(
   state: SessionsState,
   payload: unknown,
+  options?: { reconcileCurrentChatRun?: boolean },
 ): SessionsChangedApplyResult {
   if (!isRecord(payload) || !state.sessionsResult) {
     return { applied: false };
@@ -831,6 +832,7 @@ export function applySessionsChangedEvent(
   const currentChatRunId = state.chatRunId ?? null;
   const currentChatSessionKey = hasCurrentSession ? state.sessionKey : null;
   const clearedChatRun =
+    options?.reconcileCurrentChatRun !== false &&
     nextRow.hasActiveRun !== true &&
     hasCurrentSession &&
     sessionPatchTargetsCurrentChatRun(state, {
