@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   clearActiveFloatingTooltips,
   promoteNativeTitleTooltip,
@@ -7,6 +7,7 @@ import {
 } from "./dom-tooltips.ts";
 
 afterEach(() => {
+  vi.restoreAllMocks();
   clearActiveFloatingTooltips();
   document.querySelector(".control-ui-floating-tooltip")?.remove();
 });
@@ -205,6 +206,7 @@ describe("native title tooltip promotion", () => {
   });
 
   it("positions the floating tooltip below the button midpoint", () => {
+    vi.spyOn(window, "innerWidth", "get").mockReturnValue(1024);
     const root = document.createElement("div");
     const button = document.createElement("button");
     button.className = "btn";
