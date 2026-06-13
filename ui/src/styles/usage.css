@@ -229,10 +229,10 @@
   border-color: var(--border-strong);
 }
 
-.usage-date-input:focus,
-.usage-select:focus,
-.usage-query-input:focus,
-.usage-filters-inline select:focus,
+.usage-date-input:focus-visible,
+.usage-select:focus-visible,
+.usage-query-input:focus-visible,
+.usage-filters-inline select:focus-visible,
 .usage-filters-inline input[type="text"]:focus-visible {
   outline: none;
   border-color: color-mix(in srgb, var(--accent) 50%, var(--border));

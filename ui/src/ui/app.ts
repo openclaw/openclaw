@@ -723,11 +723,6 @@ export class OpenClawApp extends LitElement {
         this.paletteQuery = "";
         this.paletteActiveIndex = 0;
       }
-      return;
-    }
-    if (e.key === "Escape" && this.navDrawerOpen) {
-      e.preventDefault();
-      this.navDrawerOpen = false;
     }
   };
   private chatMobileControlsKeydownHandler = (e: KeyboardEvent) => {

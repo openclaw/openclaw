@@ -1038,7 +1038,7 @@
   background-repeat: no-repeat;
 }
 
-.agent-chat__talk-options input:focus,
+.agent-chat__talk-options input:focus-visible,
 .agent-chat__talk-options select:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);

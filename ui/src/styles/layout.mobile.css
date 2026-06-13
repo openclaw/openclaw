@@ -229,8 +229,8 @@
   .nav-item,
   .sidebar--collapsed .nav-item {
     margin: 0;
-    min-height: 44px;
-    padding: 10px 16px;
+    min-height: 40px;
+    padding: 0 12px;
     font-size: 13px;
     border-radius: var(--radius-md);
     white-space: nowrap;
