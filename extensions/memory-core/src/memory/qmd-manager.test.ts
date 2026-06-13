@@ -5169,12 +5169,14 @@ describe("QmdMemoryManager", () => {
     }
   });
 
-  it("ignores stale cache entries scoped to a different exportDir", async () => {
+  it("ignores stale cache entries scoped to a previous exportDir", async () => {
     const sessionsDir = path.join(stateDir, "agents", agentId, "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
     const sessionFile = path.join(sessionsDir, "session-1.jsonl");
-    const exportDir = path.join(stateDir, "agents", agentId, "qmd", "sessions");
-    const exportFile = path.join(exportDir, "session-1.md");
+    const firstExportDir = path.join(stateDir, "agents", agentId, "qmd", "sessions-a");
+    const secondExportDir = path.join(stateDir, "agents", agentId, "qmd", "sessions-b");
+    const firstExportFile = path.join(firstExportDir, "session-1.md");
+    const secondExportFile = path.join(secondExportDir, "session-1.md");
     await fs.writeFile(
       sessionFile,
       '{"type":"message","message":{"role":"user","content":"hello"}}\n',
@@ -5188,30 +5190,38 @@ describe("QmdMemoryManager", () => {
         ...currentMemory,
         qmd: {
           ...currentMemory?.qmd,
-          sessions: { enabled: true },
+          sessions: { enabled: true, exportDir: firstExportDir },
         },
       },
     } as OpenClawConfig;
 
-    // First sync: exports the markdown and writes a SQLite cache entry for exportDir.
+    // First sync: exports markdown and writes a SQLite cache row for firstExportDir.
     const first = await createManager();
     try {
       await first.manager.sync({ reason: "manual" });
-      expect(await fs.readFile(exportFile, "utf-8")).toContain("hello");
+      expect(await fs.readFile(firstExportFile, "utf-8")).toContain("hello");
     } finally {
       await first.manager.close();
     }
 
-    // Delete the markdown. On the next sync the cache entry for exportDir still
-    // exists, but because the target is missing the fast path falls through and
-    // rebuilds. This verifies cache scoping by (session_file, export_dir, render_version).
-    await fs.rm(exportFile);
+    cfg = {
+      ...cfg,
+      memory: {
+        ...cfg.memory,
+        qmd: {
+          ...cfg.memory?.qmd,
+          sessions: { enabled: true, exportDir: secondExportDir },
+        },
+      },
+    } as OpenClawConfig;
 
+    // Second sync points at a different exportDir. The old cache row still
+    // exists, but the lookup key includes export_dir, so this must rebuild into
+    // the new directory instead of trusting the previous target.
     const second = await createManager();
     try {
       await second.manager.sync({ reason: "manual" });
-      // Markdown must be rebuilt even though the source jsonl is unchanged.
-      expect(await fs.readFile(exportFile, "utf-8")).toContain("hello");
+      expect(await fs.readFile(secondExportFile, "utf-8")).toContain("hello");
     } finally {
       await second.manager.close();
     }

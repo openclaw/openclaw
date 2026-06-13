@@ -105,10 +105,9 @@ const QMD_EXPORT_FINGERPRINT_EDGE_BYTES = 512;
 type QmdExportCacheDatabase = Pick<OpenClawAgentKyselyDatabase, "qmd_session_export_cache">;
 
 // Compute a cheap content fingerprint from the first and last N bytes of a
-// JSONL file. This is NOT a full-file hash — it catches truncate-and-rewrite
-// attacks that preserve size and mtime but change content, without the IO cost
-// of reading the entire file. Combined with inode, it makes the fast path
-// safe against backup restores and transcript rewrites.
+// JSONL file. This is NOT a full-file hash; it hardens the stat fast path
+// against common append/truncate/edge rewrites without paying the IO cost of
+// reading the entire file.
 async function computeContentFingerprint(filePath: string): Promise<string> {
   const fd = await fs.open(filePath, "r");
   try {
