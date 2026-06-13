@@ -210,7 +210,8 @@ type QaEvidenceTestTargetInput = {
   id: string;
   title: string;
   sourcePath: string;
-  coverageIds: readonly string[];
+  primaryCoverageIds?: readonly string[];
+  secondaryCoverageIds?: readonly string[];
   surfaceIds: readonly string[];
   categoryIds: readonly string[];
   docsRefs?: readonly string[];
@@ -578,7 +579,8 @@ function buildTestRunnerEvidenceSummary(
       mapping: {
         profile,
         coverage: buildQaEvidenceCoverage({
-          primaryIds: target?.coverageIds ?? [],
+          primaryIds: target?.primaryCoverageIds ?? [],
+          secondaryIds: target?.secondaryCoverageIds ?? [],
           surfaceIds: target?.surfaceIds ?? [],
           categoryIds: target?.categoryIds ?? [],
         }),

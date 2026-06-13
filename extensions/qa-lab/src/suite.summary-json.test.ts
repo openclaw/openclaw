@@ -56,7 +56,7 @@ describe("buildQaSuiteSummaryJson", () => {
   });
 
   it("treats an empty scenarioIds array as unspecified (no filter)", () => {
-    // A CLI path that omits --scenario passes an empty array to runQaSuite.
+    // A CLI path that omits --scenario passes an empty array to runQaFlowSuite.
     // The summary must encode that as null so downstream parity/report
     // tooling doesn't interpret a full run as an explicit empty selection.
     const json = buildQaSuiteSummaryJson({
