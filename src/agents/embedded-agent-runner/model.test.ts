@@ -3016,6 +3016,52 @@ describe("resolveModel", () => {
     });
   });
 
+  it("uses provider-normalized model ids for OpenRouter transport", () => {
+    const modelId = "openrouter/anthropic/claude-sonnet-4.6";
+    mockDiscoveredModel(discoverModels, {
+      provider: "openrouter",
+      modelId,
+      templateModel: {
+        ...makeModel(modelId),
+        provider: "openrouter",
+        api: "openai-completions",
+        baseUrl: "https://openrouter.ai/api/v1",
+      },
+    });
+    const baseRuntimeHooks = createRuntimeHooks();
+    const normalizeProviderResolvedModelWithPlugin = vi.fn(
+      (params: { context: { model: { id: string } } }) => ({
+        ...params.context.model,
+        id: params.context.model.id.slice("openrouter/".length),
+      }),
+    );
+
+    const result = resolveModel("openrouter", modelId, "/tmp/agent", undefined, {
+      authStorage: { mocked: true } as never,
+      modelRegistry: discoverModels({ mocked: true } as never, "/tmp/agent"),
+      runtimeHooks: {
+        ...baseRuntimeHooks,
+        normalizeProviderResolvedModelWithPlugin,
+      },
+    });
+
+    expect(normalizeProviderResolvedModelWithPlugin).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openrouter",
+        context: expect.objectContaining({
+          modelId,
+          model: expect.objectContaining({ id: modelId }),
+        }),
+      }),
+    );
+    expectRecordFields(result.model, {
+      provider: "openrouter",
+      id: "anthropic/claude-sonnet-4.6",
+      api: "openai-completions",
+      baseUrl: "https://openrouter.ai/api/v1",
+    });
+  });
+
   it("matches prefixed Hugging Face ids against discovered registry models", () => {
     mockDiscoveredModel(discoverModels, {
       provider: "huggingface",
