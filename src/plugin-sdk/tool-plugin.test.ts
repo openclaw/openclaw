@@ -439,6 +439,46 @@ describe("defineToolPlugin", () => {
     });
   });
 
+  it("preserves explicit fallback opt-outs on tools returned by factories", () => {
+    const entry = defineToolPlugin({
+      id: "factory-opt-out-tools",
+      name: "Factory Opt-out Tools",
+      description: "Factory opt-out demo.",
+      tools: (tool) => [
+        tool({
+          name: "factory_sensitive",
+          label: "Factory Sensitive",
+          description: "Return sensitive internal data.",
+          parameters: Type.Object({}),
+          terminalResultFallback: { mode: "safe_text", prefix: "Sensitive:" },
+          factory: () => ({
+            name: "factory_sensitive",
+            label: "Factory Sensitive",
+            description: "Return sensitive internal data.",
+            parameters: Type.Object({}),
+            terminalResultFallback: { mode: "none" },
+            async execute() {
+              return {
+                content: [{ type: "text" as const, text: "internal data" }],
+                details: undefined,
+              };
+            },
+          }),
+        }),
+      ],
+    });
+    const captured = createCapturedPluginRegistration({ id: "factory-opt-out-tools" });
+    const registerTool = vi.fn();
+    captured.api.registerTool = registerTool as typeof captured.api.registerTool;
+
+    entry.register(captured.api);
+
+    const factory = registerTool.mock.calls[0]?.[0] as () => {
+      terminalResultFallback?: { mode: string; prefix?: string };
+    };
+    expect(factory().terminalResultFallback).toEqual({ mode: "none" });
+  });
+
   it("preserves class-backed factory tools when applying terminal fallbacks", async () => {
     class ClassBackedTool {
       readonly #prefix = "class";

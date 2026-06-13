@@ -462,6 +462,38 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     },
   );
 
+  it.each([{ ok: false }, { success: false }, { deliveryStatus: "failed" }])(
+    "does not synthesize a completed terminal reply from explicit failure details",
+    (details) => {
+      const payload = resolveTerminalToolResultReplyPayload({
+        isCronTrigger: false,
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt: makeAttemptResult({
+          assistantTexts: [],
+          toolMetas: [{ toolName: "exec" }],
+          messagesSnapshot: [
+            {
+              role: "toolResult",
+              content: [{ type: "text", text: "operation failed" }],
+              details,
+            } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+            {
+              role: "assistant",
+              stopReason: "stop",
+              provider: "openai",
+              model: "gpt-5.4",
+              content: [],
+            } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+          ],
+        }),
+      });
+
+      expect(payload).toBeNull();
+    },
+  );
+
   it("does not reuse an older NO_REPLY tool result without current-attempt tool activity", () => {
     const payload = resolveSilentToolResultReplyPayload({
       isCronTrigger: true,
@@ -586,6 +618,54 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     ]);
     expect(result.meta.livenessState).toBe("working");
     expectNoWarnMessageWith("incomplete turn detected");
+  });
+
+  it("does not promote pre-tool narration when the final assistant is empty", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (params: unknown) => {
+      const attemptParams = params as {
+        onToolOutcome?: (observation: {
+          toolName: string;
+          argsHash: string;
+          resultHash: string;
+          resultText?: string;
+        }) => void;
+      };
+      attemptParams.onToolOutcome?.({
+        toolName: "status",
+        argsHash: "current",
+        resultHash: "status-result",
+        resultText: "healthy",
+      });
+      return makeAttemptResult({
+        assistantTexts: ["The endpoint should be healthy."],
+        toolMetas: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "completed",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      });
+    });
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      prompt: "Check the endpoint status.",
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "run-pre-tool-narration-prefers-tool-fallback",
+    });
+
+    expect(result.payloads).toEqual([
+      {
+        text:
+          "status completed, but the model did not provide a final answer. " +
+          "No user-facing result text was provided.",
+      },
+    ]);
+    expect(JSON.stringify(result.payloads)).not.toContain("should be healthy");
   });
 
   it("does not return opted-out tool output when the final assistant is empty", async () => {
@@ -3018,6 +3098,21 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       timedOut: false,
       attempt: makeAttemptResult({
         assistantTexts: ["I'll be blunt: the endpoint is down."],
+      }),
+    });
+
+    expect(retryInstruction).toBeNull();
+  });
+
+  it("does not misclassify an explicit answer-style reply as planning-only", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "custom-provider",
+      modelId: "custom-model",
+      prompt: "Can you explain the root cause?",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["I'll explain: the cache was stale."],
       }),
     });
 

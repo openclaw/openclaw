@@ -517,7 +517,7 @@ function readToolResultAggregatedText(message: AgentMessage): string | undefined
   return trimmed || undefined;
 }
 
-function hasTerminalToolResultErrorStatus(message: AgentMessage): boolean {
+function hasTerminalToolResultFailure(message: AgentMessage): boolean {
   const details =
     message && typeof message === "object" && !Array.isArray(message)
       ? (message as { details?: unknown }).details
@@ -525,8 +525,15 @@ function hasTerminalToolResultErrorStatus(message: AgentMessage): boolean {
   if (!details || typeof details !== "object" || Array.isArray(details)) {
     return false;
   }
-  const status = normalizeLowercaseStringOrEmpty((details as { status?: unknown }).status);
-  return TERMINAL_TOOL_RESULT_ERROR_STATUSES.has(status);
+  const record = details as Record<string, unknown>;
+  const status = normalizeLowercaseStringOrEmpty(record.status);
+  const deliveryStatus = normalizeLowercaseStringOrEmpty(record.deliveryStatus);
+  return (
+    record.ok === false ||
+    record.success === false ||
+    TERMINAL_TOOL_RESULT_ERROR_STATUSES.has(status) ||
+    TERMINAL_TOOL_RESULT_ERROR_STATUSES.has(deliveryStatus)
+  );
 }
 
 function resolveTrailingToolResultText(messages: readonly AgentMessage[]): string | null {
@@ -539,7 +546,7 @@ function resolveTrailingToolResultText(messages: readonly AgentMessage[]): strin
     if (isToolResultRole(role)) {
       if (
         (message as { isError?: boolean }).isError === true ||
-        hasTerminalToolResultErrorStatus(message)
+        hasTerminalToolResultFailure(message)
       ) {
         return null;
       }
@@ -1159,6 +1166,9 @@ export function isPlanningOnlyAssistantText(
     return false;
   }
   const classifierText = normalizePlanningOnlyClassifierText(text);
+  if (SINGLE_ACTION_RESULT_STYLE_RE.test(classifierText)) {
+    return false;
+  }
   const hasStructuredPlanningFormat = hasStructuredPlanningOnlyFormat(classifierText);
   const hasProgressClaim = isPlanningOnlyProgressClaim(classifierText);
   const hasShortPlaceholder = PLANNING_ONLY_SHORT_PLACEHOLDER_RE.test(classifierText);

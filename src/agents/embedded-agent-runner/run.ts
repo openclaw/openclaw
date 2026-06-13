@@ -419,7 +419,13 @@ function hasAsyncTaskProgressPlaceholderText(attempt: EmbeddedRunAttemptForRunne
 function buildAssistantTextTerminalPayloads(
   attempt: EmbeddedRunAttemptForRunner,
 ): EmbeddedAgentRunResult["payloads"] | undefined {
-  const texts = attempt.assistantTexts
+  return buildAssistantTextTerminalPayloadsFromTexts(attempt.assistantTexts);
+}
+
+function buildAssistantTextTerminalPayloadsFromTexts(
+  assistantTexts: readonly string[],
+): EmbeddedAgentRunResult["payloads"] | undefined {
+  const texts = assistantTexts
     .map((text) => text.trim())
     .filter((text) => text && !isSilentReplyPayloadText(text, SILENT_REPLY_TOKEN));
   return texts.length ? texts.map((text) => ({ text })) : undefined;
@@ -4156,13 +4162,31 @@ export async function runEmbeddedAgent(
             "end_turn",
             "stop",
           ].includes(finalAssistantStopReasonForTerminalPayloads);
-          const completedAssistantTextTerminalPayloads =
+          const finalAssistantTerminalText = (
+            finalAssistantVisibleText ?? finalAssistantRawText
+          )?.trim();
+          const hasCurrentAttemptToolActivity =
+            currentAttemptToolLoopObservations.length > 0 ||
+            attempt.toolMetas.length > 0 ||
+            (attempt.itemLifecycle?.startedCount ?? 0) > 0 ||
+            (attempt.itemLifecycle?.completedCount ?? 0) > 0 ||
+            (attempt.itemLifecycle?.activeCount ?? 0) > 0;
+          const finalAssistantTextTerminalPayloads =
             !renderedTerminalPayloads &&
             hasCompletedAssistantForTerminalPayloads &&
+            finalAssistantTerminalText &&
+            !hasAsyncTaskProgressPlaceholderText(attempt)
+              ? buildAssistantTextTerminalPayloadsFromTexts([finalAssistantTerminalText])
+              : undefined;
+          const completedAssistantTextTerminalPayloads =
+            finalAssistantTextTerminalPayloads ??
+            (!renderedTerminalPayloads &&
+            hasCompletedAssistantForTerminalPayloads &&
+            !hasCurrentAttemptToolActivity &&
             !isPlanningOnlyAssistantText(attempt.assistantTexts) &&
             !hasAsyncTaskProgressPlaceholderText(attempt)
               ? buildAssistantTextTerminalPayloads(attempt)
-              : undefined;
+              : undefined);
           const asyncTaskTerminalPayloads =
             !completedAssistantTextTerminalPayloads &&
             (!renderedTerminalPayloads || renderedPayloadsArePlanningOnlyText) &&
@@ -4179,7 +4203,8 @@ export async function runEmbeddedAgent(
             !attempt.clientToolCalls?.length &&
             !attempt.yieldDetected &&
             !hasAsyncStartedTerminalProgress(attempt) &&
-            !hasVisibleOutboundDeliveryEvidence(attempt)
+            !hasVisibleOutboundDeliveryEvidence(attempt) &&
+            !hasCurrentAttemptToolActivity
               ? buildAssistantTextTerminalPayloads(attempt)
               : undefined);
           const assistantTextPayloadsArePlanningOnlyText = areTerminalPayloadsPlanningOnlyText(

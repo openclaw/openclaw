@@ -175,6 +175,9 @@ function applyFactoryTerminalResultFallback(
     return result;
   }
   const applyFallback = (tool: AnyAgentTool): AnyAgentTool => {
+    if (tool.terminalResultFallback !== undefined) {
+      return tool;
+    }
     Object.defineProperty(tool, "terminalResultFallback", {
       configurable: true,
       enumerable: true,
