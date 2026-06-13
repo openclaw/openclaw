@@ -38,7 +38,7 @@ describe("Kimi implicit provider (#22409)", () => {
   it("publishes the env vars used by core api-key auto-detection", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 
-    expect(provider.envVars).toEqual(["KIMI_API_KEY", "KIMICODE_API_KEY"]);
+    expect(provider.envVars).toEqual(["KIMI_CODE_API_KEY", "KIMI_API_KEY", "KIMICODE_API_KEY"]);
   });
 
   it("does not publish a provider when no API key is resolved", async () => {

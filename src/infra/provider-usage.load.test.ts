@@ -46,6 +46,12 @@ describe("provider-usage.load", () => {
               displayName: "Codex",
               windows: [{ label: "3h", usedPercent: 12 }],
             };
+          case "kimi":
+            return {
+              provider,
+              displayName: "Kimi",
+              windows: [{ label: "5h", usedPercent: 20 }],
+            };
           case "xiaomi":
             return {
               provider,
@@ -73,6 +79,7 @@ describe("provider-usage.load", () => {
         { provider: "github-copilot", token: "copilot-token" },
         { provider: googleGeminiCliProvider, token: "gemini-token" },
         { provider: "openai", token: "codex-token", accountId: "acc-1" },
+        { provider: "kimi", token: "kimi-token" },
         { provider: "xiaomi", token: "xiaomi-token" },
         { provider: "xiaomi-token-plan", token: "xiaomi-token-plan-token" },
       ],
@@ -83,6 +90,7 @@ describe("provider-usage.load", () => {
       "github-copilot",
       googleGeminiCliProvider,
       "openai",
+      "kimi",
       "xiaomi",
       "xiaomi-token-plan",
     ]);
@@ -96,6 +104,9 @@ describe("provider-usage.load", () => {
     expect(
       summary.providers.find((provider) => provider.provider === "openai")?.windows[0]?.label,
     ).toBe("3h");
+    expect(summary.providers.find((provider) => provider.provider === "kimi")?.windows).toEqual([
+      { label: "5h", usedPercent: 20 },
+    ]);
     expect(summary.providers.find((provider) => provider.provider === "xiaomi")?.windows).toEqual(
       [],
     );

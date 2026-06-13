@@ -302,7 +302,7 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 | Groq                                    | `groq`                           | `GROQ_API_KEY`                                               | -                                                          |
 | Hugging Face Inference                  | `huggingface`                    | `HUGGINGFACE_HUB_TOKEN` or `HF_TOKEN`                        | `huggingface/deepseek-ai/DeepSeek-R1`                      |
 | Kilo Gateway                            | `kilocode`                       | `KILOCODE_API_KEY`                                           | `kilocode/kilo/auto`                                       |
-| Kimi Coding                             | `kimi`                           | `KIMI_API_KEY` or `KIMICODE_API_KEY`                         | `kimi/kimi-for-coding`                                     |
+| Kimi Coding                             | `kimi`                           | `KIMI_CODE_API_KEY`, `KIMI_API_KEY`, or `KIMICODE_API_KEY`   | `kimi/kimi-for-coding`                                     |
 | MiniMax                                 | `minimax` / `minimax-portal`     | `MINIMAX_API_KEY` / `MINIMAX_OAUTH_TOKEN`                    | `minimax/MiniMax-M3`                                       |
 | Mistral                                 | `mistral`                        | `MISTRAL_API_KEY`                                            | `mistral/mistral-large-latest`                             |
 | Moonshot                                | `moonshot`                       | `MOONSHOT_API_KEY`                                           | `moonshot/kimi-k2.6`                                       |
@@ -400,12 +400,12 @@ Kimi K2 model IDs:
 Kimi Coding uses Moonshot AI's Anthropic-compatible endpoint:
 
 - Provider: `kimi`
-- Auth: `KIMI_API_KEY`
+- Auth: `KIMI_CODE_API_KEY`, `KIMI_API_KEY`, or `KIMICODE_API_KEY`
 - Example model: `kimi/kimi-for-coding`
 
 ```json5
 {
-  env: { KIMI_API_KEY: "sk-..." },
+  env: { KIMI_CODE_API_KEY: "sk-..." },
   agents: {
     defaults: { model: { primary: "kimi/kimi-for-coding" } },
   },

@@ -9,6 +9,7 @@ const envKeys = [
   "GOOGLE_APPLICATION_CREDENTIALS",
   "GOOGLE_CLOUD_LOCATION",
   "GOOGLE_CLOUD_PROJECT",
+  "KIMI_CODE_API_KEY",
   "KIMI_API_KEY",
   "KIMICODE_API_KEY",
   "MOONSHOT_API_KEY",
@@ -60,6 +61,7 @@ describe("getEnvApiKey", () => {
     await withEnvAsync(
       {
         MOONSHOT_API_KEY: "moonshot-key",
+        KIMI_CODE_API_KEY: "kimi-code-key",
         KIMI_API_KEY: "kimi-key",
         KIMICODE_API_KEY: "kimicode-key",
       },
@@ -69,10 +71,18 @@ describe("getEnvApiKey", () => {
 
         expect(findEnvKeys("moonshot")).toEqual(["MOONSHOT_API_KEY", "KIMI_API_KEY"]);
         expect(getEnvApiKey("moonshot")).toBe("moonshot-key");
-        expect(findEnvKeys("kimi")).toEqual(["KIMI_API_KEY", "KIMICODE_API_KEY"]);
-        expect(getEnvApiKey("kimi")).toBe("kimi-key");
-        expect(findEnvKeys("kimi-coding")).toEqual(["KIMI_API_KEY", "KIMICODE_API_KEY"]);
-        expect(getEnvApiKey("kimi-coding")).toBe("kimi-key");
+        expect(findEnvKeys("kimi")).toEqual([
+          "KIMI_CODE_API_KEY",
+          "KIMI_API_KEY",
+          "KIMICODE_API_KEY",
+        ]);
+        expect(getEnvApiKey("kimi")).toBe("kimi-code-key");
+        expect(findEnvKeys("kimi-coding")).toEqual([
+          "KIMI_CODE_API_KEY",
+          "KIMI_API_KEY",
+          "KIMICODE_API_KEY",
+        ]);
+        expect(getEnvApiKey("kimi-coding")).toBe("kimi-code-key");
       },
     );
   });

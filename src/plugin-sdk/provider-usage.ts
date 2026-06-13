@@ -11,6 +11,7 @@ export {
   fetchCodexUsage,
   fetchDeepSeekUsage,
   fetchGeminiUsage,
+  fetchKimiUsage,
   fetchMinimaxUsage,
   fetchZaiUsage,
 } from "../infra/provider-usage.fetch.js";
