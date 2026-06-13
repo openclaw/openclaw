@@ -56,22 +56,16 @@ prepare_gates() {
   if [ -n "$unsupported_changelog_fragments" ]; then
     echo "Unsupported changelog fragment files detected:"
     printf '%s\n' "$unsupported_changelog_fragments"
-    echo "Move changelog fragment content into CHANGELOG.md and remove changelog/fragments files."
+    echo "Remove changelog/fragments files. OpenClaw changelog edits are release-managed only."
     exit 1
   fi
 
   if [ "$has_changelog_update" = "true" ]; then
-    normalize_pr_changelog_entries "$pr"
-    validate_changelog_attribution_policy
+    echo "CHANGELOG.md changes are release-managed only. Remove CHANGELOG.md from this PR unless this is an explicit release/changelog task."
+    exit 1
   fi
 
-  if [ "$changelog_required" = "true" ]; then
-    local contrib="${PR_AUTHOR:-}"
-    validate_changelog_merge_hygiene
-    validate_changelog_entry_for_pr "$pr" "$contrib"
-  else
-    echo "Changelog not required for this changed-file set."
-  fi
+  echo "Changelog not required for this changed-file set."
 
   local current_head
   current_head=$(git rev-parse HEAD)
@@ -96,7 +90,7 @@ prepare_gates() {
 
   if [ "$reuse_gates" = "true" ]; then
     gates_mode="reused_docs_only"
-    echo "Docs/changelog-only delta since last verified head $previous_last_verified_head; reusing prior gates."
+    echo "Docs-only delta since last verified head $previous_last_verified_head; reusing prior gates."
   else
     run_quiet_logged "pnpm build" ".local/gates-build.log" pnpm build
     run_quiet_logged "pnpm check" ".local/gates-check.log" pnpm check

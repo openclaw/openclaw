@@ -58,8 +58,6 @@ source "$script_parent_dir/pr-lib/worktree.sh"
 # shellcheck disable=SC1091
 source "$script_parent_dir/pr-lib/common.sh"
 # shellcheck disable=SC1091
-source "$script_parent_dir/pr-lib/changelog.sh"
-# shellcheck disable=SC1091
 source "$script_parent_dir/pr-lib/gates.sh"
 # shellcheck disable=SC1091
 source "$script_parent_dir/pr-lib/push.sh"
