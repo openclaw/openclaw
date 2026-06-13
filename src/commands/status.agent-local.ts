@@ -8,7 +8,6 @@ import { readSessionStoreReadOnly } from "../config/sessions/store-read.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
 import { pathExists } from "../infra/fs-safe.js";
-import { ensureSessionStateMigratedForCommand } from "./session-state-migration.js";
 
 export type AgentLocalStatus = {
   id: string;
@@ -32,7 +31,6 @@ type AgentLocalStatusesResult = {
 export async function getAgentLocalStatuses(
   cfg: OpenClawConfig,
 ): Promise<AgentLocalStatusesResult> {
-  await ensureSessionStateMigratedForCommand(cfg);
   const agentList = listGatewayAgentsBasic(cfg);
   const now = Date.now();
 

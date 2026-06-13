@@ -523,10 +523,12 @@ describe("dispatchTelegramMessage draft streaming", () => {
     telegramDeps?: TelegramBotDeps;
     bot?: Bot;
     replyToMode?: Parameters<typeof dispatchTelegramMessage>[0]["replyToMode"];
+    retryDispatchErrors?: boolean;
+    suppressFailureFallback?: boolean;
     textLimit?: number;
   }) {
     const bot = params.bot ?? createBot();
-    await dispatchTelegramMessage({
+    return await dispatchTelegramMessage({
       context: params.context,
       bot,
       cfg: params.cfg ?? {},
@@ -537,6 +539,8 @@ describe("dispatchTelegramMessage draft streaming", () => {
       telegramCfg: params.telegramCfg ?? {},
       telegramDeps: params.telegramDeps ?? telegramDepsForTest,
       opts: { token: "token" },
+      retryDispatchErrors: params.retryDispatchErrors,
+      suppressFailureFallback: params.suppressFailureFallback,
     });
   }
 
@@ -1325,6 +1329,66 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     expect(createTelegramDraftStream).toHaveBeenCalled();
     expect(draftStream.update).toHaveBeenCalledWith("HelloWorld");
+  });
+
+  it("sizes block-mode preview chunks from streaming.preview.chunk", async () => {
+    const draftStream = createDraftStream();
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onPartialReply?.({ text: "Hello" });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "block",
+      cfg: {
+        channels: {
+          telegram: { streaming: { preview: { chunk: { minChars: 100, maxChars: 600 } } } },
+        },
+      },
+      telegramCfg: { streaming: { mode: "block" } },
+    });
+
+    expectDraftStreamParams({ maxChars: 600 });
+  });
+
+  it("uses the shared block chunk default when block mode has no chunk config", async () => {
+    const draftStream = createDraftStream();
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onPartialReply?.({ text: "Hello" });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "block",
+      telegramCfg: { streaming: { mode: "block" } },
+    });
+
+    expectDraftStreamParams({ maxChars: 800 });
+  });
+
+  it("keeps the Telegram edit cap for non-block previews regardless of chunk config", async () => {
+    const draftStream = createDraftStream();
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onPartialReply?.({ text: "Hello" });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      cfg: {
+        channels: {
+          telegram: { streaming: { preview: { chunk: { maxChars: 600 } } } },
+        },
+      },
+      telegramCfg: { streaming: { mode: "partial" } },
+    });
+
+    expectDraftStreamParams({ maxChars: 4096 });
   });
 
   it("streams text-only finals into the answer message", async () => {
@@ -2339,6 +2403,42 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(firstPartialUpdateOrder).toBeLessThan(rotationOrder);
     expect(rotationOrder).toBeLessThan(nextPartialUpdateOrder);
     expect(deliverReplies).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns retryable when spooled replay suppresses fallback after non-silent delivery skip", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      dispatcherOptions.onSkip?.({ text: "final answer" }, { kind: "final", reason: "empty" });
+      return { queuedFinal: false };
+    });
+
+    const result = await dispatchWithContext({
+      context: createContext(),
+      retryDispatchErrors: true,
+      suppressFailureFallback: true,
+    });
+
+    expect(result).toMatchObject({ kind: "failed-retryable" });
+    expect((result as { error?: unknown }).error).toBeInstanceOf(Error);
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("does not return retryable after spooled replay already showed visible output", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "partial answer" }, { kind: "block" });
+      dispatcherOptions.onSkip?.({ text: "final answer" }, { kind: "final", reason: "empty" });
+      return { queuedFinal: false };
+    });
+
+    const result = await dispatchWithContext({
+      context: createContext(),
+      retryDispatchErrors: true,
+      suppressFailureFallback: true,
+    });
+
+    expect(result).toEqual({ kind: "completed" });
+    expect(answerDraftStream.update).toHaveBeenCalledWith("partial answer");
+    expect(deliverReplies).not.toHaveBeenCalled();
   });
 
   it("keeps tool progress visible after a partial-streamed intermediate block", async () => {

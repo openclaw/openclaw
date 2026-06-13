@@ -180,6 +180,15 @@ describe("scripts/run-vitest", () => {
     ]);
   });
 
+  it("routes explicit Docker helper tests through the Docker tooling config", () => {
+    expect(resolveImplicitVitestArgs(["run", "test/scripts/docker-build-helper.test.ts"])).toEqual([
+      "run",
+      "--config",
+      "test/vitest/vitest.tooling-docker.config.ts",
+      "test/scripts/docker-build-helper.test.ts",
+    ]);
+  });
+
   it("keeps tooling-excluded explicit tests on existing routing", () => {
     const argv = ["run", "test/scripts/openclaw-e2e-instance.test.ts"];
     expect(resolveImplicitVitestArgs(argv)).toBe(argv);

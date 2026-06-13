@@ -1,11 +1,20 @@
 // Channel plugin catalog tests cover plugin catalog entries and metadata normalization.
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { PluginChannelCatalogEntry } from "../../plugins/channel-catalog-registry.js";
+
+const listChannelCatalogEntriesMock = vi.hoisted(() =>
+  vi.fn<() => PluginChannelCatalogEntry[]>(() => []),
+);
 
 vi.mock("../../plugins/channel-catalog-registry.js", () => ({
-  listChannelCatalogEntries: () => [],
+  listChannelCatalogEntries: listChannelCatalogEntriesMock,
 }));
 
 import { getChannelPluginCatalogEntry } from "./catalog.js";
+
+beforeEach(() => {
+  listChannelCatalogEntriesMock.mockReset().mockReturnValue([]);
+});
 
 describe("channel plugin catalog", () => {
   it("keeps third-party channel ids mapped with catalog install trust", () => {
@@ -25,5 +34,44 @@ describe("channel plugin catalog", () => {
     expect(yuanbao?.pluginId).toBe("openclaw-plugin-yuanbao");
     expect(yuanbao?.trustedSourceLinkedOfficialInstall).toBe(true);
     expect(yuanbao?.install?.npmSpec).toBe("openclaw-plugin-yuanbao@2.13.1");
+  });
+
+  it("excludes only the rejected origin/plugin pair when resolving fallback copies", () => {
+    listChannelCatalogEntriesMock.mockReturnValue([
+      {
+        pluginId: "telegram",
+        origin: "config",
+        rootDir: "/tmp/config-telegram",
+        packageName: "telegram-shadow",
+        channel: {
+          id: "telegram",
+          label: "Telegram Shadow",
+          selectionLabel: "Telegram Shadow",
+          docsPath: "/channels/telegram",
+          blurb: "shadow",
+        },
+        install: { localPath: "/tmp/config-telegram" },
+      },
+      {
+        pluginId: "telegram",
+        origin: "bundled",
+        rootDir: "/tmp/bundled-telegram",
+        packageName: "@openclaw/telegram",
+        channel: {
+          id: "telegram",
+          label: "Telegram",
+          selectionLabel: "Telegram",
+          docsPath: "/channels/telegram",
+          blurb: "bundled",
+        },
+        install: { npmSpec: "@openclaw/telegram@1.0.0" },
+      },
+    ] satisfies PluginChannelCatalogEntry[]);
+
+    expect(
+      getChannelPluginCatalogEntry("telegram", {
+        excludePluginRefs: [{ pluginId: "telegram", origin: "config" }],
+      })?.origin,
+    ).toBe("bundled");
   });
 });

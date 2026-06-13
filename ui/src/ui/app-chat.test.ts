@@ -1076,7 +1076,7 @@ describe("refreshChat", () => {
     }
   });
 
-  it("uses startup metadata without scheduling a chat.metadata follow-up", async () => {
+  it("uses startup metadata without scheduling command or metadata follow-ups", async () => {
     const { resetSlashCommandsForTest } = await import("./chat/slash-commands.ts");
     resetSlashCommandsForTest();
     const previousFetch = globalThis.fetch;
@@ -1110,11 +1110,7 @@ describe("refreshChat", () => {
       });
       expect(request).not.toHaveBeenCalledWith("chat.metadata", expect.anything());
       expect(request).not.toHaveBeenCalledWith("models.list", expect.anything());
-      expect(request).toHaveBeenCalledWith("commands.list", {
-        agentId: "main",
-        includeArgs: true,
-        scope: "text",
-      });
+      expect(request).not.toHaveBeenCalledWith("commands.list", expect.anything());
       expect(host.chatModelCatalog).toEqual([
         { id: "gpt-fast", name: "GPT Fast", provider: "openai" },
       ]);

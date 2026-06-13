@@ -277,6 +277,7 @@ import {
   resolveEmbeddedAgentStreamFn,
 } from "../stream-resolution.js";
 import { applySystemPromptToSession } from "../system-prompt.js";
+import { repairRejectedThinkingReplayInSessionManager } from "../thinking-replay-repair.js";
 import {
   dropReasoningFromHistory,
   dropThinkingBlocks,
@@ -1808,6 +1809,7 @@ export async function runEmbeddedAttempt(
         defaultModel: defaultModelLabel,
         shell: detectRuntimeShell(),
         channel: runtimeChannel,
+        chatType: params.chatType,
         capabilities: runtimeCapabilities,
         channelActions,
         activeProcessSessions,
@@ -1989,6 +1991,7 @@ export async function runEmbeddedAttempt(
     let trajectoryEndRecorded = false;
     let buildAbortSettlePromise: () => Promise<void> | null = () => null;
     let cleanupYieldAborted = false;
+    let repairedRejectedThinkingReplay = false;
     try {
       await repairSessionFileIfNeeded({
         sessionFile: params.sessionFile,
@@ -2637,6 +2640,20 @@ export async function runEmbeddedAttempt(
           transformSystemPrompt: false,
         });
       }
+      const nativeWebSearchPolicyContext = {
+        sessionKey: sandboxSessionKey,
+        sandboxToolPolicy: sandbox?.tools,
+        messageProvider: resolveAttemptToolPolicyMessageProvider(params),
+        agentAccountId: params.agentAccountId,
+        groupId: params.groupId,
+        groupChannel: params.groupChannel,
+        groupSpace: params.groupSpace,
+        spawnedBy: params.spawnedBy,
+        senderId: params.senderId,
+        senderName: params.senderName,
+        senderUsername: params.senderUsername,
+        senderE164: params.senderE164,
+      };
 
       applyExtraParamsToAgent(
         activeSession.agent,
@@ -2650,7 +2667,10 @@ export async function runEmbeddedAttempt(
         params.model,
         agentDir,
         resolvedTransport,
-        { preparedExtraParams: effectiveExtraParams },
+        {
+          preparedExtraParams: effectiveExtraParams,
+          nativeWebSearchPolicyContext,
+        },
       );
       if (codeModeControlsEnabledForRun) {
         activeSession.agent.streamFn = createCodexNativeWebSearchWrapper(
@@ -2658,6 +2678,8 @@ export async function runEmbeddedAttempt(
           {
             config: params.config,
             agentDir,
+            agentId: sessionAgentId,
+            ...nativeWebSearchPolicyContext,
             codeModeToolSurfaceEnabled: true,
           },
         );
@@ -2724,6 +2746,30 @@ export async function runEmbeddedAttempt(
           activeSession.agent.streamFn,
           {
             id: activeSession.sessionId,
+            onRecoveredAnthropicThinking: () => {
+              if (!sessionManager) {
+                log.warn(
+                  `[session-recovery] unable to repair rejected thinking replay: session manager unavailable sessionId=${activeSession.sessionId}`,
+                );
+                return;
+              }
+              const repair = repairRejectedThinkingReplayInSessionManager({
+                sessionManager,
+                sessionFile: params.sessionFile,
+                sessionId: params.sessionId,
+                sessionKey: params.sessionKey,
+                agentId: sessionAgentId,
+              });
+              if (repair.repaired) {
+                repairedRejectedThinkingReplay = true;
+                sessionLockController.refreshAfterOwnedSessionWrite();
+                return;
+              }
+              log.warn(
+                `[session-recovery] rejected thinking replay retry succeeded but transcript repair made no changes: ` +
+                  `sessionId=${activeSession.sessionId} reason=${repair.reason ?? "unknown"}`,
+              );
+            },
           },
         );
       }
@@ -2748,6 +2794,7 @@ export async function runEmbeddedAttempt(
               mode,
               allowedToolNames: replayAllowedToolNames,
               preserveNativeAnthropicToolUseIds: transcriptPolicy.preserveNativeAnthropicToolUseIds,
+              duplicateToolCallIdStyle: transcriptPolicy.duplicateToolCallIdStyle,
               preserveReplaySafeThinkingToolCallIds: shouldAllowProviderOwnedThinkingReplay({
                 modelApi: (model as { api?: unknown })?.api as string | null | undefined,
                 provider: params.provider,
@@ -3263,6 +3310,7 @@ export async function runEmbeddedAttempt(
           shouldEmitToolResult: params.shouldEmitToolResult,
           shouldEmitToolOutput: params.shouldEmitToolOutput,
           sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+          hasDeliveredMessageToolOnlySourceReply: () => didDeliverSourceReplyViaMessageTool,
           onToolResult: params.onToolResult,
           onReasoningStream: params.onReasoningStream,
           onReasoningEnd: params.onReasoningEnd,
@@ -3308,6 +3356,7 @@ export async function runEmbeddedAttempt(
 
       const {
         assistantTexts,
+        getLastAssistantTextMessageIndex,
         toolMetas,
         getAcceptedSessionSpawns,
         runToolLifecycle,
@@ -4516,6 +4565,9 @@ export async function runEmbeddedAttempt(
 
         await sessionLockController.waitForSessionEvents(activeSession);
         await waitForPendingEvents();
+        if (repairedRejectedThinkingReplay) {
+          activeSession.agent.state.messages = activeSessionManager.buildSessionContext().messages;
+        }
         await sessionLockController.releaseForPrompt();
 
         if (
@@ -5227,6 +5279,7 @@ export async function runEmbeddedAttempt(
         messagesSnapshot,
         ...(beforeAgentFinalizeRevisionReason ? { beforeAgentFinalizeRevisionReason } : {}),
         assistantTexts,
+        lastAssistantTextMessageIndex: getLastAssistantTextMessageIndex(),
         toolMetas: toolMetasNormalized,
         acceptedSessionSpawns,
         lastAssistant,

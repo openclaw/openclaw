@@ -145,6 +145,39 @@ describe("ModelRegistry models.json auth", () => {
     expect(registry.find("zai", "glm-5.1")?.name).toBe("GLM 5.1");
   });
 
+  it("preserves model params from generated plugin catalog shards", () => {
+    const modelsPath = writeModelsJsonWithPluginCatalog({
+      root: { providers: {} },
+      pluginRelativePath: join("plugins", "amazon-bedrock", PLUGIN_MODEL_CATALOG_FILE),
+      pluginCatalog: {
+        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+        providers: {
+          "amazon-bedrock": {
+            baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+            api: "bedrock-converse-stream",
+            auth: "aws-sdk",
+            models: [
+              {
+                id: "company-fable",
+                name: "Company Fable",
+                params: { canonicalModelId: "claude-fable-5" },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    const registry = ModelRegistry.create(AuthStorage.inMemory(), modelsPath, {
+      pluginMetadataSnapshot: pluginOwnerSnapshot("amazon-bedrock", "amazon-bedrock"),
+    });
+
+    expect(registry.getError()).toBeUndefined();
+    expect(registry.find("amazon-bedrock", "company-fable")?.params).toEqual({
+      canonicalModelId: "claude-fable-5",
+    });
+  });
+
   it("ignores non-generated plugin catalog files", () => {
     // Plugin catalog shards are codegen artifacts; hand-written lookalikes must
     // not extend the provider registry.

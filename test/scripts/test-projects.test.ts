@@ -215,6 +215,14 @@ describe("scripts/test-projects changed-target routing", () => {
     ).toEqual(["src/utils/provider-utils.test.ts"]);
   });
 
+  it("skips deleted direct test files in changed mode", () => {
+    expect(
+      resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [
+        "test/deleted-changed-target.test.ts",
+      ]),
+    ).toStrictEqual([]);
+  });
+
   it("records broad fallback paths skipped by focused changed mode", () => {
     expect(
       resolveChangedTestTargetPlan([
@@ -828,10 +836,15 @@ describe("scripts/test-projects changed-target routing", () => {
     expect(findUnmatchedExplicitTestTargets(targets)).toEqual([]);
     expect(buildVitestRunPlans(targets, process.cwd())).toEqual([
       {
+        config: "test/vitest/vitest.tooling-docker.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["test/scripts/docker-build-helper.test.ts"],
+        watchMode: false,
+      },
+      {
         config: "test/vitest/vitest.tooling.config.ts",
         forwardedArgs: [],
         includePatterns: [
-          "test/scripts/docker-build-helper.test.ts",
           "test/scripts/plugin-prerelease-test-plan.test.ts",
           "test/scripts/kitchen-sink-rpc-walk.test.ts",
           "test/scripts/openclaw-test-state.test.ts",
@@ -904,6 +917,12 @@ describe("scripts/test-projects changed-target routing", () => {
   it("includes the isolated tooling shard for broad shell helper targets", () => {
     expect(buildVitestRunPlans(["test/scripts"], process.cwd())).toEqual([
       {
+        config: "test/vitest/vitest.tooling-docker.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["test/scripts/docker-build-helper.test.ts"],
+        watchMode: false,
+      },
+      {
         config: "test/vitest/vitest.tooling-isolated.config.ts",
         forwardedArgs: [],
         includePatterns: ["test/scripts/openclaw-e2e-instance.test.ts"],
@@ -920,6 +939,12 @@ describe("scripts/test-projects changed-target routing", () => {
 
   it("includes the isolated tooling shard for broad shell helper globs", () => {
     expect(buildVitestRunPlans(["test/scripts/*.test.ts"], process.cwd())).toEqual([
+      {
+        config: "test/vitest/vitest.tooling-docker.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["test/scripts/docker-build-helper.test.ts"],
+        watchMode: false,
+      },
       {
         config: "test/vitest/vitest.tooling-isolated.config.ts",
         forwardedArgs: [],
@@ -2133,6 +2158,7 @@ describe("scripts/test-projects full-suite sharding", () => {
         "test/vitest/vitest.full-core-unit-ui.config.ts",
         "test/vitest/vitest.full-core-unit-support.config.ts",
         "test/vitest/vitest.full-core-support-boundary.config.ts",
+        "test/vitest/vitest.full-core-tooling.config.ts",
         "test/vitest/vitest.full-core-contracts.config.ts",
         "test/vitest/vitest.full-core-bundled.config.ts",
         "test/vitest/vitest.full-core-runtime.config.ts",
@@ -2262,6 +2288,7 @@ describe("scripts/test-projects full-suite sharding", () => {
       "test/vitest/vitest.unit-support.config.ts",
       "test/vitest/vitest.boundary.config.ts",
       "test/vitest/vitest.tooling.config.ts",
+      "test/vitest/vitest.tooling-docker.config.ts",
       "test/vitest/vitest.tooling-isolated.config.ts",
       "test/vitest/vitest.contracts-channel-surface.config.ts",
       "test/vitest/vitest.contracts-channel-config.config.ts",

@@ -4,24 +4,15 @@ import os from "node:os";
 import path from "node:path";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { WhatsAppSendResult } from "../inbound/send-result.js";
+import { createTestWebInboundMessage } from "../inbound/test-message.test-helper.js";
+import type { WebInboundMessage } from "../inbound/types.js";
 import { buildMentionConfig } from "./mentions.js";
 import { applyGroupGating, type GroupHistoryEntry } from "./monitor/group-gating.js";
 import { formatWhatsAppInboundListeningLog } from "./monitor/listener-log.js";
 import { buildInboundLine, formatReplyContext } from "./monitor/message-line.js";
-import type { WebInboundMsg } from "./types.js";
 
 let sessionDir: string | undefined;
 let sessionStorePath: string;
-
-function acceptedSendResult(kind: "media" | "text", id: string): WhatsAppSendResult {
-  return {
-    kind,
-    messageId: id,
-    keys: [{ id }],
-    providerAccepted: true,
-  };
-}
 
 beforeEach(async () => {
   sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-group-gating-"));
@@ -50,7 +41,7 @@ const makeConfig = (overrides: Record<string, unknown>) =>
 
 async function runGroupGating(params: {
   cfg: import("openclaw/plugin-sdk/config-contracts").OpenClawConfig;
-  msg: WebInboundMsg;
+  msg: WebInboundMessage;
   conversationId?: string;
   agentId?: string;
   selfChatMode?: boolean;
@@ -81,23 +72,80 @@ async function runGroupGating(params: {
   return { result, groupHistories, verboseLogs };
 }
 
-function createGroupMessage(overrides: Partial<WebInboundMsg> = {}): WebInboundMsg {
-  return {
-    id: "g1",
-    from: "123@g.us",
-    conversationId: "123@g.us",
-    chatId: "123@g.us",
+type TestMessageOverrides = {
+  accountId?: string;
+  body?: string;
+  conversationId?: string;
+  from?: string;
+  id?: string;
+  mentionedJids?: string[];
+  replyToBody?: string;
+  replyToId?: string;
+  replyToSender?: string;
+  replyToSenderE164?: string;
+  replyToSenderJid?: string;
+  selfE164?: string;
+  selfJid?: string;
+  senderE164?: string;
+  senderJid?: string;
+  senderName?: string;
+  timestamp?: number;
+  to?: string;
+};
+
+function createGroupMessage(overrides: TestMessageOverrides = {}): WebInboundMessage {
+  return createTestWebInboundMessage({
+    event: {
+      id: overrides.id ?? "g1",
+      timestamp: overrides.timestamp,
+    },
+    payload: {
+      body: overrides.body ?? "hello group",
+    },
+    platform: {
+      chatJid: "123@g.us",
+      recipientJid: overrides.to ?? "+2",
+      senderE164: overrides.senderE164 ?? "+111",
+      senderJid: overrides.senderJid,
+      senderName: overrides.senderName ?? "Alice",
+      selfE164: overrides.selfE164 ?? "+999",
+      selfJid: overrides.selfJid,
+    },
+    from: overrides.from ?? "123@g.us",
+    conversationId: overrides.conversationId ?? overrides.from ?? "123@g.us",
     chatType: "group",
-    to: "+2",
-    accountId: "default",
-    body: "hello group",
-    senderE164: "+111",
-    senderName: "Alice",
-    selfE164: "+999",
-    sendComposing: async () => {},
-    reply: async (_text, _options) => acceptedSendResult("text", "r1"),
-    sendMedia: async (_payload, _options) => acceptedSendResult("media", "m1"),
-    ...overrides,
+    accountId: overrides.accountId ?? "default",
+    quote: overrides.replyToBody
+      ? {
+          id: overrides.replyToId,
+          body: overrides.replyToBody,
+          sender: {
+            displayName: overrides.replyToSender,
+            jid: overrides.replyToSenderJid,
+            e164: overrides.replyToSenderE164,
+          },
+        }
+      : undefined,
+    group: {
+      mentions: {
+        jids: overrides.mentionedJids,
+      },
+    },
+  });
+}
+
+function createDirectMessage(overrides: TestMessageOverrides = {}): WebInboundMessage {
+  const msg = createGroupMessage(overrides);
+  return {
+    ...msg,
+    from: overrides.from ?? "+1555",
+    conversationId: overrides.conversationId ?? overrides.from ?? "+1555",
+    chatType: "direct",
+    group: undefined,
+    platform: {
+      ...msg.platform,
+      chatJid: overrides.from ?? "+1555",
+    },
   };
 }
 
@@ -657,7 +705,6 @@ describe("buildInboundLine", () => {
       cfg: makeInboundCfg(""),
       agentId: "main",
       msg: createGroupMessage({
-        to: "+15550009999",
         accountId: "default",
         body: "ping",
         timestamp: 1700000000000,
@@ -675,15 +722,13 @@ describe("buildInboundLine", () => {
     const line = buildInboundLine({
       cfg: makeInboundCfg(""),
       agentId: "main",
-      msg: {
+      msg: createDirectMessage({
         from: "+1555",
-        to: "+1555",
         body: "hello",
-        chatType: "direct",
         replyToId: "q1",
         replyToBody: "original",
         replyToSender: "+1999",
-      } as never,
+      }),
       envelope: { includeTimestamp: false },
     });
 
@@ -696,12 +741,11 @@ describe("buildInboundLine", () => {
     const line = buildInboundLine({
       cfg: makeInboundCfg("[PFX]"),
       agentId: "main",
-      msg: {
+      msg: createDirectMessage({
         from: "+1555",
-        to: "+2666",
         body: "ping",
-        chatType: "direct",
-      } as never,
+        to: "+2666",
+      }),
       envelope: { includeTimestamp: false },
     });
 
@@ -712,12 +756,11 @@ describe("buildInboundLine", () => {
     const line = buildInboundLine({
       cfg: makeInboundCfg(""),
       agentId: "main",
-      msg: {
+      msg: createDirectMessage({
         from: "whatsapp:+15550001111",
-        to: "+2666",
         body: "ping",
-        chatType: "direct",
-      } as never,
+        to: "+2666",
+      }),
       envelope: { includeTimestamp: false },
     });
 
@@ -733,9 +776,11 @@ describe("formatReplyContext", () => {
 
   it("uses unknown sender label when reply sender is absent", () => {
     expect(
-      formatReplyContext({
-        replyToBody: "original",
-      } as never),
+      formatReplyContext(
+        createDirectMessage({
+          replyToBody: "original",
+        }),
+      ),
     ).toBe("[Replying to unknown sender]\noriginal\n[/Replying]");
   });
 });

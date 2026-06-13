@@ -10,6 +10,7 @@ import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-event
 import { detectErrorKind, type ErrorKind } from "../infra/errors.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import { isAcpSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
+import { resolveAssistantEventPhase } from "../shared/chat-message-content.js";
 import { setSafeTimeout } from "../utils/timer-delay.js";
 import {
   normalizeLiveAssistantEventText,
@@ -132,6 +133,19 @@ function shouldHideHeartbeatChatOutput(runId: string, sourceRunId?: string): boo
 
 function shouldSuppressHeartbeatToolEvents(runId: string, sourceRunId?: string): boolean {
   return Boolean(resolveHeartbeatContext(runId, sourceRunId)?.isHeartbeat);
+}
+
+function shouldMirrorAssistantEventToHiddenSessionMessages(data: unknown): boolean {
+  if (!data || typeof data !== "object") {
+    return false;
+  }
+  const record = data as { text?: unknown; delta?: unknown };
+  const hasText = typeof record.text === "string" && record.text.length > 0;
+  const hasDelta = typeof record.delta === "string" && record.delta.length > 0;
+  if (!hasText && !hasDelta) {
+    return false;
+  }
+  return resolveAssistantEventPhase(data) === "commentary";
 }
 
 function normalizeHeartbeatChatFinalText(params: {
@@ -470,9 +484,7 @@ export function createAgentEventHandler({
         receivedToPhaseMs: roundedChatSendTimingMs(nowMs - timing.receivedAtMs),
         ...(timing.dispatchStartedAtMs !== undefined
           ? {
-              dispatchStartedToPhaseMs: roundedChatSendTimingMs(
-                nowMs - timing.dispatchStartedAtMs,
-              ),
+              dispatchStartedToPhaseMs: roundedChatSendTimingMs(nowMs - timing.dispatchStartedAtMs),
             }
           : {}),
       },
@@ -1189,6 +1201,18 @@ export function createAgentEventHandler({
             );
           }
         }
+      } else if (
+        !isAborted &&
+        sessionKey &&
+        hasSessionMessageSubscribers &&
+        evt.stream === "assistant" &&
+        shouldMirrorAssistantEventToHiddenSessionMessages(evt.data)
+      ) {
+        sendAgentPayload(
+          sessionKey,
+          { ...agentPayload, ...buildSessionEventSnapshot(sessionKey, undefined, sessionAgentId) },
+          { agentId: sessionAgentId, controlUiVisible: false, dropIfSlow: true },
+        );
       }
     }
 
@@ -1234,7 +1258,11 @@ export function createAgentEventHandler({
     if (lifecyclePhase === "error") {
       clearBufferedChatState(clientRunId);
       const skipChatErrorFinal = isChatSendRunActive(evt.runId) && !chatLink;
-      if (isAborted || lifecycleErrorRetryGraceMs <= 0) {
+      const isFallbackExhaustedFailure = evt.data?.fallbackExhaustedFailure === true;
+      // Per-attempt provider errors keep the retry grace so fallback can reuse
+      // the runId. Once the runner marks fallback as exhausted, clear chat state
+      // immediately so webchat sessions do not stay in progress until the timer.
+      if (isAborted || isFallbackExhaustedFailure || lifecycleErrorRetryGraceMs <= 0) {
         finalizeLifecycleEvent(evt, { skipChatErrorFinal });
       } else {
         scheduleTerminalLifecycleError(evt, { skipChatErrorFinal });

@@ -9,6 +9,7 @@ import type {
   ChannelStatusIssue,
 } from "./channel-contract.js";
 import type { ChannelPlugin } from "./channel-core.js";
+import type { MessageReceipt } from "./channel-outbound.js";
 import type { OpenClawConfig } from "./config-types.js";
 import {
   createLazyFacadeObjectValue,
@@ -67,7 +68,7 @@ export type DiscordComponentBuildResult = {
 
 /** Send/edit options for Discord component messages. */
 export type DiscordComponentSendOpts = {
-  cfg?: OpenClawConfig;
+  cfg: OpenClawConfig;
   accountId?: string;
   replyTo?: string;
   files?: unknown;
@@ -80,11 +81,11 @@ export type DiscordComponentSendOpts = {
   [key: string]: unknown;
 };
 
-/** Minimal Discord API message result returned by component send/edit helpers. */
+/** Normalized Discord message result returned by component send/edit helpers. */
 export type DiscordComponentSendResult = {
-  id?: string;
-  channel_id?: string;
-  [key: string]: unknown;
+  messageId: string;
+  channelId: string;
+  receipt: MessageReceipt;
 };
 
 /** Resolved Discord account with token source metadata for status and runtime checks. */

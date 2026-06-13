@@ -596,6 +596,7 @@ function tryFinalizeTrackedAgentTask(params: {
   status: GatewayAgentTaskTerminalStatus;
   error?: string;
   terminalSummary?: string;
+  log: Pick<GatewayRequestContext["logGateway"], "warn">;
 }): void {
   try {
     finalizeTaskRunByRunId({
@@ -606,8 +607,10 @@ function tryFinalizeTrackedAgentTask(params: {
       ...(params.error !== undefined ? { error: params.error } : {}),
       ...(params.terminalSummary !== undefined ? { terminalSummary: params.terminalSummary } : {}),
     });
-  } catch {
+  } catch (err) {
     // Best-effort only: background task tracking must not block agent runs.
+    // Still surface the swallowed error so non-transient finalize failures stay observable.
+    params.log.warn(`failed to finalize tracked agent task ${params.runId}: ${formatForLog(err)}`);
   }
 }
 
@@ -822,8 +825,12 @@ function dispatchAgentRunFromGateway(params: {
           startedAt: Date.now(),
         }),
       );
-    } catch {
+    } catch (err) {
       // Best-effort only: background task tracking must not block agent runs.
+      // Still surface the swallowed error so non-transient tracking failures stay observable.
+      params.context.logGateway.warn(
+        `failed to start tracked agent task ${params.runId}: ${formatForLog(err)}`,
+      );
     }
   }
   void agentCommandFromIngress(params.ingressOpts, defaultRuntime, params.context.deps)
@@ -835,6 +842,7 @@ function dispatchAgentRunFromGateway(params: {
           runId: params.runId,
           status: aborted ? "timed_out" : "succeeded",
           terminalSummary: aborted ? "aborted" : "completed",
+          log: params.context.logGateway,
         });
       }
       const payload = {
@@ -872,6 +880,7 @@ function dispatchAgentRunFromGateway(params: {
           status: aborted ? "timed_out" : resolveFailedTrackedAgentTaskStatus(err),
           error: renderedErr,
           terminalSummary: renderedErr,
+          log: params.context.logGateway,
         });
       }
       const error = errorShape(ErrorCodes.UNAVAILABLE, renderedErr);

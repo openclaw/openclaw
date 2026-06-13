@@ -8,7 +8,6 @@ import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "./openclaw-agent-db.generated.js";
 import {
-  closeOpenClawAgentDatabase,
   closeOpenClawAgentDatabasesForTest,
   listOpenClawRegisteredAgentDatabases,
   openOpenClawAgentDatabase,
@@ -114,26 +113,6 @@ describe("openclaw agent database", () => {
         .filter((entry) => entry.agentId === "worker-1")
         .map((entry) => entry.path),
     ).toEqual([defaultDatabase.path, relocated.path].toSorted());
-  });
-
-  it("closes one cached agent database handle", () => {
-    const stateDir = createTempStateDir();
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const database = openOpenClawAgentDatabase({
-      agentId: "worker-1",
-      env,
-    });
-
-    expect(closeOpenClawAgentDatabase({ agentId: "worker-1", env })).toBe(true);
-    expect(database.db.isOpen).toBe(false);
-    expect(closeOpenClawAgentDatabase({ agentId: "worker-1", env })).toBe(false);
-
-    const reopened = openOpenClawAgentDatabase({
-      agentId: "worker-1",
-      env,
-    });
-    expect(reopened.db.isOpen).toBe(true);
-    expect(reopened).not.toBe(database);
   });
 
   it("rejects the legacy agent registry primary key with a doctor repair hint", () => {
