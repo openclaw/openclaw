@@ -3438,12 +3438,24 @@ export async function runEmbeddedAgent(
             ["completed", "end_turn", "stop"].includes(finalAssistantStopReason)
               ? (finalAssistantVisibleText ?? finalAssistantRawText)?.trim()
               : undefined;
+          const recoveredFinalAssistantPlanningOnlyText =
+            recoveredFinalAssistantCandidateAfterPromptTimeout
+              ? resolvePlanningOnlyTerminalPayloadText({
+                  provider: activeErrorContext.provider,
+                  modelId: activeErrorContext.model,
+                  prompt: params.prompt,
+                  aborted: false,
+                  timedOut: false,
+                  attempt: {
+                    ...attempt,
+                    assistantTexts: [recoveredFinalAssistantCandidateAfterPromptTimeout],
+                    lastAssistant: sessionLastAssistant ?? attempt.lastAssistant,
+                  },
+                })
+              : null;
           const recoveredFinalAssistantTextAfterPromptTimeout =
             recoveredFinalAssistantCandidateAfterPromptTimeout &&
-            !isPlanningOnlyAssistantTextForPrompt({
-              assistantTexts: [recoveredFinalAssistantCandidateAfterPromptTimeout],
-              prompt: params.prompt,
-            })
+            !recoveredFinalAssistantPlanningOnlyText
               ? recoveredFinalAssistantCandidateAfterPromptTimeout
               : undefined;
           const payloadAlreadyContainsRecoveredFinalAssistant =
@@ -3663,7 +3675,8 @@ export async function runEmbeddedAgent(
               });
           const nextEmptyResponseRetryInstruction = emptyAssistantReplyIsSilent
             ? null
-            : completedToolFallbackForPlanningOnlyPayload
+            : completedToolFallbackForPlanningOnlyPayload ||
+                payloadsForTerminalPathHavePromptAwareFinalReply
               ? null
               : resolveEmptyResponseRetryInstruction({
                   provider: activeErrorContext.provider,
@@ -4290,9 +4303,21 @@ export async function runEmbeddedAgent(
             !hasAsyncTaskProgressPlaceholderText(attempt)
               ? buildAssistantTextTerminalPayloads(attempt)
               : undefined);
+          const planningOnlyTerminalTextCandidate = !emptyAssistantReplyIsSilent
+            ? resolvePlanningOnlyTerminalPayloadText({
+                provider: activeErrorContext.provider,
+                modelId: activeErrorContext.model,
+                prompt,
+                aborted,
+                timedOut,
+                attempt,
+              })
+            : null;
+          const renderedPayloadsNeedPlanningReplacement =
+            renderedPayloadsArePlanningOnlyText && Boolean(planningOnlyTerminalTextCandidate);
           const asyncTaskTerminalPayloads =
             !completedAssistantTextTerminalPayloads &&
-            (!renderedTerminalPayloads || renderedPayloadsArePlanningOnlyText) &&
+            (!renderedTerminalPayloads || renderedPayloadsNeedPlanningReplacement) &&
             canUseAttemptTerminalFallback
               ? buildAsyncTaskTerminalPayloads(attempt)
               : undefined;
@@ -4314,15 +4339,17 @@ export async function runEmbeddedAgent(
             assistantTextTerminalPayloads,
             params.prompt,
           );
+          const assistantTextPayloadsNeedPlanningReplacement =
+            assistantTextPayloadsArePlanningOnlyText && Boolean(planningOnlyTerminalTextCandidate);
           const finalAssistantHasVisibleText = Boolean(finalAssistantVisibleText?.trim());
           const successfulToolTerminalFallback =
             (!renderedTerminalPayloads ||
-              renderedPayloadsArePlanningOnlyText ||
+              renderedPayloadsNeedPlanningReplacement ||
               (!finalAssistantHasVisibleText &&
                 !renderedPayloadsHaveMedia &&
                 currentAttemptToolLoopObservations.length > 0)) &&
             !asyncTaskTerminalPayloads &&
-            (!assistantTextTerminalPayloads || assistantTextPayloadsArePlanningOnlyText) &&
+            (!assistantTextTerminalPayloads || assistantTextPayloadsNeedPlanningReplacement) &&
             !emptyAssistantReplyIsSilent &&
             !attempt.didSendDeterministicApprovalPrompt &&
             !attempt.heartbeatToolResponse &&
@@ -4339,20 +4366,14 @@ export async function runEmbeddedAgent(
               : undefined;
           const shouldPreferToolFallbackOverPlanningText =
             Boolean(successfulToolTerminalFallback) &&
-            (renderedPayloadsArePlanningOnlyText || assistantTextPayloadsArePlanningOnlyText);
+            (renderedPayloadsNeedPlanningReplacement ||
+              assistantTextPayloadsNeedPlanningReplacement);
           const planningOnlyTerminalText =
             !asyncTaskTerminalPayloads &&
             !successfulToolTerminalFallback &&
-            !emptyAssistantReplyIsSilent &&
-            (renderedPayloadsArePlanningOnlyText || assistantTextPayloadsArePlanningOnlyText)
-              ? resolvePlanningOnlyTerminalPayloadText({
-                  provider: activeErrorContext.provider,
-                  modelId: activeErrorContext.model,
-                  prompt,
-                  aborted,
-                  timedOut,
-                  attempt,
-                })
+            (renderedPayloadsNeedPlanningReplacement ||
+              assistantTextPayloadsNeedPlanningReplacement)
+              ? planningOnlyTerminalTextCandidate
               : null;
           const visibleTerminalPayloads =
             asyncTaskTerminalPayloads ??

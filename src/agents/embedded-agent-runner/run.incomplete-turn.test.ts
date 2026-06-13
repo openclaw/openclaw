@@ -1468,6 +1468,46 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     },
   );
 
+  it("promotes a requested plan when a prompt timeout races completion", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    const finalText = "Plan:\n1. Inspect the runner\n2. Patch the guard\n3. Run focused tests";
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        timedOut: true,
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.5",
+          content: [{ type: "text", text: finalText }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      prompt: "What's your plan for fixing this?",
+      provider: "mock-openai",
+      model: "gpt-5.5",
+      runId: "run-prompt-timeout-requested-plan-recovered",
+      config: {
+        agents: {
+          defaults: {
+            embeddedAgent: {
+              executionContract: "strict-agentic",
+            },
+          },
+          list: [{ id: "main" }],
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads).toEqual([{ text: finalText }]);
+    expect(result.meta.finalAssistantVisibleText).toBe(finalText);
+  });
+
   it("includes tool fallback before timeout error when final answer times out after tool work", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedRunEmbeddedAttempt.mockImplementationOnce(async (params: unknown) => {
@@ -1931,6 +1971,77 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
     expect(warnMessages()).toEqual([]);
     expect(result.payloads).toEqual([{ text: "Absolutely." }]);
+    expect(JSON.stringify(result.payloads)).not.toContain("read completed");
+  });
+
+  it("preserves an explicitly requested plan after completed safe tool work", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    const finalText = "Plan:\n1. Inspect the runner\n2. Patch the guard\n3. Run focused tests";
+    mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: finalText }]);
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (params: unknown) => {
+      const attemptParams = params as {
+        onToolOutcome?: (observation: {
+          toolName: string;
+          argsHash: string;
+          resultHash: string;
+          resultText?: string;
+        }) => void;
+      };
+      attemptParams.onToolOutcome?.({
+        toolName: "read",
+        argsHash: "current",
+        resultHash: "status-result",
+        resultText: "runner details",
+      });
+      const toolMetas = [{ toolName: "read", mutatingAction: false }];
+      return makeAttemptResult({
+        assistantTexts: [finalText],
+        itemLifecycle: {
+          startedCount: 1,
+          completedCount: 1,
+          activeCount: 0,
+        },
+        toolMetas,
+        replayMetadata: buildAttemptReplayMetadata({
+          toolMetas,
+          didSendViaMessagingTool: false,
+          messagingToolSentTexts: [],
+          messagingToolSentMediaUrls: [],
+          successfulCronAdds: 0,
+        }),
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [{ type: "text", text: finalText }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      });
+    });
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      prompt: "What's your plan for fixing this?",
+      provider: "mock-openai",
+      model: "gpt-5.4",
+      runId: "run-requested-plan-after-tool-work",
+      config: {
+        agents: {
+          defaults: {
+            embeddedAgent: {
+              executionContract: "strict-agentic",
+            },
+          },
+          list: [{ id: "main" }],
+        },
+      } as OpenClawConfig,
+    });
+
+    expectNoWarnMessageWith("planning-only turn detected");
+    expectNoWarnMessageWith("strict-agentic execution contract triggered");
+    expect(warnMessages()).toEqual([]);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads).toEqual([{ text: finalText }]);
     expect(JSON.stringify(result.payloads)).not.toContain("read completed");
   });
 

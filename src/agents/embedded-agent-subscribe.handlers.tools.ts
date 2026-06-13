@@ -321,6 +321,27 @@ function hasToolResultFailureDetails(details: Record<string, unknown> | undefine
   );
 }
 
+function hasToolResultDryRunOrFailureEvidence(value: unknown, depth = 0): boolean {
+  if (Array.isArray(value)) {
+    return (
+      depth < 3 && value.some((entry) => hasToolResultDryRunOrFailureEvidence(entry, depth + 1))
+    );
+  }
+  const record = readRecordField(value);
+  if (!record) {
+    return false;
+  }
+  if (record.dryRun === true || hasToolResultFailureDetails(record)) {
+    return true;
+  }
+  if (depth >= 3) {
+    return false;
+  }
+  return [record.result, record.results, record.payloadOutcomes].some((entry) =>
+    hasToolResultDryRunOrFailureEvidence(entry, depth + 1),
+  );
+}
+
 function hasMessagingToolNonDeliveryEvidence(value: unknown, depth = 0): boolean {
   if (Array.isArray(value)) {
     return (
@@ -1451,7 +1472,7 @@ export async function handleToolExecutionEnd(
     !isToolError &&
     toolName === "cron" &&
     isCronAddAction(executedArgs) &&
-    !hasToolResultFailureDetails(readToolResultDetailsRecord(result))
+    !hasToolResultDryRunOrFailureEvidence(readToolResultDetailsRecord(result))
   ) {
     ctx.state.successfulCronAdds += 1;
   }

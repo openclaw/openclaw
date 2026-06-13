@@ -405,34 +405,38 @@ describe("handleToolExecutionEnd cron.add commitment tracking", () => {
     expect(ctx.state.itemActiveIds.size).toBe(0);
   });
 
-  it.each([{ status: "failed" }, { status: "blocked" }, { ok: false }, { success: false }])(
-    "does not increment successfulCronAdds for returned failure details",
-    async (details) => {
-      const { ctx } = createTestContext();
-      await handleToolExecutionStart(
-        ctx as never,
-        {
-          type: "tool_execution_start",
-          toolName: "cron",
-          toolCallId: "tool-cron-returned-failure",
-          args: { action: "add", job: { name: "reminder" } },
-        } as never,
-      );
+  it.each([
+    { status: "failed" },
+    { status: "blocked" },
+    { ok: false },
+    { success: false },
+    { ok: true, dryRun: true },
+    { status: "ok", result: { status: "failed" } },
+  ])("does not increment successfulCronAdds for non-committed result details", async (details) => {
+    const { ctx } = createTestContext();
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "cron",
+        toolCallId: "tool-cron-returned-failure",
+        args: { action: "add", job: { name: "reminder" } },
+      } as never,
+    );
 
-      await handleToolExecutionEnd(
-        ctx as never,
-        {
-          type: "tool_execution_end",
-          toolName: "cron",
-          toolCallId: "tool-cron-returned-failure",
-          isError: false,
-          result: { details },
-        } as never,
-      );
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "cron",
+        toolCallId: "tool-cron-returned-failure",
+        isError: false,
+        result: { details },
+      } as never,
+    );
 
-      expect(ctx.state.successfulCronAdds).toBe(0);
-    },
-  );
+    expect(ctx.state.successfulCronAdds).toBe(0);
+  });
 
   it("emits current attempt delivery and side-effect state after tool completion", async () => {
     const { ctx } = createTestContext();

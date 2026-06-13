@@ -502,34 +502,36 @@ describe("before_tool_call loop detection behavior", () => {
     );
   });
 
-  it.each([{ ok: false }, { success: false }, { delivery_status: "failed" }])(
-    "marks explicit false result flags as failed replay-safety observations",
-    async (details) => {
-      const onToolOutcome = vi.fn();
-      const execute = vi.fn().mockResolvedValue({
-        content: [{ type: "text", text: "write failed after partial update" }],
-        details,
-      });
-      const tool = createWrappedTool("write", execute, {
-        ...enabledLoopDetectionContext,
-        runId: "run-returned-false-mutating-outcome-observer",
-        onToolOutcome,
-      });
+  it.each([
+    { ok: false },
+    { success: false },
+    { delivery_status: "failed" },
+    { status: "ok", result: { status: "failed" } },
+  ])("marks returned failure details as failed replay-safety observations", async (details) => {
+    const onToolOutcome = vi.fn();
+    const execute = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: "write failed after partial update" }],
+      details,
+    });
+    const tool = createWrappedTool("write", execute, {
+      ...enabledLoopDetectionContext,
+      runId: "run-returned-false-mutating-outcome-observer",
+      onToolOutcome,
+    });
 
-      await expectUnblockedToolExecution(tool, "write-returned-false-observer", {
-        path: "report.md",
-        content: "updated",
-      });
+    await expectUnblockedToolExecution(tool, "write-returned-false-observer", {
+      path: "report.md",
+      content: "updated",
+    });
 
-      expect(onToolOutcome).toHaveBeenCalledWith(
-        expect.objectContaining({
-          toolName: "write",
-          mutatingAction: true,
-          failed: true,
-        }),
-      );
-    },
-  );
+    expect(onToolOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "write",
+        mutatingAction: true,
+        failed: true,
+      }),
+    );
+  });
 
   it("does not mark snake_case failed message outcomes as delivered", async () => {
     const onToolOutcome = vi.fn();

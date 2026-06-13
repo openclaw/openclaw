@@ -980,6 +980,24 @@ function hasFailedToolResultStatus(details: Record<string, unknown> | undefined)
   );
 }
 
+function hasToolResultFailureEvidence(value: unknown, depth = 0): boolean {
+  if (Array.isArray(value)) {
+    return depth < 3 && value.some((entry) => hasToolResultFailureEvidence(entry, depth + 1));
+  }
+  if (!isPlainObject(value)) {
+    return false;
+  }
+  if (hasFailedToolResultStatus(value)) {
+    return true;
+  }
+  if (depth >= 3) {
+    return false;
+  }
+  return [value.result, value.results, value.payloadOutcomes].some((entry) =>
+    hasToolResultFailureEvidence(entry, depth + 1),
+  );
+}
+
 function hasMessagingToolNonDeliveryEvidence(value: unknown, depth = 0): boolean {
   if (Array.isArray(value)) {
     return (
@@ -1211,7 +1229,7 @@ export async function recordToolLoopOutcome(args: {
     if ((record?.resultHash || shouldEmitHashlessToolLoopBlock) && args.ctx.onToolOutcome) {
       const blockedMessage = typeof details?.reason === "string" ? details.reason : undefined;
       const executionThrew = Boolean(args.error);
-      const failed = executionThrew || hasFailedToolResultStatus(details);
+      const failed = executionThrew || hasToolResultFailureEvidence(details);
       const mutatingAction =
         !blockedReason &&
         buildToolMutationState(record?.toolName ?? args.toolName, args.toolParams).mutatingAction;
