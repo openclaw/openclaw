@@ -1022,7 +1022,8 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     opts.useStoredDeviceAuth === true &&
     !context.urlOverride &&
     !context.explicitAuth.token &&
-    !context.explicitAuth.password;
+    !context.explicitAuth.password &&
+    (!context.isRemoteMode || (!resolvedCredentials.token && !resolvedCredentials.password));
   ensureRemoteModeUrlConfigured(context);
   const connectionDetails = buildGatewayConnectionDetails({
     config: context.config,

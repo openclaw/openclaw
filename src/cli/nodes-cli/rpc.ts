@@ -23,6 +23,19 @@ async function loadNodesCliRpcRuntime(): Promise<NodesCliRpcRuntimeModule> {
   return nodesCliRpcRuntimeLoader.load();
 }
 
+function isGatewayCredentialsRequiredError(value: unknown): value is Error {
+  return value instanceof Error && value.name === "GatewayCredentialsRequiredError";
+}
+
+function isUnknownGatewayMethodError(value: unknown, method: string): value is Error {
+  return (
+    value instanceof Error &&
+    value.name === "GatewayClientRequestError" &&
+    (value as Error & { gatewayCode?: unknown }).gatewayCode === "INVALID_REQUEST" &&
+    value.message.includes(`unknown method: ${method}`)
+  );
+}
+
 /** Attach shared Gateway connection/json options to a node command. */
 export const nodesCallOpts = (cmd: Command, defaults?: { timeoutMs?: number }) =>
   cmd
@@ -52,7 +65,10 @@ export const callNodeDiagnosticsGatewayCli = async (
     return await callGatewayCli(method, opts, params, {
       useStoredDeviceAuth: true,
     });
-  } catch {
+  } catch (error) {
+    if (!isGatewayCredentialsRequiredError(error)) {
+      throw error;
+    }
     return await callGatewayCli(method, opts, params);
   }
 };
@@ -172,8 +188,15 @@ export async function resolveNodeId(opts: NodesRpcOpts, query: string) {
 
 /** Resolve a node through the pairing-aware diagnostics view when available. */
 export async function resolveNodeDiagnosticsId(opts: NodesRpcOpts, query: string) {
-  const res = await callNodeDiagnosticsGatewayCli("node.list", opts, {});
-  return resolveNodeFromNodeList(parseNodeList(res), query).nodeId;
+  try {
+    const res = await callNodeDiagnosticsGatewayCli("node.list", opts, {});
+    return resolveNodeFromNodeList(parseNodeList(res), query).nodeId;
+  } catch (error) {
+    if (!isUnknownGatewayMethodError(error, "node.list")) {
+      throw error;
+    }
+    return await resolveNodeId(opts, query);
+  }
 }
 
 /** Resolve a node query to the best available node record. */

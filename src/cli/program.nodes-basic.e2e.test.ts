@@ -552,7 +552,9 @@ describe("cli program (nodes basics)", () => {
     callGateway.mockImplementation(async (...args: unknown[]) => {
       const opts = (args[0] ?? {}) as { method?: string; useStoredDeviceAuth?: boolean };
       if (opts.method === "node.list" && opts.useStoredDeviceAuth) {
-        throw new Error("stored device auth unavailable");
+        throw Object.assign(new Error("stored device auth unavailable"), {
+          name: "GatewayCredentialsRequiredError",
+        });
       }
       if (opts.method === "node.list") {
         return {
@@ -578,6 +580,16 @@ describe("cli program (nodes basics)", () => {
     expect(requests[0]?.useStoredDeviceAuth).toBe(true);
     expect(requests[1]?.useStoredDeviceAuth).toBeUndefined();
     expect(getRuntimeOutput()).toContain("Read Only Node");
+  });
+
+  it("does not retry node diagnostics after a transport failure", async () => {
+    callGateway.mockRejectedValue(new Error("gateway timed out"));
+
+    await expect(runProgram(["nodes", "status"])).rejects.toThrow("exit");
+
+    const requests = gatewayRequests().filter((request) => request.method === "node.list");
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.useStoredDeviceAuth).toBe(true);
   });
 
   it("describes pending-only nodes through the pairing diagnostics view", async () => {
@@ -622,6 +634,42 @@ describe("cli program (nodes basics)", () => {
     expect(describeRequest?.params).toEqual({ nodeId: "pending-only-node" });
     expect(describeRequest?.useStoredDeviceAuth).toBe(true);
     expect(getRuntimeOutput()).toContain("pending-only-request");
+  });
+
+  it("describes nodes through the paired-node fallback on older gateways", async () => {
+    callGateway.mockImplementation(async (...args: unknown[]) => {
+      const opts = (args[0] ?? {}) as {
+        method?: string;
+        params?: { nodeId?: string };
+      };
+      if (opts.method === "node.list") {
+        throw Object.assign(new Error("unknown method: node.list"), {
+          name: "GatewayClientRequestError",
+          gatewayCode: "INVALID_REQUEST",
+        });
+      }
+      if (opts.method === "node.pair.list") {
+        return {
+          pending: [],
+          paired: [{ nodeId: "legacy-node", displayName: "Legacy Node" }],
+        };
+      }
+      if (opts.method === "node.describe" && opts.params?.nodeId === "legacy-node") {
+        return {
+          nodeId: "legacy-node",
+          displayName: "Legacy Node",
+          paired: true,
+          connected: false,
+        };
+      }
+      return { ok: true };
+    });
+
+    await runProgram(["nodes", "describe", "--node", "legacy-node"]);
+
+    expectGatewayRequest("node.pair.list", {});
+    expectGatewayRequest("node.describe", { nodeId: "legacy-node" });
+    expect(getRuntimeOutput()).toContain("Legacy Node");
   });
 
   it("does not recommend approval from a stale pending request id alone", async () => {
