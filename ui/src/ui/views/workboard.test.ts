@@ -182,6 +182,31 @@ describe("renderWorkboard", () => {
     }
   });
 
+  it("stops lifecycle refresh while the plugin is disabled", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.lifecycleTasksPrepared = true;
+    state.lifecycleTasksPreparedAt = Date.now();
+    state.lifecycleTaskRefreshFailed = true;
+    state.lifecycleTaskRefreshError = "Task refresh unavailable";
+    const container = document.createElement("div");
+
+    renderInto(container, {
+      host,
+      client: null,
+      connected: true,
+      pluginEnabled: false,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+    });
+
+    expect(state.lifecycleTasksPrepared).toBe(false);
+    expect(state.lifecycleTaskRefreshFailed).toBe(false);
+    expect(state.lifecycleTaskRefreshError).toBeNull();
+  });
+
   it("keeps dispatch available during refresh and disables it during writes", () => {
     const host = {};
     const state = getWorkboardState(host);

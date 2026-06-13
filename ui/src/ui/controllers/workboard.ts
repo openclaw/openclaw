@@ -425,6 +425,7 @@ const workboardStates = new WeakMap<WorkboardHost, WorkboardUiState>();
 const workboardLoadPromises = new WeakMap<WorkboardHost, Promise<boolean>>();
 const workboardLifecycleTaskRefreshPromises = new WeakMap<WorkboardHost, Promise<number | null>>();
 const workboardLoadGenerations = new WeakMap<WorkboardHost, number>();
+const workboardLifecycleReconciliationEpochs = new WeakMap<WorkboardHost, number>();
 const workboardTaskPollOffsets = new WeakMap<WorkboardHost, number>();
 const workboardTaskDiscoveryOffsets = new WeakMap<WorkboardHost, number>();
 const workboardDefaultTaskDiscoveryCursors = new WeakMap<WorkboardHost, string>();
@@ -471,6 +472,23 @@ function isCurrentWorkboardLoadGeneration(host: WorkboardHost, generation: numbe
   return workboardLoadGenerations.get(host) === generation;
 }
 
+function nextWorkboardLifecycleReconciliationEpoch(host: WorkboardHost): number {
+  const epoch = (workboardLifecycleReconciliationEpochs.get(host) ?? 0) + 1;
+  workboardLifecycleReconciliationEpochs.set(host, epoch);
+  return epoch;
+}
+
+function currentWorkboardLifecycleReconciliationEpoch(host: WorkboardHost): number {
+  return workboardLifecycleReconciliationEpochs.get(host) ?? 0;
+}
+
+function isCurrentWorkboardLifecycleReconciliationEpoch(
+  host: WorkboardHost,
+  epoch: number,
+): boolean {
+  return currentWorkboardLifecycleReconciliationEpoch(host) === epoch;
+}
+
 function invalidateWorkboardLoads(host: WorkboardHost) {
   const state = workboardStates.get(host);
   if (state) {
@@ -478,6 +496,7 @@ function invalidateWorkboardLoads(host: WorkboardHost) {
     resetWorkboardLifecycleTaskConfirmations(state);
   }
   nextWorkboardLoadGeneration(host);
+  nextWorkboardLifecycleReconciliationEpoch(host);
 }
 
 function clearWorkboardLifecycleTaskPreparedTimer(host: WorkboardHost) {
@@ -513,6 +532,7 @@ export function stopWorkboardLifecycleRefresh(host: WorkboardHost) {
     resetWorkboardLifecycleTaskConfirmations(state);
   }
   nextWorkboardLoadGeneration(host);
+  nextWorkboardLifecycleReconciliationEpoch(host);
 }
 
 function setWorkboardLifecycleTasksPrepared(
@@ -2922,6 +2942,7 @@ export async function syncWorkboardLifecycle(params: {
   ) {
     return;
   }
+  const reconciliationEpoch = currentWorkboardLifecycleReconciliationEpoch(params.host);
   let tasksPreparedAt = workboardLifecycleTasksPreparedAt(state);
   const tasksPrepared = tasksPreparedAt !== null;
   setWorkboardLifecycleTasksPrepared(state, false, { host: params.host });
@@ -2938,13 +2959,19 @@ export async function syncWorkboardLifecycle(params: {
       return;
     }
   }
-  if (workboardLifecycleSyncBlocked(params.host, state)) {
+  if (
+    !isCurrentWorkboardLifecycleReconciliationEpoch(params.host, reconciliationEpoch) ||
+    workboardLifecycleSyncBlocked(params.host, state)
+  ) {
     return;
   }
   const syncKeys = getLifecycleSyncKeys(params.host);
   let lifecycleWriteStarted = false;
   for (const card of state.cards) {
-    if (workboardLifecycleSyncBlocked(params.host, state)) {
+    if (
+      !isCurrentWorkboardLifecycleReconciliationEpoch(params.host, reconciliationEpoch) ||
+      workboardLifecycleSyncBlocked(params.host, state)
+    ) {
       return;
     }
     const lifecycle = getWorkboardLifecycle(
@@ -3014,6 +3041,7 @@ export async function syncWorkboardLifecycle(params: {
       if (
         !currentCard ||
         !isCurrentWorkboardLoadGeneration(params.host, generation) ||
+        !isCurrentWorkboardLifecycleReconciliationEpoch(params.host, reconciliationEpoch) ||
         hasPendingStatusTransition(params.host, currentCard.id) ||
         (currentCard.status !== card.status && responseCard.status !== currentCard.status) ||
         (shouldSkipStaleLifecycleStatus(currentCard, lifecycle) &&
@@ -3024,11 +3052,16 @@ export async function syncWorkboardLifecycle(params: {
       replaceCard(state, responseCard);
       syncKeys.set(card.id, key);
     } catch (error) {
-      state.error = formatError(error);
-      syncKeys.set(card.id, key);
+      if (isCurrentWorkboardLifecycleReconciliationEpoch(params.host, reconciliationEpoch)) {
+        state.error = formatError(error);
+        syncKeys.set(card.id, key);
+      }
     } finally {
       state.syncingCardIds.delete(card.id);
-      if (isCurrentWorkboardLoadGeneration(params.host, generation)) {
+      if (
+        isCurrentWorkboardLoadGeneration(params.host, generation) &&
+        isCurrentWorkboardLifecycleReconciliationEpoch(params.host, reconciliationEpoch)
+      ) {
         setWorkboardLifecycleTasksPrepared(state, true, {
           host: params.host,
           preparedAt: tasksPreparedAt ?? Date.now(),
@@ -3038,7 +3071,10 @@ export async function syncWorkboardLifecycle(params: {
       params.requestUpdate?.();
     }
   }
-  if (!lifecycleWriteStarted) {
+  if (
+    !lifecycleWriteStarted &&
+    isCurrentWorkboardLifecycleReconciliationEpoch(params.host, reconciliationEpoch)
+  ) {
     setWorkboardLifecycleTasksPrepared(state, true, {
       host: params.host,
       preparedAt: tasksPreparedAt ?? Date.now(),
@@ -3674,13 +3710,20 @@ export async function stopWorkboardCard(params: {
         taskCancellationError = error;
       }
     }
-    const sessionAborted = sessionKey
-      ? await abortWorkboardSessionRun({
+    let sessionAborted = false;
+    if (sessionKey) {
+      try {
+        sessionAborted = await abortWorkboardSessionRun({
           client: params.client,
           sessionKey,
           runId: workboardCardRunId(params.card),
-        })
-      : false;
+        });
+      } catch (error) {
+        if (!taskCancelled) {
+          throw error;
+        }
+      }
+    }
     if (!taskCancelled && !sessionAborted) {
       if (taskCancellationError) {
         state.error = formatError(taskCancellationError);

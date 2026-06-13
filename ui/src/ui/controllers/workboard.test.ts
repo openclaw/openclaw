@@ -4167,6 +4167,45 @@ describe("workboard controller", () => {
     expect(state.cards[0]?.status).toBe("running");
   });
 
+  it("cancels remaining lifecycle card writes when refresh stops", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const first = { ...sampleCard, id: "card-1", sessionKey: "session-1" };
+    const second = { ...sampleCard, id: "card-2", sessionKey: "session-2" };
+    const firstUpdate = createDeferred<{ card: WorkboardCard }>();
+    state.loaded = true;
+    state.cards = [first, second];
+    state.lifecycleTasksPrepared = true;
+    state.lifecycleTasksPreparedAt = Date.now();
+    const client = createClient((method, params) => {
+      if (method === "workboard.cards.update") {
+        return (params as { id: string }).id === first.id
+          ? firstUpdate.promise
+          : { card: { ...second, status: "running" } };
+      }
+      return {};
+    });
+    const sessions = [
+      { ...sampleSession, key: "session-1" },
+      { ...sampleSession, key: "session-2" },
+    ];
+
+    const syncing = syncWorkboardLifecycle({ host, client: client as never, sessions });
+    await vi.waitFor(() => {
+      expect(client.request).toHaveBeenCalledWith(
+        "workboard.cards.update",
+        expect.objectContaining({ id: first.id }),
+      );
+    });
+    stopWorkboardLifecycleRefresh(host);
+    firstUpdate.resolve({ card: { ...first, status: "running" } });
+    await syncing;
+
+    expect(
+      client.request.mock.calls.filter(([method]) => method === "workboard.cards.update"),
+    ).toHaveLength(1);
+  });
+
   it("reuses an in-flight lifecycle task refresh across render-driven syncs", async () => {
     const host = {};
     const state = getWorkboardState(host);
@@ -4957,6 +4996,41 @@ describe("workboard controller", () => {
       taskId: "task-1",
       status: "cancelled",
     });
+  });
+
+  it("marks a cancelled task blocked when follow-up session abort fails", async () => {
+    const host = {};
+    const linked = {
+      ...sampleCard,
+      sessionKey: sampleTaskSessionKey,
+      runId: "run-1",
+      taskId: "task-1",
+    };
+    const blocked = { ...linked, status: "blocked" };
+    const state = getWorkboardState(host);
+    state.cards = [linked];
+    state.tasksByCardId.set("card-1", sampleTask);
+    const client = createClient((method) => {
+      if (method === "tasks.cancel") {
+        return { cancelled: true };
+      }
+      if (method === "chat.abort") {
+        throw new Error("run already removed");
+      }
+      if (method === "workboard.cards.update") {
+        return { card: blocked };
+      }
+      return {};
+    });
+
+    await stopWorkboardCard({ host, client: client as never, card: linked });
+
+    expect(client.request).toHaveBeenCalledWith("workboard.cards.update", {
+      id: "card-1",
+      patch: { status: "blocked" },
+    });
+    expect(state.cards[0]).toMatchObject({ status: "blocked" });
+    expect(state.error).toBeNull();
   });
 
   it("cancels a tracked replacement instead of its confirmed-missing task link", async () => {

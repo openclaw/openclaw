@@ -2469,7 +2469,7 @@ function renderColumn(props: WorkboardProps, status: WorkboardStatus, cards: Wor
 
 export function renderWorkboard(props: WorkboardProps) {
   const state = getWorkboardState(props.host);
-  if (!props.connected) {
+  if (!props.connected || props.pluginEnabled !== true) {
     stopWorkboardLifecycleRefresh(props.host);
   }
   configureWorkboardPolling({
