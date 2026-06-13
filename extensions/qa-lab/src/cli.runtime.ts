@@ -70,6 +70,7 @@ import {
 } from "./scenario-catalog.js";
 import { resolveQaScenarioPackScenarioIds } from "./scenario-packs.js";
 import { runQaSuiteFromRuntime } from "./suite-launch.runtime.js";
+import { resolveQaSuiteOutputDir } from "./suite-planning.js";
 import { readQaSuiteFailedOrSkippedScenarioCountFromFile } from "./suite-summary.js";
 import {
   buildTokenEfficiencyReport,
@@ -649,9 +650,7 @@ export async function runQaSuiteCommand(opts: {
     if (opts.preflight === true) {
       throw new Error("--preflight requires qa-flow scenarios.");
     }
-    const outputDir =
-      resolveRepoRelativeOutputDir(repoRoot, opts.outputDir) ??
-      path.join(repoRoot, ".artifacts", "qa-e2e", `qa-suite-test-${Date.now().toString(36)}`);
+    const outputDir = await resolveQaSuiteOutputDir(repoRoot, opts.outputDir);
     const scenarioRunnerParams = {
       repoRoot,
       outputDir,

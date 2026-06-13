@@ -312,6 +312,28 @@ describe("qa cli runtime", () => {
     expect(runQaVitestScenarios).not.toHaveBeenCalled();
   });
 
+  it("rejects repo-local symlink output directories for Playwright scenarios", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-suite-symlink-root-"));
+    const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-suite-symlink-outside-"));
+    try {
+      await fs.symlink(outsideRoot, path.join(tempRoot, "artifacts-link"));
+
+      await expect(
+        runQaSuiteCommand({
+          repoRoot: tempRoot,
+          outputDir: "artifacts-link/qa-out",
+          scenarioIds: ["control-ui-chat-flow-playwright"],
+        }),
+      ).rejects.toThrow("QA suite outputDir must not traverse symlinks");
+
+      expect(runQaPlaywrightScenarios).not.toHaveBeenCalled();
+      expect(runQaVitestScenarios).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+      await fs.rm(outsideRoot, { recursive: true, force: true });
+    }
+  });
+
   it("resolves suite repo-root-relative paths before dispatching", async () => {
     await runQaSuiteCommand({
       repoRoot: "/tmp/openclaw-repo",

@@ -156,6 +156,20 @@ describe("qa coverage report", () => {
     expect(report).toContain("  - execution: playwright ui/src/ui/e2e/chat-flow.e2e.test.ts");
   });
 
+  it("splits qa suite targets when matches mix execution kinds", () => {
+    const matches = findQaScenarioMatches(readQaScenarioPack().scenarios, "control-ui");
+    const report = renderQaScenarioMatchesMarkdownReport({
+      query: "control-ui",
+      matches,
+    });
+
+    expect(report).toContain("- Suite commands:");
+    expect(report).toContain("  - qa-flow: `pnpm openclaw qa suite --scenario");
+    expect(report).toContain(
+      "  - playwright: `pnpm openclaw qa suite --scenario control-ui-chat-flow-playwright`",
+    );
+  });
+
   it("reports taxonomy mapping gaps as scorecard signals", () => {
     const taxonomy = parseQaScorecardTaxonomy({
       version: 1,

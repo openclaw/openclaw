@@ -448,11 +448,35 @@ function formatOptionalScenarioMetadata(match: QaScenarioSearchMatch) {
   return metadata.length > 0 ? metadata.join("; ") : "none";
 }
 
+function formatSuiteCommand(matches: readonly QaScenarioSearchMatch[]) {
+  const scenarioArgs = matches.map((match) => `--scenario ${match.id}`).join(" ");
+  return `pnpm openclaw qa suite ${scenarioArgs}`;
+}
+
+function scenarioMatchCommandGroups(matches: readonly QaScenarioSearchMatch[]) {
+  const groups = new Map<QaScenarioSearchMatch["executionKind"], QaScenarioSearchMatch[]>();
+  for (const match of matches) {
+    const existing = groups.get(match.executionKind) ?? [];
+    existing.push(match);
+    groups.set(match.executionKind, existing);
+  }
+  const executionOrder: QaScenarioSearchMatch["executionKind"][] = ["flow", "vitest", "playwright"];
+  return executionOrder
+    .map((executionKind) => ({
+      executionKind,
+      matches: groups.get(executionKind) ?? [],
+    }))
+    .filter((group) => group.matches.length > 0);
+}
+
+function formatExecutionKindForCommand(executionKind: QaScenarioSearchMatch["executionKind"]) {
+  return executionKind === "flow" ? "qa-flow" : executionKind;
+}
+
 export function renderQaScenarioMatchesMarkdownReport(params: {
   query: string;
   matches: readonly QaScenarioSearchMatch[];
 }) {
-  const scenarioArgs = params.matches.map((match) => `--scenario ${match.id}`).join(" ");
   const lines = [
     "# QA Scenario Matches",
     "",
@@ -460,8 +484,16 @@ export function renderQaScenarioMatchesMarkdownReport(params: {
     `- Matches: ${params.matches.length}`,
   ];
 
-  if (scenarioArgs) {
-    lines.push(`- Suite command: \`pnpm openclaw qa suite ${scenarioArgs}\``);
+  const commandGroups = scenarioMatchCommandGroups(params.matches);
+  if (commandGroups.length === 1) {
+    lines.push(`- Suite command: \`${formatSuiteCommand(commandGroups[0].matches)}\``);
+  } else if (commandGroups.length > 1) {
+    lines.push("- Suite commands:");
+    for (const group of commandGroups) {
+      lines.push(
+        `  - ${formatExecutionKindForCommand(group.executionKind)}: \`${formatSuiteCommand(group.matches)}\``,
+      );
+    }
   }
   lines.push("");
 
