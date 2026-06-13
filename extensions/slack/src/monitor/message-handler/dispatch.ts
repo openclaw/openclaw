@@ -805,6 +805,19 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     }
   };
   const deliveryTracker = createSlackEventDeliveryTracker();
+  const markPreviewPayloadDelivered = (params: {
+    kind: ReplyDispatchKind;
+    payload: ReplyPayload;
+    threadTs: string | undefined;
+  }) => {
+    deliveryTracker.markDelivered(params);
+    // Single-use reply modes move later same-turn payloads off the preview
+    // thread, so protect both delivery keys from duplicates.
+    const nextThreadTs = replyPlan.peekThreadTs();
+    if (nextThreadTs !== params.threadTs) {
+      deliveryTracker.markDelivered({ ...params, threadTs: nextThreadTs });
+    }
+  };
   const resolveDeliveryThreadTs = (params: {
     kind: ReplyDispatchKind;
     forcedThreadTs?: string;
@@ -908,7 +921,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     payload: ReplyPayload;
     kind: ReplyDispatchKind;
     forcedThreadTs?: string;
-  }): Promise<void> => {
+  }): Promise<string | undefined> => {
     if (params.payload.isReasoning === true) {
       return;
     }
@@ -925,7 +938,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       })
     ) {
       logVerbose("slack: suppressed duplicate normal delivery within the same turn");
-      return;
+      return deliveryReplyThreadTs;
     }
     await deliverReplies({
       cfg: ctx.cfg,
@@ -958,6 +971,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       payload: params.payload,
       threadTs: deliveryReplyThreadTs,
     });
+    return deliveryReplyThreadTs;
   };
 
   const deliverBufferedStreamFallback = async (params: {
@@ -1311,7 +1325,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           kind: info.kind,
           forcedThreadTs: finalThreadTs,
         });
-        deliveryTracker.markDelivered({ kind: info.kind, payload, threadTs: finalThreadTs });
+        markPreviewPayloadDelivered({ kind: info.kind, payload, threadTs: finalThreadTs });
         return;
       }
     }
@@ -1363,14 +1377,16 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             ...(edit.blocks?.length ? { blocks: edit.blocks } : {}),
             threadTs: edit.threadTs,
           });
-          emitSlackMessageSentHooks({
-            ...messageSentHookContext,
-            to: messageSentHookTarget,
-            accountId: account.accountId,
-            content: trimmedFinalText,
-            success: true,
-            messageId: preview.messageId,
-          });
+          if (!ttsSupplement) {
+            emitSlackMessageSentHooks({
+              ...messageSentHookContext,
+              to: messageSentHookTarget,
+              accountId: account.accountId,
+              content: trimmedFinalText,
+              success: true,
+              messageId: preview.messageId,
+            });
+          }
           draftPreviewCommitted = true;
           observedFinalReplyDelivery = true;
         },
@@ -1382,14 +1398,25 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           const finalThreadTs = usedReplyThreadTs ?? statusThreadTs;
           observedReplyDelivery = true;
           replyPlan.markSent();
-          deliveryTracker.markDelivered({ kind: info.kind, payload, threadTs: finalThreadTs });
+          // Supplemental TTS media is the terminal delivery for the logical
+          // payload. Marking the preview first would suppress that media send.
+          if (!ttsSupplement) {
+            markPreviewPayloadDelivered({ kind: info.kind, payload, threadTs: finalThreadTs });
+          }
         },
         buildSupplementalPayload: () =>
           ttsSupplement ? buildTtsSupplementMediaPayload(payload) : undefined,
         deliverSupplemental: async (supplementalPayload) => {
-          await deliverNormally({
+          const previewThreadTs = usedReplyThreadTs ?? statusThreadTs;
+          const supplementalThreadTs = await deliverNormally({
             payload: supplementalPayload,
             kind: info.kind,
+            forcedThreadTs: previewThreadTs,
+          });
+          markPreviewPayloadDelivered({
+            kind: info.kind,
+            payload,
+            threadTs: supplementalThreadTs,
           });
         },
         logPreviewEditFailure: (err) => {

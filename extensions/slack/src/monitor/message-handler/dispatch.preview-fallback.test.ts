@@ -834,7 +834,8 @@ vi.mock("../config.runtime.js", () => ({
 
 vi.mock("../replies.js", () => ({
   createSlackReplyDeliveryPlan: () => ({
-    peekThreadTs: () => mockedReplyThreadTsSequence?.[0] ?? mockedReplyThreadTs,
+    peekThreadTs: () =>
+      mockedReplyThreadTsSequence ? mockedReplyThreadTsSequence[0] : mockedReplyThreadTs,
     nextThreadTs: () =>
       mockedReplyThreadTsSequence ? mockedReplyThreadTsSequence.shift() : mockedReplyThreadTs,
     markSent: () => {},
@@ -3094,16 +3095,22 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     ]);
   });
 
-  it("suppresses duplicate TTS supplement finals after preview finalization", async () => {
+  it("defers hooks and suppresses duplicate TTS finals when flush creates the preview id", async () => {
+    let flushed = false;
     const draftStream = {
       ...createDraftStreamStub(),
-      flush: vi.fn(noopAsync),
+      flush: vi.fn(async () => {
+        flushed = true;
+      }),
       clear: vi.fn(noopAsync),
       discardPending: vi.fn(noopAsync),
       seal: vi.fn(noopAsync),
+      messageId: () => (flushed ? "171234.567" : undefined),
     };
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
+    mockedSlackIsThreadReply = false;
+    mockedReplyThreadTsSequence = [undefined, undefined];
     const payload = {
       text: "Spoken answer",
       mediaUrl: "https://example.com/tts.mp3",
@@ -3116,7 +3123,12 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       { kind: "final", payload },
     ];
 
-    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        message: { thread_ts: undefined },
+        replyToMode: "first",
+      }),
+    );
 
     expect(finalizeSlackPreviewEditMock).toHaveBeenCalledTimes(1);
     expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
@@ -3124,6 +3136,48 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       requireMockCall(deliverRepliesMock, 0, "deliver replies")[0],
       "deliver replies params",
     );
+    expectRecordFields(delivered, { replyThreadTs: THREAD_TS });
+    expect(emitSlackMessageSentHooksMock).not.toHaveBeenCalled();
+  });
+
+  it("suppresses duplicate TTS supplement finals after preview finalization", async () => {
+    const draftStream = {
+      ...createDraftStreamStub(),
+      flush: vi.fn(noopAsync),
+      clear: vi.fn(noopAsync),
+      discardPending: vi.fn(noopAsync),
+      seal: vi.fn(noopAsync),
+    };
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
+    mockedSlackIsThreadReply = false;
+    mockedReplyThreadTsSequence = [undefined];
+    const payload = {
+      text: "Spoken answer",
+      mediaUrl: "https://example.com/tts.mp3",
+      audioAsVoice: true,
+      spokenText: "Spoken answer",
+      ttsSupplement: { spokenText: "Spoken answer" },
+    };
+    mockedDispatchSequence = [
+      { kind: "final", payload },
+      { kind: "final", payload },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        message: { thread_ts: undefined },
+        replyToMode: "first",
+      }),
+    );
+
+    expect(finalizeSlackPreviewEditMock).toHaveBeenCalledTimes(1);
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    const delivered = requireRecord(
+      requireMockCall(deliverRepliesMock, 0, "deliver replies")[0],
+      "deliver replies params",
+    );
+    expectRecordFields(delivered, { replyThreadTs: THREAD_TS });
     expect(delivered.replies).toEqual([
       {
         mediaUrl: "https://example.com/tts.mp3",
