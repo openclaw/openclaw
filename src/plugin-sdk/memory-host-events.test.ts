@@ -223,6 +223,19 @@ describe("createClaimableDedupe", () => {
     await expect(dedupe.claim("line:evt-2")).resolves.toEqual({ kind: "claimed" });
   });
 
+  it("forgets committed claimable entries", async () => {
+    const dedupe = createClaimableDedupe({
+      ttlMs: 10_000,
+      memoryMaxSize: 100,
+    });
+
+    await expect(dedupe.claim("line:evt-3")).resolves.toEqual({ kind: "claimed" });
+    await expect(dedupe.commit("line:evt-3")).resolves.toBe(true);
+    await expect(dedupe.claim("line:evt-3")).resolves.toEqual({ kind: "duplicate" });
+    await expect(dedupe.forget("line:evt-3")).resolves.toBe(true);
+    await expect(dedupe.claim("line:evt-3")).resolves.toEqual({ kind: "claimed" });
+  });
+
   it("supports persistent-backed recent checks and warmup", async () => {
     const root = await createTempDir("openclaw-claimable-dedupe-");
     const writer = createClaimableDedupe({
@@ -250,6 +263,18 @@ describe("createClaimableDedupe", () => {
     expect(await reader.warmup("acct")).toBe(1);
     await expect(reader.claim("m1", { namespace: "acct" })).resolves.toEqual({
       kind: "duplicate",
+    });
+    await expect(reader.forget("m1", { namespace: "acct" })).resolves.toBe(true);
+    const afterForget = createClaimableDedupe({
+      ttlMs: 10_000,
+      memoryMaxSize: 100,
+      pluginId: "test-claimable-dedupe",
+      namespacePrefix: "test-claimable-dedupe",
+      stateMaxEntries: 1000,
+      env: { ...process.env, OPENCLAW_STATE_DIR: root },
+    });
+    await expect(afterForget.claim("m1", { namespace: "acct" })).resolves.toEqual({
+      kind: "claimed",
     });
   });
 

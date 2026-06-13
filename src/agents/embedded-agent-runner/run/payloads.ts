@@ -242,6 +242,7 @@ export function buildEmbeddedRunPayloads(params: {
   suppressToolErrorWarnings?: boolean | (() => boolean | undefined);
   inlineToolResultsAllowed: boolean;
   didSendViaMessagingTool?: boolean;
+  didDeliverSourceReplyViaMessageTool?: boolean;
   messagingToolSourceReplyPayloads?: MessagingToolSourceReplyPayload[];
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   agentId?: string;
@@ -310,10 +311,15 @@ export function buildEmbeddedRunPayloads(params: {
     });
   });
   const hasSourceReplyPayload = replyItems.length > sourceReplyStartIndex;
+  const deliveredSourceReplyViaMessageTool =
+    params.sourceReplyDeliveryMode === "message_tool_only" &&
+    params.didDeliverSourceReplyViaMessageTool === true;
 
   const useMarkdown = params.toolResultFormat === "markdown";
   const suppressAssistantArtifacts =
-    params.didSendDeterministicApprovalPrompt === true || hasSourceReplyPayload;
+    params.didSendDeterministicApprovalPrompt === true ||
+    hasSourceReplyPayload ||
+    deliveredSourceReplyViaMessageTool;
   const nonEmptyAssistantTexts = params.assistantTexts.filter((text) => text.trim().length > 0);
   const currentAssistant = params.currentAssistant ?? undefined;
   const assistantForPayload =

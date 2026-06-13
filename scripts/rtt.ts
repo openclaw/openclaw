@@ -11,6 +11,7 @@ import {
   buildRunId,
   createHarnessEnv,
   readTelegramSummary,
+  resolveTelegramSummaryPath,
   resolveMainVersion,
   resolvePublishedVersion,
   runHarness,
@@ -198,12 +199,12 @@ async function runOne(params: {
 
   process.stderr.write(`[rtt] run ${params.index + 1}/${params.options.runs}: ${params.spec}\n`);
   const harnessExitCode = await runHarness({ env, harnessRoot: params.options.harnessRoot });
-  await readTelegramSummary(path.join(harnessRawDir, "telegram-qa-summary.json"));
+  await readTelegramSummary(await resolveTelegramSummaryPath(harnessRawDir));
   await fs.rm(rawDir, { recursive: true, force: true });
   await fs.mkdir(path.dirname(rawDir), { recursive: true });
   await fs.cp(harnessRawDir, rawDir, { recursive: true });
 
-  const rawSummaryPath = path.join(rawDir, "telegram-qa-summary.json");
+  const rawSummaryPath = await resolveTelegramSummaryPath(rawDir);
   const rawReportPath = path.join(rawDir, "telegram-qa-report.md");
   const rawObservedMessagesPath = path.join(rawDir, "telegram-qa-observed-messages.json");
   const rawSummary = await readTelegramSummary(rawSummaryPath);

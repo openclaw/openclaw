@@ -72,9 +72,11 @@ resolve_package_tgz() {
 
 package_mount_args=()
 package_install_source="$PACKAGE_SPEC"
+package_source_kind="npm-package"
 resolved_package_tgz="$(resolve_package_tgz "$PACKAGE_TGZ")"
 if [ -n "$resolved_package_tgz" ]; then
   package_install_source="/package-under-test/$(basename "$resolved_package_tgz")"
+  package_source_kind="packed-tarball"
   package_mount_args=(-v "$resolved_package_tgz:$package_install_source:ro")
 else
   validate_openclaw_package_spec "$PACKAGE_SPEC"
@@ -198,6 +200,8 @@ docker_env=(
   -e OPENCLAW_NPM_TELEGRAM_INSTALL_SOURCE="$package_install_source"
   -e OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL="$PACKAGE_LABEL"
   -e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR"
+  -e OPENCLAW_QA_PACKAGE_SOURCE="$package_install_source"
+  -e OPENCLAW_QA_PACKAGE_SOURCE_KIND="$package_source_kind"
   -e OPENCLAW_QA_TELEGRAM_GROUP_ID
   -e OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN
   -e OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN
@@ -238,6 +242,7 @@ for key in \
   OPENCLAW_QA_CREDENTIAL_HTTP_MAX_BODY_BYTES \
   OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_BYTES \
   OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_CHUNKS \
+  OPENCLAW_QA_PACKAGE_SOURCE_SHA \
   OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX \
   OPENCLAW_QA_CREDENTIAL_OWNER_ID \
   OPENCLAW_QA_ALLOW_INSECURE_HTTP; do

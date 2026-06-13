@@ -3022,6 +3022,160 @@ describe("agent event handler", () => {
     );
   });
 
+  it("mirrors commentary-phase assistant events only to exact session message subscribers", () => {
+    const {
+      broadcast,
+      broadcastToConnIds,
+      nodeSendToSession,
+      sessionMessageSubscribers,
+      handler,
+      nowSpy,
+    } = createHarness({
+      now: 1_000,
+      resolveSessionKeyForRun: () => "session-hidden",
+    });
+    sessionMessageSubscribers.subscribe("conn-selected", "session-hidden");
+    sessionMessageSubscribers.subscribe("conn-other", "session-other");
+    registerAgentRunContext("run-hidden-commentary", {
+      sessionKey: "session-hidden",
+      isControlUiVisible: false,
+      verboseLevel: "off",
+    });
+
+    handler({
+      runId: "run-hidden-commentary",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: {
+        text: "I will inspect the files first.",
+        delta: "I will inspect the files first.",
+        phase: "commentary",
+      },
+    });
+    handler({
+      runId: "run-hidden-commentary",
+      seq: 2,
+      stream: "assistant",
+      ts: Date.now(),
+      data: {
+        text: "Untagged text frame must not mirror.",
+        delta: "Untagged text frame must not mirror.",
+      },
+    });
+    handler({
+      runId: "run-hidden-commentary",
+      seq: 3,
+      stream: "assistant",
+      ts: Date.now(),
+      data: {
+        delta: "Untagged delta-only stream must not mirror.",
+      },
+    });
+    handler({
+      runId: "run-hidden-commentary",
+      seq: 4,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Terminal echo without delta" },
+    });
+    handler({
+      runId: "run-hidden-commentary",
+      seq: 5,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Final answer", delta: "Final answer", phase: "final_answer" },
+    });
+    handler({
+      runId: "run-hidden-commentary",
+      seq: 6,
+      stream: "assistant",
+      ts: Date.now(),
+      data: {
+        delta: "Streaming commentary delta.",
+        phase: "commentary",
+      },
+    });
+
+    expect(chatBroadcastCalls(broadcast)).toHaveLength(0);
+    expect(agentBroadcastCalls(broadcast)).toHaveLength(0);
+    expect(nodeSendToSession).not.toHaveBeenCalled();
+
+    const agentCalls = broadcastToConnIds.mock.calls.filter(([event]) => event === "agent");
+    expect(agentCalls).toHaveLength(2);
+    expect(agentCalls[0]?.[2]).toEqual(new Set(["conn-selected"]));
+    expect(agentCalls[1]?.[2]).toEqual(new Set(["conn-selected"]));
+    expectPayloadFields(agentCalls[0]?.[1], {
+      runId: "run-hidden-commentary",
+      sessionKey: "session-hidden",
+      stream: "assistant",
+    });
+    expectPayloadFields(agentCalls[1]?.[1], {
+      runId: "run-hidden-commentary",
+      sessionKey: "session-hidden",
+      stream: "assistant",
+    });
+    expectPayloadDataFields(agentCalls[0]?.[1], {
+      text: "I will inspect the files first.",
+      delta: "I will inspect the files first.",
+      phase: "commentary",
+    });
+    expectPayloadDataFields(agentCalls[1]?.[1], {
+      delta: "Streaming commentary delta.",
+      phase: "commentary",
+    });
+
+    const chatCalls = broadcastToConnIds.mock.calls.filter(([event]) => event === "chat");
+    expect(chatCalls).toHaveLength(1);
+    expect(chatCalls[0]?.[2]).toEqual(new Set(["conn-selected"]));
+    expectPayloadFields(chatCalls[0]?.[1], {
+      runId: "run-hidden-commentary",
+      sessionKey: "session-hidden",
+      state: "delta",
+    });
+    nowSpy?.mockRestore();
+  });
+
+  it("does not mirror aborted non-control-UI-visible assistant commentary", () => {
+    const {
+      broadcast,
+      broadcastToConnIds,
+      chatRunState,
+      nodeSendToSession,
+      sessionMessageSubscribers,
+      handler,
+      nowSpy,
+    } = createHarness({
+      now: 1_000,
+      resolveSessionKeyForRun: () => "session-hidden-aborted",
+    });
+    sessionMessageSubscribers.subscribe("conn-selected", "session-hidden-aborted");
+    registerAgentRunContext("run-hidden-commentary-aborted", {
+      sessionKey: "session-hidden-aborted",
+      isControlUiVisible: false,
+      verboseLevel: "off",
+    });
+    chatRunState.abortedRuns.set("run-hidden-commentary-aborted", 1_000);
+
+    handler({
+      runId: "run-hidden-commentary-aborted",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: {
+        text: "This aborted commentary must not be mirrored.",
+        delta: "This aborted commentary must not be mirrored.",
+        phase: "commentary",
+      },
+    });
+
+    expect(chatBroadcastCalls(broadcast)).toHaveLength(0);
+    expect(agentBroadcastCalls(broadcast)).toHaveLength(0);
+    expect(broadcastToConnIds).not.toHaveBeenCalled();
+    expect(nodeSendToSession).not.toHaveBeenCalled();
+    nowSpy?.mockRestore();
+  });
+
   it("uses agent event sessionKey when run-context lookup cannot resolve", () => {
     const { broadcast, handler } = createHarness({
       resolveSessionKeyForRun: () => undefined,

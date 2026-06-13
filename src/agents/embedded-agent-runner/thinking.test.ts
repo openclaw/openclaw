@@ -2,7 +2,7 @@
 // recovery behavior for provider transcripts and active assistant turns.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { castAgentMessage, castAgentMessages } from "../test-helpers/agent-message-fixtures.js";
 import {
   OMITTED_ASSISTANT_REASONING_TEXT,
@@ -592,6 +592,139 @@ describe("wrapAnthropicStreamWithRecovery", () => {
       throw new Error("Expected Anthropic recovery retry to start with an assistant message");
     }
     expect(retryMessage.content).toEqual([{ type: "text", text: "visible answer" }]);
+  });
+
+  it("notifies recovery only after a rejected request retry succeeds", async () => {
+    let callCount = 0;
+    const recovered = vi.fn();
+    const finalMessage = createTestAssistantMessage({
+      content: [{ type: "text", text: "recovered" }],
+      stopReason: "stop",
+    });
+    const originalMessages = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "secret", thinkingSignature: "sig" },
+          { type: "text", text: "visible answer" },
+        ],
+      },
+    ]);
+    const wrapped = wrapAnthropicStreamWithRecovery(
+      (() => {
+        callCount += 1;
+        if (callCount === 1) {
+          return Promise.reject(anthropicThinkingError);
+        }
+        const stream = createAssistantMessageEventStream();
+        queueMicrotask(() => {
+          stream.push({ type: "done", reason: "stop", message: finalMessage });
+          stream.end();
+        });
+        return stream;
+      }) as Parameters<typeof wrapAnthropicStreamWithRecovery>[0],
+      { id: "test-session", onRecoveredAnthropicThinking: recovered },
+    );
+
+    const response = (await wrapped(
+      {} as never,
+      {
+        messages: originalMessages,
+      } as never,
+      {} as never,
+    )) as { result: () => Promise<unknown> } & AsyncIterable<unknown>;
+    for await (const event of response) {
+      void event;
+      // Drain the retry stream before reading result().
+    }
+
+    await expect(response.result()).resolves.toEqual(finalMessage);
+    expect(callCount).toBe(2);
+    expect(recovered).toHaveBeenCalledTimes(1);
+    expect(recovered).toHaveBeenCalledWith({
+      originalMessages,
+      cleanedMessages: [
+        {
+          ...originalMessages[0],
+          content: [{ type: "text", text: "visible answer" }],
+        },
+      ],
+    });
+  });
+
+  it("does not notify recovery when the stripped-thinking retry also fails", async () => {
+    const recovered = vi.fn();
+    let callCount = 0;
+    const retryError = new Error("retry failed");
+    const wrapped = wrapAnthropicStreamWithRecovery(
+      (() => {
+        callCount += 1;
+        return Promise.reject(callCount === 1 ? anthropicThinkingError : retryError);
+      }) as Parameters<typeof wrapAnthropicStreamWithRecovery>[0],
+      { id: "test-session", onRecoveredAnthropicThinking: recovered },
+    );
+
+    await expect(
+      wrapped(
+        {} as never,
+        {
+          messages: castAgentMessages([
+            {
+              role: "assistant",
+              content: [{ type: "thinking", thinking: "secret", thinkingSignature: "sig" }],
+            },
+          ]),
+        } as never,
+        {} as never,
+      ),
+    ).rejects.toBe(retryError);
+    expect(recovered).not.toHaveBeenCalled();
+  });
+
+  it("does not notify recovery when the stripped-thinking retry resolves to a stream error", async () => {
+    const recovered = vi.fn();
+    let callCount = 0;
+    const errorMessage = createTestStreamErrorMessage("retry stream failed");
+    const wrapped = wrapAnthropicStreamWithRecovery(
+      (() => {
+        callCount += 1;
+        if (callCount === 1) {
+          return Promise.reject(anthropicThinkingError);
+        }
+        const stream = createAssistantMessageEventStream();
+        queueMicrotask(() => {
+          stream.push({
+            type: "error",
+            reason: "error",
+            error: errorMessage,
+          });
+          stream.end();
+        });
+        return stream;
+      }) as Parameters<typeof wrapAnthropicStreamWithRecovery>[0],
+      { id: "test-session", onRecoveredAnthropicThinking: recovered },
+    );
+
+    const response = (await wrapped(
+      {} as never,
+      {
+        messages: castAgentMessages([
+          {
+            role: "assistant",
+            content: [{ type: "thinking", thinking: "secret", thinkingSignature: "sig" }],
+          },
+        ]),
+      } as never,
+      {} as never,
+    )) as { result: () => Promise<unknown> } & AsyncIterable<unknown>;
+    for await (const event of response) {
+      void event;
+      // Drain the retry stream before reading result().
+    }
+
+    await expect(response.result()).resolves.toEqual(errorMessage);
+    expect(callCount).toBe(2);
+    expect(recovered).not.toHaveBeenCalled();
   });
 
   it("retries Bedrock-style invalid thinking signature errors", async () => {
