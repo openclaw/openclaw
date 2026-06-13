@@ -149,9 +149,6 @@ describe("package Telegram live Docker E2E", () => {
     const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
 
     expect(script).toContain("OPENCLAW_NPM_TELEGRAM_RTT_SAMPLES");
-    expect(script).toContain(
-      '-e OPENCLAW_NPM_TELEGRAM_RTT_SAMPLES="${OPENCLAW_NPM_TELEGRAM_RTT_SAMPLES:-20}"',
-    );
     expect(script).toContain("OPENCLAW_NPM_TELEGRAM_RTT_TIMEOUT_MS");
     expect(script).toContain("OPENCLAW_NPM_TELEGRAM_RTT_MAX_FAILURES");
     expect(script).toContain("OPENCLAW_NPM_TELEGRAM_RTT_CHECKS");
@@ -208,6 +205,19 @@ describe("package Telegram live Docker E2E", () => {
         OPENCLAW_QA_CREDENTIAL_ROLE: "maintainer",
       }),
     ).toBe("ci");
+  });
+
+  it("defaults package Telegram RTT for the normal package live lane", () => {
+    expect(testing.resolveRttOptions({})).toEqual({
+      rttCount: 20,
+      rttTimeoutMs: undefined,
+      maxRttFailures: 20,
+      rttCheckIds: [],
+    });
+  });
+
+  it("does not force default RTT onto focused non-RTT scenario runs", () => {
+    expect(testing.resolveRttOptions({}, ["telegram-canary"])).toEqual({});
   });
 
   it("maps repeated RTT env onto package Telegram live options", () => {

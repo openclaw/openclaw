@@ -40,17 +40,24 @@ function resolveCredentialRole(env: NodeJS.ProcessEnv) {
   return env.OPENCLAW_NPM_TELEGRAM_CREDENTIAL_ROLE ?? env.OPENCLAW_QA_CREDENTIAL_ROLE;
 }
 
-function resolveRttOptions(env: NodeJS.ProcessEnv) {
-  const rttCount = parsePositiveIntegerEnv(env, "OPENCLAW_NPM_TELEGRAM_RTT_SAMPLES");
-  if (rttCount === undefined) {
+const DEFAULT_RTT_CHECK_ID = "telegram-mentioned-message-reply";
+
+function resolveRttOptions(env: NodeJS.ProcessEnv, selectedScenarioIds: readonly string[] = []) {
+  const explicitCheckIds = splitCsv(env.OPENCLAW_NPM_TELEGRAM_RTT_CHECKS);
+  if (
+    explicitCheckIds.length === 0 &&
+    selectedScenarioIds.length > 0 &&
+    !selectedScenarioIds.includes(DEFAULT_RTT_CHECK_ID)
+  ) {
     return {};
   }
+  const rttCount = parsePositiveIntegerEnv(env, "OPENCLAW_NPM_TELEGRAM_RTT_SAMPLES") ?? 20;
   return {
     rttCount,
     rttTimeoutMs: parsePositiveIntegerEnv(env, "OPENCLAW_NPM_TELEGRAM_RTT_TIMEOUT_MS"),
     maxRttFailures:
       parsePositiveIntegerEnv(env, "OPENCLAW_NPM_TELEGRAM_RTT_MAX_FAILURES") ?? rttCount,
-    rttCheckIds: splitCsv(env.OPENCLAW_NPM_TELEGRAM_RTT_CHECKS),
+    rttCheckIds: explicitCheckIds,
   };
 }
 
@@ -103,6 +110,7 @@ async function main() {
   const outputDir =
     process.env.OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR?.trim() ||
     path.join(repoRoot, ".artifacts", "qa-e2e", `npm-telegram-live-${Date.now().toString(36)}`);
+  const scenarioIds = splitCsv(process.env.OPENCLAW_NPM_TELEGRAM_SCENARIOS);
   const result = await runTelegramQaLive({
     env: process.env,
     repoRoot,
@@ -112,8 +120,8 @@ async function main() {
     primaryModel: process.env.OPENCLAW_NPM_TELEGRAM_MODEL,
     alternateModel: process.env.OPENCLAW_NPM_TELEGRAM_ALT_MODEL,
     fastMode: parseBoolean(process.env.OPENCLAW_NPM_TELEGRAM_FAST),
-    scenarioIds: splitCsv(process.env.OPENCLAW_NPM_TELEGRAM_SCENARIOS),
-    ...resolveRttOptions(process.env),
+    scenarioIds,
+    ...resolveRttOptions(process.env, scenarioIds),
     sutAccountId: process.env.OPENCLAW_NPM_TELEGRAM_SUT_ACCOUNT,
     credentialSource: resolveCredentialSource(process.env),
     credentialRole: resolveCredentialRole(process.env),
