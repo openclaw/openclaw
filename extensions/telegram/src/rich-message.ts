@@ -147,7 +147,7 @@ export function buildTelegramRichMarkdown(
   markdown: string,
   options?: TelegramRichMessageOptions,
 ): TelegramInputRichMessage {
-  const normalizedMarkdown = normalizeTelegramRichMarkdown(markdown);
+  const normalizedMarkdown = normalizeTelegramRichMarkdown(sanitizeTelegramRichMarkdown(markdown));
   return options?.skipEntityDetection === true
     ? { markdown: normalizedMarkdown, skip_entity_detection: true }
     : { markdown: normalizedMarkdown };
@@ -157,7 +157,10 @@ export function buildTelegramRichHtml(
   html: string,
   options?: TelegramRichMessageOptions,
 ): TelegramInputRichMessage {
-  return options?.skipEntityDetection === true ? { html, skip_entity_detection: true } : { html };
+  const safeHtml = escapeTelegramRichHtmlMediaTags(html);
+  return options?.skipEntityDetection === true
+    ? { html: safeHtml, skip_entity_detection: true }
+    : { html: safeHtml };
 }
 
 export function buildTelegramRichMessage(
@@ -174,6 +177,27 @@ type RichMarkdownFenceSpan = {
   start: number;
   end: number;
 };
+
+function escapeTelegramRichHtmlTag(tag: string): string {
+  return tag
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
+function escapeTelegramRichHtmlMediaTags(html: string): string {
+  return html.replace(
+    /<\/?(?:img|picture|source|video|audio|track|iframe|embed|object)\b[^<>]*>/gi,
+    (tag) => escapeTelegramRichHtmlTag(tag),
+  );
+}
+
+function sanitizeTelegramRichMarkdown(markdown: string): string {
+  return escapeTelegramRichHtmlMediaTags(markdown)
+    .replace(/!\[([^\]\n]*)\]\(([^)\n]+)\)/g, "[$1]($2)")
+    .replace(/!\[([^\]\n]*)\]\[([^\]\n]+)\]/g, "[$1][$2]");
+}
 
 function parseRichMarkdownFenceSpans(markdown: string): RichMarkdownFenceSpan[] {
   const spans: RichMarkdownFenceSpan[] = [];
