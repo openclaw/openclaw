@@ -89,10 +89,14 @@ function resolveGoogleAuthLibraryTokenExpiresAtMs(nowRaw = Date.now()): number |
     : resolveExpiresAtMsFromDurationMs(GOOGLE_VERTEX_AUTHLIB_TOKEN_CACHE_MS, { nowMs });
 }
 
-export function resetGoogleVertexAuthorizedUserTokenCacheForTest(): void {
+export function clearGoogleVertexAdcTokenCache(): void {
   cachedGoogleVertexAuthorizedUserToken = undefined;
   cachedGoogleAuthClient = undefined;
   cachedGoogleVertexAdcToken = undefined;
+}
+
+export function resetGoogleVertexAuthorizedUserTokenCacheForTest(): void {
+  clearGoogleVertexAdcTokenCache();
 }
 
 export function isGoogleVertexCredentialsMarker(
