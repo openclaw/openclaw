@@ -31,6 +31,7 @@ import {
   runWithImageModelFallback,
   runWithModelFallback as runWithModelFallbackBase,
 } from "./model-fallback.js";
+import { createAgentRunRestartAbortError } from "./run-termination.js";
 import { SessionWriteLockTimeoutError } from "./session-write-lock-error.js";
 import { makeModelFallbackCfg } from "./test-helpers/model-fallback-config-fixture.js";
 
@@ -2560,6 +2561,25 @@ describe("runWithModelFallback", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
+  it("does not fall back on restart aborts", async () => {
+    const cfg = makeCfg();
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(createAgentRunRestartAbortError())
+      .mockResolvedValueOnce("fallback should not run");
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        run,
+      }),
+    ).rejects.toThrow("agent run aborted for restart");
+
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
   it("does not fall back when the caller abort signal timed out", async () => {
     const cfg = makeCfg();
     const timeoutReason = new Error("chat run timed out");
@@ -2612,6 +2632,35 @@ describe("runWithModelFallback", () => {
         classifyResult,
       }),
     ).rejects.toThrow("This operation was aborted");
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(classifyResult).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fall back when a restart abort is classified from the result", async () => {
+    const cfg = makeProviderFallbackCfg("openai");
+    const controller = new AbortController();
+    controller.abort(createAgentRunRestartAbortError());
+    const run = vi
+      .fn()
+      .mockResolvedValueOnce({ payloads: [] })
+      .mockResolvedValueOnce({ payloads: [{ text: "fallback should not run" }] });
+    const classifyResult = vi.fn(() => ({
+      message: "empty response",
+      reason: "format" as const,
+      code: "empty_result",
+    }));
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "m1",
+        abortSignal: controller.signal,
+        run,
+        classifyResult,
+      }),
+    ).rejects.toThrow("empty response");
 
     expect(run).toHaveBeenCalledTimes(1);
     expect(classifyResult).toHaveBeenCalledTimes(1);

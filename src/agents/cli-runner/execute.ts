@@ -4,7 +4,10 @@
  */
 import crypto from "node:crypto";
 import { shouldLogVerbose } from "../../globals.js";
-import { emitAgentEvent } from "../../infra/agent-events.js";
+import {
+  assertAgentRunLifecycleGenerationCurrent,
+  emitAgentEvent,
+} from "../../infra/agent-events.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import {
   resolveEventSessionKeyForPolicy,
@@ -354,6 +357,7 @@ export async function executePreparedCliRun(
       modelId: context.modelId,
       authProfileId: context.effectiveAuthProfileId,
       thinkingLevel: params.thinkLevel,
+      executionMode: params.executionMode ?? "agent",
       useResume,
       baseArgs: baseArgsWithSkills,
     }) ?? baseArgsWithSkills;
@@ -386,6 +390,9 @@ export async function executePreparedCliRun(
 
   try {
     return await enqueueCliRun(queueKey, async () => {
+      if (params.lifecycleGeneration) {
+        assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
+      }
       const cliTurnStartedAt = Date.now();
       const restoreSkillEnv = params.skillsSnapshot
         ? applySkillEnvOverridesFromSnapshot({
@@ -474,12 +481,16 @@ export async function executePreparedCliRun(
         const outputMode = useResume ? (backend.resumeOutput ?? backend.output) : backend.output;
         const hasJsonlOutput = outputMode === "jsonl";
         let observedCliActivity = false;
+        const emitLiveEvents = params.executionMode !== "side-question";
         const emitCliToolUseStart = (event: {
           toolCallId: string;
           name: string;
           args: Record<string, unknown>;
         }) => {
           observedCliActivity = true;
+          if (!emitLiveEvents) {
+            return;
+          }
           emitAgentEvent({
             runId: params.runId,
             stream: "tool",
@@ -498,6 +509,9 @@ export async function executePreparedCliRun(
           result?: unknown;
         }) => {
           observedCliActivity = true;
+          if (!emitLiveEvents) {
+            return;
+          }
           emitAgentEvent({
             runId: params.runId,
             stream: "tool",
@@ -512,6 +526,9 @@ export async function executePreparedCliRun(
         };
         let commentaryCounter = 0;
         const emitCliCommentaryText = (text: string) => {
+          if (!emitLiveEvents) {
+            return;
+          }
           commentaryCounter += 1;
           const transformedText = applyPluginTextReplacements(
             text,
@@ -555,6 +572,9 @@ export async function executePreparedCliRun(
               if (text || delta) {
                 observedCliActivity = true;
               }
+              if (!emitLiveEvents) {
+                return;
+              }
               emitAgentEvent({
                 runId: params.runId,
                 stream: "assistant",
@@ -572,7 +592,10 @@ export async function executePreparedCliRun(
             },
             onToolUseStart: emitCliToolUseStart,
             onToolResult: emitCliToolResult,
-            onCommentaryText: context.params.emitCommentaryText ? emitCliCommentaryText : undefined,
+            onCommentaryText:
+              emitLiveEvents && context.params.emitCommentaryText
+                ? emitCliCommentaryText
+                : undefined,
             cleanup: async () => {
               try {
                 await fallbackClaudeSkillsPlugin?.cleanup();
@@ -600,6 +623,9 @@ export async function executePreparedCliRun(
                 if (text || delta) {
                   observedCliActivity = true;
                 }
+                if (!emitLiveEvents) {
+                  return;
+                }
                 emitAgentEvent({
                   runId: params.runId,
                   stream: "assistant",
@@ -617,9 +643,10 @@ export async function executePreparedCliRun(
               },
               onToolUseStart: emitCliToolUseStart,
               onToolResult: emitCliToolResult,
-              onCommentaryText: context.params.emitCommentaryText
-                ? emitCliCommentaryText
-                : undefined,
+              onCommentaryText:
+                emitLiveEvents && context.params.emitCommentaryText
+                  ? emitCliCommentaryText
+                  : undefined,
             })
           : null;
         const supervisor = executeDeps.getProcessSupervisor();
@@ -745,7 +772,7 @@ export async function executePreparedCliRun(
               Boolean(context.openClawHistoryPrompt) &&
               Boolean(params.sessionKey) &&
               params.timeoutMs - (Date.now() - context.started) > 0;
-            if (params.sessionKey && !deferWatchdogNoticeForFreshRetry) {
+            if (params.sessionKey && emitLiveEvents && !deferWatchdogNoticeForFreshRetry) {
               const stallNotice = [
                 `CLI agent (${params.provider}) produced no output for ${Math.round(noOutputTimeoutMs / 1000)}s and was terminated.`,
                 "It may have been waiting for interactive input or an approval prompt.",

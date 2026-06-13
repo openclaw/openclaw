@@ -813,6 +813,7 @@ export async function runPreparedReply(
         sessionKey,
         isMainSession,
         isNewSession,
+        suppressHeartbeatOwnedEvents: isHeartbeat,
       });
       if (eventsBlock) {
         drainedSystemEventBlocks.push(eventsBlock);
