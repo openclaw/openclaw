@@ -8,7 +8,7 @@ read_when:
   - You need to configure custom reranking endpoints
 ---
 
-The external reranker plugin lets you proxy reranking requests to any Cohere-compatible `/v1/rerank` endpoint. This includes:
+The external reranker plugin lets you replace mmr in memorySearch:hybrid and proxy reranking requests to any Cohere-compatible `/v1/rerank` endpoint. This includes:
 
 - **Cloud services**: Cohere, Jina, Voyage AI, and other providers with Cohere-compatible APIs
 - **Local servers**: llama.cpp with `--reranking`, vLLM, Ollama (with reranking support)
@@ -78,7 +78,7 @@ This keeps all endpoint URLs and credentials in one place (`models.providers`) r
 - Cohere: `rerank-english-v3.0`, `rerank-multilingual-v3.0`
 - Jina: `jina-reranker-v2-base-multilingual`
 - Voyage AI: `rerank-2`, `rerank-lite-2`
-- llama.cpp: the model name loaded with `--reranking`
+- llama.cpp: the model name loaded with `--embedding  --reranking  --pooling rank \`
 
 </ParamField>
 
