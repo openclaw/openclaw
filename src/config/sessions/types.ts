@@ -201,6 +201,14 @@ export type SessionGoal = {
   budgetLimitedAt?: number;
 };
 
+export type SessionHistoryEntry = {
+  sessionId: string;
+  sessionFile?: string;
+  updatedAt: number;
+  label?: string;
+  systemSent?: boolean;
+};
+
 export type SessionEntry = {
   /**
    * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
@@ -242,6 +250,8 @@ export type SessionEntry = {
   subagentRole?: "orchestrator" | "leaf";
   /** Explicit control scope assigned at spawn time for subagent control decisions. */
   subagentControlScope?: "children" | "none";
+  /** Previous sessions for this session key, newest-first. Capped at 20. */
+  history?: SessionHistoryEntry[];
   /** Session-scoped tool deny entries inherited from the caller that created this session. */
   inheritedToolDeny?: string[];
   /** Session-scoped tool allow entries inherited from the caller that created this session. */
@@ -726,4 +736,5 @@ export type SessionSystemPromptReport = {
 
 export const DEFAULT_RESET_TRIGGER = "/new";
 export const DEFAULT_RESET_TRIGGERS = ["/new", "/reset"];
+export const MAX_SESSION_HISTORY = 20;
 export const DEFAULT_IDLE_MINUTES = 0;

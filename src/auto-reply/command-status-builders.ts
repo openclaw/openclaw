@@ -57,7 +57,7 @@ export function buildHelpMessage(cfg?: OpenClawConfig): string {
   const lines = ["ℹ️ Help", ""];
 
   lines.push("Session");
-  lines.push("  /new  |  /reset  |  /compact [instructions]  |  /stop");
+  lines.push("  /new  |  /reset  |  /resume [#index|id]  |  /compact [instructions]  |  /stop");
   lines.push("");
 
   const optionParts = [
