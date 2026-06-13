@@ -317,6 +317,7 @@ export OPENCLAW_IMAGE="$IMAGE_NAME"
 export OPENCLAW_IMAGE_APT_PACKAGES="${OPENCLAW_IMAGE_APT_PACKAGES-${OPENCLAW_DOCKER_APT_PACKAGES:-}}"
 export OPENCLAW_IMAGE_PIP_PACKAGES="${OPENCLAW_IMAGE_PIP_PACKAGES:-}"
 export OPENCLAW_EXTENSIONS="${OPENCLAW_EXTENSIONS:-}"
+export OPENCLAW_INSTALL_CODEX_CLI="${OPENCLAW_INSTALL_CODEX_CLI:-}"
 export OPENCLAW_INSTALL_BROWSER="${OPENCLAW_INSTALL_BROWSER:-}"
 export OPENCLAW_EXTRA_MOUNTS="$EXTRA_MOUNTS"
 export OPENCLAW_HOME_VOLUME="$HOME_VOLUME_NAME"
@@ -522,6 +523,7 @@ upsert_env "$ENV_FILE" \
   OPENCLAW_IMAGE_APT_PACKAGES \
   OPENCLAW_IMAGE_PIP_PACKAGES \
   OPENCLAW_EXTENSIONS \
+  OPENCLAW_INSTALL_CODEX_CLI \
   OPENCLAW_INSTALL_BROWSER \
   OPENCLAW_SANDBOX \
   OPENCLAW_DOCKER_SOCKET \
@@ -545,6 +547,7 @@ if [[ "$IMAGE_NAME" == "openclaw:local" ]]; then
     --build-arg "OPENCLAW_IMAGE_APT_PACKAGES=${OPENCLAW_IMAGE_APT_PACKAGES}" \
     --build-arg "OPENCLAW_IMAGE_PIP_PACKAGES=${OPENCLAW_IMAGE_PIP_PACKAGES}" \
     --build-arg "OPENCLAW_EXTENSIONS=${OPENCLAW_EXTENSIONS}" \
+    --build-arg "OPENCLAW_INSTALL_CODEX_CLI=${OPENCLAW_INSTALL_CODEX_CLI:-}" \
     --build-arg "OPENCLAW_INSTALL_BROWSER=${OPENCLAW_INSTALL_BROWSER}" \
     --build-arg "OPENCLAW_INSTALL_DOCKER_CLI=${OPENCLAW_INSTALL_DOCKER_CLI:-}" \
     -t "$IMAGE_NAME" \
@@ -575,6 +578,10 @@ run_prestart_gateway --user root --entrypoint sh openclaw-gateway -c \
    chown node:node /home/node/.config; \
    find /home/node/.config/openclaw -xdev -exec chown node:node {} +; \
    [ -d /home/node/.openclaw/workspace/.openclaw ] && chown -R node:node /home/node/.openclaw/workspace/.openclaw || true'
+
+echo ""
+echo "==> Repairing existing config/state"
+run_prestart_cli doctor --fix
 
 echo ""
 if [[ -n "$SKIP_ONBOARDING" ]]; then

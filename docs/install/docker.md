@@ -131,6 +131,8 @@ The setup script accepts these optional environment variables:
 | `OPENCLAW_IMAGE_APT_PACKAGES`              | Install extra apt packages during build (space-separated)             |
 | `OPENCLAW_IMAGE_PIP_PACKAGES`              | Install extra Python packages during build (space-separated)          |
 | `OPENCLAW_EXTENSIONS`                      | Pre-install plugin dependencies at build time (space-separated names) |
+| `OPENCLAW_INSTALL_BROWSER`                 | Install Playwright Chromium during local image builds                 |
+| `OPENCLAW_INSTALL_CODEX_CLI`               | Install OpenAI Codex CLI during local image builds                    |
 | `OPENCLAW_EXTRA_MOUNTS`                    | Extra host bind mounts (comma-separated `source:target[:opts]`)       |
 | `OPENCLAW_HOME_VOLUME`                     | Persist `/home/node` in a named Docker volume                         |
 | `OPENCLAW_SANDBOX`                         | Opt in to sandbox bootstrap (`1`, `true`, `yes`, `on`)                |
@@ -430,13 +432,14 @@ See [ClawDock](/install/clawdock) for the full helper guide.
     1. **Persist `/home/node`**: `export OPENCLAW_HOME_VOLUME="openclaw_home"`
     2. **Bake system deps**: `export OPENCLAW_IMAGE_APT_PACKAGES="git curl jq"`
     3. **Bake Python deps**: `export OPENCLAW_IMAGE_PIP_PACKAGES="requests==2.32.5 humanize==4.14.0"`
-    4. **Bake Playwright Chromium**: `export OPENCLAW_INSTALL_BROWSER=1`
-    5. **Or install Playwright browsers into a persisted volume**:
+    4. **Install Codex CLI in the image**: `export OPENCLAW_INSTALL_CODEX_CLI=1`
+    5. **Bake Playwright Chromium**: `export OPENCLAW_INSTALL_BROWSER=1`
+    6. **Or install Playwright browsers into a persisted volume**:
        ```bash
        docker compose run --rm openclaw-cli \
          node /app/node_modules/playwright-core/cli.js install chromium
        ```
-    6. **Persist browser downloads**: use `OPENCLAW_HOME_VOLUME` or
+    7. **Persist browser downloads**: use `OPENCLAW_HOME_VOLUME` or
        `OPENCLAW_EXTRA_MOUNTS`. OpenClaw auto-detects the Docker image's
        Playwright-managed Chromium on Linux.
 

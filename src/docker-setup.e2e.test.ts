@@ -548,6 +548,28 @@ describe("scripts/docker/setup.sh", () => {
     expect(log).toContain("find /home/node/.config/openclaw -xdev");
   });
 
+  it("repairs existing config before onboarding and setup-time config writes", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+    await resetDockerLog(activeSandbox);
+
+    const result = runDockerSetup(activeSandbox);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("==> Repairing existing config/state");
+    const log = await readDockerLog(activeSandbox);
+    const chownIdx = log.indexOf("--user root");
+    const doctorIdx = log.indexOf("dist/index.js doctor --fix");
+    const onboardIdx = log.indexOf("dist/index.js onboard");
+    const configSetIdx = log.indexOf("dist/index.js config set --batch-json");
+    expect(chownIdx).toBeGreaterThanOrEqual(0);
+    expect(doctorIdx).toBeGreaterThan(chownIdx);
+    expect(onboardIdx).toBeGreaterThan(doctorIdx);
+    expect(configSetIdx).toBeGreaterThan(doctorIdx);
+    expect(log).toContain(
+      `run --rm --no-deps ${prestartContainerEnvFlags} --entrypoint node openclaw-gateway dist/index.js doctor --fix`,
+    );
+  });
+
   it("reuses existing config token when OPENCLAW_GATEWAY_TOKEN is unset", async () => {
     const activeSandbox = requireSandbox(sandbox);
     const { result, envFile } = await runDockerSetupWithUnsetGatewayToken(
