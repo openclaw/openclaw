@@ -81,6 +81,23 @@ function asPayloadRecord(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
+function ensureMoonshotToolCallReasoningContent(payloadObj: Record<string, unknown>): void {
+  if (!Array.isArray(payloadObj.messages)) {
+    return;
+  }
+  for (const message of payloadObj.messages) {
+    const record = asPayloadRecord(message);
+    if (
+      record?.role === "assistant" &&
+      Array.isArray(record.tool_calls) &&
+      record.tool_calls.length > 0 &&
+      !("reasoning_content" in record)
+    ) {
+      record.reasoning_content = "";
+    }
+  }
+}
+
 function sanitizeKimiK27Payload(payloadObj: Record<string, unknown>): void {
   delete payloadObj.thinking;
   delete payloadObj.reasoning_effort;
@@ -97,7 +114,20 @@ function sanitizeKimiK27AfterCaller(
   value: unknown,
   fallbackPayload: Record<string, unknown>,
 ): unknown {
-  sanitizeKimiK27Payload(asPayloadRecord(value) ?? fallbackPayload);
+  const finalPayload = asPayloadRecord(value) ?? fallbackPayload;
+  sanitizeKimiK27Payload(finalPayload);
+  ensureMoonshotToolCallReasoningContent(finalPayload);
+  return value;
+}
+
+function finalizeMoonshotPayloadAfterCaller(
+  value: unknown,
+  fallbackPayload: Record<string, unknown>,
+  thinkingEnabled: boolean,
+): unknown {
+  if (thinkingEnabled) {
+    ensureMoonshotToolCallReasoningContent(asPayloadRecord(value) ?? fallbackPayload);
+  }
   return value;
 }
 
@@ -193,7 +223,14 @@ export function createMoonshotThinkingWrapper(
               delete thinkingObj.keep;
             }
           }
-          return originalOnPayload?.(payload, payloadModel);
+          const result = originalOnPayload?.(payload, payloadModel);
+          const thinkingEnabled = effectiveThinkingType === "enabled";
+          if (result && typeof (result as Promise<unknown>).then === "function") {
+            return Promise.resolve(result).then((resolved) =>
+              finalizeMoonshotPayloadAfterCaller(resolved, payloadObj, thinkingEnabled),
+            );
+          }
+          return finalizeMoonshotPayloadAfterCaller(result, payloadObj, thinkingEnabled);
         },
       });
     };
