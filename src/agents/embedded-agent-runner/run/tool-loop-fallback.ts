@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyPayload } from "../../../auto-reply/reply-payload.js";
+import { truncateUtf16Safe } from "../../../utils.js";
 import type { MessagingToolSend } from "../../embedded-agent-messaging.types.js";
 import type {
   AgentToolTerminalResultFallback,
@@ -31,8 +32,139 @@ export type ToolLoopFallbackResolution = {
 
 const TERMINAL_LOOP_BLOCKED_REASONS = new Set(["tool-loop", "post-compaction-loop"]);
 const DEFAULT_FALLBACK_MAX_CHARS = 4_000;
+const MAX_RETAINED_TOOL_LOOP_OBSERVATIONS = 64;
+const MAX_RETAINED_RESULT_TEXT_CHARS = 64_000;
+const MAX_RETAINED_PUBLIC_TEXT_CHARS = 4_000;
+const MAX_RETAINED_MESSAGING_ITEMS = 16;
+const MAX_RETAINED_FALLBACK_FIELDS = 32;
+const MAX_RETAINED_FALLBACK_PATHS = 8;
+const MAX_RETAINED_FALLBACK_PATH_SEGMENTS = 8;
+const MAX_RETAINED_LABEL_CHARS = 256;
 const EXTERNAL_UNTRUSTED_CONTENT_BLOCK_RE =
   /<<<EXTERNAL_UNTRUSTED_CONTENT id="([a-f0-9]+)">>>\n[\s\S]*?\n---\n([\s\S]*?)\n<<<END_EXTERNAL_UNTRUSTED_CONTENT id="\1">>>/u;
+
+function boundStringArray(values: readonly string[] | undefined): string[] | undefined {
+  const bounded = values
+    ?.slice(-MAX_RETAINED_MESSAGING_ITEMS)
+    .map((value) => truncateUtf16Safe(value, MAX_RETAINED_PUBLIC_TEXT_CHARS));
+  return bounded?.length ? bounded : undefined;
+}
+
+function boundMessagingToolSend(target: MessagingToolSend): MessagingToolSend {
+  const mediaUrls = boundStringArray(target.mediaUrls);
+  return {
+    tool: truncateUtf16Safe(target.tool, MAX_RETAINED_LABEL_CHARS),
+    provider: truncateUtf16Safe(target.provider, MAX_RETAINED_LABEL_CHARS),
+    ...(target.accountId
+      ? { accountId: truncateUtf16Safe(target.accountId, MAX_RETAINED_LABEL_CHARS) }
+      : {}),
+    ...(target.to ? { to: truncateUtf16Safe(target.to, MAX_RETAINED_PUBLIC_TEXT_CHARS) } : {}),
+    ...(target.threadId
+      ? { threadId: truncateUtf16Safe(target.threadId, MAX_RETAINED_LABEL_CHARS) }
+      : {}),
+    ...(target.threadImplicit === true ? { threadImplicit: true } : {}),
+    ...(target.threadSuppressed === true ? { threadSuppressed: true } : {}),
+    ...(target.text
+      ? { text: truncateUtf16Safe(target.text, MAX_RETAINED_PUBLIC_TEXT_CHARS) }
+      : {}),
+    ...(target.mediaUrl
+      ? { mediaUrl: truncateUtf16Safe(target.mediaUrl, MAX_RETAINED_PUBLIC_TEXT_CHARS) }
+      : {}),
+    ...(mediaUrls ? { mediaUrls } : {}),
+  };
+}
+
+function boundTerminalResultFallback(
+  fallback: AgentToolTerminalResultFallback | undefined,
+): AgentToolTerminalResultFallback | undefined {
+  if (!fallback || fallback.mode === "none") {
+    return fallback;
+  }
+  if (fallback.mode === "safe_text") {
+    return {
+      mode: "safe_text",
+      ...(fallback.maxChars !== undefined ? { maxChars: fallback.maxChars } : {}),
+      ...(fallback.prefix
+        ? { prefix: truncateUtf16Safe(fallback.prefix, MAX_RETAINED_PUBLIC_TEXT_CHARS) }
+        : {}),
+    };
+  }
+  return {
+    mode: "structured_summary",
+    ...(fallback.maxChars !== undefined ? { maxChars: fallback.maxChars } : {}),
+    fields: fallback.fields.slice(0, MAX_RETAINED_FALLBACK_FIELDS).map((field) => {
+      return {
+        label: truncateUtf16Safe(field.label, MAX_RETAINED_LABEL_CHARS),
+        paths: field.paths
+          .slice(0, MAX_RETAINED_FALLBACK_PATHS)
+          .map((path) =>
+            path
+              .slice(0, MAX_RETAINED_FALLBACK_PATH_SEGMENTS)
+              .map((segment) => truncateUtf16Safe(segment, MAX_RETAINED_LABEL_CHARS)),
+          ),
+        format: field.format,
+        missingText: field.missingText
+          ? truncateUtf16Safe(field.missingText, MAX_RETAINED_PUBLIC_TEXT_CHARS)
+          : undefined,
+      };
+    }),
+  };
+}
+
+function boundToolLoopObservation(observation: ToolLoopObservation): ToolLoopObservation {
+  const terminalSummary = observation.terminalSummary
+    ? {
+        ...observation.terminalSummary,
+        text: truncateUtf16Safe(observation.terminalSummary.text, MAX_RETAINED_PUBLIC_TEXT_CHARS),
+      }
+    : undefined;
+  const messagingToolSentTargets = observation.messagingToolSentTargets
+    ?.slice(-MAX_RETAINED_MESSAGING_ITEMS)
+    .map(boundMessagingToolSend);
+  const terminalResultFallback = boundTerminalResultFallback(observation.terminalResultFallback);
+  const messagingToolSentTexts = boundStringArray(observation.messagingToolSentTexts);
+  const messagingToolSentMediaUrls = boundStringArray(observation.messagingToolSentMediaUrls);
+  return {
+    toolName: truncateUtf16Safe(observation.toolName, MAX_RETAINED_LABEL_CHARS),
+    argsHash: truncateUtf16Safe(observation.argsHash, MAX_RETAINED_LABEL_CHARS),
+    ...(observation.resultHash
+      ? { resultHash: truncateUtf16Safe(observation.resultHash, MAX_RETAINED_LABEL_CHARS) }
+      : {}),
+    ...(observation.resultText
+      ? { resultText: truncateUtf16Safe(observation.resultText, MAX_RETAINED_RESULT_TEXT_CHARS) }
+      : {}),
+    ...(terminalSummary ? { terminalSummary } : {}),
+    ...(terminalResultFallback ? { terminalResultFallback } : {}),
+    ...(observation.didSendViaMessagingTool === true ? { didSendViaMessagingTool: true } : {}),
+    ...(messagingToolSentTexts ? { messagingToolSentTexts } : {}),
+    ...(messagingToolSentMediaUrls ? { messagingToolSentMediaUrls } : {}),
+    ...(messagingToolSentTargets?.length ? { messagingToolSentTargets } : {}),
+    ...(observation.mutatingAction === true ? { mutatingAction: true } : {}),
+    ...(observation.asyncStarted === true ? { asyncStarted: true } : {}),
+    ...(observation.failed === true ? { failed: true } : {}),
+    ...(observation.blockedReason
+      ? { blockedReason: truncateUtf16Safe(observation.blockedReason, MAX_RETAINED_LABEL_CHARS) }
+      : {}),
+    ...(observation.blockedMessage
+      ? {
+          blockedMessage: truncateUtf16Safe(
+            observation.blockedMessage,
+            MAX_RETAINED_PUBLIC_TEXT_CHARS,
+          ),
+        }
+      : {}),
+  };
+}
+
+export function appendBoundedToolLoopObservation(
+  observations: ToolLoopObservation[],
+  observation: ToolLoopObservation,
+): void {
+  observations.push(boundToolLoopObservation(observation));
+  if (observations.length > MAX_RETAINED_TOOL_LOOP_OBSERVATIONS) {
+    observations.splice(0, observations.length - MAX_RETAINED_TOOL_LOOP_OBSERVATIONS);
+  }
+}
 
 function normalizeToolResultTextForFallback(
   text: string | undefined,

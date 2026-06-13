@@ -1,11 +1,46 @@
 import { describe, expect, it } from "vitest";
 import {
+  appendBoundedToolLoopObservation,
   resolveSuccessfulToolTerminalFallback,
   resolveToolLoopAbortFallback,
   resolveToolLoopAbortFallbackPayload,
 } from "./tool-loop-fallback.js";
 
 describe("tool-loop terminal fallback", () => {
+  it("bounds retained observations and their fallback-relevant payloads", () => {
+    const observations: Parameters<typeof appendBoundedToolLoopObservation>[0] = [];
+    for (let index = 0; index < 70; index += 1) {
+      appendBoundedToolLoopObservation(observations, {
+        toolName: `tool-${index}`,
+        argsHash: `args-${index}`,
+        resultHash: `result-${index}`,
+        resultText: "r".repeat(70_000),
+        terminalSummary: {
+          privacy: "public",
+          text: "s".repeat(5_000),
+        },
+        messagingToolSentTexts: Array.from({ length: 20 }, () => "t".repeat(5_000)),
+        messagingToolSentTargets: Array.from({ length: 20 }, () => ({
+          tool: "message",
+          provider: "discord",
+          to: "channel-1",
+          text: "m".repeat(5_000),
+          channelData: { unbounded: "x".repeat(70_000) },
+        })),
+      });
+    }
+
+    expect(observations).toHaveLength(64);
+    expect(observations[0]?.toolName).toBe("tool-6");
+    expect(observations.at(-1)?.resultText).toHaveLength(64_000);
+    expect(observations.at(-1)?.terminalSummary?.text).toHaveLength(4_000);
+    expect(observations.at(-1)?.messagingToolSentTexts).toHaveLength(16);
+    expect(observations.at(-1)?.messagingToolSentTexts?.[0]).toHaveLength(4_000);
+    expect(observations.at(-1)?.messagingToolSentTargets).toHaveLength(16);
+    expect(observations.at(-1)?.messagingToolSentTargets?.[0]?.text).toHaveLength(4_000);
+    expect(observations.at(-1)?.messagingToolSentTargets?.[0]?.channelData).toBeUndefined();
+  });
+
   it("uses a public terminal summary returned by any tool without runner-side registration", () => {
     const resolution = resolveToolLoopAbortFallback({
       observations: [

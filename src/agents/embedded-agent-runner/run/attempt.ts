@@ -3380,6 +3380,7 @@ export async function runEmbeddedAttempt(
         getLastCompactionTokensAfter,
         waitForPendingEvents,
       } = subscription;
+      params.onTerminalLifecycleMetaReady?.(setTerminalLifecycleMeta);
       toolMetasForTerminal = toolMetas;
       isCompactionPendingForExternalSignal = subscription.isCompacting;
       isCompactionInFlightForExternalSignal = () => activeSession.isCompacting;

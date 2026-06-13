@@ -199,6 +199,7 @@ import {
   resolveHookModelSelection,
 } from "./run/setup.js";
 import {
+  appendBoundedToolLoopObservation,
   resolveSuccessfulToolTerminalFallback,
   resolveToolLoopAbortFallback,
   type ToolLoopObservation,
@@ -229,11 +230,19 @@ const REPLAY_UNSAFE_TOOL_LOOP_WARNING =
   "⚠️ Some tool actions may have already been executed — please verify before retrying.";
 const TOOL_LOOP_ABORT_ERROR_TEXT =
   "I stopped because repeated tool calls did not make progress. No user-facing result text was provided.";
+const MAX_RETAINED_TOOL_LOOP_SIDE_EFFECT_ITEMS = 64;
 const NO_REAL_CONVERSATION_MESSAGES_REASON = "no real conversation messages";
 const BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX =
   "Before accepting the previous final answer, apply this revision request and produce the revised final answer. Do not repeat completed work or rerun tools unless the request explicitly requires it.";
 const MAX_BEFORE_AGENT_FINALIZE_REVISIONS = 3;
 type EmbeddedRunAttemptForRunner = Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
+
+function appendBoundedItems<T>(target: T[], items: readonly T[]): void {
+  target.push(...items);
+  if (target.length > MAX_RETAINED_TOOL_LOOP_SIDE_EFFECT_ITEMS) {
+    target.splice(0, target.length - MAX_RETAINED_TOOL_LOOP_SIDE_EFFECT_ITEMS);
+  }
+}
 
 function isNoRealConversationCompactionNoop(params: {
   ok?: boolean;
@@ -1455,8 +1464,40 @@ export async function runEmbeddedAgent(
       let toolLoopAbortError: Error | undefined;
       let currentAttemptToolLoopObservations: ToolLoopObservation[] = [];
       let currentAttemptLiveState: EmbeddedAgentAttemptLiveState | undefined;
+      let currentAttemptObservedDidSendViaMessagingTool = false;
+      let currentAttemptObservedHadPotentialSideEffects = false;
+      let currentAttemptObservedMessagingToolSentTexts: string[] = [];
+      let currentAttemptObservedMessagingToolSentMediaUrls: string[] = [];
+      let currentAttemptObservedMessagingToolSentTargets: NonNullable<
+        ToolLoopObservation["messagingToolSentTargets"]
+      > = [];
+      let currentAttemptTerminalLifecycleMetaSetter:
+        | NonNullable<EmbeddedRunAttemptForRunner["setTerminalLifecycleMeta"]>
+        | undefined;
       const observePostCompactionToolOutcome = (observation: ToolLoopObservation): void => {
-        currentAttemptToolLoopObservations.push(observation);
+        appendBoundedToolLoopObservation(currentAttemptToolLoopObservations, observation);
+        const retainedObservation = currentAttemptToolLoopObservations.at(-1);
+        if (retainedObservation) {
+          currentAttemptObservedDidSendViaMessagingTool ||=
+            retainedObservation.didSendViaMessagingTool === true;
+          appendBoundedItems(
+            currentAttemptObservedMessagingToolSentTexts,
+            retainedObservation.messagingToolSentTexts ?? [],
+          );
+          appendBoundedItems(
+            currentAttemptObservedMessagingToolSentMediaUrls,
+            retainedObservation.messagingToolSentMediaUrls ?? [],
+          );
+          appendBoundedItems(
+            currentAttemptObservedMessagingToolSentTargets,
+            retainedObservation.messagingToolSentTargets ?? [],
+          );
+          if (!retainedObservation.blockedReason) {
+            currentAttemptObservedHadPotentialSideEffects ||= toolMetasHavePotentialSideEffects([
+              retainedObservation,
+            ]);
+          }
+        }
         if (observation.blockedReason === "tool-loop") {
           const message =
             observation.blockedMessage ??
@@ -1479,7 +1520,7 @@ export async function runEmbeddedAgent(
             blockedReason: "post-compaction-loop",
             blockedMessage: verdict.message,
           };
-          currentAttemptToolLoopObservations.push(blockedObservation);
+          appendBoundedToolLoopObservation(currentAttemptToolLoopObservations, blockedObservation);
           toolLoopAbortError ??= PostCompactionLoopPersistedError.fromVerdict(verdict);
           postCompactionAbortController?.abort(toolLoopAbortError);
         }
@@ -1790,6 +1831,12 @@ export async function runEmbeddedAgent(
           runLoopIterations += 1;
           currentAttemptToolLoopObservations = [];
           currentAttemptLiveState = undefined;
+          currentAttemptObservedDidSendViaMessagingTool = false;
+          currentAttemptObservedHadPotentialSideEffects = false;
+          currentAttemptObservedMessagingToolSentTexts = [];
+          currentAttemptObservedMessagingToolSentMediaUrls = [];
+          currentAttemptObservedMessagingToolSentTargets = [];
+          currentAttemptTerminalLifecycleMetaSetter = undefined;
           const runtimeAuthRetry = authRetryPending;
           authRetryPending = false;
           attemptedThinking.add(thinkLevel);
@@ -1882,30 +1929,22 @@ export async function runEmbeddedAgent(
             const messagingToolSentTexts = [
               ...accumulatedMessagingToolSentTexts,
               ...(currentAttemptLiveState?.messagingToolSentTexts ??
-                currentAttemptToolLoopObservations.flatMap(
-                  (observation) => observation.messagingToolSentTexts ?? [],
-                )),
+                currentAttemptObservedMessagingToolSentTexts),
             ];
             const messagingToolSentMediaUrls = [
               ...accumulatedMessagingToolSentMediaUrls,
               ...(currentAttemptLiveState?.messagingToolSentMediaUrls ??
-                currentAttemptToolLoopObservations.flatMap(
-                  (observation) => observation.messagingToolSentMediaUrls ?? [],
-                )),
+                currentAttemptObservedMessagingToolSentMediaUrls),
             ];
             const messagingToolSentTargets = [
               ...accumulatedMessagingToolSentTargets,
               ...(currentAttemptLiveState?.messagingToolSentTargets ??
-                currentAttemptToolLoopObservations.flatMap(
-                  (observation) => observation.messagingToolSentTargets ?? [],
-                )),
+                currentAttemptObservedMessagingToolSentTargets),
             ];
             const didSendViaMessagingTool =
               accumulatedDidSendViaMessagingTool ||
               currentAttemptLiveState?.didSendViaMessagingTool === true ||
-              currentAttemptToolLoopObservations.some(
-                (observation) => observation.didSendViaMessagingTool === true,
-              );
+              currentAttemptObservedDidSendViaMessagingTool;
             const successfulCronAdds =
               accumulatedSuccessfulCronAdds + (currentAttemptLiveState?.successfulCronAdds ?? 0);
             const acceptedSessionSpawns = [
@@ -1918,11 +1957,7 @@ export async function runEmbeddedAgent(
               didSendViaMessagingTool ||
               successfulCronAdds > 0 ||
               acceptedSessionSpawns.length > 0 ||
-              toolMetasHavePotentialSideEffects(
-                currentAttemptToolLoopObservations.filter(
-                  (observation) => !observation.blockedReason,
-                ),
-              );
+              currentAttemptObservedHadPotentialSideEffects;
             const agentMeta = buildErrorAgentMeta({
               sessionId: activeSessionId,
               sessionFile: activeSessionFile,
@@ -2054,6 +2089,9 @@ export async function runEmbeddedAgent(
             onAttemptStateChange: (state) => {
               currentAttemptLiveState = state;
             },
+            onTerminalLifecycleMetaReady: (setter) => {
+              currentAttemptTerminalLifecycleMetaSetter = setter;
+            },
             authStorage,
             authProfileStore: runAttemptAuthProfileStore,
             // These harnesses build OpenClaw tools internally. Keep transport auth
@@ -2123,6 +2161,12 @@ export async function runEmbeddedAgent(
           })
             .catch((err: unknown): never | EmbeddedAgentRunResult => {
               if (toolLoopAbortError) {
+                currentAttemptTerminalLifecycleMetaSetter?.({
+                  replayInvalid: true,
+                  livenessState: "blocked",
+                  stopReason: "tool_loop_abort",
+                  aborted: true,
+                });
                 return buildToolLoopAbortFallbackResult();
               }
               throw toolLoopAbortError ?? err;
@@ -2135,9 +2179,6 @@ export async function runEmbeddedAgent(
             });
           if (isEmbeddedAgentRunResult(rawAttempt)) {
             return rawAttempt;
-          }
-          if (toolLoopAbortError) {
-            return buildToolLoopAbortFallbackResult();
           }
           const attempt = normalizeEmbeddedRunAttemptResult(rawAttempt);
 
@@ -2160,6 +2201,14 @@ export async function runEmbeddedAgent(
           ) => {
             attempt.setTerminalLifecycleMeta?.({ ...meta, aborted });
           };
+          if (toolLoopAbortError) {
+            setTerminalLifecycleMeta({
+              replayInvalid: true,
+              livenessState: "blocked",
+              stopReason: "tool_loop_abort",
+            });
+            return buildToolLoopAbortFallbackResult();
+          }
           const timedOutDuringToolExecution = attempt.timedOutDuringToolExecution ?? false;
           if (sessionIdUsed && sessionIdUsed !== activeSessionId) {
             activeSessionId = sessionIdUsed;
@@ -3429,7 +3478,9 @@ export async function runEmbeddedAgent(
             .toLowerCase();
           const recoveredFinalAssistantCandidateAfterPromptTimeout =
             timedOutDuringPrompt &&
-            !hasMessagingToolSideEffectEvidence(attempt) &&
+            attempt.didDeliverSourceReplyViaMessageTool !== true &&
+            (!hasMessagingToolSideEffectEvidence(attempt) ||
+              !(attempt.assistantTexts ?? []).some((text) => text.trim().length > 0)) &&
             ["completed", "end_turn", "stop"].includes(finalAssistantStopReason)
               ? (finalAssistantVisibleText ?? finalAssistantRawText)?.trim()
               : undefined;

@@ -39,6 +39,20 @@ export type EmbeddedRunContextWindowInfo = {
   source: "model" | "modelsConfig" | "agentContextTokens" | "default";
 };
 
+export type EmbeddedRunTerminalLifecycleMeta = {
+  replayInvalid?: boolean;
+  livenessState?: EmbeddedRunLivenessState;
+  stopReason?: string;
+  yielded?: boolean;
+  timeoutPhase?: AgentRunTimeoutPhase;
+  providerStarted?: boolean;
+  aborted?: boolean;
+};
+
+export type EmbeddedRunTerminalLifecycleMetaSetter = (
+  meta: EmbeddedRunTerminalLifecycleMeta,
+) => void;
+
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   initialReplayState?: EmbeddedRunReplayState;
   /** Pluggable context engine for ingest/assemble/compact lifecycle. */
@@ -65,6 +79,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   onToolOutcome?: ToolOutcomeObserver;
   /** Live delivery and side-effect state observed before an attempt returns. */
   onAttemptStateChange?: (state: EmbeddedAgentAttemptLiveState) => void;
+  /** Supplies the attempt-owned terminal lifecycle finalizer before execution can abort. */
+  onTerminalLifecycleMetaReady?: (setter: EmbeddedRunTerminalLifecycleMetaSetter) => void;
   model: Model;
   authStorage: AuthStorage;
   /** Auth profile store already resolved during startup for this attempt. */
@@ -220,13 +236,5 @@ export type EmbeddedRunAttemptResult = {
     completedCount: number;
     activeCount: number;
   };
-  setTerminalLifecycleMeta?: (meta: {
-    replayInvalid?: boolean;
-    livenessState?: EmbeddedRunLivenessState;
-    stopReason?: string;
-    yielded?: boolean;
-    timeoutPhase?: AgentRunTimeoutPhase;
-    providerStarted?: boolean;
-    aborted?: boolean;
-  }) => void;
+  setTerminalLifecycleMeta?: EmbeddedRunTerminalLifecycleMetaSetter;
 };

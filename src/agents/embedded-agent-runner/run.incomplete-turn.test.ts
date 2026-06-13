@@ -935,6 +935,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
   it("surfaces a known read-only tool terminal result when a tool loop resolves after abort", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
+    const setTerminalLifecycleMeta = vi.fn();
     mockedRunEmbeddedAttempt.mockImplementationOnce(async (params: unknown) => {
       const attemptParams = params as {
         abortSignal?: AbortSignal;
@@ -969,6 +970,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         externalAbort: false,
         assistantTexts: [],
         toolMetas: [{ toolName: "web_fetch" }],
+        setTerminalLifecycleMeta,
       });
     });
 
@@ -989,14 +991,22 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       stopReason: "tool_loop_abort",
       finishReason: "tool_loop_abort",
     });
+    expect(setTerminalLifecycleMeta).toHaveBeenCalledWith({
+      replayInvalid: true,
+      livenessState: "blocked",
+      stopReason: "tool_loop_abort",
+      aborted: true,
+    });
   });
 
   it("preserves live replay state when a loop abort has an unresolved tool failure", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     const sentTarget = { tool: "message", provider: "discord", to: "channel-1" };
+    const setTerminalLifecycleMeta = vi.fn();
     mockedRunEmbeddedAttempt.mockImplementationOnce(async (params: unknown) => {
       const attemptParams = params as {
         abortSignal?: AbortSignal;
+        onTerminalLifecycleMetaReady?: (setter: typeof setTerminalLifecycleMeta) => void;
         onAttemptStateChange?: (state: {
           replayState: { replayInvalid: boolean; hadPotentialSideEffects: boolean };
           didSendViaMessagingTool: boolean;
@@ -1019,6 +1029,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
           blockedMessage?: string;
         }) => void;
       };
+      attemptParams.onTerminalLifecycleMetaReady?.(setTerminalLifecycleMeta);
       attemptParams.onAttemptStateChange?.({
         replayState: { replayInvalid: true, hadPotentialSideEffects: true },
         didSendViaMessagingTool: true,
@@ -1071,6 +1082,65 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(result.didSendViaMessagingTool).toBe(true);
     expect(result.messagingToolSentTexts).toEqual(["already sent"]);
     expect(result.messagingToolSentTargets).toEqual([sentTarget]);
+    expect(setTerminalLifecycleMeta).toHaveBeenCalledWith({
+      replayInvalid: true,
+      livenessState: "blocked",
+      stopReason: "tool_loop_abort",
+      aborted: true,
+    });
+  });
+
+  it("preserves early side-effect evidence after the observation ring evicts it", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (params: unknown) => {
+      const attemptParams = params as {
+        abortSignal?: AbortSignal;
+        onToolOutcome?: (observation: {
+          toolName: string;
+          argsHash: string;
+          resultHash: string;
+          mutatingAction?: boolean;
+          blockedReason?: string;
+          blockedMessage?: string;
+        }) => void;
+      };
+      attemptParams.onToolOutcome?.({
+        toolName: "charge_customer",
+        argsHash: "charge",
+        resultHash: "charged",
+        mutatingAction: false,
+      });
+      for (let index = 0; index < 70; index += 1) {
+        attemptParams.onToolOutcome?.({
+          toolName: "read",
+          argsHash: `read-${index}`,
+          resultHash: `result-${index}`,
+          mutatingAction: false,
+        });
+      }
+      attemptParams.onToolOutcome?.({
+        toolName: "read",
+        argsHash: "read-loop",
+        resultHash: "blocked",
+        blockedReason: "tool-loop",
+        blockedMessage: "CRITICAL: repeated read calls.",
+      });
+      expect(attemptParams.abortSignal?.aborted).toBe(true);
+      throw new Error("Request was aborted.");
+    });
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "xai",
+      model: "grok-composer-2.5-fast",
+      runId: "run-tool-loop-after-evicted-side-effect",
+    });
+
+    expect(result.payloads).toContainEqual({
+      text: "⚠️ Some tool actions may have already been executed — please verify before retrying.",
+      isError: true,
+    });
+    expect(result.meta.replayInvalid).toBe(true);
   });
 
   it("warns when an unknown plugin tool completed before a later tool loop abort", async () => {
@@ -1548,6 +1618,37 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       result: "success",
       stage: "assistant",
     });
+  });
+
+  it("promotes a timeout-raced final assistant reply after an external message send", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    const finalText = "The external notification was sent, and the source-channel summary is done.";
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        timedOut: true,
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: ["External notification"],
+        messagingToolSentTargets: [{ tool: "message", provider: "discord", to: "channel-2" }],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.5",
+          content: [{ type: "text", text: finalText }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-prompt-timeout-external-message-final-assistant-recovered",
+    });
+
+    expect(result.payloads).toEqual([{ text: finalText }]);
+    expect(result.meta.finalAssistantVisibleText).toBe(finalText);
   });
 
   it.each([
@@ -6241,6 +6342,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     "set composer 2.5 as the default",
     "endpoint results now",
     "channel proof after the restart",
+    "When you have a moment, can you check the scheduler?",
+    "I need you to check the scheduler",
   ])("treats task-shaped prompt %s as actionable for planning-only retry", (prompt) => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "openai",
