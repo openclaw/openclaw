@@ -230,7 +230,7 @@ const MID_TURN_PRECHECK_CONTINUATION_PROMPT =
   "Continue from the current transcript after the latest tool result. Do not repeat the original user request, and do not rerun completed tools unless the transcript shows they are still needed.";
 const COMPACTION_CONTINUATION_RETRY_INSTRUCTION =
   "The previous attempt compacted the conversation context before producing a final user-visible answer. Continue from the compacted transcript and produce the final answer now. Do not restart from scratch, do not repeat completed work, and do not rerun tools unless the transcript clearly lacks required evidence.";
-const REPLAY_UNSAFE_TOOL_LOOP_WARNING =
+const REPLAY_UNSAFE_TOOL_ACTION_WARNING =
   "⚠️ Some tool actions may have already been executed — please verify before retrying.";
 const TOOL_LOOP_ABORT_ERROR_TEXT =
   "I stopped because repeated tool calls did not make progress. No user-facing result text was provided.";
@@ -575,13 +575,21 @@ function resolveAttemptSuccessfulToolTerminalFallback(params: {
   attempt: EmbeddedRunAttemptForRunner;
   observations: readonly ToolLoopObservation[];
   retentionState: ToolLoopObservationRetentionState;
+  priorAttemptsHadPotentialSideEffects: boolean;
 }) {
-  return resolveSuccessfulToolTerminalFallback({
+  const fallback = resolveSuccessfulToolTerminalFallback({
     observations: params.observations,
     retentionState: params.retentionState,
     requireDeclaredPresentableFallback: resolveAttemptReplayMetadata(params.attempt)
       .hadPotentialSideEffects,
   });
+  if (!fallback || !params.priorAttemptsHadPotentialSideEffects) {
+    return fallback;
+  }
+  return {
+    toolName: fallback.toolName,
+    payload: { text: REPLAY_UNSAFE_TOOL_ACTION_WARNING, isError: true },
+  };
 }
 
 function shouldSurfaceNonDeliverableTerminalReply(params: {
@@ -1847,6 +1855,8 @@ export async function runEmbeddedAgent(
             });
           }
           runLoopIterations += 1;
+          const priorAttemptsHadPotentialSideEffects =
+            accumulatedReplayState.hadPotentialSideEffects;
           currentAttemptToolLoopObservations = [];
           currentAttemptToolLoopObservationRetention = createToolLoopObservationRetentionState();
           currentAttemptLiveState = undefined;
@@ -1998,7 +2008,7 @@ export async function runEmbeddedAgent(
               payloads: [
                 fallback?.payload ?? { text: TOOL_LOOP_ABORT_ERROR_TEXT, isError: true },
                 ...(hadPotentialSideEffects
-                  ? [{ text: REPLAY_UNSAFE_TOOL_LOOP_WARNING, isError: true }]
+                  ? [{ text: REPLAY_UNSAFE_TOOL_ACTION_WARNING, isError: true }]
                   : []),
               ],
               meta: {
@@ -3601,6 +3611,7 @@ export async function runEmbeddedAgent(
                   attempt,
                   observations: currentAttemptToolLoopObservations,
                   retentionState: currentAttemptToolLoopObservationRetention,
+                  priorAttemptsHadPotentialSideEffects,
                 })?.payload
               : undefined;
             const promptTimeoutFallbackPayloads =
@@ -3734,6 +3745,7 @@ export async function runEmbeddedAgent(
                   attempt,
                   observations: currentAttemptToolLoopObservations,
                   retentionState: currentAttemptToolLoopObservationRetention,
+                  priorAttemptsHadPotentialSideEffects,
                 })
               : undefined;
           const nextPlanningOnlyRetryInstruction =
@@ -3919,6 +3931,7 @@ export async function runEmbeddedAgent(
                   attempt,
                   observations: currentAttemptToolLoopObservations,
                   retentionState: currentAttemptToolLoopObservationRetention,
+                  priorAttemptsHadPotentialSideEffects,
                 })
               : undefined;
             const exhaustedPlanningOnlyPayloads = exhaustedPlanningOnlyToolFallback
@@ -3997,6 +4010,7 @@ export async function runEmbeddedAgent(
                   attempt,
                   observations: currentAttemptToolLoopObservations,
                   retentionState: currentAttemptToolLoopObservationRetention,
+                  priorAttemptsHadPotentialSideEffects,
                 })
               : undefined;
           if (nonRetryablePlanningOnlyText) {
@@ -4066,6 +4080,7 @@ export async function runEmbeddedAgent(
                   attempt,
                   observations: currentAttemptToolLoopObservations,
                   retentionState: currentAttemptToolLoopObservationRetention,
+                  priorAttemptsHadPotentialSideEffects,
                 })
               : undefined;
             const replayInvalid = resolveReplayInvalidForAttempt(
@@ -4195,6 +4210,7 @@ export async function runEmbeddedAgent(
                   attempt,
                   observations: currentAttemptToolLoopObservations,
                   retentionState: currentAttemptToolLoopObservationRetention,
+                  priorAttemptsHadPotentialSideEffects,
                 })
               : undefined;
             const replayInvalid = resolveReplayInvalidForAttempt(
@@ -4454,6 +4470,7 @@ export async function runEmbeddedAgent(
                   attempt,
                   observations: currentAttemptToolLoopObservations,
                   retentionState: currentAttemptToolLoopObservationRetention,
+                  priorAttemptsHadPotentialSideEffects,
                 })?.payload
               : undefined;
           const shouldPreferToolFallbackOverPlanningText =

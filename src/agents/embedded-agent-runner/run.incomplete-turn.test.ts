@@ -41,6 +41,7 @@ import {
   resolveIncompleteTurnPayloadText as resolveIncompleteTurnPayloadTextCore,
   resolveReasoningOnlyRetryInstruction,
   resolvePlanningOnlyBlockedPayloadText,
+  resolvePlanningOnlyTerminalPayloadText,
   STRICT_AGENTIC_BLOCKED_TEXT,
   resolveReplayInvalidFlag,
   resolveRunLivenessState,
@@ -6600,6 +6601,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     "Can you not delete the file?",
     "Could you please avoid restarting production?",
     "Can you ensure you don't delete the file?",
+    "I need you to not delete the backups.",
+    "We want you to avoid restarting production.",
+    "I would like you to ensure you don't remove the database.",
   ])("does not treat a negated action request as authorization to act: %s", (prompt) => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "openai",
@@ -6615,11 +6619,14 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(retryInstruction).toBeNull();
   });
 
-  it("keeps a safe action request with a constraint actionable", () => {
+  it.each([
+    "Can you check the config without changing it?",
+    "I need you to check the config without changing it.",
+  ])("keeps a safe action request with a constraint actionable: %s", (prompt) => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "openai",
       modelId: "gpt-5.4",
-      prompt: "Can you check the config without changing it?",
+      prompt,
       aborted: false,
       timedOut: false,
       attempt: makeAttemptResult({
@@ -6628,6 +6635,32 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     });
 
     expect(retryInstruction).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
+  });
+
+  it.each([
+    {
+      name: "active",
+      itemLifecycle: { startedCount: 1, completedCount: 0, activeCount: 1 },
+    },
+    {
+      name: "started but unfinished",
+      itemLifecycle: { startedCount: 1, completedCount: 0, activeCount: 0 },
+    },
+  ])("does not finalize planning-only text while an item is $name", ({ itemLifecycle }) => {
+    const params = {
+      provider: "openai",
+      modelId: "gpt-5.4",
+      prompt: "Please inspect the code, make the change, and run the checks.",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["I'll inspect the code, make the change, and run the checks."],
+        itemLifecycle,
+      }),
+    };
+
+    expect(resolvePlanningOnlyBlockedPayloadText(params)).toBeNull();
+    expect(resolvePlanningOnlyTerminalPayloadText(params)).toBeNull();
   });
 
   it.each([

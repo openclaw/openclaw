@@ -166,7 +166,7 @@ const ACTIONABLE_PROMPT_POLITE_DIRECTIVE_RE =
 const ACTIONABLE_PROMPT_REQUEST_RE =
   /\b(?:can|could|would|will)\s+you\b|\b(?:help|tell|show)\s+me\b|\bwalk me through\b|\b(?:i|we)\s+(?:need|want|would like)\s+you\b/i;
 const NON_AUTHORIZING_NEGATED_ACTION_REQUEST_RE =
-  /\b(?:can|could|would|will)\s+you\s+(?:(?:please\s+)?(?:not|never|avoid|refrain\s+from)\b|[^?\n]{0,80}\b(?:ensure|make\s+sure)\b[^?\n]{0,80}(?:\b(?:not|never)\b|\bdo\s+not\b|\bdon['’]t\b))/i;
+  /\b(?:(?:can|could|would|will)\s+you|(?:i|we)\s+(?:need|want|would like)\s+you\s+to)\s+(?:(?:please\s+)?(?:not|never|avoid|refrain\s+from)\b|[^?\n]{0,80}\b(?:ensure|make\s+sure)\b[^?\n]{0,80}(?:\b(?:not|never)\b|\bdo\s+not\b|\bdon['’]t\b))/i;
 const NON_AUTHORIZING_ADVISORY_PROMPT_RE =
   /^(?:(?:hey|hi|hello)\b[\s,!:-]*)?(?:please[\s,]+)?(?:(?:(?:what|which|how|why|where|who|whom|whose)\b[^?\n]{0,200}\b|when\s+)(?:can|could|would|will|should|do|does|did|are|is)\s+you\b|(?:(?:can|could|would|will)\s+you\s+)?(?:please\s+)?(?:(?:explain|describe|walk\s+me\s+through|help\s+me\s+understand)\b|(?:tell\s+me|show\s+me)\b[^?\n]{0,200}\b(?:how|why|what|which|when|where|whether|steps?|procedure|instructions?)\b))/i;
 const EXPLICIT_ADVISORY_FOLLOW_UP_ACTION_RE =
@@ -1471,7 +1471,8 @@ export function resolvePlanningOnlyBlockedPayloadText(params: {
     !shouldApplyPlanningOnlyRetryGuard({
       provider: params.provider,
       modelId: params.modelId,
-    })
+    }) ||
+    hasUnsettledAttemptItems(params.attempt)
   ) {
     return null;
   }
@@ -1509,7 +1510,9 @@ export function resolvePlanningOnlyTerminalPayloadText(params: {
   return shouldApplyPlanningOnlyRetryGuard({
     provider: params.provider,
     modelId: params.modelId,
-  }) && resolvePlanningOnlyTurnClassification(params)
+  }) &&
+    !hasUnsettledAttemptItems(params.attempt) &&
+    resolvePlanningOnlyTurnClassification(params)
     ? PLANNING_ONLY_BLOCKED_TEXT
     : null;
 }

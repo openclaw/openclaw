@@ -2308,6 +2308,83 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     expect(result.meta.livenessState).toBe("blocked");
   });
 
+  it("warns instead of surfacing a later fallback after an earlier attempt had side effects", async () => {
+    mockedRunEmbeddedAttempt
+      .mockImplementationOnce(async (params) => {
+        params.onToolOutcome?.({
+          toolName: "write",
+          argsHash: "report",
+          resultHash: "write-result",
+          mutatingAction: true,
+        });
+        return makeAttemptResult({
+          assistantTexts: [],
+          promptError: makeOverflowError(),
+          toolMetas: [{ toolName: "write", mutatingAction: true }],
+          replayMetadata: {
+            hadPotentialSideEffects: true,
+            replaySafe: false,
+          },
+        });
+      })
+      .mockImplementation(async (params) => {
+        params.onToolOutcome?.({
+          toolName: "status_probe",
+          argsHash: "current",
+          resultHash: "status-result",
+          resultText: "healthy",
+          terminalResultFallback: { mode: "safe_text", prefix: "Status:" },
+        });
+        return makeAttemptResult({
+          assistantTexts: [],
+          itemLifecycle: {
+            startedCount: 1,
+            completedCount: 1,
+            activeCount: 0,
+          },
+          toolMetas: [{ toolName: "status_probe", mutatingAction: false }],
+          lastAssistant: {
+            role: "assistant",
+            stopReason: "end_turn",
+            provider: "openai",
+            model: "gpt-5.4",
+            content: [
+              {
+                type: "thinking",
+                thinking: "internal reasoning",
+                thinkingSignature: JSON.stringify({
+                  id: "rs_prior_side_effect",
+                  type: "reasoning",
+                }),
+              },
+            ],
+          } as never,
+        });
+      });
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({ summary: "Compacted session", tokensAfter: 50 }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.4",
+      reasoningLevel: "on",
+      runId: "run-prior-side-effect-blocks-later-fallback",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.payloads).toEqual([
+      {
+        text: "⚠️ Some tool actions may have already been executed — please verify before retrying.",
+        isError: true,
+      },
+    ]);
+    expect(JSON.stringify(result.payloads)).not.toContain("Status:");
+    expect(result.meta.replayInvalid).toBe(true);
+    expect(result.meta.livenessState).toBe("blocked");
+  });
+
   it("normalizes abort-wrapped prompt errors before handing off to model fallback", async () => {
     const promptError = Object.assign(new Error("request aborted"), {
       name: "AbortError",
