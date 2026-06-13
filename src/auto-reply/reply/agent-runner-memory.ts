@@ -12,6 +12,7 @@ import { classifyCompactionReason } from "../../agents/embedded-agent-runner/com
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
+import { isCliRuntimeAliasForProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { resolveContextConfigProviderForRuntime } from "../../agents/openai-routing.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
@@ -233,6 +234,22 @@ function resolveMemoryFlushRuntimeOverrideForProvider(params: {
     return "codex";
   }
   return undefined;
+}
+
+function followupUsesCliRuntime(params: {
+  cfg: OpenClawConfig;
+  followupRun: FollowupRun;
+  sessionEntry?: Pick<SessionEntry, "agentRuntimeOverride">;
+}): boolean {
+  const provider = params.followupRun.run.provider;
+  if (isCliProvider(provider, params.cfg)) {
+    return true;
+  }
+  return isCliRuntimeAliasForProvider({
+    provider,
+    runtime: params.sessionEntry?.agentRuntimeOverride,
+    cfg: params.cfg,
+  });
 }
 
 function resolveFollowupContextConfigProvider(params: {
@@ -709,7 +726,11 @@ export async function runPreflightCompactionIfNeeded(params: {
     return entry ?? params.sessionEntry;
   }
 
-  const isCli = isCliProvider(params.followupRun.run.provider, params.cfg);
+  const isCli = followupUsesCliRuntime({
+    cfg: params.cfg,
+    followupRun: params.followupRun,
+    sessionEntry: entry,
+  });
   if (params.isHeartbeat || isCli) {
     return entry ?? params.sessionEntry;
   }
@@ -1026,11 +1047,15 @@ export async function runMemoryFlushIfNeeded(params: {
     return sandboxCfg.workspaceAccess === "rw";
   })();
 
-  const isCli = isCliProvider(params.followupRun.run.provider, params.cfg);
-  const canAttemptFlush = memoryFlushWritable && !params.isHeartbeat && !isCli;
   let entry =
     params.sessionEntry ??
     (params.sessionKey ? params.sessionStore?.[params.sessionKey] : undefined);
+  const isCli = followupUsesCliRuntime({
+    cfg: params.cfg,
+    followupRun: params.followupRun,
+    sessionEntry: entry,
+  });
+  const canAttemptFlush = memoryFlushWritable && !params.isHeartbeat && !isCli;
   const contextWindowTokens = resolveMemoryFlushContextWindowTokens({
     cfg: params.cfg,
     provider: resolveFollowupContextConfigProvider({
