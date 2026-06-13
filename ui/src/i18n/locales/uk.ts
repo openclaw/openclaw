@@ -1339,6 +1339,16 @@ export const uk: TranslationMap = {
     toolCards: {
       toolError: "Помилка інструмента",
     },
+    workspace: {
+      files: "Workspace files",
+      section: "Workspace",
+      title: "Files",
+      refresh: "Refresh files",
+      hide: "Hide workspace files",
+      show: "Show workspace files",
+      loading: "Loading files...",
+      empty: "No workspace files",
+    },
   },
   languages: {
     en: "Англійська",

@@ -1,5 +1,13 @@
 {
   "fallbackKeys": [
+    "chat.workspace.empty",
+    "chat.workspace.files",
+    "chat.workspace.hide",
+    "chat.workspace.loading",
+    "chat.workspace.refresh",
+    "chat.workspace.section",
+    "chat.workspace.show",
+    "chat.workspace.title",
     "workboard.dependencies",
     "workboard.dependenciesBlocked",
     "workboard.dependenciesBlockedTitle",
@@ -29,12 +37,12 @@
     "workboard.unknownStatus",
     "workboard.viewDetails"
   ],
-  "generatedAt": "2026-06-01T07:19:25.987Z",
+  "generatedAt": "2026-06-13T16:41:43.263Z",
   "locale": "nl",
   "model": "claude-opus-4-8",
   "provider": "anthropic",
-  "sourceHash": "0639815f4b249fd84b5149556602c9e5da1136d73a747f26a1c12981a4319ebb",
-  "totalKeys": 1330,
+  "sourceHash": "e48ce4efdf7569dbb47189ec7bcec7372ebc62237c6f0a137f222e6dbf211d98",
+  "totalKeys": 1338,
   "translatedKeys": 1302,
   "workflow": 1
 }

@@ -59,6 +59,14 @@
   flex-direction: column;
   gap: 2px;
   min-width: 0;
+  flex: 1;
+}
+
+.chat-workspace-rail__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
 }
 
 .chat-workspace-rail__eyebrow {
@@ -192,6 +200,46 @@
     opacity: 1;
     transform: translateX(0);
   }
+}
+
+/* Collapsed workspace rail */
+.chat-workbench--rail-collapsed {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.chat-workspace-rail--collapsed {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  padding-top: 8px;
+  min-width: auto;
+}
+
+.chat-workspace-rail__collapse {
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  padding: 0;
+}
+
+.chat-workspace-rail__toggle {
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  padding: 0;
+  margin: 4px;
+}
+
+.chat-workspace-rail__toggle svg,
+.chat-workspace-rail__collapse svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 /* Sidebar Panel */

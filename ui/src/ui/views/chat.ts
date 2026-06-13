@@ -467,6 +467,7 @@ interface ChatEphemeralState {
     scrollTop: number;
   } | null;
   historyRenderAnchorFrame: number | null;
+  workspaceRailOpen: boolean;
 }
 
 function createChatEphemeralState(): ChatEphemeralState {
@@ -489,6 +490,7 @@ function createChatEphemeralState(): ChatEphemeralState {
     historyRenderExpansionFrame: null,
     historyRenderAnchorAdjustment: null,
     historyRenderAnchorFrame: null,
+    workspaceRailOpen: true,
   };
 }
 
@@ -1007,28 +1009,76 @@ function formatWorkspaceFileSize(file: AgentFileEntry): string {
 
 function renderWorkspaceFileRail(
   workspaceFiles: NonNullable<ChatProps["workspaceFiles"]> | undefined,
+  requestUpdate: () => void,
 ): TemplateResult | typeof nothing {
   if (!workspaceFiles) {
     return nothing;
   }
+  const railId = "chat-workspace-file-rail";
+
+  const collapseRail = () => {
+    vs.workspaceRailOpen = false;
+    requestUpdate();
+  };
+
+  const expandRail = () => {
+    vs.workspaceRailOpen = true;
+    requestUpdate();
+  };
+
+  if (!vs.workspaceRailOpen) {
+    return html`
+      <aside
+        id=${railId}
+        class="chat-workspace-rail chat-workspace-rail--collapsed"
+        aria-label=${t("chat.workspace.files")}
+      >
+        <button
+          class="btn btn--ghost btn--sm chat-workspace-rail__toggle"
+          type="button"
+          title=${t("chat.workspace.show")}
+          aria-label=${t("chat.workspace.show")}
+          aria-controls=${railId}
+          aria-expanded="false"
+          @click=${expandRail}
+        >
+          ${icons.panelRightOpen}
+        </button>
+      </aside>
+    `;
+  }
+
   const files = workspaceFiles.list?.files ?? [];
   return html`
-    <aside class="chat-workspace-rail" aria-label="Workspace files">
+    <aside id=${railId} class="chat-workspace-rail" aria-label=${t("chat.workspace.files")}>
       <div class="chat-workspace-rail__header">
         <div class="chat-workspace-rail__title">
-          <span class="chat-workspace-rail__eyebrow">Workspace</span>
-          <strong>Files</strong>
+          <span class="chat-workspace-rail__eyebrow">${t("chat.workspace.section")}</span>
+          <strong>${t("chat.workspace.title")}</strong>
         </div>
-        <button
-          class="btn btn--ghost btn--sm chat-workspace-rail__refresh"
-          type="button"
-          title="Refresh files"
-          aria-label="Refresh files"
-          ?disabled=${workspaceFiles.loading}
-          @click=${workspaceFiles.onRefresh}
-        >
-          ${icons.refresh}
-        </button>
+        <div class="chat-workspace-rail__actions">
+          <button
+            class="btn btn--ghost btn--sm chat-workspace-rail__refresh"
+            type="button"
+            title=${t("chat.workspace.refresh")}
+            aria-label=${t("chat.workspace.refresh")}
+            ?disabled=${workspaceFiles.loading}
+            @click=${workspaceFiles.onRefresh}
+          >
+            ${icons.refresh}
+          </button>
+          <button
+            class="btn btn--ghost btn--sm chat-workspace-rail__collapse"
+            type="button"
+            title=${t("chat.workspace.hide")}
+            aria-label=${t("chat.workspace.hide")}
+            aria-controls=${railId}
+            aria-expanded="true"
+            @click=${collapseRail}
+          >
+            ${icons.panelRightOpen}
+          </button>
+        </div>
       </div>
       ${workspaceFiles.list?.workspace
         ? html`<div class="chat-workspace-rail__path" title=${workspaceFiles.list.workspace}>
@@ -1040,9 +1090,9 @@ function renderWorkspaceFileRail(
             ${workspaceFiles.error}
           </div>`
         : workspaceFiles.loading && files.length === 0
-          ? html`<div class="chat-workspace-rail__state">Loading files...</div>`
+          ? html`<div class="chat-workspace-rail__state">${t("chat.workspace.loading")}</div>`
           : files.length === 0
-            ? html`<div class="chat-workspace-rail__state">No workspace files</div>`
+            ? html`<div class="chat-workspace-rail__state">${t("chat.workspace.empty")}</div>`
             : html`
                 <div class="chat-workspace-rail__list" role="list">
                   ${files.map((file) => {
@@ -1997,7 +2047,7 @@ export function renderChat(props: ChatProps) {
         : nothing}
       ${renderSearchBar(requestUpdate)} ${renderPinnedSection(props, pinned, requestUpdate)}
 
-      <div class="chat-workbench">
+      <div class="chat-workbench ${!vs.workspaceRailOpen && props.workspaceFiles ? "chat-workbench--rail-collapsed" : ""}">
         <div class="chat-split-container ${sidebarOpen ? "chat-split-container--open" : ""}">
           <div
             class="chat-main"
@@ -2035,7 +2085,7 @@ export function renderChat(props: ChatProps) {
               `
             : nothing}
         </div>
-        ${renderWorkspaceFileRail(props.workspaceFiles)}
+        ${renderWorkspaceFileRail(props.workspaceFiles, requestUpdate)}
       </div>
 
       ${renderChatQueue({

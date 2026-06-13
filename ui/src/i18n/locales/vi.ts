@@ -1328,6 +1328,16 @@ export const vi: TranslationMap = {
     toolCards: {
       toolError: "Lỗi công cụ",
     },
+    workspace: {
+      files: "Workspace files",
+      section: "Workspace",
+      title: "Files",
+      refresh: "Refresh files",
+      hide: "Hide workspace files",
+      show: "Show workspace files",
+      loading: "Loading files...",
+      empty: "No workspace files",
+    },
   },
   languages: {
     en: "English (Tiếng Anh)",

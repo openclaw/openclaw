@@ -1302,6 +1302,16 @@ export const zh_TW: TranslationMap = {
     toolCards: {
       toolError: "工具錯誤",
     },
+    workspace: {
+      files: "Workspace files",
+      section: "Workspace",
+      title: "Files",
+      refresh: "Refresh files",
+      hide: "Hide workspace files",
+      show: "Show workspace files",
+      loading: "Loading files...",
+      empty: "No workspace files",
+    },
   },
   languages: {
     en: "英文",

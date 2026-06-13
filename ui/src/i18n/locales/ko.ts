@@ -1328,6 +1328,16 @@ export const ko: TranslationMap = {
     toolCards: {
       toolError: "도구 오류",
     },
+    workspace: {
+      files: "Workspace files",
+      section: "Workspace",
+      title: "Files",
+      refresh: "Refresh files",
+      hide: "Hide workspace files",
+      show: "Show workspace files",
+      loading: "Loading files...",
+      empty: "No workspace files",
+    },
   },
   languages: {
     en: "영어",

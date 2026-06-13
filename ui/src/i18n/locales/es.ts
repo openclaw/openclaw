@@ -1342,6 +1342,16 @@ export const es: TranslationMap = {
     toolCards: {
       toolError: "Error de herramienta",
     },
+    workspace: {
+      files: "Workspace files",
+      section: "Workspace",
+      title: "Files",
+      refresh: "Refresh files",
+      hide: "Hide workspace files",
+      show: "Show workspace files",
+      loading: "Loading files...",
+      empty: "No workspace files",
+    },
   },
   languages: {
     en: "Inglés (English)",

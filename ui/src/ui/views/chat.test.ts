@@ -907,6 +907,111 @@ describe("chat composer workbench", () => {
     expect(onOpenFile).toHaveBeenCalledWith("AGENTS.md");
   });
 
+  it("collapses and re-expands the workspace file rail", () => {
+    const onRequestUpdate = vi.fn();
+    const container = renderChatView({
+      onRequestUpdate,
+      workspaceFiles: {
+        agentId: "main",
+        list: {
+          agentId: "main",
+          workspace: "/workspace",
+          files: [
+            {
+              name: "AGENTS.md",
+              path: "/workspace/AGENTS.md",
+              missing: false,
+              size: 2048,
+            },
+          ],
+        },
+        loading: false,
+        error: null,
+        activeName: "AGENTS.md",
+        onRefresh: vi.fn(),
+        onOpenFile: vi.fn(),
+      },
+    });
+
+    const collapseButton = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Hide workspace files"]',
+    );
+    expect(collapseButton).not.toBeNull();
+
+    collapseButton?.click();
+
+    expect(onRequestUpdate).toHaveBeenCalledTimes(1);
+
+    const collapsed = renderChatView({
+      onRequestUpdate,
+      workspaceFiles: {
+        agentId: "main",
+        list: {
+          agentId: "main",
+          workspace: "/workspace",
+          files: [
+            {
+              name: "AGENTS.md",
+              path: "/workspace/AGENTS.md",
+              missing: false,
+              size: 2048,
+            },
+          ],
+        },
+        loading: false,
+        error: null,
+        activeName: "AGENTS.md",
+        onRefresh: vi.fn(),
+        onOpenFile: vi.fn(),
+      },
+    });
+
+    expect(collapsed.querySelector(".chat-workbench--rail-collapsed")).not.toBeNull();
+    expect(collapsed.querySelector(".chat-workspace-rail__path")).toBeNull();
+    const expandButton = collapsed.querySelector<HTMLButtonElement>(
+      'button[aria-label="Show workspace files"]',
+    );
+    expect(expandButton?.getAttribute("aria-expanded")).toBe("false");
+    expect(expandButton?.getAttribute("aria-controls")).toBe("chat-workspace-file-rail");
+
+    expandButton?.click();
+
+    expect(onRequestUpdate).toHaveBeenCalledTimes(2);
+
+    const expanded = renderChatView({
+      onRequestUpdate,
+      workspaceFiles: {
+        agentId: "main",
+        list: {
+          agentId: "main",
+          workspace: "/workspace",
+          files: [
+            {
+              name: "AGENTS.md",
+              path: "/workspace/AGENTS.md",
+              missing: false,
+              size: 2048,
+            },
+          ],
+        },
+        loading: false,
+        error: null,
+        activeName: "AGENTS.md",
+        onRefresh: vi.fn(),
+        onOpenFile: vi.fn(),
+      },
+    });
+
+    expect(expanded.querySelector(".chat-workbench--rail-collapsed")).toBeNull();
+    expect(expanded.querySelector(".chat-workspace-rail__path")?.textContent?.trim()).toBe(
+      "/workspace",
+    );
+    const expandedCollapseButton = expanded.querySelector<HTMLButtonElement>(
+      'button[aria-label="Hide workspace files"]',
+    );
+    expect(expandedCollapseButton?.getAttribute("aria-controls")).toBe("chat-workspace-file-rail");
+  });
+
   it("keeps the secondary New session and Export controls suppressed in the composer", () => {
     const container = renderChatView({
       messages: [{ role: "assistant", content: "ready" }],
