@@ -11,6 +11,12 @@ export function buildUsageContract(
   const cacheRead = usage.cacheRead;
   const cacheWrite = usage.cacheWrite;
   const total = usage.total;
+  const hasTokens =
+    input !== undefined ||
+    output !== undefined ||
+    cacheRead !== undefined ||
+    cacheWrite !== undefined ||
+    total !== undefined;
 
   const promptTotal = (cacheRead ?? 0) + (cacheWrite ?? 0) + (input ?? 0);
   const cacheHitPct =
@@ -70,6 +76,7 @@ export function buildUsageContract(
       cache_write_tokens: cacheWrite,
       total_tokens: total,
       cache_hit_pct: cacheHitPct,
+      has_tokens: hasTokens,
       last: last
         ? {
             input_tokens: last.input,
