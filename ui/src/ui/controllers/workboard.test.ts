@@ -1078,6 +1078,28 @@ describe("workboard controller", () => {
     expect(state.lastRefreshStartedAt).toBeNull();
   });
 
+  it.each(["dispatch", "card write"] as const)(
+    "blocks direct forced loads while a %s is active",
+    async (activeMutation) => {
+      const host = {};
+      const state = getWorkboardState(host);
+      if (activeMutation === "dispatch") {
+        state.dispatching = true;
+      } else {
+        state.busyCardIds.add(sampleCard.id);
+      }
+      const client = createClient({
+        "workboard.cards.list": { cards: [sampleCard], statuses: ["todo", "done"] },
+      });
+
+      await expect(loadWorkboard({ host, client: client as never, force: true })).resolves.toBe(
+        false,
+      );
+
+      expect(client.request).not.toHaveBeenCalled();
+    },
+  );
+
   it("blocks card writes while dispatch is relisting cards", async () => {
     const host = {};
     const state = getWorkboardState(host);
@@ -4355,6 +4377,46 @@ describe("workboard controller", () => {
       taskId: "task-1",
       status: "cancelled",
     });
+  });
+
+  it("falls back to session abort when unresolved task cancellation fails", async () => {
+    const host = {};
+    const linked = {
+      ...sampleCard,
+      status: "running" as const,
+      sessionKey: sampleTaskSessionKey,
+      runId: "run-1",
+      taskId: "task-pruned",
+    };
+    const blocked = { ...linked, status: "blocked" as const };
+    const state = getWorkboardState(host);
+    state.cards = [linked];
+    const client = createClient((method) => {
+      if (method === "tasks.cancel") {
+        throw new Error("task not found: task-pruned");
+      }
+      if (method === "chat.abort") {
+        return { aborted: true, runIds: ["run-1"] };
+      }
+      return { card: blocked };
+    });
+
+    await stopWorkboardCard({ host, client: client as never, card: linked });
+
+    expect(client.request).toHaveBeenNthCalledWith(1, "tasks.cancel", {
+      taskId: "task-pruned",
+      reason: "Stopped from Workboard.",
+    });
+    expect(client.request).toHaveBeenNthCalledWith(2, "chat.abort", {
+      sessionKey: sampleTaskSessionKey,
+      runId: "run-1",
+    });
+    expect(client.request).toHaveBeenNthCalledWith(3, "workboard.cards.update", {
+      id: "card-1",
+      patch: { status: "blocked" },
+    });
+    expect(state.cards).toEqual([blocked]);
+    expect(state.error).toBeNull();
   });
 
   it("marks task-linked cards blocked when task cancellation already stopped the session", async () => {

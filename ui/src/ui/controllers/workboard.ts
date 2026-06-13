@@ -1715,7 +1715,12 @@ export async function loadWorkboard(params: {
   taskRefresh?: "all" | "linked";
 }): Promise<boolean> {
   const state = getWorkboardState(params.host);
-  if (!params.client || (!params.force && (state.loaded || state.loadAttempted))) {
+  if (
+    !params.client ||
+    state.dispatching ||
+    workboardHasActiveWrites(state) ||
+    (!params.force && (state.loaded || state.loadAttempted))
+  ) {
     return false;
   }
   const client = params.client;
@@ -2504,9 +2509,11 @@ export async function captureSessionToWorkboard(params: {
   if (state.capturingSessionKeys.has(params.session.key)) {
     return state.cards.find((card) => workboardCardSessionKey(card) === params.session.key) ?? null;
   }
+  if (workboardHasActiveWrites(state)) {
+    return null;
+  }
   state.error = null;
-  state.capturingSessionKeys.add(params.session.key);
-  params.requestUpdate?.();
+  let captureStarted = false;
   try {
     if (!state.loaded) {
       await loadWorkboard({
@@ -2516,9 +2523,12 @@ export async function captureSessionToWorkboard(params: {
         force: true,
       });
     }
-    if (!state.loaded) {
+    if (!state.loaded || state.dispatching || workboardHasActiveWrites(state)) {
       return null;
     }
+    state.capturingSessionKeys.add(params.session.key);
+    captureStarted = true;
+    params.requestUpdate?.();
     const existing = state.cards.find(
       (card) => workboardCardSessionKey(card) === params.session.key,
     );
@@ -2561,8 +2571,10 @@ export async function captureSessionToWorkboard(params: {
     state.error = formatError(error);
     return null;
   } finally {
-    state.capturingSessionKeys.delete(params.session.key);
-    params.requestUpdate?.();
+    if (captureStarted) {
+      state.capturingSessionKeys.delete(params.session.key);
+      params.requestUpdate?.();
+    }
   }
 }
 
@@ -3298,21 +3310,29 @@ export async function stopWorkboardCard(params: {
   params.requestUpdate?.();
   try {
     let taskCancelled = false;
+    let taskCancellationError: unknown = null;
     if (taskId && (!task || taskIsActive(task))) {
-      const cancelled = await cancelWorkboardTaskRun({
-        client: params.client,
-        taskId,
-      });
-      taskCancelled = cancelled.cancelled;
-      if (cancelled.cancelled) {
-        state.tasksByCardId.set(
-          params.card.id,
-          cancelled.task ?? {
-            ...(task ?? { id: taskId, taskId }),
-            status: "cancelled",
-            updatedAt: Date.now(),
-          },
-        );
+      try {
+        const cancelled = await cancelWorkboardTaskRun({
+          client: params.client,
+          taskId,
+        });
+        taskCancelled = cancelled.cancelled;
+        if (cancelled.cancelled) {
+          state.tasksByCardId.set(
+            params.card.id,
+            cancelled.task ?? {
+              ...(task ?? { id: taskId, taskId }),
+              status: "cancelled",
+              updatedAt: Date.now(),
+            },
+          );
+        }
+      } catch (error) {
+        if (!sessionKey) {
+          throw error;
+        }
+        taskCancellationError = error;
       }
     }
     const sessionAborted = sessionKey
@@ -3323,6 +3343,9 @@ export async function stopWorkboardCard(params: {
         })
       : false;
     if (!taskCancelled && !sessionAborted) {
+      if (taskCancellationError) {
+        state.error = formatError(taskCancellationError);
+      }
       return;
     }
     const payload = await params.client.request("workboard.cards.update", {
