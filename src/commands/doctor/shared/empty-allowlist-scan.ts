@@ -88,9 +88,17 @@ export function scanEmptyAllowlistPolicyWarnings(
     if (isDisabledRecord(channelConfig)) {
       continue;
     }
-    checkAccount(channelConfig, `channels.${channelName}`, channelName);
 
     const accounts = asObjectRecord(channelConfig.accounts);
+
+    // When sub-accounts exist, the top-level config is only a parent/fallback
+    // for account-level allowlist resolution — don't check it as a standalone
+    // account. Otherwise every populated per-account allowFrom would still
+    // trigger a false warning for the empty top-level groupAllowFrom.
+    if (!accounts || Object.keys(accounts).length === 0) {
+      checkAccount(channelConfig, `channels.${channelName}`, channelName);
+    }
+
     if (!accounts) {
       continue;
     }

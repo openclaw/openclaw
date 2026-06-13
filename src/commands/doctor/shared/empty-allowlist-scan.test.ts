@@ -87,4 +87,48 @@ describe("doctor empty allowlist policy scan", () => {
     const [warningOptions] = extraWarningsForAccount.mock.calls[0] ?? [];
     expect(warningOptions?.prefix).toBe("channels.signal");
   });
+
+  it("does not warn on empty top-level groupAllowFrom when every account has its own populated list", () => {
+    // Reporter scenario from #92684: top-level groupAllowFrom is empty but
+    // each account carries its own populated groupAllowFrom. The top-level
+    // config is only a parent/fallback, not an account, and should not
+    // trigger a false "all group messages dropped" warning.
+    const warnings = scanEmptyAllowlistPolicyWarnings(
+      {
+        channels: {
+          telegram: {
+            groupPolicy: "allowlist",
+            groupAllowFrom: [],
+            accounts: {
+              bot1: {
+                groupAllowFrom: ["@alice"],
+              },
+              bot2: {
+                groupAllowFrom: ["@bob"],
+              },
+            },
+          },
+        },
+      },
+      { doctorFixCommand: "openclaw doctor --fix" },
+    );
+    // The top-level parent config must not be scanned as a standalone account.
+    expect(warnings.filter((w) => w.includes("group messages")).length).toBe(0);
+  });
+
+  it("still warns on empty top-level groupAllowFrom when no accounts are configured", () => {
+    // Regression: without sub-accounts, the top-level config is the account
+    // and empty groupAllowFrom is a real problem.
+    const warnings = scanEmptyAllowlistPolicyWarnings(
+      {
+        channels: {
+          telegram: {
+            groupPolicy: "allowlist",
+          },
+        },
+      },
+      { doctorFixCommand: "openclaw doctor --fix" },
+    );
+    expect(warnings.some((w) => w.includes("group messages"))).toBe(true);
+  });
 });
