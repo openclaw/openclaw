@@ -423,9 +423,11 @@ type WorkboardHost = object;
 
 const workboardStates = new WeakMap<WorkboardHost, WorkboardUiState>();
 const workboardLoadPromises = new WeakMap<WorkboardHost, Promise<boolean>>();
+const workboardLoadTokens = new WeakMap<WorkboardHost, object>();
 const workboardLifecycleTaskRefreshPromises = new WeakMap<WorkboardHost, Promise<number | null>>();
 const workboardLoadGenerations = new WeakMap<WorkboardHost, number>();
 const workboardLifecycleReconciliationEpochs = new WeakMap<WorkboardHost, number>();
+const workboardPollingGenerations = new WeakMap<WorkboardHost, number>();
 const workboardTaskPollOffsets = new WeakMap<WorkboardHost, number>();
 const workboardTaskDiscoveryOffsets = new WeakMap<WorkboardHost, number>();
 const workboardDefaultTaskDiscoveryCursors = new WeakMap<WorkboardHost, string>();
@@ -470,6 +472,20 @@ function nextWorkboardLoadGeneration(host: WorkboardHost): number {
 
 function isCurrentWorkboardLoadGeneration(host: WorkboardHost, generation: number): boolean {
   return workboardLoadGenerations.get(host) === generation;
+}
+
+function nextWorkboardPollingGeneration(host: WorkboardHost): number {
+  const generation = (workboardPollingGenerations.get(host) ?? 0) + 1;
+  workboardPollingGenerations.set(host, generation);
+  return generation;
+}
+
+function currentWorkboardPollingGeneration(host: WorkboardHost): number {
+  return workboardPollingGenerations.get(host) ?? 0;
+}
+
+function isCurrentWorkboardPollingGeneration(host: WorkboardHost, generation: number): boolean {
+  return currentWorkboardPollingGeneration(host) === generation;
 }
 
 function nextWorkboardLifecycleReconciliationEpoch(host: WorkboardHost): number {
@@ -1930,6 +1946,8 @@ export async function loadWorkboard(params: {
       : result;
   }
   const generation = nextWorkboardLoadGeneration(params.host);
+  const loadToken = {};
+  workboardLoadTokens.set(params.host, loadToken);
   const lastRefreshErrorBeforeLoad = state.lastRefreshError;
   state.loadAttempted = true;
   state.loading = true;
@@ -2111,13 +2129,17 @@ export async function loadWorkboard(params: {
       return false;
     } finally {
       const isCurrentGeneration = isCurrentWorkboardLoadGeneration(params.host, generation);
+      const ownsLoad = workboardLoadTokens.get(params.host) === loadToken;
       if (!isCurrentGeneration && !state.loaded) {
         state.loadAttempted = false;
       }
-      if (isCurrentGeneration || !state.draftSaving) {
+      if (isCurrentGeneration || (ownsLoad && !state.draftSaving)) {
         state.loading = false;
       }
-      workboardLoadPromises.delete(params.host);
+      if (ownsLoad) {
+        workboardLoadPromises.delete(params.host);
+        workboardLoadTokens.delete(params.host);
+      }
       params.requestUpdate?.();
     }
   })();
@@ -2131,8 +2153,19 @@ export async function refreshWorkboard(params: {
   requestUpdate?: () => void;
   source: WorkboardRefreshSource;
   refreshDiagnostics?: boolean;
+  pollGeneration?: number;
 }) {
   const state = getWorkboardState(params.host);
+  const pollGeneration =
+    params.source === "poll"
+      ? (params.pollGeneration ?? currentWorkboardPollingGeneration(params.host))
+      : null;
+  if (
+    pollGeneration !== null &&
+    !isCurrentWorkboardPollingGeneration(params.host, pollGeneration)
+  ) {
+    return;
+  }
   if (state.dispatching || workboardHasActiveWrites(state)) {
     return;
   }
@@ -2148,7 +2181,10 @@ export async function refreshWorkboard(params: {
   params.requestUpdate?.();
   if (!params.client) {
     state.lastRefreshError = "Gateway client unavailable";
-    if (params.source === "poll") {
+    if (
+      pollGeneration !== null &&
+      isCurrentWorkboardPollingGeneration(params.host, pollGeneration)
+    ) {
       state.pollRefreshInProgress = false;
     }
     params.requestUpdate?.();
@@ -2171,7 +2207,10 @@ export async function refreshWorkboard(params: {
       state.lastRefreshAt = Date.now();
     }
   } finally {
-    if (params.source === "poll") {
+    if (
+      pollGeneration !== null &&
+      isCurrentWorkboardPollingGeneration(params.host, pollGeneration)
+    ) {
       state.pollRefreshInProgress = false;
     }
     params.requestUpdate?.();
@@ -2208,8 +2247,12 @@ function scheduleWorkboardPoll(host: WorkboardHost) {
   if (!entry?.enabled || !entry.client || entry.intervalMs <= 0) {
     return;
   }
+  const pollingGeneration = currentWorkboardPollingGeneration(host);
   const timer = setTimeout(() => {
     workboardPollingTimers.delete(host);
+    if (!isCurrentWorkboardPollingGeneration(host, pollingGeneration)) {
+      return;
+    }
     const current = workboardPollingEntries.get(host);
     const state = getWorkboardState(host);
     if (!current?.enabled || !current.client || current.intervalMs <= 0) {
@@ -2222,10 +2265,15 @@ function scheduleWorkboardPoll(host: WorkboardHost) {
           client: current.client,
           requestUpdate: current.requestUpdate,
           source: "poll",
+          pollGeneration: pollingGeneration,
         });
       }
     };
-    void run().finally(() => scheduleWorkboardPoll(host));
+    void run().finally(() => {
+      if (isCurrentWorkboardPollingGeneration(host, pollingGeneration)) {
+        scheduleWorkboardPoll(host);
+      }
+    });
   }, entry.intervalMs);
   workboardPollingTimers.set(host, timer);
 }
@@ -2261,8 +2309,17 @@ export function configureWorkboardPolling(params: {
 }
 
 export function stopWorkboardPolling(host: WorkboardHost) {
+  nextWorkboardPollingGeneration(host);
   clearWorkboardPolling(host);
   workboardPollingEntries.delete(host);
+  const state = workboardStates.get(host);
+  if (!state?.pollRefreshInProgress) {
+    return;
+  }
+  state.pollRefreshInProgress = false;
+  nextWorkboardLoadGeneration(host);
+  workboardLoadPromises.delete(host);
+  workboardLoadTokens.delete(host);
 }
 
 function replaceCard(state: WorkboardUiState, card: WorkboardCard) {

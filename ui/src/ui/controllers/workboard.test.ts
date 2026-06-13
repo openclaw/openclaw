@@ -832,6 +832,68 @@ describe("workboard controller", () => {
     ).toHaveLength(1);
   });
 
+  it("rearms polling after teardown while the previous poll is still in flight", async () => {
+    vi.useFakeTimers();
+    const host = {};
+    const firstListResponse = createDeferred<unknown>();
+    const secondListResponse = createDeferred<unknown>();
+    const firstClient = createClient((method) => {
+      if (method === "workboard.cards.list") {
+        return firstListResponse.promise;
+      }
+      return {};
+    });
+    const secondClient = createClient((method) => {
+      if (method === "workboard.cards.list") {
+        return secondListResponse.promise;
+      }
+      return {};
+    });
+    const state = getWorkboardState(host);
+    state.autoRefreshIntervalMs = 5000;
+
+    configureWorkboardPolling({
+      host,
+      client: firstClient as never,
+      enabled: true,
+    });
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(state.pollRefreshInProgress).toBe(true);
+
+    stopWorkboardPolling(host);
+    expect(state.pollRefreshInProgress).toBe(false);
+
+    configureWorkboardPolling({
+      host,
+      client: secondClient as never,
+      enabled: true,
+    });
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(secondClient.request).toHaveBeenCalledWith("workboard.cards.list", {});
+    expect(state.pollRefreshInProgress).toBe(true);
+
+    firstListResponse.resolve({
+      cards: [{ ...sampleCard, title: "Stale poll" }],
+      statuses: ["todo", "done"],
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(state.pollRefreshInProgress).toBe(true);
+
+    secondListResponse.resolve({
+      cards: [{ ...sampleCard, title: "Current poll" }],
+      statuses: ["todo", "done"],
+    });
+    await vi.waitFor(() => {
+      expect(state.pollRefreshInProgress).toBe(false);
+    });
+
+    expect(state.cards).toMatchObject([{ title: "Current poll" }]);
+    stopWorkboardPolling(host);
+  });
+
   it("polls a canonical replacement task instead of a stale session-matched task", async () => {
     const host = {};
     const state = getWorkboardState(host);
