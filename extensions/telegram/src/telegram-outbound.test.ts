@@ -102,4 +102,26 @@ describe("telegramPlugin outbound", () => {
     expect(chunks?.at(1)?.match(/^# /gm)).toHaveLength(100);
     expect(chunks?.join("\n")).toBe(text);
   });
+
+  it("keeps long rich markdown lists intact", () => {
+    clearTelegramRuntime();
+    const text = Array.from({ length: 600 }, (_, index) => `- Item ${index + 1}`).join("\n");
+
+    const chunks = telegramOutbound.chunker?.(text, 32_768);
+
+    expect(chunks).toEqual([text]);
+  });
+
+  it("keeps tall rich markdown tables intact", () => {
+    clearTelegramRuntime();
+    const text = [
+      "| Name | Value |",
+      "| --- | --- |",
+      ...Array.from({ length: 600 }, (_, index) => `| Row ${index + 1} | ${index + 1} |`),
+    ].join("\n");
+
+    const chunks = telegramOutbound.chunker?.(text, 32_768);
+
+    expect(chunks).toEqual([text]);
+  });
 });

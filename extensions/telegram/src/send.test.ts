@@ -1099,8 +1099,44 @@ describe("sendMessageTelegram", () => {
     expect(chunks.join("\n")).toBe(markdown);
   });
 
-  it("does not split rich block chunks on blank lines inside fences", async () => {
+  it("keeps long rich markdown lists intact", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 55, chat: { id: "123" } });
+    const markdown = Array.from({ length: 600 }, (_, index) => `- Item ${index + 1}`).join("\n");
+
+    await sendMessageTelegram("123", markdown, {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+    });
+
+    expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
+    expect(botRawApi.sendRichMessage).toHaveBeenCalledWith({
+      chat_id: "123",
+      rich_message: { markdown },
+    });
+  });
+
+  it("keeps tall rich markdown tables intact", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 56, chat: { id: "123" } });
+    const markdown = [
+      "| Name | Value |",
+      "| --- | --- |",
+      ...Array.from({ length: 600 }, (_, index) => `| Row ${index + 1} | ${index + 1} |`),
+    ].join("\n");
+
+    await sendMessageTelegram("123", markdown, {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+    });
+
+    expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
+    expect(botRawApi.sendRichMessage).toHaveBeenCalledWith({
+      chat_id: "123",
+      rich_message: { markdown },
+    });
+  });
+
+  it("does not split rich block chunks on blank lines inside fences", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 57, chat: { id: "123" } });
     const markdown = `~~~txt\n${Array.from({ length: 900 }, (_, index) => `line ${index + 1}`).join(
       "\n\n",
     )}\n~~~`;
@@ -1118,7 +1154,7 @@ describe("sendMessageTelegram", () => {
   });
 
   it("does not split rich heading chunks inside fences", async () => {
-    botApi.sendMessage.mockResolvedValue({ message_id: 56, chat: { id: "123" } });
+    botApi.sendMessage.mockResolvedValue({ message_id: 58, chat: { id: "123" } });
     const markdown = `~~~md\n${Array.from(
       { length: 600 },
       (_, index) => `# Literal heading ${index + 1}`,
@@ -1137,7 +1173,7 @@ describe("sendMessageTelegram", () => {
   });
 
   it("chunks long rich markdown fences into bounded markdown chunks", async () => {
-    botApi.sendMessage.mockResolvedValue({ message_id: 57, chat: { id: "123" } });
+    botApi.sendMessage.mockResolvedValue({ message_id: 59, chat: { id: "123" } });
     const markdown = `~~~ts\n${"const value = 1;\n".repeat(5000)}~~~`;
 
     await sendMessageTelegram("123", markdown, {
@@ -1156,7 +1192,7 @@ describe("sendMessageTelegram", () => {
   });
 
   it("chunks explicit rich HTML above the Bot API rich message limit", async () => {
-    botApi.sendMessage.mockResolvedValue({ message_id: 58, chat: { id: "123" } });
+    botApi.sendMessage.mockResolvedValue({ message_id: 60, chat: { id: "123" } });
     const html = `<b>${"A".repeat(70_000)}</b>`;
 
     await sendMessageTelegram("123", html, {
