@@ -28,10 +28,7 @@ export function openMemoryDatabaseAtPath(
       probe.close();
     } catch (err) {
       const msg = (err as Error).message ?? "";
-      if (
-        msg.includes("unable to open database file") ||
-        msg.includes("SQLITE_CANTOPEN")
-      ) {
+      if (msg.includes("unable to open database file") || msg.includes("SQLITE_CANTOPEN")) {
         throw new Error(
           `Memory database not found at ${dbPath}; refusing to auto-create an empty database during an index swap window.`,
           { cause: err },
@@ -40,7 +37,10 @@ export function openMemoryDatabaseAtPath(
     }
   }
   const db = new DatabaseSync(dbPath, { allowExtension });
-  configureMemorySqliteWalMaintenance(db);
+  configureMemorySqliteWalMaintenance(db, { databasePath: dbPath });
+  // busy_timeout is per-connection and resets to 0 on restart.
+  // Set it on every open so concurrent processes retry instead of
+  // failing immediately with SQLITE_BUSY.
   db.exec("PRAGMA busy_timeout = 5000");
   return db;
 }
