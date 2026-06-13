@@ -9,7 +9,12 @@ import { resolveBoundAcpThreadSessionKey } from "./commands-acp/targets.js";
 import { emitResetCommandHooks, type ResetCommandAction } from "./commands-reset-hooks.js";
 import { parseSoftResetCommand } from "./commands-reset-mode.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "./commands-types.js";
+import type { ReplySessionBinding } from "./get-reply.types.js";
 import { isResetAuthorizedForContext } from "./reset-authorization.js";
+
+type InternalResetCommandOptions = NonNullable<HandleCommandsParams["opts"]> & {
+  onSessionPrepared?: (binding: ReplySessionBinding) => void;
+};
 
 function applyAcpResetTailContext(ctx: HandleCommandsParams["ctx"], resetTail: string): void {
   const mutableCtx = ctx as Record<string, unknown>;
@@ -139,6 +144,13 @@ export async function maybeHandleResetCommand(
       logVerbose(`acp reset failed for ${boundAcpKey}: ${resetResult.error ?? "unknown error"}`);
     }
     if (resetResult.ok) {
+      if (resetResult.sessionId) {
+        (params.opts as InternalResetCommandOptions | undefined)?.onSessionPrepared?.({
+          sessionKey: resetResult.sessionKey ?? boundAcpKey,
+          sessionId: resetResult.sessionId,
+          storePath: resetResult.storePath,
+        });
+      }
       params.command.resetHookTriggered = true;
       if (resetTail) {
         applyAcpResetTailContext(params.ctx, resetTail);

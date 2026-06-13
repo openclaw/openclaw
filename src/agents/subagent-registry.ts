@@ -483,7 +483,7 @@ function schedulePendingLifecycleTimeout(params: {
     if (!entry) {
       return;
     }
-    if (entry.outcome?.status === "ok") {
+    if (entry.outcome?.status === "ok" || entry.pauseReason === "sessions_yield") {
       return;
     }
     const completionParams = {
@@ -1112,6 +1112,25 @@ function ensureListener() {
         });
         return;
       }
+      // sessions_yield ends the turn by aborting the run signal, so a yielded
+      // terminal can also look aborted. An explicit yield is authoritative — pause,
+      // don't kill — else the tracking task settles `cancelled` with a false notice (#92448).
+      if (evt.data?.yielded === true) {
+        // Drop any grace timer from an earlier aborted/error terminal so it can't
+        // later fire and settle this now-paused run with a false notice.
+        clearPendingLifecycleError(evt.runId);
+        clearPendingLifecycleTimeout(evt.runId);
+        if (
+          markSubagentRunPausedAfterYield({
+            entry,
+            endedAt,
+            startedAt: startedAt ?? entry.startedAt,
+          })
+        ) {
+          persistSubagentRuns();
+        }
+        return;
+      }
       if (isAbortedAgentStopReason(stopReason)) {
         clearPendingLifecycleError(evt.runId);
         clearPendingLifecycleTimeout(evt.runId);
@@ -1160,18 +1179,6 @@ function ensureListener() {
         });
         return;
       }
-      if (evt.data?.yielded === true) {
-        if (
-          markSubagentRunPausedAfterYield({
-            entry,
-            endedAt,
-            startedAt: startedAt ?? entry.startedAt,
-          })
-        ) {
-          persistSubagentRuns();
-        }
-        return;
-      }
       clearPendingLifecycleError(evt.runId);
       clearPendingLifecycleTimeout(evt.runId);
       const completionParams = {
@@ -1209,6 +1216,7 @@ const subagentRunManager = createSubagentRunManager({
   stopSweeper,
   resumeSubagentRun,
   clearPendingLifecycleError,
+  clearPendingLifecycleTimeout,
   resolveSubagentWaitTimeoutMs,
   scheduleOrphanRecovery: (args) => scheduleSubagentOrphanRecovery(args),
   resolveSubagentSessionCompletion,

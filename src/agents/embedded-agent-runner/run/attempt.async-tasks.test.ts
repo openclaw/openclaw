@@ -7,6 +7,7 @@ import {
 import { resetTaskRegistryForTests, type TaskRecord } from "../../../tasks/runtime-internal.js";
 import {
   requiresCompletionRequiredAsyncTaskWait,
+  shouldWaitForCompletionRequiredAsyncTasks,
   waitForCompletionRequiredAsyncTasks,
   type AsyncStartedToolMeta,
 } from "./attempt.async-tasks.js";
@@ -93,6 +94,46 @@ describe("waitForCompletionRequiredAsyncTasks", () => {
       requiresCompletionRequiredAsyncTaskWait({
         sessionKey,
         toolMetas: [],
+      }),
+    ).toBe(true);
+  });
+
+  it("skips media task waiting after sessions_yield pauses the attempt", () => {
+    resetTaskRegistryForTests();
+    const sessionKey = "agent:main:cron:daily-media:run:run-123";
+    createRunningTaskRun({
+      runtime: "cli",
+      taskKind: "image_generation",
+      sourceId: "image_generate:openai",
+      requesterSessionKey: sessionKey,
+      ownerKey: sessionKey,
+      scopeKind: "session",
+      runId: "tool:image_generate:run-123",
+      task: "daily image",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+      startedAt: 1,
+      lastEventAt: 1,
+    });
+
+    expect(
+      shouldWaitForCompletionRequiredAsyncTasks({
+        sessionKey,
+        toolMetas: [
+          {
+            toolName: "image_generate",
+            asyncStarted: true,
+            asyncTaskRunId: "tool:image_generate:run-123",
+          },
+        ],
+        yieldDetected: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldWaitForCompletionRequiredAsyncTasks({
+        sessionKey,
+        toolMetas: [],
+        yieldDetected: false,
       }),
     ).toBe(true);
   });

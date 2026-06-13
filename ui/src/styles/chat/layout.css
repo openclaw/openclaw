@@ -779,7 +779,7 @@
 
 .chat-settings-popover__label {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px; /* was 11px */
   font-weight: 650;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -1038,8 +1038,8 @@
   background-repeat: no-repeat;
 }
 
-.agent-chat__talk-options input:focus,
-.agent-chat__talk-options select:focus {
+.agent-chat__talk-options input:focus-visible,
+.agent-chat__talk-options select:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
 }
@@ -1980,7 +1980,7 @@
 
 .chat-session-picker__option-meta {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px; /* was 11px */
 }
 
 .chat-session-picker__option-check {
@@ -2205,7 +2205,7 @@
 .chat-controls__inline-select-section-label {
   padding: 4px 8px 3px;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 12px; /* was 10px */
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -2658,7 +2658,7 @@
 .agent-chat__hint kbd {
   display: inline-block;
   padding: 1px 6px;
-  font-size: 11px;
+  font-size: 12px; /* was 11px */
   font-family: var(--font-mono);
   background: var(--panel-strong);
   border: 1px solid var(--border);

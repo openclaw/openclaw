@@ -31,7 +31,10 @@ import { defaultRuntime } from "../../runtime.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { ChainState, ContinueWorkRequest } from "../continuation/types.js";
-import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
+import {
+  getReplyPayloadMetadata,
+  markReplyPayloadForSourceSuppressionDelivery,
+} from "../reply-payload.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
   clearDroppedCliSessionBinding,
@@ -386,6 +389,10 @@ export function createFollowupRunner(params: {
 
       // Route to originating channel if set, otherwise fall back to dispatcher.
       if (deliveryRoute === "origin" && isRoutableChannel(originatingChannel) && originatingTo) {
+        const payloadMetadata = getReplyPayloadMetadata(payload);
+        const hasTranscriptOwner =
+          payloadMetadata?.assistantMessageIndex !== undefined ||
+          payloadMetadata?.assistantTranscriptOwned === true;
         const result = await routeReply({
           payload,
           channel: originatingChannel,
@@ -398,7 +405,7 @@ export function createFollowupRunner(params: {
           requesterSenderE164: queued.run.senderE164,
           threadId: queued.originatingThreadId,
           cfg: runtimeConfig,
-          mirror: options.mirror,
+          mirror: hasTranscriptOwner ? false : options.mirror,
           replyKind,
           runId: options.runId,
         });
@@ -937,6 +944,10 @@ export function createFollowupRunner(params: {
                     suppressNextUserMessagePersistence: suppressQueuedUserPersistenceForCandidate,
                     userTurnTranscriptRecorder,
                     onUserMessagePersisted: notifyUserMessagePersisted,
+                    persistAssistantTranscript:
+                      queued.currentInboundEventKind !== "room_event" &&
+                      run.suppressTranscriptOnlyAssistantPersistence !== true,
+                    storePath,
                     currentInboundEventKind: queued.currentInboundEventKind,
                     currentInboundAudio: queued.currentInboundAudio,
                     currentInboundContext: queued.currentInboundContext,

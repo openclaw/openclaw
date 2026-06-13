@@ -1390,7 +1390,8 @@ async function sendSubagentAnnounceDirectly(params: {
     if (
       params.expectsCompletionMessage &&
       isCronRunSessionKey(canonicalRequesterSessionKey) &&
-      !resolveRequesterSessionActivity(canonicalRequesterSessionKey).isActive
+      !resolveRequesterSessionActivity(canonicalRequesterSessionKey).isActive &&
+      !agentMediatedCompletion
     ) {
       const generatedMediaDelivery = await tryGeneratedMediaDirectDelivery();
       if (generatedMediaDelivery) {

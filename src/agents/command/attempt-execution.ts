@@ -653,6 +653,7 @@ export async function runAgentAttempt(params: {
           toolsAllow: params.opts.toolsAllow,
           cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
           cleanupCliLiveSessionOnRunEnd: params.opts.cleanupCliLiveSessionOnRunEnd,
+          oneShotCliRun: params.opts.oneShotCliRun,
           ...(mutableCliSessionStore
             ? {
                 onBeforeFreshCliSessionRetry: async (retry) => {

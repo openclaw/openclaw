@@ -46,6 +46,10 @@ export type RunCliAgentParams = {
   suppressNextUserMessagePersistence?: boolean;
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
   onUserMessagePersisted?: (message: PersistedUserTurnMessage) => void | Promise<void>;
+  /** Persist the successful CLI assistant reply into the OpenClaw session transcript. */
+  persistAssistantTranscript?: boolean;
+  /** Session store path used when assistant transcript persistence is enabled. */
+  storePath?: string;
   currentInboundEventKind?: InboundEventKind;
   currentInboundContext?: CurrentInboundPromptContext;
   inputProvenance?: InputProvenance;
@@ -122,6 +126,8 @@ export type RunCliAgentParams = {
    * alive after the JSON response is emitted.
    */
   cleanupBundleMcpOnRunEnd?: boolean;
+  /** Mark explicit one-shot local CLI runs so plugin tools can release resources promptly. */
+  oneShotCliRun?: boolean;
 };
 
 /** Backend config after MCP, skill, env, and cleanup preparation. */

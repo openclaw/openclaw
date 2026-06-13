@@ -57,13 +57,6 @@ function asTextChunkMode(value: unknown): TextChunkMode | undefined {
   return value === "length" || value === "newline" ? value : undefined;
 }
 
-function asStringNumberArray(value: unknown): Array<string | number> | undefined {
-  return Array.isArray(value) &&
-    value.every((entry) => typeof entry === "string" || typeof entry === "number")
-    ? value
-    : undefined;
-}
-
 function asInteger(value: unknown): number | undefined {
   return typeof value === "number" && Number.isInteger(value) ? value : undefined;
 }
@@ -553,6 +546,8 @@ export function createChannelProgressDraftGate(params: {
   onStart: () => void | Promise<void>;
   /** Delay before first work event starts a draft; second work event starts immediately. */
   initialDelayMs?: number;
+  /** Reports timer-fired startup failures, which have no awaiting caller. */
+  onStartError?: (error: unknown) => void;
   /** Timer implementation, injectable for tests. */
   setTimeoutFn?: typeof setTimeout;
   /** Timer clearer, injectable for tests. */
@@ -561,6 +556,12 @@ export function createChannelProgressDraftGate(params: {
   const initialDelayMs = params.initialDelayMs ?? DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS;
   const setTimeoutFn = params.setTimeoutFn ?? setTimeout;
   const clearTimeoutFn = params.clearTimeoutFn ?? clearTimeout;
+  // Timer starts have no awaiting caller, so preserve observability at this SDK boundary.
+  const reportStartError =
+    params.onStartError ??
+    ((error: unknown) => {
+      console.warn(`[progress-draft] channel progress draft failed to start: ${String(error)}`);
+    });
   let started = false;
   let disposed = false;
   let workEvents = 0;
@@ -612,7 +613,10 @@ export function createChannelProgressDraftGate(params: {
     }
     timer = setTimeoutFn(() => {
       timer = undefined;
-      void start().catch(() => {});
+      // Explicit starts rethrow to callers; timer starts must report at the boundary.
+      void start().catch((error: unknown) => {
+        reportStartError(error);
+      });
     }, initialDelayMs);
   };
 
@@ -733,23 +737,6 @@ export function resolveChannelStreamingPreviewCommandText(
     asCommandTextMode(config?.preview?.commandText) ??
     defaultValue
   );
-}
-
-export function resolveChannelStreamingPreviewNativeToolProgress(
-  entry: StreamingCompatEntry | null | undefined,
-  defaultValue = false,
-): boolean {
-  const config = getChannelStreamingConfigObject(entry);
-  const preview = asObjectRecord(config?.preview);
-  return asBoolean(preview?.nativeToolProgress) ?? defaultValue;
-}
-
-export function resolveChannelStreamingPreviewNativeToolProgressAllowFrom(
-  entry: StreamingCompatEntry | null | undefined,
-): Array<string | number> | undefined {
-  const config = getChannelStreamingConfigObject(entry);
-  const preview = asObjectRecord(config?.preview);
-  return asStringNumberArray(preview?.nativeToolProgressAllowFrom);
 }
 
 export function resolveChannelStreamingSuppressDefaultToolProgressMessages(

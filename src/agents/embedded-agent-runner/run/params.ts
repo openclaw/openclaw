@@ -277,4 +277,6 @@ export type RunEmbeddedAgentParams = {
     getContextUsage: () => number | null;
     triggerCompaction: RequestCompactionToolOpts["triggerCompaction"];
   };
+  /** Mark explicit one-shot local CLI runs so plugin tools can release resources promptly. */
+  oneShotCliRun?: boolean;
 };
