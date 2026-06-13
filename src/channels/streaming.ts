@@ -553,12 +553,7 @@ export function createChannelProgressDraftGate(params: {
   onStart: () => void | Promise<void>;
   /** Delay before first work event starts a draft; second work event starts immediately. */
   initialDelayMs?: number;
-  /**
-   * Observes a timer-fired startup rejection. The explicit start/noteWork/startNow
-   * paths re-throw to their awaiting caller, but the timer path has no awaiter. When a
-   * caller does not supply this, the gate logs a warning at the helper boundary so the
-   * failure is never silently dropped regardless of which channel built the gate.
-   */
+  /** Reports timer-fired startup failures, which have no awaiting caller. */
   onStartError?: (error: unknown) => void;
   /** Timer implementation, injectable for tests. */
   setTimeoutFn?: typeof setTimeout;
@@ -568,10 +563,7 @@ export function createChannelProgressDraftGate(params: {
   const initialDelayMs = params.initialDelayMs ?? DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS;
   const setTimeoutFn = params.setTimeoutFn ?? setTimeout;
   const clearTimeoutFn = params.clearTimeoutFn ?? clearTimeout;
-  // Boundary default: callers that do not pass onStartError still get an observable
-  // warning for a swallowed timer-fired start failure instead of a silent drop. Use a
-  // lightweight console.warn (matching sibling typing.ts) rather than a structured
-  // logger import, so this SDK-exposed module does not widen its static import surface.
+  // Timer starts have no awaiting caller, so preserve observability at this SDK boundary.
   const reportStartError =
     params.onStartError ??
     ((error: unknown) => {
@@ -628,8 +620,7 @@ export function createChannelProgressDraftGate(params: {
     }
     timer = setTimeoutFn(() => {
       timer = undefined;
-      // Timer start has no awaiter; route the rejection to the (defaulted) reporter so
-      // it is observed rather than silently dropped.
+      // Explicit starts rethrow to callers; timer starts must report at the boundary.
       void start().catch((error: unknown) => {
         reportStartError(error);
       });

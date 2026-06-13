@@ -163,9 +163,8 @@ describe("createChannelProgressDraftCompositor", () => {
     vi.useFakeTimers();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      // The compositor builds the gate without an onStartError, so the failure must be
-      // observed by the gate's default boundary reporter rather than silently dropped.
-      const update = vi.fn().mockRejectedValue(new Error("send failed"));
+      const error = new Error("send failed");
+      const update = vi.fn().mockRejectedValue(error);
       const progress = createChannelProgressDraftCompositor({
         entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
         mode: "progress",
@@ -174,16 +173,14 @@ describe("createChannelProgressDraftCompositor", () => {
         update,
       });
 
-      // A single work event schedules the delayed start timer (no startImmediately).
       await progress.pushToolProgress("🛠️ Exec");
       expect(warn).not.toHaveBeenCalled();
 
-      // Firing the timer runs onStart -> render -> update(), which rejects.
       await vi.advanceTimersByTimeAsync(DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS);
 
       expect(update).toHaveBeenCalled();
       expect(warn).toHaveBeenCalledWith(
-        expect.stringContaining("channel progress draft failed to start"),
+        "[progress-draft] channel progress draft failed to start: Error: send failed",
       );
     } finally {
       vi.useRealTimers();
