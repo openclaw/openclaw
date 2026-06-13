@@ -583,7 +583,8 @@ describe("models.list", () => {
           prefix: `openclaw-models-list-provider-${fixture.name}-profile-`,
           agentEnv: "main",
           env: {
-            VLLM_API_KEY: "test-token",
+            OPENCLAW_TEST_PROFILE_API_KEY: "test-token",
+            VLLM_API_KEY: undefined,
           },
         },
         async (state) => {
@@ -596,7 +597,7 @@ describe("models.list", () => {
                 keyRef: {
                   source: "env",
                   provider: "default",
-                  id: "VLLM_API_KEY",
+                  id: "OPENCLAW_TEST_PROFILE_API_KEY",
                 },
               },
             },

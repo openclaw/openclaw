@@ -206,7 +206,6 @@ async function resolveModelsListEntryAvailability(
 
 async function buildPublicModelsListEntry(params: {
   entry: ModelCatalogEntry;
-  cfg: OpenClawConfig;
   providerAuthChecker?: ModelsListProviderAuthChecker;
 }): Promise<ModelsListEntry> {
   const publicEntry = omitRuntimeModelParams(params.entry);
@@ -234,7 +233,6 @@ async function buildPublicModelsListEntries(params: {
     params.catalog.map((entry) =>
       buildPublicModelsListEntry({
         entry,
-        cfg: params.cfg,
         providerAuthChecker,
       }),
     ),
