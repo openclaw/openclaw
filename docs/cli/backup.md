@@ -128,9 +128,11 @@ Start only from an archive you created or otherwise trust. `openclaw backup veri
 
 ### Inspect and stage the archive
 
-Verify the archive before extracting it, then extract into a private temporary directory:
+Verify the archive before extracting it, then extract into a private temporary directory. The block sets `set -euo pipefail` so a failed `openclaw backup verify` stops the script before any extraction:
 
 ```bash
+set -euo pipefail
+
 ARCHIVE=./2026-03-09T08-00-00.000+08-00-openclaw-backup.tar.gz
 
 openclaw backup verify "$ARCHIVE"
