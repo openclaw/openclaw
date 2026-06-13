@@ -1,8 +1,7 @@
 // Slack plugin module implements doctor behavior.
 import type { ChannelDoctorAdapter } from "openclaw/plugin-sdk/channel-contract";
 import { createDangerousNameMatchingMutableAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { GroupPolicy } from "openclaw/plugin-sdk/config-contracts";
+import type { GroupPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { collectProviderDangerousNameMatchingScopes } from "openclaw/plugin-sdk/runtime-doctor";
 import { resolveDefaultGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import {
@@ -52,11 +51,7 @@ const collectSlackMutableAllowlistWarnings =
     },
   });
 
-// Slack channel IDs look like C0123ABCD / G… / D… (9+ alphanumerics), optionally `channel:`-prefixed,
-// and case-insensitive since config keys may be lowercase. A `channels` map keyed by a human channel
-// NAME instead of an ID is never matched under groupPolicy:"allowlist" (name matching is off), so
-// messages in that channel are silently dropped with no validation error or diagnostic. Warn so the
-// operator can re-key. #81665
+// Match every ID form accepted by Slack channel routing, including normalized config keys.
 const SLACK_CHANNEL_ID_RE = /^(?:channel:)?[CGD][A-Z0-9]{8,}$/i;
 
 function collectSlackNameKeyedChannelWarnings({ cfg }: { cfg: OpenClawConfig }): string[] {
@@ -69,18 +64,14 @@ function collectSlackNameKeyedChannelWarnings({ cfg }: { cfg: OpenClawConfig }):
   const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
   for (const scope of collectProviderDangerousNameMatchingScopes(cfg, "slack")) {
     if (scope.dangerousNameMatchingEnabled) {
-      // Name matching is enabled for this account, so name-keyed channels do resolve.
       continue;
     }
-    // Effective group policy for the warning: an explicit account/provider policy wins, then
-    // channels.defaults.groupPolicy, then the loaded Slack default of "allowlist" for an omitted
-    // policy. Only "allowlist" routing drops unmatched channels, so explicit "open"/"disabled"
-    // are skipped — while omitted / default-allowlist configs (the case the issue describes) warn.
-    const explicitGroupPolicy =
+    const scopedGroupPolicy =
       typeof scope.account.groupPolicy === "string"
         ? (scope.account.groupPolicy as GroupPolicy)
         : providerGroupPolicy;
-    const effectiveGroupPolicy = explicitGroupPolicy ?? defaultGroupPolicy ?? "allowlist";
+    // Doctor reads authored config, while Slack's runtime schema materializes this default.
+    const effectiveGroupPolicy = scopedGroupPolicy ?? defaultGroupPolicy ?? "allowlist";
     if (effectiveGroupPolicy !== "allowlist") {
       continue;
     }

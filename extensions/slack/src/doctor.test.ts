@@ -2,6 +2,19 @@
 import { describe, expect, it } from "vitest";
 import { slackDoctor } from "./doctor.js";
 
+async function collectSlackWarnings(
+  slack: Record<string, unknown>,
+  defaults?: Record<string, unknown>,
+) {
+  return (
+    (await Promise.resolve(
+      slackDoctor.collectMutableAllowlistWarnings?.({
+        cfg: { channels: { ...(defaults ? { defaults } : {}), slack } } as never,
+      }),
+    )) ?? []
+  );
+}
+
 function getSlackCompatibilityNormalizer(): NonNullable<
   typeof slackDoctor.normalizeCompatibilityConfig
 > {
@@ -50,121 +63,58 @@ describe("slack doctor", () => {
     ).toBe(true);
   });
 
-  it("warns when a slack channels map is keyed by name instead of channel ID under allowlist (#81665)", async () => {
-    const warnings = await Promise.resolve(
-      slackDoctor.collectMutableAllowlistWarnings?.({
-        cfg: {
-          channels: {
-            slack: {
-              groupPolicy: "allowlist",
-              channels: {
-                "example-channel": { requireMention: false },
-                C0AL2GDUA7J: { requireMention: false },
-              },
-            },
-          },
-        } as never,
-      }),
+  it("warns for name-keyed allowlist channels but accepts routed ID forms (#81665)", async () => {
+    const warnings = await collectSlackWarnings({
+      channels: {
+        "example-channel": {},
+        C0AL2GDUA7J: {},
+        c0al2gdua7k: {},
+        "channel:C0AL2GDUA7L": {},
+        "*": {},
+      },
+    });
+
+    const nameKeyWarnings = warnings.filter((warning) =>
+      warning.includes("keyed by a channel name"),
     );
-    expect(
-      warnings?.some(
-        (warning) =>
-          warning.includes('channels.slack.channels."example-channel"') &&
-          warning.includes("keyed by a channel name"),
-      ),
-    ).toBe(true);
-    // The ID-keyed entry is valid and must not be flagged.
-    expect(warnings?.some((warning) => warning.includes('channels.slack.channels."C0AL2GDUA7J"'))).toBe(
+    expect(nameKeyWarnings).toHaveLength(1);
+    expect(nameKeyWarnings[0]).toContain('channels.slack.channels."example-channel"');
+  });
+
+  it("uses account policy and name-matching overrides for name-keyed channels (#81665)", async () => {
+    const warnings = await collectSlackWarnings({
+      groupPolicy: "open",
+      accounts: {
+        inheritedOpen: {
+          channels: { general: {} },
+        },
+        explicitAllowlist: {
+          groupPolicy: "allowlist",
+          channels: { engineering: {} },
+        },
+        nameMatching: {
+          groupPolicy: "allowlist",
+          dangerouslyAllowNameMatching: true,
+          channels: { support: {} },
+        },
+      },
+    });
+
+    const nameKeyWarnings = warnings.filter((warning) =>
+      warning.includes("keyed by a channel name"),
+    );
+    expect(nameKeyWarnings).toHaveLength(1);
+    expect(nameKeyWarnings[0]).toContain(
+      'channels.slack.accounts.explicitAllowlist.channels."engineering"',
+    );
+
+    const sharedOpenWarnings = await collectSlackWarnings(
+      { channels: { general: {} } },
+      { groupPolicy: "open" },
+    );
+    expect(sharedOpenWarnings.some((warning) => warning.includes("keyed by a channel name"))).toBe(
       false,
     );
-  });
-
-  it("does not flag name-keyed slack channels when groupPolicy is open (#81665)", async () => {
-    const warnings = await Promise.resolve(
-      slackDoctor.collectMutableAllowlistWarnings?.({
-        cfg: {
-          channels: {
-            slack: {
-              groupPolicy: "open",
-              channels: { "example-channel": { requireMention: false } },
-            },
-          },
-        } as never,
-      }),
-    );
-    expect(warnings?.some((warning) => warning.includes("keyed by a channel name"))).toBe(false);
-  });
-
-  it("accepts lowercase and channel:-prefixed Slack ID keys without flagging them (#81665)", async () => {
-    const warnings = await Promise.resolve(
-      slackDoctor.collectMutableAllowlistWarnings?.({
-        cfg: {
-          channels: {
-            slack: {
-              groupPolicy: "allowlist",
-              channels: { c0al2gdua7j: { requireMention: false }, "channel:C0AL2GDUA7J": {} },
-            },
-          },
-        } as never,
-      }),
-    );
-    expect(warnings?.some((warning) => warning.includes("keyed by a channel name"))).toBe(false);
-  });
-
-  it("does not flag name-keyed channels in accounts that inherit an open provider policy (#81665)", async () => {
-    const warnings = await Promise.resolve(
-      slackDoctor.collectMutableAllowlistWarnings?.({
-        cfg: {
-          channels: {
-            slack: {
-              groupPolicy: "open",
-              accounts: { work: { channels: { general: { requireMention: false } } } },
-            },
-          },
-        } as never,
-      }),
-    );
-    expect(warnings?.some((warning) => warning.includes("keyed by a channel name"))).toBe(false);
-  });
-
-  it("warns for a configured slack provider that omits groupPolicy (loaded default is allowlist) (#81665)", async () => {
-    const warnings = await Promise.resolve(
-      slackDoctor.collectMutableAllowlistWarnings?.({
-        cfg: {
-          channels: { slack: { channels: { "example-channel": { requireMention: false } } } },
-        } as never,
-      }),
-    );
-    // The loaded Slack default for an omitted groupPolicy is "allowlist", which silently drops
-    // unmatched channels — exactly the config the issue describes — so it must be flagged.
-    expect(warnings?.some((warning) => warning.includes("keyed by a channel name"))).toBe(true);
-  });
-
-  it("honors channels.defaults.groupPolicy when slack omits its own policy (#81665)", async () => {
-    const allowlistDefault = await Promise.resolve(
-      slackDoctor.collectMutableAllowlistWarnings?.({
-        cfg: {
-          channels: {
-            defaults: { groupPolicy: "allowlist" },
-            slack: { channels: { "example-channel": {} } },
-          },
-        } as never,
-      }),
-    );
-    expect(allowlistDefault?.some((warning) => warning.includes("keyed by a channel name"))).toBe(
-      true,
-    );
-    const openDefault = await Promise.resolve(
-      slackDoctor.collectMutableAllowlistWarnings?.({
-        cfg: {
-          channels: {
-            defaults: { groupPolicy: "open" },
-            slack: { channels: { "example-channel": {} } },
-          },
-        } as never,
-      }),
-    );
-    expect(openDefault?.some((warning) => warning.includes("keyed by a channel name"))).toBe(false);
   });
 
   it("normalizes legacy slack streaming aliases into the nested streaming shape", () => {
