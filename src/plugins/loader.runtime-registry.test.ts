@@ -3,6 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  getRegisteredMemoryReranker,
+  registerMemoryReranker,
+} from "../plugin-sdk/memory-core-host-engine-reranker.js";
 import { getCompactionProvider, registerCompactionProvider } from "./compaction-provider.js";
 import { getEmbeddingProvider, registerEmbeddingProvider } from "./embedding-providers.js";
 import {
@@ -86,6 +90,14 @@ function requireMemoryEmbeddingProvider(providerId: string) {
     throw new Error(`expected ${providerId} memory embedding provider`);
   }
   return provider;
+}
+
+function requireMemoryReranker(rerankerId: string) {
+  const reranker = getRegisteredMemoryReranker(rerankerId);
+  if (!reranker) {
+    throw new Error(`expected ${rerankerId} memory reranker`);
+  }
+  return reranker;
 }
 
 function makeOpenClawDevSourceRoot(): string {
@@ -739,6 +751,10 @@ describe("clearPluginLoaderCache", () => {
       id: "stale-embedding",
       create: async () => ({ provider: null }),
     });
+    registerMemoryReranker({
+      id: "stale-reranker",
+      rerank: async (params) => params.documents.map((document) => ({ id: document.id, score: 1 })),
+    });
     registerMemoryEmbeddingProvider({
       id: "stale",
       create: async () => ({ provider: null }),
@@ -777,6 +793,7 @@ describe("clearPluginLoaderCache", () => {
       requireMemoryRuntime().resolveMemoryBackendConfig({ cfg: {} as never, agentId: "main" }),
     ).toEqual({ backend: "builtin" });
     expect(getEmbeddingProvider("stale-embedding")?.id).toBe("stale-embedding");
+    expect(requireMemoryReranker("stale-reranker").id).toBe("stale-reranker");
     expect(requireMemoryEmbeddingProvider("stale").id).toBe("stale");
 
     clearPluginLoaderCache();
@@ -786,6 +803,7 @@ describe("clearPluginLoaderCache", () => {
     expect(listMemoryCorpusSupplements()).toStrictEqual([]);
     expect(resolveMemoryFlushPlan({})).toBeNull();
     expect(getMemoryRuntime()).toBeUndefined();
+    expect(getRegisteredMemoryReranker("stale-reranker")).toBeUndefined();
     expect(getMemoryEmbeddingProvider("stale")).toBeUndefined();
   });
 });
@@ -801,6 +819,10 @@ describe("loadOpenClawPlugins active runtime clearing", () => {
       label: "Stale Compaction",
       summarize: async () => "stale",
     });
+    registerMemoryReranker({
+      id: "stale-reranker",
+      rerank: async (params) => params.documents.map((document) => ({ id: document.id, score: 1 })),
+    });
     registerMemoryEmbeddingProvider({
       id: "stale-memory",
       create: async () => ({ provider: null }),
@@ -810,6 +832,7 @@ describe("loadOpenClawPlugins active runtime clearing", () => {
 
     expect(getEmbeddingProvider("stale-embedding")).toBeUndefined();
     expect(getCompactionProvider("stale-compaction")).toBeUndefined();
+    expect(getRegisteredMemoryReranker("stale-reranker")).toBeUndefined();
     expect(getMemoryEmbeddingProvider("stale-memory")).toBeUndefined();
   });
 });

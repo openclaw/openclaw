@@ -1,4 +1,3 @@
-import { registerMemoryReranker } from "openclaw/plugin-sdk/memory-core-host-engine-reranker";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { ExternalMmrReranker, type ExternalRerankerConfig } from "./src/reranker.js";
 
@@ -9,7 +8,7 @@ export default definePluginEntry({
     "OpenClaw memory reranker plugin that proxies to a Cohere-compatible /v1/rerank endpoint (Cohere, Jina, Voyage, llama.cpp).",
   register(api) {
     const cfg = (api.pluginConfig ?? {}) as Partial<ExternalRerankerConfig>;
-    registerMemoryReranker(
+    api.registerMemoryReranker(
       new ExternalMmrReranker(
         {
           provider: cfg.provider ?? "",
