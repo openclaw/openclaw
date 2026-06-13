@@ -248,6 +248,40 @@ describe("workboard controller", () => {
     expect(state.missingTaskIds).toEqual(new Set());
   });
 
+  it("defers lifecycle sync when exact task confirmation fails", async () => {
+    const host = {};
+    const linked = {
+      ...sampleCard,
+      status: "running",
+      taskId: sampleTask.taskId,
+      sessionKey: sampleTaskSessionKey,
+      runId: "run-1",
+    } satisfies WorkboardCard;
+    const client = createClient((method) => {
+      if (method === "workboard.cards.list") {
+        return { cards: [linked], statuses: ["todo", "running", "done"] };
+      }
+      if (method === "tasks.list") {
+        return { tasks: [] };
+      }
+      if (method === "tasks.get") {
+        throw new Error("task confirmation unavailable");
+      }
+      return {};
+    });
+
+    await loadWorkboard({ host, client: client as never, force: true });
+
+    const state = getWorkboardState(host);
+    expect(state.lifecycleTaskRefreshFailed).toBe(true);
+    expect(state.lastRefreshError).toBe("task confirmation unavailable");
+    vi.clearAllMocks();
+
+    await syncWorkboardLifecycle({ host, client: client as never, sessions: [] });
+
+    expect(client.request).not.toHaveBeenCalled();
+  });
+
   it("reuses exact-confirmed full-load tasks for the next lifecycle sync", async () => {
     const host = {};
     const linked = {

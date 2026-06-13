@@ -1823,7 +1823,7 @@ export async function loadWorkboard(params: {
           }
           nextUnfilteredCursor = pollResult?.nextUnfilteredCursor;
           applyTaskSummariesToState(taskLinkState, taskSummaries, { missingTaskIds });
-          lifecycleTaskRefreshFailed = false;
+          lifecycleTaskRefreshFailed = Boolean(taskRefreshError);
           if (taskRefreshError) {
             linkedTaskRefreshFailed = true;
             nextTaskRefreshError = taskRefreshError;
