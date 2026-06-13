@@ -49,7 +49,10 @@ describe("qa scenario packs", () => {
       const scenario = readQaScenarioById(scenarioId);
 
       expect(scenario.sourcePath).toMatch(/^qa\/scenarios\/personal\//);
-      expect(scenario.coverage?.primary.every((id) => id.split(".").length >= 3)).toBe(true);
+      expect(scenario.coverage?.primary.length).toBeGreaterThan(0);
+      expect(
+        scenario.coverage?.primary.every((id) => /^[a-z0-9]+(?:[.-][a-z0-9]+)*$/.test(id)),
+      ).toBe(true);
     }
   });
 
