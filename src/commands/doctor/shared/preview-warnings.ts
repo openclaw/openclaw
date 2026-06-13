@@ -779,6 +779,7 @@ async function resolveDoctorChannelPreviewConfig(params: {
 /** Collect info and warning notes for doctor preview mode. */
 export async function collectDoctorPreviewNotes(params: {
   cfg: OpenClawConfig;
+  activationSourceConfig?: OpenClawConfig;
   doctorFixCommand: string;
   env?: NodeJS.ProcessEnv;
   allowExec?: boolean;
@@ -804,7 +805,11 @@ export async function collectDoctorPreviewNotes(params: {
     ? await import("./channel-plugin-blockers.js")
     : undefined;
   const channelPluginBlockerHits =
-    channelPluginRuntime?.scanConfiguredChannelPluginBlockers(params.cfg, env) ?? [];
+    channelPluginRuntime?.scanConfiguredChannelPluginBlockers(
+      params.cfg,
+      env,
+      params.activationSourceConfig,
+    ) ?? [];
   if (channelPluginRuntime && channelPluginBlockerHits.length > 0) {
     warnings.push(
       channelPluginRuntime

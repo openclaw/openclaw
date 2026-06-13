@@ -29,6 +29,7 @@ export type ChannelPluginBlockerHit = {
 export function scanConfiguredChannelPluginBlockers(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
+  activationSourceConfig: OpenClawConfig = cfg,
 ): ChannelPluginBlockerHit[] {
   const configuredChannelIds = new Set(
     listExplicitConfiguredChannelIdsForConfig(cfg)
@@ -39,7 +40,7 @@ export function scanConfiguredChannelPluginBlockers(
     return [];
   }
 
-  const pluginsConfig = normalizePluginsConfig(cfg.plugins);
+  const pluginsConfig = normalizePluginsConfig(activationSourceConfig.plugins);
   const registry = loadPluginManifestRegistryForPluginRegistry({
     config: cfg,
     env,
@@ -47,6 +48,7 @@ export function scanConfiguredChannelPluginBlockers(
   });
   const presencePolicy = resolveConfiguredChannelPresencePolicy({
     config: cfg,
+    activationSourceConfig,
     env,
     includePersistedAuthState: false,
     manifestRecords: registry.plugins,
@@ -70,7 +72,7 @@ export function scanConfiguredChannelPluginBlockers(
       id: plugin.id,
       origin: plugin.origin,
       config: pluginsConfig,
-      rootConfig: cfg,
+      rootConfig: activationSourceConfig,
       enabledByDefault: plugin.enabledByDefault,
     });
     if (

@@ -88,6 +88,47 @@ describe("channel plugin blockers", () => {
     expect(hits).toStrictEqual([]);
   });
 
+  it("diagnoses trust from the pre-auto-enable config", () => {
+    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
+      plugins: [
+        {
+          id: "discord",
+          origin: "global",
+          channels: ["discord"],
+          enabledByDefault: false,
+        },
+      ],
+      diagnostics: [],
+    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+
+    const channels = {
+      discord: {
+        enabled: true,
+        token: "configured",
+      },
+    };
+    const hits = scanConfiguredChannelPluginBlockers(
+      {
+        channels,
+        plugins: {
+          entries: {
+            discord: { enabled: true },
+          },
+        },
+      },
+      process.env,
+      { channels },
+    );
+
+    expect(hits).toEqual([
+      {
+        channelId: "discord",
+        pluginId: "discord",
+        reason: "missing explicit enablement",
+      },
+    ]);
+  });
+
   it("reports external channel plugins omitted from a restrictive allowlist", () => {
     vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
       plugins: [
