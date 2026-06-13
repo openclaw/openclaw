@@ -44,7 +44,7 @@ export async function runCommandWithRuntime(
       onError(err);
       return;
     }
-    runtime.error(String(err));
+    runtime.error(formatErrorMessage(err));
     runtime.exit(1);
   }
 }
