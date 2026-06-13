@@ -521,18 +521,6 @@ function resolveHistoryStartIndex(
 
 export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGroup> {
   let items: ChatItem[] = [];
-  const debugItems = typeof (globalThis as any).window !== "undefined";
-  if (debugItems) {
-    console.warn(
-      "[DEDUPE] buildChatItems input",
-      JSON.stringify({
-        msgCount: (Array.isArray(props.messages) ? props.messages : []).length,
-        streamIsNull: props.stream === null,
-        streamLen: typeof props.stream === "string" ? props.stream.length : 0,
-        segCount: (props.streamSegments ?? []).length,
-      }),
-    );
-  }
   const historyRenderLimit = resolveHistoryRenderLimit(props.historyRenderLimit);
   const history = (Array.isArray(props.messages) ? props.messages : []).filter(
     (message) => !isAssistantHeartbeatAckForDisplay(message),
@@ -706,25 +694,6 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   const result = groupMessages(
     collapseSequentialDuplicateMessages(sortChatItemsByVisibleTime(items)),
   );
-  if (debugItems) {
-    const previews = result.map((item) => {
-      if (item.kind === "stream") {
-        return `stream[${item.text.slice(0, 30)}]`;
-      }
-      if (item.kind === "group") {
-        const texts = item.messages.map((m) => {
-          const msg = m.message as Record<string, unknown>;
-          const role = typeof msg.role === "string" ? msg.role : "?";
-          const content = Array.isArray(msg.content) ? msg.content : [];
-          const textBlocks = content.filter((b: any) => b?.type === "text");
-          const text = textBlocks.map((b: any) => String(b.text ?? "").slice(0, 30)).join("|");
-          return `${role}:"${text}"`;
-        });
-        return `group[${texts.join("; ")}]`;
-      }
-      return item.kind;
-    });
-  }
   return result;
 }
 

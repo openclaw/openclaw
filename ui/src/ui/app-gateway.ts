@@ -15,7 +15,6 @@ import {
   refreshChatAvatar,
   scopedAgentListParamsForRefreshTarget,
   retryReconnectableQueuedChatSends,
-  scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
 } from "./app-chat.ts";
 import type { EventLogEntry } from "./app-events.ts";
@@ -1097,7 +1096,13 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
     void loadChatHistory(host as unknown as ChatState);
     return;
   }
-  if (shouldConsumePendingTranscriptSync && !historyReloaded) {
+  // Only reload history for pending transcript sync when the terminal event
+  // doesn't already carry a complete assistant message. Normal finals carry
+  // the full reply in the payload; an unnecessary reload would cause a visible
+  // flicker (the optimistic user bubble gets replaced by the persisted copy).
+  // Error and aborted states always need a reload because the transcript
+  // contains the error details that aren't in the terminal payload.
+  if (shouldConsumePendingTranscriptSync && !historyReloaded && state !== "final") {
     void loadChatHistory(host as unknown as ChatState);
   }
 }

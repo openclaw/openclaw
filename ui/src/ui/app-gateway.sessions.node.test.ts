@@ -865,7 +865,7 @@ describe("handleGatewayEvent pending transcript sync", () => {
     applySessionsChangedEventMock
       .mockReset()
       .mockImplementation(
-        (state: { chatRunId: string | null; sessionKey: string }, _payload: unknown) => {
+        (_state: { chatRunId: string | null; sessionKey: string }, _payload: unknown) => {
           // Session row is updated but hasActiveRun stays true — the local run
           // is still active and should not be reconciled by a sessions.changed event.
           return {

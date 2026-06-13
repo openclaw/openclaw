@@ -675,17 +675,6 @@ export function createAgentEventHandler({
       controlUiVisible: opts?.controlUiVisible ?? true,
       dropIfSlow: true,
     });
-    if (typeof payload.deltaText === "string" && payload.deltaText.length > 0) {
-      console.warn(
-        "[DEDUPE] emitChatDelta",
-        JSON.stringify({
-          runId: clientRunId,
-          state: "delta",
-          deltaTextLen: payload.deltaText.length,
-          textLen: mergedText.length,
-        }),
-      );
-    }
   };
 
   const resolveBufferedChatTextState = (
@@ -827,16 +816,6 @@ export function createAgentEventHandler({
             : undefined,
       };
       sendChatPayload(sessionKey, payload, opts);
-      console.warn(
-        "[DEDUPE] emitChatFinal",
-        JSON.stringify({
-          runId: clientRunId,
-          state: "final",
-          hasMessage: payload.message != null,
-          textLen: text?.length ?? 0,
-          stopReason,
-        }),
-      );
       return;
     }
     const payload = {
