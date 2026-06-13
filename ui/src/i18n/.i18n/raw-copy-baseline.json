@@ -1532,13 +1532,6 @@
       "kind": "html-attribute",
       "name": "aria-label",
       "path": "ui/src/ui/views/chat.ts",
-      "text": "Refresh files"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "aria-label",
-      "path": "ui/src/ui/views/chat.ts",
       "text": "Remove attachment"
     },
     {
@@ -1572,13 +1565,6 @@
     {
       "count": 1,
       "kind": "html-attribute",
-      "name": "aria-label",
-      "path": "ui/src/ui/views/chat.ts",
-      "text": "Workspace files"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
       "name": "placeholder",
       "path": "ui/src/ui/views/chat.ts",
       "text": "Auto"
@@ -1603,13 +1589,6 @@
       "name": "title",
       "path": "ui/src/ui/views/chat.ts",
       "text": "Exit focus mode"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "title",
-      "path": "ui/src/ui/views/chat.ts",
-      "text": "Refresh files"
     },
     {
       "count": 1,
@@ -1668,13 +1647,6 @@
       "text": "Exact VAD"
     },
     {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/chat.ts",
-      "text": "Files"
-    },
-    {
       "count": 2,
       "kind": "html-text",
       "name": "text",
@@ -1700,20 +1672,6 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/chat.ts",
-      "text": "Loading files..."
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/chat.ts",
-      "text": "Missing"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/chat.ts",
       "text": "Model"
     },
     {
@@ -1729,13 +1687,6 @@
       "name": "text",
       "path": "ui/src/ui/views/chat.ts",
       "text": "No matching messages"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/chat.ts",
-      "text": "No workspace files"
     },
     {
       "count": 1,
@@ -1771,13 +1722,6 @@
       "name": "text",
       "path": "ui/src/ui/views/chat.ts",
       "text": "Talk settings"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/chat.ts",
-      "text": "Workspace"
     },
     {
       "count": 1,
