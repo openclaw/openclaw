@@ -182,10 +182,12 @@ describe("renderWorkboard", () => {
     }
   });
 
-  it("stops lifecycle refresh while the plugin is disabled", () => {
+  it("stops polling and lifecycle refresh while the plugin is disabled", () => {
     const host = {};
     const state = getWorkboardState(host);
     state.loaded = true;
+    state.loading = true;
+    state.pollRefreshInProgress = true;
     state.lifecycleTasksPrepared = true;
     state.lifecycleTasksPreparedAt = Date.now();
     state.lifecycleTaskRefreshFailed = true;
@@ -202,6 +204,8 @@ describe("renderWorkboard", () => {
       onOpenSession: () => undefined,
     });
 
+    expect(state.pollRefreshInProgress).toBe(false);
+    expect(state.loading).toBe(false);
     expect(state.lifecycleTasksPrepared).toBe(false);
     expect(state.lifecycleTaskRefreshFailed).toBe(false);
     expect(state.lifecycleTaskRefreshError).toBeNull();
