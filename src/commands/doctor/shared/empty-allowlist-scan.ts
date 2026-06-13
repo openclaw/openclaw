@@ -88,19 +88,20 @@ export function scanEmptyAllowlistPolicyWarnings(
     if (isDisabledRecord(channelConfig)) {
       continue;
     }
-    checkAccount(channelConfig, `channels.${channelName}`, channelName);
 
     const accounts = asObjectRecord(channelConfig.accounts);
-    if (!accounts) {
+    const accountEntries = accounts
+      ? Object.entries(accounts).filter(
+          ([, account]) =>
+            Boolean(account && typeof account === "object") && !isDisabledRecord(account),
+        )
+      : [];
+    if (accountEntries.length === 0) {
+      checkAccount(channelConfig, `channels.${channelName}`, channelName);
       continue;
     }
-    for (const [accountId, account] of Object.entries(accounts)) {
-      if (!account || typeof account !== "object") {
-        continue;
-      }
-      if (isDisabledRecord(account)) {
-        continue;
-      }
+
+    for (const [accountId, account] of accountEntries) {
       checkAccount(
         account as DoctorAccountRecord,
         `channels.${channelName}.accounts.${accountId}`,

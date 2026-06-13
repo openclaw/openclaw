@@ -16,14 +16,34 @@ vi.mock("./channel-doctor.js", () => ({
 }));
 
 describe("doctor empty allowlist policy scan", () => {
-  it("scans top-level and account-scoped channel warnings", () => {
+  it("does not warn for a parent group allowlist when every account has entries", () => {
+    const warnings = scanEmptyAllowlistPolicyWarnings(
+      {
+        channels: {
+          signal: {
+            groupPolicy: "allowlist",
+            groupAllowFrom: [],
+            accounts: {
+              work: { groupAllowFrom: ["100"] },
+              personal: { groupAllowFrom: ["200"] },
+            },
+          },
+        },
+      },
+      { doctorFixCommand: "openclaw doctor --fix" },
+    );
+
+    expect(warnings).toStrictEqual([]);
+  });
+
+  it("scans account-scoped warnings with top-level policy fallback", () => {
     const warnings = scanEmptyAllowlistPolicyWarnings(
       {
         channels: {
           signal: {
             dmPolicy: "allowlist",
             accounts: {
-              work: { dmPolicy: "allowlist" },
+              work: {},
             },
           },
         },
@@ -32,7 +52,6 @@ describe("doctor empty allowlist policy scan", () => {
     );
 
     expect(warnings).toEqual([
-      '- channels.signal.dmPolicy is "allowlist" but allowFrom is empty — all DMs will be blocked. Add sender IDs to channels.signal.allowFrom, or run "openclaw doctor --fix" to auto-migrate from pairing store when entries exist.',
       '- channels.signal.accounts.work.dmPolicy is "allowlist" but allowFrom is empty — all DMs will be blocked. Add sender IDs to channels.signal.accounts.work.allowFrom, or run "openclaw doctor --fix" to auto-migrate from pairing store when entries exist.',
     ]);
   });
