@@ -5,7 +5,7 @@
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createLazyImportLoader, type LazyPromiseLoader } from "../shared/lazy-promise.js";
-import { MODEL_CONTEXT_TOKEN_CACHE } from "./context-cache.js";
+import { MODEL_CONTEXT_TOKEN_CACHE, MODEL_CONTEXT_WINDOW_CACHE } from "./context-cache.js";
 
 const CONTEXT_WINDOW_RUNTIME_STATE_KEY = Symbol.for("openclaw.contextWindowRuntimeState");
 
@@ -44,4 +44,5 @@ export function resetContextWindowCacheForTest(): void {
   CONTEXT_WINDOW_RUNTIME_STATE.nextConfigLoadAttemptAtMs = 0;
   CONTEXT_WINDOW_RUNTIME_STATE.modelsConfigRuntimeLoader.clear();
   MODEL_CONTEXT_TOKEN_CACHE.clear();
+  MODEL_CONTEXT_WINDOW_CACHE.clear();
 }

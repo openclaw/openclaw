@@ -1,0 +1,255 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  lookupCachedContextTokens,
+  lookupCachedContextWindow,
+  providerContextTokenCacheKey,
+} from "./context-cache.js";
+import { normalizeProviderId } from "./model-selection.js";
+
+type ConfigModelEntry = { id?: string; contextWindow?: number; contextTokens?: number };
+type ProviderConfigEntry = {
+  contextWindow?: number;
+  contextTokens?: number;
+  models?: ConfigModelEntry[];
+};
+export type ModelsConfig = {
+  providers?: Record<string, ProviderConfigEntry | undefined>;
+};
+
+export type ContextTokenResolutionParams = {
+  cfg?: OpenClawConfig;
+  provider?: string;
+  model?: string;
+  contextTokensOverride?: number;
+  fallbackContextTokens?: number;
+  modelContextWindow?: number;
+  modelContextTokens?: number;
+  allowAsyncLoad?: boolean;
+};
+
+const ANTHROPIC_GA_1M_MODEL_PREFIXES = [
+  "claude-opus-4-8",
+  "claude-opus-4.8",
+  "claude-opus-4-6",
+  "claude-opus-4.6",
+  "claude-opus-4-7",
+  "claude-opus-4.7",
+  "claude-sonnet-4-6",
+  "claude-sonnet-4.6",
+] as const;
+export const ANTHROPIC_CONTEXT_1M_TOKENS = 1_048_576;
+export const ANTHROPIC_FABLE_CONTEXT_TOKENS = 1_000_000;
+
+type ConfiguredContextTokens = {
+  value: number;
+  source: "contextTokens" | "contextWindow";
+};
+
+function resolveProviderModelRef(params: {
+  provider?: string;
+  model?: string;
+}): { provider: string; model: string } | undefined {
+  const modelRaw = params.model?.trim();
+  if (!modelRaw) {
+    return undefined;
+  }
+  const providerRaw = params.provider?.trim();
+  if (providerRaw) {
+    const provider = normalizeProviderId(providerRaw);
+    return provider ? { provider, model: modelRaw } : undefined;
+  }
+  const slash = modelRaw.indexOf("/");
+  if (slash <= 0) {
+    return undefined;
+  }
+  const provider = normalizeProviderId(modelRaw.slice(0, slash));
+  const model = modelRaw.slice(slash + 1).trim();
+  return provider && model ? { provider, model } : undefined;
+}
+
+function resolveConfiguredProviderContextTokens(
+  cfg: OpenClawConfig | undefined,
+  provider: string,
+  model: string,
+): ConfiguredContextTokens | undefined {
+  const providers = (cfg?.models as ModelsConfig | undefined)?.providers;
+  if (!providers) {
+    return undefined;
+  }
+
+  function readProviderContextTokens(
+    providerConfig: ProviderConfigEntry | undefined,
+  ): ConfiguredContextTokens | undefined {
+    if (typeof providerConfig?.contextTokens === "number" && providerConfig.contextTokens > 0) {
+      return { value: providerConfig.contextTokens, source: "contextTokens" };
+    }
+    if (typeof providerConfig?.contextWindow === "number" && providerConfig.contextWindow > 0) {
+      return { value: providerConfig.contextWindow, source: "contextWindow" };
+    }
+    return undefined;
+  }
+
+  function findContextTokens(
+    matchProviderId: (id: string) => boolean,
+  ): ConfiguredContextTokens | undefined {
+    for (const [providerId, providerConfig] of Object.entries(providers!)) {
+      if (!matchProviderId(providerId)) {
+        continue;
+      }
+      if (Array.isArray(providerConfig?.models)) {
+        for (const entry of providerConfig.models) {
+          const entryId = typeof entry?.id === "string" ? entry.id : "";
+          const slash = entryId.indexOf("/");
+          const prefixedProvider = slash > 0 ? normalizeProviderId(entryId.slice(0, slash)) : "";
+          const bareEntryId = slash > 0 ? entryId.slice(slash + 1).trim() : "";
+          const modelMatches =
+            entryId === model ||
+            (prefixedProvider === normalizeProviderId(providerId) && bareEntryId === model);
+          if (modelMatches && typeof entry.contextTokens === "number" && entry.contextTokens > 0) {
+            return { value: entry.contextTokens, source: "contextTokens" };
+          }
+          if (modelMatches && typeof entry.contextWindow === "number" && entry.contextWindow > 0) {
+            return { value: entry.contextWindow, source: "contextWindow" };
+          }
+        }
+      }
+      const providerContextTokens = readProviderContextTokens(providerConfig);
+      if (providerContextTokens) {
+        return providerContextTokens;
+      }
+    }
+    return undefined;
+  }
+
+  // Match exact config keys before normalized aliases so one provider cannot
+  // inherit another provider's context cap based on object iteration order.
+  const exactResult = findContextTokens(
+    (id) => normalizeLowercaseStringOrEmpty(id) === normalizeLowercaseStringOrEmpty(provider),
+  );
+  if (exactResult !== undefined) {
+    return exactResult;
+  }
+  const normalizedProvider = normalizeProviderId(provider);
+  return findContextTokens((id) => normalizeProviderId(id) === normalizedProvider);
+}
+
+function resolveModelFamilyId(modelId: string): string {
+  const normalized = normalizeLowercaseStringOrEmpty(modelId);
+  return normalized.includes("/") ? (normalized.split("/").at(-1) ?? normalized) : normalized;
+}
+
+export function resolveAnthropicFixedContextWindow(
+  provider: string,
+  model: string,
+): number | undefined {
+  const modelId = resolveModelFamilyId(model);
+  if (
+    (provider === "anthropic" || provider === "anthropic-vertex") &&
+    modelId.startsWith("claude-fable-5")
+  ) {
+    return ANTHROPIC_FABLE_CONTEXT_TOKENS;
+  }
+  if (provider !== "anthropic" && provider !== "claude-cli") {
+    return undefined;
+  }
+  return ANTHROPIC_GA_1M_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix))
+    ? ANTHROPIC_CONTEXT_1M_TOKENS
+    : undefined;
+}
+
+export function resolveContextTokensForModelFromCache(
+  params: ContextTokenResolutionParams,
+  lookupContextTokens: (modelId?: string) => number | undefined = lookupCachedContextTokens,
+  lookupContextWindow: (modelId?: string) => number | undefined = lookupCachedContextWindow,
+): number | undefined {
+  const ref = resolveProviderModelRef(params);
+  const override =
+    typeof params.contextTokensOverride === "number" && params.contextTokensOverride > 0
+      ? params.contextTokensOverride
+      : undefined;
+  const capOverride = (contextTokens: number) =>
+    override !== undefined ? Math.min(override, contextTokens) : contextTokens;
+  const explicitProvider = params.provider?.trim();
+
+  if (ref && explicitProvider) {
+    const configuredWindow = resolveConfiguredProviderContextTokens(
+      params.cfg,
+      explicitProvider,
+      ref.model,
+    );
+    const fixedContextWindow = resolveAnthropicFixedContextWindow(ref.provider, ref.model);
+    const providerResult = lookupContextTokens(
+      providerContextTokenCacheKey(normalizeProviderId(ref.provider), ref.model),
+    );
+    const providerWindow = lookupContextWindow(
+      providerContextTokenCacheKey(normalizeProviderId(ref.provider), ref.model),
+    );
+    const modelContextTokens =
+      typeof params.modelContextTokens === "number" && params.modelContextTokens > 0
+        ? params.modelContextTokens
+        : undefined;
+    if (configuredWindow) {
+      if (configuredWindow.source === "contextTokens") {
+        const effectiveCap =
+          fixedContextWindow === undefined
+            ? configuredWindow.value
+            : Math.min(configuredWindow.value, fixedContextWindow);
+        return capOverride(effectiveCap);
+      }
+      // A configured contextWindow is the native window, not necessarily the
+      // lower runtime budget. Prefer verified discovery, then static metadata.
+      const runtimeCap = providerResult ?? modelContextTokens;
+      if (runtimeCap !== undefined) {
+        const effectiveCap =
+          fixedContextWindow === undefined ? runtimeCap : Math.min(runtimeCap, fixedContextWindow);
+        return capOverride(
+          fixedContextWindow === undefined
+            ? Math.min(configuredWindow.value, effectiveCap)
+            : effectiveCap,
+        );
+      }
+      if (fixedContextWindow !== undefined) {
+        return capOverride(fixedContextWindow);
+      }
+      return capOverride(configuredWindow.value);
+    }
+    if (providerResult !== undefined) {
+      const effectiveCap =
+        fixedContextWindow === undefined
+          ? providerResult
+          : Math.min(providerResult, fixedContextWindow);
+      return capOverride(effectiveCap);
+    }
+    if (modelContextTokens !== undefined) {
+      const effectiveCap =
+        fixedContextWindow === undefined
+          ? modelContextTokens
+          : Math.min(modelContextTokens, fixedContextWindow);
+      return capOverride(effectiveCap);
+    }
+    if (fixedContextWindow !== undefined) {
+      return capOverride(fixedContextWindow);
+    }
+    if (typeof params.modelContextWindow === "number" && params.modelContextWindow > 0) {
+      return capOverride(params.modelContextWindow);
+    }
+    if (providerWindow !== undefined) {
+      return capOverride(providerWindow);
+    }
+  }
+
+  // Model-only calls use the raw discovery key. With an explicit provider,
+  // slash-containing raw keys lack ownership provenance and cannot lower an override.
+  const bareResult = lookupContextTokens(params.model);
+  if (bareResult !== undefined) {
+    const ambiguousSlashId = Boolean(explicitProvider && ref?.model.includes("/"));
+    return ambiguousSlashId && override !== undefined ? override : capOverride(bareResult);
+  }
+  const bareWindow = lookupContextWindow(params.model);
+  if (bareWindow !== undefined) {
+    return capOverride(bareWindow);
+  }
+
+  return override ?? params.fallbackContextTokens;
+}

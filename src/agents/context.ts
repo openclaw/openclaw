@@ -11,10 +11,26 @@ import {
   resolveDefaultAgentDir,
   resolveDefaultAgentId,
 } from "./agent-scope.js";
-import { lookupCachedContextTokens, MODEL_CONTEXT_TOKEN_CACHE } from "./context-cache.js";
+import {
+  lookupCachedContextTokens,
+  lookupCachedContextWindow,
+  MODEL_CONTEXT_TOKEN_CACHE,
+  MODEL_CONTEXT_WINDOW_CACHE,
+  providerContextTokenCacheKey,
+} from "./context-cache.js";
+import {
+  type ContextTokenResolutionParams,
+  type ModelsConfig,
+  resolveAnthropicFixedContextWindow,
+  resolveContextTokensForModelFromCache,
+} from "./context-resolution.js";
 import { CONTEXT_WINDOW_RUNTIME_STATE } from "./context-runtime-state.js";
 import { normalizeProviderId } from "./model-selection.js";
 
+export {
+  ANTHROPIC_CONTEXT_1M_TOKENS,
+  ANTHROPIC_FABLE_CONTEXT_TOKENS,
+} from "./context-resolution.js";
 export { resetContextWindowCacheForTest } from "./context-runtime-state.js";
 
 type ModelEntry = {
@@ -27,26 +43,6 @@ type ModelRegistryLike = {
   getAvailable?: () => ModelEntry[];
   getAll: () => ModelEntry[];
 };
-type ConfigModelEntry = { id?: string; contextWindow?: number; contextTokens?: number };
-type ProviderConfigEntry = {
-  contextWindow?: number;
-  contextTokens?: number;
-  models?: ConfigModelEntry[];
-};
-type ModelsConfig = { providers?: Record<string, ProviderConfigEntry | undefined> };
-
-const ANTHROPIC_GA_1M_MODEL_PREFIXES = [
-  "claude-opus-4-8",
-  "claude-opus-4.8",
-  "claude-opus-4-6",
-  "claude-opus-4.6",
-  "claude-opus-4-7",
-  "claude-opus-4.7",
-  "claude-sonnet-4-6",
-  "claude-sonnet-4.6",
-] as const;
-export const ANTHROPIC_CONTEXT_1M_TOKENS = 1_048_576;
-export const ANTHROPIC_FABLE_CONTEXT_TOKENS = 1_000_000;
 const CONFIG_LOAD_RETRY_POLICY: BackoffPolicy = {
   initialMs: 1_000,
   maxMs: 60_000,
@@ -58,6 +54,13 @@ export function applyDiscoveredContextWindows(params: {
   cache: Map<string, number>;
   models: ModelEntry[];
 }) {
+  const cacheMinimum = (key: string, contextTokens: number) => {
+    const existing = params.cache.get(key);
+    if (existing === undefined || contextTokens < existing) {
+      params.cache.set(key, contextTokens);
+    }
+  };
+
   for (const model of params.models) {
     if (!model?.id) {
       continue;
@@ -73,24 +76,36 @@ export function applyDiscoveredContextWindows(params: {
     if (!contextTokens || contextTokens <= 0) {
       continue;
     }
-    const existing = params.cache.get(model.id);
     // Cache the most conservative effective limit. Provider/runtime callers that
-    // know the active provider should still prefer qualified lookups first.
-    if (existing === undefined || contextTokens < existing) {
-      params.cache.set(model.id, contextTokens);
+    // know the active provider prefer the provider-owned entry below.
+    cacheMinimum(model.id, contextTokens);
+    if (typeof model.provider === "string") {
+      const provider = normalizeProviderId(model.provider);
+      if (provider) {
+        cacheMinimum(providerContextTokenCacheKey(provider, model.id), contextTokens);
+        const slash = model.id.indexOf("/");
+        const prefixedProvider = slash > 0 ? normalizeProviderId(model.id.slice(0, slash)) : "";
+        const bareModelId = slash > 0 ? model.id.slice(slash + 1).trim() : "";
+        // Some registries preserve a self-prefixed id alongside provider ownership.
+        // Cache its bare form without stripping cross-provider ids such as OpenRouter rows.
+        if (prefixedProvider === provider && bareModelId) {
+          cacheMinimum(providerContextTokenCacheKey(provider, bareModelId), contextTokens);
+        }
+      }
     }
   }
 }
 
 export function applyConfiguredContextWindows(params: {
   cache: Map<string, number>;
+  windowCache: Map<string, number>;
   modelsConfig: ModelsConfig | undefined;
 }) {
   const providers = params.modelsConfig?.providers;
   if (!providers || typeof providers !== "object") {
     return;
   }
-  for (const provider of Object.values(providers)) {
+  for (const [providerId, provider] of Object.entries(providers)) {
     if (!Array.isArray(provider?.models)) {
       continue;
     }
@@ -99,17 +114,39 @@ export function applyConfiguredContextWindows(params: {
       const contextTokens =
         typeof model?.contextTokens === "number"
           ? model.contextTokens
-          : typeof model?.contextWindow === "number"
-            ? model.contextWindow
-            : typeof provider?.contextTokens === "number"
-              ? provider.contextTokens
-              : typeof provider?.contextWindow === "number"
-                ? provider.contextWindow
-                : undefined;
-      if (!modelId || !contextTokens || contextTokens <= 0) {
+          : typeof provider?.contextTokens === "number"
+            ? provider.contextTokens
+            : undefined;
+      const contextWindow =
+        typeof model?.contextWindow === "number"
+          ? model.contextWindow
+          : typeof provider?.contextWindow === "number"
+            ? provider.contextWindow
+            : undefined;
+      const configuredValue =
+        contextTokens && contextTokens > 0
+          ? { cache: params.cache, value: contextTokens }
+          : contextWindow && contextWindow > 0
+            ? { cache: params.windowCache, value: contextWindow }
+            : undefined;
+      if (!modelId || !configuredValue) {
         continue;
       }
-      params.cache.set(modelId, contextTokens);
+      configuredValue.cache.set(modelId, configuredValue.value);
+      configuredValue.cache.set(
+        providerContextTokenCacheKey(normalizeProviderId(providerId), modelId),
+        configuredValue.value,
+      );
+      const normalizedProvider = normalizeProviderId(providerId);
+      const slash = modelId.indexOf("/");
+      const prefixedProvider = slash > 0 ? normalizeProviderId(modelId.slice(0, slash)) : "";
+      const bareModelId = slash > 0 ? modelId.slice(slash + 1).trim() : "";
+      if (normalizedProvider && prefixedProvider === normalizedProvider && bareModelId) {
+        configuredValue.cache.set(
+          providerContextTokenCacheKey(normalizedProvider, bareModelId),
+          configuredValue.value,
+        );
+      }
     }
   }
 }
@@ -122,6 +159,7 @@ function primeConfiguredContextWindows(): OpenClawConfig | undefined {
   if (CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig) {
     applyConfiguredContextWindows({
       cache: MODEL_CONTEXT_TOKEN_CACHE,
+      windowCache: MODEL_CONTEXT_WINDOW_CACHE,
       modelsConfig: CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig.models as
         | ModelsConfig
         | undefined,
@@ -135,6 +173,7 @@ function primeConfiguredContextWindows(): OpenClawConfig | undefined {
     const cfg = getRuntimeConfig();
     applyConfiguredContextWindows({
       cache: MODEL_CONTEXT_TOKEN_CACHE,
+      windowCache: MODEL_CONTEXT_WINDOW_CACHE,
       modelsConfig: cfg.models as ModelsConfig | undefined,
     });
     CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig = cfg;
@@ -196,6 +235,7 @@ export function ensureContextWindowCacheLoaded(): Promise<void> {
 
     applyConfiguredContextWindows({
       cache: MODEL_CONTEXT_TOKEN_CACHE,
+      windowCache: MODEL_CONTEXT_WINDOW_CACHE,
       modelsConfig: cfg.models as ModelsConfig | undefined,
     });
   })().catch(() => {
@@ -204,15 +244,12 @@ export function ensureContextWindowCacheLoaded(): Promise<void> {
   return CONTEXT_WINDOW_RUNTIME_STATE.loadPromise;
 }
 
-export function lookupContextTokens(
-  modelId?: string,
-  options?: { allowAsyncLoad?: boolean; skipRuntimeConfigLoad?: boolean },
-): number | undefined {
-  if (!modelId) {
-    return undefined;
-  }
+function prepareContextWindowCache(options?: {
+  allowAsyncLoad?: boolean;
+  skipRuntimeConfigLoad?: boolean;
+}) {
   if (options?.skipRuntimeConfigLoad) {
-    return lookupCachedContextTokens(modelId);
+    return;
   }
   if (options?.allowAsyncLoad === false) {
     // Read-only callers still need synchronous config-backed overrides, but they
@@ -222,121 +259,17 @@ export function lookupContextTokens(
     // Best-effort: kick off loading on demand, but don't block lookups.
     void ensureContextWindowCacheLoaded();
   }
-  return lookupCachedContextTokens(modelId);
 }
 
-function resolveProviderModelRef(params: {
-  provider?: string;
-  model?: string;
-}): { provider: string; model: string } | undefined {
-  const modelRaw = params.model?.trim();
-  if (!modelRaw) {
-    return undefined;
-  }
-  const providerRaw = params.provider?.trim();
-  if (providerRaw) {
-    const provider = normalizeProviderId(providerRaw);
-    if (!provider) {
-      return undefined;
-    }
-    return { provider, model: modelRaw };
-  }
-  const slash = modelRaw.indexOf("/");
-  if (slash <= 0) {
-    return undefined;
-  }
-  const provider = normalizeProviderId(modelRaw.slice(0, slash));
-  const model = modelRaw.slice(slash + 1).trim();
-  if (!provider || !model) {
-    return undefined;
-  }
-  return { provider, model };
-}
-
-// Look up an explicit runtime context cap for a specific provider+model
-// directly from config, without going through the shared discovery cache.
-// This avoids the cache keyspace collision where "provider/model" synthetic
-// keys overlap with raw slash-containing model IDs (e.g. OpenRouter's
-// "google/gemini-2.5-pro" stored as a raw catalog entry).
-function resolveConfiguredProviderContextTokens(
-  cfg: OpenClawConfig | undefined,
-  provider: string,
-  model: string,
+export function lookupContextTokens(
+  modelId?: string,
+  options?: { allowAsyncLoad?: boolean; skipRuntimeConfigLoad?: boolean },
 ): number | undefined {
-  const providers = (cfg?.models as ModelsConfig | undefined)?.providers;
-  if (!providers) {
+  if (!modelId) {
     return undefined;
   }
-
-  // Mirror the lookup order in embedded-agent-runner/model.ts: exact key first,
-  // then normalized fallback. This prevents alias collisions from picking the
-  // wrong configured cap based on Object.entries iteration order.
-  function readProviderContextTokens(providerConfig: ProviderConfigEntry | undefined) {
-    return typeof providerConfig?.contextTokens === "number"
-      ? providerConfig.contextTokens
-      : typeof providerConfig?.contextWindow === "number"
-        ? providerConfig.contextWindow
-        : undefined;
-  }
-
-  function findContextTokens(matchProviderId: (id: string) => boolean): number | undefined {
-    for (const [providerId, providerConfig] of Object.entries(providers!)) {
-      if (!matchProviderId(providerId)) {
-        continue;
-      }
-      if (Array.isArray(providerConfig?.models)) {
-        for (const m of providerConfig.models) {
-          const contextTokens =
-            typeof m?.contextTokens === "number"
-              ? m.contextTokens
-              : typeof m?.contextWindow === "number"
-                ? m.contextWindow
-                : undefined;
-          if (
-            typeof m?.id === "string" &&
-            m.id === model &&
-            typeof contextTokens === "number" &&
-            contextTokens > 0
-          ) {
-            return contextTokens;
-          }
-        }
-      }
-      const providerContextTokens = readProviderContextTokens(providerConfig);
-      if (typeof providerContextTokens === "number" && providerContextTokens > 0) {
-        return providerContextTokens;
-      }
-    }
-    return undefined;
-  }
-
-  // 1. Exact match (case-insensitive, no alias expansion).
-  const exactResult = findContextTokens(
-    (id) => normalizeLowercaseStringOrEmpty(id) === normalizeLowercaseStringOrEmpty(provider),
-  );
-  if (exactResult !== undefined) {
-    return exactResult;
-  }
-
-  // 2. Normalized fallback: covers case-only provider key differences.
-  const normalizedProvider = normalizeProviderId(provider);
-  return findContextTokens((id) => normalizeProviderId(id) === normalizedProvider);
-}
-
-function resolveAnthropicFixedContextWindow(provider: string, model: string): number | undefined {
-  const modelId = resolveModelFamilyId(model);
-  if (
-    (provider === "anthropic" || provider === "anthropic-vertex") &&
-    modelId.startsWith("claude-fable-5")
-  ) {
-    return ANTHROPIC_FABLE_CONTEXT_TOKENS;
-  }
-  if (provider !== "anthropic" && provider !== "claude-cli") {
-    return undefined;
-  }
-  return ANTHROPIC_GA_1M_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix))
-    ? ANTHROPIC_CONTEXT_1M_TOKENS
-    : undefined;
+  prepareContextWindowCache(options);
+  return lookupCachedContextTokens(modelId) ?? lookupCachedContextWindow(modelId);
 }
 
 function resolveDiscoveredAnthropicFixedContextWindow(model: ModelEntry): number | undefined {
@@ -358,109 +291,17 @@ function resolveDiscoveredAnthropicFixedContextWindow(model: ModelEntry): number
     : undefined;
 }
 
-function resolveModelFamilyId(modelId: string): string {
-  const normalized = normalizeLowercaseStringOrEmpty(modelId);
-  return normalized.includes("/") ? (normalized.split("/").at(-1) ?? normalized) : normalized;
-}
-
-export function resolveContextTokensForModel(params: {
-  cfg?: OpenClawConfig;
-  provider?: string;
-  model?: string;
-  contextTokensOverride?: number;
-  fallbackContextTokens?: number;
-  allowAsyncLoad?: boolean;
-}): number | undefined {
-  const ref = resolveProviderModelRef({
-    provider: params.provider,
-    model: params.model,
-  });
-  const override =
-    typeof params.contextTokensOverride === "number" && params.contextTokensOverride > 0
-      ? params.contextTokensOverride
-      : undefined;
-  const capOverride = (contextTokens: number) =>
-    override !== undefined ? Math.min(override, contextTokens) : contextTokens;
-  const explicitProvider = params.provider?.trim();
-  if (ref) {
-    if (explicitProvider) {
-      const fixedContextWindow = resolveAnthropicFixedContextWindow(ref.provider, ref.model);
-      if (fixedContextWindow !== undefined) {
-        return capOverride(fixedContextWindow);
-      }
-    }
-    // Only do the config direct scan when the caller explicitly passed a
-    // provider. When provider is inferred from a slash in the model string
-    // (e.g. "google/gemini-2.5-pro" → ref.provider = "google"), the model ID
-    // may belong to a DIFFERENT provider (e.g. an OpenRouter session). Scanning
-    // cfg.models.providers.google in that case would return Google's configured
-    // window and misreport context limits for the OpenRouter session.
-    // See status.ts log-usage fallback which calls with only { model } set.
-    if (explicitProvider) {
-      const configuredWindow = resolveConfiguredProviderContextTokens(
-        params.cfg,
-        explicitProvider,
-        ref.model,
-      );
-      if (configuredWindow !== undefined) {
-        return capOverride(configuredWindow);
-      }
-    }
-  }
-
-  // When provider is explicitly given and the model ID is bare (no slash),
-  // try the provider-qualified cache key BEFORE the bare key.  Discovery
-  // entries are stored under qualified IDs (e.g. "google-gemini-cli/
-  // gemini-3.1-pro-preview → 1M"), while the bare key may hold a cross-
-  // provider minimum (128k).  Returning the qualified entry gives the correct
-  // provider-specific window for /status and session context-token persistence.
-  //
-  // Guard: only when params.provider is explicit (not inferred from a slash in
-  // the model string). For model-only callers (e.g. status.ts log-usage
-  // fallback with model="google/gemini-2.5-pro"), the inferred provider would
-  // construct "google/gemini-2.5-pro" as the qualified key which accidentally
-  // matches OpenRouter's raw discovery entry — the bare lookup is correct there.
-  if (params.provider && ref && !ref.model.includes("/")) {
-    const qualifiedResult = lookupContextTokens(
-      `${normalizeProviderId(ref.provider)}/${ref.model}`,
-      {
-        allowAsyncLoad: params.allowAsyncLoad,
-        skipRuntimeConfigLoad: Boolean(params.cfg),
-      },
-    );
-    if (qualifiedResult !== undefined) {
-      return capOverride(qualifiedResult);
-    }
-  }
-
-  // Bare key fallback.  For model-only calls with slash-containing IDs
-  // (e.g. "google/gemini-2.5-pro") this IS the raw discovery cache key.
-  const bareResult = lookupContextTokens(params.model, {
+export function resolveContextTokensForModel(
+  params: ContextTokenResolutionParams,
+): number | undefined {
+  const lookupOptions = {
     allowAsyncLoad: params.allowAsyncLoad,
     skipRuntimeConfigLoad: Boolean(params.cfg),
-  });
-  if (bareResult !== undefined) {
-    return capOverride(bareResult);
-  }
-
-  // When provider is implicit, try qualified as a last resort so inferred
-  // provider/model pairs (e.g. model="google-gemini-cli/gemini-3.1-pro")
-  // still find discovery entries stored under that qualified ID.
-  if (!params.provider && ref && !ref.model.includes("/")) {
-    const qualifiedResult = lookupContextTokens(
-      `${normalizeProviderId(ref.provider)}/${ref.model}`,
-      {
-        allowAsyncLoad: params.allowAsyncLoad,
-        skipRuntimeConfigLoad: Boolean(params.cfg),
-      },
-    );
-    if (qualifiedResult !== undefined) {
-      return capOverride(qualifiedResult);
-    }
-  }
-
-  if (override !== undefined) {
-    return override;
-  }
-  return params.fallbackContextTokens;
+  };
+  prepareContextWindowCache(lookupOptions);
+  return resolveContextTokensForModelFromCache(
+    params,
+    (modelId) => lookupCachedContextTokens(modelId),
+    (modelId) => lookupCachedContextWindow(modelId),
+  );
 }

@@ -5,7 +5,10 @@ import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.js";
-import { MODEL_CONTEXT_TOKEN_CACHE } from "../agents/context-cache.js";
+import {
+  MODEL_CONTEXT_TOKEN_CACHE,
+  providerContextTokenCacheKey,
+} from "../agents/context-cache.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 import { createSuccessfulImageMediaDecision } from "./media-understanding.test-fixtures.js";
@@ -2418,7 +2421,10 @@ describe("buildStatusMessage", () => {
     await withTempHome(
       async (dir) => {
         MODEL_CONTEXT_TOKEN_CACHE.set("gemini-2.5-pro", 128_000);
-        MODEL_CONTEXT_TOKEN_CACHE.set("google-gemini-cli/gemini-2.5-pro", 1_000_000);
+        MODEL_CONTEXT_TOKEN_CACHE.set(
+          providerContextTokenCacheKey("google-gemini-cli", "gemini-2.5-pro"),
+          1_000_000,
+        );
 
         const sessionId = "sess-google-bare-model";
         writeTranscriptUsageLog({
@@ -2461,7 +2467,10 @@ describe("buildStatusMessage", () => {
 
   it("prefers provider-qualified context windows for fresh bare model ids", () => {
     MODEL_CONTEXT_TOKEN_CACHE.set("claude-opus-4-6", 200_000);
-    MODEL_CONTEXT_TOKEN_CACHE.set("anthropic/claude-opus-4-6", 1_000_000);
+    MODEL_CONTEXT_TOKEN_CACHE.set(
+      providerContextTokenCacheKey("anthropic", "claude-opus-4-6"),
+      1_000_000,
+    );
 
     const text = buildStatusMessage({
       agent: {
@@ -2485,7 +2494,7 @@ describe("buildStatusMessage", () => {
   });
 
   it("does not let agent contextTokens inflate status above the model window", () => {
-    MODEL_CONTEXT_TOKEN_CACHE.set("openai/gpt-5.5", 272_000);
+    MODEL_CONTEXT_TOKEN_CACHE.set(providerContextTokenCacheKey("openai", "gpt-5.5"), 272_000);
 
     const text = buildStatusMessage({
       agent: {

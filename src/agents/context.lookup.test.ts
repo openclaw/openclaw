@@ -290,21 +290,24 @@ describe("lookupContextTokens", () => {
     expect(lookupContextTokens("anthropic/claude-opus-4.7-20260219")).toBe(1_048_576);
   });
 
-  it("resolveContextTokensForModel returns discovery value when provider-qualified entry exists in cache", async () => {
-    // Registry returns provider-qualified entries (real-world scenario from #35976).
-    // When no explicit config override exists, the bare cache lookup hits the
-    // provider-qualified raw discovery entry.
+  it("resolveContextTokensForModel handles self-prefixed provider-owned discovery ids", async () => {
     mockDiscoveryDeps([
-      { id: "github-copilot/gemini-3.1-pro-preview", contextWindow: 128_000 },
-      { id: "google-gemini-cli/gemini-3.1-pro-preview", contextWindow: 1_048_576 },
+      {
+        provider: "github-copilot",
+        id: "github-copilot/gemini-3.1-pro-preview",
+        contextWindow: 128_000,
+      },
+      {
+        provider: "google-gemini-cli",
+        id: "google-gemini-cli/gemini-3.1-pro-preview",
+        contextWindow: 1_048_576,
+      },
     ]);
 
     const { lookupContextTokens, resolveContextTokensForModel } = await importContextModule();
     lookupContextTokens("google-gemini-cli/gemini-3.1-pro-preview");
     await flushAsyncWarmup();
 
-    // With provider specified and no config override, bare lookup finds the
-    // provider-qualified discovery entry.
     const result = resolveContextTokensForModel({
       provider: "google-gemini-cli",
       model: "gemini-3.1-pro-preview",
@@ -369,7 +372,13 @@ describe("lookupContextTokens", () => {
     // override, the config direct scan returns it before any cache lookup —
     // so the OpenRouter raw "google/gemini-2.5-pro" qualified entry is never hit.
     // Real callers (status.summary.ts) always pass cfg when provider is explicit.
-    mockDiscoveryDeps([{ id: "google/gemini-2.5-pro", contextWindow: 999_000 }]);
+    mockDiscoveryDeps([
+      {
+        provider: "openrouter",
+        id: "google/gemini-2.5-pro",
+        contextWindow: 999_000,
+      },
+    ]);
 
     const cfg = createContextOverrideConfig("google", "gemini-2.5-pro", 2_000_000);
     const { lookupContextTokens, resolveContextTokensForModel } = await importContextModule();
@@ -388,8 +397,17 @@ describe("lookupContextTokens", () => {
     const openrouterResult = resolveContextTokensForModel({
       provider: "openrouter",
       model: "google/gemini-2.5-pro",
+      contextTokensOverride: 2_000_000,
     });
     expect(openrouterResult).toBe(999_000);
+
+    // The same raw key must not be treated as provider-owned Google metadata.
+    const googleUnconfiguredResult = resolveContextTokensForModel({
+      provider: "google",
+      model: "gemini-2.5-pro",
+      contextTokensOverride: 2_000_000,
+    });
+    expect(googleUnconfiguredResult).toBe(2_000_000);
   });
 
   it("resolveContextTokensForModel prefers exact provider key over alias-normalized match", async () => {
@@ -475,17 +493,24 @@ describe("lookupContextTokens", () => {
     // an explicit-provider call must return the provider-specific qualified value,
     // not the collided bare minimum.
     mockDiscoveryDeps([
-      { id: "github-copilot/gemini-3.1-pro-preview", contextWindow: 128_000 },
+      {
+        provider: "github-copilot",
+        id: "gemini-3.1-pro-preview",
+        contextWindow: 128_000,
+      },
       { id: "gemini-3.1-pro-preview", contextWindow: 128_000 },
-      { id: "google-gemini-cli/gemini-3.1-pro-preview", contextWindow: 1_048_576 },
+      {
+        provider: "google-gemini-cli",
+        id: "gemini-3.1-pro-preview",
+        contextWindow: 1_048_576,
+      },
     ]);
 
     const { lookupContextTokens, resolveContextTokensForModel } = await importContextModule();
     lookupContextTokens("google-gemini-cli/gemini-3.1-pro-preview");
     await flushAsyncWarmup();
 
-    // Qualified "google-gemini-cli/gemini-3.1-pro-preview" → 1M wins over
-    // bare "gemini-3.1-pro-preview" → 128k (cross-provider minimum).
+    // Provider-owned 1M metadata wins over the bare 128k cross-provider minimum.
     const result = resolveContextTokensForModel({
       provider: "google-gemini-cli",
       model: "gemini-3.1-pro-preview",

@@ -7,6 +7,7 @@ const statusSummaryMocks = vi.hoisted(() => ({
   hasConfiguredChannelsForReadOnlyScope: vi.fn(() => true),
   buildChannelSummary: vi.fn(async () => ["ok"]),
   readSessionStoreReadOnly: vi.fn(() => ({})),
+  resolveProviderStaticModel: vi.fn(),
   configureTaskRegistryMaintenance: vi.fn(),
   taskRegistrySummary: {
     total: 0,
@@ -76,6 +77,19 @@ vi.mock("../agents/defaults.js", () => ({
   DEFAULT_CONTEXT_TOKENS: 200_000,
   DEFAULT_MODEL: "gpt-5.5",
   DEFAULT_PROVIDER: "openai",
+}));
+
+vi.mock("../agents/embedded-agent-runner/model.static-catalog.js", () => ({
+  createBundledStaticCatalogModelResolver: vi.fn(() =>
+    vi.fn(({ provider, modelId }) =>
+      provider === "openai" && modelId === "gpt-5.5"
+        ? { contextWindow: 1_000_000, contextTokens: 272_000 }
+        : undefined,
+    ),
+  ),
+  createBundledProviderStaticCatalogModelResolver: vi.fn(
+    () => statusSummaryMocks.resolveProviderStaticModel,
+  ),
 }));
 
 vi.mock("../config/io.js", () => ({
@@ -197,6 +211,13 @@ describe("getStatusSummary", () => {
     statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope.mockReturnValue(true);
     statusSummaryMocks.buildChannelSummary.mockResolvedValue(["ok"]);
     statusSummaryMocks.readSessionStoreReadOnly.mockReturnValue({});
+    statusSummaryMocks.resolveProviderStaticModel.mockReset();
+    statusSummaryMocks.resolveProviderStaticModel.mockImplementation(
+      async ({ provider, modelId }) =>
+        provider === "google" && modelId === "gemini-3.1-pro-preview"
+          ? { contextWindow: 1_048_576 }
+          : undefined,
+    );
   });
 
   it("includes runtimeVersion in the status payload", async () => {
@@ -296,6 +317,47 @@ describe("getStatusSummary", () => {
     const contextCall = vi.mocked(statusSummaryRuntime.resolveContextTokensForModel).mock
       .calls[0]?.[0];
     expect(contextCall?.allowAsyncLoad).toBe(false);
+    expect(contextCall).toMatchObject({
+      modelContextWindow: 1_000_000,
+      modelContextTokens: 272_000,
+    });
+  });
+
+  it("uses bundled provider static catalogs for cold status context", async () => {
+    vi.mocked(statusSummaryRuntime.resolveConfiguredStatusModelRef).mockReturnValue({
+      provider: "google",
+      model: "gemini-3.1-pro-preview",
+    });
+
+    await getStatusSummary();
+
+    expect(
+      vi.mocked(statusSummaryRuntime.resolveContextTokensForModel).mock.calls[0]?.[0],
+    ).toMatchObject({
+      provider: "google",
+      model: "gemini-3.1-pro-preview",
+      modelContextWindow: 1_048_576,
+      allowAsyncLoad: false,
+    });
+  });
+
+  it("keeps status available when static catalog lookup fails", async () => {
+    vi.mocked(statusSummaryRuntime.resolveConfiguredStatusModelRef).mockReturnValue({
+      provider: "broken-provider",
+      model: "broken-model",
+    });
+    statusSummaryMocks.resolveProviderStaticModel.mockRejectedValueOnce(
+      new Error("static catalog unavailable"),
+    );
+
+    await expect(getStatusSummary()).resolves.toMatchObject({
+      sessions: {
+        defaults: {
+          model: "broken-model",
+          contextTokens: 200_000,
+        },
+      },
+    });
   });
 
   it("includes the selected agent runtime on recent sessions", async () => {

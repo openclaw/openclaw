@@ -37,6 +37,8 @@ vi.mock("../../plugins/provider-discovery.js", async (importOriginal) => ({
 
 import { getModelProviderRequestTransport } from "../provider-request-config.js";
 import {
+  createBundledProviderStaticCatalogModelResolver,
+  createBundledStaticCatalogModelResolver,
   resolveBundledProviderStaticCatalogModel,
   resolveBundledStaticCatalogModel,
 } from "./model.static-catalog.js";
@@ -119,6 +121,17 @@ beforeEach(() => {
 });
 
 describe("resolveBundledStaticCatalogModel", () => {
+  it("reuses one manifest scan across prepared lookups", () => {
+    setManifestPlugins([createMistralManifestPlugin()]);
+
+    const resolveModel = createBundledStaticCatalogModelResolver();
+    expect(resolveModel({ provider: "mistral", modelId: "mistral-medium-3-5" })?.id).toBe(
+      "mistral-medium-3-5",
+    );
+    expect(resolveModel({ provider: "mistral", modelId: "missing" })).toBeUndefined();
+    expect(manifestMocks.listOpenClawPluginManifestMetadata).toHaveBeenCalledTimes(1);
+  });
+
   it("synthesizes a runtime model from an exact bundled static manifest catalog row", () => {
     setManifestPlugins([createMistralManifestPlugin()]);
 
@@ -277,6 +290,36 @@ describe("resolveBundledProviderStaticCatalogModel", () => {
       workspaceDir: undefined,
       env: process.env,
     });
+  });
+
+  it("runs each prepared provider static catalog once", async () => {
+    const provider = {
+      id: "google",
+      pluginId: "google",
+      label: "Google",
+      auth: [],
+      staticCatalog: { run: vi.fn() },
+    };
+    providerMocks.resolveOwningPluginIdsForProviderRef.mockReturnValue(["google"]);
+    providerMocks.resolveBundledProviderCompatPluginIds.mockReturnValue(["google"]);
+    providerMocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([provider]);
+    providerMocks.runProviderStaticCatalog.mockResolvedValue({ marker: "static-result" });
+    providerMocks.normalizePluginDiscoveryResult.mockReturnValue({
+      google: {
+        models: [{ id: "gemini-3.1-pro-preview", name: "Gemini Pro", contextWindow: 1_048_576 }],
+      },
+    });
+
+    const resolveModel = createBundledProviderStaticCatalogModelResolver();
+    await expect(
+      resolveModel({ provider: "google", modelId: "gemini-3.1-pro-preview" }),
+    ).resolves.toMatchObject({ contextWindow: 1_048_576 });
+    await expect(
+      resolveModel({ provider: "google", modelId: "missing-model" }),
+    ).resolves.toBeUndefined();
+
+    expect(providerMocks.resolveRuntimePluginDiscoveryProviders).toHaveBeenCalledTimes(1);
+    expect(providerMocks.runProviderStaticCatalog).toHaveBeenCalledTimes(1);
   });
 
   it("does not load provider catalogs when the provider owner is not bundled and enabled", async () => {
