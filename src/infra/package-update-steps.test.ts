@@ -231,6 +231,44 @@ describe("runGlobalPackageUpdateSteps", () => {
     },
   );
 
+  it.each(["modified", "deleted"] as const)(
+    "does not reapply %s overrides after an unrecorded installed byte change",
+    async (overrideKind) => {
+      await withTempDir(
+        { prefix: `openclaw-package-update-local-actual-bytes-${overrideKind}-` },
+        async (base) => {
+          const packageRoot = path.join(base, "package");
+          const indexPath = path.join(packageRoot, "dist", "index.js");
+          await writePackageRoot(packageRoot, "1.0.0");
+          if (overrideKind === "modified") {
+            await fs.writeFile(indexPath, "export const local = true;\n", "utf8");
+          } else {
+            await fs.rm(indexPath);
+          }
+
+          const plan = await captureLocalPackageOverrides({ packageRoot });
+          expect(plan).not.toBeNull();
+          await fs.writeFile(indexPath, "export {};\n", "utf8");
+          await writePackageDistInventory(packageRoot);
+          await fs.writeFile(indexPath, "export const changedAfterVerify = true;\n", "utf8");
+
+          const result = await applyLocalPackageOverrides({
+            packageRoot,
+            plan,
+            reapply: true,
+          });
+
+          expect(result.status).toBe("conflict");
+          expect(result.applied).toBe(0);
+          expect(result.conflicts).toEqual([{ path: "dist/index.js", reason: "target-changed" }]);
+          await expect(fs.readFile(indexPath, "utf8")).resolves.toBe(
+            "export const changedAfterVerify = true;\n",
+          );
+        },
+      );
+    },
+  );
+
   it.runIf(process.platform !== "win32")(
     "reapplies overrides when Windows reports synthetic installed modes",
     async () => {

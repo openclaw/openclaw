@@ -540,8 +540,17 @@ async function preflightLocalOverrides(params: {
       conflicts.push({ path: change.path, reason: "target-hardlinked" });
       continue;
     }
+    let targetSha: string;
+    try {
+      // Package verification runs earlier; rehash at replay preflight so later mutations fail closed.
+      targetSha = await hashFileSha256(targetPath);
+    } catch {
+      conflicts.push({ path: change.path, reason: "target-inspection-failed" });
+      continue;
+    }
     if (
       nextEntry.sha256 !== change.baseline.sha256 ||
+      targetSha !== nextEntry.sha256 ||
       nextEntry.mode !== normalizeFileMode(change.baseline.mode) ||
       (process.platform !== "win32" && targetProbe.mode !== normalizeFileMode(nextEntry.mode))
     ) {
