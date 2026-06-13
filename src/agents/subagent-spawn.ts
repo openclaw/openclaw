@@ -348,6 +348,19 @@ function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<S
       entry.model = model;
       entry.modelOverride = model;
       entry.modelOverrideSource = patch.modelOverrideSource === "auto" ? "auto" : "user";
+      if (
+        typeof patch.modelOverrideFallbackOriginProvider === "string" &&
+        patch.modelOverrideFallbackOriginProvider.trim()
+      ) {
+        entry.modelOverrideFallbackOriginProvider =
+          patch.modelOverrideFallbackOriginProvider.trim();
+      }
+      if (
+        typeof patch.modelOverrideFallbackOriginModel === "string" &&
+        patch.modelOverrideFallbackOriginModel.trim()
+      ) {
+        entry.modelOverrideFallbackOriginModel = patch.modelOverrideFallbackOriginModel.trim();
+      }
       if (provider) {
         entry.modelProvider = provider;
         entry.providerOverride = provider;
