@@ -1695,6 +1695,7 @@ export async function startGatewayServer(
     const { startManagedGatewayConfigReloader } = await import("./server-reload-handlers.js");
     runtimeState.configReloader = startManagedGatewayConfigReloader({
       minimalTestGateway,
+      getEventLoopHealth: readinessEventLoopHealth.snapshot,
       initialConfig: cfgAtStart,
       initialCompareConfig: startupLastGoodSnapshot.sourceConfig,
       initialInternalWriteHash: startupInternalWriteHash,

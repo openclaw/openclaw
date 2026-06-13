@@ -51,6 +51,15 @@ const hoisted = vi.hoisted(() => ({
   disposeAllSessionMcpRuntimes: vi.fn(async () => {}),
 }));
 
+const healthMonitorHoisted = vi.hoisted(() => ({
+  startGatewayChannelHealthMonitor: vi.fn(() => ({ stop: () => {} })),
+}));
+
+vi.mock("./server-runtime-services.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./server-runtime-services.js")>()),
+  startGatewayChannelHealthMonitor: healthMonitorHoisted.startGatewayChannelHealthMonitor,
+}));
+
 vi.mock("../hooks/gmail-watcher.js", () => ({
   stopGmailWatcher: hoisted.stopGmailWatcher,
 }));
@@ -1501,5 +1510,127 @@ describe("gateway plugin hot reload handlers", () => {
     expect(startChannel).not.toHaveBeenCalled();
     expect(events).toEqual(["reload:start", "stop", "registry:replace"]);
     expect(setState).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("startManagedGatewayConfigReloader event-loop health wiring", () => {
+  afterEach(() => {
+    healthMonitorHoisted.startGatewayChannelHealthMonitor.mockReset();
+    healthMonitorHoisted.startGatewayChannelHealthMonitor.mockReturnValue({ stop: () => {} });
+  });
+
+  it("threads getEventLoopHealth into a health monitor recreated by a hot reload (#89785)", async () => {
+    const getEventLoopHealth = () => ({ degraded: true, reasons: ["event_loop_delay"] });
+    const initialConfig = {
+      gateway: { reload: { debounceMs: 0 }, channelHealthCheckMinutes: 5 },
+    } as unknown as OpenClawConfig;
+    const nextConfig = {
+      gateway: { reload: { debounceMs: 0 }, channelHealthCheckMinutes: 10 },
+    } as unknown as OpenClawConfig;
+
+    let resolveMonitorCreated: (() => void) | undefined;
+    const monitorCreated = new Promise<void>((resolve) => {
+      resolveMonitorCreated = resolve;
+    });
+    healthMonitorHoisted.startGatewayChannelHealthMonitor.mockImplementation(() => {
+      resolveMonitorCreated?.();
+      return { stop: () => {} };
+    });
+
+    const writeListenerRef: { current: ((event: ConfigWriteNotification) => void) | null } = {
+      current: null,
+    };
+    const readSnapshot = vi.fn(async () => ({
+      path: "/tmp/openclaw.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      sourceConfig: nextConfig,
+      resolved: nextConfig,
+      valid: true,
+      runtimeConfig: nextConfig,
+      config: nextConfig,
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+      hash: "hash-next",
+    }));
+
+    const reloader = startManagedGatewayConfigReloader({
+      minimalTestGateway: false,
+      initialConfig,
+      initialCompareConfig: initialConfig,
+      initialInternalWriteHash: null,
+      watchPath: "/tmp/openclaw.json",
+      readSnapshot: readSnapshot as never,
+      promoteSnapshot: vi.fn(async () => true) as never,
+      subscribeToWrites: ((listener: (event: ConfigWriteNotification) => void) => {
+        writeListenerRef.current = listener;
+        return () => {
+          if (writeListenerRef.current === listener) {
+            writeListenerRef.current = null;
+          }
+        };
+      }) as never,
+      deps: {} as never,
+      broadcast: vi.fn(),
+      getState: () => ({
+        hooksConfig: {} as never,
+        hookClientIpConfig: {} as never,
+        heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() } as never,
+        cronState: {
+          cron: { start: vi.fn(async () => {}), stop: vi.fn() },
+          storePath: "/tmp/cron.json",
+          cronEnabled: false,
+        } as never,
+        channelHealthMonitor: null,
+      }),
+      setState: vi.fn(),
+      startChannel: vi.fn(async () => {}),
+      stopChannel: vi.fn(async () => {}),
+      reloadPlugins: vi.fn(async () => ({
+        restartChannels: new Set<string>(),
+        activeChannels: new Set<string>(),
+      })),
+      logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      logChannels: { info: vi.fn(), error: vi.fn() },
+      logCron: { error: vi.fn() },
+      logReload: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      channelManager: {} as never,
+      activateRuntimeSecrets: vi.fn(async (config: OpenClawConfig) => ({
+        sourceConfig: config,
+        config,
+        authStores: [],
+        warnings: [],
+        webTools: {},
+      })) as never,
+      resolveSharedGatewaySessionGenerationForConfig: () => undefined,
+      sharedGatewaySessionGenerationState: { current: undefined, required: null },
+      clients: [],
+      getEventLoopHealth,
+    });
+
+    const listener = writeListenerRef.current;
+    if (!listener) {
+      throw new Error("Expected config write listener to be registered");
+    }
+    listener({
+      configPath: "/tmp/openclaw.json",
+      sourceConfig: nextConfig,
+      runtimeConfig: nextConfig,
+      persistedHash: "hash-next",
+      revision: 1,
+      fingerprint: "runtime-hash-next",
+      sourceFingerprint: "source-hash-next",
+      writtenAtMs: Date.now(),
+    });
+
+    await monitorCreated;
+
+    expect(healthMonitorHoisted.startGatewayChannelHealthMonitor).toHaveBeenCalledWith(
+      expect.objectContaining({ getEventLoopHealth }),
+    );
+
+    await reloader.stop();
   });
 });

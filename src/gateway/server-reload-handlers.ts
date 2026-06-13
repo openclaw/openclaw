@@ -183,6 +183,7 @@ type ManagedGatewayConfigReloaderParams = Omit<
     error: (msg: string) => void;
   };
   channelManager: GatewayChannelManager;
+  getEventLoopHealth?: Parameters<typeof startGatewayChannelHealthMonitor>[0]["getEventLoopHealth"];
   activateRuntimeSecrets: ActivateRuntimeSecrets;
   resolveSharedGatewaySessionGenerationForConfig: (config: OpenClawConfig) => string | undefined;
   sharedGatewaySessionGenerationState: SharedGatewaySessionGenerationState;
@@ -651,6 +652,7 @@ export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigRe
       startGatewayChannelHealthMonitor({
         cfg: config,
         channelManager: params.channelManager,
+        ...(params.getEventLoopHealth && { getEventLoopHealth: params.getEventLoopHealth }),
       }),
   });
 
