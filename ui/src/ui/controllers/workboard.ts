@@ -1634,8 +1634,10 @@ function selectWorkboardMissingTaskConfirmationIds(
   return selectRotatingBatch(host, ids, WORKBOARD_TASK_POLL_BATCH_SIZE, workboardTaskPollOffsets);
 }
 
+type WorkboardTaskLinkState = Pick<WorkboardUiState, "cards" | "tasksByCardId" | "missingTaskIds">;
+
 function applyTaskSummariesToState(
-  state: WorkboardUiState,
+  state: WorkboardTaskLinkState,
   tasks: readonly WorkboardTaskSummary[],
   options: {
     missingTaskIds?: ReadonlySet<string>;
@@ -1686,7 +1688,7 @@ function shouldRefreshWorkboardTasksForLifecycle(state: WorkboardUiState): boole
   );
 }
 
-function workboardTaskLinksReadyForLifecycle(state: WorkboardUiState): boolean {
+function workboardTaskLinksReadyForLifecycle(state: WorkboardTaskLinkState): boolean {
   return state.cards.every((card) => {
     const taskId = normalizeString(card.taskId);
     return !taskId || state.missingTaskIds.has(taskId) || state.tasksByCardId.has(card.id);
@@ -1756,14 +1758,21 @@ export async function loadWorkboard(params: {
         return false;
       }
       const previousTasksByCardId = state.tasksByCardId;
-      state.cards = normalized.cards;
-      state.statuses = normalized.statuses;
-      state.tasksByCardId = new Map();
+      const taskLinkState: WorkboardTaskLinkState = {
+        cards: normalized.cards,
+        tasksByCardId: new Map(),
+        missingTaskIds: new Set(state.missingTaskIds),
+      };
       let linkedTaskRefreshFailed = false;
-      if (state.cards.length > 0) {
-        const preparedTaskSummaries = state.cards.flatMap((card) => {
+      let lifecycleTaskRefreshFailed = state.lifecycleTaskRefreshFailed;
+      let nextTaskRefreshError: string | null = null;
+      let nextUnfilteredCursor: string | null | undefined;
+      if (taskLinkState.cards.length > 0) {
+        const preparedTaskSummaries = taskLinkState.cards.flatMap((card) => {
           const task = previousTasksByCardId.get(card.id);
-          return task && taskMatchesTrackedCardLink(task, card, state.missingTaskIds) ? [task] : [];
+          return task && taskMatchesTrackedCardLink(task, card, taskLinkState.missingTaskIds)
+            ? [task]
+            : [];
         });
         try {
           const pollResult =
@@ -1772,15 +1781,15 @@ export async function loadWorkboard(params: {
                   client,
                   selectWorkboardTaskPollIds(
                     params.host,
-                    state.cards,
+                    taskLinkState.cards,
                     previousTasksByCardId,
-                    state.missingTaskIds,
+                    taskLinkState.missingTaskIds,
                   ),
                   selectWorkboardTaskDiscoveryQueries(
                     params.host,
-                    state.cards,
+                    taskLinkState.cards,
                     previousTasksByCardId,
-                    state.missingTaskIds,
+                    taskLinkState.missingTaskIds,
                   ),
                 )
               : null;
@@ -1802,9 +1811,9 @@ export async function loadWorkboard(params: {
               client,
               selectWorkboardMissingTaskConfirmationIds(
                 params.host,
-                state.cards,
+                taskLinkState.cards,
                 listedTaskSummaries,
-                state.missingTaskIds,
+                taskLinkState.missingTaskIds,
               ),
               [],
             );
@@ -1812,47 +1821,52 @@ export async function loadWorkboard(params: {
             missingTaskIds = confirmationResult.missingTaskIds;
             taskRefreshError = confirmationResult.error;
           }
-          if (isCurrentWorkboardLoadGeneration(params.host, generation)) {
-            if (pollResult?.nextUnfilteredCursor !== undefined) {
-              if (pollResult.nextUnfilteredCursor) {
-                workboardDefaultTaskDiscoveryCursors.set(
-                  params.host,
-                  pollResult.nextUnfilteredCursor,
-                );
-              } else {
-                workboardDefaultTaskDiscoveryCursors.delete(params.host);
-              }
-            }
-            applyTaskSummariesToState(state, taskSummaries, { missingTaskIds });
-            state.lifecycleTaskRefreshFailed = false;
-            if (taskRefreshError) {
-              linkedTaskRefreshFailed = true;
-              state.lastRefreshError = taskRefreshError;
-            }
+          nextUnfilteredCursor = pollResult?.nextUnfilteredCursor;
+          applyTaskSummariesToState(taskLinkState, taskSummaries, { missingTaskIds });
+          lifecycleTaskRefreshFailed = false;
+          if (taskRefreshError) {
+            linkedTaskRefreshFailed = true;
+            nextTaskRefreshError = taskRefreshError;
           }
         } catch (error) {
-          if (isCurrentWorkboardLoadGeneration(params.host, generation)) {
-            applyTaskSummariesToState(state, preparedTaskSummaries);
-            if (params.taskRefresh === "linked") {
-              linkedTaskRefreshFailed = true;
-            } else {
-              // Render-driven lifecycle sync runs after every update. Defer a
-              // failed full task refresh until a later load instead of retrying immediately.
-              state.lifecycleTaskRefreshFailed = true;
-            }
-            state.lastRefreshError = formatError(error);
+          applyTaskSummariesToState(taskLinkState, preparedTaskSummaries);
+          if (params.taskRefresh === "linked") {
+            linkedTaskRefreshFailed = true;
+          } else {
+            // Render-driven lifecycle sync runs after every update. Defer a
+            // failed full task refresh until a later load instead of retrying immediately.
+            lifecycleTaskRefreshFailed = true;
           }
+          nextTaskRefreshError = formatError(error);
         }
       } else {
-        state.lifecycleTaskRefreshFailed = false;
+        lifecycleTaskRefreshFailed = false;
       }
       if (!isCurrentWorkboardLoadGeneration(params.host, generation)) {
         return false;
       }
+      if (params.taskRefresh === "linked" && state.draggedCardId) {
+        return false;
+      }
+      if (nextUnfilteredCursor !== undefined) {
+        if (nextUnfilteredCursor) {
+          workboardDefaultTaskDiscoveryCursors.set(params.host, nextUnfilteredCursor);
+        } else {
+          workboardDefaultTaskDiscoveryCursors.delete(params.host);
+        }
+      }
+      state.cards = taskLinkState.cards;
+      state.statuses = normalized.statuses;
+      state.tasksByCardId = taskLinkState.tasksByCardId;
+      state.missingTaskIds = taskLinkState.missingTaskIds;
+      state.lifecycleTaskRefreshFailed = lifecycleTaskRefreshFailed;
+      if (nextTaskRefreshError) {
+        state.lastRefreshError = nextTaskRefreshError;
+      }
       state.lifecycleTasksPrepared =
         params.taskRefresh === "linked" &&
         !linkedTaskRefreshFailed &&
-        workboardTaskLinksReadyForLifecycle(state);
+        workboardTaskLinksReadyForLifecycle(taskLinkState);
       state.loaded = true;
       return true;
     } catch (error) {

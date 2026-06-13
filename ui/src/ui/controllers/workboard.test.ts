@@ -909,6 +909,36 @@ describe("workboard controller", () => {
     stopWorkboardPolling(host);
   });
 
+  it("discards an in-flight poll when a card drag starts", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const listedCards = createDeferred<unknown>();
+    const initialCard = { ...sampleCard, title: "Drag target" };
+    const refreshedCard = { ...sampleCard, title: "Server refresh" };
+    state.cards = [initialCard];
+    state.loaded = true;
+    const client = createClient((method) => {
+      if (method === "workboard.cards.list") {
+        return listedCards.promise;
+      }
+      return {};
+    });
+
+    const refresh = refreshWorkboard({
+      host,
+      client: client as never,
+      source: "poll",
+    });
+    await Promise.resolve();
+    state.draggedCardId = initialCard.id;
+    listedCards.resolve({ cards: [refreshedCard], statuses: ["todo", "done"] });
+    await refresh;
+
+    expect(state.cards).toEqual([initialCard]);
+    expect(state.draggedCardId).toBe(initialCard.id);
+    expect(state.lastRefreshAt).toBeNull();
+  });
+
   it("tracks dispatch independently from refresh loading state", async () => {
     const host = {};
     const state = getWorkboardState(host);
