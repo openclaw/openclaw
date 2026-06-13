@@ -248,6 +248,33 @@ describe("workboard controller", () => {
     expect(state.missingTaskIds).toEqual(new Set());
   });
 
+  it("reuses exact-confirmed full-load tasks for the next lifecycle sync", async () => {
+    const host = {};
+    const linked = {
+      ...sampleCard,
+      status: "running",
+      taskId: sampleTask.taskId,
+      sessionKey: sampleTaskSessionKey,
+      runId: "run-1",
+    } satisfies WorkboardCard;
+    const client = createClient({
+      "workboard.cards.list": { cards: [linked], statuses: ["todo", "running", "done"] },
+      "tasks.list": { tasks: [] },
+      "tasks.get": { task: sampleTask },
+    });
+
+    await loadWorkboard({ host, client: client as never, force: true });
+
+    const state = getWorkboardState(host);
+    expect(state.lifecycleTasksPrepared).toBe(true);
+    vi.clearAllMocks();
+
+    await syncWorkboardLifecycle({ host, client: client as never, sessions: [] });
+
+    expect(client.request).not.toHaveBeenCalled();
+    expect(state.tasksByCardId.get(sampleCard.id)).toEqual(sampleTask);
+  });
+
   it("keeps a canonical task link over a newer loose session match", async () => {
     const host = {};
     const linked = {
@@ -405,7 +432,8 @@ describe("workboard controller", () => {
     vi.clearAllMocks();
     await syncWorkboardLifecycle({ host, client: client as never, sessions: [] });
 
-    expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
+    expect(client.request).not.toHaveBeenCalledWith("tasks.list", { limit: 500 });
+    expect(getWorkboardState(host).tasksByCardId.get(sampleCard.id)).toEqual(sampleTask);
   });
 
   it("keeps prepared task summaries when bounded poll enrichment fails", async () => {

@@ -1864,9 +1864,7 @@ export async function loadWorkboard(params: {
         state.lastRefreshError = nextTaskRefreshError;
       }
       state.lifecycleTasksPrepared =
-        params.taskRefresh === "linked" &&
-        !linkedTaskRefreshFailed &&
-        workboardTaskLinksReadyForLifecycle(taskLinkState);
+        !linkedTaskRefreshFailed && workboardTaskLinksReadyForLifecycle(taskLinkState);
       state.loaded = true;
       return true;
     } catch (error) {
