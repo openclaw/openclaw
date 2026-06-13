@@ -2577,6 +2577,54 @@ describe("workboard controller", () => {
     expect(state.capturingSessionKeys.size).toBe(0);
   });
 
+  it("does not duplicate same-session captures waiting on the initial load", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const list = createDeferred<unknown>();
+    const create = createDeferred<unknown>();
+    const created = { ...sampleCard, sessionKey: sampleSession.key };
+    const client = createClient((method) => {
+      if (method === "workboard.cards.list") {
+        return list.promise;
+      }
+      if (method === "chat.history") {
+        return { messages: [] };
+      }
+      if (method === "workboard.cards.create") {
+        return create.promise;
+      }
+      return {};
+    });
+
+    const firstCapture = captureSessionToWorkboard({
+      host,
+      client: client as never,
+      session: sampleSession,
+    });
+    const secondCapture = captureSessionToWorkboard({
+      host,
+      client: client as never,
+      session: sampleSession,
+    });
+    list.resolve({ cards: [], statuses: ["todo"] });
+    await vi.waitFor(() => {
+      expect(client.request).toHaveBeenCalledWith(
+        "workboard.cards.create",
+        expect.objectContaining({ sessionKey: sampleSession.key }),
+      );
+    });
+
+    expect(
+      client.request.mock.calls.filter(([method]) => method === "workboard.cards.create"),
+    ).toHaveLength(1);
+    create.resolve({ card: created });
+    const captures = await Promise.all([firstCapture, secondCapture]);
+
+    expect(captures.filter(Boolean)).toEqual([created]);
+    expect(state.cards).toEqual([created]);
+    expect(state.capturingSessionKeys.size).toBe(0);
+  });
+
   it("does not capture sessions while dispatch is active", async () => {
     const host = {};
     const state = getWorkboardState(host);
@@ -4592,6 +4640,37 @@ describe("workboard controller", () => {
     expect(state.lifecycleTaskRefreshFailed).toBe(true);
     expect(state.error).toBeNull();
     expect(state.lifecycleTaskRefreshError).toBe("task confirmation unavailable");
+  });
+
+  it("requests a render after lifecycle refresh marks a task missing", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const linked = {
+      ...sampleCard,
+      status: "ready",
+      taskId: sampleTask.taskId,
+    } satisfies WorkboardCard;
+    state.loaded = true;
+    state.cards = [linked];
+    const client = createClient((method) => {
+      if (method === "tasks.list") {
+        return { tasks: [] };
+      }
+      if (method === "tasks.get") {
+        throw new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: `task not found: ${sampleTask.taskId}`,
+        });
+      }
+      return {};
+    });
+    const requestUpdate = vi.fn();
+
+    await syncWorkboardLifecycle({ host, client: client as never, sessions: [], requestUpdate });
+
+    expect(state.missingTaskIds).toEqual(new Set([sampleTask.taskId]));
+    expect(client.request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
+    expect(requestUpdate).toHaveBeenCalledOnce();
   });
 
   it("keeps prepared task lifecycle state after no-op syncs", async () => {

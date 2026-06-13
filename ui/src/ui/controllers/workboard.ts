@@ -2755,6 +2755,11 @@ export async function captureSessionToWorkboard(params: {
     if (!state.loaded || state.dispatching) {
       return null;
     }
+    if (state.capturingSessionKeys.has(params.session.key)) {
+      return (
+        state.cards.find((card) => workboardCardSessionKey(card) === params.session.key) ?? null
+      );
+    }
     state.capturingSessionKeys.add(params.session.key);
     captureStarted = true;
     params.requestUpdate?.();
@@ -2913,8 +2918,8 @@ async function refreshWorkboardLifecycleTasks(
       state.lifecycleTaskRefreshError = null;
       if (recoveredFromTaskRefresh) {
         state.lastRefreshError = null;
-        params.requestUpdate?.();
       }
+      params.requestUpdate?.();
       return Date.now();
     } catch (error) {
       if (
