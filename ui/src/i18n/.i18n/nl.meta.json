@@ -71,12 +71,12 @@
     "workboard.viewRunning",
     "workboard.viewStale"
   ],
-  "generatedAt": "2026-06-11T06:53:22.672Z",
+  "generatedAt": "2026-06-13T08:47:03.282Z",
   "locale": "nl",
   "model": "claude-opus-4-8",
   "provider": "anthropic",
-  "sourceHash": "d2019714821601dceb0df9321da35c4cfe405be445e03e85d394333a22af0b2c",
-  "totalKeys": 1370,
-  "translatedKeys": 1300,
+  "sourceHash": "8851d68710fd6e18cadfcced95e4a11fbf7351eb6ec20c40e7aaba0a069d9f12",
+  "totalKeys": 1371,
+  "translatedKeys": 1301,
   "workflow": 1
 }

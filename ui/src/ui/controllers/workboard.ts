@@ -385,6 +385,7 @@ export type WorkboardUiState = {
   activeHealthHighlight: WorkboardHealthKey | null;
   showArchived: boolean;
   layout: "comfortable" | "compact";
+  hideEmptyColumns: boolean;
   autoRefreshIntervalMs: WorkboardAutoRefreshIntervalMs;
   lastRefreshAt: number | null;
   lastRefreshStartedAt: number | null;
@@ -479,6 +480,7 @@ function createDefaultState(): WorkboardUiState {
     activeHealthHighlight: null,
     showArchived: false,
     layout: "compact",
+    hideEmptyColumns: false,
     autoRefreshIntervalMs: 0,
     lastRefreshAt: null,
     lastRefreshStartedAt: null,

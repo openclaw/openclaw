@@ -2554,9 +2554,9 @@ export function renderWorkboard(props: WorkboardProps) {
     byStatus.get(card.status)?.push(card);
   }
   const visibleStatuses =
-    state.viewPreset === "all"
-      ? state.statuses
-      : state.statuses.filter((status) => (byStatus.get(status)?.length ?? 0) > 0);
+    state.hideEmptyColumns || state.viewPreset !== "all"
+      ? state.statuses.filter((status) => (byStatus.get(status)?.length ?? 0) > 0)
+      : state.statuses;
   const archivedCardsHidden =
     !state.showArchived && state.cards.some((card) => card.metadata?.archivedAt);
   const activeFiltering =
@@ -2696,6 +2696,18 @@ export function renderWorkboard(props: WorkboardProps) {
               </div>
               ${renderRefreshStatus(state)}
             </div>
+            <label class="workboard-toggle">
+              <input
+                type="checkbox"
+                name="workboard-hide-empty-columns"
+                .checked=${state.hideEmptyColumns}
+                @change=${(event: Event) => {
+                  state.hideEmptyColumns = (event.currentTarget as HTMLInputElement).checked;
+                  props.onRequestUpdate?.();
+                }}
+              />
+              <span>${t("workboard.hideEmptyColumns")}</span>
+            </label>
           </div>
           <div class="workboard-toolbar__actions">
             ${autoRefreshEnabled
