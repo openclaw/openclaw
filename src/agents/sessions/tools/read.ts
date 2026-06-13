@@ -9,6 +9,7 @@ import { basename, dirname, isAbsolute, relative, resolve as resolvePath, sep } 
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import type { ImageContent, Model, TextContent } from "../../../llm/types.js";
+import { decodeWindowsOutputBuffer } from "../../../infra/windows-encoding.js";
 import {
   classifyMediaReferenceSource,
   normalizeMediaReferenceSource,
@@ -339,7 +340,7 @@ export function createReadToolDefinition(
             } else {
               // Read text content.
               const buffer = await ops.readFile(absolutePath);
-              const textContent = buffer.toString("utf-8");
+              const textContent = decodeWindowsOutputBuffer({ buffer });
               const allLines = textContent.split("\n");
               const totalFileLines = allLines.length;
               // Apply offset if specified. Convert from 1-indexed input to 0-indexed array access.
