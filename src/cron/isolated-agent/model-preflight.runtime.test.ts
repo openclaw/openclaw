@@ -210,7 +210,7 @@ describe("preflightCronModelProvider", () => {
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
   });
 
-  it("does not probe a second local candidate after the shared chain deadline expires", async () => {
+  it("does not cache a local candidate skipped after the shared chain deadline expires", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     fetchWithSsrFGuardMock.mockRejectedValueOnce(new Error("first endpoint unavailable"));
@@ -257,6 +257,17 @@ describe("preflightCronModelProvider", () => {
     }
     expect(second.reason).toContain("chain budget exhausted");
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+
+    mockReachableResponse(200);
+    vi.setSystemTime(deadlineMs + 1);
+    const nextRun = await preflightCronModelProvider({
+      cfg,
+      provider: "second",
+      model: "local-two",
+    });
+
+    expect(nextRun).toEqual({ status: "available" });
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
   });
 
   it("retries an unavailable endpoint after the cache ttl", async () => {
