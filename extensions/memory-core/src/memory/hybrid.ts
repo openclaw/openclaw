@@ -49,6 +49,13 @@ export function bm25RankToScore(rank: number): number {
   return 1 / (1 + rank);
 }
 
+/**
+ * Check if two line ranges overlap.
+ */
+function linesOverlap(aStart: number, aEnd: number, bStart: number, bEnd: number): boolean {
+  return aStart <= bEnd && bStart <= aEnd;
+}
+
 export async function mergeHybridResults(params: {
   vector: HybridVectorResult[];
   keyword: HybridKeywordResult[];
@@ -87,6 +94,9 @@ export async function mergeHybridResults(params: {
     }
   >();
 
+  // Secondary index: group vector results by path for fallback matching
+  const vectorByPath = new Map<string, HybridVectorResult[]>();
+
   for (const r of params.vector) {
     byId.set(r.id, {
       id: r.id,
@@ -98,26 +108,60 @@ export async function mergeHybridResults(params: {
       vectorScore: r.vectorScore,
       textScore: 0,
     });
+    const existing = vectorByPath.get(r.path);
+    if (existing) {
+      existing.push(r);
+    } else {
+      vectorByPath.set(r.path, [r]);
+    }
   }
 
   for (const r of params.keyword) {
     const existing = byId.get(r.id);
     if (existing) {
+      // Exact chunk ID match — update textScore directly
       existing.textScore = r.textScore;
       if (r.snippet && r.snippet.length > 0) {
         existing.snippet = r.snippet;
       }
     } else {
-      byId.set(r.id, {
-        id: r.id,
-        path: r.path,
-        startLine: r.startLine,
-        endLine: r.endLine,
-        source: r.source,
-        snippet: r.snippet,
-        vectorScore: 0,
-        textScore: r.textScore,
-      });
+      // No chunk ID match — try path + line range overlap as fallback
+      // Pick the overlapping vector chunk with the highest vectorScore
+      const candidates = vectorByPath.get(r.path);
+      let merged = false;
+      if (candidates) {
+        let best: HybridVectorResult | undefined;
+        for (const v of candidates) {
+          if (linesOverlap(r.startLine, r.endLine, v.startLine, v.endLine)) {
+            if (!best || v.vectorScore > best.vectorScore) {
+              best = v;
+            }
+          }
+        }
+        if (best) {
+          const entry = byId.get(best.id)!;
+          entry.textScore = Math.max(entry.textScore, r.textScore);
+          if (r.startLine < entry.startLine) entry.startLine = r.startLine;
+          if (r.endLine > entry.endLine) entry.endLine = r.endLine;
+          if (r.snippet && r.snippet.length > 0) {
+            entry.snippet = r.snippet;
+          }
+          merged = true;
+        }
+      }
+      if (!merged) {
+        // No overlap found — add as keyword-only entry
+        byId.set(r.id, {
+          id: r.id,
+          path: r.path,
+          startLine: r.startLine,
+          endLine: r.endLine,
+          source: r.source,
+          snippet: r.snippet,
+          vectorScore: 0,
+          textScore: r.textScore,
+        });
+      }
     }
   }
 
