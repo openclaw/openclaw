@@ -10,7 +10,9 @@ import { MODEL_CONTEXT_TOKEN_CACHE, MODEL_CONTEXT_WINDOW_CACHE } from "./context
 const CONTEXT_WINDOW_RUNTIME_STATE_KEY = Symbol.for("openclaw.contextWindowRuntimeState");
 
 type ContextWindowRuntimeState = {
+  generation: number;
   loadPromise: Promise<void> | null;
+  loadGeneration: number | null;
   configuredConfig: OpenClawConfig | undefined;
   configLoadFailures: number;
   nextConfigLoadAttemptAtMs: number;
@@ -26,7 +28,9 @@ export const CONTEXT_WINDOW_RUNTIME_STATE = (() => {
     // The loader is lifecycle-owned here; callers reuse the same pending load
     // promise and backoff counters instead of racing config discovery.
     globalState[CONTEXT_WINDOW_RUNTIME_STATE_KEY] = {
+      generation: 0,
       loadPromise: null,
+      loadGeneration: null,
       configuredConfig: undefined,
       configLoadFailures: 0,
       nextConfigLoadAttemptAtMs: 0,
@@ -36,13 +40,18 @@ export const CONTEXT_WINDOW_RUNTIME_STATE = (() => {
   return globalState[CONTEXT_WINDOW_RUNTIME_STATE_KEY];
 })();
 
-/** Reset context-window runtime state and token cache for isolated tests. */
-export function resetContextWindowCacheForTest(): void {
-  CONTEXT_WINDOW_RUNTIME_STATE.loadPromise = null;
+/** Reset prepared context-window state after model config or plugin metadata changes. */
+export function resetContextWindowCache(): void {
+  CONTEXT_WINDOW_RUNTIME_STATE.generation += 1;
   CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig = undefined;
   CONTEXT_WINDOW_RUNTIME_STATE.configLoadFailures = 0;
   CONTEXT_WINDOW_RUNTIME_STATE.nextConfigLoadAttemptAtMs = 0;
-  CONTEXT_WINDOW_RUNTIME_STATE.modelsConfigRuntimeLoader.clear();
   MODEL_CONTEXT_TOKEN_CACHE.clear();
   MODEL_CONTEXT_WINDOW_CACHE.clear();
+}
+
+/** Reset context-window runtime state and token cache for isolated tests. */
+export function resetContextWindowCacheForTest(): void {
+  resetContextWindowCache();
+  CONTEXT_WINDOW_RUNTIME_STATE.modelsConfigRuntimeLoader.clear();
 }

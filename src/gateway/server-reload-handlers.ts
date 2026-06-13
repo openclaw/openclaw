@@ -1,6 +1,7 @@
 // Gateway hot-reload handlers.
 // Applies config reload plans to hooks, cron, heartbeat, plugins, channels, and restarts.
 import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.js";
+import { refreshContextWindowCache } from "../agents/context.js";
 import {
   getActiveEmbeddedRunCount,
   listActiveEmbeddedRunSessionIds,
@@ -96,6 +97,19 @@ function resetPreparedModelRuntimeStateForHotReload(): void {
   resetModelCatalogCache();
   clearCurrentProviderAuthState();
   markGatewayModelCatalogStaleForReload();
+}
+
+function shouldRefreshContextWindowCache(plan: GatewayReloadPlan): boolean {
+  return (
+    plan.reloadPlugins ||
+    plan.changedPaths.some(
+      (path) =>
+        path === "models" ||
+        path.startsWith("models.") ||
+        path === "agents.list" ||
+        path.startsWith("agents.list."),
+    )
+  );
 }
 
 async function disposeMcpRuntimesWithTimeout(params: {
@@ -504,6 +518,9 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
 
     applyGatewayLaneConcurrency(nextConfig);
 
+    if (shouldRefreshContextWindowCache(plan)) {
+      await refreshContextWindowCache(nextConfig);
+    }
     void warmCurrentProviderAuthStateOffMainThread(nextConfig).catch((err: unknown) => {
       params.logReload.warn(`provider auth state rewarm failed: ${String(err)}`);
     });
@@ -687,6 +704,9 @@ export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigRe
           await activateSecretsRuntimeSnapshot(previousSnapshot);
         } else {
           clearSecretsRuntimeSnapshot();
+        }
+        if (previousSnapshot && shouldRefreshContextWindowCache(plan)) {
+          await refreshContextWindowCache(previousSnapshot.config);
         }
         params.sharedGatewaySessionGenerationState.current = previousSharedGatewaySessionGeneration;
         if (sharedGatewaySessionGenerationChanged) {

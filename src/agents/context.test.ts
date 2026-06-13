@@ -347,14 +347,6 @@ describe("resolveContextTokensForModel", () => {
   it("returns 1M context when anthropic context1m is enabled for a GA 1M model", () => {
     const result = resolveContextTokensForModel({
       cfg: {
-        models: {
-          providers: {
-            anthropic: {
-              baseUrl: "https://api.anthropic.com",
-              models: [testModelContextWindow("claude-opus-4-6", 200_000)],
-            },
-          },
-        },
         agents: {
           defaults: {
             models: {
@@ -377,14 +369,6 @@ describe("resolveContextTokensForModel", () => {
   it("returns 1M context when claude-cli context1m is enabled for a GA 1M model", () => {
     const result = resolveContextTokensForModel({
       cfg: {
-        models: {
-          providers: {
-            "claude-cli": {
-              baseUrl: "https://api.anthropic.com",
-              models: [testModelContextWindow("claude-opus-4-7", 200_000)],
-            },
-          },
-        },
         agents: {
           defaults: {
             models: {
@@ -407,14 +391,6 @@ describe("resolveContextTokensForModel", () => {
   it("returns 1M context for GA-capable Anthropic 4.x models even without context1m", () => {
     const result = resolveContextTokensForModel({
       cfg: {
-        models: {
-          providers: {
-            anthropic: {
-              baseUrl: "https://api.anthropic.com",
-              models: [testModelContextWindow("claude-opus-4-6", 200_000)],
-            },
-          },
-        },
         agents: {
           defaults: {
             models: {
@@ -440,7 +416,38 @@ describe("resolveContextTokensForModel", () => {
     ["anthropic", "claude-sonnet-4-6", ANTHROPIC_CONTEXT_1M_TOKENS],
     ["anthropic-vertex", "claude-sonnet-4-6", ANTHROPIC_VERTEX_CONTEXT_1M_TOKENS],
   ])(
-    "returns the fixed context for %s model %s even when config reports 200k",
+    "returns the fixed context for unconfigured %s model %s",
+    (provider, modelId, expectedContextTokens) => {
+      const result = resolveContextTokensForModel({
+        provider,
+        model: modelId,
+        fallbackContextTokens: 200_000,
+        allowAsyncLoad: false,
+      });
+
+      expect(result).toBe(expectedContextTokens);
+    },
+  );
+
+  it("keeps fixed Anthropic context above stale static native-window metadata", () => {
+    expect(
+      resolveContextTokensForModel({
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        modelContextWindow: 200_000,
+        fallbackContextTokens: 200_000,
+        allowAsyncLoad: false,
+      }),
+    ).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
+  });
+
+  it.each([
+    ["anthropic", "claude-fable-5", ANTHROPIC_FABLE_CONTEXT_TOKENS],
+    ["anthropic-vertex", "claude-fable-5", ANTHROPIC_FABLE_CONTEXT_TOKENS],
+    ["anthropic", "claude-sonnet-4-6", ANTHROPIC_CONTEXT_1M_TOKENS],
+    ["anthropic-vertex", "claude-sonnet-4-6", ANTHROPIC_VERTEX_CONTEXT_1M_TOKENS],
+  ])(
+    "ignores a materialized lower context window for fixed %s model %s",
     (provider, modelId, expectedContextTokens) => {
       const result = resolveContextTokensForModel({
         cfg: {
@@ -462,6 +469,32 @@ describe("resolveContextTokensForModel", () => {
       expect(result).toBe(expectedContextTokens);
     },
   );
+
+  it("honors an explicit lower contextTokens cap for a fixed Anthropic model", () => {
+    const result = resolveContextTokensForModel({
+      cfg: {
+        models: {
+          providers: {
+            anthropic: {
+              baseUrl: "https://api.anthropic.com",
+              models: [
+                {
+                  ...testModelContextWindow("claude-sonnet-4-6", 200_000),
+                  contextTokens: 200_000,
+                },
+              ],
+            },
+          },
+        },
+      },
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      fallbackContextTokens: 200_000,
+      allowAsyncLoad: false,
+    });
+
+    expect(result).toBe(200_000);
+  });
 
   it("keeps older Anthropic Sonnet 4.x models at the configured window when context1m is set", () => {
     const result = resolveContextTokensForModel({
@@ -777,6 +810,35 @@ describe("resolveContextTokensForModel", () => {
           allowAsyncLoad: false,
         }),
       ).toBe(272_000);
+    } finally {
+      resetContextWindowCacheForTest();
+    }
+  });
+
+  it("caps prepared runtime tokens by a lower configured native window", () => {
+    resetContextWindowCacheForTest();
+    try {
+      applyConfiguredContextWindows({
+        cache: MODEL_CONTEXT_TOKEN_CACHE,
+        windowCache: MODEL_CONTEXT_WINDOW_CACHE,
+        modelsConfig: {
+          providers: {
+            openai: {
+              models: [{ id: "gpt-5.5", contextWindow: 128_000 }],
+            },
+          },
+        },
+      });
+
+      expect(
+        resolveContextTokensForModel({
+          provider: "openai",
+          model: "gpt-5.5",
+          modelContextTokens: 272_000,
+          contextTokensOverride: 1_000_000,
+          allowAsyncLoad: false,
+        }),
+      ).toBe(128_000);
     } finally {
       resetContextWindowCacheForTest();
     }

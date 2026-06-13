@@ -24,3 +24,15 @@ export function lookupCachedContextWindow(modelId?: string): number | undefined 
   }
   return MODEL_CONTEXT_WINDOW_CACHE.get(modelId);
 }
+
+/** Returns the lowest positive context limit from independently sourced metadata. */
+export function minPositiveContextTokens(...values: Array<number | undefined>): number | undefined {
+  let result: number | undefined;
+  for (const value of values) {
+    if (typeof value !== "number" || value <= 0) {
+      continue;
+    }
+    result = result === undefined ? value : Math.min(result, value);
+  }
+  return result;
+}

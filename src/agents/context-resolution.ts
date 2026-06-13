@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   lookupCachedContextTokens,
   lookupCachedContextWindow,
+  minPositiveContextTokens,
   providerContextTokenCacheKey,
 } from "./context-cache.js";
 import { normalizeProviderId } from "./model-selection.js";
@@ -193,6 +194,16 @@ export function resolveContextTokensForModelFromCache(
       typeof params.modelContextTokens === "number" && params.modelContextTokens > 0
         ? params.modelContextTokens
         : undefined;
+    const modelContextWindow =
+      typeof params.modelContextWindow === "number" && params.modelContextWindow > 0
+        ? params.modelContextWindow
+        : undefined;
+    const runtimeCap = minPositiveContextTokens(
+      providerResult,
+      modelContextTokens,
+      fixedContextWindow === undefined ? providerWindow : undefined,
+      fixedContextWindow === undefined ? modelContextWindow : undefined,
+    );
     if (configuredWindow) {
       if (configuredWindow.source === "contextTokens") {
         const effectiveCap =
@@ -201,58 +212,37 @@ export function resolveContextTokensForModelFromCache(
             : Math.min(configuredWindow.value, fixedContextWindow);
         return capOverride(effectiveCap);
       }
-      // A configured contextWindow is the native window, not necessarily the
-      // lower runtime budget. Prefer verified discovery, then static metadata.
-      const runtimeCap = providerResult ?? modelContextTokens;
-      if (runtimeCap !== undefined) {
-        const effectiveCap =
-          fixedContextWindow === undefined ? runtimeCap : Math.min(runtimeCap, fixedContextWindow);
-        return capOverride(
-          fixedContextWindow === undefined
-            ? Math.min(configuredWindow.value, effectiveCap)
-            : effectiveCap,
-        );
-      }
+      // Runtime config fills omitted contextWindow values with 200k, so this
+      // field cannot lower a fixed provider contract. contextTokens remains
+      // the explicit effective-cap override above.
       if (fixedContextWindow !== undefined) {
-        return capOverride(fixedContextWindow);
+        const effectiveCap =
+          runtimeCap === undefined ? fixedContextWindow : Math.min(runtimeCap, fixedContextWindow);
+        return capOverride(effectiveCap);
+      }
+      if (runtimeCap !== undefined) {
+        return capOverride(Math.min(configuredWindow.value, runtimeCap));
       }
       return capOverride(configuredWindow.value);
     }
-    if (providerResult !== undefined) {
+    if (runtimeCap !== undefined) {
       const effectiveCap =
-        fixedContextWindow === undefined
-          ? providerResult
-          : Math.min(providerResult, fixedContextWindow);
-      return capOverride(effectiveCap);
-    }
-    if (modelContextTokens !== undefined) {
-      const effectiveCap =
-        fixedContextWindow === undefined
-          ? modelContextTokens
-          : Math.min(modelContextTokens, fixedContextWindow);
+        fixedContextWindow === undefined ? runtimeCap : Math.min(runtimeCap, fixedContextWindow);
       return capOverride(effectiveCap);
     }
     if (fixedContextWindow !== undefined) {
       return capOverride(fixedContextWindow);
-    }
-    if (typeof params.modelContextWindow === "number" && params.modelContextWindow > 0) {
-      return capOverride(params.modelContextWindow);
-    }
-    if (providerWindow !== undefined) {
-      return capOverride(providerWindow);
     }
   }
 
   // Model-only calls use the raw discovery key. With an explicit provider,
   // slash-containing raw keys lack ownership provenance and cannot lower an override.
   const bareResult = lookupContextTokens(params.model);
-  if (bareResult !== undefined) {
-    const ambiguousSlashId = Boolean(explicitProvider && ref?.model.includes("/"));
-    return ambiguousSlashId && override !== undefined ? override : capOverride(bareResult);
-  }
   const bareWindow = lookupContextWindow(params.model);
-  if (bareWindow !== undefined) {
-    return capOverride(bareWindow);
+  const bareCap = minPositiveContextTokens(bareResult, bareWindow);
+  if (bareCap !== undefined) {
+    const ambiguousSlashId = Boolean(explicitProvider && ref?.model.includes("/"));
+    return ambiguousSlashId && override !== undefined ? override : capOverride(bareCap);
   }
 
   return override ?? params.fallbackContextTokens;

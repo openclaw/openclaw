@@ -2,6 +2,7 @@
 // model resolution.
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 type DiscoveredModel = {
   id: string;
@@ -66,12 +67,17 @@ function mockDiscoveryDeps(
   });
 }
 
-function createContextOverrideConfig(provider: string, model: string, contextWindow: number) {
+function createContextOverrideConfig(
+  provider: string,
+  model: string,
+  contextWindow: number,
+): OpenClawConfig {
   return {
     models: {
       providers: {
         [provider]: {
-          models: [{ id: model, contextWindow }],
+          baseUrl: "https://example.invalid",
+          models: [{ id: model, contextWindow } as never],
         },
       },
     },
@@ -177,6 +183,20 @@ describe("lookupContextTokens", () => {
     expect(lookupContextTokens("gpt-5.4", { allowAsyncLoad: false })).toBe(272_000);
   });
 
+  it("keeps a lower configured window as a cap on discovered context tokens", async () => {
+    mockDiscoveryDeps([{ provider: "openai", id: "gpt-5.5", contextTokens: 272_000 }], {
+      openai: {
+        models: [{ id: "gpt-5.5", contextWindow: 128_000 }],
+      },
+    });
+
+    const { lookupContextTokens } = await importContextModule();
+    lookupContextTokens("gpt-5.5");
+    await flushAsyncWarmup();
+
+    expect(lookupContextTokens("gpt-5.5")).toBe(128_000);
+  });
+
   it("rehydrates config-backed cache entries after module reload when runtime config survives", async () => {
     // The shared runtime snapshot should survive module reloads so lookups do
     // not synchronously reread config on every import.
@@ -242,6 +262,47 @@ describe("lookupContextTokens", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("serializes refreshed discovery behind an in-flight stale models.json preparation", async () => {
+    let releaseModelsJson: (() => void) | undefined;
+    const modelsJsonEvents: string[] = [];
+    contextTestState.ensureOpenClawModelsJson
+      .mockImplementationOnce(async () => {
+        modelsJsonEvents.push("old:start");
+        await new Promise<void>((resolve) => {
+          releaseModelsJson = resolve;
+        });
+        modelsJsonEvents.push("old:end");
+      })
+      .mockImplementationOnce(async () => {
+        modelsJsonEvents.push("new:start", "new:end");
+      });
+    mockDiscoveryDeps([{ provider: "openrouter", id: "claude-sonnet", contextWindow: 654_321 }], {
+      openrouter: {
+        models: [{ id: "claude-sonnet", contextWindow: 321_000 }],
+      },
+    });
+
+    const { lookupContextTokens, refreshContextWindowCache } = await importContextModule();
+    expect(lookupContextTokens("claude-sonnet")).toBe(321_000);
+    await vi.waitFor(() => {
+      expect(modelsJsonEvents).toEqual(["old:start"]);
+    });
+
+    const nextConfig = createContextOverrideConfig("openrouter", "claude-sonnet", 222_000);
+    contextTestState.discoveredModels = [
+      { provider: "openrouter", id: "claude-sonnet", contextWindow: 222_000 },
+    ];
+    const refreshPromise = refreshContextWindowCache(nextConfig);
+    await Promise.resolve();
+    expect(modelsJsonEvents).toEqual(["old:start"]);
+
+    releaseModelsJson?.();
+    await refreshPromise;
+
+    expect(modelsJsonEvents).toEqual(["old:start", "old:end", "new:start", "new:end"]);
+    expect(lookupContextTokens("claude-sonnet", { allowAsyncLoad: false })).toBe(222_000);
   });
 
   it("returns the smaller window when the same bare model id is discovered under multiple providers", async () => {
