@@ -59,6 +59,19 @@ describe("config-eval helpers", () => {
     expect(resolveConfigPath("not-an-object", "browser.enabled")).toBeUndefined();
   });
 
+  it("blocks prototype keys while resolving config paths", () => {
+    const config = {
+      safe: {
+        enabled: true,
+      },
+    };
+
+    expect(resolveConfigPath(config, "safe.enabled")).toBe(true);
+    expect(resolveConfigPath(config, "__proto__")).toBeUndefined();
+    expect(resolveConfigPath(config, "constructor.name")).toBeUndefined();
+    expect(resolveConfigPath(config, "prototype.polluted")).toBeUndefined();
+  });
+
   it("uses defaults only when config paths are unresolved", () => {
     const config = {
       browser: {
