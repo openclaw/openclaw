@@ -28,10 +28,7 @@ export function openMemoryDatabaseAtPath(
       probe.close();
     } catch (err) {
       const msg = (err as Error).message ?? "";
-      if (
-        msg.includes("unable to open database file") ||
-        msg.includes("SQLITE_CANTOPEN")
-      ) {
+      if (msg.includes("unable to open database file") || msg.includes("SQLITE_CANTOPEN")) {
         throw new Error(
           `Memory database not found at ${dbPath}; refusing to auto-create an empty database during an index swap window.`,
           { cause: err },

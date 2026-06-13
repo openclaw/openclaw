@@ -85,9 +85,14 @@ function parseProcMountInfoEntries(
 function parseMountCommandEntries(contents: string): Array<{ mountPoint: string; fsType: string }> {
   const entries: Array<{ mountPoint: string; fsType: string }> = [];
   for (const line of contents.split("\n")) {
-    const match = /^.* on (.+) \(([^,\s)]+)/.exec(line);
-    if (match) {
-      entries.push({ mountPoint: match[1], fsType: match[2] });
+    const linuxMatch = /^.* on (.+) type ([^,\s)]+) \(/.exec(line);
+    if (linuxMatch) {
+      entries.push({ mountPoint: linuxMatch[1], fsType: linuxMatch[2] });
+      continue;
+    }
+    const bsdMatch = /^.* on (.+) \(([^,\s)]+)/.exec(line);
+    if (bsdMatch) {
+      entries.push({ mountPoint: bsdMatch[1], fsType: bsdMatch[2] });
     }
   }
   return entries;
@@ -146,6 +151,28 @@ function isNfsBackedPath(targetPath: string): boolean {
   return isNfsMountEntryPath(checkedPath);
 }
 
+function readJournalModeResult(row: unknown): string | null {
+  if (!row || typeof row !== "object") {
+    return null;
+  }
+  const record = row as Record<string, unknown>;
+  const value = record.journal_mode ?? Object.values(record)[0];
+  return typeof value === "string" ? value.toLowerCase() : null;
+}
+
+function requireRollbackJournalMode(db: DatabaseSync, options: SqliteWalMaintenanceOptions): void {
+  const row = db.prepare("PRAGMA journal_mode = DELETE;").get();
+  const journalMode = readJournalModeResult(row);
+  if (journalMode !== "delete") {
+    const label = options.databaseLabel ?? "sqlite database";
+    const location = options.databasePath ? ` at ${options.databasePath}` : "";
+    const actual = journalMode ?? "unknown";
+    throw new Error(
+      `${label}${location} is on an NFS-backed volume but SQLite kept journal_mode=${actual}; refusing to continue with WAL on NFS.`,
+    );
+  }
+}
+
 /** Configure WAL pragmas and return a handle for checkpoint/close maintenance. */
 export function configureSqliteWalMaintenance(
   db: DatabaseSync,
@@ -162,7 +189,7 @@ export function configureSqliteWalMaintenance(
   const timerIntervalMs = Math.min(checkpointIntervalMs, MAX_TIMER_TIMEOUT_MS);
   const checkpointMode = options.checkpointMode ?? "TRUNCATE";
   if (options.databasePath && isNfsBackedPath(options.databasePath)) {
-    db.exec("PRAGMA journal_mode = DELETE;");
+    requireRollbackJournalMode(db, options);
     return {
       checkpoint: () => true,
       close: () => true,

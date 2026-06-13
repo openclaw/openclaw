@@ -14,6 +14,9 @@ import {
 function createMockDb(): DatabaseSync {
   return {
     exec: vi.fn(),
+    prepare: vi.fn(() => ({
+      get: vi.fn(() => ({ journal_mode: "delete" })),
+    })),
   } as unknown as DatabaseSync;
 }
 
@@ -59,11 +62,32 @@ describe("sqlite WAL maintenance", () => {
       });
 
       expect(statfs).toHaveBeenCalledWith(tempDir);
-      expect(db["exec"]).toHaveBeenCalledTimes(1);
-      expect(db["exec"]).toHaveBeenCalledWith("PRAGMA journal_mode = DELETE;");
+      expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA journal_mode = DELETE;");
+      expect(db["exec"]).not.toHaveBeenCalled();
       expect(maintenance.checkpoint()).toBe(true);
       expect(maintenance.close()).toBe(true);
-      expect(db["exec"]).toHaveBeenCalledTimes(1);
+      expect(db["exec"]).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses NFS-backed databases when SQLite keeps WAL active", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-nfs-"));
+    try {
+      const db = createMockDb();
+      vi.mocked(db["prepare"]).mockReturnValue({
+        get: vi.fn(() => ({ journal_mode: "wal" })),
+      } as unknown as ReturnType<DatabaseSync["prepare"]>);
+      vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0x6969));
+
+      expect(() =>
+        configureSqliteWalMaintenance(db, {
+          checkpointIntervalMs: 0,
+          databaseLabel: "test-db",
+          databasePath: path.join(tempDir, "openclaw.sqlite"),
+        }),
+      ).toThrow(/test-db .*journal_mode=wal/);
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
@@ -83,7 +107,7 @@ describe("sqlite WAL maintenance", () => {
         databasePath: path.join(tempDir, "openclaw.sqlite"),
       });
 
-      expect(db["exec"]).toHaveBeenCalledWith("PRAGMA journal_mode = DELETE;");
+      expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA journal_mode = DELETE;");
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
@@ -106,7 +130,30 @@ describe("sqlite WAL maintenance", () => {
         databasePath: path.join(tempDir, "openclaw.sqlite"),
       });
 
-      expect(db["exec"]).toHaveBeenCalledWith("PRAGMA journal_mode = DELETE;");
+      expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA journal_mode = DELETE;");
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("parses Linux mount command filesystem names when proc mountinfo is unavailable", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-nfs-"));
+    try {
+      const db = createMockDb();
+      vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0));
+      vi.spyOn(fs, "readFileSync").mockImplementation(() => {
+        throw new Error("no proc mountinfo");
+      });
+      vi.spyOn(childProcess, "execFileSync").mockReturnValue(
+        Buffer.from(`server:/share on ${tempDir} type nfs4 (rw,relatime)\n`),
+      );
+
+      configureSqliteWalMaintenance(db, {
+        checkpointIntervalMs: 0,
+        databasePath: path.join(tempDir, "openclaw.sqlite"),
+      });
+
+      expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA journal_mode = DELETE;");
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
