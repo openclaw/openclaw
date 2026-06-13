@@ -38,7 +38,8 @@ pnpm install
 2. Install Tauri prerequisites:
 
 - Windows: Rust toolchain + WebView2 runtime
-- Linux: Rust toolchain + the WebKitGTK / GTK packages required by Tauri
+- Linux: Rust toolchain + the WebKitGTK / GTK packages required by Tauri v2:
+  `libglib2.0-dev libgobject-2.0-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev`
 
 3. Start the desktop app from the repo root:
 
@@ -53,6 +54,17 @@ pnpm desktop:build
 ```
 
 For this MVP, `desktop:build` produces a release binary without installer bundling yet.
+
+### Verify (no GTK required)
+
+```bash
+# Rust formatting
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check
+
+# Frontend type check and build (inside apps/desktop)
+tsc --noEmit
+vite build
+```
 
 ## Notes
 
