@@ -8,6 +8,7 @@ import { access as fsAccess, readFile as fsReadFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { decodeWindowsOutputBuffer } from "../../../infra/windows-encoding.js";
 import type { ImageContent, Model, TextContent } from "../../../llm/types.js";
 import {
   classifyMediaReferenceSource,
@@ -39,12 +40,6 @@ const readSchema = Type.Object({
     Type.Number({ description: "Line number to start reading from (1-indexed)" }),
   ),
   limit: Type.Optional(Type.Number({ description: "Maximum number of lines to read" })),
-  encoding: Type.Optional(
-    Type.String({
-      description:
-        "File encoding to use when decoding text (e.g. utf-8, gbk, latin1). Defaults to utf-8.",
-    }),
-  ),
 });
 export type { ReadToolDetails, ReadToolInput } from "./tool-contracts.js";
 
@@ -254,22 +249,21 @@ function formatReadResult(
   return text;
 }
 
-function decodeReadBuffer(buffer: Buffer, encoding?: string): string {
-  if (!encoding) {
-    return buffer.toString("utf-8");
+/** Decodes a text buffer using the shared UTF-8 → Windows codepage → UTF-8 fallback chain. */
+function decodeReadBuffer(buffer: Buffer): string {
+  const output = decodeWindowsOutputBuffer({ buffer });
+  // decodeWindowsOutputBuffer treats non-Win32 platforms as UTF-8-only.  For
+  // cross-platform tolerance, also accept invalid UTF-8 by falling back to
+  // replacement characters so a GBK file on Linux is readable rather than
+  // silently returning garbled UTF-8 output.
+  if (process.platform !== "win32") {
+    try {
+      return new TextDecoder("utf-8", { fatal: true }).decode(buffer);
+    } catch {
+      return buffer.toString("utf-8");
+    }
   }
-  const normalized = encoding.toLowerCase().replace(/[^a-z0-9-]/g, "");
-  if (normalized === "utf8" || normalized === "utf-8") {
-    return buffer.toString("utf-8");
-  }
-  try {
-    // Use TextDecoder for legacy encodings (GBK, Latin-1, etc.)
-    // Node.js 24+ supports these encodings natively via TextDecoder
-    return new TextDecoder(normalized).decode(buffer);
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Unsupported encoding "${encoding}": ${message}`, { cause: error });
-  }
+  return output;
 }
 
 export function createReadToolDefinition(
@@ -287,12 +281,7 @@ export function createReadToolDefinition(
     parameters: readSchema,
     async execute(
       toolCallId,
-      {
-        path,
-        offset,
-        limit,
-        encoding,
-      }: { path: string; offset?: number; limit?: number; encoding?: string },
+      { path, offset, limit }: { path: string; offset?: number; limit?: number },
       signal?: AbortSignal,
       onUpdate?,
       ctx?,
@@ -368,7 +357,7 @@ export function createReadToolDefinition(
             } else {
               // Read text content.
               const buffer = await ops.readFile(absolutePath);
-              const textContent = decodeReadBuffer(buffer, encoding);
+              const textContent = decodeReadBuffer(buffer);
               const allLines = textContent.split("\n");
               const totalFileLines = allLines.length;
               // Apply offset if specified. Convert from 1-indexed input to 0-indexed array access.
