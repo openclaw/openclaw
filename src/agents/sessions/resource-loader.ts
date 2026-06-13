@@ -109,8 +109,15 @@ export function loadProjectContextFiles(options: {
 
   let currentDir = resolvedCwd;
   const root = resolve("/");
+  const homeBoundary = resolve(homedir());
 
   while (true) {
+    // Stop walking above the user's home directory to prevent untrusted
+    // context injection from system directories on shared hosts.
+    if (currentDir !== homeBoundary && !currentDir.startsWith(homeBoundary + sep)) {
+      break;
+    }
+
     const contextFile = loadContextFileFromDir(currentDir);
     if (contextFile && !seenPaths.has(contextFile.path)) {
       ancestorContextFiles.unshift(contextFile);
