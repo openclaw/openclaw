@@ -179,9 +179,10 @@ Notes:
   overlay), `--ref` (element-clip label overlay by ARIA ref), and `--element`
   (element-clip label overlay by CSS selector); in element-clip modes, labels
   are projected relative to the element. The response also includes an
-  `annotations` array with each ref's bounding box (`{ref, number, role, name?,
-box: {x, y, width, height}}`); coordinates are in the captured image's space
-  (viewport / fullpage / element-relative). The field is omitted when empty.
+  `annotations` array with each ref's bounding box. Each item has `ref`,
+  `number`, `role`, optional `name`, and `box: {x, y, width, height}`;
+  coordinates are in the captured image's space (viewport / fullpage /
+  element-relative). The field is omitted when empty.
   `existing-session` profiles render a chrome-mcp overlay on page screenshots
   but do not use the Playwright projection helper and do not include
   `annotations`; CSS `--element` screenshots are unsupported there. Without
