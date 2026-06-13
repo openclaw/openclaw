@@ -1,6 +1,7 @@
 // Tests agent runner execution setup, command args, and model fallback routing.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refresh-failure.js";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { MissingProviderAuthError } from "../../agents/model-auth.js";
@@ -49,11 +50,57 @@ const GENERIC_RUN_FAILURE_TEXT =
   "⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.";
 
 describe("resolveSessionRuntimeOverrideForProvider", () => {
+  afterEach(() => {
+    cliBackendsTesting.resetDepsForTest();
+  });
+
   it("ignores unsupported session runtime pins", () => {
     expect(
       resolveSessionRuntimeOverrideForProvider({
         provider: "openai",
         entry: { agentRuntimeOverride: "unsupported-runtime" },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("keeps CLI runtime pins only when the runtime serves the selected provider", () => {
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [],
+      resolvePluginSetupCliBackend: ({ backend, config }) =>
+        backend === "claude-cli" && config
+          ? {
+              pluginId: "anthropic",
+              backend: {
+                id: "claude-cli",
+                modelProvider: "anthropic",
+                config: { command: "claude" },
+                bundleMcp: false,
+              },
+            }
+          : undefined,
+    });
+    const cfg = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": { command: "claude" },
+          },
+        },
+      },
+    };
+
+    expect(
+      resolveSessionRuntimeOverrideForProvider({
+        provider: "anthropic",
+        entry: { agentRuntimeOverride: "claude-cli" },
+        cfg,
+      }),
+    ).toBe("claude-cli");
+    expect(
+      resolveSessionRuntimeOverrideForProvider({
+        provider: "openai",
+        entry: { agentRuntimeOverride: "claude-cli" },
+        cfg,
       }),
     ).toBeUndefined();
   });

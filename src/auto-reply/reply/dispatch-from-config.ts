@@ -647,6 +647,7 @@ const resolveHarnessSourceVisibleRepliesDefault = (params: {
       const agentHarnessRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
         provider: candidate.provider,
         entry: params.entry,
+        cfg: params.cfg,
       });
       const harness = selectAgentHarness({
         provider: candidate.provider,
