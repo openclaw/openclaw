@@ -145,7 +145,7 @@ describe("node host version mismatch guard", () => {
       expect(pendingAfterVersionMismatch?.requestId).toBe(pendingBefore?.requestId);
       expect(pendingAfterVersionMismatch?.commands).toEqual(["screen.snapshot", "system.run"]);
 
-      const originalSend = WebSocket.prototype.send;
+      const originalSend = Reflect.get(WebSocket.prototype, "send");
       let failNextHelloOk = true;
       const sendSpy = vi.spyOn(WebSocket.prototype, "send").mockImplementation(function (
         this: WebSocket,
