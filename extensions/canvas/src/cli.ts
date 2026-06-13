@@ -111,13 +111,20 @@ function parseCanvasPositiveIntOption(raw: string | undefined, flag: string): nu
   return parsed;
 }
 
-function parseCanvasFiniteNumberOption(raw: string | undefined, flag: string): number | undefined {
+function parseCanvasFiniteNumberOption(
+  raw: string | undefined,
+  flag: string,
+  bounds?: { min: number; max: number },
+): number | undefined {
   if (!raw) {
     return undefined;
   }
   const parsed = parseStrictFiniteNumber(raw);
   if (parsed === undefined) {
     throw new Error(`${flag} must be a number.`);
+  }
+  if (bounds && (parsed < bounds.min || parsed > bounds.max)) {
+    throw new Error(`${flag} must be between ${bounds.min} and ${bounds.max}.`);
   }
   return parsed;
 }
@@ -245,8 +252,15 @@ async function invokeCanvas(
   command: string,
   params?: Record<string, unknown>,
 ) {
-  const nodeId = await deps.resolveNodeId(opts, normalizeOptionalString(opts.node) ?? "");
+  // Validate the invoke timeout at the CLI boundary so an invalid value fails
+  // before node resolution/invocation instead of being silently dropped.
   const timeoutMs = deps.parseTimeoutMs(opts.invokeTimeout);
+  const hasInvokeTimeout =
+    typeof opts.invokeTimeout === "string" && opts.invokeTimeout.trim() !== "";
+  if (hasInvokeTimeout && timeoutMs === undefined) {
+    throw new Error("--invoke-timeout must be a positive integer (ms).");
+  }
+  const nodeId = await deps.resolveNodeId(opts, normalizeOptionalString(opts.node) ?? "");
   return await deps.callGatewayCli(
     "node.invoke",
     opts,
@@ -278,7 +292,10 @@ export function registerNodesCanvasCommands(nodes: Command, deps: CanvasCliDepen
         await deps.runNodesCommand("canvas snapshot", async () => {
           const format = parseCanvasSnapshotRequestFormat(opts.format);
           const maxWidth = parseCanvasPositiveIntOption(opts.maxWidth, "--max-width");
-          const quality = parseCanvasFiniteNumberOption(opts.quality, "--quality");
+          const quality = parseCanvasFiniteNumberOption(opts.quality, "--quality", {
+            min: 0,
+            max: 1,
+          });
           const raw = await invokeCanvas(deps, opts, "canvas.snapshot", {
             format,
             maxWidth: Number.isFinite(maxWidth) ? maxWidth : undefined,

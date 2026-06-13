@@ -1,5 +1,6 @@
 // Canvas tests cover cli plugin behavior.
 import { Command } from "commander";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { registerNodesCanvasCommands, type CanvasCliDependencies } from "./cli.js";
 
@@ -25,7 +26,8 @@ function createCanvasCliDeps() {
       await action();
     },
     getNodesTheme: () => ({ ok: (value) => value }),
-    parseTimeoutMs: (raw) => (typeof raw === "string" ? Number.parseInt(raw, 10) : undefined),
+    parseTimeoutMs: (raw) =>
+      raw === undefined || raw === null ? undefined : parseStrictPositiveInteger(raw),
     resolveNodeId: async (opts) => opts.node ?? "ios-node",
     buildNodeInvokeParams: ({ nodeId, command, params, timeoutMs }) => ({
       nodeId,
@@ -170,5 +172,50 @@ describe("canvas CLI", () => {
       }),
     ).rejects.toThrow(`${flag} must be a number.`);
     expect(deps.callGatewayCli).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["--quality", "5", "--quality must be between 0 and 1."],
+    ["--quality", "-1", "--quality must be between 0 and 1."],
+    ["--invoke-timeout", "20ms", "--invoke-timeout must be a positive integer (ms)."],
+  ])(
+    "rejects out-of-range or invalid snapshot %s %s before invoking the node (#92487)",
+    async (flag, value, message) => {
+      const program = new Command();
+      program.exitOverride();
+      const nodes = program.command("nodes");
+      const { deps } = createCanvasCliDeps();
+
+      registerNodesCanvasCommands(nodes, deps);
+
+      await expect(
+        program.parseAsync(["nodes", "canvas", "snapshot", "--node", "ios-node", flag, value], {
+          from: "user",
+        }),
+      ).rejects.toThrow(message);
+      expect(deps.callGatewayCli).not.toHaveBeenCalled();
+    },
+  );
+
+  it("accepts boundary --quality values and forwards them to the node (#92487)", async () => {
+    const program = new Command();
+    program.exitOverride();
+    const nodes = program.command("nodes");
+    const { deps } = createCanvasCliDeps();
+
+    registerNodesCanvasCommands(nodes, deps);
+
+    await program.parseAsync(
+      ["nodes", "canvas", "snapshot", "--node", "ios-node", "--quality", "1"],
+      { from: "user" },
+    );
+
+    expect(deps.callGatewayCli).toHaveBeenCalledWith(
+      "node.invoke",
+      expect.anything(),
+      expect.objectContaining({
+        params: expect.objectContaining({ quality: 1 }),
+      }),
+    );
   });
 });
