@@ -1232,11 +1232,13 @@ function resetDraft(state: WorkboardUiState) {
 }
 
 function openCreateModal(state: WorkboardUiState) {
+  clearActiveFloatingTooltips();
   resetDraft(state);
   state.draftOpen = true;
 }
 
 function openEditModal(state: WorkboardUiState, card: WorkboardCard) {
+  clearActiveFloatingTooltips();
   state.draftOpen = true;
   state.editingCardId = card.id;
   state.draftTitle = card.title;

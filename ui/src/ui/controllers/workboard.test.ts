@@ -1554,6 +1554,41 @@ describe("workboard controller", () => {
     expect(getWorkboardState(host).cards).toMatchObject([{ title: "Forced full refresh" }]);
   });
 
+  it("does not restart a queued forced refresh after lifecycle teardown", async () => {
+    const host = {};
+    const pollList = createDeferred<unknown>();
+    const client = createClient((method) => {
+      if (method === "workboard.cards.list") {
+        return pollList.promise;
+      }
+      return {};
+    });
+
+    const poll = loadWorkboard({
+      host,
+      client: client as never,
+      force: true,
+      taskRefresh: "linked",
+    });
+    await Promise.resolve();
+    const forced = loadWorkboard({
+      host,
+      client: client as never,
+      force: true,
+      refreshDiagnostics: true,
+      taskRefresh: "all",
+    });
+    stopWorkboardLifecycleRefresh(host);
+    pollList.resolve({ cards: [sampleCard], statuses: ["todo", "done"] });
+    await Promise.all([poll, forced]);
+
+    expect(client.request).not.toHaveBeenCalledWith("workboard.cards.diagnostics.refresh", {});
+    expect(
+      client.request.mock.calls.filter(([method]) => method === "workboard.cards.list"),
+    ).toHaveLength(1);
+    expect(getWorkboardState(host).loaded).toBe(false);
+  });
+
   it("does not start a queued forced refresh after a card write begins", async () => {
     const host = {};
     const pollList = createDeferred<unknown>();

@@ -2974,6 +2974,65 @@ describe("renderWorkboard", () => {
     tooltip.remove();
   });
 
+  it("clears active tooltips before opening create and edit modals", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Tooltip clearing task",
+        status: "ready",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    const container = document.createElement("div");
+    document.body.append(container);
+    const props: WorkboardRenderProps = {
+      host,
+      client: null,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+    };
+
+    try {
+      for (const title of ["New card", "Edit card"]) {
+        state.draftOpen = false;
+        state.editingCardId = null;
+        renderInto(container, props);
+        const button = container.querySelector<HTMLButtonElement>(`button[title="${title}"]`);
+        const tooltip = document.createElement("div");
+        tooltip.className = "control-ui-floating-tooltip";
+        tooltip.dataset.open = "true";
+        document.body.append(tooltip);
+        button?.setAttribute("data-floating-tooltip-active", "true");
+        button?.setAttribute("data-native-tooltip-title", title);
+        button?.setAttribute("data-native-tooltip-generated", "true");
+        button?.setAttribute("data-tooltip", title);
+        button?.removeAttribute("title");
+
+        button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+        expect(state.draftOpen).toBe(true);
+        expect(button?.getAttribute("title")).toBe(title);
+        expect(button?.getAttribute("data-tooltip")).toBeNull();
+        expect(button?.getAttribute("data-floating-tooltip-active")).toBeNull();
+        expect(tooltip.dataset.open).toBe("false");
+        tooltip.remove();
+      }
+    } finally {
+      container.remove();
+      document.querySelector(".control-ui-floating-tooltip")?.remove();
+    }
+  });
+
   it("preflights model-specific starts for ACP runtime agents", () => {
     const host = {};
     const state = getWorkboardState(host);

@@ -1890,10 +1890,15 @@ export async function loadWorkboard(params: {
   const client = params.client;
   const existingLoad = workboardLoadPromises.get(params.host);
   if (existingLoad) {
+    const existingGeneration = workboardLoadGenerations.get(params.host);
     const result = await existingLoad;
     // Forced callers carry their own diagnostics/task-refresh contract, so a
     // weaker in-flight load cannot satisfy them.
-    return params.force && !state.dispatching && !workboardHasActiveWrites(state)
+    return params.force &&
+      existingGeneration !== undefined &&
+      isCurrentWorkboardLoadGeneration(params.host, existingGeneration) &&
+      !state.dispatching &&
+      !workboardHasActiveWrites(state)
       ? await loadWorkboard(params)
       : result;
   }
