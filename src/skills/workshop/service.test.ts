@@ -1,12 +1,14 @@
 // Workshop service tests cover skill workshop generation, storage, and validation behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withEnvAsync } from "../../test-utils/env.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
+import { CONFIG_DIR } from "../../utils.js";
 import { buildWorkspaceSkillStatus } from "../discovery/status.js";
 import {
   getSkillsSnapshotVersion,
@@ -34,6 +36,7 @@ import {
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
 let stateDir = "";
+let managedSkillDirs: string[] = [];
 
 beforeEach(async () => {
   testState = await createOpenClawTestState({
@@ -44,6 +47,8 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  await Promise.all(managedSkillDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
+  managedSkillDirs = [];
   await testState.cleanup();
   resetSkillsRefreshStateForTest();
   await tempDirs.cleanup();
@@ -52,6 +57,153 @@ afterEach(async () => {
 async function makeWorkspace(): Promise<string> {
   return await tempDirs.make("openclaw-skill-workshop-");
 }
+
+async function makeManagedSkillDir(name: string): Promise<string> {
+  const dir = path.join(CONFIG_DIR, "skills", name);
+  await fs.rm(dir, { recursive: true, force: true });
+  managedSkillDirs.push(dir);
+  return dir;
+}
+
+describe("managed skill workshop proposals", () => {
+  it("creates and applies an update proposal for an openclaw-managed shared skill", async () => {
+    const managedDir = await makeManagedSkillDir("shared-scripting");
+    await writeSkill({
+      dir: managedDir,
+      name: "shared-scripting",
+      description: "Shared scripting helpers",
+      body: "# Shared Scripting\n\nOld steps.\n",
+    });
+    const workspaceDir = await makeWorkspace();
+
+    const proposal = await proposeUpdateSkill({
+      workspaceDir,
+      skillName: "shared-scripting",
+      content: "# Shared Scripting\n\nUpdated steps.\n",
+    });
+
+    expect(proposal.record.target.source).toBe("openclaw-managed");
+    expect(proposal.record.status).toBe("pending");
+    expect(proposal.record.scan.state).toBe("clean");
+
+    const applied = await applySkillProposal({
+      workspaceDir,
+      proposalId: proposal.record.id,
+    });
+
+    expect(applied.targetSkillFile).toBe(path.join(managedDir, "SKILL.md"));
+    await expect(fs.readFile(applied.targetSkillFile, "utf8")).resolves.toContain("Updated steps.");
+  });
+
+  it("revises an openclaw-managed skill proposal before applying", async () => {
+    const managedDir = await makeManagedSkillDir("revise-managed");
+    await writeSkill({
+      dir: managedDir,
+      name: "revise-managed",
+      description: "Revise managed skill",
+      body: "# Revise Managed\n\nOriginal.\n",
+    });
+    const workspaceDir = await makeWorkspace();
+
+    const proposal = await proposeUpdateSkill({
+      workspaceDir,
+      skillName: "revise-managed",
+      content: "# Revise Managed\n\nFirst update.\n",
+    });
+    const revised = await reviseSkillProposal({
+      workspaceDir,
+      proposalId: proposal.record.id,
+      content: "# Revise Managed\n\nRevised update.\n",
+    });
+
+    expect(revised.record.proposedVersion).toBe("v2");
+
+    const applied = await applySkillProposal({
+      workspaceDir,
+      proposalId: revised.record.id,
+    });
+
+    await expect(fs.readFile(applied.targetSkillFile, "utf8")).resolves.toContain(
+      "Revised update.",
+    );
+  });
+
+  it("uses the config-path managed root when no state-dir override is set", async () => {
+    const rootDir = await tempDirs.make("openclaw-skill-workshop-config-root-");
+    const configDir = path.join(rootDir, "profile");
+    const homeDir = path.join(rootDir, "home");
+    const configPath = path.join(configDir, "openclaw.json");
+    const managedDir = path.join(configDir, "skills", "config-managed");
+    await fs.mkdir(configDir, { recursive: true });
+    await fs.mkdir(homeDir, { recursive: true });
+    await fs.writeFile(configPath, "{}\n", "utf8");
+    await writeSkill({
+      dir: managedDir,
+      name: "config-managed",
+      description: "Config managed skill",
+      body: "# Config Managed\n\nOriginal.\n",
+    });
+    const workspaceDir = await makeWorkspace();
+
+    await withEnvAsync(
+      {
+        HOME: homeDir,
+        OPENCLAW_HOME: undefined,
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_STATE_DIR: undefined,
+      },
+      async () => {
+        vi.resetModules();
+        const service = await import("./service.js");
+
+        const proposal = await service.proposeUpdateSkill({
+          workspaceDir,
+          skillName: "config-managed",
+          content: "# Config Managed\n\nUpdated.\n",
+        });
+
+        expect(proposal.record.target.source).toBe("openclaw-managed");
+        expect(proposal.record.target.skillFile).toBe(path.join(managedDir, "SKILL.md"));
+
+        const applied = await service.applySkillProposal({
+          workspaceDir,
+          proposalId: proposal.record.id,
+        });
+
+        expect(applied.targetSkillFile).toBe(path.join(managedDir, "SKILL.md"));
+        await expect(fs.readFile(applied.targetSkillFile, "utf8")).resolves.toContain("Updated.");
+      },
+    );
+    vi.resetModules();
+  });
+
+  it("hides proposal apply targets outside workspace and managed skills directory", async () => {
+    const workspaceDir = await makeWorkspace();
+    const escapedDir = await makeWorkspace();
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      name: "Escape Test",
+      description: "Test path boundary",
+      content: "# Escape Test\n",
+    });
+
+    await updateSkillProposalRecord({
+      record: {
+        ...proposal.record,
+        target: {
+          ...proposal.record.target,
+          skillFile: path.join(escapedDir, "escape", "SKILL.md"),
+          skillDir: path.join(escapedDir, "escape"),
+          source: "openclaw-workspace",
+        },
+      },
+    });
+
+    await expect(
+      applySkillProposal({ workspaceDir, proposalId: proposal.record.id }),
+    ).rejects.toThrow("Skill proposal not found");
+  });
+});
 
 describe("skill workshop proposals", () => {
   it("creates a pending proposal under the workshop and applies it as an active workspace skill", async () => {

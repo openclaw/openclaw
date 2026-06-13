@@ -721,9 +721,12 @@ describe("buildAgentSystemPrompt", () => {
     expect(withTool).toContain("`action=revise` for an existing pending proposal");
     expect(withTool).toContain("pass the proposal or skill name in `name`");
     expect(withTool).toContain(
-      "Use `action=apply`, `action=reject`, or `action=quarantine` only after the user explicitly asks to approve/use/apply, reject, or quarantine a specific proposal.",
+      "Use `action=apply`, `action=reject`, or `action=quarantine` after the user explicitly asks to approve/use/apply, reject, or quarantine a specific proposal, or when the current approved low-risk workstream requires same-turn auto-apply.",
     );
-    expect(withTool).toContain("Generated skills are pending proposals by default.");
+    expect(withTool).toContain("Do not auto-apply proposals that are destructive");
+    expect(withTool).toContain(
+      "Generated skills are pending proposals by default when the user has only asked for a draft, review, option, or recommendation.",
+    );
     expect(withTool).toContain(
       "Do not apply, reject, or quarantine proposals manually with filesystem operations or shell commands.",
     );

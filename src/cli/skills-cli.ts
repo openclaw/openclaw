@@ -617,7 +617,7 @@ export function registerSkillsCli(program: Command) {
 
   workshop
     .command("propose-update")
-    .description("Create a pending proposal for an existing workspace skill")
+    .description("Create a pending proposal for an existing writable user-owned skill")
     .argument("<skill>", "Skill name or key")
     .option("--proposal <path>", "Path to PROPOSAL.md draft content")
     .option(
