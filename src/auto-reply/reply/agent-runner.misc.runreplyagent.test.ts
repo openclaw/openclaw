@@ -2642,7 +2642,7 @@ describe("runReplyAgent response usage footer", () => {
     });
   }
 
-  it("appends session key when responseUsage=full", async () => {
+  it("uses the built-in compact footer when responseUsage=full", async () => {
     runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "ok" }],
       meta: {
@@ -2658,9 +2658,11 @@ describe("runReplyAgent response usage footer", () => {
     const res = await createRun({ responseUsage: "full", sessionKey });
     const payload = Array.isArray(res) ? res[0] : res;
     const text = payload?.text ?? "";
-    expect(text).toContain("Usage:");
-    expect(text).toContain("cache 4 cached / 2 new");
-    expect(text).toContain(`· session \`${sessionKey}\``);
+    expect(text).toContain("anthropic🤖 claude 🌘 🐌");
+    expect(text).toContain("↕️ 12/3");
+    expect(text).toContain("🗄 22%");
+    expect(text).not.toContain("Usage:");
+    expect(text).not.toContain("· session ");
   });
 
   it("does not append session key when responseUsage=tokens", async () => {
@@ -2747,10 +2749,12 @@ describe("runReplyAgent response usage footer", () => {
     const payload = Array.isArray(res) ? res[0] : res;
     const text = payload?.text ?? "";
 
-    expect(text).toContain("Usage: 1.0k in / 2.0k out");
-    expect(text).toContain("cache 500 cached / 2.0k new");
-    expect(text).toContain("est $0.04");
-    expect(text).toContain(`· session \`${sessionKey}\``);
+    expect(text).toContain("amazon-bedrock🤖 us.anthropic.claude-sonnet-4-6 🌘 🐌");
+    expect(text).toContain("↕️ 1.0k/2.0k");
+    expect(text).toContain("🗄 14%");
+    expect(text).toContain("💰0.0406");
+    expect(text).not.toContain("Usage:");
+    expect(text).not.toContain("· session ");
   });
 });
 
