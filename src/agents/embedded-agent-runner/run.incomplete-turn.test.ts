@@ -1736,8 +1736,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
   it.each([
     ["presentation", { presentation: { title: "Status", blocks: [] } }],
-    ["interactive", { interactive: { blocks: [{ type: "buttons", buttons: [] }] } }],
-  ] as const)("preserves planning-like text with a %s payload", async (_name, richPayload) => {
+    ["interactive", { interactive: { blocks: [{ type: "buttons" as const, buttons: [] }] } }],
+  ])("preserves planning-like text with a %s payload", async (_name, richPayload) => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     const payload = { text: "Checking the deployment status now.", ...richPayload };
     mockedBuildEmbeddedRunPayloads.mockReturnValue([payload]);
