@@ -158,8 +158,6 @@ const PLANNING_ONLY_WAIT_PLACEHOLDER_RE =
   /^(?:stand by|one sec(?:ond)?|give me (?:a )?(?:moment|minute|sec(?:ond)?)|hang on|hold on|bear with me|just a moment|please wait)(?:\s+(?:while|and)\b.{0,100})?[.!…]*$/i;
 const PLANNING_ONLY_ACK_PLACEHOLDER_RE =
   /^(?:sure(?: thing)?|got it|understood|absolutely|will do|roger(?: that)?|copy(?: that)?|sounds good|okay|ok)(?:[.!…]*)$/i;
-const DIRECT_ACKNOWLEDGEMENT_ANSWER_RE =
-  /^(?:sure(?: thing)?|absolutely|sounds good|okay|ok)(?:[.!…]*)$/i;
 const ACKNOWLEDGEMENT_REQUEST_PROMPT_RE =
   /\b(?:acknowledg(?:e|ement)|confirm|reply|respond|say|answer)\b.{0,80}\b(?:ok(?:ay)?|got it|understood|roger(?: that)?|copy(?: that)?|will do|sounds good|acknowledg(?:e|ed|ement)|confirm(?:ed|ation)?|short reply|brief reply)\b|\b(?:acknowledg(?:e|ement)|confirm)\s+(?:this|that|it|receipt)\b/i;
 const DIRECT_ACKNOWLEDGEMENT_ANSWER_PROMPT_RE =
@@ -1203,8 +1201,7 @@ function resolvePlanningOnlyTurnClassification(params: {
     hasAckPlaceholder &&
     typeof params.prompt === "string" &&
     (isExplicitAcknowledgementRequestPrompt(params.prompt) ||
-      (DIRECT_ACKNOWLEDGEMENT_ANSWER_RE.test(classifierText) &&
-        isDirectAcknowledgementAnswerPrompt(params.prompt)))
+      isDirectAcknowledgementAnswerPrompt(params.prompt))
   ) {
     return null;
   }

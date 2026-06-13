@@ -1896,6 +1896,10 @@ export async function runReplyAgent(params: {
     const committedMessagingToolSourceReplyDelivery =
       runResult.didDeliverSourceReplyViaMessageTool === true ||
       hasVisibleAgentPayload({ payloads: runResult.messagingToolSourceReplyPayloads });
+    const successfulDirectSourceReplyDelivery =
+      Boolean(blockReplyPipeline?.didStream() && !blockReplyPipeline.isAborted()) ||
+      (directlySentBlockKeys?.size ?? 0) > 0 ||
+      committedMessagingToolSourceReplyDelivery;
     if (
       opts?.sourceReplyDeliveryMode === "message_tool_only" &&
       committedMessagingToolSourceReplyDelivery
@@ -1925,6 +1929,9 @@ export async function runReplyAgent(params: {
       return returnWithQueuedFollowupDrain(silentFallbackFailurePayload);
     };
     const returnSideEffectProgressIfNeeded = async (): Promise<ReplyPayload | undefined> => {
+      if (successfulDirectSourceReplyDelivery) {
+        return undefined;
+      }
       const sideEffectProgressPayload = buildSideEffectProgressPayload({
         successfulCronAdds: runResult.successfulCronAdds,
         messagingToolSentTexts: runResult.messagingToolSentTexts,

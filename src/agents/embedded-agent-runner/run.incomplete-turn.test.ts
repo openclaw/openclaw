@@ -2700,6 +2700,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     { prompt: "Would this work for you?", assistantText: "Sure thing." },
     { prompt: "Are we ready?", assistantText: "Absolutely." },
     { prompt: "Do you agree?", assistantText: "Absolutely." },
+    { prompt: "Will you keep replies short?", assistantText: "Got it." },
+    { prompt: "Will you stay available?", assistantText: "Understood." },
   ])(
     "does not classify direct acknowledgement answer $assistantText as planning-only",
     ({ prompt, assistantText }) => {

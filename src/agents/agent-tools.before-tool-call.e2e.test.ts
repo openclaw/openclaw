@@ -108,7 +108,9 @@ describe("before_tool_call loop detection behavior", () => {
   function createWrappedTool(
     name: string,
     execute: ReturnType<typeof vi.fn>,
-    loopDetectionContext = enabledLoopDetectionContext,
+    loopDetectionContext: Parameters<
+      typeof wrapToolWithBeforeToolCallHook
+    >[1] = enabledLoopDetectionContext,
   ) {
     return wrapToolWithBeforeToolCallHook(
       { name, execute } as unknown as AnyAgentTool,

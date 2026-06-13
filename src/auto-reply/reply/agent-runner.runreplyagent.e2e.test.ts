@@ -1654,6 +1654,40 @@ describe("runReplyAgent typing (heartbeat)", () => {
     );
   });
 
+  it.each([
+    { name: "empty payloads", payloads: [] },
+    { name: "stripped NO_REPLY", payloads: [{ text: "NO_REPLY" }] },
+  ])(
+    "does not surface cron progress after a streamed source reply with $name",
+    async ({ payloads }) => {
+      const onBlockReply = vi.fn();
+      state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+        await params.onBlockReply?.({ text: "streamed final answer" });
+        return {
+          payloads,
+          successfulCronAdds: 1,
+          meta: {},
+        };
+      });
+
+      const { run } = createMinimalRun({
+        blockStreamingEnabled: true,
+        opts: { onBlockReply },
+        sessionCtx: {
+          Provider: "discord",
+          OriginatingChannel: "discord",
+          MessageSid: "1503645939964055592",
+        },
+      });
+
+      await expect(run()).resolves.toBeUndefined();
+      expect(onBlockReply).toHaveBeenCalledWith(
+        expect.objectContaining({ text: "streamed final answer" }),
+        expect.anything(),
+      );
+    },
+  );
+
   it("surfaces generic side-effect progress when a non-cron runtime returns no payloads", async () => {
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [],
