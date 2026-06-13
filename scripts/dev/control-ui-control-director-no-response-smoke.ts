@@ -367,10 +367,14 @@ async function getFreePort(): Promise<number> {
   return address.port;
 }
 
+function childHasExited(child: ChildProcessWithoutNullStreams): boolean {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
 async function waitForExit(child: ChildProcessWithoutNullStreams, timeoutMs: number) {
   return await Promise.race([
     new Promise<boolean>((resolve) => {
-      if (child.exitCode !== null || child.signalCode !== null) {
+      if (childHasExited(child)) {
         resolve(true);
         return;
       }
@@ -380,15 +384,40 @@ async function waitForExit(child: ChildProcessWithoutNullStreams, timeoutMs: num
   ]);
 }
 
-async function stopChildProcess(child: ChildProcessWithoutNullStreams) {
-  if (child.exitCode === null && !child.killed) {
-    child.kill("SIGTERM");
+function signalChildProcess(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals) {
+  if (childHasExited(child)) {
+    return;
   }
+  if (platform() !== "win32" && typeof child.pid === "number") {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      // Fall back to signaling the direct child when process groups are unavailable.
+    }
+  }
+  child.kill(signal);
+}
+
+async function stopChildProcess(child: ChildProcessWithoutNullStreams) {
+  signalChildProcess(child, "SIGTERM");
   const stopped = await waitForExit(child, 2_000);
-  if (!stopped && child.exitCode === null && !child.killed) {
-    child.kill("SIGKILL");
+  if (!stopped) {
+    signalChildProcess(child, "SIGKILL");
     await waitForExit(child, 2_000);
   }
+}
+
+async function cleanupWithTimeout(label: string, cleanup: () => Promise<unknown>) {
+  await Promise.race([
+    cleanup(),
+    new Promise<void>((resolve) =>
+      setTimeout(() => {
+        console.warn(`control-ui-control-director-no-response-smoke: cleanup timed out: ${label}`);
+        resolve();
+      }, 5_000),
+    ),
+  ]);
 }
 
 async function waitForPortOpen(params: {
@@ -532,6 +561,7 @@ async function startIsolatedGateway(params: {
         OPENCLAW_STATE_DIR: stateDir,
         OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
       },
+      detached: platform() !== "win32",
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
@@ -914,18 +944,29 @@ async function runSmoke() {
       { cause: error },
     );
   } finally {
-    await browser?.close().catch(() => undefined);
-    await gateway?.stop().catch(() => undefined);
-    await mockProvider?.stop().catch(() => undefined);
+    if (browser) {
+      await cleanupWithTimeout("browser", () => browser.close()).catch(() => undefined);
+    }
+    if (gateway) {
+      await cleanupWithTimeout("gateway", () => gateway.stop()).catch(() => undefined);
+    }
+    if (mockProvider) {
+      await cleanupWithTimeout("mock-provider", () => mockProvider.stop()).catch(() => undefined);
+    }
   }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  runSmoke().catch((error) => {
-    console.error(
-      "control-ui-control-director-no-response-smoke: failed",
-      error instanceof Error ? error.message : String(error),
-    );
-    process.exitCode = 1;
-  });
+  runSmoke().then(
+    () => {
+      process.exit(0);
+    },
+    (error) => {
+      console.error(
+        "control-ui-control-director-no-response-smoke: failed",
+        error instanceof Error ? error.message : String(error),
+      );
+      process.exit(1);
+    },
+  );
 }

@@ -5,6 +5,7 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { applyControlDirectorDeliveryGuards } from "../../agents/control-director-delivery-guards.js";
 import { rewriteTranscriptEntriesInSessionFile } from "../../agents/pi-embedded-runner/transcript-rewrite.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox/context.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
@@ -175,7 +176,7 @@ function collectArtifactIdsFromReplyPayloads(
 
 function buildControlDirectorGuardedStatusTextFromSessionEntry(
   entry: unknown,
-  runId: string,
+  runId?: string,
 ): string | undefined {
   if (!entry || typeof entry !== "object") {
     return undefined;
@@ -199,12 +200,12 @@ function buildControlDirectorGuardedStatusTextFromSessionEntry(
   };
   const liveness = (record.controlDirectorLivenessAudit ?? [])
     .toReversed()
-    .find((candidate) => candidate.runId === runId);
+    .find((candidate) => !runId || candidate.runId === runId);
   const ledger = (record.controlDirectorMissionLedger ?? [])
     .toReversed()
     .find(
       (candidate) =>
-        candidate.runId === runId &&
+        (!runId || candidate.runId === runId) &&
         (candidate.status === "blocked" || candidate.finalStatus === "blocked") &&
         ((candidate.guardActions?.length ?? 0) > 0 || (candidate.watchdogActions?.length ?? 0) > 0),
     );
@@ -1766,6 +1767,70 @@ function broadcastChatFinal(params: {
   params.context.agentRunSeq.delete(params.runId);
 }
 
+function extractChatHistoryMessageText(message: unknown): string {
+  if (!message || typeof message !== "object") {
+    return "";
+  }
+  const record = message as Record<string, unknown>;
+  if (typeof record.text === "string") {
+    return record.text;
+  }
+  if (typeof record.content === "string") {
+    return record.content;
+  }
+  if (Array.isArray(record.content)) {
+    return (
+      extractAssistantDisplayTextFromContent(
+        record.content.filter((block): block is AssistantDisplayContentBlock =>
+          Boolean(block && typeof block === "object"),
+        ),
+      ) ?? ""
+    );
+  }
+  return "";
+}
+
+function hasControlDirectorGuardedStatusMessage(messages: readonly unknown[]): boolean {
+  return messages.some((message) => {
+    const text = extractChatHistoryMessageText(message);
+    return (
+      text.includes("Verified state") &&
+      text.includes("Next build gap") &&
+      text.includes("Completion Grade:") &&
+      text.includes("Criticality:") &&
+      text.includes("Status: blocked")
+    );
+  });
+}
+
+function appendControlDirectorGuardedStatusHistoryMessage(params: {
+  messages: unknown[];
+  entry: unknown;
+  targetRunId?: string | undefined;
+}): unknown[] {
+  if (hasControlDirectorGuardedStatusMessage(params.messages)) {
+    return params.messages;
+  }
+  const text = buildControlDirectorGuardedStatusTextFromSessionEntry(
+    params.entry,
+    params.targetRunId,
+  );
+  if (!text) {
+    return params.messages;
+  }
+  return [
+    ...params.messages,
+    {
+      role: "assistant",
+      content: [{ type: "text", text }],
+      text,
+      timestamp: Date.now(),
+      stopReason: "stop",
+      usage: { input: 0, output: 0, totalTokens: 0 },
+    },
+  ];
+}
+
 function isBtwReplyPayload(payload: ReplyPayload | undefined): payload is ReplyPayload & {
   btw: { question: string };
   text: string;
@@ -1871,12 +1936,17 @@ export const chatHandlers: GatewayRequestHandlers = {
       localMessages,
     });
     const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(cfg, maxChars);
-    const normalized = augmentChatHistoryWithCanvasBlocks(
+    const projectedMessages = augmentChatHistoryWithCanvasBlocks(
       projectRecentChatDisplayMessages(rawMessages, {
         maxChars: effectiveMaxChars,
         maxMessages: max,
       }),
     );
+    const normalized = appendControlDirectorGuardedStatusHistoryMessage({
+      messages: projectedMessages,
+      entry,
+      targetRunId,
+    });
     const perMessageHardCap = Math.min(CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES, maxHistoryBytes);
     const replaced = replaceOversizedChatHistoryMessages({
       messages: normalized,
@@ -2930,19 +3000,44 @@ export const chatHandlers: GatewayRequestHandlers = {
                   }
                 }
                 if (!broadcastedControlDirectorGuardedFinal) {
-                  const { storePath: latestStorePath, entry: latestEntry } =
-                    loadSessionEntry(sessionKey);
-                  const guardedStatusText = buildControlDirectorGuardedStatusTextFromSessionEntry(
-                    latestEntry,
-                    clientRunId,
-                  );
+                  const {
+                    storePath: latestStorePath,
+                    store: latestStore,
+                    entry: latestEntry,
+                  } = loadSessionEntry(sessionKey);
+                  const sessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
+                  const hasFinalReplyText = deliveredReplies
+                    .filter((entry) => entry.kind === "final")
+                    .some((entry) => (entry.payload.text ?? entry.payload.spokenText ?? "").trim());
+                  const synthesizedGuard = hasFinalReplyText
+                    ? undefined
+                    : await applyControlDirectorDeliveryGuards<ReplyPayload>({
+                        agentId,
+                        payloads: [],
+                        finalAssistantVisibleText: "",
+                        classification: "empty",
+                        canQueueContinuation: true,
+                        runId: clientRunId,
+                        sessionId,
+                        sessionKey,
+                        sessionEntry: latestEntry,
+                        sessionStore: latestStore,
+                        storePath: latestStorePath,
+                        requestBody: parsedMessage,
+                      });
+                  const guardedStatusText =
+                    buildTranscriptReplyText(synthesizedGuard?.payloads ?? []) ||
+                    buildControlDirectorGuardedStatusTextFromSessionEntry(
+                      synthesizedGuard?.sessionEntry ?? latestEntry,
+                      clientRunId,
+                    );
                   if (guardedStatusText) {
-                    const sessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
+                    const guardedEntry = synthesizedGuard?.sessionEntry ?? latestEntry;
                     const appended = await appendAssistantTranscriptMessage({
                       message: guardedStatusText,
                       sessionId,
                       storePath: latestStorePath,
-                      sessionFile: latestEntry?.sessionFile,
+                      sessionFile: guardedEntry?.sessionFile,
                       agentId,
                       createIfMissing: true,
                       cfg,
