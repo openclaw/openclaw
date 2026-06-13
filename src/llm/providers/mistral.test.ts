@@ -121,6 +121,27 @@ describe("Mistral provider", () => {
     ]);
   });
 
+  it("omits tools and automatic tool choice when every schema is unreadable", async () => {
+    const stream = streamMistral(
+      makeMistralModel(),
+      {
+        ...context,
+        tools: [makeUnreadableParameterTool()] as never,
+      },
+      {
+        apiKey: "sk-mistral-provider",
+        toolChoice: "auto",
+      },
+    );
+
+    const result = await stream.result();
+    const payload = mistralMockState.payloads[0] as Record<string, unknown>;
+
+    expect(result.stopReason).toBe("error");
+    expect(payload).not.toHaveProperty("tools");
+    expect(payload).not.toHaveProperty("toolChoice");
+  });
+
   it("fails locally when a pinned Mistral tool choice is skipped", async () => {
     const stream = streamMistral(
       makeMistralModel(),
@@ -147,7 +168,9 @@ describe("Mistral provider", () => {
     const result = await stream.result();
 
     expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toContain('Mistral tool_choice requested unavailable tool "broken_tool"');
+    expect(result.errorMessage).toContain(
+      'Mistral tool_choice requested unavailable tool "broken_tool"',
+    );
     expect(mistralMockState.payloads).toHaveLength(0);
   });
 });
