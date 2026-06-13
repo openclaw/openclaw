@@ -166,7 +166,7 @@ function canIgnoreChmodError(target: string, code: string | undefined): boolean 
 // it: the database stays usable without the chmod, and crashing at open would
 // take the gateway down on Azure Files/NFS/Docker volumes (#91919). Unexpected
 // chmod failures still throw so credentials-adjacent hardening stays loud.
-function bestEffortChmodSync(target: string, mode: number): void {
+export function bestEffortChmodSync(target: string, mode: number): void {
   try {
     chmodSync(target, mode);
   } catch (err) {

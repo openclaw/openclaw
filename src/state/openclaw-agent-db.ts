@@ -1,5 +1,5 @@
 // OpenClaw agent database stores agent-scoped persisted runtime state.
-import { chmodSync, existsSync, mkdirSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, statSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import {
@@ -17,6 +17,7 @@ import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.generated.js"
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+  bestEffortChmodSync,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
@@ -95,12 +96,12 @@ function ensureOpenClawAgentDatabasePermissions(
   mkdirSync(dir, { recursive: true, mode: OPENCLAW_AGENT_DB_DIR_MODE });
   // Default agent state is private by contract; custom pre-existing dirs keep caller ownership.
   if (isDefaultAgentDatabase || !dirExisted) {
-    chmodSync(dir, OPENCLAW_AGENT_DB_DIR_MODE);
+    bestEffortChmodSync(dir, OPENCLAW_AGENT_DB_DIR_MODE);
   }
   for (const suffix of OPENCLAW_AGENT_DB_SIDECAR_SUFFIXES) {
     const candidate = `${pathname}${suffix}`;
     if (existsSync(candidate)) {
-      chmodSync(candidate, OPENCLAW_AGENT_DB_FILE_MODE);
+      bestEffortChmodSync(candidate, OPENCLAW_AGENT_DB_FILE_MODE);
     }
   }
 }
