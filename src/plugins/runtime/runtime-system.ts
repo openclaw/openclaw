@@ -1,6 +1,6 @@
 // Runtime system helpers expose host system operations to activated plugin runtimes.
 import { requestHeartbeat } from "../../infra/heartbeat-wake.js";
-import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { enqueueSystemEvent as enqueueSystemEventInternal } from "../../infra/system-events.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { formatNativeDependencyHint } from "./native-deps.js";
@@ -14,6 +14,13 @@ const runHeartbeatOnceInternal = createLazyRuntimeMethod(
   loadHeartbeatRunnerRuntime,
   (runtime) => runtime.runHeartbeatOnce,
 );
+
+// Plugin-provided system events are untrusted by construction: force `trusted: false`
+// so a channel/plugin cannot set `trusted: true` to bypass the inbound anti-spoof
+// sanitizer. Trusted-internal producers (continuation/post-compaction) enqueue via the
+// direct `infra/system-events` import, not this plugin runtime facade.
+const enqueueSystemEvent: PluginRuntime["system"]["enqueueSystemEvent"] = (text, options) =>
+  enqueueSystemEventInternal(text, { ...options, trusted: false });
 
 /** Creates the plugin runtime system facade with heartbeat/event/process helpers. */
 export function createRuntimeSystem(): PluginRuntime["system"] {

@@ -54,6 +54,15 @@ type SystemEventOptions = {
   sessionDeliveryAckId?: string;
   sessionDeliveryAckStateDir?: string;
   /**
+   * @deprecated Legacy untrusted-producer downgrade flag, re-exported via the
+   * `plugin-sdk/channel-runtime` + `plugin-sdk/system-event-runtime` subpaths.
+   * Accepted-and-ignored for installed third-party channel plugins that still
+   * pass it: the anti-spoof sanitizer is now unconditional for untrusted
+   * producers (sanitize-by-default), so this flag has no runtime effect. Kept
+   * until a named SDK removal window.
+   */
+  forceSenderIsOwnerFalse?: boolean;
+  /**
    * Trusted-internal enrichment marker (continuation/OCR/transcripts). When
    * `true`, the payload is trusted core data that may legitimately contain
    * `System:`/`[System]` examples (subagent returns, post-compaction context,
