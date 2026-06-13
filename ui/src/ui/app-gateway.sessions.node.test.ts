@@ -6,7 +6,8 @@ const loadChatHistoryMock = vi.fn();
 const applySessionsChangedEventMock = vi.fn();
 const clearPendingQueueItemsForRunMock = vi.fn();
 const flushChatQueueForEventMock = vi.fn();
-const handleChatEventMock = vi.fn(() => "idle");
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const handleChatEventMock = vi.fn((_state?: any) => "idle");
 const handleSessionOperationEventMock = vi.fn();
 const recordFirstAssistantChatTimingMock = vi.fn();
 
