@@ -6,8 +6,7 @@ title: Control UI chat flow Playwright coverage
 surface: control-ui
 coverage:
   primary:
-    - gateway-hosted-ui
-    - chat-send-lifecycle
+    - ui.control
 objective: Link the Control UI chat-flow Playwright suite to the QA coverage inventory.
 successCriteria:
   - Playwright covers the hosted Control UI chat surface.

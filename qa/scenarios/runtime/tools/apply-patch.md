@@ -7,7 +7,7 @@ surface: runtime-tools
 runtimeParityTier: standard
 coverage:
   primary:
-    - tool-call-handling
+    - tools.apply-patch
 objective: Verify apply_patch behavior is tracked across OpenClaw and Codex while Codex owns patching natively.
 successCriteria:
   - OpenClaw may expose OpenClaw apply_patch while Codex app-server mode may omit duplicate OpenClaw dynamic apply_patch.

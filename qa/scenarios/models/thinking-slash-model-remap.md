@@ -6,10 +6,10 @@ title: Thinking slash model remap
 surface: models
 coverage:
   primary:
-    - thinking-and-context-settings
+    - models.thinking
   secondary:
-    - provider-and-runtime-overrides
-    - session-parity
+    - models.switching
+    - runtime.session-continuity
 objective: Verify /think lists provider-owned levels and remaps stored thinking levels when the session model changes provider capabilities.
 plugins:
   - anthropic

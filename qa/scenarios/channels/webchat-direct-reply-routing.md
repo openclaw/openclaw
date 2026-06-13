@@ -7,10 +7,10 @@ surface: qa-channel
 runtimeParityTier: live-only
 coverage:
   primary:
-    - conversation-routing
+    - runtime.direct-reply-routing
   secondary:
-    - chat-send-lifecycle
-    - provider-outbound-adapter-bridge
+    - tools.message
+    - channels.webchat
 objective: Verify a current-chat reply is delivered as assistant text, not by calling `message(action=send)` and ending with `Sent.`.
 successCriteria:
   - The visible outbound reply contains the requested marker exactly once.

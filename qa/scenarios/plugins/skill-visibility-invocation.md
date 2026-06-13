@@ -6,9 +6,9 @@ title: Skill visibility and invocation
 surface: skills
 coverage:
   primary:
-    - mixed-plugins
+    - plugins.skills
   secondary:
-    - direct-tool-invoke-api
+    - tools.invocation
 objective: Verify a workspace skill becomes visible in skills.status and influences the next agent turn.
 successCriteria:
   - skills.status reports the seeded skill as visible and eligible.

@@ -7,7 +7,10 @@ surface: personal
 category: redaction
 coverage:
   primary:
-    - redaction
+    - personal.redaction
+  secondary:
+    - security.redaction
+    - qa.artifact-safety
 risk: high
 capabilities:
   - redaction

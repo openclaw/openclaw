@@ -6,10 +6,10 @@ title: Commitments heartbeat target none
 surface: memory
 coverage:
   primary:
-    - commitment-check-ins
+    - commitments.heartbeat-target-none
   secondary:
-    - session-and-run-coordination
-    - automatic-final-reply-delivery
+    - commitments.scope
+    - runtime.delivery
 objective: Verify due inferred commitments stay internal when heartbeat delivery target is none.
 successCriteria:
   - Scenario runs through qa-channel and a real gateway child.

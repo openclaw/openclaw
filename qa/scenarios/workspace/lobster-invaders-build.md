@@ -6,9 +6,9 @@ title: Build Lobster Invaders
 surface: workspace
 coverage:
   primary:
-    - artifacts
+    - workspace.artifacts
   secondary:
-    - process-lifecycle
+    - workspace.builds
 objective: Verify the agent can read the repo, create a tiny playable artifact, and report what changed.
 successCriteria:
   - Agent inspects source before coding.

@@ -16,7 +16,7 @@ type EvidenceSummaryForTest = {
   entries: Array<{
     test: { id: string };
     mapping?: {
-      coverage?: Array<{ coverageId?: string }>;
+      coverage?: Array<{ id?: string }>;
     };
     result: {
       status?: string;
@@ -533,7 +533,7 @@ describe("npm Telegram RTT driver", () => {
             test: expect.objectContaining({ id: "telegram-canary" }),
             mapping: expect.objectContaining({
               coverage: expect.arrayContaining([
-                expect.objectContaining({ coverageId: "channels.telegram.canary" }),
+                expect.objectContaining({ id: "channels.telegram.canary" }),
               ]),
             }),
             result: expect.objectContaining({ status: "pass" }),
@@ -542,7 +542,7 @@ describe("npm Telegram RTT driver", () => {
             test: expect.objectContaining({ id: "telegram-mentioned-message-reply" }),
             mapping: expect.objectContaining({
               coverage: expect.arrayContaining([
-                expect.objectContaining({ coverageId: "channels.telegram.mention-gating" }),
+                expect.objectContaining({ id: "channels.telegram.mention-gating" }),
               ]),
             }),
             result: expect.objectContaining({

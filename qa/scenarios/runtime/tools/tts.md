@@ -7,7 +7,7 @@ surface: runtime-tools
 runtimeParityTier: optional
 coverage:
   primary:
-    - generated-audio-persistence-and-delivery
+    - tools.tts
 objective: Verify tts preserves arguments and result shape when the tool is present.
 successCriteria:
   - If tts is present, the fixture exercises happy and failure paths.

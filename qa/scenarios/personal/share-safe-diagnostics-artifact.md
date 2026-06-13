@@ -7,9 +7,10 @@ surface: personal
 category: diagnostics
 coverage:
   primary:
-    - support-zip-composition
+    - personal.diagnostics
   secondary:
-    - redaction
+    - personal.redaction
+    - qa.artifact-safety
 risk: high
 capabilities:
   - tools.read

@@ -7,7 +7,7 @@ surface: runtime-tools
 runtimeParityTier: optional
 coverage:
   primary:
-    - memory-search-and-store-tools
+    - tools.memory.add
 objective: Track memory.add parity once a first-class memory add tool is exposed.
 successCriteria:
   - If memory_add is present, the fixture exercises happy and failure paths.

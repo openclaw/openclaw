@@ -6,10 +6,10 @@ title: Message-tool-only private final reply warning
 surface: channel
 coverage:
   primary:
-    - automatic-final-reply-delivery
+    - channels.direct-visible-replies
   secondary:
-    - plugin-registry-resolution
-    - provider-outbound-adapter-bridge
+    - channels.qa-channel
+    - tools.message
 objective: Reproduce #85714 — under messages.visibleReplies=message_tool a long private final reply that never calls the message tool is kept private (no outbound), and the gateway emits the private-final WARN.
 gatewayConfigPatch:
   messages:

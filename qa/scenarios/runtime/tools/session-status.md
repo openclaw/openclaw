@@ -7,7 +7,7 @@ surface: runtime-tools
 runtimeParityTier: standard
 coverage:
   primary:
-    - session-apis
+    - tools.session-status
 objective: Verify session_status preserves arguments and result shape across OpenClaw and Codex.
 successCriteria:
   - Effective tools expose session_status.

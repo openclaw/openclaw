@@ -7,11 +7,10 @@ surface: personal
 category: tool-safety
 coverage:
   primary:
-    - tool-safety-controls
+    - personal.tool-safety
   secondary:
-    - tool-call-handling
-    - approval-flow
-    - approval-policy
+    - tools.followthrough
+    - runtime.approvals
 risk: medium
 capabilities:
   - tools.read

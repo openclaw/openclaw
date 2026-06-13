@@ -7,10 +7,10 @@ surface: runtime
 runtimeParityTier: live-only
 coverage:
   primary:
-    - session-and-transcript-recovery
+    - runtime.restart-recovery
   secondary:
-    - session-and-run-coordination
-    - automatic-final-reply-delivery
+    - runtime.gateway-restart
+    - runtime.delivery
 objective: Verify an agent run interrupted by a gateway restart does not duplicate delivery and the same session can recover on the next turn.
 successCriteria:
   - Scenario starts an agent run before applying a restart-required config change.

@@ -7,9 +7,9 @@ surface: runtime
 runtimeParityTier: standard
 coverage:
   primary:
-    - thread-lifecycle
+    - runtime.codex-plugin.lifecycle
   secondary:
-    - openclaw-doctor
+    - runtime.doctor-repair
 objective: Verify a clean home that needs the Codex runtime reports a clear missing-plugin remediation, installs through doctor repair, and retries through Codex OAuth instead of OpenAI API-key auth.
 successCriteria:
   - Missing Codex plugin emits the exact remediation string asserted by the fixture test.

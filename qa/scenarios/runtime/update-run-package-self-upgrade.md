@@ -6,10 +6,10 @@ title: Update run package self-upgrade
 surface: runtime
 coverage:
   primary:
-    - update-run-status
+    - runtime.update-run
   secondary:
-    - install-update-and-uninstall
-    - session-and-transcript-recovery
+    - runtime.gateway-restart
+    - runtime.package-update
 objective: Verify an agent can self-update an installed OpenClaw package from 2026.4.26 to latest by using the gateway update.run action, then recover through the forced restart.
 successCriteria:
   - The agent is explicitly instructed to use the gateway tool action update.run instead of shell package-manager commands.

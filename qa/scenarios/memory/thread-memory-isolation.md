@@ -6,9 +6,9 @@ title: Thread memory isolation
 surface: memory
 coverage:
   primary:
-    - cross-client-history
+    - memory.thread-isolation
   secondary:
-    - native-threads
+    - channels.threads
 objective: Verify a memory-backed answer requested inside a thread stays in-thread and does not leak into the root channel.
 successCriteria:
   - Agent uses memory tools inside the thread.

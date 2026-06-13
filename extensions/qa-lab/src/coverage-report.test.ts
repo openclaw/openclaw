@@ -10,10 +10,10 @@ import { readQaScenarioPack, type QaSeedScenarioWithSource } from "./scenario-ca
 import { buildQaScorecardTaxonomyReport } from "./scorecard-taxonomy.js";
 
 const TEST_EXECUTABLE_CATEGORY_ID = "agent-runtime-and-provider-execution.agent-turn-execution";
-const TEST_EXECUTABLE_COVERAGE_ID = "session-and-run-coordination";
+const TEST_EXECUTABLE_COVERAGE_ID = "channels.dm";
 const TEST_BROWSER_CATEGORY_ID = "browser-control-ui-and-webchat.browser-ui";
-const TEST_BROWSER_COVERAGE_ID = "gateway-hosted-ui";
-const TEST_WEBCHAT_COVERAGE_ID = "chat-send-lifecycle";
+const TEST_BROWSER_COVERAGE_ID = "ui.control";
+const TEST_WEBCHAT_COVERAGE_ID = "ui.webchat";
 
 function testMaturityTaxonomy(params?: {
   categoryId?: string;
@@ -48,8 +48,8 @@ function testMaturityTaxonomy(params?: {
             id: categoryLocalId,
             name: "Test category",
             features: (params?.coverageIds ?? [TEST_EXECUTABLE_COVERAGE_ID]).map((coverageId) => ({
-              coverageId,
               name: coverageId,
+              coverageIds: [coverageId],
             })),
           },
         ],
@@ -167,12 +167,12 @@ describe("qa coverage report", () => {
     const observabilityPack = inventory.scenarioPacks.find((pack) => pack.id === "observability");
     expect(personalPack?.missingScenarioIds).toStrictEqual([]);
     expect(personalPack?.scenarioIds).toContain("personal-share-safe-diagnostics-artifact");
-    expect(personalPack?.coverageIds).toContain("redaction");
+    expect(personalPack?.coverageIds).toContain("personal.redaction");
     expect(observabilityPack?.missingScenarioIds).toStrictEqual([]);
     expect(observabilityPack?.scenarioIds).toEqual(["otel-trace-smoke", "docker-prometheus-smoke"]);
-    expect(observabilityPack?.coverageIds).toContain("otlp-http-traces");
-    expect(inventory.byTheme.memory.map((coverage) => coverage.id)).toContain("embedding-search");
-    expect(inventory.bySurface.memory.map((coverage) => coverage.id)).toContain("embedding-search");
+    expect(observabilityPack?.coverageIds).toContain("telemetry.prometheus");
+    expect(inventory.byTheme.memory.map((coverage) => coverage.id)).toContain("memory.recall");
+    expect(inventory.bySurface.memory.map((coverage) => coverage.id)).toContain("memory.recall");
   });
 
   it("renders a compact markdown inventory", () => {
@@ -183,7 +183,7 @@ describe("qa coverage report", () => {
     expect(report).toContain("# QA Coverage Inventory");
     expect(report).toContain("- Missing coverage metadata: 0");
     expect(report).toContain("- Overlapping coverage IDs:");
-    expect(report).toContain("embedding-search");
+    expect(report).toContain("memory.recall");
     expect(report).toContain("primary: memory-recall (qa/scenarios/memory/memory-recall.md)");
     expect(report).toContain("secondary: active-memory-preprompt-recall");
     expect(report).toContain("## Scenario Packs");
@@ -209,9 +209,7 @@ describe("qa coverage report", () => {
     expect(report).toContain(
       "- browser-automation-and-exec-sandbox-tools.tool-invocation-and-execution (browser-automation-and-exec-sandbox-tools / Tool Invocation and Execution; partial): profiles: release, smoke-ci; coverage IDs:",
     );
-    expect(report).toContain(
-      "primary:playwright:ui/src/ui/e2e/chat-flow.e2e.test.ts (gateway-hosted-ui)",
-    );
+    expect(report).toContain("primary:playwright:ui/src/ui/e2e/chat-flow.e2e.test.ts (ui.control)");
     expect(report).not.toContain("### Unmapped Scenario Coverage IDs");
   });
 

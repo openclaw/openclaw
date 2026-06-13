@@ -7,7 +7,7 @@ surface: runtime-tools
 runtimeParityTier: standard
 coverage:
   primary:
-    - tool-call-handling
+    - tools.fs.write
 objective: Verify file write behavior is tracked across OpenClaw and Codex while Codex owns write natively.
 successCriteria:
   - OpenClaw may expose OpenClaw write while Codex app-server mode may omit duplicate OpenClaw dynamic write.

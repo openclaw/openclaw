@@ -6,9 +6,9 @@ title: OTEL trace smoke
 surface: telemetry
 coverage:
   primary:
-    - otlp-http-traces
+    - telemetry.otel
   secondary:
-    - model-and-runtime-telemetry
+    - harness.qa-lab
 objective: Verify a QA-lab gateway run emits bounded OpenTelemetry traces, metrics, and logs through the diagnostics-otel plugin.
 successCriteria:
   - The diagnostics-otel plugin starts with trace, metric, and log export enabled.

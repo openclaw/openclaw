@@ -5,14 +5,13 @@ import { getQaProvider, type QaProviderMode } from "./providers/index.js";
 
 export const QA_EVIDENCE_SUMMARY_KIND = "openclaw.qa.evidence-summary";
 export const QA_EVIDENCE_FILENAME = "qa-evidence.json";
-// v2 is still the first adopted evidence artifact shape; the earlier draft
-// was not shipped as a consumer contract.
 export const QA_EVIDENCE_SUMMARY_SCHEMA_VERSION = 2;
 
 const qaEvidenceStatusSchema = z.enum(["pass", "fail", "blocked", "skipped"]);
 const nonEmptyStringSchema = z.string().trim().min(1);
 const nullableStringSchema = nonEmptyStringSchema.nullable();
 const qaEvidenceProfileIdSchema = nonEmptyStringSchema;
+const qaEvidenceIdSchema = z.object({ id: nonEmptyStringSchema });
 
 const qaEvidenceProviderSchema = z
   .object({
@@ -94,9 +93,8 @@ const qaEvidenceRefSchema = z
   })
   .strict();
 
-const qaEvidenceCoverageSchema = z
-  .object({
-    coverageId: nonEmptyStringSchema,
+const qaEvidenceCoverageSchema = qaEvidenceIdSchema
+  .extend({
     role: nonEmptyStringSchema,
     surfaceIds: z.array(nonEmptyStringSchema),
     categoryIds: z.array(nonEmptyStringSchema),
@@ -271,8 +269,8 @@ function buildQaEvidenceCoverage(params: {
 }) {
   const surfaceIds = uniqueSortedStrings(params.surfaceIds ?? []);
   const categoryIds = uniqueSortedStrings(params.categoryIds ?? []);
-  const buildCoverage = (coverageId: string, role: "primary" | "secondary") => ({
-    coverageId,
+  const buildCoverage = (id: string, role: "primary" | "secondary") => ({
+    id,
     role,
     surfaceIds,
     categoryIds: role === "primary" ? categoryIds : [],
@@ -658,7 +656,7 @@ export function buildLiveTransportEvidenceSummary(
     const categoryIds = [liveCoverageId];
     const coverage = [
       {
-        coverageId: liveCoverageId,
+        id: liveCoverageId,
         role: "live-transport",
         surfaceIds: [channelSurfaceId],
         categoryIds,
@@ -666,7 +664,7 @@ export function buildLiveTransportEvidenceSummary(
       ...uniqueSortedStrings(check.coverageIds ?? [])
         .filter((coverageId) => coverageId !== liveCoverageId)
         .map((coverageId) => ({
-          coverageId,
+          id: coverageId,
           role: "live-transport-coverage",
           surfaceIds: [channelSurfaceId],
           categoryIds,

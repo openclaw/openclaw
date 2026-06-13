@@ -7,7 +7,7 @@ surface: runtime-tools
 runtimeParityTier: standard
 coverage:
   primary:
-    - tool-call-handling
+    - tools.fs.read
 objective: Verify file read behavior is tracked across OpenClaw and Codex while Codex owns read natively.
 successCriteria:
   - OpenClaw may expose OpenClaw read while Codex app-server mode may omit duplicate OpenClaw dynamic read.

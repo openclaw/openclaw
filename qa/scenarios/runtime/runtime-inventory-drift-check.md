@@ -6,7 +6,7 @@ title: Runtime inventory drift check
 surface: inventory
 coverage:
   primary:
-    - tool-availability-rules
+    - runtime.inventory
 objective: Verify tools.effective and skills.status stay aligned with runtime behavior after config changes.
 successCriteria:
   - Enabled tool appears before the config change.

@@ -7,12 +7,12 @@ surface: plugins
 category: pre-release
 coverage:
   primary:
-    - smoke-tests
+    - plugins.kitchen-sink
   secondary:
-    - credential-health-checks
-    - runtime-activation
-    - tool-plugins
-    - cached-health-snapshots
+    - plugins.lifecycle
+    - plugins.plugin-tools
+    - models.live-openai
+    - gateway.performance
 risk: high
 objective: Verify the external Kitchen Sink plugin can be installed into a qa-lab gateway, expose its major runtime surfaces, and coexist with a live OpenAI provider turn.
 successCriteria:

@@ -7,10 +7,10 @@ surface: runtime
 runtimeParityTier: live-only
 coverage:
   primary:
-    - thread-lifecycle
+    - runtime.gateway-log-sentinel.codex-progress
   secondary:
-    - native-codex-app-server-harness
-    - token-pressure
+    - runtime.long-context
+    - runtime.codex-app-server
 objective: Fail live proof when long-context activity triggers Codex app-server timeout or stalled-progress sentinels.
 successCriteria:
   - Gateway config routes the selected QA model through the Codex app-server runtime.

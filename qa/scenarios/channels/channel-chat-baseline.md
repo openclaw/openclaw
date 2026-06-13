@@ -6,9 +6,9 @@ title: Channel baseline conversation
 surface: channel
 coverage:
   primary:
-    - group-channel-session-isolation
+    - channels.group-messages
   secondary:
-    - plugin-registry-resolution
+    - channels.qa-channel
 objective: Verify the QA agent can respond correctly in a shared channel and respect mention-driven group semantics.
 successCriteria:
   - Agent replies in the shared channel transcript.

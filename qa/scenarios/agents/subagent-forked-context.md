@@ -6,7 +6,7 @@ title: Subagent forked context
 surface: subagents
 coverage:
   primary:
-    - subagent-turns
+    - agents.subagents
 objective: Verify the agent can choose forked subagent context when the child needs the current transcript.
 successCriteria:
   - Agent launches a native subagent with context=fork.

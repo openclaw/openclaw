@@ -6,9 +6,9 @@ title: Reasoning-only recovery after replay-safe read
 surface: runtime
 coverage:
   primary:
-    - failure-recovery
+    - runtime.reasoning-only-recovery
   secondary:
-    - compaction
+    - runtime.retry-policy
 objective: Verify a GPT-style reasoning-only turn after a replay-safe read auto-continues into a visible answer.
 successCriteria:
   - Scenario is mock-openai only so live lanes do not pick it up implicitly.

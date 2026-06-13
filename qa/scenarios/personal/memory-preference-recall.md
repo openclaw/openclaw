@@ -7,11 +7,10 @@ surface: personal
 category: memory
 coverage:
   primary:
-    - active-memory
+    - personal.memory-recall
   secondary:
-    - plugin-registry-resolution
-    - embedding-search
-    - memory-search-and-store-tools
+    - memory.recall
+    - channels.qa-channel
 risk: medium
 capabilities:
   - memory.recall

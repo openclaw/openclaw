@@ -7,7 +7,7 @@ surface: runtime
 runtimeParityTier: standard
 coverage:
   primary:
-    - doctor-diagnostics
+    - runtime.codex-plugin.version
 objective: Verify a Codex plugin pinned behind the OpenClaw host version fails closed with a precise update remediation.
 successCriteria:
   - The lifecycle fixture detects the plugin version is older than the host version.

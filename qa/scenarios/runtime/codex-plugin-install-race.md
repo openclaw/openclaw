@@ -7,9 +7,9 @@ surface: runtime
 runtimeParityTier: standard
 coverage:
   primary:
-    - thread-lifecycle
+    - runtime.codex-plugin.lifecycle
   secondary:
-    - session-and-run-coordination
+    - runtime.turn-ordering
 objective: Verify first agent turns wait on Codex plugin installation through deterministic ordering primitives, without sleep-based race assertions, lost tokens, or duplicate responses.
 successCriteria:
   - The first turn records a waiting event before the install completion event.

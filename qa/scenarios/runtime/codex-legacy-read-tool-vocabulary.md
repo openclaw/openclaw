@@ -7,10 +7,10 @@ surface: runtime
 runtimeParityTier: live-only
 coverage:
   primary:
-    - tool-context
+    - runtime.codex-native-workspace.read
   secondary:
-    - tool-call-handling
-    - payload-compatibility
+    - runtime.prompt-compatibility
+    - tools.fs.read
 objective: Verify Codex-mode agents can satisfy legacy "Read tool" wording through the native Codex workspace-read capability instead of stopping because duplicate OpenClaw dynamic read is intentionally filtered.
 successCriteria:
   - Agent reads the seeded workspace file and replies with the exact marker line.

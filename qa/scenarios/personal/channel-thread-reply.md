@@ -7,12 +7,11 @@ surface: personal
 category: channel-replies
 coverage:
   primary:
-    - automatic-final-reply-delivery
+    - personal.channel-replies
   secondary:
-    - session-and-run-coordination
-    - inbound-conversation-routing
-    - plugin-registry-resolution
-    - native-threads
+    - channels.dm
+    - channels.threads
+    - channels.qa-channel
 risk: medium
 capabilities:
   - channel.reply

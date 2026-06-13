@@ -7,11 +7,10 @@ surface: personal
 category: reminders
 coverage:
   primary:
-    - agent-cron-tool
+    - personal.reminders
   secondary:
-    - isolated-cron-execution
-    - manual-cron-runs
-    - plugin-registry-resolution
+    - scheduling.cron
+    - channels.qa-channel
 risk: medium
 capabilities:
   - cron.add

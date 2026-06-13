@@ -6,10 +6,10 @@ title: Plugin lifecycle hot reload
 surface: plugins
 coverage:
   primary:
-    - runtime-activation
+    - plugins.lifecycle
   secondary:
-    - config-reload
-    - enable-and-disable
+    - plugins.hot-reload
+    - config.hot-apply
 objective: Verify a runtime-owned capability can be disabled and re-enabled through hot config reload without stale state.
 successCriteria:
   - Workspace skill capability is eligible before reload.

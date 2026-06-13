@@ -6,10 +6,9 @@ title: DM baseline conversation
 surface: dm
 coverage:
   primary:
-    - session-and-run-coordination
-    - inbound-conversation-routing
+    - channels.dm
   secondary:
-    - plugin-registry-resolution
+    - channels.qa-channel
 objective: Verify the QA agent can chat coherently in a DM, explain the QA setup, and stay in character.
 successCriteria:
   - Agent replies in DM without channel routing mistakes.

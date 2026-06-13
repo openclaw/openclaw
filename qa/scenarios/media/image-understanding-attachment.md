@@ -6,9 +6,9 @@ title: Image understanding from attachment
 surface: image-understanding
 coverage:
   primary:
-    - inbound-image-summarization
+    - media.image-understanding
   secondary:
-    - plugin-registry-resolution
+    - channels.qa-channel
 objective: Verify an attached image reaches the agent model and the agent can describe what it sees.
 successCriteria:
   - Agent receives at least one image attachment.

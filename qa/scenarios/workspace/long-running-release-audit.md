@@ -6,10 +6,10 @@ title: Long-running release audit
 surface: workspace
 coverage:
   primary:
-    - process-lifecycle
+    - workspace.long-running-task
   secondary:
-    - artifacts
-    - context-engine
+    - workspace.repo-discovery
+    - workspace.artifacts
 objective: Verify a model can complete a sustained repo audit that requires reading several scattered files, ignoring stale decoys, writing artifacts, and checking its own output.
 successCriteria:
   - Agent starts from the seeded project README instead of guessing.

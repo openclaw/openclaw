@@ -37,8 +37,7 @@ title: Memory recall after context switch
 surface: memory
 coverage:
   primary:
-    - embedding-search
-    - memory-search-and-store-tools
+    - memory.recall
 objective: Verify the agent can store a fact, switch topics, then recall the fact accurately later.
 successCriteria:
   - Agent acknowledges the seeded fact.

@@ -6,9 +6,10 @@ title: Dreaming shadow trial report
 surface: memory
 coverage:
   primary:
-    - memory-files
+    - memory.dreaming
   secondary:
-    - redaction
+    - memory.promotion
+    - qa.artifact-safety
 risk: medium
 capabilities:
   - tools.read

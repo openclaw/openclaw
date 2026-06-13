@@ -6,10 +6,9 @@ title: Active Memory pre-reply recall
 surface: memory
 coverage:
   primary:
-    - active-memory
+    - memory.active-recall
   secondary:
-    - embedding-search
-    - memory-search-and-store-tools
+    - memory.recall
 objective: Verify Active Memory surfaces a memory-only preference before the main reply, and that the same question stays unresolved when the plugin is off.
 plugins:
   - active-memory

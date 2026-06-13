@@ -6,9 +6,9 @@ title: Model switch follow-up
 surface: models
 coverage:
   primary:
-    - provider-and-runtime-overrides
+    - models.switching
   secondary:
-    - session-parity
+    - runtime.session-continuity
 objective: Verify the agent can switch to a different configured model and continue coherently.
 successCriteria:
   - Agent reflects the model switch request.

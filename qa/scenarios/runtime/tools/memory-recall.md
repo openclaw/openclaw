@@ -7,7 +7,7 @@ surface: runtime-tools
 runtimeParityTier: optional
 coverage:
   primary:
-    - memory-search-and-store-tools
+    - tools.memory.recall
 objective: Verify memory_recall parity when the memory plugin exposes the tool.
 successCriteria:
   - If memory_recall is present, the fixture exercises happy and failure paths.

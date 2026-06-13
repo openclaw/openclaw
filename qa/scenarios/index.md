@@ -19,7 +19,7 @@ Coverage tracking:
   block
 - add `coverage.secondary` only when a scenario intentionally protects another behavior
 - keep IDs behavior-shaped, broad enough to reuse, lowercase, and dotted or dashed
-- use the exact `coverageId` values from `taxonomy.yaml`
+- use the exact values listed under feature `coverageIds` in `taxonomy.yaml`
 - prefer reusing an existing coverage ID over minting a scenario-shaped ID
 - avoid copying the scenario title into coverage IDs
 - use `pnpm openclaw qa coverage` to render the current inventory

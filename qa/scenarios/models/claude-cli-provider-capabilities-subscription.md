@@ -6,9 +6,9 @@ title: Claude CLI provider capabilities subscription
 surface: model-provider
 coverage:
   primary:
-    - model-reference-selection
+    - models.provider-capabilities
   secondary:
-    - claude-cli-compatibility
+    - models.claude-cli
 objective: Verify the Claude CLI model-provider lane can use native Claude subscription auth to talk, read an attached image, use bundled MCP tools, and apply workspace skills.
 successCriteria:
   - A live-frontier run fails fast unless the selected primary provider is claude-cli.

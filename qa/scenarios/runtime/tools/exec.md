@@ -7,7 +7,7 @@ surface: runtime-tools
 runtimeParityTier: standard
 coverage:
   primary:
-    - exec-routing
+    - tools.exec
 objective: Verify command execution behavior is tracked across OpenClaw and Codex while Codex owns exec/process natively.
 successCriteria:
   - OpenClaw may expose OpenClaw exec while Codex app-server mode may omit duplicate OpenClaw dynamic exec/process.

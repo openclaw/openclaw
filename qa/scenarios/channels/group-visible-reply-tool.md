@@ -6,11 +6,10 @@ title: Group visible reply via message tool
 surface: channel
 coverage:
   primary:
-    - mention-required
-    - automatic-final-reply-delivery
+    - channels.group-visible-replies
   secondary:
-    - plugin-registry-resolution
-    - provider-outbound-adapter-bridge
+    - channels.qa-channel
+    - tools.message
 objective: Verify a group-sourced QA channel turn replies visibly through message(action=send) in the same room.
 gatewayConfigPatch:
   messages:

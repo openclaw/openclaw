@@ -6,9 +6,9 @@ title: GPT-5.5 thinking visibility switch
 surface: models
 coverage:
   primary:
-    - thinking-and-context-settings
+    - models.thinking
   secondary:
-    - progress-visibility
+    - runtime.reasoning-visibility
 objective: Verify GPT-5.5 can switch from disabled thinking to medium thinking while reasoning display stays enabled.
 successCriteria:
   - Live runs target openai/gpt-5.5, not a mini or pro variant.

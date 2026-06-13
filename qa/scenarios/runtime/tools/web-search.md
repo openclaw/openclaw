@@ -7,7 +7,7 @@ surface: runtime-tools
 runtimeParityTier: standard
 coverage:
   primary:
-    - web-search-exposure
+    - tools.web-search
 objective: Verify web_search preserves arguments and result shape across OpenClaw and Codex.
 successCriteria:
   - Effective tools expose web_search.

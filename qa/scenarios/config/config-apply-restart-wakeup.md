@@ -6,9 +6,9 @@ title: Config apply restart wake-up
 surface: config
 coverage:
   primary:
-    - restart-and-stop
+    - config.restart-apply
   secondary:
-    - session-and-transcript-recovery
+    - runtime.gateway-restart
 objective: Verify a restart-required config.apply restarts cleanly and delivers the post-restart wake message back into the QA channel.
 successCriteria:
   - config.apply schedules a restart-required change.

@@ -7,9 +7,10 @@ surface: runtime
 runtimeParityTier: live-only
 coverage:
   primary:
-    - runtime-activation
+    - runtime.gateway-log-sentinel.plugin-hooks
   secondary:
-    - tool-plugins
+    - plugins.before-prompt-build
+    - plugins.before-tool-call
 objective: Fail the live parity lane when plugin hook crashes appear in gateway logs during ordinary prompt and tool activity.
 successCriteria:
   - An ordinary live agent turn completes with the expected marker.

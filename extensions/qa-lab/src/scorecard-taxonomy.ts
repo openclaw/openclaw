@@ -27,8 +27,8 @@ const qaScorecardProfileSchema = z.object({
 });
 
 const qaMaturityFeatureSchema = z.object({
-  coverageId: qaScorecardIdSchema,
   name: z.string().trim().min(1),
+  coverageIds: z.array(qaScorecardIdSchema).default([]),
   description: z.string().trim().min(1).optional(),
 });
 
@@ -156,6 +156,12 @@ type MaturityCategoryRef = {
   id: string;
   surfaceId: string;
   categoryName: string;
+  features: MaturityFeatureRef[];
+  coverageIds: string[];
+};
+
+type MaturityFeatureRef = {
+  name: string;
   coverageIds: string[];
 };
 
@@ -290,8 +296,12 @@ function buildMaturityRefs(taxonomy: QaMaturityTaxonomy | null) {
   for (const surface of taxonomy.surfaces) {
     for (const category of surface.categories) {
       const categoryId = `${surface.id}.${category.id}`;
-      const categoryCoverageIds = category.features.map((feature) => {
-        const coverageId = feature.coverageId;
+      const features = category.features.map((feature) => ({
+        name: feature.name,
+        coverageIds: uniqueSorted(feature.coverageIds),
+      }));
+      const categoryCoverageIds = uniqueSorted(features.flatMap((feature) => feature.coverageIds));
+      for (const coverageId of categoryCoverageIds) {
         const refs = coverageIds.get(coverageId) ?? [];
         refs.push({
           coverageId,
@@ -299,12 +309,12 @@ function buildMaturityRefs(taxonomy: QaMaturityTaxonomy | null) {
           surfaceId: surface.id,
         });
         coverageIds.set(coverageId, refs);
-        return coverageId;
-      });
+      }
       categories.set(categoryId, {
         id: categoryId,
         surfaceId: surface.id,
         categoryName: category.name,
+        features,
         coverageIds: categoryCoverageIds,
       });
     }
@@ -315,22 +325,27 @@ function buildMaturityRefs(taxonomy: QaMaturityTaxonomy | null) {
 function pushMissingPrimaryIssues(params: {
   issues: QaScorecardValidationIssue[];
   category: MaturityCategoryRef;
-  fulfilledCoverageIds: ReadonlySet<string>;
+  coverageIdsWithPrimaryEvidence: ReadonlySet<string>;
   coverageIdsWithSecondaryEvidence: ReadonlySet<string>;
 }) {
-  for (const coverageId of params.category.coverageIds) {
-    if (params.fulfilledCoverageIds.has(coverageId)) {
+  for (const feature of params.category.features) {
+    if (
+      feature.coverageIds.some((coverageId) =>
+        params.coverageIdsWithPrimaryEvidence.has(coverageId),
+      )
+    ) {
       continue;
     }
-    const reason = params.coverageIdsWithSecondaryEvidence.has(coverageId)
-      ? "only has secondary evidence"
-      : "has no primary evidence";
+    const hasSecondaryEvidence = feature.coverageIds.some((coverageId) =>
+      params.coverageIdsWithSecondaryEvidence.has(coverageId),
+    );
+    const reason = hasSecondaryEvidence ? "only has secondary evidence" : "has no primary evidence";
     params.issues.push({
       code: "coverage-id-missing-primary-evidence",
       severity: "warning",
       categoryId: params.category.id,
-      ref: coverageId,
-      message: `${params.category.id} coverage ID ${coverageId} ${reason}`,
+      ref: feature.coverageIds.join(", ") || feature.name,
+      message: `${params.category.id} feature ${feature.name} ${reason}`,
     });
   }
 }
@@ -528,16 +543,19 @@ export function buildQaScorecardTaxonomyReport(params: {
       }
     }
 
+    const fulfilledFeatureCountForCategory = category.features.filter((feature) =>
+      feature.coverageIds.some((coverageId) => fulfilledCoverageIds.has(coverageId)),
+    ).length;
     if (required) {
-      requiredFeatureCount += category.coverageIds.length;
-      fulfilledFeatureCount += fulfilledCoverageIds.size;
+      requiredFeatureCount += category.features.length;
+      fulfilledFeatureCount += fulfilledFeatureCountForCategory;
       pushMissingPrimaryIssues({
         issues,
         category,
-        fulfilledCoverageIds,
+        coverageIdsWithPrimaryEvidence: fulfilledCoverageIds,
         coverageIdsWithSecondaryEvidence: secondaryOnlyCoverageIds,
       });
-      if (fulfilledCoverageIds.size === 0) {
+      if (fulfilledFeatureCountForCategory === 0) {
         issues.push({
           code: "profile-category-missing-evidence",
           severity: "warning",
@@ -551,7 +569,9 @@ export function buildQaScorecardTaxonomyReport(params: {
       ? category.coverageIds.filter((coverageId) => !coverageIdsWithAnyEvidence.has(coverageId))
       : [];
     const mappingStatus =
-      required && fulfilledCoverageIds.size === category.coverageIds.length
+      required &&
+      category.features.length > 0 &&
+      fulfilledFeatureCountForCategory === category.features.length
         ? "mapped"
         : evidenceReports.length > 0
           ? "partial"

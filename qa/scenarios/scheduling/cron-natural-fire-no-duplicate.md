@@ -6,11 +6,10 @@ title: Cron natural fire no duplicate
 surface: cron
 coverage:
   primary:
-    - isolated-cron-execution
-    - manual-cron-runs
+    - scheduling.cron
   secondary:
-    - run-history
-    - plugin-registry-resolution
+    - channels.qa-channel
+    - scheduling.dedup
 objective: Verify one naturally fired cron run in a single gateway uptime produces exactly one qa-channel delivery for its marker.
 successCriteria:
   - A one-shot cron job fires from the scheduler timer without cron.run force mode.

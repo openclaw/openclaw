@@ -7,7 +7,7 @@ surface: runtime-tools
 runtimeParityTier: standard
 coverage:
   primary:
-    - tool-call-handling
+    - tools.fs.list
 objective: Verify directory inspection behavior is tracked through read while Codex owns file inspection natively.
 successCriteria:
   - OpenClaw may expose OpenClaw read while Codex app-server mode may omit duplicate OpenClaw dynamic read.

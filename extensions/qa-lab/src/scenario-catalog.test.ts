@@ -45,7 +45,7 @@ describe("qa scenario catalog", () => {
         .filter((scenario) => !(scenario.coverage?.primary.length ?? 0))
         .map((scenario) => scenario.id),
     ).toStrictEqual([]);
-    expect(readQaScenarioById("memory-recall").coverage?.primary).toContain("embedding-search");
+    expect(readQaScenarioById("memory-recall").coverage?.primary).toContain("memory.recall");
   });
 
   it("exposes bootstrap data from the markdown pack", () => {
@@ -120,7 +120,7 @@ describe("qa scenario catalog", () => {
     }
     expect(scenario.execution.path).toBe("ui/src/ui/e2e/chat-flow.e2e.test.ts");
     expect(scenario.execution.flow).toBeUndefined();
-    expect(scenario.coverage?.primary).toContain("gateway-hosted-ui");
+    expect(scenario.coverage?.primary).toContain("ui.control");
   });
 
   it("loads runtime parity tier metadata for first-hour and soak lanes", () => {
@@ -256,8 +256,8 @@ describe("qa scenario catalog", () => {
       | undefined;
 
     expect(scenario.sourcePath).toBe("qa/scenarios/runtime/qa-bus-tool-trace-visibility.md");
-    expect(scenario.coverage?.primary).toContain("model-and-runtime-telemetry");
-    expect(scenario.coverage?.secondary ?? []).toStrictEqual([]);
+    expect(scenario.coverage?.primary).toContain("harness.tool-trace-visibility");
+    expect(scenario.coverage?.secondary ?? []).toStrictEqual(["runtime.qa-bus", "tools.trace"]);
     expect(config?.expectedToolName).toBe("exec");
     expect(config?.expectedRedaction).toBe("[redacted]");
     expect(config?.searchQuery).toBe("exec");
@@ -278,8 +278,8 @@ describe("qa scenario catalog", () => {
       | undefined;
 
     expect(scenario.sourcePath).toBe("qa/scenarios/runtime/update-run-package-self-upgrade.md");
-    expect(scenario.coverage?.primary).toContain("update-run-status");
-    expect(scenario.coverage?.secondary).toContain("install-update-and-uninstall");
+    expect(scenario.coverage?.primary).toContain("runtime.update-run");
+    expect(scenario.coverage?.secondary).toContain("runtime.package-update");
     expect(config?.requiredProviderMode).toBe("live-frontier");
     expect(config?.allowEnv).toBe("OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF");
     expect(config?.sourceVersion).toBe("2026.4.26");
@@ -568,7 +568,7 @@ describe("qa scenario catalog", () => {
     const flow = JSON.stringify(scenario.execution.flow);
 
     expect(scenario.sourcePath).toBe("qa/scenarios/memory/dreaming-shadow-trial-report.md");
-    expect(scenario.coverage?.primary).toContain("memory-files");
+    expect(scenario.coverage?.primary).toContain("memory.dreaming");
     expect(config?.prompt).toContain("Dreaming shadow trial report check");
     expect(config?.reportName).toBe("dreaming-shadow-trial-report.md");
     expect(config?.seededMemory).toBe("# Memory\n\n");

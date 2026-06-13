@@ -6,10 +6,10 @@ title: Docker Prometheus smoke
 surface: telemetry
 coverage:
   primary:
-    - prometheus-text-exposition
+    - telemetry.prometheus
   secondary:
-    - docker-e2e-plan-scheduler-scripts
-    - model-and-runtime-telemetry
+    - harness.qa-lab
+    - docker.e2e
 objective: Verify a QA-lab gateway run emits protected, bounded Prometheus diagnostics metrics through the diagnostics-prometheus plugin.
 successCriteria:
   - The diagnostics-prometheus plugin exposes the protected scrape route.

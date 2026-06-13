@@ -7,7 +7,7 @@ surface: runtime-tools
 runtimeParityTier: optional
 coverage:
   primary:
-    - api-backed-providers
+    - tools.tavily-search
 objective: Track tavily_search parity once the tool is present in the runtime surface.
 successCriteria:
   - If tavily_search is present, the fixture exercises happy and failure paths.

@@ -6,9 +6,9 @@ title: Instruction followthrough repo contract
 surface: repo-contract
 coverage:
   primary:
-    - instruction-profile
+    - agents.instructions
   secondary:
-    - turn-startup-and-runtime-choice
+    - runtime.first-action
 objective: Verify the agent reads repo instruction files first, follows the required tool order, and completes the first feasible action instead of stopping at a plan.
 successCriteria:
   - Agent reads the seeded instruction files before writing the requested artifact.

@@ -7,9 +7,9 @@ surface: runtime
 runtimeParityTier: live-only
 coverage:
   primary:
-    - safe-load-failures
+    - runtime.gateway-log-sentinel.plugin-contracts
   secondary:
-    - plugin-runtime-harness
+    - plugins.contracts.tools
 objective: Fail live proof when gateway startup logs show plugin manifest contract registration errors such as missing `contracts.tools`.
 successCriteria:
   - Gateway reaches healthy state.

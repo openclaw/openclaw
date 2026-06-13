@@ -6,9 +6,9 @@ title: Session memory ranking
 surface: memory
 coverage:
   primary:
-    - embedding-search
+    - memory.ranking
   secondary:
-    - memory-search-and-store-tools
+    - memory.recall
 objective: Verify session-transcript memory can outrank stale durable notes and drive the final answer toward the newer fact.
 successCriteria:
   - Session memory indexing is enabled for the scenario.

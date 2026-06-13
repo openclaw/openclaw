@@ -6,9 +6,9 @@ title: Reasoning-only no-auto-retry after write
 surface: runtime
 coverage:
   primary:
-    - failure-recovery
+    - runtime.reasoning-only-recovery
   secondary:
-    - compaction
+    - runtime.retry-policy
 objective: Verify a GPT-style reasoning-only turn after a mutating write stays replay-unsafe and does not auto-retry.
 successCriteria:
   - Scenario is mock-openai only so live lanes do not pick it up implicitly.

@@ -6,9 +6,9 @@ title: Model switch with tool continuity
 surface: models
 coverage:
   primary:
-    - provider-and-runtime-overrides
+    - models.switching
   secondary:
-    - tool-call-handling
+    - runtime.tool-continuity
 objective: Verify switching models preserves session context and tool use instead of dropping into plain-text only behavior.
 successCriteria:
   - Alternate model is actually requested.

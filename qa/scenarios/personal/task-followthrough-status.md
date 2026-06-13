@@ -7,9 +7,10 @@ surface: personal
 category: followthrough
 coverage:
   primary:
-    - tool-call-handling
+    - personal.task-followthrough
   secondary:
-    - artifacts
+    - tools.followthrough
+    - workspace.artifacts
 risk: medium
 capabilities:
   - tools.read

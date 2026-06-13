@@ -6,11 +6,10 @@ title: Subagent completion direct fallback
 surface: subagents
 coverage:
   primary:
-    - subagent-turns
+    - agents.subagents
   secondary:
-    - session-and-run-coordination
-    - plugin-registry-resolution
-    - automatic-final-reply-delivery
+    - runtime.delivery
+    - channels.qa-channel
 objective: Verify a yielded parent still receives a successful subagent result through direct fallback delivery when the dormant announce turn produces no visible reply.
 successCriteria:
   - Parent launches a native subagent.

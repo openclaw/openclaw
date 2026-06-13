@@ -7,9 +7,9 @@ surface: runtime
 runtimeParityTier: standard
 coverage:
   primary:
-    - openclaw-doctor
+    - runtime.doctor-repair
   secondary:
-    - codex-oauth-profiles
+    - runtime.codex-plugin.auth
 objective: Reproduce the doctor-migration auth cells as an automated fixture matrix for Codex OAuth selection.
 successCriteria:
   - OAuth-only hosts select the openai OAuth profile and use the Codex harness.

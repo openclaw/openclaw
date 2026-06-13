@@ -6,9 +6,9 @@ title: Medium game plan Codex harness
 surface: workspace
 coverage:
   primary:
-    - runtime-assembly
+    - workspace.planning
   secondary:
-    - native-codex-app-server-harness
+    - models.codex-cli
 objective: Verify the Codex app-server harness can plan and build a medium-complex self-contained browser game.
 successCriteria:
   - A live-frontier run fails fast unless the selected primary model is openai/gpt-5.5 with the Codex harness forced.

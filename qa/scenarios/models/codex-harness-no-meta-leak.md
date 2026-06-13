@@ -6,9 +6,9 @@ title: Codex harness no meta leak
 surface: dm
 coverage:
   primary:
-    - native-codex-app-server-harness
+    - models.codex-cli
   secondary:
-    - context-visibility
+    - runtime.no-meta-leak
 objective: Verify the Codex app-server harness keeps coordination/meta chatter out of the visible reply.
 successCriteria:
   - The scenario forces the Codex embedded harness.

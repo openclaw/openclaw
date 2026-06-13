@@ -6,11 +6,10 @@ title: QA channel reconnect dedupe
 surface: channel
 coverage:
   primary:
-    - channel-health-policy
+    - channels.reconnect
   secondary:
-    - session-and-run-coordination
-    - automatic-final-reply-delivery
-    - durable-outbound-send-orchestration
+    - channels.dedup
+    - runtime.delivery
 objective: Verify qa-channel readiness polling keeps prior delivery stable and does not replay the last outbound message.
 successCriteria:
   - Agent replies once before a reconnect-style readiness cycle.

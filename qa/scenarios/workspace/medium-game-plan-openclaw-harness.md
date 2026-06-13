@@ -6,9 +6,9 @@ title: Medium game plan OpenClaw harness
 surface: workspace
 coverage:
   primary:
-    - runtime-assembly
+    - workspace.planning
   secondary:
-    - external-harness-selection
+    - agents.openclaw-harness
 objective: Verify GPT-5.5 can use the OpenClaw harness to plan and build a medium-complex self-contained browser game.
 successCriteria:
   - A live-frontier run fails fast unless the selected primary model is openai/gpt-5.5.

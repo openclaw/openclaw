@@ -6,10 +6,10 @@ title: Crestodian ring-zero setup
 surface: config
 coverage:
   primary:
-    - service-auth-wiring
+    - config.crestodian-setup
   secondary:
-    - turn-startup-and-runtime-choice
-    - setup-onboarding-flows
+    - channels.discord-config
+    - agents.create
 objective: Verify Crestodian can bootstrap a fresh OpenClaw config, set the default model, create an agent, configure Discord through a SecretRef, validate config, and leave an audit trail.
 successCriteria:
   - Crestodian reports missing config in an empty state dir.

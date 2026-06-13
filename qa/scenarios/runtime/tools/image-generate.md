@@ -7,7 +7,7 @@ surface: runtime-tools
 runtimeParityTier: optional
 coverage:
   primary:
-    - image-generation-tool-invocation
+    - tools.image-generate
 objective: Verify image_generate preserves arguments and result shape across OpenClaw and Codex.
 successCriteria:
   - Effective tools expose image_generate after QA image-generation config is applied.

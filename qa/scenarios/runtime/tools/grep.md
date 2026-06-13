@@ -7,7 +7,7 @@ surface: runtime-tools
 runtimeParityTier: standard
 coverage:
   primary:
-    - tool-call-handling
+    - tools.grep
 objective: Verify grep-style search behavior is tracked through command execution while Codex owns exec/process natively.
 successCriteria:
   - OpenClaw may expose OpenClaw exec while Codex app-server mode may omit duplicate OpenClaw dynamic exec/process.

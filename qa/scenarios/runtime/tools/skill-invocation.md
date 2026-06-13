@@ -7,7 +7,7 @@ surface: runtime-tools
 runtimeParityTier: optional
 coverage:
   primary:
-    - mixed-plugins
+    - tools.skill-invocation
 objective: Track skill invocation parity once skill tools are represented as first-class runtime tools.
 successCriteria:
   - If skill_invoke is present, the fixture exercises happy and failure paths.

@@ -7,9 +7,9 @@ surface: runtime
 runtimeParityTier: standard
 coverage:
   primary:
-    - codex-oauth-profiles
+    - runtime.codex-plugin.auth
   secondary:
-    - auth-profile-selection
+    - auth-profiles.provider-selection
 objective: Verify mixed openai OAuth and openai API-key profile stores select the Codex OAuth profile for Codex app-server turns.
 successCriteria:
   - The selected auth profile id is openai:qa-oauth.

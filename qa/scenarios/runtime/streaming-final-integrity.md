@@ -7,11 +7,10 @@ surface: runtime
 runtimeParityTier: live-only
 coverage:
   primary:
-    - streaming-replies
+    - channels.streaming
   secondary:
-    - abort-and-terminal-outcomes
-    - session-and-run-coordination
-    - automatic-final-reply-delivery
+    - runtime.fallback-delivery
+    - runtime.delivery
 objective: Verify channel-visible streaming settles into one coherent final message without token-delta chatter.
 successCriteria:
   - Agent produces a final marker reply.

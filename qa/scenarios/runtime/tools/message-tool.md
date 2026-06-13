@@ -7,7 +7,7 @@ surface: runtime-tools
 runtimeParityTier: optional
 coverage:
   primary:
-    - provider-outbound-adapter-bridge
+    - tools.message-tool
 objective: Report whether a direct message tool is present. The coding-profile session surface normally uses sessions_send instead.
 successCriteria:
   - The fixture is report-only when the coding profile does not expose a direct message tool.

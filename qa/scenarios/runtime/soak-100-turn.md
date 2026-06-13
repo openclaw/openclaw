@@ -7,9 +7,9 @@ surface: runtime
 runtimeParityTier: soak
 coverage:
   primary:
-    - abort-and-terminal-outcomes
+    - runtime.soak-100
   secondary:
-    - token-pressure
+    - runtime.long-context
 objective: Provide an optional long-run soak that can be scheduled or run in Testbox without entering the maintainer default gate.
 successCriteria:
   - The same QA session accepts 100 sequential user turns.

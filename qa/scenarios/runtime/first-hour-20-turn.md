@@ -7,9 +7,9 @@ surface: runtime
 runtimeParityTier: standard
 coverage:
   primary:
-    - turn-startup-and-runtime-choice
+    - runtime.first-hour-20
   secondary:
-    - token-pressure
+    - runtime.long-context
 objective: Verify both runtimes preserve a same-session conversation across the required 20-turn maintainer gate.
 successCriteria:
   - The same QA session accepts 20 sequential user turns.

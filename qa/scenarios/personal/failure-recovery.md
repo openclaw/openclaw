@@ -7,10 +7,10 @@ surface: personal
 category: reliability
 coverage:
   primary:
-    - failure-recovery
+    - personal.failure-recovery
   secondary:
-    - progress-visibility
-    - model-and-runtime-telemetry
+    - personal.no-fake-progress
+    - tools.evidence
 risk: medium
 capabilities:
   - tools.read

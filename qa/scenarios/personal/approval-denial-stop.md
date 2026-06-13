@@ -7,10 +7,10 @@ surface: personal
 category: approvals
 coverage:
   primary:
-    - approval-policy
+    - personal.approval-denial
   secondary:
-    - approval-flow
-    - tool-safety-controls
+    - runtime.approvals
+    - tools.safety
 risk: high
 capabilities:
   - approvals.denial

@@ -6,9 +6,9 @@ title: Skill install hot availability
 surface: skills
 coverage:
   primary:
-    - mixed-plugins
+    - plugins.skills
   secondary:
-    - install-update-and-uninstall
+    - plugins.hot-install
 objective: Verify a newly added workspace skill shows up without a broken intermediate state and can influence the next turn immediately.
 successCriteria:
   - Skill is absent before install.

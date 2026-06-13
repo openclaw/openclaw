@@ -7,7 +7,7 @@ surface: runtime-tools
 runtimeParityTier: standard
 coverage:
   primary:
-    - subagent-turns
+    - tools.sessions-spawn
 objective: Verify sessions_spawn preserves arguments and result shape across OpenClaw and Codex.
 successCriteria:
   - Effective tools expose sessions_spawn.

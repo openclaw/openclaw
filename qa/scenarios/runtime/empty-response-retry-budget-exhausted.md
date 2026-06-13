@@ -6,9 +6,9 @@ title: Empty-response retry budget exhausted
 surface: runtime
 coverage:
   primary:
-    - failure-recovery
+    - runtime.empty-response-recovery
   secondary:
-    - compaction
+    - runtime.retry-policy
 objective: Verify repeated empty GPT turns exhaust the retry budget after one continuation attempt.
 successCriteria:
   - Scenario is mock-openai only so live lanes do not pick it up implicitly.

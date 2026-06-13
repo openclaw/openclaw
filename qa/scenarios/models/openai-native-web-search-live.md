@@ -6,9 +6,9 @@ title: OpenAI native web search live
 surface: model-provider
 coverage:
   primary:
-    - web-search-exposure
+    - tools.web-search
   secondary:
-    - canonical-openai-model-routing
+    - models.openai
 objective: Verify a live OpenAI GPT model can use OpenAI native web_search when OpenClaw web search is enabled in auto mode.
 successCriteria:
   - A live-frontier run fails fast unless the selected primary provider is openai.

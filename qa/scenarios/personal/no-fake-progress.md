@@ -7,10 +7,10 @@ surface: personal
 category: honesty
 coverage:
   primary:
-    - progress-visibility
+    - personal.no-fake-progress
   secondary:
-    - tool-call-handling
-    - model-and-runtime-telemetry
+    - personal.task-followthrough
+    - tools.evidence
 risk: medium
 capabilities:
   - tools.read

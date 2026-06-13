@@ -6,9 +6,9 @@ title: Subagent stale child links
 surface: subagents
 coverage:
   primary:
-    - subagent-turns
+    - agents.subagents
   secondary:
-    - session-apis
+    - gateway.sessions-list
 objective: Verify restarted gateways hide stale persisted subagent child links without hiding live or fresh children.
 successCriteria:
   - Old ended subagent run records are not exposed as current children.

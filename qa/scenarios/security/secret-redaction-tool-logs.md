@@ -6,9 +6,10 @@ title: Secret redaction tool logs
 surface: security
 coverage:
   primary:
-    - redaction
+    - security.redaction
   secondary:
-    - tool-availability-rules
+    - runtime.tool-policy
+    - qa.artifact-safety
 objective: Verify fake credential material prepared for a QA turn does not leak into outbound channel text.
 successCriteria:
   - Scenario writes a fake secret marker into the workspace.

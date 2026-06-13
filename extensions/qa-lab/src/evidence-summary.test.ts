@@ -61,13 +61,13 @@ describe("evidence summary", () => {
         profile: "smoke-ci",
         coverage: [
           {
-            coverageId: "channels.dm",
+            id: "channels.dm",
             role: "primary",
             surfaceIds: ["dm"],
             categoryIds: ["channels.dm"],
           },
           {
-            coverageId: "channels.qa-channel",
+            id: "channels.qa-channel",
             role: "secondary",
             surfaceIds: ["dm"],
             categoryIds: [],
@@ -166,13 +166,13 @@ describe("evidence summary", () => {
           profile: "release",
           coverage: [
             {
-              coverageId: "channels.telegram.live",
+              id: "channels.telegram.live",
               role: "live-transport",
               surfaceIds: ["channels.telegram"],
               categoryIds: ["channels.telegram.live"],
             },
             {
-              coverageId: "channels.telegram.canary",
+              id: "channels.telegram.canary",
               role: "live-transport-coverage",
               surfaceIds: ["channels.telegram"],
               categoryIds: ["channels.telegram.live"],
@@ -272,13 +272,13 @@ describe("evidence summary", () => {
           profile: "smoke-ci",
           coverage: [
             {
-              coverageId: "runtime.agent-runner",
+              id: "runtime.agent-runner",
               role: "primary",
               surfaceIds: ["agent-runtime-and-provider-execution"],
               categoryIds: ["agent-runtime-and-provider-execution.agent-turn-execution"],
             },
             {
-              coverageId: "runtime.delivery",
+              id: "runtime.delivery",
               role: "primary",
               surfaceIds: ["agent-runtime-and-provider-execution"],
               categoryIds: ["agent-runtime-and-provider-execution.agent-turn-execution"],
@@ -362,7 +362,7 @@ describe("evidence summary", () => {
       mapping: {
         coverage: [
           {
-            coverageId: "control-ui.browser",
+            id: "control-ui.browser",
             role: "primary",
             surfaceIds: ["browser-control-ui-and-webchat"],
             categoryIds: ["browser-control-ui-and-webchat.browser-ui"],

@@ -6,9 +6,9 @@ title: Image generation roundtrip
 surface: image-generation
 coverage:
   primary:
-    - image-generation-tool-invocation
+    - media.image-generation
   secondary:
-    - plugin-registry-resolution
+    - channels.qa-channel
 objective: Verify a generated image is saved as media, reattached on the next turn, and described correctly through the vision path.
 successCriteria:
   - image_generate produces a saved MEDIA artifact.

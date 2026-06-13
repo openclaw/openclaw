@@ -6,11 +6,10 @@ title: Group fallback when message tool is unavailable
 surface: channel
 coverage:
   primary:
-    - mention-required
-    - automatic-final-reply-delivery
+    - channels.group-visible-replies
   secondary:
-    - plugin-registry-resolution
-    - provider-outbound-adapter-bridge
+    - channels.qa-channel
+    - tools.message
 objective: Reproduce the group-visible-reply bug class where message_tool mode selected tool-only delivery even though group tool policy removed the message tool.
 gatewayConfigPatch:
   messages:
