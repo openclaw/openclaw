@@ -43,4 +43,20 @@ describe("resolveHeartbeatReplyPayload", () => {
     };
     expect(resolveHeartbeatReplyPayload(reasoning)).toBeUndefined();
   });
+
+  it("skips a trailing legacy 'Reasoning:'-prefixed payload and returns the final answer", () => {
+    const answer: ReplyPayload = { text: "All clear" };
+    const legacyReasoning: ReplyPayload = { text: "Reasoning: because nothing changed" };
+    expect(resolveHeartbeatReplyPayload([answer, legacyReasoning])).toBe(answer);
+  });
+
+  it("returns undefined for a scalar legacy 'Reasoning:'-prefixed payload", () => {
+    const legacyReasoning: ReplyPayload = { text: "Reasoning: because nothing changed" };
+    expect(resolveHeartbeatReplyPayload(legacyReasoning)).toBeUndefined();
+  });
+
+  it("returns undefined for a scalar blockquoted 'Thinking' reasoning payload", () => {
+    const blockquoted: ReplyPayload = { text: "Thinking... _weighing the options_" };
+    expect(resolveHeartbeatReplyPayload(blockquoted)).toBeUndefined();
+  });
 });

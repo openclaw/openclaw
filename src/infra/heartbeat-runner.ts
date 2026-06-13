@@ -26,7 +26,11 @@ import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
 import { resolveModelRefFromString, type ModelRef } from "../agents/model-selection.js";
 import { resolvePersistedSessionRuntimeId } from "../agents/session-runtime-compat.js";
 import { DEFAULT_HEARTBEAT_FILENAME } from "../agents/workspace.js";
-import { resolveHeartbeatReplyPayload } from "../auto-reply/heartbeat-reply-payload.js";
+import {
+  hasFormattedReasoningPrefix,
+  isReasoningReplyPayload,
+  resolveHeartbeatReplyPayload,
+} from "../auto-reply/heartbeat-reply-payload.js";
 import {
   getHeartbeatToolNotificationText,
   resolveHeartbeatToolResponseFromReplyResult,
@@ -760,14 +764,14 @@ function resolveHeartbeatReasoningPayloads(
   const reasoningPayloads: ReplyPayload[] = [];
   for (const payload of payloads) {
     const text = typeof payload.text === "string" ? payload.text : "";
-    const hasFormattedReasoningPrefix = /^(?:Reasoning:|Thinking\.{0,3}(?=\s*_))/u.test(
-      text.trimStart(),
-    );
-    if (payload.isReasoning !== true && !hasFormattedReasoningPrefix) {
+    // Shared classifier keeps this lane in lockstep with the heartbeat reply
+    // selector so a legacy-formatted reasoning payload is never both skipped
+    // here and surfaced as the visible reply (or vice versa). See #92242.
+    if (!isReasoningReplyPayload(payload)) {
       continue;
     }
 
-    const formattedText = hasFormattedReasoningPrefix ? text : formatReasoningMessage(text);
+    const formattedText = hasFormattedReasoningPrefix(text) ? text : formatReasoningMessage(text);
     if (!formattedText.trim()) {
       continue;
     }
