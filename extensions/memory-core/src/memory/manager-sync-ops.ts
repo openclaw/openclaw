@@ -335,6 +335,7 @@ export abstract class MemoryManagerSyncOps {
 
   protected resetVectorState(): void {
     this.vectorReady = null;
+    this.lastMetaSerialized = null;
     this.vector.available = null;
     this.vector.semanticAvailable = undefined;
     this.vector.loadError = undefined;
