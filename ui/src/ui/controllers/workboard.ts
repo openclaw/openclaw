@@ -2911,7 +2911,6 @@ async function refreshWorkboardLifecycleTasks(
       ) {
         return null;
       }
-      state.tasksByCardId = new Map();
       resetWorkboardLifecycleTaskConfirmations(state);
       setWorkboardLifecycleTaskRefreshFailed(state, true, {
         host: params.host,
@@ -3693,15 +3692,14 @@ export async function stopWorkboardCard(params: {
   state.error = null;
   params.requestUpdate?.();
   try {
-    let taskCancelled = false;
-    let taskCancellationError: unknown = null;
+    let taskStopped = false;
     if (taskId && (!task || taskIsActive(task))) {
       try {
         const cancelled = await cancelWorkboardTaskRun({
           client: params.client,
           taskId,
         });
-        taskCancelled = cancelled.cancelled;
+        taskStopped = cancelled.cancelled;
         if (cancelled.cancelled) {
           state.tasksByCardId.set(
             params.card.id,
@@ -3713,10 +3711,14 @@ export async function stopWorkboardCard(params: {
           );
         }
       } catch (error) {
-        if (!sessionKey || !isMissingTaskLookupError(error, taskId)) {
+        if (!isMissingTaskLookupError(error, taskId)) {
           throw error;
         }
-        taskCancellationError = error;
+        state.missingTaskIds.add(taskId);
+        if (task?.taskId === taskId || task?.id === taskId) {
+          state.tasksByCardId.delete(params.card.id);
+        }
+        taskStopped = true;
       }
     }
     let sessionAborted = false;
@@ -3728,15 +3730,12 @@ export async function stopWorkboardCard(params: {
           runId: workboardCardRunId(params.card),
         });
       } catch (error) {
-        if (!taskCancelled) {
+        if (!taskStopped) {
           throw error;
         }
       }
     }
-    if (!taskCancelled && !sessionAborted) {
-      if (taskCancellationError) {
-        state.error = formatError(taskCancellationError);
-      }
+    if (!taskStopped && !sessionAborted) {
       return;
     }
     const payload = await params.client.request("workboard.cards.update", {

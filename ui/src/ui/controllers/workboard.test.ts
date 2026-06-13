@@ -4445,6 +4445,37 @@ describe("workboard controller", () => {
     expect(state.missingTaskIds).toEqual(new Set([missingTaskId]));
   });
 
+  it("preserves a tracked replacement when lifecycle task refresh fails", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const missingTaskId = "task-pruned-from-ledger";
+    const replacementTask = {
+      ...sampleTask,
+      id: "task-replacement",
+      taskId: "task-replacement",
+    };
+    const linked = {
+      ...sampleCard,
+      status: "ready",
+      taskId: missingTaskId,
+    } satisfies WorkboardCard;
+    state.loaded = true;
+    state.cards = [linked];
+    state.tasksByCardId.set(linked.id, replacementTask);
+    state.missingTaskIds = new Set([missingTaskId]);
+    const client = createClient(() => {
+      throw new Error("tasks unavailable");
+    });
+
+    await syncWorkboardLifecycle({ host, client: client as never, sessions: [] });
+
+    expect(client.request).toHaveBeenCalledOnce();
+    expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
+    expect(state.tasksByCardId.get(linked.id)).toEqual(replacementTask);
+    expect(state.missingTaskIds).toEqual(new Set([missingTaskId]));
+    expect(state.lifecycleTaskRefreshError).toBe("tasks unavailable");
+  });
+
   it("defers lifecycle writes when exact confirmation after task listing fails", async () => {
     const host = {};
     const state = getWorkboardState(host);
@@ -5138,7 +5169,7 @@ describe("workboard controller", () => {
     });
   });
 
-  it("falls back to session abort when unresolved task cancellation fails", async () => {
+  it("records missing task cancellation before aborting its linked session", async () => {
     const host = {};
     const linked = {
       ...sampleCard,
@@ -5178,6 +5209,42 @@ describe("workboard controller", () => {
       patch: { status: "blocked" },
     });
     expect(state.cards).toEqual([blocked]);
+    expect(state.missingTaskIds).toEqual(new Set(["task-pruned"]));
+    expect(state.error).toBeNull();
+  });
+
+  it("treats missing task cancellation as stopped for task-only cards", async () => {
+    const host = {};
+    const linked = {
+      ...sampleCard,
+      status: "running" as const,
+      taskId: "task-pruned",
+    };
+    const blocked = { ...linked, status: "blocked" as const };
+    const state = getWorkboardState(host);
+    state.cards = [linked];
+    const client = createClient((method) => {
+      if (method === "tasks.cancel") {
+        throw new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: "task not found: task-pruned",
+        });
+      }
+      return { card: blocked };
+    });
+
+    await stopWorkboardCard({ host, client: client as never, card: linked });
+
+    expect(client.request).toHaveBeenNthCalledWith(1, "tasks.cancel", {
+      taskId: "task-pruned",
+      reason: "Stopped from Workboard.",
+    });
+    expect(client.request).toHaveBeenNthCalledWith(2, "workboard.cards.update", {
+      id: "card-1",
+      patch: { status: "blocked" },
+    });
+    expect(state.cards).toEqual([blocked]);
+    expect(state.missingTaskIds).toEqual(new Set(["task-pruned"]));
     expect(state.error).toBeNull();
   });
 
