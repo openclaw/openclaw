@@ -60,6 +60,43 @@ describe("agent run terminal outcome", () => {
     ).toBe("cancelled");
   });
 
+  it("keeps restart cancellation sticky over late completion", () => {
+    const restartCancel = buildAgentRunTerminalOutcome({
+      status: "timeout",
+      stopReason: "restart",
+      timeoutPhase: "gateway_draining",
+      providerStarted: true,
+      endedAt: 100,
+    });
+    const lateCompletion = buildAgentRunTerminalOutcome({
+      status: "ok",
+      endedAt: 200,
+    });
+
+    expect(restartCancel).toMatchObject({
+      reason: "cancelled",
+      status: "timeout",
+      stopReason: "restart",
+    });
+    expect(mergeAgentRunTerminalOutcome(restartCancel, lateCompletion)).toBe(restartCancel);
+  });
+
+  it("keeps explicit provider timeout attribution ahead of restart cancellation", () => {
+    expect(
+      buildAgentRunTerminalOutcome({
+        status: "timeout",
+        stopReason: "restart",
+        timeoutPhase: "provider",
+        providerStarted: true,
+      }),
+    ).toMatchObject({
+      reason: "hard_timeout",
+      status: "timeout",
+      stopReason: "restart",
+      timeoutPhase: "provider",
+    });
+  });
+
   it("does not treat successful model stop metadata as cancellation", () => {
     expect(
       buildAgentRunTerminalOutcome({

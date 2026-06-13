@@ -613,6 +613,7 @@ export const pl: TranslationMap = {
     labelsPlaceholder: "ui, docs",
     searchPlaceholder: "Szukaj kart",
     allPriorities: "Wszystkie priorytety",
+    hideEmptyColumns: "Hide empty columns",
     emptyColumn: "Upuść pracę tutaj",
     lifecycleUnlinked: "Brak sesji",
     lifecycleUnlinkedDetail: "Rozpocznij lub połącz sesję",
@@ -1616,6 +1617,8 @@ export const pl: TranslationMap = {
     },
     jobDetail: {
       system: "System",
+      command: "Command",
+      cwd: "CWD",
       prompt: "Prompt",
       delivery: "Dostarczanie",
       agent: "Agent",

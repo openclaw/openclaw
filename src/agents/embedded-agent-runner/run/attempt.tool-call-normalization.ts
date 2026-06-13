@@ -1159,11 +1159,13 @@ export function sanitizeReplayToolCallIdsForStream(params: {
   mode: ToolCallIdMode;
   allowedToolNames?: Set<string>;
   preserveNativeAnthropicToolUseIds?: boolean;
+  duplicateToolCallIdStyle?: "openai";
   preserveReplaySafeThinkingToolCallIds?: boolean;
   repairToolUseResultPairing?: boolean;
 }): AgentMessage[] {
   const sanitized = sanitizeToolCallIdsForCloudCodeAssist(params.messages, params.mode, {
     preserveNativeAnthropicToolUseIds: params.preserveNativeAnthropicToolUseIds,
+    duplicateToolCallIdStyle: params.duplicateToolCallIdStyle,
     preserveReplaySafeThinkingToolCallIds: params.preserveReplaySafeThinkingToolCallIds,
     allowedToolNames: params.allowedToolNames,
   });

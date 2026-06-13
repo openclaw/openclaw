@@ -20,6 +20,7 @@ type MemoryToolOptions = {
   getConfig?: () => OpenClawConfig | undefined;
   agentId?: string;
   agentSessionKey?: string;
+  oneShotCliRun?: boolean;
 };
 
 let memoryToolRuntimePromise: Promise<MemoryToolRuntime> | null = null;

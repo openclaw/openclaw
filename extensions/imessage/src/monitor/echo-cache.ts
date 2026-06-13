@@ -6,6 +6,11 @@ type SentMessageLookup = {
   messageId?: string;
 };
 
+type SentMessageLookupOptions = {
+  skipIdShortCircuit?: boolean;
+  includePendingText?: boolean;
+};
+
 export type SentMessageCache = {
   remember: (scope: string, lookup: SentMessageLookup) => void;
   /**
@@ -17,7 +22,11 @@ export type SentMessageCache = {
    *   that will never match the GUID outbound IDs, but text matching is still
    *   the right way to identify agent reply echoes.
    */
-  has: (scope: string, lookup: SentMessageLookup, skipIdShortCircuit?: boolean) => boolean;
+  has: (
+    scope: string,
+    lookup: SentMessageLookup,
+    options?: boolean | SentMessageLookupOptions,
+  ) => boolean;
 };
 
 // Echo arrival observed at ~2.2s on M4 Mac Mini (SQLite poll interval is the bottleneck).
@@ -70,9 +79,21 @@ class DefaultSentMessageCache implements SentMessageCache {
     this.cleanup();
   }
 
-  has(scope: string, lookup: SentMessageLookup, skipIdShortCircuit = false): boolean {
+  has(
+    scope: string,
+    lookup: SentMessageLookup,
+    options: boolean | SentMessageLookupOptions = false,
+  ): boolean {
     this.cleanup();
-    if (hasPersistedIMessageEcho({ scope, ...lookup })) {
+    const resolvedOptions =
+      typeof options === "boolean" ? { skipIdShortCircuit: options } : options;
+    if (
+      hasPersistedIMessageEcho({
+        scope,
+        ...lookup,
+        includePendingText: resolvedOptions.includePendingText,
+      })
+    ) {
       return true;
     }
     const textKey = normalizeEchoTextKey(lookup.text);
@@ -89,7 +110,7 @@ class DefaultSentMessageCache implements SentMessageCache {
       const hasTextOnlyMatch =
         typeof textTimestamp === "number" &&
         (!textBackedByIdTimestamp || textTimestamp > textBackedByIdTimestamp);
-      if (!skipIdShortCircuit && !hasTextOnlyMatch) {
+      if (!resolvedOptions.skipIdShortCircuit && !hasTextOnlyMatch) {
         return false;
       }
     }

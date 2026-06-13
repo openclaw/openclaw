@@ -201,6 +201,11 @@ export type SessionGoal = {
   budgetLimitedAt?: number;
 };
 
+export type RestartRecoveryRun = {
+  runId: string;
+  lifecycleGeneration: string;
+};
+
 export type SessionEntry = {
   /**
    * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
@@ -250,6 +255,8 @@ export type SessionEntry = {
   pluginOwnerId?: string;
   systemSent?: boolean;
   abortedLastRun?: boolean;
+  /** Interrupted run generations whose late lifecycle events must be ignored. */
+  restartRecoveryRuns?: RestartRecoveryRun[];
   /** Durable guard state for automatic subagent orphan recovery. */
   subagentRecovery?: SubagentRecoveryState;
   /** Quota cascade protection and state-aware failover status. */

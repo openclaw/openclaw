@@ -611,6 +611,7 @@ export const ar: TranslationMap = {
     labelsPlaceholder: "ui, docs",
     searchPlaceholder: "البحث في البطاقات",
     allPriorities: "كل الأولويات",
+    hideEmptyColumns: "Hide empty columns",
     emptyColumn: "أفلِت العمل هنا",
     lifecycleUnlinked: "لا توجد جلسة",
     lifecycleUnlinkedDetail: "ابدأ جلسة أو اربطها",
@@ -1586,6 +1587,8 @@ export const ar: TranslationMap = {
     },
     jobDetail: {
       system: "النظام",
+      command: "Command",
+      cwd: "CWD",
       prompt: "المطالبة",
       delivery: "التسليم",
       agent: "الوكيل",

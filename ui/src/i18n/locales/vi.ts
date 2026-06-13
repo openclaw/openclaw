@@ -613,6 +613,7 @@ export const vi: TranslationMap = {
     labelsPlaceholder: "ui, docs",
     searchPlaceholder: "Tìm kiếm thẻ",
     allPriorities: "Tất cả mức ưu tiên",
+    hideEmptyColumns: "Hide empty columns",
     emptyColumn: "Thả công việc vào đây",
     lifecycleUnlinked: "Không có phiên",
     lifecycleUnlinkedDetail: "Bắt đầu hoặc liên kết một phiên",
@@ -1596,6 +1597,8 @@ export const vi: TranslationMap = {
     },
     jobDetail: {
       system: "Hệ thống",
+      command: "Command",
+      cwd: "CWD",
       prompt: "Prompt",
       delivery: "Gửi",
       agent: "Agent",

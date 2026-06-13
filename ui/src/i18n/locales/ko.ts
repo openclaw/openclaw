@@ -611,6 +611,7 @@ export const ko: TranslationMap = {
     labelsPlaceholder: "ui, docs",
     searchPlaceholder: "카드 검색",
     allPriorities: "모든 우선순위",
+    hideEmptyColumns: "Hide empty columns",
     emptyColumn: "여기에 작업을 놓으세요",
     lifecycleUnlinked: "세션 없음",
     lifecycleUnlinkedDetail: "세션을 시작하거나 연결하세요",
@@ -1593,6 +1594,8 @@ export const ko: TranslationMap = {
     },
     jobDetail: {
       system: "시스템",
+      command: "Command",
+      cwd: "CWD",
       prompt: "프롬프트",
       delivery: "전달",
       agent: "에이전트",

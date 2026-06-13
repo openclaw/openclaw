@@ -1,8 +1,14 @@
 /**
  * Top-level CLI-backed agent runner orchestration.
  */
-import type { ReplyPayload } from "../auto-reply/reply-payload.js";
+import { setReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { appendExactAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
+import {
+  assertAgentRunLifecycleGenerationCurrent,
+  captureAgentRunLifecycleGeneration,
+  withAgentRunLifecycleGeneration,
+} from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { buildAgentHookContextChannelFields } from "../plugins/hook-agent-context.js";
@@ -28,6 +34,7 @@ import {
   runHarnessContextEngineMaintenance,
 } from "./harness/context-engine-lifecycle.js";
 import { buildAgentHookContext } from "./harness/hook-context.js";
+import { runAgentHarnessBeforeMessageWriteHook } from "./harness/hook-helpers.js";
 import { buildAgentHookConversationMessages } from "./harness/hook-history.js";
 import {
   runAgentHarnessLlmInputHook,
@@ -35,6 +42,7 @@ import {
 } from "./harness/lifecycle-hook-helpers.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { SessionManager } from "./sessions/session-manager.js";
+import { buildAssistantMessage, buildUsageWithNoCost } from "./stream-message-shared.js";
 
 const log = createSubsystemLogger("agents/cli-runner");
 
@@ -231,6 +239,62 @@ async function persistApprovedCliUserTurnTranscript(params: RunCliAgentParams): 
   }
 }
 
+async function persistCliAssistantTranscript(params: {
+  runParams: RunCliAgentParams;
+  text: string;
+  modelId: string;
+  usage?: {
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+    total?: number;
+  };
+}): Promise<boolean> {
+  const { runParams } = params;
+  if (!runParams.persistAssistantTranscript || !runParams.sessionKey || !params.text) {
+    return false;
+  }
+  if (runParams.currentInboundEventKind === "room_event") {
+    return true;
+  }
+  try {
+    const result = await appendExactAssistantMessageToSessionTranscript({
+      sessionKey: runParams.sessionKey,
+      agentId: runParams.agentId,
+      expectedSessionId: runParams.sessionId,
+      storePath: runParams.storePath,
+      idempotencyKey: `cli-assistant:${runParams.runId}`,
+      config: runParams.config,
+      beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+      message: buildAssistantMessage({
+        model: {
+          api: "cli",
+          provider: runParams.provider,
+          id: params.modelId,
+        },
+        content: [{ type: "text", text: params.text }],
+        stopReason: "stop",
+        usage: buildUsageWithNoCost({
+          input: params.usage?.input,
+          output: params.usage?.output,
+          cacheRead: params.usage?.cacheRead,
+          cacheWrite: params.usage?.cacheWrite,
+          totalTokens: params.usage?.total,
+        }),
+      }),
+    });
+    if (!result.ok) {
+      log.warn(`CLI assistant transcript persistence skipped: ${result.reason}`);
+      return result.code === "blocked" || result.code === "session-rebound";
+    }
+    return true;
+  } catch (error) {
+    log.warn(`CLI assistant transcript persistence failed: ${formatErrorMessage(error)}`);
+    return false;
+  }
+}
+
 async function finalizeCliContextEngineTurn(params: {
   context: PreparedCliRunContext;
   historyMessages: unknown[];
@@ -289,7 +353,19 @@ async function finalizeCliContextEngineTurn(params: {
 }
 
 /** Prepares and runs one CLI-backed agent turn. */
-export async function runCliAgent(params: RunCliAgentParams): Promise<EmbeddedAgentRunResult> {
+export function runCliAgent(paramsInput: RunCliAgentParams): Promise<EmbeddedAgentRunResult> {
+  const lifecycleGeneration =
+    paramsInput.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(paramsInput.runId);
+  return withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
+    runCliAgentInternal({
+      ...paramsInput,
+      lifecycleGeneration,
+    }),
+  );
+}
+
+async function runCliAgentInternal(params: RunCliAgentParams): Promise<EmbeddedAgentRunResult> {
+  assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration!);
   // Cron gate must fire before prepareCliRunContext — that call allocates
   // backend resources released only by runPreparedCliAgent's try…finally.
   params.onExecutionStarted?.();
@@ -594,11 +670,16 @@ export async function runPreparedCliAgent(
     output: Awaited<ReturnType<typeof executePreparedCliRun>>;
     effectiveCliSessionId?: string;
     bindingFlushOk?: boolean;
+    assistantTranscriptOwned?: boolean;
   }): EmbeddedAgentRunResult => {
     const text = resultParams.output.text?.trim();
     const rawText = resultParams.output.rawText?.trim();
     const payloads = text
-      ? [{ text }]
+      ? [
+          resultParams.assistantTranscriptOwned
+            ? setReplyPayloadMetadata({ text }, { assistantTranscriptOwned: true })
+            : { text },
+        ]
       : params.allowEmptyAssistantReplyAsSilent === true
         ? [{ text: SILENT_REPLY_TOKEN }]
         : undefined;
@@ -718,6 +799,12 @@ export async function runPreparedCliAgent(
         assistantText,
         output,
       });
+      const assistantTranscriptOwned = await persistCliAssistantTranscript({
+        runParams: params,
+        text: assistantText,
+        modelId: context.modelId,
+        usage: output.usage,
+      });
       const bindingFlushOk = await isCliBindingFlushed(
         effectiveCliSessionId,
         params.provider,
@@ -732,7 +819,12 @@ export async function runPreparedCliAgent(
         ctx: hookContext,
         hookRunner,
       });
-      return buildCliRunResult({ output, effectiveCliSessionId, bindingFlushOk });
+      return buildCliRunResult({
+        output,
+        effectiveCliSessionId,
+        bindingFlushOk,
+        assistantTranscriptOwned,
+      });
     };
 
     if (hasBeforeAgentRunHooks && hookRunner) {
@@ -750,6 +842,8 @@ export async function runPreparedCliAgent(
             }),
             channelId: hookContext.channelId,
             accountId: params.agentAccountId,
+            senderId: params.senderId ?? undefined,
+            senderIsOwner: params.senderIsOwner ?? undefined,
           },
           buildAgentHookContext(hookContext),
         );
@@ -878,10 +972,14 @@ export function buildRunClaudeCliAgentParams(params: RunClaudeCliAgentParams): R
     cwd: params.cwd,
     config: params.config,
     prompt: params.prompt,
+    persistAssistantTranscript: params.persistAssistantTranscript,
+    storePath: params.storePath,
+    currentInboundEventKind: params.currentInboundEventKind,
     provider: params.provider ?? "claude-cli",
     model: params.model ?? "opus",
     thinkLevel: params.thinkLevel,
     timeoutMs: params.timeoutMs,
+    runTimeoutOverrideMs: params.runTimeoutOverrideMs,
     runId: params.runId,
     jobId: params.jobId,
     extraSystemPrompt: params.extraSystemPrompt,
@@ -900,6 +998,8 @@ export function buildRunClaudeCliAgentParams(params: RunClaudeCliAgentParams): R
     currentThreadTs: params.currentThreadTs,
     currentMessageId: params.currentMessageId,
     currentInboundAudio: params.currentInboundAudio,
+    senderId: params.senderId,
+    senderIsOwner: params.senderIsOwner,
   };
 }
 

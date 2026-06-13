@@ -15,12 +15,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type * as ManifestRegistryModule from "../plugins/manifest-registry.js";
-import { runAgentAttempt } from "./command/attempt-execution.js";
+import { runAgentAttempt as runAgentAttemptImpl } from "./command/attempt-execution.js";
 import type { RunEmbeddedAgentParams } from "./embedded-agent-runner/run/params.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 
 type LoadPluginManifestRegistry = typeof ManifestRegistryModule.loadPluginManifestRegistry;
+type RunAgentAttemptParams = Parameters<typeof runAgentAttemptImpl>[0];
+
+const runAgentAttempt = (
+  params: Omit<RunAgentAttemptParams, "lifecycleGeneration"> &
+    Partial<Pick<RunAgentAttemptParams, "lifecycleGeneration">>,
+) =>
+  runAgentAttemptImpl({
+    ...params,
+    lifecycleGeneration: params.lifecycleGeneration ?? "test-generation",
+  });
 
 const loadPluginManifestRegistry = vi.hoisted(() =>
   vi.fn<LoadPluginManifestRegistry>(() => ({

@@ -982,21 +982,25 @@ public struct WakeParams: Codable, Sendable {
     public let mode: AnyCodable
     public let text: String
     public let sessionkey: String?
+    public let agentid: String?
 
     public init(
         mode: AnyCodable,
         text: String,
-        sessionkey: String?)
+        sessionkey: String?,
+        agentid: String? = nil)
     {
         self.mode = mode
         self.text = text
         self.sessionkey = sessionkey
+        self.agentid = agentid
     }
 
     private enum CodingKeys: String, CodingKey {
         case mode
         case text
         case sessionkey = "sessionKey"
+        case agentid = "agentId"
     }
 }
 
@@ -2773,6 +2777,7 @@ public struct ConfigPatchParams: Codable, Sendable {
     public let deliverycontext: [String: AnyCodable]?
     public let note: String?
     public let restartdelayms: Int?
+    public let replacepaths: [String]?
 
     public init(
         raw: String,
@@ -2780,7 +2785,8 @@ public struct ConfigPatchParams: Codable, Sendable {
         sessionkey: String?,
         deliverycontext: [String: AnyCodable]?,
         note: String?,
-        restartdelayms: Int?)
+        restartdelayms: Int?,
+        replacepaths: [String]?)
     {
         self.raw = raw
         self.basehash = basehash
@@ -2788,6 +2794,7 @@ public struct ConfigPatchParams: Codable, Sendable {
         self.deliverycontext = deliverycontext
         self.note = note
         self.restartdelayms = restartdelayms
+        self.replacepaths = replacepaths
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -2797,6 +2804,7 @@ public struct ConfigPatchParams: Codable, Sendable {
         case deliverycontext = "deliveryContext"
         case note
         case restartdelayms = "restartDelayMs"
+        case replacepaths = "replacePaths"
     }
 }
 

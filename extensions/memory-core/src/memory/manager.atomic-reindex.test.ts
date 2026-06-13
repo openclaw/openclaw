@@ -24,6 +24,15 @@ async function expectRejectCode(promise: Promise<unknown>, code: string): Promis
   throw new Error(`Expected rejection with code ${code}`);
 }
 
+function normalizeBackupName(filePath: string): string {
+  return path
+    .basename(filePath)
+    .replace(
+      /backup-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/,
+      "backup-<uuid>",
+    );
+}
+
 describe("memory manager atomic reindex", () => {
   let fixtureRoot = "";
   let caseId = 0;
@@ -129,6 +138,25 @@ describe("memory manager atomic reindex", () => {
     });
 
     expect(rename).toHaveBeenCalledTimes(3);
+    expect(wait).not.toHaveBeenCalled();
+  });
+
+  it("requires the main sqlite file during index moves", async () => {
+    const rename = vi
+      .fn()
+      .mockRejectedValue(Object.assign(new Error("missing"), { code: "ENOENT" }));
+    const wait = vi.fn().mockResolvedValue(undefined);
+
+    await expectRejectCode(
+      moveMemoryIndexFiles("index.sqlite.tmp", "index.sqlite", {
+        fileOps: { rename, rm: fs.rm, wait },
+        maxRenameAttempts: 3,
+        renameRetryDelayMs: 10,
+      }),
+      "ENOENT",
+    );
+
+    expect(rename).toHaveBeenCalledTimes(1);
     expect(wait).not.toHaveBeenCalled();
   });
 
@@ -246,6 +274,151 @@ describe("memory manager atomic reindex", () => {
       "rm:index.sqlite.tmp-wal:closed",
       "rm:index.sqlite.tmp-shm:closed",
     ]);
+  });
+
+  it("atomic swap on POSIX: target file never goes absent during swap", async () => {
+    writeChunkMarker(indexPath, "before");
+    writeChunkMarker(tempIndexPath, "after");
+
+    const existsChecks: boolean[] = [];
+    const realRename = fs.rename;
+    const rename: typeof fs.rename = vi.fn(async (source, target) => {
+      existsChecks.push(
+        await fs.access(indexPath).then(
+          () => true,
+          () => false,
+        ),
+      );
+      return realRename(source, target);
+    });
+
+    await runMemoryAtomicReindex({
+      targetPath: indexPath,
+      tempPath: tempIndexPath,
+      fileOptions: {
+        fileOps: { rename, rm: fs.rm, wait: vi.fn().mockResolvedValue(undefined) },
+      },
+      build: async () => undefined,
+    });
+
+    expect(readChunkMarker(indexPath)).toBe("after");
+    expect(existsChecks.length).toBeGreaterThan(0);
+    for (const exists of existsChecks) {
+      expect(exists).toBe(true);
+    }
+  });
+
+  it("backs up stale target sidecars before replacing the main index", async () => {
+    writeChunkMarker(indexPath, "before");
+    writeChunkMarker(tempIndexPath, "after");
+    await fs.writeFile(`${indexPath}-wal`, "stale wal");
+    await fs.writeFile(`${indexPath}-shm`, "stale shm");
+    await fs.writeFile(`${tempIndexPath}-wal`, "closed temp wal");
+    await fs.writeFile(`${tempIndexPath}-shm`, "closed temp shm");
+
+    const events: string[] = [];
+    const realRename = fs.rename;
+    const realRm = fs.rm;
+    const rename: typeof fs.rename = vi.fn(async (source, target) => {
+      events.push(
+        `rename:${normalizeBackupName(String(source))}->${normalizeBackupName(String(target))}`,
+      );
+      await realRename(source, target);
+    });
+    const rm: typeof fs.rm = vi.fn(async (filePath, options) => {
+      events.push(`rm:${normalizeBackupName(String(filePath))}:${readChunkMarker(indexPath)}`);
+      await realRm(filePath, options);
+    });
+
+    await runMemoryAtomicReindex({
+      targetPath: indexPath,
+      tempPath: tempIndexPath,
+      fileOptions: {
+        fileOps: { rename, rm, wait: vi.fn().mockResolvedValue(undefined) },
+      },
+      build: async () => undefined,
+    });
+
+    expect(readChunkMarker(indexPath)).toBe("after");
+    expect(rename).toHaveBeenCalledTimes(3);
+    expect(events).toEqual([
+      "rename:index.sqlite-wal->index.sqlite.backup-<uuid>-wal",
+      "rename:index.sqlite-shm->index.sqlite.backup-<uuid>-shm",
+      "rename:index.sqlite.tmp->index.sqlite",
+      "rm:index.sqlite.backup-<uuid>:after",
+      "rm:index.sqlite.backup-<uuid>-wal:after",
+      "rm:index.sqlite.backup-<uuid>-shm:after",
+      "rm:index.sqlite.tmp-wal:after",
+      "rm:index.sqlite.tmp-shm:after",
+    ]);
+    await expectPathMissing(`${indexPath}-wal`);
+    await expectPathMissing(`${indexPath}-shm`);
+    await expectPathMissing(`${tempIndexPath}-wal`);
+    await expectPathMissing(`${tempIndexPath}-shm`);
+  });
+
+  it("restores backed-up target sidecars when publishing the main index fails", async () => {
+    writeChunkMarker(indexPath, "before");
+    writeChunkMarker(tempIndexPath, "after");
+    await fs.writeFile(`${indexPath}-wal`, "stale wal");
+    await fs.writeFile(`${indexPath}-shm`, "stale shm");
+
+    const realRename = fs.rename;
+    const rename: typeof fs.rename = vi.fn(async (source, target) => {
+      if (String(source) === tempIndexPath && String(target) === indexPath) {
+        throw Object.assign(new Error("locked target"), { code: "EACCES" });
+      }
+      await realRename(source, target);
+    });
+
+    await expectRejectCode(
+      runMemoryAtomicReindex({
+        targetPath: indexPath,
+        tempPath: tempIndexPath,
+        fileOptions: {
+          fileOps: { rename, rm: fs.rm, wait: vi.fn().mockResolvedValue(undefined) },
+        },
+        build: async () => undefined,
+      }),
+      "EACCES",
+    );
+
+    await expect(fs.readFile(`${indexPath}-wal`, "utf8")).resolves.toBe("stale wal");
+    await expect(fs.readFile(`${indexPath}-shm`, "utf8")).resolves.toBe("stale shm");
+    expect(readChunkMarker(indexPath)).toBe("before");
+    await expectPathMissing(tempIndexPath);
+  });
+
+  it("restores target sidecars when sidecar backup partially fails", async () => {
+    writeChunkMarker(indexPath, "before");
+    writeChunkMarker(tempIndexPath, "after");
+    await fs.writeFile(`${indexPath}-wal`, "stale wal");
+    await fs.writeFile(`${indexPath}-shm`, "stale shm");
+
+    const realRename = fs.rename;
+    const rename: typeof fs.rename = vi.fn(async (source, target) => {
+      if (String(source) === `${indexPath}-shm` && String(target).includes(".backup-")) {
+        throw Object.assign(new Error("locked shm"), { code: "EACCES" });
+      }
+      await realRename(source, target);
+    });
+
+    await expectRejectCode(
+      runMemoryAtomicReindex({
+        targetPath: indexPath,
+        tempPath: tempIndexPath,
+        fileOptions: {
+          fileOps: { rename, rm: fs.rm, wait: vi.fn().mockResolvedValue(undefined) },
+        },
+        build: async () => undefined,
+      }),
+      "EACCES",
+    );
+
+    await expect(fs.readFile(`${indexPath}-wal`, "utf8")).resolves.toBe("stale wal");
+    await expect(fs.readFile(`${indexPath}-shm`, "utf8")).resolves.toBe("stale shm");
+    expect(readChunkMarker(indexPath)).toBe("before");
+    await expectPathMissing(tempIndexPath);
   });
 });
 

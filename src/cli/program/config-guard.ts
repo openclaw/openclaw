@@ -97,6 +97,20 @@ function hasBundledChannelLegacyStateMigrationInputs(stateDir: string, oauthDir:
   return dirHasFile(oauthDir, isLegacyWhatsAppAuthFile);
 }
 
+function hasLegacyExecApprovalsMigrationInput(stateDir: string): boolean {
+  if (!process.env.OPENCLAW_STATE_DIR?.trim()) {
+    return false;
+  }
+  const homeDir = resolveRequiredHomeDir(process.env, os.homedir);
+  const sourcePath = path.join(homeDir, ".openclaw", "exec-approvals.json");
+  const targetPath = path.join(stateDir, "exec-approvals.json");
+  return (
+    path.resolve(sourcePath) !== path.resolve(targetPath) &&
+    fileOrDirExists(sourcePath) &&
+    !fileOrDirExists(targetPath)
+  );
+}
+
 function hasLegacyStateMigrationInputs(): boolean {
   // Only run migration prompts when old state actually exists in known legacy locations.
   const stateDir = resolveStateDir(process.env, os.homedir);
@@ -118,7 +132,9 @@ function hasLegacyStateMigrationInputs(): boolean {
       path.join(stateDir, "plugins", "installs.json"),
       path.join(stateDir, "sessions"),
       path.join(stateDir, "tasks", "runs.sqlite"),
-    ].some(fileOrDirExists) || hasBundledChannelLegacyStateMigrationInputs(stateDir, oauthDir)
+    ].some(fileOrDirExists) ||
+    hasBundledChannelLegacyStateMigrationInputs(stateDir, oauthDir) ||
+    hasLegacyExecApprovalsMigrationInput(stateDir)
   );
 }
 

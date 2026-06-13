@@ -91,6 +91,7 @@ describe("evaluateViaPlaywright (abort)", () => {
       cdpUrl: "http://127.0.0.1:9222",
       fn,
       ref,
+      ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
       signal: ctrl.signal,
     });
 
@@ -98,7 +99,12 @@ describe("evaluateViaPlaywright (abort)", () => {
     ctrl.abort(new Error("aborted by test"));
 
     await expect(p).rejects.toThrow("aborted by test");
-    expect(forceDisconnectPlaywrightForTarget).toHaveBeenCalled();
+    expect(forceDisconnectPlaywrightForTarget).toHaveBeenCalledWith({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: undefined,
+      ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
+      reason: "evaluate aborted",
+    });
   });
 
   it("does not disconnect when evaluate is blocked by an observed dialog", async () => {

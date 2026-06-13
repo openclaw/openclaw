@@ -83,6 +83,9 @@ describe("agent event handler", () => {
     lifecycleErrorRetryGraceMs?: number;
     isChatSendRunActive?: (runId: string) => boolean;
     clearTrackedActiveRun?: AgentEventHandlerOptions["clearTrackedActiveRun"];
+    markTrackedRunTerminalPersisted?: AgentEventHandlerOptions["markTrackedRunTerminalPersisted"];
+    trackTrackedRunTerminalPersistence?: AgentEventHandlerOptions["trackTrackedRunTerminalPersistence"];
+    resolveActiveLifecycleGenerationForRun?: (runId: string) => string | undefined;
   }) {
     const nowSpy =
       params?.now === undefined ? undefined : vi.spyOn(Date, "now").mockReturnValue(params.now);
@@ -113,6 +116,9 @@ describe("agent event handler", () => {
       lifecycleErrorRetryGraceMs: params?.lifecycleErrorRetryGraceMs,
       isChatSendRunActive: params?.isChatSendRunActive,
       clearTrackedActiveRun: params?.clearTrackedActiveRun ?? clearTrackedActiveRun,
+      markTrackedRunTerminalPersisted: params?.markTrackedRunTerminalPersisted,
+      trackTrackedRunTerminalPersistence: params?.trackTrackedRunTerminalPersistence,
+      resolveActiveLifecycleGenerationForRun: params?.resolveActiveLifecycleGenerationForRun,
     });
 
     return {
@@ -410,6 +416,89 @@ describe("agent event handler", () => {
     expect(payload.deltaText).toBe("Hello world");
     expect(payload.message?.content?.[0]?.text).toBe("Hello world");
     expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+    nowSpy?.mockRestore();
+  });
+
+  it("emits the first assistant chat.send timing event to the originating Control UI", () => {
+    const { broadcastToConnIds, chatRunState, handler, nowSpy } = createHarness({ now: 1_000 });
+    chatRunState.registry.add("run-1", {
+      sessionKey: "session-1",
+      clientRunId: "client-1",
+      chatSendTiming: {
+        ackedAtMs: 0,
+        connId: "conn-control-ui",
+        dispatchStartedAtMs: 0,
+        receivedAtMs: 0,
+      },
+    });
+
+    handler({
+      runId: "run-1",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Hello world" },
+    });
+    handler({
+      runId: "run-1",
+      seq: 2,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Hello world again" },
+    });
+
+    expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "chat.send_timing",
+      expect.objectContaining({
+        phase: "first-assistant-event",
+        runId: "client-1",
+        sessionKey: "session-1",
+        ackToPhaseMs: expect.any(Number),
+        dispatchStartedToPhaseMs: expect.any(Number),
+        receivedToPhaseMs: expect.any(Number),
+      }),
+      new Set(["conn-control-ui"]),
+      { dropIfSlow: true },
+    );
+    nowSpy?.mockRestore();
+  });
+
+  it("emits first assistant chat.send timing when text first flushes on final", () => {
+    const { broadcastToConnIds, chatRunState, handler, nowSpy } = createHarness({ now: 1_000 });
+    chatRunState.registry.add("run-final-only", {
+      sessionKey: "session-1",
+      clientRunId: "client-final",
+      chatSendTiming: {
+        ackedAtMs: 0,
+        connId: "conn-control-ui",
+        dispatchStartedAtMs: 0,
+        receivedAtMs: 0,
+      },
+    });
+    chatRunState.buffers.set("client-final", "Final only reply");
+
+    handler({
+      runId: "run-final-only",
+      seq: 1,
+      stream: "lifecycle",
+      ts: Date.now(),
+      data: { phase: "end" },
+    });
+
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "chat.send_timing",
+      expect.objectContaining({
+        phase: "first-assistant-event",
+        runId: "client-final",
+        sessionKey: "session-1",
+        ackToPhaseMs: expect.any(Number),
+        dispatchStartedToPhaseMs: expect.any(Number),
+        receivedToPhaseMs: expect.any(Number),
+      }),
+      new Set(["conn-control-ui"]),
+      { dropIfSlow: true },
+    );
     nowSpy?.mockRestore();
   });
 
@@ -1842,7 +1931,17 @@ describe("agent event handler", () => {
     resetAgentRunContextForTest();
   });
 
-  it("broadcasts terminal session status to session subscribers on lifecycle end", () => {
+  it("broadcasts terminal session status to session subscribers on lifecycle end", async () => {
+    vi.mocked(loadGatewaySessionRow).mockReturnValue({
+      key: "session-finished",
+      kind: "direct",
+      updatedAt: 1_700,
+      status: "done",
+      startedAt: 900,
+      endedAt: 1_700,
+      runtimeMs: 800,
+      abortedLastRun: false,
+    });
     const { broadcastToConnIds, sessionEventSubscribers, handler } = createHarness({
       resolveSessionKeyForRun: () => "session-finished",
     });
@@ -1875,6 +1974,11 @@ describe("agent event handler", () => {
       },
     });
 
+    await vi.waitFor(() => {
+      expect(
+        broadcastToConnIds.mock.calls.filter(([event]) => event === "sessions.changed"),
+      ).toHaveLength(2);
+    });
     const sessionsChangedCalls = broadcastToConnIds.mock.calls.filter(
       ([event]) => event === "sessions.changed",
     );
@@ -1905,7 +2009,7 @@ describe("agent event handler", () => {
     resetAgentRunContextForTest();
   });
 
-  it("does not project stale pre-reset lifecycle events into session subscriber snapshots", () => {
+  it("does not project stale pre-reset lifecycle events into session subscriber snapshots", async () => {
     vi.mocked(loadGatewaySessionRow).mockReturnValue({
       key: "session-reset",
       kind: "direct",
@@ -1948,6 +2052,11 @@ describe("agent event handler", () => {
       },
     });
 
+    await vi.waitFor(() => {
+      expect(
+        broadcastToConnIds.mock.calls.filter(([event]) => event === "sessions.changed"),
+      ).toHaveLength(2);
+    });
     const sessionsChangedCalls = broadcastToConnIds.mock.calls.filter(
       ([event]) => event === "sessions.changed",
     );
@@ -1974,7 +2083,586 @@ describe("agent event handler", () => {
     resetAgentRunContextForTest();
   });
 
-  it("clears tracked active runs before terminal sessions.changed broadcasts", () => {
+  it("suppresses late interrupted pre-restart lifecycle events from live projections", () => {
+    vi.mocked(loadSessionEntry).mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      store: {},
+      entry: {
+        sessionId: "session-recovery",
+        updatedAt: 2_000,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryRuns: [
+          {
+            runId: "interrupted-run",
+            lifecycleGeneration: "pre-restart",
+          },
+        ],
+      },
+      canonicalKey: "session-recovery",
+      legacyKey: undefined,
+    });
+    const {
+      broadcast,
+      broadcastToConnIds,
+      chatRunState,
+      clearAgentRunContext,
+      clearTrackedActiveRun,
+      handler,
+      sessionEventSubscribers,
+    } = createHarness({
+      resolveSessionKeyForRun: () => "session-recovery",
+      lifecycleErrorRetryGraceMs: 0,
+    });
+    sessionEventSubscribers.subscribe("conn-session");
+    chatRunState.registry.add("interrupted-run", {
+      sessionKey: "session-recovery",
+      clientRunId: "interrupted-run",
+    });
+
+    handler({
+      runId: "interrupted-run",
+      lifecycleGeneration: "pre-restart",
+      seq: 2,
+      stream: "lifecycle",
+      sessionKey: "session-recovery",
+      sessionId: "session-recovery",
+      ts: 2_100,
+      data: {
+        phase: "end",
+        aborted: true,
+        stopReason: "restart",
+        endedAt: 2_100,
+      },
+    });
+
+    expect(chatBroadcastCalls(broadcast)).toHaveLength(0);
+    expect(
+      broadcastToConnIds.mock.calls.filter(([event]) => event === "sessions.changed"),
+    ).toHaveLength(0);
+    expect(persistGatewaySessionLifecycleEventMock).not.toHaveBeenCalled();
+    expect(chatRunState.registry.peek("interrupted-run")).toBeUndefined();
+    expect(clearAgentRunContext).toHaveBeenCalledWith("interrupted-run");
+    expect(clearTrackedActiveRun).toHaveBeenCalledWith({
+      runId: "interrupted-run",
+      clientRunId: "interrupted-run",
+      sessionKey: "session-recovery",
+    });
+  });
+
+  it("projects successful completion when a restart marker was persisted before abort", async () => {
+    vi.mocked(loadSessionEntry).mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      store: {},
+      entry: {
+        sessionId: "session-recovery",
+        updatedAt: 2_000,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryRuns: [
+          {
+            runId: "completed-during-marker-write",
+            lifecycleGeneration: "pre-restart",
+          },
+        ],
+      },
+      canonicalKey: "session-recovery",
+      legacyKey: undefined,
+    });
+    const markTrackedRunTerminalPersisted = vi.fn();
+    const trackTrackedRunTerminalPersistence = vi.fn();
+    const {
+      broadcast,
+      broadcastToConnIds,
+      chatRunState,
+      clearAgentRunContext,
+      clearTrackedActiveRun,
+      handler,
+      sessionEventSubscribers,
+    } = createHarness({
+      resolveSessionKeyForRun: () => "session-recovery",
+      lifecycleErrorRetryGraceMs: 0,
+      markTrackedRunTerminalPersisted,
+      trackTrackedRunTerminalPersistence,
+    });
+    sessionEventSubscribers.subscribe("conn-session");
+    chatRunState.registry.add("completed-during-marker-write", {
+      sessionKey: "session-recovery",
+      clientRunId: "completed-during-marker-write",
+    });
+
+    handler({
+      runId: "completed-during-marker-write",
+      lifecycleGeneration: "pre-restart",
+      seq: 2,
+      stream: "lifecycle",
+      sessionKey: "session-recovery",
+      sessionId: "session-recovery",
+      ts: 2_100,
+      data: {
+        phase: "end",
+        endedAt: 2_100,
+      },
+    });
+
+    expect(chatBroadcastCalls(broadcast)).toHaveLength(1);
+    expect(persistGatewaySessionLifecycleEventMock).toHaveBeenCalledTimes(1);
+    expect(trackTrackedRunTerminalPersistence).toHaveBeenCalledWith({
+      runId: "completed-during-marker-write",
+      clientRunId: "completed-during-marker-write",
+      sessionKey: "session-recovery",
+      sessionId: "session-recovery",
+      observedAt: 2_100,
+      persistence: expect.any(Promise),
+    });
+    await vi.waitFor(() => {
+      expect(markTrackedRunTerminalPersisted).toHaveBeenCalledWith({
+        runId: "completed-during-marker-write",
+        clientRunId: "completed-during-marker-write",
+        sessionKey: "session-recovery",
+      });
+      expect(
+        broadcastToConnIds.mock.calls.filter(([event]) => event === "sessions.changed"),
+      ).toHaveLength(1);
+    });
+    expect(chatRunState.registry.peek("completed-during-marker-write")).toBeUndefined();
+    expect(clearAgentRunContext).toHaveBeenCalledWith("completed-during-marker-write");
+    expect(clearTrackedActiveRun).toHaveBeenCalledWith({
+      runId: "completed-during-marker-write",
+      clientRunId: "completed-during-marker-write",
+      sessionKey: "session-recovery",
+    });
+  });
+
+  it("keeps live session status running while another recovery run remains", async () => {
+    const restartRecoveryRuns = [
+      {
+        runId: "completed-run",
+        lifecycleGeneration: "pre-restart",
+      },
+      {
+        runId: "interrupted-run",
+        lifecycleGeneration: "pre-restart",
+      },
+    ];
+    vi.mocked(loadSessionEntry).mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      store: {},
+      entry: {
+        sessionId: "session-recovery",
+        updatedAt: 2_000,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryRuns,
+      },
+      canonicalKey: "session-recovery",
+      legacyKey: undefined,
+    });
+    vi.mocked(loadGatewaySessionRow).mockReturnValue({
+      key: "session-recovery",
+      kind: "direct",
+      sessionId: "session-recovery",
+      updatedAt: 2_000,
+      status: "running",
+      abortedLastRun: true,
+    });
+    const { broadcastToConnIds, handler, sessionEventSubscribers } = createHarness({
+      resolveSessionKeyForRun: () => "session-recovery",
+      lifecycleErrorRetryGraceMs: 0,
+    });
+    sessionEventSubscribers.subscribe("conn-session");
+
+    handler({
+      runId: "completed-run",
+      lifecycleGeneration: "pre-restart",
+      seq: 2,
+      stream: "lifecycle",
+      sessionKey: "session-recovery",
+      sessionId: "session-recovery",
+      ts: 2_100,
+      data: {
+        phase: "end",
+        endedAt: 2_100,
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(
+        broadcastToConnIds.mock.calls.filter(([event]) => event === "sessions.changed"),
+      ).toHaveLength(1);
+    });
+    const payload = requireRecord(
+      requireMockArg(broadcastToConnIds, 0, 1, "sessions changed payload"),
+      "sessions changed payload",
+    );
+    expectPayloadFields(payload, {
+      status: "running",
+      abortedLastRun: true,
+      endedAt: undefined,
+      runtimeMs: undefined,
+    });
+  });
+
+  it("broadcasts canonical state after concurrent recovery completions persist", async () => {
+    const restartRecoveryRuns = [
+      {
+        runId: "run-a",
+        lifecycleGeneration: "pre-restart-a",
+      },
+      {
+        runId: "run-b",
+        lifecycleGeneration: "pre-restart-b",
+      },
+    ];
+    vi.mocked(loadSessionEntry).mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      store: {},
+      entry: {
+        sessionId: "session-recovery",
+        updatedAt: 2_000,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryRuns,
+      },
+      canonicalKey: "session-recovery",
+      legacyKey: undefined,
+    });
+    let currentRow = {
+      key: "session-recovery",
+      kind: "direct" as const,
+      sessionId: "session-recovery",
+      updatedAt: 2_000,
+      status: "running" as "done" | "running",
+      abortedLastRun: true,
+    };
+    vi.mocked(loadGatewaySessionRow).mockImplementation(() => currentRow);
+    let resolveRunA: (() => void) | undefined;
+    let resolveRunB: (() => void) | undefined;
+    persistGatewaySessionLifecycleEventMock.mockImplementation(
+      ({ event }: { event: { runId: string } }) =>
+        new Promise<void>((resolve) => {
+          if (event.runId === "run-a") {
+            resolveRunA = resolve;
+          } else {
+            resolveRunB = resolve;
+          }
+        }),
+    );
+    const { broadcastToConnIds, handler, sessionEventSubscribers } = createHarness({
+      resolveSessionKeyForRun: () => "session-recovery",
+      lifecycleErrorRetryGraceMs: 0,
+    });
+    sessionEventSubscribers.subscribe("conn-session");
+
+    for (const [runId, lifecycleGeneration, seq] of [
+      ["run-a", "pre-restart-a", 1],
+      ["run-b", "pre-restart-b", 2],
+    ] as const) {
+      handler({
+        runId,
+        lifecycleGeneration,
+        seq,
+        stream: "lifecycle",
+        sessionKey: "session-recovery",
+        sessionId: "session-recovery",
+        ts: 2_100 + seq,
+        data: {
+          phase: "end",
+          endedAt: 2_100 + seq,
+        },
+      });
+    }
+
+    currentRow = { ...currentRow, updatedAt: 2_101 };
+    resolveRunA?.();
+    await vi.waitFor(() => {
+      expect(
+        broadcastToConnIds.mock.calls.filter(([event]) => event === "sessions.changed"),
+      ).toHaveLength(1);
+    });
+    expectPayloadFields(requireMockArg(broadcastToConnIds, 0, 1, "run-a session snapshot"), {
+      status: "running",
+      abortedLastRun: true,
+    });
+
+    currentRow = {
+      ...currentRow,
+      updatedAt: 2_102,
+      status: "done",
+      abortedLastRun: false,
+    };
+    resolveRunB?.();
+    await vi.waitFor(() => {
+      expect(
+        broadcastToConnIds.mock.calls.filter(([event]) => event === "sessions.changed"),
+      ).toHaveLength(2);
+    });
+    expectPayloadFields(requireMockArg(broadcastToConnIds, 1, 1, "run-b session snapshot"), {
+      status: "done",
+      abortedLastRun: false,
+    });
+  });
+
+  it("reloads canonical state when a restart marker races terminal persistence", async () => {
+    vi.mocked(loadSessionEntry).mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      store: {},
+      entry: {
+        sessionId: "session-recovery",
+        updatedAt: 2_000,
+        status: "running",
+      },
+      canonicalKey: "session-recovery",
+      legacyKey: undefined,
+    });
+    let currentRow = {
+      key: "session-recovery",
+      kind: "direct" as const,
+      sessionId: "session-recovery",
+      updatedAt: 2_000,
+      status: "done" as "done" | "running",
+      abortedLastRun: false,
+    };
+    vi.mocked(loadGatewaySessionRow).mockImplementation(() => currentRow);
+    let resolvePersistence: (() => void) | undefined;
+    persistGatewaySessionLifecycleEventMock.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolvePersistence = resolve;
+        }),
+    );
+    const { broadcastToConnIds, handler, sessionEventSubscribers } = createHarness({
+      resolveSessionKeyForRun: () => "session-recovery",
+      lifecycleErrorRetryGraceMs: 0,
+    });
+    sessionEventSubscribers.subscribe("conn-session");
+
+    handler({
+      runId: "completed-run",
+      lifecycleGeneration: "pre-restart",
+      seq: 2,
+      stream: "lifecycle",
+      sessionKey: "session-recovery",
+      sessionId: "session-recovery",
+      ts: 2_100,
+      data: {
+        phase: "end",
+        endedAt: 2_100,
+      },
+    });
+
+    expect(
+      broadcastToConnIds.mock.calls.filter(([event]) => event === "sessions.changed"),
+    ).toHaveLength(0);
+    currentRow = {
+      ...currentRow,
+      updatedAt: 2_100,
+      status: "running",
+      abortedLastRun: true,
+    };
+    resolvePersistence?.();
+
+    await vi.waitFor(() => {
+      expect(
+        broadcastToConnIds.mock.calls.filter(([event]) => event === "sessions.changed"),
+      ).toHaveLength(1);
+    });
+    expectPayloadFields(requireMockArg(broadcastToConnIds, 0, 1, "canonical session snapshot"), {
+      status: "running",
+      abortedLastRun: true,
+    });
+  });
+
+  it("broadcasts a terminal fallback snapshot when persistence fails", async () => {
+    vi.mocked(loadGatewaySessionRow).mockReturnValue({
+      key: "session-failed-write",
+      kind: "direct",
+      sessionId: "session-failed-write",
+      updatedAt: 2_000,
+      status: "running",
+      startedAt: 1_000,
+      abortedLastRun: false,
+    });
+    persistGatewaySessionLifecycleEventMock.mockRejectedValueOnce(new Error("disk full"));
+    const markTrackedRunTerminalPersisted = vi.fn();
+    const { broadcastToConnIds, handler, sessionEventSubscribers } = createHarness({
+      resolveSessionKeyForRun: () => "session-failed-write",
+      lifecycleErrorRetryGraceMs: 0,
+      markTrackedRunTerminalPersisted,
+    });
+    sessionEventSubscribers.subscribe("conn-session");
+
+    handler({
+      runId: "run-failed-write",
+      seq: 2,
+      stream: "lifecycle",
+      sessionKey: "session-failed-write",
+      sessionId: "session-failed-write",
+      ts: 2_100,
+      data: {
+        phase: "end",
+        endedAt: 2_100,
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(
+        broadcastToConnIds.mock.calls.filter(([event]) => event === "sessions.changed"),
+      ).toHaveLength(1);
+    });
+    expectPayloadFields(requireMockArg(broadcastToConnIds, 0, 1, "fallback session snapshot"), {
+      status: "done",
+      updatedAt: 2_100,
+      abortedLastRun: false,
+    });
+    expect(markTrackedRunTerminalPersisted).not.toHaveBeenCalled();
+  });
+
+  it("does not clear a same-id retry when an old restart terminal arrives", () => {
+    vi.mocked(loadSessionEntry).mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      store: {},
+      entry: {
+        sessionId: "session-recovery",
+        updatedAt: 2_000,
+        status: "running",
+        restartRecoveryRuns: [
+          {
+            runId: "shared-run",
+            lifecycleGeneration: "pre-restart",
+          },
+        ],
+      },
+      canonicalKey: "session-recovery",
+      legacyKey: undefined,
+    });
+    registerAgentRunContext("shared-run", {
+      sessionKey: "session-recovery",
+      sessionId: "session-recovery",
+      lifecycleGeneration: "pre-restart",
+    });
+    const { agentRunSeq, chatRunState, clearAgentRunContext, clearTrackedActiveRun, handler } =
+      createHarness({
+        resolveSessionKeyForRun: () => "session-recovery",
+        lifecycleErrorRetryGraceMs: 0,
+        resolveActiveLifecycleGenerationForRun: () => "post-restart",
+      });
+    agentRunSeq.set("shared-run", 4);
+    chatRunState.registry.add("shared-run", {
+      sessionKey: "session-recovery",
+      clientRunId: "shared-run",
+    });
+    chatRunState.buffers.set("shared-run", "new retry output");
+
+    handler({
+      runId: "shared-run",
+      lifecycleGeneration: "pre-restart",
+      seq: 3,
+      stream: "lifecycle",
+      sessionKey: "session-recovery",
+      sessionId: "session-recovery",
+      ts: 2_100,
+      data: {
+        phase: "end",
+        endedAt: 2_100,
+      },
+    });
+
+    expect(chatRunState.registry.peek("shared-run")).toBeDefined();
+    expect(chatRunState.buffers.get("shared-run")).toBe("new retry output");
+    expect(agentRunSeq.get("shared-run")).toBe(4);
+    expect(clearAgentRunContext).not.toHaveBeenCalled();
+    expect(clearTrackedActiveRun).not.toHaveBeenCalled();
+    expect(persistGatewaySessionLifecycleEventMock).not.toHaveBeenCalled();
+  });
+
+  it("cancels a deferred old-generation error before a same-id retry", () => {
+    vi.useFakeTimers();
+    let activeLifecycleGeneration = "pre-restart";
+    registerAgentRunContext("shared-run", {
+      sessionKey: "session-recovery",
+      sessionId: "session-recovery",
+      lifecycleGeneration: activeLifecycleGeneration,
+    });
+    const { chatRunState, clearAgentRunContext, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-recovery",
+      lifecycleErrorRetryGraceMs: 100,
+      resolveActiveLifecycleGenerationForRun: () => activeLifecycleGeneration,
+    });
+    chatRunState.registry.add("shared-run", {
+      sessionKey: "session-recovery",
+      clientRunId: "shared-run",
+    });
+
+    handler({
+      runId: "shared-run",
+      lifecycleGeneration: "pre-restart",
+      seq: 1,
+      stream: "lifecycle",
+      sessionKey: "session-recovery",
+      sessionId: "session-recovery",
+      ts: 2_000,
+      data: {
+        phase: "error",
+        error: "retryable provider failure",
+        endedAt: 2_000,
+      },
+    });
+    expect(vi.getTimerCount()).toBe(1);
+
+    vi.mocked(loadSessionEntry).mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      store: {},
+      entry: {
+        sessionId: "session-recovery",
+        updatedAt: 2_000,
+        status: "running",
+        restartRecoveryRuns: [
+          {
+            runId: "shared-run",
+            lifecycleGeneration: "pre-restart",
+          },
+        ],
+      },
+      canonicalKey: "session-recovery",
+      legacyKey: undefined,
+    });
+    resetAgentRunContextForTest();
+    activeLifecycleGeneration = "post-restart";
+    registerAgentRunContext("shared-run", {
+      sessionKey: "session-recovery",
+      sessionId: "session-recovery",
+      lifecycleGeneration: activeLifecycleGeneration,
+    });
+
+    handler({
+      runId: "shared-run",
+      lifecycleGeneration: "pre-restart",
+      seq: 2,
+      stream: "lifecycle",
+      sessionKey: "session-recovery",
+      sessionId: "session-recovery",
+      ts: 2_100,
+      data: {
+        phase: "end",
+        endedAt: 2_100,
+      },
+    });
+
+    expect(vi.getTimerCount()).toBe(0);
+    vi.advanceTimersByTime(100);
+    expect(chatRunState.registry.peek("shared-run")).toBeDefined();
+    expect(clearAgentRunContext).not.toHaveBeenCalled();
+  });
+
+  it("clears tracked active runs before terminal sessions.changed broadcasts", async () => {
     vi.mocked(loadGatewaySessionRow).mockReturnValue({
       key: "session-finished",
       kind: "direct",
@@ -2011,6 +2699,11 @@ describe("agent event handler", () => {
       runId: "provider-run",
       clientRunId: "client-run",
       sessionKey: "session-finished",
+    });
+    await vi.waitFor(() => {
+      expect(
+        broadcastToConnIds.mock.calls.filter(([event]) => event === "sessions.changed"),
+      ).toHaveLength(1);
     });
     expect(requireMockArg(broadcastToConnIds, 0, 0, "sessions changed event")).toBe(
       "sessions.changed",
@@ -2084,7 +2777,7 @@ describe("agent event handler", () => {
     expect(chatBroadcastCalls(broadcast)).toHaveLength(0);
   });
 
-  it("keeps live session setting metadata at the top level for lifecycle updates", () => {
+  it("keeps live session setting metadata at the top level for lifecycle updates", async () => {
     vi.mocked(loadGatewaySessionRow).mockReturnValue({
       key: "session-finished",
       kind: "direct",
@@ -2132,6 +2825,11 @@ describe("agent event handler", () => {
       },
     });
 
+    await vi.waitFor(() => {
+      expect(
+        broadcastToConnIds.mock.calls.filter(([event]) => event === "sessions.changed"),
+      ).toHaveLength(1);
+    });
     expect(requireMockArg(broadcastToConnIds, 0, 0, "sessions changed event")).toBe(
       "sessions.changed",
     );
@@ -2162,7 +2860,7 @@ describe("agent event handler", () => {
     });
   });
 
-  it("omits goal state from unscoped global lifecycle snapshots", () => {
+  it("omits goal state from unscoped global lifecycle snapshots", async () => {
     vi.mocked(loadGatewaySessionRow).mockReturnValue({
       key: "global",
       kind: "global",
@@ -2195,6 +2893,11 @@ describe("agent event handler", () => {
       data: { phase: "end", endedAt: 1_700 },
     });
 
+    await vi.waitFor(() => {
+      expect(
+        broadcastToConnIds.mock.calls.filter(([event]) => event === "sessions.changed"),
+      ).toHaveLength(1);
+    });
     const payload = requireRecord(
       requireMockArg(broadcastToConnIds, 0, 1, "sessions changed payload"),
       "sessions changed payload",
@@ -2558,6 +3261,47 @@ describe("agent event handler", () => {
     expect(agentRunSeq.has("run-terminal-error")).toBe(false);
   });
 
+  it("finalizes fallback-exhausted lifecycle errors without waiting for retry grace", () => {
+    vi.useFakeTimers();
+    const { broadcast, clearAgentRunContext, agentRunSeq, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-terminal-error",
+      lifecycleErrorRetryGraceMs: 100,
+    });
+    registerAgentRunContext("run-terminal-final-failure", {
+      sessionKey: "session-terminal-error",
+    });
+
+    handler({
+      runId: "run-terminal-final-failure",
+      seq: 1,
+      stream: "lifecycle",
+      ts: Date.now(),
+      data: {
+        phase: "error",
+        error: "LLM request failed: network connection error.",
+        fallbackExhaustedFailure: true,
+      },
+    });
+
+    const finalPayload = chatBroadcastCalls(broadcast).at(-1)?.[1] as {
+      state?: string;
+      runId?: string;
+      errorMessage?: string;
+    };
+    expect(finalPayload.state).toBe("error");
+    expect(finalPayload.runId).toBe("run-terminal-final-failure");
+    expect(finalPayload.errorMessage).toContain("network connection error");
+    expect(clearAgentRunContext).toHaveBeenCalledWith("run-terminal-final-failure");
+    expect(agentRunSeq.has("run-terminal-final-failure")).toBe(false);
+    expect(
+      persistGatewaySessionLifecycleEventMock.mock.calls.some(
+        ([params]) =>
+          (params as { event?: { data?: { fallbackExhaustedFailure?: boolean } } }).event?.data
+            ?.fallbackExhaustedFailure === true,
+      ),
+    ).toBe(true);
+  });
+
   it("keeps deferred lifecycle-error cleanup across later non-terminal events", () => {
     vi.useFakeTimers();
     const { broadcast, clearAgentRunContext, agentRunSeq, handler } = createHarness({
@@ -2896,6 +3640,160 @@ describe("agent event handler", () => {
     expect(requireMockArg(broadcastToConnIds, 1, 2, "hidden chat final recipients")).toEqual(
       new Set(["conn-selected"]),
     );
+  });
+
+  it("mirrors commentary-phase assistant events only to exact session message subscribers", () => {
+    const {
+      broadcast,
+      broadcastToConnIds,
+      nodeSendToSession,
+      sessionMessageSubscribers,
+      handler,
+      nowSpy,
+    } = createHarness({
+      now: 1_000,
+      resolveSessionKeyForRun: () => "session-hidden",
+    });
+    sessionMessageSubscribers.subscribe("conn-selected", "session-hidden");
+    sessionMessageSubscribers.subscribe("conn-other", "session-other");
+    registerAgentRunContext("run-hidden-commentary", {
+      sessionKey: "session-hidden",
+      isControlUiVisible: false,
+      verboseLevel: "off",
+    });
+
+    handler({
+      runId: "run-hidden-commentary",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: {
+        text: "I will inspect the files first.",
+        delta: "I will inspect the files first.",
+        phase: "commentary",
+      },
+    });
+    handler({
+      runId: "run-hidden-commentary",
+      seq: 2,
+      stream: "assistant",
+      ts: Date.now(),
+      data: {
+        text: "Untagged text frame must not mirror.",
+        delta: "Untagged text frame must not mirror.",
+      },
+    });
+    handler({
+      runId: "run-hidden-commentary",
+      seq: 3,
+      stream: "assistant",
+      ts: Date.now(),
+      data: {
+        delta: "Untagged delta-only stream must not mirror.",
+      },
+    });
+    handler({
+      runId: "run-hidden-commentary",
+      seq: 4,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Terminal echo without delta" },
+    });
+    handler({
+      runId: "run-hidden-commentary",
+      seq: 5,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Final answer", delta: "Final answer", phase: "final_answer" },
+    });
+    handler({
+      runId: "run-hidden-commentary",
+      seq: 6,
+      stream: "assistant",
+      ts: Date.now(),
+      data: {
+        delta: "Streaming commentary delta.",
+        phase: "commentary",
+      },
+    });
+
+    expect(chatBroadcastCalls(broadcast)).toHaveLength(0);
+    expect(agentBroadcastCalls(broadcast)).toHaveLength(0);
+    expect(nodeSendToSession).not.toHaveBeenCalled();
+
+    const agentCalls = broadcastToConnIds.mock.calls.filter(([event]) => event === "agent");
+    expect(agentCalls).toHaveLength(2);
+    expect(agentCalls[0]?.[2]).toEqual(new Set(["conn-selected"]));
+    expect(agentCalls[1]?.[2]).toEqual(new Set(["conn-selected"]));
+    expectPayloadFields(agentCalls[0]?.[1], {
+      runId: "run-hidden-commentary",
+      sessionKey: "session-hidden",
+      stream: "assistant",
+    });
+    expectPayloadFields(agentCalls[1]?.[1], {
+      runId: "run-hidden-commentary",
+      sessionKey: "session-hidden",
+      stream: "assistant",
+    });
+    expectPayloadDataFields(agentCalls[0]?.[1], {
+      text: "I will inspect the files first.",
+      delta: "I will inspect the files first.",
+      phase: "commentary",
+    });
+    expectPayloadDataFields(agentCalls[1]?.[1], {
+      delta: "Streaming commentary delta.",
+      phase: "commentary",
+    });
+
+    const chatCalls = broadcastToConnIds.mock.calls.filter(([event]) => event === "chat");
+    expect(chatCalls).toHaveLength(1);
+    expect(chatCalls[0]?.[2]).toEqual(new Set(["conn-selected"]));
+    expectPayloadFields(chatCalls[0]?.[1], {
+      runId: "run-hidden-commentary",
+      sessionKey: "session-hidden",
+      state: "delta",
+    });
+    nowSpy?.mockRestore();
+  });
+
+  it("does not mirror aborted non-control-UI-visible assistant commentary", () => {
+    const {
+      broadcast,
+      broadcastToConnIds,
+      chatRunState,
+      nodeSendToSession,
+      sessionMessageSubscribers,
+      handler,
+      nowSpy,
+    } = createHarness({
+      now: 1_000,
+      resolveSessionKeyForRun: () => "session-hidden-aborted",
+    });
+    sessionMessageSubscribers.subscribe("conn-selected", "session-hidden-aborted");
+    registerAgentRunContext("run-hidden-commentary-aborted", {
+      sessionKey: "session-hidden-aborted",
+      isControlUiVisible: false,
+      verboseLevel: "off",
+    });
+    chatRunState.abortedRuns.set("run-hidden-commentary-aborted", 1_000);
+
+    handler({
+      runId: "run-hidden-commentary-aborted",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: {
+        text: "This aborted commentary must not be mirrored.",
+        delta: "This aborted commentary must not be mirrored.",
+        phase: "commentary",
+      },
+    });
+
+    expect(chatBroadcastCalls(broadcast)).toHaveLength(0);
+    expect(agentBroadcastCalls(broadcast)).toHaveLength(0);
+    expect(broadcastToConnIds).not.toHaveBeenCalled();
+    expect(nodeSendToSession).not.toHaveBeenCalled();
+    nowSpy?.mockRestore();
   });
 
   it("uses agent event sessionKey when run-context lookup cannot resolve", () => {

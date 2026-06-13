@@ -68,15 +68,8 @@ export type TelegramInlineButtonsScope = "off" | "dm" | "group" | "all" | "allow
 export type TelegramStreamingMode = "off" | "partial" | "block" | "progress";
 export type TelegramExecApprovalTarget = "dm" | "channel" | "both";
 
-export type TelegramStreamingPreviewConfig = ChannelStreamingPreviewConfig & {
-  /** Use Telegram-native ephemeral draft UI for DM preview tool progress. */
-  nativeToolProgress?: boolean;
-  /** Telegram sender/user IDs allowed to use native DM preview tool progress. */
-  nativeToolProgressAllowFrom?: Array<string | number>;
-};
-
 export type TelegramPreviewStreamingConfig = Omit<ChannelPreviewStreamingConfig, "preview"> & {
-  preview?: TelegramStreamingPreviewConfig;
+  preview?: ChannelStreamingPreviewConfig;
 };
 
 export type TelegramExecApprovalConfig = {

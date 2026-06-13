@@ -63,7 +63,7 @@ function scenarioMatchesLiveLane(params: {
   return true;
 }
 
-function selectQaSuiteScenarios(params: {
+function selectQaFlowSuiteScenarios(params: {
   scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"];
   scenarioIds?: string[];
   providerMode: QaProviderMode;
@@ -80,15 +80,31 @@ function selectQaSuiteScenarios(params: {
     if (missingScenarioIds.length > 0) {
       throw new Error(`unknown QA scenario id(s): ${missingScenarioIds.join(", ")}`);
     }
-    return [...requestedScenarioIds].map((scenarioId) => scenarioById.get(scenarioId)!);
+    const selectedScenarios = [...requestedScenarioIds].map(
+      (scenarioId) => scenarioById.get(scenarioId)!,
+    );
+    const nonFlowScenarios = selectedScenarios.filter(
+      (scenario) => scenario.execution.kind !== "flow",
+    );
+    if (nonFlowScenarios.length > 0) {
+      const scenarioList = nonFlowScenarios
+        .map((scenario) => `${scenario.id} (${scenario.execution.kind})`)
+        .join(", ");
+      throw new Error(
+        `flow execution requires execution.kind: flow; unsupported scenario(s): ${scenarioList}`,
+      );
+    }
+    return selectedScenarios;
   }
-  return params.scenarios.filter((scenario) =>
-    scenarioMatchesLiveLane({
-      scenario,
-      providerMode: params.providerMode,
-      primaryModel: params.primaryModel,
-      claudeCliAuthMode: params.claudeCliAuthMode,
-    }),
+  return params.scenarios.filter(
+    (scenario) =>
+      scenario.execution.kind === "flow" &&
+      scenarioMatchesLiveLane({
+        scenario,
+        providerMode: params.providerMode,
+        primaryModel: params.primaryModel,
+        claudeCliAuthMode: params.claudeCliAuthMode,
+      }),
   );
 }
 
@@ -266,7 +282,7 @@ export {
   resolveQaSuiteWorkerStartStaggerMs,
   resolveQaSuiteOutputDir,
   scenarioRequiresControlUi,
-  selectQaSuiteScenarios,
+  selectQaFlowSuiteScenarios,
   shouldUseIsolatedQaSuiteScenarioWorkers,
   splitModelRef,
 };

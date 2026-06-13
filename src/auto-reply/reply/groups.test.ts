@@ -48,10 +48,18 @@ describe("group runtime loading", () => {
     expect(toolOnlyContext).toContain("Normal final replies are private");
     expect(toolOnlyContext).toContain("message tool with action=send");
     expect(toolOnlyContext).toContain("Be a good group participant");
+    expect(toolOnlyContext).toContain("Avoid Markdown tables");
     expect(toolOnlyContext).toContain("wrap bare URLs");
     expect(toolOnlyContext).toContain("<https://example.com>");
     expect(toolOnlyContext).toContain("do not call message(action=send)");
     expect(toolOnlyContext).not.toContain('reply with exactly "NO_REPLY"');
+    const telegramContext = isolatedGroups.buildGroupChatContext({
+      sessionCtx: { ChatType: "group", Provider: "telegram" },
+      silentReplyPolicy: "allow",
+      silentToken: "NO_REPLY",
+    });
+    expect(telegramContext).toContain("Write like a human. Minimize empty lines");
+    expect(telegramContext).not.toContain("Avoid Markdown tables");
     expect(
       isolatedGroups.buildGroupIntro({
         cfg: {} as OpenClawConfig,

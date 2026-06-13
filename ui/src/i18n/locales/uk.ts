@@ -614,6 +614,7 @@ export const uk: TranslationMap = {
     labelsPlaceholder: "ui, docs",
     searchPlaceholder: "Шукати картки",
     allPriorities: "Усі пріоритети",
+    hideEmptyColumns: "Hide empty columns",
     emptyColumn: "Перетягніть роботу сюди",
     lifecycleUnlinked: "Немає сесії",
     lifecycleUnlinkedDetail: "Запустіть або пов’яжіть сесію",
@@ -1611,6 +1612,8 @@ export const uk: TranslationMap = {
     },
     jobDetail: {
       system: "Система",
+      command: "Command",
+      cwd: "CWD",
       prompt: "Запит",
       delivery: "Доставка",
       agent: "Агент",

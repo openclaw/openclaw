@@ -594,6 +594,16 @@ describe("chunkMarkdownTextWithMode", () => {
       "Gamma",
     ]);
   });
+
+  it("does not split surrogate pairs at hard length boundaries", () => {
+    const text = `a${"😀".repeat(20_000)}`;
+    const chunks = chunkMarkdownTextWithMode(text, 32_768, "length");
+
+    expect(chunks.join("")).toBe(text);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => !/[\uD800-\uDBFF]$/u.test(chunk))).toBe(true);
+    expect(chunks.every((chunk) => !/^[\uDC00-\uDFFF]/u.test(chunk))).toBe(true);
+  });
 });
 
 describe("resolveChunkMode", () => {

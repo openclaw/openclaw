@@ -8,6 +8,7 @@ import type {
 import type { ReplyPayload } from "../../../auto-reply/reply-payload.js";
 import type { ReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
 import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
+import type { ChatType } from "../../../channels/chat-type.js";
 import type { InboundEventKind } from "../../../channels/inbound-event/kind.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { ImageContent } from "../../../llm/types.js";
@@ -43,6 +44,8 @@ export type CurrentInboundPromptContext = {
 export type RunEmbeddedAgentParams = {
   sessionId: string;
   sessionKey?: string;
+  /** Immutable gateway lifecycle ownership captured when this execution was admitted. */
+  lifecycleGeneration?: string;
   /** Provider prompt-cache affinity key; distinct from transcript/session identity. */
   promptCacheKey?: string;
   /** Session-like key for sandbox and tool-policy resolution. Defaults to sessionKey. */
@@ -50,6 +53,7 @@ export type RunEmbeddedAgentParams = {
   agentId?: string;
   messageChannel?: string;
   messageProvider?: string;
+  chatType?: ChatType;
   agentAccountId?: string;
   /** What initiated this agent run: "user", "heartbeat", "cron", "memory", "overflow", or "manual". */
   trigger?: EmbeddedRunTrigger;
@@ -171,7 +175,7 @@ export type RunEmbeddedAgentParams = {
   runTimeoutOverrideMs?: number;
   runId: string;
   abortSignal?: AbortSignal;
-  onExecutionStarted?: () => void;
+  onExecutionStarted?: (info?: { lifecycleGeneration?: string }) => void;
   onExecutionPhase?: (info: {
     phase: EmbeddedAgentExecutionPhase;
     provider?: string;
@@ -189,6 +193,7 @@ export type RunEmbeddedAgentParams = {
     model?: string;
     backend?: string;
   }) => void;
+  onSessionIdChanged?: (sessionId: string) => void;
   replyOperation?: ReplyOperation;
   shouldEmitToolResult?: () => boolean;
   shouldEmitToolOutput?: () => boolean;
@@ -255,4 +260,6 @@ export type RunEmbeddedAgentParams = {
    * exit promptly after emitting the final JSON result.
    */
   cleanupBundleMcpOnRunEnd?: boolean;
+  /** Mark explicit one-shot local CLI runs so plugin tools can release resources promptly. */
+  oneShotCliRun?: boolean;
 };

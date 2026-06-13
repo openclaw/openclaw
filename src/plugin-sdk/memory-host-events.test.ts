@@ -10,7 +10,11 @@ import {
   readMemoryHostEvents,
   resolveMemoryHostEventLogPath,
 } from "./memory-host-events.js";
-import { createClaimableDedupe, createPersistentDedupe } from "./persistent-dedupe.js";
+import {
+  createClaimableDedupe,
+  createPersistentDedupe,
+  listPersistentDedupeLegacyJsonFileEntries,
+} from "./persistent-dedupe.js";
 import { createPluginSdkTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createPluginSdkTestHarness();
@@ -129,6 +133,33 @@ describe("createPersistentDedupe", () => {
     await expect(fs.access(legacyPath)).rejects.toThrow();
   });
 
+  it("lists retired JSON cache files as persistent dedupe entries", async () => {
+    const root = await createTempDir("openclaw-legacy-dedupe-");
+    const legacyPath = path.join(root, "legacy.json");
+    await fs.writeFile(
+      legacyPath,
+      JSON.stringify({
+        fresh: 1_000,
+        expired: 100,
+        invalid: "bad",
+      }),
+    );
+
+    await expect(
+      listPersistentDedupeLegacyJsonFileEntries({
+        filePath: legacyPath,
+        ttlMs: 500,
+        now: 1_100,
+      }),
+    ).resolves.toStrictEqual([
+      {
+        key: expect.stringMatching(/^k\.[a-f0-9]{32}$/),
+        value: { key: "fresh", seenAt: 1_000 },
+        ttlMs: 400,
+      },
+    ]);
+  });
+
   it("warms empty namespaces and ignores retired JSON cache files", async () => {
     const root = await createTempDir("openclaw-dedupe-");
     const emptyReader = createDedupe(root, { ttlMs: 10_000 });
@@ -192,6 +223,19 @@ describe("createClaimableDedupe", () => {
     await expect(dedupe.claim("line:evt-2")).resolves.toEqual({ kind: "claimed" });
   });
 
+  it("forgets committed claimable entries", async () => {
+    const dedupe = createClaimableDedupe({
+      ttlMs: 10_000,
+      memoryMaxSize: 100,
+    });
+
+    await expect(dedupe.claim("line:evt-3")).resolves.toEqual({ kind: "claimed" });
+    await expect(dedupe.commit("line:evt-3")).resolves.toBe(true);
+    await expect(dedupe.claim("line:evt-3")).resolves.toEqual({ kind: "duplicate" });
+    await expect(dedupe.forget("line:evt-3")).resolves.toBe(true);
+    await expect(dedupe.claim("line:evt-3")).resolves.toEqual({ kind: "claimed" });
+  });
+
   it("supports persistent-backed recent checks and warmup", async () => {
     const root = await createTempDir("openclaw-claimable-dedupe-");
     const writer = createClaimableDedupe({
@@ -219,6 +263,18 @@ describe("createClaimableDedupe", () => {
     expect(await reader.warmup("acct")).toBe(1);
     await expect(reader.claim("m1", { namespace: "acct" })).resolves.toEqual({
       kind: "duplicate",
+    });
+    await expect(reader.forget("m1", { namespace: "acct" })).resolves.toBe(true);
+    const afterForget = createClaimableDedupe({
+      ttlMs: 10_000,
+      memoryMaxSize: 100,
+      pluginId: "test-claimable-dedupe",
+      namespacePrefix: "test-claimable-dedupe",
+      stateMaxEntries: 1000,
+      env: { ...process.env, OPENCLAW_STATE_DIR: root },
+    });
+    await expect(afterForget.claim("m1", { namespace: "acct" })).resolves.toEqual({
+      kind: "claimed",
     });
   });
 

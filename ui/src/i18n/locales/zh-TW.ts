@@ -609,6 +609,7 @@ export const zh_TW: TranslationMap = {
     labelsPlaceholder: "ui, docs",
     searchPlaceholder: "搜尋卡片",
     allPriorities: "所有優先順序",
+    hideEmptyColumns: "Hide empty columns",
     emptyColumn: "將工作拖放到這裡",
     lifecycleUnlinked: "沒有工作階段",
     lifecycleUnlinkedDetail: "開始或連結工作階段",
@@ -1567,6 +1568,8 @@ export const zh_TW: TranslationMap = {
     },
     jobDetail: {
       system: "系統",
+      command: "Command",
+      cwd: "CWD",
       prompt: "提示",
       delivery: "傳送",
       agent: "代理",

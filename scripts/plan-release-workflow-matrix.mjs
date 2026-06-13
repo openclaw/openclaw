@@ -103,6 +103,11 @@ const LIVE_MODEL_PROVIDERS = [
     profiles: "stable full",
   },
   {
+    provider_label: "Moonshot",
+    providers: "moonshot",
+    profiles: "full",
+  },
+  {
     provider_label: "OpenAI",
     providers: "openai",
     profiles: "beta minimum stable full",

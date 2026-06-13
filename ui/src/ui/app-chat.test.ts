@@ -53,6 +53,7 @@ let removeQueuedMessage: typeof import("./app-chat.ts").removeQueuedMessage;
 let markQueuedChatSendsWaitingForReconnect: typeof import("./app-chat.ts").markQueuedChatSendsWaitingForReconnect;
 let retryReconnectableQueuedChatSends: typeof import("./app-chat.ts").retryReconnectableQueuedChatSends;
 let recordChatSendServerTiming: typeof import("./app-chat.ts").recordChatSendServerTiming;
+let recordFirstAssistantChatTiming: typeof import("./app-chat.ts").recordFirstAssistantChatTiming;
 
 async function loadChatHelpers(): Promise<void> {
   ({
@@ -68,6 +69,7 @@ async function loadChatHelpers(): Promise<void> {
     markQueuedChatSendsWaitingForReconnect,
     retryReconnectableQueuedChatSends,
     recordChatSendServerTiming,
+    recordFirstAssistantChatTiming,
   } = await import("./app-chat.ts"));
 }
 
@@ -1074,7 +1076,7 @@ describe("refreshChat", () => {
     }
   });
 
-  it("uses startup metadata without scheduling a chat.metadata follow-up", async () => {
+  it("uses startup metadata without scheduling command or metadata follow-ups", async () => {
     const { resetSlashCommandsForTest } = await import("./chat/slash-commands.ts");
     resetSlashCommandsForTest();
     const previousFetch = globalThis.fetch;
@@ -1108,11 +1110,7 @@ describe("refreshChat", () => {
       });
       expect(request).not.toHaveBeenCalledWith("chat.metadata", expect.anything());
       expect(request).not.toHaveBeenCalledWith("models.list", expect.anything());
-      expect(request).toHaveBeenCalledWith("commands.list", {
-        agentId: "main",
-        includeArgs: true,
-        scope: "text",
-      });
+      expect(request).not.toHaveBeenCalledWith("commands.list", expect.anything());
       expect(host.chatModelCatalog).toEqual([
         { id: "gpt-fast", name: "GPT Fast", provider: "openai" },
       ]);
@@ -1382,6 +1380,78 @@ describe("handleSendChat", () => {
     expect(host.chatMessage).toBe("");
   });
 
+  it.each([
+    {
+      input: "/reset soft please reload system prompt",
+      expected: "/reset soft please reload system prompt",
+    },
+    {
+      input: "/reset\tsoft please reload system prompt",
+      expected: "/reset soft please reload system prompt",
+    },
+    {
+      input: "/reset\nsoft please reload system prompt",
+      expected: "/reset soft please reload system prompt",
+    },
+    {
+      input: "/reset: soft please reload system prompt",
+      expected: "/reset soft please reload system prompt",
+    },
+  ])("preserves $input args and skips confirmation dialog", async ({ input, expected }) => {
+    const confirm = vi.fn(() => false);
+    vi.stubGlobal("confirm", confirm);
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return { status: "started" };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: input,
+      sessionKey: "agent:main",
+    });
+
+    await handleSendChat(host);
+
+    expect(confirm).not.toHaveBeenCalled();
+    const payload = findRequestPayload(
+      request as unknown as MockCallSource,
+      "chat.send",
+      "chat send payload",
+    );
+    expect(payload.sessionKey).toBe("agent:main");
+    expect(payload.message).toBe(expected);
+    expect(host.chatMessage).toBe("");
+  });
+
+  it.each([
+    "/reset softish please archive",
+    "/reset\tsoftish please archive",
+    "/reset\nsoftish please archive",
+    "/reset: softish please archive",
+  ])("keeps %s on the hard-reset confirmation path", async (message) => {
+    const confirm = vi.fn(() => false);
+    vi.stubGlobal("confirm", confirm);
+    const request = vi.fn(async (method: string) => {
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "keep this draft",
+      sessionKey: "agent:main",
+    });
+
+    await handleSendChat(host, message, {
+      confirmReset: true,
+      restoreDraft: true,
+    });
+
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(request).not.toHaveBeenCalled();
+    expect(host.chatMessage).toBe("keep this draft");
+  });
+
   it("does not seed refreshSessionsAfterChat for a terminal timeout ack on a refreshing send", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "chat.send") {
@@ -1537,6 +1607,83 @@ describe("handleSendChat", () => {
           agentRunId: "agent-run-1",
         }),
       ]),
+    );
+  });
+
+  it("warns when the first assistant reply paint is slow", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      queueMicrotask(() => callback(0));
+      return 1;
+    });
+    const runId = "run-slow-first-assistant";
+    const host = makeHost({
+      chatStream: "slow first token",
+      eventLogBuffer: [],
+      tab: "debug",
+    });
+    const timingHost = host as ChatHost & {
+      chatSendTimingsByRun: Map<
+        string,
+        {
+          runId: string;
+          submittedAtMs: number;
+          requestStartedAtMs: number;
+          ackAtMs: number;
+          ackStatus: "started";
+          sendAttempts: number;
+          sendState: "sending";
+          sessionKey: string;
+          agentId: string;
+        }
+      >;
+    };
+    timingHost.chatSendTimingsByRun = new Map([
+      [
+        runId,
+        {
+          runId,
+          submittedAtMs: performance.now() - 2_000,
+          requestStartedAtMs: performance.now() - 1_900,
+          ackAtMs: performance.now() - 1_800,
+          ackStatus: "started",
+          sendAttempts: 1,
+          sendState: "sending",
+          sessionKey: "agent:main",
+          agentId: "main",
+        },
+      ],
+    ]);
+
+    recordFirstAssistantChatTiming(
+      host,
+      {
+        agentId: "main",
+        runId,
+        sessionKey: "agent:main",
+        state: "delta",
+      },
+      "delta",
+    );
+
+    await vi.waitFor(() =>
+      expect(eventPayloads(host, "control-ui.chat.send")).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            phase: "first-assistant-visible",
+            runId,
+            slow: true,
+          }),
+        ]),
+      ),
+    );
+    expect(warn).toHaveBeenCalledWith(
+      "[openclaw] control-ui.chat.send",
+      expect.objectContaining({
+        phase: "first-assistant-visible",
+        runId,
+        slow: true,
+      }),
     );
   });
 

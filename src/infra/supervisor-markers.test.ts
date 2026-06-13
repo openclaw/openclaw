@@ -46,6 +46,39 @@ describe("detectRespawnSupervisor", () => {
     expect(detectRespawnSupervisor({ JOURNAL_STREAM: "" }, "linux")).toBeNull();
   });
 
+  it("detects Linux OpenClaw gateway service markers only for opt-in callers", () => {
+    const gatewayServiceEnv = {
+      OPENCLAW_SERVICE_MARKER: " openclaw ",
+      OPENCLAW_SERVICE_KIND: " gateway ",
+    };
+    expect(detectRespawnSupervisor(gatewayServiceEnv, "linux")).toBeNull();
+    expect(
+      detectRespawnSupervisor(gatewayServiceEnv, "linux", {
+        includeLinuxOpenClawGatewayServiceMarker: true,
+      }),
+    ).toBe("systemd");
+    expect(
+      detectRespawnSupervisor(
+        {
+          OPENCLAW_SERVICE_MARKER: "openclaw",
+          OPENCLAW_SERVICE_KIND: "worker",
+        },
+        "linux",
+        { includeLinuxOpenClawGatewayServiceMarker: true },
+      ),
+    ).toBeNull();
+    expect(
+      detectRespawnSupervisor(
+        {
+          OPENCLAW_SERVICE_MARKER: "other",
+          OPENCLAW_SERVICE_KIND: "gateway",
+        },
+        "linux",
+        { includeLinuxOpenClawGatewayServiceMarker: true },
+      ),
+    ).toBeNull();
+  });
+
   it("detects scheduled-task supervision on Windows from either hint family", () => {
     expect(
       detectRespawnSupervisor({ OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway" }, "win32"),

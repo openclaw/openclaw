@@ -29,6 +29,7 @@ type MemoryToolOptions = {
   agentId?: string;
   agentSessionKey?: string;
   sandboxed?: boolean;
+  oneShotCliRun?: boolean;
 };
 
 let memoryToolsModulePromise: Promise<MemoryToolsModule> | undefined;
@@ -154,6 +155,7 @@ function resolveMemoryToolOptions(ctx: OpenClawPluginToolContext): MemoryToolOpt
     agentId: ctx.agentId,
     agentSessionKey: ctx.sessionKey,
     sandboxed: ctx.sandboxed,
+    oneShotCliRun: ctx.oneShotCliRun,
   };
 }
 

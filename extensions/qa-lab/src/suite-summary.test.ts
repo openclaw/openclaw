@@ -72,6 +72,19 @@ describe("qa suite summary helpers", () => {
     ).toBe(1);
   });
 
+  it("counts evidence entry results", () => {
+    const summary = {
+      entries: [
+        { result: { status: "pass" } },
+        { result: { status: "fail" } },
+        { result: { status: "skipped" } },
+      ],
+    };
+
+    expect(readQaSuiteFailedScenarioCountFromSummary(summary)).toBe(1);
+    expect(readQaSuiteFailedOrSkippedScenarioCountFromSummary(summary)).toBe(2);
+  });
+
   it("uses the larger blocking signal when skipped counts and scenarios disagree", () => {
     expect(
       readQaSuiteFailedOrSkippedScenarioCountFromSummary({
@@ -138,7 +151,7 @@ describe("qa suite summary helpers", () => {
 
     try {
       await expect(readQaSuiteFailedScenarioCountFromFile(summaryPath)).rejects.toThrow(
-        "did not include counts.failed or scenarios[].status",
+        "did not include counts.failed, scenarios[].status, or entries[].result.status",
       );
     } finally {
       await fs.rm(outputDir, { recursive: true, force: true });

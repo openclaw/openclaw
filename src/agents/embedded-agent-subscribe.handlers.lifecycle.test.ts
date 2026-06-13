@@ -2,7 +2,7 @@
 // lifecycle events, and deferred reply cleanup.
 import { describe, expect, it, vi } from "vitest";
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
-import { handleAgentEnd } from "./embedded-agent-subscribe.handlers.lifecycle.js";
+import { handleAgentEnd, handleAgentStart } from "./embedded-agent-subscribe.handlers.lifecycle.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 
 const { emitAgentEventMock } = vi.hoisted(() => ({
@@ -20,6 +20,7 @@ function createContext(
     onBeforeLifecycleTerminal?: () => void | Promise<void>;
     onBlockReply?: ((payload: unknown) => void) | undefined;
     onBlockReplyFlush?: () => void | Promise<void>;
+    resolveTerminalStopReason?: () => string | undefined;
   },
 ): EmbeddedAgentSubscribeContext {
   // Lifecycle tests only need terminal state and delivery callbacks; omitted
@@ -34,6 +35,7 @@ function createContext(
       sessionKey: "agent:main:main",
       onAgentEvent: overrides?.onAgentEvent,
       onBeforeLifecycleTerminal: overrides?.onBeforeLifecycleTerminal,
+      resolveTerminalStopReason: overrides?.resolveTerminalStopReason,
       ...(onBlockReply ? { onBlockReply } : {}),
       onBlockReplyFlush: overrides?.onBlockReplyFlush,
     },
@@ -96,6 +98,44 @@ function firstWarnMeta(ctx: EmbeddedAgentSubscribeContext): Record<string, unkno
 }
 
 describe("handleAgentEnd", () => {
+  it("keeps explicit session and agent identity on lifecycle start events", () => {
+    emitAgentEventMock.mockClear();
+    const ctx = createContext(undefined);
+    ctx.params.sessionId = "session-1";
+    ctx.params.agentId = "main";
+
+    handleAgentStart(ctx);
+
+    expect(emitAgentEventMock).toHaveBeenCalledWith({
+      runId: "run-1",
+      sessionKey: "agent:main:main",
+      sessionId: "session-1",
+      agentId: "main",
+      stream: "lifecycle",
+      data: expect.objectContaining({ phase: "start" }),
+    });
+  });
+
+  it("keeps the execution lifecycle generation on terminal events", async () => {
+    emitAgentEventMock.mockClear();
+    const ctx = createContext(undefined);
+    ctx.params.lifecycleGeneration = "pre-restart-generation";
+    ctx.params.sessionId = "session-1";
+    ctx.params.agentId = "main";
+
+    await handleAgentEnd(ctx);
+
+    expect(emitAgentEventMock).toHaveBeenCalledWith({
+      runId: "run-1",
+      sessionKey: "agent:main:main",
+      sessionId: "session-1",
+      agentId: "main",
+      lifecycleGeneration: "pre-restart-generation",
+      stream: "lifecycle",
+      data: expect.objectContaining({ phase: "end" }),
+    });
+  });
+
   it("suppresses raw assistant error messages in user-facing lifecycle events", async () => {
     // Canary text proves provider error strings are sanitized before lifecycle
     // events reach channel integrations.
@@ -199,6 +239,7 @@ describe("handleAgentEnd", () => {
 
     expect(emitAgentEventMock).toHaveBeenCalledWith({
       runId: "run-1",
+      sessionKey: "agent:main:main",
       stream: "lifecycle",
       data: expect.objectContaining({
         phase: "end",
@@ -214,6 +255,38 @@ describe("handleAgentEnd", () => {
     });
   });
 
+  it("overrides embedded abort terminals with the restart stop reason", async () => {
+    emitAgentEventMock.mockClear();
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(undefined, {
+      onAgentEvent,
+      resolveTerminalStopReason: () => "restart",
+    });
+    ctx.state.terminalStopReason = "aborted";
+    ctx.state.terminalAborted = true;
+
+    await handleAgentEnd(ctx);
+
+    expect(emitAgentEventMock).toHaveBeenCalledWith({
+      runId: "run-1",
+      sessionKey: "agent:main:main",
+      stream: "lifecycle",
+      data: expect.objectContaining({
+        phase: "end",
+        stopReason: "restart",
+        aborted: true,
+      }),
+    });
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        stopReason: "restart",
+        aborted: true,
+      },
+    });
+  });
+
   it("emits explicit aborted terminal metadata on lifecycle end events", async () => {
     emitAgentEventMock.mockClear();
     const onAgentEvent = vi.fn();
@@ -225,6 +298,7 @@ describe("handleAgentEnd", () => {
 
     expect(emitAgentEventMock).toHaveBeenCalledWith({
       runId: "run-1",
+      sessionKey: "agent:main:main",
       stream: "lifecycle",
       data: expect.objectContaining({
         phase: "end",

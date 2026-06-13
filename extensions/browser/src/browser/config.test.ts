@@ -974,6 +974,39 @@ describe("browser config", () => {
     expect(profile?.mcpArgs).toEqual(["--no-usage-statistics", "--performanceCrux", "false"]);
   });
 
+  it("applies top-level cdpUrl to an existing-session default profile", () => {
+    const resolved = resolveBrowserConfig({
+      defaultProfile: "user",
+      cdpUrl: "http://127.0.0.1:9222/",
+    });
+
+    const profile = resolveProfile(resolved, resolved.defaultProfile);
+    expect(resolved.defaultProfile).toBe("user");
+    expect(profile?.driver).toBe("existing-session");
+    expect(profile?.cdpUrl).toBe("http://127.0.0.1:9222");
+    expect(profile?.cdpHost).toBe("127.0.0.1");
+    expect(profile?.cdpIsLoopback).toBe(true);
+  });
+
+  it("keeps explicit existing-session profile cdpUrl over the top-level cdpUrl", () => {
+    const resolved = resolveBrowserConfig({
+      defaultProfile: "chrome-live",
+      cdpUrl: "http://127.0.0.1:9222",
+      profiles: {
+        "chrome-live": {
+          driver: "existing-session",
+          attachOnly: true,
+          cdpUrl: "http://127.0.0.1:9333",
+          color: "#00AA00",
+        },
+      },
+    });
+
+    const profile = resolveProfile(resolved, resolved.defaultProfile);
+    expect(profile?.driver).toBe("existing-session");
+    expect(profile?.cdpUrl).toBe("http://127.0.0.1:9333");
+  });
+
   it("preserves direct websocket cdpUrl for existing-session profiles", () => {
     const resolved = resolveBrowserConfig({
       profiles: {

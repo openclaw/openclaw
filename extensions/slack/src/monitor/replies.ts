@@ -1,6 +1,7 @@
 // Slack plugin module implements replies behavior.
 import type { MessageMetadata } from "@slack/types";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   chunkMarkdownTextWithMode,
   isSilentReplyText,
@@ -9,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/reply-chunking";
 import {
   deliverTextOrMediaReply,
+  getReplyPayloadTtsSupplement,
   resolveSendableOutboundReplyParts,
   type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
@@ -16,11 +18,17 @@ import { createReplyReferencePlanner } from "openclaw/plugin-sdk/reply-reference
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { markdownToSlackMrkdwnChunks } from "../format.js";
 import { SLACK_TEXT_LIMIT } from "../limits.js";
+import { emitSlackMessageSentHooks } from "../message-sent-hook.js";
 import { resolveSlackReplyBlocks } from "../reply-blocks.js";
-import { sendMessageSlack, type SlackSendIdentity } from "./send.runtime.js";
+import { sendMessageSlack, type SlackSendIdentity, type SlackSendResult } from "./send.runtime.js";
 
 export function readSlackReplyBlocks(payload: ReplyPayload) {
   return resolveSlackReplyBlocks(payload);
+}
+
+function resolveSlackMediaHookSpokenText(payload: ReplyPayload): string | undefined {
+  const spokenText = getReplyPayloadTtsSupplement(payload)?.spokenText ?? payload.spokenText;
+  return spokenText?.trim() || undefined;
 }
 
 export function resolveDeliveredSlackReplyThreadTs(params: {
@@ -46,7 +54,25 @@ export async function deliverReplies(params: {
   replyToMode: "off" | "first" | "all" | "batched";
   identity?: SlackSendIdentity;
   metadata?: MessageMetadata;
+  /** Logical conversation target used by lifecycle hooks when delivery uses a physical Slack id. */
+  messageSentHookTarget?: string;
+  /**
+   * Canonical session key for the internal `message:sent` hook. When set, the
+   * internal hook fires alongside the plugin `message_sent` hook. The plugin
+   * hook fires regardless (self-gated on registered listeners).
+   */
+  sessionKeyForInternalHooks?: string;
+  /** Whether the reply target is a group/channel (vs a DM). */
+  isGroup?: boolean;
+  /** Group/channel id for the `message_sent` event when `isGroup` is true. */
+  groupId?: string;
+  /**
+   * Defer hook emission to a caller that must resolve another delivery path
+   * before reporting the terminal outcome.
+   */
+  deferMessageSentHooks?: true;
 }) {
+  let latestResult: SlackSendResult | undefined;
   for (const payload of params.replies) {
     if (payload.isReasoning === true) {
       continue;
@@ -62,6 +88,41 @@ export async function deliverReplies(params: {
       continue;
     }
 
+    // Fire the `message_sent` hook(s) after delivery, mirroring Telegram's
+    // `emitMessageSentHooks` in `extensions/telegram/src/bot/delivery.replies.ts`.
+    // `emitSlackMessageSentHooks` self-gates on registered listeners, so this is
+    // a no-op when no plugin observes `message_sent`.
+    const emitSent = (content: string, result?: SlackSendResult) => {
+      if (params.deferMessageSentHooks) {
+        return;
+      }
+      emitSlackMessageSentHooks({
+        sessionKeyForInternalHooks: params.sessionKeyForInternalHooks,
+        to: params.messageSentHookTarget ?? params.target,
+        accountId: params.accountId,
+        content,
+        success: true,
+        messageId: result?.messageId,
+        isGroup: params.isGroup,
+        groupId: params.groupId,
+      });
+    };
+    const emitFailed = (content: string, error: unknown) => {
+      if (params.deferMessageSentHooks) {
+        return;
+      }
+      emitSlackMessageSentHooks({
+        sessionKeyForInternalHooks: params.sessionKeyForInternalHooks,
+        to: params.messageSentHookTarget ?? params.target,
+        accountId: params.accountId,
+        content,
+        success: false,
+        error: formatErrorMessage(error),
+        isGroup: params.isGroup,
+        groupId: params.groupId,
+      });
+    };
+
     if (!reply.hasMedia && slackBlocks?.length) {
       const trimmed = reply.trimmedText;
       if (!trimmed && !slackBlocks?.length) {
@@ -70,57 +131,80 @@ export async function deliverReplies(params: {
       if (trimmed && isSilentReplyText(trimmed, SILENT_REPLY_TOKEN)) {
         continue;
       }
-      await sendMessageSlack(params.target, trimmed, {
-        cfg: params.cfg,
-        token: params.token,
-        threadTs,
-        accountId: params.accountId,
-        ...(slackBlocks?.length ? { blocks: slackBlocks } : {}),
-        ...(params.identity ? { identity: params.identity } : {}),
-        ...(params.metadata ? { metadata: params.metadata } : {}),
-      });
+      let result: SlackSendResult;
+      try {
+        result = await sendMessageSlack(params.target, trimmed, {
+          cfg: params.cfg,
+          token: params.token,
+          threadTs,
+          accountId: params.accountId,
+          ...(slackBlocks?.length ? { blocks: slackBlocks } : {}),
+          ...(params.identity ? { identity: params.identity } : {}),
+          ...(params.metadata ? { metadata: params.metadata } : {}),
+        });
+      } catch (error) {
+        emitFailed(trimmed, error);
+        throw error;
+      }
+      emitSent(trimmed, result);
+      latestResult = result;
       params.runtime.log?.(`delivered reply to ${params.target}`);
       continue;
     }
 
-    const delivered = await deliverTextOrMediaReply({
-      payload,
-      text: reply.text,
-      chunkText: !reply.hasMedia
-        ? (value) => {
-            const trimmed = value.trim();
-            if (!trimmed || isSilentReplyText(trimmed, SILENT_REPLY_TOKEN)) {
-              return [];
+    const spokenText = resolveSlackMediaHookSpokenText(payload);
+    const mediaHookContent = reply.hasText ? reply.text : spokenText || reply.text;
+    const hookContent = reply.hasMedia ? mediaHookContent : reply.trimmedText;
+    let lastResult: SlackSendResult | undefined;
+    let delivered: Awaited<ReturnType<typeof deliverTextOrMediaReply>>;
+    try {
+      delivered = await deliverTextOrMediaReply({
+        payload,
+        text: reply.text,
+        chunkText: !reply.hasMedia
+          ? (value) => {
+              const trimmed = value.trim();
+              if (!trimmed || isSilentReplyText(trimmed, SILENT_REPLY_TOKEN)) {
+                return [];
+              }
+              return [trimmed];
             }
-            return [trimmed];
-          }
-        : undefined,
-      sendText: async (trimmed) => {
-        await sendMessageSlack(params.target, trimmed, {
-          cfg: params.cfg,
-          token: params.token,
-          threadTs,
-          accountId: params.accountId,
-          ...(params.identity ? { identity: params.identity } : {}),
-          ...(params.metadata ? { metadata: params.metadata } : {}),
-        });
-      },
-      sendMedia: async ({ mediaUrl, caption }) => {
-        await sendMessageSlack(params.target, caption ?? "", {
-          cfg: params.cfg,
-          token: params.token,
-          mediaUrl,
-          threadTs,
-          accountId: params.accountId,
-          ...(params.identity ? { identity: params.identity } : {}),
-          ...(params.metadata ? { metadata: params.metadata } : {}),
-        });
-      },
-    });
+          : undefined,
+        sendText: async (trimmed) => {
+          lastResult = await sendMessageSlack(params.target, trimmed, {
+            cfg: params.cfg,
+            token: params.token,
+            threadTs,
+            accountId: params.accountId,
+            ...(params.identity ? { identity: params.identity } : {}),
+            ...(params.metadata ? { metadata: params.metadata } : {}),
+          });
+        },
+        sendMedia: async ({ mediaUrl, caption }) => {
+          lastResult = await sendMessageSlack(params.target, caption ?? "", {
+            cfg: params.cfg,
+            token: params.token,
+            mediaUrl,
+            threadTs,
+            accountId: params.accountId,
+            ...(params.identity ? { identity: params.identity } : {}),
+            ...(params.metadata ? { metadata: params.metadata } : {}),
+          });
+        },
+      });
+    } catch (error) {
+      emitFailed(hookContent, error);
+      throw error;
+    }
     if (delivered !== "empty") {
+      // Slack file uploads return file IDs, not the posted message `ts` expected
+      // by message_sent consumers.
+      emitSent(hookContent, reply.hasMedia ? undefined : lastResult);
+      latestResult = lastResult;
       params.runtime.log?.(`delivered reply to ${params.target}`);
     }
   }
+  return latestResult;
 }
 
 export type SlackRespondFn = (payload: {
@@ -211,8 +295,16 @@ export async function deliverSlackSlashReplies(params: {
   textLimit: number;
   tableMode?: MarkdownTableMode;
   chunkMode?: ChunkMode;
+  messageSentHookTarget?: string;
+  accountId?: string;
+  sessionKeyForInternalHooks?: string;
+  isGroup?: boolean;
+  groupId?: string;
 }) {
-  const messages: Array<{ text: string; blocks?: ReturnType<typeof readSlackReplyBlocks> }> = [];
+  const deliveries: Array<{
+    hookContent: string;
+    messages: Array<{ text: string; blocks?: ReturnType<typeof readSlackReplyBlocks> }>;
+  }> = [];
   const chunkLimit = Math.min(params.textLimit, SLACK_TEXT_LIMIT);
   for (const payload of params.replies) {
     if (payload.isReasoning === true) {
@@ -225,7 +317,10 @@ export async function deliverSlackSlashReplies(params: {
         ? reply.trimmedText
         : undefined;
     if (slackBlocks?.length && !reply.hasMedia) {
-      messages.push({ text: text ?? "", blocks: slackBlocks });
+      deliveries.push({
+        hookContent: text ?? "",
+        messages: [{ text: text ?? "", blocks: slackBlocks }],
+      });
       continue;
     }
     const combined = [text ?? "", ...reply.mediaUrls].filter(Boolean).join("\n");
@@ -243,18 +338,48 @@ export async function deliverSlackSlashReplies(params: {
     if (!chunks.length && combined) {
       chunks.push(combined);
     }
-    for (const chunk of chunks) {
-      messages.push({ text: chunk });
-    }
+    deliveries.push({
+      hookContent: text ?? resolveSlackMediaHookSpokenText(payload) ?? combined,
+      messages: chunks.map((chunk) => ({ text: chunk })),
+    });
   }
 
-  if (messages.length === 0) {
+  if (deliveries.length === 0) {
     return;
   }
 
   // Slack slash command responses can be multi-part by sending follow-ups via response_url.
   const responseType = params.ephemeral ? "ephemeral" : "in_channel";
-  for (const message of messages) {
-    await params.respond({ ...message, response_type: responseType });
+  for (const delivery of deliveries) {
+    try {
+      for (const message of delivery.messages) {
+        await params.respond({ ...message, response_type: responseType });
+      }
+    } catch (error) {
+      if (params.messageSentHookTarget) {
+        emitSlackMessageSentHooks({
+          sessionKeyForInternalHooks: params.sessionKeyForInternalHooks,
+          to: params.messageSentHookTarget,
+          accountId: params.accountId,
+          content: delivery.hookContent,
+          success: false,
+          error: formatErrorMessage(error),
+          isGroup: params.isGroup,
+          groupId: params.groupId,
+        });
+      }
+      throw error;
+    }
+    if (params.messageSentHookTarget) {
+      emitSlackMessageSentHooks({
+        sessionKeyForInternalHooks: params.sessionKeyForInternalHooks,
+        to: params.messageSentHookTarget,
+        accountId: params.accountId,
+        content: delivery.hookContent,
+        success: true,
+        isGroup: params.isGroup,
+        groupId: params.groupId,
+      });
+    }
   }
 }

@@ -81,6 +81,62 @@ describe("engine/config/group", () => {
       };
       expect(resolveHistoryLimit(cfg, "G")).toBe(DEFAULT_GROUP_HISTORY_LIMIT);
     });
+
+    describe("account-level defaultRequireMention layer", () => {
+      it("uses hardcoded true when nothing configured (default account)", () => {
+        const cfg = { channels: { qqbot: { appId: "1" } } };
+        expect(resolveGroupConfig(cfg, "G1").requireMention).toBe(true);
+      });
+
+      it("reads defaultRequireMention from top-level qqbot (default account)", () => {
+        const cfg = {
+          channels: { qqbot: { appId: "1", defaultRequireMention: false } },
+        };
+        expect(resolveGroupConfig(cfg, "G1").requireMention).toBe(false);
+      });
+
+      it("reads defaultRequireMention from named account config", () => {
+        const cfg = {
+          channels: {
+            qqbot: {
+              accounts: { bot2: { appId: "9", defaultRequireMention: false } },
+            },
+          },
+        };
+        expect(resolveRequireMention(cfg, "G1", "bot2")).toBe(false);
+      });
+
+      it("wildcard overrides account-level defaultRequireMention", () => {
+        const cfg = {
+          channels: {
+            qqbot: {
+              appId: "1",
+              defaultRequireMention: false,
+              groups: { "*": { requireMention: true } },
+            },
+          },
+        };
+        // wildcard requireMention=true wins over account-level defaultRequireMention=false
+        expect(resolveGroupConfig(cfg, "G1").requireMention).toBe(true);
+      });
+
+      it("specific group config has highest priority", () => {
+        const cfg = {
+          channels: {
+            qqbot: {
+              appId: "1",
+              defaultRequireMention: false,
+              groups: {
+                "*": { requireMention: true },
+                SPECIAL_GROUP: { requireMention: false },
+              },
+            },
+          },
+        };
+        expect(resolveGroupConfig(cfg, "SPECIAL_GROUP").requireMention).toBe(false);
+        expect(resolveGroupConfig(cfg, "OTHER_GROUP").requireMention).toBe(true); // wildcard
+      });
+    });
   });
 
   describe("named accounts", () => {

@@ -977,6 +977,7 @@ function createPolicyHarness(overrides?: {
   channelName?: string;
   allowFrom?: string[];
   useAccessGroups?: boolean;
+  slashEphemeral?: boolean;
   shouldDropMismatchedSlackEvent?: (body: unknown) => boolean;
   resolveChannelName?: () => Promise<{ name?: string; type?: string }>;
 }) {
@@ -1010,7 +1011,7 @@ function createPolicyHarness(overrides?: {
     slashCommand: {
       enabled: true,
       name: "openclaw",
-      ephemeral: true,
+      ephemeral: overrides?.slashEphemeral ?? true,
       sessionPrefix: "slack:slash",
     },
     textLimit: 4000,
@@ -1251,7 +1252,7 @@ describe("slack slash commands access groups", () => {
 });
 
 describe("slack slash command session metadata", () => {
-  const { recordSessionMetaFromInboundMock } = getSlackSlashMocks();
+  const { deliverSlackSlashRepliesMock, recordSessionMetaFromInboundMock } = getSlackSlashMocks();
 
   it("calls recordSessionMetaFromInbound after dispatching a slash command", async () => {
     const harness = createPolicyHarness({ groupPolicy: "open" });
@@ -1271,6 +1272,50 @@ describe("slack slash command session metadata", () => {
     expect(call.ctx?.GroupSpace).toBe("T1");
     expect(call.sessionKey).toBeTypeOf("string");
     expect(call.sessionKey).not.toBe("");
+  });
+
+  it("passes canonical hook correlation to slash reply delivery", async () => {
+    const harness = createPolicyHarness({ groupPolicy: "open" });
+    await registerAndRunPolicySlash({ harness });
+    const dispatchArg = firstDispatchArg() as {
+      ctx?: { OriginatingTo?: string; SessionKey?: string };
+      dispatcherOptions?: { deliver?: (payload: { text: string }) => Promise<void> };
+    };
+
+    await dispatchArg.dispatcherOptions?.deliver?.({ text: "final answer" });
+
+    expect(deliverSlackSlashRepliesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [{ text: "final answer" }],
+        messageSentHookTarget: dispatchArg.ctx?.OriginatingTo,
+        sessionKeyForInternalHooks: dispatchArg.ctx?.SessionKey,
+        accountId: "acct",
+        isGroup: true,
+        groupId: harness.channelId,
+      }),
+    );
+  });
+
+  it("targets the channel for public slash reply hooks", async () => {
+    const harness = createPolicyHarness({
+      groupPolicy: "open",
+      slashEphemeral: false,
+    });
+    await registerAndRunPolicySlash({ harness });
+    const dispatchArg = firstDispatchArg() as {
+      dispatcherOptions?: { deliver?: (payload: { text: string }) => Promise<void> };
+    };
+
+    await dispatchArg.dispatcherOptions?.deliver?.({ text: "public answer" });
+
+    expect(firstDispatchArg().ctx?.OriginatingTo).toBe(`channel:${harness.channelId}`);
+    expect(deliverSlackSlashRepliesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageSentHookTarget: `channel:${harness.channelId}`,
+        isGroup: true,
+        groupId: harness.channelId,
+      }),
+    );
   });
 
   it("awaits session metadata persistence before dispatch", async () => {

@@ -152,7 +152,7 @@ export function createCronPromptExecutor(params: {
   cronSession: MutableCronSession;
   abortSignal?: AbortSignal;
   abortReason: () => string;
-  onExecutionStarted?: () => void;
+  onExecutionStarted?: (info?: { lifecycleGeneration?: string }) => void;
   onExecutionPhase?: (
     info: Pick<CronAgentExecutionPhaseUpdate, "phase"> &
       Partial<Omit<CronAgentExecutionPhaseUpdate, "jobId" | "phase">>,
@@ -394,7 +394,7 @@ export async function executeCronRun(params: {
   abortSignal?: AbortSignal;
   abortReason: () => string;
   isAborted: () => boolean;
-  onExecutionStarted?: () => void;
+  onExecutionStarted?: (info?: { lifecycleGeneration?: string }) => void;
   onExecutionPhase?: (
     info: Pick<CronAgentExecutionPhaseUpdate, "phase"> &
       Partial<Omit<CronAgentExecutionPhaseUpdate, "jobId" | "phase">>,

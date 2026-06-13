@@ -104,10 +104,18 @@ if ! declare -F docker_e2e_docker_run_cmd >/dev/null 2>&1; then
       shift
       docker_e2e_docker_run_resource_args "$@"
       if declare -F docker_e2e_timeout_cmd >/dev/null 2>&1; then
-        docker_e2e_timeout_cmd "${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_DOCKER_E2E_RUN_TIMEOUT:-3600s}}" docker run "${DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" "$@"
+        if [ "${#DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" -gt 0 ]; then
+          docker_e2e_timeout_cmd "${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_DOCKER_E2E_RUN_TIMEOUT:-3600s}}" docker run "${DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" "$@"
+        else
+          docker_e2e_timeout_cmd "${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_DOCKER_E2E_RUN_TIMEOUT:-3600s}}" docker run "$@"
+        fi
         return
       fi
-      set -- run "${DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" "$@"
+      if [ "${#DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" -gt 0 ]; then
+        set -- run "${DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" "$@"
+      else
+        set -- run "$@"
+      fi
     fi
     if declare -F docker_e2e_timeout_cmd >/dev/null 2>&1; then
       docker_e2e_timeout_cmd "${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_DOCKER_E2E_RUN_TIMEOUT:-3600s}}" docker "$@"
@@ -333,8 +341,7 @@ docker_e2e_run_with_harness() {
     rmdir "$cid_dir" 2>/dev/null || true
     docker_e2e_cleanup_package_mount_args
     if [ -n "$harness_stdin_fd" ]; then
-      exec {harness_stdin_fd}<&-
-      harness_stdin_fd=""
+      eval "exec ${harness_stdin_fd}<&-"
     fi
     restore_harness_traps
     if [ "$exit_after_cleanup" = "1" ]; then
@@ -345,7 +352,19 @@ docker_e2e_run_with_harness() {
   trap 'cleanup_harness_run 130 1' INT
   trap 'cleanup_harness_run 143 1' TERM
   trap 'cleanup_harness_run 129 1' HUP
-  exec {harness_stdin_fd}<&0
+  local candidate_fd
+  for candidate_fd in 19 18 17 16 15 14 13 12 11 10; do
+    if ! eval "true <&${candidate_fd}" 2>/dev/null; then
+      harness_stdin_fd="$candidate_fd"
+      break
+    fi
+  done
+  if [ -z "$harness_stdin_fd" ]; then
+    echo "no free file descriptor available for Docker harness stdin" >&2
+    cleanup_harness_run 1
+    return 1
+  fi
+  eval "exec ${harness_stdin_fd}<&0"
   docker_e2e_docker_run_cmd run --rm --cidfile "$cidfile" "${DOCKER_E2E_HARNESS_ARGS[@]}" "$@" <&$harness_stdin_fd &
   docker_run_pid="$!"
   local had_errexit=0

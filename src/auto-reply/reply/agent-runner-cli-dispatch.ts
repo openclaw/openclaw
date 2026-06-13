@@ -7,10 +7,21 @@ import {
 import { runCliAgent } from "../../agents/cli-runner.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
 import { clearCliSession } from "../../agents/cli-session.js";
+import { extractToolResultText } from "../../agents/embedded-agent-subscribe.tools.js";
+import { inferToolMetaFromArgs } from "../../agents/embedded-agent-utils.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent.js";
+import {
+  isAgentRunRestartAbortReason,
+  resolveAgentRunAbortLifecycleFields,
+} from "../../agents/run-termination.js";
 import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
 import type { AgentEventPayload } from "../../infra/agent-events.js";
-import { emitAgentEvent, onAgentEvent } from "../../infra/agent-events.js";
+import {
+  emitAgentEvent,
+  onAgentEvent,
+  withAgentRunLifecycleGeneration,
+} from "../../infra/agent-events.js";
+import { formatToolAggregate } from "../tool-meta.js";
 
 function isClaudeCliProvider(provider: string): boolean {
   return normalizeLowercaseStringOrEmpty(provider) === "claude-cli";
@@ -118,8 +129,11 @@ function readCommentaryTextPayload(evt: AgentEventPayload): CommentaryTextPayloa
 
 export type CliToolEventPayload = {
   name: string | undefined;
-  phase: "start" | "update";
+  phase: "start" | "update" | "result";
   args: Record<string, unknown> | undefined;
+  toolCallId?: string;
+  isError?: boolean;
+  result?: unknown;
 };
 
 export function keepCliSessionBindingOnlyWhenReused(params: {
@@ -194,17 +208,79 @@ function createToolEventBridge(params: {
         return undefined;
       }
       const phaseValue = evt.data.phase;
-      if (phaseValue !== "start" && phaseValue !== "update") {
+      if (phaseValue !== "start" && phaseValue !== "update" && phaseValue !== "result") {
         return undefined;
       }
-      const phase: CliToolEventPayload["phase"] = phaseValue === "start" ? "start" : "update";
+      const phase: CliToolEventPayload["phase"] =
+        phaseValue === "start" ? "start" : phaseValue === "update" ? "update" : "result";
       return {
         name: typeof evt.data.name === "string" ? evt.data.name : undefined,
         phase,
         args: isRecord(evt.data.args) ? evt.data.args : undefined,
+        toolCallId: typeof evt.data.toolCallId === "string" ? evt.data.toolCallId : undefined,
+        ...(phase === "result"
+          ? {
+              isError: evt.data.isError === true,
+              result: evt.data.result,
+            }
+          : {}),
       };
     },
   });
+}
+
+/**
+ * Tracks CLI tool start/result events and renders the same durable tool
+ * summaries the embedded runner emits: a formatToolAggregate line per result
+ * (args-derived meta captured at start), plus the output block under full
+ * verbose. Keeps CLI runs at tool-summary parity with embedded runs.
+ */
+export function createCliToolSummaryTracker(params: {
+  detailMode?: "explain" | "raw";
+  shouldEmitToolResult: () => boolean;
+  shouldEmitToolOutput: () => boolean;
+  deliver: (payload: { text: string; isError?: boolean }) => Promise<void> | void;
+}) {
+  const metaByCallId = new Map<string, string | undefined>();
+  return {
+    noteToolEvent: async (payload: CliToolEventPayload): Promise<void> => {
+      if (payload.phase === "start") {
+        if (payload.toolCallId && payload.name) {
+          metaByCallId.set(
+            payload.toolCallId,
+            inferToolMetaFromArgs(payload.name, payload.args, {
+              detailMode: params.detailMode ?? "explain",
+            }),
+          );
+        }
+        return;
+      }
+      if (payload.phase !== "result") {
+        return;
+      }
+      const meta = payload.toolCallId ? metaByCallId.get(payload.toolCallId) : undefined;
+      if (payload.toolCallId) {
+        metaByCallId.delete(payload.toolCallId);
+      }
+      if (!params.shouldEmitToolResult()) {
+        return;
+      }
+      const aggregate = formatToolAggregate(payload.name, meta ? [meta] : undefined, {
+        markdown: true,
+      });
+      let text = aggregate;
+      if (params.shouldEmitToolOutput()) {
+        const output = extractToolResultText(payload.result)?.trim();
+        if (output) {
+          text = `${aggregate}\n\`\`\`txt\n${output}\n\`\`\``;
+        }
+      }
+      if (!text.trim()) {
+        return;
+      }
+      await params.deliver({ text, ...(payload.isError === true ? { isError: true } : {}) });
+    },
+  };
 }
 
 function createCommentaryEventBridge(params: {
@@ -220,8 +296,9 @@ function createCommentaryEventBridge(params: {
   });
 }
 
-export async function runCliAgentWithLifecycle(params: {
+type RunCliAgentWithLifecycleParams = {
   runId: string;
+  lifecycleGeneration?: string;
   provider: string;
   runParams: RunCliAgentParams;
   startedAt?: number;
@@ -235,7 +312,22 @@ export async function runCliAgentWithLifecycle(params: {
   onCommentaryText?: (payload: { text: string; itemId?: string }) => Promise<void>;
   onErrorBeforeLifecycle?: (err: unknown) => Promise<void>;
   transformResult?: (result: EmbeddedAgentRunResult) => EmbeddedAgentRunResult;
-}): Promise<EmbeddedAgentRunResult> {
+};
+
+export function runCliAgentWithLifecycle(
+  params: RunCliAgentWithLifecycleParams,
+): Promise<EmbeddedAgentRunResult> {
+  if (!params.lifecycleGeneration) {
+    return runCliAgentWithLifecycleInternal(params);
+  }
+  return withAgentRunLifecycleGeneration(params.lifecycleGeneration, () =>
+    runCliAgentWithLifecycleInternal(params),
+  );
+}
+
+async function runCliAgentWithLifecycleInternal(
+  params: RunCliAgentWithLifecycleParams,
+): Promise<EmbeddedAgentRunResult> {
   const startedAt = params.startedAt ?? Date.now();
   const emitLifecycleStart = params.emitLifecycleStart ?? true;
   const emitLifecycleTerminal = params.emitLifecycleTerminal ?? true;
@@ -243,6 +335,9 @@ export async function runCliAgentWithLifecycle(params: {
   if (emitLifecycleStart) {
     emitAgentEvent({
       runId: params.runId,
+      ...(params.runParams.sessionKey ? { sessionKey: params.runParams.sessionKey } : {}),
+      ...(params.runParams.sessionId ? { sessionId: params.runParams.sessionId } : {}),
+      ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
       stream: "lifecycle",
       data: {
         phase: "start",
@@ -279,10 +374,12 @@ export async function runCliAgentWithLifecycle(params: {
   try {
     const rawResult = await runCliAgent({
       ...params.runParams,
-      classifyCommentaryText:
-        params.runParams.classifyCommentaryText ?? Boolean(params.onCommentaryText),
       emitCommentaryText: Boolean(params.onCommentaryText),
     });
+    const restartAbortReason = params.runParams.abortSignal?.reason;
+    if (isAgentRunRestartAbortReason(restartAbortReason)) {
+      throw restartAbortReason;
+    }
     const result = params.transformResult?.(rawResult) ?? rawResult;
     await stopAgentEventBridges(bridges);
 
@@ -298,11 +395,15 @@ export async function runCliAgentWithLifecycle(params: {
     if (emitLifecycleTerminal) {
       emitAgentEvent({
         runId: params.runId,
+        ...(params.runParams.sessionKey ? { sessionKey: params.runParams.sessionKey } : {}),
+        ...(params.runParams.sessionId ? { sessionId: params.runParams.sessionId } : {}),
+        ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
         stream: "lifecycle",
         data: {
           phase: "end",
           startedAt,
           endedAt: Date.now(),
+          ...resolveAgentRunAbortLifecycleFields(params.runParams.abortSignal),
         },
       });
       lifecycleTerminalEmitted = true;
@@ -314,12 +415,16 @@ export async function runCliAgentWithLifecycle(params: {
     if (emitLifecycleTerminal) {
       emitAgentEvent({
         runId: params.runId,
+        ...(params.runParams.sessionKey ? { sessionKey: params.runParams.sessionKey } : {}),
+        ...(params.runParams.sessionId ? { sessionId: params.runParams.sessionId } : {}),
+        ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
         stream: "lifecycle",
         data: {
           phase: "error",
           startedAt,
           endedAt: Date.now(),
           error: String(err),
+          ...resolveAgentRunAbortLifecycleFields(params.runParams.abortSignal),
         },
       });
       lifecycleTerminalEmitted = true;
@@ -332,12 +437,16 @@ export async function runCliAgentWithLifecycle(params: {
     if (emitLifecycleTerminal && !lifecycleTerminalEmitted) {
       emitAgentEvent({
         runId: params.runId,
+        ...(params.runParams.sessionKey ? { sessionKey: params.runParams.sessionKey } : {}),
+        ...(params.runParams.sessionId ? { sessionId: params.runParams.sessionId } : {}),
+        ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
         stream: "lifecycle",
         data: {
           phase: "error",
           startedAt,
           endedAt: Date.now(),
           error: "CLI run completed without lifecycle terminal event",
+          ...resolveAgentRunAbortLifecycleFields(params.runParams.abortSignal),
         },
       });
     }

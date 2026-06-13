@@ -1,5 +1,6 @@
 // Tracks active reply runs so stop, queue, and status commands can coordinate.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import {
   markDiagnosticEmbeddedRunEnded,
   markDiagnosticEmbeddedRunStarted,
@@ -398,7 +399,7 @@ export function createReplyOperation(params: {
     },
     abortForRestart() {
       const phaseBeforeAbort = phase;
-      abortWithReason("restart", new Error("Reply operation aborted for restart"), {
+      abortWithReason("restart", createAgentRunRestartAbortError(), {
         abortedCode: "aborted_for_restart",
       });
       if (phaseBeforeAbort === "queued") {
@@ -516,6 +517,11 @@ export function resolveActiveReplyRunThreadId(sessionKey: string): string | numb
 
 export function isReplyRunActiveForSessionId(sessionId: string): boolean {
   return resolveReplyRunForCurrentSessionId(sessionId) !== undefined;
+}
+
+export function isReplyRunAbortableForCompaction(sessionId: string): boolean {
+  const operation = resolveReplyRunForCurrentSessionId(sessionId);
+  return Boolean(operation && operation.phase !== "queued");
 }
 
 export function isReplyRunStreamingForSessionId(sessionId: string): boolean {

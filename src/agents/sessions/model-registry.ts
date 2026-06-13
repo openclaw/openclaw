@@ -21,6 +21,7 @@ import type {
 } from "../../llm/types.js";
 import { registerOAuthProvider, resetOAuthProviders } from "../../llm/utils/oauth/index.js";
 import type { OAuthProviderInterface } from "../../llm/utils/oauth/types.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getAgentDir } from "../config.js";
 import { resolveModelPluginMetadataSnapshot } from "../model-discovery-context.js";
 import {
@@ -37,6 +38,8 @@ import {
   resolveConfigValueUncached,
   resolveHeadersOrThrow,
 } from "./resolve-config-value.js";
+
+const log = createSubsystemLogger("agents/model-registry");
 
 // Schema for OpenRouter routing preferences
 const PercentileCutoffsSchema = Type.Object({
@@ -170,6 +173,7 @@ const ModelDefinitionSchema = Type.Object({
   ),
   contextWindow: Type.Optional(Type.Number()),
   maxTokens: Type.Optional(Type.Number()),
+  params: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
   headers: Type.Optional(Type.Record(Type.String(), Type.String())),
   compat: Type.Optional(ProviderCompatSchema),
 });
@@ -354,9 +358,7 @@ export class ModelRegistry {
     }
   }
 
-  /**
-   * Get any error from loading models.json (undefined if no error).
-   */
+  /** Get any root or generated plugin catalog load error. */
   getError(): string | undefined {
     return this.loadError;
   }
@@ -370,7 +372,8 @@ export class ModelRegistry {
 
     if (error) {
       this.loadError = error;
-      // Keep the prior empty/default registry shape when models.json failed to load.
+      log.warn(`model catalog load issue: ${error}`);
+      // Plugin catalog failures can return salvaged models; root failures return empty.
     }
 
     let combined = customModels;
@@ -443,6 +446,7 @@ export class ModelRegistry {
       }
 
       const models = this.parseModels(configForUse);
+      const pluginCatalogErrors: string[] = [];
       if (options.includePluginCatalogs !== false) {
         for (const pluginCatalog of listPluginModelCatalogFiles(dirname(modelsJsonPath))) {
           const pluginResult = this.loadCustomModels(pluginCatalog.path, {
@@ -451,13 +455,14 @@ export class ModelRegistry {
             requireGeneratedCatalog: true,
           });
           if (pluginResult.error) {
-            return pluginResult;
+            pluginCatalogErrors.push(pluginResult.error);
+            continue;
           }
           models.push(...pluginResult.models);
         }
       }
 
-      return { models, error: undefined };
+      return { models, error: pluginCatalogErrors.join("\n\n") || undefined };
     } catch (error) {
       if (error instanceof SyntaxError) {
         if (options.requireGeneratedCatalog === true) {
@@ -553,6 +558,7 @@ export class ModelRegistry {
           cost: modelDef.cost ?? defaultCost,
           contextWindow: modelDef.contextWindow ?? 128000,
           maxTokens: modelDef.maxTokens ?? 16384,
+          params: modelDef.params,
           headers: undefined,
           compat,
         } as Model);
@@ -878,6 +884,7 @@ export class ModelRegistry {
           cost: modelDef.cost,
           contextWindow: modelDef.contextWindow,
           maxTokens: modelDef.maxTokens,
+          params: modelDef.params,
           headers: undefined,
           compat: modelDef.compat,
         } as Model);
@@ -923,6 +930,7 @@ export interface ProviderConfigInput {
     cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
     contextWindow: number;
     maxTokens: number;
+    params?: Record<string, unknown>;
     headers?: Record<string, string>;
     compat?: Model["compat"];
   }>;

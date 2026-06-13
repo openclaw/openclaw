@@ -558,6 +558,7 @@ export async function clickViaPlaywright(opts: {
       void forceDisconnectPlaywrightForTarget({
         cdpUrl: opts.cdpUrl,
         targetId: opts.targetId,
+        ssrfPolicy: opts.ssrfPolicy,
         reason: "click aborted",
       }).catch(() => {});
     };
@@ -1025,6 +1026,7 @@ export async function evaluateViaPlaywright(opts: {
     void forceDisconnectPlaywrightForTarget({
       cdpUrl: opts.cdpUrl,
       targetId: opts.targetId,
+      ssrfPolicy: opts.ssrfPolicy,
       reason: "evaluate aborted",
     }).catch(() => {});
   });

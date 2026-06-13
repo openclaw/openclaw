@@ -13,6 +13,7 @@ import {
   loadRunCronIsolatedAgentTurn,
   makeCronSession,
   mockRunCronFallbackPassthrough,
+  preflightCronModelProviderMock,
   resolveCronPayloadOutcomeMock,
   resolveCronSessionMock,
   resetRunCronIsolatedAgentTurnHarness,
@@ -781,6 +782,70 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     expect(cronSession.store).toBeUndefined();
   });
 
+  it("does not let old cron cleanup clear a newer same-id run context", async () => {
+    mockRunCronFallbackPassthrough();
+    const {
+      claimAgentRunContext,
+      clearAgentRunContext,
+      getAgentRunContext,
+      rotateAgentEventLifecycleGeneration,
+    } = await import("../../infra/agent-events.js");
+    let newerLifecycleGeneration = "";
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (runParams: {
+        onExecutionStarted?: (info?: { lifecycleGeneration?: string }) => void;
+      }) => {
+        runParams.onExecutionStarted?.();
+        newerLifecycleGeneration = rotateAgentEventLifecycleGeneration();
+        claimAgentRunContext("test-session-id", {
+          sessionKey: "agent:default:cron:message-tool-policy",
+          sessionId: "test-session-id",
+          lifecycleGeneration: newerLifecycleGeneration,
+        });
+        return {
+          payloads: [{ text: "test output" }],
+          meta: { agentMeta: {} },
+        };
+      },
+    );
+
+    await runCronIsolatedAgentTurn(makeParams());
+
+    expect(getAgentRunContext("test-session-id")).toEqual(
+      expect.objectContaining({
+        lifecycleGeneration: newerLifecycleGeneration,
+      }),
+    );
+    clearAgentRunContext("test-session-id", newerLifecycleGeneration);
+  });
+
+  it("rejects cron work when the gateway lifecycle rotates during preparation", async () => {
+    let releasePreflight: (() => void) | undefined;
+    const preflightStarted = new Promise<void>((resolveStarted) => {
+      preflightCronModelProviderMock.mockImplementationOnce(async () => {
+        resolveStarted();
+        await new Promise<void>((resolve) => {
+          releasePreflight = resolve;
+        });
+        return { status: "available" };
+      });
+    });
+    const { getAgentRunContext, rotateAgentEventLifecycleGeneration } =
+      await import("../../infra/agent-events.js");
+
+    const runPromise = runCronIsolatedAgentTurn(makeParams());
+    await preflightStarted;
+    rotateAgentEventLifecycleGeneration();
+    releasePreflight?.();
+
+    await expect(runPromise).resolves.toMatchObject({
+      status: "error",
+      error: expect.stringContaining("Agent run belongs to a stale gateway lifecycle"),
+    });
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(getAgentRunContext("test-session-id")).toBeUndefined();
+  });
+
   it("keeps shared cron run context references active after completion", async () => {
     const cronSession = makeCronSession({
       store: { "agent:default:cron:message-tool-policy": { retained: true } },
@@ -805,6 +870,113 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     });
     expect(cronSession.store).toBeUndefined();
     clearAgentRunContext("test-session-id");
+  });
+
+  it("releases a shared cron run context created by this invocation", async () => {
+    mockRunCronFallbackPassthrough();
+    runEmbeddedAgentMock.mockRejectedValueOnce(new Error("runner failed"));
+    const { getAgentRunContext } = await import("../../infra/agent-events.js");
+    const currentSessionJob = makeMessageToolPolicyJob() as unknown as Record<string, unknown>;
+    currentSessionJob.sessionTarget = "current";
+
+    await expect(
+      runCronIsolatedAgentTurn({
+        ...makeParams(),
+        job: currentSessionJob as never,
+      }),
+    ).resolves.toMatchObject({
+      status: "error",
+    });
+
+    expect(getAgentRunContext("test-session-id")).toBeUndefined();
+  });
+
+  it("keeps shared cron context until overlapping invocations finish", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronSessionMock.mockImplementation(() => makeCronSession());
+    const { claimAgentRunContext, getAgentEventLifecycleGeneration, getAgentRunContext } =
+      await import("../../infra/agent-events.js");
+    let invocationCount = 0;
+    let releaseFirst = () => {};
+    let releaseSecond = () => {};
+    let markFirstStarted = () => {};
+    let markSecondStarted = () => {};
+    const firstStarted = new Promise<void>((resolve) => {
+      markFirstStarted = resolve;
+    });
+    const secondStarted = new Promise<void>((resolve) => {
+      markSecondStarted = resolve;
+    });
+    const firstBlocked = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const secondBlocked = new Promise<void>((resolve) => {
+      releaseSecond = resolve;
+    });
+    runEmbeddedAgentMock.mockImplementation(async () => {
+      claimAgentRunContext("test-session-id", {
+        sessionKey: "agent:default:cron:message-tool-policy",
+        sessionId: "test-session-id",
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      });
+      invocationCount += 1;
+      if (invocationCount === 1) {
+        markFirstStarted();
+        await firstBlocked;
+      } else {
+        markSecondStarted();
+        await secondBlocked;
+      }
+      return {
+        payloads: [{ text: "test output" }],
+        meta: { agentMeta: {} },
+      };
+    });
+    const currentSessionJob = makeMessageToolPolicyJob() as unknown as Record<string, unknown>;
+    currentSessionJob.sessionTarget = "current";
+    const runParams = {
+      ...makeParams(),
+      job: currentSessionJob as never,
+    };
+
+    const firstRun = runCronIsolatedAgentTurn(runParams);
+    await firstStarted;
+    const secondRun = runCronIsolatedAgentTurn(runParams);
+    await secondStarted;
+
+    releaseFirst();
+    await firstRun;
+    expect(getAgentRunContext("test-session-id")).toBeDefined();
+
+    releaseSecond();
+    await secondRun;
+    expect(getAgentRunContext("test-session-id")).toBeUndefined();
+  });
+
+  it("releases a stale shared cron context replaced by this invocation", async () => {
+    mockRunCronFallbackPassthrough();
+    runEmbeddedAgentMock.mockRejectedValueOnce(new Error("runner failed"));
+    const {
+      claimAgentRunContext,
+      getAgentEventLifecycleGeneration,
+      getAgentRunContext,
+      rotateAgentEventLifecycleGeneration,
+    } = await import("../../infra/agent-events.js");
+    claimAgentRunContext("test-session-id", {
+      sessionKey: "agent:default:cron:message-tool-policy",
+      sessionId: "test-session-id",
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
+    });
+    rotateAgentEventLifecycleGeneration();
+    const currentSessionJob = makeMessageToolPolicyJob() as unknown as Record<string, unknown>;
+    currentSessionJob.sessionTarget = "current";
+
+    await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: currentSessionJob as never,
+    });
+
+    expect(getAgentRunContext("test-session-id")).toBeUndefined();
   });
 
   it("skips cron delivery when output is heartbeat-only", async () => {

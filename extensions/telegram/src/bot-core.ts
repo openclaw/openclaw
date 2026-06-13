@@ -28,6 +28,12 @@ import type { TelegramBotDeps } from "./bot-deps.js";
 import { registerTelegramHandlers } from "./bot-handlers.runtime.js";
 import { createTelegramMessageProcessor } from "./bot-message.js";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
+import {
+  getTelegramSpooledReplayDeferredParticipant,
+  isTelegramSpooledReplayUpdate,
+  runWithTelegramUpdateProcessingFrame,
+  TelegramSpooledReplayProcessingError,
+} from "./bot-processing-outcome.js";
 import { createTelegramUpdateTracker } from "./bot-update-tracker.js";
 import type { TelegramUpdateKeyContext } from "./bot-updates.js";
 import { resolveDefaultAgentId } from "./bot.agent.runtime.js";
@@ -43,6 +49,7 @@ import {
 } from "./client-fetch.js";
 import { resolveTelegramTransport } from "./fetch.js";
 import { stringifyTelegramRawUpdateForLog } from "./raw-update-log.js";
+import { TELEGRAM_RICH_TEXT_LIMIT } from "./rich-message.js";
 import { createTelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
 import { getTelegramSequentialKey } from "./sequential-key.js";
 import { createTelegramThreadBindingManager } from "./thread-bindings.js";
@@ -212,7 +219,29 @@ export function createTelegramBotCore(
       return;
     }
     try {
-      await next();
+      const { result } = await runWithTelegramUpdateProcessingFrame(async () => {
+        await next();
+      });
+      const deferredWork = getTelegramSpooledReplayDeferredParticipant();
+      if (deferredWork) {
+        void deferredWork.task
+          .then((deferredResult) => {
+            updateTracker.finishUpdate(begin.update, {
+              completed: deferredResult.kind !== "failed-retryable",
+            });
+          })
+          .catch(() => {
+            updateTracker.finishUpdate(begin.update, { completed: false });
+          });
+        return;
+      }
+      if (result?.kind === "failed-retryable") {
+        if (isTelegramSpooledReplayUpdate(ctx.update)) {
+          throw new TelegramSpooledReplayProcessingError(result.error);
+        }
+        updateTracker.finishUpdate(begin.update, { completed: true });
+        return;
+      }
       updateTracker.finishUpdate(begin.update, { completed: true });
     } catch (error) {
       updateTracker.finishUpdate(begin.update, { completed: false });
@@ -246,7 +275,12 @@ export function createTelegramBotCore(
       DEFAULT_GROUP_HISTORY_LIMIT,
   );
   const groupHistories = new Map<string, HistoryEntry[]>();
-  const textLimit = resolveTextChunkLimit(cfg, "telegram", account.accountId);
+  const textLimit = Math.min(
+    resolveTextChunkLimit(cfg, "telegram", account.accountId, {
+      fallbackLimit: TELEGRAM_RICH_TEXT_LIMIT,
+    }),
+    TELEGRAM_RICH_TEXT_LIMIT,
+  );
   const dmPolicy = telegramCfg.dmPolicy ?? "pairing";
   const allowFrom = opts.allowFrom ?? telegramCfg.allowFrom;
   const groupAllowFrom =

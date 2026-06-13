@@ -42,6 +42,7 @@ const state = vi.hoisted(() => ({
   isContextOverflowErrorMock: vi.fn((_: string | undefined) => false),
   isLikelyContextOverflowErrorMock: vi.fn((_: string | undefined) => false),
   updateSessionStoreMock: vi.fn(),
+  resolveCurrentTurnImagesMock: vi.fn(),
 }));
 
 const GENERIC_RUN_FAILURE_TEXT =
@@ -148,6 +149,7 @@ vi.mock("../../infra/agent-events.js", async () => {
   );
   return {
     ...actual,
+    clearAgentRunContext: vi.fn(),
     emitAgentEvent: vi.fn(),
     registerAgentRunContext: vi.fn(),
   };
@@ -171,6 +173,10 @@ vi.mock("../heartbeat.js", () => ({
     didStrip: false,
     shouldSkip: false,
   }),
+}));
+
+vi.mock("./current-turn-images.js", () => ({
+  resolveCurrentTurnImages: (params: unknown) => state.resolveCurrentTurnImagesMock(params),
 }));
 
 vi.mock("./agent-runner-utils.js", () => ({
@@ -236,6 +242,8 @@ type FallbackRunnerParams = {
 };
 
 type EmbeddedAgentParams = {
+  lifecycleGeneration?: string;
+  onExecutionStarted?: (info?: { lifecycleGeneration?: string }) => void;
   onBlockReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
   onToolResult?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
   onItemEvent?: (payload: {
@@ -1153,6 +1161,13 @@ describe("runAgentTurnWithFallback", () => {
     state.isLikelyContextOverflowErrorMock.mockReset();
     state.isLikelyContextOverflowErrorMock.mockReturnValue(false);
     state.updateSessionStoreMock.mockReset();
+    state.resolveCurrentTurnImagesMock.mockReset();
+    state.resolveCurrentTurnImagesMock.mockImplementation(
+      async (params: { images?: unknown[]; imageOrder?: unknown[] }) => ({
+        images: params.images,
+        imageOrder: params.imageOrder,
+      }),
+    );
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => ({
       result: await params.run("anthropic", "claude"),
       provider: "anthropic",
@@ -1189,6 +1204,55 @@ describe("runAgentTurnWithFallback", () => {
     expect(fallbackCall.abortSignal).toBe(replyOperation.abortSignal);
     expect(fallbackCall.sessionId).toBe("session");
     expect(embeddedCall.abortSignal).toBe(replyOperation.abortSignal);
+  });
+
+  it("registers run ownership before asynchronous image preflight", async () => {
+    const agentEvents = await import("../../infra/agent-events.js");
+    const registerAgentRunContext = vi.mocked(agentEvents.registerAgentRunContext);
+    let resolveImages: (() => void) | undefined;
+    state.resolveCurrentTurnImagesMock.mockImplementationOnce(
+      () =>
+        new Promise<Record<string, never>>((resolve) => {
+          resolveImages = () => resolve({});
+        }),
+    );
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const runPromise = runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+    expect(registerAgentRunContext).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        sessionKey: "main",
+        sessionId: "session",
+      }),
+    );
+    expect(state.runWithModelFallbackMock).not.toHaveBeenCalled();
+
+    resolveImages?.();
+    await runPromise;
+  });
+
+  it("clears run ownership when image preflight fails", async () => {
+    const agentEvents = await import("../../infra/agent-events.js");
+    const clearAgentRunContext = vi.mocked(agentEvents.clearAgentRunContext);
+    state.resolveCurrentTurnImagesMock.mockRejectedValueOnce(new Error("invalid image metadata"));
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    await expect(
+      runAgentTurnWithFallback(
+        createMinimalRunAgentTurnParams({
+          opts: { runId: "preflight-failure" },
+        }),
+      ),
+    ).rejects.toThrow("invalid image metadata");
+
+    expect(clearAgentRunContext).toHaveBeenCalledWith("preflight-failure", expect.any(String));
+    expect(state.runWithModelFallbackMock).not.toHaveBeenCalled();
   });
 
   it("passes runtime toolsAllow to embedded agent runs", async () => {
@@ -1838,6 +1902,7 @@ describe("runAgentTurnWithFallback", () => {
     followupRun.run.model = "gpt-5.4";
     followupRun.run.extraSystemPrompt = "dynamic inbound metadata\n\nstable group prompt";
     followupRun.run.extraSystemPromptStatic = "stable group prompt";
+    followupRun.run.senderId = "sender-static";
     followupRun.originatingChannel = "telegram";
 
     const result = await runAgentTurnWithFallback({
@@ -1870,6 +1935,7 @@ describe("runAgentTurnWithFallback", () => {
       trigger: "user",
       messageChannel: "telegram",
       messageProvider: "telegram",
+      senderId: "sender-static",
     });
   });
 
@@ -1965,6 +2031,8 @@ describe("runAgentTurnWithFallback", () => {
       agentId: "agent",
       sessionId: "session",
       suppressNextUserMessagePersistence: false,
+      persistAssistantTranscript: true,
+      storePath: "/tmp/sessions.json",
     });
     const call = requireMockCall(state.runCliAgentMock, 0, "CLI runtime");
     const callParams = requireRecord(call[0], "CLI runtime");
@@ -2017,6 +2085,7 @@ describe("runAgentTurnWithFallback", () => {
     expect(result.kind).toBe("success");
     expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
       currentInboundEventKind: "room_event",
+      persistAssistantTranscript: false,
       cliSessionId: "existing-cli-session",
       cliSessionBinding: {
         sessionId: "existing-cli-session",
@@ -2243,12 +2312,7 @@ describe("runAgentTurnWithFallback", () => {
       attempts: [],
     }));
     state.runCliAgentMock.mockImplementationOnce(
-      async (params: {
-        runId: string;
-        classifyCommentaryText?: boolean;
-        emitCommentaryText?: boolean;
-      }) => {
-        expect(params.classifyCommentaryText).toBe(false);
+      async (params: { runId: string; emitCommentaryText?: boolean }) => {
         expect(params.emitCommentaryText).toBe(false);
         const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
           "../../infra/agent-events.js",
@@ -2311,12 +2375,7 @@ describe("runAgentTurnWithFallback", () => {
       attempts: [],
     }));
     state.runCliAgentMock.mockImplementationOnce(
-      async (params: {
-        runId: string;
-        classifyCommentaryText?: boolean;
-        emitCommentaryText?: boolean;
-      }) => {
-        expect(params.classifyCommentaryText).toBe(false);
+      async (params: { runId: string; emitCommentaryText?: boolean }) => {
         expect(params.emitCommentaryText).toBe(false);
         const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
           "../../infra/agent-events.js",
@@ -2402,12 +2461,7 @@ describe("runAgentTurnWithFallback", () => {
       attempts: [],
     }));
     state.runCliAgentMock.mockImplementationOnce(
-      async (params: {
-        runId: string;
-        classifyCommentaryText?: boolean;
-        emitCommentaryText?: boolean;
-      }) => {
-        expect(params.classifyCommentaryText).toBe(false);
+      async (params: { runId: string; emitCommentaryText?: boolean }) => {
         expect(params.emitCommentaryText).toBe(false);
         const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
           "../../infra/agent-events.js",
@@ -2481,12 +2535,7 @@ describe("runAgentTurnWithFallback", () => {
       attempts: [],
     }));
     state.runCliAgentMock.mockImplementationOnce(
-      async (params: {
-        runId: string;
-        classifyCommentaryText?: boolean;
-        emitCommentaryText?: boolean;
-      }) => {
-        expect(params.classifyCommentaryText).toBe(true);
+      async (params: { runId: string; emitCommentaryText?: boolean }) => {
         expect(params.emitCommentaryText).toBe(true);
         const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
           "../../infra/agent-events.js",
@@ -2539,6 +2588,51 @@ describe("runAgentTurnWithFallback", () => {
     expect(call?.kind).toBe("preamble");
     expect(call?.progressText).toBe("Let me check the files.");
     expect(call?.itemId).toBe("commentary-1");
+  });
+
+  it("does not emit CLI commentary when commentary progress is explicitly disabled", async () => {
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("claude-cli", "claude-opus-4-6"),
+      provider: "claude-cli",
+      model: "claude-opus-4-6",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockImplementationOnce(
+      async (params: { runId: string; emitCommentaryText?: boolean }) => {
+        // Defined-but-off commentary progress must leave commentary emission off
+        // so pre-tool text stays in the assistant stream (#92092).
+        expect(params.emitCommentaryText).toBe(false);
+        return { payloads: [{ text: "done" }], meta: {} };
+      },
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "claude-cli";
+    followupRun.run.model = "claude-opus-4-6";
+
+    await runAgentTurnWithFallback({
+      commandBody: "hi",
+      followupRun,
+      sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
+      opts: { commentaryProgressEnabled: false },
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(state.runCliAgentMock).toHaveBeenCalledTimes(1);
   });
 
   it("does not bridge CLI tool deltas when silentExpected is set", async () => {
@@ -3920,6 +4014,64 @@ describe("runAgentTurnWithFallback", () => {
     expect(typeof lifecycleData.endedAt).toBe("number");
   });
 
+  it("uses a rebound lifecycle generation for embedded terminal events", async () => {
+    const agentEvents = await import("../../infra/agent-events.js");
+    const emitAgentEvent = vi.mocked(agentEvents.emitAgentEvent);
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      params.onExecutionStarted?.({ lifecycleGeneration: "post-restart" });
+      await params.onAgentEvent?.({
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 1_000 },
+      });
+      throw new Error("rebound failure");
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: { runId: "run-rebound" } as GetReplyOptions,
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("final");
+    const lifecycleEvents = emitAgentEvent.mock.calls
+      .map((call) => call[0])
+      .filter(
+        (event) =>
+          event.runId === "run-rebound" &&
+          event.stream === "lifecycle" &&
+          (event.data.phase === "error" || event.data.fallbackExhaustedFailure === true),
+      );
+    expect(lifecycleEvents.length).toBeGreaterThan(0);
+    expect(lifecycleEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          lifecycleGeneration: "post-restart",
+        }),
+      ]),
+    );
+    expect(lifecycleEvents.every((event) => event.lifecycleGeneration === "post-restart")).toBe(
+      true,
+    );
+  });
+
   it("does not duplicate embedded lifecycle terminal events already reported by the runner", async () => {
     const agentEvents = await import("../../infra/agent-events.js");
     const emitAgentEvent = vi.mocked(agentEvents.emitAgentEvent);
@@ -4589,7 +4741,7 @@ describe("runAgentTurnWithFallback", () => {
     });
   });
 
-  it("delivers compaction hook messages without duplicating notifyUser notices", async () => {
+  it("delivers compaction hook messages alongside notifyUser notices (#90185)", async () => {
     const onBlockReply = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
       await params.onAgentEvent?.({
@@ -4639,7 +4791,7 @@ describe("runAgentTurnWithFallback", () => {
     });
 
     expect(result.kind).toBe("success");
-    expect(onBlockReply).toHaveBeenCalledTimes(2);
+    expect(onBlockReply).toHaveBeenCalledTimes(4);
     expectBlockReplyCall(onBlockReply, 0, {
       text: "Hook before",
       replyToId: "msg",
@@ -4647,7 +4799,19 @@ describe("runAgentTurnWithFallback", () => {
       isCompactionNotice: true,
     });
     expectBlockReplyCall(onBlockReply, 1, {
+      text: "🧹 Compacting context...",
+      replyToId: "msg",
+      replyToCurrent: true,
+      isCompactionNotice: true,
+    });
+    expectBlockReplyCall(onBlockReply, 2, {
       text: "Hook after",
+      replyToId: "msg",
+      replyToCurrent: true,
+      isCompactionNotice: true,
+    });
+    expectBlockReplyCall(onBlockReply, 3, {
+      text: "🧹 Compaction complete",
       replyToId: "msg",
       replyToCurrent: true,
       isCompactionNotice: true,
@@ -4771,6 +4935,69 @@ describe("runAgentTurnWithFallback", () => {
     });
     expectBlockReplyCall(onBlockReply, 1, {
       text: "🧹 Compaction incomplete",
+      isCompactionNotice: true,
+    });
+  });
+
+  it("uses the compaction notice fallback when no block-reply dispatcher is wired", async () => {
+    const onCompactionNoticePayload = vi.fn();
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onAgentEvent?.({ stream: "compaction", data: { phase: "start" } });
+      await params.onAgentEvent?.({
+        stream: "compaction",
+        data: { phase: "end", completed: true },
+      });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const followupRun = createFollowupRun();
+    followupRun.run.config = {
+      agents: {
+        defaults: {
+          compaction: {
+            notifyUser: true,
+          },
+        },
+      },
+    };
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun,
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+      onCompactionNoticePayload,
+    });
+
+    expect(result.kind).toBe("success");
+    expect(onCompactionNoticePayload).toHaveBeenCalledTimes(2);
+    expectBlockReplyCall(onCompactionNoticePayload, 0, {
+      text: "🧹 Compacting context...",
+      replyToId: "msg",
+      replyToCurrent: true,
+      isCompactionNotice: true,
+    });
+    expectBlockReplyCall(onCompactionNoticePayload, 1, {
+      text: "🧹 Compaction complete",
+      replyToId: "msg",
+      replyToCurrent: true,
       isCompactionNotice: true,
     });
   });
@@ -5079,12 +5306,14 @@ describe("runAgentTurnWithFallback", () => {
   });
 
   it("surfaces gateway restart text when the reply operation was aborted for restart", async () => {
+    const agentEvents = await import("../../infra/agent-events.js");
+    const emitAgentEvent = vi.mocked(agentEvents.emitAgentEvent);
     const { replyOperation, failMock } = createMockReplyOperation();
     Object.defineProperty(replyOperation, "result", {
       value: { kind: "aborted", code: "aborted_for_restart" } as const,
       configurable: true,
     });
-    state.runWithModelFallbackMock.mockRejectedValueOnce(
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(
       Object.assign(new Error("aborted"), { name: "AbortError" }),
     );
 
@@ -5120,9 +5349,75 @@ describe("runAgentTurnWithFallback", () => {
       );
     }
     expect(failMock).not.toHaveBeenCalled();
+    expect(
+      emitAgentEvent.mock.calls.some(
+        ([event]) =>
+          event.stream === "lifecycle" &&
+          event.data.phase === "end" &&
+          event.data.aborted === true &&
+          event.data.stopReason === "restart",
+      ),
+    ).toBe(true);
+  });
+
+  it("preserves restart ownership when an aborted embedded runner resolves normally", async () => {
+    const agentEvents = await import("../../infra/agent-events.js");
+    const emitAgentEvent = vi.mocked(agentEvents.emitAgentEvent);
+    const { replyOperation } = createMockReplyOperation();
+    Object.defineProperty(replyOperation, "result", {
+      value: { kind: "aborted", code: "aborted_for_restart" } as const,
+      configurable: true,
+    });
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {},
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      replyOperation,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result).toEqual({
+      kind: "final",
+      payload: expect.objectContaining({
+        text: "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
+      }),
+    });
+    expect(
+      emitAgentEvent.mock.calls.some(
+        ([event]) =>
+          event.stream === "lifecycle" &&
+          event.data.phase === "end" &&
+          event.data.aborted === true &&
+          event.data.stopReason === "restart",
+      ),
+    ).toBe(true);
   });
 
   it("uses compact generic copy for raw external chat errors when verbose is off", async () => {
+    const agentEvents = await import("../../infra/agent-events.js");
+    const emitAgentEvent = vi.mocked(agentEvents.emitAgentEvent);
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
       new Error("INVALID_ARGUMENT: some other failure"),
     );
@@ -5135,7 +5430,7 @@ describe("runAgentTurnWithFallback", () => {
         Provider: "whatsapp",
         MessageSid: "msg",
       } as unknown as TemplateContext,
-      opts: {},
+      opts: { runId: "run-provider-failure" } as GetReplyOptions,
       typingSignals: createMockTypingSignaler(),
       blockReplyPipeline: null,
       blockStreamingEnabled: false,
@@ -5155,6 +5450,21 @@ describe("runAgentTurnWithFallback", () => {
     if (result.kind === "final") {
       expect(result.payload.text).toBe(GENERIC_RUN_FAILURE_TEXT);
     }
+    const terminalFailureEvent = emitAgentEvent.mock.calls
+      .map((call) => call[0])
+      .find((event) => {
+        if (!event || typeof event !== "object") {
+          return false;
+        }
+        const data = (event as { data?: Record<string, unknown> }).data;
+        return (
+          (event as { runId?: unknown }).runId === "run-provider-failure" &&
+          (event as { stream?: unknown }).stream === "lifecycle" &&
+          data?.phase === "error" &&
+          data.fallbackExhaustedFailure === true
+        );
+      });
+    expect(terminalFailureEvent).toBeDefined();
   });
 
   it("uses heartbeat failure copy for raw external errors during heartbeat runs", async () => {

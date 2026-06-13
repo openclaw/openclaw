@@ -50,10 +50,6 @@ import {
 import { createPreparedEmbeddedAgentSettingsManager } from "../agent-project-settings.js";
 import { isDefaultAgentRuntimeId } from "../agent-runtime-id.js";
 import {
-  mapSandboxSkillEntriesForPrompt,
-  resolveSandboxSkillRuntimeInputs,
-} from "./sandbox-skills.js";
-import {
   resolveAgentDir,
   resolveRunModelFallbacksOverride,
   resolveSessionAgentIds,
@@ -101,6 +97,7 @@ import { supportsModelTools } from "../model-tool-support.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import { wrapStreamFnTextTransforms } from "../plugin-text-transforms.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "../prompt-surface.js";
+import { applyPreparedRuntimeAuthToModel } from "../provider-request-config.js";
 import { registerProviderStreamForModel } from "../provider-stream.js";
 import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
 import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
@@ -164,6 +161,10 @@ import { sanitizeSessionHistory, validateReplayTurns } from "./replay-history.js
 import { createEmbeddedAgentResourceLoader } from "./resource-loader.js";
 import { resolveAttemptSpawnWorkspaceDir } from "./run/attempt.thread-helpers.js";
 import { buildEmbeddedSandboxInfo, resolveEmbeddedSandboxInfoExecPolicy } from "./sandbox-info.js";
+import {
+  mapSandboxSkillEntriesForPrompt,
+  resolveSandboxSkillRuntimeInputs,
+} from "./sandbox-skills.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "./session-manager-cache.js";
 import {
   resolveEmbeddedAgentBaseStreamFn,
@@ -210,6 +211,18 @@ function prepareCompactionSessionAgent(params: {
   effectiveWorkspace: string;
   agentDir: string;
   runtimePlan?: AgentRuntimePlan;
+  sessionKey?: string;
+  sandboxToolPolicy?: { allow?: string[]; deny?: string[] };
+  messageProvider?: string;
+  agentAccountId?: string | null;
+  groupId?: string | null;
+  groupChannel?: string | null;
+  groupSpace?: string | null;
+  spawnedBy?: string | null;
+  senderId?: string | null;
+  senderName?: string | null;
+  senderUsername?: string | null;
+  senderE164?: string | null;
 }) {
   params.session.agent.streamFn = resolveEmbeddedAgentStreamFn({
     currentStreamFn: resolveEmbeddedAgentBaseStreamFn({ session: params.session as never }),
@@ -252,7 +265,25 @@ function prepareCompactionSessionAgent(params: {
     params.effectiveModel,
     params.agentDir,
     undefined,
-    preparedRuntimeExtraParams ? { preparedExtraParams: preparedRuntimeExtraParams } : undefined,
+    {
+      ...(preparedRuntimeExtraParams ? { preparedExtraParams: preparedRuntimeExtraParams } : {}),
+      nativeWebSearchPolicyContext: {
+        // Compaction rebuilds the provider stream wrapper, so preserve the
+        // session-scoped policy inputs that can suppress provider-native search.
+        sessionKey: params.sessionKey,
+        sandboxToolPolicy: params.sandboxToolPolicy,
+        messageProvider: params.messageProvider,
+        agentAccountId: params.agentAccountId,
+        groupId: params.groupId,
+        groupChannel: params.groupChannel,
+        groupSpace: params.groupSpace,
+        spawnedBy: params.spawnedBy,
+        senderId: params.senderId,
+        senderName: params.senderName,
+        senderUsername: params.senderUsername,
+        senderE164: params.senderE164,
+      },
+    },
   );
 }
 
@@ -641,9 +672,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
           profileId: apiKeyInfo.profileId,
         },
       });
-      if (preparedAuth?.baseUrl) {
-        runtimeModel = { ...runtimeModel, baseUrl: preparedAuth.baseUrl };
-      }
+      runtimeModel = applyPreparedRuntimeAuthToModel(runtimeModel, preparedAuth);
       const runtimeApiKey = preparedAuth?.apiKey ?? apiKeyInfo.apiKey;
       hasRuntimeAuthExchange = Boolean(preparedAuth?.apiKey);
       if (!runtimeApiKey) {
@@ -816,6 +845,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
           : undefined,
       sessionId: params.sessionId,
       runId: params.runId,
+      oneShotCliRun: params.oneShotCliRun,
       groupId: params.groupId,
       groupChannel: params.groupChannel,
       groupSpace: params.groupSpace,
@@ -992,6 +1022,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
       model: `${provider}/${modelId}`,
       shell: detectRuntimeShell(),
       channel: runtimeChannel,
+      chatType: params.chatType,
       capabilities: runtimeCapabilities,
       channelActions,
       activeProcessSessions: listActiveProcessSessionReferences({
@@ -1259,6 +1290,18 @@ async function compactEmbeddedAgentSessionDirectOnce(
             effectiveWorkspace,
             agentDir,
             runtimePlan,
+            sessionKey: sandboxSessionKey,
+            sandboxToolPolicy: sandbox?.tools,
+            messageProvider: resolvedMessageProvider,
+            agentAccountId: params.agentAccountId,
+            groupId: params.groupId,
+            groupChannel: params.groupChannel,
+            groupSpace: params.groupSpace,
+            spawnedBy: params.spawnedBy,
+            senderId: params.senderId,
+            senderName: params.senderName,
+            senderUsername: params.senderUsername,
+            senderE164: params.senderE164,
           });
 
           const prior = await sanitizeSessionHistory({

@@ -240,6 +240,12 @@ describe("diagnostic-events", () => {
 
     expect(traceparents).toEqual([undefined, `00-${trace.traceId}-${trace.spanId}-01`]);
     expect(formatDiagnosticTraceparentForPropagation({ trace }, { trusted: true })).toBeUndefined();
+    expect(
+      formatDiagnosticTraceparentForPropagation(
+        { trace },
+        { trusted: false, trustedTraceContext: true },
+      ),
+    ).toBeUndefined();
   });
 
   it("shares diagnostic state across duplicate module instances", async () => {

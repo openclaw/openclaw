@@ -229,6 +229,52 @@ describe("telegram doctor", () => {
     ]);
   });
 
+  it("removes retired native draft preview keys", () => {
+    const normalize = telegramDoctor.normalizeCompatibilityConfig;
+    if (!normalize) {
+      throw new Error("expected telegram compatibility normalizer");
+    }
+
+    const result = normalize({
+      cfg: {
+        channels: {
+          telegram: {
+            streaming: {
+              mode: "partial",
+              preview: {
+                toolProgress: true,
+                nativeToolProgress: true,
+                nativeToolProgressAllowFrom: ["123"],
+              },
+            },
+            accounts: {
+              work: {
+                streaming: {
+                  preview: {
+                    nativeToolProgress: true,
+                  },
+                },
+              },
+            },
+          },
+        },
+      } as never,
+    });
+
+    const telegram = result.config.channels?.telegram;
+    expect(telegram?.streaming).toEqual({
+      mode: "partial",
+      preview: {
+        toolProgress: true,
+      },
+    });
+    expect(telegram?.accounts?.work?.streaming).toBeUndefined();
+    expect(result.changes).toEqual([
+      "Removed channels.telegram.streaming.preview native draft keys; Telegram previews now use rich send/edit messages.",
+      "Removed channels.telegram.accounts.work.streaming.preview native draft keys; Telegram previews now use rich send/edit messages.",
+    ]);
+  });
+
   it("finds invalid allowFrom entries across scopes", () => {
     const hits = scanTelegramInvalidAllowFromEntries({
       channels: {

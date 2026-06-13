@@ -8,7 +8,7 @@ import {
 import type { ResolvedTtsConfig, SpeechProviderPlugin } from "openclaw/plugin-sdk/speech-core";
 import { withEnv, withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AssistantMessage } from "../../llm/types.js";
+import type { AssistantMessage, Model } from "../../llm/types.js";
 import { resolveWorkspacePackagePublicModuleUrl } from "../../plugin-sdk/test-helpers/public-surface-loader.js";
 
 type TtsRuntimeModule = typeof import("openclaw/plugin-sdk/tts-runtime");
@@ -25,11 +25,8 @@ let ttsRuntimePromise: Promise<TtsRuntimeModule> | null = null;
 let ttsRuntimeInitialized = false;
 let ttsCorePromise: Promise<TtsCoreModule> | null = null;
 let completeSimple: typeof import("openclaw/plugin-sdk/llm").completeSimple;
-let getApiKeyForModelMock: SummarizeTextDeps["getApiKeyForModel"];
+let prepareSimpleCompletionModelMock: SummarizeTextDeps["prepareSimpleCompletionModel"];
 let requireApiKeyMock: SummarizeTextDeps["requireApiKey"];
-let resolveModelAsyncMock: SummarizeTextDeps["resolveModelAsync"];
-let ensureCustomApiRegisteredMock: ReturnType<typeof vi.fn>;
-let prepareModelForSimpleCompletionMock: SummarizeTextDeps["prepareModelForSimpleCompletion"];
 let summarizeTextCore: TtsCoreModule["summarizeText"];
 let resolveTtsConfig: TtsRuntimeModule["resolveTtsConfig"];
 let maybeApplyTtsToPayload: TtsRuntimeModule["maybeApplyTtsToPayload"];
@@ -83,19 +80,20 @@ vi.mock("openclaw/plugin-sdk/llm", () => {
   };
 });
 
-function createResolvedModel(provider: string, modelId: string, api = "openai-completions") {
+function createResolvedModel(provider: string, modelId: string) {
   return {
     model: {
       provider,
       id: modelId,
       name: modelId,
-      api,
+      api: "openai-completions",
+      baseUrl: "https://example.test/v1",
       reasoning: false,
       input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 128000,
       maxTokens: 8192,
-    },
+    } satisfies Model<"openai-completions">,
     authStorage: { profiles: {} },
     modelRegistry: { find: vi.fn() },
   };
@@ -144,10 +142,8 @@ const mockAssistantMessage = (content: AssistantMessage["content"]): AssistantMe
 function createSummarizeTextDeps() {
   return {
     completeSimple,
-    getApiKeyForModel: getApiKeyForModelMock,
-    prepareModelForSimpleCompletion: prepareModelForSimpleCompletionMock,
+    prepareSimpleCompletionModel: prepareSimpleCompletionModelMock,
     requireApiKey: requireApiKeyMock,
-    resolveModelAsync: resolveModelAsyncMock,
   };
 }
 
@@ -427,10 +423,15 @@ async function loadTtsCore(): Promise<TtsCoreModule> {
   return await ttsCorePromise;
 }
 
-function createPrepareModelForSimpleCompletionMock(): SummarizeTextDeps["prepareModelForSimpleCompletion"] {
-  return vi.fn(
-    ({ model }: Parameters<SummarizeTextDeps["prepareModelForSimpleCompletion"]>[0]) => model,
-  ) as SummarizeTextDeps["prepareModelForSimpleCompletion"];
+function createPrepareSimpleCompletionModelMock(): SummarizeTextDeps["prepareSimpleCompletionModel"] {
+  return vi.fn(async ({ provider, modelId }) => ({
+    model: createResolvedModel(provider, modelId).model,
+    auth: {
+      apiKey: "test-api-key",
+      source: "test",
+      mode: "api-key" as const,
+    },
+  })) as SummarizeTextDeps["prepareSimpleCompletionModel"];
 }
 
 async function setupTtsRuntime() {
@@ -452,7 +453,6 @@ async function setupTtsRuntime() {
 }
 
 function setupTestSpeechProviderRegistry() {
-  prepareModelForSimpleCompletionMock = createPrepareModelForSimpleCompletionMock();
   const registry = createEmptyPluginRegistry();
   registry.speechProviders = [
     { pluginId: "openai", provider: buildTestOpenAISpeechProvider(), source: "test" },
@@ -496,28 +496,12 @@ function createResolvedSummarizationConfig(cfg: OpenClawConfig): ResolvedTtsConf
 async function setupSummarizationMocks() {
   ({ summarizeText: summarizeTextCore } = await loadTtsCore());
   ({ completeSimple } = await import("openclaw/plugin-sdk/llm"));
-  getApiKeyForModelMock = vi.fn() as SummarizeTextDeps["getApiKeyForModel"];
+  prepareSimpleCompletionModelMock = createPrepareSimpleCompletionModelMock();
   requireApiKeyMock = vi.fn() as SummarizeTextDeps["requireApiKey"];
-  resolveModelAsyncMock = vi.fn() as SummarizeTextDeps["resolveModelAsync"];
-  ensureCustomApiRegisteredMock = vi.fn();
-  prepareModelForSimpleCompletionMock = createPrepareModelForSimpleCompletionMock();
   vi.mocked(completeSimple).mockResolvedValue(
     mockAssistantMessage([{ type: "text", text: "Summary" }]),
   );
-  vi.mocked(getApiKeyForModelMock).mockResolvedValue({
-    apiKey: "test-api-key",
-    source: "test",
-    mode: "api-key",
-  });
   vi.mocked(requireApiKeyMock).mockImplementation((auth: { apiKey?: string }) => auth.apiKey ?? "");
-  vi.mocked(resolveModelAsyncMock).mockImplementation(
-    async (provider: string, modelId: string) =>
-      createResolvedModel(provider, modelId) as unknown as Awaited<
-        ReturnType<typeof resolveModelAsyncMock>
-      >,
-  );
-  vi.mocked(ensureCustomApiRegisteredMock).mockReset();
-  prepareModelForSimpleCompletionMock = createPrepareModelForSimpleCompletionMock();
 }
 
 async function setupTtsContractTest() {
@@ -905,7 +889,10 @@ export function describeTtsSummarizationContract() {
       ).toBe("user");
       expect((callArgs[2] as { maxTokens?: number } | undefined)?.maxTokens).toBe(250);
       expect((callArgs[2] as { temperature?: number } | undefined)?.temperature).toBe(0.3);
-      expect(getApiKeyForModelMock).toHaveBeenCalledTimes(1);
+      expect(requireApiKeyMock).toHaveBeenCalledWith(
+        expect.objectContaining({ apiKey: "test-api-key" }),
+        "openai",
+      );
     });
 
     it("uses summaryModel override when configured", async () => {
@@ -915,24 +902,28 @@ export function describeTtsSummarizationContract() {
       };
       await runSummarizeText({ cfg });
 
-      expect(resolveModelAsyncMock).toHaveBeenCalledWith("openai", "gpt-4.1-mini", undefined, cfg);
+      expect(prepareSimpleCompletionModelMock).toHaveBeenCalledWith({
+        cfg,
+        provider: "openai",
+        modelId: "gpt-4.1-mini",
+        useAsyncModelResolution: true,
+      });
     });
 
     it("keeps native completion APIs for direct summarization", async () => {
-      vi.mocked(resolveModelAsyncMock).mockResolvedValue({
-        ...createResolvedModel("local-summary", "demo-model", "openai-completions"),
+      vi.mocked(prepareSimpleCompletionModelMock).mockResolvedValue({
         model: {
-          ...createResolvedModel("local-summary", "demo-model", "openai-completions").model,
+          ...createResolvedModel("local-summary", "demo-model").model,
           baseUrl: "http://127.0.0.1:4000/v1",
         },
-      } as never);
+        auth: { apiKey: "test-api-key", source: "test", mode: "api-key" },
+      });
 
       await runSummarizeText();
 
       expect(
         (mockCallAt(vi.mocked(completeSimple), 0)[0] as { api?: string } | undefined)?.api,
       ).toBe("openai-completions");
-      expect(ensureCustomApiRegisteredMock).not.toHaveBeenCalled();
     });
 
     it.each([

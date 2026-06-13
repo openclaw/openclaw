@@ -28,7 +28,6 @@ type DispatchReplyWithBufferedBlockDispatcherArgs = Parameters<
 >[0];
 
 const createTelegramDraftStream = vi.hoisted(() => vi.fn());
-const createNativeTelegramToolProgressDraft = vi.hoisted(() => vi.fn());
 const dispatchReplyWithBufferedBlockDispatcher = vi.hoisted(() =>
   vi.fn<(params: DispatchReplyWithBufferedBlockDispatcherArgs) => Promise<unknown>>(),
 );
@@ -221,8 +220,6 @@ const telegramDepsForTest: TelegramBotDeps = {
   wasSentByBot: wasSentByBot as TelegramBotDeps["wasSentByBot"],
   createTelegramDraftStream:
     createTelegramDraftStream as TelegramBotDeps["createTelegramDraftStream"],
-  createNativeTelegramToolProgressDraft:
-    createNativeTelegramToolProgressDraft as TelegramBotDeps["createNativeTelegramToolProgressDraft"],
   deliverReplies: deliverReplies as TelegramBotDeps["deliverReplies"],
   deliverInboundReplyWithMessageSendContext:
     deliverInboundReplyWithMessageSendContext as TelegramBotDeps["deliverInboundReplyWithMessageSendContext"],
@@ -247,7 +244,6 @@ describe("dispatchTelegramMessage draft streaming", () => {
     installTelegramStateRuntimeForTest();
     resetTelegramReplyFenceForTests();
     createTelegramDraftStream.mockReset();
-    createNativeTelegramToolProgressDraft.mockReset();
     dispatchReplyWithBufferedBlockDispatcher.mockReset();
     deliverReplies.mockReset();
     deliverInboundReplyWithMessageSendContext.mockReset();
@@ -352,10 +348,6 @@ describe("dispatchTelegramMessage draft streaming", () => {
   const createDraftStream = (messageId?: number) => createTestDraftStream({ messageId });
   const createSequencedDraftStream = (startMessageId = 1001) =>
     createSequencedTestDraftStream(startMessageId);
-  const createNativeToolProgressDraft = (updateResult = true) => ({
-    update: vi.fn(async () => updateResult),
-    stop: vi.fn(),
-  });
 
   function setupDraftStreams(params?: { answerMessageId?: number; reasoningMessageId?: number }) {
     const answerDraftStream = createDraftStream(params?.answerMessageId);
@@ -523,10 +515,12 @@ describe("dispatchTelegramMessage draft streaming", () => {
     telegramDeps?: TelegramBotDeps;
     bot?: Bot;
     replyToMode?: Parameters<typeof dispatchTelegramMessage>[0]["replyToMode"];
+    retryDispatchErrors?: boolean;
+    suppressFailureFallback?: boolean;
     textLimit?: number;
   }) {
     const bot = params.bot ?? createBot();
-    await dispatchTelegramMessage({
+    return await dispatchTelegramMessage({
       context: params.context,
       bot,
       cfg: params.cfg ?? {},
@@ -537,6 +531,8 @@ describe("dispatchTelegramMessage draft streaming", () => {
       telegramCfg: params.telegramCfg ?? {},
       telegramDeps: params.telegramDeps ?? telegramDepsForTest,
       opts: { token: "token" },
+      retryDispatchErrors: params.retryDispatchErrors,
+      suppressFailureFallback: params.suppressFailureFallback,
     });
   }
 
@@ -1327,6 +1323,66 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.update).toHaveBeenCalledWith("HelloWorld");
   });
 
+  it("sizes block-mode preview chunks from streaming.preview.chunk", async () => {
+    const draftStream = createDraftStream();
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onPartialReply?.({ text: "Hello" });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "block",
+      cfg: {
+        channels: {
+          telegram: { streaming: { preview: { chunk: { minChars: 100, maxChars: 600 } } } },
+        },
+      },
+      telegramCfg: { streaming: { mode: "block" } },
+    });
+
+    expectDraftStreamParams({ maxChars: 600 });
+  });
+
+  it("uses the shared block chunk default when block mode has no chunk config", async () => {
+    const draftStream = createDraftStream();
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onPartialReply?.({ text: "Hello" });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "block",
+      telegramCfg: { streaming: { mode: "block" } },
+    });
+
+    expectDraftStreamParams({ maxChars: 800 });
+  });
+
+  it("keeps the Telegram edit cap for non-block previews regardless of chunk config", async () => {
+    const draftStream = createDraftStream();
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onPartialReply?.({ text: "Hello" });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      cfg: {
+        channels: {
+          telegram: { streaming: { preview: { chunk: { maxChars: 600 } } } },
+        },
+      },
+      telegramCfg: { streaming: { mode: "partial" } },
+    });
+
+    expectDraftStreamParams({ maxChars: 4096 });
+  });
+
   it("streams text-only finals into the answer message", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
@@ -1763,234 +1819,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
-  it("uses native DM drafts for transient tool progress before answer text", async () => {
-    const nativeDraft = createNativeToolProgressDraft();
-    createNativeTelegramToolProgressDraft.mockReturnValue(nativeDraft);
-    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
-      async ({ dispatcherOptions, replyOptions }) => {
-        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
-        await replyOptions?.onPartialReply?.({ text: "Done ", delta: "Done " });
-        await dispatcherOptions.deliver({ text: "Done answer." }, { kind: "final" });
-        return { queuedFinal: true };
-      },
-    );
-
-    await dispatchWithContext({
-      context: createContext(),
-      streamMode: "partial",
-      telegramCfg: {
-        streaming: {
-          mode: "partial",
-          preview: { nativeToolProgress: true, nativeToolProgressAllowFrom: ["123"] },
-        },
-      },
-    });
-
-    expect(createNativeTelegramToolProgressDraft).toHaveBeenCalledWith(
-      expect.objectContaining({
-        chatId: 123,
-        thread: { id: 777, scope: "dm" },
-      }),
-    );
-    expect(nativeDraft.update).toHaveBeenCalledWith(expect.stringContaining("Exec"));
-    expect(nativeDraft.update).toHaveBeenCalledWith(expect.not.stringContaining("`"));
-    expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Done ");
-    expect(answerDraftStream.update).toHaveBeenLastCalledWith("Done answer.");
-    expect(answerDraftStream.update).not.toHaveBeenCalledWith(expect.stringContaining("Exec"));
-    expect(nativeDraft.stop).toHaveBeenCalled();
-  });
-
-  it("keeps native DM drafts off by default", async () => {
-    const nativeDraft = createNativeToolProgressDraft();
-    createNativeTelegramToolProgressDraft.mockReturnValue(nativeDraft);
-    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
-      async ({ dispatcherOptions, replyOptions }) => {
-        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
-        await dispatcherOptions.deliver({ text: "Done answer." }, { kind: "final" });
-        return { queuedFinal: true };
-      },
-    );
-
-    await dispatchWithContext({
-      context: createContext(),
-      streamMode: "partial",
-      telegramCfg: { streaming: { mode: "partial" } },
-    });
-
-    expect(createNativeTelegramToolProgressDraft).not.toHaveBeenCalled();
-    expect(nativeDraft.update).not.toHaveBeenCalled();
-    expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, expect.stringContaining("Exec"));
-    expect(answerDraftStream.update).toHaveBeenLastCalledWith("Done answer.");
-  });
-
-  it("honors the native DM draft allowlist", async () => {
-    const nativeDraft = createNativeToolProgressDraft();
-    createNativeTelegramToolProgressDraft.mockReturnValue(nativeDraft);
-    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
-      async ({ dispatcherOptions, replyOptions }) => {
-        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
-        await dispatcherOptions.deliver({ text: "Done answer." }, { kind: "final" });
-        return { queuedFinal: true };
-      },
-    );
-
-    await dispatchWithContext({
-      context: createContext(),
-      streamMode: "partial",
-      telegramCfg: {
-        streaming: {
-          mode: "partial",
-          preview: {
-            nativeToolProgress: true,
-            nativeToolProgressAllowFrom: ["999"],
-          },
-        },
-      },
-    });
-
-    expect(createNativeTelegramToolProgressDraft).not.toHaveBeenCalled();
-    expect(nativeDraft.update).not.toHaveBeenCalled();
-    expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, expect.stringContaining("Exec"));
-    expect(answerDraftStream.update).toHaveBeenLastCalledWith("Done answer.");
-  });
-
-  it("falls back to edited preview tool progress when native DM draft update fails", async () => {
-    const nativeDraft = createNativeToolProgressDraft(false);
-    createNativeTelegramToolProgressDraft.mockReturnValue(nativeDraft);
-    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
-      async ({ dispatcherOptions, replyOptions }) => {
-        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
-        await dispatcherOptions.deliver({ text: "Done answer." }, { kind: "final" });
-        return { queuedFinal: true };
-      },
-    );
-
-    await dispatchWithContext({
-      context: createContext(),
-      streamMode: "partial",
-      telegramCfg: {
-        streaming: { mode: "partial", preview: { nativeToolProgress: true } },
-      },
-    });
-
-    expect(nativeDraft.update).toHaveBeenCalledWith(expect.stringContaining("Exec"));
-    expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, expect.stringContaining("Exec"));
-    expect(answerDraftStream.update).toHaveBeenLastCalledWith("Done answer.");
-  });
-
-  it("does not hide durable tool media in native DM drafts", async () => {
-    const nativeDraft = createNativeToolProgressDraft();
-    createNativeTelegramToolProgressDraft.mockReturnValue(nativeDraft);
-    setupDraftStreams({ answerMessageId: 2001 });
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
-      await dispatcherOptions.deliver(
-        { text: "Rendered chart", mediaUrl: "/tmp/chart.png" },
-        { kind: "tool" },
-      );
-      return { queuedFinal: true };
-    });
-
-    await dispatchWithContext({
-      context: createContext(),
-      streamMode: "partial",
-      telegramCfg: {
-        streaming: { mode: "partial", preview: { nativeToolProgress: true } },
-      },
-    });
-
-    expect(nativeDraft.update).not.toHaveBeenCalled();
-    expectDeliveredReply(0, { text: "Rendered chart", mediaUrl: "/tmp/chart.png" });
-  });
-
-  it("does not hide durable tool errors in native DM drafts", async () => {
-    const nativeDraft = createNativeToolProgressDraft();
-    createNativeTelegramToolProgressDraft.mockReturnValue(nativeDraft);
-    setupDraftStreams({ answerMessageId: 2001 });
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
-      await dispatcherOptions.deliver({ text: "Tool failed", isError: true }, { kind: "tool" });
-      return { queuedFinal: true };
-    });
-
-    await dispatchWithContext({
-      context: createContext(),
-      streamMode: "partial",
-      telegramCfg: {
-        streaming: { mode: "partial", preview: { nativeToolProgress: true } },
-      },
-    });
-
-    expect(nativeDraft.update).not.toHaveBeenCalled();
-    expectDeliveredReply(0, { text: "Tool failed", isError: true });
-  });
-
-  it("does not hide exec approval payloads in native DM drafts", async () => {
-    const nativeDraft = createNativeToolProgressDraft();
-    createNativeTelegramToolProgressDraft.mockReturnValue(nativeDraft);
-    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
-    const execApproval = { id: "approval-1", command: "pnpm test" };
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
-      await dispatcherOptions.deliver(
-        {
-          text: "Approve command?",
-          channelData: { execApproval },
-        },
-        { kind: "tool" },
-      );
-      return { queuedFinal: true };
-    });
-
-    await dispatchWithContext({
-      context: createContext(),
-      streamMode: "partial",
-      telegramCfg: {
-        streaming: { mode: "partial", preview: { nativeToolProgress: true } },
-      },
-    });
-
-    expect(nativeDraft.update).not.toHaveBeenCalled();
-    expect(answerDraftStream.update).toHaveBeenCalledWith("Approve command?");
-  });
-
-  it("does not use native tool progress drafts in groups", async () => {
-    setupDraftStreams({ answerMessageId: 2001 });
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
-      async ({ dispatcherOptions, replyOptions }) => {
-        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
-        await dispatcherOptions.deliver({ text: "Done answer." }, { kind: "final" });
-        return { queuedFinal: true };
-      },
-    );
-
-    await dispatchWithContext({
-      context: createContext({
-        ctxPayload: {
-          SessionKey: "agent:main:telegram:group:-100123",
-          ChatType: "group",
-        } as unknown as TelegramMessageContext["ctxPayload"],
-        msg: {
-          chat: { id: -100123, type: "supergroup" },
-          message_id: 99,
-        } as unknown as TelegramMessageContext["msg"],
-        chatId: -100123,
-        isGroup: true,
-        threadSpec: { id: undefined, scope: "none" },
-      }),
-      streamMode: "partial",
-      telegramCfg: {
-        streaming: { mode: "partial", preview: { nativeToolProgress: true } },
-      },
-    });
-
-    expect(createNativeTelegramToolProgressDraft).not.toHaveBeenCalled();
-  });
-
   it("does not hide text-only tool output after answer streaming starts", async () => {
-    const nativeDraft = createNativeToolProgressDraft();
-    createNativeTelegramToolProgressDraft.mockReturnValue(nativeDraft);
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
@@ -2004,13 +1833,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
       context: createContext(),
       streamMode: "partial",
       telegramCfg: {
-        streaming: { mode: "partial", preview: { nativeToolProgress: true } },
+        streaming: { mode: "partial" },
       },
     });
 
-    expect(nativeDraft.update).not.toHaveBeenCalledWith(
-      expect.stringContaining("Tool result after partial"),
-    );
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Partial answer");
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Tool result after partial");
   });
@@ -2339,6 +2165,42 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(firstPartialUpdateOrder).toBeLessThan(rotationOrder);
     expect(rotationOrder).toBeLessThan(nextPartialUpdateOrder);
     expect(deliverReplies).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns retryable when spooled replay suppresses fallback after non-silent delivery skip", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      dispatcherOptions.onSkip?.({ text: "final answer" }, { kind: "final", reason: "empty" });
+      return { queuedFinal: false };
+    });
+
+    const result = await dispatchWithContext({
+      context: createContext(),
+      retryDispatchErrors: true,
+      suppressFailureFallback: true,
+    });
+
+    expect(result).toMatchObject({ kind: "failed-retryable" });
+    expect((result as { error?: unknown }).error).toBeInstanceOf(Error);
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("does not return retryable after spooled replay already showed visible output", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "partial answer" }, { kind: "block" });
+      dispatcherOptions.onSkip?.({ text: "final answer" }, { kind: "final", reason: "empty" });
+      return { queuedFinal: false };
+    });
+
+    const result = await dispatchWithContext({
+      context: createContext(),
+      retryDispatchErrors: true,
+      suppressFailureFallback: true,
+    });
+
+    expect(result).toEqual({ kind: "completed" });
+    expect(answerDraftStream.update).toHaveBeenCalledWith("partial answer");
+    expect(deliverReplies).not.toHaveBeenCalled();
   });
 
   it("keeps tool progress visible after a partial-streamed intermediate block", async () => {

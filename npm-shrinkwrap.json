@@ -1671,9 +1671,9 @@
       }
     },
     "node_modules/hono": {
-      "version": "4.12.18",
-      "resolved": "https://registry.npmjs.org/hono/-/hono-4.12.18.tgz",
-      "integrity": "sha512-RWzP96k/yv0PQfyXnWjs6zot20TqfpfsNXhOnev8d1InAxubW93L11/oNUc3tQqn2G0bSdAOBpX+2uDFHV7kdQ==",
+      "version": "4.12.21",
+      "resolved": "https://registry.npmjs.org/hono/-/hono-4.12.21.tgz",
+      "integrity": "sha512-uV63apnb0kyPtAUwoWgaGh9HyIFcv8lgmzPZSiTBQAFOFGIzka5EZ1dZocmGnn0XdX0+XTqJ6Tqv7selMuGLRQ==",
       "license": "MIT",
       "engines": {
         "node": ">=16.9.0"
