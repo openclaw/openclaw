@@ -517,12 +517,15 @@ describe("applyExtraParamsToAgent", () => {
   type OpenAIResponsesWrapperOptions = SimpleStreamOptions & {
     replayResponsesItemIds?: boolean;
   };
+  type OpenAIResponsesWrapperCompat = NonNullable<Model<"openai-responses">["compat"]> & {
+    supportsStore?: boolean;
+  };
 
   const buildResponsesWrapperModel = (params: {
     provider: string;
     id: string;
     baseUrl: string;
-    compat?: Model<"openai-responses">["compat"];
+    compat?: OpenAIResponsesWrapperCompat;
   }): Model<"openai-responses"> => ({
     api: "openai-responses",
     provider: params.provider,
