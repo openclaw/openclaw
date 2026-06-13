@@ -16,6 +16,7 @@ import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import type { ChatType } from "../../channels/chat-type.js";
 import type { CliBackendConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { privateFileStore } from "../../infra/private-file-store.js";
@@ -119,6 +120,9 @@ export function buildCliAgentSystemPrompt(params: {
   extraSystemPrompt?: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   silentReplyPromptMode?: SilentReplyPromptMode;
+  runtimeChannel?: string;
+  runtimeChatType?: ChatType;
+  runtimeCapabilities?: string[];
   ownerNumbers?: string[];
   heartbeatPrompt?: string;
   docsPath?: string;
@@ -152,6 +156,9 @@ export function buildCliAgentSystemPrompt(params: {
       model: params.modelDisplay,
       defaultModel: defaultModelLabel,
       shell: detectRuntimeShell(),
+      channel: params.runtimeChannel,
+      chatType: params.runtimeChatType,
+      capabilities: params.runtimeCapabilities,
     },
   });
   return buildConfiguredAgentSystemPrompt({

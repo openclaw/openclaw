@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerLegacyContextEngine } from "../../context-engine/legacy.registration.js";
 import {
@@ -14,6 +15,11 @@ import {
 import type { ContextEngine } from "../../context-engine/types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { clearMemoryPluginState, registerMemoryPromptSection } from "../../plugins/memory-state.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { testing as cliBackendsTesting } from "../cli-backends.js";
 import { hashCliSessionText } from "../cli-session.js";
@@ -276,6 +282,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     ensureSandboxWorkspaceForSessionMock.mockReset();
     resetContextWindowCacheForTest();
     clearMemoryPluginState();
+    setActivePluginRegistry(createTestRegistry());
     vi.unstubAllEnvs();
     sessionFileEnvSnapshot?.restore();
     sessionFileEnvSnapshot = undefined;
@@ -1008,6 +1015,45 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       expect(context.systemPrompt).not.toContain(`Your working directory is: ${dir}`);
     } finally {
       fs.rmSync(taskDir, { recursive: true, force: true });
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("passes Telegram rich text capabilities into CLI system prompts", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
+            agentPrompt: {
+              messageToolCapabilities: () => ["richText"],
+            },
+          } satisfies ChannelPlugin,
+        },
+      ]),
+    );
+
+    try {
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-telegram-rich-text",
+        messageChannel: "telegram",
+        config: createCliBackendConfig(),
+      });
+
+      expect(context.systemPrompt).toContain("channel=telegram");
+      expect(context.systemPrompt).toContain("Telegram rich text is available");
+      expect(context.systemPrompt).toContain("This is not legacy MarkdownV2/parse_mode");
+    } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
