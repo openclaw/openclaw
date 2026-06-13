@@ -297,6 +297,13 @@ function createPreparedSlackMessage(params?: {
   const mainSessionKey = params?.route?.mainSessionKey ?? "main";
   const lastRoutePolicy =
     params?.route?.lastRoutePolicy ?? (routeSessionKey === mainSessionKey ? "main" : "session");
+  const message = {
+    channel: "C123",
+    ts: "171234.111",
+    thread_ts: THREAD_TS,
+    user: "U123",
+    ...params?.message,
+  };
 
   return {
     ctx: {
@@ -319,13 +326,7 @@ function createPreparedSlackMessage(params?: {
       accountId: "default",
       config: params?.accountConfig ?? {},
     },
-    message: {
-      channel: "C123",
-      ts: "171234.111",
-      thread_ts: THREAD_TS,
-      user: "U123",
-      ...params?.message,
-    },
+    message,
     route: {
       agentId: "agent-1",
       accountId: "default",
@@ -335,7 +336,7 @@ function createPreparedSlackMessage(params?: {
       ...params?.route,
     },
     channelConfig: params?.channelConfig ?? null,
-    replyTarget: "channel:C123",
+    replyTarget: `channel:${message.channel}`,
     ctxPayload: {
       MessageThreadId: THREAD_TS,
       ...params?.ctxPayload,
@@ -2019,7 +2020,18 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     });
     stopSlackStreamMock.mockResolvedValueOnce({ messageId: "171234.567" });
 
-    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        isDirectMessage: true,
+        message: { channel: "D123" },
+        route: { sessionKey: "agent:agent-1:slack:direct:u123" },
+        ctxPayload: {
+          SessionKey: "agent:agent-1:slack:direct:u123:thread:thread-1",
+          To: "user:U123",
+          OriginatingTo: "user:U123",
+        },
+      }),
+    );
 
     // The final was flushed through the stream, not deliverReplies.
     expect(deliverRepliesMock).not.toHaveBeenCalled();
@@ -2032,7 +2044,8 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       content: FINAL_REPLY_TEXT,
       success: true,
       messageId: "171234.567",
-      sessionKeyForInternalHooks: "agent:agent-1:slack:C123",
+      to: "user:U123",
+      sessionKeyForInternalHooks: "agent:agent-1:slack:direct:u123:thread:thread-1",
     });
   });
 

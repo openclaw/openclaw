@@ -474,6 +474,25 @@ describe("deliverReplies message_sent hook", () => {
     expect(context).toMatchObject({ sessionKey: "slack:C123:U1" });
   });
 
+  it("uses the logical hook target while delivering to a physical DM channel", async () => {
+    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
+    sendMock.mockResolvedValue({ messageId: "ts", channelId: "D123" });
+
+    await deliverReplies(
+      baseParams({
+        replies: [{ text: "direct reply" }],
+        target: "channel:D123",
+        messageSentHookTarget: "user:U123",
+      }),
+    );
+
+    expect(sendMock).toHaveBeenCalledWith("channel:D123", "direct reply", expect.anything());
+    const event = messageHookRunner.runMessageSent.mock.calls[0]?.[0] as Record<string, unknown>;
+    const context = messageHookRunner.runMessageSent.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(event).toMatchObject({ to: "user:U123" });
+    expect(context).toMatchObject({ conversationId: "user:U123" });
+  });
+
   it("emits message_sent with success=false when delivery throws", async () => {
     messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
     sendMock.mockRejectedValue(new Error("channel_not_found"));

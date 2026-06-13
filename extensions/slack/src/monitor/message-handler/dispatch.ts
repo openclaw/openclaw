@@ -523,10 +523,16 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
 
   // Shared context for the `message_sent` plugin hook emitted on each delivered
   // reply (both the `deliverReplies` paths and the native-streaming finalizer).
+  const messageSentHookTarget =
+    prepared.ctxPayload.OriginatingTo ?? prepared.ctxPayload.To ?? prepared.replyTarget;
   const messageSentHookContext = {
-    sessionKeyForInternalHooks: route.sessionKey,
+    sessionKeyForInternalHooks: prepared.ctxPayload.SessionKey ?? route.sessionKey,
     isGroup: prepared.isRoomish,
     groupId: prepared.isRoomish ? message.channel : undefined,
+  };
+  const messageSentDeliveryHookContext = {
+    ...messageSentHookContext,
+    messageSentHookTarget,
   };
 
   const reactionMessageTs = prepared.ackReactionMessageTs;
@@ -757,7 +763,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       }
       emitSlackMessageSentHooks({
         ...messageSentHookContext,
-        to: prepared.replyTarget,
+        to: messageSentHookTarget,
         accountId: account.accountId,
         content: delivery.content,
         success: true,
@@ -773,7 +779,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       }
       emitSlackMessageSentHooks({
         ...messageSentHookContext,
-        to: prepared.replyTarget,
+        to: messageSentHookTarget,
         accountId: account.accountId,
         content: delivery.content,
         success: false,
@@ -789,7 +795,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       }
       emitSlackMessageSentHooks({
         ...messageSentHookContext,
-        to: prepared.replyTarget,
+        to: messageSentHookTarget,
         accountId: account.accountId,
         content: delivery.content,
         success: true,
@@ -876,7 +882,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         replyToMode: replyDeliveryMode,
         ...(slackIdentity ? { identity: slackIdentity } : {}),
         ...(slackMessageMetadata ? { metadata: slackMessageMetadata } : {}),
-        ...messageSentHookContext,
+        ...messageSentDeliveryHookContext,
         deferMessageSentHooks: true,
       });
       markSlackStreamFallbackDelivered(session);
@@ -933,7 +939,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       replyToMode: replyDeliveryMode,
       ...(slackIdentity ? { identity: slackIdentity } : {}),
       ...(slackMessageMetadata ? { metadata: slackMessageMetadata } : {}),
-      ...messageSentHookContext,
+      ...messageSentDeliveryHookContext,
     });
     observedReplyDelivery = true;
     if (params.kind === "final") {
@@ -1359,7 +1365,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           });
           emitSlackMessageSentHooks({
             ...messageSentHookContext,
-            to: prepared.replyTarget,
+            to: messageSentHookTarget,
             accountId: account.accountId,
             content: trimmedFinalText,
             success: true,

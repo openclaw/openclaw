@@ -49,6 +49,8 @@ export async function deliverReplies(params: {
   replyToMode: "off" | "first" | "all" | "batched";
   identity?: SlackSendIdentity;
   metadata?: MessageMetadata;
+  /** Logical conversation target used by lifecycle hooks when delivery uses a physical Slack id. */
+  messageSentHookTarget?: string;
   /**
    * Canonical session key for the internal `message:sent` hook. When set, the
    * internal hook fires alongside the plugin `message_sent` hook. The plugin
@@ -91,7 +93,7 @@ export async function deliverReplies(params: {
       }
       emitSlackMessageSentHooks({
         sessionKeyForInternalHooks: params.sessionKeyForInternalHooks,
-        to: params.target,
+        to: params.messageSentHookTarget ?? params.target,
         accountId: params.accountId,
         content,
         success: true,
@@ -106,7 +108,7 @@ export async function deliverReplies(params: {
       }
       emitSlackMessageSentHooks({
         sessionKeyForInternalHooks: params.sessionKeyForInternalHooks,
-        to: params.target,
+        to: params.messageSentHookTarget ?? params.target,
         accountId: params.accountId,
         content,
         success: false,
