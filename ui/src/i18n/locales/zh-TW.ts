@@ -372,7 +372,6 @@ export const zh_TW: TranslationMap = {
     labels: {
       host: "Host",
       agent: "代理",
-      
       session: "工作階段",
       cwd: "CWD",
       resolved: "Resolved",
@@ -393,7 +392,6 @@ export const zh_TW: TranslationMap = {
     chat: "聊天",
     control: "控制",
     agent: "代理",
-      
     settings: "設置",
     expand: "展開側邊欄",
     collapse: "折疊側邊欄",
@@ -987,7 +985,7 @@ export const zh_TW: TranslationMap = {
       days: "天",
       hours: "小時",
       session: "工作階段",
-      agent: "Agent",
+      agent: "代理",
       channel: "頻道",
       provider: "提供者",
       model: "模型",

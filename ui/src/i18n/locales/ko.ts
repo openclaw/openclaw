@@ -374,7 +374,6 @@ export const ko: TranslationMap = {
     labels: {
       host: "Host",
       agent: "에이전트",
-      
       session: "세션",
       cwd: "CWD",
       resolved: "Resolved",
@@ -395,7 +394,6 @@ export const ko: TranslationMap = {
     chat: "채팅",
     control: "Control",
     agent: "에이전트",
-      
     settings: "설정",
     expand: "사이드바 펼치기",
     collapse: "사이드바 접기",
@@ -996,7 +994,7 @@ export const ko: TranslationMap = {
       days: "일",
       hours: "시간",
       session: "세션",
-      agent: "Agent",
+      agent: "에이전트",
       channel: "채널",
       provider: "제공업체",
       model: "모델",

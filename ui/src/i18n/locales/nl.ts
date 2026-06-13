@@ -377,7 +377,6 @@ export const nl: TranslationMap = {
     labels: {
       host: "Host",
       agent: "Agent",
-      
       session: "Sessie",
       cwd: "CWD",
       resolved: "Opgelost",
@@ -398,7 +397,6 @@ export const nl: TranslationMap = {
     chat: "Chat",
     control: "Control",
     agent: "Agent",
-      
     settings: "Instellingen",
     expand: "Zijbalk uitvouwen",
     collapse: "Zijbalk samenvouwen",

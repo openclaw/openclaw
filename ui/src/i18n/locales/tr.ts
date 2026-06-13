@@ -377,7 +377,6 @@ export const tr: TranslationMap = {
     labels: {
       host: "Host",
       agent: "Aracı",
-      
       session: "Oturum",
       cwd: "CWD",
       resolved: "Resolved",
@@ -398,7 +397,6 @@ export const tr: TranslationMap = {
     chat: "Sohbet",
     control: "Kontrol",
     agent: "Aracı",
-      
     settings: "Ayarlar",
     expand: "Kenar çubuğunu genişlet",
     collapse: "Kenar çubuğunu daralt",
@@ -1003,7 +1001,7 @@ export const tr: TranslationMap = {
       days: "Günler",
       hours: "Saat",
       session: "Oturum",
-      agent: "Agent",
+      agent: "Aracı",
       channel: "Kanal",
       provider: "Sağlayıcı",
       model: "Model",

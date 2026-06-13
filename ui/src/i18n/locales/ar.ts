@@ -374,7 +374,6 @@ export const ar: TranslationMap = {
     labels: {
       host: "المضيف",
       agent: "الوكيل",
-      
       session: "الجلسة",
       cwd: "CWD",
       resolved: "تم الحل",
@@ -395,7 +394,6 @@ export const ar: TranslationMap = {
     chat: "الدردشة",
     control: "التحكم",
     agent: "الوكيل",
-      
     settings: "الإعدادات",
     expand: "توسيع الشريط الجانبي",
     collapse: "طي الشريط الجانبي",

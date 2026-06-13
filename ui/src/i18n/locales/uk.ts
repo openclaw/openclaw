@@ -376,7 +376,6 @@ export const uk: TranslationMap = {
     labels: {
       host: "Host",
       agent: "Агент",
-      
       session: "Сеанс",
       cwd: "CWD",
       resolved: "Resolved",
@@ -397,7 +396,6 @@ export const uk: TranslationMap = {
     chat: "Чат",
     control: "Керування",
     agent: "Агент",
-      
     settings: "Налаштування",
     expand: "Розгорнути бічну панель",
     collapse: "Згорнути бічну панель",
@@ -1003,7 +1001,7 @@ export const uk: TranslationMap = {
       days: "Дні",
       hours: "Години",
       session: "Сеанс",
-      agent: "Agent",
+      agent: "Агент",
       channel: "Канал",
       provider: "Провайдер",
       model: "Модель",

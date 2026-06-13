@@ -375,7 +375,6 @@ export const pt_BR: TranslationMap = {
     labels: {
       host: "Host",
       agent: "Agente",
-      
       session: "Sessão",
       cwd: "CWD",
       resolved: "Resolved",
@@ -396,7 +395,6 @@ export const pt_BR: TranslationMap = {
     chat: "Chat",
     control: "Controle",
     agent: "Agente",
-      
     settings: "Configurações",
     expand: "Expandir barra lateral",
     collapse: "Recolher barra lateral",
@@ -998,7 +996,7 @@ export const pt_BR: TranslationMap = {
       days: "Dias",
       hours: "Horas",
       session: "Sessão",
-      agent: "Agent",
+      agent: "Agente",
       channel: "Canal",
       provider: "Provedor",
       model: "Modelo",
