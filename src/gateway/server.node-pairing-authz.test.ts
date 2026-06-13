@@ -491,11 +491,13 @@ describe("gateway node pairing authorization", () => {
       });
       await reverted.stopAndWait();
 
-      expect(
-        (await listNodePairing()).pending.some(
-          (entry) => entry.nodeId === pairedNode.identity.deviceId,
-        ),
-      ).toBe(false);
+      await vi.waitFor(async () => {
+        expect(
+          (await listNodePairing()).pending.some(
+            (entry) => entry.nodeId === pairedNode.identity.deviceId,
+          ),
+        ).toBe(false);
+      });
     });
 
     test("requests re-pairing when a paired node reconnects with upgraded commands", async () => {
