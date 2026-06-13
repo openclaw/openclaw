@@ -582,6 +582,58 @@ describe("before_tool_call loop detection behavior", () => {
     );
   });
 
+  it("preserves selected structured fallback fields from oversized tool results", async () => {
+    const onToolOutcome = vi.fn();
+    const execute = vi.fn().mockResolvedValue({
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            huge: "x".repeat(70_000),
+            status: "ok",
+            items: [1, 2, 3],
+            detail: "y".repeat(70_000),
+          }),
+        },
+      ],
+      details: { status: "ok" },
+    });
+    const tool = wrapToolWithBeforeToolCallHook(
+      {
+        name: "large_status",
+        execute,
+        terminalResultFallback: {
+          mode: "structured_summary",
+          fields: [
+            { label: "Status", paths: [["status"]] },
+            { label: "Items", paths: [["items"]], format: "count" },
+            { label: "Detail", paths: [["detail"]] },
+          ],
+        },
+      } as unknown as AnyAgentTool,
+      {
+        ...enabledLoopDetectionContext,
+        runId: "run-oversized-structured-fallback",
+        onToolOutcome,
+      },
+    );
+
+    await expectUnblockedToolExecution(tool, "large-status-observer", {});
+
+    const observation = onToolOutcome.mock.calls.at(-1)?.[0] as {
+      resultText?: string;
+    };
+    const resultText = observation.resultText;
+    expect(resultText).toBeDefined();
+    expect(resultText?.length).toBeLessThanOrEqual(64_000);
+    expect(JSON.parse(resultText ?? "{}")).toEqual({
+      status: "ok",
+      items: 3,
+      detail: expect.stringMatching(/^y+$/),
+    });
+    expect(JSON.parse(resultText ?? "{}")).not.toHaveProperty("huge");
+  });
+
   it("does not carry loop history across run ids", async () => {
     const execute = vi.fn().mockResolvedValue({
       content: [{ type: "text", text: "same output" }],

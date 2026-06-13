@@ -178,7 +178,7 @@ const SINGLE_ACTION_EXPLICIT_CONTINUATION_RE =
 const SINGLE_ACTION_MULTI_STEP_PROMISE_RE =
   /\bi(?:'ll| will)\b(?=[^.!?]{0,160}\b(?:next|then|after(?:wards)?|once)\b)/i;
 const SINGLE_ACTION_RESULT_STYLE_RE =
-  /\b(?:i(?:'ll| will)\s+(?:summarize|explain|share|show|report|describe|clarify|answer|recap)(?:\s+\w+){0,4}\s*:|(?:here(?:'s| is)|summary|result|answer|findings?|root cause)\s*:)/i;
+  /\b(?:(?:i(?:'ll| will)|let me)\s+(?:summarize|explain|share|show|report|describe|clarify|answer|recap)(?:\s+\w+){0,4}\s*:|(?:here(?:'s| is)|summary|result|answer|findings?|root cause)\s*:)/i;
 const RETRY_SAFE_TOOL_NAMES = new Set([
   "read",
   "search",

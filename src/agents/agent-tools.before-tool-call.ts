@@ -770,6 +770,170 @@ function readToolResultText(result: unknown): string | undefined {
   return text || undefined;
 }
 
+function readOwnPath(value: unknown, segments: readonly string[]): unknown {
+  let current = value;
+  for (const segment of segments) {
+    if (!isPlainObject(current) || !Object.hasOwn(current, segment)) {
+      return undefined;
+    }
+    current = current[segment];
+  }
+  return current;
+}
+
+function normalizeStructuredFallbackFieldValue(params: {
+  value: unknown;
+  format?: "string" | "count" | "none-if-nullish-or-zero";
+}): string | number | boolean | null | undefined {
+  if (params.format === "count") {
+    if (Array.isArray(params.value)) {
+      return params.value.length;
+    }
+    return typeof params.value === "number" && Number.isFinite(params.value)
+      ? params.value
+      : undefined;
+  }
+  if (
+    params.format === "none-if-nullish-or-zero" &&
+    (params.value === null || params.value === 0)
+  ) {
+    return params.value;
+  }
+  if (
+    typeof params.value === "string" ||
+    typeof params.value === "boolean" ||
+    (typeof params.value === "number" && Number.isFinite(params.value))
+  ) {
+    return params.value;
+  }
+  return undefined;
+}
+
+function setProjectedStructuredFallbackPath(params: {
+  target: Record<string, unknown>;
+  path: readonly string[];
+  value: string | number | boolean | null;
+}): { parent: Record<string, unknown>; key: string } | undefined {
+  const key = params.path.at(-1);
+  if (key === undefined) {
+    return undefined;
+  }
+  let current = params.target;
+  for (const segment of params.path.slice(0, -1)) {
+    const existing = current[segment];
+    if (existing !== undefined && !isPlainObject(existing)) {
+      return undefined;
+    }
+    const next = existing ?? Object.create(null);
+    Object.defineProperty(current, segment, {
+      configurable: true,
+      enumerable: true,
+      value: next,
+      writable: true,
+    });
+    current = next as Record<string, unknown>;
+  }
+  Object.defineProperty(current, key, {
+    configurable: true,
+    enumerable: true,
+    value: params.value,
+    writable: true,
+  });
+  return { parent: current, key };
+}
+
+function projectStructuredFallbackResultText(params: {
+  rawResultText: string;
+  fallback: Extract<AgentToolTerminalResultFallback, { mode: "structured_summary" }>;
+}): string | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(params.rawResultText);
+  } catch {
+    return undefined;
+  }
+  if (!isPlainObject(parsed)) {
+    return undefined;
+  }
+
+  const projected: Record<string, unknown> = Object.create(null);
+  const selectedStrings: Array<{
+    parent: Record<string, unknown>;
+    key: string;
+    value: string;
+  }> = [];
+  for (const field of params.fallback.fields) {
+    for (const candidatePath of field.paths) {
+      const value = normalizeStructuredFallbackFieldValue({
+        value: readOwnPath(parsed, candidatePath),
+        format: field.format,
+      });
+      if (value === undefined) {
+        continue;
+      }
+      const selectedPath = setProjectedStructuredFallbackPath({
+        target: projected,
+        path: candidatePath,
+        value:
+          typeof value === "string"
+            ? truncateUtf16Safe(value, TOOL_OUTCOME_RESULT_TEXT_MAX_CHARS)
+            : value,
+      });
+      if (!selectedPath) {
+        continue;
+      }
+      if (typeof value === "string") {
+        selectedStrings.push({ ...selectedPath, value });
+      }
+      break;
+    }
+  }
+
+  let serialized = JSON.stringify(projected);
+  if (serialized.length <= TOOL_OUTCOME_RESULT_TEXT_MAX_CHARS) {
+    return serialized;
+  }
+  if (selectedStrings.length === 0) {
+    return undefined;
+  }
+
+  let low = 0;
+  let high = TOOL_OUTCOME_RESULT_TEXT_MAX_CHARS;
+  while (low < high) {
+    const candidate = Math.ceil((low + high) / 2);
+    for (const selected of selectedStrings) {
+      selected.parent[selected.key] = truncateUtf16Safe(selected.value, candidate);
+    }
+    serialized = JSON.stringify(projected);
+    if (serialized.length <= TOOL_OUTCOME_RESULT_TEXT_MAX_CHARS) {
+      low = candidate;
+    } else {
+      high = candidate - 1;
+    }
+  }
+  for (const selected of selectedStrings) {
+    selected.parent[selected.key] = truncateUtf16Safe(selected.value, low);
+  }
+  serialized = JSON.stringify(projected);
+  return serialized.length <= TOOL_OUTCOME_RESULT_TEXT_MAX_CHARS ? serialized : undefined;
+}
+
+function resolveRecordedToolResultText(params: {
+  rawResultText: string | undefined;
+  fallback: AgentToolTerminalResultFallback | undefined;
+}): string | undefined {
+  if (!params.rawResultText) {
+    return undefined;
+  }
+  if (params.fallback?.mode === "structured_summary") {
+    return projectStructuredFallbackResultText({
+      rawResultText: params.rawResultText,
+      fallback: params.fallback,
+    });
+  }
+  return truncateUtf16Safe(params.rawResultText, TOOL_OUTCOME_RESULT_TEXT_MAX_CHARS);
+}
+
 function readToolTerminalSummary(result: unknown): AgentToolTerminalSummary | undefined {
   if (!isPlainObject(result) || !isPlainObject(result.terminalSummary)) {
     return undefined;
@@ -1025,9 +1189,10 @@ export async function recordToolLoopOutcome(args: {
         args.terminalResultFallback.mode !== "none"
           ? readToolResultText(args.result)
           : undefined;
-      const resultText = rawResultText
-        ? truncateUtf16Safe(rawResultText, TOOL_OUTCOME_RESULT_TEXT_MAX_CHARS)
-        : undefined;
+      const resultText = resolveRecordedToolResultText({
+        rawResultText,
+        fallback: args.terminalResultFallback,
+      });
       const terminalSummary =
         blockedReason || failed ? undefined : readToolTerminalSummary(args.result);
       const didSendViaMessagingTool = hasCommittedMessagingToolSendOutcome({

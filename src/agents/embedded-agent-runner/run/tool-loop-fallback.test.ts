@@ -719,6 +719,37 @@ describe("tool-loop terminal fallback", () => {
     ).toBeUndefined();
   });
 
+  it("does not let a later unrelated tool failure hide an earlier successful action", () => {
+    expect(
+      resolveSuccessfulToolTerminalFallback({
+        requireDeclaredPresentableFallback: true,
+        observations: [
+          {
+            toolName: "write",
+            argsHash: "write",
+            resultHash: "write-result",
+            mutatingAction: true,
+          },
+          {
+            toolName: "status_probe",
+            argsHash: "first-status",
+            resultHash: "failed-status-result",
+            failed: true,
+          },
+          {
+            toolName: "status_probe",
+            argsHash: "second-status",
+            resultHash: "successful-status-result",
+            terminalSummary: {
+              text: "Status healthy.",
+              privacy: "public",
+            },
+          },
+        ],
+      }),
+    ).toBeUndefined();
+  });
+
   it("does not let an earlier same-tool fallback hide a later uncovered action", () => {
     expect(
       resolveSuccessfulToolTerminalFallback({

@@ -292,6 +292,22 @@ function isSuccessfulObservation(observation: ToolLoopObservation): boolean {
   return !observation.blockedReason && observation.failed !== true;
 }
 
+function selectSuccessfulObservationsAfterLatestToolFailure(
+  observations: readonly ToolLoopObservation[],
+): ToolLoopObservation[] {
+  const latestFailureIndexByTool = new Map<string, number>();
+  for (const [index, observation] of observations.entries()) {
+    if (observation.failed === true) {
+      latestFailureIndexByTool.set(observation.toolName, index);
+    }
+  }
+  return observations.filter(
+    (observation, index) =>
+      isSuccessfulObservation(observation) &&
+      index > (latestFailureIndexByTool.get(observation.toolName) ?? -1),
+  );
+}
+
 export function resolveToolLoopAbortFallback(params: {
   observations: readonly ToolLoopObservation[];
 }): ToolLoopFallbackResolution | undefined {
@@ -325,12 +341,9 @@ export function resolveSuccessfulToolTerminalFallback(params: {
   observations: readonly ToolLoopObservation[];
   requireDeclaredPresentableFallback?: boolean;
 }): ToolLoopFallbackResolution | undefined {
-  const lastFailureIndex = params.observations.findLastIndex(
-    (observation) => observation.failed === true,
+  const successfulObservations = selectSuccessfulObservationsAfterLatestToolFailure(
+    params.observations,
   );
-  const successfulObservations = params.observations
-    .slice(lastFailureIndex + 1)
-    .filter(isSuccessfulObservation);
   if (successfulObservations.length === 0) {
     return undefined;
   }

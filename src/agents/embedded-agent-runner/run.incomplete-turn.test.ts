@@ -3121,6 +3121,21 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(retryInstruction).toBeNull();
   });
 
+  it("does not misclassify a let-me answer-style reply as planning-only", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "custom-provider",
+      modelId: "custom-model",
+      prompt: "Can you explain the root cause?",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["Let me explain: the cache was stale."],
+      }),
+    });
+
+    expect(retryInstruction).toBeNull();
+  });
+
   it("does not misclassify a direct answer that starts with a wait phrase", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "custom-provider",
