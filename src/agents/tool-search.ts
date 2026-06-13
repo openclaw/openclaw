@@ -641,9 +641,35 @@ function classifyTool(tool: CatalogTool): {
   return { source: "openclaw", sourceName: "core" };
 }
 
-function makeCatalogId(tool: CatalogTool, source: CatalogSource, sourceName?: string): string {
+function makeCatalogId(name: string, source: CatalogSource, sourceName?: string): string {
   const owner = sourceName?.trim() || "core";
-  return `${source}:${owner}:${tool.name}`;
+  return `${source}:${owner}:${name}`;
+}
+
+type CatalogToolSnapshot = {
+  name: string;
+  label?: string;
+  description: string;
+  parameters?: unknown;
+};
+
+function readCatalogToolSnapshot(tool: CatalogTool): CatalogToolSnapshot | undefined {
+  try {
+    const name = tool.name;
+    if (typeof name !== "string" || !name.trim()) {
+      return undefined;
+    }
+    const label = typeof tool.label === "string" ? tool.label : undefined;
+    const description = typeof tool.description === "string" ? tool.description : "";
+    return {
+      name,
+      ...(label !== undefined ? { label } : {}),
+      description,
+      parameters: tool.parameters,
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 function wrapCatalogTool(tool: AnyAgentTool, hookContext?: HookContext): AnyAgentTool {
@@ -657,21 +683,25 @@ function toCatalogEntry(
   tool: CatalogTool,
   sourceOverride?: CatalogSource,
   hookContext?: HookContext,
-): ToolSearchCatalogEntry {
+): ToolSearchCatalogEntry | undefined {
+  const snapshot = readCatalogToolSnapshot(tool);
+  if (!snapshot) {
+    return undefined;
+  }
   const classified = classifyTool(tool);
   const source = sourceOverride ?? classified.source;
   const sourceName = sourceOverride === "client" ? "client" : classified.sourceName;
   const catalogTool =
     source === "client" ? tool : wrapCatalogTool(tool as AnyAgentTool, hookContext);
   return {
-    id: makeCatalogId(tool, source, sourceName),
+    id: makeCatalogId(snapshot.name, source, sourceName),
     source,
     sourceName,
     ...(source === "mcp" && classified.mcp ? { mcp: classified.mcp } : {}),
-    name: tool.name,
-    label: tool.label,
-    description: tool.description ?? "",
-    parameters: tool.parameters,
+    name: snapshot.name,
+    label: snapshot.label,
+    description: snapshot.description,
+    parameters: snapshot.parameters,
     tool: catalogTool,
   };
 }
@@ -1295,7 +1325,10 @@ export function applyToolCatalogCompaction(params: {
       continue;
     }
     if (shouldCatalog(tool)) {
-      catalog.push(toCatalogEntry(tool, undefined, params.toolHookContext));
+      const entry = toCatalogEntry(tool, undefined, params.toolHookContext);
+      if (entry) {
+        catalog.push(entry);
+      }
       continue;
     }
     visible.push(tool);
@@ -1385,16 +1418,19 @@ export function addClientToolsToToolCatalog(params: {
   if (!existing) {
     return { tools: params.tools, compacted: false, catalogToolCount: 0 };
   }
+  const entries = params.tools
+    .map((tool) => toCatalogEntry(tool, "client"))
+    .filter((entry): entry is ToolSearchCatalogEntry => Boolean(entry));
   registerToolSearchCatalog({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     agentId: params.agentId,
     runId: params.runId,
     catalogRef: params.catalogRef,
-    entries: params.tools.map((tool) => toCatalogEntry(tool, "client")),
+    entries,
     append: true,
   });
-  return { tools: [], compacted: params.tools.length > 0, catalogToolCount: params.tools.length };
+  return { tools: [], compacted: entries.length > 0, catalogToolCount: entries.length };
 }
 
 function toJsonSafe(value: unknown): unknown {

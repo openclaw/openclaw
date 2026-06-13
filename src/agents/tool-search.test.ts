@@ -160,6 +160,32 @@ describe("Tool Search", () => {
     expect(telemetry.callCount).toBe(1);
   });
 
+  it("skips catalog tools with unreadable schemas without dropping healthy siblings", () => {
+    const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
+    const broken = pluginTool("fake_broken", "Broken target");
+    Object.defineProperty(broken, "parameters", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin parameters getter exploded");
+      },
+    });
+    const healthy = pluginTool("fake_healthy", "Healthy target");
+
+    const compacted = applyToolSearchCatalog({
+      tools: [codeTool, broken, healthy],
+      config: {
+        tools: {
+          toolSearch: true,
+        },
+      } as never,
+      sessionId: "session-unreadable-schema",
+      sessionKey: "agent:main:unreadable-schema",
+    });
+
+    expect(compacted.tools.map((tool) => tool.name)).toEqual([TOOL_SEARCH_CODE_MODE_TOOL_NAME]);
+    expect(compacted.catalogToolCount).toBe(1);
+  });
+
   it("scopes catalogs by run id when attempts share a session", async () => {
     // Overlapping run attempts can share a session id; run-scoped catalogs keep
     // one attempt from calling tools only exposed to another.
