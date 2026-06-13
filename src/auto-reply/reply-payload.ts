@@ -57,6 +57,12 @@ export type ReplyPayloadMetadata = {
    */
   deliverDespiteSourceReplySuppression?: boolean;
   beforeAgentRunBlocked?: boolean;
+  /**
+   * Final text synthesized by Control Director runtime guards after an agent run
+   * did not produce a transcript-visible assistant answer. WebChat may safely
+   * append/broadcast these marked finals because they are not duplicate Pi turns.
+   */
+  controlDirectorGuardedFinal?: boolean;
 };
 
 const replyPayloadMetadata = new WeakMap<object, ReplyPayloadMetadata>();
