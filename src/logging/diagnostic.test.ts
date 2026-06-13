@@ -480,6 +480,58 @@ describe("stuck session diagnostics threshold", () => {
     expect(recoverStuckSession).toHaveBeenCalledTimes(2);
   });
 
+  it("does not suppress recovery-eligible sessions during warning backoff", () => {
+    const events: DiagnosticEventPayload[] = [];
+    const recoveryRequests: Array<{ sessionKey?: string }> = [];
+    const recoverStuckSession = vi.fn((params) => {
+      recoveryRequests.push({ sessionKey: params.sessionKey });
+    });
+    const unsubscribe = onDiagnosticEvent((event) => {
+      if (event.type === "session.stuck" || event.type === "session.recovery.requested") {
+        events.push(event);
+      }
+    });
+    try {
+      startDiagnosticHeartbeat(
+        {
+          diagnostics: {
+            enabled: true,
+            stuckSessionWarnMs: 30_000,
+          },
+        },
+        { recoverStuckSession },
+      );
+      // Set up an idle session with queued work but no active embedded run.
+      // This classifies as recovery-eligible (stale_session_state).
+      logSessionStateChange({
+        sessionId: "s-recovery",
+        sessionKey: "main-recovery",
+        state: "idle",
+        queueDepth: 1,
+      });
+      // Advance past the first warn threshold to trigger the initial stuck event.
+      vi.advanceTimersByTime(61_000);
+      expect(recoverStuckSession).toHaveBeenCalledTimes(1);
+
+      // Advance by only half the backoff window. Without the fix, the backoff
+      // would suppress the next check. With the fix, recovery-eligible sessions
+      // bypass the backoff and are recovered again.
+      vi.advanceTimersByTime(31_000);
+    } finally {
+      unsubscribe();
+    }
+
+    // Recovery should have been called at least twice: once for the initial
+    // stuck detection, and once more despite the backoff window because the
+    // session is recovery-eligible.
+    expect(recoverStuckSession).toHaveBeenCalledTimes(2);
+    const stuckEvents = events.filter((e) => e.type === "session.stuck");
+    expect(stuckEvents).toHaveLength(2);
+    // The second stuck event should arrive before the backoff window expires,
+    // proving that recovery eligibility bypassed the throttle.
+    expect(stuckEvents[1].ageMs).toBeLessThan(120_000);
+  });
+
   it("reports active sessions as stalled instead of stuck when active work stops progressing", () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn();

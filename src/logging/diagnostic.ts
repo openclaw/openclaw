@@ -1027,7 +1027,7 @@ export function logSessionAttention(
       state.lastStuckWarnAgeMs === undefined
         ? params.thresholdMs
         : Math.max(state.lastStuckWarnAgeMs + params.thresholdMs, state.lastStuckWarnAgeMs * 2);
-    if (params.ageMs < nextWarnAgeMs) {
+    if (params.ageMs < nextWarnAgeMs && !recoveryEligible) {
       return undefined;
     }
     state.lastStuckWarnAgeMs = params.ageMs;
@@ -1040,7 +1040,7 @@ export function logSessionAttention(
             state.lastLongRunningWarnAgeMs + params.thresholdMs,
             state.lastLongRunningWarnAgeMs * 2,
           );
-    if (params.ageMs < nextWarnAgeMs) {
+    if (params.ageMs < nextWarnAgeMs && !recoveryEligible) {
       return undefined;
     }
     state.lastLongRunningWarnAgeMs = params.ageMs;
