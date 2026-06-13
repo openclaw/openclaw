@@ -68,7 +68,7 @@ import {
   type QaRuntimeParityTier,
 } from "./scenario-catalog.js";
 import { resolveQaScenarioPackScenarioIds } from "./scenario-packs.js";
-import { runQaFlowSuiteFromRuntime, runQaSuiteFromRuntime } from "./suite-launch.runtime.js";
+import { runQaFlowSuiteFromRuntime, runQaSuite } from "./suite-launch.runtime.js";
 import { readQaSuiteFailedOrSkippedScenarioCountFromFile } from "./suite-summary.js";
 import {
   buildTokenEfficiencyReport,
@@ -686,7 +686,7 @@ export async function runQaSuiteCommand(opts: {
   }
   const thinkingDefault = parseQaThinkingLevel("--thinking", opts.thinking);
   const runtimeResult = await runQaSuiteWithInfraRetry(() =>
-    runQaSuiteFromRuntime({
+    runQaSuite({
       repoRoot,
       outputDir: resolveRepoRelativeOutputDir(repoRoot, opts.outputDir),
       transportId,

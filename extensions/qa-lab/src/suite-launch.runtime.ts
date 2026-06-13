@@ -90,9 +90,7 @@ async function runQaTestFileSuiteFromRuntime(params: {
   });
 }
 
-export async function runQaSuiteFromRuntime(
-  ...args: [QaSuiteRunParams?]
-): Promise<QaSuiteRuntimeResult> {
+export async function runQaSuite(...args: [QaSuiteRunParams?]): Promise<QaSuiteRuntimeResult> {
   const runParams = args[0];
   const testFileScenarios = resolveTestFileScenariosForSuiteDispatch(runParams);
   if (testFileScenarios) {

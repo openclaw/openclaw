@@ -17,7 +17,7 @@ vi.mock("./test-file-scenario-runner.js", async (importOriginal) => ({
   runQaTestFileScenarios,
 }));
 
-import { runQaSuiteFromRuntime } from "./suite-launch.runtime.js";
+import { runQaSuite } from "./suite-launch.runtime.js";
 
 const tempRoots: string[] = [];
 
@@ -56,7 +56,7 @@ describe("qa suite runtime launcher", () => {
   });
 
   it("routes selected flow scenarios to the flow suite engine", async () => {
-    const result = await runQaSuiteFromRuntime({
+    const result = await runQaSuite({
       repoRoot: process.cwd(),
       providerMode: "mock-openai",
       scenarioIds: ["channel-chat-baseline"],
@@ -81,7 +81,7 @@ describe("qa suite runtime launcher", () => {
 
   it("routes selected Playwright scenarios to the Playwright scenario runner", async () => {
     const repoRoot = await makeTempRepo("qa-suite-launch-");
-    const result = await runQaSuiteFromRuntime({
+    const result = await runQaSuite({
       repoRoot,
       outputDir: ".artifacts/qa-e2e/scenario-test",
       scenarioIds: ["control-ui-chat-flow-playwright"],
@@ -112,7 +112,7 @@ describe("qa suite runtime launcher", () => {
 
   it("rejects mixed flow and Vitest/Playwright scenarios", async () => {
     await expect(
-      runQaSuiteFromRuntime({
+      runQaSuite({
         repoRoot: process.cwd(),
         scenarioIds: ["channel-chat-baseline", "control-ui-chat-flow-playwright"],
       }),
@@ -124,7 +124,7 @@ describe("qa suite runtime launcher", () => {
 
   it("rejects runtime-pair requests for Vitest/Playwright scenarios", async () => {
     await expect(
-      runQaSuiteFromRuntime({
+      runQaSuite({
         repoRoot: process.cwd(),
         runtimePair: ["openclaw", "codex"],
         scenarioIds: ["control-ui-chat-flow-playwright"],
@@ -141,7 +141,7 @@ describe("qa suite runtime launcher", () => {
     await fs.symlink(outsideRoot, path.join(repoRoot, "artifacts-link"));
 
     await expect(
-      runQaSuiteFromRuntime({
+      runQaSuite({
         repoRoot,
         outputDir: "artifacts-link/qa-out",
         scenarioIds: ["control-ui-chat-flow-playwright"],
