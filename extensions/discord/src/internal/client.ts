@@ -50,6 +50,11 @@ export interface ClientOptions {
   devGuilds?: string[];
   eventQueue?: DiscordEventQueueOptions;
   restCacheTtlMs?: number;
+  /**
+   * When set (for example Discord `slashCommandDeploy.mode="changed-only"`), seed the deployer
+   * with persisted fingerprints so unchanged command sets skip REST after gateway restarts.
+   */
+  commandDeployInitialHashes?: ReadonlyMap<string, string> | Record<string, string>;
 }
 
 type OneOffComponentResult =
@@ -209,6 +214,7 @@ export class Client {
       commands: this.commands,
       devGuilds: this.options.devGuilds,
       hashStorePath: this.options.commandDeployHashStorePath,
+      initialHashes: this.options.commandDeployInitialHashes,
       rest: () => this.rest,
     });
     for (const component of handlers.components ?? []) {
@@ -278,6 +284,10 @@ export class Client {
 
   async deployCommands(options: DeployCommandOptions = {}) {
     return await this.commandDeployer.deploy(options);
+  }
+
+  snapshotCommandDeployHashes(): Record<string, string> {
+    return this.commandDeployer.snapshotDeployedCommandSetHashes();
   }
 
   async reconcileCommands() {

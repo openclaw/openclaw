@@ -100,6 +100,8 @@ export type {
   DiscordGuildEntry,
   DiscordIntentsConfig,
   DiscordSlashCommandConfig,
+  DiscordSlashCommandDeployConfig,
+  DiscordSlashCommandDeployMode,
   DmConfig,
   DmPolicy,
   GoogleChatAccountConfig,
