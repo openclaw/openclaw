@@ -987,6 +987,12 @@ function buildAnthropicParams(
   }
   if (options?.toolChoice) {
     params.tool_choice = normalizeAnthropicToolChoice(model, options.toolChoice);
+  } else if (
+    typeof params.thinking === "object" &&
+    params.thinking !== null &&
+    (params.thinking as { type?: unknown }).type === "adaptive"
+  ) {
+    params.tool_choice = { type: "auto" };
   }
   applyAnthropicPayloadPolicyToParams(params, payloadPolicy);
   return params;

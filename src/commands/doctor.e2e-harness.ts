@@ -241,6 +241,10 @@ function createLegacyStateMigrationDetectionResult(params?: {
       sessionPath: "/tmp/state/session-delivery-queue",
       hasLegacy: false,
     },
+    followupQueueSidecar: {
+      sourcePath: "/tmp/state/live-chat-followup-queues.json",
+      hasLegacy: false,
+    },
     execApprovals: {
       sourcePath: "/tmp/state/exec-approvals.legacy.json",
       targetPath: "/tmp/state/exec-approvals.json",

@@ -14,6 +14,7 @@ import {
   waitForQueueDebounce,
 } from "../../../utils/queue-helpers.js";
 import { isRoutableChannel } from "../route-reply.js";
+import { clearRestoredPendingDrainKey, persistFollowupQueues } from "./persist.js";
 import { FOLLOWUP_QUEUES } from "./state.js";
 import {
   completeFollowupRunLifecycle,
@@ -34,6 +35,13 @@ export function rememberFollowupDrainCallback(
   key: string,
   runFollowup: (run: FollowupRun) => Promise<void>,
 ): void {
+  // Plain callback registration. Do NOT sweep restoredPendingDrainKeys here:
+  // enqueueFollowupRun calls this during an active turn (passing
+  // restartIfIdle=false from agent-runner.ts), and scheduling a drain at that
+  // point would race the active turn it should wait behind. The pending-restore
+  // sweep lives in kickFollowupDrainIfIdle, which enqueue only calls once it
+  // has confirmed `restartIfIdle && !queue.draining` — the same active-run
+  // idle guard the rest of the drain pipeline uses.
   FOLLOWUP_RUN_CALLBACKS.set(key, runFollowup);
 }
 
@@ -41,13 +49,31 @@ export function clearFollowupDrainCallback(key: string): void {
   FOLLOWUP_RUN_CALLBACKS.delete(key);
 }
 
-/** Restart the drain for `key` if it is currently idle, using the stored callback. */
+/**
+ * Restart the drain for `key` if it is currently idle, using the stored callback.
+ * Also clears `key` from the pending-restore set — restored items for this
+ * specific route are now scheduled to drain via the same idle-aware path.
+ *
+ * The sweep is intentionally limited to the current key: `kickFollowupDrainIfIdle`
+ * only has the active-run/idle guarantee for the route the caller passed in.
+ * Other restored routes whose callbacks were registered during their own active
+ * turns must wait for their own enqueue idle-kick — draining them from here
+ * would reintroduce the concurrent/out-of-order delivery race.
+ */
 export function kickFollowupDrainIfIdle(key: string): void {
+  clearRestoredPendingDrainKey(key);
   const cb = FOLLOWUP_RUN_CALLBACKS.get(key);
   if (!cb) {
     return;
   }
   scheduleFollowupDrain(key, cb);
+}
+
+function persistDrainAcknowledgement(): void {
+  // A successful followup run means the message has been handed to the
+  // dispatcher. Persist the shortened queue immediately so a crash before the
+  // drain finally block cannot replay an already-delivered prompt.
+  persistFollowupQueues();
 }
 
 type OriginRoutingMetadata = Pick<
@@ -377,6 +403,13 @@ export function scheduleFollowupDrain(
       const collectState = { forceIndividualCollect: false };
       while (queue.items.length > 0 || queue.droppedCount > 0) {
         const droppedBeforeDebounce = await dropAbortedFollowups(queue.items, effectiveRunFollowup);
+        if (droppedBeforeDebounce > 0) {
+          // dropAbortedFollowups splices items out of the queue. If the gateway
+          // exits between that splice and the next persist call, the state file
+          // would still contain the aborted items and abortSignal is not
+          // serialized — so restart would replay items the source already canceled.
+          persistDrainAcknowledgement();
+        }
         if (droppedBeforeDebounce > 0 && queue.items.length === 0) {
           clearFollowupQueueSummaryState(queue);
         }
@@ -385,6 +418,9 @@ export function scheduleFollowupDrain(
         }
         await waitForQueueDebounce(queue);
         const droppedAfterDebounce = await dropAbortedFollowups(queue.items, effectiveRunFollowup);
+        if (droppedAfterDebounce > 0) {
+          persistDrainAcknowledgement();
+        }
         if (droppedAfterDebounce > 0 && queue.items.length === 0) {
           clearFollowupQueueSummaryState(queue);
         }
@@ -431,12 +467,14 @@ export function scheduleFollowupDrain(
                 });
               });
               clearFollowupQueueSummaryState(queue);
+              persistDrainAcknowledgement();
               continue;
             }
             summaryOnly.restore?.();
             break;
           }
           if (collectDrainResult === "drained") {
+            persistDrainAcknowledgement();
             continue;
           }
 
@@ -503,6 +541,7 @@ export function scheduleFollowupDrain(
               clearFollowupQueueSummaryState(queue);
               pendingSummary = undefined;
             }
+            persistDrainAcknowledgement();
           }
           continue;
         }
@@ -540,12 +579,14 @@ export function scheduleFollowupDrain(
             break;
           }
           clearFollowupQueueSummaryState(queue);
+          persistDrainAcknowledgement();
           continue;
         }
 
         if (!(await drainNextQueueItem(queue.items, effectiveRunFollowup))) {
           break;
         }
+        persistDrainAcknowledgement();
       }
     } catch (err) {
       queue.lastEnqueuedAt = Date.now();
@@ -567,7 +608,9 @@ export function scheduleFollowupDrain(
           FOLLOWUP_QUEUES.delete(key);
           clearFollowupDrainCallback(key);
         }
+        persistFollowupQueues();
       } else {
+        persistFollowupQueues();
         scheduleFollowupDrain(key, effectiveRunFollowup);
       }
     }

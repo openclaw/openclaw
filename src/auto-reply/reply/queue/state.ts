@@ -2,27 +2,16 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveGlobalMap } from "../../../shared/global-singleton.js";
 import { applyQueueRuntimeSettings } from "../../../utils/queue-helpers.js";
+import { persistFollowupQueues, restoreFollowupQueues } from "./persist.js";
 import {
   completeFollowupRunLifecycle,
+  type FollowupQueueState,
   type FollowupRun,
   type QueueDropPolicy,
-  type QueueMode,
   type QueueSettings,
 } from "./types.js";
 
-export type FollowupQueueState = {
-  items: FollowupRun[];
-  draining: boolean;
-  lastEnqueuedAt: number;
-  mode: QueueMode;
-  debounceMs: number;
-  cap: number;
-  dropPolicy: QueueDropPolicy;
-  droppedCount: number;
-  summaryLines: string[];
-  summarySources: FollowupRun[];
-  lastRun?: FollowupRun["run"];
-};
+export type { FollowupQueueState };
 
 export const DEFAULT_QUEUE_DEBOUNCE_MS = 500;
 export const DEFAULT_QUEUE_CAP = 20;
@@ -100,6 +89,7 @@ export function clearFollowupQueue(key: string): number {
   queue.lastRun = undefined;
   queue.lastEnqueuedAt = 0;
   FOLLOWUP_QUEUES.delete(cleaned);
+  persistFollowupQueues();
   return cleared;
 }
 
@@ -176,4 +166,7 @@ export function refreshQueuedFollowupSession(params: {
   for (const item of queue.items) {
     rewriteRun(item.run);
   }
+  persistFollowupQueues();
 }
+
+restoreFollowupQueues();
