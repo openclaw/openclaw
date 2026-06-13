@@ -93,8 +93,12 @@ fi
 
 credential_source="$(resolve_credential_source)"
 credential_role="$(resolve_credential_role)"
-if [ -z "$credential_role" ] && [ -n "${CI:-}" ] && [ "$credential_source" = "convex" ]; then
-  credential_role="ci"
+if [ -z "$credential_role" ] && [ "$credential_source" = "convex" ]; then
+  if [ -n "${CI:-}" ]; then
+    credential_role="ci"
+  else
+    credential_role="maintainer"
+  fi
 fi
 
 validate_credential_preflight() {
@@ -166,6 +170,7 @@ docker_env=(
   -e OPENCLAW_QA_PACKAGE_SOURCE_KIND="$package_source_kind"
   -e OPENCLAW_QA_RUNNER="${OPENCLAW_QA_RUNNER:-docker}"
   -e OPENCLAW_NPM_TELEGRAM_FAST="${OPENCLAW_NPM_TELEGRAM_FAST:-1}"
+  -e OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES="${OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES:-20}"
 )
 
 forward_env_if_set() {
@@ -214,7 +219,6 @@ for key in \
   OPENCLAW_NPM_TELEGRAM_ALT_MODEL \
   OPENCLAW_NPM_TELEGRAM_SCENARIOS \
   OPENCLAW_NPM_TELEGRAM_SAMPLE_SCENARIOS \
-  OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES \
   OPENCLAW_NPM_TELEGRAM_SAMPLE_TIMEOUT_MS \
   OPENCLAW_NPM_TELEGRAM_MAX_FAILURES \
   OPENCLAW_NPM_TELEGRAM_SKIP_HOTPATH \

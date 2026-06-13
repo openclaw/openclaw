@@ -384,20 +384,18 @@ controls; the samples are folded into `qa-evidence.json` under
 
 ```bash
 OPENCLAW_QA_CREDENTIAL_SOURCE=convex \
-OPENCLAW_QA_CREDENTIAL_ROLE=maintainer \
-OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC=openclaw@beta \
-OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES=20 \
-OPENCLAW_NPM_TELEGRAM_SAMPLE_TIMEOUT_MS=30000 \
 pnpm test:docker:npm-telegram-live
 ```
 
 When `OPENCLAW_QA_CREDENTIAL_SOURCE=convex` is set, the package live wrapper
 leases a `kind: "telegram"` credential, exports the leased group/driver/SUT bot
 env into the installed-package run, heartbeats the lease, and releases it on
-shutdown. `OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES`,
-`OPENCLAW_NPM_TELEGRAM_SAMPLE_TIMEOUT_MS`, and
-`OPENCLAW_NPM_TELEGRAM_MAX_FAILURES` control repeated sampling without creating
-a separate RTT command or Telegram-specific summary format.
+shutdown. The package wrapper defaults to 20 repeated samples of
+`telegram-mentioned-message-reply`, a 30s sample timeout, and Convex role
+`maintainer` outside CI when Convex is selected. Override
+`OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES`, `OPENCLAW_NPM_TELEGRAM_SAMPLE_TIMEOUT_MS`,
+or `OPENCLAW_NPM_TELEGRAM_MAX_FAILURES` to tune repeated sampling without
+creating a separate RTT command or Telegram-specific summary format.
 
 ### Discord QA
 

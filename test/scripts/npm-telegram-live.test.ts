@@ -82,8 +82,11 @@ describe("package Telegram live Docker E2E", () => {
     expect(script).toContain('docker_e2e_print_log "$run_log"');
     expect(script).not.toContain('cat "$run_log"');
     expect(script).toContain('"${docker_env[@]}"');
-    expect(script).toContain('if [ -z "$credential_role" ] && [ -n "${CI:-}" ]');
+    expect(script).toContain(
+      'if [ -z "$credential_role" ] && [ "$credential_source" = "convex" ]; then',
+    );
     expect(script).toContain('credential_role="ci"');
+    expect(script).toContain('credential_role="maintainer"');
   });
 
   it("bounds installed-package hot path OpenClaw commands", () => {
@@ -146,6 +149,9 @@ describe("package Telegram live Docker E2E", () => {
     const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
 
     expect(script).toContain("OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES");
+    expect(script).toContain(
+      '-e OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES="${OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES:-20}"',
+    );
     expect(script).toContain("OPENCLAW_NPM_TELEGRAM_SAMPLE_TIMEOUT_MS");
     expect(script).toContain("OPENCLAW_NPM_TELEGRAM_MAX_FAILURES");
     expect(script).toContain("OPENCLAW_NPM_TELEGRAM_SAMPLE_SCENARIOS");
