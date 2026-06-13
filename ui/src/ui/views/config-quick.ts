@@ -419,7 +419,7 @@ function renderModelCard(props: QuickSettingsProps) {
           </button>
         </div>
         <div class="qs-row">
-          <span class="qs-row__label">Thinking</span>
+          <span class="qs-row__label" title="Controls model thinking/reasoning mode for this session. Separate from provider-level reasoning effort in agent config.">Thinking</span>
           <div class="qs-segmented">
             ${THINKING_LEVELS.map(
               (level) => html`
