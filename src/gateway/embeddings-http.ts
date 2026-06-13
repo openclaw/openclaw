@@ -24,7 +24,7 @@ import type {
 } from "../plugins/memory-embedding-providers.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { sendJson } from "./http-common.js";
+import { sendInvalidRequest, sendJson } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import {
   OPENCLAW_MODEL_ID,
@@ -291,7 +291,12 @@ export async function handleOpenAiEmbeddingsHttpRequest(
     return true;
   }
 
-  const agentId = resolveAgentIdForRequest({ req, model: requestModel });
+  const agentResult = resolveAgentIdForRequest({ req, model: requestModel });
+  if (!agentResult.ok) {
+    sendInvalidRequest(res, agentResult.errorMessage);
+    return true;
+  }
+  const agentId = agentResult.agentId;
   const agentDir = resolveAgentDir(cfg, agentId);
   const memorySearch = resolveMemorySearchConfig(cfg, agentId);
   const configuredProvider = memorySearch?.provider ?? "openai";

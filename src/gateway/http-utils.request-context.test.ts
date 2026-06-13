@@ -2,7 +2,9 @@
  * Tests HTTP request context extraction for gateway auth and routing.
  */
 import type { IncomingMessage } from "node:http";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.js";
 import {
   resolveOpenAiCompatibleHttpOperatorScopes,
   resolveOpenAiCompatibleHttpSenderIsOwner,
@@ -15,44 +17,128 @@ function createReq(headers: Record<string, string> = {}): IncomingMessage {
   return { headers } as IncomingMessage;
 }
 
+function setAgentRoster(ids: string[]) {
+  resetConfigRuntimeState();
+  setRuntimeConfigSnapshot({
+    agents: {
+      list: ids.map((id, index) => ({ id, default: index === 0 })),
+    },
+  } satisfies OpenClawConfig);
+}
+
+function expectResolvedContext(result: ReturnType<typeof resolveGatewayRequestContext>) {
+  expect(result.ok).toBe(true);
+  if (!result.ok) {
+    throw new Error(result.errorMessage);
+  }
+  return result;
+}
+
 const tokenAuth = { mode: "token" as const };
 const noneAuth = { mode: "none" as const };
 
+beforeEach(() => {
+  setAgentRoster(["main", "beta"]);
+});
+
 describe("resolveGatewayRequestContext", () => {
   it("uses normalized x-openclaw-message-channel when enabled", () => {
-    const result = resolveGatewayRequestContext({
-      req: createReq({ "x-openclaw-message-channel": " Custom-Channel " }),
-      model: "openclaw",
-      sessionPrefix: "openai",
-      defaultMessageChannel: "webchat",
-      useMessageChannelHeader: true,
-    });
+    const result = expectResolvedContext(
+      resolveGatewayRequestContext({
+        req: createReq({ "x-openclaw-message-channel": " Custom-Channel " }),
+        model: "openclaw",
+        sessionPrefix: "openai",
+        defaultMessageChannel: "webchat",
+        useMessageChannelHeader: true,
+      }),
+    );
 
     expect(result.messageChannel).toBe("custom-channel");
   });
 
   it("uses default messageChannel when header support is disabled", () => {
-    const result = resolveGatewayRequestContext({
-      req: createReq({ "x-openclaw-message-channel": "custom-channel" }),
-      model: "openclaw",
-      sessionPrefix: "openresponses",
-      defaultMessageChannel: "webchat",
-      useMessageChannelHeader: false,
-    });
+    const result = expectResolvedContext(
+      resolveGatewayRequestContext({
+        req: createReq({ "x-openclaw-message-channel": "custom-channel" }),
+        model: "openclaw",
+        sessionPrefix: "openresponses",
+        defaultMessageChannel: "webchat",
+        useMessageChannelHeader: false,
+      }),
+    );
 
     expect(result.messageChannel).toBe("webchat");
   });
 
   it("includes session prefix and user in generated session key", () => {
+    const result = expectResolvedContext(
+      resolveGatewayRequestContext({
+        req: createReq(),
+        model: "openclaw",
+        user: "alice",
+        sessionPrefix: "openresponses",
+        defaultMessageChannel: "webchat",
+      }),
+    );
+
+    expect(result.sessionKey).toContain("openresponses-user:alice");
+  });
+
+  it("keeps valid explicit agent selectors in the configured roster", () => {
+    const result = expectResolvedContext(
+      resolveGatewayRequestContext({
+        req: createReq({ "x-openclaw-agent-id": " Beta " }),
+        model: "openclaw/main",
+        sessionPrefix: "openai",
+        defaultMessageChannel: "webchat",
+      }),
+    );
+
+    expect(result.agentId).toBe("beta");
+    expect(result.sessionKey).toMatch(/^agent:beta:/);
+  });
+
+  it("rejects unknown explicit model agent selectors", () => {
     const result = resolveGatewayRequestContext({
       req: createReq(),
-      model: "openclaw",
-      user: "alice",
-      sessionPrefix: "openresponses",
+      model: "openclaw/missing-agent",
+      sessionPrefix: "openai",
       defaultMessageChannel: "webchat",
     });
 
-    expect(result.sessionKey).toContain("openresponses-user:alice");
+    expect(result).toEqual({
+      ok: false,
+      errorMessage: "Unknown OpenClaw agent 'missing-agent'.",
+    });
+  });
+
+  it("rejects unknown explicit header agent selectors", () => {
+    const result = resolveGatewayRequestContext({
+      req: createReq({ "x-openclaw-agent-id": "missing-agent" }),
+      model: "openclaw",
+      sessionPrefix: "openai",
+      defaultMessageChannel: "webchat",
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      errorMessage: "Unknown OpenClaw agent 'missing-agent'.",
+    });
+  });
+
+  it("keeps default routing when no explicit agent is supplied", () => {
+    setAgentRoster(["solo"]);
+    const result = expectResolvedContext(
+      resolveGatewayRequestContext({
+        req: createReq(),
+        model: "openclaw/default",
+        sessionPrefix: "openai",
+        defaultMessageChannel: "webchat",
+      }),
+    );
+
+    expect(result.agentId).toBe("solo");
+    expect(result.sessionKey).toMatch(/^agent:solo:/);
   });
 });
 

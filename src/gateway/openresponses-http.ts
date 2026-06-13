@@ -36,7 +36,13 @@ import { defaultRuntime } from "../runtime.js";
 import { resolveAssistantStreamDeltaText } from "./agent-event-assistant-text.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { sendJson, setSseHeaders, watchClientDisconnect, writeDone } from "./http-common.js";
+import {
+  sendInvalidRequest,
+  sendJson,
+  setSseHeaders,
+  watchClientDisconnect,
+  writeDone,
+} from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import {
   getBearerToken,
@@ -477,7 +483,12 @@ export async function handleOpenResponsesHttpRequest(
   const stream = Boolean(payload.stream);
   const model = payload.model;
   const user = payload.user;
-  const agentId = resolveAgentIdForRequest({ req, model });
+  const agentResult = resolveAgentIdForRequest({ req, model });
+  if (!agentResult.ok) {
+    sendInvalidRequest(res, agentResult.errorMessage);
+    return true;
+  }
+  const agentId = agentResult.agentId;
   const { modelOverride, errorMessage: modelError } = await resolveOpenAiCompatModelOverride({
     req,
     agentId,
@@ -632,6 +643,10 @@ export async function handleOpenResponsesHttpRequest(
     defaultMessageChannel: "webchat",
     useMessageChannelHeader: true,
   });
+  if (!resolved.ok) {
+    sendInvalidRequest(res, resolved.errorMessage);
+    return true;
+  }
   const responseSessionScope = createResponseSessionScope({
     req,
     auth: opts.auth,

@@ -42,7 +42,13 @@ import {
 } from "./agent-prompt.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { sendJson, setSseHeaders, watchClientDisconnect, writeDone } from "./http-common.js";
+import {
+  sendInvalidRequest,
+  sendJson,
+  setSseHeaders,
+  watchClientDisconnect,
+  writeDone,
+} from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import {
   resolveGatewayRequestContext,
@@ -962,7 +968,7 @@ export async function handleOpenAiHttpRequest(
         }
       : undefined;
 
-  const { agentId, sessionKey, messageChannel } = resolveGatewayRequestContext({
+  const requestContext = resolveGatewayRequestContext({
     req,
     model,
     user,
@@ -970,6 +976,11 @@ export async function handleOpenAiHttpRequest(
     defaultMessageChannel: "webchat",
     useMessageChannelHeader: true,
   });
+  if (!requestContext.ok) {
+    sendInvalidRequest(res, requestContext.errorMessage);
+    return true;
+  }
+  const { agentId, sessionKey, messageChannel } = requestContext;
   const { modelOverride, errorMessage: modelError } = await resolveOpenAiCompatModelOverride({
     req,
     agentId,

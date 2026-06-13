@@ -8,6 +8,7 @@ import { createClientToolNameConflictError } from "../agents/agent-tool-definiti
 import { FailoverError } from "../agents/failover-error.js";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
+import { resetConfigRuntimeState } from "../config/config.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
 import {
@@ -15,6 +16,7 @@ import {
   getFreePort,
   installGatewayTestHooks,
   startGatewayServerWithRetries,
+  testState,
 } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
@@ -257,6 +259,10 @@ async function expectInvalidRequest(
 describe("OpenResponses HTTP API (e2e)", () => {
   it("handles OpenResponses request parsing and validation", async () => {
     const port = enabledPort;
+    testState.agentsConfig = {
+      list: [{ id: "main", default: true }, { id: "beta" }],
+    };
+    resetConfigRuntimeState();
     const mockAgentOnce = (payloads: Array<{ text: string }>, meta?: unknown) => {
       agentCommand.mockClear();
       agentCommand.mockResolvedValueOnce({ payloads, meta } as never);
@@ -323,6 +329,39 @@ describe("OpenResponses HTTP API (e2e)", () => {
         /^agent:beta:/,
       );
       await ensureResponseConsumed(resModel);
+
+      agentCommand.mockClear();
+      const resUnknownModel = await postResponses(port, {
+        model: "openclaw/missing-agent",
+        input: "hi",
+      });
+      expect(resUnknownModel.status).toBe(400);
+      const unknownModelJson = (await resUnknownModel.json()) as {
+        error?: { type?: string; message?: string };
+      };
+      expect(unknownModelJson.error).toEqual({
+        type: "invalid_request_error",
+        message: "Unknown OpenClaw agent 'missing-agent'.",
+      });
+      expect(agentCommand).toHaveBeenCalledTimes(0);
+      await ensureResponseConsumed(resUnknownModel);
+
+      agentCommand.mockClear();
+      const resUnknownHeader = await postResponses(
+        port,
+        { model: "openclaw", input: "hi" },
+        { "x-openclaw-agent-id": "missing-agent" },
+      );
+      expect(resUnknownHeader.status).toBe(400);
+      const unknownHeaderJson = (await resUnknownHeader.json()) as {
+        error?: { type?: string; message?: string };
+      };
+      expect(unknownHeaderJson.error).toEqual({
+        type: "invalid_request_error",
+        message: "Unknown OpenClaw agent 'missing-agent'.",
+      });
+      expect(agentCommand).toHaveBeenCalledTimes(0);
+      await ensureResponseConsumed(resUnknownHeader);
 
       mockAgentOnce([{ text: "hello" }]);
       const resDefaultAlias = await postResponses(port, { model: "openclaw/default", input: "hi" });

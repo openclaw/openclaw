@@ -6,7 +6,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { modelKey, parseModelRef, resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { createModelVisibilityPolicy } from "../agents/model-visibility-policy.js";
 import { getRuntimeConfig } from "../config/io.js";
@@ -36,6 +36,10 @@ export {
 export const OPENCLAW_MODEL_ID = "openclaw";
 /** Default OpenAI-compatible model alias that targets the default OpenClaw agent. */
 export const OPENCLAW_DEFAULT_MODEL_ID = "openclaw/default";
+
+export type AgentIdForRequestResult =
+  | { ok: true; agentId: string }
+  | { ok: false; errorMessage: string };
 
 function resolveAgentIdFromHeader(req: IncomingMessage): string | undefined {
   const raw =
@@ -131,19 +135,41 @@ export async function resolveOpenAiCompatModelOverride(params: {
   return { modelOverride: raw };
 }
 
+function formatUnknownAgentMessage(agentId: string): string {
+  return `Unknown OpenClaw agent '${agentId}'.`;
+}
+
+function resolveAgentIdSelection(params: { req: IncomingMessage; model: string | undefined }): {
+  agentId: string;
+  explicit: boolean;
+} {
+  const cfg = getRuntimeConfig();
+  const fromHeader = resolveAgentIdFromHeader(params.req);
+  if (fromHeader) {
+    return { agentId: fromHeader, explicit: true };
+  }
+
+  const fromModel = resolveAgentIdFromModel(params.model, cfg);
+  if (fromModel) {
+    const lowered = normalizeLowercaseStringOrEmpty(params.model);
+    const explicit = lowered !== OPENCLAW_MODEL_ID && lowered !== OPENCLAW_DEFAULT_MODEL_ID;
+    return { agentId: fromModel, explicit };
+  }
+
+  return { agentId: resolveDefaultAgentId(cfg), explicit: false };
+}
+
 /** Resolves the request agent from headers, model alias, or the configured default. */
 export function resolveAgentIdForRequest(params: {
   req: IncomingMessage;
   model: string | undefined;
-}): string {
+}): AgentIdForRequestResult {
   const cfg = getRuntimeConfig();
-  const fromHeader = resolveAgentIdFromHeader(params.req);
-  if (fromHeader) {
-    return fromHeader;
+  const selection = resolveAgentIdSelection(params);
+  if (selection.explicit && !listAgentIds(cfg).includes(selection.agentId)) {
+    return { ok: false, errorMessage: formatUnknownAgentMessage(selection.agentId) };
   }
-
-  const fromModel = resolveAgentIdFromModel(params.model, cfg);
-  return fromModel ?? resolveDefaultAgentId(cfg);
+  return { ok: true, agentId: selection.agentId };
 }
 
 function resolveSessionKey(params: {
@@ -170,8 +196,14 @@ export function resolveGatewayRequestContext(params: {
   sessionPrefix: string;
   defaultMessageChannel: string;
   useMessageChannelHeader?: boolean;
-}): { agentId: string; sessionKey: string; messageChannel: string } {
-  const agentId = resolveAgentIdForRequest({ req: params.req, model: params.model });
+}):
+  | { ok: true; agentId: string; sessionKey: string; messageChannel: string }
+  | { ok: false; errorMessage: string } {
+  const agentResult = resolveAgentIdForRequest({ req: params.req, model: params.model });
+  if (!agentResult.ok) {
+    return agentResult;
+  }
+  const agentId = agentResult.agentId;
   const sessionKey = resolveSessionKey({
     req: params.req,
     agentId,
@@ -184,5 +216,5 @@ export function resolveGatewayRequestContext(params: {
       params.defaultMessageChannel)
     : params.defaultMessageChannel;
 
-  return { agentId, sessionKey, messageChannel };
+  return { ok: true, agentId, sessionKey, messageChannel };
 }

@@ -278,6 +278,10 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
   });
 
   it("supports base64 encoding and agent-scoped auth/config resolution", async () => {
+    testState.agentsConfig = {
+      list: [{ id: "main", default: true }, { id: "beta" }],
+    };
+    resetConfigRuntimeState();
     const res = await postEmbeddings(
       {
         model: "openclaw/beta",
@@ -293,6 +297,17 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     const lastCall = latestCreateEmbeddingProviderOptions();
     expect(typeof lastCall.model).toBe("string");
     expect(lastCall.agentDir).toBe(resolveAgentDir({}, "beta"));
+  });
+
+  it("rejects unknown explicit agent selectors before creating an embedding provider", async () => {
+    const callCount = createEmbeddingProviderMock.mock.calls.length;
+    const res = await postEmbeddings({
+      model: "openclaw/missing-agent",
+      input: "hello",
+    });
+
+    await expectInvalidEmbeddingRequest(res, "Unknown OpenClaw agent 'missing-agent'.");
+    expect(createEmbeddingProviderMock.mock.calls.length).toBe(callCount);
   });
 
   it("rejects invalid input shapes", async () => {
