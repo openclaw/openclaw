@@ -17,7 +17,7 @@ import {
 } from "openclaw/plugin-sdk/provider-stream-family";
 import { buildOpenRouterImageGenerationProvider } from "./image-generation-provider.js";
 import { openrouterMediaUnderstandingProvider } from "./media-understanding-provider.js";
-import { isOpenRouterMistralModelId } from "./models.js";
+import { isOpenRouterMistralModelId, normalizeOpenRouterModelId } from "./models.js";
 import { buildOpenRouterMusicGenerationProvider } from "./music-generation-provider.js";
 import { createOpenRouterOAuthAuthMethod } from "./oauth.js";
 import { applyOpenrouterConfig, OPENROUTER_DEFAULT_MODEL_REF } from "./onboard.js";
@@ -52,15 +52,18 @@ const OPENROUTER_CACHE_TTL_MODEL_PREFIXES = [
 function normalizeOpenRouterResolvedModel<T extends ProviderRuntimeModel>(model: T): T | undefined {
   const normalizedBaseUrl = normalizeOpenRouterBaseUrl(model.baseUrl);
   const reasoning = isOpenRouterProxyReasoningUnsupportedModel(model.id) ? false : model.reasoning;
+  const normalizedId = normalizeOpenRouterModelId(model.id);
   if (
     (!normalizedBaseUrl || normalizedBaseUrl === model.baseUrl) &&
-    reasoning === model.reasoning
+    reasoning === model.reasoning &&
+    (normalizedId === undefined || normalizedId === model.id)
   ) {
     return undefined;
   }
   return {
     ...model,
     ...(normalizedBaseUrl ? { baseUrl: normalizedBaseUrl } : {}),
+    ...(normalizedId && normalizedId !== model.id ? { id: normalizedId } : {}),
     reasoning,
   };
 }
