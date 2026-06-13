@@ -67,6 +67,8 @@ function looksLikeSlackChannelId(channelKey: string): boolean {
   );
 }
 
+// Startup resolution updates ctx.channelsConfig, but inbound authorization captures the authored
+// channels map and key list when createSlackMonitorContext runs. Diagnose those authored keys.
 function collectSlackNameKeyedChannelWarnings({ cfg }: { cfg: OpenClawConfig }): string[] {
   const warnings = new Set<string>();
   const slackCfg = asObjectRecord(asObjectRecord(cfg.channels)?.slack);
