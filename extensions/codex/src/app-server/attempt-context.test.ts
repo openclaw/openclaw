@@ -108,6 +108,46 @@ describe("Codex app-server attempt context", () => {
     expect(context.memoryToolRouted).toBe(false);
   });
 
+  it("uses compact identity pointers for group-channel turns", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-group-workspace-"));
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "Private soul detail.");
+    await fs.writeFile(path.join(workspaceDir, "IDENTITY.md"), "Private identity detail.");
+    await fs.writeFile(path.join(workspaceDir, "USER.md"), "Private family detail.");
+
+    const context = await buildCodexWorkspaceBootstrapContext({
+      params: {
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        groupChannel: "#openclaw",
+        config: {
+          agents: {
+            defaults: {
+              workspace: workspaceDir,
+            },
+          },
+        },
+      } as EmbeddedRunAttemptParams,
+      resolvedWorkspace: workspaceDir,
+      effectiveWorkspace: workspaceDir,
+      sessionKey: "agent:main:session-1",
+      sessionAgentId: "main",
+      memoryToolNames: [],
+    });
+
+    expect(context.turnScopedDeveloperInstructions).toContain(
+      "follow the active agent workspace identity and collaboration instructions",
+    );
+    expect(context.turnScopedDeveloperInstructions).not.toContain("Iggy");
+    expect(context.turnScopedDeveloperInstructions).not.toContain("Juan");
+    expect(context.turnScopedDeveloperInstructions).toContain("shared/group-channel turns");
+    expect(context.turnScopedDeveloperInstructions).toContain("SOUL.md");
+    expect(context.turnScopedDeveloperInstructions).toContain("IDENTITY.md");
+    expect(context.turnScopedDeveloperInstructions).toContain("USER.md");
+    expect(context.turnScopedDeveloperInstructions).not.toContain("Private soul detail.");
+    expect(context.turnScopedDeveloperInstructions).not.toContain("Private identity detail.");
+    expect(context.turnScopedDeveloperInstructions).not.toContain("Private family detail.");
+  });
+
   it("remaps Codex bootstrap files under dot-prefixed workspace directories", () => {
     expect(
       remapCodexContextFilePath({

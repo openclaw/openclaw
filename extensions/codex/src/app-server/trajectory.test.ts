@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createCodexTrajectoryRecorder,
+  recordCodexTrajectoryContext,
   resolveCodexTrajectoryAppendFlags,
   resolveCodexTrajectoryPointerFlags,
 } from "./trajectory.js";
@@ -202,5 +203,63 @@ describe("Codex trajectory recorder", () => {
     ) as { data?: { truncated?: boolean; reason?: string } };
     expect(parsed.data?.truncated).toBe(true);
     expect(parsed.data?.reason).toBe("trajectory-event-size-limit");
+  });
+
+  it("summarizes large compiled context fields before writing trajectory", async () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const recorder = createCodexTrajectoryRecorder({
+      cwd: tmpDir,
+      attempt: {
+        sessionFile,
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        runId: "run-1",
+        prompt: "small prompt",
+        model: { api: "responses" },
+      } as never,
+      env: {},
+    });
+
+    const trajectoryRecorder = expectTrajectoryRecorder(recorder);
+    recordCodexTrajectoryContext(trajectoryRecorder, {
+      cwd: tmpDir,
+      developerInstructions: "developer ".repeat(1_000),
+      tools: [
+        {
+          name: "large_tool",
+          description: "large schema",
+          inputSchema: {
+            type: "object",
+            properties: Object.fromEntries(
+              Array.from({ length: 200 }, (_, index) => [
+                `field_${index}`,
+                { type: "string", description: "x".repeat(100) },
+              ]),
+            ),
+          },
+        },
+      ],
+      attempt: {
+        sessionFile,
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        runId: "run-1",
+        prompt: "small prompt",
+        model: { api: "responses" },
+      } as never,
+    });
+    await trajectoryRecorder.flush();
+
+    const parsed = JSON.parse(
+      fs.readFileSync(path.join(tmpDir, "session.trajectory.jsonl"), "utf8"),
+    );
+
+    expect(parsed.data.systemPrompt.truncated).toBe(true);
+    expect(parsed.data.systemPrompt.preview).toContain("developer");
+    expect(parsed.data.systemPrompt.preview.length).toBeLessThanOrEqual(4096);
+    expect(parsed.data.tools.truncated).toBe(true);
+    expect(parsed.data.tools.names).toEqual(["large_tool"]);
+    expect(JSON.stringify(parsed)).not.toContain("field_199");
   });
 });

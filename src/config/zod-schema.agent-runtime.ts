@@ -1107,6 +1107,12 @@ export const ToolsSchema = z
       })
       .strict()
       .optional(),
+    sessionStatus: z
+      .object({
+        details: z.enum(["compact", "full"]).optional(),
+      })
+      .strict()
+      .optional(),
     loopDetection: ToolLoopDetectionSchema,
     toolSearch: ToolSearchSchema,
     codeMode: CodeModeSchema,

@@ -224,6 +224,14 @@ type SessionStatusRouteDetails = {
   deliveryContext?: SessionStatusDeliveryContextDetails;
 };
 
+type SessionStatusRouteSummary = {
+  included: boolean;
+  origin: boolean;
+  active: boolean;
+  deliveryContext: boolean;
+};
+type SessionStatusDetailsMode = "compact" | "full";
+
 const INTERNAL_SESSION_KEY_ORIGIN_PREFIXES = new Set(["main", "cron", "subagent", "acp"]);
 
 function readRouteThreadId(value: unknown): string | number | undefined {
@@ -337,6 +345,21 @@ function formatSessionStatusRouteContext(details: SessionStatusRouteDetails): st
 \`\`\`json
 ${JSON.stringify(details, null, 2)}
 \`\`\``;
+}
+
+function summarizeSessionStatusRoute(
+  details: SessionStatusRouteDetails,
+): SessionStatusRouteSummary {
+  return {
+    included: Object.keys(details).length > 0,
+    origin: Boolean(details.origin),
+    active: Boolean(details.active),
+    deliveryContext: Boolean(details.deliveryContext),
+  };
+}
+
+function resolveSessionStatusDetailsMode(cfg: OpenClawConfig): SessionStatusDetailsMode {
+  return cfg.tools?.sessionStatus?.details === "compact" ? "compact" : "full";
 }
 
 function resolveActiveStatusModelIdentity(params: {
@@ -935,6 +958,8 @@ export function createSessionStatusTool(opts?: {
         isLiveRunSession: isLiveRouteSession,
       });
       const routeContextText = formatSessionStatusRouteContext(routeDetails);
+      const routeSummary = summarizeSessionStatusRoute(routeDetails);
+      const detailsMode = resolveSessionStatusDetailsMode(cfg);
       const visibleStatusText = routeContextText
         ? `${fullStatusText}
 
@@ -949,23 +974,37 @@ ${routeContextText}`
               : resultOverrideModel
             : null;
 
+      const detailsBase = {
+        ok: true,
+        sessionKey: resolved.key,
+        changedModel,
+        ...(modelRaw !== undefined
+          ? {
+              model: resultOverrideModel ?? defaultModelForCard,
+              ...((resultOverrideProvider ?? providerForCard)
+                ? { modelProvider: resultOverrideProvider ?? providerForCard }
+                : {}),
+              modelOverride: modelOverrideForResult,
+            }
+          : {}),
+      };
+
       return {
         content: [{ type: "text", text: visibleStatusText }],
         details: {
-          ok: true,
-          sessionKey: resolved.key,
-          changedModel,
-          ...(modelRaw !== undefined
+          ...detailsBase,
+          ...(detailsMode === "full"
             ? {
-                model: resultOverrideModel ?? defaultModelForCard,
-                ...((resultOverrideProvider ?? providerForCard)
-                  ? { modelProvider: resultOverrideProvider ?? providerForCard }
-                  : {}),
-                modelOverride: modelOverrideForResult,
+                statusText: visibleStatusText,
+                ...routeDetails,
               }
             : {}),
-          statusText: visibleStatusText,
-          ...routeDetails,
+          ...(detailsMode === "compact"
+            ? {
+                statusTextChars: visibleStatusText.length,
+                routeContext: routeSummary,
+              }
+            : {}),
         },
       };
     },

@@ -51,6 +51,35 @@ describe("config: tools.alsoAllow", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("allows session_status output policy config", () => {
+    const res = validateConfigObject({
+      tools: {
+        sessionStatus: {
+          details: "full",
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects invalid session_status output policy config", () => {
+    const res = validateConfigObject({
+      tools: {
+        sessionStatus: {
+          details: "verbose",
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues.map((issue) => issue.path)).toEqual(
+        expect.arrayContaining(["tools.sessionStatus.details"]),
+      );
+    }
+  });
+
   it("allows per-agent message tool cross-context policy", () => {
     const res = validateConfigObject({
       agents: {

@@ -377,6 +377,10 @@ Default: `tree` (current session + sessions spawned by it, such as subagents).
       // "self" | "tree" | "agent" | "all"
       visibility: "tree",
     },
+    sessionStatus: {
+      // "compact" keeps model-facing details small; "full" restores legacy detail payloads.
+      details: "compact",
+    },
   },
 }
 ```
@@ -394,6 +398,24 @@ Default: `tree` (current session + sessions spawned by it, such as subagents).
 
   </Accordion>
 </AccordionGroup>
+
+### `tools.sessionStatus`
+
+Controls model-facing details returned by the `session_status` tool.
+
+```json5
+{
+  tools: {
+    sessionStatus: {
+      details: "full", // "compact" | "full"
+    },
+  },
+}
+```
+
+- `full` (default): preserves legacy `details.statusText` and route metadata.
+- `compact`: keeps full human-readable status text in tool `content` while
+  returning compact metadata in structured `details`.
 
 ### `tools.sessions_spawn`
 

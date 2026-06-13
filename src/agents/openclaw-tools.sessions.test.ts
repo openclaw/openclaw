@@ -289,6 +289,7 @@ describe("sessions tools", () => {
     };
 
     expect(schemaProp("sessions_history", "limit").type).toBe("integer");
+    expect(schemaProp("sessions_history", "includeTools").type).toBe("boolean");
     expect(schemaProp("sessions_list", "limit").type).toBe("integer");
     expect(schemaProp("sessions_list", "activeMinutes").type).toBe("integer");
     expect(schemaProp("sessions_list", "messageLimit").type).toBe("integer");
@@ -714,6 +715,19 @@ describe("sessions tools", () => {
         return {
           messages: [
             { role: "toolResult", content: [] },
+            { role: "tool", content: "legacy tool role" },
+            {
+              role: "assistant",
+              content: [{ type: "toolCall", name: "session_status", arguments: {} }],
+            },
+            {
+              role: "assistant",
+              content: [{ type: "toolUse", name: "exec", input: {} }],
+            },
+            {
+              role: "assistant",
+              content: [{ type: "toolCallDelta", partialJson: '{"cmd":"ls"}' }],
+            },
             {
               role: "assistant",
               provider: "openclaw",
@@ -741,25 +755,167 @@ describe("sessions tools", () => {
     const result = await tool.execute("call3", { sessionKey: "main" });
     const details = result.details as { messages?: unknown[] };
     expect(details.messages).toHaveLength(3);
+    expect(details.messages).not.toContainEqual(expect.objectContaining({ role: "toolResult" }));
+    expect(details.messages).not.toContainEqual(expect.objectContaining({ role: "tool" }));
+    const serialized = JSON.stringify(details.messages);
+    expect(serialized).not.toContain("toolCall");
+    expect(serialized).not.toContain("toolUse");
+    expect(serialized).not.toContain("toolCallDelta");
     expect(details.messages).toContainEqual(
       expect.objectContaining({ provider: "openclaw", model: "gateway-injected" }),
     );
     expect(details.messages).toContainEqual(
       expect.objectContaining({ provider: "openclaw", model: "delivery-mirror" }),
     );
+  });
 
-    const withTools = await tool.execute("call4", {
+  it("sessions_history keeps includeTools compatible but bounded", async () => {
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "toolCall", name: "session_status", arguments: {} }],
+              usage: { input: 1, output: 1 },
+            },
+            {
+              role: "toolResult",
+              content: "tool-output: " + "x".repeat(40_000),
+              details: { giant: "y".repeat(40_000) },
+            },
+            { role: "assistant", content: [{ type: "text", text: "ok" }] },
+          ],
+        };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
+    if (!tool) {
+      throw new Error("missing sessions_history tool");
+    }
+
+    const result = await tool.execute("call-history-include-tools-compatible", {
       sessionKey: "main",
       includeTools: true,
     });
-    const withToolsDetails = withTools.details as { messages?: unknown[] };
-    expect(withToolsDetails.messages).toHaveLength(4);
-    expect(withToolsDetails.messages).toContainEqual(
-      expect.objectContaining({ provider: "openclaw", model: "delivery-mirror" }),
-    );
-    expect(withToolsDetails.messages).toContainEqual(
-      expect.objectContaining({ provider: "openclaw", model: "gateway-injected" }),
-    );
+    const details = result.details as {
+      messages?: Array<Record<string, unknown>>;
+      truncated?: boolean;
+      contentTruncated?: boolean;
+      bytes?: number;
+    };
+    expect(details.truncated).toBe(true);
+    expect(details.contentTruncated).toBe(true);
+    expect(typeof details.bytes).toBe("number");
+    expect((details.bytes ?? 0) <= 24 * 1024).toBe(true);
+    expect(details.messages).toContainEqual(expect.objectContaining({ role: "toolResult" }));
+    expect(JSON.stringify(details.messages)).toContain("toolCall");
+    const toolResult = details.messages?.find((message) => message.role === "toolResult");
+    expect(toolResult?.details).toBeUndefined();
+  });
+
+  it("sessions_history overreads and returns the last 10 non-tool turns by default", async () => {
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "chat.history") {
+        return {
+          messages: Array.from({ length: 30 }, (_, index) =>
+            index % 2 === 0
+              ? {
+                  role: "toolResult",
+                  content: `tool-output-${index}`,
+                }
+              : {
+                  role: "assistant",
+                  content: [{ type: "text", text: `human-visible-${index}` }],
+                },
+          ),
+        };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
+    if (!tool) {
+      throw new Error("missing sessions_history tool");
+    }
+
+    const result = await tool.execute("call-history-default-limit", { sessionKey: "main" });
+    const historyCall = callGatewayMock.mock.calls.find((call) => {
+      const request = call[0] as { method?: string };
+      return request.method === "chat.history";
+    });
+    expect(historyCall).toBeDefined();
+    if (!historyCall) {
+      throw new Error("missing chat.history call");
+    }
+    expect((historyCall[0] as { params?: { limit?: number } }).params?.limit).toBe(50);
+    const details = result.details as { messages?: Array<{ content?: unknown }> };
+    expect(details.messages).toHaveLength(10);
+    expect(JSON.stringify(details.messages)).not.toContain("tool-output");
+    expect(JSON.stringify(details.messages)).not.toContain("human-visible-9");
+    expect(JSON.stringify(details.messages)).toContain("human-visible-29");
+  });
+
+  it("sessions_history honors explicit smaller limits after filtering tools", async () => {
+    callGatewayMock.mockResolvedValue({
+      messages: [
+        { role: "assistant", content: [{ type: "text", text: "old" }] },
+        { role: "toolResult", content: "tool output" },
+        { role: "assistant", content: [{ type: "text", text: "middle" }] },
+        { role: "tool", content: "legacy tool role" },
+        { role: "assistant", content: [{ type: "text", text: "new" }] },
+      ],
+    });
+    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
+    if (!tool) {
+      throw new Error("missing sessions_history tool");
+    }
+
+    const result = await tool.execute("call-history-explicit-limit", {
+      sessionKey: "main",
+      limit: 3,
+    });
+    const historyCall = callGatewayMock.mock.calls.find((call) => {
+      const request = call[0] as { method?: string };
+      return request.method === "chat.history";
+    });
+    expect(historyCall).toBeDefined();
+    if (!historyCall) {
+      throw new Error("missing chat.history call");
+    }
+    expect((historyCall[0] as { params?: { limit?: number } }).params?.limit).toBe(15);
+    const details = result.details as { messages?: Array<{ content?: unknown }> };
+    expect(details.messages).toHaveLength(3);
+    expect(JSON.stringify(details.messages)).toContain("old");
+    expect(JSON.stringify(details.messages)).toContain("middle");
+    expect(JSON.stringify(details.messages)).toContain("new");
+  });
+
+  it("sessions_history keeps includeTools raw history bounded to the requested limit", async () => {
+    callGatewayMock.mockResolvedValue({ messages: [] });
+    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
+    if (!tool) {
+      throw new Error("missing sessions_history tool");
+    }
+
+    await tool.execute("call-history-include-tools-limit", {
+      sessionKey: "main",
+      limit: 3,
+      includeTools: true,
+    });
+    const historyCall = callGatewayMock.mock.calls.find((call) => {
+      const request = call[0] as { method?: string };
+      return request.method === "chat.history";
+    });
+    expect(historyCall).toBeDefined();
+    if (!historyCall) {
+      throw new Error("missing chat.history call");
+    }
+    expect((historyCall[0] as { params?: { limit?: number } }).params?.limit).toBe(3);
   });
 
   it("sessions_history caps oversized payloads and strips heavy fields", async () => {
@@ -804,10 +960,7 @@ describe("sessions tools", () => {
       throw new Error("missing sessions_history tool");
     }
 
-    const result = await tool.execute("call4b", {
-      sessionKey: "main",
-      includeTools: true,
-    });
+    const result = await tool.execute("call4b", { sessionKey: "main" });
     const details = result.details as {
       messages?: Array<Record<string, unknown>>;
       truncated?: boolean;
@@ -817,7 +970,7 @@ describe("sessions tools", () => {
       bytes?: number;
     };
     expect(details.truncated).toBe(true);
-    expect(details.droppedMessages).toBe(true);
+    expect(details.droppedMessages).toBe(false);
     expect(details.contentTruncated).toBe(true);
     expect(details.contentRedacted).toBe(false);
     expect(typeof details.bytes).toBe("number");
@@ -869,10 +1022,7 @@ describe("sessions tools", () => {
       throw new Error("missing sessions_history tool");
     }
 
-    const result = await tool.execute("call4c", {
-      sessionKey: "main",
-      includeTools: true,
-    });
+    const result = await tool.execute("call4c", { sessionKey: "main" });
     const details = result.details as {
       messages?: Array<Record<string, unknown>>;
       truncated?: boolean;

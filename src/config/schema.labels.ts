@@ -210,6 +210,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.links.scope": "Link Understanding Scope",
   "tools.profile": "Tool Profile",
   "tools.alsoAllow": "Tool Allowlist Additions",
+  "tools.sessionStatus.details": "Session Status Details Mode",
   "agents.list[].tools.profile": "Agent Tool Profile",
   "agents.list[].tools.alsoAllow": "Agent Tool Allowlist Additions",
   "agents.list[].tools.codeMode": "Agent Code Mode",

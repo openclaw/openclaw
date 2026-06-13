@@ -4,7 +4,7 @@ export const EXEC_TOOL_DISPLAY_SUMMARY = "Run shell now.";
 export const PROCESS_TOOL_DISPLAY_SUMMARY = "Inspect/control exec sessions.";
 export const CRON_TOOL_DISPLAY_SUMMARY = "Schedule reminders, cron, wake events.";
 export const SESSIONS_LIST_TOOL_DISPLAY_SUMMARY = "List visible sessions; filters/previews.";
-export const SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY = "Read sanitized session history.";
+export const SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY = "Read last 10 non-tool session turns.";
 export const SESSIONS_SEND_TOOL_DISPLAY_SUMMARY = "Message session or configured agent.";
 export const SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY = "Spawn subagent or ACP session.";
 export const SESSIONS_SPAWN_SUBAGENT_TOOL_DISPLAY_SUMMARY = "Spawn subagent session.";
@@ -22,8 +22,9 @@ export function describeSessionsListTool(): string {
 /** Describes the sessions_history tool for model-facing instructions. */
 export function describeSessionsHistoryTool(): string {
   return [
-    "Fetch sanitized history for visible session.",
-    "Use before replying, debugging, resuming; supports limits/tool messages.",
+    "Fetch the last 10 sanitized turns for a visible session.",
+    "`includeTools` is supported for bounded recovery/debug replay; omit for non-tool recall.",
+    "Use only after session reset/recovery when required context is missing.",
   ].join(" ");
 }
 

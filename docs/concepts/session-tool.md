@@ -56,8 +56,11 @@ unrelated sessions stay hidden. When visibility is restricted, `sessions_list`
 returns optional `visibility` metadata showing the effective mode and a warning that
 results may be scope-limited.
 
-`sessions_history` fetches the conversation transcript for a specific session.
-By default, tool results are excluded -- pass `includeTools: true` to see them.
+`sessions_history` fetches the last 10 conversation turns for a specific
+session. Use it only for reset/recovery cases where required context is missing.
+Tool results are excluded by default. Existing callers can still request them
+with `includeTools: true`, but that path is separately bounded and sanitized for
+recovery/debug replay rather than raw transcript dumping.
 The returned view is intentionally bounded and safety-filtered:
 
 - assistant text is normalized before recall:
@@ -77,8 +80,12 @@ The returned view is intentionally bounded and safety-filtered:
 - long text blocks are truncated
 - very large histories can drop older rows or replace an oversized row with
   `[sessions_history omitted: message too large]`
+- tool-inclusive replay uses a stricter byte cap than ordinary non-tool recall
 - the tool reports summary flags such as `truncated`, `droppedMessages`,
   `contentTruncated`, `contentRedacted`, and `bytes`
+
+Callers can pass a smaller `limit` when less context is sufficient. Avoid using
+`sessions_history` for routine context refreshes in long-lived chat sessions.
 
 Both tools accept either a **session key** (like `"main"`) or a **session ID**
 from a previous list call.
@@ -121,9 +128,14 @@ the caller's current session; visible client labels such as `openclaw-tui` are
 not session keys.
 
 When route metadata is available, `session_status` also includes a visible
-`Route context` JSON block and matching structured `details` fields. These
-fields disambiguate the session key from the route that is currently handling
-the live run:
+`Route context` JSON block. By default, structured tool-result `details`
+preserve the shipped full shape, including `details.statusText` and full route
+fields. Set `tools.sessionStatus.details="compact"` when model-facing callers
+need smaller structured details that report route-presence metadata instead of
+duplicating the full status card.
+
+Route context disambiguates the session key from the route that is currently
+handling the live run:
 
 - `origin` is where the session was created, or the provider inferred from a
   deliverable session-key prefix when older state lacks stored origin metadata.

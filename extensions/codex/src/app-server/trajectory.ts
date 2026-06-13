@@ -2,6 +2,7 @@
  * Records optional Codex runtime trajectory sidecars with bounded, redacted
  * context and completion events.
  */
+import { createHash } from "node:crypto";
 import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -39,6 +40,8 @@ const JWT_VALUE_RE = /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]
 const COOKIE_PAIR_RE = /\b([A-Za-z][A-Za-z0-9_.-]{1,64})=([A-Za-z0-9+/._~%=-]{16,})(?=;|\s|$)/gu;
 const TRAJECTORY_RUNTIME_FILE_MAX_BYTES = 50 * 1024 * 1024;
 const TRAJECTORY_RUNTIME_EVENT_MAX_BYTES = 256 * 1024;
+const TRAJECTORY_TEXT_INLINE_MAX_CHARS = 4096;
+const TRAJECTORY_JSON_INLINE_MAX_BYTES = 8192;
 
 type CodexTrajectoryOpenFlagConstants = Pick<
   typeof nodeFs.constants,
@@ -94,6 +97,51 @@ function boundedTrajectoryLine(event: Record<string, unknown>): string | undefin
     return `${truncated}\n`;
   }
   return undefined;
+}
+
+function hashTrajectoryValue(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function summarizeLargeTrajectoryText(value: string | undefined): unknown {
+  if (typeof value !== "string" || value.length <= TRAJECTORY_TEXT_INLINE_MAX_CHARS) {
+    return value;
+  }
+  return {
+    truncated: true,
+    chars: value.length,
+    bytes: Buffer.byteLength(value),
+    sha256: hashTrajectoryValue(value),
+    preview: value.slice(0, TRAJECTORY_TEXT_INLINE_MAX_CHARS),
+  };
+}
+
+function summarizeLargeTrajectoryJson<T>(
+  value: T,
+  summarize: (value: T) => Record<string, unknown>,
+): unknown {
+  const serialized = JSON.stringify(value);
+  if (Buffer.byteLength(serialized) <= TRAJECTORY_JSON_INLINE_MAX_BYTES) {
+    return value;
+  }
+  return {
+    truncated: true,
+    bytes: Buffer.byteLength(serialized),
+    sha256: hashTrajectoryValue(serialized),
+    ...summarize(value),
+  };
+}
+
+function summarizeTrajectoryTools(
+  tools: { name?: unknown; description?: unknown; parameters?: unknown }[] | undefined,
+): unknown {
+  if (!tools) {
+    return undefined;
+  }
+  return summarizeLargeTrajectoryJson(tools, (value) => ({
+    count: value.length,
+    names: value.map((tool) => (typeof tool.name === "string" ? tool.name : "unknown")),
+  }));
 }
 
 function resolveTrajectoryPointerFilePath(sessionFile: string): string {
@@ -219,10 +267,10 @@ export function recordCodexTrajectoryContext(
     return;
   }
   recorder.recordEvent("context.compiled", {
-    systemPrompt: params.developerInstructions,
+    systemPrompt: summarizeLargeTrajectoryText(params.developerInstructions),
     prompt: params.prompt ?? params.attempt.prompt,
     imagesCount: params.attempt.images?.length ?? 0,
-    tools: toTrajectoryToolDefinitions(params.tools),
+    tools: summarizeTrajectoryTools(toTrajectoryToolDefinitions(params.tools)),
   });
 }
 

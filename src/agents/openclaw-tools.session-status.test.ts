@@ -48,6 +48,7 @@ const createMockConfig = () => ({
   },
   tools: {
     agentToAgent: { enabled: false },
+    sessionStatus: { details: "compact" },
   },
 });
 
@@ -94,6 +95,10 @@ function installScopedSessionStores(syncUpdates = false) {
     );
   }
   return stores;
+}
+
+function resultText(result: { content: Array<{ type: string; text?: string }> }): string {
+  return result.content.find((item) => item.type === "text")?.text ?? "";
 }
 
 async function createSessionsModuleMock() {
@@ -455,11 +460,45 @@ describe("session_status tool", () => {
     const tool = getSessionStatusTool();
 
     const result = await tool.execute("call1", {});
-    const details = result.details as { ok?: boolean; statusText?: string };
+    const details = result.details as {
+      ok?: boolean;
+      statusText?: string;
+      statusTextChars?: number;
+    };
     expect(details.ok).toBe(true);
+    expect(resultText(result)).toContain("OpenClaw");
+    expect(resultText(result)).toContain("🧠 Model:");
+    expect(resultText(result)).not.toContain("OAuth/token status");
+    expect(details.statusText).toBeUndefined();
+    expect(details.statusTextChars).toBe(resultText(result).length);
+  });
+
+  it("preserves full session_status details by default for compatibility", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "s1",
+        updatedAt: 10,
+      },
+    });
+    mockConfig = {
+      ...createMockConfig(),
+      tools: {
+        agentToAgent: { enabled: false },
+      },
+    };
+
+    const tool = getSessionStatusTool();
+
+    const result = await tool.execute("call-default-full-details", {});
+    const details = result.details as {
+      statusText?: string;
+      statusTextChars?: number;
+      routeContext?: unknown;
+    };
+    expect(details.statusText).toBe(resultText(result));
     expect(details.statusText).toContain("OpenClaw");
-    expect(details.statusText).toContain("🧠 Model:");
-    expect(details.statusText).not.toContain("OAuth/token status");
+    expect(details.statusTextChars).toBeUndefined();
+    expect(details.routeContext).toBeUndefined();
   });
 
   it("enables transcript usage fallback for session_status", async () => {
@@ -618,7 +657,8 @@ describe("session_status tool", () => {
     const details = result.details as { ok?: boolean; sessionKey?: string; statusText?: string };
     expect(details.ok).toBe(true);
     expect(details.sessionKey).toBe("agent:main:main");
-    expect(details.statusText).toContain("OpenClaw");
+    expect(resultText(result)).toContain("OpenClaw");
+    expect(details.statusText).toBeUndefined();
   });
 
   it("reports origin, active, and persisted delivery route metadata for semantic current", async () => {
@@ -654,38 +694,86 @@ describe("session_status tool", () => {
       ok?: boolean;
       sessionKey?: string;
       statusText?: string;
-      origin?: { provider?: string; accountId?: string };
-      active?: { channel?: string; to?: string; accountId?: string; threadId?: string };
-      deliveryContext?: {
-        channel?: string;
-        to?: string;
-        accountId?: string;
-        threadId?: string;
+      routeContext?: {
+        included?: boolean;
+        origin?: boolean;
+        active?: boolean;
+        deliveryContext?: boolean;
       };
     };
     expect(details.ok).toBe(true);
     expect(details.sessionKey).toBe(sessionKey);
+    expect(details.routeContext).toEqual({
+      included: true,
+      origin: true,
+      active: true,
+      deliveryContext: true,
+    });
+    const text = resultText(result);
+    expect(text).toContain("Route context:");
+    expect(text).toContain('"origin"');
+    expect(text).toContain('"active"');
+    expect(text).toContain('"deliveryContext"');
+    expect(details.statusText).toBeUndefined();
+  });
+
+  it("returns full session_status details when explicitly configured", async () => {
+    const sessionKey = "agent:main:discord:channel:1489550370136129537";
+    resetSessionStore({
+      [sessionKey]: {
+        sessionId: "s-discord-full-status",
+        updatedAt: 10,
+        origin: { provider: "discord", accountId: "bot-primary" },
+        deliveryContext: {
+          channel: "discord",
+          to: "channel:1489550370136129537",
+        },
+      },
+    });
+    mockConfig = {
+      ...mockConfig,
+      tools: {
+        ...(mockConfig.tools as Record<string, unknown> | undefined),
+        sessionStatus: { details: "full" },
+      },
+    };
+
+    const tool = createSessionStatusTool({
+      agentSessionKey: sessionKey,
+      runSessionKey: sessionKey,
+      activeDeliveryContext: {
+        channel: "webchat",
+        to: "control-ui-conversation",
+      },
+      config: mockConfig as never,
+    });
+
+    const result = await tool.execute("call-current-full-status-details", {
+      sessionKey: "current",
+    });
+    const details = result.details as {
+      statusText?: string;
+      statusTextChars?: number;
+      routeContext?: unknown;
+      origin?: { provider?: string; accountId?: string };
+      active?: { channel?: string; to?: string };
+      deliveryContext?: { channel?: string; to?: string };
+    };
+
+    expect(details.statusText).toContain("OpenClaw");
+    expect(details.statusText).toContain("Route context:");
+    expect(details.statusTextChars).toBeUndefined();
+    expect(details.routeContext).toBeUndefined();
     expect(details.origin).toEqual({ provider: "discord", accountId: "bot-primary" });
     expect(details.active).toEqual({
       channel: "webchat",
       to: "control-ui-conversation",
-      accountId: "browser",
-      threadId: "webchat-thread",
     });
     expect(details.deliveryContext).toEqual({
       channel: "discord",
       to: "channel:1489550370136129537",
       accountId: "bot-primary",
-      threadId: "thread-origin",
     });
-    const text =
-      result.content.find((item): item is { type: "text"; text: string } => item.type === "text")
-        ?.text ?? "";
-    expect(text).toContain("Route context:");
-    expect(text).toContain('"origin"');
-    expect(text).toContain('"active"');
-    expect(text).toContain('"deliveryContext"');
-    expect(details.statusText).toContain('"active"');
   });
 
   it("does not report an active route for explicit non-live session lookups", async () => {
@@ -707,7 +795,11 @@ describe("session_status tool", () => {
     });
     mockConfig = {
       ...mockConfig,
-      tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true, allow: ["*"] } },
+      tools: {
+        sessions: { visibility: "all" },
+        agentToAgent: { enabled: true, allow: ["*"] },
+        sessionStatus: { details: "compact" },
+      },
     };
 
     const tool = createSessionStatusTool({
@@ -724,15 +816,18 @@ describe("session_status tool", () => {
       sessionKey: targetKey,
     });
     const details = result.details as {
-      origin?: { provider?: string };
-      active?: { channel?: string };
-      deliveryContext?: { channel?: string; to?: string };
+      routeContext?: {
+        included?: boolean;
+        origin?: boolean;
+        active?: boolean;
+        deliveryContext?: boolean;
+      };
     };
-    expect(details.origin).toEqual({ provider: "discord" });
-    expect(details.active).toBeUndefined();
-    expect(details.deliveryContext).toEqual({
-      channel: "discord",
-      to: "channel:1489550370136129537",
+    expect(details.routeContext).toEqual({
+      included: true,
+      origin: true,
+      active: false,
+      deliveryContext: true,
     });
   });
 
@@ -769,14 +864,18 @@ describe("session_status tool", () => {
     });
     const details = result.details as {
       sessionKey?: string;
-      active?: { channel?: string };
-      deliveryContext?: { channel?: string; to?: string };
+      routeContext?: {
+        included?: boolean;
+        active?: boolean;
+        deliveryContext?: boolean;
+      };
     };
     expect(details.sessionKey).toBe(policyKey);
-    expect(details.active).toBeUndefined();
-    expect(details.deliveryContext).toEqual({
-      channel: "telegram",
-      to: "telegram:direct:1234",
+    expect(details.routeContext).toEqual({
+      included: true,
+      origin: true,
+      active: false,
+      deliveryContext: true,
     });
   });
 
@@ -936,8 +1035,9 @@ describe("session_status tool", () => {
     const details = result.details as { ok?: boolean; sessionKey?: string; statusText?: string };
     expect(details.ok).toBe(true);
     expect(details.sessionKey).toBe("agent:main:scope:scopy:direct:scopy");
-    expect(details.statusText).toContain("OpenClaw");
-    expect(details.statusText).toContain("🧠 Model:");
+    expect(resultText(result)).toContain("OpenClaw");
+    expect(resultText(result)).toContain("🧠 Model:");
+    expect(details.statusText).toBeUndefined();
   });
 
   it("resolves sandboxed sessionKey=current to the requester when no run session override exists", async () => {
@@ -953,8 +1053,9 @@ describe("session_status tool", () => {
     const details = result.details as { ok?: boolean; sessionKey?: string; statusText?: string };
     expect(details.ok).toBe(true);
     expect(details.sessionKey).toBe("agent:main:telegram:group:-5096326138");
-    expect(details.statusText).toContain("OpenClaw");
-    expect(details.statusText).toContain("🧠 Model:");
+    expect(resultText(result)).toContain("OpenClaw");
+    expect(resultText(result)).toContain("🧠 Model:");
+    expect(details.statusText).toBeUndefined();
     expect(
       callGatewayMock.mock.calls.some(([arg]) => {
         const request = arg as { method?: string; params?: { key?: string } };
@@ -972,8 +1073,9 @@ describe("session_status tool", () => {
     const details = result.details as { ok?: boolean; sessionKey?: string; statusText?: string };
     expect(details.ok).toBe(true);
     expect(details.sessionKey).toBe("agent:main:scope:scopy:direct:scopy");
-    expect(details.statusText).toContain("OpenClaw");
-    expect(details.statusText).toContain("🧠 Model:");
+    expect(resultText(result)).toContain("OpenClaw");
+    expect(resultText(result)).toContain("🧠 Model:");
+    expect(details.statusText).toBeUndefined();
   });
 
   it("renders the active run model for semantic current lookups", async () => {

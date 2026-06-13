@@ -244,6 +244,7 @@ export type CodeModeConfig =
     };
 
 export type SessionsToolsVisibility = "self" | "tree" | "agent" | "all";
+export type SessionStatusDetailsMode = "compact" | "full";
 
 export type ToolPolicyConfig = {
   /** Exact tool names allowed after the selected profile is applied. */
@@ -708,6 +709,11 @@ export type ToolsConfig = {
      * - "all": any session (cross-agent still requires tools.agentToAgent)
      */
     visibility?: SessionsToolsVisibility;
+  };
+  /** session_status tool output policy. */
+  sessionStatus?: {
+    /** Full preserves shipped structured details; compact keeps model-facing details small. */
+    details?: SessionStatusDetailsMode;
   };
   /** Elevated exec permissions for the host machine. */
   elevated?: {
