@@ -94,6 +94,7 @@ describe("loadControlUiBootstrapConfig", () => {
       embedSandboxMode: "scripts" as const,
       allowExternalEmbedUrls: false,
       serverVersion: null,
+      seamColor: null,
     };
 
     await loadControlUiBootstrapConfig(state);
@@ -200,6 +201,7 @@ describe("loadControlUiBootstrapConfig", () => {
       embedSandboxMode: "scripts" as const,
       allowExternalEmbedUrls: false,
       serverVersion: null,
+      seamColor: null,
     };
 
     await loadControlUiBootstrapConfig(state);
@@ -366,6 +368,7 @@ describe("loadControlUiBootstrapConfig", () => {
       embedSandboxMode: "scripts" as const,
       allowExternalEmbedUrls: false,
       serverVersion: null,
+      seamColor: null,
     };
 
     await loadControlUiBootstrapConfig(state);
