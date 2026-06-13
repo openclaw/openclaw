@@ -64,6 +64,7 @@ struct ChatProTab: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .safeAreaPadding(.top, 8)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .navigationBarHidden(true)
@@ -103,7 +104,6 @@ struct ChatProTab: View {
             self.connectionPillButton
         }
         .padding(.horizontal, OpenClawProMetric.pagePadding)
-        .padding(.top, 8)
         .padding(.bottom, 4)
     }
 
