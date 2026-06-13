@@ -114,4 +114,21 @@ describe("qqbot message adapter", () => {
     expect(proofResults.find((result) => result.capability === "media")?.status).toBe("verified");
     expect(proofResults.find((result) => result.capability === "replyTo")?.status).toBe("verified");
   });
+
+  it("rejects media sends when the QQ outbound layer reports an error", async () => {
+    sendMediaMock.mockResolvedValue({
+      error: "API Error [/v2/users/user-1/files]: Bad Request",
+    });
+
+    const sendMedia = qqbotPlugin.message?.send?.media;
+    expect(sendMedia).toBeDefined();
+    await expect(
+      sendMedia?.({
+        cfg,
+        to: "qqbot:c2c:user-1",
+        text: "image",
+        mediaUrl: "https://example.com/image.png",
+      }),
+    ).rejects.toThrow("API Error [/v2/users/user-1/files]: Bad Request");
+  });
 });

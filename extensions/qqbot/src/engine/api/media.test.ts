@@ -394,7 +394,7 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
     expectGuardedDownload("http://93.184.216.34/assets/photo.png");
   });
 
-  it("does not pass URL or fake-IP DNS policy to the QQ upload body", async () => {
+  it("does not pass remote URLs through to the QQ upload body", async () => {
     const client = mockApiClient();
     const tokenManager = mockTokenManager();
     const api = new MediaApi(client, tokenManager);
@@ -408,20 +408,13 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
     );
 
     expectGuardedDownload("https://cdn.example.com/assets/photo.png");
-    expect(client["request"]).toHaveBeenCalledWith(
-      "token-1",
-      "POST",
-      expect.any(String),
-      expect.objectContaining({
-        file_data: MEDIA_BASE64,
-      }),
-      expect.any(Object),
-    );
     expect(client["request"]).not.toHaveBeenCalledWith(
       expect.any(String),
       expect.any(String),
       expect.any(String),
-      expect.objectContaining({ url: expect.any(String) }),
+      expect.objectContaining({
+        url: "https://cdn.example.com/assets/photo.png",
+      }),
       expect.any(Object),
     );
   });

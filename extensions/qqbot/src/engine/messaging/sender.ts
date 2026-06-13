@@ -634,18 +634,6 @@ async function sendMediaInternal(
   }
 }
 
-/**
- * Upload a {@link MediaSource} via the one-shot or chunked path, chosen by
- * size + kind.
- *
- * Routing rules (kept here as the single source of truth so callers need
- * not know which endpoint was used):
- *
- * - `url` / `base64`: always one-shot — the server accepts these directly
- *   and the chunked endpoint has no representation for them.
- * - `localPath` / `buffer` with `size >= LARGE_FILE_THRESHOLD`: chunked.
- * - Everything else: one-shot.
- */
 async function dispatchUpload(
   ctx: AccountContext,
   scope: ChatScope,
@@ -660,6 +648,19 @@ async function dispatchUpload(
       const buffer = await downloadDirectUploadUrl(source.url, {
         maxBytes: getMaxUploadSize(fileType),
       });
+      if (
+        scope === "c2c" &&
+        (fileType === MediaFileType.IMAGE || fileType === MediaFileType.FILE)
+      ) {
+        return ctx.chunkedMediaApi.uploadChunked({
+          scope,
+          targetId,
+          fileType,
+          source: { kind: "buffer", buffer, fileName },
+          creds,
+          fileName,
+        });
+      }
       if (buffer.length >= LARGE_FILE_THRESHOLD) {
         return ctx.chunkedMediaApi.uploadChunked({
           scope,
