@@ -477,6 +477,18 @@ if (packageEntrySet.has("dist/postinstall-content-inventory.json")) {
       const normalizedContentEntries = contentInventory.map((entry) =>
         Object.assign({}, entry, { path: entry.path.replace(/\\/gu, "/") }),
       );
+      const normalizedContentEntryCounts = new Map();
+      for (const contentEntry of normalizedContentEntries) {
+        normalizedContentEntryCounts.set(
+          contentEntry.path,
+          (normalizedContentEntryCounts.get(contentEntry.path) ?? 0) + 1,
+        );
+      }
+      for (const [entry, count] of normalizedContentEntryCounts) {
+        if (count > 1) {
+          errors.push(`duplicate normalized content inventory entry: ${entry}`);
+        }
+      }
       const contentEntryMap = new Map(normalizedContentEntries.map((entry) => [entry.path, entry]));
       const normalizedInventorySet = normalizedInventory ? new Set(normalizedInventory) : null;
       if (normalizedInventory) {

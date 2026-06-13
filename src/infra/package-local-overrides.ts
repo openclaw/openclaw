@@ -213,7 +213,7 @@ async function copyOverridePayload(params: {
 }
 
 const LOCAL_IMPORT_SPECIFIER_PATTERN =
-  /(?:import|export)\s+(?:[^'"]*?\sfrom\s*)?["']([^"']+)["']|import\s*\(\s*["']([^"']+)["']\s*\)|require\s*\(\s*["']([^"']+)["']\s*\)/gu;
+  /(?:import|export)\b\s*(?:[^'"]*?\bfrom\s*)?["']([^"']+)["']|import\s*\(\s*["']([^"']+)["']\s*\)|require\s*\(\s*["']([^"']+)["']\s*\)/gu;
 
 function resolveReferencedDistPath(params: {
   fromPath: string;

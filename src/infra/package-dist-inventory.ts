@@ -524,20 +524,23 @@ export async function collectPackageDistContentInventory(
   inventory?: string[],
 ): Promise<PackageDistContentInventoryEntry[]> {
   const files = inventory ?? (await collectPackageDistInventory(packageRoot));
+  const scanContext = createPackageDistInventoryScanContext();
   const entries = await Promise.all(
-    files.map(async (relativePath) => {
-      const absolutePath = path.join(packageRoot, relativePath);
-      const stats = await fs.lstat(absolutePath);
-      if (!stats.isFile() || stats.isSymbolicLink()) {
-        throw new Error(`Unsafe package dist path: ${relativePath}`);
-      }
-      return {
-        path: normalizeRelativePath(relativePath),
-        sha256: await hashFileSha256(absolutePath),
-        mode: normalizeFileMode(stats.mode),
-        size: stats.size,
-      } satisfies PackageDistContentInventoryEntry;
-    }),
+    files.map((relativePath) =>
+      withPackageDistInventoryFsSlot(scanContext, async () => {
+        const absolutePath = path.join(packageRoot, relativePath);
+        const stats = await fs.lstat(absolutePath);
+        if (!stats.isFile() || stats.isSymbolicLink()) {
+          throw new Error(`Unsafe package dist path: ${relativePath}`);
+        }
+        return {
+          path: normalizeRelativePath(relativePath),
+          sha256: await hashFileSha256(absolutePath),
+          mode: normalizeFileMode(stats.mode),
+          size: stats.size,
+        } satisfies PackageDistContentInventoryEntry;
+      }),
+    ),
   );
   return entries.toSorted((left, right) => left.path.localeCompare(right.path));
 }

@@ -335,6 +335,36 @@ describe("check-openclaw-package-tarball", () => {
     );
   });
 
+  it("rejects duplicate normalized content inventory paths", () => {
+    const body = "export {};\n";
+    const entry = {
+      path: "dist/index.js",
+      sha256: createHash("sha256").update(body).digest("hex"),
+      mode: 0o644,
+      size: Buffer.byteLength(body),
+    };
+    withTarball(
+      ["dist/index.js"],
+      {
+        "dist/index.js": body,
+        "dist/postinstall-content-inventory.json": JSON.stringify([
+          entry,
+          { ...entry, path: "dist\\index.js" },
+        ]),
+      },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          "duplicate normalized content inventory entry: dist/index.js",
+        );
+      },
+      "2026.5.21",
+      { includeContentInventory: false },
+    );
+  });
+
   it("rejects content inventory entries omitted from the path inventory", () => {
     withTarball(
       ["dist/index.js"],

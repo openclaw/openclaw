@@ -1,11 +1,12 @@
 // Covers package dist inventory collection and validation.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   assertNoLegacyPluginDependencyStagingDebris,
   collectLegacyPluginDependencyStagingDebrisPaths,
+  collectPackageDistContentInventory,
   collectPackageDistContentInventoryErrors,
   collectPackageDistInventoryErrors,
   LOCAL_BUILD_METADATA_DIST_PATHS,
@@ -81,6 +82,52 @@ describe("package dist inventory", () => {
         await expect(readPackageDistContentInventoryIfPresent(packageRoot)).rejects.toThrow(
           "Invalid package dist content inventory",
         );
+      },
+    );
+  });
+
+  it("bounds concurrent content inventory hash reads", async () => {
+    await withTempDir(
+      { prefix: "openclaw-dist-content-inventory-concurrency-" },
+      async (packageRoot) => {
+        const inventory = Array.from(
+          { length: 40 },
+          (_, index) => `dist/file-${String(index).padStart(2, "0")}.js`,
+        );
+        await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
+        await Promise.all(
+          inventory.map((relativePath) =>
+            fs.writeFile(path.join(packageRoot, relativePath), "export {};\n", "utf8"),
+          ),
+        );
+
+        const realReadFile = fs.readFile;
+        let activeReads = 0;
+        let maxActiveReads = 0;
+        const readFileSpy = vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
+          const filePath = String(args[0]);
+          if (!filePath.includes(`${path.sep}dist${path.sep}file-`)) {
+            return await realReadFile(...args);
+          }
+          activeReads += 1;
+          maxActiveReads = Math.max(maxActiveReads, activeReads);
+          try {
+            await new Promise((resolve) => setTimeout(resolve, 5));
+            return await realReadFile(...args);
+          } finally {
+            activeReads -= 1;
+          }
+        });
+
+        try {
+          await expect(
+            collectPackageDistContentInventory(packageRoot, inventory),
+          ).resolves.toHaveLength(inventory.length);
+        } finally {
+          readFileSpy.mockRestore();
+        }
+        expect(maxActiveReads).toBeGreaterThan(1);
+        expect(maxActiveReads).toBeLessThanOrEqual(32);
       },
     );
   });
