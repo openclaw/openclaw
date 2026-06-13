@@ -37,6 +37,7 @@ export function scanEmptyAllowlistPolicyWarnings(
     prefix: string,
     channelName: string,
     parent?: DoctorAccountRecord,
+    skipGroupAllowlistCheck?: boolean,
   ) => {
     const accountDm = asObjectRecord(account.dm);
     const parentDm = asObjectRecord(parent?.dm);
@@ -61,6 +62,7 @@ export function scanEmptyAllowlistPolicyWarnings(
         doctorFixCommand: params.doctorFixCommand,
         parent,
         prefix,
+        skipGroupAllowlistCheck,
         shouldSkipDefaultEmptyGroupAllowlistWarning:
           params.shouldSkipDefaultEmptyGroupAllowlistWarning,
       }),
@@ -90,14 +92,13 @@ export function scanEmptyAllowlistPolicyWarnings(
     }
 
     const accounts = asObjectRecord(channelConfig.accounts);
+    const hasAnyAccounts =
+      accounts && Object.keys(accounts).some((id) => !isDisabledRecord(accounts[id]));
 
-    // When sub-accounts exist, the top-level config is only a parent/fallback
-    // for account-level allowlist resolution — don't check it as a standalone
-    // account. Otherwise every populated per-account allowFrom would still
-    // trigger a false warning for the empty top-level groupAllowFrom.
-    if (!accounts || Object.keys(accounts).length === 0) {
-      checkAccount(channelConfig, `channels.${channelName}`, channelName);
-    }
+    // When non-disabled sub-accounts exist, the top-level config's empty
+    // groupAllowFrom is a parent/fallback, not a standalone account policy.
+    // Skip the group-allowlist warning (but still run DM and extra warnings).
+    checkAccount(channelConfig, `channels.${channelName}`, channelName, undefined, hasAnyAccounts);
 
     if (!accounts) {
       continue;

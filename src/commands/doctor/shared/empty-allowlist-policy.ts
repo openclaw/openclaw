@@ -12,6 +12,7 @@ type CollectEmptyAllowlistPolicyWarningsParams = {
   doctorFixCommand: string;
   parent?: DoctorAccountRecord;
   prefix: string;
+  skipGroupAllowlistCheck?: boolean;
   shouldSkipDefaultEmptyGroupAllowlistWarning?: typeof shouldSkipChannelDoctorDefaultEmptyGroupAllowlistWarning;
 };
 
@@ -63,7 +64,13 @@ export function collectEmptyAllowlistPolicyWarningsForAccount(
     (params.parent?.groupPolicy as string | undefined) ??
     undefined;
 
-  if (groupPolicy !== "allowlist" || !usesSenderBasedGroupAllowlist(params.channelName)) {
+  if (
+    groupPolicy !== "allowlist" ||
+    !usesSenderBasedGroupAllowlist(params.channelName) ||
+    // When non-disabled sub-accounts exist, the top-level's empty
+    // groupAllowFrom is a parent/fallback — don't warn on it.
+    params.skipGroupAllowlistCheck
+  ) {
     return warnings;
   }
 
