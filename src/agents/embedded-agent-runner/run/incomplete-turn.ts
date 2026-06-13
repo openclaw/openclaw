@@ -154,7 +154,7 @@ const PLANNING_ONLY_HEADING_RE = /^(?:plan|steps?|next steps?)\s*:/i;
 const PLANNING_ONLY_BULLET_RE = /^(?:[-*•]\s+|\d+[.)]\s+)/u;
 const PLANNING_ONLY_MAX_VISIBLE_TEXT = 700;
 const PLANNING_ONLY_ACTION_VERB_RE =
-  /\b(?:inspect(?:ing)?|investigat(?:e|ing)|check(?:ing)?|look(?:ing)?(?:\s+into|\s+at)?|read(?:ing)?|search(?:ing)?|find(?:ing)?|debug(?:ging)?|fix(?:ing)?|patch(?:ing)?|updat(?:e|ing)|chang(?:e|ing)|edit(?:ing)?|writ(?:e|ing)|implement(?:ing)?|runn?ing|run|test(?:ing)?|verify|verifying|review(?:ing)?|analy(?:s|z)(?:e|ing)|summari(?:s|z)(?:e|ing)|explain(?:ing)?|answer(?:ing)?|show(?:ing)?|shar(?:e|ing)|report(?:ing)?|prepar(?:e|ing)|captur(?:e|ing)|tak(?:e|ing)|handl(?:e|ing)|sort(?:ing|ed)?|follow(?:ing)?\s+up|get(?:ting)?\s+back|start(?:ing)?|launch(?:ing)?|send(?:ing)?|monitor(?:ing)?|refactor(?:ing)?|restart(?:ing)?|deploy(?:ing)?|ship(?:ping)?)\b/i;
+  /\b(?:inspect(?:ing)?|investigat(?:e|ing)|check(?:ing)?|look(?:ing)?(?:\s+into|\s+at)?|read(?:ing)?|search(?:ing)?|find(?:ing)?|debug(?:ging)?|fix(?:ing)?|patch(?:ing)?|updat(?:e|ing)|chang(?:e|ing)|edit(?:ing)?|writ(?:e|ing)|implement(?:ing)?|add(?:ing)?|remov(?:e|ing)|delet(?:e|ing)|creat(?:e|ing)|mov(?:e|ing)|renam(?:e|ing)|cop(?:y|ying)|install(?:ing)?|uninstall(?:ing)?|enabl(?:e|ing)|disabl(?:e|ing)|configur(?:e|ing)|reset(?:ting)?|archiv(?:e|ing)|cancel(?:ing|led)?|stop(?:ping)?|runn?ing|run|test(?:ing)?|verify|verifying|review(?:ing)?|analy(?:s|z)(?:e|ing)|summari(?:s|z)(?:e|ing)|explain(?:ing)?|answer(?:ing)?|show(?:ing)?|shar(?:e|ing)|report(?:ing)?|prepar(?:e|ing)|captur(?:e|ing)|tak(?:e|ing)|handl(?:e|ing)|sort(?:ing|ed)?|follow(?:ing)?\s+up|get(?:ting)?\s+back|start(?:ing)?|launch(?:ing)?|send(?:ing)?|monitor(?:ing)?|refactor(?:ing)?|restart(?:ing)?|deploy(?:ing)?|ship(?:ping)?)\b/i;
 const ACTIONABLE_PROMPT_DIRECTIVE_RE =
   /^\s*(?:(?:ok(?:ay)?|please|pls)\s+)?(?:check|inspect|look(?:\s+into|\s+at)?|read|write|edit|update|fix|investigate|debug|run|search|find|implement|add|remove|refactor|explain|summari(?:s|z)e|analy(?:s|z)e|review|tell|show|make|restart|deploy|prepare|generate|start|launch|send|monitor|set|load|hit|ask|wire|channel)\b/i;
 const ACTIONABLE_PROMPT_REQUEST_RE =
@@ -307,16 +307,23 @@ export type PlanningOnlyPlanDetails = {
   steps: string[];
 };
 
+export function toolMetasHavePotentialSideEffects(
+  toolMetas: readonly {
+    toolName: string;
+    mutatingAction?: boolean;
+    asyncStarted?: boolean;
+  }[],
+): boolean {
+  return toolMetas.some(
+    (toolMeta) => toolMeta.asyncStarted === true || !isReplaySafeToolMeta(toolMeta),
+  );
+}
+
 export function buildAttemptReplayMetadata(
   params: ReplayMetadataAttempt,
 ): EmbeddedRunAttemptResult["replayMetadata"] {
-  const hadUnsafeToolActivity = params.toolMetas.some(
-    (toolMeta) => !isReplaySafeToolMeta(toolMeta),
-  );
-  const hadAsyncStartedTool = params.toolMetas.some((t) => t.asyncStarted === true);
   const hadPotentialSideEffects =
-    hadUnsafeToolActivity ||
-    hadAsyncStartedTool ||
+    toolMetasHavePotentialSideEffects(params.toolMetas) ||
     hasMessagingToolSideEffectEvidence(params) ||
     hasAcceptedSessionSpawn(params.acceptedSessionSpawns) ||
     (params.successfulCronAdds ?? 0) > 0;

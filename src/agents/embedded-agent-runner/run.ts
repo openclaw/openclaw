@@ -185,6 +185,7 @@ import {
   resolveRunLivenessState,
   shouldRetryMissingAssistantTurn,
   shouldTreatEmptyAssistantReplyAsSilent,
+  toolMetasHavePotentialSideEffects,
 } from "./run/incomplete-turn.js";
 import type { RunEmbeddedAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
@@ -1847,12 +1848,13 @@ export async function runEmbeddedAgent(
             const didSendViaMessagingTool = currentAttemptToolLoopObservations.some(
               (observation) => observation.didSendViaMessagingTool === true,
             );
-            const hadPotentialSideEffects = currentAttemptToolLoopObservations.some(
-              (observation) =>
-                observation.mutatingAction === true ||
-                observation.asyncStarted === true ||
-                observation.didSendViaMessagingTool === true,
-            );
+            const hadPotentialSideEffects =
+              didSendViaMessagingTool ||
+              toolMetasHavePotentialSideEffects(
+                currentAttemptToolLoopObservations.filter(
+                  (observation) => !observation.blockedReason,
+                ),
+              );
             const agentMeta = buildErrorAgentMeta({
               sessionId: activeSessionId,
               sessionFile: activeSessionFile,

@@ -787,7 +787,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     });
   });
 
-  it("surfaces a tool-declared terminal result when a tool loop resolves after abort", async () => {
+  it("surfaces a known read-only tool terminal result when a tool loop resolves after abort", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedRunEmbeddedAttempt.mockImplementationOnce(async (params: unknown) => {
       const attemptParams = params as {
@@ -803,14 +803,14 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         }) => void;
       };
       attemptParams.onToolOutcome?.({
-        toolName: "status_probe",
+        toolName: "web_fetch",
         argsHash: "current",
         resultHash: "status-result",
         resultText: "healthy",
         terminalResultFallback: { mode: "safe_text", prefix: "Status:" },
       });
       attemptParams.onToolOutcome?.({
-        toolName: "status_probe",
+        toolName: "web_fetch",
         argsHash: "current",
         resultHash: "blocked-result",
         blockedReason: "tool-loop",
@@ -822,7 +822,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         aborted: true,
         externalAbort: false,
         assistantTexts: [],
-        toolMetas: [{ toolName: "status_probe" }],
+        toolMetas: [{ toolName: "web_fetch" }],
       });
     });
 
@@ -843,6 +843,66 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       stopReason: "tool_loop_abort",
       finishReason: "tool_loop_abort",
     });
+  });
+
+  it("warns when an unknown plugin tool completed before a later tool loop abort", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (params: unknown) => {
+      const attemptParams = params as {
+        abortSignal?: AbortSignal;
+        onToolOutcome?: (observation: {
+          toolName: string;
+          argsHash: string;
+          resultHash: string;
+          resultText?: string;
+          terminalResultFallback?: { mode: "safe_text"; prefix?: string };
+          mutatingAction?: boolean;
+          blockedReason?: string;
+          blockedMessage?: string;
+        }) => void;
+      };
+      attemptParams.onToolOutcome?.({
+        toolName: "charge_customer",
+        argsHash: "invoice",
+        resultHash: "charge-result",
+        resultText: "charged",
+        mutatingAction: false,
+      });
+      attemptParams.onToolOutcome?.({
+        toolName: "status_probe",
+        argsHash: "current",
+        resultHash: "status-result",
+        resultText: "healthy",
+        terminalResultFallback: { mode: "safe_text", prefix: "Status:" },
+        mutatingAction: false,
+      });
+      attemptParams.onToolOutcome?.({
+        toolName: "status_probe",
+        argsHash: "current",
+        resultHash: "blocked-result",
+        blockedReason: "tool-loop",
+        blockedMessage:
+          "CRITICAL: You are alternating between repeated tool-call patterns with no progress.",
+      });
+      expect(attemptParams.abortSignal?.aborted).toBe(true);
+      throw new Error("Request was aborted.");
+    });
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "xai",
+      model: "grok-composer-2.5-fast",
+      runId: "run-tool-loop-after-unknown-plugin-tool",
+    });
+
+    expect(result.payloads).toEqual([
+      { text: "Status:\nhealthy" },
+      {
+        text: "⚠️ Some tool actions may have already been executed — please verify before retrying.",
+        isError: true,
+      },
+    ]);
+    expect(result.meta.replayInvalid).toBe(true);
   });
 
   it("warns about prior mutating work when a later tool loop aborts", async () => {
@@ -2865,6 +2925,24 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
     expect(retryInstruction).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
   });
+
+  it.each(["Will you delete the file?", "Will you remove the job?", "Will you create the ticket?"])(
+    "keeps acknowledgement placeholders planning-only for operation question %s",
+    (prompt) => {
+      const retryInstruction = resolvePlanningOnlyRetryInstruction({
+        provider: "custom-provider",
+        modelId: "custom-model",
+        prompt,
+        aborted: false,
+        timedOut: false,
+        attempt: makeAttemptResult({
+          assistantTexts: ["Will do."],
+        }),
+      });
+
+      expect(retryInstruction).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
+    },
+  );
 
   it("does not classify capability chatter for non-actionable prompts", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({

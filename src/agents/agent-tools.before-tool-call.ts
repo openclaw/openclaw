@@ -1060,7 +1060,7 @@ export async function recordToolLoopOutcome(args: {
           ? { messagingToolSentMediaUrls: messagingMediaUrls }
           : {}),
         ...(messagingTarget ? { messagingToolSentTargets: [messagingTarget] } : {}),
-        ...(mutatingAction ? { mutatingAction } : {}),
+        ...(!blockedReason ? { mutatingAction } : {}),
         ...(asyncStarted ? { asyncStarted } : {}),
         ...(failed ? { failed } : {}),
         ...(args.terminalResultFallback

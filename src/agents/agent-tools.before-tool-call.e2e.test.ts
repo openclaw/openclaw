@@ -425,6 +425,30 @@ describe("before_tool_call loop detection behavior", () => {
     );
   });
 
+  it("marks known read-only action outcomes as replay-safe", async () => {
+    const onToolOutcome = vi.fn();
+    const execute = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: "no scheduled jobs" }],
+      details: { jobs: [] },
+    });
+    const tool = createWrappedTool("cron", execute, {
+      ...enabledLoopDetectionContext,
+      runId: "run-read-only-action-outcome-observer",
+      onToolOutcome,
+    });
+
+    await expectUnblockedToolExecution(tool, "cron-list-observer", {
+      action: "list",
+    });
+
+    expect(onToolOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "cron",
+        mutatingAction: false,
+      }),
+    );
+  });
+
   it("marks failed mutating tool outcomes for replay-safety handling", async () => {
     const onToolOutcome = vi.fn();
     const execute = vi.fn().mockRejectedValue(new Error("write failed after partial update"));
