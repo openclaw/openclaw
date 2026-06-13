@@ -6931,6 +6931,7 @@ describe("gateway agent handler chat.abort integration", () => {
 
   it("removes the chatAbortControllers entry after the run errors", async () => {
     prime();
+    mocks.clearAgentRunContext.mockClear();
     mocks.agentCommand.mockRejectedValueOnce(new Error("boom"));
 
     const context = makeContext();
@@ -6947,6 +6948,7 @@ describe("gateway agent handler chat.abort integration", () => {
 
     await waitForAssertion(() => {
       expect(context.chatAbortControllers.has(runId)).toBe(false);
+      expect(mocks.clearAgentRunContext).toHaveBeenCalledWith(runId, "test-generation");
     });
   });
 

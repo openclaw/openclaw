@@ -1234,10 +1234,13 @@ async function disposeCronRunContext(params: {
   sessionId: string;
   cronSession: MutableCronSession;
   ownsRunContext: boolean;
+  clearRunContext: boolean;
   lifecycleGeneration: string;
 }): Promise<void> {
-  if (params.ownsRunContext) {
+  if (params.clearRunContext) {
     clearAgentRunContext(params.sessionId, params.lifecycleGeneration);
+  }
+  if (params.ownsRunContext) {
     await retireSessionMcpRuntime({
       sessionId: params.sessionId,
       reason: "isolated-cron-dispose",
@@ -1282,6 +1285,7 @@ export async function runCronIsolatedAgentTurn(params: {
   // Capture the stable run id before execution can rotate its persisted session.
   const initialSessionId = prepared.context.cronSession.sessionEntry.sessionId;
   const ownsRunContext = params.job.sessionTarget === "isolated";
+  let clearRunContext = ownsRunContext;
   let runLifecycleGeneration = admittedLifecycleGeneration;
   const notifyExecutionStarted = (info?: { lifecycleGeneration?: string }) => {
     if (info?.lifecycleGeneration) {
@@ -1330,6 +1334,10 @@ export async function runCronIsolatedAgentTurn(params: {
   try {
     assertAgentRunLifecycleGenerationCurrent(runLifecycleGeneration);
     const existingRunContext = getAgentRunContext(initialSessionId);
+    const replacesStaleRunContext =
+      existingRunContext?.lifecycleGeneration !== undefined &&
+      existingRunContext.lifecycleGeneration !== runLifecycleGeneration;
+    clearRunContext ||= existingRunContext === undefined || replacesStaleRunContext;
     claimAgentRunContext(initialSessionId, {
       ...existingRunContext,
       sessionKey:
@@ -1430,6 +1438,7 @@ export async function runCronIsolatedAgentTurn(params: {
       sessionId: initialSessionId,
       cronSession: prepared.context.cronSession,
       ownsRunContext,
+      clearRunContext,
       lifecycleGeneration: runLifecycleGeneration,
     });
   }

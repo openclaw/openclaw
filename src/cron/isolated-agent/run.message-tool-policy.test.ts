@@ -872,6 +872,51 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     clearAgentRunContext("test-session-id");
   });
 
+  it("releases a shared cron run context created by this invocation", async () => {
+    mockRunCronFallbackPassthrough();
+    runEmbeddedAgentMock.mockRejectedValueOnce(new Error("runner failed"));
+    const { getAgentRunContext } = await import("../../infra/agent-events.js");
+    const currentSessionJob = makeMessageToolPolicyJob() as unknown as Record<string, unknown>;
+    currentSessionJob.sessionTarget = "current";
+
+    await expect(
+      runCronIsolatedAgentTurn({
+        ...makeParams(),
+        job: currentSessionJob as never,
+      }),
+    ).resolves.toMatchObject({
+      status: "error",
+    });
+
+    expect(getAgentRunContext("test-session-id")).toBeUndefined();
+  });
+
+  it("releases a stale shared cron context replaced by this invocation", async () => {
+    mockRunCronFallbackPassthrough();
+    runEmbeddedAgentMock.mockRejectedValueOnce(new Error("runner failed"));
+    const {
+      claimAgentRunContext,
+      getAgentEventLifecycleGeneration,
+      getAgentRunContext,
+      rotateAgentEventLifecycleGeneration,
+    } = await import("../../infra/agent-events.js");
+    claimAgentRunContext("test-session-id", {
+      sessionKey: "agent:default:cron:message-tool-policy",
+      sessionId: "test-session-id",
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
+    });
+    rotateAgentEventLifecycleGeneration();
+    const currentSessionJob = makeMessageToolPolicyJob() as unknown as Record<string, unknown>;
+    currentSessionJob.sessionTarget = "current";
+
+    await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: currentSessionJob as never,
+    });
+
+    expect(getAgentRunContext("test-session-id")).toBeUndefined();
+  });
+
   it("skips cron delivery when output is heartbeat-only", async () => {
     mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());
