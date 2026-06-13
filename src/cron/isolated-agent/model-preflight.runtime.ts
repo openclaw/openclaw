@@ -262,9 +262,11 @@ export async function preflightCronModelProvider(params: {
 
   let lastError: unknown;
   let attempts = 0;
+  let budgetExhausted = false;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     const remainingBudgetMs = resolveRemainingBudgetMs(params.deadlineMs);
     if (remainingBudgetMs !== undefined && remainingBudgetMs <= 0) {
+      budgetExhausted = true;
       lastError = new Error("cron model preflight chain budget exhausted");
       break;
     }
@@ -284,6 +286,7 @@ export async function preflightCronModelProvider(params: {
       if (attempt < maxAttempts) {
         const remainingDelayBudgetMs = resolveRemainingBudgetMs(params.deadlineMs);
         if (remainingDelayBudgetMs !== undefined && remainingDelayBudgetMs <= 0) {
+          budgetExhausted = true;
           lastError = new Error(
             `cron model preflight chain budget exhausted after ${attempts} attempt${attempts === 1 ? "" : "s"}`,
           );
@@ -302,7 +305,9 @@ export async function preflightCronModelProvider(params: {
     error: lastError ?? new Error("cron model preflight chain budget exhausted"),
     attempts,
   };
-  preflightCache.set(cacheKey, { checkedAtMs: nowMs, result });
+  if (!budgetExhausted) {
+    preflightCache.set(cacheKey, { checkedAtMs: nowMs, result });
+  }
   return buildUnavailableResult({
     provider: params.provider,
     model: params.model,
