@@ -18,7 +18,6 @@ import type {
   WriteManagerSessionMeta,
 } from "./manager.types.js";
 import {
-  buildRuntimeControlSignature,
   normalizeRuntimeOptions,
   normalizeText,
   validateRuntimeOptionPatch,
@@ -123,7 +122,14 @@ export async function runManagerInitializeSession(params: {
     mode: input.mode,
     cwd: effectiveCwd,
     configSignature: resolveRuntimeConfigCacheKey(input.cfg),
-    appliedControlSignature: buildRuntimeControlSignature(effectiveRuntimeOptions),
+    // ensureSession applied only model/thinking/cwd; seed those as already-applied so the
+    // first turn pushes the remaining controls (timeout/permission/mode/extras) without
+    // resending startup model/thinking through set_config_option backends may not support.
+    appliedRuntimeOptions: normalizeRuntimeOptions({
+      ...(requestedModel ? { model: requestedModel } : {}),
+      ...(requestedThinking ? { thinking: requestedThinking } : {}),
+      ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
+    }),
   });
   return {
     runtime,

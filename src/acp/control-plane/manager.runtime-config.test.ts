@@ -419,11 +419,15 @@ describe("AcpSessionManager runtime config", () => {
     expectMockCallFields(runtimeState.setMode, {
       mode: "plan",
     });
-    expectMockCallFields(runtimeState.setConfigOption, {
+    expectRecordFields(mockCallArg(runtimeState.ensureSession), {
+      model: "openai/gpt-5.4",
+      thinking: "high",
+    });
+    expectNoMockCallFields(runtimeState.setConfigOption, {
       key: "model",
       value: "openai/gpt-5.4",
     });
-    expectMockCallFields(runtimeState.setConfigOption, {
+    expectNoMockCallFields(runtimeState.setConfigOption, {
       key: "thinking",
       value: "high",
     });
@@ -521,13 +525,13 @@ describe("AcpSessionManager runtime config", () => {
     expect(runtimeState.runTurn).not.toHaveBeenCalled();
   });
 
-  it("fails turns when adapters reject required runtime config", async () => {
+  it("fails turns when adapters reject required post-start runtime config", async () => {
     const runtimeState = createRuntime();
     runtimeState.setConfigOption.mockImplementation(async (input: { key: string }) => {
-      if (input.key === "model") {
+      if (input.key === "approval_policy") {
         throw new AcpRuntimeError(
           "ACP_TURN_FAILED",
-          'Agent rejected session/set_config_option for "model": ACP -32602 Invalid params',
+          'Agent rejected session/set_config_option for "approval_policy": ACP -32602 Invalid params',
         );
       }
     });
@@ -541,7 +545,7 @@ describe("AcpSessionManager runtime config", () => {
       acp: {
         ...readySessionMeta({ agent: "opencode" }),
         runtimeOptions: {
-          model: "opencode/gpt-5.4",
+          permissionProfile: "strict",
         },
       },
     });
@@ -563,7 +567,7 @@ describe("AcpSessionManager runtime config", () => {
     expect(runtimeState.runTurn).not.toHaveBeenCalled();
   });
 
-  it("maps persisted thinking runtime options to advertised effort config keys before running turns", async () => {
+  it("does not remap startup thinking runtime options to advertised effort config keys", async () => {
     const runtimeState = createRuntime();
     runtimeState.getCapabilities.mockResolvedValue({
       controls: ["session/set_mode", "session/set_config_option", "session/status"],
@@ -593,7 +597,10 @@ describe("AcpSessionManager runtime config", () => {
       requestId: "run-1",
     });
 
-    expectMockCallFields(runtimeState.setConfigOption, {
+    expectRecordFields(mockCallArg(runtimeState.ensureSession), {
+      thinking: "high",
+    });
+    expectNoMockCallFields(runtimeState.setConfigOption, {
       key: "effort",
       value: "high",
     });
@@ -635,7 +642,15 @@ describe("AcpSessionManager runtime config", () => {
       requestId: "run-1",
     });
 
-    expectMockCallFields(runtimeState.setConfigOption, {
+    expectRecordFields(mockCallArg(runtimeState.ensureSession), {
+      model: "gemini-3-flash-preview",
+      thinking: "high",
+    });
+    expectNoMockCallFields(runtimeState.setConfigOption, {
+      key: "model",
+      value: "gemini-3-flash-preview",
+    });
+    expectNoMockCallFields(runtimeState.setConfigOption, {
       key: "thought_level",
       value: "high",
     });

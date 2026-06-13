@@ -4,6 +4,7 @@ import {
   AcpSessionManager,
   baseCfg,
   createRuntime,
+  expectMockCallFields,
   expectNoMockCallFields,
   expectRecordFields,
   expectRejectedRecord,
@@ -169,6 +170,86 @@ describe("AcpSessionManager initializeSession", () => {
     expectNoMockCallFields(runtimeState.setConfigOption, {
       key: "thinking",
       value: "high",
+    });
+  });
+
+  it("applies post-start controls on first turn without resending startup model/thinking", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+
+    let currentMeta: SessionAcpMeta | undefined;
+    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+      const sessionKey =
+        (paramsUnknown as { sessionKey?: string }).sessionKey ?? "agent:opencode:acp:session-b";
+      return {
+        sessionKey,
+        storeSessionKey: sessionKey,
+        acp: currentMeta,
+      };
+    });
+    hoisted.upsertAcpSessionMetaMock.mockImplementation(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as {
+        mutate: (
+          current: SessionAcpMeta | undefined,
+          entry: { acp?: SessionAcpMeta } | undefined,
+        ) => SessionAcpMeta | null | undefined;
+      };
+      const next = params.mutate(currentMeta, currentMeta ? { acp: currentMeta } : undefined);
+      if (next) {
+        currentMeta = next;
+      }
+      return {
+        sessionKey: "agent:opencode:acp:session-b",
+        storeSessionKey: "agent:opencode:acp:session-b",
+        acp: currentMeta,
+      };
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.initializeSession({
+      cfg: baseCfg,
+      sessionKey: "agent:opencode:acp:session-b",
+      agent: "opencode",
+      mode: "persistent",
+      runtimeOptions: {
+        model: "deepseek/deepseek-v4-pro",
+        thinking: "high",
+        permissionProfile: "strict",
+        timeoutSeconds: 120,
+      },
+    });
+
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey: "agent:opencode:acp:session-b",
+      text: "do work",
+      mode: "prompt",
+      requestId: "run-1",
+    });
+
+    expectRecordFields(mockCallArg(runtimeState.ensureSession), {
+      sessionKey: "agent:opencode:acp:session-b",
+      model: "deepseek/deepseek-v4-pro",
+      thinking: "high",
+    });
+    expectNoMockCallFields(runtimeState.setConfigOption, {
+      key: "model",
+      value: "deepseek/deepseek-v4-pro",
+    });
+    expectNoMockCallFields(runtimeState.setConfigOption, {
+      key: "thinking",
+      value: "high",
+    });
+    expectMockCallFields(runtimeState.setConfigOption, {
+      key: "approval_policy",
+      value: "strict",
+    });
+    expectMockCallFields(runtimeState.setConfigOption, {
+      key: "timeout",
+      value: "120",
     });
   });
 

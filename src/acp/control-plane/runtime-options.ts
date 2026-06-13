@@ -307,21 +307,6 @@ export function runtimeOptionsEqual(
   return JSON.stringify(normalizeRuntimeOptions(a)) === JSON.stringify(normalizeRuntimeOptions(b));
 }
 
-export function buildRuntimeControlSignature(options: AcpSessionRuntimeOptions): string {
-  const normalized = normalizeRuntimeOptions(options);
-  const extras = Object.entries(normalized.backendExtras ?? {}).toSorted(([a], [b]) =>
-    a.localeCompare(b),
-  );
-  return JSON.stringify({
-    runtimeMode: normalized.runtimeMode ?? null,
-    model: normalized.model ?? null,
-    thinking: normalized.thinking ?? null,
-    permissionProfile: normalized.permissionProfile ?? null,
-    timeoutSeconds: normalized.timeoutSeconds ?? null,
-    backendExtras: extras,
-  });
-}
-
 export function buildRuntimeConfigOptionPairs(
   options: AcpSessionRuntimeOptions,
   advertisedConfigOptionKeys?: readonly string[],

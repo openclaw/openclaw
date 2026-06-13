@@ -218,7 +218,11 @@ export async function ensureManagerRuntimeHandle(params: {
     mode,
     cwd: effectiveCwd,
     configSignature,
-    appliedControlSignature: undefined,
+    appliedRuntimeOptions: normalizeRuntimeOptions({
+      ...(model ? { model } : {}),
+      ...(thinking ? { thinking } : {}),
+      ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
+    }),
   });
   return {
     runtime,

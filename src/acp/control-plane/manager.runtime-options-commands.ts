@@ -240,5 +240,5 @@ async function persistManagerRuntimeOptions(
   }
   // Persisting options does not guarantee this process pushed all controls to the runtime.
   // Force the next turn to reconcile runtime controls from persisted metadata.
-  cached.appliedControlSignature = undefined;
+  cached.appliedRuntimeOptions = undefined;
 }
