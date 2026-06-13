@@ -57,6 +57,8 @@ export function buildEmbeddedSystemPrompt(params: {
   nativeCommandGuidanceLines?: string[];
   runtimeInfo: {
     agentId?: string;
+    sessionKey?: string;
+    sessionId?: string;
     host: string;
     os: string;
     arch: string;

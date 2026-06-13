@@ -44,7 +44,7 @@ describe("moonshot provider plugin", () => {
     });
   });
 
-  it("owns replay policy for OpenAI-compatible Moonshot transports without mangling native Kimi tool_call IDs", async () => {
+  it("rewrites duplicate tool-call ids with OpenAI-style ids for Moonshot replay", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 
     const policy = provider.buildReplayPolicy?.({
@@ -57,10 +57,28 @@ describe("moonshot provider plugin", () => {
       applyAssistantFirstOrderingFix: true,
       validateGeminiTurns: true,
       validateAnthropicTurns: true,
+      sanitizeToolCallIds: true,
+      toolCallIdMode: "strict",
+      duplicateToolCallIdStyle: "openai",
     });
     expect(policy).not.toHaveProperty("dropReasoningFromHistory");
-    expect(policy).not.toHaveProperty("sanitizeToolCallIds");
-    expect(policy).not.toHaveProperty("toolCallIdMode");
+  });
+
+  it("preserves responses-family replay behavior", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    const policy = provider.buildReplayPolicy?.({
+      provider: "moonshot",
+      modelApi: "openai-responses",
+      modelId: "kimi-k2.6",
+    } as never);
+
+    expect(policy).toEqual({
+      applyAssistantFirstOrderingFix: false,
+      validateGeminiTurns: false,
+      validateAnthropicTurns: false,
+      allowSyntheticToolResults: true,
+    });
   });
 
   it("wires moonshot-thinking stream hooks", async () => {

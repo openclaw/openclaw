@@ -378,7 +378,10 @@ AI CLI backend such as `claude-cli` or `my-cli`.
   (for example normalizing old flag shapes).
 - Use `resolveExecutionArgs` for request-scoped argv rewrites that belong to
   the CLI dialect, such as mapping OpenClaw thinking levels to a native effort
-  flag.
+  flag. The hook receives `ctx.executionMode`; use `"side-question"` to add
+  backend-native isolation flags for ephemeral `/btw` calls. If those flags
+  reliably disable native tools for an otherwise always-on CLI, declare
+  `sideQuestionToolMode: "disabled"` too.
 
 For an end-to-end authoring guide, see
 [CLI backend plugins](/plugins/cli-backend-plugins).

@@ -246,6 +246,7 @@ async function clearPluginOwnedSessionStores(params: {
   sessionEntrySlotKeys?: ReadonlySet<string>;
   storePaths?: readonly string[];
   resolveStorePaths?: ResolveCleanupSessionStorePaths;
+  shouldCleanup?: () => boolean;
 }): Promise<number> {
   if (!params.pluginId && !params.sessionKey) {
     return 0;
@@ -253,9 +254,15 @@ async function clearPluginOwnedSessionStores(params: {
   const storePaths = resolveCleanupSessionStorePaths(params);
   let cleared = 0;
   for (const storePath of storePaths) {
+    if (params.shouldCleanup && !params.shouldCleanup()) {
+      break;
+    }
     cleared += await updateSessionStore(
       storePath,
       (store) => {
+        if (params.shouldCleanup && !params.shouldCleanup()) {
+          return 0;
+        }
         let clearedInStore = 0;
         const now = Date.now();
         for (const [entryKey, entry] of Object.entries(store)) {
@@ -287,6 +294,7 @@ async function clearPromotedSessionEntrySlotStores(params: {
   sessionEntrySlotKeys: ReadonlySet<string>;
   storePaths?: readonly string[];
   resolveStorePaths?: ResolveCleanupSessionStorePaths;
+  shouldCleanup?: () => boolean;
 }): Promise<number> {
   if ((!params.pluginId && !params.sessionKey) || params.sessionEntrySlotKeys.size === 0) {
     return 0;
@@ -294,9 +302,15 @@ async function clearPromotedSessionEntrySlotStores(params: {
   const storePaths = resolveCleanupSessionStorePaths(params);
   let cleared = 0;
   for (const storePath of storePaths) {
+    if (params.shouldCleanup && !params.shouldCleanup()) {
+      break;
+    }
     cleared += await updateSessionStore(
       storePath,
       (store) => {
+        if (params.shouldCleanup && !params.shouldCleanup()) {
+          return 0;
+        }
         let clearedInStore = 0;
         const now = Date.now();
         for (const [entryKey, entry] of Object.entries(store)) {
@@ -360,6 +374,7 @@ export async function runPluginHostCleanup(params: {
   preserveSchedulerOwnerRegistry?: PluginRegistry | null;
   sessionStorePaths?: readonly string[];
   resolveSessionStorePaths?: ResolveCleanupSessionStorePaths;
+  skipPersistentSessionState?: boolean;
 }): Promise<PluginHostCleanupResult> {
   const failures: PluginHostCleanupFailure[] = [];
   const shouldCleanup = params.shouldCleanup ?? (() => true);
@@ -374,7 +389,7 @@ export async function runPluginHostCleanup(params: {
   const restartPromotedSessionEntrySlotKeys =
     params.restartPromotedSessionEntrySlotKeys ?? sessionEntrySlotKeys;
   let persistentCleanupCount = 0;
-  if (shouldCleanup()) {
+  if (!params.skipPersistentSessionState && shouldCleanup()) {
     try {
       persistentCleanupCount =
         params.reason === "restart"
@@ -385,6 +400,7 @@ export async function runPluginHostCleanup(params: {
               sessionEntrySlotKeys: restartPromotedSessionEntrySlotKeys,
               storePaths: params.sessionStorePaths,
               resolveStorePaths: params.resolveSessionStorePaths,
+              shouldCleanup,
             })
           : await clearPluginOwnedSessionStores({
               cfg: params.cfg ?? getRuntimeConfig(),
@@ -393,6 +409,7 @@ export async function runPluginHostCleanup(params: {
               sessionEntrySlotKeys,
               storePaths: params.sessionStorePaths,
               resolveStorePaths: params.resolveSessionStorePaths,
+              shouldCleanup,
             });
     } catch (error) {
       failures.push({

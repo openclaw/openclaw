@@ -1,5 +1,5 @@
 // Package Acceptance Workflow tests cover package acceptance workflow script behavior.
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
@@ -54,6 +54,10 @@ type Workflow = {
 
 function readWorkflow(path: string): Workflow {
   return parse(readFileSync(path, "utf8")) as Workflow;
+}
+
+function isExecutable(path: string): boolean {
+  return (statSync(path).mode & 0o111) !== 0;
 }
 
 function workflowPaths(): string[] {
@@ -1378,7 +1382,6 @@ describe("package artifact reuse", () => {
 
   it("keeps release QA and repo E2E lanes off scarce 32-core runners", () => {
     const releaseChecksWorkflow = readFileSync(RELEASE_CHECKS_WORKFLOW, "utf8");
-    const qaWorkflow = readFileSync(QA_LIVE_TRANSPORTS_WORKFLOW, "utf8");
     const liveE2eWorkflow = readFileSync(LIVE_E2E_WORKFLOW, "utf8");
 
     for (const jobName of [
@@ -1547,9 +1550,14 @@ describe("package artifact reuse", () => {
     };
     const releaseWorkflow = readFileSync(RELEASE_PUBLISH_WORKFLOW, "utf8");
     const clawHubWorkflow = readFileSync(".github/workflows/plugin-clawhub-release.yml", "utf8");
+    const clawHubNewWorkflow = readFileSync(".github/workflows/plugin-clawhub-new.yml", "utf8");
     const pluginNpmWorkflow = readFileSync(".github/workflows/plugin-npm-release.yml", "utf8");
     const openclawNpmWorkflow = readFileSync(".github/workflows/openclaw-npm-release.yml", "utf8");
     const approvalScript = readFileSync("scripts/validate-release-publish-approval.mjs", "utf8");
+    const clawHubReleasePlanScript = readFileSync(
+      "scripts/lib/openclaw-release-clawhub-plan.ts",
+      "utf8",
+    );
     const clawHubResolveRefIndex = clawHubWorkflow.indexOf("- name: Resolve checked-out ref");
     const clawHubValidateRefIndex = clawHubWorkflow.indexOf(
       "- name: Validate ref is on a trusted publish branch",
@@ -1571,30 +1579,80 @@ describe("package artifact reuse", () => {
     expect(packageJson.scripts?.["release:fast-pretag-check"]).toBe(
       "bash scripts/release-fast-pretag-check.sh",
     );
-    expect(clawHubWorkflow).toContain('CLAWHUB_REF: "c9bb13023598dcc547fdf4a93b9d42512b8c8854"');
+    expect(clawHubWorkflow).toContain('CLAWHUB_CLI_PACKAGE: "clawhub@0.21.0"');
+    expect(clawHubWorkflow).not.toContain("CLAWHUB_REPOSITORY:");
+    expect(clawHubWorkflow).not.toContain("CLAWHUB_REF:");
     expect(clawHubWorkflow).toContain("pack_plugins_clawhub_artifacts:");
+    expect(clawHubWorkflow).toContain("Verify package-local runtime build");
+    expect(clawHubWorkflow).toContain("Install pinned ClawHub CLI wrapper");
     expect(clawHubWorkflow).toContain("Pack ClawHub package artifact");
     expect(clawHubWorkflow).toContain("Upload ClawHub package artifact");
+    expect(clawHubWorkflow).toContain("Validate OIDC source matches workflow ref");
+    expect(clawHubWorkflow).toContain(
+      "Dry-run target ref to validate; real OIDC publishes must dispatch the workflow with --ref set to the target release tag/ref",
+    );
+    expect(clawHubWorkflow).toContain(
+      "Plugin ClawHub OIDC publishes must run from the same ref that is being published.",
+    );
+    expect(clawHubWorkflow).toContain("The ref input is only supported for dry_run=true.");
+    expect(clawHubWorkflow).toContain(
+      "Dry-run publish target differs from workflow ref; allowing validation-only dispatch.",
+    );
+    expect(clawHubWorkflow).toContain(
+      "github.event_name == 'workflow_dispatch' && inputs.dry_run != true && inputs.publish_scope == 'selected' && steps.plan.outputs.skipped_published_count != '0'",
+    );
+    expect(clawHubWorkflow).toContain(
+      "uses: openclaw/clawhub/.github/workflows/package-publish.yml@9d49df109d4ad3dc8a6ecf05d26b39f46d294721",
+    );
     expect(clawHubWorkflow).toContain("dry_run:");
     expect(clawHubWorkflow).toContain("default: false");
-    expect(clawHubWorkflow).toContain("approve_plugin_clawhub_release:");
+    expect(clawHubWorkflow).not.toContain("approve_plugin_clawhub_release:");
+    expect(clawHubWorkflow).toContain("approve_plugins_clawhub_release:");
+    expect(clawHubWorkflow).toContain("environment: clawhub-plugin-release");
     expect(clawHubWorkflow).toContain("inputs.dry_run != true");
-    expect(clawHubWorkflow).toContain("Approve ClawHub package publish");
+    expect(clawHubWorkflow).toContain("release_publish_branch:");
     expect(clawHubWorkflow).toContain(
-      "always() && github.event_name == 'workflow_dispatch' && needs.preview_plugins_clawhub.outputs.has_candidates == 'true' && needs.pack_plugins_clawhub_artifacts.result == 'success' && (inputs.dry_run == true || needs.approve_plugin_clawhub_release.result == 'success')",
+      "TRUSTED_PUBLISH_BRANCH: ${{ inputs.release_publish_branch || github.ref_name }}",
     );
     expect(clawHubWorkflow).toContain(
-      "uses: openclaw/clawhub/.github/workflows/package-publish.yml@c9bb13023598dcc547fdf4a93b9d42512b8c8854",
+      "EXPECTED_WORKFLOW_BRANCH: ${{ inputs.release_publish_branch || github.ref_name }}",
     );
-    expect(clawHubWorkflow).toContain("dry_run: ${{ inputs.dry_run }}");
+    expect(clawHubWorkflow).toContain(
+      "always() && github.event_name == 'workflow_dispatch' && needs.preview_plugins_clawhub.outputs.has_candidates == 'true' && needs.pack_plugins_clawhub_artifacts.result == 'success' && (inputs.dry_run == true || needs.approve_plugins_clawhub_release.result == 'success')",
+    );
     expect(clawHubWorkflow).toContain("package_artifact_name: ${{ matrix.plugin.artifactName }}");
-    expect(clawHubWorkflow).toContain("clawhub_token: ${{ secrets.CLAWHUB_TOKEN }}");
+    expect(clawHubWorkflow).toContain("source_repo: ${{ github.repository }}");
+    expect(clawHubWorkflow).toContain(
+      "source_commit: ${{ needs.preview_plugins_clawhub.outputs.ref_revision }}",
+    );
+    expect(clawHubWorkflow).toContain("source_ref: ${{ github.ref }}");
+    expect(clawHubWorkflow).toContain("source_path: ${{ matrix.plugin.packageDir }}");
+    expect(clawHubWorkflow).toContain(
+      "inspector_artifact_name: ${{ matrix.plugin.artifactName }}-inspector",
+    );
+    expect(clawHubWorkflow).toContain(
+      "publish_json_artifact_name: ${{ matrix.plugin.artifactName }}-publish-json",
+    );
+    expect(clawHubWorkflow).toContain("tags: ${{ matrix.plugin.publishTag }}");
+    expect(clawHubWorkflow).toContain("dry_run: ${{ inputs.dry_run }}");
+    expect(clawHubWorkflow).not.toContain("secrets.CLAWHUB_TOKEN");
+    expect(clawHubWorkflow).not.toContain("clawhub_token:");
+    expect(clawHubWorkflow).toContain("bootstrapCandidates");
+    expect(clawHubWorkflow).toContain("missingTrustedPublisher");
+    expect(clawHubWorkflow).toContain("bootstrap_candidate_count");
+    expect(clawHubWorkflow).toContain("missing_trusted_publisher_count");
+    expect(clawHubWorkflow).toContain("Bootstrap candidates requiring token bootstrap:");
+    expect(clawHubWorkflow).toContain("Missing trusted publisher candidates:");
     expect(clawHubWorkflow).toContain("verify_published_clawhub_package:");
     expect(clawHubWorkflow).toContain("inputs.dry_run != true");
     expect(clawHubWorkflow).toContain("Verify published ClawHub package");
     expect(clawHubWorkflow).not.toContain("bash scripts/plugin-clawhub-publish.sh --publish");
     expect(clawHubWorkflow).not.toContain("Write ClawHub token config");
-    expect(clawHubWorkflow).toContain("bun install failed while preparing ClawHub CLI; retrying");
+    expect(clawHubWorkflow).not.toContain("Checkout ClawHub CLI source");
+    expect(clawHubWorkflow).not.toContain("packages/clawhub/src/cli.ts");
+    expect(clawHubWorkflow).not.toContain(
+      "bun install failed while preparing ClawHub CLI; retrying",
+    );
     expect(clawHubWorkflow).toContain("max-parallel: 32");
     expect(clawHubResolveRefIndex).toBeGreaterThanOrEqual(0);
     expect(clawHubValidateRefIndex).toBeGreaterThan(clawHubResolveRefIndex);
@@ -1602,6 +1660,29 @@ describe("package artifact reuse", () => {
     expect(clawHubMetadataIndex).toBeGreaterThan(clawHubSetupIndex);
     expect(releaseWorkflow).toContain("Plugin npm run ID");
     expect(releaseWorkflow).toContain("Plugin ClawHub run ID");
+    expect(releaseWorkflow).toContain("plugin-clawhub-new.yml");
+    expect(releaseWorkflow).toContain("Plugin ClawHub bootstrap run ID");
+    expect(releaseWorkflow).toContain("scripts/openclaw-release-clawhub-plan.ts");
+    expect(releaseWorkflow).toContain("scripts/openclaw-release-clawhub-runtime-state.ts");
+    expect(isExecutable("scripts/openclaw-release-clawhub-plan.ts")).toBe(true);
+    expect(isExecutable("scripts/openclaw-release-clawhub-runtime-state.ts")).toBe(true);
+    expect(releaseWorkflow).toContain("openclaw-release-clawhub-plan.json");
+    expect(releaseWorkflow).toContain("openclaw-release-clawhub-runtime-state");
+    expect(releaseWorkflow).toContain("bootstrap_plugins");
+    expect(releaseWorkflow).toContain("missing_trusted_plugins");
+    expect(releaseWorkflow).toContain(".summary.bootstrapPlugins");
+    expect(releaseWorkflow).toContain(".summary.missingTrustedPlugins");
+    expect(releaseWorkflow).toContain("append_clawhub_dispatch_args");
+    expect(releaseWorkflow).toContain("write_clawhub_runtime_state");
+    expect(releaseWorkflow).toContain(".[$target].inputs | to_entries[]");
+    expect(releaseWorkflow).toContain(".verifierArgs[]");
+    expect(releaseWorkflow).toContain(".proofLines.normal");
+    expect(releaseWorkflow).toContain(".proofLines.bootstrap");
+    expect(releaseWorkflow).toContain("Bootstrap/repair candidates:");
+    expect(releaseWorkflow).toContain("Trusted-publisher repair plugins:");
+    expect(releaseWorkflow).toContain(
+      "Waiting for plugin-clawhub-new.yml bootstrap to finish before continuing release publish.",
+    );
     expect(releaseWorkflow).toContain("OpenClaw npm run ID");
     expect(releaseWorkflow).toContain("npm_telegram_run_id");
     expect(releaseWorkflow).toContain('release_publish_run_id="${GITHUB_RUN_ID}"');
@@ -1612,7 +1693,7 @@ describe("package artifact reuse", () => {
     );
     expect(releaseWorkflow).toContain("registry tarball");
     expect(releaseWorkflow).toContain("release SHA");
-    expect(releaseWorkflow).toContain("not awaited by this proof");
+    expect(clawHubReleasePlanScript).toContain("not awaited by this proof");
     expect(releaseWorkflow).toContain("wait_for_job_success");
     expect(releaseWorkflow).toContain("Validate release publish approval");
     expect(releaseWorkflow).toContain('conclusion" == "skipped"');
@@ -1621,13 +1702,17 @@ describe("package artifact reuse", () => {
     expect(releaseWorkflow).toContain("release:verify-beta");
     expect(releaseWorkflow).toContain('--workflow-ref "${CHILD_WORKFLOW_REF}"');
     expect(releaseWorkflow).toContain("--skip-github-release");
+    expect(clawHubReleasePlanScript).toContain("--plugin-clawhub-bootstrap-run");
     expect(releaseWorkflow).toContain('verify_args+=(--plugins "${PLUGINS}")');
     expect(releaseWorkflow).toContain("openclaw-release-postpublish-evidence");
     expect(releaseWorkflow).toContain("Failed child job summary");
     expect(releaseWorkflow).toContain("Workflow completion waits for ClawHub");
     expect(releaseWorkflow).toContain("Workflow completion does not wait for ClawHub");
     expect(releaseWorkflow).toContain('[[ "${WAIT_FOR_CLAWHUB}" == "true" ]]');
-    expect(releaseWorkflow).toContain("--skip-clawhub");
+    expect(releaseWorkflow).toContain(
+      '[[ -n "${plugin_clawhub_bootstrap_run_id}" && "${WAIT_FOR_CLAWHUB}" == "true" ]]',
+    );
+    expect(clawHubReleasePlanScript).toContain("--skip-clawhub");
     expect(pluginNpmWorkflow).toContain("Validate release publish approval run");
     expect(clawHubWorkflow).toContain("Validate release publish approval run");
     expect(openclawNpmWorkflow).toContain("Validate release publish approval run");
@@ -1651,9 +1736,71 @@ describe("package artifact reuse", () => {
     expect(approvalScript).toContain("must still be in_progress");
     expect(approvalScript).toContain("completed with success/failure");
     expect(pluginNpmWorkflow).toContain("environment: npm-release");
-    expect(clawHubWorkflow).toContain("environment: clawhub-plugin-release");
+    expect(clawHubWorkflow.match(/environment: clawhub-plugin-release/g)?.length).toBe(1);
+    expect(clawHubNewWorkflow).toContain("name: Plugin ClawHub New");
+    expect(clawHubNewWorkflow).toContain('CLAWHUB_CLI_PACKAGE: "clawhub@0.21.0"');
+    expect(clawHubNewWorkflow).not.toContain("CLAWHUB_REPOSITORY:");
+    expect(clawHubNewWorkflow).not.toContain("CLAWHUB_REF:");
+    expect(clawHubNewWorkflow).toContain("environment: clawhub-plugin-bootstrap");
+    expect(clawHubNewWorkflow).toContain("secrets.CLAWHUB_TOKEN");
+    expect(clawHubNewWorkflow).not.toContain(
+      "uses: openclaw/clawhub/.github/workflows/package-publish.yml",
+    );
+    expect(clawHubNewWorkflow).not.toContain("clawhub_token:");
+    expect(clawHubNewWorkflow).toContain("Validate pinned ClawHub trusted publisher CLI support");
+    expect(clawHubNewWorkflow).toContain('npm exec --yes --package "${CLAWHUB_CLI_PACKAGE}"');
+    expect(clawHubNewWorkflow).toContain(
+      "CLAW-277 03 - Split OpenClaw plugin ClawHub publishing into OIDC release and token bootstrap workflows",
+    );
+    expect(clawHubNewWorkflow).toContain("Usage: clawhub package trusted-publisher set");
+    expect(clawHubNewWorkflow).toContain("Write ClawHub token config");
+    expect(clawHubNewWorkflow).toContain("CLAWHUB_CONFIG_PATH=${config_path}");
+    expect(clawHubNewWorkflow).toContain(
+      "CLAWHUB_REGISTRY is required for token-gated ClawHub bootstrap.",
+    );
+    expect(clawHubNewWorkflow).toContain(
+      "CLAWHUB_TOKEN is required for token-gated ClawHub bootstrap.",
+    );
+    expect(clawHubNewWorkflow).toContain("JSON.stringify({ registry, token }, null, 2)");
+    expect(clawHubNewWorkflow).toContain("Publish ClawHub bootstrap package");
+    expect(clawHubNewWorkflow).toContain("bash scripts/plugin-clawhub-publish.sh --publish");
+    expect(clawHubNewWorkflow).toContain("bootstrapMode");
+    expect(clawHubNewWorkflow).toContain("BOOTSTRAP_MODE: ${{ matrix.plugin.bootstrapMode }}");
+    expect(clawHubNewWorkflow).toContain("requiresManualOverride");
+    expect(clawHubNewWorkflow).toContain(
+      'OPENCLAW_CLAWHUB_MANUAL_OVERRIDE_REASON="GitHub Actions trusted publisher repair before OIDC migration"',
+    );
+    expect(clawHubNewWorkflow).toContain("configure-only");
+    expect(clawHubNewWorkflow).toContain(
+      "version is already present on ClawHub; configuring trusted publisher only",
+    );
+    expect(clawHubNewWorkflow).toContain(
+      "EXPECTED_WORKFLOW_BRANCH: ${{ inputs.release_publish_branch || github.ref_name }}",
+    );
+    expect(clawHubNewWorkflow).toContain(
+      "TRUSTED_PUBLISH_BRANCH: ${{ inputs.release_publish_branch || github.ref_name }}",
+    );
+    expect(clawHubNewWorkflow).toContain('OPENCLAW_PLUGIN_NPM_RUNTIME_BUILD: "0"');
+    expect(clawHubNewWorkflow).toContain("trusted-publisher set");
+    expect(clawHubNewWorkflow).toContain("--workflow-filename plugin-clawhub-release.yml");
+    expect(clawHubNewWorkflow).not.toContain("--environment clawhub-plugin-release");
+    expect(clawHubNewWorkflow).toContain("trustedPublisher?.environment != null");
+    expect(clawHubNewWorkflow).toContain("without an environment pin");
+    expect(clawHubNewWorkflow).not.toContain("Checkout ClawHub CLI source");
+    expect(clawHubNewWorkflow).not.toContain("packages/clawhub/src/cli.ts");
+    expect(clawHubNewWorkflow).toContain("verify_bootstrap_clawhub_package:");
+    expect(clawHubNewWorkflow).toContain("Verify bootstrap ClawHub package and trusted publisher");
+    expect(clawHubNewWorkflow).toContain("/trusted-publisher");
+    expect(clawHubNewWorkflow).toContain('trustedPublisher?.repository !== "openclaw/openclaw"');
     expect(openclawNpmWorkflow).toContain("environment: npm-release");
     expect(releaseWorkflow).toContain("default: from-validation");
+    expect(releaseWorkflow).toContain('--release-publish-branch "${CHILD_WORKFLOW_REF}"');
+    expect(releaseWorkflow).toContain('--release-publish-run-id "${GITHUB_RUN_ID}"');
+    expect(releaseWorkflow).toContain("jq -r '.normal.ref' \"${clawhub_plan_path}\"");
+    expect(releaseWorkflow).toContain("jq -r '.normal.workflow' \"${clawhub_plan_path}\"");
+    expect(releaseWorkflow).toContain("jq -r '.bootstrap.ref' \"${clawhub_plan_path}\"");
+    expect(releaseWorkflow).toContain("jq -r '.bootstrap.workflow' \"${clawhub_plan_path}\"");
+    expect(releaseWorkflow).toContain('--clawhub-workflow-ref "${clawhub_workflow_ref}"');
     expect(releaseWorkflow).toContain(
       'if [[ "$EXPECTED_RELEASE_PROFILE" != "from-validation" && "$release_profile" != "$EXPECTED_RELEASE_PROFILE" ]]; then',
     );
