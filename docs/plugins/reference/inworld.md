@@ -11,7 +11,7 @@ Adds Inworld LLM and text-to-speech provider support to OpenClaw.
 
 ## Distribution
 
-- Package: `@openclaw/inworld-provider`
+- Package: `@openclaw/inworld-speech`
 - Install route: included in OpenClaw
 
 ## Surface
