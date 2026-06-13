@@ -138,7 +138,7 @@ export function buildMemorySearchUnavailableResult(
   // is not necessarily an embedding/provider fault: the provider probe and each
   // individual corpus can be healthy while corpus=all aggregation stalls. Report
   // it as a timeout instead of pointing users at provider configuration.
-  const isTimeoutError = !isQuotaError && /timed out after/.test(lowerReason);
+  const isTimeoutError = !isQuotaError && lowerReason.includes("timed out after");
   const phaseLabel =
     overrides?.phase === "memory"
       ? "memory/session"
