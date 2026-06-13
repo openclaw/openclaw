@@ -109,6 +109,8 @@ export type RunEmbeddedAgentParams = {
   forceHeartbeatTool?: boolean;
   /** Allow runtime plugins for this run to late-bind the gateway subagent. */
   allowGatewaySubagentBinding?: boolean;
+  /** Internal restart-drain path for work accepted before external ingress closed. */
+  allowGatewayDrain?: boolean;
   sessionFile: string;
   workspaceDir: string;
   /** Task working directory for tool/runtime execution. Defaults to workspaceDir. */

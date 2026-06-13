@@ -2,6 +2,10 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveGlobalDedupeCache } from "../../../infra/dedupe.js";
 import { channelRouteDedupeKey } from "../../../plugin-sdk/channel-route.js";
+import {
+  isGatewayDrainInternalContext,
+  isGatewayDraining,
+} from "../../../process/command-queue.js";
 import { applyQueueDropPolicy, shouldSkipQueueItem } from "../../../utils/queue-helpers.js";
 import { kickFollowupDrainIfIdle, rememberFollowupDrainCallback } from "./drain.js";
 import { getExistingFollowupQueue, getFollowupQueue } from "./state.js";
@@ -72,6 +76,12 @@ export function enqueueFollowupRun(
   runFollowup?: (run: FollowupRun) => Promise<void>,
   restartIfIdle = true,
 ): boolean {
+  if (isGatewayDraining() && !run.allowDuringGatewayDrain && !isGatewayDrainInternalContext()) {
+    return false;
+  }
+  if (isGatewayDrainInternalContext()) {
+    run.allowDuringGatewayDrain = true;
+  }
   if (isFollowupRunAborted(run)) {
     return false;
   }

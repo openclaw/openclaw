@@ -32,7 +32,11 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
         }) => {
           await params.onFlush([entry]);
         },
-        flushKey: async (_key: string) => {},
+        flushKey: async (_key: string) => false,
+        flushKeyWithCount: async (_key: string) => ({ flushed: 0 }),
+        cancelKey: (_key: string) => false,
+        flushAll: async () => 0,
+        unregister: () => {},
       },
     }),
   };
