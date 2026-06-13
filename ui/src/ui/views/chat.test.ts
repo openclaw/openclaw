@@ -874,6 +874,50 @@ describe("chat goal status", () => {
   });
 });
 
+describe("chat token usage meter", () => {
+  it("renders the active session context usage, including a valid zero-token session", () => {
+    const container = renderChatView({
+      sessions: createSessionsResultFromRows([
+        {
+          key: "main",
+          kind: "direct",
+          updatedAt: 2,
+          totalTokens: 0,
+          contextTokens: 200_000,
+        },
+      ]),
+    });
+
+    const meter = requireElement(container, ".token-meter", "token usage meter");
+    expect(meter.getAttribute("role")).toBe("progressbar");
+    expect(meter.getAttribute("aria-valuenow")).toBe("0");
+    expect(meter.closest(".agent-chat__input")).not.toBeNull();
+    expect(meter.closest(".agent-chat__toolbar")).toBeNull();
+    expect(container.querySelector<HTMLElement>(".token-meter__bar")?.style.width).toBe("0%");
+  });
+
+  it("uses the session context window before the default context window", () => {
+    const container = renderChatView({
+      sessions: {
+        ...createSessionsResultFromRows([
+          {
+            key: "main",
+            kind: "direct",
+            updatedAt: 2,
+            totalTokens: 90_000,
+            contextTokens: 100_000,
+          },
+        ]),
+        defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: 200_000 },
+      },
+    });
+
+    const meter = requireElement(container, ".token-meter", "token usage meter");
+    expect(meter.getAttribute("aria-valuenow")).toBe("90");
+    expect(container.querySelector(".token-meter__bar--high")).not.toBeNull();
+  });
+});
+
 describe("chat composer workbench", () => {
   it("renders session controls in the composer and workspace files in the rail", () => {
     const onRefresh = vi.fn();

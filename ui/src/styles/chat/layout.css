@@ -921,6 +921,32 @@
   background: color-mix(in srgb, var(--danger, #ef4444) 14%, transparent);
 }
 
+.token-meter {
+  width: 100%;
+  height: 2px;
+  flex-shrink: 0;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--border) 60%, transparent);
+}
+
+.token-meter__bar {
+  height: 100%;
+  border-radius: 1px;
+  transition: width 400ms var(--ease-out, cubic-bezier(0, 0, 0.2, 1));
+}
+
+.token-meter__bar--low {
+  background: var(--success, #22c55e);
+}
+
+.token-meter__bar--mid {
+  background: var(--info, #3b82f6);
+}
+
+.token-meter__bar--high {
+  background: var(--danger, #ef4444);
+}
+
 .agent-chat__talk-status {
   color: var(--text);
 }
@@ -2051,6 +2077,10 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .token-meter__bar {
+    transition: none;
+  }
+
   .chat-controls__session-row--flash .chat-controls__session-trigger {
     animation: none;
     border-color: color-mix(in srgb, var(--accent) 70%, var(--border));

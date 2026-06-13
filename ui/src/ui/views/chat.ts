@@ -1578,6 +1578,33 @@ function renderSlashMenu(
   `;
 }
 
+function renderTokenMeter(
+  totalTokens: number | undefined,
+  contextWindow: number | null,
+): TemplateResult | typeof nothing {
+  if (!contextWindow || !Number.isFinite(totalTokens)) {
+    return nothing;
+  }
+  const percent = Math.min(
+    Math.max(Math.round(((totalTokens ?? 0) / contextWindow) * 100), 0),
+    100,
+  );
+  const tier = percent >= 85 ? "high" : percent >= 60 ? "mid" : "low";
+
+  return html`
+    <div
+      class="token-meter"
+      role="progressbar"
+      aria-label=${t("common.tokens")}
+      aria-valuemin="0"
+      aria-valuemax="100"
+      aria-valuenow=${percent}
+    >
+      <div class="token-meter__bar token-meter__bar--${tier}" style="width: ${percent}%"></div>
+    </div>
+  `;
+}
+
 export function renderChat(props: ChatProps) {
   const canCompose = props.connected;
   const isBusy = props.sending || props.stream !== null;
@@ -2266,6 +2293,7 @@ export function renderChat(props: ChatProps) {
             showSecondary: false,
           })}
         </div>
+        ${renderTokenMeter(activeSession?.totalTokens, threadContextWindow)}
       </div>
     </section>
   `;
