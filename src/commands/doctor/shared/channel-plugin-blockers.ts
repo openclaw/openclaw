@@ -25,6 +25,8 @@ export type ChannelPluginBlockerHit = {
   channelId: string;
   /** Plugin id that would provide the configured channel. */
   pluginId: string;
+  /** Another owner can still serve this channel despite this owner-specific blocker. */
+  channelAvailable?: boolean;
   /** Effective activation reason preventing the plugin from loading. */
   reason:
     | "disabled in config"
@@ -84,7 +86,11 @@ export function scanConfiguredChannelPluginBlockers(
   const hits: ChannelPluginBlockerHit[] = [];
   const hitKeys = new Set<string>();
   const globalDisableChannelIds = new Set<string>();
-  const addHits = (channelId: string, ownerStates: ChannelOwnerState[]) => {
+  const addHits = (
+    channelId: string,
+    ownerStates: ChannelOwnerState[],
+    channelAvailable = false,
+  ) => {
     for (const state of ownerStates) {
       if (!state.reason) {
         continue;
@@ -100,11 +106,15 @@ export function scanConfiguredChannelPluginBlockers(
         continue;
       }
       hitKeys.add(key);
-      hits.push({
+      const hit: ChannelPluginBlockerHit = {
         channelId,
         pluginId: state.pluginId,
         reason: state.reason,
-      });
+      };
+      if (channelAvailable) {
+        hit.channelAvailable = true;
+      }
+      hits.push(hit);
     }
   };
 
@@ -131,9 +141,13 @@ export function scanConfiguredChannelPluginBlockers(
   }
 
   for (const [channelId, triggers] of manifestEnvTriggers) {
-    for (const pluginIds of triggers.values()) {
-      const owners = registry.plugins.filter((plugin) => pluginIds.has(plugin.id));
-      const ownerStates = owners.map((plugin) =>
+    const channelOwnerStates = registry.plugins
+      .filter((plugin) =>
+        plugin.channels.some(
+          (rawChannelId) => normalizeOptionalLowercaseString(rawChannelId) === channelId,
+        ),
+      )
+      .map((plugin) =>
         resolveConfiguredChannelOwnerState({
           plugin,
           channelId,
@@ -143,10 +157,13 @@ export function scanConfiguredChannelPluginBlockers(
           effectivePluginsConfig,
         }),
       );
+    const channelAvailable = channelOwnerStates.some((state) => state.available);
+    for (const pluginIds of triggers.values()) {
+      const ownerStates = channelOwnerStates.filter((state) => pluginIds.has(state.pluginId));
       if (ownerStates.some((state) => state.available)) {
         continue;
       }
-      addHits(channelId, ownerStates);
+      addHits(channelId, ownerStates, channelAvailable);
     }
   }
 
@@ -348,6 +365,9 @@ export function isWarningBlockedByChannelPlugin(
   hits: ChannelPluginBlockerHit[],
 ): boolean {
   return hits.some((hit) => {
+    if (hit.channelAvailable) {
+      return false;
+    }
     const prefix = `channels.${sanitizeForLog(hit.channelId)}`;
     return warning.includes(`${prefix}:`) || warning.includes(`${prefix}.`);
   });

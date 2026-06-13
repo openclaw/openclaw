@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import * as manifestRegistry from "../../../plugins/manifest-registry.js";
 import {
   collectConfiguredChannelPluginBlockerWarnings,
+  isWarningBlockedByChannelPlugin,
   scanConfiguredChannelPluginBlockers,
 } from "./channel-plugin-blockers.js";
 
@@ -378,8 +379,31 @@ describe("channel plugin blockers", () => {
         channelId: "shared-chat",
         pluginId: "external-chat",
         reason: "missing explicit enablement",
+        channelAvailable: true,
       },
     ]);
+  });
+
+  it("preserves channel-wide warnings when only a co-owner is blocked", () => {
+    expect(
+      isWarningBlockedByChannelPlugin("channels.shared-chat.groupPolicy: warning", [
+        {
+          channelId: "shared-chat",
+          pluginId: "external-chat",
+          reason: "missing explicit enablement",
+          channelAvailable: true,
+        },
+      ]),
+    ).toBe(false);
+    expect(
+      isWarningBlockedByChannelPlugin("channels.shared-chat.groupPolicy: warning", [
+        {
+          channelId: "shared-chat",
+          pluginId: "external-chat",
+          reason: "missing explicit enablement",
+        },
+      ]),
+    ).toBe(true);
   });
 
   it("accepts an available co-owner for the same manifest env trigger", () => {
