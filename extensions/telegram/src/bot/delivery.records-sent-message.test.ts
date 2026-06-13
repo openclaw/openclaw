@@ -134,4 +134,47 @@ describe("deliverReplies sent-message ledger", () => {
       expect(recordSentMessage).toHaveBeenCalledWith("123", id, cfg);
     }
   });
+
+  it("records every voice-fallback text id when the fallback chunks into multiple sends", async () => {
+    // When sendVoice is forbidden, delivery falls back to text that can itself
+    // chunk into multiple sends; each fallback message id must be recorded.
+    let nextId = 200;
+    const sendMessage = vi
+      .fn()
+      .mockImplementation(async () => ({ message_id: ++nextId, chat: { id: "123" } }));
+    const sendVoice = vi
+      .fn()
+      .mockRejectedValue(
+        new Error("Call to 'sendVoice' failed! (400: Bad Request: VOICE_MESSAGES_FORBIDDEN)"),
+      );
+    loadWebMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("audio-bytes"),
+      contentType: "audio/ogg",
+      fileName: "note.ogg",
+    });
+    await deliverReplies({
+      replies: [
+        {
+          mediaUrl: "https://example.com/note.ogg",
+          text: "first paragraph here\n\nsecond paragraph here",
+          audioAsVoice: true,
+        },
+      ],
+      cfg,
+      chatId: "123",
+      token: "tok",
+      runtime: createRuntime() as RuntimeEnv,
+      bot: createBot({ sendVoice, sendMessage }),
+      replyToMode: "off",
+      textLimit: 16,
+      mediaLoader: loadWebMedia,
+    });
+    expect(sendVoice).toHaveBeenCalledTimes(1);
+    const fallbackSends = sendMessage.mock.calls.length;
+    expect(fallbackSends).toBeGreaterThan(1);
+    expect(recordSentMessage).toHaveBeenCalledTimes(fallbackSends);
+    for (let id = 201; id <= 200 + fallbackSends; id += 1) {
+      expect(recordSentMessage).toHaveBeenCalledWith("123", id, cfg);
+    }
+  });
 });

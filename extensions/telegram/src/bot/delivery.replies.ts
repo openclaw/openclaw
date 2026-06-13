@@ -281,6 +281,7 @@ async function sendTelegramVoiceFallbackText(opts: {
   silent?: boolean;
   replyMarkup?: ReturnType<typeof buildInlineKeyboard>;
   replyQuoteText?: string;
+  progress: DeliveryProgress;
 }): Promise<number | undefined> {
   let firstDeliveredMessageId: number | undefined;
   const chunks = filterEmptyTelegramTextChunks(opts.chunkText(opts.text));
@@ -304,6 +305,7 @@ async function sendTelegramVoiceFallbackText(opts: {
     if (firstDeliveredMessageId == null) {
       firstDeliveredMessageId = messageId;
     }
+    markDelivered(opts.progress, messageId);
     if (replyToForChunk) {
       appliedReplyTo = true;
     }
@@ -484,13 +486,13 @@ async function deliverMediaReply(params: {
               silent: params.silent,
               replyMarkup: params.replyMarkup,
               replyQuoteText: params.replyQuoteText,
+              progress: params.progress,
             });
             if (firstDeliveredMessageId == null) {
               firstDeliveredMessageId = fallbackMessageId;
             }
             visibleFallbackText = fallbackText;
             markReplyApplied(params.progress, voiceFallbackReplyTo);
-            markDelivered(params.progress, fallbackMessageId);
             continue;
           }
           if (isCaptionTooLong(voiceErr)) {
@@ -514,6 +516,7 @@ async function deliverMediaReply(params: {
                 linkPreview: params.linkPreview,
                 silent: params.silent,
                 replyMarkup: params.replyMarkup,
+                progress: params.progress,
               });
               visibleFallbackText = fallbackText;
             }
