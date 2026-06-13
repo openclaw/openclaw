@@ -1380,7 +1380,24 @@ describe("handleSendChat", () => {
     expect(host.chatMessage).toBe("");
   });
 
-  it("preserves /reset soft args and skips confirmation dialog", async () => {
+  it.each([
+    {
+      input: "/reset soft please reload system prompt",
+      expected: "/reset soft please reload system prompt",
+    },
+    {
+      input: "/reset\tsoft please reload system prompt",
+      expected: "/reset soft please reload system prompt",
+    },
+    {
+      input: "/reset\nsoft please reload system prompt",
+      expected: "/reset soft please reload system prompt",
+    },
+    {
+      input: "/reset: soft please reload system prompt",
+      expected: "/reset soft please reload system prompt",
+    },
+  ])("preserves $input args and skips confirmation dialog", async ({ input, expected }) => {
     const confirm = vi.fn(() => false);
     vi.stubGlobal("confirm", confirm);
     const request = vi.fn(async (method: string) => {
@@ -1391,7 +1408,7 @@ describe("handleSendChat", () => {
     });
     const host = makeHost({
       client: { request } as unknown as ChatHost["client"],
-      chatMessage: "/reset soft please reload system prompt",
+      chatMessage: input,
       sessionKey: "agent:main",
     });
 
@@ -1404,8 +1421,35 @@ describe("handleSendChat", () => {
       "chat send payload",
     );
     expect(payload.sessionKey).toBe("agent:main");
-    expect(payload.message).toBe("/reset soft please reload system prompt");
+    expect(payload.message).toBe(expected);
     expect(host.chatMessage).toBe("");
+  });
+
+  it.each([
+    "/reset softish please archive",
+    "/reset\tsoftish please archive",
+    "/reset\nsoftish please archive",
+    "/reset: softish please archive",
+  ])("keeps %s on the hard-reset confirmation path", async (message) => {
+    const confirm = vi.fn(() => false);
+    vi.stubGlobal("confirm", confirm);
+    const request = vi.fn(async (method: string) => {
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "keep this draft",
+      sessionKey: "agent:main",
+    });
+
+    await handleSendChat(host, message, {
+      confirmReset: true,
+      restoreDraft: true,
+    });
+
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(request).not.toHaveBeenCalled();
+    expect(host.chatMessage).toBe("keep this draft");
   });
 
   it("records visible send timing phases for a normal chat send", async () => {

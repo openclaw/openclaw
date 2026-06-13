@@ -245,18 +245,17 @@ export function isChatStopCommand(text: string) {
 }
 
 function isChatResetCommand(text: string) {
-  const trimmed = text.trim();
-  if (!trimmed) {
+  const parsed = parseSlashCommand(text);
+  if (!parsed || (parsed.command.key !== "new" && parsed.command.key !== "reset")) {
     return false;
   }
-  const normalized = normalizeLowercaseStringOrEmpty(trimmed);
-  if (normalized === "/new" || normalized === "/reset") {
+  if (parsed.command.key === "new") {
     return true;
   }
-  if (normalized.match(/^\/reset soft(?:\s|$)/)) {
+  if (/^soft(?:\s|$)/.test(normalizeLowercaseStringOrEmpty(parsed.args))) {
     return false;
   }
-  return normalized.startsWith("/new ") || normalized.startsWith("/reset ");
+  return true;
 }
 
 function confirmChatResetCommand(text: string) {
