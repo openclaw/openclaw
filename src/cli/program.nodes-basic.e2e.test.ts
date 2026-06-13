@@ -15,6 +15,7 @@ type GatewayCallRequest = {
   params?: unknown;
   scopes?: unknown;
   useStoredDeviceAuth?: boolean;
+  deviceIdentity?: unknown;
 };
 
 function formatRuntimeLogCallArg(value: unknown): string {
@@ -550,10 +551,21 @@ describe("cli program (nodes basics)", () => {
 
   it("falls back to read-only node status when pairing diagnostics are unavailable", async () => {
     callGateway.mockImplementation(async (...args: unknown[]) => {
-      const opts = (args[0] ?? {}) as { method?: string; useStoredDeviceAuth?: boolean };
+      const opts = (args[0] ?? {}) as {
+        method?: string;
+        scopes?: string[];
+        useStoredDeviceAuth?: boolean;
+      };
       if (opts.method === "node.list" && opts.useStoredDeviceAuth) {
         throw Object.assign(new Error("stored device auth unavailable"), {
           name: "GatewayCredentialsRequiredError",
+        });
+      }
+      if (opts.method === "node.list" && opts.scopes?.includes("operator.pairing")) {
+        throw Object.assign(new Error("unauthorized: pairing scope unavailable"), {
+          name: "GatewayClientRequestError",
+          gatewayCode: "INVALID_REQUEST",
+          details: { code: "AUTH_SCOPE_MISMATCH" },
         });
       }
       if (opts.method === "node.list") {
@@ -576,10 +588,44 @@ describe("cli program (nodes basics)", () => {
     await runProgram(["nodes", "status"]);
 
     const requests = gatewayRequests().filter((request) => request.method === "node.list");
+    expect(requests).toHaveLength(3);
+    expect(requests[0]?.useStoredDeviceAuth).toBe(true);
+    expect(requests[1]?.scopes).toEqual(["operator.read", "operator.pairing"]);
+    expect(requests[1]?.deviceIdentity).toBeNull();
+    expect(requests[2]?.useStoredDeviceAuth).toBeUndefined();
+    expect(requests[2]?.scopes).toBeUndefined();
+    expect(getRuntimeOutput()).toContain("Read Only Node");
+  });
+
+  it("uses isolated pairing scopes for explicit diagnostic credentials", async () => {
+    callGateway.mockImplementation(async (...args: unknown[]) => {
+      const opts = (args[0] ?? {}) as {
+        method?: string;
+        scopes?: string[];
+        useStoredDeviceAuth?: boolean;
+      };
+      if (opts.method === "node.list" && opts.useStoredDeviceAuth) {
+        throw Object.assign(new Error("stored device auth disabled for explicit credentials"), {
+          name: "GatewayStoredDeviceAuthUnavailableError",
+        });
+      }
+      return { nodes: [] };
+    });
+
+    await runProgram([
+      "nodes",
+      "status",
+      "--url",
+      "wss://gateway.example.test",
+      "--token",
+      "explicit-token",
+    ]);
+
+    const requests = gatewayRequests().filter((request) => request.method === "node.list");
     expect(requests).toHaveLength(2);
     expect(requests[0]?.useStoredDeviceAuth).toBe(true);
-    expect(requests[1]?.useStoredDeviceAuth).toBeUndefined();
-    expect(getRuntimeOutput()).toContain("Read Only Node");
+    expect(requests[1]?.scopes).toEqual(["operator.read", "operator.pairing"]);
+    expect(requests[1]?.deviceIdentity).toBeNull();
   });
 
   it("does not retry node diagnostics after a transport failure", async () => {
@@ -624,6 +670,43 @@ describe("cli program (nodes basics)", () => {
     expect(requests[0]?.useStoredDeviceAuth).toBe(true);
     expect(requests[1]?.useStoredDeviceAuth).toBeUndefined();
     expect(getRuntimeOutput()).toContain("Configured Auth Node");
+  });
+
+  it("falls back to configured auth when stored device auth lacks read scope", async () => {
+    callGateway.mockImplementation(async (...args: unknown[]) => {
+      const opts = (args[0] ?? {}) as {
+        method?: string;
+        scopes?: string[];
+        useStoredDeviceAuth?: boolean;
+      };
+      if (opts.method === "node.list" && opts.useStoredDeviceAuth) {
+        throw Object.assign(new Error("missing scope: operator.read"), {
+          name: "GatewayClientRequestError",
+          gatewayCode: "INVALID_REQUEST",
+        });
+      }
+      if (opts.method === "node.list" && opts.scopes?.includes("operator.pairing")) {
+        return {
+          nodes: [
+            {
+              nodeId: "shared-auth-node",
+              displayName: "Shared Auth Node",
+              paired: true,
+              connected: false,
+            },
+          ],
+        };
+      }
+      return { nodes: [] };
+    });
+
+    await runProgram(["nodes", "status"]);
+
+    const requests = gatewayRequests().filter((request) => request.method === "node.list");
+    expect(requests).toHaveLength(2);
+    expect(requests[1]?.scopes).toEqual(["operator.read", "operator.pairing"]);
+    expect(requests[1]?.deviceIdentity).toBeNull();
+    expect(getRuntimeOutput()).toContain("Shared Auth Node");
   });
 
   it("describes pending-only nodes through the pairing diagnostics view", async () => {

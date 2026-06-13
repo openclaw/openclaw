@@ -765,17 +765,18 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.deviceIdentity).toEqual(deviceIdentityState.value);
   });
 
-  it("preserves explicit credentials instead of replacing them with stored device auth", async () => {
+  it("does not replace explicit credentials with stored device auth", async () => {
     setLocalLoopbackGatewayConfig();
 
-    await callGatewayCli({
-      method: "node.list",
-      token: "explicit-token",
-      useStoredDeviceAuth: true,
-    });
+    await expect(
+      callGatewayCli({
+        method: "node.list",
+        token: "explicit-token",
+        useStoredDeviceAuth: true,
+      }),
+    ).rejects.toMatchObject({ name: "GatewayStoredDeviceAuthUnavailableError" });
 
-    expect(lastClientOptions?.token).toBe("explicit-token");
-    expect(lastClientOptions?.scopes).toEqual(["operator.read"]);
+    expect(lastClientOptions).toBeNull();
   });
 
   it("prefers stored device auth over configured local credentials", async () => {
@@ -794,15 +795,15 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.scopes).toBeUndefined();
   });
 
-  it("preserves configured remote credentials instead of sending stored device auth", async () => {
+  it("does not send stored device auth to configured remote gateways", async () => {
     getRuntimeConfig.mockReturnValue(makeRemotePasswordGatewayConfig("remote-password"));
     setGatewayNetworkDefaults();
 
-    await callGatewayCli({ method: "node.list", useStoredDeviceAuth: true });
+    await expect(
+      callGatewayCli({ method: "node.list", useStoredDeviceAuth: true }),
+    ).rejects.toMatchObject({ name: "GatewayStoredDeviceAuthUnavailableError" });
 
-    expect(lastClientOptions?.url).toBe("wss://remote.example:18789");
-    expect(lastClientOptions?.password).toBe("remote-password");
-    expect(lastClientOptions?.scopes).toEqual(["operator.read"]);
+    expect(lastClientOptions).toBeNull();
   });
 
   it("fails before connecting when stored device auth is unavailable", async () => {

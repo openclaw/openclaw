@@ -83,6 +83,7 @@ type CallGatewayBaseOptions = {
   mode?: GatewayClientMode;
   approvalRuntimeToken?: string;
   useStoredDeviceAuth?: boolean;
+  surfaceGatewayClientRequestErrors?: boolean;
   deviceIdentity?: DeviceIdentity | null;
   instanceId?: string;
   minProtocol?: number;
@@ -162,6 +163,13 @@ export class GatewayExplicitAuthRequiredError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "GatewayExplicitAuthRequiredError";
+  }
+}
+
+export class GatewayStoredDeviceAuthUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "GatewayStoredDeviceAuthUnavailableError";
   }
 }
 
@@ -1024,12 +1032,18 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     errorHint: "Fix: pass --token or --password (or gatewayToken in tools).",
     configPath: context.configPath,
   });
-  const useStoredDeviceAuth =
-    opts.useStoredDeviceAuth === true &&
-    !context.urlOverride &&
-    !context.explicitAuth.token &&
-    !context.explicitAuth.password &&
-    (!context.isRemoteMode || (!resolvedCredentials.token && !resolvedCredentials.password));
+  if (
+    opts.useStoredDeviceAuth &&
+    (context.urlOverride ||
+      context.explicitAuth.token ||
+      context.explicitAuth.password ||
+      context.isRemoteMode)
+  ) {
+    throw new GatewayStoredDeviceAuthUnavailableError(
+      "stored device auth is limited to the configured local gateway",
+    );
+  }
+  const useStoredDeviceAuth = opts.useStoredDeviceAuth === true;
   ensureRemoteModeUrlConfigured(context);
   const connectionDetails = buildGatewayConnectionDetails({
     config: context.config,
@@ -1070,7 +1084,8 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     safeTimerTimeoutMs,
     connectionDetails,
     deviceIdentity,
-    surfaceGatewayClientRequestErrors: useStoredDeviceAuth,
+    surfaceGatewayClientRequestErrors:
+      useStoredDeviceAuth || opts.surfaceGatewayClientRequestErrors === true,
   });
 }
 

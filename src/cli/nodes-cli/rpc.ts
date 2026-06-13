@@ -44,12 +44,24 @@ function readGatewayClientRequestDetailCode(value: unknown): string | null {
   return typeof code === "string" ? code : null;
 }
 
-function isStoredDeviceAuthFallbackError(value: unknown): value is Error {
-  if (value instanceof Error && value.name === "GatewayCredentialsRequiredError") {
+function isDiagnosticsAuthFallbackError(value: unknown): value is Error {
+  if (
+    value instanceof Error &&
+    (value.name === "GatewayCredentialsRequiredError" ||
+      value.name === "GatewayStoredDeviceAuthUnavailableError")
+  ) {
     return true;
   }
   const detailCode = readGatewayClientRequestDetailCode(value);
-  return detailCode !== null && STORED_DEVICE_AUTH_FALLBACK_DETAIL_CODES.has(detailCode);
+  if (detailCode !== null && STORED_DEVICE_AUTH_FALLBACK_DETAIL_CODES.has(detailCode)) {
+    return true;
+  }
+  return (
+    value instanceof Error &&
+    value.name === "GatewayClientRequestError" &&
+    (value as Error & { gatewayCode?: unknown }).gatewayCode === "INVALID_REQUEST" &&
+    value.message.includes("missing scope: operator.read")
+  );
 }
 
 function isUnknownGatewayMethodError(value: unknown, method: string): value is Error {
@@ -74,7 +86,12 @@ export const callGatewayCli = async (
   method: string,
   opts: NodesRpcOpts,
   params?: unknown,
-  callOpts?: { transportTimeoutMs?: number; useStoredDeviceAuth?: boolean },
+  callOpts?: {
+    scopes?: OperatorScope[];
+    transportTimeoutMs?: number;
+    useStoredDeviceAuth?: boolean;
+    withoutDeviceIdentity?: boolean;
+  },
 ) => {
   const runtime = await loadNodesCliRpcRuntime();
   return await runtime.callGatewayCliRuntime(method, opts, params, callOpts);
@@ -91,11 +108,21 @@ export const callNodeDiagnosticsGatewayCli = async (
       useStoredDeviceAuth: true,
     });
   } catch (error) {
-    if (!isStoredDeviceAuthFallbackError(error)) {
+    if (!isDiagnosticsAuthFallbackError(error)) {
       throw error;
     }
-    return await callGatewayCli(method, opts, params);
   }
+  try {
+    return await callGatewayCli(method, opts, params, {
+      scopes: ["operator.read", "operator.pairing"],
+      withoutDeviceIdentity: true,
+    });
+  } catch (error) {
+    if (!isDiagnosticsAuthFallbackError(error)) {
+      throw error;
+    }
+  }
+  return await callGatewayCli(method, opts, params);
 };
 
 /** Call pairing approval methods with explicit operator scopes. */
