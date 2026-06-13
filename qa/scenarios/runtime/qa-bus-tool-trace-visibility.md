@@ -6,10 +6,7 @@ title: QA bus tool trace visibility
 surface: harness
 coverage:
   primary:
-    - harness.tool-trace-visibility
-  secondary:
-    - runtime.qa-bus
-    - tools.trace
+    - model-and-runtime-telemetry
 objective: Verify QA-Lab can assert sanitized tool-call traces directly on bus messages.
 successCriteria:
   - QA bus messages can carry a toolCalls array.
@@ -24,7 +21,8 @@ codeRefs:
   - extensions/qa-lab/src/runtime-api.ts
 execution:
   kind: flow
-  summary: Add a synthetic tool-backed bus message and verify sanitized trace assertions.
+  summary: Add a synthetic tool-backed bus message and verify sanitized trace
+    assertions.
   config:
     expectedToolName: exec
     expectedRedaction: "[redacted]"

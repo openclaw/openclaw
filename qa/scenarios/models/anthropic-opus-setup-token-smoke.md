@@ -6,14 +6,17 @@ title: Anthropic Opus setup-token smoke
 surface: model-provider
 coverage:
   primary:
-    - models.provider-auth
+    - login-and-api-key-setup
   secondary:
-    - models.anthropic
-objective: Verify the regular Anthropic Opus lane can complete a quick chat turn using setup-token auth.
+    - canonical-anthropic-refs
+objective: Verify the regular Anthropic Opus lane can complete a quick chat turn
+  using setup-token auth.
 successCriteria:
-  - A live-frontier run fails fast unless the selected primary provider is anthropic.
+  - A live-frontier run fails fast unless the selected primary provider is
+    anthropic.
   - The selected primary model is Anthropic Opus 4.8.
-  - The QA gateway worker stages a token auth profile in the isolated agent store.
+  - The QA gateway worker stages a token auth profile in the isolated agent
+    store.
   - The agent replies through the regular Anthropic provider.
 docsRefs:
   - docs/concepts/model-providers.md
@@ -24,12 +27,16 @@ codeRefs:
   - extensions/qa-lab/src/suite.ts
 execution:
   kind: flow
-  summary: Run with `OPENCLAW_LIVE_SETUP_TOKEN_VALUE=<setup-token> pnpm openclaw qa suite --provider-mode live-frontier --model anthropic/claude-opus-4-8 --alt-model anthropic/claude-opus-4-8 --scenario anthropic-opus-setup-token-smoke`.
+  summary: Run with `OPENCLAW_LIVE_SETUP_TOKEN_VALUE=<setup-token> pnpm openclaw
+    qa suite --provider-mode live-frontier --model anthropic/claude-opus-4-8
+    --alt-model anthropic/claude-opus-4-8 --scenario
+    anthropic-opus-setup-token-smoke`.
   config:
     requiredProvider: anthropic
     requiredModel: claude-opus-4-8
-    profileId: "anthropic:qa-setup-token"
-    chatPrompt: "Anthropic Opus setup-token smoke. Reply exactly: ANTHROPIC-OPUS-SETUP-TOKEN-OK"
+    profileId: anthropic:qa-setup-token
+    chatPrompt: "Anthropic Opus setup-token smoke. Reply exactly:
+      ANTHROPIC-OPUS-SETUP-TOKEN-OK"
     chatExpected: ANTHROPIC-OPUS-SETUP-TOKEN-OK
 ```
 

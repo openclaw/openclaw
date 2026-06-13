@@ -6,11 +6,12 @@ title: Commitments heartbeat target none
 surface: memory
 coverage:
   primary:
-    - commitments.heartbeat-target-none
+    - commitment-check-ins
   secondary:
-    - commitments.scope
-    - runtime.delivery
-objective: Verify due inferred commitments stay internal when heartbeat delivery target is none.
+    - session-and-run-coordination
+    - automatic-final-reply-delivery
+objective: Verify due inferred commitments stay internal when heartbeat delivery
+  target is none.
 successCriteria:
   - Scenario runs through qa-channel and a real gateway child.
   - A due commitment exists for the qa agent and qa-channel conversation.
@@ -36,7 +37,8 @@ gatewayConfigPatch:
         target: none
 execution:
   kind: flow
-  summary: Seed a due commitment, wake heartbeat, and assert target none sends no qa-channel message.
+  summary: Seed a due commitment, wake heartbeat, and assert target none sends no
+    qa-channel message.
   config:
     conversationId: commitments-target-none-room
     commitmentId: cm_qa_target_none

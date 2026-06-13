@@ -7,14 +7,18 @@ surface: runtime
 runtimeParityTier: standard
 coverage:
   primary:
-    - runtime.codex-plugin.lifecycle
+    - thread-lifecycle
   secondary:
-    - runtime.doctor-repair
-objective: Verify a clean home that needs the Codex runtime reports a clear missing-plugin remediation, installs through doctor repair, and retries through Codex OAuth instead of OpenAI API-key auth.
+    - openclaw-doctor
+objective: Verify a clean home that needs the Codex runtime reports a clear
+  missing-plugin remediation, installs through doctor repair, and retries
+  through Codex OAuth instead of OpenAI API-key auth.
 successCriteria:
-  - Missing Codex plugin emits the exact remediation string asserted by the fixture test.
+  - Missing Codex plugin emits the exact remediation string asserted by the
+    fixture test.
   - Doctor repair seeds the Codex plugin before retrying the agent turn.
-  - The retry uses the openai OAuth profile and never routes through the openai API-key profile.
+  - The retry uses the openai OAuth profile and never routes through the openai
+    API-key profile.
 docsRefs:
   - docs/cli/doctor.md
   - docs/cli/plugins.md
@@ -25,9 +29,11 @@ codeRefs:
   - extensions/qa-lab/src/codex-plugin-lifecycle.test.ts
 execution:
   kind: flow
-  summary: Exercise the Codex lifecycle fixture for missing plugin repair and retry auth routing.
+  summary: Exercise the Codex lifecycle fixture for missing plugin repair and
+    retry auth routing.
   config:
-    remediation: Codex plugin is required for Codex runtime. Run "openclaw doctor --fix" to install @openclaw/codex, then retry.
+    remediation: Codex plugin is required for Codex runtime. Run "openclaw doctor
+      --fix" to install @openclaw/codex, then retry.
 ```
 
 ```yaml qa-flow

@@ -6,10 +6,12 @@ title: DM baseline conversation
 surface: dm
 coverage:
   primary:
-    - channels.dm
+    - session-and-run-coordination
+    - inbound-conversation-routing
   secondary:
-    - channels.qa-channel
-objective: Verify the QA agent can chat coherently in a DM, explain the QA setup, and stay in character.
+    - plugin-registry-resolution
+objective: Verify the QA agent can chat coherently in a DM, explain the QA
+  setup, and stay in character.
 successCriteria:
   - Agent replies in DM without channel routing mistakes.
   - Agent visible reply contains the scenario marker.
@@ -23,10 +25,12 @@ codeRefs:
   - extensions/qa-lab/src/lab-server.ts
 execution:
   kind: flow
-  summary: Verify the QA agent can chat coherently in a DM, explain the QA setup, and stay in character.
+  summary: Verify the QA agent can chat coherently in a DM, explain the QA setup,
+    and stay in character.
   config:
     expectedMarker: QA-DM-BASELINE-OK
-    prompt: "DM baseline marker check. Include exact marker: `QA-DM-BASELINE-OK` and briefly identify the QA lab message bus."
+    prompt: "DM baseline marker check. Include exact marker: `QA-DM-BASELINE-OK` and
+      briefly identify the QA lab message bus."
 ```
 
 ```yaml qa-flow

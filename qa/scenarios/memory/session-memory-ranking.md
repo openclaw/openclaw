@@ -6,14 +6,17 @@ title: Session memory ranking
 surface: memory
 coverage:
   primary:
-    - memory.ranking
+    - embedding-search
   secondary:
-    - memory.recall
-objective: Verify session-transcript memory can outrank stale durable notes and drive the final answer toward the newer fact.
+    - memory-search-and-store-tools
+objective: Verify session-transcript memory can outrank stale durable notes and
+  drive the final answer toward the newer fact.
 successCriteria:
   - Session memory indexing is enabled for the scenario.
-  - Search ranks the newer transcript-backed fact ahead of the stale durable note.
-  - The agent uses memory tools and answers with the current fact, not the stale one.
+  - Search ranks the newer transcript-backed fact ahead of the stale durable
+    note.
+  - The agent uses memory tools and answers with the current fact, not the stale
+    one.
 docsRefs:
   - docs/concepts/memory-search.md
   - docs/reference/memory-config.md
@@ -23,15 +26,23 @@ codeRefs:
   - extensions/qa-lab/src/suite.ts
 execution:
   kind: flow
-  summary: Verify session-transcript memory can outrank stale durable notes and drive the final answer toward the newer fact.
+  summary: Verify session-transcript memory can outrank stale durable notes and
+    drive the final answer toward the newer fact.
   config:
     staleFact: ORBIT-9
     currentFact: ORBIT-10
     transcriptId: qa-session-memory-ranking
-    transcriptQuestion: "What is the current Project Nebula codename?"
-    transcriptAnswer: "The current Project Nebula codename is ORBIT-10."
-    prompt: "Session memory ranking check: what is the current Project Nebula codename? Use memory_search first with corpus=sessions for indexed session transcripts. If the first session search misses, retry memory_search with corpus=sessions and query 'current Project Nebula codename ORBIT-10'. If that still misses, run memory_search one more time without a corpus filter using the exact query 'current Project Nebula codename ORBIT-10'. If any result contains ORBIT-10, answer ORBIT-10. If durable notes conflict with newer indexed session transcripts, prefer the newer current fact."
-    promptSnippet: "Session memory ranking check"
+    transcriptQuestion: What is the current Project Nebula codename?
+    transcriptAnswer: The current Project Nebula codename is ORBIT-10.
+    prompt: "Session memory ranking check: what is the current Project Nebula
+      codename? Use memory_search first with corpus=sessions for indexed session
+      transcripts. If the first session search misses, retry memory_search with
+      corpus=sessions and query 'current Project Nebula codename ORBIT-10'. If
+      that still misses, run memory_search one more time without a corpus filter
+      using the exact query 'current Project Nebula codename ORBIT-10'. If any
+      result contains ORBIT-10, answer ORBIT-10. If durable notes conflict with
+      newer indexed session transcripts, prefer the newer current fact."
+    promptSnippet: Session memory ranking check
 ```
 
 ```yaml qa-flow

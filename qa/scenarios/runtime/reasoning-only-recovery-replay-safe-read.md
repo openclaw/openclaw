@@ -6,14 +6,16 @@ title: Reasoning-only recovery after replay-safe read
 surface: runtime
 coverage:
   primary:
-    - runtime.reasoning-only-recovery
+    - failure-recovery
   secondary:
-    - runtime.retry-policy
-objective: Verify a GPT-style reasoning-only turn after a replay-safe read auto-continues into a visible answer.
+    - compaction
+objective: Verify a GPT-style reasoning-only turn after a replay-safe read
+  auto-continues into a visible answer.
 successCriteria:
   - Scenario is mock-openai only so live lanes do not pick it up implicitly.
   - The agent performs a replay-safe read before the reasoning-only turn.
-  - The runtime injects the visible-answer continuation instruction after the reasoning-only turn.
+  - The runtime injects the visible-answer continuation instruction after the
+    reasoning-only turn.
   - The final visible reply contains the exact recovery marker.
 docsRefs:
   - docs/help/testing.md
@@ -26,7 +28,8 @@ execution:
   config:
     requiredProvider: mock-openai
     promptSnippet: Reasoning-only continuation QA check
-    prompt: "Reasoning-only continuation QA check: read QA_KICKOFF_TASK.md, then answer with exactly REASONING-RECOVERED-OK."
+    prompt: "Reasoning-only continuation QA check: read QA_KICKOFF_TASK.md, then
+      answer with exactly REASONING-RECOVERED-OK."
     expectedReply: REASONING-RECOVERED-OK
     retryNeedle: recorded reasoning but did not produce a user-visible answer
 ```

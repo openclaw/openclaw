@@ -6,14 +6,17 @@ title: Subagent stale child links
 surface: subagents
 coverage:
   primary:
-    - agents.subagents
+    - subagent-turns
   secondary:
-    - gateway.sessions-list
-objective: Verify restarted gateways hide stale persisted subagent child links without hiding live or fresh children.
+    - session-apis
+objective: Verify restarted gateways hide stale persisted subagent child links
+  without hiding live or fresh children.
 successCriteria:
   - Old ended subagent run records are not exposed as current children.
-  - Old store-only spawnedBy and parentSessionKey rows are not exposed as current children.
-  - Child-side ACP store rows from sibling agents are not exposed as current children.
+  - Old store-only spawnedBy and parentSessionKey rows are not exposed as
+    current children.
+  - Child-side ACP store rows from sibling agents are not exposed as current
+    children.
   - Live subagent runs and fresh dashboard children remain visible.
 docsRefs:
   - docs/tools/subagents.md
@@ -25,7 +28,8 @@ codeRefs:
   - extensions/qa-lab/src/gateway-child.ts
 execution:
   kind: flow
-  summary: Seed stale subagent session state on disk, restart the real gateway, then assert sessions.list filters only the stale child links.
+  summary: Seed stale subagent session state on disk, restart the real gateway,
+    then assert sessions.list filters only the stale child links.
 ```
 
 ```yaml qa-flow

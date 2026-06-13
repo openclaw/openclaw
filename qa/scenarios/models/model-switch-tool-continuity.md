@@ -6,10 +6,11 @@ title: Model switch with tool continuity
 surface: models
 coverage:
   primary:
-    - models.switching
+    - provider-and-runtime-overrides
   secondary:
-    - runtime.tool-continuity
-objective: Verify switching models preserves session context and tool use instead of dropping into plain-text only behavior.
+    - tool-call-handling
+objective: Verify switching models preserves session context and tool use
+  instead of dropping into plain-text only behavior.
 successCriteria:
   - Alternate model is actually requested.
   - A tool call still happens after the model switch.
@@ -22,11 +23,16 @@ codeRefs:
   - extensions/qa-lab/src/mock-openai-server.ts
 execution:
   kind: flow
-  summary: Verify switching models preserves session context and tool use instead of dropping into plain-text only behavior.
+  summary: Verify switching models preserves session context and tool use instead
+    of dropping into plain-text only behavior.
   config:
-    initialPrompt: "Read repo/qa/scenarios/index.md and summarize the QA scenario pack mission in one clause before any model switch."
-    followupPrompt: "The harness has already requested the alternate model for this turn. Do not call session_status or change models yourself. Tool continuity check: use the read tool to reread repo/qa/scenarios/index.md, then mention the model handoff and QA mission in one short sentence."
-    promptSnippet: "Tool continuity check"
+    initialPrompt: Read repo/qa/scenarios/index.md and summarize the QA scenario
+      pack mission in one clause before any model switch.
+    followupPrompt: "The harness has already requested the alternate model for this
+      turn. Do not call session_status or change models yourself. Tool
+      continuity check: use the read tool to reread repo/qa/scenarios/index.md,
+      then mention the model handoff and QA mission in one short sentence."
+    promptSnippet: Tool continuity check
 ```
 
 ```yaml qa-flow

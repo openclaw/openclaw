@@ -6,15 +6,18 @@ title: OpenAI native web search live
 surface: model-provider
 coverage:
   primary:
-    - tools.web-search
+    - web-search-exposure
   secondary:
-    - models.openai
-objective: Verify a live OpenAI GPT model can use OpenAI native web_search when OpenClaw web search is enabled in auto mode.
+    - canonical-openai-model-routing
+objective: Verify a live OpenAI GPT model can use OpenAI native web_search when
+  OpenClaw web search is enabled in auto mode.
 successCriteria:
-  - A live-frontier run fails fast unless the selected primary provider is openai.
+  - A live-frontier run fails fast unless the selected primary provider is
+    openai.
   - The selected primary model is GPT-5.5, not a mini or pro variant.
   - Web search is enabled without pinning a managed web_search provider.
-  - The live reply includes the required marker plus an official OpenAI News URL and headline found through web search.
+  - The live reply includes the required marker plus an official OpenAI News URL
+    and headline found through web search.
 gatewayConfigPatch:
   tools:
     web:
@@ -32,19 +35,29 @@ codeRefs:
   - extensions/qa-lab/src/suite.ts
 execution:
   kind: flow
-  summary: Run with `OPENCLAW_LIVE_OPENAI_KEY="${OPENAI_API_KEY}" pnpm openclaw qa suite --provider-mode live-frontier --model openai/gpt-5.5 --alt-model openai/gpt-5.5 --fast --thinking medium --scenario openai-native-web-search-live`.
+  summary: Run with `OPENCLAW_LIVE_OPENAI_KEY="${OPENAI_API_KEY}" pnpm openclaw qa
+    suite --provider-mode live-frontier --model openai/gpt-5.5 --alt-model
+    openai/gpt-5.5 --fast --thinking medium --scenario
+    openai-native-web-search-live`.
   config:
     requiredProvider: openai
     requiredModel: gpt-5.5
     expectedMarker: WEB-SEARCH-OK
     failureMarker: WEB-SEARCH-FAILED
-    searchPrompt: |-
-      Web search QA: use web search now for `site:openai.com/news OpenAI latest news`.
+    searchPrompt: >-
+      Web search QA: use web search now for `site:openai.com/news OpenAI latest
+      news`.
+
       Reply in exactly three lines:
+
       WEB-SEARCH-OK
+
       URL: <official openai.com/news URL from the search results>
+
       HEADLINE: <article or page headline from the search results>
-      Do not answer from memory. If web search is unavailable, reply exactly WEB-SEARCH-FAILED.
+
+      Do not answer from memory. If web search is unavailable, reply exactly
+      WEB-SEARCH-FAILED.
 ```
 
 ```yaml qa-flow

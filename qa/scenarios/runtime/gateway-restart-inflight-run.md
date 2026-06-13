@@ -7,15 +7,18 @@ surface: runtime
 runtimeParityTier: live-only
 coverage:
   primary:
-    - runtime.restart-recovery
+    - session-and-transcript-recovery
   secondary:
-    - runtime.gateway-restart
-    - runtime.delivery
-objective: Verify an agent run interrupted by a gateway restart does not duplicate delivery and the same session can recover on the next turn.
+    - session-and-run-coordination
+    - automatic-final-reply-delivery
+objective: Verify an agent run interrupted by a gateway restart does not
+  duplicate delivery and the same session can recover on the next turn.
 successCriteria:
-  - Scenario starts an agent run before applying a restart-required config change.
+  - Scenario starts an agent run before applying a restart-required config
+    change.
   - Gateway and qa-channel return healthy after the restart.
-  - The interrupted run emits its marker at most once and the next turn delivers the recovery marker exactly once.
+  - The interrupted run emits its marker at most once and the next turn delivers
+    the recovery marker exactly once.
 docsRefs:
   - docs/gateway/configuration.md
   - docs/automation/tasks.md
@@ -26,10 +29,13 @@ codeRefs:
   - src/gateway/server-restart-sentinel.ts
 execution:
   kind: flow
-  summary: Start an agent run, restart the gateway, then verify recovery delivery is not duplicated.
+  summary: Start an agent run, restart the gateway, then verify recovery delivery
+    is not duplicated.
   config:
-    prompt: "Gateway restart in-flight QA check. Read QA_KICKOFF_TASK.md, then reply exactly: RESTART-INFLIGHT-MAYBE-OK"
-    recoveryPrompt: "Gateway restart recovery follow-up marker. Reply exactly: RESTART-RECOVERY-OK"
+    prompt: "Gateway restart in-flight QA check. Read QA_KICKOFF_TASK.md, then reply
+      exactly: RESTART-INFLIGHT-MAYBE-OK"
+    recoveryPrompt: "Gateway restart recovery follow-up marker. Reply exactly:
+      RESTART-RECOVERY-OK"
     interruptedMarker: RESTART-INFLIGHT-MAYBE-OK
     recoveryMarker: RESTART-RECOVERY-OK
 ```

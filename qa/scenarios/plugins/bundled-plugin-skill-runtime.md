@@ -6,14 +6,17 @@ title: Bundled plugin skill runtime
 surface: skills
 coverage:
   primary:
-    - plugins.skills
+    - mixed-plugins
   secondary:
-    - plugins.runtime
-objective: Verify packaged bundled plugin skills load from dist-runtime instead of being skipped by path-containment checks.
+    - runtime-activation
+objective: Verify packaged bundled plugin skills load from dist-runtime instead
+  of being skipped by path-containment checks.
 successCriteria:
-  - The runtime-packaged bundled plugin tree is used as OPENCLAW_BUNDLED_PLUGINS_DIR.
+  - The runtime-packaged bundled plugin tree is used as
+    OPENCLAW_BUNDLED_PLUGINS_DIR.
   - The enabled bundled plugin skill is reported as eligible by the skills CLI.
-  - The check fails on SKILL.md symlink escapes and passes when runtime staging copies SKILL.md as a real file.
+  - The check fails on SKILL.md symlink escapes and passes when runtime staging
+    copies SKILL.md as a real file.
 docsRefs:
   - docs/tools/skills.md
   - docs/plugins/manifest.md
@@ -23,7 +26,8 @@ codeRefs:
   - src/agents/skills/plugin-skills.ts
 execution:
   kind: flow
-  summary: Force the packaged dist-runtime plugin tree and verify an enabled bundled plugin skill survives discovery.
+  summary: Force the packaged dist-runtime plugin tree and verify an enabled
+    bundled plugin skill survives discovery.
   config:
     pluginId: open-prose
     expectedSkillName: prose

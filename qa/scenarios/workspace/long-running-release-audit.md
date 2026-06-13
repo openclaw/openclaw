@@ -6,11 +6,13 @@ title: Long-running release audit
 surface: workspace
 coverage:
   primary:
-    - workspace.long-running-task
+    - process-lifecycle
   secondary:
-    - workspace.repo-discovery
-    - workspace.artifacts
-objective: Verify a model can complete a sustained repo audit that requires reading several scattered files, ignoring stale decoys, writing artifacts, and checking its own output.
+    - artifacts
+    - context-engine
+objective: Verify a model can complete a sustained repo audit that requires
+  reading several scattered files, ignoring stale decoys, writing artifacts, and
+  checking its own output.
 successCriteria:
   - Agent starts from the seeded project README instead of guessing.
   - Agent inspects docs and source files across multiple directories.
@@ -24,7 +26,8 @@ codeRefs:
   - extensions/qa-lab/src/scenario-flow-runner.ts
 execution:
   kind: flow
-  summary: Verify sustained repo-style auditing with scattered evidence and artifact verification.
+  summary: Verify sustained repo-style auditing with scattered evidence and
+    artifact verification.
   config:
     reportFile: audit-fixture/release-audit.json
     handoffFile: audit-fixture/release-handoff.md
@@ -37,20 +40,29 @@ execution:
       - REL-INSTALL-846
       - REL-DOCS-611
     workspaceFiles:
-      audit-fixture/README.md: |-
+      audit-fixture/README.md: >-
         # Finch Relay
+
 
         Release readiness task:
 
+
         The release checklist was renamed during docs cleanup.
+
         Find the current checklist under `docs/`, then inspect the referenced
+
         source and notes. Produce:
 
+
         - `release-audit.json`
+
         - `release-handoff.md`
 
+
         Do not use `docs/archive/old-release-notes.md` as current evidence.
-        Historical path that may appear in stale notes: `docs/release-checklist.md`.
+
+        Historical path that may appear in stale notes:
+        `docs/release-checklist.md`.
       audit-fixture/docs/current-readiness-checklist.md: |-
         # Release Checklist
 
@@ -78,13 +90,18 @@ execution:
 
         The archive folder contains stale notes and should not be treated as
         current release evidence.
-      audit-fixture/docs/operator-notes.md: |-
+      audit-fixture/docs/operator-notes.md: >-
         # Operator Notes
+
 
         Current docs update status:
 
+
         Finding id: REL-DOCS-611
-        Status: docs mention reconnect, cron, memory, plugin, and installer checks,
+
+        Status: docs mention reconnect, cron, memory, plugin, and installer
+        checks,
+
         but the channel ordering and UI notes still need maintainer handoff.
       audit-fixture/docs/archive/old-release-notes.md: |-
         # Old Release Notes
@@ -92,13 +109,13 @@ execution:
         Stale finding id: REL-STALE-000
         This file is from a previous release and should not appear in the new
         release audit.
-      audit-fixture/src/gateway/reconnect.ts: |-
+      audit-fixture/src/gateway/reconnect.ts: >-
         export const gatewayReconnectReleaseFinding = {
           id: "REL-GATEWAY-417",
           area: "gateway reconnect handling",
           status: "retry jitter verified, resume token fallback still needs manual spot check",
         };
-      audit-fixture/src/channels/delivery.ts: |-
+      audit-fixture/src/channels/delivery.ts: >-
         export const channelDeliveryReleaseFinding = {
           id: "REL-CHANNEL-238",
           area: "channel delivery ordering",
@@ -110,7 +127,7 @@ execution:
           area: "cron duplicate prevention",
           status: "single-run lock verified for restart wakeups",
         };
-      audit-fixture/src/memory/recall.ts: |-
+      audit-fixture/src/memory/recall.ts: >-
         export const memoryRecallReleaseFinding = {
           id: "REL-MEMORY-552",
           area: "memory recall fallback",
@@ -128,13 +145,22 @@ execution:
           area: "installer update path",
           status: "update smoke passed from previous stable tag",
         };
-    prompt: |-
+    prompt: >-
       Do a release readiness audit for the small project under `audit-fixture/`.
-      Start from `audit-fixture/README.md`, find the current checklist, inspect the referenced docs/source, then create `audit-fixture/release-audit.json` and `audit-fixture/release-handoff.md`.
 
-      The JSON should include current finding ids, source files, statuses, and a boolean `verified`.
-      The Markdown handoff should summarize what is ready and what needs follow-up.
+      Start from `audit-fixture/README.md`, find the current checklist, inspect
+      the referenced docs/source, then create `audit-fixture/release-audit.json`
+      and `audit-fixture/release-handoff.md`.
+
+
+      The JSON should include current finding ids, source files, statuses, and a
+      boolean `verified`.
+
+      The Markdown handoff should summarize what is ready and what needs
+      follow-up.
+
       Check your generated JSON before finalizing.
+
       Final reply exactly: RELEASE-AUDIT-COMPLETE
 ```
 

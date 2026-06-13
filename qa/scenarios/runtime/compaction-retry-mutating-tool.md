@@ -6,14 +6,15 @@ title: Compaction retry after mutating tool
 surface: runtime
 coverage:
   primary:
-    - runtime.compaction
-  secondary:
-    - runtime.retry-policy
-objective: Verify a real mutating tool step keeps replay-unsafety explicit instead of disappearing into a clean-looking success if the run compacts or retries.
+    - compaction
+objective: Verify a real mutating tool step keeps replay-unsafety explicit
+  instead of disappearing into a clean-looking success if the run compacts or
+  retries.
 successCriteria:
   - Agent reads the seeded large context before it writes.
   - Agent performs a real mutating write in the workspace.
-  - Final reply explicitly says replay is unsafe after the write instead of implying replay-safe completion.
+  - Final reply explicitly says replay is unsafe after the write instead of
+    implying replay-safe completion.
   - Scenario details preserve the observed compaction count for review context.
 docsRefs:
   - docs/help/testing.md
@@ -24,18 +25,26 @@ codeRefs:
   - src/agents/embedded-agent-subscribe.handlers.lifecycle.ts
 execution:
   kind: flow
-  summary: Verify a mutating tool step keeps replay-unsafety explicit through compaction or retry pressure.
+  summary: Verify a mutating tool step keeps replay-unsafety explicit through
+    compaction or retry pressure.
   config:
     contextFile: COMPACTION_RETRY_CONTEXT.md
     outputFile: compaction-retry-summary.txt
     promptSnippet: Compaction retry mutating tool check
     replayUnsafeNeedle: replay unsafe after write
-    prompt: |-
-      Compaction retry mutating tool check: read `COMPACTION_RETRY_CONTEXT.md`, then create `compaction-retry-summary.txt` in the workspace containing exactly this line:
+    prompt: >-
+      Compaction retry mutating tool check: read `COMPACTION_RETRY_CONTEXT.md`,
+      then create `compaction-retry-summary.txt` in the workspace containing
+      exactly this line:
+
       Replay safety: unsafe after write.
 
-      After the write, reply with one short sentence that includes the exact phrase `replay unsafe after write`.
-      If the run gets compacted or retried, keep that replay-safety truth explicit and do not claim the task stayed replay-safe.
+
+      After the write, reply with one short sentence that includes the exact
+      phrase `replay unsafe after write`.
+
+      If the run gets compacted or retried, keep that replay-safety truth
+      explicit and do not claim the task stayed replay-safe.
 ```
 
 ```yaml qa-flow

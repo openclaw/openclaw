@@ -7,11 +7,13 @@ surface: runtime-tools
 runtimeParityTier: optional
 coverage:
   primary:
-    - tools.skill-invocation
-objective: Track skill invocation parity once skill tools are represented as first-class runtime tools.
+    - mixed-plugins
+objective: Track skill invocation parity once skill tools are represented as
+  first-class runtime tools.
 successCriteria:
   - If skill_invoke is present, the fixture exercises happy and failure paths.
-  - If skill_invoke is absent, the fixture records the known-broken tracking marker.
+  - If skill_invoke is absent, the fixture records the known-broken tracking
+    marker.
 docsRefs:
   - docs/tools/skills.md
 codeRefs:
@@ -33,12 +35,13 @@ execution:
       codexDefaultImpact: P4
       qaImpact: P3
       action: keep optional until stable skill_invoke tool semantics exist
-      reason: Skills are currently prompt/inventory-driven in QA, not exposed as a stable skill_invoke tool.
+      reason: Skills are currently prompt/inventory-driven in QA, not exposed as a
+        stable skill_invoke tool.
     knownBroken:
       issue: "#80173"
       reason: skill_invoke is not exposed by the current default tool surface.
-    promptSnippet: "target=skill_invoke"
-    failurePromptSnippet: "failure target=skill_invoke"
+    promptSnippet: target=skill_invoke
+    failurePromptSnippet: failure target=skill_invoke
 ```
 
 ```yaml qa-flow

@@ -7,15 +7,18 @@ surface: runtime
 runtimeParityTier: live-only
 coverage:
   primary:
-    - runtime.codex-native-workspace.read
+    - tool-context
   secondary:
-    - runtime.prompt-compatibility
-    - tools.fs.read
-objective: Verify Codex-mode agents can satisfy legacy "Read tool" wording through the native Codex workspace-read capability instead of stopping because duplicate OpenClaw dynamic read is intentionally filtered.
+    - tool-call-handling
+    - payload-compatibility
+objective: Verify Codex-mode agents can satisfy legacy "Read tool" wording
+  through the native Codex workspace-read capability instead of stopping because
+  duplicate OpenClaw dynamic read is intentionally filtered.
 successCriteria:
   - Agent reads the seeded workspace file and replies with the exact marker line.
   - Agent does not claim that the Read tool is unavailable.
-  - Any failure is classified as a native prompt-compatibility/product behavior gap, not as missing OpenClaw dynamic read exposure.
+  - Any failure is classified as a native prompt-compatibility/product behavior
+    gap, not as missing OpenClaw dynamic read exposure.
 docsRefs:
   - docs/plugins/codex-harness.md
   - docs/tools/tool-search.md
@@ -24,7 +27,8 @@ codeRefs:
   - extensions/qa-lab/src/suite.ts
 execution:
   kind: flow
-  summary: Seed a workspace file, ask with legacy "Read tool" wording, and require Codex to complete the read through its native workspace capability.
+  summary: Seed a workspace file, ask with legacy "Read tool" wording, and require
+    Codex to complete the read through its native workspace capability.
   config:
     runtimeParityComparison: codex-native-workspace
     fixtureFile: LEGACY_READ_TOOL_FIXTURE.txt

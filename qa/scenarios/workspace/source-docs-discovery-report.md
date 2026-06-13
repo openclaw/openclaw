@@ -6,10 +6,11 @@ title: Source and docs discovery report
 surface: discovery
 coverage:
   primary:
-    - workspace.repo-discovery
+    - context-engine
   secondary:
-    - docs.discovery
-objective: Verify the agent can read repo docs and source, expand the QA plan, and publish a worked or did-not-work report.
+    - context-visibility
+objective: Verify the agent can read repo docs and source, expand the QA plan,
+  and publish a worked or did-not-work report.
 successCriteria:
   - Agent reads docs and source before proposing more tests.
   - Agent identifies extra candidate scenarios beyond the seed list.
@@ -24,13 +25,18 @@ codeRefs:
   - src/agents/system-prompt.ts
 execution:
   kind: flow
-  summary: Verify the agent can read repo docs and source, expand the QA plan, and publish a worked or did-not-work report.
+  summary: Verify the agent can read repo docs and source, expand the QA plan, and
+    publish a worked or did-not-work report.
   config:
     requiredFiles:
       - repo/qa/scenarios/index.md
       - repo/extensions/qa-lab/src/suite.ts
       - repo/docs/help/testing.md
-    prompt: Read the seeded docs and source plan. The full repo is mounted under ./repo/. Explicitly inspect repo/qa/scenarios/index.md, repo/extensions/qa-lab/src/suite.ts, and repo/docs/help/testing.md, then report grouped into Worked, Failed, Blocked, and Follow-up. Mention at least two extra QA scenarios beyond the seed list.
+    prompt: Read the seeded docs and source plan. The full repo is mounted under
+      ./repo/. Explicitly inspect repo/qa/scenarios/index.md,
+      repo/extensions/qa-lab/src/suite.ts, and repo/docs/help/testing.md, then
+      report grouped into Worked, Failed, Blocked, and Follow-up. Mention at
+      least two extra QA scenarios beyond the seed list.
 ```
 
 ```yaml qa-flow

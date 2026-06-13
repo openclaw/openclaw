@@ -6,10 +6,11 @@ title: Native image generation
 surface: image-generation
 coverage:
   primary:
-    - media.image-generation
+    - image-generation-tool-invocation
   secondary:
-    - tools.native-image-generation
-objective: Verify image_generate appears when configured and returns a real saved media artifact.
+    - provider-and-model-selection
+objective: Verify image_generate appears when configured and returns a real
+  saved media artifact.
 successCriteria:
   - image_generate appears in the effective tool inventory.
   - Agent triggers native image_generate.
@@ -22,11 +23,13 @@ codeRefs:
   - extensions/qa-lab/src/mock-openai-server.ts
 execution:
   kind: flow
-  summary: Verify image_generate appears when configured and returns a real saved media artifact.
+  summary: Verify image_generate appears when configured and returns a real saved
+    media artifact.
   config:
-    prompt: "Image generation check: generate a QA lighthouse image and summarize it in one short sentence."
-    promptSnippet: "Image generation check"
-    generatedNeedle: "QA lighthouse"
+    prompt: "Image generation check: generate a QA lighthouse image and summarize it
+      in one short sentence."
+    promptSnippet: Image generation check
+    generatedNeedle: QA lighthouse
 ```
 
 ```yaml qa-flow

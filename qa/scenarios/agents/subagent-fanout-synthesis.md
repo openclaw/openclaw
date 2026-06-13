@@ -6,10 +6,11 @@ title: Subagent fanout synthesis
 surface: subagents
 coverage:
   primary:
-    - agents.subagents
+    - subagent-turns
   secondary:
-    - agents.synthesis
-objective: Verify the agent can delegate multiple bounded subagent tasks and fold both results back into one parent reply.
+    - usage-and-response-reporting
+objective: Verify the agent can delegate multiple bounded subagent tasks and
+  fold both results back into one parent reply.
 successCriteria:
   - Parent flow launches at least two bounded subagent tasks.
   - Both delegated results are acknowledged in the main flow.
@@ -23,16 +24,27 @@ codeRefs:
   - extensions/qa-lab/src/suite.ts
 execution:
   kind: flow
-  summary: Verify the agent can delegate multiple bounded subagent tasks and fold both results back into one parent reply.
+  summary: Verify the agent can delegate multiple bounded subagent tasks and fold
+    both results back into one parent reply.
   config:
-    prompt: |-
-      Subagent fanout synthesis check: delegate exactly two bounded subagents sequentially.
+    prompt: >-
+      Subagent fanout synthesis check: delegate exactly two bounded subagents
+      sequentially.
+
       Subagent 1: verify that `HEARTBEAT.md` exists and report `ok` if it does.
-      Subagent 2: verify that `repo/qa/scenarios/agents/subagent-fanout-synthesis.md` exists and report `ok` if it does.
+
+      Subagent 2: verify that
+      `repo/qa/scenarios/agents/subagent-fanout-synthesis.md` exists and report
+      `ok` if it does.
+
       Wait for both subagents to finish.
+
       Then reply with exactly these two lines and nothing else:
+
       subagent-1: ok
+
       subagent-2: ok
+
       Do not use ACP.
     expectedReplyAny:
       - "subagent-1: ok"

@@ -7,12 +7,16 @@ surface: runtime-tools
 runtimeParityTier: standard
 coverage:
   primary:
-    - tools.fs.write
-objective: Verify file write behavior is tracked across OpenClaw and Codex while Codex owns write natively.
+    - tool-call-handling
+objective: Verify file write behavior is tracked across OpenClaw and Codex while
+  Codex owns write natively.
 successCriteria:
-  - OpenClaw may expose OpenClaw write while Codex app-server mode may omit duplicate OpenClaw dynamic write.
-  - Mock provider write plans are reported as fixture intent, not as actual runtime tool calls.
-  - The row stays report-only until the fixture validates native Codex write behavior directly.
+  - OpenClaw may expose OpenClaw write while Codex app-server mode may omit
+    duplicate OpenClaw dynamic write.
+  - Mock provider write plans are reported as fixture intent, not as actual
+    runtime tool calls.
+  - The row stays report-only until the fixture validates native Codex write
+    behavior directly.
 docsRefs:
   - qa/scenarios/index.md
 codeRefs:
@@ -33,12 +37,14 @@ execution:
       codexDefaultImpact: P4
       qaImpact: P1
       action: split native write behavior from OpenClaw dynamic tool parity
-      reason: Codex app-server intentionally owns write natively; the fixture must not require OpenClaw dynamic write exposure.
+      reason: Codex app-server intentionally owns write natively; the fixture must not
+        require OpenClaw dynamic write exposure.
     knownHarnessGap:
       issue: "#80319"
-      reason: QA tool-defaults currently needs native write behavior coverage instead of OpenClaw dynamic write exposure.
-    promptSnippet: "target=write"
-    failurePromptSnippet: "failure target=write"
+      reason: QA tool-defaults currently needs native write behavior coverage instead
+        of OpenClaw dynamic write exposure.
+    promptSnippet: target=write
+    failurePromptSnippet: failure target=write
 ```
 
 ```yaml qa-flow

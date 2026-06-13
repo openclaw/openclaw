@@ -7,13 +7,15 @@ surface: runtime-tools
 runtimeParityTier: standard
 coverage:
   primary:
-    - tools.web-fetch
-objective: Verify web_fetch preserves arguments and result shape across OpenClaw and Codex.
+    - web-fetch-exposure
+objective: Verify web_fetch preserves arguments and result shape across OpenClaw
+  and Codex.
 successCriteria:
   - Effective tools expose web_fetch.
   - The mock provider plans exactly one happy-path web_fetch call.
   - The mock provider plans one denied-input failure-path web_fetch call.
-  - Runtime parity coverage hard-fails call/result drift in the standard direct-loading gate.
+  - Runtime parity coverage hard-fails call/result drift in the standard
+    direct-loading gate.
 docsRefs:
   - qa/scenarios/index.md
 codeRefs:
@@ -25,7 +27,7 @@ execution:
   config:
     toolName: web_fetch
     toolCoverage:
-      family: web_fetch
+      family: web-fetch
       actualTool: web_fetch
       bucket: openclaw-dynamic-integration
       expectedLayer: openclaw-dynamic
@@ -34,9 +36,10 @@ execution:
       codexDefaultImpact: P4
       qaImpact: P1
       action: hard gate in the standard direct-loading tier
-      reason: web_fetch is an OpenClaw integration tool and must stay visible and callable under OpenClaw and Codex direct runtime parity.
-    promptSnippet: "target=web_fetch"
-    failurePromptSnippet: "failure target=web_fetch"
+      reason: web_fetch is an OpenClaw integration tool and must stay visible and
+        callable under OpenClaw and Codex direct runtime parity.
+    promptSnippet: target=web_fetch
+    failurePromptSnippet: failure target=web_fetch
 ```
 
 ```yaml qa-flow

@@ -7,16 +7,18 @@ surface: personal
 category: channel-replies
 coverage:
   primary:
-    - personal.channel-replies
+    - automatic-final-reply-delivery
   secondary:
-    - channels.dm
-    - channels.threads
-    - channels.qa-channel
+    - session-and-run-coordination
+    - inbound-conversation-routing
+    - plugin-registry-resolution
+    - native-threads
 risk: medium
 capabilities:
   - channel.reply
   - thread.reply
-objective: Verify personal-style DM and threaded replies stay on the intended qa-channel surfaces.
+objective: Verify personal-style DM and threaded replies stay on the intended
+  qa-channel surfaces.
 successCriteria:
   - Agent replies to a fake user DM in the same DM conversation.
   - Agent replies to a fake channel thread inside that thread.
@@ -29,7 +31,8 @@ codeRefs:
   - extensions/qa-lab/src/bus-state.ts
 execution:
   kind: flow
-  summary: Verify fake personal replies stay routed to the requested QA conversation and thread.
+  summary: Verify fake personal replies stay routed to the requested QA
+    conversation and thread.
   config:
     dmUserId: qa-alice
     dmUserName: QA Alice

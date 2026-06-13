@@ -6,15 +6,17 @@ title: Reasoning-only no-auto-retry after write
 surface: runtime
 coverage:
   primary:
-    - runtime.reasoning-only-recovery
+    - failure-recovery
   secondary:
-    - runtime.retry-policy
-objective: Verify a GPT-style reasoning-only turn after a mutating write stays replay-unsafe and does not auto-retry.
+    - compaction
+objective: Verify a GPT-style reasoning-only turn after a mutating write stays
+  replay-unsafe and does not auto-retry.
 successCriteria:
   - Scenario is mock-openai only so live lanes do not pick it up implicitly.
   - The agent performs the seeded mutating write.
   - Mock trace does not include an automatic reasoning-only retry instruction.
-  - Mock trace stops after the write-side reasoning-only terminal turn instead of attempting a continuation.
+  - Mock trace stops after the write-side reasoning-only terminal turn instead
+    of attempting a continuation.
 docsRefs:
   - docs/help/testing.md
 codeRefs:
@@ -26,7 +28,9 @@ execution:
   config:
     requiredProvider: mock-openai
     promptSnippet: Reasoning-only after write safety check
-    prompt: "Reasoning-only after write safety check: write reasoning-only-side-effect.txt, then answer with exactly SIDE-EFFECT-GUARD-OK."
+    prompt: "Reasoning-only after write safety check: write
+      reasoning-only-side-effect.txt, then answer with exactly
+      SIDE-EFFECT-GUARD-OK."
     retryNeedle: recorded reasoning but did not produce a user-visible answer
     outputFile: reasoning-only-side-effect.txt
 ```

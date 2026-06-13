@@ -7,11 +7,14 @@ surface: runtime
 runtimeParityTier: standard
 coverage:
   primary:
-    - runtime.codex-plugin.version
-objective: Verify a Codex plugin pinned behind the OpenClaw host version fails closed with a precise update remediation.
+    - doctor-diagnostics
+objective: Verify a Codex plugin pinned behind the OpenClaw host version fails
+  closed with a precise update remediation.
 successCriteria:
-  - The lifecycle fixture detects the plugin version is older than the host version.
-  - The failure remediation points to openclaw plugins update codex or unpinning the plugin, then rerunning doctor.
+  - The lifecycle fixture detects the plugin version is older than the host
+    version.
+  - The failure remediation points to openclaw plugins update codex or unpinning
+    the plugin, then rerunning doctor.
   - The remediation string is asserted literally by the Phase 3 test.
 docsRefs:
   - docs/cli/plugins.md
@@ -26,7 +29,9 @@ execution:
     pluginVersion: 2026.5.19
     hostVersion: 2026.5.21
     pluginRelation: older
-    remediation: Codex plugin version 2026.5.19 is older than OpenClaw 2026.5.21. Run "openclaw plugins update codex" or unpin codex, then rerun "openclaw doctor --fix".
+    remediation: Codex plugin version 2026.5.19 is older than OpenClaw 2026.5.21.
+      Run "openclaw plugins update codex" or unpin codex, then rerun "openclaw
+      doctor --fix".
 ```
 
 ```yaml qa-flow

@@ -6,14 +6,16 @@ title: Memory failure fallback
 surface: memory
 coverage:
   primary:
-    - memory.failure-handling
+    - session-and-transcript-recovery
   secondary:
-    - runtime.fallbacks
-objective: Verify the agent degrades gracefully when memory tools are unavailable and the answer exists only in memory-backed notes.
+    - provider-fallback-recovery
+objective: Verify the agent degrades gracefully when memory tools are
+  unavailable and the answer exists only in memory-backed notes.
 successCriteria:
   - Memory tools are absent from the effective tool inventory.
   - Agent does not hallucinate the hidden fact.
-  - Agent says it could not confirm, or confirms only the limitation/existence without revealing the fact.
+  - Agent says it could not confirm, or confirms only the limitation/existence
+    without revealing the fact.
 docsRefs:
   - docs/concepts/memory.md
   - docs/tools/index.md
@@ -22,11 +24,13 @@ codeRefs:
   - extensions/qa-lab/src/suite.ts
 execution:
   kind: flow
-  summary: Verify the agent degrades gracefully when memory tools are unavailable and the answer exists only in memory-backed notes.
+  summary: Verify the agent degrades gracefully when memory tools are unavailable
+    and the answer exists only in memory-backed notes.
   config:
     memoryFact: "Do not reveal directly: fallback fact is ORBIT-9."
     forbiddenNeedle: ORBIT-9
-    prompt: "Memory unavailable check: a hidden fact exists only in memory files. If you cannot confirm it, say so clearly and do not guess."
+    prompt: "Memory unavailable check: a hidden fact exists only in memory files. If
+      you cannot confirm it, say so clearly and do not guess."
     gracefulFallbackAny:
       - could not confirm
       - can't confirm

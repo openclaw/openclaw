@@ -6,15 +6,18 @@ title: Cron single run no duplicate
 surface: cron
 coverage:
   primary:
-    - scheduling.cron
+    - isolated-cron-execution
+    - manual-cron-runs
   secondary:
-    - channels.qa-channel
-    - scheduling.dedup
-objective: Verify one forced cron run produces exactly one qa-channel delivery for its marker.
+    - run-history
+    - plugin-registry-resolution
+objective: Verify one forced cron run produces exactly one qa-channel delivery
+  for its marker.
 successCriteria:
   - A single forced cron run completes successfully.
   - The qa-channel receives exactly one outbound reply containing the run marker.
-  - No second outbound reply with the same marker appears during the duplicate window.
+  - No second outbound reply with the same marker appears during the duplicate
+    window.
 docsRefs:
   - docs/help/testing.md
   - docs/channels/qa-channel.md
@@ -25,12 +28,14 @@ codeRefs:
   - extensions/qa-lab/src/suite-runtime-transport.ts
 execution:
   kind: flow
-  summary: Force one cron run and assert qa-channel does not receive a duplicate delivery for the same marker.
+  summary: Force one cron run and assert qa-channel does not receive a duplicate
+    delivery for the same marker.
   config:
     channelId: qa-room
     channelTitle: QA Room
     duplicateWindowMs: 8000
-    reminderPromptTemplate: "A QA cron dedupe check fired. Send a one-line ping back to the room containing this exact marker: {{marker}}"
+    reminderPromptTemplate: "A QA cron dedupe check fired. Send a one-line ping back
+      to the room containing this exact marker: {{marker}}"
 ```
 
 ```yaml qa-flow

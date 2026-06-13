@@ -45,7 +45,9 @@ describe("qa scenario catalog", () => {
         .filter((scenario) => !(scenario.coverage?.primary.length ?? 0))
         .map((scenario) => scenario.id),
     ).toStrictEqual([]);
-    expect(readQaScenarioById("memory-recall").coverage?.primary).toContain("memory.recall");
+    expect(readQaScenarioById("memory-recall").coverage?.primary).toContain(
+      "session-memory-and-context-engine.memory.embedding-search",
+    );
   });
 
   it("exposes bootstrap data from the markdown pack", () => {
@@ -111,16 +113,15 @@ describe("qa scenario catalog", () => {
     expect(scenario.gatewayRuntime?.forwardHostHome).toBe(true);
   });
 
-  it("loads Playwright execution scenarios from markdown", () => {
+  it("loads native test execution scenarios from markdown", () => {
     const scenario = readQaScenarioById("control-ui-chat-flow-playwright");
 
     expect(scenario.execution.kind).toBe("playwright");
-    if (scenario.execution.kind !== "playwright") {
-      throw new Error("expected Playwright scenario execution");
-    }
     expect(scenario.execution.path).toBe("ui/src/ui/e2e/chat-flow.e2e.test.ts");
     expect(scenario.execution.flow).toBeUndefined();
-    expect(scenario.coverage?.primary).toContain("ui.control");
+    expect(scenario.coverage?.primary).toContain(
+      "browser-control-ui-and-webchat.browser-ui.gateway-hosted-ui",
+    );
   });
 
   it("loads runtime parity tier metadata for first-hour and soak lanes", () => {
@@ -256,8 +257,10 @@ describe("qa scenario catalog", () => {
       | undefined;
 
     expect(scenario.sourcePath).toBe("qa/scenarios/runtime/qa-bus-tool-trace-visibility.md");
-    expect(scenario.coverage?.primary).toContain("harness.tool-trace-visibility");
-    expect(scenario.coverage?.secondary).toContain("runtime.qa-bus");
+    expect(scenario.coverage?.primary).toContain(
+      "telemetry-diagnostics-and-observability.telemetry-export.model-and-runtime-telemetry",
+    );
+    expect(scenario.coverage?.secondary ?? []).toStrictEqual([]);
     expect(config?.expectedToolName).toBe("exec");
     expect(config?.expectedRedaction).toBe("[redacted]");
     expect(config?.searchQuery).toBe("exec");
@@ -278,8 +281,12 @@ describe("qa scenario catalog", () => {
       | undefined;
 
     expect(scenario.sourcePath).toBe("qa/scenarios/runtime/update-run-package-self-upgrade.md");
-    expect(scenario.coverage?.primary).toContain("runtime.update-run");
-    expect(scenario.coverage?.secondary).toContain("runtime.package-update");
+    expect(scenario.coverage?.primary).toContain(
+      "browser-control-ui-and-webchat.operator-console.update-run-status",
+    );
+    expect(scenario.coverage?.secondary).toContain(
+      "plugin-sdk-and-bundled-plugin-architecture.installing-and-running-plugins.install-update-and-uninstall",
+    );
     expect(config?.requiredProviderMode).toBe("live-frontier");
     expect(config?.allowEnv).toBe("OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF");
     expect(config?.sourceVersion).toBe("2026.4.26");
@@ -568,7 +575,9 @@ describe("qa scenario catalog", () => {
     const flow = JSON.stringify(scenario.execution.flow);
 
     expect(scenario.sourcePath).toBe("qa/scenarios/memory/dreaming-shadow-trial-report.md");
-    expect(scenario.coverage?.primary).toContain("memory.dreaming");
+    expect(scenario.coverage?.primary).toContain(
+      "session-memory-and-context-engine.memory.memory-files",
+    );
     expect(config?.prompt).toContain("Dreaming shadow trial report check");
     expect(config?.reportName).toBe("dreaming-shadow-trial-report.md");
     expect(config?.seededMemory).toBe("# Memory\n\n");

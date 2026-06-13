@@ -6,15 +6,17 @@ title: Plugin lifecycle hot reload
 surface: plugins
 coverage:
   primary:
-    - plugins.lifecycle
+    - runtime-activation
   secondary:
-    - plugins.hot-reload
-    - config.hot-apply
-objective: Verify a runtime-owned capability can be disabled and re-enabled through hot config reload without stale state.
+    - config-reload
+    - enable-and-disable
+objective: Verify a runtime-owned capability can be disabled and re-enabled
+  through hot config reload without stale state.
 successCriteria:
   - Workspace skill capability is eligible before reload.
   - Hot config disables the capability and status reflects the disabled state.
-  - A second hot reload re-enables the capability and the next agent turn can use it.
+  - A second hot reload re-enables the capability and the next agent turn can
+    use it.
 docsRefs:
   - docs/tools/skills.md
   - docs/gateway/configuration.md
@@ -25,17 +27,23 @@ codeRefs:
   - extensions/qa-lab/src/suite-runtime-agent-tools.ts
 execution:
   kind: flow
-  summary: Disable and re-enable a workspace skill through config.patch and verify the capability is not stale.
+  summary: Disable and re-enable a workspace skill through config.patch and verify
+    the capability is not stale.
   config:
     skillName: qa-lifecycle-hot-reload-skill
     prompt: "Lifecycle hot reload marker. Reply exactly: LIFECYCLE-HOT-RELOAD-OK"
     expectedReply: LIFECYCLE-HOT-RELOAD-OK
-    skillBody: |-
+    skillBody: >-
       ---
+
       name: qa-lifecycle-hot-reload-skill
+
       description: Lifecycle hot reload QA marker
+
       ---
-      When the user asks for the lifecycle marker exactly, reply with exactly: LIFECYCLE-HOT-RELOAD-OK
+
+      When the user asks for the lifecycle marker exactly, reply with exactly:
+      LIFECYCLE-HOT-RELOAD-OK
 ```
 
 ```yaml qa-flow

@@ -6,10 +6,12 @@ title: Approval turn tool followthrough
 surface: harness
 coverage:
   primary:
-    - runtime.approvals
+    - approval-flow
+    - approval-policy
   secondary:
-    - tools.followthrough
-objective: Verify a short approval like "ok do it" triggers immediate tool use instead of fake-progress narration.
+    - tool-call-handling
+objective: Verify a short approval like "ok do it" triggers immediate tool use
+  instead of fake-progress narration.
 successCriteria:
   - Agent can keep the pre-action turn brief.
   - The short approval leads to a real tool call on the next turn.
@@ -23,10 +25,13 @@ codeRefs:
   - src/agents/embedded-agent-runner/run/incomplete-turn.ts
 execution:
   kind: flow
-  summary: Verify a short approval like "ok do it" triggers immediate tool use instead of fake-progress narration.
+  summary: Verify a short approval like "ok do it" triggers immediate tool use
+    instead of fake-progress narration.
   config:
-    preActionPrompt: Before acting, tell me the single file you would start with in six words or fewer. Do not use tools yet.
-    approvalPrompt: ok do it. read `QA_KICKOFF_TASK.md` now and reply with the QA mission in one short sentence.
+    preActionPrompt: Before acting, tell me the single file you would start with in
+      six words or fewer. Do not use tools yet.
+    approvalPrompt: ok do it. read `QA_KICKOFF_TASK.md` now and reply with the QA
+      mission in one short sentence.
     expectedReplyAny:
       - qa
       - mission

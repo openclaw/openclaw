@@ -6,18 +6,21 @@ title: Group visible reply via message tool
 surface: channel
 coverage:
   primary:
-    - channels.group-visible-replies
+    - mention-required
+    - automatic-final-reply-delivery
   secondary:
-    - channels.qa-channel
-    - tools.message
-objective: Verify a group-sourced QA channel turn replies visibly through message(action=send) in the same room.
+    - plugin-registry-resolution
+    - provider-outbound-adapter-bridge
+objective: Verify a group-sourced QA channel turn replies visibly through
+  message(action=send) in the same room.
 gatewayConfigPatch:
   messages:
     groupChat:
       visibleReplies: message_tool
 successCriteria:
   - Agent receives a synthetic shared-room turn.
-  - Mock provider calls the shared message tool instead of relying on final-answer delivery.
+  - Mock provider calls the shared message tool instead of relying on
+    final-answer delivery.
   - The visible reply lands once in the same group transcript.
 docsRefs:
   - docs/channels/groups.md
@@ -28,11 +31,13 @@ codeRefs:
   - src/auto-reply/reply/dispatch-from-config.ts
 execution:
   kind: flow
-  summary: Send a mentioned group message and verify visible output uses the message tool in the source group.
+  summary: Send a mentioned group message and verify visible output uses the
+    message tool in the source group.
   config:
     conversationId: qa-visible-tool-room
     promptSnippet: qa group visible reply tool check
-    prompt: "@openclaw qa group visible reply tool check. Use the visible room reply path. exact marker: `QA-GROUP-TOOL-OK`"
+    prompt: "@openclaw qa group visible reply tool check. Use the visible room reply
+      path. exact marker: `QA-GROUP-TOOL-OK`"
     expectedMarker: QA-GROUP-TOOL-OK
 ```
 

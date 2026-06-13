@@ -6,17 +6,20 @@ title: Docker Prometheus smoke
 surface: telemetry
 coverage:
   primary:
-    - telemetry.prometheus
+    - prometheus-text-exposition
   secondary:
-    - harness.qa-lab
-    - docker.e2e
-objective: Verify a QA-lab gateway run emits protected, bounded Prometheus diagnostics metrics through the diagnostics-prometheus plugin.
+    - docker-e2e-plan-scheduler-scripts
+    - model-and-runtime-telemetry
+objective: Verify a QA-lab gateway run emits protected, bounded Prometheus
+  diagnostics metrics through the diagnostics-prometheus plugin.
 successCriteria:
   - The diagnostics-prometheus plugin exposes the protected scrape route.
   - An unauthenticated scrape is rejected.
   - A minimal QA-channel agent turn completes.
-  - The authenticated scrape includes release-critical diagnostics metric families.
-  - Prometheus output omits prompt content, session keys, auth tokens, raw ids, and file paths.
+  - The authenticated scrape includes release-critical diagnostics metric
+    families.
+  - Prometheus output omits prompt content, session keys, auth tokens, raw ids,
+    and file paths.
 plugins:
   - diagnostics-prometheus
 gatewayConfigPatch:

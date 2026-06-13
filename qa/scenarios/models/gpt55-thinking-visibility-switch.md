@@ -6,16 +6,21 @@ title: GPT-5.5 thinking visibility switch
 surface: models
 coverage:
   primary:
-    - models.thinking
+    - thinking-and-context-settings
   secondary:
-    - runtime.reasoning-visibility
-objective: Verify GPT-5.5 can switch from disabled thinking to medium thinking while reasoning display stays enabled.
+    - progress-visibility
+objective: Verify GPT-5.5 can switch from disabled thinking to medium thinking
+  while reasoning display stays enabled.
 successCriteria:
   - Live runs target openai/gpt-5.5, not a mini or pro variant.
   - The session enables reasoning display before the comparison turns.
-  - The disabled-thinking turn returns its visible marker without sending a reasoning payload to OpenAI-compatible providers.
-  - The medium-thinking turn sends a medium reasoning request and returns its visible marker.
-  - Transports with a visible reasoning lane expose a separate Reasoning-prefixed message; qa-channel validates provider behavior because generic delivery suppresses reasoning payloads by design.
+  - The disabled-thinking turn returns its visible marker without sending a
+    reasoning payload to OpenAI-compatible providers.
+  - The medium-thinking turn sends a medium reasoning request and returns its
+    visible marker.
+  - Transports with a visible reasoning lane expose a separate
+    Reasoning-prefixed message; qa-channel validates provider behavior because
+    generic delivery suppresses reasoning payloads by design.
 docsRefs:
   - docs/tools/thinking.md
   - docs/help/testing.md
@@ -28,7 +33,8 @@ codeRefs:
   - extensions/qa-lab/src/providers/mock-openai/server.ts
 execution:
   kind: flow
-  summary: Toggle reasoning display and GPT-5.5 thinking between off/none and medium, then verify visible reasoning only on the medium turn.
+  summary: Toggle reasoning display and GPT-5.5 thinking between off/none and
+    medium, then verify visible reasoning only on the medium turn.
   config:
     requiredProvider: openai
     requiredModel: gpt-5.5
@@ -37,7 +43,8 @@ execution:
     reasoningDirective: /reasoning on
     conversationId: qa-thinking-visibility
     offPrompt: "QA thinking visibility check off: answer exactly THINKING-OFF-OK."
-    maxPrompt: "QA thinking visibility check max: verify 17+24=41 internally, then answer exactly THINKING-MAX-OK."
+    maxPrompt: "QA thinking visibility check max: verify 17+24=41 internally, then
+      answer exactly THINKING-MAX-OK."
     offMarker: THINKING-OFF-OK
     maxMarker: THINKING-MAX-OK
 ```

@@ -7,14 +7,16 @@ surface: runtime
 runtimeParityTier: soak
 coverage:
   primary:
-    - runtime.soak-100
+    - abort-and-terminal-outcomes
   secondary:
-    - runtime.long-context
-objective: Provide an optional long-run soak that can be scheduled or run in Testbox without entering the maintainer default gate.
+    - token-pressure
+objective: Provide an optional long-run soak that can be scheduled or run in
+  Testbox without entering the maintainer default gate.
 successCriteria:
   - The same QA session accepts 100 sequential user turns.
   - Every turn receives the requested marker reply without losing session state.
-  - Runtime parity captures token estimate or live token usage for the full soak cell.
+  - Runtime parity captures token estimate or live token usage for the full soak
+    cell.
 docsRefs:
   - docs/concepts/qa-e2e-automation.md
   - qa/scenarios/index.md

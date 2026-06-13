@@ -6,14 +6,16 @@ title: Empty-response recovery after replay-safe read
 surface: runtime
 coverage:
   primary:
-    - runtime.empty-response-recovery
+    - failure-recovery
   secondary:
-    - runtime.retry-policy
-objective: Verify an empty visible GPT turn after a replay-safe read auto-continues into a visible answer.
+    - compaction
+objective: Verify an empty visible GPT turn after a replay-safe read
+  auto-continues into a visible answer.
 successCriteria:
   - Scenario is mock-openai only so live lanes do not pick it up implicitly.
   - The agent performs a replay-safe read before the empty response.
-  - The runtime injects the visible-answer continuation instruction after the empty turn.
+  - The runtime injects the visible-answer continuation instruction after the
+    empty turn.
   - The final visible reply contains the exact recovery marker.
 docsRefs:
   - docs/help/testing.md
@@ -26,7 +28,8 @@ execution:
   config:
     requiredProvider: mock-openai
     promptSnippet: Empty response continuation QA check
-    prompt: "Empty response continuation QA check: read QA_KICKOFF_TASK.md, then answer with exactly EMPTY-RECOVERED-OK."
+    prompt: "Empty response continuation QA check: read QA_KICKOFF_TASK.md, then
+      answer with exactly EMPTY-RECOVERED-OK."
     expectedReply: EMPTY-RECOVERED-OK
     retryNeedle: The previous attempt did not produce a user-visible answer.
 ```

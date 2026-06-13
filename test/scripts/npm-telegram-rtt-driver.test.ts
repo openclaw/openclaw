@@ -16,7 +16,7 @@ type EvidenceSummaryForTest = {
   entries: Array<{
     test: { id: string };
     mapping?: {
-      coverage?: Array<{ id?: string }>;
+      coverage?: Array<{ coverageId?: string }>;
     };
     result: {
       status?: string;
@@ -203,7 +203,7 @@ function readRequestJson(req: IncomingMessage): Promise<Record<string, unknown>>
       try {
         resolve(JSON.parse(raw) as Record<string, unknown>);
       } catch (error) {
-        reject(error);
+        reject(error instanceof Error ? error : new Error(String(error)));
       }
     });
   });
@@ -285,7 +285,7 @@ async function startTelegramApiServer(options: {
 
       if (method === "sendMessage") {
         const messageId = nextMessageId++;
-        const text = String(body.text ?? "");
+        const text = typeof body.text === "string" ? body.text : "";
         if (token === "driver-token" && text.startsWith("/status@")) {
           pushSutUpdate({
             replyToMessageId: options.canaryReplyToRequest ? messageId : undefined,
@@ -318,7 +318,7 @@ async function startTelegramApiServer(options: {
       }
 
       writeTelegramJson(res, { ok: false, description: `unexpected method ${method}` });
-    })().catch((error) => {
+    })().catch((error: unknown) => {
       res.writeHead(500, { "content-type": "text/plain" }).end(String(error));
     });
   });
@@ -533,7 +533,7 @@ describe("npm Telegram RTT driver", () => {
             test: expect.objectContaining({ id: "telegram-canary" }),
             mapping: expect.objectContaining({
               coverage: expect.arrayContaining([
-                expect.objectContaining({ id: "channels.telegram.canary" }),
+                expect.objectContaining({ coverageId: "channels.telegram.canary" }),
               ]),
             }),
             result: expect.objectContaining({ status: "pass" }),
@@ -542,7 +542,7 @@ describe("npm Telegram RTT driver", () => {
             test: expect.objectContaining({ id: "telegram-mentioned-message-reply" }),
             mapping: expect.objectContaining({
               coverage: expect.arrayContaining([
-                expect.objectContaining({ id: "channels.telegram.mention-gating" }),
+                expect.objectContaining({ coverageId: "channels.telegram.mention-gating" }),
               ]),
             }),
             result: expect.objectContaining({

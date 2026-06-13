@@ -7,13 +7,15 @@ surface: runtime-tools
 runtimeParityTier: standard
 coverage:
   primary:
-    - tools.web-search
-objective: Verify web_search preserves arguments and result shape across OpenClaw and Codex.
+    - web-search-exposure
+objective: Verify web_search preserves arguments and result shape across
+  OpenClaw and Codex.
 successCriteria:
   - Effective tools expose web_search.
   - The mock provider plans exactly one happy-path web_search call.
   - The mock provider plans one denied-input failure-path web_search call.
-  - Runtime parity coverage hard-fails call/result drift in the standard direct-loading gate.
+  - Runtime parity coverage hard-fails call/result drift in the standard
+    direct-loading gate.
 docsRefs:
   - qa/scenarios/index.md
 codeRefs:
@@ -25,7 +27,7 @@ execution:
   config:
     toolName: web_search
     toolCoverage:
-      family: web_search
+      family: web-search
       actualTool: web_search
       bucket: openclaw-dynamic-integration
       expectedLayer: openclaw-dynamic
@@ -34,9 +36,10 @@ execution:
       codexDefaultImpact: P4
       qaImpact: P1
       action: hard gate in the standard direct-loading tier
-      reason: web_search is an OpenClaw integration tool and must stay visible and callable under OpenClaw and Codex direct runtime parity.
-    promptSnippet: "target=web_search"
-    failurePromptSnippet: "failure target=web_search"
+      reason: web_search is an OpenClaw integration tool and must stay visible and
+        callable under OpenClaw and Codex direct runtime parity.
+    promptSnippet: target=web_search
+    failurePromptSnippet: failure target=web_search
 ```
 
 ```yaml qa-flow

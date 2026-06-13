@@ -61,13 +61,13 @@ describe("evidence summary", () => {
         profile: "smoke-ci",
         coverage: [
           {
-            id: "channels.dm",
+            coverageId: "channels.dm",
             role: "primary",
             surfaceIds: ["dm"],
             categoryIds: ["channels.dm"],
           },
           {
-            id: "channels.qa-channel",
+            coverageId: "channels.qa-channel",
             role: "secondary",
             surfaceIds: ["dm"],
             categoryIds: [],
@@ -144,7 +144,7 @@ describe("evidence summary", () => {
       checks: [
         {
           id: "telegram-canary",
-          standardId: "canary",
+          coverageIds: ["channels.telegram.canary"],
           title: "Telegram canary",
           status: "fail",
           details: "timed out waiting for SUT reply",
@@ -166,14 +166,14 @@ describe("evidence summary", () => {
           profile: "release",
           coverage: [
             {
-              id: "channels.telegram.live",
+              coverageId: "channels.telegram.live",
               role: "live-transport",
               surfaceIds: ["channels.telegram"],
               categoryIds: ["channels.telegram.live"],
             },
             {
-              id: "channels.telegram.canary",
-              role: "live-transport-standard",
+              coverageId: "channels.telegram.canary",
+              role: "live-transport-coverage",
               surfaceIds: ["channels.telegram"],
               categoryIds: ["channels.telegram.live"],
             },
@@ -272,13 +272,13 @@ describe("evidence summary", () => {
           profile: "smoke-ci",
           coverage: [
             {
-              id: "runtime.agent-runner",
+              coverageId: "runtime.agent-runner",
               role: "primary",
               surfaceIds: ["agent-runtime-and-provider-execution"],
               categoryIds: ["agent-runtime-and-provider-execution.agent-turn-execution"],
             },
             {
-              id: "runtime.delivery",
+              coverageId: "runtime.delivery",
               role: "primary",
               surfaceIds: ["agent-runtime-and-provider-execution"],
               categoryIds: ["agent-runtime-and-provider-execution.agent-turn-execution"],
@@ -362,7 +362,7 @@ describe("evidence summary", () => {
       mapping: {
         coverage: [
           {
-            id: "control-ui.browser",
+            coverageId: "control-ui.browser",
             role: "primary",
             surfaceIds: ["browser-control-ui-and-webchat"],
             categoryIds: ["browser-control-ui-and-webchat.browser-ui"],
@@ -485,7 +485,7 @@ describe("evidence summary", () => {
           id: "telegram-canary",
           title: "Telegram canary",
           details: "Canary passed.",
-          standardId: "canary",
+          coverageIds: ["channels.telegram.canary"],
           status: "pass",
         },
       ],
@@ -515,7 +515,7 @@ describe("evidence summary", () => {
           id: "telegram-canary",
           title: "Telegram canary",
           details: "Canary passed.",
-          standardId: "canary",
+          coverageIds: ["channels.telegram.canary"],
           status: "pass",
         },
       ],
@@ -543,7 +543,7 @@ describe("evidence summary", () => {
           id: "telegram-canary",
           title: "Telegram canary",
           details: "Canary passed.",
-          standardId: "canary",
+          coverageIds: ["channels.telegram.canary"],
           status: "pass",
         },
       ],

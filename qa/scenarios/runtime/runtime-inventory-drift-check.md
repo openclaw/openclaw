@@ -6,8 +6,9 @@ title: Runtime inventory drift check
 surface: inventory
 coverage:
   primary:
-    - runtime.inventory
-objective: Verify tools.effective and skills.status stay aligned with runtime behavior after config changes.
+    - tool-availability-rules
+objective: Verify tools.effective and skills.status stay aligned with runtime
+  behavior after config changes.
 successCriteria:
   - Enabled tool appears before the config change.
   - After config change, disabled tool disappears from tools.effective.
@@ -21,16 +22,22 @@ codeRefs:
   - src/gateway/server-methods/skills.ts
 execution:
   kind: flow
-  summary: Verify tools.effective and skills.status stay aligned with runtime behavior after config changes.
+  summary: Verify tools.effective and skills.status stay aligned with runtime
+    behavior after config changes.
   config:
     skillName: qa-drift-skill
     successMarker: DRIFT-SKILL-OK
-    skillBody: |-
+    skillBody: >-
       ---
+
       name: qa-drift-skill
+
       description: Drift skill marker
+
       ---
-      When the user asks for the drift skill marker exactly, reply with exactly: DRIFT-SKILL-OK
+
+      When the user asks for the drift skill marker exactly, reply with exactly:
+      DRIFT-SKILL-OK
     deniedTool: image_generate
 ```
 

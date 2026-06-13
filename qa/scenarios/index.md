@@ -5,8 +5,8 @@ Single source of truth for repo-backed QA suite bootstrap data.
 
 - `index.md` defines pack-level bootstrap data
 - each nested `*.md` scenario defines one evidence scenario via `qa-scenario`
-- flow scenarios add `qa-flow`; Vitest and Playwright scenarios use `execution.path`
-- scenario markdown may also define coverage IDs, category metadata, required plugins,
+- flow scenarios add `qa-flow`; native test scenarios use `execution.path`
+- scenario markdown may also define taxonomy coverage IDs, category metadata, required plugins,
   lane filters, runtime parity tiers, and gateway config patching
 
 - kickoff mission
@@ -15,16 +15,16 @@ Single source of truth for repo-backed QA suite bootstrap data.
 
 Coverage tracking:
 
-- add `coverage.primary` IDs to each scenario's `qa-scenario` block
+- add fully qualified taxonomy coverage IDs to `coverage.primary` in each scenario's
+  `qa-scenario` block
 - add `coverage.secondary` only when a scenario intentionally protects another behavior
 - keep IDs behavior-shaped, broad enough to reuse, lowercase, and dotted or dashed
-- prefer reusing an existing feature ID over minting a scenario-shaped ID
+- use coverage IDs from `taxonomy.yaml` in `<surface>.<category>.<feature>` form
+- prefer reusing an existing coverage ID over minting a scenario-shaped ID
 - avoid copying the scenario title into coverage IDs
 - use `pnpm openclaw qa coverage` to render the current inventory
 - use `execution.kind: vitest` or `execution.kind: playwright` plus `execution.path`
-  for test files that provide evidence without a `qa-flow` block
-- run Vitest and Playwright scenarios with
-  `pnpm openclaw qa suite --scenario <scenario-id>`
+  for native test files that provide evidence without a `qa-flow` block
 - use `runtimeParityTier` for runtime-pair gate membership: `standard`,
   `optional`, `live-only`, or `soak`
 - treat the old `coverage: ["id"]` / `coverage: - id` list shape as invalid

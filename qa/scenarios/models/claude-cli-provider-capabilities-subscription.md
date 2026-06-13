@@ -6,13 +6,17 @@ title: Claude CLI provider capabilities subscription
 surface: model-provider
 coverage:
   primary:
-    - models.provider-capabilities
+    - model-reference-selection
   secondary:
-    - models.claude-cli
-objective: Verify the Claude CLI model-provider lane can use native Claude subscription auth to talk, read an attached image, use bundled MCP tools, and apply workspace skills.
+    - claude-cli-compatibility
+objective: Verify the Claude CLI model-provider lane can use native Claude
+  subscription auth to talk, read an attached image, use bundled MCP tools, and
+  apply workspace skills.
 successCriteria:
-  - A live-frontier run fails fast unless the selected primary provider is claude-cli.
-  - The Claude CLI backend does not preserve ANTHROPIC_API_KEY for this run, forcing native Claude subscription auth.
+  - A live-frontier run fails fast unless the selected primary provider is
+    claude-cli.
+  - The Claude CLI backend does not preserve ANTHROPIC_API_KEY for this run,
+    forcing native Claude subscription auth.
   - The agent replies through the Claude CLI provider in a direct chat turn.
   - The agent describes an attached image through the Claude CLI image path.
   - The agent can reach memory via the bundled MCP/tool bridge.
@@ -29,30 +33,48 @@ codeRefs:
   - extensions/qa-lab/src/suite.ts
 execution:
   kind: flow
-  summary: Run with `pnpm openclaw qa suite --provider-mode live-frontier --cli-auth-mode subscription --model claude-cli/claude-sonnet-4-6 --alt-model claude-cli/claude-sonnet-4-6 --scenario claude-cli-provider-capabilities-subscription`.
+  summary: Run with `pnpm openclaw qa suite --provider-mode live-frontier
+    --cli-auth-mode subscription --model claude-cli/claude-sonnet-4-6
+    --alt-model claude-cli/claude-sonnet-4-6 --scenario
+    claude-cli-provider-capabilities-subscription`.
   config:
     authMode: subscription
     requiredProvider: claude-cli
     chatPrompt: "Claude CLI provider marker check. Reply exactly: CLAUDE-CLI-CHAT-OK"
     chatExpected: CLAUDE-CLI-CHAT-OK
-    imagePrompt: "Image understanding check: describe the top and bottom colors in the attached image in one short sentence."
+    imagePrompt: "Image understanding check: describe the top and bottom colors in
+      the attached image in one short sentence."
     imageColorGroups:
-      - [red, scarlet, crimson]
-      - [blue, azure, teal, cyan, aqua]
+      - - red
+        - scarlet
+        - crimson
+      - - blue
+        - azure
+        - teal
+        - cyan
+        - aqua
     memoryFact: "Hidden Claude CLI MCP fact: the provider bridge codename is ORBIT-9."
-    memoryQuery: "provider bridge codename ORBIT-9"
+    memoryQuery: provider bridge codename ORBIT-9
     memoryExpected: ORBIT-9
-    memoryPrompt: "Memory tools check: use the available memory search MCP/tool bridge to find the hidden provider bridge codename stored only in memory. Reply with the codename."
-    memoryPromptSnippet: "Memory tools check"
+    memoryPrompt: "Memory tools check: use the available memory search MCP/tool
+      bridge to find the hidden provider bridge codename stored only in memory.
+      Reply with the codename."
+    memoryPromptSnippet: Memory tools check
     skillName: qa-claude-cli-skill
     skillExpected: VISIBLE-SKILL-OK
-    skillBody: |-
+    skillBody: >-
       ---
+
       name: qa-claude-cli-skill
+
       description: Claude CLI QA skill marker
+
       ---
-      When the user asks for the Claude CLI skill marker exactly, or explicitly asks you to use qa-claude-cli-skill, reply with exactly: VISIBLE-SKILL-OK
-    skillPrompt: "Use qa-claude-cli-skill now. Reply exactly with the visible skill marker and nothing else."
+
+      When the user asks for the Claude CLI skill marker exactly, or explicitly
+      asks you to use qa-claude-cli-skill, reply with exactly: VISIBLE-SKILL-OK
+    skillPrompt: Use qa-claude-cli-skill now. Reply exactly with the visible skill
+      marker and nothing else.
 ```
 
 ```yaml qa-flow

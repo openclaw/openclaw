@@ -6,14 +6,16 @@ title: Config restart capability flip
 surface: config
 coverage:
   primary:
-    - config.restart-apply
+    - restart-and-stop
   secondary:
-    - plugins.capabilities
-objective: Verify a restart-triggering config change flips capability inventory and the same session successfully uses the newly restored tool after wake-up.
+    - mixed-plugins
+objective: Verify a restart-triggering config change flips capability inventory
+  and the same session successfully uses the newly restored tool after wake-up.
 successCriteria:
   - Capability is absent before the restart-triggering patch.
   - Restart sentinel wakes the same session back up after config patch.
-  - The restored capability appears in tools.effective and works in the follow-up turn.
+  - The restored capability appears in tools.effective and works in the
+    follow-up turn.
 docsRefs:
   - docs/gateway/configuration.md
   - docs/gateway/protocol.md
@@ -25,10 +27,15 @@ codeRefs:
   - extensions/qa-lab/src/suite.ts
 execution:
   kind: flow
-  summary: Verify a restart-triggering config change flips capability inventory and the same session successfully uses the newly restored tool after wake-up.
+  summary: Verify a restart-triggering config change flips capability inventory
+    and the same session successfully uses the newly restored tool after
+    wake-up.
   config:
-    imagePrompt: "Capability flip image check: generate a QA lighthouse image in this turn right now. Do not acknowledge first, do not promise future work, and do not stop before using image_generate. Final reply must include the MEDIA path."
-    imagePromptSnippet: "Capability flip image check"
+    imagePrompt: "Capability flip image check: generate a QA lighthouse image in
+      this turn right now. Do not acknowledge first, do not promise future work,
+      and do not stop before using image_generate. Final reply must include the
+      MEDIA path."
+    imagePromptSnippet: Capability flip image check
     deniedTool: image_generate
     imageTurnTimeoutMs: 120000
     mediaPathTimeoutMs: 30000

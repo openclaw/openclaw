@@ -7,7 +7,7 @@ surface: runtime-tools
 runtimeParityTier: optional
 coverage:
   primary:
-    - tools.tts
+    - generated-audio-persistence-and-delivery
 objective: Verify tts preserves arguments and result shape when the tool is present.
 successCriteria:
   - If tts is present, the fixture exercises happy and failure paths.
@@ -37,8 +37,8 @@ execution:
     knownBroken:
       issue: "#80173"
       reason: tts is configuration-dependent and absent from the default mock QA run.
-    promptSnippet: "target=tts"
-    failurePromptSnippet: "failure target=tts"
+    promptSnippet: target=tts
+    failurePromptSnippet: failure target=tts
 ```
 
 ```yaml qa-flow

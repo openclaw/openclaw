@@ -6,10 +6,11 @@ title: Channel baseline conversation
 surface: channel
 coverage:
   primary:
-    - channels.group-messages
+    - group-channel-session-isolation
   secondary:
-    - channels.qa-channel
-objective: Verify the QA agent can respond correctly in a shared channel and respect mention-driven group semantics.
+    - plugin-registry-resolution
+objective: Verify the QA agent can respond correctly in a shared channel and
+  respect mention-driven group semantics.
 successCriteria:
   - Agent replies in the shared channel transcript.
   - Agent visible reply contains the scenario marker.
@@ -23,10 +24,12 @@ codeRefs:
   - extensions/qa-lab/src/bus-state.ts
 execution:
   kind: flow
-  summary: Verify the QA agent can respond correctly in a shared channel and respect mention-driven group semantics.
+  summary: Verify the QA agent can respond correctly in a shared channel and
+    respect mention-driven group semantics.
   config:
     expectedMarker: QA-CHANNEL-BASELINE-OK
-    mentionPrompt: "@openclaw qa channel baseline marker check. Reply exactly: QA-CHANNEL-BASELINE-OK"
+    mentionPrompt: "@openclaw qa channel baseline marker check. Reply exactly:
+      QA-CHANNEL-BASELINE-OK"
 ```
 
 ```yaml qa-flow

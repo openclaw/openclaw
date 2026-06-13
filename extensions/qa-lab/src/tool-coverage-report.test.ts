@@ -6,6 +6,9 @@ import {
   renderQaToolCoverageMarkdownReport,
 } from "./tool-coverage-report.js";
 
+const TEST_TOOL_FEATURE_ID =
+  "agent-runtime-and-provider-execution.tool-calls-and-response-handling.tool-call-handling";
+
 function makeScenario(
   id: string,
   tool: string,
@@ -16,14 +19,17 @@ function makeScenario(
     title: id,
     surface: "runtime-tools",
     coverage: {
-      primary: [`tools.${tool}`],
+      primary: [TEST_TOOL_FEATURE_ID],
     },
     objective: "exercise tool",
     successCriteria: ["tool is exercised"],
     sourcePath: `qa/scenarios/runtime/tools/${tool}.md`,
     execution: {
       kind: "flow",
-      config,
+      config: {
+        ...config,
+        toolCoverage: { ...readToolCoverageConfig(config), family: tool },
+      },
       flow: {
         steps: [
           {
@@ -36,7 +42,24 @@ function makeScenario(
   };
 }
 
+function readToolCoverageConfig(config: Record<string, unknown>): Record<string, unknown> {
+  const toolCoverage = config.toolCoverage;
+  return typeof toolCoverage === "object" && toolCoverage !== null && !Array.isArray(toolCoverage)
+    ? toolCoverage
+    : {};
+}
+
 describe("qa tool coverage report", () => {
+  it("derives tool fixture rows from tool coverage metadata", () => {
+    const report = buildQaToolCoverageReport({
+      scenarios: [makeScenario("runtime-tool-apply-patch", "apply-patch")],
+      generatedAt: "2026-05-10T00:00:00.000Z",
+    });
+
+    expect(report.totalTools).toBe(1);
+    expect(report.rows[0]?.tool).toBe("apply-patch");
+  });
+
   it("renders catalog-only tool fixture coverage", () => {
     const report = buildQaToolCoverageReport({
       scenarios: [

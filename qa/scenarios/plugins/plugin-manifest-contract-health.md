@@ -7,10 +7,11 @@ surface: runtime
 runtimeParityTier: live-only
 coverage:
   primary:
-    - runtime.gateway-log-sentinel.plugin-contracts
+    - safe-load-failures
   secondary:
-    - plugins.contracts.tools
-objective: Fail live proof when gateway startup logs show plugin manifest contract registration errors such as missing `contracts.tools`.
+    - plugin-runtime-harness
+objective: Fail live proof when gateway startup logs show plugin manifest
+  contract registration errors such as missing `contracts.tools`.
 successCriteria:
   - Gateway reaches healthy state.
   - Startup logs contain no plugin contract registration sentinel.
@@ -22,7 +23,8 @@ codeRefs:
   - src/plugins/manifest.ts
 execution:
   kind: flow
-  summary: Scan startup logs from cursor 0 for plugin manifest contract registration failures.
+  summary: Scan startup logs from cursor 0 for plugin manifest contract
+    registration failures.
   config:
     startupCursor: 0
 ```

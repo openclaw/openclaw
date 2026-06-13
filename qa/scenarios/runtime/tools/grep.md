@@ -7,12 +7,16 @@ surface: runtime-tools
 runtimeParityTier: standard
 coverage:
   primary:
-    - tools.grep
-objective: Verify grep-style search behavior is tracked through command execution while Codex owns exec/process natively.
+    - tool-call-handling
+objective: Verify grep-style search behavior is tracked through command
+  execution while Codex owns exec/process natively.
 successCriteria:
-  - OpenClaw may expose OpenClaw exec while Codex app-server mode may omit duplicate OpenClaw dynamic exec/process.
-  - Mock provider exec plans are reported as fixture intent, not as actual runtime tool calls.
-  - The row stays report-only until the fixture validates native Codex search/command behavior directly.
+  - OpenClaw may expose OpenClaw exec while Codex app-server mode may omit
+    duplicate OpenClaw dynamic exec/process.
+  - Mock provider exec plans are reported as fixture intent, not as actual
+    runtime tool calls.
+  - The row stays report-only until the fixture validates native Codex
+    search/command behavior directly.
 docsRefs:
   - qa/scenarios/index.md
 codeRefs:
@@ -33,12 +37,14 @@ execution:
       codexDefaultImpact: P4
       qaImpact: P1
       action: split native search/command behavior from OpenClaw dynamic tool parity
-      reason: Codex app-server intentionally owns command execution natively; current OpenClaw coding surface routes grep-style searches through exec.
+      reason: Codex app-server intentionally owns command execution natively; current
+        OpenClaw coding surface routes grep-style searches through exec.
     knownHarnessGap:
       issue: "#80319"
-      reason: QA tool-defaults currently needs native search/command behavior coverage instead of OpenClaw dynamic exec exposure.
-    promptSnippet: "target=exec"
-    failurePromptSnippet: "failure target=exec"
+      reason: QA tool-defaults currently needs native search/command behavior coverage
+        instead of OpenClaw dynamic exec exposure.
+    promptSnippet: target=exec
+    failurePromptSnippet: failure target=exec
 ```
 
 ```yaml qa-flow

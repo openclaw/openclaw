@@ -6,15 +6,18 @@ title: Medium game plan OpenClaw harness
 surface: workspace
 coverage:
   primary:
-    - workspace.planning
+    - runtime-assembly
   secondary:
-    - agents.openclaw-harness
-objective: Verify GPT-5.5 can use the OpenClaw harness to plan and build a medium-complex self-contained browser game.
+    - external-harness-selection
+objective: Verify GPT-5.5 can use the OpenClaw harness to plan and build a
+  medium-complex self-contained browser game.
 successCriteria:
-  - A live-frontier run fails fast unless the selected primary model is openai/gpt-5.5.
+  - A live-frontier run fails fast unless the selected primary model is
+    openai/gpt-5.5.
   - The scenario forces the embedded OpenClaw harness before the build turn.
   - The prompt explicitly asks the agent to enter plan mode before editing.
-  - The agent writes a self-contained HTML game with a canvas loop, controls, scoring, waves, pause, and restart.
+  - The agent writes a self-contained HTML game with a canvas loop, controls,
+    scoring, waves, pause, and restart.
 docsRefs:
   - docs/plugins/sdk-agent-harness.md
   - docs/gateway/configuration-reference.md
@@ -25,7 +28,9 @@ codeRefs:
   - extensions/qa-lab/src/suite.ts
 execution:
   kind: flow
-  summary: Run with `pnpm openclaw qa suite --provider-mode live-frontier --model openai/gpt-5.5 --alt-model openai/gpt-5.5 --fast --thinking medium --scenario medium-game-plan-openclaw-harness`.
+  summary: Run with `pnpm openclaw qa suite --provider-mode live-frontier --model
+    openai/gpt-5.5 --alt-model openai/gpt-5.5 --fast --thinking medium
+    --scenario medium-game-plan-openclaw-harness`.
   config:
     requiredProvider: openai
     requiredModel: gpt-5.5
@@ -33,20 +38,34 @@ execution:
     artifactFile: star-garden-defenders-openclaw.html
     gameTitle: Star Garden Defenders
     minBytes: 5000
-    buildPrompt: |-
-      Enter plan mode first and write a short implementation plan before editing.
+    buildPrompt: >-
+      Enter plan mode first and write a short implementation plan before
+      editing.
 
-      Then build a medium-complex, self-contained browser game at ./star-garden-defenders-openclaw.html.
+
+      Then build a medium-complex, self-contained browser game at
+      ./star-garden-defenders-openclaw.html.
+
 
       Game: Star Garden Defenders.
+
       Requirements:
+
       - one HTML file only; no external assets, fonts, scripts, or network calls
+
       - canvas-based arcade loop with requestAnimationFrame
+
       - keyboard controls and mouse or pointer support
-      - player movement, enemy waves, collectibles or power-ups, collision handling
+
+      - player movement, enemy waves, collectibles or power-ups, collision
+      handling
+
       - score, lives or health, wave number, pause, restart, and game-over state
+
       - polished inline CSS and clear on-screen controls
-      - after writing the file, reply with the filename and the main systems implemented
+
+      - after writing the file, reply with the filename and the main systems
+      implemented
 ```
 
 ```yaml qa-flow
