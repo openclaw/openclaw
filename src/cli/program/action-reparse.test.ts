@@ -16,6 +16,10 @@ vi.mock("./helpers.js", () => ({
   resolveCommandOptionArgs: resolveCommandOptionArgsMock,
 }));
 
+function setRawArgs(command: Command, rawArgs: string[]): void {
+  (command as Command & { rawArgs: string[] }).rawArgs = rawArgs;
+}
+
 describe("reparseProgramFromActionArgs", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -26,7 +30,7 @@ describe("reparseProgramFromActionArgs", () => {
 
   it("uses action command name + args as fallback argv", async () => {
     const program = new Command().name("openclaw");
-    program.rawArgs = ["node", "openclaw", "status", "--json"];
+    setRawArgs(program, ["node", "openclaw", "status", "--json"]);
     const parseAsync = vi.spyOn(program, "parseAsync").mockResolvedValue(program);
     const actionCommand = {
       name: () => "status",
@@ -46,7 +50,7 @@ describe("reparseProgramFromActionArgs", () => {
 
   it("falls back to action args without command name when action has no name", async () => {
     const program = new Command().name("openclaw");
-    program.rawArgs = ["node", "openclaw"];
+    setRawArgs(program, ["node", "openclaw"]);
     const parseAsync = vi.spyOn(program, "parseAsync").mockResolvedValue(program);
     const actionCommand = {
       name: () => "",
@@ -87,7 +91,7 @@ describe("reparseProgramFromActionArgs", () => {
 
   it("uses root raw args and reparses the root for nested lazy commands", async () => {
     const root = new Command().name("openclaw");
-    root.rawArgs = ["node", "openclaw", "workspaces", "audit", "export", "--since", "1"];
+    setRawArgs(root, ["node", "openclaw", "workspaces", "audit", "export", "--since", "1"]);
     const workspaces = root.command("workspaces");
     const audit = workspaces.command("audit");
     const exportCommand = audit.command("export");
