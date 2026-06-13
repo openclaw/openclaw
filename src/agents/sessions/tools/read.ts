@@ -26,11 +26,11 @@ import { formatDimensionNote, resizeImage } from "../../utils/image-resize.js";
 import { detectSupportedImageMimeTypeFromFile } from "../../utils/mime.js";
 import { formatPathRelativeToCwdOrAbsolute } from "../../utils/paths.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
+import { detectEncoding, decodeBuffer } from "./encoding-detection.js";
 import { normalizePositiveLimit } from "./limits.js";
 import { resolveReadPath } from "./path-utils.js";
 import { getTextOutput, invalidArgText, replaceTabs, shortenPath, str } from "./render-utils.js";
 import type { ReadToolDetails } from "./tool-contracts.js";
-import { detectEncoding } from "./encoding-detection.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateHead } from "./truncate.js";
 
@@ -340,11 +340,18 @@ export function createReadToolDefinition(
             } else {
               // Read text content.
               const buffer = await ops.readFile(absolutePath);
-              // Auto-detect encoding to handle GBK, Shift-JIS, and other legacy encodings
+              // Auto-detect encoding to handle Shift-JIS, UTF-16, and other
+              // legacy encodings. decodeBuffer routes through TextDecoder (or
+              // Buffer#toString for the labels Node understands) — it never
+              // passes Node-Buffer-unsupported labels like "shift-jis" to
+              // Buffer#toString, which would throw ERR_UNKNOWN_ENCODING and
+              // break reads more than mojibake would. We also strip the BOM
+              // from the buffer before decoding, so the model never sees a
+              // stray U+FEFF prefix on a UTF-8 / UTF-16 file.
               const encodingResult = detectEncoding(buffer);
-              const textContent = encodingResult.encoding === "utf-8"
-                ? buffer.toString("utf-8")
-                : buffer.toString(encodingResult.encoding as BufferEncoding);
+              const payload =
+                encodingResult.bomLength > 0 ? buffer.subarray(encodingResult.bomLength) : buffer;
+              const textContent = decodeBuffer(payload, encodingResult.encoding);
               const allLines = textContent.split("\n");
               const totalFileLines = allLines.length;
               // Apply offset if specified. Convert from 1-indexed input to 0-indexed array access.
