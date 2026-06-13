@@ -211,6 +211,7 @@ const BEFORE_TOOL_CALL_HOOK_FAILURE_REASON =
 const MAX_TRACKED_ADJUSTED_PARAMS = 1024;
 const LOOP_WARNING_BUCKET_SIZE = 10;
 const MAX_LOOP_WARNING_KEYS = 256;
+const MAX_TRACKED_EXTERNAL_CONTENT_RUNS = 256;
 
 type ToolHookExternalContentSource = PluginHookExternalContentProvenance["sources"][number];
 
@@ -253,9 +254,7 @@ function collectToolHookExternalContentSources(
     }
     sources.add("unknown");
     for (const match of value.matchAll(/^Source:\s*([^\r\n]+)/gim)) {
-      const source = EXTERNAL_CONTENT_SOURCE_BY_LABEL.get(
-        match[1]?.trim().toLowerCase() ?? "",
-      );
+      const source = EXTERNAL_CONTENT_SOURCE_BY_LABEL.get(match[1]?.trim().toLowerCase() ?? "");
       if (source) {
         sources.add(source);
       }
@@ -320,21 +319,77 @@ function mergeToolHookExternalContentProvenance(
   };
 }
 
+const externalContentByRunId = new Map<string, PluginHookExternalContentProvenance>();
+
+function resolveExternalContentKey(ctx: HookContext | undefined): string | undefined {
+  const runId = ctx?.runId?.trim();
+  return runId || undefined;
+}
+
+function rememberExternalContentForRun(
+  key: string,
+  externalContent: PluginHookExternalContentProvenance,
+): void {
+  if (externalContentByRunId.has(key)) {
+    externalContentByRunId.delete(key);
+  }
+
+  externalContentByRunId.set(key, externalContent);
+
+  while (externalContentByRunId.size > MAX_TRACKED_EXTERNAL_CONTENT_RUNS) {
+    const oldest = externalContentByRunId.keys().next().value;
+    if (!oldest) {
+      break;
+    }
+    externalContentByRunId.delete(oldest);
+  }
+}
+
+function resolveHookContextExternalContent(
+  ctx: HookContext | undefined,
+): PluginHookExternalContentProvenance | undefined {
+  const key = resolveExternalContentKey(ctx);
+  const runExternalContent = key ? externalContentByRunId.get(key) : undefined;
+  const merged = mergeToolHookExternalContentProvenance(ctx?.externalContent, runExternalContent);
+
+  if (key && merged) {
+    rememberExternalContentForRun(key, merged);
+  }
+
+  return merged;
+}
+
+function mergeHookContextExternalContent(
+  ctx: HookContext | undefined,
+  next: PluginHookExternalContentProvenance | undefined,
+): PluginHookExternalContentProvenance | undefined {
+  if (!ctx || !next) {
+    return resolveHookContextExternalContent(ctx);
+  }
+
+  const merged = mergeToolHookExternalContentProvenance(
+    resolveHookContextExternalContent(ctx),
+    next,
+  );
+
+  if (merged) {
+    ctx.externalContent = merged;
+
+    const key = resolveExternalContentKey(ctx);
+    if (key) {
+      rememberExternalContentForRun(key, merged);
+    }
+  }
+
+  return merged;
+}
+
 function refreshHookContextExternalContentFromToolResult(
   ctx: HookContext | undefined,
   result: unknown,
 ): void {
-  if (!ctx) {
-    return;
-  }
   const resultExternalContent = detectToolHookExternalContentProvenance([result]);
-  if (!resultExternalContent) {
-    return;
-  }
-  ctx.externalContent = mergeToolHookExternalContentProvenance(
-    ctx.externalContent,
-    resultExternalContent,
-  );
+  mergeHookContextExternalContent(ctx, resultExternalContent);
 }
 
 /**
@@ -1052,6 +1107,7 @@ export async function runBeforeToolCallHook(args: {
       ...(args.toolKind && { toolKind: args.toolKind }),
       ...(args.toolInputKind && { toolInputKind: args.toolInputKind }),
     };
+    const externalContent = resolveHookContextExternalContent(args.ctx);
     const buildToolContext = (identity: typeof toolIdentity) => ({
       toolName,
       ...identity,
@@ -1062,7 +1118,7 @@ export async function runBeforeToolCallHook(args: {
       ...(args.ctx?.trace && { trace: freezeDiagnosticTraceContext(args.ctx.trace) }),
       ...(args.toolCallId && { toolCallId: args.toolCallId }),
       ...(args.ctx?.channelId && { channelId: args.ctx.channelId }),
-      ...(args.ctx?.externalContent && { externalContent: args.ctx.externalContent }),
+      ...(externalContent && { externalContent }),
     });
     const toolContext = buildToolContext(toolIdentity);
     const trustedPolicyResult = shouldRunTrustedPolicies
@@ -1073,7 +1129,7 @@ export async function runBeforeToolCallHook(args: {
             ...toolIdentity,
             ...(args.ctx?.runId && { runId: args.ctx.runId }),
             ...(args.toolCallId && { toolCallId: args.toolCallId }),
-            ...(args.ctx?.externalContent && { externalContent: args.ctx.externalContent }),
+            ...(externalContent && { externalContent }),
             ...(derivedToolParams.derivedPaths
               ? { derivedPaths: derivedToolParams.derivedPaths }
               : {}),
@@ -1180,7 +1236,7 @@ export async function runBeforeToolCallHook(args: {
         ...policyAdjustedToolIdentity,
         ...(args.ctx?.runId && { runId: args.ctx.runId }),
         ...(args.toolCallId && { toolCallId: args.toolCallId }),
-        ...(args.ctx?.externalContent && { externalContent: args.ctx.externalContent }),
+        ...(externalContent && { externalContent }),
         ...(policyAdjustedDerivedToolParams.derivedPaths
           ? { derivedPaths: policyAdjustedDerivedToolParams.derivedPaths }
           : {}),
