@@ -578,9 +578,14 @@ async function runEmbeddedAgentInternal(
       const existingContext = getAgentRunContext(params.runId);
       if (lifecycleGeneration !== currentLifecycleGeneration) {
         const wasQueuedBeforeRotation = queuedLifecycleGeneration === lifecycleGeneration;
+        const canResumeAcrossRotation = sessionQueuePriority === "foreground";
         const newerSameIdExecutionOwnsContext =
           existingContext?.lifecycleGeneration === currentLifecycleGeneration;
-        if (!wasQueuedBeforeRotation || newerSameIdExecutionOwnsContext) {
+        if (
+          !wasQueuedBeforeRotation ||
+          !canResumeAcrossRotation ||
+          newerSameIdExecutionOwnsContext
+        ) {
           assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
         }
         lifecycleGeneration = currentLifecycleGeneration;

@@ -13,6 +13,7 @@ import {
   loadRunCronIsolatedAgentTurn,
   makeCronSession,
   mockRunCronFallbackPassthrough,
+  preflightCronModelProviderMock,
   resolveCronPayloadOutcomeMock,
   resolveCronSessionMock,
   resetRunCronIsolatedAgentTurnHarness,
@@ -816,6 +817,33 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       }),
     );
     clearAgentRunContext("test-session-id", newerLifecycleGeneration);
+  });
+
+  it("rejects cron work when the gateway lifecycle rotates during preparation", async () => {
+    let releasePreflight: (() => void) | undefined;
+    const preflightStarted = new Promise<void>((resolveStarted) => {
+      preflightCronModelProviderMock.mockImplementationOnce(async () => {
+        resolveStarted();
+        await new Promise<void>((resolve) => {
+          releasePreflight = resolve;
+        });
+        return { status: "available" };
+      });
+    });
+    const { getAgentRunContext, rotateAgentEventLifecycleGeneration } =
+      await import("../../infra/agent-events.js");
+
+    const runPromise = runCronIsolatedAgentTurn(makeParams());
+    await preflightStarted;
+    rotateAgentEventLifecycleGeneration();
+    releasePreflight?.();
+
+    await expect(runPromise).resolves.toMatchObject({
+      status: "error",
+      error: expect.stringContaining("Agent run belongs to a stale gateway lifecycle"),
+    });
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(getAgentRunContext("test-session-id")).toBeUndefined();
   });
 
   it("keeps shared cron run context references active after completion", async () => {

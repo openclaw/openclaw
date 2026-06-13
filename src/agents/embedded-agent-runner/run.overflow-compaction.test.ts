@@ -840,6 +840,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     const runPromise = runEmbeddedAgent({
       ...overflowBaseRunParams,
       runId: "queued-across-restart",
+      trigger: "user",
       lifecycleGeneration: getAgentEventLifecycleGeneration(),
       onExecutionStarted,
       enqueue: async (task) => {
@@ -872,6 +873,40 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       lifecycleGeneration: currentLifecycleGeneration,
     });
     resetAgentRunContextForTest();
+  });
+
+  it("rejects background work queued across lifecycle rotation", async () => {
+    resetAgentRunContextForTest();
+    let enqueueCount = 0;
+    let runQueuedTask: (() => void) | undefined;
+    const runPromise = runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      runId: "background-queued-across-restart",
+      trigger: "cron",
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      enqueue: async (task) => {
+        enqueueCount += 1;
+        if (enqueueCount === 1) {
+          return await task();
+        }
+        return await new Promise((resolve, reject) => {
+          runQueuedTask = () => {
+            void Promise.resolve().then(task).then(resolve, reject);
+          };
+        });
+      },
+    });
+    await vi.waitFor(() => expect(runQueuedTask).toBeTypeOf("function"));
+
+    rotateAgentEventLifecycleGeneration();
+    runQueuedTask?.();
+
+    await expect(runPromise).rejects.toMatchObject({
+      name: "AbortError",
+      message: "Agent run belongs to a stale gateway lifecycle",
+    });
+    expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
+    expect(getAgentRunContext("background-queued-across-restart")).toBeUndefined();
   });
 
   it("does not claim a rebound generation after queued work was aborted", async () => {

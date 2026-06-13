@@ -16,6 +16,7 @@ import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
+  assertAgentRunLifecycleGenerationCurrent,
   claimAgentRunContext,
   clearAgentRunContext,
   getAgentEventLifecycleGeneration,
@@ -1264,6 +1265,7 @@ export async function runCronIsolatedAgentTurn(params: {
   agentId?: string;
   lane?: string;
 }): Promise<RunCronAgentTurnResult> {
+  const admittedLifecycleGeneration = getAgentEventLifecycleGeneration();
   const abortSignal = params.abortSignal ?? params.signal;
   const isAborted = () => abortSignal?.aborted === true;
   const abortReason = () => {
@@ -1280,17 +1282,7 @@ export async function runCronIsolatedAgentTurn(params: {
   // Capture the stable run id before execution can rotate its persisted session.
   const initialSessionId = prepared.context.cronSession.sessionEntry.sessionId;
   const ownsRunContext = params.job.sessionTarget === "isolated";
-  let runLifecycleGeneration = getAgentEventLifecycleGeneration();
-  const existingRunContext = getAgentRunContext(initialSessionId);
-  claimAgentRunContext(initialSessionId, {
-    ...existingRunContext,
-    sessionKey:
-      ownsRunContext || !existingRunContext?.sessionKey
-        ? prepared.context.runSessionKey
-        : existingRunContext.sessionKey,
-    sessionId: initialSessionId,
-    lifecycleGeneration: runLifecycleGeneration,
-  });
+  let runLifecycleGeneration = admittedLifecycleGeneration;
   const notifyExecutionStarted = (info?: { lifecycleGeneration?: string }) => {
     if (info?.lifecycleGeneration) {
       runLifecycleGeneration = info.lifecycleGeneration;
@@ -1336,6 +1328,17 @@ export async function runCronIsolatedAgentTurn(params: {
   let outcome: "completed" | "error" = "completed";
   let outcomeError: string | undefined;
   try {
+    assertAgentRunLifecycleGenerationCurrent(runLifecycleGeneration);
+    const existingRunContext = getAgentRunContext(initialSessionId);
+    claimAgentRunContext(initialSessionId, {
+      ...existingRunContext,
+      sessionKey:
+        ownsRunContext || !existingRunContext?.sessionKey
+          ? prepared.context.runSessionKey
+          : existingRunContext.sessionKey,
+      sessionId: initialSessionId,
+      lifecycleGeneration: runLifecycleGeneration,
+    });
     const { executeCronRun } = await loadCronExecutorRuntime();
     const execution = await executeCronRun({
       cfg: params.cfg,
