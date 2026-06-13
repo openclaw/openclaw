@@ -4,6 +4,7 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../p
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withEnv } from "../../test-utils/env.js";
 import type { TemplateContext } from "../templating.js";
+import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "./delivery-hints.js";
 import { buildInboundMetaSystemPrompt, buildInboundUserContextPrefix } from "./inbound-meta.js";
 
 vi.mock("../../channels/plugins/registry-loaded.js", () => ({
@@ -301,9 +302,7 @@ describe("buildInboundUserContextPrefix", () => {
       { sourceReplyDeliveryMode: "message_tool_only" },
     );
 
-    expect(text).toContain(
-      "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send the final user-visible answer. Interim assistant text between tool calls is still shown to the user as progress narration, so narrate your work as you go.",
-    );
+    expect(text).toContain(MESSAGE_TOOL_ONLY_DELIVERY_HINT);
     expect(text.indexOf("Delivery:")).toBeLessThan(text.indexOf("Conversation info"));
     expect(text).toContain("Conversation info (untrusted metadata):");
   });
