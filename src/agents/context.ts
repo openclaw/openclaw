@@ -391,6 +391,12 @@ export function resolveContextTokensForModel(params: {
   });
   const explicitProvider = params.provider?.trim();
   if (ref) {
+    // Kick off background model discovery for read-only paths that
+    // otherwise never trigger async loading (cfg + allowAsyncLoad: false).
+    // Move this to the top of if(ref) so discovery fires for ALL resolvable
+    // model references, not just the fallback path.
+    void ensureContextWindowCacheLoaded();
+
     if (explicitProvider) {
       const fixedContextWindow = resolveAnthropicFixedContextWindow(ref.provider, ref.model);
       if (fixedContextWindow !== undefined) {
@@ -414,9 +420,6 @@ export function resolveContextTokensForModel(params: {
         return configuredWindow;
       }
     }
-    // Kick off background model discovery for read-only paths that
-    // otherwise never trigger async loading (cfg + allowAsyncLoad: false).
-    void ensureContextWindowCacheLoaded();
   }
 
   // When provider is explicitly given and the model ID is bare (no slash),
