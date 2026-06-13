@@ -2047,6 +2047,17 @@ export async function runEmbeddedAgent(
               acceptedSessionSpawns,
             };
           };
+          const drainToolLoopAbortTerminalEvents = async (): Promise<void> => {
+            try {
+              await currentAttemptTerminalDrain?.();
+            } catch (drainError) {
+              currentAttemptTerminalDrainFailed = true;
+              log.warn(
+                `tool loop abort terminal drain failed: runId=${params.runId} ` +
+                  `sessionId=${params.sessionId} err=${String(drainError)}`,
+              );
+            }
+          };
           const rawAttempt = await runEmbeddedAttemptWithBackend({
             sessionId: activeSessionId,
             sessionKey: resolvedSessionKey,
@@ -2200,15 +2211,7 @@ export async function runEmbeddedAgent(
           })
             .catch(async (err: unknown): Promise<EmbeddedAgentRunResult> => {
               if (toolLoopAbortError) {
-                try {
-                  await currentAttemptTerminalDrain?.();
-                } catch (drainError) {
-                  currentAttemptTerminalDrainFailed = true;
-                  log.warn(
-                    `tool loop abort terminal drain failed: runId=${params.runId} ` +
-                      `sessionId=${params.sessionId} err=${String(drainError)}`,
-                  );
-                }
+                await drainToolLoopAbortTerminalEvents();
                 currentAttemptTerminalLifecycleMetaSetter?.({
                   replayInvalid: true,
                   livenessState: "blocked",
@@ -2250,6 +2253,7 @@ export async function runEmbeddedAgent(
             attempt.setTerminalLifecycleMeta?.({ ...meta, aborted });
           };
           if (toolLoopAbortError) {
+            await drainToolLoopAbortTerminalEvents();
             setTerminalLifecycleMeta({
               replayInvalid: true,
               livenessState: "blocked",

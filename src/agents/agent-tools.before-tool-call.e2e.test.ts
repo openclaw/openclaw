@@ -507,6 +507,7 @@ describe("before_tool_call loop detection behavior", () => {
     { success: false },
     { delivery_status: "failed" },
     { status: "ok", result: { status: "failed" } },
+    { status: "ok", result: { dryRun: true } },
   ])("marks returned failure details as failed replay-safety observations", async (details) => {
     const onToolOutcome = vi.fn();
     const execute = vi.fn().mockResolvedValue({
@@ -531,6 +532,46 @@ describe("before_tool_call loop detection behavior", () => {
         failed: true,
       }),
     );
+  });
+
+  it("does not retain terminal fallback evidence from a dry-run result", async () => {
+    const onToolOutcome = vi.fn();
+    const execute = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: "dry-run output" }],
+      details: { status: "ok", result: { dryRun: true } },
+      terminalSummary: {
+        privacy: "public",
+        text: "Action completed.",
+      },
+    });
+    const tool = wrapToolWithBeforeToolCallHook(
+      {
+        name: "write",
+        execute,
+        terminalResultFallback: { mode: "safe_text", prefix: "Result:" },
+      } as unknown as AnyAgentTool,
+      {
+        ...enabledLoopDetectionContext,
+        runId: "run-dry-run-terminal-fallback-observer",
+        onToolOutcome,
+      },
+    );
+
+    await expectUnblockedToolExecution(tool, "write-dry-run-observer", {
+      path: "report.md",
+      content: "updated",
+    });
+
+    const observation = onToolOutcome.mock.calls.at(-1)?.[0];
+    expect(observation).toEqual(
+      expect.objectContaining({
+        toolName: "write",
+        mutatingAction: true,
+        failed: true,
+      }),
+    );
+    expect(observation).not.toHaveProperty("resultText");
+    expect(observation).not.toHaveProperty("terminalSummary");
   });
 
   it("does not mark snake_case failed message outcomes as delivered", async () => {

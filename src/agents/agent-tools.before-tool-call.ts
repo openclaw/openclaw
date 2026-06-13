@@ -987,7 +987,7 @@ function hasToolResultFailureEvidence(value: unknown, depth = 0): boolean {
   if (!isPlainObject(value)) {
     return false;
   }
-  if (hasFailedToolResultStatus(value)) {
+  if (value.dryRun === true || hasFailedToolResultStatus(value)) {
     return true;
   }
   if (depth >= 3) {

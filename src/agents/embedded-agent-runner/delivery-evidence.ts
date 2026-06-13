@@ -209,6 +209,16 @@ function isKnownNonSentDeliveryStatus(status: string): boolean {
   );
 }
 
+function hasExplicitNonDeliveryFlag(outcome: Record<string, unknown>): boolean {
+  if (outcome.dryRun === true || outcome.ok === false || outcome.success === false) {
+    return true;
+  }
+  return [outcome.deliveryStatus, outcome.delivery_status, outcome.status].some((value) => {
+    const status = readLowercaseString(value);
+    return status ? isKnownNonSentDeliveryStatus(status) : false;
+  });
+}
+
 function hasSentPayloadOutcomeEvidence(value: unknown, depth: number): boolean {
   if (!Array.isArray(value)) {
     return false;
@@ -216,6 +226,9 @@ function hasSentPayloadOutcomeEvidence(value: unknown, depth: number): boolean {
   return value.some((entry) => {
     const outcome = readRecord(entry);
     if (!outcome) {
+      return false;
+    }
+    if (hasExplicitNonDeliveryFlag(outcome)) {
       return false;
     }
     const status =

@@ -38,6 +38,7 @@ import {
   resolvePlanningOnlyRetryInstruction,
   isIncompleteTerminalAssistantTurn,
   PLANNING_ONLY_BLOCKED_TEXT,
+  PLANNING_ONLY_REPLAY_UNSAFE_BLOCKED_TEXT,
   resolveIncompleteTurnPayloadText as resolveIncompleteTurnPayloadTextCore,
   resolveReasoningOnlyRetryInstruction,
   resolvePlanningOnlyBlockedPayloadText,
@@ -1001,22 +1002,36 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     ]);
   });
 
-  it("surfaces a known read-only tool terminal result when a tool loop resolves after abort", async () => {
+  it("drains late parallel tool outcomes before returning a resolved loop-abort fallback", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     const setTerminalLifecycleMeta = vi.fn();
+    const terminalDrain = vi.fn();
     mockedRunEmbeddedAttempt.mockImplementationOnce(async (params: unknown) => {
       const attemptParams = params as {
         abortSignal?: AbortSignal;
+        onTerminalDrainReady?: (drain: () => Promise<void>) => void;
         onToolOutcome?: (observation: {
           toolName: string;
           argsHash: string;
           resultHash: string;
           resultText?: string;
           terminalResultFallback?: { mode: "safe_text"; prefix?: string };
+          failed?: boolean;
+          mutatingAction?: boolean;
           blockedReason?: string;
           blockedMessage?: string;
         }) => void;
       };
+      attemptParams.onTerminalDrainReady?.(async () => {
+        terminalDrain();
+        attemptParams.onToolOutcome?.({
+          toolName: "write",
+          argsHash: "late-sibling",
+          resultHash: "failed",
+          failed: true,
+          mutatingAction: true,
+        });
+      });
       attemptParams.onToolOutcome?.({
         toolName: "web_fetch",
         argsHash: "current",
@@ -1049,9 +1064,15 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       runId: "run-tool-loop-declared-fallback-resolved",
     });
 
+    expect(terminalDrain).toHaveBeenCalledOnce();
     expect(result.payloads).toEqual([
       {
-        text: "Status:\nhealthy",
+        text: "I stopped because repeated tool calls did not make progress. No user-facing result text was provided.",
+        isError: true,
+      },
+      {
+        text: "⚠️ Some tool actions may have already been executed — please verify before retrying.",
+        isError: true,
       },
     ]);
     expect(result.meta.livenessState).toBe("blocked");
@@ -5431,6 +5452,30 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     ).toBe(true);
     expect(
       hasCommittedMessagingToolResultDetails({
+        status: "partial_failed",
+        payloadOutcomes: [
+          {
+            status: "sent",
+            resultCount: 1,
+            dryRun: true,
+          },
+        ],
+      }),
+    ).toBe(false);
+    expect(
+      hasCommittedMessagingToolResultDetails({
+        status: "partial_failed",
+        payloadOutcomes: [
+          {
+            status: "sent",
+            resultCount: 1,
+            success: false,
+          },
+        ],
+      }),
+    ).toBe(false);
+    expect(
+      hasCommittedMessagingToolResultDetails({
         ok: true,
         result: {
           channel: "discord",
@@ -6918,7 +6963,7 @@ describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
         timedOut: false,
         attempt,
       }),
-    ).toBe(PLANNING_ONLY_BLOCKED_TEXT);
+    ).toBe(PLANNING_ONLY_REPLAY_UNSAFE_BLOCKED_TEXT);
   });
 
   it("blocks planning-only text after non-replay-safe tool activity", () => {
@@ -6941,7 +6986,7 @@ describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
       },
     });
 
-    expect(result).toBe(PLANNING_ONLY_BLOCKED_TEXT);
+    expect(result).toBe(PLANNING_ONLY_REPLAY_UNSAFE_BLOCKED_TEXT);
   });
 
   it("does not block direct completion summaries after non-replay-safe tool activity", () => {

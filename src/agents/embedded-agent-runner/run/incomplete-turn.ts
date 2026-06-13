@@ -329,6 +329,8 @@ export const ACK_EXECUTION_FAST_PATH_INSTRUCTION =
   "The latest user message is a short approval to proceed. Do not recap or restate the plan. Start with the first concrete tool action immediately. Keep any user-facing follow-up brief and natural.";
 export const PLANNING_ONLY_BLOCKED_TEXT =
   "Agent stopped after repeated plan-only turns without taking a concrete action. No concrete tool action or external side effect advanced the task.";
+export const PLANNING_ONLY_REPLAY_UNSAFE_BLOCKED_TEXT =
+  "Agent stopped after repeated plan-only turns. Some tool actions or external side effects may already have executed; verify the current state before retrying.";
 export const STRICT_AGENTIC_BLOCKED_TEXT = PLANNING_ONLY_BLOCKED_TEXT;
 
 export type PlanningOnlyPlanDetails = {
@@ -1494,7 +1496,7 @@ export function resolvePlanningOnlyBlockedPayloadText(params: {
     retryBlockedByToolActivity ||
     resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects
   ) {
-    return PLANNING_ONLY_BLOCKED_TEXT;
+    return PLANNING_ONLY_REPLAY_UNSAFE_BLOCKED_TEXT;
   }
   return null;
 }
