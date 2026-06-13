@@ -80,6 +80,9 @@ export function resolveSubagentModelAndThinkingPlan(params: {
     };
   }
 
+  const modelOverrideSource = params.modelOverride?.trim() ? "user" : "auto";
+  const resolvedModelRef = splitModelRef(resolvedModel);
+
   return {
     status: "ok" as const,
     resolvedModel,
@@ -89,7 +92,19 @@ export function resolveSubagentModelAndThinkingPlan(params: {
       ...(resolvedModel
         ? {
             model: resolvedModel,
-            modelOverrideSource: params.modelOverride?.trim() ? "user" : "auto",
+            modelOverrideSource,
+            ...(modelOverrideSource === "auto" &&
+            resolvedModelRef.provider &&
+            resolvedModelRef.model
+              ? {
+                  // Auto-selected subagent models are real session overrides, not legacy
+                  // auto-fallback recoveries. Persist self-origin metadata so the child
+                  // run keeps its configured model instead of the legacy cleanup path
+                  // discarding it before first execution.
+                  modelOverrideFallbackOriginProvider: resolvedModelRef.provider,
+                  modelOverrideFallbackOriginModel: resolvedModelRef.model,
+                }
+              : {}),
           }
         : {}),
       ...thinkingPlan.initialSessionPatch,
