@@ -423,6 +423,7 @@ type WorkboardHost = object;
 
 const workboardStates = new WeakMap<WorkboardHost, WorkboardUiState>();
 const workboardLoadPromises = new WeakMap<WorkboardHost, Promise<boolean>>();
+const workboardLifecycleTaskRefreshPromises = new WeakMap<WorkboardHost, Promise<number | null>>();
 const workboardLoadGenerations = new WeakMap<WorkboardHost, number>();
 const workboardTaskPollOffsets = new WeakMap<WorkboardHost, number>();
 const workboardTaskDiscoveryOffsets = new WeakMap<WorkboardHost, number>();
@@ -503,6 +504,7 @@ function resetWorkboardLifecycleTaskConfirmations(state: WorkboardUiState) {
 export function stopWorkboardLifecycleRefresh(host: WorkboardHost) {
   clearWorkboardLifecycleTaskPreparedTimer(host);
   clearWorkboardLifecycleTaskRetryTimer(host);
+  workboardLifecycleTaskRefreshPromises.delete(host);
   const state = workboardStates.get(host);
   if (state) {
     setWorkboardLifecycleTasksPrepared(state, false);
@@ -2780,28 +2782,19 @@ export async function captureSessionToWorkboard(params: {
   }
 }
 
-export async function syncWorkboardLifecycle(params: {
-  host: WorkboardHost;
-  client: GatewayBrowserClient | null;
-  sessions: readonly GatewaySessionRow[];
-  canWrite?: boolean;
-  requestUpdate?: () => void;
-}) {
-  const state = getWorkboardState(params.host);
-  if (
-    !params.client ||
-    !state.loaded ||
-    params.canWrite === false ||
-    (workboardLifecycleTaskRefreshRetryPending(state) &&
-      shouldRefreshWorkboardTasksForLifecycle(state)) ||
-    workboardLifecycleSyncBlocked(params.host, state)
-  ) {
-    return;
+async function refreshWorkboardLifecycleTasks(
+  params: {
+    host: WorkboardHost;
+    client: GatewayBrowserClient;
+    requestUpdate?: () => void;
+  },
+  state: WorkboardUiState,
+): Promise<number | null> {
+  const existingRefresh = workboardLifecycleTaskRefreshPromises.get(params.host);
+  if (existingRefresh) {
+    return await existingRefresh;
   }
-  let tasksPreparedAt = workboardLifecycleTasksPreparedAt(state);
-  const tasksPrepared = tasksPreparedAt !== null;
-  setWorkboardLifecycleTasksPrepared(state, false, { host: params.host });
-  if (!tasksPrepared && shouldRefreshWorkboardTasksForLifecycle(state)) {
+  const refresh = (async () => {
     const generation = nextWorkboardLoadGeneration(params.host);
     try {
       const previousTasksByCardId = state.tasksByCardId;
@@ -2844,7 +2837,7 @@ export async function syncWorkboardLifecycle(params: {
         !isCurrentWorkboardLoadGeneration(params.host, generation) ||
         workboardLifecycleSyncBlocked(params.host, state)
       ) {
-        return;
+        return null;
       }
       state.cards = taskLinkState.cards;
       state.tasksByCardId = taskLinkState.tasksByCardId;
@@ -2863,7 +2856,7 @@ export async function syncWorkboardLifecycle(params: {
         });
         state.lifecycleTaskRefreshError = confirmationResult.error;
         params.requestUpdate?.();
-        return;
+        return null;
       }
       if (!workboardTaskLinksReadyForLifecycle(taskLinkState)) {
         setWorkboardLifecycleTaskRefreshFailed(state, true, {
@@ -2871,7 +2864,7 @@ export async function syncWorkboardLifecycle(params: {
           requestUpdate: params.requestUpdate,
           retryDelayMs: WORKBOARD_LIFECYCLE_TASK_CONTINUE_MS,
         });
-        return;
+        return null;
       }
       resetWorkboardLifecycleTaskConfirmations(state);
       const recoveredFromTaskRefresh =
@@ -2879,15 +2872,16 @@ export async function syncWorkboardLifecycle(params: {
       setWorkboardLifecycleTaskRefreshFailed(state, false, { host: params.host });
       state.lifecycleTaskRefreshError = null;
       if (recoveredFromTaskRefresh) {
+        state.lastRefreshError = null;
         params.requestUpdate?.();
       }
-      tasksPreparedAt = Date.now();
+      return Date.now();
     } catch (error) {
       if (
         !isCurrentWorkboardLoadGeneration(params.host, generation) ||
         workboardLifecycleSyncBlocked(params.host, state)
       ) {
-        return;
+        return null;
       }
       state.tasksByCardId = new Map();
       resetWorkboardLifecycleTaskConfirmations(state);
@@ -2897,6 +2891,50 @@ export async function syncWorkboardLifecycle(params: {
       });
       state.lifecycleTaskRefreshError = formatError(error);
       params.requestUpdate?.();
+      return null;
+    }
+  })();
+  workboardLifecycleTaskRefreshPromises.set(params.host, refresh);
+  try {
+    return await refresh;
+  } finally {
+    if (workboardLifecycleTaskRefreshPromises.get(params.host) === refresh) {
+      workboardLifecycleTaskRefreshPromises.delete(params.host);
+    }
+  }
+}
+
+export async function syncWorkboardLifecycle(params: {
+  host: WorkboardHost;
+  client: GatewayBrowserClient | null;
+  sessions: readonly GatewaySessionRow[];
+  canWrite?: boolean;
+  requestUpdate?: () => void;
+}) {
+  const state = getWorkboardState(params.host);
+  if (
+    !params.client ||
+    !state.loaded ||
+    params.canWrite === false ||
+    (workboardLifecycleTaskRefreshRetryPending(state) &&
+      shouldRefreshWorkboardTasksForLifecycle(state)) ||
+    workboardLifecycleSyncBlocked(params.host, state)
+  ) {
+    return;
+  }
+  let tasksPreparedAt = workboardLifecycleTasksPreparedAt(state);
+  const tasksPrepared = tasksPreparedAt !== null;
+  setWorkboardLifecycleTasksPrepared(state, false, { host: params.host });
+  if (!tasksPrepared && shouldRefreshWorkboardTasksForLifecycle(state)) {
+    tasksPreparedAt = await refreshWorkboardLifecycleTasks(
+      {
+        host: params.host,
+        client: params.client,
+        requestUpdate: params.requestUpdate,
+      },
+      state,
+    );
+    if (tasksPreparedAt === null) {
       return;
     }
   }

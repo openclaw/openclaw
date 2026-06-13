@@ -4167,6 +4167,43 @@ describe("workboard controller", () => {
     expect(state.cards[0]?.status).toBe("running");
   });
 
+  it("reuses an in-flight lifecycle task refresh across render-driven syncs", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const linked = {
+      ...sampleCard,
+      status: "running",
+      sessionKey: sampleTaskSessionKey,
+      runId: "run-1",
+      taskId: "task-1",
+    } satisfies WorkboardCard;
+    state.loaded = true;
+    state.cards = [linked];
+    state.tasksByCardId.set("card-1", sampleTask);
+    const taskList = createDeferred<unknown>();
+    const client = createClient((method) => {
+      if (method === "tasks.list") {
+        return taskList.promise;
+      }
+      return {};
+    });
+
+    const first = syncWorkboardLifecycle({ host, client: client as never, sessions: [] });
+    await vi.waitFor(() => {
+      expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
+    });
+    const second = syncWorkboardLifecycle({ host, client: client as never, sessions: [] });
+    await Promise.resolve();
+
+    expect(client.request.mock.calls.filter(([method]) => method === "tasks.list")).toHaveLength(1);
+
+    taskList.resolve({ tasks: [sampleTask] });
+    await Promise.all([first, second]);
+
+    expect(client.request.mock.calls.filter(([method]) => method === "tasks.list")).toHaveLength(1);
+    expect(state.lifecycleTasksPrepared).toBe(true);
+  });
+
   it("authoritatively refreshes running linked cards without task ids before lifecycle sync", async () => {
     const host = {};
     const state = getWorkboardState(host);
@@ -4451,6 +4488,7 @@ describe("workboard controller", () => {
     expect(client.request).toHaveBeenCalledOnce();
     expect(requestUpdate).toHaveBeenCalledOnce();
     expect(state.lifecycleTaskRefreshError).toBe("tasks unavailable");
+    state.lastRefreshError = "tasks unavailable";
     vi.clearAllMocks();
 
     await syncWorkboardLifecycle({ host, client: client as never, sessions: [], requestUpdate });
@@ -4468,6 +4506,7 @@ describe("workboard controller", () => {
     expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
     expect(state.lifecycleTaskRefreshFailed).toBe(false);
     expect(state.lifecycleTaskRefreshError).toBeNull();
+    expect(state.lastRefreshError).toBeNull();
     expect(state.error).toBe("unrelated write error");
     expect(requestUpdate).toHaveBeenCalledOnce();
   });
