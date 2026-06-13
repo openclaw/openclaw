@@ -92,6 +92,36 @@ This works with local models too, for example a second Ollama model dedicated to
 
 When unset, compaction starts with the active session model. If summarization fails with a model-fallback-eligible provider error, OpenClaw retries that compaction attempt through the session's existing model fallback chain. The fallback choice is temporary and is not written back to session state. An explicit `agents.defaults.compaction.model` override remains exact and does not inherit the session fallback chain.
 
+<Warning>
+On CLI backends that own their compaction — for example `claude-cli`, which
+compacts internally — OpenClaw normally **defers** compaction to the backend.
+Setting `agents.defaults.compaction.model` overrides that deferral and forces
+OpenClaw's in-process summarizer to run with the model you name.
+
+If that model's provider has no standalone credentials in your setup, every
+compaction attempt fails. A common case: the session authenticates through the
+`claude-cli` OAuth profile, but `compaction.model` points at a bare
+`anthropic/<model>` that expects a separate Anthropic API key. The attempt fails
+with `No_credentials_found_for_profile_anthropic:claude-cli` in the gateway log,
+and because an explicit override does not inherit the session fallback chain
+(see above), nothing compacts.
+
+The chat sees nothing until the context finally overflows, at which point the
+turn fails with a generic notice:
+
+> ⚠️ Context is too large and auto-compaction could not recover this turn. Try
+> again, use /compact, or use /new to start a fresh session.
+
+The suggested `/compact` runs through the same broken override and fails the same
+way, so the session cannot recover until you fix the model.
+
+On `claude-cli`/OAuth sessions, leave `compaction.model` unset so OpenClaw defers
+to the backend's native compaction. If you must override, point it at a provider
+that has its own configured credentials — for example `anthropic-api/<model>`
+with an API key, or a local `ollama/<model>`. See
+[Native compaction ownership](/gateway/cli-backends#native-compaction-ownership).
+</Warning>
+
 ### Identifier preservation
 
 Compaction summarization preserves opaque identifiers by default (`identifierPolicy: "strict"`). Override with `identifierPolicy: "off"` to disable, or `identifierPolicy: "custom"` plus `identifierInstructions` for custom guidance.
