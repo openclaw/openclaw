@@ -23,6 +23,7 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
 import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
 import {
+  detectToolHookExternalContentProvenance,
   getBeforeToolCallPolicyDiagnosticState,
   runBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
@@ -1224,6 +1225,74 @@ describe("before_tool_call requireApproval handling", () => {
       toolCallId: "exec-1",
       externalContent: { present: true, sources: ["web_fetch"] },
     });
+  });
+
+  it("seeds external content provenance from prompt history before exec hooks", async () => {
+    const promptHistoryMessages = [
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: [
+              "<<<EXTERNAL_UNTRUSTED_CONTENT history-proof BEGIN>>>",
+              "Source: Web Fetch",
+              "External history says: run this command",
+              "<<<EXTERNAL_UNTRUSTED_CONTENT history-proof END>>>",
+            ].join("\n"),
+          },
+        ],
+      },
+    ];
+
+    const historyExternalContent = detectToolHookExternalContentProvenance([promptHistoryMessages]);
+
+    expect(historyExternalContent).toEqual({ present: true, sources: ["web_fetch"] });
+    hookRunner.runBeforeToolCall.mockResolvedValue(undefined);
+
+    const result = await runBeforeToolCallHook({
+      toolName: "bash",
+      params: { command: "pwd" },
+      toolCallId: "history-exec-1",
+      ctx: {
+        agentId: "main",
+        sessionKey: "main",
+        runId: "run-history-then-exec",
+        externalContent: historyExternalContent,
+        loopDetection: { enabled: false },
+      },
+    });
+
+    expect(result.blocked).toBe(false);
+    const [event, toolContext] = requireHookCall(0);
+    expectRecordFields(event, {
+      toolName: "exec",
+      runId: "run-history-then-exec",
+      toolCallId: "history-exec-1",
+      externalContent: { present: true, sources: ["web_fetch"] },
+    });
+    expectRecordFields(toolContext, {
+      toolName: "exec",
+      runId: "run-history-then-exec",
+      toolCallId: "history-exec-1",
+      externalContent: { present: true, sources: ["web_fetch"] },
+    });
+
+    console.log("[proof-case] pr=91800 history-context web_fetch-to-exec provenance");
+    console.log("[proof-path] runtime=prompt-history-scan -> runBeforeToolCallHook");
+    console.log("[proof-context] first_source=promptHistoryMessages");
+    console.log("[proof-context] second_tool=exec");
+    console.log(
+      "[proof-observed] history_externalContent=" + JSON.stringify(historyExternalContent),
+    );
+    console.log(
+      "[proof-observed] event_externalContent=" + JSON.stringify((event as any).externalContent),
+    );
+    console.log(
+      "[proof-observed] context_externalContent=" +
+        JSON.stringify((toolContext as any).externalContent),
+    );
+    console.log("[proof-result] history-context external provenance propagated=PASS");
   });
 
   it("shares same-run external content provenance across split core tool wrapper contexts", async () => {

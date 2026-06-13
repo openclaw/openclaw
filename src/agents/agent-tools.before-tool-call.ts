@@ -286,7 +286,7 @@ function collectToolHookExternalContentSources(
   }
 }
 
-function detectToolHookExternalContentProvenance(
+export function detectToolHookExternalContentProvenance(
   values: readonly unknown[],
 ): PluginHookExternalContentProvenance | undefined {
   const sources = new Set<ToolHookExternalContentSource>();
@@ -302,7 +302,7 @@ function detectToolHookExternalContentProvenance(
   };
 }
 
-function mergeToolHookExternalContentProvenance(
+export function mergeToolHookExternalContentProvenance(
   left: PluginHookExternalContentProvenance | undefined,
   right: PluginHookExternalContentProvenance | undefined,
 ): PluginHookExternalContentProvenance | undefined {

@@ -4058,6 +4058,18 @@ export async function runEmbeddedAttempt(
               ? { currentUserTimestamp: preparedUserTurnMessage.timestamp }
               : {}),
           });
+          const currentPromptExternalContent = detectToolHookExternalContentProvenance([
+            promptForModel,
+            messagesForCurrentPrompt,
+            hookMessagesForCurrentPrompt,
+          ]);
+          const mergedPromptExternalContent = mergeToolHookExternalContentProvenance(
+            catalogToolHookContext.externalContent,
+            currentPromptExternalContent,
+          );
+          if (mergedPromptExternalContent) {
+            catalogToolHookContext.externalContent = mergedPromptExternalContent;
+          }
           if (systemPromptReport) {
             systemPromptReport.currentTurn = {
               ...(params.currentInboundEventKind ? { kind: params.currentInboundEventKind } : {}),
