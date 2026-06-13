@@ -178,6 +178,33 @@ describe("mattermostPlugin", () => {
   });
 
   describe("threading", () => {
+    it("exposes the effective reply root as the transport thread", () => {
+      const resolveReplyTransport = mattermostPlugin.threading?.resolveReplyTransport;
+      if (!resolveReplyTransport) {
+        throw new Error("mattermost threading.resolveReplyTransport missing");
+      }
+
+      expect(
+        resolveReplyTransport({
+          cfg: {},
+          replyToId: "post-parent",
+          threadId: "other-thread",
+        }),
+      ).toEqual({
+        replyToId: "post-parent",
+        threadId: "post-parent",
+      });
+      expect(
+        resolveReplyTransport({
+          cfg: {},
+          threadId: 42,
+        }),
+      ).toEqual({
+        replyToId: "42",
+        threadId: "42",
+      });
+    });
+
     it("uses replyToMode for channel messages and keeps direct messages off", () => {
       const resolveReplyToMode = requireMattermostReplyToModeResolver();
 

@@ -5,6 +5,7 @@ import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/rec
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
+  normalizeOptionalStringifiedId,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -644,6 +645,7 @@ function resolveMessagingToolThreadEvidence(params: {
   to: string;
   accountId?: string;
   threadId?: string;
+  replyToId?: string;
   allowImplicitThread: boolean;
   threadSuppressed: boolean;
   options?: {
@@ -654,19 +656,35 @@ function resolveMessagingToolThreadEvidence(params: {
     hasRepliedRef?: { value: boolean };
   };
 }): Pick<MessagingToolSend, "threadId" | "threadImplicit" | "threadSuppressed"> {
+  const threading = getChannelPlugin(params.providerId)?.threading;
   const autoThreadResolver = params.allowImplicitThread
-    ? getChannelPlugin(params.providerId)?.threading?.resolveAutoThreadId
+    ? threading?.resolveAutoThreadId
     : undefined;
+  const replyTransport = params.replyToId
+    ? threading?.resolveReplyTransport?.({
+        cfg: params.options?.config ?? {},
+        accountId: params.accountId,
+        threadId: params.threadId,
+        replyToId: params.replyToId,
+      })
+    : undefined;
+  const transportThreadId = normalizeOptionalStringifiedId(replyTransport?.threadId);
+  const replyToThreadId =
+    replyTransport?.threadId === null
+      ? normalizeOptionalString(replyTransport.replyToId)
+      : undefined;
+  const explicitThreadId = transportThreadId ?? replyToThreadId ?? params.threadId;
   const currentChannelId = normalizeOptionalString(params.options?.currentChannelId);
   const currentThreadId = normalizeOptionalString(params.options?.currentThreadId);
   const replyToMode = params.options?.replyToMode ?? (currentThreadId ? "all" : undefined);
   const canResolveCurrentThread = Boolean(currentChannelId && currentThreadId);
   const resolvedCurrentThreadId =
-    !params.threadId && !params.threadSuppressed && autoThreadResolver && canResolveCurrentThread
+    !explicitThreadId && !params.threadSuppressed && autoThreadResolver && canResolveCurrentThread
       ? autoThreadResolver({
           cfg: params.options?.config ?? {},
           accountId: params.accountId,
           to: params.to,
+          replyToId: params.replyToId,
           toolContext: {
             currentChannelId,
             currentThreadTs: currentThreadId,
@@ -676,13 +694,13 @@ function resolveMessagingToolThreadEvidence(params: {
         })
       : undefined;
   const threadImplicit =
-    !params.threadId &&
+    !explicitThreadId &&
     !params.threadSuppressed &&
     Boolean(autoThreadResolver) &&
     (!canResolveCurrentThread || Boolean(resolvedCurrentThreadId));
   return {
-    ...((params.threadId ?? resolvedCurrentThreadId)
-      ? { threadId: params.threadId ?? resolvedCurrentThreadId }
+    ...((explicitThreadId ?? resolvedCurrentThreadId)
+      ? { threadId: explicitThreadId ?? resolvedCurrentThreadId }
       : {}),
     ...(threadImplicit ? { threadImplicit: true } : {}),
     ...(params.threadSuppressed ? { threadSuppressed: true } : {}),
@@ -718,6 +736,10 @@ export function extractMessagingToolSend(
     const provider = providerId ?? normalizeOptionalLowercaseString(providerHint) ?? "message";
     const to = normalizeTargetForProvider(provider, toRaw);
     const threadId = normalizeOptionalString(args.threadId);
+    const replyToId = normalizeOptionalString(args.replyTo);
+    // Normal sends use prepared core delivery, where provider transport owns
+    // reply/thread precedence. Other send-like actions use plugin dispatch.
+    const outboundReplyToId = action === "send" ? replyToId : undefined;
     const threadSuppressed = args.topLevel === true || args.threadId === null;
     return to
       ? {
@@ -731,6 +753,7 @@ export function extractMessagingToolSend(
                 to,
                 accountId,
                 threadId,
+                replyToId: outboundReplyToId,
                 allowImplicitThread: true,
                 threadSuppressed,
                 options,

@@ -76,8 +76,10 @@ describe("extractMessagingToolSend", () => {
               resolveAutoThreadId: ({
                 to,
                 toolContext,
+                replyToId,
               }: {
                 to: string;
+                replyToId?: string | null;
                 toolContext?: {
                   currentChannelId?: string;
                   currentThreadTs?: string;
@@ -86,6 +88,7 @@ describe("extractMessagingToolSend", () => {
                 };
               }) => {
                 if (
+                  replyToId ||
                   to !== toolContext?.currentChannelId ||
                   toolContext.replyToMode === "off" ||
                   ((toolContext.replyToMode === "first" || toolContext.replyToMode === "batched") &&
@@ -95,6 +98,10 @@ describe("extractMessagingToolSend", () => {
                 }
                 return toolContext.currentThreadTs;
               },
+              resolveReplyTransport: ({ replyToId }: { replyToId?: string | null }) => ({
+                replyToId,
+                threadId: null,
+              }),
             },
           },
           source: "test",
@@ -102,6 +109,41 @@ describe("extractMessagingToolSend", () => {
         {
           pluginId: "discord",
           plugin: createChannelTestPluginBase({ id: "discord" }),
+          source: "test",
+        },
+        {
+          pluginId: "mattermost",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "mattermost" }),
+            threading: {
+              resolveReplyTransport: ({
+                threadId,
+                replyToId,
+              }: {
+                threadId?: string | number | null;
+                replyToId?: string | null;
+              }) => {
+                const resolvedThreadId =
+                  replyToId ?? (threadId != null ? String(threadId) : undefined);
+                return {
+                  replyToId: resolvedThreadId,
+                  threadId: resolvedThreadId,
+                };
+              },
+            },
+          },
+          source: "test",
+        },
+        {
+          pluginId: "numeric-thread",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "numeric-thread" }),
+            threading: {
+              resolveReplyTransport: () => ({
+                threadId: 42,
+              }),
+            },
+          },
           source: "test",
         },
       ]),
@@ -290,6 +332,92 @@ describe("extractMessagingToolSend", () => {
 
     expect(result?.threadImplicit).toBe(true);
     expect(result?.threadId).toBe("171.222");
+  });
+
+  it("records an explicit Slack replyTo as the destination thread", () => {
+    const result = extractMessagingToolSend(
+      "message",
+      {
+        action: "send",
+        provider: "slack",
+        to: "channel:C1",
+        replyTo: "999.000",
+        content: "done",
+      },
+      {
+        currentChannelId: "channel:c1",
+        currentThreadId: "171.222",
+        replyToMode: "all",
+      },
+    );
+
+    expect(result?.threadImplicit).toBeUndefined();
+    expect(result?.threadId).toBe("999.000");
+  });
+
+  it("uses Slack transport precedence when threadId and replyTo are both present", () => {
+    const result = extractMessagingToolSend("message", {
+      action: "send",
+      provider: "slack",
+      to: "channel:C1",
+      threadId: "111.000",
+      replyTo: "999.000",
+      content: "done",
+    });
+
+    expect(result?.threadImplicit).toBeUndefined();
+    expect(result?.threadId).toBe("999.000");
+  });
+
+  it("keeps plugin-action thread precedence outside normal sends", () => {
+    const result = extractMessagingToolSend("message", {
+      action: "upload-file",
+      provider: "slack",
+      to: "channel:C1",
+      threadId: "111.000",
+      replyTo: "999.000",
+      path: "/tmp/report.pdf",
+    });
+
+    expect(result?.threadImplicit).toBeUndefined();
+    expect(result?.threadId).toBe("111.000");
+  });
+
+  it("does not treat a Discord replyTo as a destination thread", () => {
+    const result = extractMessagingToolSend("message", {
+      action: "send",
+      provider: "discord",
+      to: "channel:123",
+      replyTo: "native-message-1",
+      content: "done",
+    });
+
+    expect(result?.threadImplicit).toBeUndefined();
+    expect(result?.threadId).toBeUndefined();
+  });
+
+  it("records a Mattermost replyTo as the destination thread", () => {
+    const result = extractMessagingToolSend("message", {
+      action: "send",
+      provider: "mattermost",
+      to: "channel:123",
+      replyTo: "post-1",
+      content: "done",
+    });
+
+    expect(result?.threadId).toBe("post-1");
+  });
+
+  it("preserves numeric thread ids returned by provider transport resolution", () => {
+    const result = extractMessagingToolSend("message", {
+      action: "send",
+      provider: "numeric-thread",
+      to: "channel:123",
+      replyTo: "post-1",
+      content: "done",
+    });
+
+    expect(result?.threadId).toBe("42");
   });
 
   it("keeps provider-tool extracted thread id evidence", () => {
