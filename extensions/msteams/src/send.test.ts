@@ -642,7 +642,7 @@ describe("sendPollMSTeams DLP redaction (#16 / poll-card follow-up)", () => {
   function sentPollCard(): {
     body: Array<{ type: string; text?: string; choices?: Array<{ title: string; value: string }> }>;
   } {
-    const call = mockState.sendMSTeamsActivityWithReference.mock.calls[0];
+    const call = mockState.sendMSTeamsActivityWithReference.mock.calls[0] as unknown as unknown[];
     const activity = call?.[2] as { attachments: Array<{ content: unknown }> };
     return activity.attachments[0].content as ReturnType<typeof sentPollCard>;
   }
