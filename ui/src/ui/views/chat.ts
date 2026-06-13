@@ -1034,13 +1034,13 @@ function renderWorkspaceFileRail(
     return html`
       <aside
         class="chat-workspace-rail chat-workspace-rail--collapsed"
-        aria-label="Workspace files"
+        aria-label=${t("chat.workspaceFiles.label")}
       >
         <button
           type="button"
           class="nav-collapse-toggle chat-workspace-rail__collapse-toggle"
-          title="Expand workspace files"
-          aria-label="Expand workspace files"
+          title=${t("chat.workspaceFiles.expand")}
+          aria-label=${t("chat.workspaceFiles.expand")}
           aria-expanded="false"
           @click=${workspaceFiles.onToggleCollapsed}
         >
@@ -1054,18 +1054,18 @@ function renderWorkspaceFileRail(
   }
   const files = workspaceFiles.list?.files ?? [];
   return html`
-    <aside class="chat-workspace-rail" aria-label="Workspace files">
+    <aside class="chat-workspace-rail" aria-label=${t("chat.workspaceFiles.label")}>
       <div class="chat-workspace-rail__header">
         <div class="chat-workspace-rail__title">
-          <span class="chat-workspace-rail__eyebrow">Workspace</span>
-          <strong>Files</strong>
+          <span class="chat-workspace-rail__eyebrow">${t("chat.workspaceFiles.workspace")}</span>
+          <strong>${t("chat.workspaceFiles.files")}</strong>
         </div>
         <div class="chat-workspace-rail__actions">
           <button
             class="btn btn--ghost btn--sm chat-workspace-rail__refresh"
             type="button"
-            title="Refresh files"
-            aria-label="Refresh files"
+            title=${t("chat.workspaceFiles.refresh")}
+            aria-label=${t("chat.workspaceFiles.refresh")}
             ?disabled=${workspaceFiles.loading}
             @click=${workspaceFiles.onRefresh}
           >
@@ -1074,8 +1074,8 @@ function renderWorkspaceFileRail(
           <button
             type="button"
             class="nav-collapse-toggle chat-workspace-rail__collapse-toggle"
-            title="Collapse workspace files"
-            aria-label="Collapse workspace files"
+            title=${t("chat.workspaceFiles.collapse")}
+            aria-label=${t("chat.workspaceFiles.collapse")}
             aria-expanded="true"
             @click=${workspaceFiles.onToggleCollapsed}
           >
@@ -1095,9 +1095,9 @@ function renderWorkspaceFileRail(
             ${workspaceFiles.error}
           </div>`
         : workspaceFiles.loading && files.length === 0
-          ? html`<div class="chat-workspace-rail__state">Loading files...</div>`
+          ? html`<div class="chat-workspace-rail__state">${t("chat.workspaceFiles.loading")}</div>`
           : files.length === 0
-            ? html`<div class="chat-workspace-rail__state">No workspace files</div>`
+            ? html`<div class="chat-workspace-rail__state">${t("chat.workspaceFiles.empty")}</div>`
             : html`
                 <div class="chat-workspace-rail__list" role="list">
                   ${files.map((file) => {
@@ -1121,7 +1121,9 @@ function renderWorkspaceFileRail(
                             : nothing}
                         </span>
                         ${file.missing
-                          ? html`<span class="chat-workspace-rail__file-badge">Missing</span>`
+                          ? html`<span class="chat-workspace-rail__file-badge"
+                              >${t("chat.workspaceFiles.missing")}</span
+                            >`
                           : nothing}
                       </button>
                     `;

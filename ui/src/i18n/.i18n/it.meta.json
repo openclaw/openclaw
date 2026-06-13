@@ -1,5 +1,14 @@
 {
   "fallbackKeys": [
+    "chat.workspaceFiles.collapse",
+    "chat.workspaceFiles.empty",
+    "chat.workspaceFiles.expand",
+    "chat.workspaceFiles.files",
+    "chat.workspaceFiles.label",
+    "chat.workspaceFiles.loading",
+    "chat.workspaceFiles.missing",
+    "chat.workspaceFiles.refresh",
+    "chat.workspaceFiles.workspace",
     "cron.jobDetail.command",
     "cron.jobDetail.cwd",
     "skillWorkshop.header.useCurrentChat",
@@ -34,12 +43,12 @@
     "workboard.unknownStatus",
     "workboard.viewDetails"
   ],
-  "generatedAt": "2026-06-13T03:39:02.458Z",
+  "generatedAt": "2026-06-13T21:58:38.697Z",
   "locale": "it",
   "model": "claude-opus-4-8",
   "provider": "anthropic",
-  "sourceHash": "644e37fe678b6c9f31954656d675e2bd8a6f133171ef56c55aabc321ccde5b04",
-  "totalKeys": 1336,
+  "sourceHash": "642a382824b6637e6eea0d3fbccd04b135194675db6bb9a0a1bacbf6424bd870",
+  "totalKeys": 1345,
   "translatedKeys": 1303,
   "workflow": 1
 }

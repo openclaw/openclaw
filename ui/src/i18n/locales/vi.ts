@@ -1338,6 +1338,17 @@ export const vi: TranslationMap = {
     toolCards: {
       toolError: "Lỗi công cụ",
     },
+    workspaceFiles: {
+      label: "Workspace files",
+      expand: "Expand workspace files",
+      collapse: "Collapse workspace files",
+      workspace: "Workspace",
+      files: "Files",
+      refresh: "Refresh files",
+      loading: "Loading files…",
+      empty: "No workspace files",
+      missing: "Missing",
+    },
   },
   languages: {
     en: "English (Tiếng Anh)",
