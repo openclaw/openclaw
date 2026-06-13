@@ -199,7 +199,7 @@ function isOpenClawGatewaySystemdService(name: string, contents: string): boolea
 }
 
 function isOpenClawGatewayTaskName(name: string): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(name);
+  const normalized = normalizeLowercaseStringOrEmpty(name).replace(/^[/\\]+/, "");
   if (!normalized) {
     return false;
   }
