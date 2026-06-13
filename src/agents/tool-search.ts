@@ -1109,7 +1109,10 @@ function compactDirectoryDescription(description: string): string {
 }
 
 function formatToolDirectoryEntry(entry: ReturnType<typeof compactEntry>): string {
-  const description = compactDirectoryDescription(entry.description);
+  const description =
+    entry.source === "openclaw"
+      ? compactDirectoryDescription(entry.description)
+      : "External tool; use tool_describe to inspect its schema.";
   const owner = entry.sourceName ? ` (${entry.sourceName})` : "";
   return `- ${entry.name}${owner}: ${description || "No description."}`;
 }

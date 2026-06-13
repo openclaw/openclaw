@@ -502,11 +502,11 @@ async function executeToolCalls(
   emit: AgentEventSink,
 ): Promise<ExecutedToolCallBatch> {
   const toolCalls = assistantMessage.content.filter((c) => c.type === "toolCall");
-  const resolvedToolCalls = new Map<AgentToolCall, AgentTool | undefined>();
+  const resolvedToolCalls = new Map<AgentToolCall, ResolvedToolCallOutcome>();
   let hasSequentialToolCall = false;
   if (config.toolExecution !== "sequential") {
     for (const toolCall of toolCalls) {
-      const tool = await resolveToolCallTool(
+      const resolution = await resolveToolCallTool(
         currentContext,
         assistantMessage,
         toolCall,
@@ -514,7 +514,7 @@ async function executeToolCalls(
         signal,
         resolvedToolCalls,
       );
-      if (tool?.executionMode === "sequential") {
+      if (resolution.kind === "resolved" && resolution.tool?.executionMode === "sequential") {
         hasSequentialToolCall = true;
         break;
       }
@@ -550,11 +550,15 @@ type ExecutedToolCallBatch = {
   terminate: boolean;
 };
 
+type ResolvedToolCallOutcome =
+  | { kind: "resolved"; tool?: AgentTool }
+  | { kind: "error"; error: unknown };
+
 async function executeToolCallsSequential(
   currentContext: AgentContext,
   assistantMessage: AssistantMessage,
   toolCalls: AgentToolCall[],
-  resolvedToolCalls: Map<AgentToolCall, AgentTool | undefined>,
+  resolvedToolCalls: Map<AgentToolCall, ResolvedToolCallOutcome>,
   config: AgentLoopConfig,
   signal: AbortSignal | undefined,
   emit: AgentEventSink,
@@ -618,7 +622,7 @@ async function executeToolCallsParallel(
   currentContext: AgentContext,
   assistantMessage: AssistantMessage,
   toolCalls: AgentToolCall[],
-  resolvedToolCalls: Map<AgentToolCall, AgentTool | undefined>,
+  resolvedToolCalls: Map<AgentToolCall, ResolvedToolCallOutcome>,
   config: AgentLoopConfig,
   signal: AbortSignal | undefined,
   emit: AgentEventSink,
@@ -742,28 +746,35 @@ async function resolveToolCallTool(
   toolCall: AgentToolCall,
   config: AgentLoopConfig,
   signal: AbortSignal | undefined,
-  resolvedToolCalls?: Map<AgentToolCall, AgentTool | undefined>,
-): Promise<AgentTool | undefined> {
-  if (resolvedToolCalls?.has(toolCall)) {
-    return resolvedToolCalls.get(toolCall);
+  resolvedToolCalls?: Map<AgentToolCall, ResolvedToolCallOutcome>,
+): Promise<ResolvedToolCallOutcome> {
+  const cached = resolvedToolCalls?.get(toolCall);
+  if (cached) {
+    return cached;
   }
-  let tool = currentContext.tools?.find((t) => t.name === toolCall.name);
-  if (!tool) {
-    tool = await config.resolveDeferredTool?.(
-      {
-        assistantMessage,
-        toolCall,
-        context: currentContext,
-      },
-      signal,
-    );
-    if (tool) {
-      // Make the recovered tool visible to later provider continuations in this run.
-      currentContext.tools = [...(currentContext.tools ?? []), tool];
+  let resolution: ResolvedToolCallOutcome;
+  try {
+    let tool = currentContext.tools?.find((t) => t.name === toolCall.name);
+    if (!tool) {
+      tool = await config.resolveDeferredTool?.(
+        {
+          assistantMessage,
+          toolCall,
+          context: currentContext,
+        },
+        signal,
+      );
+      if (tool) {
+        // Make the recovered tool visible to later provider continuations in this run.
+        currentContext.tools = [...(currentContext.tools ?? []), tool];
+      }
     }
+    resolution = { kind: "resolved", ...(tool ? { tool } : {}) };
+  } catch (error) {
+    resolution = { kind: "error", error };
   }
-  resolvedToolCalls?.set(toolCall, tool);
-  return tool;
+  resolvedToolCalls?.set(toolCall, resolution);
+  return resolution;
 }
 
 async function prepareToolCall(
@@ -772,9 +783,9 @@ async function prepareToolCall(
   toolCall: AgentToolCall,
   config: AgentLoopConfig,
   signal: AbortSignal | undefined,
-  resolvedToolCalls: Map<AgentToolCall, AgentTool | undefined>,
+  resolvedToolCalls: Map<AgentToolCall, ResolvedToolCallOutcome>,
 ): Promise<PreparedToolCall | ImmediateToolCallOutcome> {
-  const tool = await resolveToolCallTool(
+  const resolution = await resolveToolCallTool(
     currentContext,
     assistantMessage,
     toolCall,
@@ -782,6 +793,20 @@ async function prepareToolCall(
     signal,
     resolvedToolCalls,
   );
+  if (resolution.kind === "error") {
+    return {
+      kind: "immediate",
+      result: createErrorToolResult(
+        signal?.aborted
+          ? "Operation aborted"
+          : resolution.error instanceof Error
+            ? resolution.error.message
+            : String(resolution.error),
+      ),
+      isError: true,
+    };
+  }
+  const tool = resolution.tool;
   if (!tool) {
     return {
       kind: "immediate",

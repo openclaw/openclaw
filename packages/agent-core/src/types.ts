@@ -277,7 +277,8 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
   /**
    * Hydrates an already-authorized tool that was deferred out of the current
    * provider-visible tool set. Return undefined for every other unknown name so
-   * the loop keeps the normal "Tool <name> not found" result.
+   * the loop keeps the normal "Tool <name> not found" result. Thrown or rejected
+   * failures become error tool results for the requested call.
    */
   resolveDeferredTool?: (
     context: DeferredToolCallContext,
