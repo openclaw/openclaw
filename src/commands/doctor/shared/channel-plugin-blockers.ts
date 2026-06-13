@@ -28,6 +28,7 @@ export type ChannelPluginBlockerHit = {
   /** Effective activation reason preventing the plugin from loading. */
   reason:
     | "disabled in config"
+    | "blocked by denylist"
     | "plugins disabled"
     | "missing explicit enablement"
     | "not enabled"
@@ -51,7 +52,7 @@ export function scanConfiguredChannelPluginBlockers(
     env,
     includeDisabled: true,
   });
-  const manifestEnvOwners = listManifestEnvConfiguredChannelOwners(registry.plugins, env);
+  const manifestEnvTriggers = listManifestEnvConfiguredChannelTriggers(registry.plugins, env);
   const policyEntries = resolveConfiguredChannelPresencePolicy({
     config: cfg,
     activationSourceConfig,
@@ -64,7 +65,7 @@ export function scanConfiguredChannelPluginBlockers(
   const policyChannelIds = policyEntries
     .filter(
       (entry) =>
-        !manifestEnvOwners.has(entry.channelId) ||
+        !manifestEnvTriggers.has(entry.channelId) ||
         entry.sources.some((source) => source !== "env" && source !== "manifest-env"),
     )
     .map((entry) => entry.channelId);
@@ -75,24 +76,24 @@ export function scanConfiguredChannelPluginBlockers(
   for (const channelId of listExplicitlyDisabledChannelIdsForConfig(cfg)) {
     const normalizedChannelId = normalizeOptionalLowercaseString(channelId) ?? channelId;
     genericChannelIds.delete(normalizedChannelId);
-    manifestEnvOwners.delete(normalizedChannelId);
+    manifestEnvTriggers.delete(normalizedChannelId);
   }
-  if (genericChannelIds.size === 0 && manifestEnvOwners.size === 0) {
+  if (genericChannelIds.size === 0 && manifestEnvTriggers.size === 0) {
     return [];
   }
   const hits: ChannelPluginBlockerHit[] = [];
   const hitKeys = new Set<string>();
+  const globalDisableChannelIds = new Set<string>();
   const addHits = (channelId: string, ownerStates: ChannelOwnerState[]) => {
-    let reportedGlobalDisable = false;
     for (const state of ownerStates) {
       if (!state.reason) {
         continue;
       }
       if (state.reason === "plugins disabled") {
-        if (reportedGlobalDisable) {
+        if (globalDisableChannelIds.has(channelId)) {
           continue;
         }
-        reportedGlobalDisable = true;
+        globalDisableChannelIds.add(channelId);
       }
       const key = `${channelId}\0${state.pluginId}\0${state.reason}`;
       if (hitKeys.has(key)) {
@@ -129,32 +130,34 @@ export function scanConfiguredChannelPluginBlockers(
     addHits(channelId, ownerStates);
   }
 
-  for (const [channelId, pluginIds] of manifestEnvOwners) {
-    const owners = registry.plugins.filter((plugin) => pluginIds.has(plugin.id));
-    const ownerStates = owners.map((plugin) =>
-      resolveConfiguredChannelOwnerState({
-        plugin,
-        channelId,
-        sourceConfig: activationSourceConfig,
-        sourcePluginsConfig,
-        effectiveConfig: cfg,
-        effectivePluginsConfig,
-      }),
-    );
-    addHits(
-      channelId,
-      ownerStates.filter((state) => !state.available),
-    );
+  for (const [channelId, triggers] of manifestEnvTriggers) {
+    for (const pluginIds of triggers.values()) {
+      const owners = registry.plugins.filter((plugin) => pluginIds.has(plugin.id));
+      const ownerStates = owners.map((plugin) =>
+        resolveConfiguredChannelOwnerState({
+          plugin,
+          channelId,
+          sourceConfig: activationSourceConfig,
+          sourcePluginsConfig,
+          effectiveConfig: cfg,
+          effectivePluginsConfig,
+        }),
+      );
+      if (ownerStates.some((state) => state.available)) {
+        continue;
+      }
+      addHits(channelId, ownerStates);
+    }
   }
 
   return hits;
 }
 
-function listManifestEnvConfiguredChannelOwners(
+function listManifestEnvConfiguredChannelTriggers(
   plugins: readonly PluginManifestRecord[],
   env: NodeJS.ProcessEnv,
-): Map<string, Set<string>> {
-  const ownersByChannelId = new Map<string, Set<string>>();
+): Map<string, Map<string, Set<string>>> {
+  const triggersByChannelId = new Map<string, Map<string, Set<string>>>();
   for (const plugin of plugins) {
     const ownedChannelIds = new Set(
       plugin.channels
@@ -166,25 +169,30 @@ function listManifestEnvConfiguredChannelOwners(
       if (!channelId || !ownedChannelIds.has(channelId)) {
         continue;
       }
-      const configured = envVars.some((envVar) => {
+      for (const envVar of envVars) {
         if (!isSafeChannelEnvVarTriggerName(envVar)) {
-          return false;
+          continue;
         }
         const value = env[envVar] ?? env[envVar.toUpperCase()];
-        return typeof value === "string" && value.trim().length > 0;
-      });
-      if (!configured) {
-        continue;
+        if (typeof value !== "string" || value.trim().length === 0) {
+          continue;
+        }
+        let triggers = triggersByChannelId.get(channelId);
+        if (!triggers) {
+          triggers = new Map();
+          triggersByChannelId.set(channelId, triggers);
+        }
+        const trigger = envVar.trim().toUpperCase();
+        let ownerIds = triggers.get(trigger);
+        if (!ownerIds) {
+          ownerIds = new Set();
+          triggers.set(trigger, ownerIds);
+        }
+        ownerIds.add(plugin.id);
       }
-      let ownerIds = ownersByChannelId.get(channelId);
-      if (!ownerIds) {
-        ownerIds = new Set();
-        ownersByChannelId.set(channelId, ownerIds);
-      }
-      ownerIds.add(plugin.id);
     }
   }
-  return ownersByChannelId;
+  return triggersByChannelId;
 }
 
 type ChannelOwnerState = {
@@ -218,17 +226,12 @@ function resolveConfiguredChannelOwnerState(params: {
   });
   const sourceExternalTrusted =
     params.plugin.origin === "bundled" ||
-    (sourceBaseBlock === null &&
-      (params.plugin.origin === "workspace"
-        ? isActivatedManifestOwner({
-            plugin: params.plugin,
-            normalizedConfig: params.sourcePluginsConfig,
-            rootConfig: params.sourceConfig,
-          })
-        : hasExplicitManifestOwnerTrust({
-            plugin: params.plugin,
-            normalizedConfig: params.sourcePluginsConfig,
-          })));
+    hasExplicitManifestOwnerTrust({
+      plugin: params.plugin,
+      normalizedConfig: params.sourcePluginsConfig,
+    }) ||
+    (params.plugin.origin === "workspace" &&
+      params.sourcePluginsConfig.slots.contextEngine === params.plugin.id);
   const sourceBundledActivated =
     params.plugin.origin === "bundled" &&
     (bundledChannelConfigured ||
@@ -295,6 +298,9 @@ function mapManifestOwnerBlockerReason(
   if (reason === "plugin-disabled") {
     return "disabled in config";
   }
+  if (reason === "blocked-by-denylist") {
+    return "blocked by denylist";
+  }
   if (reason === "not-in-allowlist") {
     return "not in allowlist";
   }
@@ -304,6 +310,9 @@ function mapManifestOwnerBlockerReason(
 function formatReason(hit: ChannelPluginBlockerHit): string {
   if (hit.reason === "disabled in config") {
     return `plugin "${sanitizeForLog(hit.pluginId)}" is disabled by plugins.entries.${sanitizeForLog(hit.pluginId)}.enabled=false.`;
+  }
+  if (hit.reason === "blocked by denylist") {
+    return `plugin "${sanitizeForLog(hit.pluginId)}" is blocked by plugins.deny. Remove "${sanitizeForLog(hit.pluginId)}" from plugins.deny.`;
   }
   if (hit.reason === "plugins disabled") {
     return `plugins.enabled=false blocks channel plugins globally.`;

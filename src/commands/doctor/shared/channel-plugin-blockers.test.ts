@@ -382,6 +382,84 @@ describe("channel plugin blockers", () => {
     ]);
   });
 
+  it("accepts an available co-owner for the same manifest env trigger", () => {
+    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
+      plugins: [
+        {
+          id: "bundled-chat",
+          origin: "bundled",
+          channels: ["shared-chat"],
+          channelEnvVars: {
+            "shared-chat": ["SHARED_CHAT_TOKEN"],
+          },
+          enabledByDefault: true,
+        },
+        {
+          id: "external-chat",
+          origin: "config",
+          channels: ["shared-chat"],
+          channelEnvVars: {
+            "shared-chat": ["SHARED_CHAT_TOKEN"],
+          },
+          enabledByDefault: false,
+        },
+      ],
+      diagnostics: [],
+    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+
+    const hits = scanConfiguredChannelPluginBlockers({}, {
+      SHARED_CHAT_TOKEN: "configured",
+    } as NodeJS.ProcessEnv);
+
+    expect(hits).toStrictEqual([]);
+  });
+
+  it("deduplicates global plugin disablement across manifest env triggers", () => {
+    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
+      plugins: [
+        {
+          id: "first-chat",
+          origin: "config",
+          channels: ["shared-chat"],
+          channelEnvVars: {
+            "shared-chat": ["FIRST_CHAT_TOKEN"],
+          },
+          enabledByDefault: false,
+        },
+        {
+          id: "second-chat",
+          origin: "config",
+          channels: ["shared-chat"],
+          channelEnvVars: {
+            "shared-chat": ["SECOND_CHAT_TOKEN"],
+          },
+          enabledByDefault: false,
+        },
+      ],
+      diagnostics: [],
+    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+
+    const hits = scanConfiguredChannelPluginBlockers(
+      {
+        plugins: {
+          enabled: false,
+        },
+      },
+      {
+        FIRST_CHAT_TOKEN: "configured",
+        SECOND_CHAT_TOKEN: "configured",
+      } as NodeJS.ProcessEnv,
+    );
+
+    expect(hits).toEqual([
+      {
+        channelId: "shared-chat",
+        pluginId: "first-chat",
+        reason: "plugins disabled",
+      },
+    ]);
+  });
+
   it("does not report unrelated blocked owners for a manifest env trigger", () => {
     vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
       plugins: [
@@ -651,6 +729,88 @@ describe("channel plugin blockers", () => {
     expect(hits).toStrictEqual([]);
   });
 
+  it("preserves explicit external trust across an auto-materialized allowlist", () => {
+    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
+      plugins: [
+        {
+          id: "discord",
+          origin: "global",
+          channels: ["discord"],
+          enabledByDefault: false,
+        },
+      ],
+      diagnostics: [],
+    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+
+    const sourceConfig: OpenClawConfig = {
+      channels: {
+        discord: {
+          enabled: true,
+        },
+      },
+      plugins: {
+        allow: ["browser"],
+        entries: {
+          discord: { enabled: true },
+        },
+      },
+    };
+    const hits = scanConfiguredChannelPluginBlockers(
+      {
+        ...sourceConfig,
+        plugins: {
+          ...sourceConfig.plugins,
+          allow: ["browser", "discord"],
+        },
+      },
+      process.env,
+      sourceConfig,
+    );
+
+    expect(hits).toStrictEqual([]);
+  });
+
+  it("preserves explicit workspace trust across an auto-materialized allowlist", () => {
+    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
+      plugins: [
+        {
+          id: "workspace-chat",
+          origin: "workspace",
+          channels: ["workspace-chat"],
+          enabledByDefault: false,
+        },
+      ],
+      diagnostics: [],
+    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+
+    const sourceConfig: OpenClawConfig = {
+      channels: {
+        "workspace-chat": {
+          enabled: true,
+        },
+      },
+      plugins: {
+        allow: ["browser"],
+        entries: {
+          "workspace-chat": { enabled: true },
+        },
+      },
+    };
+    const hits = scanConfiguredChannelPluginBlockers(
+      {
+        ...sourceConfig,
+        plugins: {
+          ...sourceConfig.plugins,
+          allow: ["browser", "workspace-chat"],
+        },
+      },
+      process.env,
+      sourceConfig,
+    );
+
+    expect(hits).toStrictEqual([]);
+  });
+
   it("accepts an env-auto-enabled bundled owner absent from the source config", () => {
     vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
       plugins: [
@@ -756,9 +916,50 @@ describe("channel plugin blockers", () => {
     expect(hits).toEqual([
       {
         channelId: "shared-chat",
+        pluginId: "denied-chat",
+        reason: "blocked by denylist",
+      },
+      {
+        channelId: "shared-chat",
         pluginId: "untrusted-chat",
         reason: "missing explicit enablement",
       },
+    ]);
+  });
+
+  it("reports a single channel owner blocked by plugins.deny", () => {
+    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
+      plugins: [
+        {
+          id: "discord",
+          origin: "global",
+          channels: ["discord"],
+          enabledByDefault: false,
+        },
+      ],
+      diagnostics: [],
+    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+
+    const hits = scanConfiguredChannelPluginBlockers({
+      plugins: {
+        deny: ["discord"],
+      },
+      channels: {
+        discord: {
+          enabled: true,
+        },
+      },
+    });
+
+    expect(hits).toEqual([
+      {
+        channelId: "discord",
+        pluginId: "discord",
+        reason: "blocked by denylist",
+      },
+    ]);
+    expect(collectConfiguredChannelPluginBlockerWarnings(hits)).toEqual([
+      '- channels.discord: channel is configured, but plugin "discord" is blocked by plugins.deny. Remove "discord" from plugins.deny. Fix plugin enablement before relying on setup guidance for this channel.',
     ]);
   });
 
