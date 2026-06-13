@@ -13,6 +13,7 @@ import {
   hasScopedRolloutOptions,
   isTransientRolloutCode,
   outcomeFromTenantAdminRolloutResponse,
+  preflightGhcrImagePull,
   runRollout,
   rolloutOptionsFromEnv,
   tenantIdsFromFlyApps,
@@ -35,6 +36,8 @@ const ROLLOUT_ENV_NAMES = [
   "FLY_API_TOKEN",
   "FLY_ORG_SLUG",
   "FLY_MACHINES_API",
+  "GHCR_PULL_USERNAME",
+  "GHCR_PULL_TOKEN",
   "GITHUB_TOKEN",
   "GITHUB_REPOSITORY",
   "GITHUB_RUN_NUMBER",
@@ -174,6 +177,178 @@ describe("scripts/runtime-rollout", () => {
     expect(adminRolloutPollUrl("https://api.rockielab.com", "id with/slash")).toBe(
       "https://api.rockielab.com/api/admin/tenants/rollout/id%20with%2Fslash",
     );
+  });
+
+  it("preflights GHCR private image readability before touching tenants", async () => {
+    const attempts: unknown[] = [];
+    const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: URL | RequestInfo, init?: RequestInit) => {
+        const requestUrl = String(url);
+        fetchCalls.push({ url: requestUrl, init });
+        if (requestUrl.startsWith("https://ghcr.io/token?")) {
+          return jsonResponse(200, { token: "registry-token" });
+        }
+        if (
+          requestUrl === "https://ghcr.io/v2/rockielab/rockielab-runtime-multitenant/manifests/sha"
+        ) {
+          return jsonResponse(401, { errors: [{ code: "UNAUTHORIZED" }] });
+        }
+        throw new Error(`unexpected fetch: ${requestUrl}`);
+      }),
+    );
+
+    try {
+      const result = await preflightGhcrImagePull({
+        image: "ghcr.io/rockielab/rockielab-runtime-multitenant:sha",
+        username: "saml212",
+        token: "",
+        timeoutMs: 1000,
+        attempts,
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        auth_mode: "anonymous",
+        code: "401",
+        repository: "rockielab/rockielab-runtime-multitenant",
+        reference: "sha",
+      });
+      expect(result.message).toContain("GHCR_PULL_TOKEN is not set");
+      expect(fetchCalls[0]?.init?.headers).not.toHaveProperty("Authorization");
+      expect(attempts).toMatchObject([
+        { kind: "ghcr-pull-preflight-token", response_code: "200" },
+        { kind: "ghcr-pull-preflight-manifest", response_code: "401" },
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("uses the configured GHCR pull token during preflight", async () => {
+    const attempts: unknown[] = [];
+    const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: URL | RequestInfo, init?: RequestInit) => {
+        const requestUrl = String(url);
+        fetchCalls.push({ url: requestUrl, init });
+        if (requestUrl.startsWith("https://ghcr.io/token?")) {
+          return jsonResponse(200, { token: "registry-token" });
+        }
+        if (
+          requestUrl === "https://ghcr.io/v2/rockielab/rockielab-runtime-multitenant/manifests/sha"
+        ) {
+          return jsonResponse(200, { schemaVersion: 2 });
+        }
+        throw new Error(`unexpected fetch: ${requestUrl}`);
+      }),
+    );
+
+    try {
+      await expect(
+        preflightGhcrImagePull({
+          image: "ghcr.io/rockielab/rockielab-runtime-multitenant:sha",
+          username: "saml212",
+          token: "pull-token",
+          timeoutMs: 1000,
+          attempts,
+        }),
+      ).resolves.toMatchObject({
+        ok: true,
+        auth_mode: "configured-token",
+        code: "200",
+      });
+      expect(fetchCalls[0]?.init?.headers).toMatchObject({
+        Authorization: `Basic ${Buffer.from("saml212:pull-token").toString("base64")}`,
+      });
+      expect(fetchCalls[1]?.init?.headers).toMatchObject({
+        Authorization: "Bearer registry-token",
+      });
+      expect(JSON.stringify(attempts)).not.toContain("registry-token");
+      expect(JSON.stringify(attempts)).toContain("<redacted>");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("stops rollout before admin calls when the namespaced GHCR image is unreadable", async () => {
+    const previousEnv = snapshotEnv();
+    const artifactDir = await mkdtemp(path.join(tmpdir(), "runtime-rollout-"));
+    const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
+    try {
+      process.env.API_URL = "https://api.rockielab.test";
+      process.env.ADMIN_TOKEN = "admin-token";
+      process.env.IMAGE_TAG = "ghcr.io/rockielab/rockielab-runtime-multitenant:sha";
+      process.env.ROLLOUT_ARTIFACT_DIR = artifactDir;
+      process.env.ROLLOUT_CURL_MAX_TIME = "1";
+      process.env.GHCR_PULL_USERNAME = "saml212";
+      process.env.GHCR_PULL_TOKEN = "pull-token";
+      delete process.env.FLY_API_TOKEN;
+      delete process.env.GITHUB_TOKEN;
+      delete process.env.GITHUB_REPOSITORY;
+      delete process.env.GITHUB_RUN_NUMBER;
+      delete process.env.API_PASSWORD;
+
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: URL | RequestInfo, init?: RequestInit) => {
+          const requestUrl = String(url);
+          fetchCalls.push({ url: requestUrl, init });
+          if (requestUrl.startsWith("https://ghcr.io/token?")) {
+            return jsonResponse(200, { token: "registry-token", expires_in: 300 });
+          }
+          if (
+            requestUrl ===
+            "https://ghcr.io/v2/rockielab/rockielab-runtime-multitenant/manifests/sha"
+          ) {
+            return jsonResponse(401, { errors: [{ code: "UNAUTHORIZED" }] });
+          }
+          throw new Error(`unexpected fetch: ${requestUrl}`);
+        }),
+      );
+
+      await expect(runRollout()).resolves.toBe(1);
+
+      expect(fetchCalls.map((call) => call.url)).toEqual([
+        "https://ghcr.io/token?service=ghcr.io&scope=repository%3Arockielab%2Frockielab-runtime-multitenant%3Apull",
+        "https://ghcr.io/v2/rockielab/rockielab-runtime-multitenant/manifests/sha",
+      ]);
+      expect(fetchCalls.some((call) => call.url.startsWith("https://api.rockielab.test"))).toBe(
+        false,
+      );
+
+      const summary = await readRolloutSummary(artifactDir);
+      expect(summary).toMatchObject({
+        final_result: "failed-ghcr-pull-auth-preflight",
+        final_response_code: "401",
+        ghcr_pull_preflight: {
+          ok: false,
+          auth_mode: "configured-token",
+          code: "401",
+          repository: "rockielab/rockielab-runtime-multitenant",
+          reference: "sha",
+        },
+      });
+      expect(summary.error_details.remediation).toContain("Set GHCR_PULL_TOKEN");
+      const summaryText = JSON.stringify(summary);
+      const attemptsText = await readFile(path.join(artifactDir, "attempts.jsonl"), "utf8");
+      const attempts = attemptsText
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(summaryText).not.toContain("registry-token");
+      expect(attemptsText).not.toContain("registry-token");
+      expect(JSON.parse(attempts[0].response_body)).toMatchObject({
+        token: "<redacted>",
+        expires_in: 300,
+      });
+    } finally {
+      vi.unstubAllGlobals();
+      restoreEnv(previousEnv);
+      await rm(artifactDir, { recursive: true, force: true });
+    }
   });
 
   it("treats tenant and rollout tuning options as scoped to prevent fallback broadening", () => {

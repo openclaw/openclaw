@@ -228,21 +228,42 @@ jobs:
               { name: "fleet-task", color: "7057ff", description: "Fleet task follow-up" },
               { name: "cli-drift", color: "d73a4a", description: "Claude/Codex CLI surface drift" },
             ];
-            for (const label of labels) {
+            async function skipDisabledIssues() {
+              core.warning("CLI drift issue was not opened because Issues are disabled on this repository.");
+              await core.summary
+                .addHeading("CLI Drift Issue Skipped")
+                .addRaw("Issues are disabled on this repository; drift details remain in the workflow summary and artifact.")
+                .write();
+            }
+            async function ensureLabels() {
               try {
-                await github.rest.issues.getLabel({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  name: label.name,
-                });
+                for (const label of labels) {
+                  try {
+                    await github.rest.issues.getLabel({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      name: label.name,
+                    });
+                  } catch (error) {
+                    if (error.status !== 404) throw error;
+                    await github.rest.issues.createLabel({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      ...label,
+                    });
+                  }
+                }
+                return true;
               } catch (error) {
-                if (error.status !== 404) throw error;
-                await github.rest.issues.createLabel({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  ...label,
-                });
+                if (error.status === 410) {
+                  await skipDisabledIssues();
+                  return false;
+                }
+                throw error;
               }
+            }
+            if (!(await ensureLabels())) {
+              return;
             }
 
             const summary = fs.readFileSync(process.env.SUMMARY_PATH, "utf8");
@@ -271,13 +292,21 @@ jobs:
               "```",
             ].join("\n");
 
-            await github.rest.issues.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              title: `CLI surface drift in multitenant runtime (${process.env.CHECKED_SHA.slice(0, 7)})`,
-              labels: labels.map((label) => label.name),
-              body,
-            });
+            try {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: `CLI surface drift in multitenant runtime (${process.env.CHECKED_SHA.slice(0, 7)})`,
+                labels: labels.map((label) => label.name),
+                body,
+              });
+            } catch (error) {
+              if (error.status === 410) {
+                await skipDisabledIssues();
+                return;
+              }
+              throw error;
+            }
 
       - name: Fail on assertion failure
         if: steps.surface.outputs.status != '0'

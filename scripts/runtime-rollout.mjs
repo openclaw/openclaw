@@ -7,6 +7,13 @@ const DEFAULT_FLY_ORG_SLUG = "sam-larson-851";
 const DEFAULT_FLY_MACHINES_API = "https://api.machines.dev/v1";
 const TENANT_APP_PREFIX = "rockielab-tenant-";
 const WORKFLOW_FILE = "build-runtime-image.yml";
+const DEFAULT_GHCR_PULL_USERNAME = "saml212";
+const GHCR_MANIFEST_ACCEPT = [
+  "application/vnd.oci.image.index.v1+json",
+  "application/vnd.oci.image.manifest.v1+json",
+  "application/vnd.docker.distribution.manifest.list.v2+json",
+  "application/vnd.docker.distribution.manifest.v2+json",
+].join(", ");
 
 export function isTransientRolloutCode(code) {
   return ["000", "520", "521", "522", "523", "524"].includes(String(code));
@@ -140,6 +147,163 @@ async function request(method, url, { headers = {}, body, timeoutMs }) {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function parseGhcrImageRef(image) {
+  if (!image.startsWith("ghcr.io/")) {
+    return null;
+  }
+  const remainder = image.slice("ghcr.io/".length);
+  const digestAt = remainder.lastIndexOf("@");
+  if (digestAt > 0) {
+    const repository = remainder.slice(0, digestAt);
+    const reference = remainder.slice(digestAt + 1);
+    return repository.includes("/") && reference ? { repository, reference } : null;
+  }
+  const lastSlash = remainder.lastIndexOf("/");
+  const tagColon = remainder.lastIndexOf(":");
+  if (lastSlash <= 0 || tagColon <= lastSlash) {
+    return null;
+  }
+  const repository = remainder.slice(0, tagColon);
+  const reference = remainder.slice(tagColon + 1);
+  if (!repository.includes("/") || !reference) {
+    return null;
+  }
+  return { repository, reference };
+}
+
+function ghcrTokenUrl(repository) {
+  const params = new URLSearchParams({
+    service: "ghcr.io",
+    scope: `repository:${repository}:pull`,
+  });
+  return `https://ghcr.io/token?${params.toString()}`;
+}
+
+function ghcrManifestUrl(repository, reference) {
+  return `https://ghcr.io/v2/${repository}/manifests/${encodeURIComponent(reference)}`;
+}
+
+function redactCredentialFields(value) {
+  if (Array.isArray(value)) {
+    return value.map(redactCredentialFields);
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, fieldValue]) => [
+        key,
+        ["token", "access_token", "refresh_token"].includes(key)
+          ? "<redacted>"
+          : redactCredentialFields(fieldValue),
+      ]),
+    );
+  }
+  return value;
+}
+
+function safeGhcrTokenResponseBody(body, error) {
+  const raw = body || error || "";
+  const parsed = parseJson(raw);
+  return parsed ? JSON.stringify(redactCredentialFields(parsed)) : raw;
+}
+
+export async function preflightGhcrImagePull({ image, username, token, timeoutMs, attempts = [] }) {
+  const parsed = parseGhcrImageRef(image);
+  if (!parsed) {
+    return {
+      ok: true,
+      skipped: true,
+      repository: "",
+      reference: "",
+      auth_mode: "skipped-non-ghcr",
+      code: "skipped",
+      message: "Image is not a namespaced ghcr.io reference; GHCR preflight skipped.",
+    };
+  }
+
+  const authMode = token ? "configured-token" : "anonymous";
+  const tokenHeaders = {
+    Accept: "application/json",
+  };
+  if (token) {
+    const user = username || DEFAULT_GHCR_PULL_USERNAME;
+    tokenHeaders.Authorization = `Basic ${Buffer.from(`${user}:${token}`).toString("base64")}`;
+  }
+
+  const tokenResponse = await request("GET", ghcrTokenUrl(parsed.repository), {
+    timeoutMs,
+    headers: tokenHeaders,
+  });
+  const tokenResponseBody = safeGhcrTokenResponseBody(tokenResponse.body, tokenResponse.error);
+  await appendAttempt(attempts, {
+    kind: "ghcr-pull-preflight-token",
+    repository: parsed.repository,
+    reference: parsed.reference,
+    response_code: tokenResponse.code,
+    auth_mode: authMode,
+    retryable: false,
+    response_body: tokenResponseBody,
+  });
+
+  const registryToken = parseJson(tokenResponse.body)?.token;
+  if (tokenResponse.code !== "200" || !registryToken) {
+    return {
+      ok: false,
+      repository: parsed.repository,
+      reference: parsed.reference,
+      auth_mode: authMode,
+      code: tokenResponse.code,
+      message: tokenResponseBody || `GHCR token request failed with HTTP ${tokenResponse.code}`,
+    };
+  }
+
+  const manifestResponse = await request(
+    "GET",
+    ghcrManifestUrl(parsed.repository, parsed.reference),
+    {
+      timeoutMs,
+      headers: {
+        Accept: GHCR_MANIFEST_ACCEPT,
+        Authorization: `Bearer ${registryToken}`,
+      },
+    },
+  );
+  await appendAttempt(attempts, {
+    kind: "ghcr-pull-preflight-manifest",
+    repository: parsed.repository,
+    reference: parsed.reference,
+    response_code: manifestResponse.code,
+    auth_mode: authMode,
+    retryable: false,
+    response_body: manifestResponse.body || manifestResponse.error,
+  });
+
+  if (manifestResponse.code === "200") {
+    return {
+      ok: true,
+      skipped: false,
+      repository: parsed.repository,
+      reference: parsed.reference,
+      auth_mode: authMode,
+      code: manifestResponse.code,
+      message: "GHCR manifest is readable with the rollout credential.",
+    };
+  }
+
+  const tokenHint = token
+    ? "GHCR_PULL_TOKEN is set but cannot read this package."
+    : "GHCR_PULL_TOKEN is not set and the package is not anonymously readable.";
+  return {
+    ok: false,
+    repository: parsed.repository,
+    reference: parsed.reference,
+    auth_mode: authMode,
+    code: manifestResponse.code,
+    message: `${tokenHint} Manifest probe returned HTTP ${manifestResponse.code}: ${
+      manifestResponse.body || manifestResponse.error || "<empty body>"
+    }`,
+  };
 }
 
 async function appendAttempt(attempts, entry) {
@@ -565,6 +729,8 @@ export async function runRollout() {
   const flyToken = process.env.FLY_API_TOKEN?.trim();
   const flyOrgSlug = process.env.FLY_ORG_SLUG?.trim() || DEFAULT_FLY_ORG_SLUG;
   const flyApiBase = process.env.FLY_MACHINES_API?.trim() || DEFAULT_FLY_MACHINES_API;
+  const ghcrPullUsername = process.env.GHCR_PULL_USERNAME?.trim() || DEFAULT_GHCR_PULL_USERNAME;
+  const ghcrPullToken = process.env.GHCR_PULL_TOKEN?.trim() || "";
   const rolloutOptions = rolloutOptionsFromEnv();
   const scopedRollout = hasScopedRolloutOptions(rolloutOptions);
   const startedAtMs = Date.now();
@@ -581,10 +747,29 @@ export async function runRollout() {
   let skipped = [];
   let failed = [];
   let errorDetails = {};
+  let ghcrPullPreflight = null;
 
-  console.log(`POST ${adminRolloutUrl(base, image, rolloutOptions)}`);
+  ghcrPullPreflight = await preflightGhcrImagePull({
+    image,
+    username: ghcrPullUsername,
+    token: ghcrPullToken,
+    timeoutMs,
+    attempts,
+  });
+  if (!ghcrPullPreflight.ok) {
+    finalResult = "failed-ghcr-pull-auth-preflight";
+    finalCode = ghcrPullPreflight.code;
+    finalBody = ghcrPullPreflight.message;
+    errorDetails = {
+      ghcr_pull_auth: ghcrPullPreflight.message,
+      remediation:
+        "Set GHCR_PULL_TOKEN on Rockielab/platform-runtime and Rockielab/platform-context to a read:packages PAT that can read this org package, or make the package public.",
+    };
+  } else {
+    console.log(`POST ${adminRolloutUrl(base, image, rolloutOptions)}`);
+  }
 
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+  for (let attempt = 1; ghcrPullPreflight.ok && attempt <= maxAttempts; attempt += 1) {
     const supersession = await detectSuperseded();
     if (supersession) {
       finalResult = "superseded-by-newer-build";
@@ -806,6 +991,7 @@ export async function runRollout() {
     fallback,
     superseded_by: supersededBy,
     error_details: errorDetails,
+    ghcr_pull_preflight: ghcrPullPreflight,
     final_response_body: finalBody,
     final_response_json: finalJson,
   };

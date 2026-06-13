@@ -323,6 +323,8 @@ jobs:
       API_URL: ${{ secrets.ROCKIELAB_API_URL }}
       ADMIN_TOKEN: ${{ secrets.ROCKIELAB_ADMIN_TOKEN }}
       FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      GHCR_PULL_USERNAME: ${{ secrets.GHCR_PULL_USERNAME }}
+      GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
       IMAGE_TAG: ghcr.io/rockielab/rockielab-runtime-multitenant:${{ github.sha }}
       ROLLOUT_TENANT_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.rollout_tenant_id || '' }}
       ROLLOUT_CANARY_COUNT: ${{ github.event_name == 'workflow_dispatch' && inputs.rollout_canary_count || '' }}
@@ -355,6 +357,7 @@ jobs:
               echo "ROCKIELAB_API_URL: full https url of the api host (e.g. \`https://api.rockielab.com\`)"
               echo "ROCKIELAB_ADMIN_TOKEN: sent as X-Admin-Token to the admin rollout route"
               echo "FLY_API_TOKEN: used to enumerate tenant Fly apps for per-tenant fallback after Cloudflare 524s"
+              echo "GHCR_PULL_TOKEN: optional preflight token for private runtime image pulls; required unless the GHCR package is public"
             } >> $GITHUB_STEP_SUMMARY
             {
               echo "# Cross-tenant rollout skipped"

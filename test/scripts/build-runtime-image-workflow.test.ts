@@ -121,6 +121,8 @@ describe("build-runtime-image rollout workflow", () => {
     const job = rolloutJob();
     expect(job.env).toMatchObject({
       FLY_API_TOKEN: "${{ secrets.FLY_API_TOKEN }}",
+      GHCR_PULL_USERNAME: "${{ secrets.GHCR_PULL_USERNAME }}",
+      GHCR_PULL_TOKEN: "${{ secrets.GHCR_PULL_TOKEN }}",
       IMAGE_TAG: "ghcr.io/rockielab/rockielab-runtime-multitenant:${{ github.sha }}",
       ROLLOUT_ARTIFACT_DIR: ".artifacts/runtime-rollout",
       ROLLOUT_MAX_ATTEMPTS: "5",
@@ -130,6 +132,7 @@ describe("build-runtime-image rollout workflow", () => {
 
     const run = readFileSync(ROLLOUT_SCRIPT_PATH, "utf8");
     expect(run).toContain("rollout-summary.md");
+    expect(run).toContain("preflightGhcrImagePull");
     expect(run).toContain("rollout-summary.json");
     expect(run).toContain("attempts.jsonl");
     expect(run).toContain("response_codes");
@@ -162,6 +165,9 @@ describe("build-runtime-image rollout workflow", () => {
     expect(workflow).toContain("ROCKIELAB_ADMIN_TOKEN: sent as X-Admin-Token");
     expect(workflow).toContain(
       "FLY_API_TOKEN: used to enumerate tenant Fly apps for per-tenant fallback",
+    );
+    expect(workflow).toContain(
+      "GHCR_PULL_TOKEN: optional preflight token for private runtime image pulls",
     );
   });
 
