@@ -231,6 +231,7 @@ export const ja_JP: TranslationMap = {
     statusFailed: "失敗",
     statusKilled: "強制終了",
     statusTimeout: "タイムアウトしました",
+    statusPaused: "Paused",
     model: "モデル",
     provider: "プロバイダー",
     runtime: "ランタイム",

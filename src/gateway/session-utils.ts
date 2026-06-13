@@ -415,7 +415,9 @@ function isFinitePositiveTimestamp(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
-function isTerminalSessionStatus(status: unknown): status is Exclude<SessionRunStatus, "running"> {
+function isTerminalSessionStatus(
+  status: unknown,
+): status is Exclude<SessionRunStatus, "running" | "paused"> {
   return status === "done" || status === "failed" || status === "killed" || status === "timeout";
 }
 
@@ -2245,6 +2247,7 @@ export function buildGatewaySessionRow(params: {
     goal,
     estimatedCostUsd,
     status: subagentRun ? subagentStatus : entry?.status,
+    pauseReason: entry?.pauseReason,
     subagentRunState,
     hasActiveSubagentRun: subagentRun ? liveSubagentRunActive : undefined,
     startedAt: subagentRun ? subagentStartedAt : entry?.startedAt,
