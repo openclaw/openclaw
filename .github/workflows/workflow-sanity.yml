@@ -134,7 +134,7 @@ jobs:
           cat <<'EOF'
           commands:
           - pnpm test test/scripts/runtime-postbuild.test.ts test/scripts/control-ui-control-director-no-response-smoke.test.ts src/agents/control-director-contract.test.ts src/agents/agent-command.live-model-switch.test.ts src/gateway/session-utils.subagent.test.ts test/scripts/control-director-readiness.test.ts
-          - pnpm test src/gateway/server.chat.gateway-server-chat-b.test.ts -- -t "chat.history synthesizes Control Director guarded status"
+          - pnpm test src/gateway/server.chat.gateway-server-chat-b.test.ts -- -t "chat.history synthesizes Control Director guarded status|chat.send watchdog surfaces Control Director no-response runs"
           - pnpm ui:smoke:control-director-no-response
           - pnpm check:changed scripts/runtime-postbuild.mjs test/scripts/runtime-postbuild.test.ts scripts/dev/control-ui-control-director-no-response-smoke.ts test/scripts/control-ui-control-director-no-response-smoke.test.ts package.json scripts/dev/control-ui-dashboard-smoke-suite.ts src/agents/agent-command.ts src/agents/control-director-contract.ts src/agents/control-director-delivery-guards.ts src/agents/agent-command.live-model-switch.test.ts src/agents/control-director-contract.test.ts src/config/sessions/types.ts src/gateway/server-methods/chat.ts src/gateway/server.chat.gateway-server-chat-b.test.ts src/gateway/session-utils.ts src/gateway/session-utils.types.ts src/gateway/session-utils.subagent.test.ts src/gateway/session-utils.test.ts src/plugins/session-entry-slot-keys.ts scripts/control-director-readiness.mjs test/scripts/control-director-readiness.test.ts
           EOF
@@ -143,7 +143,7 @@ jobs:
         run: pnpm test test/scripts/runtime-postbuild.test.ts test/scripts/control-ui-control-director-no-response-smoke.test.ts src/agents/control-director-contract.test.ts src/agents/agent-command.live-model-switch.test.ts src/gateway/session-utils.subagent.test.ts test/scripts/control-director-readiness.test.ts
 
       - name: Run targeted chat.history Control Director proof
-        run: pnpm test src/gateway/server.chat.gateway-server-chat-b.test.ts -- -t "chat.history synthesizes Control Director guarded status"
+        run: pnpm test src/gateway/server.chat.gateway-server-chat-b.test.ts -- -t "chat.history synthesizes Control Director guarded status|chat.send watchdog surfaces Control Director no-response runs"
 
       - name: Run Control UI no-response proof
         env:
