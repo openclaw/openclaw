@@ -221,6 +221,93 @@ describe("applyFinalEffectiveToolPolicy", () => {
     expect(warnings.filter((message) => message.includes("totally-made-up-tool"))).toHaveLength(1);
   });
 
+  it("does not warn when an enabled plugin id is outside the bundled pass", () => {
+    const warnings: string[] = [];
+    applyFinalEffectiveToolPolicy({
+      bundledTools: [makeTool("mcp__bundle__read")],
+      config: {
+        plugins: { entries: { "llm-task": { enabled: true } } },
+        tools: { allow: ["llm-task"] },
+      },
+      warn: (message) => warnings.push(message),
+    });
+
+    expect(warnings.filter((message) => message.includes("llm-task"))).toStrictEqual([]);
+  });
+
+  it("does not warn when a plugin id is enabled through plugins.allow", () => {
+    const warnings: string[] = [];
+    applyFinalEffectiveToolPolicy({
+      bundledTools: [makeTool("mcp__bundle__read")],
+      config: {
+        plugins: { allow: ["llm-task"] },
+        tools: { allow: ["llm-task"] },
+      },
+      warn: (message) => warnings.push(message),
+    });
+
+    expect(warnings.filter((message) => message.includes("llm-task"))).toStrictEqual([]);
+  });
+
+  it("warns when plugin loading is globally disabled", () => {
+    const warnings: string[] = [];
+    applyFinalEffectiveToolPolicy({
+      bundledTools: [makeTool("mcp__bundle__read")],
+      config: {
+        plugins: { enabled: false, allow: ["llm-task"] },
+        tools: { allow: ["llm-task"] },
+      },
+      warn: (message) => warnings.push(message),
+    });
+
+    expect(warnings.filter((message) => message.includes("llm-task"))).toHaveLength(1);
+  });
+
+  it("warns when a plugin id is denied despite plugins.allow", () => {
+    const warnings: string[] = [];
+    const pluginId = "llm-task-denied";
+    applyFinalEffectiveToolPolicy({
+      bundledTools: [makeTool("mcp__bundle__read")],
+      config: {
+        plugins: { allow: [pluginId], deny: [pluginId] },
+        tools: { allow: [pluginId] },
+      },
+      warn: (message) => warnings.push(message),
+    });
+
+    expect(warnings.filter((message) => message.includes(pluginId))).toHaveLength(1);
+  });
+
+  it("warns when a plugin id is individually disabled despite plugins.allow", () => {
+    const warnings: string[] = [];
+    const pluginId = "llm-task-disabled";
+    applyFinalEffectiveToolPolicy({
+      bundledTools: [makeTool("mcp__bundle__read")],
+      config: {
+        plugins: { allow: [pluginId], entries: { [pluginId]: { enabled: false } } },
+        tools: { allow: [pluginId] },
+      },
+      warn: (message) => warnings.push(message),
+    });
+
+    expect(warnings.filter((message) => message.includes(pluginId))).toHaveLength(1);
+  });
+
+  it("warns when an enabled plugin entry is outside the restrictive plugin allowlist", () => {
+    const warnings: string[] = [];
+    const pluginId = "llm-task-outside-allow";
+    applyFinalEffectiveToolPolicy({
+      bundledTools: [makeTool("mcp__bundle__read")],
+      config: {
+        plugins: { allow: ["other-plugin"], entries: { [pluginId]: { enabled: true } } },
+        tools: { allow: [pluginId] },
+      },
+      warn: (message) => warnings.push(message),
+    });
+
+    expect(warnings.filter((message) => message.includes(pluginId))).toHaveLength(1);
+  });
+
   it("keeps bundle MCP tools in the coding profile via plugin metadata", () => {
     const mcpTool = makeTool("bundleProbe__bundle_probe");
     setPluginToolMeta(mcpTool, { pluginId: "bundle-mcp", optional: false });
