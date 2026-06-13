@@ -106,4 +106,32 @@ describe("deliverReplies sent-message ledger", () => {
     });
     expect(recordSentMessage).not.toHaveBeenCalled();
   });
+
+  it("records every delivered message id when a reply is split into multiple sends", async () => {
+    // The canonical send path records each Telegram message id; a single reply
+    // can fan out into several sends (chunked text, multi-media, voice fallback),
+    // so reactions / reply-routing against later messages must also see them.
+    let nextId = 100;
+    const sendMessage = vi
+      .fn()
+      .mockImplementation(async () => ({ message_id: ++nextId, chat: { id: "123" } }));
+    await deliverReplies({
+      replies: [{ text: "first paragraph here\n\nsecond paragraph here" }],
+      cfg,
+      chatId: "123",
+      token: "tok",
+      runtime: createRuntime() as RuntimeEnv,
+      bot: createBot({ sendMessage }),
+      replyToMode: "off",
+      textLimit: 16,
+      mediaLoader: loadWebMedia,
+    });
+    const sendCount = sendMessage.mock.calls.length;
+    expect(sendCount).toBeGreaterThan(1);
+    // Every delivered id is recorded, not just the first one.
+    expect(recordSentMessage).toHaveBeenCalledTimes(sendCount);
+    for (let id = 101; id <= 100 + sendCount; id += 1) {
+      expect(recordSentMessage).toHaveBeenCalledWith("123", id, cfg);
+    }
+  });
 });

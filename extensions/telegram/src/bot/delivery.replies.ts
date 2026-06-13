@@ -58,6 +58,8 @@ const GrammyErrorCtor: typeof GrammyError | undefined =
 
 type DeliveryProgress = ReplyThreadDeliveryProgress & {
   deliveredCount: number;
+  /** Records each successfully delivered Telegram message id into the ledger. */
+  recordMessageId?: (messageId: number) => void;
 };
 
 type TelegramReplyChannelData = {
@@ -92,9 +94,15 @@ function buildChunkTextResolver(params: {
   };
 }
 
-function markDelivered(progress: DeliveryProgress): void {
+function markDelivered(progress: DeliveryProgress, messageId?: number): void {
   progress.hasDelivered = true;
   progress.deliveredCount += 1;
+  // Record each delivered message id (not just the first) so the sent-message
+  // ledger matches the canonical send path: reactions and reply routing for
+  // every chunk/media/fallback message must recognize the bot-owned send.
+  if (messageId != null) {
+    progress.recordMessageId?.(messageId);
+  }
 }
 
 function filterEmptyTelegramTextChunks<T extends { text: string }>(chunks: readonly T[]): T[] {
@@ -193,6 +201,7 @@ async function deliverTextReply(params: {
       if (firstDeliveredMessageId == null) {
         firstDeliveredMessageId = messageId;
       }
+      return messageId;
     },
   });
   return firstDeliveredMessageId;
@@ -221,7 +230,7 @@ async function sendPendingFollowUpText(params: {
     replyMarkup: params.replyMarkup,
     markDelivered,
     sendChunk: async ({ chunk, replyToMessageId, replyMarkup }) => {
-      await sendTelegramText(params.bot, params.chatId, chunk.text, params.runtime, {
+      return await sendTelegramText(params.bot, params.chatId, chunk.text, params.runtime, {
         replyToMessageId,
         thread: params.thread,
         textMode: "markdown",
@@ -390,7 +399,7 @@ async function deliverMediaReply(params: {
       if (firstDeliveredMessageId == null) {
         firstDeliveredMessageId = result.message_id;
       }
-      markDelivered(params.progress);
+      markDelivered(params.progress, result.message_id);
     } else if (kind === "image") {
       const result = await sendTelegramWithThreadFallback({
         operation: "sendPhoto",
@@ -403,7 +412,7 @@ async function deliverMediaReply(params: {
       if (firstDeliveredMessageId == null) {
         firstDeliveredMessageId = result.message_id;
       }
-      markDelivered(params.progress);
+      markDelivered(params.progress, result.message_id);
     } else if (kind === "video") {
       const result = await sendTelegramWithThreadFallback({
         operation: "sendVideo",
@@ -416,7 +425,7 @@ async function deliverMediaReply(params: {
       if (firstDeliveredMessageId == null) {
         firstDeliveredMessageId = result.message_id;
       }
-      markDelivered(params.progress);
+      markDelivered(params.progress, result.message_id);
     } else if (kind === "audio") {
       const { useVoice } = resolveTelegramVoiceSend({
         wantsVoice: params.reply.audioAsVoice === true,
@@ -441,7 +450,7 @@ async function deliverMediaReply(params: {
           if (firstDeliveredMessageId == null) {
             firstDeliveredMessageId = result.message_id;
           }
-          markDelivered(params.progress);
+          markDelivered(params.progress, result.message_id);
         };
         await params.onVoiceRecording?.();
         try {
@@ -481,7 +490,7 @@ async function deliverMediaReply(params: {
             }
             visibleFallbackText = fallbackText;
             markReplyApplied(params.progress, voiceFallbackReplyTo);
-            markDelivered(params.progress);
+            markDelivered(params.progress, fallbackMessageId);
             continue;
           }
           if (isCaptionTooLong(voiceErr)) {
@@ -525,7 +534,7 @@ async function deliverMediaReply(params: {
         if (firstDeliveredMessageId == null) {
           firstDeliveredMessageId = result.message_id;
         }
-        markDelivered(params.progress);
+        markDelivered(params.progress, result.message_id);
       }
     } else {
       const result = await sendTelegramWithThreadFallback({
@@ -539,7 +548,7 @@ async function deliverMediaReply(params: {
       if (firstDeliveredMessageId == null) {
         firstDeliveredMessageId = result.message_id;
       }
-      markDelivered(params.progress);
+      markDelivered(params.progress, result.message_id);
     }
     markReplyApplied(params.progress, replyToMessageId);
     if (pendingFollowUpText && isFirstMedia) {
@@ -707,6 +716,7 @@ export async function deliverReplies(params: {
     hasReplied: false,
     hasDelivered: false,
     deliveredCount: 0,
+    recordMessageId: (messageId) => recordSentMessage(params.chatId, messageId, params.cfg),
   };
   const mediaLoader = params.mediaLoader ?? loadWebMedia;
   const transcriptMirror = params.transcriptMirror;
@@ -884,12 +894,9 @@ export async function deliverReplies(params: {
         deliveredContents.push({ text: contentForSentHook, mediaUrls: mediaList });
       }
 
-      // Append the delivered message to the sent-message ledger in lockstep with
-      // the message_sent hook below. wasSentByBot, reply-to routing, and reaction
-      // filters depend on this entry; without it self-sent messages look foreign.
-      if (progress.deliveredCount > deliveredCountBeforeReply && firstDeliveredMessageId != null) {
-        recordSentMessage(params.chatId, firstDeliveredMessageId, params.cfg);
-      }
+      // Note: each delivered Telegram message id is recorded into the sent-message
+      // ledger as it is sent, via progress.recordMessageId wired in markDelivered
+      // (mirrors the canonical sendMessageTelegram path; see #92242).
 
       emitMessageSentHooks({
         hookRunner,
