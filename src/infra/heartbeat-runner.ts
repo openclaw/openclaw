@@ -1707,7 +1707,8 @@ export async function runHeartbeatOnce(opts: {
   const outboundSession = buildOutboundSessionContext({
     cfg,
     agentId,
-    sessionKey,
+    sessionKey: runSessionKey,
+    policySessionKey: runSessionKey === sessionKey ? undefined : sessionKey,
   });
   const canAttemptHeartbeatOk = Boolean(
     !hasDueCommitments && visibility.showOk && delivery.channel !== "none" && delivery.to,
