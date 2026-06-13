@@ -22,16 +22,18 @@ function isCronContextSystemEvent(event: SystemEvent): boolean {
   return event.contextKey?.startsWith("cron:") ?? false;
 }
 
-function selectGenericSystemEvents(events: readonly SystemEvent[]): SystemEvent[] {
-  // Exec completions and tagged cron events each own a dedicated heartbeat prompt
-  // (buildExecEventPrompt / buildCronEventPrompt) that surfaces them to the model
-  // once. Rendering them here as raw `System:` lines too double-surfaces the same
-  // text: a `sessionTarget: "main"` cron systemEvent (tagged `cron:<jobId>`) would
-  // appear both as a `System:` line and inside the heartbeat reminder wrapper
-  // (#44922). Leave them queued so the heartbeat path stays the single owner that
-  // consumes and renders them.
+function selectGenericSystemEvents(
+  events: readonly SystemEvent[],
+  options?: { suppressHeartbeatOwnedEvents?: boolean },
+): SystemEvent[] {
+  // Exec completions and tagged cron events own dedicated heartbeat prompts
+  // (buildExecEventPrompt / buildCronEventPrompt). During heartbeat runs, leave
+  // cron entries queued for that owner; ordinary turns still drain them as the
+  // fallback when a heartbeat was skipped before it could consume the event.
   return events.filter(
-    (event) => !isExecCompletionEvent(event.text) && !isCronContextSystemEvent(event),
+    (event) =>
+      !isExecCompletionEvent(event.text) &&
+      !(options?.suppressHeartbeatOwnedEvents === true && isCronContextSystemEvent(event)),
   );
 }
 
@@ -103,6 +105,7 @@ export async function drainFormattedSystemEvents(params: {
   sessionKey: string;
   isMainSession: boolean;
   isNewSession: boolean;
+  suppressHeartbeatOwnedEvents?: boolean;
 }): Promise<string | undefined> {
   const summaryLines: string[] = [];
   const systemLines: string[] = [];
@@ -110,7 +113,9 @@ export async function drainFormattedSystemEvents(params: {
   // so the heartbeat path can consume and deliver them.
   const queued = consumeSelectedSystemEventEntries(
     params.sessionKey,
-    selectGenericSystemEvents(peekSystemEventEntries(params.sessionKey)),
+    selectGenericSystemEvents(peekSystemEventEntries(params.sessionKey), {
+      suppressHeartbeatOwnedEvents: params.suppressHeartbeatOwnedEvents,
+    }),
   );
   for (const event of queued) {
     const compacted = compactSystemEvent(event.text);
