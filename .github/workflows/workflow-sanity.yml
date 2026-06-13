@@ -146,8 +146,10 @@ jobs:
         run: pnpm test src/gateway/server.chat.gateway-server-chat-b.test.ts -- -t "chat.history synthesizes Control Director guarded status|chat.send watchdog surfaces Control Director no-response runs|chat.send watchdog remains armed when dispatch returns before visible final"
 
       - name: Run Control UI no-response proof
+        timeout-minutes: 20
         env:
           CI: "true"
+          NODE_OPTIONS: --max-old-space-size=6144
         run: pnpm ui:smoke:control-director-no-response
 
       - name: Run explicit changed gate
