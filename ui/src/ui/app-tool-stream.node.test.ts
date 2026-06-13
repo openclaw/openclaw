@@ -353,6 +353,101 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     vi.useRealTimers();
   });
 
+  it("records answer candidates in activity from item events", () => {
+    useToolStreamFakeTimers();
+    const host = createHost();
+
+    handleAgentEvent(host, {
+      runId: "run-answer-candidates",
+      seq: 1,
+      stream: "item",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: {
+        kind: "answer_candidate",
+        itemId: "msg-draft",
+        status: "candidate",
+        phase: "update",
+        progressText: "Draft answer",
+        suppressChannelProgress: true,
+      },
+    });
+    handleAgentEvent(host, {
+      runId: "run-answer-candidates",
+      seq: 2,
+      stream: "item",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: {
+        kind: "answer_candidate",
+        itemId: "msg-draft",
+        status: "superseded",
+        phase: "end",
+        progressText: "Draft answer",
+        suppressChannelProgress: true,
+      },
+    });
+    handleAgentEvent(host, {
+      runId: "run-answer-candidates",
+      seq: 3,
+      stream: "item",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: {
+        kind: "answer_candidate",
+        itemId: "msg-final",
+        status: "candidate",
+        phase: "update",
+        progressText: "Final answer",
+        suppressChannelProgress: true,
+      },
+    });
+    handleAgentEvent(host, {
+      runId: "run-answer-candidates",
+      seq: 4,
+      stream: "item",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: {
+        kind: "answer_candidate",
+        itemId: "msg-final",
+        status: "selected",
+        phase: "end",
+        progressText: "Final answer",
+        suppressChannelProgress: true,
+      },
+    });
+
+    expect(host.activityEntries).toHaveLength(2);
+    expect(host.activityEntries?.map((entry) => entry.candidateStatus)).toEqual([
+      "superseded",
+      "selected",
+    ]);
+    expect(host.activityEntries?.[0]).toMatchObject({
+      id: "run-answer-candidates:item:msg-draft",
+      toolCallId: "msg-draft",
+      itemId: "msg-draft",
+      entryKind: "answer_candidate",
+      toolName: "answer_candidate",
+      status: "done",
+      summary: "answer_candidate.superseded",
+      outputPreview: "Draft answer",
+      hiddenArgumentCount: 0,
+    });
+    expect(host.activityEntries?.[1]).toMatchObject({
+      id: "run-answer-candidates:item:msg-final",
+      toolCallId: "msg-final",
+      itemId: "msg-final",
+      entryKind: "answer_candidate",
+      toolName: "answer_candidate",
+      status: "done",
+      summary: "answer_candidate.selected",
+      outputPreview: "Final answer",
+      hiddenArgumentCount: 0,
+    });
+    vi.useRealTimers();
+  });
+
   it("ignores selected-global tool events from another agent", () => {
     const host = createHost({
       sessionKey: "global",

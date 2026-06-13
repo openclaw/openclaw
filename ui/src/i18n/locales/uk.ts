@@ -481,6 +481,12 @@ export const uk: TranslationMap = {
     argumentsHidden: "{count} аргументів приховано",
     streamLabel: "Записи активності інструментів",
     toolCallId: "Виклик інструмента",
+    itemId: "Item",
+    answerCandidate: {
+      candidate: "Answer candidate streaming",
+      superseded: "Answer candidate superseded",
+      selected: "Answer candidate selected",
+    },
     runId: "Запустити",
     session: "Сеанс",
     outputTruncated: "Попередній перегляд відредаговано та обрізано.",

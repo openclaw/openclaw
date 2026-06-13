@@ -149,6 +149,13 @@ export class CodexAppServerEventProjector {
   private readonly assistantItemOrder: string[] = [];
   private readonly assistantPhaseByItem = new Map<string, string>();
   private readonly lastCommentaryProgressTextByItem = new Map<string, string>();
+  private readonly finalAnswerCandidateOrder: string[] = [];
+  private readonly finalAnswerCandidateStatusByItem = new Map<
+    string,
+    "candidate" | "superseded" | "selected"
+  >();
+  private readonly lastFinalAnswerCandidateTextByItem = new Map<string, string>();
+  private activeFinalAnswerCandidateItemId: string | undefined;
   private readonly reasoningTextByGroup = new Map<string, ReasoningTextGroup>();
   private readonly reasoningItemOrder = new Map<string, number>();
   private readonly planTextByItem = new Map<string, string>();
@@ -191,6 +198,7 @@ export class CodexAppServerEventProjector {
   private reasoningStarted = false;
   private reasoningEnded = false;
   private completedTurn: CodexTurn | undefined;
+  private completedTurnStatus: string | undefined;
   private promptError: unknown;
   private promptErrorSource: EmbeddedRunAttemptResult["promptErrorSource"] = null;
   private synthesizedMissingToolResultError: string | null = null;
@@ -294,6 +302,12 @@ export class CodexAppServerEventProjector {
     options?: { yieldDetected?: boolean },
   ): EmbeddedRunAttemptResult {
     const assistantTexts = this.collectAssistantTexts();
+    // buildResult is the terminal projection boundary for an attempt. Finalize
+    // answer-candidate activity here as an idempotent fallback, but only mark a
+    // candidate selected after an authoritative successful Codex turn. Failed,
+    // aborted, timed-out, or client-closed attempts must not look like they
+    // selected a final answer in Control UI activity.
+    this.finalizeFinalAnswerCandidateLifecycle();
     const reasoningText = collectReasoningTextValues(
       this.reasoningTextByGroup,
       this.reasoningItemOrder,
@@ -487,6 +501,7 @@ export class CodexAppServerEventProjector {
     if (this.isCommentaryAssistantItem(itemId)) {
       this.emitCommentaryProgress({ itemId, text });
     } else if (this.shouldStreamAssistantPartial(itemId)) {
+      this.emitFinalAnswerCandidateUpdate({ itemId, text });
       await this.params.onPartialReply?.({ text, delta });
     }
     // Codex app-server can emit multiple agentMessage items per turn, including
@@ -565,6 +580,9 @@ export class CodexAppServerEventProjector {
     const item = readItem(params.item);
     const itemId = item?.id ?? readString(params, "itemId") ?? readString(params, "id");
     this.rememberAssistantPhase(item);
+    if (item && item.type !== "agentMessage" && shouldSynthesizeToolProgressForItem(item)) {
+      this.supersedeActiveFinalAnswerCandidate();
+    }
     if (itemId) {
       this.activeItemIds.add(itemId);
     }
@@ -619,6 +637,8 @@ export class CodexAppServerEventProjector {
       this.assistantTextByItem.set(item.id, item.text);
       if (this.isCommentaryAssistantItem(item.id)) {
         this.emitCommentaryProgress({ itemId: item.id, text: item.text });
+      } else if (this.isFinalAnswerAssistantItem(item.id)) {
+        this.emitFinalAnswerCandidateUpdate({ itemId: item.id, text: item.text });
       }
     }
     this.recordNativeGeneratedMedia(item);
@@ -734,11 +754,18 @@ export class CodexAppServerEventProjector {
   }
 
   private async handleTurnCompleted(params: JsonObject): Promise<void> {
+    const rawTurn = isJsonObject(params.turn) ? params.turn : undefined;
+    if (!rawTurn || readString(rawTurn, "id") !== this.turnId) {
+      return;
+    }
+    this.completedTurnStatus = readString(rawTurn, "status");
     const turn = readTurn(params.turn);
     if (!turn || turn.id !== this.turnId) {
+      this.finalizeFinalAnswerCandidateLifecycle();
       return;
     }
     this.completedTurn = turn;
+    this.completedTurnStatus = turn.status ?? this.completedTurnStatus;
     if (turn.status === "failed") {
       this.promptError =
         formatCodexUsageLimitErrorMessage({
@@ -755,6 +782,9 @@ export class CodexAppServerEventProjector {
       if (item.type === "agentMessage" && typeof item.text === "string" && item.text) {
         this.rememberAssistantItem(item.id);
         this.assistantTextByItem.set(item.id, item.text);
+        if (this.isFinalAnswerAssistantItem(item.id)) {
+          this.emitFinalAnswerCandidateUpdate({ itemId: item.id, text: item.text });
+        }
       }
       this.recordNativeGeneratedMedia(item);
       if (item.type === "plan" && typeof item.text === "string" && item.text) {
@@ -769,6 +799,7 @@ export class CodexAppServerEventProjector {
       this.emitToolResultSummary(item);
       this.emitToolResultOutput(item);
     }
+    this.finalizeFinalAnswerCandidateLifecycle();
     this.activeCompactionItemIds.clear();
     await this.maybeEndReasoning();
   }
@@ -1004,7 +1035,116 @@ export class CodexAppServerEventProjector {
   }
 
   private shouldStreamAssistantPartial(itemId: string): boolean {
+    return this.isFinalAnswerAssistantItem(itemId);
+  }
+
+  private isFinalAnswerAssistantItem(itemId: string): boolean {
     return this.assistantPhaseByItem.get(itemId) === "final_answer";
+  }
+
+  private emitFinalAnswerCandidateUpdate(params: { itemId: string; text: string }): void {
+    if (!this.isFinalAnswerAssistantItem(params.itemId)) {
+      return;
+    }
+    const progressText = params.text.replace(/\s+/g, " ").trim();
+    if (!progressText) {
+      return;
+    }
+    const currentStatus = this.finalAnswerCandidateStatusByItem.get(params.itemId);
+    if (currentStatus === "superseded" || currentStatus === "selected") {
+      this.lastFinalAnswerCandidateTextByItem.set(params.itemId, progressText);
+      return;
+    }
+    const previousActive = this.activeFinalAnswerCandidateItemId;
+    if (previousActive && previousActive !== params.itemId) {
+      this.markFinalAnswerCandidate(previousActive, "superseded");
+    }
+    if (!currentStatus) {
+      this.finalAnswerCandidateOrder.push(params.itemId);
+      this.finalAnswerCandidateStatusByItem.set(params.itemId, "candidate");
+    }
+    this.activeFinalAnswerCandidateItemId = params.itemId;
+    if (this.lastFinalAnswerCandidateTextByItem.get(params.itemId) === progressText) {
+      return;
+    }
+    this.lastFinalAnswerCandidateTextByItem.set(params.itemId, progressText);
+    this.emitFinalAnswerCandidateEvent({
+      itemId: params.itemId,
+      status: "candidate",
+      phase: "update",
+      progressText,
+    });
+  }
+
+  private supersedeActiveFinalAnswerCandidate(): void {
+    const itemId = this.activeFinalAnswerCandidateItemId;
+    if (!itemId) {
+      return;
+    }
+    this.markFinalAnswerCandidate(itemId, "superseded");
+  }
+
+  private finalizeFinalAnswerCandidateLifecycle(): void {
+    if (this.completedTurnStatus !== "completed") {
+      this.supersedeActiveFinalAnswerCandidate();
+      return;
+    }
+    this.markSelectedFinalAnswerCandidate();
+  }
+
+  private markSelectedFinalAnswerCandidate(): void {
+    const selectedItem = this.resolveFinalAssistantTextItem();
+    if (!selectedItem || !this.isFinalAnswerAssistantItem(selectedItem.itemId)) {
+      return;
+    }
+    this.emitFinalAnswerCandidateUpdate({ itemId: selectedItem.itemId, text: selectedItem.text });
+    for (const itemId of this.finalAnswerCandidateOrder) {
+      if (itemId !== selectedItem.itemId) {
+        this.markFinalAnswerCandidate(itemId, "superseded");
+      }
+    }
+    this.markFinalAnswerCandidate(selectedItem.itemId, "selected");
+  }
+
+  private markFinalAnswerCandidate(itemId: string, status: "superseded" | "selected"): void {
+    const current = this.finalAnswerCandidateStatusByItem.get(itemId);
+    if (!current || current === status) {
+      return;
+    }
+    if (current === "selected" || (current === "superseded" && status !== "selected")) {
+      return;
+    }
+    this.finalAnswerCandidateStatusByItem.set(itemId, status);
+    if (this.activeFinalAnswerCandidateItemId === itemId) {
+      this.activeFinalAnswerCandidateItemId = undefined;
+    }
+    this.emitFinalAnswerCandidateEvent({
+      itemId,
+      status,
+      phase: "end",
+      progressText: this.lastFinalAnswerCandidateTextByItem.get(itemId),
+    });
+  }
+
+  private emitFinalAnswerCandidateEvent(params: {
+    itemId: string;
+    status: "candidate" | "superseded" | "selected";
+    phase: "update" | "end";
+    progressText?: string;
+  }): void {
+    this.emitAgentEvent({
+      stream: "item",
+      data: {
+        itemId: params.itemId,
+        kind: "answer_candidate",
+        title: "Answer candidate",
+        phase: params.phase,
+        status: params.status,
+        source: "codex-app-server",
+        suppressChannelProgress: true,
+        ...(params.progressText ? { progressText: params.progressText } : {}),
+      },
+    });
   }
 
   private emitCommentaryProgress(params: { itemId: string; text: string }): void {

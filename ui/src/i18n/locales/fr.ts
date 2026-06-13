@@ -482,6 +482,12 @@ export const fr: TranslationMap = {
     argumentsHidden: "{count} arguments masqués",
     streamLabel: "Entrées d’activité des outils",
     toolCallId: "Appel d’outil",
+    itemId: "Item",
+    answerCandidate: {
+      candidate: "Answer candidate streaming",
+      superseded: "Answer candidate superseded",
+      selected: "Answer candidate selected",
+    },
     runId: "Exécuter",
     session: "Session",
     outputTruncated: "Aperçu masqué et tronqué.",

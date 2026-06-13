@@ -477,6 +477,12 @@ export const en: TranslationMap = {
     argumentsHidden: "{count} arguments hidden",
     streamLabel: "Tool activity entries",
     toolCallId: "Tool call",
+    itemId: "Item",
+    answerCandidate: {
+      candidate: "Answer candidate streaming",
+      superseded: "Answer candidate superseded",
+      selected: "Answer candidate selected",
+    },
     runId: "Run",
     session: "Session",
     outputTruncated: "Preview redacted and truncated.",

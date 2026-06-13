@@ -93,6 +93,48 @@ describe("renderActivity", () => {
     expect(container.querySelector(".activity-toolbar__count")?.textContent?.trim()).toBe("1 of 1");
   });
 
+  it("renders answer candidate activity with item facts and preview text", async () => {
+    await i18n.setLocale("en");
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    render(
+      renderActivity(
+        createProps({
+          entries: [
+            createEntry({
+              id: "run-1:item:msg-early-final",
+              toolCallId: "msg-early-final",
+              itemId: "msg-early-final",
+              entryKind: "answer_candidate",
+              candidateStatus: "superseded",
+              toolName: "answer_candidate",
+              status: "done",
+              summary: "Answer candidate superseded",
+              outputPreview: "Draft answer",
+            }),
+          ],
+          expandedIds: new Set(["run-1:item:msg-early-final"]),
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".activity-entry__tool")?.textContent?.trim()).toBe(
+      "answer_candidate",
+    );
+    expect(container.querySelector(".activity-entry__text")?.textContent?.trim()).toBe(
+      "Answer candidate superseded",
+    );
+    const factsText = container.querySelector(".activity-entry__facts")?.textContent ?? "";
+    const normalizedFacts = factsText.replace(/\s+/g, " ").trim();
+    expect(normalizedFacts).toContain("Item: msg-early-final");
+    expect(normalizedFacts).not.toContain("arguments hidden");
+    expect(container.querySelector(".activity-entry__preview")?.textContent?.trim()).toBe(
+      "Draft answer",
+    );
+  });
+
   it("normalizes rounded minute durations that would otherwise show 60 seconds", async () => {
     await i18n.setLocale("en");
     const container = document.createElement("div");

@@ -481,6 +481,12 @@ export const it: TranslationMap = {
     argumentsHidden: "{count} argomenti nascosti",
     streamLabel: "Voci dell'attività degli strumenti",
     toolCallId: "Chiamata strumento",
+    itemId: "Item",
+    answerCandidate: {
+      candidate: "Answer candidate streaming",
+      superseded: "Answer candidate superseded",
+      selected: "Answer candidate selected",
+    },
     runId: "Esegui",
     session: "Sessione",
     outputTruncated: "Anteprima oscurata e troncata.",

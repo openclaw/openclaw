@@ -480,6 +480,12 @@ export const vi: TranslationMap = {
     argumentsHidden: "{count} đối số bị ẩn",
     streamLabel: "Các mục hoạt động công cụ",
     toolCallId: "Lệnh gọi công cụ",
+    itemId: "Item",
+    answerCandidate: {
+      candidate: "Answer candidate streaming",
+      superseded: "Answer candidate superseded",
+      selected: "Answer candidate selected",
+    },
     runId: "Chạy",
     session: "Phiên",
     outputTruncated: "Bản xem trước đã được biên tập lại và cắt ngắn.",

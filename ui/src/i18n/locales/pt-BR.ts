@@ -479,6 +479,12 @@ export const pt_BR: TranslationMap = {
     argumentsHidden: "{count} argumentos ocultos",
     streamLabel: "Entradas de atividade de ferramentas",
     toolCallId: "Chamada de ferramenta",
+    itemId: "Item",
+    answerCandidate: {
+      candidate: "Answer candidate streaming",
+      superseded: "Answer candidate superseded",
+      selected: "Answer candidate selected",
+    },
     runId: "Executar",
     session: "Sessão",
     outputTruncated: "Prévia redigida e truncada.",
