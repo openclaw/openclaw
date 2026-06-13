@@ -761,6 +761,9 @@ describe("package artifact reuse", () => {
     expect(retryHelper).toContain("OPENCLAW_LIVE_COMMAND_RATE_LIMIT_RETRY_DELAY_SECONDS:-60");
     expect(retryHelper).toContain("Rate limit reached");
     expect(retryHelper).toContain("tokens per min");
+    expect(
+      workflow.match(/moonshot\) require_any Moonshot MOONSHOT_API_KEY KIMI_API_KEY ;;/gu),
+    ).toHaveLength(2);
   });
 
   it("runs Docker live harnesses from trusted helper scripts", () => {

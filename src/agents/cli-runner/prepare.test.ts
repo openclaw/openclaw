@@ -20,6 +20,7 @@ import { hashCliSessionText } from "../cli-session.js";
 import { resetContextWindowCacheForTest } from "../context.js";
 import { buildActiveImageGenerationTaskPromptContextForSession } from "../image-generation-task-status.js";
 import { buildActiveMusicGenerationTaskPromptContextForSession } from "../music-generation-task-status.js";
+import type { SandboxWorkspaceInfo } from "../sandbox/types.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../system-prompt-cache-boundary.js";
 import { buildActiveVideoGenerationTaskPromptContextForSession } from "../video-generation-task-status.js";
 import {
@@ -29,10 +30,17 @@ import {
 } from "./prepare.js";
 
 const getRuntimeConfigMock = vi.hoisted(() => vi.fn(() => ({})));
+const ensureSandboxWorkspaceForSessionMock = vi.hoisted(() =>
+  vi.fn<() => Promise<SandboxWorkspaceInfo | null>>(async () => null),
+);
 let sessionFileEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
 
 vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: getRuntimeConfigMock,
+}));
+
+vi.mock("../sandbox.js", () => ({
+  ensureSandboxWorkspaceForSession: ensureSandboxWorkspaceForSessionMock,
 }));
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
@@ -254,6 +262,8 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     mockBuildActiveImageGenerationTaskPromptContextForSession.mockReturnValue(undefined);
     mockBuildActiveVideoGenerationTaskPromptContextForSession.mockReturnValue(undefined);
     mockBuildActiveMusicGenerationTaskPromptContextForSession.mockReturnValue(undefined);
+    ensureSandboxWorkspaceForSessionMock.mockReset();
+    ensureSandboxWorkspaceForSessionMock.mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -263,6 +273,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     mockBuildActiveImageGenerationTaskPromptContextForSession.mockReset();
     mockBuildActiveVideoGenerationTaskPromptContextForSession.mockReset();
     mockBuildActiveMusicGenerationTaskPromptContextForSession.mockReset();
+    ensureSandboxWorkspaceForSessionMock.mockReset();
     resetContextWindowCacheForTest();
     clearMemoryPluginState();
     vi.unstubAllEnvs();
@@ -1740,6 +1751,95 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         workspaceDir: taskDir,
       });
       expect(context.reusableCliSession).toEqual({ sessionId: "live-claude-sid" });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("renders CLI skills from sandbox-readable paths instead of persisted host snapshots", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    const hostSkillDir = "/home/tzdai/.npm-global/lib/node_modules/openclaw/skills/gog";
+    const hostSkillPath = `${hostSkillDir}/SKILL.md`;
+    const materializedWorkspace = path.join(dir, "state", "sandbox-skills");
+    const materializedSkillDir = path.join(materializedWorkspace, "skills", "gog");
+    const materializedSkillPath = path.join(materializedSkillDir, "SKILL.md");
+    fs.mkdirSync(materializedSkillDir, { recursive: true });
+    fs.writeFileSync(
+      materializedSkillPath,
+      [
+        "---",
+        "name: gog",
+        "description: Read Gmail safely.",
+        "---",
+        "",
+        "Use the Gmail tools before answering mail questions.",
+      ].join("\n"),
+      "utf-8",
+    );
+    ensureSandboxWorkspaceForSessionMock.mockResolvedValue({
+      workspaceDir: dir,
+      containerWorkdir: "/workspace",
+      skillsWorkspaceDir: materializedWorkspace,
+      workspaceAccess: "rw",
+    });
+
+    try {
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:sandboxed-user",
+        agentId: "main",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "are there any unread emails",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-sandbox-cli-skill-prompt",
+        config: createCliBackendConfig(),
+        skillsSnapshot: {
+          prompt: [
+            "<available_skills>",
+            "  <skill>",
+            "    <name>gog</name>",
+            "    <description>Read Gmail safely.</description>",
+            `    <location>${hostSkillPath}</location>`,
+            "  </skill>",
+            "</available_skills>",
+          ].join("\n"),
+          skills: [{ name: "gog" }],
+          resolvedSkills: [
+            {
+              name: "gog",
+              description: "Read Gmail safely.",
+              filePath: hostSkillPath,
+              baseDir: hostSkillDir,
+              source: "openclaw-bundled",
+              sourceInfo: {
+                path: hostSkillPath,
+                source: "openclaw-bundled",
+                scope: "project",
+                origin: "top-level",
+                baseDir: hostSkillDir,
+              },
+              disableModelInvocation: false,
+            },
+          ],
+        },
+      });
+
+      expect(ensureSandboxWorkspaceForSessionMock).toHaveBeenCalledWith({
+        config: createCliBackendConfig(),
+        sessionKey: "agent:main:sandboxed-user",
+        workspaceDir: dir,
+      });
+      expect(context.systemPrompt).toContain(
+        "/workspace/.openclaw/sandbox-skills/skills/gog/SKILL.md",
+      );
+      expect(context.systemPrompt).not.toContain(hostSkillPath);
+      expect(context.systemPromptReport.skills.promptChars).toBeGreaterThan(0);
+      expect(context.systemPromptReport.skills.entries).toEqual([
+        { name: "gog", blockChars: expect.any(Number) },
+      ]);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

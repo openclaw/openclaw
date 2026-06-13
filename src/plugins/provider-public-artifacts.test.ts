@@ -58,6 +58,21 @@ describe("provider public artifacts", () => {
     ).toBe("adaptive");
   });
 
+  it("loads Moonshot Kimi K2.7 thinking policy before runtime registration", () => {
+    const surface = resolveBundledProviderPolicySurface("moonshot");
+
+    expect(
+      surface?.resolveThinkingProfile?.({
+        provider: "moonshot",
+        modelId: "kimi-k2.7-code",
+      }),
+    ).toEqual({
+      levels: [{ id: "low", label: "on" }],
+      defaultLevel: "low",
+      preserveWhenCatalogReasoningFalse: true,
+    });
+  });
+
   it("resolves multi-provider policy artifacts by manifest-owned provider id", async () => {
     const bundledPluginsDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-provider-policy-"));
     const pluginDir = path.join(bundledPluginsDir, "openai");

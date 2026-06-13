@@ -220,7 +220,11 @@ describe("plugin lifecycle resource sampler", () => {
             "--",
             "bash",
             "-lc",
-            'bash -c \'trap "" TERM; printf "%s\\n" "$$" >"$PID_FILE"; while :; do sleep 1; done\' & wait',
+            [
+              'bash -c \'trap "" TERM; printf "%s\\n" "$$" >"$PID_FILE"; while :; do sleep 1; done\' &',
+              'while [ ! -s "$PID_FILE" ]; do sleep 0.01; done',
+              "exit 0",
+            ].join("\n"),
           ],
           {
             cwd: process.cwd(),

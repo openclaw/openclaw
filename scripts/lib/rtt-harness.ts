@@ -3,6 +3,12 @@ import { execFile, spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import {
+  QA_EVIDENCE_FILENAME,
+  validateQaEvidenceSummaryJson,
+  type QaEvidenceSummaryJson,
+  type QaEvidenceTiming,
+} from "../../extensions/qa-lab/src/evidence-summary.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -42,32 +48,6 @@ type RttResult = {
     rawObservedMessagesPath: string;
     resultPath: string;
   };
-};
-
-type TelegramQaSummary = {
-  status?: string;
-  totals?: {
-    failed?: number;
-  };
-  scenarios?: Array<{
-    id?: string;
-    rttMs?: number;
-    status?: string;
-    samples?: Array<{
-      index?: number;
-      status?: string;
-      rttMs?: number;
-    }>;
-    stats?: {
-      total?: number;
-      passed?: number;
-      failed?: number;
-      avgMs?: number;
-      p50Ms?: number;
-      p95Ms?: number;
-      maxMs?: number;
-    };
-  }>;
 };
 
 const OPENCLAW_PACKAGE_SPEC_RE =
@@ -150,28 +130,35 @@ export function buildRunId(params: { now: Date; spec: string; index?: number }) 
   return `${stamp}-${safeRunLabel(params.spec)}${suffix}`;
 }
 
-export function extractRtt(summary: TelegramQaSummary) {
-  const scenarios = summary.scenarios ?? [];
-  const mention = scenarios.find((scenario) => scenario.id === "telegram-mentioned-message-reply");
-  const warmSamples = mention?.samples
-    ?.filter((sample) => sample.status === "pass" && sample.rttMs !== undefined)
-    .toSorted((left, right) => (left.index ?? 0) - (right.index ?? 0))
-    .flatMap((sample) => (sample.rttMs === undefined ? [] : [sample.rttMs]));
+export function extractRtt(summary: QaEvidenceSummaryJson) {
+  const entries = summary.entries ?? [];
+  const findEntry = (id: string) => entries.find((entry) => entry.test?.id === id);
+  const canary = findEntry("telegram-canary")?.result?.timing;
+  const mention = findEntry("telegram-mentioned-message-reply")?.result?.timing;
   const rtt: RttResult["rtt"] = {
-    canaryMs: scenarios.find((scenario) => scenario.id === "telegram-canary")?.rttMs,
-    mentionReplyMs: mention?.stats?.p50Ms ?? mention?.rttMs,
+    canaryMs: canary?.rttMs,
+    mentionReplyMs: mention?.p50Ms ?? mention?.rttMs,
   };
-  if (warmSamples?.length) {
-    rtt.warmSamples = warmSamples;
-  }
-  if (mention?.stats) {
-    rtt.avgMs = mention.stats.avgMs;
-    rtt.p50Ms = mention.stats.p50Ms;
-    rtt.p95Ms = mention.stats.p95Ms;
-    rtt.maxMs = mention.stats.maxMs;
-    rtt.failedSamples = mention.stats.failed;
-  }
+  appendRttTiming(rtt, mention);
   return rtt;
+}
+
+function appendRttTiming(rtt: RttResult["rtt"], timing: QaEvidenceTiming | undefined) {
+  if (timing?.avgMs !== undefined) {
+    rtt.avgMs = timing.avgMs;
+  }
+  if (timing?.p50Ms !== undefined) {
+    rtt.p50Ms = timing.p50Ms;
+  }
+  if (timing?.p95Ms !== undefined) {
+    rtt.p95Ms = timing.p95Ms;
+  }
+  if (timing?.maxMs !== undefined) {
+    rtt.maxMs = timing.maxMs;
+  }
+  if (timing?.failedSamples !== undefined) {
+    rtt.failedSamples = timing.failedSamples;
+  }
 }
 
 export function createHarnessEnv(params: {
@@ -188,12 +175,15 @@ export function createHarnessEnv(params: {
   sampleTimeoutMs: number;
   timeoutMs: number;
 }) {
+  const packageSourceSpec = params.packageTgz ?? params.spec;
   return {
     ...params.baseEnv,
     OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC: params.spec,
     ...(params.packageTgz ? { OPENCLAW_NPM_TELEGRAM_PACKAGE_TGZ: params.packageTgz } : {}),
     OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL: `${params.spec} (${params.version})`,
     OPENCLAW_NPM_TELEGRAM_PROVIDER_MODE: params.providerMode,
+    OPENCLAW_QA_PACKAGE_SOURCE: packageSourceSpec,
+    OPENCLAW_QA_PACKAGE_SOURCE_KIND: params.packageTgz ? "packed-tarball" : "npm-package",
     ...(params.credentialSource
       ? { OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE: params.credentialSource }
       : {}),
@@ -287,7 +277,11 @@ export async function resolveMainVersion(harnessRoot: string) {
 }
 
 export async function readTelegramSummary(summaryPath: string) {
-  return JSON.parse(await fs.readFile(summaryPath, "utf8")) as TelegramQaSummary;
+  return validateQaEvidenceSummaryJson(JSON.parse(await fs.readFile(summaryPath, "utf8")));
+}
+
+export async function resolveTelegramSummaryPath(outputDir: string) {
+  return path.join(outputDir, QA_EVIDENCE_FILENAME);
 }
 
 export async function writeJson(pathname: string, value: unknown) {
@@ -314,52 +308,31 @@ export async function runHarness(params: { env: NodeJS.ProcessEnv; harnessRoot: 
   return exitCode ?? 1;
 }
 
-function hasWarmSampleEvidence(scenario: NonNullable<TelegramQaSummary["scenarios"]>[number]) {
-  if (
-    typeof scenario.stats?.total !== "number" ||
-    scenario.stats.total < 1 ||
-    typeof scenario.stats.passed !== "number" ||
-    scenario.stats.passed < 1
-  ) {
-    return false;
-  }
-  return (
-    scenario.samples?.some(
-      (sample) =>
-        sample.status === "pass" &&
-        typeof sample.rttMs === "number" &&
-        Number.isFinite(sample.rttMs),
-    ) ?? false
-  );
-}
-
-function rttSummaryFailed(summary: TelegramQaSummary, requestedScenarios: string[]) {
-  if (summary.status !== undefined && summary.status !== "pass") {
-    return true;
-  }
-  if ((summary.totals?.failed ?? 0) > 0) {
-    return true;
-  }
-
-  const scenarios = summary.scenarios ?? [];
+function rttSummaryFailed(summary: QaEvidenceSummaryJson, requestedScenarios: string[]) {
+  const entries = summary.entries ?? [];
   const requiredScenarioIds = ["telegram-canary", ...requestedScenarios];
   for (const scenarioId of requiredScenarioIds) {
-    const scenario = scenarios.find((candidate) => candidate.id === scenarioId);
-    if (!scenario || scenario.status !== "pass") {
+    const entry = entries.find((candidate) => candidate.test?.id === scenarioId);
+    if (!entry || entry.result?.status !== "pass") {
       return true;
     }
-    if (scenarioId === "telegram-mentioned-message-reply" && !hasWarmSampleEvidence(scenario)) {
+    const timing = entry.result.timing;
+    const rttMs =
+      scenarioId === "telegram-mentioned-message-reply"
+        ? (timing?.p50Ms ?? timing?.rttMs)
+        : timing?.rttMs;
+    if (typeof rttMs !== "number" || !Number.isFinite(rttMs)) {
       return true;
     }
   }
-  return scenarios.some((scenario) => scenario.status !== "pass");
+  return entries.some((entry) => entry.result?.status !== "pass");
 }
 
 export function buildRttResult(params: {
   artifacts: RttResult["artifacts"];
   finishedAt: Date;
   providerMode: RttProviderMode;
-  rawSummary: TelegramQaSummary;
+  rawSummary: QaEvidenceSummaryJson;
   runId: string;
   scenarios: string[];
   spec: string;

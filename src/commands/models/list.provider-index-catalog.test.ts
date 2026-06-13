@@ -12,7 +12,7 @@ describe("loadProviderIndexCatalogRowsForList", () => {
         cfg: baseConfig,
         providerFilter: "moonshot",
       }).map((row) => row.ref),
-    ).toEqual(["moonshot/kimi-k2.6"]);
+    ).toEqual(["moonshot/kimi-k2.6", "moonshot/kimi-k2.7-code"]);
   });
 
   it("returns all enabled provider-index preview rows without a provider filter", () => {
@@ -23,6 +23,7 @@ describe("loadProviderIndexCatalogRowsForList", () => {
       "deepseek/deepseek-chat",
       "deepseek/deepseek-reasoner",
       "moonshot/kimi-k2.6",
+      "moonshot/kimi-k2.7-code",
     ]);
   });
 
