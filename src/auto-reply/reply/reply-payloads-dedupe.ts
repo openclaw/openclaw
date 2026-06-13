@@ -8,6 +8,8 @@ import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.ty
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded-read.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
+import type { ReplyToMode } from "../../config/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   channelRouteTargetsMatchExact,
   stringifyRouteThreadId,
@@ -132,7 +134,7 @@ function normalizeProviderForComparison(value?: string): string | undefined {
   return lowered;
 }
 
-function normalizeThreadIdForComparison(value?: string | number): string | undefined {
+function normalizeThreadIdForComparison(value?: string | number | null): string | undefined {
   return stringifyRouteThreadId(value);
 }
 
@@ -199,12 +201,52 @@ function targetsMatchForDedupe(params: {
   return params.targetKey === params.originTarget;
 }
 
+function resolveOriginThreadIdForPayload(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  accountId?: string;
+  originatingThreadId?: string | number;
+  replyToId?: string;
+  replyToMode?: ReplyToMode;
+}): string | undefined {
+  const originThreadId = normalizeThreadIdForComparison(params.originatingThreadId);
+  const replyToId = normalizeThreadIdForComparison(params.replyToId);
+  const resolveReplyTransport = getChannelPlugin(params.provider)?.threading?.resolveReplyTransport;
+  if (
+    originThreadId ||
+    params.replyToMode === "off" ||
+    !replyToId ||
+    !params.config ||
+    !resolveReplyTransport
+  ) {
+    return originThreadId;
+  }
+  const transport = resolveReplyTransport({
+    cfg: params.config,
+    accountId: params.accountId,
+    threadId: originThreadId,
+    replyToId,
+  });
+  if (transport?.threadId != null) {
+    return normalizeThreadIdForComparison(transport.threadId) ?? originThreadId;
+  }
+  // An explicit null means the provider transports its conversation thread
+  // through replyToId. Undefined reply ids remain native message references.
+  if (transport?.threadId === null) {
+    return normalizeThreadIdForComparison(transport.replyToId) ?? originThreadId;
+  }
+  return originThreadId;
+}
+
 /** Returns true when message-tool route evidence says source replies should be deduped. */
 export function shouldDedupeMessagingToolRepliesForRoute(params: {
+  config?: OpenClawConfig;
   messageProvider?: string;
   messagingToolSentTargets?: MessagingToolSend[];
   originatingTo?: string;
   originatingThreadId?: string | number;
+  replyToId?: string;
+  replyToMode?: ReplyToMode;
   accountId?: string;
 }): boolean {
   return getMatchingMessagingToolReplyTargets(params).length > 0;
@@ -212,10 +254,13 @@ export function shouldDedupeMessagingToolRepliesForRoute(params: {
 
 /** Finds message-tool sends that target the same channel/account/thread as the source reply. */
 export function getMatchingMessagingToolReplyTargets(params: {
+  config?: OpenClawConfig;
   messageProvider?: string;
   messagingToolSentTargets?: MessagingToolSend[];
   originatingTo?: string;
   originatingThreadId?: string | number;
+  replyToId?: string;
+  replyToMode?: ReplyToMode;
   accountId?: string;
 }): MessagingToolSend[] {
   const provider = normalizeProviderForComparison(params.messageProvider);
@@ -228,6 +273,14 @@ export function getMatchingMessagingToolReplyTargets(params: {
   if (sentTargets.length === 0) {
     return [];
   }
+  const originThreadId = resolveOriginThreadIdForPayload({
+    provider,
+    config: params.config,
+    accountId: originAccount,
+    originatingThreadId: params.originatingThreadId,
+    replyToId: params.replyToId,
+    replyToMode: params.replyToMode,
+  });
   return sentTargets.filter((target) => {
     const targetProvider = resolveTargetProviderForComparison({
       currentProvider: provider,
@@ -242,7 +295,6 @@ export function getMatchingMessagingToolReplyTargets(params: {
     }
     const targetRaw = normalizeOptionalString(target.to);
     const routeAccount = originAccount ?? targetAccount;
-    const originThreadId = normalizeThreadIdForComparison(params.originatingThreadId);
     const originRoute = normalizeRouteTargetForDedupe({
       provider,
       rawTarget: originRawTarget,
@@ -297,18 +349,24 @@ export type MessagingToolPayloadDedupeDecision = {
 
 /** Resolves whether and how to dedupe final payloads against message-tool sends. */
 export function resolveMessagingToolPayloadDedupe(params: {
+  config?: OpenClawConfig;
   messageProvider?: string;
   messagingToolSentTargets?: MessagingToolSend[];
   originatingTo?: string;
   originatingThreadId?: string | number;
+  replyToId?: string;
+  replyToMode?: ReplyToMode;
   accountId?: string;
 }): MessagingToolPayloadDedupeDecision {
   const sentTargets = params.messagingToolSentTargets ?? [];
   const matchingTargets = getMatchingMessagingToolReplyTargets({
+    config: params.config,
     messageProvider: params.messageProvider,
     messagingToolSentTargets: sentTargets,
     originatingTo: params.originatingTo,
     originatingThreadId: params.originatingThreadId,
+    replyToId: params.replyToId,
+    replyToMode: params.replyToMode,
     accountId: params.accountId,
   });
   const matchingRoute = matchingTargets.length > 0;

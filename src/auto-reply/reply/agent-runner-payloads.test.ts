@@ -421,6 +421,152 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads[0]?.text).toBe("thread reply");
   });
 
+  it("dedupes a top-level Slack reply that starts the same implicit thread", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      config: {},
+      payloads: [{ text: "thread reply" }],
+      replyToMode: "first",
+      replyToChannel: "slack",
+      currentMessageId: "111.000",
+      messageProvider: "slack",
+      originatingTo: "channel:C1",
+      messagingToolSentTexts: ["thread reply"],
+      messagingToolSentTargets: [
+        {
+          tool: "slack",
+          provider: "slack",
+          to: "channel:C1",
+          threadId: "111.000",
+          text: "thread reply",
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(0);
+  });
+
+  it("dedupes an existing Slack thread by its root instead of the current child message", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      config: {},
+      payloads: [{ text: "thread reply" }],
+      replyToMode: "all",
+      replyToChannel: "slack",
+      currentMessageId: "111.222",
+      messageProvider: "slack",
+      originatingTo: "channel:C1",
+      originatingThreadId: "111.000",
+      messagingToolSentTexts: ["thread reply"],
+      messagingToolSentTargets: [
+        {
+          tool: "slack",
+          provider: "slack",
+          to: "channel:C1",
+          threadId: "111.000",
+          text: "thread reply",
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(0);
+  });
+
+  it("keeps an unthreaded later Slack payload when only the first payload starts a thread", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      config: {},
+      payloads: [{ text: "intro" }, { text: "result" }],
+      replyToMode: "first",
+      replyToChannel: "slack",
+      currentMessageId: "111.000",
+      messageProvider: "slack",
+      originatingTo: "channel:C1",
+      messagingToolSentTexts: ["result"],
+      messagingToolSentTargets: [
+        {
+          tool: "slack",
+          provider: "slack",
+          to: "channel:C1",
+          threadId: "111.000",
+          text: "result",
+        },
+      ],
+    });
+
+    expect(replyPayloads.map((payload) => payload.text)).toEqual(["intro", "result"]);
+  });
+
+  it("does not treat a Discord native reply id as a thread route", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      config: {},
+      payloads: [{ text: "same reply" }],
+      replyToMode: "all",
+      replyToChannel: "discord",
+      currentMessageId: "native-message-1",
+      messageProvider: "discord",
+      originatingTo: "channel:C1",
+      messagingToolSentTexts: ["same reply"],
+      messagingToolSentTargets: [
+        {
+          tool: "discord",
+          provider: "discord",
+          to: "channel:C1",
+          text: "same reply",
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(0);
+  });
+
+  it("does not treat a Mattermost DM reply id as a thread route", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      config: {},
+      payloads: [{ text: "same reply", replyToId: "post-1", replyToTag: true }],
+      replyToMode: "off",
+      replyToChannel: "mattermost",
+      messageProvider: "mattermost",
+      originatingTo: "user:U1",
+      messagingToolSentTexts: ["same reply"],
+      messagingToolSentTargets: [
+        {
+          tool: "mattermost",
+          provider: "mattermost",
+          to: "user:U1",
+          text: "same reply",
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(0);
+  });
+
+  it("does not infer a Slack thread when reply mode is off", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      config: {},
+      payloads: [{ text: "same reply", replyToId: "111.000", replyToTag: true }],
+      replyToMode: "off",
+      replyToChannel: "slack",
+      messageProvider: "slack",
+      originatingTo: "channel:C1",
+      messagingToolSentTexts: ["same reply"],
+      messagingToolSentTargets: [
+        {
+          tool: "slack",
+          provider: "slack",
+          to: "channel:C1",
+          text: "same reply",
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(0);
+  });
+
   it("does not dedupe short commentary that appears inside a longer same-target message", async () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,

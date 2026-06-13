@@ -1559,6 +1559,7 @@ export async function runReplyAgent(params: {
     if (visibleMemoryFlushErrorPayloads.length > 0) {
       const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
       const payloadResult = await buildReplyPayloads({
+        config: cfg,
         payloads: visibleMemoryFlushErrorPayloads,
         isHeartbeat,
         didLogHeartbeatStrip: false,
@@ -2035,6 +2036,7 @@ export async function runReplyAgent(params: {
 
     const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
     const payloadResult = await buildReplyPayloads({
+      config: cfg,
       payloads:
         fallbackNoticePayloads.length > 0
           ? [...fallbackNoticePayloads, ...payloadArray]

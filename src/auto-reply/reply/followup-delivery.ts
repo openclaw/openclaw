@@ -69,48 +69,47 @@ export function resolveFollowupDeliveryPayloads(params: {
     replyToMode,
     replyToChannel,
   });
-  const messagingToolPayloadDedupe = resolveMessagingToolPayloadDedupe({
-    messageProvider: replyMessageProvider,
-    messagingToolSentTargets: params.sentTargets,
-    originatingTo: resolveOriginMessageTo({
-      originatingTo: params.originatingTo,
-    }),
-    originatingThreadId: params.originatingThreadId,
-    accountId: resolveOriginAccountId({
-      originatingAccountId: params.originatingAccountId,
-    }),
-  });
   const sentMediaUrlFallback = params.sentMediaUrls ?? [];
   const sentTextFallback = params.sentTexts ?? [];
-  const shouldUseGlobalSentMediaUrlEvidence =
-    messagingToolPayloadDedupe.matchingRoute &&
-    messagingToolPayloadDedupe.routeSentMediaUrls.length === 0 &&
-    messagingToolPayloadDedupe.useGlobalSentMediaUrlEvidenceFallback;
-  const shouldUseGlobalSentTextEvidence =
-    messagingToolPayloadDedupe.matchingRoute &&
-    messagingToolPayloadDedupe.routeSentTexts.length === 0 &&
-    messagingToolPayloadDedupe.useGlobalSentTextEvidenceFallback;
-  const sentMediaUrlsForDedupe = messagingToolPayloadDedupe.matchingRoute
-    ? shouldUseGlobalSentMediaUrlEvidence
-      ? sentMediaUrlFallback
-      : messagingToolPayloadDedupe.routeSentMediaUrls
-    : sentMediaUrlFallback;
-  const sentTextsForDedupe = messagingToolPayloadDedupe.matchingRoute
-    ? shouldUseGlobalSentTextEvidence
-      ? sentTextFallback
-      : messagingToolPayloadDedupe.routeSentTexts
-    : sentTextFallback;
-  const mediaFilteredPayloads = messagingToolPayloadDedupe.shouldDedupePayloads
-    ? filterMessagingToolMediaDuplicates({
-        payloads: replyTaggedPayloads,
-        sentMediaUrls: sentMediaUrlsForDedupe,
-      })
-    : replyTaggedPayloads;
-  const dedupedPayloads = messagingToolPayloadDedupe.shouldDedupePayloads
-    ? filterMessagingToolDuplicates({
-        payloads: mediaFilteredPayloads,
-        sentTexts: sentTextsForDedupe,
-      })
-    : mediaFilteredPayloads;
+  const originatingTo = resolveOriginMessageTo({
+    originatingTo: params.originatingTo,
+  });
+  const accountId = resolveOriginAccountId({
+    originatingAccountId: params.originatingAccountId,
+  });
+  const dedupedPayloads: ReplyPayload[] = [];
+  for (const payload of replyTaggedPayloads) {
+    const decision = resolveMessagingToolPayloadDedupe({
+      config: params.cfg,
+      messageProvider: replyMessageProvider,
+      messagingToolSentTargets: params.sentTargets,
+      originatingTo,
+      originatingThreadId: params.originatingThreadId,
+      replyToId: payload.replyToId,
+      replyToMode,
+      accountId,
+    });
+    if (!decision.shouldDedupePayloads) {
+      dedupedPayloads.push(payload);
+      continue;
+    }
+    const sentMediaUrls =
+      decision.matchingRoute && !decision.useGlobalSentMediaUrlEvidenceFallback
+        ? decision.routeSentMediaUrls
+        : sentMediaUrlFallback;
+    const sentTexts =
+      decision.matchingRoute && !decision.useGlobalSentTextEvidenceFallback
+        ? decision.routeSentTexts
+        : sentTextFallback;
+    const mediaFiltered = filterMessagingToolMediaDuplicates({
+      payloads: [payload],
+      sentMediaUrls,
+    });
+    const textFiltered = filterMessagingToolDuplicates({
+      payloads: mediaFiltered,
+      sentTexts,
+    });
+    dedupedPayloads.push(...textFiltered);
+  }
   return dedupedPayloads;
 }
