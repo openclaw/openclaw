@@ -8,6 +8,10 @@
   overflow: hidden;
 }
 
+.chat-workbench--workspace-collapsed {
+  grid-template-columns: minmax(0, 1fr) 52px;
+}
+
 .chat-split-container {
   display: flex;
   gap: 0;
@@ -45,6 +49,12 @@
   background: color-mix(in srgb, var(--panel) 84%, transparent);
 }
 
+.chat-workspace-rail--collapsed {
+  align-items: center;
+  gap: 10px;
+  padding: 12px 8px;
+}
+
 .chat-workspace-rail__header {
   display: flex;
   align-items: center;
@@ -75,17 +85,49 @@
   line-height: 1.2;
 }
 
-.chat-workspace-rail__refresh {
+.chat-workspace-rail__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chat-workspace-rail__refresh,
+.chat-workspace-rail__collapse-toggle {
   width: 32px;
   min-width: 32px;
   height: 32px;
   padding: 0;
 }
 
+.chat-workspace-rail__collapse-toggle {
+  flex: 0 0 auto;
+  box-shadow: none;
+}
+
 .chat-workspace-rail__refresh svg,
+.chat-workspace-rail__collapse-toggle svg,
 .chat-workspace-rail__file-icon svg {
   width: 15px;
   height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.chat-workspace-rail__collapsed-icon {
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+}
+
+.chat-workspace-rail__collapsed-icon svg {
+  width: 18px;
+  height: 18px;
   fill: none;
   stroke: currentColor;
   stroke-width: 1.5px;

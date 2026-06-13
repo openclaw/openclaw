@@ -875,12 +875,14 @@ describe("chat goal status", () => {
 });
 
 describe("chat composer workbench", () => {
-  it("renders session controls in the composer and workspace files in the rail", () => {
+  it("renders session controls in the composer and workspace files in the expanded rail", () => {
+    const onToggleCollapsed = vi.fn();
     const onRefresh = vi.fn();
     const onOpenFile = vi.fn();
     const container = renderChatView({
       composerControls: html`<button class="test-composer-control">Model</button>`,
       workspaceFiles: {
+        collapsed: false,
         agentId: "main",
         list: {
           agentId: "main",
@@ -897,6 +899,7 @@ describe("chat composer workbench", () => {
         loading: false,
         error: null,
         activeName: "AGENTS.md",
+        onToggleCollapsed,
         onRefresh,
         onOpenFile,
       },
@@ -913,8 +916,41 @@ describe("chat composer workbench", () => {
     expect(file?.textContent).toContain("2 KB");
 
     file?.click();
+    container
+      .querySelector<HTMLButtonElement>('button[aria-label="Collapse workspace files"]')
+      ?.click();
 
     expect(onOpenFile).toHaveBeenCalledWith("AGENTS.md");
+    expect(onToggleCollapsed).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('button[aria-label="Workspace files"]')).toBeNull();
+  });
+
+  it("keeps the workspace files rail reachable from the collapsed strip", () => {
+    const onToggleCollapsed = vi.fn();
+    const container = renderChatView({
+      workspaceFiles: {
+        collapsed: true,
+        agentId: "main",
+        list: null,
+        loading: false,
+        error: null,
+        activeName: null,
+        onToggleCollapsed,
+        onRefresh: () => undefined,
+        onOpenFile: () => undefined,
+      },
+    });
+
+    expect(container.querySelector(".chat-workspace-rail__list")).toBeNull();
+    expect(container.querySelector(".chat-workspace-rail__collapsed-icon")).not.toBeNull();
+    const toggle = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Expand workspace files"]',
+    );
+    expect(toggle?.getAttribute("aria-expanded")).toBe("false");
+
+    toggle?.click();
+
+    expect(onToggleCollapsed).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the secondary New session and Export controls suppressed in the composer", () => {

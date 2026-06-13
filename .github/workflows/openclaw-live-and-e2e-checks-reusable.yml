@@ -420,6 +420,7 @@ jobs:
               add_suite live-cache
 
               add_profile_suite native-live-src-agents "stable full"
+              add_profile_suite native-live-src-agents-zai-coding "stable full"
               add_profile_suite native-live-src-gateway-core "beta minimum stable full"
               add_profile_suite native-live-src-gateway-profiles-anthropic "stable full"
               add_profile_suite native-live-src-gateway-profiles-anthropic-smoke "stable"
@@ -1954,6 +1955,12 @@ jobs:
             label: Native live agents
             command: node .release-harness/scripts/test-live-shard.mjs native-live-src-agents
             timeout_minutes: 60
+            profile_env_only: false
+            profiles: stable full
+          - suite_id: native-live-src-agents-zai-coding
+            label: Native live Z.AI Coding Plan
+            command: ZAI_CODING_LIVE_TEST=1 node .release-harness/scripts/test-live-shard.mjs native-live-src-agents-zai-coding
+            timeout_minutes: 15
             profile_env_only: false
             profiles: stable full
           - suite_id: native-live-src-gateway-core

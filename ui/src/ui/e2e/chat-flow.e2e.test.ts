@@ -221,6 +221,60 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
+  it("starts the workspace files panel collapsed and toggles it open", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "agents.files.list": {
+          agentId: "main",
+          files: [{ name: "AGENTS.md", path: "/workspace/AGENTS.md", size: 2048 }],
+          workspace: "/workspace",
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await page.getByRole("button", { name: "Expand workspace files" }).waitFor({
+        timeout: 10_000,
+      });
+      expect(await gateway.getRequests("agents.files.list")).toHaveLength(0);
+      expect(await page.locator(".chat-workspace-rail__file").count()).toBe(0);
+      expect(await page.locator(".chat-workspace-rail__collapsed-icon svg").count()).toBe(1);
+
+      await page.getByRole("button", { name: "Expand workspace files" }).click();
+      await page.getByRole("button", { name: "Collapse workspace files" }).waitFor({
+        timeout: 10_000,
+      });
+      await page.getByText("AGENTS.md").waitFor({ timeout: 10_000 });
+      expect(await gateway.getRequests("agents.files.list")).toHaveLength(1);
+
+      await page.getByRole("button", { name: "Collapse workspace files" }).click();
+      await page.getByRole("button", { name: "Expand workspace files" }).waitFor({
+        timeout: 10_000,
+      });
+      expect(await page.locator(".chat-workspace-rail__file").count()).toBe(0);
+      expect(await page.locator(".chat-workspace-rail__collapsed-icon svg").count()).toBe(1);
+
+      await page.getByRole("button", { name: "Expand workspace files" }).click();
+      await page.getByRole("button", { name: "Collapse workspace files" }).waitFor({
+        timeout: 10_000,
+      });
+      await page.getByText("AGENTS.md").waitFor({ timeout: 10_000 });
+      expect(await gateway.getRequests("agents.files.list")).toHaveLength(1);
+
+      await page.setViewportSize({ height: 900, width: 1000 });
+      expect(await page.locator(".chat-workspace-rail").isHidden()).toBe(true);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("renders stable markdown during a streaming chat turn and finalizes the tail", async () => {
     const context = await browser.newContext({
       locale: "en-US",

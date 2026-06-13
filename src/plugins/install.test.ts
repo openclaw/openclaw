@@ -1970,7 +1970,7 @@ describe("installPluginFromArchive", () => {
     );
   });
 
-  it("surfaces plugin scanner findings from before_install", async () => {
+  it("surfaces plugin lifecycle findings from before_install", async () => {
     const handler = vi.fn().mockReturnValue({
       findings: [
         {
@@ -2052,10 +2052,10 @@ describe("installPluginFromArchive", () => {
     expect(requests[1]?.request.requestedSpecifier).toBe(pluginDir);
   });
 
-  it("blocks plugin install when before_install rejects dangerous-looking source", async () => {
+  it("blocks plugin install when before_install rejects the staged source", async () => {
     const handler = vi.fn().mockReturnValue({
       block: true,
-      blockReason: "Blocked by enterprise policy",
+      blockReason: "Blocked by plugin lifecycle hook",
     });
     initializeGlobalHookRunner(createMockPluginRegistry([{ hookName: "before_install", handler }]));
 
@@ -2078,7 +2078,7 @@ describe("installPluginFromArchive", () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.error).toBe("Blocked by enterprise policy");
+      expect(result.error).toBe("Blocked by plugin lifecycle hook");
       expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
     }
     expect(handler).toHaveBeenCalledTimes(1);
@@ -2098,14 +2098,14 @@ describe("installPluginFromArchive", () => {
       extensions: ["index.js"],
     });
     expect(
-      warnings.some((w) => w.includes("blocked by plugin hook: Blocked by enterprise policy")),
+      warnings.some((w) => w.includes("blocked by plugin hook: Blocked by plugin lifecycle hook")),
     ).toBe(true);
   });
 
   it("keeps before_install hook blocks even when dangerous force unsafe install is set", async () => {
     const handler = vi.fn().mockReturnValue({
       block: true,
-      blockReason: "Blocked by enterprise policy",
+      blockReason: "Blocked by plugin lifecycle hook",
     });
     initializeGlobalHookRunner(createMockPluginRegistry([{ hookName: "before_install", handler }]));
 
@@ -2132,7 +2132,7 @@ describe("installPluginFromArchive", () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.error).toBe("Blocked by enterprise policy");
+      expect(result.error).toBe("Blocked by plugin lifecycle hook");
       expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
     }
     expect(
@@ -2144,7 +2144,7 @@ describe("installPluginFromArchive", () => {
     ).toBe(false);
     expect(
       warnings.some((warning) =>
-        warning.includes("blocked by plugin hook: Blocked by enterprise policy"),
+        warning.includes("blocked by plugin hook: Blocked by plugin lifecycle hook"),
       ),
     ).toBe(true);
   });

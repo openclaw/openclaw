@@ -199,11 +199,13 @@ export type ChatProps = {
   basePath?: string;
   composerControls?: TemplateResult | typeof nothing | ReturnType<typeof guard>;
   workspaceFiles?: {
+    collapsed: boolean;
     agentId: string;
     list: AgentsFilesListResult | null;
     loading: boolean;
     error: string | null;
     activeName: string | null;
+    onToggleCollapsed: () => void;
     onRefresh: () => void;
     onOpenFile: (name: string) => void;
   };
@@ -1028,6 +1030,28 @@ function renderWorkspaceFileRail(
   if (!workspaceFiles) {
     return nothing;
   }
+  if (workspaceFiles.collapsed) {
+    return html`
+      <aside
+        class="chat-workspace-rail chat-workspace-rail--collapsed"
+        aria-label="Workspace files"
+      >
+        <button
+          type="button"
+          class="nav-collapse-toggle chat-workspace-rail__collapse-toggle"
+          title="Expand workspace files"
+          aria-label="Expand workspace files"
+          aria-expanded="false"
+          @click=${workspaceFiles.onToggleCollapsed}
+        >
+          <span class="nav-collapse-toggle__icon" aria-hidden="true">${icons.panelRightOpen}</span>
+        </button>
+        <span class="chat-workspace-rail__collapsed-icon" aria-hidden="true"
+          >${icons.fileText}</span
+        >
+      </aside>
+    `;
+  }
   const files = workspaceFiles.list?.files ?? [];
   return html`
     <aside class="chat-workspace-rail" aria-label="Workspace files">
@@ -1036,16 +1060,30 @@ function renderWorkspaceFileRail(
           <span class="chat-workspace-rail__eyebrow">Workspace</span>
           <strong>Files</strong>
         </div>
-        <button
-          class="btn btn--ghost btn--sm chat-workspace-rail__refresh"
-          type="button"
-          title="Refresh files"
-          aria-label="Refresh files"
-          ?disabled=${workspaceFiles.loading}
-          @click=${workspaceFiles.onRefresh}
-        >
-          ${icons.refresh}
-        </button>
+        <div class="chat-workspace-rail__actions">
+          <button
+            class="btn btn--ghost btn--sm chat-workspace-rail__refresh"
+            type="button"
+            title="Refresh files"
+            aria-label="Refresh files"
+            ?disabled=${workspaceFiles.loading}
+            @click=${workspaceFiles.onRefresh}
+          >
+            ${icons.refresh}
+          </button>
+          <button
+            type="button"
+            class="nav-collapse-toggle chat-workspace-rail__collapse-toggle"
+            title="Collapse workspace files"
+            aria-label="Collapse workspace files"
+            aria-expanded="true"
+            @click=${workspaceFiles.onToggleCollapsed}
+          >
+            <span class="nav-collapse-toggle__icon" aria-hidden="true"
+              >${icons.panelRightClose}</span
+            >
+          </button>
+        </div>
       </div>
       ${workspaceFiles.list?.workspace
         ? html`<div class="chat-workspace-rail__path" title=${workspaceFiles.list.workspace}>
@@ -2058,7 +2096,11 @@ export function renderChat(props: ChatProps) {
         : nothing}
       ${renderSearchBar(requestUpdate)} ${renderPinnedSection(props, pinned, requestUpdate)}
 
-      <div class="chat-workbench">
+      <div
+        class="chat-workbench ${props.workspaceFiles?.collapsed
+          ? "chat-workbench--workspace-collapsed"
+          : ""}"
+      >
         <div class="chat-split-container ${sidebarOpen ? "chat-split-container--open" : ""}">
           <div
             class="chat-main"

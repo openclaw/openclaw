@@ -468,8 +468,9 @@ describe("stuck session diagnostics threshold", () => {
       );
       logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
       vi.advanceTimersByTime(91_000);
+      // One warning emitted (60s); the 90s tick is throttled but still recovers.
       expect(events).toHaveLength(1);
-      expect(recoverStuckSession).toHaveBeenCalledTimes(1);
+      expect(recoverStuckSession).toHaveBeenCalledTimes(2);
 
       vi.advanceTimersByTime(31_000);
     } finally {
@@ -477,7 +478,54 @@ describe("stuck session diagnostics threshold", () => {
     }
 
     expect(events.map((event) => event.ageMs)).toEqual([60_000, 120_000]);
+    // Recovery is requested on every heartbeat tick the session stays stuck,
+    // including the throttled tick at 90s, so it must outpace the warn backoff.
+    expect(recoverStuckSession).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps scheduling recovery for a recovery-eligible stuck session while warnings are throttled", () => {
+    const stuckEvents: Array<{ ageMs?: number }> = [];
+    const recoveryRequests: Array<{ ageMs?: number }> = [];
+    const recoverStuckSession = vi.fn();
+    const unsubscribe = onDiagnosticEvent((event) => {
+      if (event.type === "session.stuck") {
+        stuckEvents.push(event);
+      } else if (event.type === "session.recovery.requested") {
+        recoveryRequests.push(event);
+      }
+    });
+    try {
+      startDiagnosticHeartbeat(
+        {
+          diagnostics: {
+            enabled: true,
+            stuckSessionWarnMs: 30_000,
+          },
+        },
+        { recoverStuckSession },
+      );
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+
+      // First warn tick (60s): emit the stuck warning and request recovery once.
+      vi.advanceTimersByTime(61_000);
+      expect(stuckEvents).toHaveLength(1);
+      expect(recoverStuckSession).toHaveBeenCalledTimes(1);
+
+      // Backoff tick (90s): the next warn age is 120s, so the warning is
+      // throttled. Recovery must still be scheduled because the session is
+      // recovery-eligible — the warning backoff must not gate recovery.
+      vi.advanceTimersByTime(30_000);
+    } finally {
+      unsubscribe();
+    }
+
+    // Warning stays throttled: still only the single 60s warning.
+    expect(stuckEvents).toHaveLength(1);
+    expect(stuckEvents.map((event) => event.ageMs)).toEqual([60_000]);
+    // Recovery was not suppressed by the warning backoff on the 90s tick.
     expect(recoverStuckSession).toHaveBeenCalledTimes(2);
+    expect(recoveryRequests).toHaveLength(2);
+    expect(recoveryRequests.map((event) => event.ageMs)).toEqual([60_000, 90_000]);
   });
 
   it("reports active sessions as stalled instead of stuck when active work stops progressing", () => {

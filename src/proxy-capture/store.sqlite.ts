@@ -33,7 +33,10 @@ function openDatabase(dbPath: string): OpenedDatabase {
   ensureParentDir(dbPath);
   const { DatabaseSync } = requireNodeSqlite();
   const db = new DatabaseSync(dbPath);
-  const walMaintenance = configureSqliteWalMaintenance(db);
+  const walMaintenance = configureSqliteWalMaintenance(db, {
+    databaseLabel: "debug-proxy-capture",
+    databasePath: dbPath,
+  });
   db.exec("PRAGMA busy_timeout = 5000");
   db.exec(`
     CREATE TABLE IF NOT EXISTS capture_sessions (

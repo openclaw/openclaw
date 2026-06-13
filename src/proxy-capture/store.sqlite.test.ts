@@ -1,8 +1,8 @@
 // Proxy capture SQLite store tests cover persisted capture reads and writes.
-import { mkdtempSync, rmSync } from "node:fs";
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   acquireDebugProxyCaptureStore,
   closeDebugProxyCaptureStore,
@@ -15,23 +15,24 @@ const cleanupDirs: string[] = [];
 
 afterEach(() => {
   closeDebugProxyCaptureStore();
+  vi.restoreAllMocks();
   while (cleanupDirs.length > 0) {
     const dir = cleanupDirs.pop();
     if (dir) {
-      rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(dir, { recursive: true, force: true });
     }
   }
 });
 
 function makeStore() {
-  const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-proxy-capture-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-proxy-capture-"));
   cleanupDirs.push(root);
   return new DebugProxyCaptureStore(path.join(root, "capture.sqlite"), path.join(root, "blobs"));
 }
 
 describe("DebugProxyCaptureStore", () => {
   it("keeps the cached store open until the last lease releases", () => {
-    const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-proxy-capture-lease-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-proxy-capture-lease-"));
     cleanupDirs.push(root);
     const dbPath = path.join(root, "capture.sqlite");
     const blobDir = path.join(root, "blobs");
@@ -49,6 +50,32 @@ describe("DebugProxyCaptureStore", () => {
     const reopened = getDebugProxyCaptureStore(dbPath, blobDir);
     expect(Object.is(reopened, first.store)).toBe(false);
     expect(reopened.isClosed).toBe(false);
+  });
+
+  it("uses rollback journaling for captures on NFS-backed volumes", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-proxy-capture-nfs-"));
+    cleanupDirs.push(root);
+    vi.spyOn(fs, "statfsSync").mockReturnValue({
+      type: 0x6969,
+      bsize: 1024,
+      blocks: 1,
+      bfree: 1,
+      bavail: 1,
+      files: 0,
+      ffree: 0,
+    });
+
+    const store = new DebugProxyCaptureStore(
+      path.join(root, "capture.sqlite"),
+      path.join(root, "blobs"),
+    );
+    try {
+      expect(store.db.prepare("PRAGMA journal_mode").get()).toMatchObject({
+        journal_mode: "delete",
+      });
+    } finally {
+      store.close();
+    }
   });
 
   it("ignores duplicate close calls", () => {
