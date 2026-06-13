@@ -17,6 +17,7 @@ import {
 } from "./message-cache.js";
 import { clearTelegramRuntime, setTelegramRuntime } from "./runtime.js";
 import type { TelegramRuntime } from "./runtime.types.js";
+import type { TelegramApiOverride } from "./send.js";
 import {
   getTelegramSendTestMocks,
   importTelegramSendModule,
@@ -64,7 +65,12 @@ const {
 } = telegramSendModule;
 const sendMessageTelegramImpl = sendMessageTelegramImported;
 
-type RichRawTextTestApi = Bot["api"] & {
+type RichSendCallParams = {
+  rich_message?: { markdown?: string; html?: string };
+  reply_markup?: unknown;
+};
+
+type RichRawTextTestApi = Omit<TelegramApiOverride, "raw" | "sendMessage"> & {
   raw?: {
     sendRichMessage?: (params: {
       chat_id: number | string;
@@ -85,7 +91,13 @@ function richTextForTest(richMessage: { markdown?: string; html?: string }): str
     : (richMessage.html ?? "");
 }
 
-function withRichRawTextTestApi(api: Bot["api"] | undefined): Bot["api"] | undefined {
+function richSendCallParams(): RichSendCallParams[] {
+  return botRawApi.sendRichMessage.mock.calls.map(([params]) => params);
+}
+
+function withRichRawTextTestApi(
+  api: TelegramApiOverride | undefined,
+): TelegramApiOverride | undefined {
   if (!api) {
     return undefined;
   }
@@ -93,18 +105,16 @@ function withRichRawTextTestApi(api: Bot["api"] | undefined): Bot["api"] | undef
   if (textApi.raw?.sendRichMessage || !textApi.sendMessage) {
     return api;
   }
-  return {
-    ...textApi,
-    raw: {
-      ...textApi.raw,
-      sendRichMessage: async ({ chat_id, rich_message, ...params }) =>
-        await textApi.sendMessage?.(chat_id, richTextForTest(rich_message), {
-          parse_mode: "HTML",
-          ...(rich_message.skip_entity_detection === true ? { skip_entity_detection: true } : {}),
-          ...params,
-        }),
-    },
-  } as Bot["api"];
+  textApi.raw = {
+    ...textApi.raw,
+    sendRichMessage: async ({ chat_id, rich_message, ...params }) =>
+      await textApi.sendMessage?.(chat_id, richTextForTest(rich_message), {
+        parse_mode: "HTML",
+        ...(rich_message.skip_entity_detection === true ? { skip_entity_detection: true } : {}),
+        ...params,
+      }),
+  };
+  return api;
 }
 
 const sendMessageTelegram: typeof sendMessageTelegramImpl = async (to, text, opts) =>
@@ -1060,9 +1070,7 @@ describe("sendMessageTelegram", () => {
     });
 
     expect(botRawApi.sendRichMessage.mock.calls.length).toBeGreaterThan(1);
-    const chunks = botRawApi.sendRichMessage.mock.calls.map(
-      ([params]: [{ rich_message?: { markdown?: string } }]) => params.rich_message?.markdown ?? "",
-    );
+    const chunks = richSendCallParams().map((params) => params.rich_message?.markdown ?? "");
     const joinedChunks = chunks.join("\n");
     expect(joinedChunks.startsWith("# Long")).toBe(true);
     expect(joinedChunks.match(/\*\*section\*\* with _style_ and `code`/g)?.length).toBe(3000);
@@ -1078,9 +1086,7 @@ describe("sendMessageTelegram", () => {
       token: "tok",
     });
 
-    const chunks = botRawApi.sendRichMessage.mock.calls.map(
-      ([params]: [{ rich_message?: { markdown?: string; html?: string } }]) => params.rich_message,
-    );
+    const chunks = richSendCallParams().map((params) => params.rich_message);
     expect(chunks.length).toBeGreaterThan(1);
     expect(chunks.every((chunk) => chunk?.html === undefined)).toBe(true);
     expect(chunks.every((chunk) => (chunk?.markdown ?? "").length <= 32_768)).toBe(true);
@@ -1098,10 +1104,7 @@ describe("sendMessageTelegram", () => {
       token: "tok",
     });
 
-    const chunks = botRawApi.sendRichMessage.mock.calls.map(
-      ([params]: [{ rich_message?: { markdown?: string; html?: string } }]) =>
-        params.rich_message?.markdown ?? "",
-    );
+    const chunks = richSendCallParams().map((params) => params.rich_message?.markdown ?? "");
     expect(chunks).toHaveLength(2);
     expect(
       chunks.every(
@@ -1120,10 +1123,7 @@ describe("sendMessageTelegram", () => {
       token: "tok",
     });
 
-    const chunks = botRawApi.sendRichMessage.mock.calls.map(
-      ([params]: [{ rich_message?: { markdown?: string; html?: string } }]) =>
-        params.rich_message?.markdown ?? "",
-    );
+    const chunks = richSendCallParams().map((params) => params.rich_message?.markdown ?? "");
     expect(chunks).toHaveLength(2);
     expect(chunks.at(0)?.match(/^# /gm)).toHaveLength(500);
     expect(chunks.at(1)?.match(/^# /gm)).toHaveLength(100);
@@ -1212,10 +1212,7 @@ describe("sendMessageTelegram", () => {
       token: "tok",
     });
 
-    const chunks = botRawApi.sendRichMessage.mock.calls.map(
-      ([params]: [{ rich_message?: { markdown?: string; html?: string } }]) =>
-        params.rich_message?.markdown ?? "",
-    );
+    const chunks = richSendCallParams().map((params) => params.rich_message?.markdown ?? "");
     expect(chunks.length).toBeGreaterThan(1);
     expect(chunks.every((chunk) => chunk.length <= 32_768)).toBe(true);
     expect(chunks.every((chunk) => chunk.startsWith("~~~ts\n"))).toBe(true);
@@ -1234,9 +1231,7 @@ describe("sendMessageTelegram", () => {
     });
 
     expect(botRawApi.sendRichMessage.mock.calls.length).toBeGreaterThan(1);
-    const calls = botRawApi.sendRichMessage.mock.calls.map(
-      ([params]: [{ rich_message?: { html?: string }; reply_markup?: unknown }]) => params,
-    );
+    const calls = richSendCallParams();
     expect(calls.every((params) => (params.rich_message?.html ?? "").length <= 32_768)).toBe(true);
     expect(calls.at(0)?.rich_message?.html).toMatch(/^<b>A/);
     expect(calls.at(-1)?.rich_message?.html).toMatch(/A<\/b>$/);

@@ -554,7 +554,7 @@ function buildMessagingSection(params: {
                 : ""
             : "",
           telegramRichTextEnabled
-            ? "- Telegram rich text is available. When it improves clarity, use valid Bot API 10.1 rich Markdown/HTML in visible message text: headings, tables, blockquotes, `<details><summary>...</summary>...</details>`, `<sup>/<sub>`, `<mark>`, spoilers, lists, code blocks, footnotes, formulas, and supported rich media blocks. Button labels are plain text only."
+            ? "- Telegram rich text is available. When it improves clarity, use valid Bot API 10.1 rich Markdown/HTML in visible message text: headings, tables, blockquotes, `<details><summary>...</summary>...</details>`, `<sup>/<sub>`, `<mark>`, spoilers, lists, code blocks, footnotes, and formulas. Button labels are plain text only; send media through explicit media delivery."
             : "",
           ...(params.messageToolHints ?? []),
         ]
