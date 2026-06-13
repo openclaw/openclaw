@@ -1887,13 +1887,15 @@ async function dispatchSlashCommand(
       }
       await host.onSlashAction("new-session");
       return;
-    case "reset":
-      await sendChatMessageNow(host, args ? `/reset ${args}` : "/reset", {
+    case "reset": {
+      const trimmedArgs = args?.trim();
+      await sendChatMessageNow(host, trimmedArgs ? `/reset ${trimmedArgs}` : "/reset", {
         refreshSessions: true,
         previousDraft: sendOpts?.previousDraft,
         restoreDraft: sendOpts?.restoreDraft,
       });
       return;
+    }
     case "clear":
       await clearChatHistory(host);
       return;
