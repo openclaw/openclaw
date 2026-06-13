@@ -1,8 +1,8 @@
 // Orchestrates reply agent execution, payload building, and delivery callbacks.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
-import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import {
   hasSessionAutoModelFallbackProvenance,
   hasConfiguredModelFallbacks,
@@ -11,6 +11,7 @@ import {
 } from "../../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.types.js";
 import { hasVisibleAgentPayload } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import {
   formatEmbeddedAgentQueueFailureSummary,
@@ -309,41 +310,16 @@ function isMessageToolOnlyGuardDeliverablePayload(payload: ReplyPayload): boolea
   return metadata?.beforeAgentRunBlocked !== true;
 }
 
-function hasMessageToolOnlySourceDeliveryPayload(payloads: ReplyPayload[]): boolean {
-  return payloads.some(
-    (payload) => getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true,
-  );
-}
-
-function markMessageToolOnlyGuardPayloadsForSourceDelivery(
+function ensureDiscordMessageToolOnlyGuardPayloadForSourceDelivery(
   payloads: ReplyPayload[],
 ): ReplyPayload[] {
-  let markedSubstantivePayload = false;
-  return payloads.map((payload) => {
-    if (getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true) {
-      markedSubstantivePayload = true;
-      return payload;
-    }
-    if (!markedSubstantivePayload && isMessageToolOnlyGuardDeliverablePayload(payload)) {
-      markedSubstantivePayload = true;
-      return markReplyPayloadForSourceSuppressionDelivery(payload);
-    }
-    return payload;
-  });
-}
-
-function ensureDiscordMessageToolOnlyGuardPayloadForSourceDelivery(params: {
-  payloads: ReplyPayload[];
-  followupRun: FollowupRun;
-}): ReplyPayload[] {
-  const markedPayloads = markMessageToolOnlyGuardPayloadsForSourceDelivery(params.payloads);
-  if (hasMessageToolOnlySourceDeliveryPayload(markedPayloads)) {
-    return markedPayloads;
+  const sourceDeliveryPayloads = payloads.filter(
+    (payload) => getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true,
+  );
+  if (sourceDeliveryPayloads.length > 0) {
+    return sourceDeliveryPayloads;
   }
-  if (params.followupRun.run.sourceReplyDeliveryMode !== "message_tool_only") {
-    return markedPayloads;
-  }
-  return [...markedPayloads, buildDiscordMessageToolOnlyDeliveryGuardPayload()];
+  return [buildDiscordMessageToolOnlyDeliveryGuardPayload()];
 }
 
 function hasNonEmptyStringArray(value: unknown): boolean {
@@ -359,13 +335,58 @@ function hasCommittedMessagingTargetDeliveryEvidence(value: unknown): boolean {
       return false;
     }
     const record = entry as { text?: unknown; mediaUrls?: unknown };
-    if ("text" in record || "mediaUrls" in record) {
-      return (
-        (typeof record.text === "string" && record.text.trim().length > 0) ||
-        hasNonEmptyStringArray(record.mediaUrls)
-      );
+    return (
+      (typeof record.text === "string" && record.text.trim().length > 0) ||
+      hasNonEmptyStringArray(record.mediaUrls)
+    );
+  });
+}
+
+function hasCommittedMessagingTargetVisibleReplyEvidenceForCurrentSource(params: {
+  messageProvider?: string;
+  originatingTo?: string;
+  originatingThreadId?: string;
+  accountId?: string;
+  messagingToolSentTargets?: MessagingToolSend[];
+}): boolean {
+  const provider = normalizeOptionalString(params.messageProvider)?.toLowerCase();
+  const originatingTo = normalizeOptionalString(params.originatingTo);
+  const originatingThreadId = normalizeOptionalString(params.originatingThreadId);
+  const originAccount = normalizeOptionalString(params.accountId)?.toLowerCase();
+  if (!provider || !originatingTo || !Array.isArray(params.messagingToolSentTargets)) {
+    return false;
+  }
+  return params.messagingToolSentTargets.some((target) => {
+    const targetProviderRaw = normalizeOptionalString(target?.provider)?.toLowerCase();
+    const targetProvider =
+      !targetProviderRaw || targetProviderRaw === "message" ? provider : targetProviderRaw;
+    const targetTo = normalizeOptionalString(target?.to);
+    if (targetProvider !== provider || targetTo !== originatingTo) {
+      return false;
     }
-    return true;
+    const targetAccount = normalizeOptionalString(target.accountId)?.toLowerCase();
+    if (originAccount && targetAccount && originAccount !== targetAccount) {
+      return false;
+    }
+    const targetThreadId = normalizeOptionalString(target.threadId);
+    if (originatingThreadId) {
+      if (target.threadSuppressed === true) {
+        return false;
+      }
+      if (targetThreadId) {
+        if (targetThreadId !== originatingThreadId) {
+          return false;
+        }
+      } else if (target.threadImplicit !== true) {
+        return false;
+      }
+    } else if (targetThreadId || target.threadImplicit === true) {
+      return false;
+    }
+    return (
+      (typeof target.text === "string" && target.text.trim().length > 0) ||
+      hasNonEmptyStringArray(target.mediaUrls)
+    );
   });
 }
 
@@ -400,20 +421,6 @@ function hasSuccessfulSourceReplyDelivery(params: {
     hasNonEmptyStringArray(params.messagingToolSentTexts) ||
     hasNonEmptyStringArray(params.messagingToolSentMediaUrls) ||
     hasCommittedMessagingTargetDeliveryEvidence(params.messagingToolSentTargets)
-  );
-}
-
-function hasMessageToolOnlyVisibleReplyEvidence(params: {
-  messagingToolSentTexts?: string[];
-  messagingToolSentMediaUrls?: string[];
-  messagingToolSentTargets?: unknown[];
-  didSendDeterministicApprovalPrompt?: boolean;
-}): boolean {
-  return (
-    hasNonEmptyStringArray(params.messagingToolSentTexts) ||
-    hasNonEmptyStringArray(params.messagingToolSentMediaUrls) ||
-    hasCommittedMessagingTargetDeliveryEvidence(params.messagingToolSentTargets) ||
-    params.didSendDeterministicApprovalPrompt === true
   );
 }
 
@@ -2127,21 +2134,38 @@ export async function runReplyAgent(params: {
       hasVisibleBlockProgress ||
       hasDirectBlockProgress ||
       (runResult.successfulCronAdds ?? 0) > 0;
+    const originMessageProvider = resolveOriginMessageProvider({
+      originatingChannel: sessionCtx.OriginatingChannel,
+      provider: sessionCtx.Surface ?? sessionCtx.Provider ?? followupRun.run.messageProvider,
+    });
+    const originMessageTo = resolveOriginMessageTo({
+      originatingTo: sessionCtx.OriginatingTo,
+      to: sessionCtx.To,
+    });
+    const originMessageThreadId = normalizeOptionalString(
+      resolveRoutedDeliveryThreadId({ ctx: sessionCtx, sessionKey }),
+    );
+    const hasMessageToolOnlyCurrentSourceVisibleReplyEvidence =
+      hasCommittedMessagingTargetVisibleReplyEvidenceForCurrentSource({
+        messageProvider: originMessageProvider,
+        originatingTo: originMessageTo,
+        originatingThreadId: originMessageThreadId,
+        accountId: sessionCtx.AccountId,
+        messagingToolSentTargets: runResult.messagingToolSentTargets,
+      }) ||
+      // Native approval prompts are emitted through the current source route.
+      runResult.didSendDeterministicApprovalPrompt === true;
     const shouldApplyDiscordMessageToolOnlyDeliveryGuard =
       isDiscordMessageToolOnlyReplyGuardCandidate({
         followupRun,
         sessionCtx,
         isHeartbeat,
         // Intentionally narrower than successfulSideEffectDelivery: Discord
-        // response recovery should skip only after committed visible
-        // source-reply evidence. Tool/progress chatter is activity, not proof
-        // that the user received the final/status answer.
-        hasVisibleReplyEvidence: hasMessageToolOnlyVisibleReplyEvidence({
-          messagingToolSentTexts: runResult.messagingToolSentTexts,
-          messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
-          messagingToolSentTargets: runResult.messagingToolSentTargets,
-          didSendDeterministicApprovalPrompt: runResult.didSendDeterministicApprovalPrompt,
-        }),
+        // response recovery should skip only after committed current-source
+        // visible reply evidence. Tool/progress chatter, global text arrays,
+        // and target-only records are activity, not proof that the current
+        // route/thread received the final/status answer.
+        hasVisibleReplyEvidence: hasMessageToolOnlyCurrentSourceVisibleReplyEvidence,
         hasPotentialResponseActivity: hasMessageToolOnlyResponseActivity,
         hasSubstantiveFinalPayload: hasMessageToolOnlySubstantiveFinalPayload(payloadArray),
       });
@@ -2304,16 +2328,13 @@ export async function runReplyAgent(params: {
       replyToChannel,
       currentMessageId,
       replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
-      messageProvider: followupRun.run.messageProvider,
+      messageProvider: originMessageProvider,
       messagingToolSentTexts: runResult.messagingToolSentTexts,
       messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
       messagingToolSentTargets: runResult.messagingToolSentTargets,
       originatingChannel: sessionCtx.OriginatingChannel,
       originatingChatType: sessionCtx.ChatType,
-      originatingTo: resolveOriginMessageTo({
-        originatingTo: sessionCtx.OriginatingTo,
-        to: sessionCtx.To,
-      }),
+      originatingTo: originMessageTo,
       originatingThreadId: replyRouteThreadId,
       accountId: sessionCtx.AccountId,
       normalizeMediaPaths: replyMediaContext.normalizePayload,
@@ -2681,10 +2702,7 @@ export async function runReplyAgent(params: {
       logVerbose(
         "discord message_tool_only delivery guard: ensuring final payload source delivery evidence",
       );
-      finalPayloads = ensureDiscordMessageToolOnlyGuardPayloadForSourceDelivery({
-        payloads: finalPayloads,
-        followupRun,
-      });
+      finalPayloads = ensureDiscordMessageToolOnlyGuardPayloadForSourceDelivery(finalPayloads);
     }
     if (isHookBlockedRun) {
       finalPayloads = markBeforeAgentRunBlockedPayloads(finalPayloads);

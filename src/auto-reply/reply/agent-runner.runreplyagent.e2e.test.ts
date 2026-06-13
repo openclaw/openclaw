@@ -1741,7 +1741,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
   });
 
-  it("marks substantive Discord message-tool-only finals for source delivery when the model skipped message.send", async () => {
+  it("surfaces the Discord guard instead of a substantive message-tool-only final when the model skipped message.send", async () => {
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "final should surface" }],
       meta: { stopReason: "stop" },
@@ -1766,13 +1766,15 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const res = await run();
     const payload = Array.isArray(res) ? res[0] : res;
 
-    expect(payload?.text).toBe("final should surface");
+    expect(payload?.isError).toBe(true);
+    expect(payload?.text).toContain("Discord delivery guard");
+    expect(payload?.text).not.toContain("final should surface");
     expect(getReplyPayloadMetadata(payload ?? {})).toEqual({
       deliverDespiteSourceReplySuppression: true,
     });
   });
 
-  it("marks only the first substantive Discord message-tool-only final payload", async () => {
+  it("surfaces only the Discord guard instead of private substantive message-tool-only final payloads", async () => {
     const blockedPayload = setReplyPayloadMetadata(
       { text: "blocked should stay suppressed" },
       { beforeAgentRunBlocked: true },
@@ -1804,21 +1806,18 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
 
     const res = await run();
-    expect(Array.isArray(res)).toBe(true);
-    const payloads = res as ReplyPayload[];
+    const payloads = (Array.isArray(res) ? res : [res]).filter(Boolean) as ReplyPayload[];
 
-    expect(payloads.map((payload) => payload.text)).toEqual([
-      "blocked should stay suppressed",
-      "fallback should stay suppressed",
-      "first substantive final should surface",
-      "second substantive final should stay suppressed",
-    ]);
-    expect(getReplyPayloadMetadata(payloads[0])).toEqual({ beforeAgentRunBlocked: true });
-    expect(getReplyPayloadMetadata(payloads[1])).toBeUndefined();
-    expect(getReplyPayloadMetadata(payloads[2])).toEqual({
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.isError).toBe(true);
+    expect(payloads[0]?.text).toContain("Discord delivery guard");
+    expect(payloads[0]?.text).not.toContain("blocked should stay suppressed");
+    expect(payloads[0]?.text).not.toContain("fallback should stay suppressed");
+    expect(payloads[0]?.text).not.toContain("first substantive final should surface");
+    expect(payloads[0]?.text).not.toContain("second substantive final should stay suppressed");
+    expect(getReplyPayloadMetadata(payloads[0] ?? {})).toEqual({
       deliverDespiteSourceReplySuppression: true,
     });
-    expect(getReplyPayloadMetadata(payloads[3])).toBeUndefined();
   });
 
   it("surfaces the Discord message-tool-only guard after tool progress without final delivery", async () => {
@@ -1860,7 +1859,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
   });
 
-  it("appends the Discord guard when tool work ends with only an incomplete-turn error payload", async () => {
+  it("surfaces the Discord guard when tool work ends with only an incomplete-turn error payload", async () => {
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [
         { text: "⚠️ Agent couldn't generate a response. Please try again.", isError: true },
@@ -1888,17 +1887,13 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
 
     const res = await run();
-    expect(Array.isArray(res)).toBe(true);
-    const payloads = res as ReplyPayload[];
+    const payloads = (Array.isArray(res) ? res : [res]).filter(Boolean) as ReplyPayload[];
 
-    expect(payloads.map((payload) => payload.text)).toEqual([
-      "⚠️ Agent couldn't generate a response. Please try again.",
-      expect.stringContaining("Discord delivery guard"),
-    ]);
+    expect(payloads).toHaveLength(1);
     expect(payloads[0]?.isError).toBe(true);
-    expect(getReplyPayloadMetadata(payloads[0] ?? {})).toBeUndefined();
-    expect(payloads[1]?.isError).toBe(true);
-    expect(getReplyPayloadMetadata(payloads[1] ?? {})).toEqual({
+    expect(payloads[0]?.text).toContain("Discord delivery guard");
+    expect(payloads[0]?.text).not.toContain("Agent couldn't generate a response");
+    expect(getReplyPayloadMetadata(payloads[0] ?? {})).toEqual({
       deliverDespiteSourceReplySuppression: true,
     });
   });
@@ -1940,7 +1935,9 @@ describe("runReplyAgent typing (heartbeat)", () => {
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "NO_REPLY" }],
       messagingToolSentTexts: ["visible result"],
-      messagingToolSentTargets: [{ tool: "message", provider: "discord", to: "channel:C1" }],
+      messagingToolSentTargets: [
+        { tool: "message", provider: "discord", to: "channel:C1", text: "visible result" },
+      ],
       meta: { stopReason: "stop" },
     });
 
@@ -1961,7 +1958,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     await expect(run()).resolves.toBeUndefined();
   });
 
-  it("does not surface the Discord message-tool-only guard after target-only message.send evidence", async () => {
+  it("surfaces the Discord message-tool-only guard after target-only message.send evidence", async () => {
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "NO_REPLY" }],
       messagingToolSentTargets: [{ tool: "message", provider: "discord", to: "channel:C1" }],
@@ -1982,7 +1979,87 @@ describe("runReplyAgent typing (heartbeat)", () => {
       },
     });
 
+    const res = await run();
+    const payload = Array.isArray(res) ? res[0] : res;
+
+    expect(payload?.isError).toBe(true);
+    expect(payload?.text).toContain("Discord delivery guard");
+    expect(getReplyPayloadMetadata(payload ?? {})).toEqual({
+      deliverDespiteSourceReplySuppression: true,
+    });
+  });
+
+  it("does not surface the Discord message-tool-only guard when delivery evidence targets the current thread", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "NO_REPLY" }],
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: "discord",
+          to: "channel:C1",
+          threadId: "current-thread",
+          text: "visible in current thread",
+        },
+      ],
+      meta: { stopReason: "stop" },
+    });
+
+    const { run } = createMinimalRun({
+      runOverrides: {
+        messageProvider: "discord",
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:C1",
+        ChatType: "channel",
+        MessageThreadId: "current-thread",
+        MessageSid: "1503645939964055592",
+      },
+    });
+
     await expect(run()).resolves.toBeUndefined();
+  });
+
+  it("surfaces the Discord message-tool-only guard when delivery evidence is for a different thread", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "NO_REPLY" }],
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: "discord",
+          to: "channel:C1",
+          threadId: "other-thread",
+          text: "visible elsewhere",
+        },
+      ],
+      meta: { stopReason: "stop" },
+    });
+
+    const { run } = createMinimalRun({
+      runOverrides: {
+        messageProvider: "discord",
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:C1",
+        ChatType: "channel",
+        MessageThreadId: "current-thread",
+        MessageSid: "1503645939964055592",
+      },
+    });
+
+    const res = await run();
+    const payload = Array.isArray(res) ? res[0] : res;
+
+    expect(payload?.isError).toBe(true);
+    expect(payload?.text).toContain("Discord delivery guard");
+    expect(getReplyPayloadMetadata(payload ?? {})).toEqual({
+      deliverDespiteSourceReplySuppression: true,
+    });
   });
 
   it("does not surface the Discord message-tool-only guard after tool progress followed by message.send evidence", async () => {
@@ -1992,7 +2069,9 @@ describe("runReplyAgent typing (heartbeat)", () => {
       return {
         payloads: [{ text: "NO_REPLY" }],
         messagingToolSentTexts: ["visible result"],
-        messagingToolSentTargets: [{ tool: "message", provider: "discord", to: "channel:C1" }],
+        messagingToolSentTargets: [
+          { tool: "message", provider: "discord", to: "channel:C1", text: "visible result" },
+        ],
         meta: { stopReason: "stop" },
       };
     });
@@ -2204,7 +2283,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
   });
 
-  it("marks a non-mentioned substantive Discord message-tool-only final for source delivery", async () => {
+  it("surfaces the Discord guard instead of a non-mentioned substantive message-tool-only final", async () => {
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "final result should still be visible" }],
       meta: { stopReason: "stop" },
@@ -2229,7 +2308,9 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const res = await run();
     const payload = Array.isArray(res) ? res[0] : res;
 
-    expect(payload?.text).toBe("final result should still be visible");
+    expect(payload?.isError).toBe(true);
+    expect(payload?.text).toContain("Discord delivery guard");
+    expect(payload?.text).not.toContain("final result should still be visible");
     expect(getReplyPayloadMetadata(payload ?? {})).toEqual({
       deliverDespiteSourceReplySuppression: true,
     });
@@ -2267,7 +2348,9 @@ describe("runReplyAgent typing (heartbeat)", () => {
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "already sent" }],
       messagingToolSentTexts: ["already sent"],
-      messagingToolSentTargets: [{ tool: "message", provider: "discord", to: "channel:C1" }],
+      messagingToolSentTargets: [
+        { tool: "message", provider: "discord", to: "channel:C1", text: "already sent" },
+      ],
       meta: {},
     });
     const fallbackSpy = vi
@@ -2472,7 +2555,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
-  it("announces fallback without silence failure when fallback committed target-only messaging delivery", async () => {
+  it("reports fallback silence failure when fallback only recorded target-only messaging delivery", async () => {
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "NO_REPLY" }],
       messagingToolSentTargets: [{ tool: "message", provider: "discord", to: "channel:C1" }],
@@ -2516,9 +2599,9 @@ describe("runReplyAgent typing (heartbeat)", () => {
       const res = await run();
       const payload = Array.isArray(res) ? res[0] : res;
 
-      expect(payload?.isError).not.toBe(true);
-      expect(payload?.text).toContain("Model Fallback:");
-      expect(payload?.text).not.toContain("no visible reply");
+      expect(payload?.isError).toBe(true);
+      expect(payload?.text).toContain("configured model backend lmstudio/gemma-4-e4b-it");
+      expect(payload?.text).toContain("Fallback used openai/gpt-5.5");
     } finally {
       fallbackSpy.mockRestore();
     }
