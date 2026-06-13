@@ -11,16 +11,21 @@ export function classifyPortListener(listener: PortListener, port: number): Port
   if (raw.includes("openclaw")) {
     return "gateway";
   }
-  if (raw.includes("ssh")) {
-    // Only an SSH -L/-R forward of *this* local port is the actionable "ssh" case
-    // (hint: close the tunnel or move the local -L port). The local port starts the
-    // forwarding spec or follows a bind address (`[bind:]port:host:hostport`), always
-    // with a trailing host colon, so anchor to -L/-R and require that colon. A bare
-    // `:<port>` elsewhere (e.g. `sshd`, `--listen 127.0.0.1:<port>`) stays unknown so
-    // ssh-named non-tunnel processes do not get the false "close the tunnel" hint.
-    const portToken = String(port);
-    const tunnelPattern = new RegExp(`-(?:l|r)\\s*(?:\\S*:)?${portToken}:`);
-    return tunnelPattern.test(raw) ? "ssh" : "unknown";
+  const command = normalizeLowercaseStringOrEmpty(listener.command ?? "");
+  const commandLine = normalizeLowercaseStringOrEmpty(listener.commandLine ?? "");
+  const hasSshCommand = /(?:^|[/\\])ssh(?:\.exe)?$/.test(command);
+  const hasSshExecutable =
+    hasSshCommand ||
+    /(?:^|[\s"'])(?:(?:"[^"]*[/\\])|(?:'[^']*[/\\])|(?:\S*[/\\]))?ssh(?:\.exe)?(?:[\s"']|$)/.test(
+      commandLine,
+    );
+  if (hasSshCommand) {
+    return "ssh";
+  }
+  if (hasSshExecutable) {
+    // The probe row already proves this process owns the queried port. Exact
+    // ssh executables may get their forwards from ssh_config or host aliases.
+    return "ssh";
   }
   return "unknown";
 }
