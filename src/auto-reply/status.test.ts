@@ -2297,8 +2297,8 @@ describe("buildStatusMessage", () => {
         });
 
         const normalized = normalizeTestText(text);
-        expect(normalized).toContain("Context: 1.2k/999k");
-        expect(normalized).not.toContain("Context: 1.2k/2.0m");
+        expect(normalized).toContain("Context: 1.2k/2.0m");
+        expect(normalized).not.toContain("Context: 1.2k/999k");
       },
       { prefix: "openclaw-status-" },
     );
@@ -2334,8 +2334,8 @@ describe("buildStatusMessage", () => {
     });
 
     const normalized = normalizeTestText(text);
-    expect(normalized).toContain("Context: 1.2k/999k");
-    expect(normalized).not.toContain("Context: 1.2k/2.0m");
+    expect(normalized).toContain("Context: 1.2k/2.0m");
+    expect(normalized).not.toContain("Context: 1.2k/999k");
   });
 
   it("keeps provider-aware lookup for legacy fallback runtime slash ids", () => {

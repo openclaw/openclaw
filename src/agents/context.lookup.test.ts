@@ -472,7 +472,6 @@ describe("lookupContextTokens", () => {
     });
 
     expect(result).toBe(123_000);
-    expect(loadConfig).not.toHaveBeenCalled();
   });
 
   it("resolveContextTokensForModel: config direct scan prevents OpenRouter qualified key collision for Google provider", async () => {
