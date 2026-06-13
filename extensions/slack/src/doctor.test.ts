@@ -71,24 +71,33 @@ describe("slack doctor", () => {
         C0AL2GDUA7J: {},
         c0al2gdua7k: {},
         "channel:C0AL2GDUA7L": {},
+        "channel:c0al2gdua7m": {},
+        "CHANNEL:C0AL2GDUA7N": {},
+        "channel:C0al2gdua7p": {},
         "*": {},
       },
     });
 
     const nameKeyWarnings = warnings.filter((warning) =>
-      warning.includes("keyed by a channel name"),
+      warning.includes("not a routable Slack channel ID"),
     );
-    expect(nameKeyWarnings).toHaveLength(2);
+    expect(nameKeyWarnings).toHaveLength(4);
     expect(nameKeyWarnings[0]).toContain('channels.slack.channels."example-channel"');
     expect(nameKeyWarnings[1]).toContain('channels.slack.channels."development"');
+    expect(nameKeyWarnings[2]).toContain('channels.slack.channels."CHANNEL:C0AL2GDUA7N"');
+    expect(nameKeyWarnings[3]).toContain('channels.slack.channels."channel:C0al2gdua7p"');
   });
 
   it("uses account policy and name-matching overrides for name-keyed channels (#81665)", async () => {
     const warnings = await collectSlackWarnings({
       groupPolicy: "open",
+      channels: { "root-room": {} },
       accounts: {
         inheritedOpen: {
           channels: { general: {} },
+        },
+        inheritedAllowlist: {
+          groupPolicy: "allowlist",
         },
         explicitAllowlist: {
           groupPolicy: "allowlist",
@@ -103,10 +112,11 @@ describe("slack doctor", () => {
     });
 
     const nameKeyWarnings = warnings.filter((warning) =>
-      warning.includes("keyed by a channel name"),
+      warning.includes("not a routable Slack channel ID"),
     );
-    expect(nameKeyWarnings).toHaveLength(1);
-    expect(nameKeyWarnings[0]).toContain(
+    expect(nameKeyWarnings).toHaveLength(2);
+    expect(nameKeyWarnings[0]).toContain('channels.slack.channels."root-room"');
+    expect(nameKeyWarnings[1]).toContain(
       'channels.slack.accounts.explicitAllowlist.channels."engineering"',
     );
 
@@ -114,9 +124,9 @@ describe("slack doctor", () => {
       { channels: { general: {} } },
       { groupPolicy: "open" },
     );
-    expect(sharedOpenWarnings.some((warning) => warning.includes("keyed by a channel name"))).toBe(
-      true,
-    );
+    expect(
+      sharedOpenWarnings.some((warning) => warning.includes("not a routable Slack channel ID")),
+    ).toBe(true);
   });
 
   it("normalizes legacy slack streaming aliases into the nested streaming shape", () => {

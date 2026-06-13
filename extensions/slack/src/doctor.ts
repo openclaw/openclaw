@@ -54,23 +54,26 @@ const collectSlackMutableAllowlistWarnings =
 // with a numeric second character; explicit `channel:` keys remain unambiguous.
 const SLACK_CANONICAL_CHANNEL_ID_RE = /^[CGD][A-Z0-9]{8,}$/;
 const SLACK_LOWERCASE_CHANNEL_ID_RE = /^[cgd][0-9][a-z0-9]{7,}$/;
-const SLACK_PREFIXED_CHANNEL_ID_RE = /^channel:[CGD][A-Z0-9]{8,}$/i;
+const SLACK_PREFIXED_CANONICAL_CHANNEL_ID_RE = /^channel:[CGD][A-Z0-9]{8,}$/;
+const SLACK_PREFIXED_LOWERCASE_CHANNEL_ID_RE = /^channel:[cgd][a-z0-9]{8,}$/;
 
 function looksLikeSlackChannelId(channelKey: string): boolean {
   return (
     SLACK_CANONICAL_CHANNEL_ID_RE.test(channelKey) ||
     SLACK_LOWERCASE_CHANNEL_ID_RE.test(channelKey) ||
-    SLACK_PREFIXED_CHANNEL_ID_RE.test(channelKey)
+    SLACK_PREFIXED_CANONICAL_CHANNEL_ID_RE.test(channelKey) ||
+    SLACK_PREFIXED_LOWERCASE_CHANNEL_ID_RE.test(channelKey)
   );
 }
 
 function collectSlackNameKeyedChannelWarnings({ cfg }: { cfg: OpenClawConfig }): string[] {
-  const warnings: string[] = [];
+  const warnings = new Set<string>();
   const slackCfg = asObjectRecord(asObjectRecord(cfg.channels)?.slack);
   const providerGroupPolicy =
     slackCfg && typeof slackCfg.groupPolicy === "string"
       ? (slackCfg.groupPolicy as GroupPolicy)
       : undefined;
+  const providerChannels = asObjectRecord(slackCfg?.channels);
   for (const scope of collectProviderDangerousNameMatchingScopes(cfg, "slack")) {
     if (scope.dangerousNameMatchingEnabled) {
       continue;
@@ -84,22 +87,24 @@ function collectSlackNameKeyedChannelWarnings({ cfg }: { cfg: OpenClawConfig }):
     if (effectiveGroupPolicy !== "allowlist") {
       continue;
     }
-    const channels = asObjectRecord(scope.account.channels);
+    const accountChannels = asObjectRecord(scope.account.channels);
+    const channels = accountChannels ?? providerChannels;
     if (!channels) {
       continue;
     }
+    const channelsPrefix = accountChannels ? scope.prefix : "channels.slack";
     for (const channelKey of Object.keys(channels)) {
       if (channelKey === "*" || looksLikeSlackChannelId(channelKey)) {
         continue;
       }
-      warnings.push(
-        `${scope.prefix}.channels."${channelKey}" is keyed by a channel name, not a Slack channel ID; ` +
+      warnings.add(
+        `${channelsPrefix}.channels."${channelKey}" is keyed by a channel name or non-canonical ID form, not a routable Slack channel ID; ` +
           `under groupPolicy: "allowlist" this entry never matches and messages in that channel are silently dropped. ` +
           `Re-key it with the channel's ID (e.g. C0123ABCD, from the channel's About details or conversations.info).`,
       );
     }
   }
-  return warnings;
+  return [...warnings];
 }
 
 export const slackDoctor: ChannelDoctorAdapter = {
