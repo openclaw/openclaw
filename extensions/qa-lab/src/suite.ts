@@ -60,7 +60,7 @@ import {
   resolveQaSuiteWorkerStartStaggerMs,
   resolveQaSuiteOutputDir,
   scenarioRequiresControlUi,
-  selectQaSuiteScenarios,
+  selectQaFlowSuiteScenarios,
   shouldUseIsolatedQaSuiteScenarioWorkers,
   splitModelRef,
 } from "./suite-planning.js";
@@ -1040,7 +1040,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
       : isQaFastModeEnabled({ primaryModel, alternateModel });
   const outputDir = await resolveQaSuiteOutputDir(repoRoot, params?.outputDir);
   const catalog = readQaBootstrapScenarioCatalog();
-  const selectedScenarios = selectQaSuiteScenarios({
+  const selectedScenarios = selectQaFlowSuiteScenarios({
     scenarios: catalog.scenarios,
     scenarioIds: params?.scenarioIds,
     providerMode,
@@ -1301,7 +1301,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
         concurrency,
         isolatedWorkers: true,
         // When the caller supplied an explicit non-empty --scenario filter,
-        // record the executed (post-selectQaSuiteScenarios-normalized) ids
+        // record the executed (post-selectQaFlowSuiteScenarios-normalized) ids
         // so the summary matches what actually ran. When the caller passed
         // nothing or an empty array ("no filter, full lane catalog"),
         // preserve the unfiltered = null semantic so the summary stays

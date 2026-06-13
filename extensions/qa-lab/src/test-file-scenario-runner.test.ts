@@ -4,8 +4,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { validateQaEvidenceSummaryJson } from "./evidence-summary.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
-import type { QaScenarioCommandExecution } from "./scenario-command-runner.js";
-import { runQaTestFileScenarios } from "./test-file-scenario-runner.js";
+import {
+  runQaTestFileScenarios,
+  type QaScenarioCommandExecution,
+} from "./test-file-scenario-runner.js";
 
 const tempRoots: string[] = [];
 

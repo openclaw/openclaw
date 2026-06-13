@@ -13,7 +13,7 @@ import {
   resolveQaSuiteWorkerStartStaggerMs,
   resolveQaSuiteOutputDir,
   scenarioRequiresControlUi,
-  selectQaSuiteScenarios,
+  selectQaFlowSuiteScenarios,
   shouldUseIsolatedQaSuiteScenarioWorkers,
 } from "./suite-planning.js";
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
@@ -215,7 +215,7 @@ describe("qa suite planning helpers", () => {
     ];
 
     expect(
-      selectQaSuiteScenarios({
+      selectQaFlowSuiteScenarios({
         scenarios,
         scenarioIds: ["anthropic-only"],
         providerMode: "live-frontier",
@@ -232,7 +232,7 @@ describe("qa suite planning helpers", () => {
     ];
 
     expect(
-      selectQaSuiteScenarios({
+      selectQaFlowSuiteScenarios({
         scenarios,
         scenarioIds: ["third", "first"],
         providerMode: "live-frontier",
@@ -403,7 +403,7 @@ describe("qa suite planning helpers", () => {
     ];
 
     expect(
-      selectQaSuiteScenarios({
+      selectQaFlowSuiteScenarios({
         scenarios,
         providerMode: "live-frontier",
         primaryModel: "openai/gpt-5.5",
@@ -411,7 +411,7 @@ describe("qa suite planning helpers", () => {
     ).toEqual(["generic", "openai-only"]);
 
     expect(
-      selectQaSuiteScenarios({
+      selectQaFlowSuiteScenarios({
         scenarios,
         providerMode: "live-frontier",
         primaryModel: "claude-cli/claude-sonnet-4-6",
@@ -427,7 +427,7 @@ describe("qa suite planning helpers", () => {
     ];
 
     expect(
-      selectQaSuiteScenarios({
+      selectQaFlowSuiteScenarios({
         scenarios,
         providerMode: "mock-openai",
         primaryModel: "mock-openai/gpt-5.5",
@@ -435,21 +435,21 @@ describe("qa suite planning helpers", () => {
     ).toEqual(["flow"]);
   });
 
-  it("rejects explicit Playwright scenarios in the programmatic flow suite", () => {
+  it("rejects explicit Playwright scenarios in the flow suite selector", () => {
     const scenarios = [
       makeQaSuiteTestScenario("flow"),
       makePlaywrightQaSuiteTestScenario("playwright"),
     ];
 
     expect(() =>
-      selectQaSuiteScenarios({
+      selectQaFlowSuiteScenarios({
         scenarios,
         scenarioIds: ["playwright"],
         providerMode: "mock-openai",
         primaryModel: "mock-openai/gpt-5.5",
       }),
     ).toThrow(
-      "programmatic qa-flow suite can only run qa-flow scenarios; use qa suite CLI dispatch for Vitest/Playwright scenario(s): playwright (playwright)",
+      "qa-flow execution requires execution.kind: flow; unsupported scenario(s): playwright (playwright)",
     );
   });
 
@@ -465,7 +465,7 @@ describe("qa suite planning helpers", () => {
     ];
 
     expect(
-      selectQaSuiteScenarios({
+      selectQaFlowSuiteScenarios({
         scenarios,
         providerMode: "mock-openai",
         primaryModel: "mock-openai/gpt-5.5",
@@ -473,7 +473,7 @@ describe("qa suite planning helpers", () => {
     ).toEqual(["generic", "mock-only"]);
 
     expect(
-      selectQaSuiteScenarios({
+      selectQaFlowSuiteScenarios({
         scenarios,
         providerMode: "live-frontier",
         primaryModel: "openai/gpt-5.5",
@@ -490,7 +490,7 @@ describe("qa suite planning helpers", () => {
     ];
 
     expect(
-      selectQaSuiteScenarios({
+      selectQaFlowSuiteScenarios({
         scenarios,
         providerMode: "mock-openai",
         primaryModel: "mock-openai/gpt-5.5",
@@ -498,7 +498,7 @@ describe("qa suite planning helpers", () => {
     ).toEqual(["generic"]);
 
     expect(
-      selectQaSuiteScenarios({
+      selectQaFlowSuiteScenarios({
         scenarios,
         scenarioIds: ["live-runtime"],
         providerMode: "mock-openai",

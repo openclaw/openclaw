@@ -6,7 +6,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   runQaManualLane,
-  runQaTestFileScenarios,
   runQaSuiteFromRuntime,
   runQaCharacterEval,
   runQaMultipass,
@@ -19,7 +18,6 @@ const {
   defaultQaRuntimeModelForMode,
 } = vi.hoisted(() => ({
   runQaManualLane: vi.fn(),
-  runQaTestFileScenarios: vi.fn(),
   runQaSuiteFromRuntime: vi.fn(),
   runQaCharacterEval: vi.fn(),
   runQaMultipass: vi.fn(),
@@ -47,11 +45,6 @@ vi.mock("./character-eval.js", () => ({
 
 vi.mock("./multipass.runtime.js", () => ({
   runQaMultipass,
-}));
-
-vi.mock("./test-file-scenario-runner.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./test-file-scenario-runner.js")>()),
-  runQaTestFileScenarios,
 }));
 
 vi.mock("./live-transports/telegram/telegram-live.runtime.js", () => ({
@@ -167,7 +160,6 @@ describe("qa cli runtime", () => {
     runQaSuiteFromRuntime.mockReset();
     runQaCharacterEval.mockReset();
     runQaManualLane.mockReset();
-    runQaTestFileScenarios.mockReset();
     runQaMultipass.mockReset();
     listTelegramQaScenarioCatalog.mockReset();
     runTelegramQaLive.mockReset();
@@ -194,12 +186,6 @@ describe("qa cli runtime", () => {
       waited: { status: "ok" },
       reply: "done",
       watchUrl: "http://127.0.0.1:43124",
-    });
-    runQaTestFileScenarios.mockResolvedValue({
-      outputDir: "/tmp/scenario-playwright",
-      reportPath: "/tmp/scenario-playwright/qa-playwright-report.md",
-      evidencePath: "/tmp/scenario-playwright/qa-evidence.json",
-      results: [{ status: "pass" }],
     });
     runQaMultipass.mockResolvedValue({
       outputDir: "/tmp/multipass",
@@ -257,6 +243,15 @@ describe("qa cli runtime", () => {
   });
 
   it("runs selected Playwright scenarios through the suite command", async () => {
+    const evidencePath = path.join(suiteArtifactsDir, "qa-evidence.json");
+    await fs.writeFile(evidencePath, JSON.stringify({ entries: [] }), "utf8");
+    runQaSuiteFromRuntime.mockResolvedValueOnce({
+      outputDir: suiteArtifactsDir,
+      reportPath: suiteReportPath,
+      evidencePath,
+      results: [{ status: "pass" }],
+    });
+
     await runQaSuiteCommand({
       repoRoot: process.cwd(),
       outputDir: ".artifacts/qa-e2e/scenario-test",
@@ -265,56 +260,17 @@ describe("qa cli runtime", () => {
       scenarioIds: ["control-ui-chat-flow-playwright"],
     });
 
-    expect(runQaTestFileScenarios).toHaveBeenCalledTimes(1);
-    const call = mockFirstObjectArg(runQaTestFileScenarios);
-    expectFields(call, {
+    expect(runQaSuiteFromRuntime).toHaveBeenCalledWith({
       repoRoot: process.cwd(),
       outputDir: path.join(process.cwd(), ".artifacts", "qa-e2e", "scenario-test"),
+      transportId: "qa-channel",
       providerMode: "mock-openai",
       primaryModel: "mock-openai/gpt-5.5",
+      alternateModel: undefined,
+      fastMode: undefined,
+      scenarioIds: ["control-ui-chat-flow-playwright"],
     });
-    expect(
-      (call.scenarios as Array<{ id: string; execution: { kind: string } }>).map((scenario) => ({
-        id: scenario.id,
-        kind: scenario.execution.kind,
-      })),
-    ).toEqual([{ id: "control-ui-chat-flow-playwright", kind: "playwright" }]);
-    expectWriteContains(
-      stdoutWrite,
-      "QA suite evidence: /tmp/scenario-playwright/qa-evidence.json",
-    );
-  });
-
-  it("rejects mixed flow and Vitest or Playwright scenarios in one suite command", async () => {
-    await expect(
-      runQaSuiteCommand({
-        repoRoot: process.cwd(),
-        scenarioIds: ["channel-chat-baseline", "control-ui-chat-flow-playwright"],
-      }),
-    ).rejects.toThrow("qa suite cannot mix qa-flow and Vitest/Playwright scenarios");
-
-    expect(runQaTestFileScenarios).not.toHaveBeenCalled();
-  });
-
-  it("rejects repo-local symlink output directories for Playwright scenarios", async () => {
-    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-suite-symlink-root-"));
-    const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-suite-symlink-outside-"));
-    try {
-      await fs.symlink(outsideRoot, path.join(tempRoot, "artifacts-link"));
-
-      await expect(
-        runQaSuiteCommand({
-          repoRoot: tempRoot,
-          outputDir: "artifacts-link/qa-out",
-          scenarioIds: ["control-ui-chat-flow-playwright"],
-        }),
-      ).rejects.toThrow("QA suite outputDir must not traverse symlinks");
-
-      expect(runQaTestFileScenarios).not.toHaveBeenCalled();
-    } finally {
-      await fs.rm(tempRoot, { recursive: true, force: true });
-      await fs.rm(outsideRoot, { recursive: true, force: true });
-    }
+    expectWriteContains(stdoutWrite, `QA suite evidence: ${evidencePath}`);
   });
 
   it("rejects host-only resource options for Playwright scenarios", async () => {
@@ -326,7 +282,7 @@ describe("qa cli runtime", () => {
       }),
     ).rejects.toThrow("--image, --cpus, --memory, and --disk require --runner multipass");
 
-    expect(runQaTestFileScenarios).not.toHaveBeenCalled();
+    expect(runQaSuiteFromRuntime).not.toHaveBeenCalled();
   });
 
   it("resolves suite repo-root-relative paths before dispatching", async () => {

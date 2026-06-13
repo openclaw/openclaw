@@ -68,10 +68,8 @@ import {
   type QaRuntimeParityTier,
 } from "./scenario-catalog.js";
 import { resolveQaScenarioPackScenarioIds } from "./scenario-packs.js";
-import { runQaSuiteFromRuntime } from "./suite-launch.runtime.js";
-import { resolveQaSuiteOutputDir } from "./suite-planning.js";
+import { runQaSuiteFromRuntime, type QaSuiteRuntimeResult } from "./suite-launch.runtime.js";
 import { readQaSuiteFailedOrSkippedScenarioCountFromFile } from "./suite-summary.js";
-import { isQaTestFileScenario, runQaTestFileScenarios } from "./test-file-scenario-runner.js";
 import {
   buildTokenEfficiencyReport,
   renderTokenEfficiencyMarkdownReport,
@@ -232,20 +230,6 @@ function parseQaRuntimeParityTierFilters(input: string[] | undefined): QaRuntime
   return rawValues as QaRuntimeParityTier[];
 }
 
-function selectExplicitQaSuiteScenarios(params: {
-  scenarioIds: readonly string[];
-  scenarios: ReturnType<typeof readQaScenarioPack>["scenarios"];
-}) {
-  const scenarioById = new Map(params.scenarios.map((scenario) => [scenario.id, scenario]));
-  return params.scenarioIds.map((scenarioId) => {
-    const scenario = scenarioById.get(scenarioId);
-    if (!scenario) {
-      throw new Error(`unknown QA scenario id(s): ${scenarioId}`);
-    }
-    return scenario;
-  });
-}
-
 function resolveQaRuntimeParityTierScenarioIds(params: {
   scenarioIds: string[];
   runtimeParityTiers: readonly QaRuntimeParityTier[];
@@ -292,7 +276,13 @@ function hasQaSuiteRetryableNetworkCode(error: unknown) {
   return false;
 }
 
-async function assertQaSuiteArtifacts(result: { reportPath: string; summaryPath: string }) {
+function isQaTestFileSuiteResult(
+  result: QaSuiteRuntimeResult,
+): result is Extract<QaSuiteRuntimeResult, { evidencePath: string }> {
+  return "evidencePath" in result;
+}
+
+async function assertQaSuiteArtifacts(result: QaSuiteRuntimeResult) {
   try {
     await fs.access(result.reportPath);
   } catch (error) {
@@ -301,6 +291,10 @@ async function assertQaSuiteArtifacts(result: { reportPath: string; summaryPath:
       `QA suite did not produce report artifact at ${result.reportPath}: ${formatErrorMessage(error)}`,
       { cause: error },
     );
+  }
+  if (isQaTestFileSuiteResult(result)) {
+    await fs.access(result.evidencePath);
+    return;
   }
   await readQaSuiteFailedOrSkippedScenarioCountFromFile(result.summaryPath);
 }
@@ -352,6 +346,9 @@ async function runQaParityPreflight(params: {
     scenarioIds: ["approval-turn-tool-followthrough"],
     concurrency: 1,
   });
+  if (isQaTestFileSuiteResult(result)) {
+    throw new Error("QA parity preflight requires execution.kind: flow scenarios.");
+  }
   process.stdout.write(`QA parity preflight watch: ${result.watchUrl}\n`);
   process.stdout.write(`QA parity preflight report: ${result.reportPath}\n`);
   process.stdout.write(`QA parity preflight summary: ${result.summaryPath}\n`);
@@ -644,46 +641,6 @@ export async function runQaSuiteCommand(opts: {
   if (runner === "multipass" && opts.cliAuthMode !== undefined) {
     throw new Error("--cli-auth-mode requires --runner host.");
   }
-  const scenarioCatalog = readQaScenarioPack().scenarios;
-  const explicitlySelectedScenarios =
-    scenarioIds.length > 0
-      ? selectExplicitQaSuiteScenarios({ scenarioIds, scenarios: scenarioCatalog })
-      : [];
-  const testFileScenarios = explicitlySelectedScenarios.filter(isQaTestFileScenario);
-  if (testFileScenarios.length > 0) {
-    if (testFileScenarios.length !== explicitlySelectedScenarios.length) {
-      throw new Error(
-        "qa suite cannot mix qa-flow and Vitest/Playwright scenarios in one invocation.",
-      );
-    }
-    const testFileKinds = new Set(testFileScenarios.map((scenario) => scenario.execution.kind));
-    if (testFileKinds.size > 1) {
-      throw new Error("qa suite cannot mix Vitest and Playwright scenarios in one invocation.");
-    }
-    if (runner !== "host") {
-      throw new Error("Vitest/Playwright scenarios require --runner host.");
-    }
-    if (opts.preflight === true) {
-      throw new Error("--preflight requires qa-flow scenarios.");
-    }
-    const outputDir = await resolveQaSuiteOutputDir(repoRoot, opts.outputDir);
-    const scenarioRunnerParams = {
-      repoRoot,
-      outputDir,
-      providerMode,
-      primaryModel: primaryModel ?? defaultQaModelForMode(providerMode),
-    };
-    const result = await runQaTestFileScenarios({
-      ...scenarioRunnerParams,
-      scenarios: testFileScenarios,
-    });
-    process.stdout.write(`QA suite report: ${result.reportPath}\n`);
-    process.stdout.write(`QA suite evidence: ${result.evidencePath}\n`);
-    if (!allowFailures && result.results.some((scenario) => scenario.status !== "pass")) {
-      process.exitCode = 1;
-    }
-    return;
-  }
   if (runner === "multipass") {
     const thinkingDefault = parseQaThinkingLevel("--thinking", opts.thinking);
     const result = await runQaMultipass({
@@ -750,6 +707,14 @@ export async function runQaSuiteCommand(opts: {
       : {}),
     ...(runtimePair ? { runtimePair } : {}),
   });
+  if (isQaTestFileSuiteResult(result)) {
+    process.stdout.write(`QA suite report: ${result.reportPath}\n`);
+    process.stdout.write(`QA suite evidence: ${result.evidencePath}\n`);
+    if (!allowFailures && result.results.some((scenario) => scenario.status !== "pass")) {
+      process.exitCode = 1;
+    }
+    return;
+  }
   process.stdout.write(`QA suite watch: ${result.watchUrl}\n`);
   process.stdout.write(`QA suite report: ${result.reportPath}\n`);
   process.stdout.write(`QA suite summary: ${result.summaryPath}\n`);

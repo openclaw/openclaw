@@ -63,7 +63,7 @@ function scenarioMatchesLiveLane(params: {
   return true;
 }
 
-function selectQaSuiteScenarios(params: {
+function selectQaFlowSuiteScenarios(params: {
   scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"];
   scenarioIds?: string[];
   providerMode: QaProviderMode;
@@ -91,7 +91,7 @@ function selectQaSuiteScenarios(params: {
         .map((scenario) => `${scenario.id} (${scenario.execution.kind})`)
         .join(", ");
       throw new Error(
-        `programmatic qa-flow suite can only run qa-flow scenarios; use qa suite CLI dispatch for Vitest/Playwright scenario(s): ${scenarioList}`,
+        `qa-flow execution requires execution.kind: flow; unsupported scenario(s): ${scenarioList}`,
       );
     }
     return selectedScenarios;
@@ -282,7 +282,7 @@ export {
   resolveQaSuiteWorkerStartStaggerMs,
   resolveQaSuiteOutputDir,
   scenarioRequiresControlUi,
-  selectQaSuiteScenarios,
+  selectQaFlowSuiteScenarios,
   shouldUseIsolatedQaSuiteScenarioWorkers,
   splitModelRef,
 };
