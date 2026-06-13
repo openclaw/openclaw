@@ -3627,13 +3627,14 @@ function taskIsActive(task: WorkboardTaskSummary | undefined): task is Workboard
 async function cancelWorkboardTaskRun(params: {
   client: GatewayBrowserClient;
   taskId: string;
-}): Promise<{ cancelled: boolean; task: WorkboardTaskSummary | null }> {
+}): Promise<{ cancelled: boolean; missing: boolean; task: WorkboardTaskSummary | null }> {
   const result = await params.client.request("tasks.cancel", {
     taskId: params.taskId,
     reason: "Stopped from Workboard.",
   });
   return {
     cancelled: isRecord(result) && result.cancelled === true,
+    missing: isRecord(result) && result.found === false,
     task: isRecord(result) ? normalizeTaskSummary(result.task) : null,
   };
 }
@@ -3822,8 +3823,14 @@ export async function stopWorkboardCard(params: {
           client: params.client,
           taskId,
         });
-        taskStopped = cancelled.cancelled;
-        if (cancelled.cancelled) {
+        if (cancelled.missing) {
+          state.missingTaskIds.add(taskId);
+          if (task?.taskId === taskId || task?.id === taskId) {
+            state.tasksByCardId.delete(params.card.id);
+          }
+          taskStopped = !sessionKey;
+        } else if (cancelled.cancelled) {
+          taskStopped = true;
           state.tasksByCardId.set(
             params.card.id,
             cancelled.task ?? {

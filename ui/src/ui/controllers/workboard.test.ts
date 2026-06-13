@@ -5699,7 +5699,7 @@ describe("workboard controller", () => {
     });
   });
 
-  it("records missing task cancellation before aborting its linked session", async () => {
+  it("records found:false task cancellation before aborting its linked session", async () => {
     const host = {};
     const linked = {
       ...sampleCard,
@@ -5713,10 +5713,7 @@ describe("workboard controller", () => {
     state.cards = [linked];
     const client = createClient((method) => {
       if (method === "tasks.cancel") {
-        throw new GatewayRequestError({
-          code: "INVALID_REQUEST",
-          message: "task not found: task-pruned",
-        });
+        return { found: false, cancelled: false };
       }
       if (method === "chat.abort") {
         return { aborted: true, runIds: ["run-1"] };
@@ -5807,6 +5804,38 @@ describe("workboard controller", () => {
     expect(state.cards).toEqual([linked]);
     expect(state.missingTaskIds).toEqual(new Set(["task-pruned"]));
     expect(state.error).toBe("session abort unavailable");
+  });
+
+  it("treats found:false task cancellation as stopped for task-only cards", async () => {
+    const host = {};
+    const linked = {
+      ...sampleCard,
+      status: "running" as const,
+      taskId: "task-pruned",
+    };
+    const blocked = { ...linked, status: "blocked" as const };
+    const state = getWorkboardState(host);
+    state.cards = [linked];
+    const client = createClient((method) => {
+      if (method === "tasks.cancel") {
+        return { found: false, cancelled: false };
+      }
+      return { card: blocked };
+    });
+
+    await stopWorkboardCard({ host, client: client as never, card: linked });
+
+    expect(client.request).toHaveBeenNthCalledWith(1, "tasks.cancel", {
+      taskId: "task-pruned",
+      reason: "Stopped from Workboard.",
+    });
+    expect(client.request).toHaveBeenNthCalledWith(2, "workboard.cards.update", {
+      id: "card-1",
+      patch: { status: "blocked" },
+    });
+    expect(state.cards).toEqual([blocked]);
+    expect(state.missingTaskIds).toEqual(new Set(["task-pruned"]));
+    expect(state.error).toBeNull();
   });
 
   it("treats missing task cancellation as stopped for task-only cards", async () => {
