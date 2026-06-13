@@ -311,7 +311,6 @@ describe("qa cli runtime", () => {
     await runQaSuiteCommand({
       repoRoot: process.cwd(),
       outputDir: ".artifacts/qa-e2e/scenario-test",
-      providerMode: "mock-openai",
       primaryModel: "mock-openai/gpt-5.5",
       scenarioIds: ["control-ui-chat-flow-playwright"],
     });
@@ -320,7 +319,6 @@ describe("qa cli runtime", () => {
       repoRoot: process.cwd(),
       outputDir: path.join(process.cwd(), ".artifacts", "qa-e2e", "scenario-test"),
       transportId: "qa-channel",
-      providerMode: "mock-openai",
       primaryModel: "mock-openai/gpt-5.5",
       alternateModel: undefined,
       fastMode: undefined,
@@ -1572,6 +1570,20 @@ describe("qa cli runtime", () => {
       disk: "24G",
     });
     expect(runQaSuiteFromRuntime).not.toHaveBeenCalled();
+  });
+
+  it("rejects Vitest and Playwright scenarios on the multipass runner", async () => {
+    await expect(
+      runQaSuiteCommand({
+        repoRoot: "/tmp/openclaw-repo",
+        runner: "multipass",
+        scenarioIds: ["control-ui-chat-flow-playwright"],
+      }),
+    ).rejects.toThrow(
+      "--runner multipass requires execution.kind: flow scenarios; unsupported scenario(s): control-ui-chat-flow-playwright (playwright)",
+    );
+
+    expect(runQaMultipass).not.toHaveBeenCalled();
   });
 
   it("passes runtime-pair suite selection through to the multipass runner", async () => {

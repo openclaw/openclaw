@@ -84,8 +84,6 @@ describe("qa suite runtime launcher", () => {
     const result = await runQaSuiteFromRuntime({
       repoRoot,
       outputDir: ".artifacts/qa-e2e/scenario-test",
-      providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.5",
       scenarioIds: ["control-ui-chat-flow-playwright"],
     });
 

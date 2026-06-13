@@ -251,6 +251,26 @@ function resolveQaRuntimeParityTierScenarioIds(params: {
   return uniqueStrings([...params.scenarioIds, ...matchingScenarioIds]);
 }
 
+function rejectNonFlowScenarioIdsForMultipass(scenarioIds: readonly string[]) {
+  if (scenarioIds.length === 0) {
+    return;
+  }
+  const scenarioById = new Map(
+    readQaScenarioPack().scenarios.map((scenario) => [scenario.id, scenario]),
+  );
+  const nonFlowScenarios = scenarioIds.flatMap((scenarioId) => {
+    const scenario = scenarioById.get(scenarioId);
+    return scenario && scenario.execution.kind !== "flow"
+      ? [`${scenario.id} (${scenario.execution.kind})`]
+      : [];
+  });
+  if (nonFlowScenarios.length > 0) {
+    throw new Error(
+      `--runner multipass requires execution.kind: flow scenarios; unsupported scenario(s): ${nonFlowScenarios.join(", ")}`,
+    );
+  }
+}
+
 function isQaSuiteInfraRetryableError(error: unknown) {
   if (error instanceof QaSuiteArtifactError || error instanceof QaSuiteInfraError) {
     return true;
@@ -616,12 +636,13 @@ export async function runQaSuiteCommand(opts: {
     throw new Error("--cli-auth-mode requires --runner host.");
   }
   if (runner === "multipass") {
+    rejectNonFlowScenarioIdsForMultipass(scenarioIds);
     const thinkingDefault = parseQaThinkingLevel("--thinking", opts.thinking);
     const result = await runQaMultipass({
       repoRoot,
       outputDir: resolveRepoRelativeOutputDir(repoRoot, opts.outputDir),
       transportId,
-      providerMode,
+      ...(opts.providerMode !== undefined ? { providerMode } : {}),
       primaryModel,
       alternateModel,
       fastMode: opts.fastMode,
@@ -669,7 +690,7 @@ export async function runQaSuiteCommand(opts: {
       repoRoot,
       outputDir: resolveRepoRelativeOutputDir(repoRoot, opts.outputDir),
       transportId,
-      providerMode,
+      ...(opts.providerMode !== undefined ? { providerMode } : {}),
       primaryModel,
       alternateModel,
       fastMode: opts.fastMode,

@@ -1,5 +1,6 @@
 // Qa Lab plugin module implements suite launch behavior.
 import path from "node:path";
+import { DEFAULT_QA_PROVIDER_MODE } from "./providers/index.js";
 import { defaultQaModelForMode, normalizeQaProviderMode } from "./run-config.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
 import { resolveQaSuiteOutputDir } from "./suite-planning.js";
@@ -78,7 +79,7 @@ async function runQaTestFileSuiteFromRuntime(params: {
   }
   const repoRoot = path.resolve(runParams?.repoRoot ?? process.cwd());
   const outputDir = await resolveQaSuiteOutputDir(repoRoot, runParams?.outputDir);
-  const providerMode = normalizeQaProviderMode(runParams?.providerMode);
+  const providerMode = normalizeQaProviderMode(runParams?.providerMode ?? DEFAULT_QA_PROVIDER_MODE);
   const primaryModel = runParams?.primaryModel?.trim() || defaultQaModelForMode(providerMode);
   return await runQaTestFileScenarios({
     repoRoot,

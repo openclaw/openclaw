@@ -300,7 +300,7 @@ export function registerQaLabCli(program: Command) {
     .option("--output-dir <path>", "Suite artifact directory")
     .option("--runner <kind>", "Execution runner: host or multipass", "host")
     .option("--transport <id>", "QA transport id", "qa-channel")
-    .option("--provider-mode <mode>", formatQaProviderModeHelp(), DEFAULT_QA_LIVE_PROVIDER_MODE)
+    .option("--provider-mode <mode>", formatQaProviderModeHelp())
     .option("--model <ref>", "Primary provider/model ref")
     .option("--alt-model <ref>", "Alternate provider/model ref")
     .option(
