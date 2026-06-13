@@ -68,10 +68,11 @@ import {
   runWithDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
 import {
-  getNodePairingConnectSnapshot,
-  rejectPendingNodePairingRequestsForNode,
+  beginNodePairingConnect,
+  finalizeNodePairingCleanupClaim,
+  releaseNodePairingCleanupClaim,
   requestNodePairing,
-  type NodePairingPendingSnapshot,
+  type NodePairingCleanupClaim,
   updatePairedNodeMetadata,
 } from "../../../infra/node-pairing.js";
 import { upsertPresence } from "../../../infra/system-presence.js";
@@ -95,7 +96,12 @@ import {
   isWebchatClient,
 } from "../../../utils/message-channel.js";
 import { resolveRuntimeServiceVersion } from "../../../version.js";
-import { AUTH_RATE_LIMIT_SCOPE_NODE_PAIRING, type AuthRateLimiter } from "../../auth-rate-limit.js";
+import {
+  AUTH_RATE_LIMIT_SCOPE_NODE_PAIRING,
+  AUTH_RATE_LIMIT_SCOPE_NODE_REAPPROVAL,
+  buildRateLimitIdentityKey,
+  type AuthRateLimiter,
+} from "../../auth-rate-limit.js";
 import type { GatewayAuthResult, ResolvedGatewayAuth } from "../../auth.js";
 import { hasForwardedRequestHeaders, isLocalDirectRequest } from "../../auth.js";
 import { normalizeDeviceMetadataForAuth } from "../../device-auth.js";
@@ -214,24 +220,25 @@ async function requestNodePairingFromConnect(params: {
   clientIp?: string;
   pairedReconnect?: boolean;
 }): Promise<Awaited<ReturnType<typeof requestNodePairing>>> {
-  // Paired reconnects replace at most one request for their node. First-time
-  // pairing pressure must not suppress a required reapproval refresh.
-  if (!params.rateLimiter || params.pairedReconnect) {
+  if (!params.rateLimiter) {
     return await requestNodePairing(params.input);
   }
+  const rateLimitScope = params.pairedReconnect
+    ? AUTH_RATE_LIMIT_SCOPE_NODE_REAPPROVAL
+    : AUTH_RATE_LIMIT_SCOPE_NODE_PAIRING;
+  const rateLimitKey = params.pairedReconnect
+    ? buildRateLimitIdentityKey("node", params.input.nodeId)
+    : params.clientIp;
   return await withSerializedRateLimitAttempt({
-    ip: params.clientIp,
-    scope: AUTH_RATE_LIMIT_SCOPE_NODE_PAIRING,
+    ip: rateLimitKey,
+    scope: rateLimitScope,
     run: async () => {
-      const rateCheck = params.rateLimiter?.check(
-        params.clientIp,
-        AUTH_RATE_LIMIT_SCOPE_NODE_PAIRING,
-      );
+      const rateCheck = params.rateLimiter?.check(rateLimitKey, rateLimitScope);
       if (rateCheck && !rateCheck.allowed) {
         throw new NodePairingRateLimitError(rateCheck.retryAfterMs);
       }
       const result = await requestNodePairing(params.input);
-      params.rateLimiter?.recordFailure(params.clientIp, AUTH_RATE_LIMIT_SCOPE_NODE_PAIRING);
+      params.rateLimiter?.recordFailure(rateLimitKey, rateLimitScope);
       return result;
     },
   });
@@ -544,6 +551,21 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     }
 
     const text = rawDataToString(data);
+    let pendingNodePairingCleanup: NodePairingCleanupClaim | undefined;
+    const releasePendingNodePairingCleanup = async () => {
+      const claim = pendingNodePairingCleanup;
+      pendingNodePairingCleanup = undefined;
+      if (!claim) {
+        return;
+      }
+      try {
+        await releaseNodePairingCleanupClaim(claim);
+      } catch (error) {
+        logGateway.warn(
+          `failed to release pending pairing cleanup for ${claim.nodeId}: ${formatForLog(error)}`,
+        );
+      }
+    };
     try {
       const parsed = JSON.parse(text);
       const frameType =
@@ -1618,13 +1640,11 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             });
           }
         }
-        let pendingNodePairingCleanup:
-          | { nodeId: string; observed: NodePairingPendingSnapshot[] }
-          | undefined;
         if (role === "node") {
           const nodeId = connectParams.device?.id ?? connectParams.client.id;
-          const nodePairingSnapshot = await getNodePairingConnectSnapshot(nodeId);
+          const nodePairingSnapshot = await beginNodePairingConnect(nodeId);
           const pairedNode = nodePairingSnapshot.pairedNode;
+          pendingNodePairingCleanup = nodePairingSnapshot.cleanupClaim;
           let reconciliation: Awaited<ReturnType<typeof reconcileNodePairingOnConnect>>;
           try {
             reconciliation = await reconcileNodePairingOnConnect({
@@ -1642,6 +1662,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
               },
             });
           } catch (error) {
+            await releasePendingNodePairingCleanup();
             if (error instanceof NodePairingRateLimitError) {
               rejectUnauthorized({
                 ok: false,
@@ -1653,11 +1674,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             }
             throw error;
           }
-          if (reconciliation.shouldClearPendingPairings) {
-            pendingNodePairingCleanup = {
-              nodeId: reconciliation.nodeId,
-              observed: nodePairingSnapshot.pending,
-            };
+          if (!reconciliation.shouldClearPendingPairings) {
+            await releasePendingNodePairingCleanup();
           }
           const supersededPairings = reconciliation.pendingPairing?.created
             ? (reconciliation.pendingPairing.superseded ?? [])
@@ -1706,6 +1724,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         const presenceKey = shouldTrackPresence ? (device?.id ?? instanceId ?? connId) : undefined;
 
         if (isClosed()) {
+          await releasePendingNodePairingCleanup();
           setCloseCause("connect-aborted-before-register", {
             ...clientMeta,
             auth: authMethod,
@@ -1799,6 +1818,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                   gatewayVersion,
                 },
               });
+              await releasePendingNodePairingCleanup();
               close(1008, "client version mismatch");
               return;
             }
@@ -1806,6 +1826,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         }
 
         if (!setClient(nextClient)) {
+          await releasePendingNodePairingCleanup();
           setCloseCause("connect-aborted-before-register", {
             ...clientMeta,
             auth: authMethod,
@@ -1989,19 +2010,17 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
               );
             }
           }
+          await releasePendingNodePairingCleanup();
           setCloseCause("hello-send-failed", { error: formatForLog(err) });
           close();
           return;
         }
         if (pendingNodePairingCleanup) {
           const context = buildRequestContext();
+          const cleanupClaim = pendingNodePairingCleanup;
+          pendingNodePairingCleanup = undefined;
           try {
-            // Reconciliation and cleanup share the pairing lock. A newer reconnect
-            // refreshes the request revision, so this observed snapshot cannot delete it.
-            const resolvedPairings = await rejectPendingNodePairingRequestsForNode(
-              pendingNodePairingCleanup.nodeId,
-              pendingNodePairingCleanup.observed,
-            );
+            const resolvedPairings = await finalizeNodePairingCleanupClaim(cleanupClaim);
             const resolvedAt = Date.now();
             for (const resolved of resolvedPairings) {
               context.broadcast(
@@ -2017,7 +2036,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             }
           } catch (error) {
             logGateway.warn(
-              `failed to clear stale pending pairings for ${pendingNodePairingCleanup.nodeId}: ${formatForLog(error)}`,
+              `failed to clear stale pending pairings for ${cleanupClaim.nodeId}: ${formatForLog(error)}`,
             );
           }
         }
@@ -2150,6 +2169,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
       }
       void dispatch;
     } catch (err) {
+      await releasePendingNodePairingCleanup();
       logGateway.error(`parse/handle error: ${String(err)}`);
       logWs("out", "parse-error", { connId, error: formatForLog(err) });
       if (!getClient()) {

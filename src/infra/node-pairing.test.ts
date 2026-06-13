@@ -4,10 +4,11 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import {
   approveNodePairing,
-  getNodePairingConnectSnapshot,
+  beginNodePairingConnect,
+  finalizeNodePairingCleanupClaim,
   getPairedNode,
   listNodePairing,
-  rejectPendingNodePairingRequestsForNode,
+  releaseNodePairingCleanupClaim,
   removePairedNode,
   requestNodePairing,
   updatePairedNodeMetadata,
@@ -343,14 +344,13 @@ describe("node pairing tokens", () => {
         },
         baseDir,
       );
-      const snapshot = await getNodePairingConnectSnapshot("node-1", baseDir);
+      const snapshot = await beginNodePairingConnect("node-1", baseDir);
+      expect(snapshot.cleanupClaim).toBeDefined();
 
-      await expect(
-        rejectPendingNodePairingRequestsForNode("node-1", snapshot.pending, baseDir),
-      ).resolves.toEqual([{ requestId: pending.request.requestId, nodeId: "node-1" }]);
-      await expect(
-        rejectPendingNodePairingRequestsForNode("node-1", snapshot.pending, baseDir),
-      ).resolves.toEqual([]);
+      await expect(finalizeNodePairingCleanupClaim(snapshot.cleanupClaim!)).resolves.toEqual([
+        { requestId: pending.request.requestId, nodeId: "node-1" },
+      ]);
+      await expect(finalizeNodePairingCleanupClaim(snapshot.cleanupClaim!)).resolves.toEqual([]);
 
       const pairing = await listNodePairing(baseDir);
       expect(pairing.pending).toEqual([]);
@@ -373,7 +373,8 @@ describe("node pairing tokens", () => {
         },
         baseDir,
       );
-      const snapshot = await getNodePairingConnectSnapshot("node-1", baseDir);
+      const snapshot = await beginNodePairingConnect("node-1", baseDir);
+      expect(snapshot.cleanupClaim).toBeDefined();
       const refreshed = await requestNodePairing(
         {
           nodeId: "node-1",
@@ -384,9 +385,7 @@ describe("node pairing tokens", () => {
       );
       expect(refreshed.request.requestId).toBe(pending.request.requestId);
 
-      await expect(
-        rejectPendingNodePairingRequestsForNode("node-1", snapshot.pending, baseDir),
-      ).resolves.toEqual([]);
+      await expect(finalizeNodePairingCleanupClaim(snapshot.cleanupClaim!)).resolves.toEqual([]);
       expect((await listNodePairing(baseDir)).pending).toHaveLength(1);
     });
   });
@@ -402,7 +401,8 @@ describe("node pairing tokens", () => {
         },
         baseDir,
       );
-      const snapshot = await getNodePairingConnectSnapshot("node-1", baseDir);
+      const snapshot = await beginNodePairingConnect("node-1", baseDir);
+      expect(snapshot.cleanupClaim).toBeDefined();
       const replacement = await requestNodePairing(
         {
           nodeId: "node-1",
@@ -413,12 +413,54 @@ describe("node pairing tokens", () => {
       );
       expect(replacement.request.requestId).not.toBe(pending.request.requestId);
 
-      await expect(
-        rejectPendingNodePairingRequestsForNode("node-1", snapshot.pending, baseDir),
-      ).resolves.toEqual([]);
+      await expect(finalizeNodePairingCleanupClaim(snapshot.cleanupClaim!)).resolves.toEqual([]);
       const remaining = (await listNodePairing(baseDir)).pending;
       expect(remaining).toHaveLength(1);
       expect(remaining[0]?.requestId).toBe(replacement.request.requestId);
+    });
+  });
+
+  test("blocks approval until a reconnect cleanup claim is released", async () => {
+    await withNodePairingDir(async (baseDir) => {
+      await setupPairedNode(baseDir);
+      const pending = await requestNodePairing(
+        {
+          nodeId: "node-1",
+          platform: "darwin",
+          commands: ["system.run", "canvas.snapshot"],
+        },
+        baseDir,
+      );
+      const firstSnapshot = await beginNodePairingConnect("node-1", baseDir);
+      const secondSnapshot = await beginNodePairingConnect("node-1", baseDir);
+      expect(firstSnapshot.cleanupClaim).toBeDefined();
+      expect(secondSnapshot.cleanupClaim).toEqual(firstSnapshot.cleanupClaim);
+
+      await expect(
+        approveNodePairing(
+          pending.request.requestId,
+          { callerScopes: ["operator.pairing", "operator.admin"] },
+          baseDir,
+        ),
+      ).resolves.toBeNull();
+
+      await releaseNodePairingCleanupClaim(firstSnapshot.cleanupClaim!);
+      await expect(
+        approveNodePairing(
+          pending.request.requestId,
+          { callerScopes: ["operator.pairing", "operator.admin"] },
+          baseDir,
+        ),
+      ).resolves.toBeNull();
+
+      await releaseNodePairingCleanupClaim(secondSnapshot.cleanupClaim!);
+      await expect(
+        approveNodePairing(
+          pending.request.requestId,
+          { callerScopes: ["operator.pairing", "operator.admin"] },
+          baseDir,
+        ),
+      ).resolves.toMatchObject({ requestId: pending.request.requestId });
     });
   });
 

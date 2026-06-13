@@ -36,7 +36,11 @@ async function openWs(port: number) {
   return ws;
 }
 
-async function attemptNodePairing(port: number, identityPath: string) {
+async function attemptNodePairing(
+  port: number,
+  identityPath: string,
+  surface: { caps?: string[]; commands?: string[] } = {},
+) {
   const ws = await openWs(port);
   try {
     return await connectReq(ws, {
@@ -44,8 +48,9 @@ async function attemptNodePairing(port: number, identityPath: string) {
       role: "node",
       scopes: [],
       client: NODE_CLIENT,
-      commands: ["system.run"],
+      commands: surface.commands ?? ["system.run"],
       deviceIdentityPath: identityPath,
+      ...(surface.caps ? { caps: surface.caps } : {}),
     });
   } finally {
     ws.close();
@@ -168,6 +173,47 @@ describe("node pairing rate limit", () => {
         "camera",
         "screen",
       ]);
+    });
+  });
+
+  test("limits repeated paired reapproval before the pairing lock", async () => {
+    testState.gatewayAuth = {
+      mode: "token",
+      token: "secret",
+      rateLimit: {
+        maxAttempts: 3,
+        windowMs: 60_000,
+        lockoutMs: 60_000,
+        exemptLoopback: true,
+      },
+    };
+    await withGatewayServer(async ({ port }) => {
+      const identityPath = path.join(os.tmpdir(), `openclaw-node-reapproval-${randomUUID()}.json`);
+      const identity = await approveNodeIdentity({ identityPath, caps: ["camera"] });
+
+      const responses = await Promise.all(
+        Array.from(
+          { length: 5 },
+          async () =>
+            await attemptNodePairing(port, identityPath, {
+              caps: ["camera", "screen"],
+              commands: [],
+            }),
+        ),
+      );
+      const rateLimited = responses.filter((res) => {
+        const details = res.error?.details as { code?: unknown; authReason?: unknown } | undefined;
+        return (
+          details?.code === ConnectErrorDetailCodes.AUTH_RATE_LIMITED &&
+          details.authReason === "rate_limited"
+        );
+      });
+
+      expect(responses.filter((res) => res.ok)).toHaveLength(3);
+      expect(rateLimited).toHaveLength(2);
+      expect(
+        (await listNodePairing()).pending.filter((entry) => entry.nodeId === identity.deviceId),
+      ).toHaveLength(1);
     });
   });
 });
