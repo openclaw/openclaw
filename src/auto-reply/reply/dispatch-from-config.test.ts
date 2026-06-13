@@ -1259,6 +1259,7 @@ describe("dispatchReplyFromConfig", () => {
       text: "Slack channel reply",
       mediaUrls: undefined,
       idempotencyKey: undefined,
+      storePath: "/tmp/mock-sessions.json",
       updateMode: "inline",
       config: cfg,
     });
@@ -1300,6 +1301,7 @@ describe("dispatchReplyFromConfig", () => {
       text: "Redacted Slack reply",
       mediaUrls: undefined,
       idempotencyKey: undefined,
+      storePath: "/tmp/mock-sessions.json",
       updateMode: "inline",
       config: cfg,
     });

@@ -168,6 +168,9 @@ import { resolveRunTypingPolicy } from "./typing-policy.js";
 type SourceReplyTranscriptMirror = NonNullable<
   NonNullable<ReturnType<typeof getReplyPayloadMetadata>>["sourceReplyTranscriptMirror"]
 >;
+type TranscriptMirror = SourceReplyTranscriptMirror & {
+  storePath?: string;
+};
 type InternalReplyResolverOptions = {
   onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
 };
@@ -741,7 +744,7 @@ async function clearPendingFinalDeliveryAfterSuccess(params: {
 }
 
 async function mirrorInternalSourceReplyToTranscript(params: {
-  metadata?: SourceReplyTranscriptMirror;
+  metadata?: TranscriptMirror;
   cfg: OpenClawConfig;
 }): Promise<void> {
   const mirror = params.metadata;
@@ -754,6 +757,7 @@ async function mirrorInternalSourceReplyToTranscript(params: {
     text: mirror.text,
     mediaUrls: mirror.mediaUrls,
     idempotencyKey: mirror.idempotencyKey,
+    ...(mirror.storePath ? { storePath: mirror.storePath } : {}),
     updateMode: "inline",
     config: params.cfg,
   });
@@ -799,9 +803,9 @@ function visibleRecoveryShouldKeepWaiting(outcome: StuckSessionRecoveryOutcome):
 }
 
 function transcriptMirrorForDeliveredPayload(
-  metadata: SourceReplyTranscriptMirror,
+  metadata: TranscriptMirror,
   payload: ReplyPayload,
-): SourceReplyTranscriptMirror | undefined {
+): TranscriptMirror | undefined {
   const sendable = resolveSendableOutboundReplyParts(payload);
   if (!sendable.text && sendable.mediaUrls.length === 0) {
     return undefined;
@@ -815,13 +819,13 @@ function transcriptMirrorForDeliveredPayload(
 
 function captureDeliveredTranscriptMirror(params: {
   dispatcher: ReplyDispatcher;
-  metadata?: SourceReplyTranscriptMirror;
-}): () => SourceReplyTranscriptMirror | undefined {
+  metadata?: TranscriptMirror;
+}): () => TranscriptMirror | undefined {
   if (!params.metadata || !params.dispatcher.appendBeforeDeliver) {
     return () => params.metadata;
   }
   const metadata = params.metadata;
-  let deliveredMetadata: SourceReplyTranscriptMirror | undefined;
+  let deliveredMetadata: TranscriptMirror | undefined;
   let observedFinal = false;
   const { idempotencyKey, sessionKey } = metadata;
   params.dispatcher.appendBeforeDeliver((payload, info) => {
@@ -835,7 +839,10 @@ function captureDeliveredTranscriptMirror(params: {
       payloadMetadata.idempotencyKey === idempotencyKey &&
       payloadMetadata.sessionKey === sessionKey
     ) {
-      deliveredMetadata = transcriptMirrorForDeliveredPayload(payloadMetadata, payload);
+      deliveredMetadata = transcriptMirrorForDeliveredPayload(
+        { ...payloadMetadata, storePath: metadata.storePath },
+        payload,
+      );
     } else if (!payloadMetadata && !idempotencyKey) {
       deliveredMetadata = transcriptMirrorForDeliveredPayload(metadata, payload);
     }
@@ -847,7 +854,7 @@ function captureDeliveredTranscriptMirror(params: {
 async function mirrorTranscriptAfterDispatcherDelivery(params: {
   dispatcher: ReplyDispatcher;
   before: { cancelled: number; failed: number };
-  metadata: () => SourceReplyTranscriptMirror | undefined;
+  metadata: () => TranscriptMirror | undefined;
   cfg: OpenClawConfig;
 }): Promise<void> {
   await params.dispatcher.waitForIdle();
@@ -2251,6 +2258,7 @@ export async function dispatchReplyFromConfig(
               {
                 sessionKey: transcriptMirrorSessionKey,
                 agentId: sessionAgentId,
+                storePath: sessionStoreEntry.storePath,
               },
               normalizedPayload,
             )
