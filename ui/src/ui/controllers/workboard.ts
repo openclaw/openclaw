@@ -1519,8 +1519,10 @@ function taskMatchesCard(task: WorkboardTaskSummary, card: WorkboardCard): boole
 
 function taskMatchesCanonicalCardLink(task: WorkboardTaskSummary, card: WorkboardCard): boolean {
   const cardTaskId = normalizeString(card.taskId);
-  if (cardTaskId && task.taskId !== cardTaskId && task.id !== cardTaskId) {
-    return false;
+  if (cardTaskId) {
+    // Exact persisted task IDs stay authoritative when card run metadata is stale
+    // or an otherwise matching task summary omits its optional run ID.
+    return task.taskId === cardTaskId || task.id === cardTaskId;
   }
   const cardRunId = workboardCardRunId(card);
   if (cardRunId && task.runId !== cardRunId) {

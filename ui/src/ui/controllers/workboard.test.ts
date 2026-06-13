@@ -4752,6 +4752,38 @@ describe("workboard controller", () => {
     expect(state.lifecycleTasksPrepared).toBe(true);
   });
 
+  it.each([
+    ["missing", undefined],
+    ["mismatched", "run-new"],
+  ])("accepts exact-confirmed task ids with %s run metadata", async (_label, taskRunId) => {
+    vi.useFakeTimers();
+    const host = {};
+    const state = getWorkboardState(host);
+    const linked = {
+      ...sampleCard,
+      status: "running",
+      sessionKey: sampleTaskSessionKey,
+      runId: "run-stale",
+      taskId: sampleTask.taskId,
+    } satisfies WorkboardCard;
+    const confirmedTask = { ...sampleTask, runId: taskRunId };
+    state.loaded = true;
+    state.cards = [linked];
+    const client = createClient({
+      "tasks.list": { tasks: [] },
+      "tasks.get": { task: confirmedTask },
+    });
+    const requestUpdate = vi.fn();
+
+    await syncWorkboardLifecycle({ host, client: client as never, sessions: [], requestUpdate });
+
+    expect(state.tasksByCardId.get(linked.id)).toEqual(confirmedTask);
+    expect(state.lifecycleTasksPrepared).toBe(true);
+    vi.clearAllMocks();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(requestUpdate).not.toHaveBeenCalled();
+  });
+
   it("rotates bounded exact confirmations before lifecycle writes", async () => {
     vi.useFakeTimers();
     const host = {};
