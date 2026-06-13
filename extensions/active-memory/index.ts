@@ -275,6 +275,7 @@ type RecallSubagentResult = {
 
 type TerminalMemorySearchResult = {
   status: "unavailable";
+  hasUsableMemoryResult: boolean;
   searchDebug?: ActiveMemorySearchDebug;
 };
 
@@ -1726,9 +1727,37 @@ function extractTerminalMemorySearchResultFromSessionRecord(
   const disabled = details?.disabled === true;
   const unavailable = disabled || Boolean(debug?.error) || Boolean(details?.error);
   if (unavailable) {
-    return { status: "unavailable", searchDebug: debug };
+    return {
+      status: "unavailable",
+      hasUsableMemoryResult: false,
+      searchDebug: debug,
+    };
   }
   return undefined;
+}
+
+function hasUsableMemoryResultInSessionRecord(value: unknown): boolean {
+  const record = asRecord(value);
+  const nestedMessage = asRecord(record?.message);
+  const topLevelMessage =
+    record?.role === "toolResult" ||
+    record?.toolName === "memory_search" ||
+    record?.toolName === "memory_recall"
+      ? record
+      : undefined;
+  const message = nestedMessage ?? topLevelMessage;
+  if (!message || normalizeOptionalString(message.role) !== "toolResult") {
+    return false;
+  }
+  const toolName = normalizeOptionalString(message.toolName);
+  const details = asRecord(message.details);
+  if (toolName === "memory_search") {
+    return Array.isArray(details?.results) && details.results.length > 0;
+  }
+  if (toolName === "memory_recall") {
+    return Array.isArray(details?.memories) && details.memories.length > 0;
+  }
+  return false;
 }
 
 async function readActiveMemorySearchDebug(
@@ -1754,13 +1783,15 @@ async function readTerminalMemorySearchResult(
   limits?: TranscriptReadLimits,
 ): Promise<TerminalMemorySearchResult | undefined> {
   let found: TerminalMemorySearchResult | undefined;
+  let hasUsableMemoryResult = false;
   await streamBoundedTranscriptJsonl({
     sessionFile,
     limits,
     onRecord: (record) => {
+      hasUsableMemoryResult ||= hasUsableMemoryResultInSessionRecord(record);
       const result = extractTerminalMemorySearchResultFromSessionRecord(record);
       if (result) {
-        found = result;
+        found = { ...result, hasUsableMemoryResult };
         return true;
       }
       return false;
@@ -1997,23 +2028,6 @@ async function waitForSubagentPartialTimeoutData(
   }
 }
 
-async function waitForTerminalMemorySearchSubagentResult(
-  subagentPromise: Promise<RecallSubagentResult>,
-): Promise<RecallSubagentResult | undefined> {
-  let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  const timeoutPromise = new Promise<undefined>((resolve) => {
-    timeoutId = setTimeout(() => resolve(undefined), timeoutPartialDataGraceMs);
-    timeoutId.unref?.();
-  });
-  try {
-    return await Promise.race([subagentPromise.catch(() => undefined), timeoutPromise]);
-  } finally {
-    if (timeoutId) {
-      clearTimeout(timeoutId);
-    }
-  }
-}
-
 async function buildTimeoutRecallResult(params: {
   elapsedMs: number;
   maxSummaryChars: number;
@@ -2063,7 +2077,7 @@ function buildSubagentRecallResult(params: {
   const { rawReply, resultStatus } = params.subagentResult;
   const searchDebug = params.subagentResult.searchDebug ?? params.fallbackSearchDebug;
   const summary = truncateSummary(normalizeActiveSummary(rawReply) ?? "", params.maxSummaryChars);
-  return summary.length > 0 && !isUnavailableDiagnosticSummary(summary, searchDebug)
+  return summary.length > 0
     ? {
         status: "ok",
         elapsedMs: params.elapsedMs,
@@ -2091,26 +2105,6 @@ function buildSubagentRecallResult(params: {
             summary: null,
             searchDebug,
           };
-}
-
-function normalizeDiagnosticText(value: string): string {
-  return value.replace(/\s+/g, " ").trim().toLowerCase();
-}
-
-function isUnavailableDiagnosticSummary(
-  summary: string,
-  searchDebug: ActiveMemorySearchDebug | undefined,
-): boolean {
-  const normalizedSummary = normalizeDiagnosticText(summary);
-  const diagnostics = [searchDebug?.warning, searchDebug?.action, searchDebug?.error]
-    .map((value) => (value ? normalizeDiagnosticText(value) : ""))
-    .filter(Boolean);
-  return diagnostics.some(
-    (diagnostic) =>
-      normalizedSummary === diagnostic ||
-      normalizedSummary.includes(diagnostic) ||
-      diagnostic.includes(normalizedSummary),
-  );
 }
 
 function escapeXml(str: string): string {
@@ -2777,12 +2771,23 @@ async function maybeResolveActiveRecall(params: {
     // unhandled promise rejections.
     subagentPromise.catch(() => undefined);
 
-    const raceResult = await Promise.race([
+    let raceResult = await Promise.race([
       subagentPromise,
       timeoutPromise,
       terminalMemorySearchWatch.promise,
     ]);
     terminalMemorySearchWatch.stop();
+    let fallbackSearchDebug: ActiveMemorySearchDebug | undefined;
+    if (
+      raceResult !== TIMEOUT_SENTINEL &&
+      "status" in raceResult &&
+      raceResult.hasUsableMemoryResult
+    ) {
+      // A later unavailable call must not discard a summary grounded in an
+      // earlier successful recall. The existing watchdog remains the deadline.
+      fallbackSearchDebug = raceResult.searchDebug;
+      raceResult = await Promise.race([subagentPromise, timeoutPromise]);
+    }
 
     if (raceResult === TIMEOUT_SENTINEL) {
       const result = await buildTimeoutRecallResult({
@@ -2810,28 +2815,13 @@ async function maybeResolveActiveRecall(params: {
     }
 
     if ("status" in raceResult) {
-      const completedSubagentResult =
-        await waitForTerminalMemorySearchSubagentResult(subagentPromise);
-      const recoveredResult = completedSubagentResult
-        ? buildSubagentRecallResult({
-            subagentResult: completedSubagentResult,
-            fallbackSearchDebug: raceResult.searchDebug,
-            elapsedMs: Date.now() - startedAt,
-            maxSummaryChars: params.config.maxSummaryChars,
-          })
-        : undefined;
-      const result: ActiveRecallResult =
-        recoveredResult?.status === "ok"
-          ? recoveredResult
-          : {
-              status: raceResult.status,
-              elapsedMs: Date.now() - startedAt,
-              summary: null,
-              searchDebug: raceResult.searchDebug,
-            };
-      if (!completedSubagentResult) {
-        controller.abort(new Error("active-memory terminal memory search result"));
-      }
+      controller.abort(new Error("active-memory terminal memory search result"));
+      const result: ActiveRecallResult = {
+        status: raceResult.status,
+        elapsedMs: Date.now() - startedAt,
+        summary: null,
+        searchDebug: raceResult.searchDebug,
+      };
       if (params.config.logging) {
         params.api.logger.info?.(
           `${logPrefix} done status=${result.status} elapsedMs=${String(result.elapsedMs)} summaryChars=${String(result.summary?.length ?? 0)}`,
@@ -2857,6 +2847,7 @@ async function maybeResolveActiveRecall(params: {
     }
     const result = buildSubagentRecallResult({
       subagentResult: raceResult,
+      fallbackSearchDebug,
       elapsedMs: Date.now() - startedAt,
       maxSummaryChars: params.config.maxSummaryChars,
     });

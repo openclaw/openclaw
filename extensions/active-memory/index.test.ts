@@ -3162,11 +3162,11 @@ describe("active-memory plugin", () => {
     expectLinesToContain(lines, "🔎 Active Memory Debug: backend=qmd searchMs=8 hits=0");
   });
 
-  it("uses verbose assistant text that arrives after an unavailable memory_search trace", async () => {
+  it("uses a late verbose summary after a successful result and later unavailable trace", async () => {
     const CONFIGURED_TIMEOUT_MS = 1_000;
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
-    testing.setTimeoutPartialDataGraceMsForTests(200);
+    testing.setTimeoutPartialDataGraceMsForTests(5);
     api.pluginConfig = {
       agents: ["main"],
       timeoutMs: CONFIGURED_TIMEOUT_MS,
@@ -3188,6 +3188,16 @@ describe("active-memory plugin", () => {
             role: "toolResult",
             toolName: "memory_search",
             details: {
+              results: [{ path: "memory/food.md", text: "User usually orders tonkotsu ramen." }],
+              debug: { backend: "qmd", hits: 1, searchMs: 8 },
+            },
+          },
+        },
+        {
+          message: {
+            role: "toolResult",
+            toolName: "memory_search",
+            details: {
               disabled: true,
               warning: "Memory search is unavailable due to an embedding/provider error.",
               action: "Check the embedding provider configuration, then retry memory_search.",
@@ -3197,7 +3207,7 @@ describe("active-memory plugin", () => {
         },
       ]);
       await new Promise((resolve) => {
-        setTimeout(resolve, 35);
+        setTimeout(resolve, 550);
       });
       return { payloads: [{ text: verboseSummary }] };
     });
@@ -3220,11 +3230,11 @@ describe("active-memory plugin", () => {
     expectLinesToContain(lines, "Active Memory: status=ok");
     expectLinesToContain(
       lines,
-      "Active Memory Debug: Memory search is unavailable due to an embedding/provider error. Check the embedding provider configuration, then retry memory_search.",
+      "Active Memory Debug: Memory search is unavailable due to an embedding/provider error.",
     );
   });
 
-  it("does not recover unavailable diagnostics as memory context", async () => {
+  it("does not recover arbitrary assistant text without successful memory evidence", async () => {
     const CONFIGURED_TIMEOUT_MS = 1_000;
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
@@ -3260,7 +3270,7 @@ describe("active-memory plugin", () => {
       await new Promise((resolve) => {
         setTimeout(resolve, 35);
       });
-      return { payloads: [{ text: warning }] };
+      return { payloads: [{ text: "User usually orders tonkotsu ramen." }] };
     });
 
     const result = await hooks.before_prompt_build(
