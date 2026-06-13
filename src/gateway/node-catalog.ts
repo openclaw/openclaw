@@ -45,6 +45,16 @@ type KnownNodeApprovedSource = {
 type KnownNodePendingSource = {
   requestId: string;
   nodeId: string;
+  displayName?: string;
+  platform?: string;
+  version?: string;
+  coreVersion?: string;
+  uiVersion?: string;
+  clientId?: string;
+  clientMode?: string;
+  remoteIp?: string;
+  deviceFamily?: string;
+  modelIdentifier?: string;
   caps: string[];
   commands: string[];
   permissions?: Record<string, boolean>;
@@ -106,6 +116,16 @@ function buildPendingNodeSource(entry: NodePairingPendingRequest): KnownNodePend
   return {
     requestId: entry.requestId,
     nodeId: entry.nodeId,
+    displayName: entry.displayName,
+    platform: entry.platform,
+    version: entry.version,
+    coreVersion: entry.coreVersion,
+    uiVersion: entry.uiVersion,
+    clientId: entry.clientId,
+    clientMode: entry.clientMode,
+    remoteIp: entry.remoteIp,
+    deviceFamily: entry.deviceFamily,
+    modelIdentifier: entry.modelIdentifier,
     caps: uniqueSortedStrings(entry.caps),
     commands: uniqueSortedStrings(entry.commands),
     permissions: entry.permissions,
@@ -177,16 +197,30 @@ function buildEffectiveKnownNode(entry: {
   const lastSeen = resolveEffectiveLastSeen({ live, devicePairing, nodePairing });
   return {
     nodeId,
-    displayName: live?.displayName ?? nodePairing?.displayName ?? devicePairing?.displayName,
-    platform: live?.platform ?? nodePairing?.platform ?? devicePairing?.platform,
-    version: live?.version ?? nodePairing?.version,
-    coreVersion: live?.coreVersion ?? nodePairing?.coreVersion,
-    uiVersion: live?.uiVersion ?? nodePairing?.uiVersion,
-    clientId: live?.clientId ?? devicePairing?.clientId,
-    clientMode: live?.clientMode ?? devicePairing?.clientMode,
-    deviceFamily: live?.deviceFamily ?? nodePairing?.deviceFamily,
-    modelIdentifier: live?.modelIdentifier ?? nodePairing?.modelIdentifier,
-    remoteIp: live?.remoteIp ?? nodePairing?.remoteIp ?? devicePairing?.remoteIp,
+    displayName:
+      live?.displayName ??
+      nodePairing?.displayName ??
+      devicePairing?.displayName ??
+      pendingNodePairing?.displayName,
+    platform:
+      live?.platform ??
+      nodePairing?.platform ??
+      devicePairing?.platform ??
+      pendingNodePairing?.platform,
+    version: live?.version ?? nodePairing?.version ?? pendingNodePairing?.version,
+    coreVersion: live?.coreVersion ?? nodePairing?.coreVersion ?? pendingNodePairing?.coreVersion,
+    uiVersion: live?.uiVersion ?? nodePairing?.uiVersion ?? pendingNodePairing?.uiVersion,
+    clientId: live?.clientId ?? devicePairing?.clientId ?? pendingNodePairing?.clientId,
+    clientMode: live?.clientMode ?? devicePairing?.clientMode ?? pendingNodePairing?.clientMode,
+    deviceFamily:
+      live?.deviceFamily ?? nodePairing?.deviceFamily ?? pendingNodePairing?.deviceFamily,
+    modelIdentifier:
+      live?.modelIdentifier ?? nodePairing?.modelIdentifier ?? pendingNodePairing?.modelIdentifier,
+    remoteIp:
+      live?.remoteIp ??
+      nodePairing?.remoteIp ??
+      devicePairing?.remoteIp ??
+      pendingNodePairing?.remoteIp,
     caps: live ? uniqueSortedStrings(live.caps) : uniqueSortedStrings(nodePairing?.caps),
     commands: live
       ? uniqueSortedStrings(live.commands)

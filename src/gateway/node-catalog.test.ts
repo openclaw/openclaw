@@ -251,11 +251,12 @@ describe("gateway/node-catalog", () => {
     const catalog = createKnownNodeCatalog({
       pairedDevices: [pairedDevice({ deviceId: "new-node" })],
       pairedNodes: [],
-      pendingNodes: [pendingNode({ nodeId: "new-node" })],
+      pendingNodes: [pendingNode({ nodeId: "new-node", displayName: "Pending Mac" })],
       connectedNodes: [],
     });
 
     const node = getKnownNode(catalog, "new-node");
+    expect(node?.displayName).toBe("Mac");
     expect(node?.approvalState).toBe("pending-approval");
     expect(node?.pendingRequestId).toBe("request-1");
     expect(node?.pendingDeclaredCaps).toEqual(["camera", "screen"]);
@@ -264,6 +265,50 @@ describe("gateway/node-catalog", () => {
     expect(node?.caps).toEqual([]);
     expect(node?.commands).toEqual([]);
     expect(node?.permissions).toBeUndefined();
+  });
+
+  it("uses pending request metadata as the final fallback for pending-only nodes", () => {
+    const catalog = createKnownNodeCatalog({
+      pairedDevices: [],
+      pairedNodes: [],
+      pendingNodes: [
+        pendingNode({
+          nodeId: "new-node",
+          clientId: "openclaw-linux",
+          clientMode: "node",
+          displayName: "Pending Node",
+          platform: "linux",
+          version: "1.2.3",
+          coreVersion: "1.2.4",
+          uiVersion: "1.2.5",
+          deviceFamily: "desktop",
+          modelIdentifier: "x86_64",
+          remoteIp: "100.0.0.20",
+        }),
+      ],
+      connectedNodes: [],
+    });
+
+    expect(getKnownNode(catalog, "new-node")).toMatchObject({
+      nodeId: "new-node",
+      clientId: "openclaw-linux",
+      clientMode: "node",
+      displayName: "Pending Node",
+      platform: "linux",
+      version: "1.2.3",
+      coreVersion: "1.2.4",
+      uiVersion: "1.2.5",
+      deviceFamily: "desktop",
+      modelIdentifier: "x86_64",
+      remoteIp: "100.0.0.20",
+      approvalState: "pending-approval",
+      pendingRequestId: "request-1",
+      caps: [],
+      commands: [],
+      paired: false,
+      connected: false,
+    });
+    expect(getKnownNode(catalog, "new-node")?.permissions).toBeUndefined();
   });
 
   it("preserves pending first approval when a metadata reconnect omits permissions", () => {
