@@ -487,10 +487,51 @@ describe("resolveSessionDisplayName", () => {
   it("does not prefix non-typed sessions with labels", () => {
     expect(
       resolveSessionDisplayName(
-        "agent:main:imessage:direct:+19257864429",
-        row({ key: "agent:main:imessage:direct:+19257864429", label: "Tyler" }),
+        "agent:main:imessage:direct:+192****4429",
+        row({ key: "agent:main:imessage:direct:+192****4429", label: "Tyler" }),
       ),
     ).toBe("Tyler");
+  });
+
+  // ── derivedTitle fallback ──────────────────────────
+
+  it("uses derivedTitle when label and displayName are absent", () => {
+    expect(
+      resolveSessionDisplayName("mykey", row({ key: "mykey", derivedTitle: "Help with Docker" })),
+    ).toBe("Help with Docker");
+  });
+
+  it("ignores derivedTitle when label is present", () => {
+    expect(
+      resolveSessionDisplayName(
+        "mykey",
+        row({ key: "mykey", label: "Custom Label", derivedTitle: "Help with Docker" }),
+      ),
+    ).toBe("Custom Label");
+  });
+
+  it("ignores derivedTitle when displayName is present", () => {
+    expect(
+      resolveSessionDisplayName(
+        "mykey",
+        row({ key: "mykey", displayName: "My Chat", derivedTitle: "Help with Docker" }),
+      ),
+    ).toBe("My Chat");
+  });
+
+  it("ignores derivedTitle that matches key", () => {
+    expect(
+      resolveSessionDisplayName("mykey", row({ key: "mykey", derivedTitle: "mykey" })),
+    ).toBe("mykey");
+  });
+
+  it("prefixes derivedTitle for typed sessions", () => {
+    expect(
+      resolveSessionDisplayName(
+        "agent:main:cron:abc-123",
+        row({ key: "agent:main:cron:abc-123", derivedTitle: "Daily Briefing" }),
+      ),
+    ).toBe("Cron: Daily Briefing");
   });
 });
 
