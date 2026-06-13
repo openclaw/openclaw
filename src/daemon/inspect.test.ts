@@ -388,4 +388,35 @@ describe("findExtraGatewayServices (win32)", () => {
       },
     ]);
   });
+
+  it("reports duplicate root tasks that only share the gateway task prefix", async () => {
+    execSchtasksMock.mockResolvedValueOnce({
+      code: 0,
+      stdout: [
+        "TaskName:\\OpenClaw Gateway",
+        "Task To Run: C:\\Program Files\\OpenClaw\\openclaw.exe gateway run",
+        "",
+        "TaskName:\\OpenClaw Gateway (dev)",
+        "Task To Run: C:\\Program Files\\OpenClaw\\openclaw.exe gateway run --profile dev",
+        "",
+        "TaskName:\\OpenClaw Gateway Backup",
+        "Task To Run: C:\\Program Files\\OpenClaw\\openclaw.exe gateway run",
+        "",
+      ].join("\n"),
+      stderr: "",
+    });
+
+    const result = await findExtraGatewayServices({}, { deep: true });
+    expect(result).toEqual([
+      {
+        platform: "win32",
+        label: "\\OpenClaw Gateway Backup",
+        detail:
+          "task: \\OpenClaw Gateway Backup, run: C:\\Program Files\\OpenClaw\\openclaw.exe gateway run",
+        scope: "system",
+        marker: "openclaw",
+        legacy: false,
+      },
+    ]);
+  });
 });
