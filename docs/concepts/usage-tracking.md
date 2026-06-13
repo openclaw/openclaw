@@ -33,8 +33,8 @@ title: "Usage tracking"
 ## Custom `/usage full` footer
 
 `/usage full` shows a built-in compact footer with model, reasoning, fast/slow,
-context window, final-call tokens, cache, and cost when those fields are
-available. No template file is required.
+context window, turn tokens, cache, and cost when those fields are available. No
+template file is required.
 
 `messages.usageTemplate` is only for advanced custom layouts. The value is a
 JSON file path (supports `~`) or an inline object, and it replaces the built-in
