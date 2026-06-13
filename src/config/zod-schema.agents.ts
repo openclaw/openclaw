@@ -5,9 +5,24 @@ import { AgentDefaultsSchema } from "./zod-schema.agent-defaults.js";
 import { AgentEntrySchema } from "./zod-schema.agent-runtime.js";
 import { TranscribeAudioSchema } from "./zod-schema.core.js";
 
+const ExecutionBackendProfileSchema = z
+  .object({
+    label: z.string().optional(),
+    resources: z.record(z.string(), z.unknown()).optional(),
+  })
+  .catchall(z.unknown());
+
+const ExecutionBackendSchema = z
+  .object({
+    type: z.enum(["process", "container", "kubernetes"]),
+    profiles: z.record(z.string().min(1), ExecutionBackendProfileSchema).optional(),
+  })
+  .strict();
+
 export const AgentsSchema = z
   .object({
     defaults: z.lazy(() => AgentDefaultsSchema).optional(),
+    executionBackends: z.record(z.string().min(1), ExecutionBackendSchema).optional(),
     list: z.array(AgentEntrySchema).optional(),
   })
   .strict()

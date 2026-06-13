@@ -238,6 +238,12 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional allowlist of skills for this agent. If omitted, the agent inherits agents.defaults.skills when set; otherwise skills stay unrestricted. Set [] for no skills. An explicit list fully replaces inherited defaults instead of merging with them.",
   agents:
     "Agent runtime configuration root covering defaults and explicit agent entries used for routing and execution context. Keep this section explicit so model/tool behavior stays predictable across multi-agent workflows.",
+  "agents.executionBackends":
+    'Named execution placement backends selectable through sessions_spawn.execution. The shipped backend type is "process"; container and kubernetes configs are accepted as future placement contracts but are rejected at spawn time until implemented.',
+  "agents.executionBackends.*.type":
+    'Execution backend implementation type. Use "process" for the current local backend.',
+  "agents.executionBackends.*.profiles":
+    "Named backend profiles selectable through sessions_spawn.execution.profile. Profiles reserve resource/policy metadata for status and future remote workers.",
   "agents.defaults":
     "Shared default settings inherited by agents unless overridden per entry in agents.list. Use defaults to enforce consistent baseline behavior and reduce duplicated per-agent configuration.",
   "agents.defaults.skills":
