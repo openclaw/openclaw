@@ -94,6 +94,7 @@ describe("slack doctor", () => {
   });
 
   it("uses account policy and name-matching overrides for name-keyed channels (#81665)", async () => {
+    const overlongName = "a".repeat(81);
     const warnings = await collectSlackWarnings({
       groupPolicy: "open",
       channels: { "root-room": {} },
@@ -111,7 +112,22 @@ describe("slack doctor", () => {
         nameMatching: {
           groupPolicy: "allowlist",
           dangerouslyAllowNameMatching: true,
-          channels: { support: {}, "channel:customers": {} },
+          channels: {
+            support: {},
+            "#help": {},
+            "crème-brûlée": {},
+            "channel:customers": {},
+            "<#C0AL2GDUA7J>": {},
+            "slack:C0AL2GDUA7K": {},
+            "@help": {},
+            "##help": {},
+            "help+": {},
+            Support: {},
+            "-": {},
+            ___: {},
+            "#--": {},
+            [overlongName]: {},
+          },
         },
       },
     });
@@ -119,7 +135,7 @@ describe("slack doctor", () => {
     const nameKeyWarnings = warnings.filter((warning) =>
       warning.includes("Re-key it with the channel's"),
     );
-    expect(nameKeyWarnings).toHaveLength(3);
+    expect(nameKeyWarnings).toHaveLength(13);
     const rootWarning = nameKeyWarnings.find((warning) =>
       warning.includes('channels.slack.channels."root-room"'),
     );
@@ -136,6 +152,32 @@ describe("slack doctor", () => {
         ),
       ),
     ).toBe(true);
+    expect(
+      nameKeyWarnings.some((warning) =>
+        warning.includes('channels.slack.accounts.nameMatching.channels."<#C0AL2GDUA7J>"'),
+      ),
+    ).toBe(true);
+    expect(
+      nameKeyWarnings.some((warning) =>
+        warning.includes('channels.slack.accounts.nameMatching.channels."slack:C0AL2GDUA7K"'),
+      ),
+    ).toBe(true);
+    for (const invalidName of [
+      "@help",
+      "##help",
+      "help+",
+      "Support",
+      "-",
+      "___",
+      "#--",
+      overlongName,
+    ]) {
+      expect(
+        nameKeyWarnings.some((warning) =>
+          warning.includes(`channels.slack.accounts.nameMatching.channels."${invalidName}"`),
+        ),
+      ).toBe(true);
+    }
 
     const sharedOpenWarnings = await collectSlackWarnings(
       { channels: { "shared-room": {} } },

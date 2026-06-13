@@ -57,6 +57,8 @@ const SLACK_PREFIXED_LOWERCASE_CHANNEL_ID_RE = /^channel:[cgd][0-9][a-z0-9]{7,}$
 // Letter-leading lowercase forms may be valid IDs or human names. Warn conditionally instead of
 // claiming they are unroutable.
 const SLACK_AMBIGUOUS_LOWERCASE_CHANNEL_ID_RE = /^(?:channel:)?[cgd][a-z][a-z0-9]{7,}$/;
+const SLACK_CHANNEL_NAME_RE = /^[\p{L}\p{M}\p{N}_-]{1,80}$/u;
+const SLACK_CHANNEL_NAME_ALPHANUMERIC_RE = /[\p{L}\p{N}]/u;
 
 function looksLikeSlackChannelId(channelKey: string): boolean {
   return (
@@ -64,6 +66,15 @@ function looksLikeSlackChannelId(channelKey: string): boolean {
     SLACK_LOWERCASE_CHANNEL_ID_RE.test(channelKey) ||
     SLACK_PREFIXED_CANONICAL_CHANNEL_ID_RE.test(channelKey) ||
     SLACK_PREFIXED_LOWERCASE_CHANNEL_ID_RE.test(channelKey)
+  );
+}
+
+function looksLikeSlackChannelNameKey(channelKey: string): boolean {
+  const name = channelKey.startsWith("#") ? channelKey.slice(1) : channelKey;
+  return (
+    name === name.toLowerCase() &&
+    SLACK_CHANNEL_NAME_RE.test(name) &&
+    SLACK_CHANNEL_NAME_ALPHANUMERIC_RE.test(name)
   );
 }
 
@@ -108,8 +119,10 @@ function collectSlackNameKeyedChannelWarnings({ cfg }: { cfg: OpenClawConfig }):
       if (effectiveGroupPolicy === "open" && Object.keys(channelConfig ?? {}).length === 0) {
         continue;
       }
-      const hasChannelPrefix = channelKey.toLowerCase().startsWith("channel:");
-      if (account.dangerouslyAllowNameMatching === true && !hasChannelPrefix) {
+      if (
+        account.dangerouslyAllowNameMatching === true &&
+        looksLikeSlackChannelNameKey(channelKey)
+      ) {
         continue;
       }
       if (SLACK_AMBIGUOUS_LOWERCASE_CHANNEL_ID_RE.test(channelKey)) {
