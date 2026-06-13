@@ -3381,6 +3381,10 @@ export async function runEmbeddedAttempt(
         waitForPendingEvents,
       } = subscription;
       params.onTerminalLifecycleMetaReady?.(setTerminalLifecycleMeta);
+      params.onTerminalDrainReady?.(async () => {
+        await sessionLockController.waitForSessionEvents(activeSession);
+        await waitForPendingEvents();
+      });
       toolMetasForTerminal = toolMetas;
       isCompactionPendingForExternalSignal = subscription.isCompacting;
       isCompactionInFlightForExternalSignal = () => activeSession.isCompacting;

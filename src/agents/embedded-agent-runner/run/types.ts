@@ -53,6 +53,8 @@ export type EmbeddedRunTerminalLifecycleMetaSetter = (
   meta: EmbeddedRunTerminalLifecycleMeta,
 ) => void;
 
+export type EmbeddedRunTerminalDrain = () => Promise<void>;
+
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   initialReplayState?: EmbeddedRunReplayState;
   /** Pluggable context engine for ingest/assemble/compact lifecycle. */
@@ -81,6 +83,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   onAttemptStateChange?: (state: EmbeddedAgentAttemptLiveState) => void;
   /** Supplies the attempt-owned terminal lifecycle finalizer before execution can abort. */
   onTerminalLifecycleMetaReady?: (setter: EmbeddedRunTerminalLifecycleMetaSetter) => void;
+  /** Supplies the attempt-owned serialized event drain before execution can abort. */
+  onTerminalDrainReady?: (drain: EmbeddedRunTerminalDrain) => void;
   model: Model;
   authStorage: AuthStorage;
   /** Auth profile store already resolved during startup for this attempt. */

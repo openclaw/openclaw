@@ -66,6 +66,7 @@ import {
   parseImageSizeError,
   pickFallbackThinkingLevel,
 } from "../embedded-agent-helpers.js";
+import { countActiveToolExecutions } from "../embedded-agent-subscribe.handlers.tools.js";
 import type { EmbeddedAgentAttemptLiveState } from "../embedded-agent-subscribe.types.js";
 import { isStrictAgenticExecutionContractActive } from "../execution-contract.js";
 import {
@@ -200,9 +201,11 @@ import {
 } from "./run/setup.js";
 import {
   appendBoundedToolLoopObservation,
+  createToolLoopObservationRetentionState,
   resolveSuccessfulToolTerminalFallback,
   resolveToolLoopAbortFallback,
   type ToolLoopObservation,
+  type ToolLoopObservationRetentionState,
 } from "./run/tool-loop-fallback.js";
 import { mergeAttemptToolMediaPayloads } from "./run/tool-media-payloads.js";
 import {
@@ -569,9 +572,11 @@ function canSurfaceAttemptTerminalFallback(params: {
 function resolveAttemptSuccessfulToolTerminalFallback(params: {
   attempt: EmbeddedRunAttemptForRunner;
   observations: readonly ToolLoopObservation[];
+  retentionState: ToolLoopObservationRetentionState;
 }) {
   return resolveSuccessfulToolTerminalFallback({
     observations: params.observations,
+    retentionState: params.retentionState,
     requireDeclaredPresentableFallback: resolveAttemptReplayMetadata(params.attempt)
       .hadPotentialSideEffects,
   });
@@ -1463,6 +1468,7 @@ export async function runEmbeddedAgent(
       let postCompactionAbortController: AbortController | undefined;
       let toolLoopAbortError: Error | undefined;
       let currentAttemptToolLoopObservations: ToolLoopObservation[] = [];
+      let currentAttemptToolLoopObservationRetention = createToolLoopObservationRetentionState();
       let currentAttemptLiveState: EmbeddedAgentAttemptLiveState | undefined;
       let currentAttemptObservedDidSendViaMessagingTool = false;
       let currentAttemptObservedHadPotentialSideEffects = false;
@@ -1474,8 +1480,14 @@ export async function runEmbeddedAgent(
       let currentAttemptTerminalLifecycleMetaSetter:
         | NonNullable<EmbeddedRunAttemptForRunner["setTerminalLifecycleMeta"]>
         | undefined;
+      let currentAttemptTerminalDrain: (() => Promise<void>) | undefined;
+      let currentAttemptTerminalDrainFailed = false;
       const observePostCompactionToolOutcome = (observation: ToolLoopObservation): void => {
-        appendBoundedToolLoopObservation(currentAttemptToolLoopObservations, observation);
+        appendBoundedToolLoopObservation(
+          currentAttemptToolLoopObservations,
+          observation,
+          currentAttemptToolLoopObservationRetention,
+        );
         const retainedObservation = currentAttemptToolLoopObservations.at(-1);
         if (retainedObservation) {
           currentAttemptObservedDidSendViaMessagingTool ||=
@@ -1520,7 +1532,11 @@ export async function runEmbeddedAgent(
             blockedReason: "post-compaction-loop",
             blockedMessage: verdict.message,
           };
-          appendBoundedToolLoopObservation(currentAttemptToolLoopObservations, blockedObservation);
+          appendBoundedToolLoopObservation(
+            currentAttemptToolLoopObservations,
+            blockedObservation,
+            currentAttemptToolLoopObservationRetention,
+          );
           toolLoopAbortError ??= PostCompactionLoopPersistedError.fromVerdict(verdict);
           postCompactionAbortController?.abort(toolLoopAbortError);
         }
@@ -1830,6 +1846,7 @@ export async function runEmbeddedAgent(
           }
           runLoopIterations += 1;
           currentAttemptToolLoopObservations = [];
+          currentAttemptToolLoopObservationRetention = createToolLoopObservationRetentionState();
           currentAttemptLiveState = undefined;
           currentAttemptObservedDidSendViaMessagingTool = false;
           currentAttemptObservedHadPotentialSideEffects = false;
@@ -1837,6 +1854,8 @@ export async function runEmbeddedAgent(
           currentAttemptObservedMessagingToolSentMediaUrls = [];
           currentAttemptObservedMessagingToolSentTargets = [];
           currentAttemptTerminalLifecycleMetaSetter = undefined;
+          currentAttemptTerminalDrain = undefined;
+          currentAttemptTerminalDrainFailed = false;
           const runtimeAuthRetry = authRetryPending;
           authRetryPending = false;
           attemptedThinking.add(thinkLevel);
@@ -1918,8 +1937,12 @@ export async function runEmbeddedAgent(
             parentAbortSignal?.addEventListener("abort", relayParentAbort, { once: true });
           }
           const buildToolLoopAbortFallbackResult = (): EmbeddedAgentRunResult => {
+            const hasOutstandingToolExecutions =
+              currentAttemptTerminalDrainFailed || countActiveToolExecutions(params.runId) > 0;
             const fallback = resolveToolLoopAbortFallback({
               observations: currentAttemptToolLoopObservations,
+              retentionState: currentAttemptToolLoopObservationRetention,
+              hasOutstandingToolExecutions,
             });
             log.warn(
               `tool loop abort returned ${fallback ? "fallback payload" : "blocked error"}: ` +
@@ -1957,7 +1980,8 @@ export async function runEmbeddedAgent(
               didSendViaMessagingTool ||
               successfulCronAdds > 0 ||
               acceptedSessionSpawns.length > 0 ||
-              currentAttemptObservedHadPotentialSideEffects;
+              currentAttemptObservedHadPotentialSideEffects ||
+              hasOutstandingToolExecutions;
             const agentMeta = buildErrorAgentMeta({
               sessionId: activeSessionId,
               sessionFile: activeSessionFile,
@@ -2092,6 +2116,9 @@ export async function runEmbeddedAgent(
             onTerminalLifecycleMetaReady: (setter) => {
               currentAttemptTerminalLifecycleMetaSetter = setter;
             },
+            onTerminalDrainReady: (drain) => {
+              currentAttemptTerminalDrain = drain;
+            },
             authStorage,
             authProfileStore: runAttemptAuthProfileStore,
             // These harnesses build OpenClaw tools internally. Keep transport auth
@@ -2159,8 +2186,17 @@ export async function runEmbeddedAgent(
             onUserMessagePersisted,
             onAssistantErrorMessagePersisted: params.onAssistantErrorMessagePersisted,
           })
-            .catch((err: unknown): never | EmbeddedAgentRunResult => {
+            .catch(async (err: unknown): Promise<EmbeddedAgentRunResult> => {
               if (toolLoopAbortError) {
+                try {
+                  await currentAttemptTerminalDrain?.();
+                } catch (drainError) {
+                  currentAttemptTerminalDrainFailed = true;
+                  log.warn(
+                    `tool loop abort terminal drain failed: runId=${params.runId} ` +
+                      `sessionId=${params.sessionId} err=${String(drainError)}`,
+                  );
+                }
                 currentAttemptTerminalLifecycleMetaSetter?.({
                   replayInvalid: true,
                   livenessState: "blocked",
@@ -3562,6 +3598,7 @@ export async function runEmbeddedAgent(
               ? resolveAttemptSuccessfulToolTerminalFallback({
                   attempt,
                   observations: currentAttemptToolLoopObservations,
+                  retentionState: currentAttemptToolLoopObservationRetention,
                 })?.payload
               : undefined;
             const promptTimeoutFallbackPayloads =
@@ -3694,6 +3731,7 @@ export async function runEmbeddedAgent(
               ? resolveAttemptSuccessfulToolTerminalFallback({
                   attempt,
                   observations: currentAttemptToolLoopObservations,
+                  retentionState: currentAttemptToolLoopObservationRetention,
                 })
               : undefined;
           const nextPlanningOnlyRetryInstruction =
@@ -3877,6 +3915,7 @@ export async function runEmbeddedAgent(
               ? resolveAttemptSuccessfulToolTerminalFallback({
                   attempt,
                   observations: currentAttemptToolLoopObservations,
+                  retentionState: currentAttemptToolLoopObservationRetention,
                 })
               : undefined;
             const exhaustedPlanningOnlyPayloads = exhaustedPlanningOnlyToolFallback
@@ -3954,6 +3993,7 @@ export async function runEmbeddedAgent(
               ? resolveAttemptSuccessfulToolTerminalFallback({
                   attempt,
                   observations: currentAttemptToolLoopObservations,
+                  retentionState: currentAttemptToolLoopObservationRetention,
                 })
               : undefined;
           if (nonRetryablePlanningOnlyText) {
@@ -4022,6 +4062,7 @@ export async function runEmbeddedAgent(
               ? resolveAttemptSuccessfulToolTerminalFallback({
                   attempt,
                   observations: currentAttemptToolLoopObservations,
+                  retentionState: currentAttemptToolLoopObservationRetention,
                 })
               : undefined;
             const replayInvalid = resolveReplayInvalidForAttempt(
@@ -4150,6 +4191,7 @@ export async function runEmbeddedAgent(
               ? resolveAttemptSuccessfulToolTerminalFallback({
                   attempt,
                   observations: currentAttemptToolLoopObservations,
+                  retentionState: currentAttemptToolLoopObservationRetention,
                 })
               : undefined;
             const replayInvalid = resolveReplayInvalidForAttempt(
@@ -4408,6 +4450,7 @@ export async function runEmbeddedAgent(
               ? resolveAttemptSuccessfulToolTerminalFallback({
                   attempt,
                   observations: currentAttemptToolLoopObservations,
+                  retentionState: currentAttemptToolLoopObservationRetention,
                 })?.payload
               : undefined;
           const shouldPreferToolFallbackOverPlanningText =

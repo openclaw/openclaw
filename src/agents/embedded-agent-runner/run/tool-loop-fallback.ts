@@ -30,6 +30,10 @@ export type ToolLoopFallbackResolution = {
   readonly payload: ReplyPayload;
 };
 
+export type ToolLoopObservationRetentionState = {
+  readonly unresolvedFailureActions: Set<string>;
+};
+
 const TERMINAL_LOOP_BLOCKED_REASONS = new Set(["tool-loop", "post-compaction-loop"]);
 const DEFAULT_FALLBACK_MAX_CHARS = 4_000;
 const MAX_RETAINED_TOOL_LOOP_OBSERVATIONS = 64;
@@ -156,11 +160,33 @@ function boundToolLoopObservation(observation: ToolLoopObservation): ToolLoopObs
   };
 }
 
+function isSuccessfulObservation(observation: ToolLoopObservation): boolean {
+  return !observation.blockedReason && observation.failed !== true;
+}
+
+function resolveToolActionIdentity(observation: ToolLoopObservation): string {
+  return JSON.stringify([observation.toolName, observation.argsHash]);
+}
+
+export function createToolLoopObservationRetentionState(): ToolLoopObservationRetentionState {
+  return { unresolvedFailureActions: new Set() };
+}
+
 export function appendBoundedToolLoopObservation(
   observations: ToolLoopObservation[],
   observation: ToolLoopObservation,
+  retentionState?: ToolLoopObservationRetentionState,
 ): void {
-  observations.push(boundToolLoopObservation(observation));
+  const boundedObservation = boundToolLoopObservation(observation);
+  if (retentionState) {
+    const actionIdentity = resolveToolActionIdentity(boundedObservation);
+    if (boundedObservation.failed === true) {
+      retentionState.unresolvedFailureActions.add(actionIdentity);
+    } else if (isSuccessfulObservation(boundedObservation)) {
+      retentionState.unresolvedFailureActions.delete(actionIdentity);
+    }
+  }
+  observations.push(boundedObservation);
   if (observations.length > MAX_RETAINED_TOOL_LOOP_OBSERVATIONS) {
     observations.splice(0, observations.length - MAX_RETAINED_TOOL_LOOP_OBSERVATIONS);
   }
@@ -412,14 +438,6 @@ function isTerminalLoopBlockedObservation(observation: ToolLoopObservation): boo
   return TERMINAL_LOOP_BLOCKED_REASONS.has(observation.blockedReason ?? "");
 }
 
-function isSuccessfulObservation(observation: ToolLoopObservation): boolean {
-  return !observation.blockedReason && observation.failed !== true;
-}
-
-function resolveToolActionIdentity(observation: ToolLoopObservation): string {
-  return JSON.stringify([observation.toolName, observation.argsHash]);
-}
-
 function selectSuccessfulObservationsAfterLatestToolFailure(
   observations: readonly ToolLoopObservation[],
 ): ToolLoopObservation[] | undefined {
@@ -458,7 +476,15 @@ function selectLatestSuccessfulObservationPerTool(
 
 export function resolveToolLoopAbortFallback(params: {
   observations: readonly ToolLoopObservation[];
+  retentionState?: ToolLoopObservationRetentionState;
+  hasOutstandingToolExecutions?: boolean;
 }): ToolLoopFallbackResolution | undefined {
+  if (
+    params.hasOutstandingToolExecutions ||
+    (params.retentionState?.unresolvedFailureActions.size ?? 0) > 0
+  ) {
+    return undefined;
+  }
   const blockedObservationIndex = params.observations.findIndex(isTerminalLoopBlockedObservation);
   const blockedObservation = params.observations[blockedObservationIndex];
   if (!blockedObservation) {
@@ -487,8 +513,12 @@ export function resolveToolLoopAbortFallback(params: {
 
 export function resolveSuccessfulToolTerminalFallback(params: {
   observations: readonly ToolLoopObservation[];
+  retentionState?: ToolLoopObservationRetentionState;
   requireDeclaredPresentableFallback?: boolean;
 }): ToolLoopFallbackResolution | undefined {
+  if ((params.retentionState?.unresolvedFailureActions.size ?? 0) > 0) {
+    return undefined;
+  }
   const coverageObservations = selectSuccessfulObservationsAfterLatestToolFailure(
     params.observations,
   );
@@ -573,6 +603,8 @@ export function resolveSuccessfulToolTerminalFallback(params: {
 
 export function resolveToolLoopAbortFallbackPayload(params: {
   observations: readonly ToolLoopObservation[];
+  retentionState?: ToolLoopObservationRetentionState;
+  hasOutstandingToolExecutions?: boolean;
 }): ReplyPayload | undefined {
   return resolveToolLoopAbortFallback(params)?.payload;
 }

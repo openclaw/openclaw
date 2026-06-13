@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   appendBoundedToolLoopObservation,
+  createToolLoopObservationRetentionState,
   resolveSuccessfulToolTerminalFallback,
   resolveToolLoopAbortFallback,
   resolveToolLoopAbortFallbackPayload,
@@ -39,6 +40,75 @@ describe("tool-loop terminal fallback", () => {
     expect(observations.at(-1)?.messagingToolSentTargets).toHaveLength(16);
     expect(observations.at(-1)?.messagingToolSentTargets?.[0]?.text).toHaveLength(4_000);
     expect(observations.at(-1)?.messagingToolSentTargets?.[0]?.channelData).toBeUndefined();
+  });
+
+  it("preserves unresolved failure identity after its observation is evicted", () => {
+    const observations: Parameters<typeof appendBoundedToolLoopObservation>[0] = [];
+    const retentionState = createToolLoopObservationRetentionState();
+    appendBoundedToolLoopObservation(
+      observations,
+      {
+        toolName: "status",
+        argsHash: "current",
+        resultHash: "failed",
+        failed: true,
+      },
+      retentionState,
+    );
+    for (let index = 0; index < 70; index += 1) {
+      appendBoundedToolLoopObservation(
+        observations,
+        {
+          toolName: "read",
+          argsHash: `read-${index}`,
+          resultHash: `result-${index}`,
+          terminalSummary: { privacy: "public", text: `result ${index}` },
+        },
+        retentionState,
+      );
+    }
+
+    expect(resolveSuccessfulToolTerminalFallback({ observations, retentionState })).toBeUndefined();
+
+    appendBoundedToolLoopObservation(
+      observations,
+      {
+        toolName: "status",
+        argsHash: "current",
+        resultHash: "recovered",
+        terminalSummary: { privacy: "public", text: "Status recovered" },
+      },
+      retentionState,
+    );
+
+    expect(resolveSuccessfulToolTerminalFallback({ observations, retentionState })).toEqual({
+      toolName: "multiple_tools",
+      payload: expect.objectContaining({
+        text: expect.stringContaining("Status recovered"),
+      }),
+    });
+  });
+
+  it("does not surface a loop-abort fallback while another tool execution is outstanding", () => {
+    expect(
+      resolveToolLoopAbortFallback({
+        observations: [
+          {
+            toolName: "status",
+            argsHash: "current",
+            resultHash: "healthy",
+            terminalSummary: { privacy: "public", text: "Status is healthy" },
+          },
+          {
+            toolName: "status",
+            argsHash: "current",
+            resultHash: "blocked",
+            blockedReason: "tool-loop",
+          },
+        ],
+        hasOutstandingToolExecutions: true,
+      }),
+    ).toBeUndefined();
   });
 
   it("uses a public terminal summary returned by any tool without runner-side registration", () => {

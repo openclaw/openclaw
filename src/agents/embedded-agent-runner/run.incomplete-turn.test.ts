@@ -933,6 +933,73 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     });
   });
 
+  it("drains late parallel tool outcomes before returning a loop-abort fallback", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    const terminalDrain = vi.fn();
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (params: unknown) => {
+      const attemptParams = params as {
+        abortSignal?: AbortSignal;
+        onTerminalDrainReady?: (drain: () => Promise<void>) => void;
+        onToolOutcome?: (observation: {
+          toolName: string;
+          argsHash: string;
+          resultHash: string;
+          resultText?: string;
+          terminalResultFallback?: { mode: "safe_text"; prefix?: string };
+          failed?: boolean;
+          mutatingAction?: boolean;
+          blockedReason?: string;
+          blockedMessage?: string;
+        }) => void;
+      };
+      attemptParams.onTerminalDrainReady?.(async () => {
+        terminalDrain();
+        attemptParams.onToolOutcome?.({
+          toolName: "write",
+          argsHash: "late-sibling",
+          resultHash: "failed",
+          failed: true,
+          mutatingAction: true,
+        });
+      });
+      attemptParams.onToolOutcome?.({
+        toolName: "status",
+        argsHash: "current",
+        resultHash: "status-result",
+        resultText: "healthy",
+        terminalResultFallback: { mode: "safe_text", prefix: "Status:" },
+      });
+      attemptParams.onToolOutcome?.({
+        toolName: "status",
+        argsHash: "current",
+        resultHash: "blocked-result",
+        blockedReason: "tool-loop",
+        blockedMessage: "CRITICAL: repeated status calls.",
+      });
+      expect(attemptParams.abortSignal?.aborted).toBe(true);
+      throw new Error("Request was aborted.");
+    });
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "xai",
+      model: "grok-composer-2.5-fast",
+      runId: "run-tool-loop-late-parallel-outcome",
+    });
+
+    expect(terminalDrain).toHaveBeenCalledOnce();
+    expect(result.payloads).toEqual([
+      {
+        text: "I stopped because repeated tool calls did not make progress. No user-facing result text was provided.",
+        isError: true,
+      },
+      {
+        text: "⚠️ Some tool actions may have already been executed — please verify before retrying.",
+        isError: true,
+      },
+    ]);
+  });
+
   it("surfaces a known read-only tool terminal result when a tool loop resolves after abort", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     const setTerminalLifecycleMeta = vi.fn();
@@ -3395,6 +3462,21 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       expect(retryInstruction).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
     },
   );
+
+  it("detects a polite action directive after a salutation as planning-only", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      prompt: "Hey, please check the scheduler.",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["Got it."],
+      }),
+    });
+
+    expect(retryInstruction).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
+  });
 
   it("does not classify short progress-like chatter for non-actionable prompts", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
