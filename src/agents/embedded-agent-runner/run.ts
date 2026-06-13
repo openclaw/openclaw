@@ -543,8 +543,8 @@ function resolveAttemptSuccessfulToolTerminalFallback(params: {
 }) {
   return resolveSuccessfulToolTerminalFallback({
     observations: params.observations,
-    requireDeclaredPresentableFallback:
-      params.attempt.replayMetadata?.hadPotentialSideEffects ?? false,
+    requireDeclaredPresentableFallback: resolveAttemptReplayMetadata(params.attempt)
+      .hadPotentialSideEffects,
   });
 }
 

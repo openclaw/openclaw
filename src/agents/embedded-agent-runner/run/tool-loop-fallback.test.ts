@@ -561,6 +561,44 @@ describe("tool-loop terminal fallback", () => {
     });
   });
 
+  it("uses one latest result for every structured fallback field", () => {
+    expect(
+      resolveSuccessfulToolTerminalFallback({
+        observations: [
+          {
+            toolName: "web_fetch",
+            argsHash: "first-url",
+            resultHash: "first-result",
+            resultText: '{ "status": 200, "title": "Old page" }',
+            terminalResultFallback: {
+              mode: "structured_summary",
+              fields: [
+                { label: "Status", paths: [["status"]] },
+                { label: "Title", paths: [["title"]], missingText: "none" },
+              ],
+            },
+          },
+          {
+            toolName: "web_fetch",
+            argsHash: "second-url",
+            resultHash: "second-result",
+            resultText: '{ "status": 500 }',
+            terminalResultFallback: {
+              mode: "structured_summary",
+              fields: [
+                { label: "Status", paths: [["status"]] },
+                { label: "Title", paths: [["title"]], missingText: "none" },
+              ],
+            },
+          },
+        ],
+      }),
+    ).toEqual({
+      toolName: "web_fetch",
+      payload: { text: "Status: 500\nTitle: none" },
+    });
+  });
+
   it("uses a tool-declared fallback for successful terminal tool work without a loop abort", () => {
     expect(
       resolveSuccessfulToolTerminalFallback({
@@ -744,6 +782,31 @@ describe("tool-loop terminal fallback", () => {
               text: "Status healthy.",
               privacy: "public",
             },
+          },
+        ],
+      }),
+    ).toBeUndefined();
+  });
+
+  it("does not hide an unresolved tool failure behind an earlier unrelated fallback", () => {
+    expect(
+      resolveSuccessfulToolTerminalFallback({
+        observations: [
+          {
+            toolName: "status_probe",
+            argsHash: "status",
+            resultHash: "status-result",
+            terminalSummary: {
+              text: "Status healthy.",
+              privacy: "public",
+            },
+          },
+          {
+            toolName: "write",
+            argsHash: "write",
+            resultHash: "failed-write-result",
+            failed: true,
+            mutatingAction: true,
           },
         ],
       }),

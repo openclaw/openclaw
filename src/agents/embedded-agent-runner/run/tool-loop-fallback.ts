@@ -109,23 +109,17 @@ function stringifyStructuredFieldValue(params: {
 }
 
 function resolveStructuredFieldText(params: {
-  parsedResults: readonly Record<string, unknown>[];
+  parsedResult: Record<string, unknown>;
   field: Extract<AgentToolTerminalResultFallback, { mode: "structured_summary" }>["fields"][number];
 }): string {
-  for (let resultIndex = params.parsedResults.length - 1; resultIndex >= 0; resultIndex -= 1) {
-    const parsed = params.parsedResults[resultIndex];
-    if (!parsed) {
-      continue;
-    }
-    for (const path of params.field.paths) {
-      const value = readPath(parsed, path);
-      const formatted = stringifyStructuredFieldValue({
-        value,
-        format: params.field.format,
-      });
-      if (formatted !== undefined) {
-        return formatted;
-      }
+  for (const path of params.field.paths) {
+    const value = readPath(params.parsedResult, path);
+    const formatted = stringifyStructuredFieldValue({
+      value,
+      format: params.field.format,
+    });
+    if (formatted !== undefined) {
+      return formatted;
     }
   }
   return params.field.missingText ?? "unknown";
@@ -152,17 +146,17 @@ function resolveStructuredSummaryFallback(params: {
   fallback: Extract<AgentToolTerminalResultFallback, { mode: "structured_summary" }>;
   successfulObservations: readonly ToolLoopObservation[];
 }): ReplyPayload | undefined {
-  const parsedResults = params.successfulObservations
+  const parsedResult = params.successfulObservations
     .map((observation) => {
       const text = observation.resultText?.trim();
       return text ? parseToolResultJson(text) : undefined;
     })
-    .filter((parsed): parsed is Record<string, unknown> => Boolean(parsed));
-  if (parsedResults.length === 0 || params.fallback.fields.length === 0) {
+    .findLast((parsed): parsed is Record<string, unknown> => Boolean(parsed));
+  if (!parsedResult || params.fallback.fields.length === 0) {
     return undefined;
   }
   const text = params.fallback.fields
-    .map((field) => `${field.label}: ${resolveStructuredFieldText({ parsedResults, field })}`)
+    .map((field) => `${field.label}: ${resolveStructuredFieldText({ parsedResult, field })}`)
     .join("\n");
   const normalizedText = normalizeToolResultTextForFallback(text, params.fallback.maxChars);
   return normalizedText ? { text: normalizedText } : undefined;
@@ -294,11 +288,19 @@ function isSuccessfulObservation(observation: ToolLoopObservation): boolean {
 
 function selectSuccessfulObservationsAfterLatestToolFailure(
   observations: readonly ToolLoopObservation[],
-): ToolLoopObservation[] {
+): ToolLoopObservation[] | undefined {
   const latestFailureIndexByTool = new Map<string, number>();
+  const latestSuccessIndexByTool = new Map<string, number>();
   for (const [index, observation] of observations.entries()) {
     if (observation.failed === true) {
       latestFailureIndexByTool.set(observation.toolName, index);
+    } else if (isSuccessfulObservation(observation)) {
+      latestSuccessIndexByTool.set(observation.toolName, index);
+    }
+  }
+  for (const [toolName, failureIndex] of latestFailureIndexByTool) {
+    if ((latestSuccessIndexByTool.get(toolName) ?? -1) < failureIndex) {
+      return undefined;
     }
   }
   return observations.filter(
@@ -344,7 +346,7 @@ export function resolveSuccessfulToolTerminalFallback(params: {
   const successfulObservations = selectSuccessfulObservationsAfterLatestToolFailure(
     params.observations,
   );
-  if (successfulObservations.length === 0) {
+  if (!successfulObservations?.length) {
     return undefined;
   }
   if (

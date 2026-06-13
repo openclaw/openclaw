@@ -1705,7 +1705,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(result.meta.livenessState).toBe("blocked");
   });
 
-  it("blocks repeated planning-only turns for OpenAI-compatible xAI models", async () => {
+  it("does not apply planning-only classification to OpenAI-compatible xAI models", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedResolveModelAsync.mockResolvedValue({
       model: {
@@ -1740,10 +1740,11 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       } as OpenClawConfig,
     });
 
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expect(runAttemptCall(1).prompt).toContain(PLANNING_ONLY_RETRY_INSTRUCTION);
-    expect(result.payloads).toEqual([{ text: PLANNING_ONLY_BLOCKED_TEXT, isError: true }]);
-    expect(result.meta.livenessState).toBe("blocked");
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads).toEqual([
+      { text: "Running a live check now — you should get real output, not a promise." },
+    ]);
+    expect(result.meta.livenessState).toBe("working");
   });
 
   it("surfaces tool fallback after exhausting planning-only retries with completed safe tool work", async () => {
@@ -2193,6 +2194,20 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
   it("retries reasoning-only turns for non-strict-agentic providers", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedResolveModelAsync.mockResolvedValue({
+      model: {
+        id: "sonnet-4.6",
+        provider: "anthropic",
+        contextWindow: 200000,
+        api: "anthropic-messages",
+        reasoning: true,
+      },
+      error: null,
+      authStorage: {
+        setRuntimeApiKey: vi.fn(),
+      },
+      modelRegistry: {},
+    });
     mockedRunEmbeddedAttempt.mockResolvedValue(
       makeAttemptResult({
         assistantTexts: [],
@@ -2721,8 +2736,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
   it("detects present-progress action claims as planning-only turns", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
-      provider: "xai",
-      modelId: "grok-composer-2.5-fast",
+      provider: "openai",
+      modelId: "gpt-5.4",
       prompt: "Can you check the scheduler for any jobs on your agent?",
       aborted: false,
       timedOut: false,
@@ -2738,8 +2753,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     "detects short progress placeholder %s as planning-only for actionable prompts",
     (assistantText) => {
       const retryInstruction = resolvePlanningOnlyRetryInstruction({
-        provider: "custom-provider",
-        modelId: "custom-model",
+        provider: "openai",
+        modelId: "gpt-5.4",
         prompt: "Please check the scheduler and tell me the result.",
         aborted: false,
         timedOut: false,
@@ -2760,8 +2775,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     "Running 3 jobs.",
   ])("does not classify result-style progress text %s as planning-only", (assistantText) => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
-      provider: "custom-provider",
-      modelId: "custom-model",
+      provider: "openai",
+      modelId: "gpt-5.4",
       prompt: "What is the current jobs status?",
       aborted: false,
       timedOut: false,
@@ -2775,8 +2790,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
   it("does not classify a direct progress-status answer as planning-only", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
-      provider: "custom-provider",
-      modelId: "custom-model",
+      provider: "openai",
+      modelId: "gpt-5.4",
       prompt: "Are you monitoring it?",
       aborted: false,
       timedOut: false,
@@ -2797,8 +2812,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     "Monitoring it now.",
   ])("detects launch/monitor progress placeholder %s as planning-only", (assistantText) => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
-      provider: "custom-provider",
-      modelId: "custom-model",
+      provider: "openai",
+      modelId: "gpt-5.4",
       prompt: "Please send it off, monitor it, and report the result.",
       aborted: false,
       timedOut: false,
@@ -2817,8 +2832,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     "I can monitor that for you.",
   ])("detects capability placeholder %s as planning-only", (assistantText) => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
-      provider: "custom-provider",
-      modelId: "custom-model",
+      provider: "openai",
+      modelId: "gpt-5.4",
       prompt: "Please send it off, monitor it, and report the result.",
       aborted: false,
       timedOut: false,
@@ -2837,8 +2852,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     "Lemme look at the scheduler now.",
   ])("detects typographic-apostrophe placeholder %s as planning-only", (assistantText) => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
-      provider: "custom-provider",
-      modelId: "custom-model",
+      provider: "openai",
+      modelId: "gpt-5.4",
       prompt: "Please check the scheduler and tell me the result.",
       aborted: false,
       timedOut: false,
@@ -2854,8 +2869,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     "detects capability/follow-up placeholder %s as planning-only",
     (assistantText) => {
       const retryInstruction = resolvePlanningOnlyRetryInstruction({
-        provider: "custom-provider",
-        modelId: "custom-model",
+        provider: "openai",
+        modelId: "gpt-5.4",
         prompt: "Please check the scheduler and tell me the result.",
         aborted: false,
         timedOut: false,
@@ -2872,8 +2887,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     "detects short promise placeholder %s as planning-only",
     (assistantText) => {
       const retryInstruction = resolvePlanningOnlyRetryInstruction({
-        provider: "custom-provider",
-        modelId: "custom-model",
+        provider: "openai",
+        modelId: "gpt-5.4",
         prompt: "Show endpoint results now",
         aborted: false,
         timedOut: false,
@@ -2890,8 +2905,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     "detects wait placeholder %s as planning-only",
     (assistantText) => {
       const retryInstruction = resolvePlanningOnlyRetryInstruction({
-        provider: "custom-provider",
-        modelId: "custom-model",
+        provider: "openai",
+        modelId: "gpt-5.4",
         prompt: "Show endpoint results now",
         aborted: false,
         timedOut: false,
@@ -2908,8 +2923,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     "detects acknowledgement placeholder %s as planning-only",
     (assistantText) => {
       const retryInstruction = resolvePlanningOnlyRetryInstruction({
-        provider: "custom-provider",
-        modelId: "custom-model",
+        provider: "openai",
+        modelId: "gpt-5.4",
         prompt: "Show endpoint results now",
         aborted: false,
         timedOut: false,
@@ -2924,8 +2939,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
   it("does not classify short progress-like chatter for non-actionable prompts", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
-      provider: "custom-provider",
-      modelId: "custom-model",
+      provider: "openai",
+      modelId: "gpt-5.4",
       prompt: "nice",
       aborted: false,
       timedOut: false,
@@ -2941,8 +2956,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     "does not classify acknowledgements for conversational prompt %s as planning-only",
     (prompt) => {
       const retryInstruction = resolvePlanningOnlyRetryInstruction({
-        provider: "custom-provider",
-        modelId: "custom-model",
+        provider: "openai",
+        modelId: "gpt-5.4",
         prompt,
         aborted: false,
         timedOut: false,
@@ -2959,8 +2974,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     "does not classify acknowledgement of context statement %s as planning-only",
     (prompt) => {
       const retryInstruction = resolvePlanningOnlyRetryInstruction({
-        provider: "custom-provider",
-        modelId: "custom-model",
+        provider: "openai",
+        modelId: "gpt-5.4",
         prompt,
         aborted: false,
         timedOut: false,
@@ -2980,8 +2995,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     "does not classify preference-only polite request $prompt as planning-only",
     ({ prompt, assistantText }) => {
       const retryInstruction = resolvePlanningOnlyRetryInstruction({
-        provider: "custom-provider",
-        modelId: "custom-model",
+        provider: "openai",
+        modelId: "gpt-5.4",
         prompt,
         aborted: false,
         timedOut: false,
@@ -3002,8 +3017,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     "does not classify requested acknowledgement $assistantText as planning-only",
     ({ prompt, assistantText }) => {
       const retryInstruction = resolvePlanningOnlyRetryInstruction({
-        provider: "custom-provider",
-        modelId: "custom-model",
+        provider: "openai",
+        modelId: "gpt-5.4",
         prompt,
         aborted: false,
         timedOut: false,
@@ -3029,8 +3044,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     "does not classify direct acknowledgement answer $assistantText as planning-only",
     ({ prompt, assistantText }) => {
       const retryInstruction = resolvePlanningOnlyRetryInstruction({
-        provider: "custom-provider",
-        modelId: "custom-model",
+        provider: "openai",
+        modelId: "gpt-5.4",
         prompt,
         aborted: false,
         timedOut: false,
@@ -3045,8 +3060,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
   it("keeps acknowledgement placeholders planning-only for action-request questions", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
-      provider: "custom-provider",
-      modelId: "custom-model",
+      provider: "openai",
+      modelId: "gpt-5.4",
       prompt: "Can you check whether the proposed config looks good?",
       aborted: false,
       timedOut: false,
@@ -3062,8 +3077,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     "keeps acknowledgement placeholders planning-only for operation question %s",
     (prompt) => {
       const retryInstruction = resolvePlanningOnlyRetryInstruction({
-        provider: "custom-provider",
-        modelId: "custom-model",
+        provider: "openai",
+        modelId: "gpt-5.4",
         prompt,
         aborted: false,
         timedOut: false,
@@ -3078,8 +3093,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
   it("does not classify capability chatter for non-actionable prompts", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
-      provider: "custom-provider",
-      modelId: "custom-model",
+      provider: "openai",
+      modelId: "gpt-5.4",
       prompt: "thanks",
       aborted: false,
       timedOut: false,
@@ -3093,8 +3108,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
   it("does not misclassify a direct answer that starts with a conversational promise", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
-      provider: "custom-provider",
-      modelId: "custom-model",
+      provider: "openai",
+      modelId: "gpt-5.4",
       prompt: "Is the endpoint down?",
       aborted: false,
       timedOut: false,
@@ -3108,8 +3123,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
   it("does not misclassify an explicit answer-style reply as planning-only", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
-      provider: "custom-provider",
-      modelId: "custom-model",
+      provider: "openai",
+      modelId: "gpt-5.4",
       prompt: "Can you explain the root cause?",
       aborted: false,
       timedOut: false,
@@ -3123,8 +3138,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
   it("does not misclassify a let-me answer-style reply as planning-only", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
-      provider: "custom-provider",
-      modelId: "custom-model",
+      provider: "openai",
+      modelId: "gpt-5.4",
       prompt: "Can you explain the root cause?",
       aborted: false,
       timedOut: false,
@@ -3136,10 +3151,25 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(retryInstruction).toBeNull();
   });
 
+  it("does not misclassify a let-me result clause as planning-only", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      prompt: "Please check the scheduler and tell me the result.",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["Let me check: there are no scheduled jobs."],
+      }),
+    });
+
+    expect(retryInstruction).toBeNull();
+  });
+
   it("does not misclassify a direct answer that starts with a wait phrase", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
-      provider: "custom-provider",
-      modelId: "custom-model",
+      provider: "openai",
+      modelId: "gpt-5.4",
       prompt: "Is the endpoint down?",
       aborted: false,
       timedOut: false,
@@ -3153,8 +3183,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
   it("does not misclassify a direct answer that starts with an acknowledgement", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
-      provider: "custom-provider",
-      modelId: "custom-model",
+      provider: "openai",
+      modelId: "gpt-5.4",
       prompt: "Is the endpoint down?",
       aborted: false,
       timedOut: false,
@@ -4018,7 +4048,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(retryInstruction).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
   });
 
-  it("applies planning-only and ack fast paths to Ollama runs", () => {
+  it("does not apply planning-only classification to Ollama runs", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "ollama",
       modelId: "gemma4:31b",
@@ -4035,7 +4065,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       prompt: "go ahead",
     });
 
-    expect(retryInstruction).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
+    expect(retryInstruction).toBeNull();
     expect(ackInstruction).toBe(ACK_EXECUTION_FAST_PATH_INSTRUCTION);
   });
 
@@ -5812,7 +5842,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(retryInstruction).toContain("Do not restate the plan");
   });
 
-  it("applies planning-only retry to non-Gemini Google models", () => {
+  it("does not apply planning-only retry to non-Gemini Google models", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "google",
       modelId: "gemma-4-26b-a4b-it",
@@ -5824,10 +5854,10 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       }),
     });
 
-    expect(retryInstruction).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
+    expect(retryInstruction).toBeNull();
   });
 
-  it("applies planning-only retry to arbitrary provider models", () => {
+  it("does not apply planning-only retry to arbitrary provider models", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "custom-provider",
       modelId: "custom-model",
@@ -5839,7 +5869,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       }),
     });
 
-    expect(retryInstruction).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
+    expect(retryInstruction).toBeNull();
   });
 
   it.each([
@@ -5855,8 +5885,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     "channel proof after the restart",
   ])("treats task-shaped prompt %s as actionable for planning-only retry", (prompt) => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
-      provider: "custom-provider",
-      modelId: "custom-model",
+      provider: "openai",
+      modelId: "gpt-5.4",
       prompt,
       aborted: false,
       timedOut: false,
@@ -5884,8 +5914,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     "Could you send me a plan for deleting old backups?",
   ])("does not retry when the user explicitly asked only for a plan: %s", (prompt) => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
-      provider: "custom-provider",
-      modelId: "custom-model",
+      provider: "openai",
+      modelId: "gpt-5.4",
       prompt,
       aborted: false,
       timedOut: false,
@@ -5901,8 +5931,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
   it("does not treat a question about the next planned action as authorization to act", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
-      provider: "custom-provider",
-      modelId: "custom-model",
+      provider: "openai",
+      modelId: "gpt-5.4",
       prompt: "What will you do next?",
       aborted: false,
       timedOut: false,
@@ -5916,8 +5946,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
   it("does not treat an advisory question as authorization to act", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
-      provider: "custom-provider",
-      modelId: "custom-model",
+      provider: "openai",
+      modelId: "gpt-5.4",
       prompt: "Should you delete the file?",
       aborted: false,
       timedOut: false,
@@ -5929,7 +5959,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(retryInstruction).toBeNull();
   });
 
-  it("blocks non-retryable planning-only text for arbitrary provider models", () => {
+  it("does not block planning-only text for arbitrary provider models", () => {
     const toolMetas = [{ toolName: "write", mutatingAction: true }];
     const blockedText = resolvePlanningOnlyBlockedPayloadText({
       provider: "custom-provider",
@@ -5958,7 +5988,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       },
     });
 
-    expect(blockedText).toBe(PLANNING_ONLY_BLOCKED_TEXT);
+    expect(blockedText).toBeNull();
   });
 
   it("does not misclassify a direct answer that says 'i'm not going to' as planning-only", () => {

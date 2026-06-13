@@ -9,6 +9,10 @@ import {
 import type { EmbeddedAgentExecutionContract } from "../../../config/types.agent-defaults.js";
 import { hasAcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import { collectTextContentBlocks } from "../../content-blocks.js";
+import {
+  isStrictAgenticSupportedProviderModel,
+  stripProviderPrefix,
+} from "../../execution-contract.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { isLikelyMutatingToolName } from "../../tool-mutation.js";
 import {
@@ -179,6 +183,8 @@ const SINGLE_ACTION_MULTI_STEP_PROMISE_RE =
   /\bi(?:'ll| will)\b(?=[^.!?]{0,160}\b(?:next|then|after(?:wards)?|once)\b)/i;
 const SINGLE_ACTION_RESULT_STYLE_RE =
   /\b(?:(?:i(?:'ll| will)|let me)\s+(?:summarize|explain|share|show|report|describe|clarify|answer|recap)(?:\s+\w+){0,4}\s*:|(?:here(?:'s| is)|summary|result|answer|findings?|root cause)\s*:)/i;
+const SINGLE_ACTION_RESULT_CLAUSE_RE =
+  /\blet me \w+(?:\s+\w+){0,3}\s*:\s*(?:there\b|no\b|none\b|the\b|this\b|that\b|it\b|[a-z0-9_.-]+\s+(?:is|are|was|were|has|have|shows?|showed|returned|reported|contains?|failed|passed|completed|finished|succeeded)\b)/i;
 const RETRY_SAFE_TOOL_NAMES = new Set([
   "read",
   "search",
@@ -206,6 +212,13 @@ const ACTION_CLASSIFIED_RETRY_SAFE_TOOL_NAMES = new Set([
   "session_status",
   "subagents",
 ]);
+const GEMINI_INCOMPLETE_TURN_PROVIDER_IDS = new Set([
+  "google",
+  "google-vertex",
+  "google-antigravity",
+  "google-gemini-cli",
+]);
+const GEMINI_INCOMPLETE_TURN_MODEL_ID_PATTERN = /^gemini(?:[.-]|$)/;
 // Ollama native `/api/chat` can finish with only thinking/internal blocks when
 // constrained; keep a direct non-visible retry gate for those local-model turns.
 const OLLAMA_INCOMPLETE_TURN_PROVIDER_ID_PATTERN = /^ollama(?:-|$)/;
@@ -927,8 +940,13 @@ function shouldApplyPlanningOnlyRetryGuard(params: {
   modelId?: string;
   executionContract?: string;
 }): boolean {
-  void params;
-  return true;
+  if (params.executionContract === "strict-agentic") {
+    return true;
+  }
+  return isIncompleteTurnRecoverySupportedProviderModel({
+    provider: params.provider,
+    modelId: params.modelId,
+  });
 }
 
 function shouldApplyNonVisibleTurnRetryGuard(params: {
@@ -948,6 +966,26 @@ function shouldApplyNonVisibleTurnRetryGuard(params: {
   return OLLAMA_INCOMPLETE_TURN_PROVIDER_ID_PATTERN.test(
     normalizeLowercaseStringOrEmpty(params.provider ?? ""),
   );
+}
+
+function isIncompleteTurnRecoverySupportedProviderModel(params: {
+  provider?: string;
+  modelId?: string;
+}): boolean {
+  if (
+    isStrictAgenticSupportedProviderModel({
+      provider: params.provider,
+      modelId: params.modelId,
+    })
+  ) {
+    return true;
+  }
+  const provider = normalizeLowercaseStringOrEmpty(params.provider ?? "");
+  if (!GEMINI_INCOMPLETE_TURN_PROVIDER_IDS.has(provider)) {
+    return false;
+  }
+  const modelId = typeof params.modelId === "string" ? params.modelId : "";
+  return GEMINI_INCOMPLETE_TURN_MODEL_ID_PATTERN.test(stripProviderPrefix(modelId));
 }
 
 function normalizeAckPrompt(text: string): string {
@@ -1158,7 +1196,10 @@ function isSingleActionThenNarrativePattern(params: {
     return false;
   }
   const classifierText = normalizePlanningOnlyClassifierText(text);
-  if (SINGLE_ACTION_RESULT_STYLE_RE.test(classifierText)) {
+  if (
+    SINGLE_ACTION_RESULT_STYLE_RE.test(classifierText) ||
+    SINGLE_ACTION_RESULT_CLAUSE_RE.test(classifierText)
+  ) {
     return false;
   }
   return (
@@ -1176,7 +1217,10 @@ export function isPlanningOnlyAssistantText(
     return false;
   }
   const classifierText = normalizePlanningOnlyClassifierText(text);
-  if (SINGLE_ACTION_RESULT_STYLE_RE.test(classifierText)) {
+  if (
+    SINGLE_ACTION_RESULT_STYLE_RE.test(classifierText) ||
+    SINGLE_ACTION_RESULT_CLAUSE_RE.test(classifierText)
+  ) {
     return false;
   }
   const hasStructuredPlanningFormat = hasStructuredPlanningOnlyFormat(classifierText);
@@ -1354,6 +1398,14 @@ export function resolvePlanningOnlyBlockedPayloadText(params: {
   timedOut: boolean;
   attempt: PlanningOnlyAttempt;
 }): string | null {
+  if (
+    !shouldApplyPlanningOnlyRetryGuard({
+      provider: params.provider,
+      modelId: params.modelId,
+    })
+  ) {
+    return null;
+  }
   const planOnlyToolMetaCount = countPlanOnlyToolMetas(params.attempt.toolMetas);
   const planningOnly = resolvePlanningOnlyTurnClassification(params);
   if (!planningOnly) {
@@ -1385,5 +1437,10 @@ export function resolvePlanningOnlyTerminalPayloadText(params: {
   timedOut: boolean;
   attempt: PlanningOnlyAttempt;
 }): string | null {
-  return resolvePlanningOnlyTurnClassification(params) ? PLANNING_ONLY_BLOCKED_TEXT : null;
+  return shouldApplyPlanningOnlyRetryGuard({
+    provider: params.provider,
+    modelId: params.modelId,
+  }) && resolvePlanningOnlyTurnClassification(params)
+    ? PLANNING_ONLY_BLOCKED_TEXT
+    : null;
 }
