@@ -1968,14 +1968,10 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
     ) {
       return args.slice(0, 1);
     }
-    if (
-      name === "copyFile" ||
-      name === "copyFileSync" ||
-      name === "cp" ||
-      name === "cpSync" ||
-      name === "rename" ||
-      name === "renameSync"
-    ) {
+    if (name === "copyFile" || name === "copyFileSync" || name === "cp" || name === "cpSync") {
+      return args.slice(1, 2);
+    }
+    if (name === "rename" || name === "renameSync") {
       return args.slice(0, 2);
     }
     return args.slice(0, 1);

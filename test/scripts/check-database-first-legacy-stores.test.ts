@@ -729,6 +729,22 @@ describe("check-database-first-legacy-stores", () => {
     ]);
   });
 
+  it("allows fs copy calls reading from legacy store paths", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import fs from "node:fs/promises";
+        import syncFs from "node:fs";
+        await fs.copyFile("sessions.json", "state/openclaw.sqlite.import");
+        await fs.cp("cron/jobs.json", "state/openclaw.sqlite.import");
+        syncFs.copyFileSync("auth-profiles.json", "state/openclaw.sqlite.import");
+        syncFs.cpSync("cache/models.json", "state/openclaw.sqlite.import");
+      `,
+      "src/runtime/fs-copy-legacy-store-source.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
   it("flags fs removal calls targeting legacy store paths", () => {
     const violations = collectDatabaseFirstLegacyStoreViolations(
       `
