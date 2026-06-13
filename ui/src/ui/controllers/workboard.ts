@@ -2043,10 +2043,13 @@ export async function loadWorkboard(params: {
       }
       return false;
     } finally {
-      if (!isCurrentWorkboardLoadGeneration(params.host, generation) && !state.loaded) {
+      const isCurrentGeneration = isCurrentWorkboardLoadGeneration(params.host, generation);
+      if (!isCurrentGeneration && !state.loaded) {
         state.loadAttempted = false;
       }
-      state.loading = false;
+      if (isCurrentGeneration || !state.draftSaving) {
+        state.loading = false;
+      }
       workboardLoadPromises.delete(params.host);
       params.requestUpdate?.();
     }
@@ -3067,7 +3070,14 @@ export async function addWorkboardCardComment(params: {
   const state = getWorkboardState(params.host);
   const cardId = params.cardId ?? state.editingCardId;
   const body = (params.body ?? state.draftCommentBody).trim();
-  if (!cardId || !params.client || !body || state.dispatching || state.busyCardIds.has(cardId)) {
+  if (
+    !cardId ||
+    !params.client ||
+    !body ||
+    state.dispatching ||
+    state.draftSaving ||
+    state.busyCardIds.has(cardId)
+  ) {
     return;
   }
   invalidateWorkboardLoads(params.host);

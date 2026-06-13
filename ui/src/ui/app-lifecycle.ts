@@ -24,7 +24,7 @@ import {
 import { persistChatComposerState, restoreChatComposerState } from "./chat/composer-persistence.ts";
 import { startControlUiResponsivenessObserver } from "./control-ui-performance.ts";
 import { loadControlUiBootstrapConfig } from "./controllers/control-ui-bootstrap.ts";
-import { stopWorkboardPolling } from "./controllers/workboard.ts";
+import { stopWorkboardLifecycleRefresh, stopWorkboardPolling } from "./controllers/workboard.ts";
 import type { Tab } from "./navigation.ts";
 import type { ChatQueueItem } from "./ui-types.ts";
 
@@ -203,6 +203,7 @@ export function handleDisconnected(host: LifecycleHost) {
   stopLogsPolling(host as unknown as Parameters<typeof stopLogsPolling>[0]);
   stopDebugPolling(host as unknown as Parameters<typeof stopDebugPolling>[0]);
   stopWorkboardPolling(host);
+  stopWorkboardLifecycleRefresh(host);
   cancelHostAnimationFrame(host.chatScrollFrame);
   host.chatScrollFrame = null;
   cancelHostAnimationFrame(host.logsScrollFrame);

@@ -55,6 +55,7 @@ const mocks = vi.hoisted(() => ({
   loadSkillsMock: vi.fn(async () => {}),
   loadUsageMock: vi.fn(async () => {}),
   loadWorkboardMock: vi.fn(async () => {}),
+  stopWorkboardLifecycleRefreshMock: vi.fn(),
   stopWorkboardPollingMock: vi.fn(),
   startDebugPollingMock: vi.fn(),
   startLogsPollingMock: vi.fn(),
@@ -143,6 +144,7 @@ vi.mock("./controllers/usage.ts", () => ({
 }));
 vi.mock("./controllers/workboard.ts", () => ({
   loadWorkboard: mocks.loadWorkboardMock,
+  stopWorkboardLifecycleRefresh: mocks.stopWorkboardLifecycleRefreshMock,
   stopWorkboardPolling: mocks.stopWorkboardPollingMock,
 }));
 
@@ -393,6 +395,7 @@ describe("refreshActiveTab", () => {
     expect(mocks.stopLogsPollingMock).toHaveBeenCalledWith(host);
     expect(mocks.stopDebugPollingMock).toHaveBeenCalledWith(host);
     expect(mocks.stopWorkboardPollingMock).toHaveBeenCalledWith(host);
+    expect(mocks.stopWorkboardLifecycleRefreshMock).toHaveBeenCalledWith(host);
     vi.advanceTimersByTime(1_000);
     expect(pendingReload).not.toHaveBeenCalled();
 

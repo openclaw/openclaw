@@ -1414,6 +1414,49 @@ describe("workboard controller", () => {
     expect(state.loaded).toBe(true);
   });
 
+  it("does not clear draft-save loading state from an invalidated refresh", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const refreshList = createDeferred<unknown>();
+    const saveResponse = createDeferred<{ card: WorkboardCard }>();
+    const client = createClient((method) => {
+      if (method === "workboard.cards.list") {
+        return refreshList.promise;
+      }
+      if (method === "workboard.cards.update") {
+        return saveResponse.promise;
+      }
+      return {};
+    });
+    state.cards = [sampleCard];
+    state.editingCardId = sampleCard.id;
+    state.draftTitle = "Saved title";
+
+    const refresh = loadWorkboard({ host, client: client as never, force: true });
+    await Promise.resolve();
+    const save = saveWorkboardCardDraft({ host, client: client as never });
+    await vi.waitFor(() => {
+      expect(client.request).toHaveBeenCalledWith("workboard.cards.update", expect.anything());
+    });
+    refreshList.resolve({ cards: [sampleCard], statuses: ["todo", "done"] });
+    await refresh;
+
+    expect(state.draftSaving).toBe(true);
+    expect(state.loading).toBe(true);
+    await addWorkboardCardComment({
+      host,
+      client: client as never,
+      cardId: sampleCard.id,
+      body: "must wait for save",
+    });
+    expect(client.request).not.toHaveBeenCalledWith("workboard.cards.comment", expect.anything());
+
+    saveResponse.resolve({ card: { ...sampleCard, title: "Saved title" } });
+    await save;
+    expect(state.draftSaving).toBe(false);
+    expect(state.loading).toBe(false);
+  });
+
   it("queues a forced full refresh behind an in-flight bounded poll load", async () => {
     const host = {};
     const pollList = createDeferred<unknown>();

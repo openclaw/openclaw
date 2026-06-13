@@ -110,6 +110,28 @@ describe("handleDisconnected", () => {
     expect(client.request).not.toHaveBeenCalled();
     vi.unstubAllGlobals();
   });
+
+  it("stops Workboard lifecycle refresh state on teardown", () => {
+    vi.stubGlobal("window", {
+      removeEventListener: vi.fn(),
+    });
+    const host = createHost();
+    const state = getWorkboardState(host);
+    state.lifecycleTasksPrepared = true;
+    state.lifecycleTasksPreparedAt = Date.now();
+    state.lifecycleTaskRefreshFailed = true;
+    state.lifecycleTaskRefreshRetryAt = Date.now() + 5000;
+    state.lifecycleConfirmedTaskIds.add("task-1");
+    state.lifecycleTaskConfirmationStartedAt = Date.now();
+
+    handleDisconnected(host as unknown as Parameters<typeof handleDisconnected>[0]);
+
+    expect(state.lifecycleTasksPrepared).toBe(false);
+    expect(state.lifecycleTaskRefreshFailed).toBe(false);
+    expect(state.lifecycleConfirmedTaskIds.size).toBe(0);
+    expect(state.lifecycleTaskConfirmationStartedAt).toBeNull();
+    vi.unstubAllGlobals();
+  });
 });
 
 describe("handleUpdated", () => {
