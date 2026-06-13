@@ -2284,6 +2284,7 @@ export async function dispatchReplyFromConfig(
       const result = await routeReplyToOriginating(normalizedPayload, {
         abortSignal,
         kind: "final",
+        ...(hasTranscriptOwner ? { mirror: false } : {}),
       });
       if (result) {
         if (!result.ok) {

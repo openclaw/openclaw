@@ -1297,6 +1297,37 @@ describe("dispatchReplyFromConfig", () => {
     expect(transcriptMocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
   });
 
+  it("disables routed delivery mirrors for CLI-owned finals", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    mocks.routeReply.mockClear();
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "slack",
+        Surface: "slack",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:999",
+        SessionKey: "agent:main:telegram:group:999",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () =>
+        setReplyPayloadMetadata(
+          { text: "Persisted routed CLI reply" },
+          { assistantTranscriptOwned: true },
+        ),
+    });
+
+    expect(result.queuedFinal).toBe(true);
+    expect(mocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: { text: "Persisted routed CLI reply" },
+        mirror: false,
+      }),
+    );
+  });
+
   it("mirrors the delivered ownerless Slack text after dispatcher hook rewrites", async () => {
     setNoAbort();
     const dispatcher = createDispatcher();
