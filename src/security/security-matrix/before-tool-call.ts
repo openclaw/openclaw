@@ -4,16 +4,6 @@ import {
   type SecurityMatrixToolFacts,
 } from "./facts.js";
 
-export type SecurityMatrixBeforeToolCallAuditConfig = {
-  readonly security?: {
-    readonly matrix?: {
-      readonly audit?: {
-        readonly enabled?: boolean;
-      };
-    };
-  };
-};
-
 export type SecurityMatrixBeforeToolCallFacts = Omit<
   SecurityMatrixToolFacts,
   "actor" | "approvalState" | "operatorPolicy"
@@ -26,16 +16,10 @@ export type SecurityMatrixBeforeToolCallFacts = Omit<
   readonly operatorPolicy?: SecurityMatrixToolFacts["operatorPolicy"];
 };
 
-export function isSecurityMatrixBeforeToolCallAuditEnabled(
-  config: SecurityMatrixBeforeToolCallAuditConfig | undefined,
-): boolean {
-  return config?.security?.matrix?.audit?.enabled === true;
-}
-
 /**
  * Build the Security Matrix audit event shape from facts available at the real
- * before_tool_call boundary. This does not emit, confirm, block, or mutate tool
- * execution; the caller must explicitly opt in and publish the event.
+ * before_tool_call boundary. This helper is observe-only: it does not confirm,
+ * block, mutate params, or change trusted policy decisions.
  */
 export function createSecurityMatrixBeforeToolCallAuditEvent(
   facts: SecurityMatrixBeforeToolCallFacts,
@@ -47,7 +31,7 @@ export function createSecurityMatrixBeforeToolCallAuditEvent(
     actor: facts.actor ?? "agent",
     influencedBy: facts.influencedBy ?? [],
     ...(facts.capability ? { capability: facts.capability } : {}),
-    approvalState: facts.approvalState ?? "not_required",
+    approvalState: facts.approvalState ?? "none",
     operatorPolicy: facts.operatorPolicy ?? "unknown",
   });
 }
