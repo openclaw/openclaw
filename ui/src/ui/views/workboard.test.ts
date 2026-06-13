@@ -2596,50 +2596,55 @@ describe("renderWorkboard", () => {
     state.draftOpen = true;
     state.draftTitle = "New task";
     const container = document.createElement("div");
+    const innerWidth = vi.spyOn(window, "innerWidth", "get").mockReturnValue(1024);
 
-    render(
-      renderWorkboard({
-        host,
-        client: null,
-        connected: true,
-        pluginEnabled: true,
-        agentsList: null,
-        sessions: [],
-        onOpenSession: () => undefined,
-      }),
-      container,
-    );
+    try {
+      render(
+        renderWorkboard({
+          host,
+          client: null,
+          connected: true,
+          pluginEnabled: true,
+          agentsList: null,
+          sessions: [],
+          onOpenSession: () => undefined,
+        }),
+        container,
+      );
 
-    const select = container.querySelector<HTMLDetailsElement>(
-      ".workboard-draft .workboard-select",
-    );
-    const trigger = select?.querySelector<HTMLElement>(".workboard-select__trigger");
-    const menu = select?.querySelector<HTMLElement>(".workboard-select__menu");
-    expect(select).toBeTruthy();
-    expect(trigger).toBeTruthy();
-    expect(menu).toBeTruthy();
+      const select = container.querySelector<HTMLDetailsElement>(
+        ".workboard-draft .workboard-select",
+      );
+      const trigger = select?.querySelector<HTMLElement>(".workboard-select__trigger");
+      const menu = select?.querySelector<HTMLElement>(".workboard-select__menu");
+      expect(select).toBeTruthy();
+      expect(trigger).toBeTruthy();
+      expect(menu).toBeTruthy();
 
-    Object.defineProperty(trigger, "getBoundingClientRect", {
-      value: () => ({
-        top: 120,
-        right: 420,
-        bottom: 156,
-        left: 180,
-        width: 240,
-        height: 36,
-        x: 180,
-        y: 120,
-        toJSON: () => ({}),
-      }),
-    });
+      Object.defineProperty(trigger, "getBoundingClientRect", {
+        value: () => ({
+          top: 120,
+          right: 420,
+          bottom: 156,
+          left: 180,
+          width: 240,
+          height: 36,
+          x: 180,
+          y: 120,
+          toJSON: () => ({}),
+        }),
+      });
 
-    select!.open = true;
-    select!.dispatchEvent(new Event("toggle"));
+      select!.open = true;
+      select!.dispatchEvent(new Event("toggle"));
 
-    expect(menu?.style.getPropertyValue("--workboard-select-menu-left")).toBe("180px");
-    expect(menu?.style.getPropertyValue("--workboard-select-menu-top")).toBe("162px");
-    expect(menu?.style.getPropertyValue("--workboard-select-menu-width")).toBe("240px");
-    expect(menu?.style.getPropertyValue("--workboard-select-menu-max-height")).toBe("320px");
+      expect(menu?.style.getPropertyValue("--workboard-select-menu-left")).toBe("180px");
+      expect(menu?.style.getPropertyValue("--workboard-select-menu-top")).toBe("162px");
+      expect(menu?.style.getPropertyValue("--workboard-select-menu-width")).toBe("240px");
+      expect(menu?.style.getPropertyValue("--workboard-select-menu-max-height")).toBe("320px");
+    } finally {
+      innerWidth.mockRestore();
+    }
   });
 
   it("positions short dropdown menus against their trigger when opening above", () => {
@@ -2753,57 +2758,6 @@ describe("renderWorkboard", () => {
     } finally {
       container.remove();
     }
-  });
-
-  it("closes the details drawer when the selected card is clicked again", () => {
-    const host = {};
-    const state = getWorkboardState(host);
-    state.loaded = true;
-    state.cards = [
-      {
-        id: "card-1",
-        title: "Toggle details task",
-        status: "ready",
-        priority: "normal",
-        labels: [],
-        position: 1000,
-        createdAt: 1,
-        updatedAt: 1,
-      },
-    ];
-    const container = document.createElement("div");
-    const renderBoard = () =>
-      render(
-        renderWorkboard({
-          host,
-          client: null,
-          connected: true,
-          pluginEnabled: true,
-          agentsList: null,
-          sessions: [],
-          onOpenSession: () => undefined,
-        }),
-        container,
-      );
-
-    renderBoard();
-
-    const card = container.querySelector<HTMLElement>(".workboard-card");
-    card?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    renderBoard();
-
-    expect(state.detailCardId).toBe("card-1");
-    expect(container.querySelector(".workboard-detail")?.textContent).toContain(
-      "Toggle details task",
-    );
-
-    container
-      .querySelector<HTMLElement>(".workboard-card")
-      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    renderBoard();
-
-    expect(state.detailCardId).toBeNull();
-    expect(container.querySelector(".workboard-detail")).toBeNull();
   });
 
   it("clears an active card tooltip when opening details", () => {

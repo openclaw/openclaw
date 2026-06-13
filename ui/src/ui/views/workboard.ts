@@ -1195,11 +1195,6 @@ function renderCardActionSlot(content: TemplateResult | typeof nothing) {
 
 function openCardDetails(state: WorkboardUiState, card: WorkboardCard) {
   clearActiveFloatingTooltips();
-  if (state.detailCardId === card.id) {
-    state.detailCardId = null;
-    state.detailCommentBody = "";
-    return;
-  }
   state.detailCardId = card.id;
   state.detailCommentBody = "";
 }
