@@ -219,6 +219,8 @@ export async function prepareCliRunContext(
   params: RunCliAgentParams,
 ): Promise<PreparedCliRunContext> {
   const started = Date.now();
+  const executionMode = params.executionMode ?? "agent";
+  const isSideQuestion = executionMode === "side-question";
   const workspaceResolution = resolveRunWorkspaceDir({
     workspaceDir: params.workspaceDir,
     sessionKey: params.sessionKey,
@@ -249,7 +251,13 @@ export async function prepareCliRunContext(
       `CLI backend ${backendResolved.id} cannot enforce runtime toolsAllow; use an embedded runtime for restricted tool policy`,
     );
   }
-  if (params.disableTools === true && backendResolved.nativeToolMode === "always-on") {
+  const sideQuestionDisablesNativeTools =
+    isSideQuestion && backendResolved.sideQuestionToolMode === "disabled";
+  if (
+    params.disableTools === true &&
+    backendResolved.nativeToolMode === "always-on" &&
+    !sideQuestionDisablesNativeTools
+  ) {
     throw new Error(
       `CLI backend ${backendResolved.id} cannot run with tools disabled because it exposes native tools`,
     );
@@ -307,20 +315,22 @@ export async function prepareCliRunContext(
     : undefined;
 
   const sessionLabel = params.sessionKey ?? params.sessionId;
-  const { bootstrapFiles, contextFiles } = await prepareDeps.resolveBootstrapContextForRun({
-    workspaceDir,
-    config: params.config,
-    sessionKey: params.sessionKey,
-    sessionId: params.sessionId,
-    agentId: sessionAgentId,
-    contextMode: params.bootstrapContextMode,
-    runKind: params.bootstrapContextRunKind,
-    warn: prepareDeps.makeBootstrapWarn({
-      sessionLabel,
-      workspaceDir,
-      warn: (message) => cliBackendLog.warn(message),
-    }),
-  });
+  const { bootstrapFiles, contextFiles } = isSideQuestion
+    ? { bootstrapFiles: [], contextFiles: [] }
+    : await prepareDeps.resolveBootstrapContextForRun({
+        workspaceDir,
+        config: params.config,
+        sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
+        agentId: sessionAgentId,
+        contextMode: params.bootstrapContextMode,
+        runKind: params.bootstrapContextRunKind,
+        warn: prepareDeps.makeBootstrapWarn({
+          sessionLabel,
+          workspaceDir,
+          warn: (message) => cliBackendLog.warn(message),
+        }),
+      });
   const bootstrapMaxChars = resolveBootstrapMaxChars(params.config, sessionAgentId);
   const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config, sessionAgentId);
   const bootstrapAnalysis = analyzeBootstrapBudget({
@@ -338,7 +348,8 @@ export async function prepareCliRunContext(
     seenSignatures: params.bootstrapPromptWarningSignaturesSeen,
     previousSignature: params.bootstrapPromptWarningSignature,
   });
-  const bundleMcpEnabled = backendResolved.bundleMcp && params.disableTools !== true;
+  const bundleMcpEnabled =
+    !isSideQuestion && backendResolved.bundleMcp && params.disableTools !== true;
   let mcpLoopbackRuntime = bundleMcpEnabled ? prepareDeps.getActiveMcpLoopbackRuntime() : undefined;
   if (bundleMcpEnabled && !mcpLoopbackRuntime) {
     try {
@@ -385,6 +396,7 @@ export async function prepareCliRunContext(
     provider: params.provider,
     modelId,
     authProfileId: effectiveAuthProfileId,
+    executionMode,
   });
   const skipLocalCredentialEpoch = shouldSkipLocalCliCredentialEpoch({
     authEpochMode: backendResolved.authEpochMode,
@@ -411,10 +423,12 @@ export async function prepareCliRunContext(
           }
         }
       : undefined;
-  const claudeSkillsPlugin = await prepareDeps.prepareClaudeCliSkillsPlugin({
-    backendId: backendResolved.id,
-    skillsSnapshot: params.skillsSnapshot,
-  });
+  const claudeSkillsPlugin = isSideQuestion
+    ? { args: [], cleanup: async () => {} }
+    : await prepareDeps.prepareClaudeCliSkillsPlugin({
+        backendId: backendResolved.id,
+        skillsSnapshot: params.skillsSnapshot,
+      });
   const preparedCleanup =
     preparedBackendCleanup || claudeSkillsPlugin.args.length > 0
       ? async () => {
@@ -429,10 +443,17 @@ export async function prepareCliRunContext(
     ...(preparedBackend.backend.clearEnv ?? []),
     ...(preparedExecution?.clearEnv ?? []),
   ];
+  const sideQuestionBackend = (() => {
+    const { liveSession: _liveSession, ...backend } = preparedBackend.backend;
+    return {
+      ...backend,
+      sessionMode: "none" as const,
+    };
+  })();
   const preparedBackendFinal = {
     ...preparedBackend,
     backend: {
-      ...preparedBackend.backend,
+      ...(isSideQuestion ? sideQuestionBackend : preparedBackend.backend),
       ...(preparedBackendClearEnv.length > 0
         ? { clearEnv: uniqueStrings(preparedBackendClearEnv) }
         : {}),
@@ -460,21 +481,23 @@ export async function prepareCliRunContext(
     bundleMcpEnabled && mcpLoopbackRuntime
       ? hashCliSessionText(JSON.stringify(promptTools.map((tool) => tool.name).toSorted()))
       : undefined;
-  const reusableCliSessionCandidate: CliReusableSession = params.cliSessionBinding
-    ? resolveCliSessionReuse({
-        binding: params.cliSessionBinding,
-        authProfileId: effectiveAuthProfileId,
-        authEpoch,
-        authEpochVersion: CLI_AUTH_EPOCH_VERSION,
-        extraSystemPromptHash,
-        promptToolNamesHash,
-        cwdHash,
-        mcpConfigHash: preparedBackendFinal.mcpConfigHash,
-        mcpResumeHash: preparedBackendFinal.mcpResumeHash,
-      })
-    : params.cliSessionId
-      ? { sessionId: params.cliSessionId }
-      : {};
+  const reusableCliSessionCandidate: CliReusableSession = isSideQuestion
+    ? {}
+    : params.cliSessionBinding
+      ? resolveCliSessionReuse({
+          binding: params.cliSessionBinding,
+          authProfileId: effectiveAuthProfileId,
+          authEpoch,
+          authEpochVersion: CLI_AUTH_EPOCH_VERSION,
+          extraSystemPromptHash,
+          promptToolNamesHash,
+          cwdHash,
+          mcpConfigHash: preparedBackendFinal.mcpConfigHash,
+          mcpResumeHash: preparedBackendFinal.mcpResumeHash,
+        })
+      : params.cliSessionId
+        ? { sessionId: params.cliSessionId }
+        : {};
   const candidateClaudeCliSessionId = reusableCliSessionCandidate.sessionId?.trim() || undefined;
   const hasClaudeCliCandidate =
     candidateClaudeCliSessionId !== undefined && isClaudeCliProvider(params.provider);
@@ -516,19 +539,23 @@ export async function prepareCliRunContext(
     });
     return openClawHistoryMessages;
   };
-  const heartbeatPrompt = resolveHeartbeatPromptForSystemPrompt({
-    config: params.config,
-    agentId: sessionAgentId,
-    defaultAgentId,
-  });
-  const openClawReferences = await prepareDeps.resolveOpenClawReferencePaths({
-    workspaceDir,
-    argv1: process.argv[1],
-    cwd,
-    moduleUrl: import.meta.url,
-  });
+  const heartbeatPrompt = isSideQuestion
+    ? undefined
+    : resolveHeartbeatPromptForSystemPrompt({
+        config: params.config,
+        agentId: sessionAgentId,
+        defaultAgentId,
+      });
+  const openClawReferences = isSideQuestion
+    ? { docsPath: null, sourcePath: null }
+    : await prepareDeps.resolveOpenClawReferencePaths({
+        workspaceDir,
+        argv1: process.argv[1],
+        cwd,
+        moduleUrl: import.meta.url,
+      });
   const systemPromptSkillsPrompt =
-    claudeSkillsPlugin.args.length > 0
+    isSideQuestion || claudeSkillsPlugin.args.length > 0
       ? ""
       : await resolveCliSkillsPrompt({
           skillsSnapshot: params.skillsSnapshot,
@@ -537,117 +564,132 @@ export async function prepareCliRunContext(
           agentId: sessionAgentId,
           sessionKey: params.sessionKey?.trim() || params.sessionId,
         });
-  const runtimeChannel = normalizeMessageChannel(params.messageChannel ?? params.messageProvider);
-  const runtimeCapabilities = collectRuntimeChannelCapabilities({
-    cfg: params.config,
-    channel: runtimeChannel,
-    accountId: params.agentAccountId,
-  });
-  const builtSystemPrompt = buildCliAgentSystemPrompt({
-    workspaceDir,
-    cwd,
-    config: params.config,
-    defaultThinkLevel: params.thinkLevel,
-    extraSystemPrompt,
-    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-    silentReplyPromptMode: params.silentReplyPromptMode,
-    runtimeChannel,
-    runtimeChatType: params.sessionEntry?.chatType,
-    runtimeCapabilities,
-    ownerNumbers: params.ownerNumbers,
-    heartbeatPrompt,
-    docsPath: openClawReferences.docsPath ?? undefined,
-    sourcePath: openClawReferences.sourcePath ?? undefined,
-    skillsPrompt: systemPromptSkillsPrompt,
-    tools: promptTools,
-    contextFiles,
-    modelDisplay,
-    agentId: sessionAgentId,
-    sessionKey: params.sessionKey,
-    sessionId: params.sessionId,
-  });
-  const transformedSystemPrompt =
-    backendResolved.transformSystemPrompt?.({
-      config: params.config,
-      workspaceDir,
-      provider: params.provider,
-      modelId,
-      modelDisplay,
-      agentId: sessionAgentId,
-      systemPrompt: builtSystemPrompt,
-    }) ?? builtSystemPrompt;
-  let systemPrompt = transformedSystemPrompt;
-  let preparedPrompt = params.prompt;
-  const hookRunner = getGlobalHookRunner();
-  try {
-    const hookResult = await resolvePromptBuildHookResult({
-      config: params.config ?? getRuntimeConfig(),
-      prompt: params.prompt,
-      messages: await loadOpenClawHistoryMessages(),
-      hookCtx: {
-        runId: params.runId,
+  const runtimeChannel = isSideQuestion
+    ? undefined
+    : normalizeMessageChannel(params.messageChannel ?? params.messageProvider);
+  const runtimeCapabilities = isSideQuestion
+    ? undefined
+    : collectRuntimeChannelCapabilities({
+        cfg: params.config,
+        channel: runtimeChannel,
+        accountId: params.agentAccountId,
+      });
+  const builtSystemPrompt = isSideQuestion
+    ? extraSystemPrompt
+    : buildCliAgentSystemPrompt({
+        workspaceDir,
+        cwd,
+        config: params.config,
+        defaultThinkLevel: params.thinkLevel,
+        extraSystemPrompt,
+        sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+        silentReplyPromptMode: params.silentReplyPromptMode,
+        runtimeChannel,
+        runtimeChatType: params.sessionEntry?.chatType,
+        runtimeCapabilities,
+        ownerNumbers: params.ownerNumbers,
+        heartbeatPrompt,
+        docsPath: openClawReferences.docsPath ?? undefined,
+        sourcePath: openClawReferences.sourcePath ?? undefined,
+        skillsPrompt: systemPromptSkillsPrompt,
+        tools: promptTools,
+        contextFiles,
+        modelDisplay,
         agentId: sessionAgentId,
         sessionKey: params.sessionKey,
         sessionId: params.sessionId,
-        workspaceDir,
-        modelProviderId: params.provider,
-        modelId,
-        trigger: params.trigger,
-        ...buildAgentHookContextChannelFields(params),
-      },
-      hookRunner,
-    });
-    if (hookResult.prependContext) {
-      preparedPrompt = `${hookResult.prependContext}\n\n${preparedPrompt}`;
-    }
-    if (hookResult.appendContext) {
-      preparedPrompt = `${preparedPrompt}\n\n${hookResult.appendContext}`;
-    }
-    const hookSystemPrompt = hookResult.systemPrompt?.trim();
-    if (hookSystemPrompt) {
-      systemPrompt = hookSystemPrompt;
-    }
-    systemPrompt =
-      composeSystemPromptWithHookContext({
-        baseSystemPrompt: systemPrompt,
-        prependSystemContext: hookResult.prependSystemContext,
-        appendSystemContext: hookResult.appendSystemContext,
-      }) ?? systemPrompt;
-    const mediaTaskSystemPromptAddition = resolveAttemptMediaTaskSystemPromptAddition({
-      sessionKey: params.sessionKey,
-      trigger: params.trigger,
-    });
-    if (mediaTaskSystemPromptAddition) {
-      systemPrompt = prependSystemPromptAddition({
-        systemPrompt: ensureSystemPromptCacheBoundary(systemPrompt),
-        systemPromptAddition: mediaTaskSystemPromptAddition,
       });
+  const transformedSystemPrompt = !isSideQuestion
+    ? (backendResolved.transformSystemPrompt?.({
+        config: params.config,
+        workspaceDir,
+        provider: params.provider,
+        modelId,
+        modelDisplay,
+        agentId: sessionAgentId,
+        systemPrompt: builtSystemPrompt,
+      }) ?? builtSystemPrompt)
+    : builtSystemPrompt;
+  let systemPrompt = transformedSystemPrompt;
+  let preparedPrompt = params.prompt;
+  if (!isSideQuestion) {
+    const hookRunner = getGlobalHookRunner();
+    try {
+      const hookResult = await resolvePromptBuildHookResult({
+        config: params.config ?? getRuntimeConfig(),
+        prompt: params.prompt,
+        messages: await loadOpenClawHistoryMessages(),
+        hookCtx: {
+          runId: params.runId,
+          agentId: sessionAgentId,
+          sessionKey: params.sessionKey,
+          sessionId: params.sessionId,
+          workspaceDir,
+          modelProviderId: params.provider,
+          modelId,
+          trigger: params.trigger,
+          ...buildAgentHookContextChannelFields(params),
+        },
+        hookRunner,
+      });
+      if (hookResult.prependContext) {
+        preparedPrompt = `${hookResult.prependContext}\n\n${preparedPrompt}`;
+      }
+      if (hookResult.appendContext) {
+        preparedPrompt = `${preparedPrompt}\n\n${hookResult.appendContext}`;
+      }
+      const hookSystemPrompt = hookResult.systemPrompt?.trim();
+      if (hookSystemPrompt) {
+        systemPrompt = hookSystemPrompt;
+      }
+      systemPrompt =
+        composeSystemPromptWithHookContext({
+          baseSystemPrompt: systemPrompt,
+          prependSystemContext: hookResult.prependSystemContext,
+          appendSystemContext: hookResult.appendSystemContext,
+        }) ?? systemPrompt;
+      const mediaTaskSystemPromptAddition = resolveAttemptMediaTaskSystemPromptAddition({
+        sessionKey: params.sessionKey,
+        trigger: params.trigger,
+      });
+      if (mediaTaskSystemPromptAddition) {
+        systemPrompt = prependSystemPromptAddition({
+          systemPrompt: ensureSystemPromptCacheBoundary(systemPrompt),
+          systemPromptAddition: mediaTaskSystemPromptAddition,
+        });
+      }
+    } catch (error) {
+      cliBackendLog.warn(`cli prompt-build hook preparation failed: ${String(error)}`);
     }
-  } catch (error) {
-    cliBackendLog.warn(`cli prompt-build hook preparation failed: ${String(error)}`);
   }
-  const fullCurrentInboundPrompt = buildCurrentInboundPrompt({
-    context: params.currentInboundContext,
-    prompt: preparedPrompt,
-  });
-  const runCurrentInboundPrompt = buildCurrentInboundPrompt({
-    context: params.currentInboundContext,
-    prompt: preparedPrompt,
-    preferResumableText:
-      params.currentInboundEventKind === "room_event" && Boolean(reusableCliSession.sessionId),
-  });
-  const historyPromptCurrentTurn = annotateInterSessionPromptText(
-    fullCurrentInboundPrompt,
-    params.inputProvenance,
-  );
-  preparedPrompt = annotateInterSessionPromptText(runCurrentInboundPrompt, params.inputProvenance);
+  let historyPromptCurrentTurn = preparedPrompt;
+  if (!isSideQuestion) {
+    const fullCurrentInboundPrompt = buildCurrentInboundPrompt({
+      context: params.currentInboundContext,
+      prompt: preparedPrompt,
+    });
+    const runCurrentInboundPrompt = buildCurrentInboundPrompt({
+      context: params.currentInboundContext,
+      prompt: preparedPrompt,
+      preferResumableText:
+        params.currentInboundEventKind === "room_event" && Boolean(reusableCliSession.sessionId),
+    });
+    historyPromptCurrentTurn = annotateInterSessionPromptText(
+      fullCurrentInboundPrompt,
+      params.inputProvenance,
+    );
+    preparedPrompt = annotateInterSessionPromptText(
+      runCurrentInboundPrompt,
+      params.inputProvenance,
+    );
+  }
   const allowRawTranscriptReseed =
     backendResolved.config.reseedFromRawTranscriptWhenUncompacted === true;
   const rawTranscriptReseedReason = reusableCliSession.sessionId
     ? "session-expired"
     : reusableCliSession.invalidatedReason;
   const shouldPrepareOpenClawHistoryPrompt =
-    !reusableCliSession.sessionId || allowRawTranscriptReseed;
+    !isSideQuestion && (!reusableCliSession.sessionId || allowRawTranscriptReseed);
   const openClawHistoryPrompt = shouldPrepareOpenClawHistoryPrompt
     ? buildCliSessionHistoryPrompt({
         messages: await loadCliSessionReseedMessages({
@@ -671,13 +713,16 @@ export async function prepareCliRunContext(
   // dynamic suffix, not the cached prefix, for marker-free hook overrides — otherwise an idle
   // turn's prefix (O + identity) diverges from an active media turn's prefix (O) and breaks
   // prompt caching. Skip empty prompts and turns with no identity line, which need no boundary.
-  systemPrompt = appendModelIdentitySystemPrompt({
-    systemPrompt:
-      buildModelIdentityPromptLine(modelDisplay) && systemPromptWithReplacements.trim().length > 0
-        ? ensureSystemPromptCacheBoundary(systemPromptWithReplacements)
-        : systemPromptWithReplacements,
-    model: modelDisplay,
-  });
+  systemPrompt = isSideQuestion
+    ? systemPromptWithReplacements
+    : appendModelIdentitySystemPrompt({
+        systemPrompt:
+          buildModelIdentityPromptLine(modelDisplay) &&
+          systemPromptWithReplacements.trim().length > 0
+            ? ensureSystemPromptCacheBoundary(systemPromptWithReplacements)
+            : systemPromptWithReplacements,
+        model: modelDisplay,
+      });
   const systemPromptReport = buildSystemPromptReport({
     source: "run",
     generatedAt: Date.now(),
@@ -706,6 +751,38 @@ export async function prepareCliRunContext(
     },
   });
   const contextEngineConfig = params.config ?? getRuntimeConfig();
+  if (isSideQuestion) {
+    const preparedParams: RunCliAgentParams = {
+      ...params,
+      config: contextEngineConfig,
+      prompt: preparedPrompt,
+    };
+
+    return {
+      params: preparedParams,
+      effectiveAuthProfileId,
+      started,
+      workspaceDir,
+      cwd,
+      backendResolved,
+      preparedBackend: preparedBackendFinal,
+      reusableCliSession,
+      hadSessionFile: false,
+      contextEngineConfig,
+      modelId,
+      normalizedModel,
+      contextWindowInfo,
+      systemPrompt,
+      systemPromptReport,
+      claudeSkillsPluginArgs: claudeSkillsPlugin.args,
+      bootstrapPromptWarningLines: bootstrapPromptWarning.lines,
+      authEpoch,
+      authEpochVersion: CLI_AUTH_EPOCH_VERSION,
+      extraSystemPromptHash,
+      promptToolNamesHash,
+      cwdHash,
+    };
+  }
   try {
     ensureContextEnginesInitialized();
     const { sessionAgentId: contextEngineSessionAgentId } = resolveSessionAgentIds({
