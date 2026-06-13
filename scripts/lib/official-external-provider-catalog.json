@@ -179,7 +179,7 @@
                 "groupId": "acedatacloud",
                 "groupLabel": "Ace Data Cloud",
                 "groupHint": "API key",
-                "optionKey": "acedatacloudApiKey",
+                "optionKey": "acedataApiKey",
                 "cliFlag": "--acedata-api-key",
                 "cliOption": "--acedata-api-key <key>",
                 "cliDescription": "Ace Data Cloud API key (https://platform.acedata.cloud)",
