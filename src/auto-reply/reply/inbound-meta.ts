@@ -16,7 +16,7 @@ const MAX_UNTRUSTED_JSON_STRING_CHARS = 2_000;
 const MAX_UNTRUSTED_HISTORY_ENTRIES = 20;
 const MAX_UNTRUSTED_TRANSCRIPT_FIELD_CHARS = 500;
 const MESSAGE_TOOL_DELIVERY_HINT =
-  "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.";
+  "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send the final user-visible answer. Interim assistant text between tool calls is still shown to the user as progress narration, so narrate your work as you go.";
 
 /** Options for building the user-context prefix added to inbound prompts. */
 type InboundUserContextPrefixOptions = {
