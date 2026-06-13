@@ -808,7 +808,7 @@
   left: calc(100% + 8px);
   width: min(360px, calc(100vw - 96px));
   max-width: min(360px, calc(100vw - 96px));
-  z-index: 100;
+  z-index: var(--z-dropdown);
 }
 
 .sidebar-recent-session {

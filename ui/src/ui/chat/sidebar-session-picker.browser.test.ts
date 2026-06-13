@@ -63,7 +63,7 @@ function sidebarSessionPickerHtml(opts: { workspaceRail?: boolean } = {}) {
               ${iconSvg()}
             </button>
           </div>
-          <div class="chat-workspace-rail__path">/Users/nianjiu/openclaw</div>
+          <div class="chat-workspace-rail__path">/workspace/openclaw</div>
           <div class="chat-workspace-rail__list" role="list">
             <button class="chat-workspace-rail__file chat-workspace-rail__file--active" type="button" role="listitem">
               <span class="chat-workspace-rail__file-icon">${iconSvg()}</span>
