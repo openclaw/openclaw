@@ -315,12 +315,12 @@ export function resolvePdfModelConfigForTool(params: {
       const models = providerCfg?.models ?? [];
       const modelId = models
         .find((model) => {
-          const modelId = model?.id?.trim();
+          const candidateModelId = model?.id?.trim();
           return Boolean(
-            modelId &&
+            candidateModelId &&
             configuredModelInputSupportsImage({
               providerId,
-              modelId,
+              modelId: candidateModelId,
               input: model?.input,
             }),
           );
