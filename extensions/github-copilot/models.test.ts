@@ -90,7 +90,17 @@ describe("github-copilot model defaults", () => {
       const def = buildCopilotModelDefinition("claude-sonnet-4.6");
       expect(def.id).toBe("claude-sonnet-4.6");
       expect(def.api).toBe("anthropic-messages");
+      expect(def.compat).toBeUndefined();
     });
+
+    it.each(["claude-haiku-4.5", "claude-sonnet-4-5"])(
+      "disables eager tool streaming for Copilot Claude 4.5 model %s",
+      (modelId) => {
+        expect(buildCopilotModelDefinition(modelId).compat).toEqual({
+          supportsEagerToolInputStreaming: false,
+        });
+      },
+    );
 
     it("uses static metadata overrides for gpt-5.5 fallback rows", () => {
       const def = buildCopilotModelDefinition("gpt-5.5");
@@ -241,6 +251,12 @@ describe("resolveCopilotForwardCompatModel", () => {
     expect(result.name).toBe("gpt-5.4-mini");
     expect((result as unknown as Record<string, unknown>).api).toBe("openai-responses");
     expect((result as unknown as Record<string, unknown>).input).toEqual(["text", "image"]);
+  });
+
+  it("disables eager tool streaming for synthetic Copilot Claude 4.5 models", () => {
+    const result = requireResolvedModel(createMockCtx("claude-haiku-4.5"));
+    expect(result.api).toBe("anthropic-messages");
+    expect(result.compat).toEqual({ supportsEagerToolInputStreaming: false });
   });
 
   it("creates synthetic Gemini models with Chat Completions compatibility", () => {
@@ -620,6 +636,7 @@ describe("fetchCopilotModelCatalog", () => {
     const opus45 = out.find((m) => m.id === "claude-opus-4-5");
     expect(opus45?.thinkingLevelMap).toEqual({ xhigh: null, max: null });
     expect(opus45?.compat).toEqual({
+      supportsEagerToolInputStreaming: false,
       supportedReasoningEfforts: ["low", "medium", "high", "max"],
     });
   });
