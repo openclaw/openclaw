@@ -6,6 +6,28 @@ vi.mock("../send.js", () => ({
   sendMessageSlack: (...args: unknown[]) => sendMock(...args),
 }));
 
+const triggerInternalHookMock = vi.hoisted(() => vi.fn(async () => {}));
+const messageHookRunner = vi.hoisted(() => ({
+  hasHooks: vi.fn<(name: string) => boolean>(() => false),
+  runMessageSent: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/hook-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/hook-runtime")>();
+  return {
+    ...actual,
+    triggerInternalHook: triggerInternalHookMock,
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/plugin-runtime")>();
+  return {
+    ...actual,
+    getGlobalHookRunner: () => messageHookRunner,
+  };
+});
+
 let deliverReplies: typeof import("./replies.js").deliverReplies;
 let createSlackReplyDeliveryPlan: typeof import("./replies.js").createSlackReplyDeliveryPlan;
 let resolveDeliveredSlackReplyThreadTs: typeof import("./replies.js").resolveDeliveredSlackReplyThreadTs;
@@ -385,5 +407,193 @@ describe("deliverReplies reasoning suppression", () => {
     );
 
     expect(sendMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("deliverReplies message_sent hook", () => {
+  beforeAll(async () => {
+    ({ deliverReplies } = await import("./replies.js"));
+  });
+
+  beforeEach(() => {
+    sendMock.mockReset();
+    messageHookRunner.hasHooks.mockReset();
+    messageHookRunner.hasHooks.mockReturnValue(false);
+    messageHookRunner.runMessageSent.mockReset();
+    triggerInternalHookMock.mockReset();
+  });
+
+  it("emits message_sent with the delivered Slack message id after a text reply", async () => {
+    messageHookRunner.hasHooks.mockImplementation((name) => name === "message_sent");
+    sendMock.mockResolvedValue({ messageId: "1700000000.000100", channelId: "C123" });
+
+    await deliverReplies(
+      baseParams({
+        replies: [{ text: "shipped" }],
+        sessionKeyForInternalHooks: "agent:main:slack:channel:c123",
+        runId: "run-1",
+      }),
+    );
+
+    expect(messageHookRunner.runMessageSent).toHaveBeenCalledOnce();
+    expect(messageHookRunner.runMessageSent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "C123",
+        content: "shipped",
+        success: true,
+        messageId: "1700000000.000100",
+        sessionKey: "agent:main:slack:channel:c123",
+        runId: "run-1",
+      }),
+      expect.objectContaining({
+        channelId: "slack",
+        conversationId: "C123",
+        messageId: "1700000000.000100",
+        sessionKey: "agent:main:slack:channel:c123",
+        runId: "run-1",
+      }),
+    );
+  });
+
+  it("emits message_sent with success=false when text delivery throws", async () => {
+    messageHookRunner.hasHooks.mockImplementation((name) => name === "message_sent");
+    sendMock.mockRejectedValue(new Error("channel_not_found"));
+
+    await expect(deliverReplies(baseParams({ replies: [{ text: "boom" }] }))).rejects.toThrow(
+      /channel_not_found/,
+    );
+
+    expect(messageHookRunner.runMessageSent).toHaveBeenCalledOnce();
+    expect(messageHookRunner.runMessageSent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "C123",
+        content: "boom",
+        success: false,
+        error: expect.stringContaining("channel_not_found"),
+      }),
+      expect.objectContaining({ channelId: "slack" }),
+    );
+  });
+
+  it("does not emit the plugin hook when no listener observes message_sent", async () => {
+    sendMock.mockResolvedValue({ messageId: "1700000000.000101", channelId: "C123" });
+
+    await deliverReplies(baseParams({ replies: [{ text: "quiet" }] }));
+
+    expect(sendMock).toHaveBeenCalledOnce();
+    expect(messageHookRunner.runMessageSent).not.toHaveBeenCalled();
+  });
+
+  it("fires the internal message:sent hook when only a session key is supplied", async () => {
+    sendMock.mockResolvedValue({ messageId: "1700000000.000102", channelId: "C123" });
+
+    await deliverReplies(
+      baseParams({
+        replies: [{ text: "internal" }],
+        sessionKeyForInternalHooks: "agent:main:slack:channel:c123",
+      }),
+    );
+
+    expect(messageHookRunner.runMessageSent).not.toHaveBeenCalled();
+    expect(triggerInternalHookMock).toHaveBeenCalledOnce();
+  });
+
+  it("threads group context into the internal message:sent hook", async () => {
+    sendMock.mockResolvedValue({ messageId: "1700000000.000103", channelId: "C123" });
+
+    await deliverReplies(
+      baseParams({
+        replies: [{ text: "group reply" }],
+        sessionKeyForInternalHooks: "agent:main:slack:channel:c123",
+        mirrorIsGroup: true,
+        mirrorGroupId: "C123",
+      }),
+    );
+
+    expect(triggerInternalHookMock).toHaveBeenCalledOnce();
+    expect(triggerInternalHookMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: expect.objectContaining({ isGroup: true, groupId: "C123" }),
+      }),
+    );
+  });
+
+  it("emits message_sent for block-only replies with the delivered Slack id", async () => {
+    messageHookRunner.hasHooks.mockImplementation((name) => name === "message_sent");
+    sendMock.mockResolvedValue({ messageId: "1700000000.000104", channelId: "C123" });
+
+    await deliverReplies(
+      baseParams({
+        replies: [
+          {
+            text: "",
+            channelData: {
+              slack: {
+                blocks: [{ type: "divider" }],
+              },
+            },
+          },
+        ],
+      }),
+    );
+
+    expect(messageHookRunner.runMessageSent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: true,
+        messageId: "1700000000.000104",
+      }),
+      expect.anything(),
+    );
+  });
+
+  it("emits message_sent for media replies with the delivered Slack id", async () => {
+    messageHookRunner.hasHooks.mockImplementation((name) => name === "message_sent");
+    sendMock.mockResolvedValue({ messageId: "1700000000.000105", channelId: "C123" });
+
+    await deliverReplies(
+      baseParams({
+        replies: [{ text: "caption", mediaUrls: ["https://example.com/image.png"] }],
+      }),
+    );
+
+    expect(messageHookRunner.runMessageSent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "caption",
+        success: true,
+        messageId: "1700000000.000105",
+      }),
+      expect.objectContaining({ channelId: "slack" }),
+    );
+  });
+
+  it("keeps the caption as message_sent content for multi-media replies", async () => {
+    messageHookRunner.hasHooks.mockImplementation((name) => name === "message_sent");
+    sendMock
+      .mockResolvedValueOnce({ messageId: "1700000000.000106", channelId: "C123" })
+      .mockResolvedValueOnce({ messageId: "1700000000.000107", channelId: "C123" });
+
+    await deliverReplies(
+      baseParams({
+        replies: [
+          {
+            text: "caption",
+            mediaUrls: ["https://example.com/one.png", "https://example.com/two.png"],
+          },
+        ],
+      }),
+    );
+
+    expect(sendMock).toHaveBeenCalledTimes(2);
+    expect(requireSendCall(0)[1]).toBe("caption");
+    expect(requireSendCall(1)[1]).toBe("");
+    expect(messageHookRunner.runMessageSent).toHaveBeenCalledOnce();
+    expect(messageHookRunner.runMessageSent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "caption",
+        success: true,
+        messageId: "1700000000.000107",
+      }),
+      expect.objectContaining({ channelId: "slack" }),
+    );
   });
 });

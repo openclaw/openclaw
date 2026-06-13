@@ -62,6 +62,7 @@ import {
   isSlackInteractiveRepliesEnabled,
 } from "../../interactive-replies.js";
 import { SLACK_TEXT_LIMIT } from "../../limits.js";
+import { emitSlackMessageSentHooks } from "../../message-sent-hook.js";
 import {
   buildSlackProgressDraftBlocks,
   buildSlackProgressStreamCompletionChunks,
@@ -519,6 +520,38 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     ctx: prepared.ctxPayload,
   });
   const sourceRepliesAreToolOnly = sourceReplyDeliveryMode === "message_tool_only";
+  let messageSentRunId: string | undefined;
+  const buildMessageSentHookContext = () => ({
+    sessionKeyForInternalHooks: route.sessionKey,
+    ...(messageSentRunId ? { runId: messageSentRunId } : {}),
+    mirrorIsGroup: prepared.isRoomish,
+    ...(prepared.isRoomish ? { mirrorGroupId: message.channel } : {}),
+  });
+  const buildFinalMessageSentHookContext = () => {
+    const context = buildMessageSentHookContext();
+    return {
+      sessionKeyForInternalHooks: context.sessionKeyForInternalHooks,
+      ...(context.runId ? { runId: context.runId } : {}),
+      isGroup: context.mirrorIsGroup,
+      ...(context.mirrorGroupId ? { groupId: context.mirrorGroupId } : {}),
+    };
+  };
+  const emitSlackFinalMessageSent = (params: {
+    content: string;
+    success: boolean;
+    error?: string;
+    messageId?: string;
+  }) => {
+    emitSlackMessageSentHooks({
+      ...buildFinalMessageSentHookContext(),
+      to: prepared.replyTarget,
+      accountId: account.accountId,
+      content: params.content,
+      success: params.success,
+      ...(params.error ? { error: params.error } : {}),
+      ...(params.messageId ? { messageId: params.messageId } : {}),
+    });
+  };
 
   const reactionMessageTs = prepared.ackReactionMessageTs;
   const messageTs = message.ts ?? message.event_ts;
@@ -703,6 +736,13 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   let usedBlockReplyThreadTs: string | undefined;
   let observedReplyDelivery = false;
   let observedFinalReplyDelivery = false;
+  let streamedContentForSentHook = "";
+  let streamedFinalIncludedForSentHook = false;
+  const appendStreamedContentForSentHook = (text: string) => {
+    streamedContentForSentHook = streamedContentForSentHook
+      ? `${streamedContentForSentHook}\n${text}`
+      : text;
+  };
   const deliveryTracker = createSlackEventDeliveryTracker();
   const resolveDeliveryThreadTs = (params: {
     kind: ReplyDispatchKind;
@@ -754,6 +794,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         replyToMode: replyDeliveryMode,
         ...(slackIdentity ? { identity: slackIdentity } : {}),
         ...(slackMessageMetadata ? { metadata: slackMessageMetadata } : {}),
+        ...buildMessageSentHookContext(),
       });
       markSlackStreamFallbackDelivered(session);
       observedReplyDelivery = true;
@@ -807,6 +848,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       replyToMode: replyDeliveryMode,
       ...(slackIdentity ? { identity: slackIdentity } : {}),
       ...(slackMessageMetadata ? { metadata: slackMessageMetadata } : {}),
+      ...buildMessageSentHookContext(),
     });
     observedReplyDelivery = true;
     if (params.kind === "final") {
@@ -942,6 +984,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             observedFinalReplyDelivery = true;
           }
         }
+        if (params.kind === "final" && text) {
+          streamedFinalIncludedForSentHook = true;
+        }
+        appendStreamedContentForSentHook(text);
         rememberDeliveredThreadTs(params.kind, streamThreadTs);
         replyPlan.markSent();
         deliveryTracker.markDelivered({
@@ -1009,6 +1055,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           observedFinalReplyDelivery = true;
         }
       }
+      if (params.kind === "final" && text) {
+        streamedFinalIncludedForSentHook = true;
+      }
+      appendStreamedContentForSentHook(text);
       deliveryTracker.markDelivered({
         kind: params.kind,
         payload: params.payload,
@@ -1154,6 +1204,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         observedFinalReplyDelivery = true;
         observedReplyDelivery = true;
         replyPlan.markSent();
+        emitSlackFinalMessageSent({
+          content: trimmedFinalText,
+          success: true,
+          messageId,
+        });
         await deliverNormally({
           payload: buildTtsSupplementMediaPayload(payload),
           kind: info.kind,
@@ -1214,7 +1269,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           draftPreviewCommitted = true;
           observedFinalReplyDelivery = true;
         },
-        onPreviewFinalized: (_preview) => {
+        onPreviewFinalized: (preview) => {
           // The preview edit promotes the draft message into the final answer.
           // Later same-turn payloads must not let fallback cleanup clear it.
           draftPreviewCommitted = true;
@@ -1222,6 +1277,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           const finalThreadTs = usedReplyThreadTs ?? statusThreadTs;
           observedReplyDelivery = true;
           replyPlan.markSent();
+          emitSlackFinalMessageSent({
+            content: trimmedFinalText,
+            success: true,
+            messageId: preview.messageId,
+          });
           deliveryTracker.markDelivered({ kind: info.kind, payload, threadTs: finalThreadTs });
         },
         buildSupplementalPayload: () =>
@@ -1660,6 +1720,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         hasRepliedRef,
         disableBlockStreaming,
         onModelSelected,
+        onAgentRunStart: (runId) => {
+          messageSentRunId = runId;
+        },
         suppressDefaultToolProgressMessages: suppressDefaultToolProgressMessages ? true : undefined,
         onPartialReply: useStreaming
           ? undefined
@@ -1816,15 +1879,29 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       if (completionChunks?.length) {
         nativeProgressCompletionSent = true;
       }
-      await stopSlackStream({
+      const stopResult = await stopSlackStream({
         session: finalStream,
         ...(completionChunks?.length ? { chunks: completionChunks } : {}),
         ...(slackMessageMetadata ? { metadata: slackMessageMetadata } : {}),
       });
+      if (streamedFinalIncludedForSentHook && streamedContentForSentHook) {
+        emitSlackFinalMessageSent({
+          content: streamedContentForSentHook,
+          success: true,
+          ...(stopResult?.messageId ? { messageId: stopResult.messageId } : {}),
+        });
+      }
     } catch (err) {
       if (err instanceof SlackStreamNotDeliveredError) {
         streamFallbackDelivered = await deliverPendingStreamFallback(finalStream, err);
       } else {
+        if (streamedFinalIncludedForSentHook && streamedContentForSentHook) {
+          emitSlackFinalMessageSent({
+            content: streamedContentForSentHook,
+            success: false,
+            error: formatSlackError(err),
+          });
+        }
         runtime.error?.(danger(`slack-stream: failed to stop stream: ${formatSlackError(err)}`));
       }
     }

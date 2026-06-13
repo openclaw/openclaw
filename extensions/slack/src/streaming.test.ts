@@ -13,7 +13,7 @@ import {
 } from "./streaming.js";
 
 type AppendImpl = () => Promise<unknown>;
-type StopImpl = (args?: unknown) => Promise<void>;
+type StopImpl = (args?: unknown) => Promise<unknown>;
 
 function makeSession(params: { appendImpl?: AppendImpl; stopImpl?: StopImpl }): SlackStreamSession {
   return {
@@ -94,7 +94,7 @@ describe("stopSlackStream finalize error handling", () => {
     await appendSlackStream({ session, text: "some text that Slack saw" });
     expect(session.delivered).toBe(true);
 
-    await expect(stopSlackStream({ session })).resolves.toBeUndefined();
+    await expect(stopSlackStream({ session })).resolves.toEqual({});
     expect(session.stopped).toBe(true);
   });
 
@@ -202,7 +202,7 @@ describe("stopSlackStream finalize error handling", () => {
       },
     });
     await appendSlackStream({ session, text: "chars" });
-    await expect(stopSlackStream({ session })).resolves.toBeUndefined();
+    await expect(stopSlackStream({ session })).resolves.toEqual({});
     expect(session.stopped).toBe(true);
   });
 
@@ -239,7 +239,7 @@ describe("stopSlackStream finalize error handling", () => {
       delivered: false,
       pendingText: "",
     };
-    await expect(stopSlackStream({ session })).resolves.toBeUndefined();
+    await expect(stopSlackStream({ session })).resolves.toEqual({});
     expect(stop).not.toHaveBeenCalled();
   });
 
@@ -253,6 +253,40 @@ describe("stopSlackStream finalize error handling", () => {
     await stopSlackStream({ session });
     expect(session.delivered).toBe(true);
     expect(session.pendingText).toBe("");
+  });
+
+  it("returns the finalized message ts as messageId on successful stop()", async () => {
+    const session = makeSession({
+      appendImpl: async () => null,
+      stopImpl: async () => ({ ok: true, ts: "1700000000.500100" }),
+    });
+    await appendSlackStream({ session, text: "short" });
+
+    await expect(stopSlackStream({ session })).resolves.toEqual({
+      messageId: "1700000000.500100",
+    });
+  });
+
+  it("falls back to message.ts when stop omits top-level ts", async () => {
+    const session = makeSession({
+      appendImpl: async () => null,
+      stopImpl: async () => ({ ok: true, message: { ts: "1700000000.500200" } }),
+    });
+    await appendSlackStream({ session, text: "short" });
+
+    await expect(stopSlackStream({ session })).resolves.toEqual({
+      messageId: "1700000000.500200",
+    });
+  });
+
+  it("returns an empty result when stop succeeds without a ts", async () => {
+    const session = makeSession({
+      appendImpl: async () => null,
+      stopImpl: async () => ({ ok: true }),
+    });
+    await appendSlackStream({ session, text: "short" });
+
+    await expect(stopSlackStream({ session })).resolves.toEqual({});
   });
 
   it("converts a start-time flush rejection into a pending-text fallback error", async () => {

@@ -79,6 +79,10 @@ type StopSlackStreamParams = {
   metadata?: MessageMetadata;
 };
 
+export type StopSlackStreamResult = {
+  messageId?: string;
+};
+
 /**
  * Thrown when Slack rejects a stream flush/finalize with a recipient-resolution
  * error (see {@link BENIGN_SLACK_FINALIZE_ERROR_CODES}) while text is still
@@ -236,12 +240,14 @@ export async function appendSlackStream(params: AppendSlackStreamParams): Promis
  *
  * All other errors propagate unchanged.
  */
-export async function stopSlackStream(params: StopSlackStreamParams): Promise<void> {
+export async function stopSlackStream(
+  params: StopSlackStreamParams,
+): Promise<StopSlackStreamResult> {
   const { session, text, chunks, metadata } = params;
 
   if (session.stopped) {
     logVerbose("slack-stream: stream already stopped, ignoring duplicate stop");
-    return;
+    return {};
   }
 
   session.stopped = true;
@@ -256,7 +262,7 @@ export async function stopSlackStream(params: StopSlackStreamParams): Promise<vo
   );
 
   try {
-    await session.streamer.stop(
+    const stopResponse = await session.streamer.stop(
       text || chunks?.length || metadata
         ? {
             ...(text ? { markdown_text: text } : {}),
@@ -267,6 +273,9 @@ export async function stopSlackStream(params: StopSlackStreamParams): Promise<vo
     );
     session.delivered = true;
     session.pendingText = "";
+    logVerbose("slack-stream: stream stopped");
+    const messageId = readSlackStreamStopMessageId(stopResponse);
+    return messageId ? { messageId } : {};
   } catch (err) {
     if (isBenignSlackFinalizeError(err)) {
       const code = extractSlackErrorCode(err) ?? "unknown";
@@ -279,13 +288,29 @@ export async function stopSlackStream(params: StopSlackStreamParams): Promise<vo
         logVerbose(
           `slack-stream: finalize rejected by Slack (${code}); prior appends delivered, treating stream as stopped`,
         );
-        return;
+        return {};
       }
     }
     throw err;
   }
+}
 
-  logVerbose("slack-stream: stream stopped");
+function readSlackStreamStopMessageId(value: unknown): string | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  if (typeof record.ts === "string" && record.ts.trim()) {
+    return record.ts;
+  }
+  const message = record.message;
+  if (message && typeof message === "object") {
+    const messageTs = (message as Record<string, unknown>).ts;
+    if (typeof messageTs === "string" && messageTs.trim()) {
+      return messageTs;
+    }
+  }
+  return undefined;
 }
 
 // ---------------------------------------------------------------------------
