@@ -756,7 +756,7 @@ async function resolveToolCallTool(
   try {
     let tool = currentContext.tools?.find((t) => t.name === toolCall.name);
     if (!tool) {
-      tool = await config.resolveDeferredTool?.(
+      const resolvedTool = await config.resolveDeferredTool?.(
         {
           assistantMessage,
           toolCall,
@@ -764,6 +764,13 @@ async function resolveToolCallTool(
         },
         signal,
       );
+      // Keep execution and lifecycle/audit identity aligned with the original model call.
+      if (resolvedTool && resolvedTool.name !== toolCall.name) {
+        throw new Error(
+          `Deferred tool resolver returned "${resolvedTool.name}" for requested "${toolCall.name}"`,
+        );
+      }
+      tool = resolvedTool;
       if (tool) {
         // Make the recovered tool visible to later provider continuations in this run.
         currentContext.tools = [...(currentContext.tools ?? []), tool];

@@ -385,6 +385,94 @@ describe("runAgentLoop deferred tool hydration", () => {
     );
   });
 
+  it("rejects deferred tools whose names differ from the requested call", async () => {
+    const execute = vi.fn(
+      async (): Promise<AgentToolResult<unknown>> => ({
+        content: [{ type: "text", text: "wrong tool ran" }],
+        details: { ok: true },
+      }),
+    );
+    const mismatchedTool: AgentTool = {
+      name: "other_deferred",
+      label: "other_deferred",
+      description: "Different deferred tool",
+      parameters: Type.Object({}, { additionalProperties: false }),
+      execute,
+    };
+    const contexts: Context[] = [];
+    let streamCalls = 0;
+    const streamFn: StreamFn = (_model, context) => {
+      contexts.push({ ...context, tools: context.tools?.slice() });
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        streamCalls += 1;
+        const message =
+          streamCalls === 1
+            ? {
+                role: "assistant" as const,
+                content: [
+                  {
+                    type: "toolCall" as const,
+                    id: "call-requested-deferred",
+                    name: "requested_deferred",
+                    arguments: {},
+                  },
+                ],
+                api: "faux",
+                provider: "faux",
+                model: "faux-1",
+                usage: TEST_USAGE,
+                stopReason: "toolUse" as const,
+                timestamp: Date.now(),
+              }
+            : {
+                role: "assistant" as const,
+                content: [{ type: "text" as const, text: "done" }],
+                api: "faux",
+                provider: "faux",
+                model: "faux-1",
+                usage: TEST_USAGE,
+                stopReason: "stop" as const,
+                timestamp: Date.now(),
+              };
+        stream.push({ type: "done", reason: message.stopReason, message });
+      });
+      return stream;
+    };
+
+    const messages = await runAgentLoop(
+      [{ role: "user", content: "call requested tool", timestamp: Date.now() }],
+      { systemPrompt: "test", messages: [], tools: [] },
+      {
+        model,
+        convertToLlm: (agentMessages: AgentMessage[]) => agentMessages as never,
+        resolveDeferredTool: () => mismatchedTool,
+      },
+      (_event: AgentEvent) => {},
+      undefined,
+      streamFn,
+    );
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(contexts.map((context) => context.tools?.map((tool) => tool.name) ?? [])).toEqual([
+      [],
+      [],
+    ]);
+    expect(messages).toContainEqual(
+      expect.objectContaining({
+        role: "toolResult",
+        toolName: "requested_deferred",
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: 'Deferred tool resolver returned "other_deferred" for requested "requested_deferred"',
+          },
+        ],
+      }),
+    );
+  });
+
   it("hydrates sequential deferred tools before choosing the executor", async () => {
     let activeExecutions = 0;
     let maxActiveExecutions = 0;
