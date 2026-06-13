@@ -88,6 +88,12 @@ describe("config-eval helpers", () => {
     expect(isConfigPathTruthyWithDefaults(config, "browser.other", {})).toBe(false);
   });
 
+  it("does not use inherited defaults for blocked config paths", () => {
+    expect(isConfigPathTruthyWithDefaults({}, "constructor", {})).toBe(false);
+    expect(isConfigPathTruthyWithDefaults({}, "__proto__.enabled", {})).toBe(false);
+    expect(isConfigPathTruthyWithDefaults({}, "prototype.enabled", {})).toBe(false);
+  });
+
   it("returns the active runtime platform", () => {
     setPlatform("darwin");
     expect(resolveRuntimePlatform()).toBe("darwin");
