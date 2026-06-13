@@ -188,7 +188,7 @@ function isKnownNonSentDeliveryStatus(status: string): boolean {
   );
 }
 
-function hasSentPayloadOutcomeEvidence(value: unknown): boolean {
+function hasSentPayloadOutcomeEvidence(value: unknown, depth: number): boolean {
   if (!Array.isArray(value)) {
     return false;
   }
@@ -207,14 +207,18 @@ function hasSentPayloadOutcomeEvidence(value: unknown): boolean {
     const results = outcome.results;
     return (
       hasPositiveNumber(outcome.resultCount) ||
-      (Array.isArray(results) && results.length > 0) ||
+      hasResultArrayEvidence(results, depth) ||
       hasMessageIdEvidence(outcome)
     );
   });
 }
 
-function hasResultArrayEvidence(value: unknown): boolean {
-  return Array.isArray(value) && value.length > 0;
+function hasResultArrayEvidence(value: unknown, depth: number): boolean {
+  return (
+    Array.isArray(value) &&
+    depth < 3 &&
+    value.some((entry) => hasCommittedMessagingToolResultDetailsAtDepth(entry, depth + 1))
+  );
 }
 
 function hasInternalSourceReplyEvidence(details: Record<string, unknown>): boolean {
@@ -249,11 +253,14 @@ function hasCommittedMessagingToolResultDetailsAtDepth(details: unknown, depth: 
   ) {
     return false;
   }
+  if (status === "sent") {
+    return true;
+  }
   return (
     hasMessageIdEvidence(record) ||
     hasPositiveNumber(record.resultCount) ||
-    hasResultArrayEvidence(record.results) ||
-    hasSentPayloadOutcomeEvidence(record.payloadOutcomes) ||
+    hasResultArrayEvidence(record.results, depth) ||
+    hasSentPayloadOutcomeEvidence(record.payloadOutcomes, depth) ||
     hasInternalSourceReplyEvidence(record) ||
     (depth < 3 && hasCommittedMessagingToolResultDetailsAtDepth(record.result, depth + 1))
   );

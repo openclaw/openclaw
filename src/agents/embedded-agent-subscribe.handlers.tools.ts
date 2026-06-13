@@ -1359,7 +1359,7 @@ export async function handleToolExecutionEnd(
     ctx.state.pendingMessagingTargets.delete(toolCallId);
   }
   if (hasCommittedMessagingSend) {
-    const committedTarget = executedMessagingTarget ?? pendingTarget;
+    const committedTarget = executedMessagingTarget;
     if (committedTarget) {
       ctx.state.messagingToolSentTargets.push({
         ...committedTarget,
@@ -1383,7 +1383,7 @@ export async function handleToolExecutionEnd(
       isDeliveredMessageToolOnlySourceReplyResult({
         sourceReplyDeliveryMode: ctx.params.sourceReplyDeliveryMode,
         toolName,
-        args: startArgs,
+        args: executedArgs,
         result,
         isError: isToolError,
       })

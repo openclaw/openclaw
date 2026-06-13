@@ -4585,6 +4585,18 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         status: "partial_failed",
       }),
     ).toBe(false);
+    expect(
+      hasCommittedMessagingToolResultDetails({
+        status: "partial_failed",
+        results: [{ status: "failed", error: "delivery failed" }],
+      }),
+    ).toBe(false);
+    expect(
+      hasCommittedMessagingToolResultDetails({
+        status: "partial_failed",
+        results: [{ status: "sent" }],
+      }),
+    ).toBe(true);
   });
 
   it("does not treat metadata-only messaging targets as delivery evidence", () => {

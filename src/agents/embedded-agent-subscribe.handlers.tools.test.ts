@@ -1921,6 +1921,10 @@ describe("messaging tool media URL tracking", () => {
       ["tool-no-details", {}],
       ["tool-ok-false", { details: { ok: false } }],
       ["tool-unknown-status", { details: { status: "unknown" } }],
+      [
+        "tool-failed-results",
+        { details: { status: "partial_failed", results: [{ status: "failed" }] } },
+      ],
       ["tool-dry-run-ok", { details: { ok: true, dryRun: true } }],
       ["tool-dry-run-sent", { details: { deliveryStatus: "sent", dryRun: true } }],
     ] satisfies Array<[string, ToolExecutionEndEvent["result"]]>) {
@@ -1987,6 +1991,71 @@ describe("messaging tool media URL tracking", () => {
       to: "channel:adjusted",
       text: "adjusted text",
     });
+  });
+
+  it("uses adjusted before-tool-call params when classifying source replies", async () => {
+    const explicitRoute = createTestContext().ctx;
+    explicitRoute.params.sourceReplyDeliveryMode = "message_tool_only";
+    await handleToolExecutionStart(explicitRoute, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-source-reply-adjusted-explicit",
+      args: {
+        action: "send",
+        content: "original implicit reply",
+      },
+    });
+    recordAdjustedParamsForToolCall(
+      "tool-source-reply-adjusted-explicit",
+      {
+        action: "send",
+        to: "channel:external",
+        content: "adjusted external reply",
+      },
+      explicitRoute.params.runId,
+    );
+    await handleToolExecutionEnd(explicitRoute, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-source-reply-adjusted-explicit",
+      isError: false,
+      result: committedMessageToolResult(),
+    });
+    expect(explicitRoute.state.messageToolOnlySourceReplyDelivered).toBe(false);
+    expectRecordFields(requireSingleMessagingTarget(explicitRoute), "messaging target", {
+      to: "channel:external",
+      text: "adjusted external reply",
+    });
+
+    const implicitRoute = createTestContext().ctx;
+    implicitRoute.params.sourceReplyDeliveryMode = "message_tool_only";
+    await handleToolExecutionStart(implicitRoute, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-source-reply-adjusted-implicit",
+      args: {
+        action: "send",
+        to: "channel:external",
+        content: "original external reply",
+      },
+    });
+    recordAdjustedParamsForToolCall(
+      "tool-source-reply-adjusted-implicit",
+      {
+        action: "send",
+        content: "adjusted implicit reply",
+      },
+      implicitRoute.params.runId,
+    );
+    await handleToolExecutionEnd(implicitRoute, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-source-reply-adjusted-implicit",
+      isError: false,
+      result: committedMessageToolResult(),
+    });
+    expect(implicitRoute.state.messageToolOnlySourceReplyDelivered).toBe(true);
+    expect(implicitRoute.state.messagingToolSentTargets).toHaveLength(0);
   });
 
   it("commits message sends that use the text alias", async () => {
