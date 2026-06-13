@@ -985,6 +985,7 @@ describe("renderWorkboard", () => {
 
     state.pollRefreshInProgress = false;
     state.lifecycleTasksPrepared = true;
+    state.lifecycleTasksPreparedAt = Date.now();
     render(
       renderWorkboard({
         host,
