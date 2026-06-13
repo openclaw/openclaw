@@ -1376,6 +1376,70 @@ process.on("SIGINT", shutdown);`,
     expect(manager.listSessionIds()).not.toContain("session-a");
   });
 
+  it("reaps the prior runtime when a sessionKey rebinds to a new sessionId", async () => {
+    const disposed: string[] = [];
+    const createRuntime: RuntimeFactory = (params) => ({
+      ...makeRuntime([{ toolName: "bundle_probe", description: "Bundle MCP probe" }]),
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      workspaceDir: params.workspaceDir,
+      configFingerprint: params.configFingerprint ?? "fingerprint",
+      dispose: async () => {
+        disposed.push(params.sessionId);
+      },
+    });
+    const manager = testing.createSessionMcpRuntimeManager({ createRuntime });
+
+    const rolled = await manager.getOrCreate({
+      sessionId: "session-old",
+      sessionKey: "agent:test:rollover",
+      workspaceDir: "/workspace",
+    });
+    const fresh = await manager.getOrCreate({
+      sessionId: "session-new",
+      sessionKey: "agent:test:rollover",
+      workspaceDir: "/workspace",
+    });
+
+    expect(fresh).not.toBe(rolled);
+    expect(disposed).toEqual(["session-old"]);
+    expect(manager.listSessionIds()).toEqual(["session-new"]);
+    expect(manager.resolveSessionId("agent:test:rollover")).toBe("session-new");
+  });
+
+  it("keeps a still-leased prior runtime alive when its sessionKey rebinds", async () => {
+    const disposed: string[] = [];
+    const createRuntime: RuntimeFactory = (params) => ({
+      ...makeRuntime([{ toolName: "bundle_probe", description: "Bundle MCP probe" }]),
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      workspaceDir: params.workspaceDir,
+      configFingerprint: params.configFingerprint ?? "fingerprint",
+      get activeLeases() {
+        return params.sessionId === "session-busy" ? 1 : 0;
+      },
+      dispose: async () => {
+        disposed.push(params.sessionId);
+      },
+    });
+    const manager = testing.createSessionMcpRuntimeManager({ createRuntime });
+
+    await manager.getOrCreate({
+      sessionId: "session-busy",
+      sessionKey: "agent:test:busy-rollover",
+      workspaceDir: "/workspace",
+    });
+    await manager.getOrCreate({
+      sessionId: "session-next",
+      sessionKey: "agent:test:busy-rollover",
+      workspaceDir: "/workspace",
+    });
+
+    expect(disposed).toEqual([]);
+    expect(manager.listSessionIds()).toEqual(["session-busy", "session-next"]);
+    expect(manager.resolveSessionId("agent:test:busy-rollover")).toBe("session-next");
+  });
+
   it("peeks existing runtimes and populated catalogs without creating new runtimes", async () => {
     let catalogReady = false;
     const createRuntime: RuntimeFactory = (params) => {

@@ -945,6 +945,21 @@ function createSessionMcpRuntimeManager(
     idleSweepTimer = undefined;
   };
 
+  const disposeSessionById = async (sessionId: string): Promise<void> => {
+    const inFlight = createInFlight.get(sessionId);
+    createInFlight.delete(sessionId);
+    let runtime = runtimesBySessionId.get(sessionId);
+    if (!runtime && inFlight) {
+      runtime = await inFlight.promise.catch(() => undefined);
+    }
+    runtimesBySessionId.delete(sessionId);
+    idleTtlMsBySessionId.delete(sessionId);
+    forgetSessionKeysForSessionId(sessionId);
+    if (runtime) {
+      await runtime.dispose();
+    }
+  };
+
   return {
     async getOrCreate(params) {
       const idleTtlMs = resolveSessionMcpRuntimeIdleTtlMs(params.cfg);
@@ -956,7 +971,17 @@ function createSessionMcpRuntimeManager(
         ensureIdleSweepTimer();
       }
       if (params.sessionKey) {
+        const previousSessionId = sessionIdBySessionKey.get(params.sessionKey);
         sessionIdBySessionKey.set(params.sessionKey, params.sessionId);
+        // A rolled-over sessionKey strands its prior runtime until the idle TTL; reap the
+        // registered, unleased one now so file-locking MCP servers release before reconnect.
+        // Leave an in-flight prior creation alone so a concurrent same-key getOrCreate keeps it.
+        if (previousSessionId && previousSessionId !== params.sessionId) {
+          const previousRuntime = runtimesBySessionId.get(previousSessionId);
+          if (previousRuntime && (previousRuntime.activeLeases ?? 0) === 0) {
+            await disposeSessionById(previousSessionId);
+          }
+        }
       }
       const { fingerprint: nextFingerprint } = loadSessionMcpConfig({
         workspaceDir: params.workspaceDir,
@@ -1030,20 +1055,7 @@ function createSessionMcpRuntimeManager(
       return sessionId ? runtimesBySessionId.get(sessionId) : undefined;
     },
     async disposeSession(sessionId) {
-      const inFlight = createInFlight.get(sessionId);
-      createInFlight.delete(sessionId);
-      let runtime = runtimesBySessionId.get(sessionId);
-      if (!runtime && inFlight) {
-        runtime = await inFlight.promise.catch(() => undefined);
-      }
-      runtimesBySessionId.delete(sessionId);
-      idleTtlMsBySessionId.delete(sessionId);
-      if (!runtime) {
-        forgetSessionKeysForSessionId(sessionId);
-        return;
-      }
-      forgetSessionKeysForSessionId(sessionId);
-      await runtime.dispose();
+      await disposeSessionById(sessionId);
     },
     async disposeAll() {
       clearIdleSweepTimer();
