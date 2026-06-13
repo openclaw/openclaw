@@ -452,7 +452,7 @@ describe("memory tools", () => {
     expect(getMemorySearchManagerMockCalls()).toBe(1);
   });
 
-  it("does not cooldown primary memory when a corpus=all wiki supplement stalls", async () => {
+  it("returns partial primary memory results when a corpus=all wiki supplement stalls", async () => {
     vi.useFakeTimers();
     try {
       let searchCalls = 0;
@@ -481,10 +481,28 @@ describe("memory tools", () => {
       });
       await vi.advanceTimersByTimeAsync(15_000);
       const stalledAllResult = await stalledAllResultPromise;
-      expectUnavailableMemorySearchDetails(stalledAllResult.details, {
+      const stalledDetails = stalledAllResult.details as {
+        results: Array<{ corpus: string; path: string }>;
+        partial?: boolean;
+        error?: string;
+        warning?: string;
+        action?: string;
+        debug?: { partial?: { failedPhase?: string; error?: string } };
+      };
+      expect(stalledDetails.results.map((entry) => [entry.corpus, entry.path])).toEqual([
+        ["memory", "MEMORY.md"],
+      ]);
+      expect(stalledDetails.partial).toBe(true);
+      expect(stalledDetails.error).toBe("memory_search timed out after 15s");
+      expect(stalledDetails.warning).toBe(
+        "Memory search returned partial results because a supplemental corpus did not finish.",
+      );
+      expect(stalledDetails.action).toBe(
+        'Retry with corpus="memory" or corpus="wiki" for a narrower search, or increase plugins.entries.memory-core.config.tools.memorySearch.timeoutMs for slower hosts.',
+      );
+      expect(stalledDetails.debug?.partial).toEqual({
+        failedPhase: "supplement",
         error: "memory_search timed out after 15s",
-        warning: "Memory search is unavailable due to an embedding/provider error.",
-        action: "Check embedding provider configuration and retry memory_search.",
       });
 
       const memoryResult = await tool.execute("call_memory_after_stalled_wiki", {
@@ -531,8 +549,9 @@ describe("memory tools", () => {
       const stalledAllResult = await stalledAllResultPromise;
       expectUnavailableMemorySearchDetails(stalledAllResult.details, {
         error: "memory_search timed out after 15s",
-        warning: "Memory search is unavailable due to an embedding/provider error.",
-        action: "Check embedding provider configuration and retry memory_search.",
+        warning: "Memory search timed out before the tool deadline.",
+        action:
+          "Retry with a narrower corpus/query or after Gateway pressure clears; if this recurs, increase plugins.entries.memory-core.config.tools.memorySearch.timeoutMs.",
       });
 
       const wikiOnlyResult = await tool.execute("call_all_after_stalled_memory", {

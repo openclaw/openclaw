@@ -145,8 +145,9 @@ describe("memory_search unavailable payloads", () => {
       const result = await resultPromise;
       expectUnavailableMemorySearchDetails(result.details, {
         error: "memory_search timed out after 15s",
-        warning: "Memory search is unavailable due to an embedding/provider error.",
-        action: "Check embedding provider configuration and retry memory_search.",
+        warning: "Memory search timed out before the tool deadline.",
+        action:
+          "Retry with a narrower corpus/query or after Gateway pressure clears; if this recurs, increase plugins.entries.memory-core.config.tools.memorySearch.timeoutMs.",
       });
     } finally {
       vi.useRealTimers();
@@ -171,18 +172,63 @@ describe("memory_search unavailable payloads", () => {
       const result = await resultPromise;
       expectUnavailableMemorySearchDetails(result.details, {
         error: "memory_search timed out after 15s",
-        warning: "Memory search is unavailable due to an embedding/provider error.",
-        action: "Check embedding provider configuration and retry memory_search.",
+        warning: "Memory search timed out before the tool deadline.",
+        action:
+          "Retry with a narrower corpus/query or after Gateway pressure clears; if this recurs, increase plugins.entries.memory-core.config.tools.memorySearch.timeoutMs.",
       });
       // The deadline must abort the orphaned search, not just race past it.
       expect(searchSignal?.aborted).toBe(true);
       const cooldownResult = await tool.execute("search-cooldown", { query: "hello again" });
       expectUnavailableMemorySearchDetails(cooldownResult.details, {
         error: "memory_search timed out after 15s",
-        warning: "Memory search is unavailable due to an embedding/provider error.",
-        action: "Check embedding provider configuration and retry memory_search.",
+        warning: "Memory search timed out before the tool deadline.",
+        action:
+          "Retry with a narrower corpus/query or after Gateway pressure clears; if this recurs, increase plugins.entries.memory-core.config.tools.memorySearch.timeoutMs.",
       });
       expect(searchCalls).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("honors the configured memory_search tool deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      let searchSignal: AbortSignal | undefined;
+      setMemorySearchImpl(async (opts) => {
+        searchSignal = opts?.signal;
+        return await new Promise(() => {});
+      });
+      const tool = createMemorySearchToolOrThrow({
+        config: {
+          agents: { list: [{ id: "main", default: true }] },
+          plugins: {
+            entries: {
+              "memory-core": {
+                config: {
+                  tools: {
+                    memorySearch: {
+                      timeoutMs: 5_000,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+
+      const resultPromise = tool.execute("configured-timeout", { query: "hello" });
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      const result = await resultPromise;
+      expectUnavailableMemorySearchDetails(result.details, {
+        error: "memory_search timed out after 5s",
+        warning: "Memory search timed out before the tool deadline.",
+        action:
+          "Retry with a narrower corpus/query or after Gateway pressure clears; if this recurs, increase plugins.entries.memory-core.config.tools.memorySearch.timeoutMs.",
+      });
+      expect(searchSignal?.aborted).toBe(true);
     } finally {
       vi.useRealTimers();
     }
@@ -209,8 +255,9 @@ describe("memory_search unavailable payloads", () => {
       const result = await resultPromise;
       expectUnavailableMemorySearchDetails(result.details, {
         error: "memory_search timed out after 15s",
-        warning: "Memory search is unavailable due to an embedding/provider error.",
-        action: "Check embedding provider configuration and retry memory_search.",
+        warning: "Memory search timed out before the tool deadline.",
+        action:
+          "Retry with a narrower corpus/query or after Gateway pressure clears; if this recurs, increase plugins.entries.memory-core.config.tools.memorySearch.timeoutMs.",
       });
     } finally {
       vi.useRealTimers();

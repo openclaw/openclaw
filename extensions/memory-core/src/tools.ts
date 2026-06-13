@@ -44,7 +44,9 @@ type MemorySearchToolResult =
   | (MemorySearchResult & { corpus: MemorySource })
   | MemoryCorpusSearchResult;
 
-const MEMORY_SEARCH_TOOL_TIMEOUT_MS = 15_000;
+const DEFAULT_MEMORY_SEARCH_TOOL_TIMEOUT_MS = 15_000;
+const MIN_MEMORY_SEARCH_TOOL_TIMEOUT_MS = 1_000;
+const MAX_MEMORY_SEARCH_TOOL_TIMEOUT_MS = 120_000;
 const MEMORY_SEARCH_TOOL_COOLDOWN_MS = 60_000;
 
 const memorySearchToolCooldowns = new Map<string, { until: number; error: string }>();
@@ -80,6 +82,23 @@ export const testing = {
     memorySearchToolCooldowns.clear();
   },
 } as const;
+
+function clampMemorySearchToolTimeoutMs(value: number): number {
+  return Math.min(
+    MAX_MEMORY_SEARCH_TOOL_TIMEOUT_MS,
+    Math.max(MIN_MEMORY_SEARCH_TOOL_TIMEOUT_MS, Math.round(value)),
+  );
+}
+
+function resolveMemorySearchToolTimeoutMs(cfg: OpenClawConfig): number {
+  const pluginConfig = resolveMemoryCorePluginConfig(cfg);
+  const toolsConfig = asRecord(pluginConfig?.tools);
+  const memorySearchConfig = asRecord(toolsConfig?.memorySearch);
+  const timeoutMs = memorySearchConfig?.timeoutMs;
+  return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
+    ? clampMemorySearchToolTimeoutMs(timeoutMs)
+    : DEFAULT_MEMORY_SEARCH_TOOL_TIMEOUT_MS;
+}
 
 async function runMemorySearchToolWithDeadline<T>(params: {
   timeoutMs: number;
@@ -183,6 +202,59 @@ function mergeMemorySearchCorpusResults(params: {
   }
 
   return sortMemorySearchToolResults(selected).slice(0, params.maxResults);
+}
+
+function buildPartialMemorySearchCorpusResult(params: {
+  memoryResults: MemorySearchToolResult[];
+  maxResults: number;
+  provider?: string;
+  model?: string;
+  fallback: unknown;
+  citations: unknown;
+  mode?: string;
+  debug?:
+    | {
+        backend: string;
+        configuredMode?: string;
+        effectiveMode?: string;
+        fallback?: string;
+        searchMs: number;
+        hits: number;
+      }
+    | undefined;
+  error: string;
+  failedPhase: "memory" | "supplement";
+}) {
+  const warning =
+    params.failedPhase === "supplement"
+      ? "Memory search returned partial results because a supplemental corpus did not finish."
+      : "Memory search returned partial results because the primary memory corpus did not finish.";
+  const action =
+    'Retry with corpus="memory" or corpus="wiki" for a narrower search, or increase plugins.entries.memory-core.config.tools.memorySearch.timeoutMs for slower hosts.';
+  return jsonResult({
+    results: mergeMemorySearchCorpusResults({
+      memoryResults: params.memoryResults,
+      supplementResults: [],
+      maxResults: params.maxResults,
+      balanceCorpora: false,
+    }),
+    provider: params.provider,
+    model: params.model,
+    fallback: params.fallback,
+    citations: params.citations,
+    mode: params.mode,
+    partial: true,
+    error: params.error,
+    warning,
+    action,
+    debug: {
+      ...(params.debug ?? {}),
+      partial: {
+        failedPhase: params.failedPhase,
+        error: params.error,
+      },
+    },
+  });
 }
 
 function isClosedMemoryStoreError(error: unknown): boolean {
@@ -375,6 +447,27 @@ export function createMemorySearchTool(options: {
           requestedCorpus === "wiki" ? undefined : readMemorySearchToolCooldown(cooldownKey);
         let activeUnavailablePhase: "memory" | "supplement" | undefined;
         let failedUnavailablePhase: "memory" | "supplement" | undefined;
+        let partialAllCorpusResult:
+          | {
+              memoryResults: MemorySearchToolResult[];
+              maxResults: number;
+              provider?: string;
+              model?: string;
+              fallback: unknown;
+              citations: unknown;
+              mode?: string;
+              debug?:
+                | {
+                    backend: string;
+                    configuredMode?: string;
+                    effectiveMode?: string;
+                    fallback?: string;
+                    searchMs: number;
+                    hits: number;
+                  }
+                | undefined;
+            }
+          | undefined;
         const runUnavailablePhase = async <T>(
           phase: "memory" | "supplement",
           task: () => Promise<T>,
@@ -393,7 +486,7 @@ export function createMemorySearchTool(options: {
         };
 
         const outcome = await runMemorySearchToolWithDeadline({
-          timeoutMs: MEMORY_SEARCH_TOOL_TIMEOUT_MS,
+          timeoutMs: resolveMemorySearchToolTimeoutMs(cfg),
           run: async (deadlineSignal) => {
             const { resolveMemoryBackendConfig } = await loadMemoryToolRuntime();
             const shouldQuerySupplements = requestedCorpus === "wiki" || requestedCorpus === "all";
@@ -555,6 +648,18 @@ export function createMemorySearchTool(options: {
                   buildPausedMemoryIndexUnavailableResult(pausedIndexIdentityReason),
                 );
               }
+              if (requestedCorpus === "all" && surfacedMemoryResults.length > 0) {
+                partialAllCorpusResult = {
+                  memoryResults: surfacedMemoryResults,
+                  maxResults: Math.max(1, maxResults ?? 10),
+                  provider,
+                  model,
+                  fallback,
+                  citations: citationsMode,
+                  mode: searchMode,
+                  debug: searchDebug,
+                };
+              }
             }
             const supplementResults = shouldQuerySupplements
               ? await runUnavailablePhase(
@@ -590,6 +695,17 @@ export function createMemorySearchTool(options: {
         });
         if (outcome.status === "unavailable") {
           const unavailablePhase = failedUnavailablePhase ?? activeUnavailablePhase;
+          if (
+            requestedCorpus === "all" &&
+            unavailablePhase === "supplement" &&
+            partialAllCorpusResult
+          ) {
+            return buildPartialMemorySearchCorpusResult({
+              ...partialAllCorpusResult,
+              error: outcome.error,
+              failedPhase: unavailablePhase,
+            });
+          }
           const shouldRecordCooldown =
             requestedCorpus !== "wiki" &&
             (requestedCorpus !== "all" || unavailablePhase === "memory");

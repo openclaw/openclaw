@@ -127,16 +127,21 @@ export function buildMemorySearchUnavailableResult(
 ) {
   const reason = (error ?? "memory search unavailable").trim() || "memory search unavailable";
   const isQuotaError = /insufficient_quota|quota|429/.test(normalizeLowercaseStringOrEmpty(reason));
+  const isToolTimeout = /\bmemory_search timed out after \d+s\b/i.test(reason);
   const warning =
     overrides?.warning ??
     (isQuotaError
       ? "Memory search is unavailable because the embedding provider quota is exhausted."
-      : "Memory search is unavailable due to an embedding/provider error.");
+      : isToolTimeout
+        ? "Memory search timed out before the tool deadline."
+        : "Memory search is unavailable due to an embedding/provider error.");
   const action =
     overrides?.action ??
     (isQuotaError
       ? "Top up or switch embedding provider, then retry memory_search."
-      : "Check embedding provider configuration and retry memory_search.");
+      : isToolTimeout
+        ? "Retry with a narrower corpus/query or after Gateway pressure clears; if this recurs, increase plugins.entries.memory-core.config.tools.memorySearch.timeoutMs."
+        : "Check embedding provider configuration and retry memory_search.");
   return {
     results: [],
     disabled: true,

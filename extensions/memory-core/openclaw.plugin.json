@@ -30,6 +30,24 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "tools": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "memorySearch": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "timeoutMs": {
+                "type": "integer",
+                "minimum": 1000,
+                "maximum": 120000,
+                "description": "Hard deadline for the memory_search tool in milliseconds. Increase on slow hosts with large memory/session indexes."
+              }
+            }
+          }
+        }
+      },
       "dreaming": {
         "type": "object",
         "additionalProperties": false,

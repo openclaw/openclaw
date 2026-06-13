@@ -159,6 +159,14 @@ inline batch timeout by default. If the host is simply slow, set
 `agents.defaults.memorySearch.sync.embeddingBatchTimeoutSeconds` and rerun
 `openclaw memory index --force`.
 
+**`memory_search` itself times out?** The tool has a separate hard deadline so a
+slow Gateway or large `memory+sessions` index cannot block the agent turn
+indefinitely. Timeout results are reported as tool-deadline failures rather than
+embedding-provider failures. For slow hosts, set
+`plugins.entries.memory-core.config.tools.memorySearch.timeoutMs` (milliseconds,
+1000-120000). For broad `corpus="all"` searches, OpenClaw returns partial
+results when one corpus finishes before another stalls.
+
 **CJK text not found?** Rebuild the FTS index with
 `openclaw memory index --force`.
 
