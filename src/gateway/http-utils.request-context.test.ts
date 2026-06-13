@@ -4,6 +4,7 @@
 import type { IncomingMessage } from "node:http";
 import { describe, expect, it } from "vitest";
 import {
+  authorizeOpenAiCompatibleHttpModelOverride,
   resolveOpenAiCompatibleHttpOperatorScopes,
   resolveOpenAiCompatibleHttpSenderIsOwner,
   resolveGatewayRequestContext,
@@ -186,5 +187,40 @@ describe("resolveOpenAiCompatibleHttpSenderIsOwner", () => {
         { authMethod: "trusted-proxy", trustDeclaredOperatorScopes: true },
       ),
     ).toBe(true);
+  });
+});
+
+describe("authorizeOpenAiCompatibleHttpModelOverride", () => {
+  it("allows shared-secret bearer callers to use x-openclaw-model", () => {
+    expect(
+      authorizeOpenAiCompatibleHttpModelOverride(
+        createReq({ authorization: "Bearer secret", "x-openclaw-model": "openai/gpt-5.4" }),
+        { authMethod: "token", trustDeclaredOperatorScopes: false },
+      ),
+    ).toEqual({ allowed: true });
+  });
+
+  it("allows trusted admin callers to use x-openclaw-model", () => {
+    expect(
+      authorizeOpenAiCompatibleHttpModelOverride(
+        createReq({
+          "x-openclaw-scopes": "operator.admin, operator.write",
+          "x-openclaw-model": "openai/gpt-5.4",
+        }),
+        { authMethod: "trusted-proxy", trustDeclaredOperatorScopes: true },
+      ),
+    ).toEqual({ allowed: true });
+  });
+
+  it("rejects trusted write-only callers that try to use x-openclaw-model", () => {
+    expect(
+      authorizeOpenAiCompatibleHttpModelOverride(
+        createReq({
+          "x-openclaw-scopes": "operator.write",
+          "x-openclaw-model": "openai/gpt-5.4",
+        }),
+        { authMethod: "trusted-proxy", trustDeclaredOperatorScopes: true },
+      ),
+    ).toEqual({ allowed: false, missingScope: "operator.admin" });
   });
 });
