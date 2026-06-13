@@ -8,7 +8,6 @@ import {
   resolveDefaultAgentId,
   resolveSessionAgentId,
 } from "../agents/agent-scope.js";
-import { runBtwSideQuestion } from "../agents/btw.js";
 import { ensureContextWindowCacheLoaded } from "../agents/context.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import {
@@ -609,6 +608,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     });
     const resolvedModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
     const timeoutSeconds = timeoutSecondsFromMs(params.timeoutMs);
+    const { runBtwSideQuestion } = await import("../agents/btw.js");
     const reply = await runBtwSideQuestion({
       cfg,
       agentDir: resolveAgentDir(cfg, sessionAgentId),
