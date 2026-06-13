@@ -291,6 +291,42 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(toolSearchControlsCase.toolSearchCatalogRef).toEqual({});
   });
 
+  it("keeps client tool names out of context engine capability guidance", async () => {
+    const contextEngine = createContextEngineBootstrapAndAssemble();
+
+    await createContextEngineAttemptRunner({
+      contextEngine,
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        disableTools: false,
+        config: {
+          tools: {
+            toolSearch: { enabled: true, mode: "directory" },
+          },
+        } as OpenClawConfig,
+        clientTools: [
+          {
+            type: "function",
+            function: {
+              name: "memory_search",
+              parameters: { type: "object", properties: {} },
+            },
+          },
+        ],
+      },
+    });
+
+    const assembleParams = mockParams(
+      contextEngine.assemble as MockCallSource,
+      0,
+      "assemble params",
+    );
+    const availableTools = assembleParams.availableTools;
+    expect(availableTools).toBeInstanceOf(Set);
+    expect((availableTools as Set<string>).has("memory_search")).toBe(false);
+  });
+
   it("defaults local-model lean embedded runs to Tool Search controls", async () => {
     await createContextEngineAttemptRunner({
       contextEngine: {
