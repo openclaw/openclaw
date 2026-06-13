@@ -881,6 +881,26 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.deviceIdentity).toBeNull();
   });
 
+  it("uses local backend auth-none without a device identity when required", async () => {
+    getRuntimeConfig.mockReturnValue({
+      gateway: { mode: "local", bind: "loopback", auth: { mode: "none" } },
+    });
+    setGatewayNetworkDefaults();
+
+    await callGateway({
+      method: "node.list",
+      scopes: ["operator.read", "operator.pairing"],
+      requireLocalBackendSharedAuth: true,
+    });
+
+    expect(lastClientOptions?.clientName).toBe(GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT);
+    expect(lastClientOptions?.mode).toBe(GATEWAY_CLIENT_MODES.BACKEND);
+    expect(lastClientOptions?.scopes).toEqual(["operator.read", "operator.pairing"]);
+    expect(lastClientOptions?.token).toBeUndefined();
+    expect(lastClientOptions?.password).toBeUndefined();
+    expect(lastClientOptions?.deviceIdentity).toBeNull();
+  });
+
   it("rejects required local backend shared auth for remote targets", async () => {
     await expect(
       callGateway({

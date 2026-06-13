@@ -433,14 +433,16 @@ function shouldOmitDeviceIdentityForGatewayCall(params: {
   url: string;
   token?: string;
   password?: string;
+  allowAuthNone?: boolean;
 }): boolean {
   const mode = params.opts.mode ?? GATEWAY_CLIENT_MODES.CLI;
   const clientName = params.opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI;
-  const hasSharedAuth = Boolean(params.token || params.password);
+  const hasDirectLocalBackendAuth =
+    Boolean(params.token || params.password) || params.allowAuthNone === true;
   return (
     mode === GATEWAY_CLIENT_MODES.BACKEND &&
     clientName === GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT &&
-    hasSharedAuth &&
+    hasDirectLocalBackendAuth &&
     isLoopbackGatewayUrl(params.url)
   );
 }
@@ -1074,17 +1076,26 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
   const tlsFingerprint = await resolveGatewayTlsFingerprint({ opts, context, url });
   const token = useStoredDeviceAuth ? undefined : resolvedCredentials.token;
   const password = useStoredDeviceAuth ? undefined : resolvedCredentials.password;
-  if (
-    opts.requireLocalBackendSharedAuth &&
-    !shouldOmitDeviceIdentityForGatewayCall({ opts, url, token, password })
-  ) {
+  const allowAuthNone =
+    opts.requireLocalBackendSharedAuth === true &&
+    resolveGatewayCallAuth(context.config).mode === "none";
+  const omitDeviceIdentity = shouldOmitDeviceIdentityForGatewayCall({
+    opts,
+    url,
+    token,
+    password,
+    allowAuthNone,
+  });
+  if (opts.requireLocalBackendSharedAuth && !omitDeviceIdentity) {
     throw new GatewayLocalBackendSharedAuthUnavailableError(
-      "local backend shared auth requires a loopback gateway with token or password credentials",
+      "local backend shared auth requires a loopback gateway with token/password credentials or auth mode none",
     );
   }
   const deviceIdentity =
     opts.deviceIdentity === undefined
-      ? resolveDeviceIdentityForGatewayCall({ opts, url, token, password })
+      ? omitDeviceIdentity
+        ? null
+        : resolveDeviceIdentityForGatewayCall({ opts, url, token, password })
       : opts.deviceIdentity;
   if (useStoredDeviceAuth) {
     const storedAuth = loadStoredOperatorDeviceAuthToken(deviceIdentity);
