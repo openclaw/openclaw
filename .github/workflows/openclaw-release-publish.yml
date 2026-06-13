@@ -984,7 +984,11 @@ jobs:
             if ! manifest_json="$(jq -Rsc '
               split("\n") as $lines |
               (if $lines[-1] == "" then $lines[0:-1] else $lines end) |
-              map(sub("\r$"; "") | capture("^(?<hash>[a-f0-9]{64})  (?<name>[^/\\\\]+)$"))
+              map(sub("\r$"; "")) |
+              if all(.[]; test("^(?<hash>[a-f0-9]{64})  (?<name>[^/\\\\]+)$"))
+              then map(capture("^(?<hash>[a-f0-9]{64})  (?<name>[^/\\\\]+)$"))
+              else error("malformed Windows checksum manifest entry")
+              end
             ' "${manifest_path}")"; then
               echo "Stable release Windows checksum manifest contains malformed entries." >&2
               return 1

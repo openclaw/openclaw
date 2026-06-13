@@ -1650,6 +1650,16 @@ describe("package artifact reuse", () => {
     );
   });
 
+  it("rejects malformed Windows checksum manifest lines before parsing entries", () => {
+    const releaseWorkflow = readFileSync(RELEASE_PUBLISH_WORKFLOW, "utf8");
+    const validateManifestLinesIndex = releaseWorkflow.indexOf("all(.[]; test(");
+    const parseManifestLinesIndex = releaseWorkflow.indexOf("map(capture(");
+
+    expect(validateManifestLinesIndex).toBeGreaterThan(-1);
+    expect(parseManifestLinesIndex).toBeGreaterThan(validateManifestLinesIndex);
+    expect(releaseWorkflow).toContain('else error("malformed Windows checksum manifest entry")');
+  });
+
   it("keeps beta release verification and ClawHub publish repair hooks wired", () => {
     const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
       scripts?: Record<string, string>;
