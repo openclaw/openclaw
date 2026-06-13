@@ -10,6 +10,7 @@ import { replaceFileAtomic } from "../infra/replace-file.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { isRecord } from "../utils.js";
 import { maintainConfigBackups } from "./backup-rotation.js";
+import { writeEditorConfigSchemaFile } from "./editor-schema.js";
 import { INCLUDE_KEY } from "./includes.js";
 import { createInvalidConfigError, formatInvalidConfigDetails } from "./io.invalid-config.js";
 import {
@@ -81,6 +82,10 @@ export type ConfigReplaceResult = {
 export type ConfigMutationIO = {
   env?: NodeJS.ProcessEnv;
   readConfigFileSnapshotForWrite: typeof readConfigFileSnapshotForWrite;
+  writeEditorConfigSchemaFile?: (params: {
+    configPath: string;
+    pluginMetadataSnapshot?: ConfigWriteOptions["basePluginMetadataSnapshot"];
+  }) => Promise<void>;
   writeConfigFile: (
     cfg: OpenClawConfig,
     options?: ConfigWriteOptions,
@@ -369,6 +374,11 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
   const envBeforePostWriteRead = { ...writeEnv };
   let envAfterPostWriteRead = envBeforePostWriteRead;
   try {
+    await (params.io?.writeEditorConfigSchemaFile ?? writeEditorConfigSchemaFile)({
+      configPath: params.snapshot.path,
+      pluginMetadataSnapshot: params.writeOptions?.basePluginMetadataSnapshot,
+    }).catch(() => {});
+
     if (
       params.writeOptions?.skipRuntimeSnapshotRefresh &&
       !hadRuntimeSnapshot &&

@@ -33,6 +33,7 @@ import { isRecord } from "../utils.js";
 import { VERSION } from "../version.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
 import { maintainConfigBackups } from "./backup-rotation.js";
+import { EDITOR_CONFIG_SCHEMA_REF, writeEditorConfigSchemaFile } from "./editor-schema.js";
 import { restoreEnvVarRefs } from "./env-preserve.js";
 import {
   type EnvSubstitutionWarning,
@@ -70,6 +71,7 @@ import {
   createMergePatch,
   formatConfigValidationFailure,
   applyUnsetPathsForWrite,
+  hasRootEditorSchemaUnsetPath,
   projectSourceOntoRuntimeShape,
   restoreEnvRefsFromMap,
   resolvePersistCandidateForWrite,
@@ -383,6 +385,17 @@ function coerceConfig(value: unknown): OpenClawConfig {
     return {};
   }
   return value as OpenClawConfig;
+}
+
+function ensureEditorSchemaRef(cfg: OpenClawConfig): OpenClawConfig {
+  if (typeof cfg.$schema === "string" && cfg.$schema.trim()) {
+    return cfg;
+  }
+  const { $schema: _schema, ...rest } = cfg;
+  return {
+    $schema: EDITOR_CONFIG_SCHEMA_REF,
+    ...rest,
+  } as OpenClawConfig;
 }
 
 function hasConfigMeta(value: unknown): boolean {
@@ -2323,10 +2336,13 @@ export function createConfigIO(
       deps.homedir(),
     ) as OpenClawConfig;
     const outputConfig = applyUnsetPathsForWrite(tildeRestoredOutputConfig, unsetPaths);
+    const editorSchemaOutputConfig = hasRootEditorSchemaUnsetPath(unsetPaths)
+      ? outputConfig
+      : ensureEditorSchemaRef(outputConfig);
     // Do NOT apply runtime defaults when writing - user config should only contain
     // explicitly set values. Runtime defaults are applied when loading (issue #6070).
     const stampedOutputConfig = stampConfigVersion(
-      outputConfig,
+      editorSchemaOutputConfig,
       options.lastTouchedVersionOverride,
     );
     const json = JSON.stringify(stampedOutputConfig, null, 2).trimEnd().concat("\n");
@@ -2471,7 +2487,6 @@ export function createConfigIO(
 
     const pluginInstallConfigMigration =
       ensureShippedPluginInstallConfigRecordsMigratedForWrite(snapshot);
-    let configCommitted = false;
     try {
       const result = await replaceFileAtomic({
         filePath: configPath,
@@ -2487,7 +2502,6 @@ export function createConfigIO(
           }
         },
       });
-      configCommitted = true;
       logConfigOverwrite();
       logConfigWriteAnomalies();
       await appendWriteAudit(
@@ -2495,6 +2509,15 @@ export function createConfigIO(
         undefined,
         await deps.fs.promises.stat(configPath).catch(() => null),
       );
+      await writeEditorConfigSchemaFile({
+        configPath,
+        fsModule: deps.fs,
+        pluginMetadataSnapshot: snapshotRead.pluginMetadataSnapshot,
+      }).catch((err: unknown) => {
+        deps.logger.warn(
+          `Editor schema update skipped for ${configPath}: ${formatErrorMessage(err)}`,
+        );
+      });
       return {
         persistedHash: nextHash,
         persistedConfig: stampedOutputConfig,
@@ -2507,9 +2530,7 @@ export function createConfigIO(
           : {}),
       };
     } catch (err) {
-      if (!configCommitted) {
-        rollbackShippedPluginInstallConfigWriteMigration(pluginInstallConfigMigration);
-      }
+      rollbackShippedPluginInstallConfigWriteMigration(pluginInstallConfigMigration);
       await appendWriteAudit("failed", err);
       throw err;
     }
