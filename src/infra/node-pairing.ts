@@ -47,6 +47,14 @@ export type NodePairingPendingRequest = NodePairingRequestInput & {
   ts: number;
 };
 
+type NodePairingPendingRecord = NodePairingPendingRequest & {
+  revision?: string;
+};
+
+export type NodePairingPendingSnapshot = Pick<NodePairingPendingRequest, "requestId" | "nodeId"> & {
+  revision?: string;
+};
+
 /** Pending request summary returned when a new approval surface supersedes older requests. */
 export type NodePairingSupersededRequest = Pick<NodePairingPendingRequest, "requestId" | "nodeId">;
 
@@ -79,7 +87,7 @@ type NodePairingList = {
 };
 
 type NodePairingStateFile = {
-  pendingById: Record<string, NodePairingPendingRequest>;
+  pendingById: Record<string, NodePairingPendingRecord>;
   pairedByNodeId: Record<string, NodePairingPairedNode>;
 };
 
@@ -91,9 +99,10 @@ const withLock = createAsyncLock();
 function buildPendingNodePairingRequest(params: {
   requestId?: string;
   req: NodePairingRequestInput;
-}): NodePairingPendingRequest {
+}): NodePairingPendingRecord {
   return {
     requestId: params.requestId ?? randomUUID(),
+    revision: randomUUID(),
     nodeId: params.req.nodeId,
     clientId: params.req.clientId,
     clientMode: params.req.clientMode,
@@ -114,11 +123,12 @@ function buildPendingNodePairingRequest(params: {
 }
 
 function refreshPendingNodePairingRequest(
-  existing: NodePairingPendingRequest,
+  existing: NodePairingPendingRecord,
   incoming: NodePairingRequestInput,
-): NodePairingPendingRequest {
+): NodePairingPendingRecord {
   return {
     ...existing,
+    revision: randomUUID(),
     clientId: incoming.clientId ?? existing.clientId,
     clientMode: incoming.clientMode ?? existing.clientMode,
     displayName: incoming.displayName ?? existing.displayName,
@@ -139,7 +149,7 @@ function refreshPendingNodePairingRequest(
 }
 
 function samePendingApprovalSurface(
-  existing: NodePairingPendingRequest,
+  existing: NodePairingPendingRecord,
   incoming: NodePairingRequestInput,
 ): boolean {
   const incomingCaps = normalizeArrayBackedTrimmedStringList(incoming.caps) ?? existing.caps;
@@ -155,7 +165,7 @@ function samePendingApprovalSurface(
 }
 
 function mergeNodePairingReplacementInput(params: {
-  existing: readonly NodePairingPendingRequest[];
+  existing: readonly NodePairingPendingRecord[];
   incoming: NodePairingRequestInput;
 }): NodePairingRequestInput {
   const latest = params.existing[0];
@@ -180,16 +190,34 @@ function mergeNodePairingReplacementInput(params: {
   };
 }
 
-function resolveNodeApprovalRequiredScopes(
-  pending: NodePairingPendingRequest,
-): NodeApprovalScope[] {
+function resolveNodeApprovalRequiredScopes(pending: NodePairingPendingRecord): NodeApprovalScope[] {
   const commands = Array.isArray(pending.commands) ? pending.commands : [];
   return resolveNodePairApprovalScopes(commands);
 }
 
-function toPendingNodePairingEntry(pending: NodePairingPendingRequest): NodePairingPendingEntry {
+function toPublicPendingNodePairingRequest(
+  pending: NodePairingPendingRecord,
+): NodePairingPendingRequest {
+  const { revision: _revision, ...request } = pending;
+  return request;
+}
+
+function toPendingNodePairingSnapshot(
+  pending: NodePairingPendingRecord,
+): NodePairingPendingSnapshot {
+  const snapshot: NodePairingPendingSnapshot = {
+    requestId: pending.requestId,
+    nodeId: pending.nodeId,
+  };
+  if (pending.revision) {
+    snapshot.revision = pending.revision;
+  }
+  return snapshot;
+}
+
+function toPendingNodePairingEntry(pending: NodePairingPendingRecord): NodePairingPendingEntry {
   return {
-    ...pending,
+    ...toPublicPendingNodePairingRequest(pending),
     requiredApproveScopes: resolveNodeApprovalRequiredScopes(pending),
   };
 }
@@ -205,7 +233,7 @@ async function loadState(baseDir?: string): Promise<NodePairingStateFile> {
     readJsonIfExists<unknown>(pairedPath),
   ]);
   const state: NodePairingStateFile = {
-    pendingById: coercePairingStateRecord<NodePairingPendingRequest>(pending),
+    pendingById: coercePairingStateRecord<NodePairingPendingRecord>(pending),
     pairedByNodeId: coercePairingStateRecord<NodePairingPairedNode>(paired),
   };
   pruneExpiredPending(state.pendingById, Date.now(), PENDING_TTL_MS);
@@ -248,6 +276,26 @@ export async function getPairedNode(
   return state.pairedByNodeId[normalizeNodeId(nodeId)] ?? null;
 }
 
+/** Return the paired record and pending revisions used by one node-connect reconciliation. */
+export async function getNodePairingConnectSnapshot(
+  nodeId: string,
+  baseDir?: string,
+): Promise<{
+  pairedNode: NodePairingPairedNode | null;
+  pending: NodePairingPendingSnapshot[];
+}> {
+  return await withLock(async () => {
+    const state = await loadState(baseDir);
+    const normalized = normalizeNodeId(nodeId);
+    return {
+      pairedNode: state.pairedByNodeId[normalized] ?? null,
+      pending: Object.values(state.pendingById)
+        .filter((entry) => entry.nodeId === normalized)
+        .map(toPendingNodePairingSnapshot),
+    };
+  });
+}
+
 /** Create or refresh a pending node pairing request for operator approval. */
 export async function requestNodePairing(
   req: NodePairingRequestInput,
@@ -282,7 +330,11 @@ export async function requestNodePairing(
           .filter((pending) => pending.requestId !== result.request.requestId)
           .map((pending) => ({ requestId: pending.requestId, nodeId: pending.nodeId }))
       : [];
-    return superseded.length > 0 ? { ...result, superseded } : result;
+    const publicResult = {
+      ...result,
+      request: toPublicPendingNodePairingRequest(result.request),
+    };
+    return superseded.length > 0 ? { ...publicResult, superseded } : publicResult;
   });
 }
 
@@ -360,6 +412,7 @@ export async function rejectNodePairing(
 /** Reject every pending request for one node while preserving its approved record. */
 export async function rejectPendingNodePairingRequestsForNode(
   nodeId: string,
+  observed: readonly NodePairingPendingSnapshot[],
   baseDir?: string,
 ): Promise<NodePairingSupersededRequest[]> {
   return await withLock(async () => {
@@ -368,8 +421,16 @@ export async function rejectPendingNodePairingRequestsForNode(
     if (!normalized) {
       return [];
     }
+    const observedById = new Map(
+      observed
+        .filter((entry) => entry.nodeId === normalized)
+        .map((entry) => [entry.requestId, entry] as const),
+    );
     const rejected = Object.values(state.pendingById)
-      .filter((pending) => pending.nodeId === normalized)
+      .filter((pending) => {
+        const snapshot = observedById.get(pending.requestId);
+        return snapshot !== undefined && snapshot.revision === pending.revision;
+      })
       .toSorted((left, right) => right.ts - left.ts);
     if (rejected.length === 0) {
       return [];

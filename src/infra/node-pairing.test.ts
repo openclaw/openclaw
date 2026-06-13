@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import {
   approveNodePairing,
+  getNodePairingConnectSnapshot,
   getPairedNode,
   listNodePairing,
   rejectPendingNodePairingRequestsForNode,
@@ -88,6 +89,8 @@ describe("node pairing tokens", () => {
       expect(first.created).toBe(true);
       expect(second.created).toBe(false);
       expect(second.request.requestId).toBe(first.request.requestId);
+      expect("revision" in first.request).toBe(false);
+      expect("revision" in second.request).toBe(false);
 
       const commandFirst = await requestNodePairing(
         {
@@ -150,6 +153,7 @@ describe("node pairing tokens", () => {
       const pendingNode = findRecordByField(pairing.pending, "nodeId", "node-4");
       expect(pendingNode.commands).toEqual(["canvas.present"]);
       expect(pendingNode.requiredApproveScopes).toEqual(["operator.pairing", "operator.write"]);
+      expect("revision" in pendingNode).toBe(false);
       expect(pairing.paired).toEqual([]);
     });
   });
@@ -339,11 +343,14 @@ describe("node pairing tokens", () => {
         },
         baseDir,
       );
+      const snapshot = await getNodePairingConnectSnapshot("node-1", baseDir);
 
-      await expect(rejectPendingNodePairingRequestsForNode("node-1", baseDir)).resolves.toEqual([
-        { requestId: pending.request.requestId, nodeId: "node-1" },
-      ]);
-      await expect(rejectPendingNodePairingRequestsForNode("node-1", baseDir)).resolves.toEqual([]);
+      await expect(
+        rejectPendingNodePairingRequestsForNode("node-1", snapshot.pending, baseDir),
+      ).resolves.toEqual([{ requestId: pending.request.requestId, nodeId: "node-1" }]);
+      await expect(
+        rejectPendingNodePairingRequestsForNode("node-1", snapshot.pending, baseDir),
+      ).resolves.toEqual([]);
 
       const pairing = await listNodePairing(baseDir);
       expect(pairing.pending).toEqual([]);
@@ -352,6 +359,66 @@ describe("node pairing tokens", () => {
       await expect(getPairedNode("node-1", baseDir)).resolves.toMatchObject({
         commands: ["system.run"],
       });
+    });
+  });
+
+  test("preserves a pending request refreshed after the connect snapshot", async () => {
+    await withNodePairingDir(async (baseDir) => {
+      await setupPairedNode(baseDir);
+      const pending = await requestNodePairing(
+        {
+          nodeId: "node-1",
+          platform: "darwin",
+          commands: ["system.run", "canvas.snapshot"],
+        },
+        baseDir,
+      );
+      const snapshot = await getNodePairingConnectSnapshot("node-1", baseDir);
+      const refreshed = await requestNodePairing(
+        {
+          nodeId: "node-1",
+          platform: "darwin",
+          commands: ["system.run", "canvas.snapshot"],
+        },
+        baseDir,
+      );
+      expect(refreshed.request.requestId).toBe(pending.request.requestId);
+
+      await expect(
+        rejectPendingNodePairingRequestsForNode("node-1", snapshot.pending, baseDir),
+      ).resolves.toEqual([]);
+      expect((await listNodePairing(baseDir)).pending).toHaveLength(1);
+    });
+  });
+
+  test("preserves a replacement pending request created after the connect snapshot", async () => {
+    await withNodePairingDir(async (baseDir) => {
+      await setupPairedNode(baseDir);
+      const pending = await requestNodePairing(
+        {
+          nodeId: "node-1",
+          platform: "darwin",
+          commands: ["system.run", "canvas.snapshot"],
+        },
+        baseDir,
+      );
+      const snapshot = await getNodePairingConnectSnapshot("node-1", baseDir);
+      const replacement = await requestNodePairing(
+        {
+          nodeId: "node-1",
+          platform: "darwin",
+          commands: ["system.run", "canvas.present"],
+        },
+        baseDir,
+      );
+      expect(replacement.request.requestId).not.toBe(pending.request.requestId);
+
+      await expect(
+        rejectPendingNodePairingRequestsForNode("node-1", snapshot.pending, baseDir),
+      ).resolves.toEqual([]);
+      const remaining = (await listNodePairing(baseDir)).pending;
+      expect(remaining).toHaveLength(1);
+      expect(remaining[0]?.requestId).toBe(replacement.request.requestId);
     });
   });
 

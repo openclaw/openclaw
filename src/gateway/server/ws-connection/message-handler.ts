@@ -68,7 +68,7 @@ import {
   runWithDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
 import {
-  getPairedNode,
+  getNodePairingConnectSnapshot,
   rejectPendingNodePairingRequestsForNode,
   requestNodePairing,
   updatePairedNodeMetadata,
@@ -1616,9 +1616,10 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         }
         if (role === "node") {
           let reconciliation: Awaited<ReturnType<typeof reconcileNodePairingOnConnect>>;
-          const pairedNode = await getPairedNode(
+          const nodePairingSnapshot = await getNodePairingConnectSnapshot(
             connectParams.device?.id ?? connectParams.client.id,
           );
+          const pairedNode = nodePairingSnapshot.pairedNode;
           try {
             reconciliation = await reconcileNodePairingOnConnect({
               cfg: getRuntimeConfig(),
@@ -1641,7 +1642,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                   throw error;
                 }
               },
-              rejectPendingPairings: rejectPendingNodePairingRequestsForNode,
+              rejectPendingPairings: async (nodeId) =>
+                await rejectPendingNodePairingRequestsForNode(nodeId, nodePairingSnapshot.pending),
             });
           } catch (error) {
             if (error instanceof NodePairingRateLimitError) {
