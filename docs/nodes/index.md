@@ -230,15 +230,15 @@ Node-related settings live under `gateway.nodes` and `tools.exec`:
       },
       // Opt into dangerous/privacy-heavy node commands (camera.snap, etc.).
       allowCommands: ["camera.snap", "screen.record"],
-      // Block commands even if platform defaults allow them.
-      denyCommands: [],
+      // Block exact command names even if defaults or allowCommands include them.
+      denyCommands: ["camera.clip"],
     },
   },
   tools: {
     exec: {
       // Default exec host: "node" routes all exec calls to a paired node.
       host: "node",
-      // Security mode for node exec: "allowlist" requires explicit approval.
+      // Security mode for node exec: allow only approved/allowlisted commands.
       security: "allowlist",
       // Pin exec to a specific node (id or name). Omit to allow any node.
       node: "build-node",
@@ -246,6 +246,11 @@ Node-related settings live under `gateway.nodes` and `tools.exec`:
   },
 }
 ```
+
+Use exact node command names. `denyCommands` removes a command even when a
+platform default or `allowCommands` entry would otherwise allow it. See
+[Gateway configuration reference](/gateway/configuration-reference#gateway-field-details)
+for gateway node pairing and command-policy field details.
 
 Per-agent exec node override:
 
