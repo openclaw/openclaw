@@ -899,6 +899,20 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         deferMessageSentHooks: true,
       });
       markSlackStreamFallbackDelivered(session);
+      if (!session.stopped) {
+        try {
+          await stopSlackStream({
+            session,
+            ...(slackMessageMetadata ? { metadata: slackMessageMetadata } : {}),
+          });
+        } catch (finalizeErr) {
+          runtime.error?.(
+            danger(
+              `slack-stream: failed to finalize native stream after fallback delivery: ${formatSlackError(finalizeErr)}`,
+            ),
+          );
+        }
+      }
       // The combined fallback can span multiple logical payloads and Slack
       // chunks, so no single message `ts` correctly identifies every event.
       emitSuccessfulPendingStreamedDeliveries();

@@ -800,9 +800,8 @@ vi.mock("../../streaming.js", () => ({
     pendingText: string;
     stopped: boolean;
   }) => {
-    session.delivered = true;
     session.pendingText = "";
-    session.stopped = true;
+    session.stopped = !session.delivered;
   },
   SlackStreamNotDeliveredError: TestSlackStreamNotDeliveredError,
   startSlackStream: startSlackStreamMock,
@@ -2188,6 +2187,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     });
     expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
     expectDeliverReplyCall(0, "still buffered");
+    expect(stopSlackStreamMock).toHaveBeenCalledTimes(2);
   });
 
   it("finalizes buffered finals natively before attempting fallback delivery", async () => {

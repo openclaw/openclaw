@@ -353,9 +353,12 @@ export function extractSlackErrorCode(err: unknown): string | undefined {
 }
 
 export function markSlackStreamFallbackDelivered(session: SlackStreamSession): void {
+  const nativeStreamWasStarted = session.delivered;
   session.pendingText = "";
-  session.delivered = true;
-  // The SDK retains text after a failed flush. Once normal delivery owns that
-  // text, retiring the streamer prevents a later stop from sending it again.
-  session.stopped = true;
+  // @slack/web-api 7.16.0 retains its private buffer after a failed flush.
+  // Clear fallback-owned text before retrying stop(), or the SDK resends it.
+  (session.streamer as unknown as { buffer: string }).buffer = "";
+  // A visible native stream still needs stop() to leave streaming state. If no
+  // native call succeeded, there is no Slack stream to finalize.
+  session.stopped = !nativeStreamWasStarted;
 }
