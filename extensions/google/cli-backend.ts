@@ -73,7 +73,14 @@ function requireGeminiOAuthCredential(
 
 async function prepareGeminiCliOAuthHome(
   credential: GeminiAuthProfileCredential | undefined,
-): Promise<{ env: Record<string, string>; clearEnv: string[]; cleanup: () => Promise<void> } | null> {
+): Promise<
+  | {
+      env: Record<string, string>;
+      clearEnv: string[];
+      cleanup: () => Promise<void>;
+    }
+  | null
+> {
   const oauth = requireGeminiOAuthCredential(credential);
   if (!oauth) {
     return null;
