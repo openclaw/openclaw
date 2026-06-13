@@ -293,12 +293,13 @@ export function listAgentRunsForSession(params: {
   sessionKey: string;
   sessionId?: string;
 }): Array<{ runId: string; lifecycleGeneration: string }> {
+  const currentLifecycleGeneration = getAgentEventState().lifecycleGeneration;
   const runs: Array<{ runId: string; lifecycleGeneration: string }> = [];
   for (const [runId, context] of getAgentEventState().runContextById) {
     const matches = context.sessionId
       ? context.sessionId === params.sessionId
       : context.sessionKey === params.sessionKey;
-    if (matches && context.lifecycleGeneration) {
+    if (matches && context.lifecycleGeneration === currentLifecycleGeneration) {
       runs.push({ runId, lifecycleGeneration: context.lifecycleGeneration });
     }
   }

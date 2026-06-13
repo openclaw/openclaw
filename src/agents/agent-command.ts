@@ -1137,6 +1137,7 @@ async function agentCommandInternal(
         sessionEntry,
         result,
         payloads,
+        assertDeliveryCurrent: () => assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration),
       });
     }
 
@@ -2215,6 +2216,7 @@ async function agentCommandInternal(
         sessionEntry,
         result,
         payloads,
+        assertDeliveryCurrent: () => assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration),
       };
       const deliveryResult = await deliverAgentCommandResult(
         resolveFreshSessionEntryForDelivery

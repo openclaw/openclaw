@@ -8,6 +8,7 @@ import {
   emitAgentEvent,
   getAgentEventLifecycleGeneration,
   getAgentRunContext,
+  listAgentRunsForSession,
   onAgentEvent,
   registerAgentRunContext,
   resetAgentEventsForTest,
@@ -163,6 +164,26 @@ describe("agent-events sequencing", () => {
     );
 
     expect(captured).toBe(preRestartGeneration);
+  });
+
+  test("lists only runs owned by the current lifecycle", () => {
+    const preRestartGeneration = getAgentEventLifecycleGeneration();
+    claimAgentRunContext("stale-run", {
+      sessionKey: "main",
+      lifecycleGeneration: preRestartGeneration,
+    });
+    const currentLifecycleGeneration = rotateAgentEventLifecycleGeneration();
+    claimAgentRunContext("current-run", {
+      sessionKey: "main",
+      lifecycleGeneration: currentLifecycleGeneration,
+    });
+
+    expect(listAgentRunsForSession({ sessionKey: "main" })).toEqual([
+      {
+        runId: "current-run",
+        lifecycleGeneration: currentLifecycleGeneration,
+      },
+    ]);
   });
 
   test("drops stale-generation terminal lifecycle after rotation", () => {

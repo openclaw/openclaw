@@ -39,6 +39,7 @@ const state = vi.hoisted(() => ({
   hasLegacyAutoFallbackWithoutOriginMock: vi.fn((_entry: unknown) => false),
   resolveAutoFallbackPrimaryProbeMock: vi.fn((_params: unknown) => undefined as unknown),
   resolveChannelModelOverrideMock: vi.fn((_params: unknown) => null as unknown),
+  assertLifecycleCurrentMock: vi.fn(),
   emitAgentEventMock: vi.fn(),
   registerAgentRunContextMock: vi.fn(),
   clearAgentRunContextMock: vi.fn(),
@@ -273,7 +274,8 @@ vi.mock("./internal-session-effects.js", () => ({
 }));
 
 vi.mock("../infra/agent-events.js", () => ({
-  assertAgentRunLifecycleGenerationCurrent: vi.fn(),
+  assertAgentRunLifecycleGenerationCurrent: (...args: unknown[]) =>
+    state.assertLifecycleCurrentMock(...args),
   captureAgentRunLifecycleGeneration: () => "test-generation",
   clearAgentRunContext: (...args: unknown[]) => state.clearAgentRunContextMock(...args),
   emitAgentEvent: (...args: unknown[]) => state.emitAgentEventMock(...args),
@@ -1268,6 +1270,29 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
   });
 
+  it("threads lifecycle ownership into ACP delivery", async () => {
+    state.acpResolveSessionMock.mockReturnValue({
+      kind: "ready",
+      meta: {
+        agent: "claude",
+        cwd: "/tmp/workspace",
+      },
+    });
+
+    await agentCommand({
+      message: "hello",
+      sessionKey: "agent:main:main",
+    });
+
+    const deliveryParams = requireRecord(
+      mockCallArg(state.deliverAgentCommandResultMock),
+      "ACP delivery params",
+    );
+    expect(deliveryParams.assertDeliveryCurrent).toBeTypeOf("function");
+    (deliveryParams.assertDeliveryCurrent as () => void)();
+    expect(state.assertLifecycleCurrentMock).toHaveBeenLastCalledWith("test-generation");
+  });
+
   it("keeps the initial session touch for local runs", async () => {
     setupSingleAttemptFallback();
     state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
@@ -1281,6 +1306,22 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     });
     expect(touchWrites).toHaveLength(1);
     expect(state.updateSessionStoreAfterAgentRunMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("threads lifecycle ownership into normal delivery", async () => {
+    setupSingleAttemptFallback();
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
+    setupSessionTouchStore();
+
+    await runBasicAgentCommand();
+
+    const deliveryParams = requireRecord(
+      mockCallArg(state.deliverAgentCommandResultMock),
+      "delivery params",
+    );
+    expect(deliveryParams.assertDeliveryCurrent).toBeTypeOf("function");
+    (deliveryParams.assertDeliveryCurrent as () => void)();
+    expect(state.assertLifecycleCurrentMock).toHaveBeenLastCalledWith("test-generation");
   });
 
   it("passes explicit timeout overrides into agent attempts", async () => {
