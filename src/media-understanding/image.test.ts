@@ -1057,7 +1057,9 @@ describe("describeImageWithModel", () => {
     });
     resolveModelAsyncMock.mockImplementationOnce(
       async (provider: string, modelId: string, agentDir?: string, cfg?: unknown) => {
-        await new Promise((resolve) => setTimeout(resolve, slowSetupMs));
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, slowSetupMs);
+        });
         const authStorage = {
           setRuntimeApiKey: setRuntimeApiKeyMock,
         };
@@ -1090,7 +1092,7 @@ describe("describeImageWithModel", () => {
     await Promise.resolve();
     expect(completeMock).toHaveBeenCalledTimes(1);
     const firstCall = requireFirstMockCall(completeMock, "slow setup image completion");
-    const [, , options] = firstCall;
+    const options = firstCall[2];
     if (!options?.signal) {
       throw new Error("Expected image completion abort signal");
     }
