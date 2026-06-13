@@ -7,11 +7,43 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-runtim
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
 import {
+  buildHostnameAllowlistPolicyFromSuffixAllowlist,
   fetchWithSsrFGuard,
+  mergeSsrFPolicies,
   ssrfPolicyFromDangerouslyAllowPrivateNetwork,
+  type SsrFPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 
 export const DEFAULT_EXTERNAL_RERANKER_TIMEOUT_MS = 30_000;
+
+/** Builds the SSRF policy for a reranker endpoint.
+ * Only grants private-network access when the user explicitly opts in. When opted
+ * in, access is scoped to the specific configured hostname via an allowlist so the
+ * policy does not open the full private range.
+ */
+export function resolveRerankerNetworkPolicy(params: {
+  baseUrl: string;
+  allowPrivateNetwork?: boolean;
+}): SsrFPolicy | undefined {
+  if (!params.allowPrivateNetwork) {
+    return undefined;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(params.baseUrl);
+  } catch {
+    return undefined;
+  }
+  const hostname = parsed.hostname.toLowerCase();
+  if (!hostname) {
+    return undefined;
+  }
+  // Restrict access to the specific configured host only, not the full private range.
+  return mergeSsrFPolicies(
+    buildHostnameAllowlistPolicyFromSuffixAllowlist([hostname]),
+    ssrfPolicyFromDangerouslyAllowPrivateNetwork(true),
+  );
+}
 
 let rerankerFetchGuard = fetchWithSsrFGuard;
 
@@ -30,6 +62,12 @@ export type ExternalRerankerConfig = {
   modelFallbacks?: string[];
   endpointPath?: string;
   topN?: number;
+  /**
+   * Opt in to reranking from a private/loopback host (e.g. localhost, 192.168.x.x).
+   * When true and the provider baseUrl resolves to a private host, access is restricted
+   * to that specific hostname only. Has no effect for public cloud endpoints.
+   */
+  allowPrivateNetwork?: boolean;
   /**
    * Extra fields merged into the rerank request body verbatim.
    * Useful for provider-specific parameters (e.g. `max_chunks_per_doc` for Cohere,
@@ -91,6 +129,10 @@ export class ExternalMmrReranker implements MemoryRerankerPlugin {
       value: providerEntry.apiKey,
       path: `models.providers.${providerId}.apiKey`,
     });
+    const ssrfPolicy = resolveRerankerNetworkPolicy({
+      baseUrl: providerEntry.baseUrl,
+      allowPrivateNetwork: this.cfg.allowPrivateNetwork,
+    });
     const errors: Error[] = [];
 
     for (const modelId of candidates) {
@@ -117,7 +159,7 @@ export class ExternalMmrReranker implements MemoryRerankerPlugin {
             }),
           },
           timeoutMs: requestTimeoutMs,
-          policy: ssrfPolicyFromDangerouslyAllowPrivateNetwork(true),
+          policy: ssrfPolicy,
           auditContext: "memory-external-reranker",
         });
 

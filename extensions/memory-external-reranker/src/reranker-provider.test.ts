@@ -9,6 +9,7 @@ const { fetchGuardMock } = vi.hoisted(() => ({
 import {
   DEFAULT_EXTERNAL_RERANKER_TIMEOUT_MS,
   ExternalMmrReranker,
+  resolveRerankerNetworkPolicy,
   setExternalRerankerFetchGuardForTesting,
 } from "./reranker.js";
 
@@ -76,6 +77,7 @@ describe("ExternalMmrReranker", () => {
       expect(mock).toHaveBeenCalledTimes(1);
       expect(guardCallOpts(mock).url).toBe("http://localhost:8080/v1/rerank");
       expect(guardCallOpts(mock).timeoutMs).toBe(DEFAULT_EXTERNAL_RERANKER_TIMEOUT_MS);
+      expect(guardCallOpts(mock).policy).toBeUndefined();
       expect(guardCallBody(mock)).toMatchObject({
         query: "neural networks",
         documents: [
@@ -210,6 +212,65 @@ describe("ExternalMmrReranker", () => {
         { id: "doc-beta", score: 0.95 },
         { id: "doc-alpha", score: 0.72 },
       ]);
+    });
+  });
+
+  describe("SSRF policy", () => {
+    it("policy is undefined by default (no private-network opt-in)", () => {
+      expect(resolveRerankerNetworkPolicy({ baseUrl: "http://localhost:8080" })).toBeUndefined();
+    });
+
+    it("policy is undefined when opt-in is true but URL is invalid", () => {
+      expect(
+        resolveRerankerNetworkPolicy({
+          baseUrl: "not-a-url",
+          allowPrivateNetwork: true,
+        }),
+      ).toBeUndefined();
+    });
+
+    it("policy includes allowPrivateNetwork when opt-in is true (private host)", () => {
+      const policy = resolveRerankerNetworkPolicy({
+        baseUrl: "http://ubuntu-ai-02:8082",
+        allowPrivateNetwork: true,
+      });
+      expect(policy).toMatchObject({ allowPrivateNetwork: true });
+    });
+
+    it("policy includes allowPrivateNetwork when opt-in is true (loopback IP)", () => {
+      const policy = resolveRerankerNetworkPolicy({
+        baseUrl: "http://127.0.0.1:8082",
+        allowPrivateNetwork: true,
+      });
+      expect(policy).toMatchObject({ allowPrivateNetwork: true });
+    });
+
+    it("policy is passed to fetch guard when opt-in and private host", async () => {
+      const mock = mockOkGuard([{ index: 0, relevance_score: 0.9 }]);
+
+      const reranker = new ExternalMmrReranker(
+        { provider: "local", model: "qwen3-reranker", allowPrivateNetwork: true },
+        makeTestConfig({ local: { baseUrl: "http://127.0.0.1:8082" } }),
+      );
+
+      const docs: RerankDocument[] = [{ id: "doc-1", content: "hello", score: 0.5 }];
+      await reranker.rerank({ query: "test", documents: docs, limit: 5 });
+
+      expect(guardCallOpts(mock).policy).toMatchObject({ allowPrivateNetwork: true });
+    });
+
+    it("policy is undefined when opt-in flag is not set, even for private baseUrl", async () => {
+      const mock = mockOkGuard([{ index: 0, relevance_score: 0.9 }]);
+
+      const reranker = new ExternalMmrReranker(
+        { provider: "local", model: "qwen3-reranker" },
+        makeTestConfig({ local: { baseUrl: "http://127.0.0.1:8082" } }),
+      );
+
+      const docs: RerankDocument[] = [{ id: "doc-1", content: "hello", score: 0.5 }];
+      await reranker.rerank({ query: "test", documents: docs, limit: 5 });
+
+      expect(guardCallOpts(mock).policy).toBeUndefined();
     });
   });
 });
