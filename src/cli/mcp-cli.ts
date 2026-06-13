@@ -20,6 +20,7 @@ import {
   runMcpOAuthLogin,
   type McpOAuthCredentialsStatus,
 } from "../agents/mcp-oauth.js";
+import { isDangerousMcpStdioEnvVarName } from "../agents/mcp-config-shared.js";
 import { resolveMcpTransportConfig } from "../agents/mcp-transport-config.js";
 import { parseConfigValue } from "../auto-reply/reply/config-value.js";
 import {
@@ -990,6 +991,21 @@ export function registerMcpCli(program: Command) {
       const parsed = parseConfigValue(rawValue);
       if (parsed.error) {
         fail(parsed.error);
+      }
+      // Validate env keys against the stdio startup safety blocklist at
+      // config-write time so the operator sees blocked keys immediately
+      // instead of discovering them through per-spawn journal warnings.
+      const envConfig = parsed.value?.env;
+      if (envConfig && typeof envConfig === "object" && !Array.isArray(envConfig)) {
+        for (const key of Object.keys(envConfig as Record<string, unknown>)) {
+          if (isDangerousMcpStdioEnvVarName(key)) {
+            defaultRuntime.log(
+              `Warning: env "${key}" is blocked by the stdio startup safety policy and will be ` +
+                `ignored at runtime. Consider setting up the equivalent inside your MCP server script, ` +
+                `or remove it from the config.`,
+            );
+          }
+        }
       }
       const loaded = await listConfiguredMcpServers();
       if (!loaded.ok) {
