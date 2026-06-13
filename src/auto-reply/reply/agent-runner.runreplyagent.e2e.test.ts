@@ -1307,7 +1307,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(sessionEntry.fallbackNoticeReason).toBeUndefined();
   });
 
-  it("surfaces fallback failure when block streaming has no matching final payload", async () => {
+  it("surfaces fallback failure when a streamed block does not match the silent final payload", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
@@ -1317,7 +1317,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
       await params.onBlockReply?.({ text: "streamed answer" });
-      return { payloads: [], meta: {} };
+      return { payloads: [{ text: "NO_REPLY" }], meta: {} };
     });
     const fallbackSpy = vi
       .spyOn(modelFallbackModule, "runWithModelFallback")

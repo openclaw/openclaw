@@ -1773,7 +1773,6 @@ export async function runReplyAgent(params: {
     }
 
     const payloadArray = runResult.payloads ?? [];
-    const hadVisibleRunPayload = hasVisibleAgentPayload({ payloads: payloadArray });
 
     if (blockReplyPipeline) {
       await blockReplyPipeline.flush({ force: true });
@@ -2129,7 +2128,7 @@ export async function runReplyAgent(params: {
       accountId: sessionCtx.AccountId,
       normalizeMediaPaths: replyMediaContext.normalizePayload,
     });
-    const { replyPayloads } = payloadResult;
+    const { replyPayloads, hadDeliveredFinalPayload } = payloadResult;
     didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
 
     const hasReplyPayloadBeyondFallbackNotice = replyPayloads.some(
@@ -2144,7 +2143,11 @@ export async function runReplyAgent(params: {
       replyPayloads.length === 0 ||
       (!hasReplyPayloadBeyondFallbackNotice && !canDeliverStandaloneFallbackNotice)
     ) {
-      if (!hasReplyPayloadBeyondFallbackNotice && hasDeliveredBlockStream && hadVisibleRunPayload) {
+      if (
+        !hasReplyPayloadBeyondFallbackNotice &&
+        hasDeliveredBlockStream &&
+        hadDeliveredFinalPayload
+      ) {
         return returnWithQueuedFollowupDrain(undefined);
       }
       const silentFallbackFailurePayload = await returnSilentFallbackFailureIfNeeded();

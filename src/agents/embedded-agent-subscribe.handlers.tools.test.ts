@@ -9,7 +9,10 @@ import {
   getDiagnosticSessionState,
 } from "../logging/diagnostic-session-state.js";
 import { recordAdjustedParamsForToolCall } from "./agent-tools.before-tool-call.js";
-import { resetAdjustedParamsByToolCallIdForTests } from "./agent-tools.before-tool-call.state.js";
+import {
+  readAdjustedParamsForToolCall,
+  resetAdjustedParamsByToolCallIdForTests,
+} from "./agent-tools.before-tool-call.state.js";
 import type { MessagingToolSend } from "./embedded-agent-messaging.types.js";
 import {
   handleToolExecutionEnd,
@@ -790,6 +793,11 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
       },
       ctx.params.runId,
     );
+    expect(readAdjustedParamsForToolCall("tool-cron-adjusted", ctx.params.runId)).toEqual({
+      action: "add",
+      name: "nightly",
+      prompt: "run nightly maintenance",
+    });
 
     await handleToolExecutionEnd(
       ctx as never,
@@ -811,6 +819,7 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
       replayInvalid: true,
       hadPotentialSideEffects: true,
     });
+    expect(readAdjustedParamsForToolCall("tool-cron-adjusted", ctx.params.runId)).toBeUndefined();
   });
 
   it("uses adjusted before-tool-call params when counting successful cron adds", async () => {

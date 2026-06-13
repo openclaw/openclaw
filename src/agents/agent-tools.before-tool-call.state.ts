@@ -12,9 +12,13 @@ export function buildAdjustedParamsKey(params: { runId?: string; toolCallId: str
   return params.toolCallId;
 }
 
+export function readAdjustedParamsForToolCall(toolCallId: string, runId?: string): unknown {
+  return adjustedParamsByToolCallId.get(buildAdjustedParamsKey({ runId, toolCallId }));
+}
+
 export function consumeAdjustedParamsForToolCall(toolCallId: string, runId?: string): unknown {
   const adjustedParamsKey = buildAdjustedParamsKey({ runId, toolCallId });
-  const params = adjustedParamsByToolCallId.get(adjustedParamsKey);
+  const params = readAdjustedParamsForToolCall(toolCallId, runId);
   adjustedParamsByToolCallId.delete(adjustedParamsKey);
   return params;
 }

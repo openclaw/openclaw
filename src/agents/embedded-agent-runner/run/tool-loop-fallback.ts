@@ -181,12 +181,11 @@ function resolveDeclaredFallbackPayload(params: {
   });
 }
 
-function resolvePublicTerminalSummaryPayload(params: {
-  successfulObservations: readonly ToolLoopObservation[];
-}): ReplyPayload | undefined {
-  const summary = params.successfulObservations.findLast(
-    (observation) => observation.terminalSummary?.privacy === "public",
-  )?.terminalSummary;
+function resolvePublicTerminalSummaryPayload(
+  observation: ToolLoopObservation,
+): ReplyPayload | undefined {
+  const summary =
+    observation.terminalSummary?.privacy === "public" ? observation.terminalSummary : undefined;
   if (!summary) {
     return undefined;
   }
@@ -216,18 +215,17 @@ function allTerminalResultFallbacksOptOut(
 function resolveToolOwnedPublicPayload(params: {
   successfulObservations: readonly ToolLoopObservation[];
 }): ReplyPayload | undefined {
-  const publicSummaryPayload = resolvePublicTerminalSummaryPayload({
-    successfulObservations: params.successfulObservations,
-  });
+  const latestObservation = params.successfulObservations.at(-1);
+  if (!latestObservation) {
+    return undefined;
+  }
+  const publicSummaryPayload = resolvePublicTerminalSummaryPayload(latestObservation);
   if (publicSummaryPayload) {
     return publicSummaryPayload;
   }
-  const declaredFallback = params.successfulObservations.findLast((observation) =>
-    Boolean(observation.terminalResultFallback),
-  )?.terminalResultFallback;
   return resolveDeclaredFallbackPayload({
-    fallback: declaredFallback,
-    successfulObservations: params.successfulObservations,
+    fallback: latestObservation.terminalResultFallback,
+    successfulObservations: [latestObservation],
   });
 }
 
@@ -310,6 +308,17 @@ function selectSuccessfulObservationsAfterLatestToolFailure(
   );
 }
 
+function selectLatestSuccessfulObservationPerTool(
+  observations: readonly ToolLoopObservation[],
+): ToolLoopObservation[] {
+  const latestByToolName = new Map<string, ToolLoopObservation>();
+  for (const observation of observations) {
+    latestByToolName.delete(observation.toolName);
+    latestByToolName.set(observation.toolName, observation);
+  }
+  return [...latestByToolName.values()];
+}
+
 export function resolveToolLoopAbortFallback(params: {
   observations: readonly ToolLoopObservation[];
 }): ToolLoopFallbackResolution | undefined {
@@ -343,9 +352,12 @@ export function resolveSuccessfulToolTerminalFallback(params: {
   observations: readonly ToolLoopObservation[];
   requireDeclaredPresentableFallback?: boolean;
 }): ToolLoopFallbackResolution | undefined {
-  const successfulObservations = selectSuccessfulObservationsAfterLatestToolFailure(
+  const successfulObservationsAfterFailures = selectSuccessfulObservationsAfterLatestToolFailure(
     params.observations,
   );
+  const successfulObservations = successfulObservationsAfterFailures
+    ? selectLatestSuccessfulObservationPerTool(successfulObservationsAfterFailures)
+    : undefined;
   if (!successfulObservations?.length) {
     return undefined;
   }
@@ -407,17 +419,9 @@ export function resolveSuccessfulToolTerminalFallback(params: {
   const toolObservations = successfulObservations.filter(
     (observation) => observation.toolName === fallbackToolName,
   );
-  const publicSummaryPayload = resolvePublicTerminalSummaryPayload({
+  const payload = resolveToolOwnedPublicPayload({
     successfulObservations: toolObservations,
   });
-  const declaredFallback = toolObservations.findLast((observation) =>
-    Boolean(observation.terminalResultFallback),
-  )?.terminalResultFallback;
-  const declaredPayload = resolveDeclaredFallbackPayload({
-    fallback: declaredFallback,
-    successfulObservations: toolObservations,
-  });
-  const payload = publicSummaryPayload ?? declaredPayload;
   if (params.requireDeclaredPresentableFallback && !payload) {
     return undefined;
   }

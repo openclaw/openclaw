@@ -838,6 +838,85 @@ describe("tool-loop terminal fallback", () => {
     ).toBeUndefined();
   });
 
+  it.each([
+    {
+      name: "public summary",
+      earlier: {
+        terminalSummary: {
+          text: "Scheduler has 2 jobs.",
+          privacy: "public" as const,
+        },
+      },
+    },
+    {
+      name: "safe text",
+      earlier: {
+        resultText: "Scheduler has 2 jobs.",
+        terminalResultFallback: { mode: "safe_text" as const, prefix: "Scheduler:" },
+      },
+    },
+    {
+      name: "structured summary",
+      earlier: {
+        resultText: '{"jobs":2}',
+        terminalResultFallback: {
+          mode: "structured_summary" as const,
+          fields: [{ label: "Jobs", paths: [["jobs"]] }],
+        },
+      },
+    },
+  ])("does not reuse an earlier same-tool $name after later uncovered work", ({ earlier }) => {
+    expect(
+      resolveSuccessfulToolTerminalFallback({
+        observations: [
+          {
+            toolName: "cron",
+            argsHash: "status",
+            resultHash: "status-result",
+            ...earlier,
+          },
+          {
+            toolName: "cron",
+            argsHash: "runs",
+            resultHash: "runs-result",
+            resultText: "internal runs payload",
+          },
+        ],
+      }),
+    ).toEqual({
+      toolName: "cron",
+      payload: {
+        text:
+          "cron completed, but the model did not provide a final answer. " +
+          "No user-facing result text was provided.",
+      },
+    });
+  });
+
+  it("honors a latest same-tool fallback opt-out after an earlier public summary", () => {
+    expect(
+      resolveSuccessfulToolTerminalFallback({
+        observations: [
+          {
+            toolName: "cron",
+            argsHash: "status",
+            resultHash: "status-result",
+            terminalSummary: {
+              text: "Scheduler has 2 jobs.",
+              privacy: "public",
+            },
+          },
+          {
+            toolName: "cron",
+            argsHash: "runs",
+            resultHash: "runs-result",
+            terminalResultFallback: { mode: "none" },
+          },
+        ],
+      }),
+    ).toBeUndefined();
+  });
+
   it("requires every mixed successful tool to produce presentable fallback output when requested", () => {
     expect(
       resolveSuccessfulToolTerminalFallback({

@@ -6,7 +6,7 @@
  */
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { consumeAdjustedParamsForToolCall } from "../agent-tools.before-tool-call.js";
+import { readAdjustedParamsForToolCall } from "../agent-tools.before-tool-call.state.js";
 import type { AgentMessage } from "../runtime/index.js";
 
 const log = createSubsystemLogger("agents/harness");
@@ -29,7 +29,8 @@ export async function runAgentHarnessAfterToolCallHook(params: {
   if (!hookRunner?.hasHooks("after_tool_call")) {
     return;
   }
-  const adjustedArgs = consumeAdjustedParamsForToolCall(params.toolCallId, params.runId);
+  // The subscription end handler owns cleanup after it records replay and delivery evidence.
+  const adjustedArgs = readAdjustedParamsForToolCall(params.toolCallId, params.runId);
   // Hooks should see adjusted tool params when before_tool_call rewrote them.
   const eventArgs =
     adjustedArgs && typeof adjustedArgs === "object"

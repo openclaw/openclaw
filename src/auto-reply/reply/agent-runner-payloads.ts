@@ -11,6 +11,7 @@ import {
   appendReplyMediaFailureWarning,
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
+  isReplyPayloadStatusNotice,
   setReplyPayloadMetadata,
 } from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
@@ -182,7 +183,11 @@ export async function buildReplyPayloads(params: {
   accountId?: string;
   extractMarkdownImages?: boolean;
   normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
-}): Promise<{ replyPayloads: ReplyPayload[]; didLogHeartbeatStrip: boolean }> {
+}): Promise<{
+  replyPayloads: ReplyPayload[];
+  didLogHeartbeatStrip: boolean;
+  hadDeliveredFinalPayload: boolean;
+}> {
   let didLogHeartbeatStrip = params.didLogHeartbeatStrip;
   const sanitizedPayloads: ReplyPayload[] = [];
   if (params.isHeartbeat) {
@@ -256,6 +261,10 @@ export async function buildReplyPayloads(params: {
   } else {
     silentFilteredPayloads.push(...replyTaggedPayloads);
   }
+  const hadDeliveredFinalPayload = silentFilteredPayloads.some(
+    (payload) =>
+      !isReplyPayloadStatusNotice(payload) && params.blockReplyPipeline?.hasSentPayload(payload),
+  );
 
   // Drop final payloads only when block streaming succeeded end-to-end.
   // If streaming aborted (e.g., timeout), fall back to final payloads.
@@ -467,5 +476,6 @@ export async function buildReplyPayloads(params: {
   return {
     replyPayloads,
     didLogHeartbeatStrip,
+    hadDeliveredFinalPayload,
   };
 }
