@@ -634,6 +634,10 @@ async function sendMediaInternal(
   }
 }
 
+function requiresC2CChunkedUpload(scope: ChatScope, fileType: MediaFileType): boolean {
+  return scope === "c2c" && (fileType === MediaFileType.IMAGE || fileType === MediaFileType.FILE);
+}
+
 async function dispatchUpload(
   ctx: AccountContext,
   scope: ChatScope,
@@ -648,10 +652,7 @@ async function dispatchUpload(
       const buffer = await downloadDirectUploadUrl(source.url, {
         maxBytes: getMaxUploadSize(fileType),
       });
-      if (
-        scope === "c2c" &&
-        (fileType === MediaFileType.IMAGE || fileType === MediaFileType.FILE)
-      ) {
+      if (requiresC2CChunkedUpload(scope, fileType)) {
         return ctx.chunkedMediaApi.uploadChunked({
           scope,
           targetId,
@@ -677,12 +678,22 @@ async function dispatchUpload(
       });
     }
     case "base64":
+      if (requiresC2CChunkedUpload(scope, fileType)) {
+        return ctx.chunkedMediaApi.uploadChunked({
+          scope,
+          targetId,
+          fileType,
+          source: { kind: "buffer", buffer: Buffer.from(source.data, "base64"), fileName },
+          creds,
+          fileName,
+        });
+      }
       return ctx.mediaApi.uploadMedia(scope, targetId, fileType, creds, {
         fileData: source.data,
         fileName,
       });
     case "localPath":
-      if (source.size >= LARGE_FILE_THRESHOLD) {
+      if (requiresC2CChunkedUpload(scope, fileType) || source.size >= LARGE_FILE_THRESHOLD) {
         return ctx.chunkedMediaApi.uploadChunked({
           scope,
           targetId,
@@ -703,7 +714,10 @@ async function dispatchUpload(
         fileName,
       });
     case "buffer":
-      if (source.buffer.length >= LARGE_FILE_THRESHOLD) {
+      if (
+        requiresC2CChunkedUpload(scope, fileType) ||
+        source.buffer.length >= LARGE_FILE_THRESHOLD
+      ) {
         return ctx.chunkedMediaApi.uploadChunked({
           scope,
           targetId,

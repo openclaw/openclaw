@@ -1,8 +1,12 @@
 // Qqbot tests cover unified sender behavior.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChunkedMediaApi } from "../api/media-chunked.js";
 import { MediaApi } from "../api/media.js";
 import { MediaFileType, type MessageResponse, type UploadMediaResponse } from "../types.js";
+import type { RawMediaSource } from "./media-source.js";
 import { registerAccount, sendMedia } from "./sender.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
@@ -43,6 +47,16 @@ const logger = {
   debug: vi.fn(),
 };
 
+const tempDirs: string[] = [];
+
+async function createLocalMediaFile(name: string, bytes: Buffer): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), "qqbot-sender-test-"));
+  tempDirs.push(dir);
+  const filePath = join(dir, name);
+  await writeFile(filePath, bytes);
+  return filePath;
+}
+
 function mockGuardedDownload(): void {
   fetchWithSsrFGuardMock.mockResolvedValueOnce({
     response: new Response(MEDIA_BYTES),
@@ -60,6 +74,10 @@ describe("qqbot unified sender media upload dispatch", () => {
     logger.error.mockReset();
     logger.warn.mockReset();
     logger.debug.mockReset();
+  });
+
+  afterEach(async () => {
+    await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
   });
 
   it.each([
@@ -132,6 +150,84 @@ describe("qqbot unified sender media upload dispatch", () => {
         msgId: undefined,
         content: kind === "image" ? content : undefined,
       });
+    },
+  );
+
+  it.each([
+    {
+      label: "base64",
+      source: async (): Promise<RawMediaSource> => ({ base64: MEDIA_BYTES.toString("base64") }),
+      expectedSource: { kind: "buffer" as const, buffer: Buffer.from(MEDIA_BYTES) },
+    },
+    {
+      label: "buffer",
+      source: async (): Promise<RawMediaSource> => ({
+        buffer: Buffer.from(MEDIA_BYTES),
+        fileName: "buffer-proof.png",
+      }),
+      expectedSource: {
+        kind: "buffer" as const,
+        buffer: Buffer.from(MEDIA_BYTES),
+        fileName: "buffer-proof.png",
+      },
+    },
+    {
+      label: "localPath",
+      source: async (): Promise<RawMediaSource> => ({
+        localPath: await createLocalMediaFile("local-proof.png", MEDIA_BYTES),
+      }),
+      expectedSource: { kind: "localPath" as const },
+    },
+  ])(
+    "uploads C2C image $label byte sources through chunked upload instead of one-shot file_data",
+    async ({ source, expectedSource }) => {
+      const uploadMediaSpy = vi
+        .spyOn(MediaApi.prototype, "uploadMedia")
+        .mockResolvedValue(UPLOAD_RESPONSE);
+      const uploadChunkedSpy = vi
+        .spyOn(ChunkedMediaApi.prototype, "uploadChunked")
+        .mockResolvedValue(UPLOAD_RESPONSE);
+      vi.spyOn(MediaApi.prototype, "sendMediaMessage").mockResolvedValue(MESSAGE_RESPONSE);
+      const appId = `sender-test-${expectedSource.kind}`;
+      const creds = { appId, clientSecret: "client-secret" };
+      registerAccount(appId, { logger });
+
+      const result = await sendMedia({
+        target: { type: "c2c", id: "user-openid" },
+        creds,
+        kind: "image",
+        source: await source(),
+        content: "caption",
+      });
+
+      expect(result).toBe(MESSAGE_RESPONSE);
+      expect(uploadMediaSpy).not.toHaveBeenCalled();
+      expect(uploadChunkedSpy).toHaveBeenCalledOnce();
+      expect(uploadChunkedSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          scope: "c2c",
+          targetId: "user-openid",
+          fileType: MediaFileType.IMAGE,
+          creds,
+        }),
+      );
+      const chunkedSource = uploadChunkedSpy.mock.calls[0]?.[0]?.source;
+      expect(chunkedSource?.kind).toBe(expectedSource.kind);
+      if (expectedSource.kind === "buffer") {
+        expect(chunkedSource).toMatchObject({
+          kind: "buffer",
+          fileName: expectedSource.fileName,
+        });
+        expect(chunkedSource?.kind === "buffer" ? chunkedSource.buffer : undefined).toEqual(
+          expectedSource.buffer,
+        );
+      }
+      if (expectedSource.kind === "localPath") {
+        expect(chunkedSource).toMatchObject({
+          kind: "localPath",
+          size: MEDIA_BYTES.length,
+        });
+      }
     },
   );
 });
