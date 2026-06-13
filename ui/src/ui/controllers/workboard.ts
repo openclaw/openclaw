@@ -375,6 +375,7 @@ export type WorkboardUiState = {
   cards: WorkboardCard[];
   statuses: readonly WorkboardStatus[];
   tasksByCardId: Map<string, WorkboardTaskSummary>;
+  missingTaskIds: Set<string>;
   lastDispatchSummary: WorkboardDispatchSummary | null;
   dispatching: boolean;
   query: string;
@@ -418,6 +419,7 @@ const workboardLoadPromises = new WeakMap<WorkboardHost, Promise<boolean>>();
 const workboardLoadGenerations = new WeakMap<WorkboardHost, number>();
 const workboardTaskPollOffsets = new WeakMap<WorkboardHost, number>();
 const workboardTaskDiscoveryOffsets = new WeakMap<WorkboardHost, number>();
+const workboardDefaultTaskDiscoveryCursors = new WeakMap<WorkboardHost, string>();
 const workboardPollingTimers = new WeakMap<WorkboardHost, ReturnType<typeof setTimeout>>();
 const workboardPollingEntries = new WeakMap<
   WorkboardHost,
@@ -467,6 +469,7 @@ function createDefaultState(): WorkboardUiState {
     cards: [],
     statuses: WORKBOARD_STATUSES,
     tasksByCardId: new Map(),
+    missingTaskIds: new Set(),
     lastDispatchSummary: null,
     dispatching: false,
     query: "",
@@ -1347,6 +1350,17 @@ function taskMatchesCanonicalCardLink(task: WorkboardTaskSummary, card: Workboar
   return taskMatchesCard(task, card);
 }
 
+function taskMatchesTrackedCardLink(
+  task: WorkboardTaskSummary,
+  card: WorkboardCard,
+  missingTaskIds: ReadonlySet<string>,
+): boolean {
+  const cardTaskId = normalizeString(card.taskId);
+  return cardTaskId && missingTaskIds.has(cardTaskId)
+    ? taskMatchesCard(task, card)
+    : taskMatchesCanonicalCardLink(task, card);
+}
+
 function selectRotatingBatch<T>(
   host: WorkboardHost,
   items: readonly T[],
@@ -1370,6 +1384,7 @@ function selectWorkboardTaskPollIds(
   host: WorkboardHost,
   cards: readonly WorkboardCard[],
   previousTasksByCardId: ReadonlyMap<string, WorkboardTaskSummary>,
+  missingTaskIds: ReadonlySet<string>,
 ): string[] {
   // Prepared summaries cover links between polls; rotate a hard-bounded batch
   // so active, terminal, and unresolved task IDs are eventually revalidated.
@@ -1377,12 +1392,17 @@ function selectWorkboardTaskPollIds(
   const seen = new Set<string>();
   for (const card of cards) {
     const previousTask = previousTasksByCardId.get(card.id);
-    const previousMatches = previousTask ? taskMatchesCanonicalCardLink(previousTask, card) : false;
+    const previousMatches = previousTask
+      ? taskMatchesTrackedCardLink(previousTask, card, missingTaskIds)
+      : false;
     let taskId: string | undefined;
     if (previousMatches && previousTask) {
       taskId = previousTask.taskId;
     } else if (!previousMatches) {
       taskId = normalizeString(card.taskId) ?? undefined;
+    }
+    if (taskId && missingTaskIds.has(taskId)) {
+      continue;
     }
     if (taskId && !seen.has(taskId)) {
       seen.add(taskId);
@@ -1394,31 +1414,35 @@ function selectWorkboardTaskPollIds(
 
 type WorkboardTaskDiscoveryQuery = {
   sessionKey?: string;
+  cursor?: string;
 };
 
 function selectWorkboardTaskDiscoveryQueries(
   host: WorkboardHost,
   cards: readonly WorkboardCard[],
   previousTasksByCardId: ReadonlyMap<string, WorkboardTaskSummary>,
+  missingTaskIds: ReadonlySet<string>,
 ): WorkboardTaskDiscoveryQuery[] {
   const queries: WorkboardTaskDiscoveryQuery[] = [];
   const seenSessionKeys = new Set<string>();
   let hasUnfilteredQuery = false;
   for (const card of cards) {
     const previousTask = previousTasksByCardId.get(card.id);
+    const cardTaskId = normalizeString(card.taskId);
     const hasCanonicalTask =
-      normalizeString(card.taskId) ||
-      (previousTask ? taskMatchesCanonicalCardLink(previousTask, card) : false);
+      Boolean(cardTaskId && !missingTaskIds.has(cardTaskId)) ||
+      (previousTask ? taskMatchesTrackedCardLink(previousTask, card, missingTaskIds) : false);
     const sessionKey = workboardCardSessionKey(card);
     if (card.status !== "running" || hasCanonicalTask || !sessionKey) {
       continue;
     }
     // The gateway filter is exact-match only. Default-agent Workboard sessions
-    // omit the canonical agent prefix, so discover those from one bounded page.
+    // omit the canonical agent prefix, so rotate through bounded unfiltered pages.
     if (sessionKey.startsWith("subagent:workboard-")) {
       if (!hasUnfilteredQuery) {
         hasUnfilteredQuery = true;
-        queries.push({});
+        const cursor = workboardDefaultTaskDiscoveryCursors.get(host);
+        queries.push(cursor ? { cursor } : {});
       }
     } else if (!seenSessionKeys.has(sessionKey)) {
       seenSessionKeys.add(sessionKey);
@@ -1446,7 +1470,12 @@ async function getWorkboardTaskPollBatch(
   client: GatewayBrowserClient,
   taskIds: readonly string[],
   discoveryQueries: readonly WorkboardTaskDiscoveryQuery[],
-): Promise<{ tasks: WorkboardTaskSummary[]; missingTaskIds: Set<string>; error: string | null }> {
+): Promise<{
+  tasks: WorkboardTaskSummary[];
+  missingTaskIds: Set<string>;
+  nextUnfilteredCursor?: string | null;
+  error: string | null;
+}> {
   const results = await Promise.allSettled([
     ...taskIds.map(async (taskId) => {
       try {
@@ -1465,11 +1494,16 @@ async function getWorkboardTaskPollBatch(
         ...query,
         limit: WORKBOARD_TASKS_LIST_LIMIT,
       });
-      return { tasks: normalizeTasksPage(payload).tasks };
+      const page = normalizeTasksPage(payload);
+      return {
+        tasks: page.tasks,
+        ...(query.sessionKey ? {} : { nextUnfilteredCursor: page.nextCursor }),
+      };
     }),
   ]);
   const tasks: WorkboardTaskSummary[] = [];
   const missingTaskIds = new Set<string>();
+  let nextUnfilteredCursor: string | null | undefined;
   let error: string | null = null;
   for (const result of results) {
     if (result.status === "fulfilled") {
@@ -1477,11 +1511,14 @@ async function getWorkboardTaskPollBatch(
       if ("missingTaskId" in result.value && result.value.missingTaskId) {
         missingTaskIds.add(result.value.missingTaskId);
       }
+      if ("nextUnfilteredCursor" in result.value) {
+        nextUnfilteredCursor = result.value.nextUnfilteredCursor;
+      }
     } else {
       error ??= formatError(result.reason);
     }
   }
-  return { tasks, missingTaskIds, error };
+  return { tasks, missingTaskIds, nextUnfilteredCursor, error };
 }
 
 type WorkboardTaskIndex = {
@@ -1553,6 +1590,31 @@ function findLatestTaskForCard(
   return latest;
 }
 
+function selectWorkboardMissingTaskConfirmationIds(
+  host: WorkboardHost,
+  cards: readonly WorkboardCard[],
+  tasks: readonly WorkboardTaskSummary[],
+  missingTaskIds: ReadonlySet<string>,
+): string[] {
+  const taskIndex = buildWorkboardTaskIndex(tasks);
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  for (const card of cards) {
+    const taskId = normalizeString(card.taskId);
+    if (
+      !taskId ||
+      seen.has(taskId) ||
+      missingTaskIds.has(taskId) ||
+      findLatestTaskForCard(taskIndex, card)
+    ) {
+      continue;
+    }
+    seen.add(taskId);
+    ids.push(taskId);
+  }
+  return selectRotatingBatch(host, ids, WORKBOARD_TASK_POLL_BATCH_SIZE, workboardTaskPollOffsets);
+}
+
 function applyTaskSummariesToState(
   state: WorkboardUiState,
   tasks: readonly WorkboardTaskSummary[],
@@ -1562,28 +1624,50 @@ function applyTaskSummariesToState(
 ) {
   const tasksByCardId = new Map<string, WorkboardTaskSummary>();
   const taskIndex = buildWorkboardTaskIndex(tasks);
+  // Keep historical card links read-only while remembering exact ledger misses.
+  // Confirmed misses stop blocking starts without writes from passive refresh paths.
+  const missingTaskIds = new Set(state.missingTaskIds);
   const cards = state.cards.map((card) => {
+    const cardTaskId = normalizeString(card.taskId);
     const task = findLatestTaskForCard(taskIndex, card);
     if (!task) {
-      const taskId = normalizeString(card.taskId);
-      if (taskId && options.missingTaskIds?.has(taskId)) {
-        const { taskId: _, ...unlinkedCard } = card;
-        return unlinkedCard;
+      if (cardTaskId && options.missingTaskIds?.has(cardTaskId)) {
+        missingTaskIds.add(cardTaskId);
       }
       return card;
     }
     tasksByCardId.set(card.id, task);
-    if (card.taskId === task.taskId) {
+    const replacesMissingTask =
+      Boolean(cardTaskId && missingTaskIds.has(cardTaskId)) &&
+      task.taskId !== cardTaskId &&
+      task.id !== cardTaskId;
+    if (cardTaskId && !replacesMissingTask) {
+      missingTaskIds.delete(cardTaskId);
+    }
+    missingTaskIds.delete(task.taskId);
+    if (card.taskId === task.taskId || replacesMissingTask) {
       return card;
     }
     return { ...card, taskId: task.taskId };
   });
+  const linkedTaskIds = new Set(
+    cards
+      .map((card) => normalizeString(card.taskId))
+      .filter((taskId): taskId is string => Boolean(taskId)),
+  );
   state.cards = cards;
   state.tasksByCardId = tasksByCardId;
+  state.missingTaskIds = new Set([...missingTaskIds].filter((taskId) => linkedTaskIds.has(taskId)));
 }
 
 function shouldRefreshWorkboardTasksForLifecycle(state: WorkboardUiState): boolean {
-  return state.tasksByCardId.size > 0 || state.cards.some((card) => Boolean(card.taskId));
+  return (
+    state.tasksByCardId.size > 0 ||
+    state.cards.some((card) => {
+      const taskId = normalizeString(card.taskId);
+      return Boolean(taskId && !state.missingTaskIds.has(taskId));
+    })
+  );
 }
 
 function normalizeDispatchSummary(value: unknown): WorkboardDispatchSummary {
@@ -1650,37 +1734,69 @@ export async function loadWorkboard(params: {
       if (state.cards.length > 0) {
         const preparedTaskSummaries = state.cards.flatMap((card) => {
           const task = previousTasksByCardId.get(card.id);
-          return task && taskMatchesCanonicalCardLink(task, card) ? [task] : [];
+          return task && taskMatchesTrackedCardLink(task, card, state.missingTaskIds) ? [task] : [];
         });
         try {
           const pollResult =
             params.taskRefresh === "linked"
               ? await getWorkboardTaskPollBatch(
                   client,
-                  selectWorkboardTaskPollIds(params.host, state.cards, previousTasksByCardId),
+                  selectWorkboardTaskPollIds(
+                    params.host,
+                    state.cards,
+                    previousTasksByCardId,
+                    state.missingTaskIds,
+                  ),
                   selectWorkboardTaskDiscoveryQueries(
                     params.host,
                     state.cards,
                     previousTasksByCardId,
+                    state.missingTaskIds,
                   ),
                 )
               : null;
-          const taskSummaries = pollResult
-            ? [
-                ...pollResult.tasks,
-                ...preparedTaskSummaries.filter(
-                  (task) => !pollResult.missingTaskIds.has(task.taskId),
-                ),
-              ]
-            : await listWorkboardTasks(client);
-          if (isCurrentWorkboardLoadGeneration(params.host, generation)) {
-            applyTaskSummariesToState(
-              state,
-              taskSummaries,
-              pollResult ? { missingTaskIds: pollResult.missingTaskIds } : undefined,
+          let taskSummaries: WorkboardTaskSummary[];
+          let missingTaskIds: ReadonlySet<string>;
+          let taskRefreshError: string | null;
+          if (pollResult) {
+            taskSummaries = [
+              ...pollResult.tasks,
+              ...preparedTaskSummaries.filter(
+                (task) => !pollResult.missingTaskIds.has(task.taskId),
+              ),
+            ];
+            missingTaskIds = pollResult.missingTaskIds;
+            taskRefreshError = pollResult.error;
+          } else {
+            const listedTaskSummaries = await listWorkboardTasks(client);
+            const confirmationResult = await getWorkboardTaskPollBatch(
+              client,
+              selectWorkboardMissingTaskConfirmationIds(
+                params.host,
+                state.cards,
+                listedTaskSummaries,
+                state.missingTaskIds,
+              ),
+              [],
             );
-            if (pollResult?.error) {
-              state.lastRefreshError = pollResult.error;
+            taskSummaries = [...listedTaskSummaries, ...confirmationResult.tasks];
+            missingTaskIds = confirmationResult.missingTaskIds;
+            taskRefreshError = confirmationResult.error;
+          }
+          if (isCurrentWorkboardLoadGeneration(params.host, generation)) {
+            if (pollResult?.nextUnfilteredCursor !== undefined) {
+              if (pollResult.nextUnfilteredCursor) {
+                workboardDefaultTaskDiscoveryCursors.set(
+                  params.host,
+                  pollResult.nextUnfilteredCursor,
+                );
+              } else {
+                workboardDefaultTaskDiscoveryCursors.delete(params.host);
+              }
+            }
+            applyTaskSummariesToState(state, taskSummaries, { missingTaskIds });
+            if (taskRefreshError) {
+              state.lastRefreshError = taskRefreshError;
             }
           }
         } catch (error) {

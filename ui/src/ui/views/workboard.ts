@@ -844,14 +844,18 @@ function positionWorkboardSelectMenu(details: HTMLDetailsElement) {
   const availableAbove = rect.top - gutter - gap;
   const openAbove = availableBelow < 220 && availableAbove > availableBelow;
   const maxHeight = Math.max(140, Math.min(320, openAbove ? availableAbove : availableBelow));
-  const top = openAbove
-    ? Math.max(gutter, rect.top - gap - maxHeight)
-    : Math.min(rect.bottom + gap, viewportHeight - gutter - maxHeight);
-
   menu.style.setProperty("--workboard-select-menu-left", `${left}px`);
-  menu.style.setProperty("--workboard-select-menu-top", `${top}px`);
   menu.style.setProperty("--workboard-select-menu-width", `${width}px`);
   menu.style.setProperty("--workboard-select-menu-max-height", `${maxHeight}px`);
+  const renderedHeight = Math.min(
+    maxHeight,
+    menu.getBoundingClientRect().height || menu.scrollHeight || maxHeight,
+  );
+  const top = openAbove
+    ? Math.max(gutter, rect.top - gap - renderedHeight)
+    : Math.min(rect.bottom + gap, viewportHeight - gutter - maxHeight);
+
+  menu.style.setProperty("--workboard-select-menu-top", `${top}px`);
 }
 
 function getEnabledWorkboardSelectOptions(details: HTMLDetailsElement): HTMLButtonElement[] {
@@ -930,7 +934,7 @@ function handleWorkboardSelectKeydown(event: KeyboardEvent) {
   const details = event.currentTarget as HTMLDetailsElement;
   const target = event.target;
   const trigger = details.querySelector<HTMLElement>(".workboard-select__trigger");
-  if (event.key === "Escape") {
+  if (event.key === "Escape" && details.open) {
     closeWorkboardSelectMenu(details, true);
     event.preventDefault();
     event.stopPropagation();
@@ -1597,8 +1601,9 @@ function taskIsActive(task: WorkboardTaskSummary | undefined): boolean {
 function cardHasActiveOrUnresolvedTask(
   card: WorkboardCard,
   task: WorkboardTaskSummary | undefined,
+  missingTaskIds: ReadonlySet<string>,
 ): boolean {
-  return taskIsActive(task) || Boolean(card.taskId && !task);
+  return taskIsActive(task) || Boolean(card.taskId && !task && !missingTaskIds.has(card.taskId));
 }
 
 function cardCanStart(
@@ -1608,7 +1613,7 @@ function cardCanStart(
 ): boolean {
   const task = state.tasksByCardId.get(card.id);
   const session = findWorkboardSession(card, sessions);
-  const activeTask = cardHasActiveOrUnresolvedTask(card, task);
+  const activeTask = cardHasActiveOrUnresolvedTask(card, task, state.missingTaskIds);
   const linkedSessionKey = card.sessionKey ?? card.execution?.sessionKey;
   return !activeTask && (!linkedSessionKey || !session);
 }
@@ -2190,7 +2195,7 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
   const session = findWorkboardSession(card, props.sessions);
   const busy = state.busyCardIds.has(card.id) || state.dispatching;
   const syncing = state.syncingCardIds.has(card.id);
-  const activeTask = cardHasActiveOrUnresolvedTask(card, task);
+  const activeTask = cardHasActiveOrUnresolvedTask(card, task, state.missingTaskIds);
   const live =
     activeTask ||
     session?.hasActiveRun === true ||

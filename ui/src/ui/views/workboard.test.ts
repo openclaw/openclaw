@@ -1216,6 +1216,46 @@ describe("renderWorkboard", () => {
     }
   });
 
+  it("lets Escape close the card modal from a closed custom select", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    const container = document.createElement("div");
+    document.body.append(container);
+    const props: WorkboardRenderProps = {
+      host,
+      client: null,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+      onRequestUpdate: () => renderInto(container, props),
+    };
+
+    try {
+      renderInto(container, props);
+      container.querySelector<HTMLButtonElement>(".workboard-toolbar__actions .primary")?.click();
+      await nextFrame();
+
+      const select = container.querySelector<HTMLDetailsElement>(
+        ".workboard-draft .workboard-select",
+      );
+      const trigger = select?.querySelector<HTMLElement>(".workboard-select__trigger");
+      expect(select?.open).toBe(false);
+      expect(trigger).toBeTruthy();
+
+      trigger!.focus();
+      dispatchKey(trigger!, "Escape");
+      await nextFrame();
+
+      expect(container.querySelector(".workboard-draft")).toBeNull();
+    } finally {
+      render(nothing, container);
+      container.remove();
+    }
+  });
+
   it("treats the detail drawer as a labelled keyboard-modal dialog", async () => {
     const host = {};
     const state = getWorkboardState(host);
@@ -1801,6 +1841,43 @@ describe("renderWorkboard", () => {
 
     expect(container.querySelector('button[title="Stop session"]')).not.toBeNull();
     expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(0);
+  });
+
+  it("allows starts for authoritatively missing historical task links", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Historical task link",
+        status: "running",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+        taskId: "task-pruned-from-ledger",
+      },
+    ];
+    state.missingTaskIds = new Set(["task-pruned-from-ledger"]);
+    const container = document.createElement("div");
+
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: null,
+        sessions: [],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+
+    expect(container.querySelector('button[title="Stop session"]')).toBeNull();
+    expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(1);
   });
 
   it("hides write controls for read-only operators", () => {
@@ -2563,6 +2640,75 @@ describe("renderWorkboard", () => {
     expect(menu?.style.getPropertyValue("--workboard-select-menu-top")).toBe("162px");
     expect(menu?.style.getPropertyValue("--workboard-select-menu-width")).toBe("240px");
     expect(menu?.style.getPropertyValue("--workboard-select-menu-max-height")).toBe("320px");
+  });
+
+  it("positions short dropdown menus against their trigger when opening above", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.draftOpen = true;
+    state.draftTitle = "New task";
+    const container = document.createElement("div");
+    const innerHeight = vi.spyOn(window, "innerHeight", "get").mockReturnValue(768);
+
+    try {
+      render(
+        renderWorkboard({
+          host,
+          client: null,
+          connected: true,
+          pluginEnabled: true,
+          agentsList: null,
+          sessions: [],
+          onOpenSession: () => undefined,
+        }),
+        container,
+      );
+
+      const select = container.querySelector<HTMLDetailsElement>(
+        ".workboard-draft .workboard-select",
+      );
+      const trigger = select?.querySelector<HTMLElement>(".workboard-select__trigger");
+      const menu = select?.querySelector<HTMLElement>(".workboard-select__menu");
+      expect(select).toBeTruthy();
+      expect(trigger).toBeTruthy();
+      expect(menu).toBeTruthy();
+
+      Object.defineProperty(trigger, "getBoundingClientRect", {
+        value: () => ({
+          top: 700,
+          right: 420,
+          bottom: 736,
+          left: 180,
+          width: 240,
+          height: 36,
+          x: 180,
+          y: 700,
+          toJSON: () => ({}),
+        }),
+      });
+      Object.defineProperty(menu, "getBoundingClientRect", {
+        value: () => ({
+          top: 0,
+          right: 420,
+          bottom: 96,
+          left: 180,
+          width: 240,
+          height: 96,
+          x: 180,
+          y: 0,
+          toJSON: () => ({}),
+        }),
+      });
+
+      select!.open = true;
+      select!.dispatchEvent(new Event("toggle"));
+
+      expect(menu?.style.getPropertyValue("--workboard-select-menu-top")).toBe("598px");
+      expect(menu?.style.getPropertyValue("--workboard-select-menu-max-height")).toBe("320px");
+    } finally {
+      innerHeight.mockRestore();
+    }
   });
 
   it("closes fixed dropdown menus when their anchor container scrolls or resizes", () => {

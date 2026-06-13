@@ -165,7 +165,39 @@ describe("workboard controller", () => {
     });
   });
 
-  it("preserves persisted task ids when a live paginated task listing omits them", async () => {
+  it("confirms persisted task ids before marking paginated omissions missing", async () => {
+    const host = {};
+    const linked = {
+      ...sampleCard,
+      taskId: sampleTask.taskId,
+      sessionKey: sampleTaskSessionKey,
+      runId: "run-1",
+    } satisfies WorkboardCard;
+    const client = createClient((method) => {
+      if (method === "workboard.cards.list") {
+        return { cards: [linked], statuses: ["todo", "done"] };
+      }
+      if (method === "tasks.list") {
+        return { tasks: [] };
+      }
+      if (method === "tasks.get") {
+        throw new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: `task not found: ${sampleTask.taskId}`,
+        });
+      }
+      return {};
+    });
+
+    await loadWorkboard({ host, client: client as never, force: true });
+
+    const state = getWorkboardState(host);
+    expect(client.request).toHaveBeenCalledWith("tasks.get", { taskId: sampleTask.taskId });
+    expect(state.cards[0]).toMatchObject({ taskId: sampleTask.taskId });
+    expect(state.missingTaskIds).toEqual(new Set([sampleTask.taskId]));
+  });
+
+  it("keeps paginated task omissions unresolved when exact lookup finds the task", async () => {
     const host = {};
     const linked = {
       ...sampleCard,
@@ -176,11 +208,16 @@ describe("workboard controller", () => {
     const client = createClient({
       "workboard.cards.list": { cards: [linked], statuses: ["todo", "done"] },
       "tasks.list": { tasks: [] },
+      "tasks.get": { task: sampleTask },
     });
 
     await loadWorkboard({ host, client: client as never, force: true });
 
-    expect(getWorkboardState(host).cards[0]).toMatchObject({ taskId: sampleTask.taskId });
+    const state = getWorkboardState(host);
+    expect(client.request).toHaveBeenCalledWith("tasks.get", { taskId: sampleTask.taskId });
+    expect(state.cards[0]).toMatchObject({ taskId: sampleTask.taskId });
+    expect(state.tasksByCardId.get(sampleCard.id)).toEqual(sampleTask);
+    expect(state.missingTaskIds).toEqual(new Set());
   });
 
   it("records poll refresh state until the final reconciliation render", async () => {
@@ -301,7 +338,7 @@ describe("workboard controller", () => {
     expect(state.lastRefreshError).toBe("tasks unavailable");
   });
 
-  it("removes terminal task links after authoritative task pruning", async () => {
+  it("tracks terminal task links after authoritative task pruning", async () => {
     const host = {};
     const state = getWorkboardState(host);
     const linkedCard = {
@@ -331,9 +368,19 @@ describe("workboard controller", () => {
     });
 
     expect(client.request).toHaveBeenCalledWith("tasks.get", { taskId: sampleTask.taskId });
-    expect(state.cards[0]).not.toHaveProperty("taskId");
+    expect(state.cards[0]).toMatchObject({ taskId: sampleTask.taskId });
     expect(state.tasksByCardId.has(sampleCard.id)).toBe(false);
+    expect(state.missingTaskIds).toEqual(new Set([sampleTask.taskId]));
     expect(state.lastRefreshError).toBeNull();
+
+    vi.clearAllMocks();
+    await refreshWorkboard({
+      host,
+      client: client as never,
+      source: "poll",
+    });
+
+    expect(client.request).not.toHaveBeenCalledWith("tasks.get", { taskId: sampleTask.taskId });
   });
 
   it("keeps canonical task unlinks during bounded poll refreshes", async () => {
@@ -604,6 +651,97 @@ describe("workboard controller", () => {
     await refreshWorkboard({ host, client: client as never, source: "poll" });
 
     expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
+    expect(getWorkboardState(host).cards[0]).toMatchObject({ taskId: sampleTask.taskId });
+  });
+
+  it("preserves discovered replacements across consecutive polls", async () => {
+    const host = {};
+    const missingTaskId = "task-pruned-from-ledger";
+    const replacementTaskId = "task-replacement";
+    const replacementTask = {
+      ...sampleTask,
+      id: replacementTaskId,
+      taskId: replacementTaskId,
+      childSessionKey: `agent:main:${sampleTaskSessionKey}`,
+    };
+    const linkedCard = {
+      ...sampleCard,
+      status: "running",
+      taskId: missingTaskId,
+      sessionKey: sampleTaskSessionKey,
+      runId: "run-1",
+    } satisfies WorkboardCard;
+    const state = getWorkboardState(host);
+    state.missingTaskIds = new Set([missingTaskId]);
+    const client = createClient((method, params) => {
+      if (method === "workboard.cards.list") {
+        return { cards: [linkedCard], statuses: ["todo", "running", "done"] };
+      }
+      if (method === "tasks.list") {
+        return { tasks: [replacementTask] };
+      }
+      if (method === "tasks.get") {
+        const taskId = (params as { taskId: string }).taskId;
+        if (taskId === replacementTaskId) {
+          return { task: replacementTask };
+        }
+        throw new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: `task not found: ${taskId}`,
+        });
+      }
+      return {};
+    });
+
+    await refreshWorkboard({ host, client: client as never, source: "poll" });
+
+    expect(client.request).not.toHaveBeenCalledWith("tasks.get", { taskId: missingTaskId });
+    expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
+    expect(state.cards[0]).toMatchObject({ taskId: missingTaskId });
+    expect(state.tasksByCardId.get(sampleCard.id)).toEqual(replacementTask);
+    expect(state.missingTaskIds).toEqual(new Set([missingTaskId]));
+
+    vi.clearAllMocks();
+    await refreshWorkboard({ host, client: client as never, source: "poll" });
+
+    expect(client.request).toHaveBeenCalledWith("tasks.get", { taskId: replacementTaskId });
+    expect(client.request).not.toHaveBeenCalledWith("tasks.get", { taskId: missingTaskId });
+    expect(client.request).not.toHaveBeenCalledWith("tasks.list", expect.anything());
+    expect(state.cards[0]).toMatchObject({ taskId: missingTaskId });
+    expect(state.tasksByCardId.get(sampleCard.id)).toEqual(replacementTask);
+    expect(state.missingTaskIds).toEqual(new Set([missingTaskId]));
+  });
+
+  it("cycles default-agent task discovery through bounded task pages", async () => {
+    const host = {};
+    const linkedCard = {
+      ...sampleCard,
+      status: "running",
+      sessionKey: sampleTaskSessionKey,
+      runId: "run-1",
+    } satisfies WorkboardCard;
+    const client = createClient((method, params) => {
+      if (method === "workboard.cards.list") {
+        return { cards: [linkedCard], statuses: ["todo", "running", "done"] };
+      }
+      if (method === "tasks.list") {
+        return (params as { cursor?: string }).cursor === "500"
+          ? { tasks: [{ ...sampleTask, childSessionKey: `agent:main:${sampleTaskSessionKey}` }] }
+          : { tasks: [], nextCursor: "500" };
+      }
+      return {};
+    });
+
+    await refreshWorkboard({ host, client: client as never, source: "poll" });
+    expect(getWorkboardState(host).cards[0]).not.toHaveProperty("taskId");
+
+    vi.clearAllMocks();
+    await refreshWorkboard({ host, client: client as never, source: "poll" });
+
+    expect(client.request).toHaveBeenCalledWith("tasks.list", {
+      limit: 500,
+      cursor: "500",
+    });
     expect(getWorkboardState(host).cards[0]).toMatchObject({ taskId: sampleTask.taskId });
   });
 
