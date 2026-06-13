@@ -532,6 +532,8 @@ describe("deepseek provider plugin", () => {
       name: "DeepSeek V4 Flash",
       input: ["text"],
       reasoning: true,
+      contextWindow: 131072,
+      maxTokens: 8192,
       cost: { input: 0.2, output: 0.5, cacheRead: 0.05, cacheWrite: 0.5 },
     });
 
@@ -544,6 +546,8 @@ describe("deepseek provider plugin", () => {
       name: "DeepSeek V4 Pro",
       input: ["text"],
       reasoning: true,
+      contextWindow: 131072,
+      maxTokens: 8192,
       cost: { input: 0.5, output: 1.5, cacheRead: 0.1, cacheWrite: 1.5 },
       compat: { supportsTools: false },
     });
