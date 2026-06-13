@@ -121,6 +121,44 @@ type ChatProofResult = {
   screenshotPath: string;
 };
 
+function extractSmokeText(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (!value || typeof value !== "object") {
+    return "";
+  }
+  const record = value as Record<string, unknown>;
+  if (typeof record.text === "string") {
+    return record.text;
+  }
+  if (typeof record.content === "string") {
+    return record.content;
+  }
+  if (Array.isArray(record.content)) {
+    return record.content
+      .map((entry) => extractSmokeText(entry))
+      .filter(Boolean)
+      .join("\n");
+  }
+  return "";
+}
+
+export function collectControlDirectorSmokeVisibleText(messages: readonly unknown[]): string {
+  return messages
+    .map((message) => extractSmokeText(message))
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+export function extractControlDirectorSmokeHistoryMessages(value: unknown): unknown[] {
+  if (!value || typeof value !== "object") {
+    return [];
+  }
+  const record = value as Record<string, unknown>;
+  return Array.isArray(record.messages) ? record.messages : [];
+}
+
 function timestampSlug(): string {
   return new Date().toISOString().replace(/[:.]/g, "-");
 }
@@ -578,8 +616,10 @@ async function sendControlDirectorPrompt(page: Page, prompt: string): Promise<st
 }
 
 async function waitForVisibleBlockedResponse(page: Page): Promise<string> {
-  await page.waitForFunction(
-    (markers) => {
+  const deadline = Date.now() + 120_000;
+  let lastVisibleText = "";
+  while (Date.now() < deadline) {
+    const result = await page.evaluate(async (markers) => {
       function extractText(value: unknown): string {
         if (typeof value === "string") {
           return value;
@@ -602,55 +642,72 @@ async function waitForVisibleBlockedResponse(page: Page): Promise<string> {
         }
         return "";
       }
+      function collectMessagesText(messages: readonly unknown[]): string {
+        return messages
+          .map((message) => extractText(message))
+          .filter(Boolean)
+          .join("\n\n");
+      }
+      function hasAllMarkers(text: string): boolean {
+        return markers.every((marker) => text.includes(marker));
+      }
       const app = document.querySelector("openclaw-app") as
-        | (HTMLElement & { chatMessages?: unknown[]; chatStream?: string | null })
+        | (HTMLElement & {
+            chatMessages?: unknown[];
+            chatRunId?: string | null;
+            chatStream?: string | null;
+            client?: {
+              request?: (method: string, params?: Record<string, unknown>) => Promise<unknown>;
+            };
+            requestUpdate?: () => void;
+            sessionKey?: string;
+          })
         | null;
       const smokeState = globalThis as Record<string, unknown>;
       const sendError = smokeState.__controlDirectorNoResponseSmokeSendError;
       if (typeof sendError === "string" && sendError) {
         throw new Error(`Control UI chat send failed: ${sendError}`);
       }
-      const messageText = (app?.chatMessages ?? [])
-        .map((message) => extractText(message))
-        .join("\n");
+      const messageText = collectMessagesText(app?.chatMessages ?? []);
       const bodyText = document.body.textContent ?? "";
-      const visibleText = `${messageText}\n${app?.chatStream ?? ""}\n${bodyText}`;
-      return (markers as string[]).every((marker) => visibleText.includes(marker));
-    },
-    CONTROL_DIRECTOR_EXPECTED_VISIBLE_MARKERS,
-    { timeout: 120_000 },
-  );
-  return await page.evaluate(() => {
-    function extractText(value: unknown): string {
-      if (typeof value === "string") {
-        return value;
+      const currentVisibleText = `${messageText}\n${app?.chatStream ?? ""}\n${bodyText}`;
+      if (hasAllMarkers(currentVisibleText)) {
+        return { ok: true, text: currentVisibleText };
       }
-      if (!value || typeof value !== "object") {
-        return "";
+      const sessionKey = typeof app?.sessionKey === "string" ? app.sessionKey.trim() : "";
+      if (!sessionKey || !app?.client?.request) {
+        return { ok: false, text: currentVisibleText };
       }
-      const record = value as Record<string, unknown>;
-      if (typeof record.text === "string") {
-        return record.text;
+      const history = (await app.client.request("chat.history", {
+        sessionKey,
+        limit: 200,
+        maxChars: 4000,
+        ...(typeof app.chatRunId === "string" && app.chatRunId.trim()
+          ? { targetRunId: app.chatRunId }
+          : {}),
+      })) as { messages?: unknown[] };
+      const historyMessages = Array.isArray(history.messages) ? history.messages : [];
+      const historyText = collectMessagesText(historyMessages);
+      if (!hasAllMarkers(historyText)) {
+        return { ok: false, text: historyText || currentVisibleText };
       }
-      if (typeof record.content === "string") {
-        return record.content;
-      }
-      if (Array.isArray(record.content)) {
-        return record.content
-          .map((entry) => extractText(entry))
-          .filter(Boolean)
-          .join("\n");
-      }
-      return "";
+      app.chatMessages = historyMessages;
+      app.chatStream = null;
+      app.chatRunId = null;
+      app.requestUpdate?.();
+      return { ok: true, text: historyText };
+    }, CONTROL_DIRECTOR_EXPECTED_VISIBLE_MARKERS as string[]);
+    if (result.ok) {
+      return result.text;
     }
-    const app = document.querySelector("openclaw-app") as
-      | (HTMLElement & { chatMessages?: unknown[]; chatStream?: string | null })
-      | null;
-    return (app?.chatMessages ?? [])
-      .map((message) => extractText(message))
-      .filter(Boolean)
-      .join("\n\n");
-  });
+    lastVisibleText = result.text;
+    await page.waitForTimeout(500);
+  }
+  throw new Error(
+    `Timed out waiting for Control Director visible blocked response. Last visible text: ${normalizeVisibleText(
+      lastVisibleText,
+    )}`,
+  );
 }
 
 async function readSessionDiagnostics(page: Page, sessionKey: string | null, visibleText: string) {

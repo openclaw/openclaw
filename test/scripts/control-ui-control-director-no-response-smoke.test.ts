@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   assertControlDirectorNoResponseEvidence,
   buildControlDirectorNoResponseSmokeCommand,
+  collectControlDirectorSmokeVisibleText,
   detectMobileDevices,
   MOBILE_WEB_VIEWPORT_PROOF_KIND,
   mobileDeviceDetectionCommands,
@@ -9,6 +10,7 @@ import {
   parseAndroidDeviceLines,
   parseIosDeviceLines,
   resolveMobileProofDecision,
+  extractControlDirectorSmokeHistoryMessages,
   validateSessionDiagnostics,
   validateVisibleBlockedText,
 } from "../../scripts/dev/control-ui-control-director-no-response-smoke.ts";
@@ -84,6 +86,35 @@ iPad unavailable (17.5) (0000)`),
         "no unsupported delivered Status: complete",
       ]),
     });
+  });
+
+  it("extracts persisted history text for the no-response fallback", () => {
+    const history = {
+      messages: [
+        { role: "user", content: "empty response exhaustion qa check" },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: [
+                "Verified state: no user-visible payload was available.",
+                "Next build gap: resolve liveness blocker.",
+                "Completion Grade: 7/10",
+                "Criticality: 10/10",
+                "Status: blocked",
+              ].join("\n"),
+            },
+          ],
+        },
+      ],
+    };
+
+    const messages = extractControlDirectorSmokeHistoryMessages(history);
+    const visibleText = collectControlDirectorSmokeVisibleText(messages);
+
+    expect(messages).toHaveLength(2);
+    expect(validateVisibleBlockedText(visibleText)).toEqual({ ok: true, missing: [] });
   });
 
   it("fails when ledger or liveness evidence is missing", () => {
