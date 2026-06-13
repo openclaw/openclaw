@@ -9,16 +9,13 @@ OpenClaw uses two glass tiers to establish visual hierarchy. **Never use flat, f
 Used for: top nav, sidebar, persistent chrome overlays.
 
 ```css
-/* Exact values from ui/src/styles/layout.css */
-background: rgba(14, 16, 21, 0.96); /* var(--chrome) */
-
-@supports (backdrop-filter: blur(1px)) {
-  backdrop-filter: blur(12px) saturate(1.6);
-  -webkit-backdrop-filter: blur(12px) saturate(1.6);
-}
+/* Exact values from ui/src/styles/layout.css — .topbar */
+background: color-mix(in srgb, var(--bg) 82%, transparent);
+backdrop-filter: blur(12px) saturate(1.6);
+-webkit-backdrop-filter: blur(12px) saturate(1.6);
 ```
 
-**Why these values:** 96% opacity keeps the chrome readable while still refracting content behind it. `saturate(1.6)` brings out colour from blurred layers.
+**Why these values:** the topbar mixes the root background with transparency so it stays readable while still refracting content behind it. `saturate(1.6)` brings out colour from blurred layers.
 
 ---
 
@@ -41,10 +38,12 @@ border-radius: var(--radius-lg); /* 14px */
 Popovers and floating overlays reduce blur slightly:
 
 ```css
-/* Exact values from ui/src/styles/components.css */
-backdrop-filter: blur(8px); /* skill-workshop panel, cron quick-create */
-backdrop-filter: blur(10px); /* modal overlay, workboard card */
-backdrop-filter: blur(14px); /* tooltip / high-contrast surface */
+/* Exact values from source */
+backdrop-filter: blur(
+  8px
+); /* components.css action menu, cron-quick-create.css modal backdrop, workboard.css modal backdrop */
+backdrop-filter: blur(10px); /* skill-workshop.css revision dialog, dreams.css media lightbox */
+backdrop-filter: blur(14px); /* components.css markdown preview dialog backdrop */
 ```
 
 ---

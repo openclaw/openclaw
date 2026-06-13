@@ -6,13 +6,13 @@ OpenClaw targets **WCAG 2.1 AA**. This checklist applies to every UI component �
 
 ## Contrast Minimums
 
-| Context                                   | Minimum Ratio    | Notes                                             |
-| ----------------------------------------- | ---------------- | ------------------------------------------------- |
-| Normal body text (< 18px / < 14px bold)   | **4.5:1**        | Use `--text` (#d4d4d8) or stronger on `--bg`      |
-| Large text (≥ 18px regular / ≥ 14px bold) | **3:1**          | Headings in chat thread                           |
-| UI component boundaries (inputs, buttons) | **3:1**          | Border colours against adjacent background        |
-| Focus indicators                          | **3:1** (AA)     | `--focus-ring` / `--focus-glow` already compliant |
-| Placeholder text                          | Best-effort ≥3:1 | `--muted` (#8b8b94) is ~4.6:1 — acceptable        |
+| Context                                   | Minimum Ratio    | Notes                                              |
+| ----------------------------------------- | ---------------- | -------------------------------------------------- |
+| Normal body text (< 18px / < 14px bold)   | **4.5:1**        | Use `--text` (#d4d4d8) or stronger on `--bg`       |
+| Large text (≥ 18px regular / ≥ 14px bold) | **3:1**          | Headings in chat thread                            |
+| UI component boundaries (inputs, buttons) | **3:1**          | Border colours against adjacent background         |
+| Focus indicators                          | **3:1** (AA)     | `--focus-ring` / `--focus-glow` already compliant  |
+| Placeholder text                          | Best-effort ≥3:1 | `--muted` (#838387) is ~5:1 on `--bg` — acceptable |
 
 > Verify with [WebAIM Contrast Checker](https://webaim.org/resources/contrastchecker/) or browser DevTools accessibility panel.
 
@@ -47,7 +47,7 @@ OpenClaw targets **WCAG 2.1 AA**. This checklist applies to every UI component �
 - [ ] Target element has `tabindex="-1"` to accept programmatic focus
 
 ```html
-<a href="#main-content" class="skip-link">Skip to main content</a>
+<a id="skip-to-main" href="#main-content" class="skip-link">Skip to main content</a>
 ```
 
 ```css

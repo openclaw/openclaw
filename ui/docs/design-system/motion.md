@@ -20,7 +20,6 @@ Non-token durations in use (document when adding new ones):
 | ----------------------- | ------------------------------ | ----------------- |
 | Theme circle transition | `400ms`                        | `base.css`        |
 | Shimmer animation       | `1500ms`                       | `base.css`        |
-| Token meter bar         | `400ms`                        | `chat/layout.css` |
 | Composer border/shadow  | `var(--duration-fast)` = 100ms | `chat/layout.css` |
 
 ---
@@ -73,14 +72,13 @@ For components with complex animation state (e.g. shimmer skeletons that use `an
 
 ## Animation Inventory
 
-| Name                      | File              | Duration                  | Purpose                       |
-| ------------------------- | ----------------- | ------------------------- | ----------------------------- |
-| `shimmer`                 | `base.css`        | 1500ms, infinite          | Skeleton loading placeholders |
-| `theme-circle-transition` | `base.css`        | 400ms, `--ease-out`       | Dark/light mode circle wipe   |
-| Token meter bar width     | `chat/layout.css` | 400ms, `--ease-out`       | Context usage bar update      |
-| Composer border/shadow    | `chat/layout.css` | 100ms (`--duration-fast`) | Focus ring on input area      |
-| Workboard card glass      | `workboard.css`   | —                         | Static (no animation)         |
-| Dreams filter blur        | `dreams.css`      | Tied to JS class toggle   | Blur in/out for media focus   |
+| Name                      | File              | Duration                  | Purpose                                         |
+| ------------------------- | ----------------- | ------------------------- | ----------------------------------------------- |
+| `shimmer`                 | `base.css`        | 1500ms, infinite          | Skeleton loading placeholders                   |
+| `theme-circle-transition` | `base.css`        | 400ms, `--ease-out`       | Dark/light mode circle wipe                     |
+| Composer border/shadow    | `chat/layout.css` | 100ms (`--duration-fast`) | Focus ring on input area                        |
+| Workboard card glass      | `workboard.css`   | —                         | Static (no animation)                           |
+| Dreams diary reveal       | `dreams.css`      | 1.4s, cubic-bezier        | Entry reveal keyframe with blur-to-clear effect |
 
 ---
 

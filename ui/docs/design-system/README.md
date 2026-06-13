@@ -14,7 +14,7 @@ OpenClaw's visual language is a **dark-first, glass-surface system** built aroun
 ## Guiding Principles
 
 1. **Glass, not solid** — Surfaces use `backdrop-filter` blur + semi-transparent backgrounds. No flat opaque panels in the main chrome.
-2. **Depth through layering** — Five background levels (`--bg` → `--bg-elevated`) communicate hierarchy without borders.
+2. **Depth through layering** — The background scale (`--bg`, `--bg-accent`, `--bg-elevated`, `--bg-hover`, `--bg-muted`) communicates hierarchy without heavy borders.
 3. **Accent with restraint** — Signature red (`--accent: #ff5c5c`) for primary actions only; teal (`--accent-2`) for secondary/status.
 4. **Motion serves meaning** — Animations telegraph state changes; they never play for decoration alone.
 5. **Accessible by default** — Every component ships with focus-visible styles, correct ARIA roles, and ≥4.5:1 contrast on text.
