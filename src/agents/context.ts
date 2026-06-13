@@ -78,6 +78,21 @@ export function applyDiscoveredContextWindows(params: {
     // know the active provider should still prefer qualified lookups first.
     if (existing === undefined || contextTokens < existing) {
       params.cache.set(model.id, contextTokens);
+      const provider =
+        typeof model.provider === "string"
+          ? model.provider
+          : typeof model.modelProvider === "string"
+            ? model.modelProvider
+            : undefined;
+      if (provider) {
+        const qualified = normalizeProviderId(provider) + "/" + model.id;
+        if (qualified !== model.id) {
+          const existingQualified = params.cache.get(qualified);
+          if (existingQualified === undefined || contextTokens < existingQualified) {
+            params.cache.set(qualified, contextTokens);
+          }
+        }
+      }
     }
   }
 }
@@ -90,26 +105,27 @@ export function applyConfiguredContextWindows(params: {
   if (!providers || typeof providers !== "object") {
     return;
   }
-  for (const provider of Object.values(providers)) {
-    if (!Array.isArray(provider?.models)) {
+  for (const [providerId, providerConfig] of Object.entries(providers)) {
+    if (!Array.isArray(providerConfig?.models)) {
       continue;
     }
-    for (const model of provider.models) {
+    const qualifiedKeyPrefix = normalizeProviderId(providerId) + "/";
+    for (const model of providerConfig.models) {
       const modelId = typeof model?.id === "string" ? model.id : undefined;
       const contextTokens =
         typeof model?.contextTokens === "number"
           ? model.contextTokens
           : typeof model?.contextWindow === "number"
             ? model.contextWindow
-            : typeof provider?.contextTokens === "number"
-              ? provider.contextTokens
-              : typeof provider?.contextWindow === "number"
-                ? provider.contextWindow
+            : typeof providerConfig?.contextTokens === "number"
+              ? providerConfig.contextTokens
+              : typeof providerConfig?.contextWindow === "number"
+                ? providerConfig.contextWindow
                 : undefined;
       if (!modelId || !contextTokens || contextTokens <= 0) {
         continue;
       }
-      params.cache.set(modelId, contextTokens);
+      params.cache.set(qualifiedKeyPrefix + modelId, contextTokens);
     }
   }
 }
@@ -215,9 +231,10 @@ export function lookupContextTokens(
     return lookupCachedContextTokens(modelId);
   }
   if (options?.allowAsyncLoad === false) {
-    // Read-only callers still need synchronous config-backed overrides, but they
-    // should not start background model discovery or models.json writes.
+    // Read-only callers still need synchronous config-backed overrides.
     primeConfiguredContextWindows();
+    // Also kick off async catalog load so the next lookup benefits from it.
+    void ensureContextWindowCacheLoaded();
   } else {
     // Best-effort: kick off loading on demand, but don't block lookups.
     void ensureContextWindowCacheLoaded();
@@ -457,4 +474,13 @@ export function resolveContextTokensForModel(params: {
   }
 
   return params.fallbackContextTokens;
+}
+
+// Gateway startup pre-warm: load plugin catalog context windows before
+// the first status call needs them. Uses setTimeout to avoid blocking
+// module initialization.
+if (typeof setImmediate === "function") {
+  setImmediate(() => ensureContextWindowCacheLoaded().catch(() => {}));
+} else if (typeof setTimeout === "function") {
+  setTimeout(() => ensureContextWindowCacheLoaded().catch(() => {}), 0);
 }
