@@ -112,6 +112,94 @@ describe("AcpSessionManager runtime config", () => {
     });
   });
 
+  it("does not resend startup model/thinking after a post-start runtime option update", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+
+    const sessionKey = "agent:opencode:acp:session-startup";
+    let currentMeta: SessionAcpMeta | undefined;
+    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+      const key = (paramsUnknown as { sessionKey?: string }).sessionKey ?? sessionKey;
+      return {
+        sessionKey: key,
+        storeSessionKey: key,
+        acp: currentMeta,
+      };
+    });
+    hoisted.upsertAcpSessionMetaMock.mockImplementation(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as {
+        mutate: (
+          current: SessionAcpMeta | undefined,
+          entry: { acp?: SessionAcpMeta } | undefined,
+        ) => SessionAcpMeta | null | undefined;
+      };
+      const next = params.mutate(currentMeta, currentMeta ? { acp: currentMeta } : undefined);
+      if (next) {
+        currentMeta = next;
+      }
+      return {
+        sessionKey,
+        storeSessionKey: sessionKey,
+        acp: currentMeta,
+      };
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.initializeSession({
+      cfg: baseCfg,
+      sessionKey,
+      agent: "opencode",
+      mode: "persistent",
+      runtimeOptions: {
+        model: "deepseek/deepseek-v4-pro",
+        thinking: "high",
+      },
+    });
+
+    // Persist a post-start permission/timeout update before the first turn; this must keep the
+    // startup model/thinking baseline so the turn only reconciles the new post-start controls.
+    await manager.updateSessionRuntimeOptions({
+      cfg: baseCfg,
+      sessionKey,
+      patch: {
+        permissionProfile: "strict",
+        timeoutSeconds: 120,
+      },
+    });
+
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey,
+      text: "do work",
+      mode: "prompt",
+      requestId: "run-1",
+    });
+
+    expectRecordFields(mockCallArg(runtimeState.ensureSession), {
+      model: "deepseek/deepseek-v4-pro",
+      thinking: "high",
+    });
+    expectNoMockCallFields(runtimeState.setConfigOption, {
+      key: "model",
+      value: "deepseek/deepseek-v4-pro",
+    });
+    expectNoMockCallFields(runtimeState.setConfigOption, {
+      key: "thinking",
+      value: "high",
+    });
+    expectMockCallFields(runtimeState.setConfigOption, {
+      key: "approval_policy",
+      value: "strict",
+    });
+    expectMockCallFields(runtimeState.setConfigOption, {
+      key: "timeout",
+      value: "120",
+    });
+  });
+
   it("reconciles persisted ACP session identifiers from runtime status after a turn", async () => {
     const runtimeState = createRuntime();
     runtimeState.ensureSession.mockResolvedValue({

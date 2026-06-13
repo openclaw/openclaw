@@ -307,6 +307,43 @@ export function runtimeOptionsEqual(
   return JSON.stringify(normalizeRuntimeOptions(a)) === JSON.stringify(normalizeRuntimeOptions(b));
 }
 
+/**
+ * Keeps applied-option entries whose values still match the newly persisted options.
+ * Unchanged entries (e.g. startup model/thinking already pushed via ensureSession) stay
+ * marked applied so the next turn does not resend them; changed or removed entries drop
+ * out so the next turn reconciles only those against the live backend.
+ */
+export function retainUnchangedAppliedRuntimeOptions(params: {
+  applied: AcpSessionRuntimeOptions | undefined;
+  persisted: AcpSessionRuntimeOptions;
+}): AcpSessionRuntimeOptions {
+  const applied = normalizeRuntimeOptions(params.applied);
+  const persisted = normalizeRuntimeOptions(params.persisted);
+  const retainedExtras = Object.fromEntries(
+    Object.entries(applied.backendExtras ?? {}).filter(
+      ([key, value]) => persisted.backendExtras?.[key] === value,
+    ),
+  );
+  return normalizeRuntimeOptions({
+    ...(applied.runtimeMode && applied.runtimeMode === persisted.runtimeMode
+      ? { runtimeMode: applied.runtimeMode }
+      : {}),
+    ...(applied.model && applied.model === persisted.model ? { model: applied.model } : {}),
+    ...(applied.thinking && applied.thinking === persisted.thinking
+      ? { thinking: applied.thinking }
+      : {}),
+    ...(applied.cwd && applied.cwd === persisted.cwd ? { cwd: applied.cwd } : {}),
+    ...(applied.permissionProfile && applied.permissionProfile === persisted.permissionProfile
+      ? { permissionProfile: applied.permissionProfile }
+      : {}),
+    ...(typeof applied.timeoutSeconds === "number" &&
+    applied.timeoutSeconds === persisted.timeoutSeconds
+      ? { timeoutSeconds: applied.timeoutSeconds }
+      : {}),
+    ...(Object.keys(retainedExtras).length > 0 ? { backendExtras: retainedExtras } : {}),
+  });
+}
+
 export function buildRuntimeConfigOptionPairs(
   options: AcpSessionRuntimeOptions,
   advertisedConfigOptionKeys?: readonly string[],
