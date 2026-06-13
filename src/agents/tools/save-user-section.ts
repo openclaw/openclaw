@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
-import { loadSessionEntry } from "../../gateway/session-utils.js";
+import { resolveAppUserId } from "../app-user-workspace.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam, ToolInputError } from "./common.js";
 
@@ -23,9 +23,6 @@ import { jsonResult, readStringParam, ToolInputError } from "./common.js";
 
 /** Sections the agent may write via this tool. Mirrors the reader allowlist. */
 export const WRITABLE_SECTIONS: readonly string[] = ["User_D_Prompt", "app_note"];
-
-/** Same path-safe charset the reader enforces on the on-disk filename component. */
-const SAFE_USERID = /^[A-Za-z0-9_-]+$/;
 
 const SaveUserSectionSchema = Type.Object({
   section: Type.String({
@@ -66,28 +63,17 @@ export function upsertSection(fileContent: string, section: string, content: str
   return fileContent.slice(0, firstStart) + block + fileContent.slice(firstEnd + end.length);
 }
 
-/** Resolve the app user id for this session from the persisted session entry. */
-function resolveAppUserId(agentSessionKey?: string): string | null {
-  if (!agentSessionKey) {
-    return null;
-  }
-  try {
-    const { entry } = loadSessionEntry(agentSessionKey);
-    const raw = (entry as { appUserId?: unknown } | undefined)?.appUserId;
-    if (typeof raw !== "string") {
-      return null;
-    }
-    const id = raw.trim().toLowerCase();
-    return SAFE_USERID.test(id) ? id : null;
-  } catch {
-    return null;
-  }
-}
-
 export function createSaveUserSectionTool(options: {
   config?: OpenClawConfig;
   agentSessionKey?: string;
   workspaceDir?: string;
+  /**
+   * Canonical directory for the per-user file, decoupled from `workspaceDir`.
+   * App-user sessions run jailed in a per-user cwd, but their user-file must
+   * land in the shared agent-home `users/` dir the dashboard reader resolves.
+   * Defaults to `<workspaceDir>/users`.
+   */
+  userFileDir?: string;
 }): AnyAgentTool | null {
   // Only offered when we can resolve a workspace to write into.
   if (!options.workspaceDir) {
@@ -122,7 +108,7 @@ export function createSaveUserSectionTool(options: {
         });
       }
 
-      const usersDir = path.join(workspaceDir, "users");
+      const usersDir = options.userFileDir ?? path.join(workspaceDir, "users");
       const filePath = path.join(usersDir, `${appUserId}.md`);
       // Containment: the resolved path must stay inside <workspace>/users/.
       const rel = path.relative(usersDir, filePath);

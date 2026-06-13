@@ -171,6 +171,13 @@ export function createOpenClawCodingTools(options?: {
   sessionKey?: string;
   agentDir?: string;
   workspaceDir?: string;
+  /**
+   * Canonical directory for the per-user file (`save_user_section`), decoupled
+   * from `workspaceDir`. Lets app-user sessions run jailed in a per-user cwd
+   * while their user-file still lands in the shared agent-home `users/` dir that
+   * the dashboard reader resolves. Defaults to `<workspaceDir>/users`.
+   */
+  userFileDir?: string;
   config?: OpenClawConfig;
   abortSignal?: AbortSignal;
   /**
@@ -436,6 +443,7 @@ export function createOpenClawCodingTools(options?: {
       sandboxRoot,
       sandboxFsBridge,
       workspaceDir: workspaceRoot,
+      userFileDir: options?.userFileDir,
       sandboxed: !!sandbox,
       config: options?.config,
       pluginToolAllowlist: collectExplicitAllowlist([

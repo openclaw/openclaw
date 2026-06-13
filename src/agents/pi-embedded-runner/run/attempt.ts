@@ -24,6 +24,7 @@ import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../../agent-paths.js";
 import { resolveSessionAgentIds } from "../../agent-scope.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
+import { canonicalUserFileDir, resolveAppToolWorkspace } from "../../app-user-workspace.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../bootstrap-files.js";
 import { createCacheTrace } from "../../cache-trace.js";
 import {
@@ -245,8 +246,28 @@ export async function runEmbeddedAttempt(
     : resolvedWorkspace;
   await fs.mkdir(effectiveWorkspace, { recursive: true });
 
+  // Option A — per-user workspace isolation. App-user sessions are re-rooted to a
+  // private per-user dir so the built-in file tools cannot reach the agent IP or
+  // other users' files. Non-app channels and admins keep the full shared
+  // workspace. Skills + bootstrap context still load from `effectiveWorkspace`
+  // (the agent home), so a jailed app user still gets the injected IP. Only the
+  // tool cwd/root is narrowed. Fails CLOSED: an app session with no resolvable
+  // appUserId gets a throwaway empty dir, never the shared workspace.
+  const appWorkspace = resolveAppToolWorkspace({
+    workspaceHome: effectiveWorkspace,
+    sessionKey: params.sessionKey,
+    denyKey: params.sessionId,
+  });
+  const toolWorkspace = appWorkspace.kind === "shared" ? effectiveWorkspace : appWorkspace.dir;
+  if (toolWorkspace !== effectiveWorkspace) {
+    await fs.mkdir(toolWorkspace, { recursive: true });
+    log.debug(
+      `app-user workspace: kind=${appWorkspace.kind} session=${params.sessionKey ?? params.sessionId} cwd=${toolWorkspace}`,
+    );
+  }
+
   let restoreSkillEnv: (() => void) | undefined;
-  process.chdir(effectiveWorkspace);
+  process.chdir(toolWorkspace);
   try {
     const shouldLoadSkillEntries = !params.skillsSnapshot || !params.skillsSnapshot.resolvedSkills;
     const skillEntries = shouldLoadSkillEntries
@@ -312,7 +333,8 @@ export async function runEmbeddedAttempt(
           senderIsAdmin: params.senderIsAdmin,
           sessionKey: params.sessionKey ?? params.sessionId,
           agentDir,
-          workspaceDir: effectiveWorkspace,
+          workspaceDir: toolWorkspace,
+          userFileDir: canonicalUserFileDir(effectiveWorkspace),
           config: params.config,
           abortSignal: runAbortController.signal,
           modelProvider: params.model.provider,

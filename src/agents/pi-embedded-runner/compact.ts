@@ -24,6 +24,7 @@ import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
+import { canonicalUserFileDir, resolveAppToolWorkspace } from "../app-user-workspace.js";
 import type { ExecElevatedDefaults } from "../bash-tools.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../bootstrap-files.js";
 import { listChannelSupportedActions, resolveChannelMessageToolHints } from "../channel-tools.js";
@@ -332,8 +333,21 @@ export async function compactEmbeddedPiSessionDirect(
     cwd: effectiveWorkspace,
   });
 
+  // Option A — per-user workspace isolation (mirrors run/attempt.ts). App-user
+  // sessions are re-rooted to a private per-user dir for the file tools; skills +
+  // bootstrap context still load from the agent home (`effectiveWorkspace`).
+  const appWorkspace = resolveAppToolWorkspace({
+    workspaceHome: effectiveWorkspace,
+    sessionKey: params.sessionKey,
+    denyKey: params.sessionId,
+  });
+  const toolWorkspace = appWorkspace.kind === "shared" ? effectiveWorkspace : appWorkspace.dir;
+  if (toolWorkspace !== effectiveWorkspace) {
+    await fs.mkdir(toolWorkspace, { recursive: true });
+  }
+
   let restoreSkillEnv: (() => void) | undefined;
-  process.chdir(effectiveWorkspace);
+  process.chdir(toolWorkspace);
   try {
     const shouldLoadSkillEntries = !params.skillsSnapshot || !params.skillsSnapshot.resolvedSkills;
     const skillEntries = shouldLoadSkillEntries
@@ -379,7 +393,8 @@ export async function compactEmbeddedPiSessionDirect(
       senderIsOwner: params.senderIsOwner,
       senderIsAdmin: params.senderIsAdmin,
       agentDir,
-      workspaceDir: effectiveWorkspace,
+      workspaceDir: toolWorkspace,
+      userFileDir: canonicalUserFileDir(effectiveWorkspace),
       config: params.config,
       abortSignal: runAbortController.signal,
       modelProvider: model.provider,

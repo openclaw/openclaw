@@ -44,6 +44,8 @@ export function createOpenClawTools(options?: {
   sandboxRoot?: string;
   sandboxFsBridge?: SandboxFsBridge;
   workspaceDir?: string;
+  /** Canonical per-user-file dir for save_user_section (defaults to <workspaceDir>/users). */
+  userFileDir?: string;
   sandboxed?: boolean;
   config?: OpenClawConfig;
   pluginToolAllowlist?: string[];
@@ -108,6 +110,7 @@ export function createOpenClawTools(options?: {
     config: options?.config,
     agentSessionKey: options?.agentSessionKey,
     workspaceDir,
+    userFileDir: options?.userFileDir,
   });
   const tools: AnyAgentTool[] = [
     createBrowserTool({
