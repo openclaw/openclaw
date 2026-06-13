@@ -59,4 +59,15 @@ describe("resolveHeartbeatReplyPayload", () => {
     const blockquoted: ReplyPayload = { text: "Thinking... _weighing the options_" };
     expect(resolveHeartbeatReplyPayload(blockquoted)).toBeUndefined();
   });
+
+  it("skips a trailing lowercase 'reasoning:' payload and returns the final answer", () => {
+    const answer: ReplyPayload = { text: "All clear" };
+    const lowercased: ReplyPayload = { text: "reasoning: because nothing changed" };
+    expect(resolveHeartbeatReplyPayload([answer, lowercased])).toBe(answer);
+  });
+
+  it("returns undefined for a Markdown blockquoted thinking payload", () => {
+    const quoted: ReplyPayload = { text: "> thinking... _weighing the options_" };
+    expect(resolveHeartbeatReplyPayload(quoted)).toBeUndefined();
+  });
 });

@@ -9,6 +9,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import {
   hasOutboundReplyContent,
+  isReasoningReplyPayload,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
@@ -26,11 +27,7 @@ import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
 import { resolveModelRefFromString, type ModelRef } from "../agents/model-selection.js";
 import { resolvePersistedSessionRuntimeId } from "../agents/session-runtime-compat.js";
 import { DEFAULT_HEARTBEAT_FILENAME } from "../agents/workspace.js";
-import {
-  hasFormattedReasoningPrefix,
-  isReasoningReplyPayload,
-  resolveHeartbeatReplyPayload,
-} from "../auto-reply/heartbeat-reply-payload.js";
+import { resolveHeartbeatReplyPayload } from "../auto-reply/heartbeat-reply-payload.js";
 import {
   getHeartbeatToolNotificationText,
   resolveHeartbeatToolResponseFromReplyResult,
@@ -757,6 +754,12 @@ function resolveStaleHeartbeatIsolatedSessionKey(params: {
   return undefined;
 }
 
+// Display-format check (not a classifier): whether reasoning text is already
+// rendered in the heartbeat "Reasoning:" / "Thinking..._" form, so it should be
+// delivered as-is rather than re-wrapped by formatReasoningMessage. Reasoning
+// classification itself is the shared SDK `isReasoningReplyPayload`.
+const HEARTBEAT_REASONING_DISPLAY_PREFIX = /^(?:Reasoning:|Thinking\.{0,3}(?=\s*_))/u;
+
 function resolveHeartbeatReasoningPayloads(
   replyResult: ReplyPayload | ReplyPayload[] | undefined,
 ): ReplyPayload[] {
@@ -771,7 +774,9 @@ function resolveHeartbeatReasoningPayloads(
       continue;
     }
 
-    const formattedText = hasFormattedReasoningPrefix(text) ? text : formatReasoningMessage(text);
+    const formattedText = HEARTBEAT_REASONING_DISPLAY_PREFIX.test(text.trimStart())
+      ? text
+      : formatReasoningMessage(text);
     if (!formattedText.trim()) {
       continue;
     }

@@ -1,39 +1,20 @@
 // Heartbeat reply payload selector for multi-payload auto-reply results.
-import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
+import {
+  hasOutboundReplyContent,
+  isReasoningReplyPayload,
+} from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "./types.js";
-
-// Formatted reasoning prefixes the heartbeat reasoning lane classifies as
-// reasoning even when the `isReasoning` flag is absent: legacy "Reasoning:"
-// text and blockquoted "Thinking..._". Kept in sync with
-// resolveHeartbeatReasoningPayloads (heartbeat-runner) so the selector skips
-// exactly the payloads the reasoning lane delivers separately.
-const FORMATTED_REASONING_PREFIX = /^(?:Reasoning:|Thinking\.{0,3}(?=\s*_))/u;
-
-/** Whether text already carries a formatted reasoning prefix (legacy reasoning). */
-export function hasFormattedReasoningPrefix(text: string): boolean {
-  return FORMATTED_REASONING_PREFIX.test(text.trimStart());
-}
-
-/**
- * Whether a payload is reasoning (flagged or legacy-formatted) and so must not
- * become the user-visible heartbeat reply.
- */
-export function isReasoningReplyPayload(payload: ReplyPayload): boolean {
-  if (payload.isReasoning === true) {
-    return true;
-  }
-  const text = typeof payload.text === "string" ? payload.text : "";
-  return hasFormattedReasoningPrefix(text);
-}
 
 /**
  * Pick the last outbound-capable reply payload for heartbeat delivery.
  *
- * Reasoning payloads are skipped: heartbeat reasoning is delivered separately
- * and only when `includeReasoning` is enabled. Without this guard a trailing
- * reasoning payload (flagged via `isReasoning` or legacy "Reasoning:" /
- * blockquoted "Thinking" text, which reasoning models can emit after the final
- * answer) would be selected as the user-visible heartbeat reply.
+ * Reasoning payloads are skipped using the shared SDK classifier
+ * `isReasoningReplyPayload`, which recognizes the `isReasoning` flag plus the
+ * common reasoning/thinking text prefixes (including lowercased and Markdown
+ * blockquoted forms). Heartbeat reasoning is delivered separately and only when
+ * `includeReasoning` is enabled; without this guard a trailing reasoning
+ * payload (which reasoning models can emit after the final answer) would be
+ * selected as the user-visible heartbeat reply.
  */
 export function resolveHeartbeatReplyPayload(
   replyResult: ReplyPayload | ReplyPayload[] | undefined,
