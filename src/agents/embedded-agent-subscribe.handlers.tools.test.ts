@@ -1905,7 +1905,7 @@ describe("messaging tool media URL tracking", () => {
             }),
           },
         ],
-        details: {},
+        details: undefined,
       },
     });
 

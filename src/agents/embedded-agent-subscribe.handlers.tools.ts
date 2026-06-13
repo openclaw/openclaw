@@ -628,8 +628,9 @@ function extractMessagingToolSourceReplyPayload(
 
 function hasCommittedMessagingToolSendResult(result: unknown): boolean {
   const details = readToolResultDetailsRecord(result);
+  const contentReceipt = hasCommittedMessagingToolResultContent(result);
   if (!details) {
-    return false;
+    return contentReceipt;
   }
   if (details.dryRun === true) {
     return false;
@@ -657,12 +658,7 @@ function hasCommittedMessagingToolSendResult(result: unknown): boolean {
   if (details.ok === false || details.success === false || (status && status !== "ok")) {
     return false;
   }
-  return (
-    details.ok === true ||
-    details.success === true ||
-    status === "ok" ||
-    hasCommittedMessagingToolResultContent(result)
-  );
+  return details.ok === true || details.success === true || status === "ok" || contentReceipt;
 }
 
 function queuePendingToolMedia(

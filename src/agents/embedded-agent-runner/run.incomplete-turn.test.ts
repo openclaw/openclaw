@@ -430,6 +430,38 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(payload).toBeNull();
   });
 
+  it.each(["blocked", "cancelled", "suppressed"])(
+    "does not synthesize a completed terminal reply from %s trailing tool output",
+    (status) => {
+      const payload = resolveTerminalToolResultReplyPayload({
+        isCronTrigger: false,
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt: makeAttemptResult({
+          assistantTexts: [],
+          toolMetas: [{ toolName: "exec" }],
+          messagesSnapshot: [
+            {
+              role: "toolResult",
+              content: [{ type: "text", text: `${status} by policy` }],
+              details: { status },
+            } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+            {
+              role: "assistant",
+              stopReason: "stop",
+              provider: "openai",
+              model: "gpt-5.4",
+              content: [],
+            } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+          ],
+        }),
+      });
+
+      expect(payload).toBeNull();
+    },
+  );
+
   it("does not reuse an older NO_REPLY tool result without current-attempt tool activity", () => {
     const payload = resolveSilentToolResultReplyPayload({
       isCronTrigger: true,

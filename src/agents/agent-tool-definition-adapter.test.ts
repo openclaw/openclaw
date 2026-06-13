@@ -289,7 +289,7 @@ describe("agent tool definition adapter", () => {
             }),
           },
         ],
-        details: {},
+        details: undefined,
       }),
     } satisfies AgentTool;
 
@@ -315,6 +315,53 @@ describe("agent tool definition adapter", () => {
         toolName: "message",
         didSendViaMessagingTool: true,
         messagingToolSentTexts: ["plugin text"],
+      }),
+    );
+  });
+
+  it("preserves partial message delivery evidence on returned failures", async () => {
+    const onToolOutcome = vi.fn();
+    const tool = {
+      name: "message",
+      label: "Message",
+      description: "partially sends a message",
+      parameters: Type.Object({
+        action: Type.String(),
+        to: Type.String(),
+        text: Type.String(),
+      }),
+      execute: async () => ({
+        content: [{ type: "text" as const, text: "partially delivered" }],
+        details: {
+          status: "partial_failed",
+          results: [{ channel: "discord", messageId: "message-1" }],
+        },
+      }),
+    } satisfies AgentTool;
+
+    const [def] = toToolDefinitions([tool], {
+      sessionId: "adapter-message-partial-delivery",
+      runId: "run-adapter-message-partial-delivery",
+      onToolOutcome,
+    });
+    if (!def) {
+      throw new Error("missing tool definition");
+    }
+
+    await def.execute(
+      "call-adapter-message-partial-delivery",
+      { action: "send", to: "discord:channel-1", text: "partial text" },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(onToolOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "message",
+        didSendViaMessagingTool: true,
+        failed: true,
+        messagingToolSentTexts: ["partial text"],
       }),
     );
   });

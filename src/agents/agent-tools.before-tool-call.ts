@@ -227,6 +227,20 @@ const MAX_TRACKED_ADJUSTED_PARAMS = 1024;
 const LOOP_WARNING_BUCKET_SIZE = 10;
 const MAX_LOOP_WARNING_KEYS = 256;
 const TOOL_OUTCOME_RESULT_TEXT_MAX_CHARS = 64_000;
+const TOOL_OUTCOME_FAILURE_STATUSES = new Set([
+  "error",
+  "failed",
+  "partial_failed",
+  "timeout",
+  "timed_out",
+  "blocked",
+  "cancelled",
+  "canceled",
+  "suppressed",
+  "dry_run",
+  "cancelled_by_message_sending_hook",
+  "cancelled-by-message-sending-hook",
+]);
 
 /**
  * Error used when before_tool_call intentionally vetoes a tool call.
@@ -783,6 +797,18 @@ function readResultDetailsRecord(result: unknown): Record<string, unknown> | und
   return isPlainObject(result) && isPlainObject(result.details) ? result.details : undefined;
 }
 
+function hasFailedToolResultStatus(details: Record<string, unknown> | undefined): boolean {
+  if (!details) {
+    return false;
+  }
+  const status = typeof details.status === "string" ? details.status.trim().toLowerCase() : "";
+  const deliveryStatus =
+    typeof details.deliveryStatus === "string" ? details.deliveryStatus.trim().toLowerCase() : "";
+  return (
+    TOOL_OUTCOME_FAILURE_STATUSES.has(status) || TOOL_OUTCOME_FAILURE_STATUSES.has(deliveryStatus)
+  );
+}
+
 function readNonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
@@ -859,7 +885,11 @@ function hasCommittedMessagingToolSendOutcome(params: {
     return false;
   }
   const details = readResultDetailsRecord(params.result);
-  if (!details || details.dryRun === true) {
+  const contentReceipt = hasCommittedMessagingToolResultContent(params.result);
+  if (!details) {
+    return contentReceipt;
+  }
+  if (details.dryRun === true) {
     return false;
   }
   if (hasCommittedMessagingToolResultDetails(details)) {
@@ -886,12 +916,7 @@ function hasCommittedMessagingToolSendOutcome(params: {
   if (details.ok === false || details.success === false || (status && status !== "ok")) {
     return false;
   }
-  return (
-    details.ok === true ||
-    details.success === true ||
-    status === "ok" ||
-    hasCommittedMessagingToolResultContent(params.result)
-  );
+  return details.ok === true || details.success === true || status === "ok" || contentReceipt;
 }
 
 function summarizeToolParams(params: unknown): DiagnosticToolParamsSummary {
@@ -975,7 +1000,8 @@ export async function recordToolLoopOutcome(args: {
     });
     if ((record?.resultHash || shouldEmitHashlessToolLoopBlock) && args.ctx.onToolOutcome) {
       const blockedMessage = typeof details?.reason === "string" ? details.reason : undefined;
-      const failed = Boolean(args.error);
+      const executionThrew = Boolean(args.error);
+      const failed = executionThrew || hasFailedToolResultStatus(details);
       const mutatingAction =
         !blockedReason &&
         buildToolMutationState(record?.toolName ?? args.toolName, args.toolParams).mutatingAction;
@@ -997,7 +1023,7 @@ export async function recordToolLoopOutcome(args: {
         toolName: record?.toolName ?? args.toolName,
         toolParams: args.toolParams,
         result: args.result,
-        failed,
+        failed: executionThrew,
       });
       const messagingText =
         didSendViaMessagingTool && isPlainObject(args.toolParams)

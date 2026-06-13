@@ -121,6 +121,13 @@ const TERMINAL_TOOL_RESULT_ERROR_STATUSES = new Set([
   "partial_failed",
   "timeout",
   "timed_out",
+  "blocked",
+  "cancelled",
+  "canceled",
+  "suppressed",
+  "dry_run",
+  "cancelled_by_message_sending_hook",
+  "cancelled-by-message-sending-hook",
 ]);
 
 export function isIncompleteTerminalAssistantTurn(params: {
