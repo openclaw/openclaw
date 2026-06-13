@@ -546,8 +546,18 @@ export function stopWorkboardLifecycleRefresh(host: WorkboardHost) {
     setWorkboardLifecycleTaskRefreshFailed(state, false);
     state.lifecycleTaskRefreshError = null;
     resetWorkboardLifecycleTaskConfirmations(state);
+    // Detach stale loads so reconnecting can start fresh without letting the
+    // old request clear a concurrent draft-save loading state.
+    if (!state.draftSaving) {
+      state.loading = false;
+    }
+    if (!state.loaded) {
+      state.loadAttempted = false;
+    }
   }
   nextWorkboardLoadGeneration(host);
+  workboardLoadPromises.delete(host);
+  workboardLoadTokens.delete(host);
   nextWorkboardLifecycleReconciliationEpoch(host);
 }
 
@@ -3453,6 +3463,7 @@ export async function dispatchWorkboard(params: {
       applyTaskSummariesToState(state, await listWorkboardTasks(params.client));
       setWorkboardLifecycleTaskRefreshFailed(state, false, { host: params.host });
       state.lifecycleTaskRefreshError = null;
+      state.lastRefreshError = null;
     } catch (error) {
       setWorkboardLifecycleTaskRefreshFailed(state, true, {
         host: params.host,

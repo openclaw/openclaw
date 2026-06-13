@@ -1329,6 +1329,27 @@ describe("workboard controller", () => {
     expect(client.request).toHaveBeenCalledWith("workboard.cards.dispatch", {});
   });
 
+  it("clears stale refresh errors after a successful dispatch reload", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.lastRefreshError = "poll unavailable";
+    const client = createClient({
+      "workboard.cards.dispatch": {
+        promoted: [],
+        reclaimed: [],
+        blocked: [],
+        orchestrated: [],
+        count: 0,
+      },
+      "workboard.cards.list": { cards: [sampleCard], statuses: ["todo", "done"] },
+      "tasks.list": { tasks: [] },
+    });
+
+    await dispatchWorkboard({ host, client: client as never });
+
+    expect(state.lastRefreshError).toBeNull();
+  });
+
   it("blocks dispatch while a card draft write is in flight", async () => {
     const host = {};
     const state = getWorkboardState(host);
@@ -1795,6 +1816,40 @@ describe("workboard controller", () => {
       client.request.mock.calls.filter(([method]) => method === "workboard.cards.list"),
     ).toHaveLength(1);
     expect(getWorkboardState(host).loaded).toBe(false);
+  });
+
+  it("detaches a stalled initial load during lifecycle teardown", async () => {
+    const host = {};
+    const initialList = createDeferred<unknown>();
+    const reopenedCard = { ...sampleCard, title: "Reopened board" };
+    let listCalls = 0;
+    const client = createClient((method) => {
+      if (method === "workboard.cards.list") {
+        listCalls += 1;
+        return listCalls === 1
+          ? initialList.promise
+          : { cards: [reopenedCard], statuses: ["todo", "done"] };
+      }
+      return {};
+    });
+
+    const initialLoad = loadWorkboard({ host, client: client as never });
+    await Promise.resolve();
+    const state = getWorkboardState(host);
+    expect(state.loading).toBe(true);
+    expect(state.loadAttempted).toBe(true);
+
+    stopWorkboardLifecycleRefresh(host);
+
+    expect(state.loading).toBe(false);
+    expect(state.loadAttempted).toBe(false);
+    await expect(loadWorkboard({ host, client: client as never })).resolves.toBe(true);
+    expect(listCalls).toBe(2);
+    expect(state.cards).toMatchObject([{ title: "Reopened board" }]);
+
+    initialList.resolve({ cards: [sampleCard], statuses: ["todo", "done"] });
+    await expect(initialLoad).resolves.toBe(false);
+    expect(state.cards).toMatchObject([{ title: "Reopened board" }]);
   });
 
   it("does not start a queued forced refresh after a card write begins", async () => {
