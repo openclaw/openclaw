@@ -10,22 +10,19 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { withFileLock } from "openclaw/plugin-sdk/file-lock";
 import {
   createSubsystemLogger,
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
+  deleteQmdSessionExportCacheEntries,
   isPathInside,
-  openOpenClawAgentDatabase,
+  listQmdSessionExportCacheSessionFiles,
   root,
   resolveAgentContextLimits,
   resolveMemorySearchSyncConfig,
   resolveAgentWorkspaceDir,
   resolveGlobalSingleton,
   resolveStateDir,
-  runOpenClawAgentWriteTransaction,
-  writeFileWithinRoot,
-  type OpenClawAgentDatabaseOptions,
-  type OpenClawAgentKyselyDatabase,
+  readQmdSessionExportCacheEntry,
+  upsertQmdSessionExportCacheEntry,
   type OpenClawConfig,
+  type QmdSessionExportCacheOptions,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   buildSessionEntry,
@@ -101,8 +98,6 @@ const SESSION_EXPORT_RENDER_VERSION = 1;
 // lightweight content fingerprint. Sized to span a typical last-line append
 // while staying well under a single read syscall's worth of IO.
 const QMD_EXPORT_FINGERPRINT_EDGE_BYTES = 512;
-
-type QmdExportCacheDatabase = Pick<OpenClawAgentKyselyDatabase, "qmd_session_export_cache">;
 
 // Compute a cheap content fingerprint from the first and last N bytes of a
 // JSONL file. This is NOT a full-file hash; it hardens the stat fast path
@@ -421,7 +416,6 @@ export class QmdMemoryManager implements MemorySearchManager {
     string,
     { rel: string; abs: string; source: MemorySource }
   >();
-  private agentDb: import("node:sqlite").DatabaseSync | null = null;
   private readonly maxQmdOutputChars = MAX_QMD_OUTPUT_CHARS;
   private readonly sessionExporter: SessionExporterConfig | null;
   private updateTimer: NodeJS.Timeout | null = null;
@@ -2500,15 +2494,8 @@ export class QmdMemoryManager implements MemorySearchManager {
     return this.db;
   }
 
-  private agentDbOptions(): OpenClawAgentDatabaseOptions {
+  private exportCacheOptions(): QmdSessionExportCacheOptions {
     return { agentId: this.agentId, env: process.env };
-  }
-
-  private getAgentDb(): import("node:sqlite").DatabaseSync {
-    if (!this.agentDb) {
-      this.agentDb = openOpenClawAgentDatabase(this.agentDbOptions()).db;
-    }
-    return this.agentDb;
   }
 
   private async exportSessions(): Promise<void> {
@@ -2524,8 +2511,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     const cutoff = this.sessionExporter.retentionMs
       ? Date.now() - this.sessionExporter.retentionMs
       : null;
-    const db = this.getAgentDb();
-    const kysely = getNodeSqliteKysely<QmdExportCacheDatabase>(db);
+    const exportCacheOptions = this.exportCacheOptions();
     for (const sessionFile of files) {
       let stat: Awaited<ReturnType<typeof fs.stat>>;
       try {
@@ -2535,15 +2521,11 @@ export class QmdMemoryManager implements MemorySearchManager {
         // any stale export below.
         continue;
       }
-      const cached = executeSqliteQueryTakeFirstSync(
-        db,
-        kysely
-          .selectFrom("qmd_session_export_cache")
-          .selectAll()
-          .where("session_file", "=", sessionFile)
-          .where("export_dir", "=", exportDir)
-          .where("render_version", "=", SESSION_EXPORT_RENDER_VERSION),
-      );
+      const cached = readQmdSessionExportCacheEntry(exportCacheOptions, {
+        sessionFile,
+        exportDir,
+        renderVersion: SESSION_EXPORT_RENDER_VERSION,
+      });
       // Fast path: stat fields match the cached identity AND the content
       // fingerprint confirms the file bytes are unchanged. Skip the full
       // entry build, redaction, hashing, and write entirely.
@@ -2551,7 +2533,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       if (
         cached &&
         cached.size === stat.size &&
-        cached.mtime_ms === stat.mtimeMs &&
+        cached.mtimeMs === stat.mtimeMs &&
         cached.ino === stat.ino
       ) {
         if (cutoff && stat.mtimeMs < cutoff) {
@@ -2560,7 +2542,7 @@ export class QmdMemoryManager implements MemorySearchManager {
         // Verify content fingerprint: cheap sha1 over first+last 512 bytes
         // catches any in-place modification that preserved size+mtime+ino.
         const fingerprint = await computeContentFingerprint(sessionFile);
-        if (fingerprint === cached.content_fingerprint) {
+        if (fingerprint === cached.contentFingerprint) {
           // Verify the cached export target still exists on disk. If it was
           // deleted out from under us, fall through to the slow rebuild path.
           try {
@@ -2588,47 +2570,25 @@ export class QmdMemoryManager implements MemorySearchManager {
         cachedTargetMissing ||
         !cached ||
         cached.hash !== entry.hash ||
-        cached.mtime_ms !== entry.mtimeMs
+        cached.mtimeMs !== entry.mtimeMs
       ) {
-        await writeFileWithinRoot({
-          rootDir: exportDir,
-          relativePath: targetName,
-          data: this.renderSessionMarkdown(entry),
+        await exportRoot.write(targetName, this.renderSessionMarkdown(entry), {
           encoding: "utf-8",
         });
       }
       const fingerprint = await computeContentFingerprint(sessionFile);
-      runOpenClawAgentWriteTransaction((agentDatabase) => {
-        const writeKysely = getNodeSqliteKysely<QmdExportCacheDatabase>(agentDatabase.db);
-        executeSqliteQuerySync(
-          agentDatabase.db,
-          writeKysely
-            .insertInto("qmd_session_export_cache")
-            .values({
-              session_file: sessionFile,
-              export_dir: exportDir,
-              render_version: SESSION_EXPORT_RENDER_VERSION,
-              size: stat.size,
-              mtime_ms: stat.mtimeMs,
-              ino: stat.ino,
-              content_fingerprint: fingerprint,
-              hash: entry.hash,
-              target,
-              updated_at: Date.now(),
-            })
-            .onConflict((conflict) =>
-              conflict.columns(["session_file", "export_dir", "render_version"]).doUpdateSet({
-                size: stat.size,
-                mtime_ms: stat.mtimeMs,
-                ino: stat.ino,
-                content_fingerprint: fingerprint,
-                hash: entry.hash,
-                target,
-                updated_at: Date.now(),
-              }),
-            ),
-        );
-      }, this.agentDbOptions());
+      upsertQmdSessionExportCacheEntry(exportCacheOptions, {
+        sessionFile,
+        exportDir,
+        renderVersion: SESSION_EXPORT_RENDER_VERSION,
+        size: stat.size,
+        mtimeMs: stat.mtimeMs,
+        ino: stat.ino,
+        contentFingerprint: fingerprint,
+        hash: entry.hash,
+        target,
+        updatedAt: Date.now(),
+      });
       keep.add(target);
     }
     const exported = await exportRoot.list(".").catch(() => []);
@@ -2643,31 +2603,15 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
     // Remove stale cache entries: session files no longer tracked or whose
     // cached target has drifted outside the current export dir.
-    const staleSessionFiles = executeSqliteQuerySync(
-      db,
-      kysely
-        .selectFrom("qmd_session_export_cache")
-        .select("session_file")
-        .where("export_dir", "=", exportDir)
-        .where("render_version", "=", SESSION_EXPORT_RENDER_VERSION),
-    )
-      .rows.map((r) => r.session_file)
-      .filter((sf) => !tracked.has(sf));
-    if (staleSessionFiles.length > 0) {
-      runOpenClawAgentWriteTransaction((agentDatabase) => {
-        const writeKysely = getNodeSqliteKysely<QmdExportCacheDatabase>(agentDatabase.db);
-        for (const sf of staleSessionFiles) {
-          executeSqliteQuerySync(
-            agentDatabase.db,
-            writeKysely
-              .deleteFrom("qmd_session_export_cache")
-              .where("session_file", "=", sf)
-              .where("export_dir", "=", exportDir)
-              .where("render_version", "=", SESSION_EXPORT_RENDER_VERSION),
-          );
-        }
-      }, this.agentDbOptions());
-    }
+    const staleSessionFiles = listQmdSessionExportCacheSessionFiles(exportCacheOptions, {
+      exportDir,
+      renderVersion: SESSION_EXPORT_RENDER_VERSION,
+    }).filter((sf) => !tracked.has(sf));
+    deleteQmdSessionExportCacheEntries(exportCacheOptions, {
+      exportDir,
+      renderVersion: SESSION_EXPORT_RENDER_VERSION,
+      sessionFiles: staleSessionFiles,
+    });
   }
 
   private renderSessionMarkdown(entry: SessionFileEntry): string {

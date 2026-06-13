@@ -35,22 +35,17 @@ export type {
   MemoryQmdSearchMode,
 } from "../config/types.memory.js";
 export type { MemorySearchConfig } from "../config/types.tools.js";
-export { root, writeFileWithinRoot } from "../infra/fs-safe.js";
+export { root } from "../infra/fs-safe.js";
 export { createSubsystemLogger } from "../logging/subsystem.js";
 export { detectMime } from "@openclaw/media-core/mime";
 export { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 export {
-  openOpenClawAgentDatabase,
-  runOpenClawAgentWriteTransaction,
-  type OpenClawAgentDatabase,
-  type OpenClawAgentDatabaseOptions,
+  deleteQmdSessionExportCacheEntries,
+  listQmdSessionExportCacheSessionFiles,
+  readQmdSessionExportCacheEntry,
+  upsertQmdSessionExportCacheEntry,
+  type QmdSessionExportCacheOptions,
 } from "../state/openclaw-agent-db.js";
-export type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
-export {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "../infra/kysely-sync.js";
 export { resolveGlobalSingleton } from "../shared/global-singleton.js";
 export { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 export { splitShellArgs } from "../utils/shell-argv.js";
