@@ -1574,6 +1574,49 @@ describe("applySessionsChangedEvent", () => {
     });
   });
 
+  it("keeps the local run active when a transcript snapshot reports plugin finalization pending", () => {
+    const state = {
+      ...createState(async () => undefined, {
+        sessionsResult: {
+          ts: 1,
+          path: "(multiple)",
+          count: 1,
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          sessions: [
+            {
+              key: "agent:main:main",
+              kind: "direct",
+              updatedAt: 1,
+              hasActiveRun: true,
+              status: "running",
+            },
+          ],
+        },
+      }),
+      sessionKey: "agent:main:main",
+      chatRunId: "run-before-finalize",
+    } as SessionsState & { sessionKey: string; chatRunId: string | null };
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:main:main",
+      session: {
+        key: "agent:main:main",
+        kind: "direct",
+        updatedAt: 2,
+        status: "done",
+        hasActiveRun: true,
+      },
+      ts: 2,
+    });
+
+    expect(applied).toEqual({ applied: true, change: "updated" });
+    expect(state.chatRunId).toBe("run-before-finalize");
+    expect(state.sessionsResult?.sessions[0]).toMatchObject({
+      status: "done",
+      hasActiveRun: true,
+    });
+  });
+
   it("clears the local chat run when an applied websocket patch makes the current session terminal", () => {
     const requestUpdate = vi.fn();
     const state: SessionsState & {
