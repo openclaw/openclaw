@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
-import { info, success } from "openclaw/plugin-sdk/runtime-env";
+import { info, success, warn } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import { defaultRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { resolveOAuthDir } from "./auth-store.runtime.js";
@@ -234,97 +234,148 @@ async function clearBaileysAuthFiles(authDir: string) {
   );
 }
 
-async function shouldClearOnLogout(authDir: string, isLegacyAuthDir: boolean): Promise<boolean> {
+/**
+ * Rename the auth directory to a timestamped backup path instead of deleting it.
+ * This preserves the existing session credentials for recovery while effectively
+ * clearing them from the active location. The backup path is:
+ *   <parentDir>/<authDirName>.bak.<YYYYMMDD-HHmmss>
+ */
+async function backupAuthDirOnClear(authDir: string): Promise<boolean> {
   try {
-    const stats = await fs.lstat(authDir);
-    if (!stats.isDirectory() || stats.isSymbolicLink()) {
-      return false;
-    }
-    if (isLegacyAuthDir) {
-      const entries = await fs.readdir(authDir, { withFileTypes: true });
-      return entries.some((entry) => {
-        if (!entry.isFile()) {
-          return false;
-        }
-        return isBaileysAuthFileName(entry.name);
-      });
-    }
-    const credsStats = await fs.lstat(resolveWebCredsPath(authDir)).catch(() => null);
-    if (credsStats?.isFile()) {
-      return true;
-    }
-    const backupStats = await fs.lstat(resolveWebCredsBackupPath(authDir)).catch(() => null);
-    return backupStats?.isFile() === true;
-  } catch (error) {
-    const codeValue =
-      error && typeof error === "object" && "code" in error
-        ? (error as { code?: unknown }).code
-        : undefined;
-    const code = typeof codeValue === "string" ? codeValue : "";
-    return code !== "ENOENT";
-  }
-}
-
-function isPathInsideDirectory(baseDir: string, targetPath: string): boolean {
-  const relativePath = path.relative(baseDir, targetPath);
-  return relativePath !== "" && !relativePath.startsWith("..") && !path.isAbsolute(relativePath);
-}
-
-async function pathHasSymlinkComponent(baseDir: string, targetPath: string): Promise<boolean> {
-  const relativePath = path.relative(baseDir, targetPath);
-  let currentPath = baseDir;
-  for (const segment of relativePath.split(path.sep)) {
-    currentPath = path.join(currentPath, segment);
-    const stats = await fs.lstat(currentPath).catch(() => null);
-    if (!stats || stats.isSymbolicLink()) {
-      return true;
-    }
-  }
-  return false;
-}
-
-type WebAuthDirOwnership =
-  | { kind: "owned"; authDir: string }
-  | { kind: "unsafe-owned" }
-  | { kind: "external" };
-
-async function isLegacyWebAuthDir(authDir: string): Promise<boolean> {
-  const legacyAuthDir = path.resolve(resolveOAuthDir());
-  const resolvedAuthDir = path.resolve(authDir);
-  if (resolvedAuthDir !== legacyAuthDir) {
+    const parentDir = path.dirname(authDir);
+    const dirName = path.basename(authDir);
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    const backupPath = path.join(parentDir, `${dirName}.bak.${timestamp}`);
+    await fs.rename(authDir, backupPath);
+    return true;
+  } catch {
     return false;
   }
-  const stats = await fs.lstat(resolvedAuthDir).catch(() => null);
-  return stats?.isDirectory() === true && !stats.isSymbolicLink();
 }
 
-async function classifyWebAuthDirOwnership(authDir: string): Promise<WebAuthDirOwnership> {
-  const whatsappAuthBase = path.resolve(resolveOAuthDir(), "whatsapp");
-  const resolvedAuthDir = path.resolve(authDir);
-  if (!isPathInsideDirectory(whatsappAuthBase, resolvedAuthDir)) {
-    return { kind: "external" };
+/**
+ * Remove all sibling backup directories (<dirName>.bak.*) for the given
+ * auth directory. Best-effort: individual deletion failures are silently
+ * caught so a single error does not prevent cleaning up other backups.
+ */
+async function cleanupBackupDirs(authDir: string): Promise<void> {
+  try {
+    const parentDir = path.dirname(authDir);
+    const dirName = path.basename(authDir);
+    let entries: string[];
+    try {
+      entries = await fs.readdir(parentDir);
+    } catch {
+      return;
+    }
+    const backupDirs = entries.filter((e) => e.startsWith(`${dirName}.bak.`));
+    await Promise.all(
+      backupDirs.map((backupDir) =>
+        fs.rm(path.join(parentDir, backupDir), { recursive: true, force: true }).catch(() => {}),
+      ),
+    );
+  } catch {
+    // best-effort: never throw from cleanup
   }
+}
 
-  const [baseRealPath, authDirRealPath] = await Promise.all([
-    fs.realpath(whatsappAuthBase).catch(() => null),
-    fs.realpath(resolvedAuthDir).catch(() => null),
-  ]);
-  if (!baseRealPath || !authDirRealPath) {
-    return { kind: "unsafe-owned" };
+/**
+ * Copy the auth directory to a timestamped backup path, preserving the active
+ * session for crash recovery. Unlike backupAuthDirOnClear (which RENAMES and
+ * destroys the active directory), this COPIES the directory so the active
+ * session remains intact. The naming convention matches backupAuthDirOnClear.
+ *
+ * Backup path: <parentDir>/<authDirName>.bak.<YYYY-MM-DDTHH-mm-ss>
+ *
+ * @returns true if the snapshot was created, false otherwise.
+ */
+export async function snapshotAuthDir(authDir: string): Promise<boolean> {
+  try {
+    const resolvedAuthDir = resolveUserPath(authDir);
+    const parentDir = path.dirname(resolvedAuthDir);
+    const dirName = path.basename(resolvedAuthDir);
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    const backupPath = path.join(parentDir, `${dirName}.bak.${timestamp}`);
+    await fs.cp(resolvedAuthDir, backupPath, { recursive: true, errorOnExist: true });
+    return true;
+  } catch {
+    return false;
   }
-  if (!isPathInsideDirectory(baseRealPath, authDirRealPath)) {
-    return { kind: "unsafe-owned" };
+}
+
+/**
+ * Restore the most recent fresh backup auth directory if the active auth directory is missing.
+ * Only backups younger than 24 hours are considered for restoration; older backups are
+ * automatically pruned to prevent stale sessions from being resurrected after explicit logout.
+ *
+ * This handles credential recovery after a plugin update or gateway restart where
+ * logoutWeb was called with backupOnClear:true, or after a crash where snapshotAuthDir
+ * preserved the session state at startup.
+ *
+ * @returns true if credentials were restored from backup, false otherwise.
+ */
+export async function restoreLatestBackup(authDir: string): Promise<boolean> {
+  try {
+    const resolvedAuthDir = resolveUserPath(authDir);
+    // Check if active creds already exist
+    const credsPath = resolveWebCredsPath(resolvedAuthDir);
+    const credsExist = await fs.lstat(credsPath).then(() => true).catch(() => false);
+    if (credsExist) {
+      return false; // nothing to restore
+    }
+
+    const parentDir = path.dirname(resolvedAuthDir);
+    const dirName = path.basename(resolvedAuthDir);
+    let entries: string[];
+    try {
+      entries = await fs.readdir(parentDir);
+    } catch {
+      return false;
+    }
+
+    // Find all backup directories sorted by timestamp (newest first)
+    const backupDirs = entries
+      .filter((e) => e.startsWith(`${dirName}.bak.`))
+      .sort()
+      .reverse();
+
+    if (backupDirs.length === 0) {
+      return false;
+    }
+
+    const MAX_BACKUP_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
+    const now = Date.now();
+
+    for (const backupDir of backupDirs) {
+      const backupPath = path.join(parentDir, backupDir);
+      try {
+        const stat = await fs.stat(backupPath);
+        if (now - stat.mtimeMs <= MAX_BACKUP_AGE_MS) {
+          // Fresh enough -- restore it
+          await fs.rename(backupPath, resolvedAuthDir);
+          return true;
+        }
+        // Too old -- delete it to prevent stale backup accumulation
+        await fs.rm(backupPath, { recursive: true, force: true }).catch(() => {});
+      } catch {
+        // Can't stat or remove this one; try the next
+        continue;
+      }
+    }
+
+    return false;
+  } catch {
+    return false;
   }
-  if (await pathHasSymlinkComponent(whatsappAuthBase, resolvedAuthDir)) {
-    return { kind: "unsafe-owned" };
-  }
-  return { kind: "owned", authDir: resolvedAuthDir };
 }
 
 export async function logoutWeb(params: {
   authDir?: string;
   isLegacyAuthDir?: boolean;
   runtime?: RuntimeEnv;
+  /** When true, backs up the auth directory before clearing, so credentials
+   *  can be restored on the next startup (e.g. after a plugin update restart). */
+  backupOnClear?: boolean;
 }) {
   const runtime = params.runtime ?? defaultRuntime;
   const resolvedAuthDir = resolveUserPath(params.authDir ?? resolveDefaultWebAuthDir());
@@ -349,7 +400,25 @@ export async function logoutWeb(params: {
   } else {
     const ownership = await classifyWebAuthDirOwnership(resolvedAuthDir);
     if (ownership.kind === "owned") {
-      await fs.rm(ownership.authDir, { recursive: true, force: true });
+      if (params.backupOnClear) {
+        // Remove stale backups before creating a fresh one.
+        await cleanupBackupDirs(ownership.authDir);
+        const backedUp = await backupAuthDirOnClear(ownership.authDir);
+        if (!backedUp) {
+          // Fail-closed: do not delete the active session when backup cannot be created.
+          // The caller can retry or handle the preservation failure at a higher level.
+          runtime.log(
+            warn(
+              "Could not back up WhatsApp credentials before clearing; preserving existing credentials.",
+            ),
+          );
+          return false;
+        }
+      } else {
+        await fs.rm(ownership.authDir, { recursive: true, force: true });
+        // Remove stale backups so they cannot be re-linked on the next startup.
+        await cleanupBackupDirs(ownership.authDir).catch(() => {});
+      }
     } else if (ownership.kind === "unsafe-owned") {
       runtime.log(
         info(
@@ -364,7 +433,11 @@ export async function logoutWeb(params: {
       return false;
     }
   }
-  runtime.log(success("Cleared WhatsApp Web credentials."));
+  if (params.isLegacyAuthDir) {
+    runtime.log(success("Cleared WhatsApp Web credentials."));
+  } else {
+    runtime.log(success("Cleared WhatsApp Web credentials."));
+  }
   return true;
 }
 

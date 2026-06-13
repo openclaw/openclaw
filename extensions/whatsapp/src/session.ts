@@ -51,6 +51,8 @@ export {
   readWebAuthSnapshotBestEffort,
   readWebSelfIdentityForDecision,
   readWebSelfId,
+  restoreLatestBackup,
+  snapshotAuthDir,
   WHATSAPP_AUTH_UNSTABLE_CODE,
   WhatsAppAuthUnstableError,
   type WhatsAppWebAuthState,

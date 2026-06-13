@@ -35,7 +35,7 @@ import {
   resolveReconnectPolicy,
   sleepWithAbort,
 } from "../reconnect.js";
-import { formatError, getWebAuthAgeMs, logoutWeb, readWebSelfId } from "../session.js";
+import { formatError, getWebAuthAgeMs, logoutWeb, readWebSelfId, restoreLatestBackup, snapshotAuthDir, webAuthExists } from "../session.js";
 import { resolveWhatsAppSocketTiming } from "../socket-timing.js";
 import { getRuntimeConfig, getRuntimeConfigSourceSnapshot } from "./config.runtime.js";
 import { whatsappHeartbeatLog, whatsappLog } from "./loggers.js";
@@ -214,6 +214,34 @@ export async function monitorWebChannel(
   const maxMediaBytes = resolveWhatsAppMediaMaxBytes(account);
   const heartbeatSeconds = resolveHeartbeatSeconds(cfg, tuning.heartbeatSeconds);
   const reconnectPolicy = resolveReconnectPolicy(cfg, tuning.reconnect);
+
+  // Restore credentials from backup before creating the socket,
+  // so any preserved backup from a previous session is in place
+  // before Baileys reads the auth directory.
+  try {
+    const restored = await restoreLatestBackup(account.authDir);
+    if (restored) {
+      reconnectLogger.warn({ accountId: account.accountId }, "restored WhatsApp credentials from backup after startup");
+    }
+  } catch {
+    // restore failures are non-fatal at startup
+  }
+
+  // Snapshot current credentials for crash recovery.
+  // If the session is wiped during this gateway run, the next
+  // startup will restore from this snapshot.
+  try {
+    const hasCreds = await webAuthExists(account.authDir);
+    if (hasCreds) {
+      const snapped = await snapshotAuthDir(account.authDir);
+      if (snapped) {
+        reconnectLogger.debug({ accountId: account.accountId }, "snapshotted WhatsApp credentials for crash recovery");
+      }
+    }
+  } catch {
+    // non-fatal
+  }
+
   const socketTiming = resolveWhatsAppSocketTiming(cfg, tuning.socketTiming);
   const baseMentionConfig = buildMentionConfig(cfg);
   const groupHistoryLimit =

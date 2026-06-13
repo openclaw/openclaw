@@ -264,8 +264,19 @@ describe("auth-store", () => {
         exit: vi.fn(),
       };
 
-      await expect(logoutWeb({ authDir, runtime: runtime as never })).resolves.toBe(true);
+      await expect(
+        logoutWeb({ authDir, backupOnClear: true, runtime: runtime as never }),
+      ).resolves.toBe(true);
+      // Original directory should no longer exist at the original path
+      // (it was renamed to a timestamped backup).
       expect(fsSync.existsSync(authDir)).toBe(false);
+      // Verify a backup was created
+      const parentDir = path.dirname(authDir);
+      const dirName = path.basename(authDir);
+      const backupEntries = fsSync
+        .readdirSync(parentDir)
+        .filter((e) => e.startsWith(`${dirName}.bak.`));
+      expect(backupEntries.length).toBeGreaterThanOrEqual(1);
     });
   });
 

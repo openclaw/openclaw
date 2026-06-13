@@ -65,25 +65,62 @@ describe("web logout", () => {
   });
 
   it(
-    "deletes cached credentials when present",
+    "deletes credentials by default, no backup created",
     { timeout: WEB_LOGOUT_TEST_TIMEOUT_MS },
     async () => {
       const authDir = await createAuthCase({ "creds.json": "{}" });
       const result = await logoutWeb({ authDir, runtime: runtime as never });
       expect(result).toBe(true);
+      // Original directory should be gone.
       expect(fs.existsSync(authDir)).toBe(false);
+      // No backup should exist when backupOnClear is not set.
+      const parentDir = path.dirname(authDir);
+      const dirName = path.basename(authDir);
+      const entries = fs.readdirSync(parentDir).filter((e) => e.startsWith(`${dirName}.bak.`));
+      expect(entries.length).toBe(0);
     },
   );
 
-  it("removes oauth.json too when not using legacy auth dir", async () => {
+  it(
+    "backs up credentials instead of deleting when backupOnClear:true",
+    { timeout: WEB_LOGOUT_TEST_TIMEOUT_MS },
+    async () => {
+      const authDir = await createAuthCase({ "creds.json": "{}" });
+      const result = await logoutWeb({ authDir, backupOnClear: true, runtime: runtime as never });
+      expect(result).toBe(true);
+      // Original directory should no longer exist at the original path
+      // (it was renamed to a timestamped backup).
+      expect(fs.existsSync(authDir)).toBe(false);
+      // A backup directory should have been created in the parent.
+      const parentDir = path.dirname(authDir);
+      const dirName = path.basename(authDir);
+      const entries = fs.readdirSync(parentDir).filter((e) => e.startsWith(`${dirName}.bak.`));
+      expect(entries.length).toBeGreaterThanOrEqual(1);
+      // Verify the backup contains the original credential file.
+      const backupDir = path.join(parentDir, entries[0]);
+      expect(fs.existsSync(path.join(backupDir, "creds.json"))).toBe(true);
+    },
+  );
+
+  it("backs up oauth.json too when backupOnClear:true", async () => {
     const authDir = await createAuthCase({
       "creds.json": "{}",
       "oauth.json": '{"token":true}',
       "session-abc.json": "{}",
     });
-    const result = await logoutWeb({ authDir, runtime: runtime as never });
+    const result = await logoutWeb({ authDir, backupOnClear: true, runtime: runtime as never });
     expect(result).toBe(true);
+    // Original directory should no longer exist at the original path.
     expect(fs.existsSync(authDir)).toBe(false);
+    // A backup directory should have been created in the parent with all files.
+    const parentDir = path.dirname(authDir);
+    const dirName = path.basename(authDir);
+    const entries = fs.readdirSync(parentDir).filter((e) => e.startsWith(`${dirName}.bak.`));
+    expect(entries.length).toBeGreaterThanOrEqual(1);
+    const backupDir = path.join(parentDir, entries[0]);
+    expect(fs.existsSync(path.join(backupDir, "creds.json"))).toBe(true);
+    expect(fs.existsSync(path.join(backupDir, "oauth.json"))).toBe(true);
+    expect(fs.existsSync(path.join(backupDir, "session-abc.json"))).toBe(true);
   });
 
   it("no-ops when nothing to delete", { timeout: WEB_LOGOUT_TEST_TIMEOUT_MS }, async () => {
