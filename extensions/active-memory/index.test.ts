@@ -3630,8 +3630,8 @@ describe("active-memory plugin", () => {
     );
 
     const prompt = lastEmbeddedPrompt();
-    expect(prompt).toContain("Bounded memory search query:\nwhat should i grab on the way?");
-    expect(prompt).toContain("Conversation context:\nwhat should i grab on the way?");
+    expect(prompt).toContain("Bounded memory search query:\ni have a flight tomorrow");
+    expect(prompt).toContain("Conversation context:\ni have a flight tomorrow");
     expect(prompt).not.toContain("Recent conversation tail:");
   });
 

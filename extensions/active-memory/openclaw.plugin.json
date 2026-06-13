@@ -45,6 +45,7 @@
         "type": "string",
         "enum": ["message", "recent", "full"]
       },
+      "messageMaxChars": { "type": "integer", "minimum": 100, "maximum": 10000 },
       "promptStyle": {
         "type": "string",
         "enum": [
@@ -132,6 +133,10 @@
     "queryMode": {
       "label": "Query Mode",
       "help": "Choose whether the blocking memory sub-agent sees only the latest user message, a small recent tail, or the full conversation."
+    },
+    "messageMaxChars": {
+      "label": "Message Max Characters",
+      "help": "Optional: maximum characters for the latest user message in message query mode. When the latest message exceeds this limit, it is truncated at a word boundary. This prevents large assembled request envelopes from being forwarded unchanged when queryMode is set to message."
     },
     "promptStyle": {
       "label": "Prompt Style",
