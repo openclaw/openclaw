@@ -258,6 +258,7 @@ type ActiveRecallResult =
 type ActiveMemoryPartialTimeoutError = Error & {
   activeMemoryPartialReply?: string;
   activeMemorySearchDebug?: ActiveMemorySearchDebug;
+  activeMemoryHasUsableMemoryResult?: boolean;
 };
 
 type TranscriptReadLimits = {
@@ -271,6 +272,7 @@ type RecallSubagentResult = {
   resultStatus?: "failed" | "unavailable";
   transcriptPath?: string;
   searchDebug?: ActiveMemorySearchDebug;
+  hasUsableMemoryResult?: boolean;
 };
 
 type TerminalMemorySearchResult = {
@@ -1736,7 +1738,13 @@ function extractTerminalMemorySearchResultFromSessionRecord(
   return undefined;
 }
 
-function hasUsableMemoryResultInSessionRecord(value: unknown): boolean {
+function hasUsableMemoryResultInSessionRecord(
+  value: unknown,
+  toolsAllow: readonly string[] = [
+    ...DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW,
+    ...LANCEDB_ACTIVE_MEMORY_TOOLS_ALLOW,
+  ],
+): boolean {
   const record = asRecord(value);
   const nestedMessage = asRecord(record?.message);
   const topLevelMessage =
@@ -1750,45 +1758,92 @@ function hasUsableMemoryResultInSessionRecord(value: unknown): boolean {
     return false;
   }
   const toolName = normalizeOptionalString(message.toolName);
+  if (!toolName || !toolsAllow.includes(toolName)) {
+    return false;
+  }
   const details = asRecord(message.details);
+  if (
+    message.isError === true ||
+    details?.disabled === true ||
+    details?.unavailable === true ||
+    Boolean(details?.error)
+  ) {
+    return false;
+  }
+  const content = extractTextContent(message.content);
   if (toolName === "memory_search") {
     if (Array.isArray(details?.results)) {
       return details.results.length > 0;
     }
     // Oversized details are capped before transcript persistence, while the
     // leading model-visible JSON still preserves whether results were present.
-    return /"results"\s*:\s*\[\s*([^\s\]])/.test(extractTextContent(message.content));
+    return /"results"\s*:\s*\[\s*([^\s\]])/.test(content);
   }
   if (toolName === "memory_recall") {
     if (Array.isArray(details?.memories)) {
       return details.memories.length > 0;
     }
-    return /^Found [1-9]\d* memories:/.test(extractTextContent(message.content));
+    return /^Found [1-9]\d* memories:/.test(content);
+  }
+  if (toolName === "memory_get") {
+    const text = normalizeOptionalString(details?.text);
+    return text !== undefined ? text.length > 0 : /"text"\s*:\s*"(?!")/.test(content);
   }
   return false;
 }
 
-async function readActiveMemorySearchDebug(
+async function readActiveMemoryTranscriptState(
   sessionFile: string,
   limits?: TranscriptReadLimits,
-): Promise<ActiveMemorySearchDebug | undefined> {
-  let found: ActiveMemorySearchDebug | undefined;
+  toolsAllow?: readonly string[],
+): Promise<{
+  searchDebug?: ActiveMemorySearchDebug;
+  hasUsableMemoryResult: boolean;
+}> {
+  let searchDebug: ActiveMemorySearchDebug | undefined;
+  let hasUsableMemoryResult = false;
   await streamBoundedTranscriptJsonl({
     sessionFile,
     limits,
     onRecord: (record) => {
       const debug = extractActiveMemorySearchDebugFromSessionRecord(record);
       if (debug) {
-        found = debug;
+        searchDebug = debug;
       }
+      hasUsableMemoryResult ||= hasUsableMemoryResultInSessionRecord(record, toolsAllow);
     },
   });
-  return found;
+  return { searchDebug, hasUsableMemoryResult };
+}
+
+async function readActiveMemorySearchDebug(
+  sessionFile: string,
+  limits?: TranscriptReadLimits,
+): Promise<ActiveMemorySearchDebug | undefined> {
+  return (await readActiveMemoryTranscriptState(sessionFile, limits)).searchDebug;
+}
+
+async function readMergedActiveMemoryTranscriptState(params: {
+  sessionFiles: readonly string[];
+  toolsAllow: readonly string[];
+}): Promise<{
+  searchDebug?: ActiveMemorySearchDebug;
+  hasUsableMemoryResult: boolean;
+}> {
+  let searchDebug: ActiveMemorySearchDebug | undefined;
+  let hasUsableMemoryResult = false;
+  for (const sessionFile of new Set(params.sessionFiles)) {
+    const state = await readActiveMemoryTranscriptState(sessionFile, undefined, params.toolsAllow);
+    searchDebug = state.searchDebug ?? searchDebug;
+    hasUsableMemoryResult ||= state.hasUsableMemoryResult;
+  }
+  return { searchDebug, hasUsableMemoryResult };
 }
 
 async function readTerminalMemorySearchResult(
   sessionFile: string,
   limits?: TranscriptReadLimits,
+  toolsAllow?: readonly string[],
 ): Promise<TerminalMemorySearchResult | undefined> {
   let found: TerminalMemorySearchResult | undefined;
   let hasUsableMemoryResult = false;
@@ -1796,7 +1851,7 @@ async function readTerminalMemorySearchResult(
     sessionFile,
     limits,
     onRecord: (record) => {
-      hasUsableMemoryResult ||= hasUsableMemoryResultInSessionRecord(record);
+      hasUsableMemoryResult ||= hasUsableMemoryResultInSessionRecord(record, toolsAllow);
       const result = extractTerminalMemorySearchResultFromSessionRecord(record);
       if (result) {
         found = { ...result, hasUsableMemoryResult };
@@ -1811,6 +1866,7 @@ async function readTerminalMemorySearchResult(
 function watchTerminalMemorySearchResult(params: {
   getSessionFile: () => string | undefined;
   abortSignal: AbortSignal;
+  toolsAllow: readonly string[];
 }): TerminalMemorySearchWatch {
   let stopped = false;
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
@@ -1851,7 +1907,9 @@ function watchTerminalMemorySearchResult(params: {
     inFlight = true;
     try {
       const sessionFile = params.getSessionFile();
-      const result = sessionFile ? await readTerminalMemorySearchResult(sessionFile) : undefined;
+      const result = sessionFile
+        ? await readTerminalMemorySearchResult(sessionFile, undefined, params.toolsAllow)
+        : undefined;
       if (result) {
         finish(result);
         return;
@@ -1922,6 +1980,15 @@ function readActiveMemorySearchDebugFromRunResult(
   );
 }
 
+function readActiveMemorySessionFileFromRunResult(result: unknown): string | undefined {
+  const record = asRecord(result);
+  const meta = asRecord(record?.meta);
+  const agentMeta = asRecord(meta?.agentMeta);
+  return (
+    normalizeOptionalString(agentMeta?.sessionFile) ?? normalizeOptionalString(meta?.sessionFile)
+  );
+}
+
 function extractAssistantTextFromSessionRecord(value: unknown): string {
   const record = asRecord(value);
   if (!record) {
@@ -1974,10 +2041,23 @@ async function readPartialAssistantText(
   return joined || null;
 }
 
+async function readMergedPartialAssistantText(
+  sessionFiles: readonly string[],
+): Promise<string | null> {
+  for (const sessionFile of new Set(sessionFiles)) {
+    const text = await readPartialAssistantText(sessionFile);
+    if (text) {
+      return text;
+    }
+  }
+  return null;
+}
+
 function attachPartialTimeoutData(
   error: unknown,
   partialReply: string | null,
   searchDebug: ActiveMemorySearchDebug | undefined,
+  hasUsableMemoryResult: boolean,
 ): void {
   if (!error || typeof error !== "object") {
     return;
@@ -1989,11 +2069,13 @@ function attachPartialTimeoutData(
   if (searchDebug) {
     target.activeMemorySearchDebug = searchDebug;
   }
+  target.activeMemoryHasUsableMemoryResult = hasUsableMemoryResult;
 }
 
 function readPartialTimeoutData(error: unknown): {
   rawReply?: string;
   searchDebug?: ActiveMemorySearchDebug;
+  hasUsableMemoryResult?: boolean;
 } {
   if (!error || typeof error !== "object") {
     return {};
@@ -2002,6 +2084,7 @@ function readPartialTimeoutData(error: unknown): {
   return {
     rawReply: normalizeOptionalString(source.activeMemoryPartialReply),
     searchDebug: source.activeMemorySearchDebug,
+    hasUsableMemoryResult: source.activeMemoryHasUsableMemoryResult,
   };
 }
 
@@ -2010,6 +2093,7 @@ async function waitForSubagentPartialTimeoutData(
 ): Promise<{
   rawReply?: string;
   searchDebug?: ActiveMemorySearchDebug;
+  hasUsableMemoryResult?: boolean;
 }> {
   if (!subagentPromise) {
     return {};
@@ -2042,6 +2126,8 @@ async function buildTimeoutRecallResult(params: {
   sessionFile?: string;
   rawReply?: string;
   searchDebug?: ActiveMemorySearchDebug;
+  hasUsableMemoryResult?: boolean;
+  toolsAllow: readonly string[];
   subagentPromise?: Promise<RecallSubagentResult>;
 }): Promise<ActiveRecallResult> {
   const subagentPartialData =
@@ -2052,15 +2138,21 @@ async function buildTimeoutRecallResult(params: {
     params.rawReply ??
     subagentPartialData.rawReply ??
     (await readPartialAssistantText(params.sessionFile));
+  const transcriptState = params.sessionFile
+    ? await readActiveMemoryTranscriptState(params.sessionFile, undefined, params.toolsAllow)
+    : undefined;
   const summary = truncateSummary(
     normalizeActiveSummary(rawReply ?? "") ?? "",
     params.maxSummaryChars,
   );
   const searchDebug =
-    params.searchDebug ??
-    subagentPartialData.searchDebug ??
-    (params.sessionFile ? await readActiveMemorySearchDebug(params.sessionFile) : undefined);
-  if (summary.length === 0) {
+    params.searchDebug ?? subagentPartialData.searchDebug ?? transcriptState?.searchDebug;
+  const canUseSummary =
+    !isUnavailableMemorySearchDebug(searchDebug) ||
+    params.hasUsableMemoryResult === true ||
+    subagentPartialData.hasUsableMemoryResult === true ||
+    transcriptState?.hasUsableMemoryResult === true;
+  if (summary.length === 0 || !canUseSummary) {
     return {
       status: "timeout",
       elapsedMs: params.elapsedMs,
@@ -2079,13 +2171,18 @@ async function buildTimeoutRecallResult(params: {
 function buildSubagentRecallResult(params: {
   subagentResult: RecallSubagentResult;
   fallbackSearchDebug?: ActiveMemorySearchDebug;
+  fallbackHasUsableMemoryResult?: boolean;
   elapsedMs: number;
   maxSummaryChars: number;
 }): ActiveRecallResult {
   const { rawReply, resultStatus } = params.subagentResult;
   const searchDebug = params.subagentResult.searchDebug ?? params.fallbackSearchDebug;
   const summary = truncateSummary(normalizeActiveSummary(rawReply) ?? "", params.maxSummaryChars);
-  return summary.length > 0
+  const hasUsableMemoryResult =
+    params.subagentResult.hasUsableMemoryResult === true ||
+    params.fallbackHasUsableMemoryResult === true;
+  const canUseSummary = !isUnavailableMemorySearchDebug(searchDebug) || hasUsableMemoryResult;
+  return summary.length > 0 && canUseSummary
     ? {
         status: "ok",
         elapsedMs: params.elapsedMs,
@@ -2564,6 +2661,7 @@ async function runRecallSubagent(params: {
     channelId: params.channelId,
   });
 
+  let activeSessionFile = sessionFile;
   try {
     const embeddedConfig = applyActiveMemoryRuntimeConfigSnapshot(params.api.config, params.config);
     const embeddedTimeoutMs = params.config.timeoutMs + params.config.setupGraceTimeoutMs;
@@ -2596,6 +2694,7 @@ async function runRecallSubagent(params: {
       cleanupBundleMcpOnRunEnd: true,
       abortSignal: params.abortSignal,
     });
+    activeSessionFile = readActiveMemorySessionFileFromRunResult(result) ?? sessionFile;
     if (params.abortSignal?.aborted) {
       const reason = params.abortSignal.reason;
       if (reason instanceof Error) {
@@ -2613,19 +2712,31 @@ async function runRecallSubagent(params: {
       .filter(Boolean)
       .join("\n")
       .trim();
+    const transcriptState = await readMergedActiveMemoryTranscriptState({
+      sessionFiles: [sessionFile, activeSessionFile],
+      toolsAllow: params.config.toolsAllow,
+    });
     const searchDebug =
-      (await readActiveMemorySearchDebug(sessionFile)) ??
-      readActiveMemorySearchDebugFromRunResult(result);
+      transcriptState.searchDebug ?? readActiveMemorySearchDebugFromRunResult(result);
     return {
       rawReply: rawReply || "NONE",
-      transcriptPath: params.config.persistTranscripts ? sessionFile : undefined,
+      transcriptPath: params.config.persistTranscripts ? activeSessionFile : undefined,
       searchDebug,
+      hasUsableMemoryResult: transcriptState.hasUsableMemoryResult,
     };
   } catch (error) {
     if (params.abortSignal?.aborted) {
-      const partialReply = await readPartialAssistantText(sessionFile);
-      const searchDebug = await readActiveMemorySearchDebug(sessionFile);
-      attachPartialTimeoutData(error, partialReply, searchDebug);
+      const partialReply = await readMergedPartialAssistantText([activeSessionFile, sessionFile]);
+      const transcriptState = await readMergedActiveMemoryTranscriptState({
+        sessionFiles: [sessionFile, activeSessionFile],
+        toolsAllow: params.config.toolsAllow,
+      });
+      attachPartialTimeoutData(
+        error,
+        partialReply,
+        transcriptState.searchDebug,
+        transcriptState.hasUsableMemoryResult,
+      );
     }
     if (
       !params.abortSignal?.aborted &&
@@ -2774,6 +2885,7 @@ async function maybeResolveActiveRecall(params: {
     terminalMemorySearchWatch = watchTerminalMemorySearchResult({
       getSessionFile: () => sessionFile,
       abortSignal: controller.signal,
+      toolsAllow: params.config.toolsAllow,
     });
     // Silently catch late rejections after timeout so they don't become
     // unhandled promise rejections.
@@ -2786,6 +2898,7 @@ async function maybeResolveActiveRecall(params: {
     ]);
     terminalMemorySearchWatch.stop();
     let fallbackSearchDebug: ActiveMemorySearchDebug | undefined;
+    let fallbackHasUsableMemoryResult = false;
     if (
       raceResult !== TIMEOUT_SENTINEL &&
       "status" in raceResult &&
@@ -2794,6 +2907,7 @@ async function maybeResolveActiveRecall(params: {
       // A later unavailable call must not discard a summary grounded in an
       // earlier successful recall. The existing watchdog remains the deadline.
       fallbackSearchDebug = raceResult.searchDebug;
+      fallbackHasUsableMemoryResult = true;
       raceResult = await Promise.race([subagentPromise, timeoutPromise]);
     }
 
@@ -2802,6 +2916,7 @@ async function maybeResolveActiveRecall(params: {
         elapsedMs: Date.now() - startedAt,
         maxSummaryChars: params.config.maxSummaryChars,
         sessionFile,
+        toolsAllow: params.config.toolsAllow,
         subagentPromise,
       });
       if (params.config.logging) {
@@ -2856,6 +2971,7 @@ async function maybeResolveActiveRecall(params: {
     const result = buildSubagentRecallResult({
       subagentResult: raceResult,
       fallbackSearchDebug,
+      fallbackHasUsableMemoryResult,
       elapsedMs: Date.now() - startedAt,
       maxSummaryChars: params.config.maxSummaryChars,
     });
@@ -2886,6 +3002,8 @@ async function maybeResolveActiveRecall(params: {
         sessionFile,
         rawReply: partialTimeoutData.rawReply,
         searchDebug: partialTimeoutData.searchDebug,
+        hasUsableMemoryResult: partialTimeoutData.hasUsableMemoryResult,
+        toolsAllow: params.config.toolsAllow,
       });
       if (params.config.logging) {
         params.api.logger.info?.(

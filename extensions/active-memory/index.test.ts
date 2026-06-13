@@ -2159,6 +2159,29 @@ describe("active-memory plugin", () => {
         },
       }),
     ).toBe(false);
+    expect(
+      testing.hasUsableMemoryResultInSessionRecord({
+        message: {
+          role: "toolResult",
+          toolName: "memory_get",
+          details: { path: "memory/food.md", text: "User usually orders ramen." },
+          content: [{ type: "text", text: '{"text":"User usually orders ramen."}' }],
+        },
+      }),
+    ).toBe(true);
+    expect(
+      testing.hasUsableMemoryResultInSessionRecord(
+        {
+          message: {
+            role: "toolResult",
+            toolName: "memory_lookup_custom",
+            details: {},
+            content: [{ type: "text", text: "User usually orders ramen." }],
+          },
+        },
+        ["memory_lookup_custom"],
+      ),
+    ).toBe(false);
   });
 
   it("replaces stale structured active-memory lines on a later empty run", async () => {
@@ -2503,6 +2526,77 @@ describe("active-memory plugin", () => {
       lines,
       "🔎 Active Memory Debug: timeout_partial: 32 chars recovered (not persisted)",
     );
+  });
+
+  it("preserves grounded timeout partials after temporary transcript cleanup", async () => {
+    testing.setMinimumTimeoutMsForTests(1);
+    testing.setSetupGraceTimeoutMsForTests(0);
+    testing.setTimeoutPartialDataGraceMsForTests(100);
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: 100,
+      maxSummaryChars: 80,
+      logging: true,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    const sessionKey = "agent:main:grounded-timeout-partial-temp-transcript";
+    hoisted.sessionStore[sessionKey] = {
+      sessionId: "s-grounded-timeout-partial-temp-transcript",
+      updatedAt: 0,
+    };
+    let tempSessionFile = "";
+    runEmbeddedAgent.mockImplementationOnce(
+      async (params: { sessionFile: string; abortSignal?: AbortSignal }) => {
+        await writeTranscriptJsonl(params.sessionFile, [
+          {
+            message: {
+              role: "toolResult",
+              toolName: "memory_search",
+              details: {
+                results: [{ path: "memory/food.md", text: "User usually orders ramen." }],
+              },
+            },
+          },
+          {
+            type: "message",
+            message: { role: "assistant", content: "User usually orders ramen." },
+          },
+        ]);
+        if (!params.abortSignal?.aborted) {
+          await new Promise<void>((resolve) => {
+            params.abortSignal?.addEventListener("abort", () => resolve(), { once: true });
+          });
+        }
+        tempSessionFile = path.join(path.dirname(params.sessionFile), "rotated.jsonl");
+        await writeTranscriptJsonl(tempSessionFile, [
+          {
+            message: {
+              role: "toolResult",
+              toolName: "memory_search",
+              details: {
+                disabled: true,
+                error: "embedding request failed",
+              },
+            },
+          },
+        ]);
+        return {
+          payloads: [],
+          meta: { agentMeta: { sessionFile: tempSessionFile } },
+        };
+      },
+    );
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what food do i usually order? grounded timeout partial", messages: [] },
+      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+    );
+
+    expectPrependContextContains(result, "User usually orders ramen.");
+    await vi.waitFor(async () => {
+      await expectPathMissing(tempSessionFile);
+    });
+    expectLinesToContain(getActiveMemoryLines(sessionKey), "status=timeout_partial");
   });
 
   it("keeps timeout status when the timeout transcript is empty", async () => {
@@ -3271,7 +3365,23 @@ describe("active-memory plugin", () => {
       await new Promise((resolve) => {
         setTimeout(resolve, 550);
       });
-      return { payloads: [{ text: verboseSummary }] };
+      const activeSessionFile = path.join(path.dirname(params.sessionFile), "rotated.jsonl");
+      await writeTranscriptJsonl(activeSessionFile, [
+        {
+          message: {
+            role: "toolResult",
+            toolName: "memory_search",
+            details: {
+              disabled: true,
+              error: "embedding request failed",
+            },
+          },
+        },
+      ]);
+      return {
+        payloads: [{ text: verboseSummary }],
+        meta: { agentMeta: { sessionFile: activeSessionFile } },
+      };
     });
 
     const result = await hooks.before_prompt_build(
@@ -3290,10 +3400,6 @@ describe("active-memory plugin", () => {
     const lines = getActiveMemoryLines(sessionKey);
     expect(lines).toHaveLength(2);
     expectLinesToContain(lines, "Active Memory: status=ok");
-    expectLinesToContain(
-      lines,
-      "Active Memory Debug: Memory search is unavailable due to an embedding/provider error.",
-    );
   });
 
   it("does not recover arbitrary assistant text without successful memory evidence", async () => {
@@ -3329,9 +3435,6 @@ describe("active-memory plugin", () => {
           },
         },
       ]);
-      await new Promise((resolve) => {
-        setTimeout(resolve, 35);
-      });
       return { payloads: [{ text: "User usually orders tonkotsu ramen." }] };
     });
 
@@ -3350,6 +3453,59 @@ describe("active-memory plugin", () => {
     expect(lines).toHaveLength(2);
     expectLinesToContain(lines, "Active Memory: status=unavailable");
     expectLinesToContain(lines, `Active Memory Debug: ${warning} ${action}`);
+  });
+
+  it("uses configured memory evidence from a rotated embedded transcript", async () => {
+    testing.setMinimumTimeoutMsForTests(1);
+    testing.setSetupGraceTimeoutMsForTests(0);
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: 1_000,
+      toolsAllow: ["memory_get", "memory_search"],
+      logging: true,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    const sessionKey = "agent:main:rotated-memory-evidence";
+    hoisted.sessionStore[sessionKey] = {
+      sessionId: "s-rotated-memory-evidence",
+      updatedAt: 0,
+    };
+    runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
+      await writeTranscriptJsonl(params.sessionFile, [
+        {
+          message: {
+            role: "toolResult",
+            toolName: "memory_get",
+            details: { path: "memory/food.md", text: "User usually orders ramen." },
+          },
+        },
+      ]);
+      const activeSessionFile = path.join(path.dirname(params.sessionFile), "rotated.jsonl");
+      await writeTranscriptJsonl(activeSessionFile, [
+        {
+          message: {
+            role: "toolResult",
+            toolName: "memory_search",
+            details: {
+              disabled: true,
+              error: "embedding request failed",
+            },
+          },
+        },
+      ]);
+      return {
+        payloads: [{ text: "User usually orders ramen." }],
+        meta: { agentMeta: { sessionFile: activeSessionFile } },
+      };
+    });
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what food do i usually order? rotated transcript", messages: [] },
+      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+    );
+
+    expectPrependContextContains(result, "User usually orders ramen.");
+    expectLinesToContain(getActiveMemoryLines(sessionKey), "status=ok");
   });
 
   it("fast-fails configured-provider-missing memory_search results without injecting provider errors", async () => {
