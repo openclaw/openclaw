@@ -2387,9 +2387,8 @@ export async function runEmbeddedAttempt(
                   },
                   toolCall.name,
                 );
-                const definition = tool
-                  ? toToolDefinitions([tool], catalogToolHookContext)[0]
-                  : undefined;
+                // Catalog entries already own before_tool_call wrapping.
+                const definition = tool ? toToolDefinitions([tool])[0] : undefined;
                 const hydratedTool = definition ? wrapToolDefinition(definition) : undefined;
                 if (hydratedTool) {
                   log.info(`tool-search: hydrated deferred directory tool ${toolCall.name}`);

@@ -14,6 +14,7 @@ import {
   toClientToolDefinitions,
   toToolDefinitions,
 } from "./agent-tool-definition-adapter.js";
+import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import type { ClientToolDefinition } from "./embedded-agent-runner/run/params.js";
 
 type ToolExecute = ReturnType<typeof toToolDefinitions>[number]["execute"];
@@ -132,6 +133,35 @@ describe("agent tool definition adapter", () => {
     });
     expect(result.content[0]?.type).toBe("text");
     expect((result.content[0] as { text?: string }).text).toContain('"count"');
+  });
+
+  it("does not re-run hook preparation for an already wrapped tool", async () => {
+    const prepareBeforeToolCallParams = vi.fn((params: unknown) => params);
+    const execute = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "done" }],
+      details: {},
+    }));
+    const tool = {
+      name: "wrapped_tool",
+      label: "Wrapped Tool",
+      description: "already owns hook execution",
+      parameters: Type.Object({}),
+      prepareBeforeToolCallParams,
+      execute,
+    } as AgentTool & {
+      prepareBeforeToolCallParams: typeof prepareBeforeToolCallParams;
+    };
+    const hookContext = { agentId: "agent-main", sessionId: "session-wrapped-tool" };
+    const wrappedTool = wrapToolWithBeforeToolCallHook(tool, hookContext);
+    const [definition] = toToolDefinitions([wrappedTool], hookContext);
+    if (!definition) {
+      throw new Error("missing wrapped tool definition");
+    }
+
+    await definition.execute("call-wrapped", {}, undefined, undefined, extensionContext);
+
+    expect(prepareBeforeToolCallParams).toHaveBeenCalledOnce();
+    expect(execute).toHaveBeenCalledOnce();
   });
 });
 
