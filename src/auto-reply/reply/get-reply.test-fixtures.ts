@@ -39,7 +39,7 @@ export function buildGetReplyGroupCtx(overrides: Partial<MsgContext> = {}): MsgC
   };
 }
 
-export function buildNativeResetContext(): MsgContext {
+export function buildNativeResetContext(overrides: Partial<MsgContext> = {}): MsgContext {
   return {
     Provider: "telegram",
     Surface: "telegram",
@@ -53,6 +53,7 @@ export function buildNativeResetContext(): MsgContext {
     CommandTargetSessionKey: "agent:main:telegram:direct:123",
     From: "telegram:123",
     To: "slash:123",
+    ...overrides,
   };
 }
 
