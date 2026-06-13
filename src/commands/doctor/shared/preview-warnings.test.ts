@@ -117,7 +117,12 @@ vi.mock("./channel-plugin-blockers.js", () => ({
     if (Object.keys(env).some((key) => key.startsWith("DISCORD_"))) {
       configuredChannels.add("discord");
     }
-    const hits = manifestState.plugins.flatMap((plugin) => {
+    const hits: Array<{
+      channelId: string;
+      pluginId: string;
+      reason: string;
+      channelAvailable?: boolean;
+    }> = manifestState.plugins.flatMap((plugin) => {
       const sourcePlugins = activationSourceConfig.plugins;
       const disabledByEntry = sourcePlugins?.entries?.[plugin.id]?.enabled === false;
       const pluginsDisabled = sourcePlugins?.enabled === false;
@@ -155,9 +160,12 @@ vi.mock("./channel-plugin-blockers.js", () => ({
           plugin.channels.filter((channelId) => configuredChannels.has(channelId)),
         ),
     );
-    return hits.map((hit) =>
-      availableChannelIds.has(hit.channelId) ? { ...hit, channelAvailable: true } : hit,
-    );
+    for (const hit of hits) {
+      if (availableChannelIds.has(hit.channelId)) {
+        hit.channelAvailable = true;
+      }
+    }
+    return hits;
   },
   collectConfiguredChannelPluginBlockerWarnings: (
     hits: Array<{ channelId: string; pluginId: string; reason: string }>,
