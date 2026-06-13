@@ -6,7 +6,7 @@ import {
   renderQaToolCoverageMarkdownReport,
 } from "./tool-coverage-report.js";
 
-const TEST_TOOL_FEATURE_ID =
+const TEST_TOOL_COVERAGE_ID =
   "agent-runtime-and-provider-execution.tool-calls-and-response-handling.tool-call-handling";
 
 function makeScenario(
@@ -19,7 +19,7 @@ function makeScenario(
     title: id,
     surface: "runtime-tools",
     coverage: {
-      primary: [TEST_TOOL_FEATURE_ID],
+      primary: [TEST_TOOL_COVERAGE_ID],
     },
     objective: "exercise tool",
     successCriteria: ["tool is exercised"],
