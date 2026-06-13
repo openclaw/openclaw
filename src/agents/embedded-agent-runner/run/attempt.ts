@@ -1300,6 +1300,8 @@ export async function runEmbeddedAttempt(
             onYield: (message) => {
               yieldDetected = true;
               yieldMessage = message;
+              // Record before aborting; see recordYieldForLifecycle declaration.
+              recordYieldForLifecycle?.();
               queueYieldInterruptForSession?.();
               runAbortController.abort("sessions_yield");
               abortSessionForYield?.();
@@ -1458,6 +1460,13 @@ export async function runEmbeddedAttempt(
     let abortSessionForYield: (() => void) | null = null;
     let queueYieldInterruptForSession: (() => void) | null = null;
     let yieldAbortSettled: Promise<void> | null = null;
+    // Late-binding (set after the subscription exists). onYield must record
+    // `yielded` into the subscription's terminal lifecycle meta BEFORE the
+    // yield abort tears down the stream: the terminal lifecycle event can be
+    // emitted from the abort path before run.ts post-processing runs, and an
+    // end event carrying `aborted` without `yielded` persists the session row
+    // as killed/abortedLastRun instead of paused.
+    let recordYieldForLifecycle: (() => void) | null = null;
     const runtimePlanModelContext = {
       workspaceDir: effectiveWorkspace,
       modelApi: params.model.api,
@@ -3397,6 +3406,7 @@ export async function runEmbeddedAttempt(
         waitForPendingEvents,
       } = subscription;
       toolMetasForTerminal = toolMetas;
+      recordYieldForLifecycle = () => setTerminalLifecycleMeta({ yielded: true });
       isCompactionPendingForExternalSignal = subscription.isCompacting;
       isCompactionInFlightForExternalSignal = () => activeSession.isCompacting;
       toolSearchCatalogExecutor = async (toolParams) => {

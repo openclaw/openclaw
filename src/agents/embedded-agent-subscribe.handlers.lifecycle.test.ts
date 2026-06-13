@@ -316,6 +316,33 @@ describe("handleAgentEnd", () => {
     });
   });
 
+  it("carries yielded on lifecycle end events when the yield abort wins the meta race", async () => {
+    // Live regression (#75662 proof capture): sessions_yield aborts the run
+    // mid-stream, so the end event fires before run.ts post-processing writes
+    // terminal meta — `aborted` arrives via the isTerminalAborted fallback.
+    // The yield itself is recorded into state at tool time (onYield ->
+    // setTerminalLifecycleMeta), and must survive onto the event so the
+    // persisted session row resolves paused, not killed/abortedLastRun.
+    emitAgentEventMock.mockClear();
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(undefined, { onAgentEvent });
+    ctx.state.yielded = true;
+    ctx.params.isTerminalAborted = () => true;
+
+    await handleAgentEnd(ctx);
+
+    expect(emitAgentEventMock).toHaveBeenCalledWith({
+      runId: "run-1",
+      sessionKey: "agent:main:main",
+      stream: "lifecycle",
+      data: expect.objectContaining({
+        phase: "end",
+        yielded: true,
+        aborted: true,
+      }),
+    });
+  });
+
   it("keeps normal lifecycle end events explicitly non-aborted", async () => {
     const onAgentEvent = vi.fn();
     const ctx = createContext(undefined, { onAgentEvent });
