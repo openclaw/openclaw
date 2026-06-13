@@ -1660,6 +1660,24 @@ describe("package artifact reuse", () => {
     expect(releaseWorkflow).toContain('else error("malformed Windows checksum manifest entry")');
   });
 
+  it("rejects unsafe direct Windows recovery before uploading assets", () => {
+    const windowsWorkflow = readFileSync(WINDOWS_NODE_RELEASE_WORKFLOW, "utf8");
+    const classifyStableReleaseIndex = windowsWorkflow.indexOf("$stableRelease = -not (");
+    const rejectPrereleaseSourceIndex = windowsWorkflow.indexOf(
+      "if ($stableRelease -and $sourceRelease.isPrerelease)",
+    );
+    const rejectUnexpectedTargetAssetsIndex = windowsWorkflow.indexOf(
+      "Target OpenClaw release contains unexpected OpenClawCompanion assets before upload",
+    );
+    const uploadAssetsIndex = windowsWorkflow.indexOf("gh release upload $env:RELEASE_TAG");
+
+    expect(classifyStableReleaseIndex).toBeGreaterThan(-1);
+    expect(rejectPrereleaseSourceIndex).toBeGreaterThan(classifyStableReleaseIndex);
+    expect(windowsWorkflow).not.toContain("-not $targetRelease.isPrerelease");
+    expect(rejectUnexpectedTargetAssetsIndex).toBeGreaterThan(-1);
+    expect(uploadAssetsIndex).toBeGreaterThan(rejectUnexpectedTargetAssetsIndex);
+  });
+
   it("keeps beta release verification and ClawHub publish repair hooks wired", () => {
     const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
       scripts?: Record<string, string>;

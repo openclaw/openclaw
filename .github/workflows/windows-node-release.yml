@@ -40,6 +40,10 @@ jobs:
           if ($env:RELEASE_TAG -notmatch '^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-(alpha|beta)\.[1-9][0-9]*)|(-[1-9][0-9]*))?$') {
             throw "Invalid OpenClaw release tag: $env:RELEASE_TAG"
           }
+          $stableRelease = -not (
+            $env:RELEASE_TAG.Contains("-alpha.") -or
+            $env:RELEASE_TAG.Contains("-beta.")
+          )
           if ($env:WINDOWS_NODE_TAG -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$') {
             throw "windows_node_tag must be an explicit openclaw-windows-node release tag, not latest: $env:WINDOWS_NODE_TAG"
           }
@@ -54,6 +58,10 @@ jobs:
             "OpenClawCompanion-Setup-x64.exe",
             "OpenClawCompanion-Setup-arm64.exe"
           )
+          $allowedTargetCompanionAssetNames = @(
+            $requiredInstallerNames
+            "OpenClawCompanion-SHA256SUMS.txt"
+          )
           if ($expectedDigests.Count -ne $requiredInstallerNames.Count) {
             throw "expected_installer_digests must contain exactly the current installer asset contract."
           }
@@ -64,9 +72,21 @@ jobs:
             }
           }
 
-          $targetRelease = gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --json tagName,isDraft,isPrerelease,url | ConvertFrom-Json
+          $targetRelease = gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --json tagName,isDraft,isPrerelease,assets,url | ConvertFrom-Json
           if ($targetRelease.tagName -ne $env:RELEASE_TAG) {
             throw "OpenClaw release tag mismatch: expected $env:RELEASE_TAG, got $($targetRelease.tagName)"
+          }
+          $unexpectedTargetCompanionAssets = @(
+            $targetRelease.assets |
+              Where-Object {
+                $_.name.StartsWith("OpenClawCompanion-") -and
+                $_.name -notin $allowedTargetCompanionAssetNames
+              } |
+              ForEach-Object name |
+              Sort-Object
+          )
+          if ($unexpectedTargetCompanionAssets.Count -ne 0) {
+            throw "Target OpenClaw release contains unexpected OpenClawCompanion assets before upload: $($unexpectedTargetCompanionAssets -join ', ')"
           }
 
           $sourceRelease = gh release view $env:WINDOWS_NODE_TAG --repo openclaw/openclaw-windows-node --json tagName,isDraft,isPrerelease,url | ConvertFrom-Json
@@ -76,7 +96,7 @@ jobs:
           if ($sourceRelease.isDraft) {
             throw "Windows source release must be published: $($sourceRelease.url)"
           }
-          if (-not $targetRelease.isPrerelease -and $sourceRelease.isPrerelease) {
+          if ($stableRelease -and $sourceRelease.isPrerelease) {
             throw "Stable OpenClaw releases require a non-prerelease Windows source release: $($sourceRelease.url)"
           }
 
