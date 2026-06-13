@@ -397,12 +397,10 @@ export function createOpenAIResponsesContextManagementWrapper(
     }
 
     const originalOnPayload = options?.onPayload;
+    const effectiveStore = policy.shouldStripStore ? false : policy.explicitStore;
     const replayResponsesItemIds =
-      policy.explicitStore === true
-        ? true
-        : policy.explicitStore === false || policy.shouldStripStore
-          ? false
-          : (options as OpenAIResponsesReplayOptions | undefined)?.replayResponsesItemIds;
+      effectiveStore ??
+      (options as OpenAIResponsesReplayOptions | undefined)?.replayResponsesItemIds;
     const nextOptions: OpenAIResponsesReplayOptions = {
       ...options,
       ...(replayResponsesItemIds === undefined ? {} : { replayResponsesItemIds }),
