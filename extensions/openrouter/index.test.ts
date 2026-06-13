@@ -389,6 +389,24 @@ describe("openrouter provider hooks", () => {
       },
     } as never);
     expect(normalizedHunterModel?.reasoning).toBe(false);
+    expect(normalizedHunterModel?.id).toBe("hunter-alpha");
+
+    const normalizedAnthropicModel = provider.normalizeResolvedModel?.({
+      provider: "openrouter",
+      model: {
+        provider: "openrouter",
+        id: "openrouter/anthropic/claude-sonnet-4.6",
+        name: "anthropic/claude-sonnet-4.6",
+        api: "openai-completions",
+        baseUrl: "https://openrouter.ai/api/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200_000,
+        maxTokens: 8192,
+      },
+    } as never);
+    expect(normalizedAnthropicModel?.id).toBe("anthropic/claude-sonnet-4.6");
 
     expect(
       provider.normalizeTransport?.({
