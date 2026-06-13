@@ -47,12 +47,12 @@
     "workboard.unknownStatus",
     "workboard.viewDetails"
   ],
-  "generatedAt": "2026-06-13T21:58:39.223Z",
+  "generatedAt": "2026-06-13T23:32:46.167Z",
   "locale": "vi",
   "model": "claude-opus-4-8",
   "provider": "anthropic",
-  "sourceHash": "642a382824b6637e6eea0d3fbccd04b135194675db6bb9a0a1bacbf6424bd870",
-  "totalKeys": 1345,
+  "sourceHash": "883781b10417b9426d3a539b243745130ea5ba12eb1b51d7e85ce346f957e276",
+  "totalKeys": 1349,
   "translatedKeys": 1303,
   "workflow": 1
 }
