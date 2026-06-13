@@ -310,6 +310,17 @@ export async function sanitizeContentBlocksImages(
   const out: ToolContentBlock[] = [];
   for (const block of blocks) {
     if (!isImageBlock(block)) {
+      if (
+        block &&
+        typeof block === "object" &&
+        (block as unknown as Record<string, unknown>).type === "image"
+      ) {
+        out.push({
+          type: "text",
+          text: `[${label}] omitted image payload: missing data or mimeType`,
+        } satisfies TextContentBlock);
+        continue;
+      }
       out.push(block);
       continue;
     }
