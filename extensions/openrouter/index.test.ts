@@ -402,6 +402,134 @@ describe("openrouter provider hooks", () => {
     });
   });
 
+  // Regression test for #92611: OpenRouter Anthropic models should strip the
+  // "openrouter/" prefix from the model ID when sending to the API, since the
+  // base URL already routes to OpenRouter.
+  // IMPORTANT: Real OpenRouter slugs like "openrouter/auto" must be preserved.
+  it("strips openrouter/ prefix from bare model IDs in normalizeResolvedModel", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+
+    // Real OpenRouter slugs must be preserved (not stripped)
+    const normalizedAutoModel = provider.normalizeResolvedModel?.({
+      provider: "openrouter",
+      model: {
+        provider: "openrouter",
+        id: "openrouter/auto",
+        name: "OpenRouter Auto",
+        api: "openai-completions",
+        baseUrl: "https://openrouter.ai/api/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200_000,
+        maxTokens: 8192,
+      },
+    } as never);
+    expect(normalizedAutoModel?.id).toBe("openrouter/auto");
+
+    const normalizedAutoFreeModel = provider.normalizeResolvedModel?.({
+      provider: "openrouter",
+      model: {
+        provider: "openrouter",
+        id: "openrouter/auto:free",
+        name: "OpenRouter Auto (Free)",
+        api: "openai-completions",
+        baseUrl: "https://openrouter.ai/api/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200_000,
+        maxTokens: 8192,
+      },
+    } as never);
+    expect(normalizedAutoFreeModel?.id).toBe("openrouter/auto:free");
+
+    const normalizedAnthropicModel = provider.normalizeResolvedModel?.({
+      provider: "openrouter",
+      model: {
+        provider: "openrouter",
+        id: "openrouter/claude-sonnet-4-6",
+        name: "Claude Sonnet 4 (6)",
+        api: "openai-completions",
+        baseUrl: "https://openrouter.ai/api/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200_000,
+        maxTokens: 8192,
+      },
+    } as never);
+    expect(normalizedAnthropicModel?.id).toBe("claude-sonnet-4-6");
+
+    // Nested provider prefix should also be stripped
+    const normalizedNestedModel = provider.normalizeResolvedModel?.({
+      provider: "openrouter",
+      model: {
+        provider: "openrouter",
+        id: "openrouter/anthropic/claude-opus-4.8",
+        name: "Claude Opus 4 (8)",
+        api: "openai-completions",
+        baseUrl: "https://openrouter.ai/api/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200_000,
+        maxTokens: 8192,
+      },
+    } as never);
+    expect(normalizedNestedModel?.id).toBe("anthropic/claude-opus-4.8");
+
+    // Models without openrouter/ prefix should return undefined (no changes needed)
+    const normalizedBareModel = provider.normalizeResolvedModel?.({
+      provider: "openrouter",
+      model: {
+        provider: "openrouter",
+        id: "anthropic/claude-sonnet-4-6",
+        name: "Claude Sonnet 4 (6)",
+        api: "openai-completions",
+        baseUrl: "https://openrouter.ai/api/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200_000,
+        maxTokens: 8192,
+      },
+    } as never);
+    // No changes needed, so returns undefined
+    expect(normalizedBareModel).toBe(undefined);
+  });
+
+  // Integration test: verify the resolved model has correct ID after normalization.
+  // This simulates what happens in the embedded-agent-runner when a model with
+  // "openrouter/" prefix is resolved and sent to the API transport layer.
+  it("provides correctly normalized model ID for API transport", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+
+    // Simulate a resolved model with openrouter/ prefix (as would come from catalog)
+    const resolvedModelWithPrefix = {
+      provider: "openrouter",
+      api: "openai-completions" as const,
+      id: "openrouter/claude-sonnet-4-6",
+      baseUrl: "https://openrouter.ai/api/v1",
+    };
+
+    // Apply normalizeResolvedModel (this is called in embedded-agent-runner/model.ts
+    // before the model is passed to the stream function)
+    const normalizedModel = provider.normalizeResolvedModel?.({
+      provider: "openrouter",
+      model: resolvedModelWithPrefix,
+    } as never);
+
+    // The normalized model should have the openrouter/ prefix stripped
+    // so the API receives "claude-sonnet-4-6" instead of "openrouter/claude-sonnet-4-6"
+    expect(normalizedModel?.id).toBe("claude-sonnet-4-6");
+    expect(normalizedModel?.baseUrl).toBe("https://openrouter.ai/api/v1");
+
+    // This normalized model would now be used in openai-completions.ts where:
+    //   const params: ChatCompletionRequestParams = { model: model.id, ... };
+    // The model.id is "claude-sonnet-4-6", which is the correct format for OpenRouter API.
+  });
+
   it("injects provider routing into compat before applying stream wrappers", async () => {
     const provider = await registerSingleProviderPlugin(openrouterPlugin);
     let capturedPayload: Record<string, unknown> | undefined;

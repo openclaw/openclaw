@@ -469,31 +469,65 @@ export async function noteMemorySearchHealth(
 
   if (provider === "local") {
     const suggestedRemoteProvider = resolveSuggestedRemoteMemoryProvider();
-    if (opts?.gatewayMemoryProbe?.checked && opts.gatewayMemoryProbe.ready) {
+    const hasExplicitLocalModel = hasLocalEmbeddings(resolved.local);
+
+    // When the probe was intentionally skipped (skipped: true), we have no embedding
+    // status information — do not warn. A skipped probe means the user ran `openclaw doctor`
+    // without --deep; it does not mean embeddings are unavailable.
+    if (opts?.gatewayMemoryProbe?.skipped) {
       return;
     }
-    const hasExplicitLocalModel = hasLocalEmbeddings(resolved.local);
-    const detail = opts?.gatewayMemoryProbe?.error?.trim();
-    note(
-      [
-        hasExplicitLocalModel
-          ? 'Memory search provider is set to "local" and a local model path is configured, but local embeddings are not confirmed ready.'
-          : 'Memory search provider is set to "local", but local embeddings are not confirmed ready.',
-        detail ? `Gateway probe: ${detail}` : null,
-        "",
-        "Fix (pick one):",
-        `- Install the llama.cpp provider plugin: ${formatCliCommand("openclaw plugins install @openclaw/llama-cpp-provider")}`,
-        `- Set a local GGUF model path in config`,
-        suggestedRemoteProvider
-          ? `- Switch to a remote provider: ${formatCliCommand(`openclaw config set agents.defaults.memorySearch.provider ${suggestedRemoteProvider}`)}`
-          : `- Switch to a remote embedding provider in config`,
-        "",
-        `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
-      ]
-        .filter(Boolean)
-        .join("\n"),
-      "Memory search",
-    );
+
+    // When gateway probe was not checked AND there was no error (gateway not running),
+    // we cannot confirm embeddings status. Do not warn — user can run `openclaw doctor --deep`
+    // to verify. NOTE: a transport timeout sets checked=false but error is present; in that
+    // case we fall through to show the warning with error context.
+    if (!opts?.gatewayMemoryProbe?.checked && !opts?.gatewayMemoryProbe?.error) {
+      return;
+    }
+
+    if (opts.gatewayMemoryProbe.ready) {
+      return;
+    }
+
+    // Gateway probe reports not ready — warn with context-sensitive guidance.
+    const detail = opts.gatewayMemoryProbe.error?.trim();
+    if (!hasExplicitLocalModel) {
+      note(
+        [
+          'Memory search provider is set to "local", but local embeddings are not confirmed ready.',
+          detail ? `Gateway probe: ${detail}` : null,
+          "",
+          "Fix (pick one):",
+          `- Install the llama.cpp provider plugin: ${formatCliCommand("openclaw plugins install @openclaw/llama-cpp-provider")}`,
+          `- Set a local GGUF model path in config`,
+          suggestedRemoteProvider
+            ? `- Switch to a remote provider: ${formatCliCommand(`openclaw config set agents.defaults.memorySearch.provider ${suggestedRemoteProvider}`)}`
+            : `- Switch to a remote embedding provider in config`,
+          "",
+          `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        "Memory search",
+      );
+    } else {
+      note(
+        [
+          'Memory search provider is set to "local" and a local model path is configured, but local embeddings are not confirmed ready.',
+          detail ? `Gateway probe: ${detail}` : null,
+          "",
+          "Verify:",
+          `- Run ${formatCliCommand("openclaw memory status --deep")} to check if the local model is loaded`,
+          `- Or switch to a remote embedding provider in config`,
+          "",
+          `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        "Memory search",
+      );
+    }
     return;
   }
 

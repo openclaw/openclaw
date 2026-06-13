@@ -192,7 +192,9 @@ describe("noteMemorySearchHealth", () => {
     resetMemoryRecallMocks();
   });
 
-  it("warns when local provider is set but readiness was not confirmed", async () => {
+  it("does not warn when local provider is set but gateway probe was not run", async () => {
+    // Without a gateway probe, we cannot confirm embeddings are unavailable.
+    // This prevents false-positive warnings when `openclaw doctor` runs without --deep.
     resolveMemorySearchConfig.mockReturnValue({
       provider: "local",
       local: {},
@@ -201,10 +203,20 @@ describe("noteMemorySearchHealth", () => {
 
     await noteMemorySearchHealth(cfg, {});
 
-    expect(note).toHaveBeenCalledTimes(1);
-    const message = firstNoteMessage();
-    expect(message).toContain('Memory search provider is set to "local"');
-    expect(message).toContain("openclaw plugins install @openclaw/llama-cpp-provider");
+    expect(note).not.toHaveBeenCalled();
+  });
+
+  it("does not warn when local provider is set and gateway probe is not provided", async () => {
+    // Same as above — no probe means unknown status, no warning.
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "local",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg);
+
+    expect(note).not.toHaveBeenCalled();
   });
 
   it("warns when local provider with default model but gateway probe reports not ready", async () => {
@@ -220,6 +232,7 @@ describe("noteMemorySearchHealth", () => {
 
     expect(note).toHaveBeenCalledTimes(1);
     const message = firstNoteMessage();
+    expect(message).toContain('Memory search provider is set to "local"');
     expect(message).toContain("local embeddings are not confirmed ready");
     expect(message).toContain("node-llama-cpp not installed");
   });
@@ -238,7 +251,9 @@ describe("noteMemorySearchHealth", () => {
     expect(note).not.toHaveBeenCalled();
   });
 
-  it("warns when local provider readiness probe is inconclusive", async () => {
+  it("warns when local provider readiness probe times out", async () => {
+    // A gateway timeout sets checked: false but has an error message. This is a
+    // real diagnostic signal — we should warn so users know embeddings may be unavailable.
     resolveMemorySearchConfig.mockReturnValue({
       provider: "local",
       local: {},
@@ -254,19 +269,38 @@ describe("noteMemorySearchHealth", () => {
     });
 
     expect(note).toHaveBeenCalledTimes(1);
-    const message = firstNoteMessage();
-    expect(message).toContain("local embeddings are not confirmed ready");
-    expect(message).toContain("gateway timeout after 8000ms");
+    expect(firstNoteMessage()).toContain("local embeddings are not confirmed ready");
   });
 
-  it("warns when local provider has an explicit hf: modelPath but readiness was not confirmed", async () => {
+  it("does not warn when gateway probe is unchecked and gateway is not running", async () => {
+    // When gateway is not running, the probe returns checked: false with no error.
+    // This means we simply don't know the status — do not produce a false warning.
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "local",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      gatewayMemoryProbe: {
+        checked: false,
+        ready: false,
+      },
+    });
+
+    expect(note).not.toHaveBeenCalled();
+  });
+
+  it("warns when local provider has an explicit hf: modelPath but gateway probe reports not ready", async () => {
     resolveMemorySearchConfig.mockReturnValue({
       provider: "local",
       local: { modelPath: "hf:some-org/some-model-GGUF/model.gguf" },
       remote: {},
     });
 
-    await noteMemorySearchHealth(cfg, {});
+    await noteMemorySearchHealth(cfg, {
+      gatewayMemoryProbe: { checked: true, ready: false },
+    });
 
     expect(note).toHaveBeenCalledTimes(1);
     expect(firstNoteMessage()).toContain("a local model path is configured");

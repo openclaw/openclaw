@@ -1,6 +1,10 @@
 // Openrouter plugin module implements models behavior.
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
+// Real OpenRouter model slugs that should be preserved with the openrouter/ prefix.
+// These are official OpenRouter model identifiers, not routed refs.
+const OPENROUTER_REAL_MODEL_SLUGS = new Set(["auto", "auto:free", "auto:lowest-latency"]);
+
 const OPENROUTER_MISTRAL_MODEL_PREFIXES = [
   "mistralai/",
   "mistral/",
@@ -18,7 +22,27 @@ export function normalizeOpenRouterModelId(modelId: unknown): string | undefined
     return undefined;
   }
   const normalized = normalizeLowercaseStringOrEmpty(modelId);
-  return normalized.startsWith("openrouter/") ? normalized.slice("openrouter/".length) : normalized;
+  // Strip openrouter/ prefix for routed refs, preserve for real OpenRouter slugs.
+  // - openrouter/auto → openrouter/auto (real slug, preserve)
+  // - openrouter/anthropic/claude-sonnet-4.6 → anthropic/claude-sonnet-4.6 (nested, strip)
+  // - openrouter/claude-sonnet-4-6 → claude-sonnet-4-6 (bare routed, strip)
+  if (normalized.startsWith("openrouter/")) {
+    const remainder = normalized.slice("openrouter/".length);
+    if (remainder.includes("/")) {
+      // Nested provider ref - strip openrouter/ prefix, keep nested provider.
+      // e.g. openrouter/anthropic/claude-sonnet-4.6 → anthropic/claude-sonnet-4.6
+      return remainder;
+    }
+    // No nested provider - check if it's a real OpenRouter slug to preserve.
+    // e.g. openrouter/auto → openrouter/auto
+    if (OPENROUTER_REAL_MODEL_SLUGS.has(remainder)) {
+      return normalized;
+    }
+    // Bare routed ref - strip openrouter/ prefix.
+    // e.g. openrouter/claude-sonnet-4-6 → claude-sonnet-4-6
+    return remainder;
+  }
+  return normalized;
 }
 
 export function isOpenRouterMistralModelId(modelId: unknown): boolean {

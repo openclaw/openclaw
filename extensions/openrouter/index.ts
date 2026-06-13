@@ -52,15 +52,28 @@ const OPENROUTER_CACHE_TTL_MODEL_PREFIXES = [
 function normalizeOpenRouterResolvedModel<T extends ProviderRuntimeModel>(model: T): T | undefined {
   const normalizedBaseUrl = normalizeOpenRouterBaseUrl(model.baseUrl);
   const reasoning = isOpenRouterProxyReasoningUnsupportedModel(model.id) ? false : model.reasoning;
+
+  // Strip the "openrouter/" prefix from the model ID before sending to the API.
+  // OpenRouter API expects bare model IDs (e.g., "claude-sonnet-4-6" or
+  // "anthropic/claude-sonnet-4-6") without the "openrouter/" namespace prefix,
+  // since the base URL already routes to OpenRouter.
+  const openrouterPrefix = "openrouter/";
+  const modelId =
+    typeof model.id === "string" && model.id.toLowerCase().startsWith(openrouterPrefix)
+      ? model.id.slice(openrouterPrefix.length)
+      : model.id;
+
   if (
     (!normalizedBaseUrl || normalizedBaseUrl === model.baseUrl) &&
-    reasoning === model.reasoning
+    reasoning === model.reasoning &&
+    modelId === model.id
   ) {
     return undefined;
   }
   return {
     ...model,
     ...(normalizedBaseUrl ? { baseUrl: normalizedBaseUrl } : {}),
+    ...(modelId !== model.id ? { id: modelId } : {}),
     reasoning,
   };
 }
