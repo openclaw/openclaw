@@ -759,6 +759,7 @@ export type DiagnosticEventInput = DiagnosticEventPayload extends infer Event
 
 export type DiagnosticEventMetadata = Readonly<{
   internal?: boolean;
+  trustedTraceContext?: boolean;
   trusted: boolean;
 }>;
 
@@ -1123,6 +1124,7 @@ function createInternalDiagnosticMetadata(trusted: boolean): DiagnosticEventMeta
 type EmitDiagnosticEventOptions = {
   internal?: boolean;
   privateData?: DiagnosticEventPrivateData;
+  trustedTraceContext?: boolean;
 };
 
 function emitDiagnosticEventWithTrust(
@@ -1137,7 +1139,11 @@ function emitDiagnosticEventWithTrust(
 
   const enriched = enrichDiagnosticEvent(state, event);
   const { internal = false, privateData } = options;
-  const metadata = internal ? createInternalDiagnosticMetadata(trusted) : { trusted };
+  const trustedTraceContext = options.trustedTraceContext === true;
+  const metadata = {
+    ...(internal ? createInternalDiagnosticMetadata(trusted) : { trusted }),
+    ...(trustedTraceContext ? { trustedTraceContext } : {}),
+  };
 
   if (ASYNC_DIAGNOSTIC_EVENT_TYPES.has(enriched.type)) {
     if (state.asyncQueue.length >= MAX_ASYNC_DIAGNOSTIC_EVENTS) {
@@ -1161,6 +1167,11 @@ function emitDiagnosticEventWithTrust(
 /** Emits an untrusted diagnostic event from external/plugin-facing code. */
 export function emitDiagnosticEvent(event: DiagnosticEventInput) {
   emitDiagnosticEventWithTrust(event, false);
+}
+
+/** Emits an untrusted event whose trace context came from OpenClaw-owned scope. */
+export function emitDiagnosticEventWithTrustedTraceContext(event: DiagnosticEventInput) {
+  emitDiagnosticEventWithTrust(event, false, { trustedTraceContext: true });
 }
 
 /** Emits an untrusted diagnostic event tagged as internal dispatcher provenance. */

@@ -12,6 +12,7 @@ export {
 } from "./embedded-agent-helpers/bootstrap.js";
 export {
   BILLING_ERROR_USER_MESSAGE,
+  classifyAssistantFailoverReason,
   classifyProviderRuntimeFailureKind,
   formatBillingErrorMessage,
   formatRateLimitOrOverloadedErrorCopy,

@@ -10,9 +10,11 @@ import {
   MOONSHOT_DEFAULT_MODEL_REF,
 } from "./onboard.js";
 import { buildMoonshotProvider } from "./provider-catalog.js";
+import { KIMI_K2_7_CODE_MODEL_ID, resolveThinkingProfile } from "./provider-policy-api.js";
 import { createKimiWebSearchProvider } from "./src/kimi-web-search-provider.js";
 
 const PROVIDER_ID = "moonshot";
+const moonshotThinkingStreamHooks = MOONSHOT_THINKING_STREAM_HOOKS;
 
 export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
@@ -67,14 +69,13 @@ export default defineSingleProviderPluginEntry({
       sanitizeToolCallIds: false,
       dropReasoningFromHistory: false,
     }),
-    ...MOONSHOT_THINKING_STREAM_HOOKS,
-    resolveThinkingProfile: () => ({
-      levels: [
-        { id: "off", label: "off" },
-        { id: "low", label: "on" },
-      ],
-      defaultLevel: "off",
-    }),
+    ...moonshotThinkingStreamHooks,
+    wrapSimpleCompletionStreamFn: (ctx) =>
+      ctx.modelId.trim().toLowerCase() === KIMI_K2_7_CODE_MODEL_ID
+        ? moonshotThinkingStreamHooks.wrapStreamFn?.(ctx)
+        : ctx.streamFn,
+    resolveThinkingProfile,
+    isModernModelRef: ({ modelId }) => modelId.trim().toLowerCase() === KIMI_K2_7_CODE_MODEL_ID,
   },
   register(api) {
     api.registerMediaUnderstandingProvider(moonshotMediaUnderstandingProvider);

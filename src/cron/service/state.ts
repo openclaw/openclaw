@@ -51,6 +51,14 @@ export type Logger = {
   error: (obj: unknown, msg?: string) => void;
 };
 
+export type CronSystemEventEnqueueResult =
+  | boolean
+  | void
+  | {
+      accepted?: boolean;
+      remove?: () => boolean | void;
+    };
+
 /** Dependency injection surface for the cron service runtime. */
 export type CronServiceDeps = {
   nowMs?: () => number;
@@ -90,7 +98,7 @@ export type CronServiceDeps = {
       contextKey?: string;
       deliveryContext?: DeliveryContext;
     },
-  ) => void;
+  ) => CronSystemEventEnqueueResult;
   /**
    * Resolve the channel-correct origin delivery context for a session key (the
    * value the channel's send expects, e.g. Telegram message_thread_id), sourced

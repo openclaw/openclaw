@@ -64,6 +64,7 @@ const createHealthSummary = (params: {
 
 const callGatewayMock = vi.fn();
 const isGatewayCredentialsRequiredErrorMock = vi.fn((_value: unknown) => false);
+const isGatewaySecretRefUnavailableErrorMock = vi.fn((_value: unknown) => false);
 const TEST_GATEWAY_URL = "ws://127.0.0.1:18789";
 const TEST_GATEWAY_MESSAGE = `Gateway mode: local\nGateway target: ${TEST_GATEWAY_URL}`;
 const TEST_AUTH_CLOSE_ERROR = "gateway closed (1008):";
@@ -90,6 +91,11 @@ vi.mock("../gateway/call.js", () => ({
     formatGatewayTransportErrorJsonMock(...args),
   isGatewayCredentialsRequiredError: (value: unknown) =>
     isGatewayCredentialsRequiredErrorMock(value),
+}));
+
+vi.mock("../gateway/credentials.js", () => ({
+  isGatewaySecretRefUnavailableError: (value: unknown) =>
+    isGatewaySecretRefUnavailableErrorMock(value),
 }));
 
 vi.mock("../cli/daemon-cli/probe.js", () => ({
@@ -139,6 +145,7 @@ describe("healthCommand", () => {
     });
     formatGatewayTransportErrorJsonMock.mockReturnValue(null);
     isGatewayCredentialsRequiredErrorMock.mockReturnValue(false);
+    isGatewaySecretRefUnavailableErrorMock.mockReturnValue(false);
     probeGatewayStatusMock.mockReset();
   });
 
@@ -320,6 +327,37 @@ describe("healthCommand", () => {
       }
     },
   );
+
+  it("reports reachable gateway diagnostics when configured auth SecretRefs are unavailable", async () => {
+    const error = new Error("gateway.auth.password is unavailable");
+    callGatewayMock.mockRejectedValueOnce(error);
+    isGatewaySecretRefUnavailableErrorMock.mockReturnValueOnce(true);
+    probeGatewayStatusMock.mockResolvedValueOnce({
+      ok: false,
+      kind: "connect",
+      error: TEST_AUTH_CLOSE_ERROR,
+    });
+
+    await healthCommand({ json: false, timeoutMs: 5000, config: {} }, runtime as never);
+
+    expect(isGatewaySecretRefUnavailableErrorMock).toHaveBeenCalledWith(error);
+    expect(probeGatewayStatusMock).toHaveBeenCalledWith({
+      url: TEST_GATEWAY_URL,
+      token: undefined,
+      password: undefined,
+      tlsFingerprint: TEST_TLS_FINGERPRINT,
+      preauthHandshakeTimeoutMs: 4321,
+      timeoutMs: 5000,
+      config: {},
+      json: false,
+    });
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(runtime.log.mock.calls).toEqual([
+      [GATEWAY_HEALTH_REACHABLE_LINE],
+      [GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE],
+    ]);
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
 
   it("formats degraded model-pricing health as a warning", () => {
     const snapshot = createHealthSummary({

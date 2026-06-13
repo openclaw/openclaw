@@ -137,7 +137,10 @@ function applyContextKeyPolicy(entry: SessionQueue, incomingContextKey: string |
   }
 }
 
-export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
+export function enqueueSystemEventEntry(
+  text: string,
+  options: SystemEventOptions,
+): SystemEvent | null {
   const key = requireSessionKey(options.sessionKey);
   const entry = getOrCreateSessionQueue(key);
   // Untrusted producers (channel/plugin payloads downgraded via
@@ -154,12 +157,12 @@ export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
   const rawText = resolveEventOwnerDowngrade(options) ? sanitizeInboundSystemTags(text) : text;
   const cleaned = rawText.trim();
   if (!cleaned) {
-    return false;
+    return null;
   }
   const normalizedContextKey = normalizeContextKey(options.contextKey);
   const normalizedDeliveryContext = normalizeDeliveryContext(options.deliveryContext);
   if (findDuplicateInQueue(entry.queue, cleaned, normalizedContextKey, normalizedDeliveryContext)) {
-    return false;
+    return null;
   } // skip consecutive duplicates
   const normalizedTraceparent = normalizeTraceparent(options?.traceparent);
   const forceSenderIsOwnerFalse =
@@ -167,7 +170,7 @@ export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
     // Preserve the old plugin SDK contract without carrying trust labels into prompts.
     options.trusted === false;
   applyContextKeyPolicy(entry, normalizedContextKey);
-  entry.queue.push({
+  const event: SystemEvent = {
     text: cleaned,
     ts: Date.now(),
     contextKey: normalizedContextKey,
@@ -178,11 +181,16 @@ export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
       : {}),
     forceSenderIsOwnerFalse,
     ...(normalizedTraceparent ? { traceparent: normalizedTraceparent } : {}),
-  });
+  };
+  entry.queue.push(event);
   if (entry.queue.length > MAX_EVENTS) {
     entry.queue.shift();
   }
-  return true;
+  return cloneSystemEvent(event);
+}
+
+export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
+  return enqueueSystemEventEntry(text, options) !== null;
 }
 
 export function drainSystemEventEntries(sessionKey: string): SystemEvent[] {

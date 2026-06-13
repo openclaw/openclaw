@@ -89,4 +89,60 @@ describe("moonshot provider plugin", () => {
       thinking: { type: "disabled" },
     });
   });
+
+  it("keeps Kimi K2.7 Code thinking always on without sending a thinking field", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const capturedStream = createCapturedThinkingConfigStream();
+
+    const wrapped = provider.wrapSimpleCompletionStreamFn?.({
+      provider: "moonshot",
+      modelId: "kimi-k2.7-code",
+      thinkingLevel: "off",
+      streamFn: capturedStream.streamFn,
+    } as never);
+
+    void wrapped?.(
+      {
+        api: "openai-completions",
+        provider: "moonshot",
+        id: "kimi-k2.7-code",
+      } as Model<"openai-completions">,
+      { messages: [] } as Context,
+      {},
+    );
+
+    expect(capturedStream.getCapturedPayload()).toEqual({
+      config: { thinkingConfig: { thinkingBudget: -1 } },
+    });
+    expect(
+      provider.wrapSimpleCompletionStreamFn?.({
+        provider: "moonshot",
+        modelId: "kimi-k2.6",
+        streamFn: capturedStream.streamFn,
+      } as never),
+    ).toBe(capturedStream.streamFn);
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "moonshot",
+        modelId: "kimi-k2.7-code",
+        reasoning: true,
+      } as never),
+    ).toEqual({
+      levels: [{ id: "low", label: "on" }],
+      defaultLevel: "low",
+      preserveWhenCatalogReasoningFalse: true,
+    });
+    expect(
+      provider.isModernModelRef?.({
+        provider: "moonshot",
+        modelId: "kimi-k2.7-code",
+      }),
+    ).toBe(true);
+    expect(
+      provider.isModernModelRef?.({
+        provider: "moonshot",
+        modelId: "kimi-k2.6",
+      }),
+    ).toBe(false);
+  });
 });

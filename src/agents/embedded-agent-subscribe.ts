@@ -223,6 +223,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     heartbeatToolResponse: undefined,
     messagingToolSentMediaUrls: [],
     messagingToolSourceReplyPayloads: [],
+    messageToolOnlySourceReplyDelivered: false,
     pendingMessagingTexts: new Map(),
     pendingMessagingTargets: new Map(),
     successfulCronAdds: 0,
@@ -959,6 +960,11 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     output += text.slice(lastIndex);
     return output;
   };
+  const hasMessageToolOnlySourceDelivery = () =>
+    params.sourceReplyDeliveryMode === "message_tool_only" &&
+    (state.messageToolOnlySourceReplyDelivered ||
+      params.hasDeliveredMessageToolOnlySourceReply?.() === true ||
+      messagingToolSourceReplyPayloads.length > 0);
 
   const emitBlockChunk = (
     text: string,
@@ -986,6 +992,10 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       state.lastDeliveredBlockReplyText = blockReplyText;
       state.toolExecutionSinceLastBlockReply = false;
     };
+    if (hasMessageToolOnlySourceDelivery()) {
+      markBlockReplyTextHandled();
+      return;
+    }
     let chunk = blockReplyText;
     let slicedPrefixReplay = false;
     const lastDeliveredBlockReplyText = state.lastDeliveredBlockReplyText;
@@ -1194,7 +1204,6 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     messagingToolSentTextsNormalized.length = 0;
     messagingToolSentTargets.length = 0;
     messagingToolSentMediaUrls.length = 0;
-    messagingToolSourceReplyPayloads.length = 0;
     pendingMessagingTexts.clear();
     pendingMessagingTargets.clear();
     state.successfulCronAdds = 0;

@@ -82,6 +82,8 @@ import {
   runQaParityReportCommand,
   runQaSuiteCommand,
 } from "./cli.runtime.js";
+import { QaSuiteInfraError } from "./errors.js";
+import { QA_EVIDENCE_FILENAME } from "./evidence-summary.js";
 import { runQaTelegramCommand } from "./live-transports/telegram/cli.runtime.js";
 import { defaultQaModelForMode as defaultQaProviderModelForMode } from "./model-selection.js";
 import type { QaProviderModeInput } from "./run-config.js";
@@ -127,7 +129,7 @@ describe("qa cli runtime", () => {
     suiteReportPath = path.join(suiteArtifactsDir, "qa-suite-report.md");
     suiteSummaryPath = path.join(suiteArtifactsDir, "qa-suite-summary.json");
     telegramArtifactsDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-telegram-runtime-"));
-    telegramSummaryPath = path.join(telegramArtifactsDir, "telegram-qa-summary.json");
+    telegramSummaryPath = path.join(telegramArtifactsDir, QA_EVIDENCE_FILENAME);
     await fs.writeFile(suiteReportPath, "# QA Suite Report\n", "utf8");
     await fs.writeFile(
       suiteSummaryPath,
@@ -616,7 +618,9 @@ describe("qa cli runtime", () => {
 
   it("retries host suite runs once for retryable infra failures", async () => {
     runQaSuiteFromRuntime
-      .mockRejectedValueOnce(new Error("agent.wait timeout while waiting for transport ready"))
+      .mockRejectedValueOnce(
+        new QaSuiteInfraError("agent_wait_failed", "agent.wait failed: gateway call timed out"),
+      )
       .mockResolvedValueOnce({
         watchUrl: "http://127.0.0.1:43124",
         reportPath: suiteReportPath,
@@ -629,13 +633,14 @@ describe("qa cli runtime", () => {
     });
 
     expect(runQaSuiteFromRuntime).toHaveBeenCalledTimes(2);
-    expectWriteContains(stderrWrite, "[qa-suite] infra retry 1/1: agent.wait timeout");
+    expectWriteContains(stderrWrite, "[qa-suite] infra retry 1/1: agent.wait failed");
   });
 
   it("retries host suite runs once for qa-channel readiness timeouts", async () => {
     runQaSuiteFromRuntime
       .mockRejectedValueOnce(
-        new Error(
+        new QaSuiteInfraError(
+          "transport_ready_timeout",
           "timed out after 180000ms waiting for qa-channel ready; last status: no qa-channel accounts reported",
         ),
       )
@@ -1658,7 +1663,9 @@ describe("qa cli runtime", () => {
           repoRoot: "/tmp/openclaw-repo",
           runner: "multipass",
         }),
-      ).rejects.toThrow("did not include counts.failed, counts.skipped, or scenarios[].status");
+      ).rejects.toThrow(
+        "did not include counts.failed, counts.skipped, scenarios[].status, or entries[].result.status",
+      );
     } finally {
       await fs.rm(repoRoot, { recursive: true, force: true });
     }
