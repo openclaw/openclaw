@@ -44,12 +44,28 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
+    env:
+      PLATFORM_CONTEXT_TOKEN: ${{ secrets.PLATFORM_CONTEXT_DISPATCH_TOKEN }}
     steps:
       # Default (non-sparse) checkout: test_dockerfile_git_credentials.py
       # resolves REPO_ROOT via Path(__file__).resolve().parents[3] and reads
       # Dockerfile.multitenant, so the whole repo tree must be present.
       - uses: actions/checkout@v4
         with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Preflight platform-context access
+        if: env.PLATFORM_CONTEXT_TOKEN == ''
+        run: |
+          echo "::error::PLATFORM_CONTEXT_DISPATCH_TOKEN is required to read Rockielab/platform-context for mcp-rockie schema parity."
+          exit 1
+
+      - uses: actions/checkout@v4
+        with:
+          repository: Rockielab/platform-context
+          path: platform-context
+          token: ${{ env.PLATFORM_CONTEXT_TOKEN }}
           fetch-depth: 1
           persist-credentials: false
 
@@ -62,3 +78,8 @@ jobs:
 
       - name: Run multitenant overlay tests
         run: python -m pytest -q overlay/multitenant/tests/
+
+      - name: Run mcp-rockie source tests
+        env:
+          PLATFORM_CONTEXT_SCHEMAS_PATH: platform-context/api/agent_tools/schemas.py
+        run: node --test overlay/multitenant/mcp-rockie/server.source.test.mjs

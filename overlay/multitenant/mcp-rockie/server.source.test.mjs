@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import path from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 
 process.env.ROCKIE_MCP_TEST_MODE = "1";
 process.env.ROCKIELAB_API_BASE = "https://api.rockielab.test";
@@ -24,6 +26,17 @@ const serverSource = readFileSync(new URL("./server.js", import.meta.url), "utf8
   );
 const moduleUrl = `data:text/javascript;charset=utf-8,${encodeURIComponent(serverSource)}`;
 const { __rockieMcpTestHooks } = await import(moduleUrl);
+const RUNTIME_LOCAL_TOOL_NAMES = new Set(["materialize_secret", "secret_get", "secret_list"]);
+
+function platformContextToolNames() {
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+  const siblingRoot = repoRoot.replace(/platform-runtime([^/]*)$/, "platform-context$1");
+  const schemasPath =
+    process.env.PLATFORM_CONTEXT_SCHEMAS_PATH ||
+    path.join(siblingRoot, "api/agent_tools/schemas.py");
+  const schemasSource = readFileSync(schemasPath, "utf8");
+  return [...schemasSource.matchAll(/^ {8}"name": "([a-z_]+)",$/gm)].map((match) => match[1]);
+}
 
 function response(body, init = {}) {
   return new Response(typeof body === "string" ? body : JSON.stringify(body), {
@@ -199,6 +212,23 @@ test("stop_inference_load is listed and proxies without tenant ids in the body",
   assert.equal(calls[0].init.headers["X-Tenant-Id"], "tenant-id");
   assert.equal(calls[0].init.headers["X-Operator-Tenant-Id"], "operator-tenant-id");
   assert.deepEqual(JSON.parse(calls[0].init.body), { arguments: { load_id: "load-1" } });
+});
+
+test("static MCP catalog stays in parity with platform-context schemas", () => {
+  const platformNames = new Set(platformContextToolNames());
+  const runtimeNames = new Set(
+    __rockieMcpTestHooks()
+      .listTools()
+      .map((tool) => tool.name),
+  );
+
+  const missingInRuntime = [...platformNames].filter((name) => !runtimeNames.has(name));
+  const unexpectedRuntimeNames = [...runtimeNames].filter(
+    (name) => !platformNames.has(name) && !RUNTIME_LOCAL_TOOL_NAMES.has(name),
+  );
+
+  assert.deepEqual(missingInRuntime, []);
+  assert.deepEqual(unexpectedRuntimeNames, []);
 });
 
 test("local secret tools remain local after platform catalog refresh", async () => {
