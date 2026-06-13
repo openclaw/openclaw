@@ -259,6 +259,39 @@ function formatConfidencePercent(value: unknown): string | undefined {
   return `confidence ${Math.round(Math.min(1, Math.max(0, value)) * 100)}%`;
 }
 
+function formatCliValue(value: unknown, fallback = ""): string {
+  if (value === null || value === undefined) {
+    return fallback;
+  }
+  switch (typeof value) {
+    case "string":
+      return value;
+    case "number":
+      return Number.isFinite(value) ? `${value}` : fallback;
+    case "boolean":
+      return value ? "true" : "false";
+    case "bigint":
+      return `${value}`;
+    case "symbol":
+      return value.description ?? fallback;
+    case "function":
+      return `[function ${value.name || "anonymous"}]`;
+    case "object":
+      break;
+    case "undefined":
+      return fallback;
+  }
+  if (value instanceof Error) {
+    return value.message;
+  }
+  try {
+    const json = JSON.stringify(value);
+    return typeof json === "string" ? json : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 function printRecommendations(result: unknown) {
   const recommendations =
     (result as { recommendations?: Array<Record<string, unknown>> })?.recommendations ?? [];
@@ -267,15 +300,15 @@ function printRecommendations(result: unknown) {
     return;
   }
   for (const recommendation of recommendations) {
-    const id = String(recommendation.id ?? "");
-    const title = String(recommendation.title ?? "");
-    const severity = String(recommendation.severity ?? "");
-    const status = String(recommendation.status ?? "");
+    const id = formatCliValue(recommendation.id ?? "");
+    const title = formatCliValue(recommendation.title ?? "");
+    const severity = formatCliValue(recommendation.severity ?? "");
+    const status = formatCliValue(recommendation.status ?? "");
     const route = (recommendation.route as { targetAgentLabel?: unknown } | undefined)
       ?.targetAgentLabel;
     const confidence = formatConfidencePercent(recommendation.confidence);
     defaultRuntime.log(
-      `${id}  ${severity}/${status}${confidence ? `  ${confidence}` : ""}  ${String(
+      `${id}  ${severity}/${status}${confidence ? `  ${confidence}` : ""}  ${formatCliValue(
         route ?? "",
       )}  ${title}`,
     );
@@ -286,7 +319,9 @@ function printOpportunities(result: unknown) {
   const recommendations =
     (result as { recommendations?: Array<Record<string, unknown>> })?.recommendations ?? [];
   const total = (result as { total?: unknown })?.total;
-  defaultRuntime.log(`Improvement opportunities ${String(total ?? recommendations.length)}`);
+  defaultRuntime.log(
+    `Improvement opportunities ${formatCliValue(total ?? recommendations.length)}`,
+  );
   if (recommendations.length === 0) {
     defaultRuntime.log("No continuous-improvement opportunities.");
     return;
@@ -296,14 +331,14 @@ function printOpportunities(result: unknown) {
       ?.targetAgentLabel;
     const confidence = formatConfidencePercent(recommendation.confidence);
     defaultRuntime.log(
-      `${String(recommendation.id ?? "")}  ${String(recommendation.category ?? "")}  ${String(
+      `${formatCliValue(recommendation.id ?? "")}  ${formatCliValue(recommendation.category ?? "")}  ${formatCliValue(
         recommendation.priority ?? recommendation.severity ?? "",
-      )}/${String(recommendation.status ?? "")}${confidence ? `  ${confidence}` : ""}  ${String(
+      )}/${formatCliValue(recommendation.status ?? "")}${confidence ? `  ${confidence}` : ""}  ${formatCliValue(
         route ?? "",
-      )}  ${String(recommendation.title ?? "")}`,
+      )}  ${formatCliValue(recommendation.title ?? "")}`,
     );
     if (recommendation.recommendedAction) {
-      defaultRuntime.log(`  next ${String(recommendation.recommendedAction)}`);
+      defaultRuntime.log(`  next ${formatCliValue(recommendation.recommendedAction)}`);
     }
   }
 }
@@ -312,11 +347,11 @@ function printSummary(result: unknown) {
   const scorecard = (result as { scorecard?: Record<string, unknown> }).scorecard;
   const groups = (result as { groups?: Array<Record<string, unknown>> }).groups ?? [];
   defaultRuntime.log(
-    `Active ${String(scorecard?.activeRecommendations ?? 0)} | groups ${String(
+    `Active ${formatCliValue(scorecard?.activeRecommendations ?? 0)} | groups ${formatCliValue(
       scorecard?.groupedRecommendations ?? groups.length,
-    )} | critical ${String(scorecard?.criticalOpen ?? 0)} | high ${String(
+    )} | critical ${formatCliValue(scorecard?.criticalOpen ?? 0)} | high ${formatCliValue(
       scorecard?.highOpen ?? 0,
-    )} | tests ${String(scorecard?.testRequired ?? 0)} | approval ${String(
+    )} | tests ${formatCliValue(scorecard?.testRequired ?? 0)} | approval ${formatCliValue(
       scorecard?.approvalRequired ?? 0,
     )}`,
   );
@@ -325,16 +360,16 @@ function printSummary(result: unknown) {
     return;
   }
   for (const group of groups) {
-    const count = String(group.count ?? 0);
-    const priority = String(group.priority ?? group.severity ?? "");
-    const status = String(group.status ?? "");
-    const title = String(group.title ?? "");
+    const count = formatCliValue(group.count ?? 0);
+    const priority = formatCliValue(group.priority ?? group.severity ?? "");
+    const status = formatCliValue(group.status ?? "");
+    const title = formatCliValue(group.title ?? "");
     const route = (group.route as { targetAgentLabel?: unknown } | undefined)?.targetAgentLabel;
     const confidence = formatConfidencePercent(
       (group.analysis as Record<string, unknown> | undefined)?.confidence,
     );
     defaultRuntime.log(
-      `${priority}/${status}  x${count}${confidence ? `  ${confidence}` : ""}  ${String(
+      `${priority}/${status}  x${count}${confidence ? `  ${confidence}` : ""}  ${formatCliValue(
         route ?? "",
       )}  ${title}`,
     );
@@ -344,17 +379,16 @@ function printSummary(result: unknown) {
 function printActionQueue(result: unknown) {
   const actionQueue =
     (result as { actionQueue?: Record<string, unknown> }).actionQueue ??
-    ((result as { scorecard?: { actionQueue?: Record<string, unknown> } }).scorecard
-      ?.actionQueue as Record<string, unknown> | undefined);
+    (result as { scorecard?: { actionQueue?: Record<string, unknown> } }).scorecard?.actionQueue;
   const items = Array.isArray(actionQueue?.items)
     ? (actionQueue.items as Array<Record<string, unknown>>)
     : [];
   defaultRuntime.log(
-    `Action Queue total ${String(actionQueue?.total ?? 0)} | unassigned ${String(
+    `Action Queue total ${formatCliValue(actionQueue?.total ?? 0)} | unassigned ${formatCliValue(
       actionQueue?.unassigned ?? 0,
-    )} | overdue ${String(actionQueue?.overdue ?? 0)} | proof missing ${String(
+    )} | overdue ${formatCliValue(actionQueue?.overdue ?? 0)} | proof missing ${formatCliValue(
       actionQueue?.proofMissing ?? 0,
-    )} | ready ${String(actionQueue?.readyToResolve ?? 0)}`,
+    )} | ready ${formatCliValue(actionQueue?.readyToResolve ?? 0)}`,
   );
   if (items.length === 0) {
     defaultRuntime.log("No actionable self-improvement items.");
@@ -364,18 +398,18 @@ function printActionQueue(result: unknown) {
     const actionability = item.actionability as Record<string, unknown> | undefined;
     const route = (item.route as { targetAgentLabel?: unknown } | undefined)?.targetAgentLabel;
     defaultRuntime.log(
-      `${String(item.kind ?? "")} ${String(item.id ?? "")}  ${String(
+      `${formatCliValue(item.kind ?? "")} ${formatCliValue(item.id ?? "")}  ${formatCliValue(
         item.priority ?? "",
-      )}/${String(item.status ?? "")}  owner ${String(
+      )}/${formatCliValue(item.status ?? "")}  owner ${formatCliValue(
         actionability?.ownerState ?? "unknown",
-      )}  sla ${String(actionability?.slaState ?? "unknown")}  proof ${String(
+      )}  sla ${formatCliValue(actionability?.slaState ?? "unknown")}  proof ${formatCliValue(
         actionability?.proofState ?? "unknown",
-      )}  closure ${String(actionability?.closureState ?? "unknown")}  rank ${String(
+      )}  closure ${formatCliValue(actionability?.closureState ?? "unknown")}  rank ${formatCliValue(
         actionability?.rank ?? 0,
-      )}  ${String(route ?? "")}  ${String(item.title ?? "")}`,
+      )}  ${formatCliValue(route ?? "")}  ${formatCliValue(item.title ?? "")}`,
     );
     if (actionability?.nextAction) {
-      defaultRuntime.log(`  next ${String(actionability.nextAction)}`);
+      defaultRuntime.log(`  next ${formatCliValue(actionability.nextAction)}`);
     }
   }
 }
@@ -384,11 +418,11 @@ function printScorecard(result: unknown) {
   const current = (result as { current?: Record<string, unknown> }).current;
   const scorecards = (result as { scorecards?: Array<Record<string, unknown>> }).scorecards ?? [];
   defaultRuntime.log(
-    `Active ${String(current?.activeRecommendations ?? 0)} | groups ${String(
+    `Active ${formatCliValue(current?.activeRecommendations ?? 0)} | groups ${formatCliValue(
       current?.groupedRecommendations ?? 0,
-    )} | critical ${String(current?.criticalOpen ?? 0)} | high ${String(
+    )} | critical ${formatCliValue(current?.criticalOpen ?? 0)} | high ${formatCliValue(
       current?.highOpen ?? 0,
-    )} | tests ${String(current?.testRequired ?? 0)} | approval ${String(
+    )} | tests ${formatCliValue(current?.testRequired ?? 0)} | approval ${formatCliValue(
       current?.approvalRequired ?? 0,
     )}`,
   );
@@ -399,9 +433,9 @@ function printScorecard(result: unknown) {
   for (const entry of scorecards) {
     const scorecard = entry.scorecard as Record<string, unknown> | undefined;
     defaultRuntime.log(
-      `${String(entry.dateKey)}  active ${String(
+      `${formatCliValue(entry.dateKey)}  active ${formatCliValue(
         scorecard?.activeRecommendations ?? 0,
-      )}  groups ${String(scorecard?.groupedRecommendations ?? 0)}  resolved24h ${String(
+      )}  groups ${formatCliValue(scorecard?.groupedRecommendations ?? 0)}  resolved24h ${formatCliValue(
         scorecard?.resolvedLast24h ?? 0,
       )}`,
     );
@@ -415,15 +449,15 @@ function printOperationalHealth(result: unknown) {
     ? (current.dimensions as Array<Record<string, unknown>>)
     : [];
   defaultRuntime.log(
-    `Operational health ${String(current?.status ?? "blocked")} | score ${String(
+    `Operational health ${formatCliValue(current?.status ?? "blocked")} | score ${formatCliValue(
       current?.score ?? 0,
-    )} | trend ${String(current?.trend ?? "unknown")} | snapshots ${String(snapshots.length)}`,
+    )} | trend ${formatCliValue(current?.trend ?? "unknown")} | snapshots ${formatCliValue(snapshots.length)}`,
   );
   for (const dimension of dimensions) {
     defaultRuntime.log(
-      `${String(dimension.id ?? "")}  ${String(dimension.status ?? "blocked")}  score ${String(
+      `${formatCliValue(dimension.id ?? "")}  ${formatCliValue(dimension.status ?? "blocked")}  score ${formatCliValue(
         dimension.score ?? 0,
-      )}  ${String(dimension.summary ?? "")}`,
+      )}  ${formatCliValue(dimension.summary ?? "")}`,
     );
     const blockers = Array.isArray(dimension.blockers)
       ? dimension.blockers.filter((item): item is string => typeof item === "string").slice(0, 3)
@@ -446,9 +480,9 @@ function printProductionCheck(result: unknown) {
     ? (check.evidence as Array<Record<string, unknown>>)
     : [];
   defaultRuntime.log(
-    `Production check ${String(check.status ?? "blocked")} | ready ${String(
+    `Production check ${formatCliValue(check.status ?? "blocked")} | ready ${formatCliValue(
       check.ready ?? false,
-    )} | score ${String(check.score ?? 0)} | evidence ${String(evidence.length)}`,
+    )} | score ${formatCliValue(check.score ?? 0)} | evidence ${formatCliValue(evidence.length)}`,
   );
   const blockers = Array.isArray(check.blockers)
     ? check.blockers.filter((item): item is string => typeof item === "string").slice(0, 5)
@@ -464,7 +498,7 @@ function printProductionCheck(result: unknown) {
   }
   for (const item of evidence.slice(0, 8)) {
     defaultRuntime.log(
-      `${String(item.key ?? "")}  ${String(item.status ?? "blocked")}  ${String(
+      `${formatCliValue(item.key ?? "")}  ${formatCliValue(item.status ?? "blocked")}  ${formatCliValue(
         item.summary ?? "",
       )}`,
     );
@@ -477,23 +511,23 @@ function printMaintenanceResult(result: unknown) {
     ? (maintenance.stores as Array<Record<string, unknown>>)
     : [];
   defaultRuntime.log(
-    `Retention maintenance ${maintenance.applied ? "applied" : "dry run"} | pruned ${String(
+    `Retention maintenance ${maintenance.applied ? "applied" : "dry run"} | pruned ${formatCliValue(
       maintenance.totalPruned ?? 0,
-    )} | before ${String(maintenance.totalBefore ?? 0)} | after ${String(
+    )} | before ${formatCliValue(maintenance.totalBefore ?? 0)} | after ${formatCliValue(
       maintenance.totalAfter ?? 0,
     )}`,
   );
   for (const store of stores) {
     defaultRuntime.log(
-      `${String(store.store ?? "")}  ${String(store.before ?? 0)} -> ${String(
+      `${formatCliValue(store.store ?? "")}  ${formatCliValue(store.before ?? 0)} -> ${formatCliValue(
         store.after ?? 0,
-      )}  pruned ${String(store.pruned ?? 0)}  active ${String(
+      )}  pruned ${formatCliValue(store.pruned ?? 0)}  active ${formatCliValue(
         store.retainedActive ?? 0,
-      )}  retention ${String(store.retentionDays ?? 0)}d`,
+      )}  retention ${formatCliValue(store.retentionDays ?? 0)}d`,
     );
   }
   if (maintenance.auditEventId) {
-    defaultRuntime.log(`Audit event: ${String(maintenance.auditEventId)}`);
+    defaultRuntime.log(`Audit event: ${formatCliValue(maintenance.auditEventId)}`);
   }
 }
 
@@ -507,7 +541,7 @@ function formatAuditEventDate(value: unknown): string {
 
 function formatAuditMetadataValue(value: unknown): string | undefined {
   if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-    return String(value);
+    return formatCliValue(value);
   }
   if (Array.isArray(value)) {
     const values = value
@@ -527,9 +561,9 @@ function printAuditEvents(result: unknown) {
   }
   for (const event of events) {
     defaultRuntime.log(
-      `${formatAuditEventDate(event.createdAt)}  ${String(event.kind ?? "")}/${String(
+      `${formatAuditEventDate(event.createdAt)}  ${formatCliValue(event.kind ?? "")}/${formatCliValue(
         event.actor ?? "",
-      )}  ${String(event.targetId ?? "")}  ${String(event.summary ?? "")}`,
+      )}  ${formatCliValue(event.targetId ?? "")}  ${formatCliValue(event.summary ?? "")}`,
     );
     const metadata = event.metadata as Record<string, unknown> | undefined;
     const entries = metadata
@@ -557,17 +591,22 @@ function formatAttemptProfile(attempt: Record<string, unknown>): string {
       ? `max ${attempt.maxOutputTokens.toLocaleString()}`
       : undefined;
   const temperature =
-    typeof attempt.temperature === "number" ? `temp ${String(attempt.temperature)}` : undefined;
-  const topP = typeof attempt.topP === "number" ? `top_p ${String(attempt.topP)}` : undefined;
+    typeof attempt.temperature === "number"
+      ? `temp ${formatCliValue(attempt.temperature)}`
+      : undefined;
+  const topP =
+    typeof attempt.topP === "number" ? `top_p ${formatCliValue(attempt.topP)}` : undefined;
   const timeout =
-    typeof attempt.timeoutMs === "number" ? `timeout ${String(attempt.timeoutMs)}ms` : undefined;
+    typeof attempt.timeoutMs === "number"
+      ? `timeout ${formatCliValue(attempt.timeoutMs)}ms`
+      : undefined;
   const completion =
     typeof attempt.completionMs === "number"
-      ? `completion ${String(attempt.completionMs)}ms`
+      ? `completion ${formatCliValue(attempt.completionMs)}ms`
       : undefined;
   const preflightSource =
     typeof attempt.preflightSource === "string"
-      ? `source ${String(attempt.preflightSource)}`
+      ? `source ${formatCliValue(attempt.preflightSource)}`
       : undefined;
   const providerConfigured =
     typeof attempt.providerConfigured === "boolean"
@@ -590,56 +629,56 @@ function formatAttemptProfile(attempt: Record<string, unknown>): string {
 
 function printAnalysis(result: unknown) {
   const analysis = result as Record<string, unknown>;
-  const model = String(analysis.modelId ?? analysis.reviewModelId ?? "deterministic");
-  const tier = String(analysis.modelTier ?? "none");
+  const model = formatCliValue(analysis.modelId ?? analysis.reviewModelId ?? "deterministic");
+  const tier = formatCliValue(analysis.modelTier ?? "none");
   const attempts = Array.isArray(analysis.attempts) ? analysis.attempts.length : 0;
-  const preflight = String(analysis.preflightStatus ?? "n/a");
+  const preflight = formatCliValue(analysis.preflightStatus ?? "n/a");
   const confidence = formatConfidencePercent(analysis.confidence);
   const readiness =
     typeof analysis.readiness === "string"
-      ? ` | readiness ${String(analysis.readiness)} | ready ${String(analysis.ready ?? false)}${
+      ? ` | readiness ${formatCliValue(analysis.readiness)} | ready ${formatCliValue(analysis.ready ?? false)}${
           analysis.readyTier && analysis.readyModelId
-            ? ` via ${String(analysis.readyTier)} ${String(analysis.readyModelId)}`
+            ? ` via ${formatCliValue(analysis.readyTier)} ${formatCliValue(analysis.readyModelId)}`
             : ""
         }`
       : "";
   defaultRuntime.log(
-    `Analysis ${String(analysis.mode)} | groups ${String(
+    `Analysis ${formatCliValue(analysis.mode)} | groups ${formatCliValue(
       analysis.groupsAnalyzed ?? 0,
-    )} | llm-reviewed ${String(analysis.groupsReviewedByLlm ?? 0)} | local-reviewed ${String(
+    )} | llm-reviewed ${formatCliValue(analysis.groupsReviewedByLlm ?? 0)} | local-reviewed ${formatCliValue(
       analysis.groupsReviewedByLocalLlm ?? 0,
-    )} | attempts ${String(attempts)} | schema ${String(
+    )} | attempts ${formatCliValue(attempts)} | schema ${formatCliValue(
       analysis.schemaValidated ?? false,
-    )}${confidence ? ` | ${confidence}` : ""}${readiness} | preflight ${preflight} | tier ${tier} | model ${model} | proposals created ${String(
+    )}${confidence ? ` | ${confidence}` : ""}${readiness} | preflight ${preflight} | tier ${tier} | model ${model} | proposals created ${formatCliValue(
       analysis.proposalsCreated ?? 0,
     )}`,
   );
   if (analysis.escalationReason) {
-    defaultRuntime.log(`Escalation: ${String(analysis.escalationReason)}`);
+    defaultRuntime.log(`Escalation: ${formatCliValue(analysis.escalationReason)}`);
   }
   if (Array.isArray(analysis.attempts) && analysis.attempts.length > 0) {
     for (const attempt of analysis.attempts as Array<Record<string, unknown>>) {
       const preflightStatus = attempt.preflightStatus
-        ? ` | preflight ${String(attempt.preflightStatus)}${
-            attempt.preflightMs !== undefined ? ` ${String(attempt.preflightMs)}ms` : ""
+        ? ` | preflight ${formatCliValue(attempt.preflightStatus)}${
+            attempt.preflightMs !== undefined ? ` ${formatCliValue(attempt.preflightMs)}ms` : ""
           }`
         : "";
       defaultRuntime.log(
-        `Attempt ${String(attempt.attempt)} ${String(attempt.tier)} ${String(
+        `Attempt ${formatCliValue(attempt.attempt)} ${formatCliValue(attempt.tier)} ${formatCliValue(
           attempt.status,
-        )} ${String(attempt.modelId)}${formatAttemptProfile(attempt)}${preflightStatus}${
-          attempt.diagnostic ? ` | diagnostic ${String(attempt.diagnostic)}` : ""
+        )} ${formatCliValue(attempt.modelId)}${formatAttemptProfile(attempt)}${preflightStatus}${
+          attempt.diagnostic ? ` | diagnostic ${formatCliValue(attempt.diagnostic)}` : ""
         }${
-          attempt.error ? ` | ${String(attempt.error)}` : ""
-        }${attempt.remediationHint ? ` | next ${String(attempt.remediationHint)}` : ""}`,
+          attempt.error ? ` | ${formatCliValue(attempt.error)}` : ""
+        }${attempt.remediationHint ? ` | next ${formatCliValue(attempt.remediationHint)}` : ""}`,
       );
     }
   }
   if (analysis.fallbackReason) {
-    defaultRuntime.log(`Model fallback: ${String(analysis.fallbackReason)}`);
+    defaultRuntime.log(`Model fallback: ${formatCliValue(analysis.fallbackReason)}`);
   }
   if (analysis.blockedPrimaryReason) {
-    defaultRuntime.log(`Primary blocked: ${String(analysis.blockedPrimaryReason)}`);
+    defaultRuntime.log(`Primary blocked: ${formatCliValue(analysis.blockedPrimaryReason)}`);
   }
 }
 
@@ -650,39 +689,39 @@ function printModelPreflight(result: unknown) {
     : [];
   const readyVia =
     preflight.readyTier && preflight.readyModelId
-      ? ` | ready via ${String(preflight.readyTier)} ${String(preflight.readyModelId)}`
+      ? ` | ready via ${formatCliValue(preflight.readyTier)} ${formatCliValue(preflight.readyModelId)}`
       : "";
   defaultRuntime.log(
-    `Model preflight ${String(preflight.readiness ?? (preflight.ready ? "ready" : "blocked"))} | ready ${String(preflight.ready ?? false)}${readyVia} | policy ${String(
+    `Model preflight ${formatCliValue(preflight.readiness ?? (preflight.ready ? "ready" : "blocked"))} | ready ${formatCliValue(preflight.ready ?? false)}${readyVia} | policy ${formatCliValue(
       preflight.reviewPolicy ?? "deterministic",
-    )} | preflight ${String(preflight.preflightStatus ?? "n/a")} | attempts ${String(
+    )} | preflight ${formatCliValue(preflight.preflightStatus ?? "n/a")} | attempts ${formatCliValue(
       attempts.length,
-    )} | schema ${String(preflight.schemaValidated ?? false)}`,
+    )} | schema ${formatCliValue(preflight.schemaValidated ?? false)}`,
   );
   if (preflight.escalationReason) {
-    defaultRuntime.log(`Escalation: ${String(preflight.escalationReason)}`);
+    defaultRuntime.log(`Escalation: ${formatCliValue(preflight.escalationReason)}`);
   }
   for (const attempt of attempts) {
     const preflightStatus = attempt.preflightStatus
-      ? ` | preflight ${String(attempt.preflightStatus)}${
-          attempt.preflightMs !== undefined ? ` ${String(attempt.preflightMs)}ms` : ""
+      ? ` | preflight ${formatCliValue(attempt.preflightStatus)}${
+          attempt.preflightMs !== undefined ? ` ${formatCliValue(attempt.preflightMs)}ms` : ""
         }`
       : "";
     defaultRuntime.log(
-      `Attempt ${String(attempt.attempt)} ${String(attempt.tier)} ${String(
+      `Attempt ${formatCliValue(attempt.attempt)} ${formatCliValue(attempt.tier)} ${formatCliValue(
         attempt.status,
-      )} ${String(attempt.modelId)}${formatAttemptProfile(attempt)}${preflightStatus}${
-        attempt.diagnostic ? ` | diagnostic ${String(attempt.diagnostic)}` : ""
+      )} ${formatCliValue(attempt.modelId)}${formatAttemptProfile(attempt)}${preflightStatus}${
+        attempt.diagnostic ? ` | diagnostic ${formatCliValue(attempt.diagnostic)}` : ""
       }${
-        attempt.error ? ` | ${String(attempt.error)}` : ""
-      }${attempt.remediationHint ? ` | next ${String(attempt.remediationHint)}` : ""}`,
+        attempt.error ? ` | ${formatCliValue(attempt.error)}` : ""
+      }${attempt.remediationHint ? ` | next ${formatCliValue(attempt.remediationHint)}` : ""}`,
     );
   }
   if (preflight.fallbackReason) {
-    defaultRuntime.log(`Model fallback: ${String(preflight.fallbackReason)}`);
+    defaultRuntime.log(`Model fallback: ${formatCliValue(preflight.fallbackReason)}`);
   }
   if (preflight.blockedPrimaryReason) {
-    defaultRuntime.log(`Primary blocked: ${String(preflight.blockedPrimaryReason)}`);
+    defaultRuntime.log(`Primary blocked: ${formatCliValue(preflight.blockedPrimaryReason)}`);
   }
 }
 
@@ -701,18 +740,18 @@ function printReviewerEvalResult(result: unknown) {
     : [];
   const p95 =
     typeof scorecard?.p95CompletionMs === "number"
-      ? ` | p95 ${String(scorecard.p95CompletionMs)}ms`
+      ? ` | p95 ${formatCliValue(scorecard.p95CompletionMs)}ms`
       : "";
   defaultRuntime.log(
-    `Reviewer eval ${String(evalResult.readiness ?? "blocked")} | ready ${String(
+    `Reviewer eval ${formatCliValue(evalResult.readiness ?? "blocked")} | ready ${formatCliValue(
       evalResult.ready ?? false,
-    )} | fixture ${String(evalResult.fixtureSet ?? "smoke")} | cases ${String(
+    )} | fixture ${formatCliValue(evalResult.fixtureSet ?? "smoke")} | cases ${formatCliValue(
       scorecard?.casesPassed ?? 0,
-    )}/${String(scorecard?.casesTotal ?? cases.length)} | pass ${formatRatePercent(
+    )}/${formatCliValue(scorecard?.casesTotal ?? cases.length)} | pass ${formatRatePercent(
       scorecard?.passRate,
     )} | schema ${formatRatePercent(scorecard?.schemaValidRate)} | safety ${formatRatePercent(
       scorecard?.safetyPassRate,
-    )} | route ${formatRatePercent(scorecard?.routePreservationRate)}${p95} | model ${String(
+    )} | route ${formatRatePercent(scorecard?.routePreservationRate)}${p95} | model ${formatCliValue(
       evalResult.modelId ?? evalResult.reviewModelId ?? "n/a",
     )}`,
   );
@@ -721,7 +760,9 @@ function printReviewerEvalResult(result: unknown) {
     const diagnostics = Array.isArray(entry.diagnostics)
       ? entry.diagnostics.filter((item): item is string => typeof item === "string").join(", ")
       : "";
-    defaultRuntime.log(`Failed ${String(entry.caseId ?? "")}: ${diagnostics || "no diagnostic"}`);
+    defaultRuntime.log(
+      `Failed ${formatCliValue(entry.caseId ?? "")}: ${diagnostics || "no diagnostic"}`,
+    );
   }
   const diagnostics = Array.isArray(scorecard?.diagnostics)
     ? (scorecard.diagnostics as Array<Record<string, unknown>>)
@@ -730,7 +771,7 @@ function printReviewerEvalResult(result: unknown) {
     defaultRuntime.log(
       `Diagnostics: ${diagnostics
         .slice(0, 6)
-        .map((entry) => `${String(entry.code)}=${String(entry.count)}`)
+        .map((entry) => `${formatCliValue(entry.code)}=${formatCliValue(entry.count)}`)
         .join("; ")}`,
     );
   }
@@ -740,9 +781,9 @@ function printModelTemplate(result: unknown) {
   const template = result as ReturnType<typeof buildSelfImprovementModelTemplate>;
   defaultRuntime.log(`Primary review model: ${template.primary.providerRef}`);
   defaultRuntime.log(
-    `Profile: ${template.primary.parameters}, ${template.primary.quantization}, context ${String(
+    `Profile: ${template.primary.parameters}, ${template.primary.quantization}, context ${formatCliValue(
       template.primary.contextWindow,
-    )}, max output ${String(template.primary.maxOutputTokens)}`,
+    )}, max output ${formatCliValue(template.primary.maxOutputTokens)}`,
   );
   defaultRuntime.log(`Fallback review model: ${template.fallback.providerRef}`);
   defaultRuntime.log(`Triage model: ${template.triage.providerRef}`);
@@ -772,9 +813,9 @@ function printProposals(result: unknown) {
   for (const proposal of proposals) {
     const route = (proposal.route as { targetAgentLabel?: unknown } | undefined)?.targetAgentLabel;
     defaultRuntime.log(
-      `${String(proposal.id ?? "")}  ${String(proposal.kind ?? "")}/${String(
+      `${formatCliValue(proposal.id ?? "")}  ${formatCliValue(proposal.kind ?? "")}/${formatCliValue(
         proposal.status ?? "",
-      )}  ${String(route ?? "")}  ${String(proposal.title ?? "")}`,
+      )}  ${formatCliValue(route ?? "")}  ${formatCliValue(proposal.title ?? "")}`,
     );
   }
 }
@@ -788,14 +829,14 @@ function printCuratorProposals(result: unknown) {
   for (const proposal of proposals) {
     const route = (proposal.route as { targetAgentLabel?: unknown } | undefined)?.targetAgentLabel;
     const workshop = proposal.workshopProposalId
-      ? `  workshop ${String(proposal.workshopProposalId)}:${String(
+      ? `  workshop ${formatCliValue(proposal.workshopProposalId)}:${formatCliValue(
           proposal.workshopProposalStatus ?? "pending",
         )}`
       : "";
     defaultRuntime.log(
-      `${String(proposal.id ?? "")}  curator ${String(
+      `${formatCliValue(proposal.id ?? "")}  curator ${formatCliValue(
         proposal.curatorStatus ?? "pending_review",
-      )}  proposal ${String(proposal.status ?? "")}  ${String(route ?? "")}${workshop}  ${String(
+      )}  proposal ${formatCliValue(proposal.status ?? "")}  ${formatCliValue(route ?? "")}${workshop}  ${formatCliValue(
         proposal.title ?? "",
       )}`,
     );
@@ -808,17 +849,17 @@ function printProposal(result: unknown) {
     defaultRuntime.log("Proposal not found.");
     return;
   }
-  defaultRuntime.log(`${String(proposal.id)}: ${String(proposal.title)}`);
-  defaultRuntime.log(`${String(proposal.kind)} | ${String(proposal.status)}`);
+  defaultRuntime.log(`${formatCliValue(proposal.id)}: ${formatCliValue(proposal.title)}`);
+  defaultRuntime.log(`${formatCliValue(proposal.kind)} | ${formatCliValue(proposal.status)}`);
   if (proposal.kind === "memory_skill") {
     defaultRuntime.log(
-      `Curator ${String(proposal.curatorStatus ?? "pending_review")} | workshop ${String(
+      `Curator ${formatCliValue(proposal.curatorStatus ?? "pending_review")} | workshop ${formatCliValue(
         proposal.workshopProposalId ?? "unlinked",
-      )} ${String(proposal.workshopProposalStatus ?? "")}`,
+      )} ${formatCliValue(proposal.workshopProposalStatus ?? "")}`,
     );
   }
-  defaultRuntime.log(String(proposal.summary ?? ""));
-  defaultRuntime.log(`Recommended action: ${String(proposal.recommendedAction ?? "")}`);
+  defaultRuntime.log(formatCliValue(proposal.summary ?? ""));
+  defaultRuntime.log(`Recommended action: ${formatCliValue(proposal.recommendedAction ?? "")}`);
 }
 
 async function runSelfImprovementCommand(
@@ -837,7 +878,7 @@ async function runSelfImprovementCommand(
     if (error instanceof Error && error.message.startsWith("__exit__:")) {
       throw error;
     }
-    defaultRuntime.error(danger(String(error)));
+    defaultRuntime.error(danger(formatCliValue(error)));
     defaultRuntime.exit(1);
   }
 }
@@ -860,7 +901,7 @@ export function registerSelfImprovementCli(program: Command) {
       (result) => {
         const scan = (result as { scan?: Record<string, unknown> }).scan;
         defaultRuntime.log(
-          `Produced ${String(scan?.produced ?? 0)} recommendation(s), ${String(scan?.open ?? 0)} open.`,
+          `Produced ${formatCliValue(scan?.produced ?? 0)} recommendation(s), ${formatCliValue(scan?.open ?? 0)} open.`,
         );
       },
     );
@@ -1032,7 +1073,7 @@ export function registerSelfImprovementCli(program: Command) {
       } else {
         printOperationalHealth(result);
       }
-      const status = String(
+      const status = formatCliValue(
         (result as { current?: { status?: unknown } }).current?.status ?? "blocked",
       );
       if (opts.failOnDegraded && status !== "ready") {
@@ -1045,7 +1086,7 @@ export function registerSelfImprovementCli(program: Command) {
       if (error instanceof Error && error.message.startsWith("__exit__:")) {
         throw error;
       }
-      defaultRuntime.error(danger(String(error)));
+      defaultRuntime.error(danger(formatCliValue(error)));
       defaultRuntime.exit(1);
     }
   });
@@ -1081,7 +1122,7 @@ export function registerSelfImprovementCli(program: Command) {
       } else {
         printProductionCheck(result);
       }
-      const status = String((result as { status?: unknown }).status ?? "blocked");
+      const status = formatCliValue((result as { status?: unknown }).status ?? "blocked");
       if (opts.failOnDegraded && status !== "ready") {
         defaultRuntime.exit(1);
       }
@@ -1092,7 +1133,7 @@ export function registerSelfImprovementCli(program: Command) {
       if (error instanceof Error && error.message.startsWith("__exit__:")) {
         throw error;
       }
-      defaultRuntime.error(danger(String(error)));
+      defaultRuntime.error(danger(formatCliValue(error)));
       defaultRuntime.exit(1);
     }
   });
@@ -1247,7 +1288,7 @@ export function registerSelfImprovementCli(program: Command) {
       ...opts,
       timeout:
         !opts.timeout || opts.timeout === "30000"
-          ? String(SELF_IMPROVEMENT_EVAL_RPC_TIMEOUT_MS)
+          ? formatCliValue(SELF_IMPROVEMENT_EVAL_RPC_TIMEOUT_MS)
           : opts.timeout,
     };
     await runSelfImprovementCommand(
@@ -1308,7 +1349,7 @@ export function registerSelfImprovementCli(program: Command) {
       ...opts,
       timeout:
         !opts.timeout || opts.timeout === "30000"
-          ? String(SELF_IMPROVEMENT_ANALYSIS_RPC_TIMEOUT_MS)
+          ? formatCliValue(SELF_IMPROVEMENT_ANALYSIS_RPC_TIMEOUT_MS)
           : opts.timeout,
     };
     await runSelfImprovementCommand(
@@ -1359,9 +1400,13 @@ export function registerSelfImprovementCli(program: Command) {
           defaultRuntime.log("Recommendation not found.");
           return;
         }
-        defaultRuntime.log(`${String(recommendation.id)}: ${String(recommendation.title)}`);
-        defaultRuntime.log(String(recommendation.summary ?? ""));
-        defaultRuntime.log(`Recommended action: ${String(recommendation.recommendedAction ?? "")}`);
+        defaultRuntime.log(
+          `${formatCliValue(recommendation.id)}: ${formatCliValue(recommendation.title)}`,
+        );
+        defaultRuntime.log(formatCliValue(recommendation.summary ?? ""));
+        defaultRuntime.log(
+          `Recommended action: ${formatCliValue(recommendation.recommendedAction ?? "")}`,
+        );
       },
     );
   });

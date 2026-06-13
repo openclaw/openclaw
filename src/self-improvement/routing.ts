@@ -51,6 +51,8 @@ function routeRoleForCategory(
       return "memory_curator";
     case "outcome_measurement":
       return "todd";
+    default:
+      return "program_manager";
   }
 }
 
@@ -66,6 +68,8 @@ function routeReason(role: SelfImprovementRouteRole): string {
       return "Sequencing, stale work triage, and priority coordination.";
     case "memory_curator":
       return "Procedural memory, skill curation, and Skill Workshop review.";
+    default:
+      return "Sequencing, stale work triage, and priority coordination.";
   }
 }
 

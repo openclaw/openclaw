@@ -69,6 +69,8 @@ function statusRank(status: SelfImprovementOperationalHealthStatus): number {
       return 2;
     case "ready":
       return 1;
+    default:
+      return 0;
   }
 }
 

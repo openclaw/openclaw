@@ -1133,9 +1133,9 @@ function configuredProviderHasModel(params: {
   model: string;
 }): boolean {
   const providerCfg = params.cfg.models?.providers?.[params.provider];
-  return Boolean(
+  return (
     Array.isArray(providerCfg?.models) &&
-    providerCfg.models.some((model) => model.id === params.model),
+    providerCfg.models.some((model) => model.id === params.model)
   );
 }
 
@@ -1792,9 +1792,7 @@ export async function preflightSelfImprovementReviewModels(params: {
   }
   const readinessSummary = summarizeSelfImprovementModelReadiness(attempts);
   const preflightSummary = summarizeSelfImprovementReviewPreflightAttempts(attempts);
-  const lastBlocked = attempts
-    .filter((attempt) => attempt.status === "blocked" && attempt.error)
-    .at(-1);
+  const lastBlocked = attempts.findLast((attempt) => attempt.status === "blocked" && attempt.error);
   return {
     ...common,
     ...readinessSummary,

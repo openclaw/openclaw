@@ -415,7 +415,7 @@ function caseResultFromReview(params: {
   const { fixture, reviewedGroup, status } = params;
   const attempts = status.attempts;
   const schemaValidated =
-    status.schemaValidated === true &&
+    status.schemaValidated &&
     Boolean(reviewedGroup?.analysis.schemaValidated) &&
     reviewedGroup?.id === fixture.group.id;
   const summary = reviewedGroup?.analysis.summary ?? "";

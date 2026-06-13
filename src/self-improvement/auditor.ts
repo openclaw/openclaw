@@ -200,6 +200,8 @@ function safetyEvidence(category: SelfImprovementRecommendationCategory): string
         "Define the metric or baseline that proves day-over-day improvement.",
         "Attach before/after evidence before marking the recommendation resolved.",
       ];
+    default:
+      return ["Retain as review-only evidence until approved."];
   }
 }
 
@@ -844,9 +846,23 @@ function auditContinuousImprovementAuditEvents(
     [
       event.kind,
       event.summary,
-      ...Object.entries(event.metadata ?? {}).flatMap(([key, value]) =>
-        Array.isArray(value) ? [key, ...value] : [key, String(value)],
-      ),
+      ...Object.entries(event.metadata ?? {}).flatMap(([key, value]) => {
+        const values = [key];
+        const entries = Array.isArray(value) ? value : [value];
+        for (const entry of entries) {
+          if (typeof entry === "string") {
+            values.push(entry);
+          } else if (typeof entry === "number" || typeof entry === "boolean") {
+            values.push(`${entry}`);
+          } else {
+            const json = JSON.stringify(entry);
+            if (json) {
+              values.push(json);
+            }
+          }
+        }
+        return values;
+      }),
     ]
       .join(" ")
       .toLowerCase();

@@ -159,7 +159,12 @@ function groupRecommendations(
   const byKey = new Map<string, SelfImprovementRecommendation[]>();
   for (const recommendation of recommendations) {
     const key = recommendation.groupKey || deriveSelfImprovementGroupKey(recommendation);
-    byKey.set(key, [...(byKey.get(key) ?? []), recommendation]);
+    const existing = byKey.get(key);
+    if (existing) {
+      existing.push(recommendation);
+    } else {
+      byKey.set(key, [recommendation]);
+    }
   }
   return [...byKey.entries()]
     .map(([groupKey, groupRecommendations]) => {
@@ -173,11 +178,11 @@ function groupRecommendations(
           left.id.localeCompare(right.id),
       )[0];
       const statusCounts = countStatuses(sorted);
-      const severity = sorted.reduce(
+      const severity = sorted.reduce<SelfImprovementRecommendationSeverity>(
         (highest, entry) => pickHighestSeverity(highest, entry.severity),
-        "low" as SelfImprovementRecommendationSeverity,
+        "low",
       );
-      const priority = sorted.reduce(
+      const priority = sorted.reduce<SelfImprovementRecommendationSeverity>(
         (highest, entry) => pickHighestSeverity(highest, entry.priority),
         severity,
       );
@@ -186,7 +191,7 @@ function groupRecommendations(
         sorted.flatMap((entry) => entry.evidence).filter(Boolean),
         220,
       ).slice(0, 5);
-      const group = {
+      const group: SelfImprovementRecommendationGroup = {
         id: `sig_${hash(groupKey)}`,
         groupKey,
         title: lead.groupTitle || lead.title,
@@ -220,10 +225,8 @@ function groupRecommendations(
           count: sorted.length,
         }),
       } satisfies SelfImprovementRecommendationGroup;
-      return {
-        ...group,
-        actionability: deriveSelfImprovementGroupActionability(group, sorted, now),
-      } satisfies SelfImprovementRecommendationGroup;
+      group.actionability = deriveSelfImprovementGroupActionability(group, sorted, now);
+      return group;
     })
     .toSorted(
       (left, right) =>

@@ -147,6 +147,7 @@ function isKalshiDashboardRefreshSuspended(scriptPath = resolveKalshiDashboardSc
       `Kalshi dashboard refresh guard could not be checked: ${
         error instanceof Error ? error.message : String(error)
       }`,
+      { cause: error },
     );
   }
 }
@@ -1959,6 +1960,7 @@ export async function loadKalshiDashboardSnapshot(opts?: {
       const message = error instanceof Error ? error.message : String(error);
       throw new Error(
         `Kalshi dashboard refresh suspended and no valid cached dashboard data is available: ${message}`,
+        { cause: error },
       );
     }
   }

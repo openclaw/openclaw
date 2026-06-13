@@ -34,6 +34,8 @@ function categoryRequiresTests(category: SelfImprovementRecommendationCategory):
     case "knowledge_hygiene":
     case "outcome_measurement":
       return false;
+    default:
+      return false;
   }
 }
 

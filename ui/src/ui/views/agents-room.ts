@@ -1176,7 +1176,7 @@ function applyAgentConfiguredRoom(
   ) {
     return metadata;
   }
-  return { ...metadata, roomId: configuredRoomId as keyof typeof PROJECT_ROOMS };
+  return { ...metadata, roomId: configuredRoomId };
 }
 
 function resolveAgentMetadata(agent: GatewayAgentRow, director: boolean): AgentMasterPlanMetadata {

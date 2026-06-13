@@ -197,6 +197,8 @@ function proposalKindForGroup(
       return "user_synthesis";
     case "program_manager":
       return "sequencing";
+    default:
+      return "implementation";
   }
 }
 
@@ -234,6 +236,8 @@ function proposalTitle(
       return `Agentless workflow proposal: ${group.title}`;
     case "sequencing":
       return `Sequencing proposal: ${group.title}`;
+    default:
+      return `Implementation proposal: ${group.title}`;
   }
 }
 
