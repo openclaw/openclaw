@@ -1738,9 +1738,9 @@ function canaryFailureMessage(params: {
         ];
       case "sut_reply_empty":
         return [
-          "1. Inspect telegram-qa-report.md to confirm whether the SUT sent media-only or blank text.",
-          "2. Check whether the Telegram native command response path produced an empty or suppressed reply.",
-          "3. Confirm the SUT command completed successfully in gateway logs.",
+          "1. Check whether the Telegram native command response path produced an empty or suppressed reply.",
+          "2. Confirm the SUT command completed successfully in gateway logs.",
+          "3. Inspect telegram-qa-report.md for the matched message ids and phase context.",
         ];
       default:
         return [
