@@ -51,6 +51,15 @@ type LogCursorState = {
   journalSince?: string;
 };
 
+type LogSourceIdentity = {
+  file?: string;
+  source?: string;
+  sourceKind?: LogsTailPayload["sourceKind"];
+  servicePid?: number;
+  serviceUnit?: string;
+  localFallback?: boolean;
+};
+
 async function loadLogsCliRuntime(): Promise<LogsCliRuntimeModule> {
   return await import("./logs-cli.runtime.js");
 }
@@ -87,6 +96,42 @@ function parsePositiveInt(value: string | undefined, fallback: number, flag: str
     throw new Error(`${flag} must be a positive integer.`);
   }
   return parsed;
+}
+
+function normalizeLogTailPayloadSource(payload: LogsTailPayload): LogsTailPayload {
+  if (payload.sourceKind || !payload.file) {
+    return payload;
+  }
+  return { ...payload, sourceKind: "file" };
+}
+
+function buildLogSourceIdentity(payload: LogsTailPayload): string | undefined {
+  const sourceKind = payload.sourceKind ?? (payload.file ? "file" : undefined);
+  if (!sourceKind && !payload.file && !payload.source) {
+    return undefined;
+  }
+  const identity: LogSourceIdentity = {
+    file: payload.file,
+    source: payload.source,
+    sourceKind,
+    servicePid: payload.service?.pid,
+    serviceUnit: payload.service?.unit,
+    localFallback: payload.localFallback === true ? true : undefined,
+  };
+  return JSON.stringify(identity);
+}
+
+function buildLogMetaRecord(payload: LogsTailPayload): Record<string, unknown> {
+  return {
+    type: "meta",
+    file: payload.file,
+    source: payload.source,
+    sourceKind: payload.sourceKind ?? (payload.file ? "file" : undefined),
+    service: payload.service,
+    cursor: payload.cursor,
+    size: payload.size,
+    localFallback: payload.localFallback === true ? true : undefined,
+  };
 }
 
 async function fetchLogs(
@@ -486,6 +531,7 @@ export function registerLogsCli(program: Command) {
     let journalCursor: string | undefined;
     let journalSince: string | undefined;
     let first = true;
+    let lastSourceIdentity: string | undefined;
     const jsonMode = Boolean(opts.json);
     const pretty = !jsonMode && process.stdout.isTTY && !opts.plain;
     const rich = isRich() && opts.color !== false;
@@ -541,20 +587,14 @@ export function registerLogsCli(program: Command) {
         }
       }
       followRetryAttempt = 0;
+      payload = normalizeLogTailPayloadSource(payload);
+      const sourceIdentity = buildLogSourceIdentity(payload);
+      const sourceChanged = sourceIdentity !== undefined && sourceIdentity !== lastSourceIdentity;
+      const shouldEmitSourceMetadata = first || sourceChanged;
       const lines = Array.isArray(payload.lines) ? payload.lines : [];
       if (jsonMode) {
-        if (first) {
-          if (
-            !emitJsonLine({
-              type: "meta",
-              file: payload.file,
-              source: payload.source,
-              sourceKind: payload.sourceKind,
-              service: payload.service,
-              cursor: payload.cursor,
-              size: payload.size,
-            })
-          ) {
+        if (shouldEmitSourceMetadata) {
+          if (!emitJsonLine(buildLogMetaRecord(payload))) {
             return;
           }
         }
@@ -589,14 +629,14 @@ export function registerLogsCli(program: Command) {
           }
         }
       } else {
-        if (first && payload.localFallback === true) {
+        if (shouldEmitSourceMetadata && payload.localFallback === true) {
           const notice =
             payload.sourceKind === "journal" ? JOURNAL_FALLBACK_NOTICE : LOCAL_FALLBACK_NOTICE;
           if (!errorLine(colorize(rich, theme.warn, notice))) {
             return;
           }
         }
-        if (first) {
+        if (shouldEmitSourceMetadata) {
           if (payload.sourceKind === "journal" && payload.source) {
             const prefix = pretty ? colorize(rich, theme.muted, "Log source:") : "Log source:";
             if (!logLine(`${prefix} ${payload.source}`)) {
@@ -657,6 +697,9 @@ export function registerLogsCli(program: Command) {
         }
       } else if (typeof payload.cursor === "string" && payload.cursor.trim().length > 0) {
         journalCursor = payload.cursor;
+      }
+      if (sourceIdentity !== undefined) {
+        lastSourceIdentity = sourceIdentity;
       }
       first = false;
 
