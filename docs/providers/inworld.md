@@ -1,31 +1,30 @@
 ---
-summary: "Inworld streaming text-to-speech for OpenClaw replies"
+summary: "Use Inworld's LLM router and streaming text-to-speech in OpenClaw"
 read_when:
+  - You want Inworld as an OpenAI-compatible LLM router
   - You want Inworld speech synthesis for outbound replies
   - You need PCM telephony or OGG_OPUS voice-note output from Inworld
 title: "Inworld"
 ---
 
-Inworld is a streaming text-to-speech (TTS) provider. In OpenClaw it
-synthesizes outbound reply audio (MP3 by default, OGG_OPUS for voice notes)
-and PCM audio for telephony channels such as Voice Call.
-
-OpenClaw posts to Inworld's streaming TTS endpoint, concatenates the
-returned base64 audio chunks into a single buffer, and hands the result to
-the standard reply-audio pipeline.
+Inworld provides two capabilities in OpenClaw: an OpenAI-compatible **LLM
+router** (`/v1/chat/completions`) and a streaming **text-to-speech**
+endpoint. Both are served from `api.inworld.ai` and share a single
+`INWORLD_API_KEY` for HTTP Basic auth.
 
 | Property      | Value                                                           |
 | ------------- | --------------------------------------------------------------- |
 | Provider id   | `inworld`                                                       |
 | Plugin        | official external package                                       |
-| Contract      | `speechProviders` (TTS only)                                    |
+| Contracts     | `providers` (LLM), `speechProviders` (TTS)                      |
 | Auth env var  | `INWORLD_API_KEY` (HTTP Basic, Base64 dashboard credential)     |
 | Base URL      | `https://api.inworld.ai`                                        |
-| Default voice | `Sarah`                                                         |
-| Default model | `inworld-tts-1.5-max`                                           |
-| Output        | MP3 (default), OGG_OPUS (voice notes), PCM 22050 Hz (telephony) |
+| LLM API       | OpenAI-compatible chat completions (`/v1/chat/completions`)     |
+| Default model | `inworld/auto` (Inworld picks the upstream model)               |
+| TTS default   | voice `Sarah`, model `inworld-tts-1.5-max`                      |
+| Output (TTS)  | MP3 (default), OGG_OPUS (voice notes), PCM 22050 Hz (telephony) |
 | Website       | [inworld.ai](https://inworld.ai)                                |
-| Docs          | [docs.inworld.ai/tts/tts](https://docs.inworld.ai/tts/tts)      |
+| Docs          | [docs.inworld.ai](https://docs.inworld.ai)                      |
 
 ## Install plugin
 
@@ -39,43 +38,89 @@ openclaw gateway restart
 ## Getting started
 
 <Steps>
-  <Step title="Set your API key">
-    Copy the credential from your Inworld dashboard (Workspace > API Keys)
-    and set it as an env var. The value is sent verbatim as the HTTP Basic
-    credential, so do not Base64-encode it again or convert it to a bearer
-    token.
+  <Step title="Get your API key">
+    Copy the credential from your Inworld dashboard (Workspace > API Keys).
+    The value is sent verbatim as the HTTP Basic credential, so do not
+    Base64-encode it again or convert it to a bearer token.
 
     ```
     INWORLD_API_KEY=<base64-credential-from-dashboard>
     ```
 
   </Step>
-  <Step title="Select Inworld in messages.tts">
-    ```json5
-    {
-      messages: {
-        tts: {
-          auto: "always",
-          provider: "inworld",
-          providers: {
-            inworld: {
-              speakerVoiceId: "Sarah",
-              modelId: "inworld-tts-1.5-max",
-            },
-          },
-        },
-      },
-    }
+  <Step title="Run onboarding">
+    ```bash
+    openclaw onboard --auth-choice inworld-api-key
     ```
   </Step>
-  <Step title="Send a message">
-    Send a reply through any connected channel. OpenClaw synthesizes the
-    audio with Inworld and delivers it as MP3 (or OGG_OPUS when the channel
-    expects a voice note).
+  <Step title="(Optional) Switch to a specific model">
+    Onboarding defaults to `inworld/auto`. Pick a concrete model later:
+
+    ```bash
+    openclaw models set inworld/<upstream-provider>/<model>
+    ```
+
   </Step>
 </Steps>
 
-## Configuration options
+## Config example
+
+```json5
+{
+  env: { INWORLD_API_KEY: "<base64-credential>" },
+  agents: {
+    defaults: {
+      model: { primary: "inworld/auto" },
+    },
+  },
+}
+```
+
+## Model references
+
+<Note>
+Model refs follow the pattern `inworld/<upstream-provider>/<model>`. The
+full live catalog is discovered from `/llm/v1alpha/models` after the API
+key is configured.
+</Note>
+
+Bundled fallback examples:
+
+| Model ref                                   | Notes                         |
+| ------------------------------------------- | ----------------------------- |
+| `inworld/auto`                              | Inworld automatic routing     |
+| `inworld/models/GLM-5.1`                    | GLM-5.1 via Z AI              |
+| `inworld/models/gemma-4-31b-it`             | Gemma 4 31B via Google        |
+| `inworld/models/gemma-4-26b-a4b-it`         | Gemma 4 26B via Google        |
+| `inworld/models/deepseek-v4-pro`            | DeepSeek V4 Pro               |
+| `inworld/models/deepseek-v4-flash`          | DeepSeek V4 Flash             |
+| `inworld/anthropic/claude-opus-4-8`         | Claude Opus 4.8 via Anthropic |
+| `inworld/google-ai-studio/gemini-3.5-flash` | Gemini 3.5 Flash via Google   |
+
+## Text-to-speech
+
+Inworld is a streaming TTS provider. Select it in `messages.tts`:
+
+```json5
+{
+  messages: {
+    tts: {
+      auto: "always",
+      provider: "inworld",
+      providers: {
+        inworld: {
+          speakerVoiceId: "Sarah",
+          modelId: "inworld-tts-1.5-max",
+        },
+      },
+    },
+  },
+}
+```
+
+Replies use MP3 by default. When the channel target is `voice-note` OpenClaw
+asks Inworld for `OGG_OPUS` so the audio plays as a native voice bubble.
+Telephony synthesis uses raw `PCM` at 22050 Hz to feed the telephony bridge.
 
 | Option           | Path                                            | Description                                                       |
 | ---------------- | ----------------------------------------------- | ----------------------------------------------------------------- |
@@ -85,31 +130,16 @@ openclaw gateway restart
 | `modelId`        | `messages.tts.providers.inworld.modelId`        | TTS model id (default `inworld-tts-1.5-max`).                     |
 | `temperature`    | `messages.tts.providers.inworld.temperature`    | Sampling temperature `0..2` (optional).                           |
 
-## Notes
+Supported voice models: `inworld-tts-1.5-max` (default), `inworld-tts-1.5-mini`,
+`inworld-tts-1-max`, `inworld-tts-1`.
 
-<AccordionGroup>
-  <Accordion title="Authentication">
-    Inworld uses HTTP Basic auth with a single Base64-encoded credential
-    string. Copy it verbatim from the Inworld dashboard. The provider sends
-    it as `Authorization: Basic <apiKey>` without any further encoding, so
-    do not Base64-encode it yourself and do not pass a bearer-style token.
-    See [TTS auth notes](/tools/tts#inworld-primary) for the same callout.
-  </Accordion>
-  <Accordion title="Models">
-    Supported model ids: `inworld-tts-1.5-max` (default),
-    `inworld-tts-1.5-mini`, `inworld-tts-1-max`, `inworld-tts-1`.
-  </Accordion>
-  <Accordion title="Audio outputs">
-    Replies use MP3 by default. When the channel target is `voice-note`
-    OpenClaw asks Inworld for `OGG_OPUS` so the audio plays as a native
-    voice bubble. Telephony synthesis uses raw `PCM` at 22050 Hz to feed
-    the telephony bridge.
-  </Accordion>
-  <Accordion title="Custom endpoints">
-    Override the API host with `messages.tts.providers.inworld.baseUrl`.
-    Trailing slashes are stripped before requests are sent.
-  </Accordion>
-</AccordionGroup>
+## Authentication
+
+Inworld uses HTTP Basic auth with a single Base64-encoded credential string.
+Copy it verbatim from the Inworld dashboard. The provider sends it as
+`Authorization: Basic <apiKey>` without any further encoding, so do not
+Base64-encode it yourself and do not pass a bearer-style token. The same key
+covers both the LLM and TTS surfaces.
 
 ## Related
 

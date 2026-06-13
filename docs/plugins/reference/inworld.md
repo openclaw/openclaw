@@ -1,5 +1,5 @@
 ---
-summary: "Inworld streaming text-to-speech (MP3, OGG_OPUS, PCM telephony)."
+summary: "Adds Inworld LLM and text-to-speech provider support to OpenClaw."
 read_when:
   - You are installing, configuring, or auditing the inworld plugin
 title: "Inworld plugin"
@@ -7,7 +7,7 @@ title: "Inworld plugin"
 
 # Inworld plugin
 
-Inworld streaming text-to-speech (MP3, OGG_OPUS, PCM telephony).
+Adds Inworld LLM and text-to-speech provider support to OpenClaw.
 
 ## Distribution
 
@@ -16,7 +16,8 @@ Inworld streaming text-to-speech (MP3, OGG_OPUS, PCM telephony).
 
 ## Surface
 
-contracts: speechProviders
+- providers: `inworld`
+- contracts: `speechProviders`
 
 ## Related docs
 
