@@ -27,7 +27,6 @@ type LocalPackageOverrideChange = {
   kind: LocalPackageOverrideKind;
   path: string;
   baseline?: PackageDistContentInventoryEntry;
-  dependencyGraphComplete?: boolean;
   dependencies?: string[];
   savedPath?: string;
   mode?: number;
@@ -89,6 +88,7 @@ type LocalPackageOverrideTargetProbe =
   | {
       status: "present";
       hardlinked: boolean;
+      mode: number;
       safeFile: boolean;
     };
 
@@ -100,6 +100,7 @@ async function probeLocalOverrideTarget(
     return {
       status: "present",
       hardlinked: stats.nlink > 1n,
+      mode: Number(stats.mode & 0o777n),
       safeFile: stats.isFile() && !stats.isSymbolicLink(),
     };
   } catch (error) {
@@ -146,6 +147,42 @@ async function resolveLocalOverrideTopologyPath(
     }
   }
   throw new Error(`could not resolve local override topology for ${relativePath}`);
+}
+
+async function resolvePathTopology(targetPath: string): Promise<string> {
+  const missingSegments: string[] = [];
+  let currentPath = path.resolve(targetPath);
+  while (true) {
+    try {
+      return path.resolve(await fs.realpath(currentPath), ...missingSegments);
+    } catch (error) {
+      if (!isMissingPathError(error)) {
+        throw error;
+      }
+      const parentPath = path.dirname(currentPath);
+      if (parentPath === currentPath) {
+        throw error;
+      }
+      missingSegments.unshift(path.basename(currentPath));
+      currentPath = parentPath;
+    }
+  }
+}
+
+async function assertRecoveryRootOutsidePackageRoot(
+  packageRoot: string,
+  recoveryRoot: string,
+): Promise<void> {
+  const [realPackageRoot, resolvedRecoveryRoot] = await Promise.all([
+    fs.realpath(packageRoot),
+    resolvePathTopology(recoveryRoot),
+  ]);
+  if (
+    resolvedRecoveryRoot === realPackageRoot ||
+    resolvedRecoveryRoot.startsWith(`${realPackageRoot}${path.sep}`)
+  ) {
+    throw new Error(`local override recovery root must be outside package root: ${recoveryRoot}`);
+  }
 }
 
 function countChanges(changes: LocalPackageOverrideChange[]) {
@@ -215,8 +252,6 @@ async function copyOverridePayload(params: {
 
 const BEST_EFFORT_LOCAL_IMPORT_SPECIFIER_PATTERN =
   /(?:import|export)\b\s*(?:[^'"]*?\bfrom\s*)?["']([^"']+)["']|import\s*\(\s*["']([^"']+)["']\s*\)|require\s*\(\s*["']([^"']+)["']\s*\)/gu;
-const POTENTIAL_LOCAL_DEPENDENCY_SYNTAX_PATTERN =
-  /\b(?:import|require)\b|\bexport\b[\s\S]*\bfrom\b/u;
 
 function resolveReferencedDistPath(params: {
   fromPath: string;
@@ -249,11 +284,9 @@ async function collectReferencedAddedOverridePaths(params: {
 }): Promise<{
   addedPaths: string[];
   dependenciesByChangePath: Map<string, string[]>;
-  incompleteDependencyGraphPaths: Set<string>;
 }> {
   const addedPaths = new Set<string>();
   const dependenciesByChangePath = new Map<string, Set<string>>();
-  const incompleteDependencyGraphPaths = new Set<string>();
   const scannedPathsByRoot = new Set<string>();
   const modifiedChangesByPath = new Map(
     params.changes
@@ -289,14 +322,7 @@ async function collectReferencedAddedOverridePaths(params: {
       continue;
     }
     scannedPathsByRoot.add(scanKey);
-    const source = await fs.readFile(current.sourcePath, "utf8").catch(() => null);
-    if (source === null) {
-      incompleteDependencyGraphPaths.add(current.rootPath);
-      continue;
-    }
-    if (POTENTIAL_LOCAL_DEPENDENCY_SYNTAX_PATTERN.test(source)) {
-      incompleteDependencyGraphPaths.add(current.rootPath);
-    }
+    const source = await fs.readFile(current.sourcePath, "utf8").catch(() => "");
     for (const match of source.matchAll(BEST_EFFORT_LOCAL_IMPORT_SPECIFIER_PATTERN)) {
       const specifier = match[1] ?? match[2] ?? match[3] ?? "";
       const referencedPath = resolveReferencedDistPath({
@@ -338,7 +364,6 @@ async function collectReferencedAddedOverridePaths(params: {
         [...dependencies].toSorted((left, right) => left.localeCompare(right)),
       ]),
     ),
-    incompleteDependencyGraphPaths,
   };
 }
 
@@ -366,6 +391,7 @@ export async function captureLocalPackageOverrides(params: {
   const ensureRecoveryDir = async () => {
     if (!recoveryDir) {
       const recoveryRoot = path.join(resolveStateDir(), "update-recovery");
+      await assertRecoveryRootOutsidePackageRoot(params.packageRoot, recoveryRoot);
       await fs.mkdir(recoveryRoot, { recursive: true, mode: 0o700 });
       recoveryDir = await fs.mkdtemp(path.join(recoveryRoot, "openclaw-local-overrides-"));
     }
@@ -406,9 +432,6 @@ export async function captureLocalPackageOverrides(params: {
     });
     for (const change of changes) {
       if (change.kind === "modified") {
-        change.dependencyGraphComplete = !referencedAdded.incompleteDependencyGraphPaths.has(
-          change.path,
-        );
         change.dependencies = referencedAdded.dependenciesByChangePath.get(change.path) ?? [];
       }
     }
@@ -429,7 +452,6 @@ export async function captureLocalPackageOverrides(params: {
       changes.push({
         kind: "added",
         path: relativePath,
-        dependencyGraphComplete: !referencedAdded.incompleteDependencyGraphPaths.has(relativePath),
         dependencies: referencedAdded.dependenciesByChangePath.get(relativePath) ?? [],
         savedPath: payload.savedPath,
         mode: payload.mode,
@@ -520,24 +542,23 @@ async function preflightLocalOverrides(params: {
     }
     if (
       nextEntry.sha256 !== change.baseline.sha256 ||
-      nextEntry.mode !== normalizeFileMode(change.baseline.mode)
+      nextEntry.mode !== normalizeFileMode(change.baseline.mode) ||
+      targetProbe.mode !== normalizeFileMode(nextEntry.mode)
     ) {
       conflicts.push({ path: change.path, reason: "target-changed" });
     }
   }
   const conflictingPaths = new Set(conflicts.map((conflict) => conflict.path));
   if (conflictingPaths.size > 0) {
+    // Dependency discovery is best-effort, so any conflict makes the full plan fail closed.
     for (const change of params.plan.changes) {
-      if (
-        change.kind === "deleted" ||
-        change.dependencyGraphComplete === true ||
-        conflictingPaths.has(change.path)
-      ) {
+      if (conflictingPaths.has(change.path)) {
         continue;
       }
       conflicts.push({ path: change.path, reason: "target-changed" });
       conflictingPaths.add(change.path);
     }
+    return conflicts;
   }
   const topologyPaths = new Map<string, string>();
   const realPackageRoot = await fs.realpath(params.packageRoot).catch(() => null);

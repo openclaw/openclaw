@@ -99,6 +99,30 @@ function createRootRunner(globalRoot: string): CommandRunner {
 }
 
 describe("runGlobalPackageUpdateSteps", () => {
+  it("rejects recovery roots inside the package being updated", async () => {
+    await withTempDir({ prefix: "openclaw-package-update-local-recovery-root-" }, async (base) => {
+      const packageRoot = path.join(base, "package");
+      const indexPath = path.join(packageRoot, "dist", "index.js");
+      await writePackageRoot(packageRoot, "1.0.0");
+      await fs.writeFile(indexPath, "export const local = true;\n", "utf8");
+
+      const priorStateDir = process.env.OPENCLAW_STATE_DIR;
+      process.env.OPENCLAW_STATE_DIR = path.join(packageRoot, "state");
+      try {
+        await expect(captureLocalPackageOverrides({ packageRoot })).rejects.toThrow(
+          "local override recovery root must be outside package root",
+        );
+      } finally {
+        if (priorStateDir === undefined) {
+          delete process.env.OPENCLAW_STATE_DIR;
+        } else {
+          process.env.OPENCLAW_STATE_DIR = priorStateDir;
+        }
+      }
+      await expectPathMissing(path.join(packageRoot, "state"));
+    });
+  });
+
   it.runIf(process.platform !== "win32")(
     "does not reapply added overrides through symlinked target ancestors",
     async () => {
@@ -171,6 +195,39 @@ describe("runGlobalPackageUpdateSteps", () => {
           expect((await fs.stat(indexPath)).mode & 0o777).toBe(0o755);
         },
       );
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "does not reapply overrides after an unrecorded installed mode change",
+    async () => {
+      await withTempDir({ prefix: "openclaw-package-update-local-actual-mode-" }, async (base) => {
+        const packageRoot = path.join(base, "package");
+        const indexPath = path.join(packageRoot, "dist", "index.js");
+        await writePackageRoot(packageRoot, "1.0.0");
+        await fs.chmod(indexPath, 0o644);
+        await writePackageDistInventory(packageRoot);
+        await fs.writeFile(indexPath, "export const local = true;\n", "utf8");
+
+        const plan = await captureLocalPackageOverrides({ packageRoot });
+        expect(plan).not.toBeNull();
+        await fs.writeFile(indexPath, "export {};\n", "utf8");
+        await fs.chmod(indexPath, 0o644);
+        await writePackageDistInventory(packageRoot);
+        await fs.chmod(indexPath, 0o755);
+
+        const result = await applyLocalPackageOverrides({
+          packageRoot,
+          plan,
+          reapply: true,
+        });
+
+        expect(result.status).toBe("conflict");
+        expect(result.applied).toBe(0);
+        expect(result.conflicts).toEqual([{ path: "dist/index.js", reason: "target-changed" }]);
+        await expect(fs.readFile(indexPath, "utf8")).resolves.toBe("export {};\n");
+        expect((await fs.stat(indexPath)).mode & 0o777).toBe(0o755);
+      });
     },
   );
 
@@ -459,52 +516,72 @@ describe("runGlobalPackageUpdateSteps", () => {
 
   it.each([
     {
+      featureRelativePath: "dist/local-feature.js",
       helperRelativePath: "dist/local-helper.js",
       name: "spaced import",
       source: 'import "./local-helper.js";\n',
     },
     {
+      featureRelativePath: "dist/local-feature.js",
       helperRelativePath: "dist/local-helper.js",
       name: "minified import",
       source: 'import"./local-helper.js";\n',
     },
     {
+      featureRelativePath: "dist/local-feature.js",
       helperRelativePath: "dist/local-helper.js",
       name: "minified re-export",
       source: 'export*from"./local-helper.js";\n',
     },
     {
+      featureRelativePath: "dist/local-feature.js",
       helperRelativePath: "dist/local-helper.js",
       name: "commented dynamic import",
       source: 'void import(/* webpackChunkName: "local" */ "./local-helper.js");\n',
     },
     {
+      featureRelativePath: "dist/local-feature.js",
       helperRelativePath: "dist/local-helper.js",
       name: "template dynamic import",
       source: "void import(`./local-helper.js`);\n",
     },
     {
+      featureRelativePath: "dist/local-feature.js",
       helperRelativePath: "dist/local-helper/index.mjs",
       name: "extensionless mjs index import",
       source: 'import "./local-helper";\n',
     },
     {
+      featureRelativePath: "dist/local-feature.js",
       helperRelativePath: "dist/local-helper/index.cjs",
       name: "extensionless cjs index import",
       source: 'require("./local-helper");\n',
     },
+    {
+      featureRelativePath: "dist/local-feature.js",
+      helperRelativePath: "dist/local-helper.js",
+      name: "plain runtime path string",
+      source: 'const helperPath = "./local-helper.js";\n',
+    },
+    {
+      featureRelativePath: "dist/local-feature.css",
+      helperRelativePath: "dist/local-font.woff2",
+      name: "CSS URL",
+      source: 'body { font-family: local; src: url("./local-font.woff2"); }\n',
+    },
   ])(
     "does not partially reapply standalone added dependency trees with $name",
-    async ({ helperRelativePath, source }) => {
+    async ({ featureRelativePath, helperRelativePath, source }) => {
       await withTempDir(
         { prefix: "openclaw-package-update-local-standalone-tree-" },
         async (base) => {
           const prefix = path.join(base, "prefix");
           const globalRoot = path.join(prefix, "lib", "node_modules");
           const packageRoot = path.join(globalRoot, "openclaw");
-          const featurePath = path.join(packageRoot, "dist", "local-feature.js");
+          const featurePath = path.join(packageRoot, featureRelativePath);
           const helperPath = path.join(packageRoot, helperRelativePath);
           await writePackageRoot(packageRoot, "1.0.0");
+          await fs.mkdir(path.dirname(featurePath), { recursive: true });
           await fs.writeFile(featurePath, source, "utf8");
           await fs.mkdir(path.dirname(helperPath), { recursive: true });
           await fs.writeFile(helperPath, "export const local = true;\n", "utf8");
@@ -544,7 +621,7 @@ describe("runGlobalPackageUpdateSteps", () => {
           expect(result.localOverrides?.applied).toBe(0);
           expect(result.localOverrides?.conflicts).toEqual([
             { path: helperRelativePath, reason: "target-exists" },
-            { path: "dist/local-feature.js", reason: "target-changed" },
+            { path: featureRelativePath, reason: "target-changed" },
           ]);
           await expectPathMissing(featurePath);
           await expect(fs.readFile(helperPath, "utf8")).resolves.toBe(
@@ -1357,7 +1434,7 @@ describe("runGlobalPackageUpdateSteps", () => {
     });
   });
 
-  it("reapplies clean local overrides when another override conflicts", async () => {
+  it("does not partially reapply clean overrides when another override conflicts", async () => {
     await withTempDir(
       { prefix: "openclaw-package-update-local-partial-conflict-" },
       async (base) => {
@@ -1431,15 +1508,16 @@ describe("runGlobalPackageUpdateSteps", () => {
 
         expect(result.failedStep).toBeNull();
         expect(result.localOverrides?.status).toBe("conflict");
-        expect(result.localOverrides?.applied).toBe(1);
+        expect(result.localOverrides?.applied).toBe(0);
         expect(result.localOverrides?.conflicts).toEqual([
           { path: "dist/index.js", reason: "target-changed" },
+          { path: "dist/extra.js", reason: "target-changed" },
         ]);
         await expect(fs.readFile(path.join(packageRoot, "dist", "index.js"), "utf8")).resolves.toBe(
           "export const upstreamConflict = true;\n",
         );
         await expect(fs.readFile(path.join(packageRoot, "dist", "extra.js"), "utf8")).resolves.toBe(
-          "export const localClean = true;\n",
+          "export const extra = 1;\n",
         );
       },
     );
@@ -1529,8 +1607,8 @@ describe("runGlobalPackageUpdateSteps", () => {
         expect(result.localOverrides?.conflicts).toEqual([
           { path: "dist/index.js", reason: "target-changed" },
           { path: "dist/feature.js", reason: "target-changed" },
-          { path: "dist/shared.js", reason: "target-changed" },
           { path: "dist/nested.js", reason: "target-changed" },
+          { path: "dist/shared.js", reason: "target-changed" },
         ]);
         await expect(fs.readFile(path.join(packageRoot, "dist", "index.js"), "utf8")).resolves.toBe(
           "export const upstreamConflict = true;\n",
