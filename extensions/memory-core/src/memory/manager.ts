@@ -917,23 +917,35 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       return strict.slice(0, maxResults);
     }
 
-    // Hybrid weighting can put valid keyword-only FTS hits below minScore.
-    // Preserve those lexical hits even when another vector result is strict.
     const keywordKeys = new Set(keywordResults.map((entry) => memoryResultRangeKey(entry)));
-    const keywordOnly = merged.filter(
-      (entry) => entry.vectorScore === 0 && keywordKeys.has(memoryResultRangeKey(entry)),
-    );
+    if (strict.length === 0) {
+      // Keep the original relaxed keyword-backed fallback for overlapping
+      // hybrid hits whose weighted score falls below minScore.
+      const relaxedMinScore = 0;
+      return this.selectScoredResults(
+        merged.filter((entry) => keywordKeys.has(memoryResultRangeKey(entry))),
+        maxResults,
+        minScore,
+        relaxedMinScore,
+      );
+    }
+
+    // Hybrid weighting can put valid keyword-only FTS hits below minScore.
+    // Preserve those lexical hits without disturbing mergeHybridResults order.
     const seen = new Set<string>();
-    const deduped: HybridMergedSearchResult[] = [];
-    for (const entry of [...strict, ...keywordOnly]) {
+    const selected: HybridMergedSearchResult[] = [];
+    for (const entry of merged) {
       const key = memoryResultRangeKey(entry);
       if (seen.has(key)) {
         continue;
       }
-      seen.add(key);
-      deduped.push(entry);
+      const keywordOnly = entry.vectorScore === 0 && keywordKeys.has(key);
+      if (entry.score >= minScore || keywordOnly) {
+        seen.add(key);
+        selected.push(entry);
+      }
     }
-    return deduped.toSorted((a, b) => b.score - a.score).slice(0, maxResults);
+    return selected.slice(0, maxResults);
   }
 
   private selectScoredResults<T extends MemorySearchResult & { score: number }>(

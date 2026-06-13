@@ -1819,7 +1819,6 @@ describe("memory index", () => {
 
   it("preserves keyword-only hybrid hits alongside strict vector results", async () => {
     const cfg = createCfg({
-      storePath: path.join(workspaceDir, "index-hybrid-keyword-with-strict-vector.sqlite"),
       minScore: 0.35,
       hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
     });
@@ -1866,6 +1865,97 @@ describe("memory index", () => {
       ]);
       expect(results[1]?.vectorScore).toBe(0);
       expect(results[1]?.textScore).toBe(1);
+    } finally {
+      await manager.close?.();
+    }
+  });
+
+  it("keeps overlapping keyword-backed hybrid hits when all scores are below minScore", async () => {
+    const cfg = createCfg({
+      minScore: 0.35,
+      hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
+    });
+    const manager = await getFreshManager(cfg);
+    try {
+      const overlappingResult = {
+        path: "memory/overlap.md",
+        startLine: 3,
+        endLine: 4,
+        source: "memory" as const,
+        snippet: "overlap keyword vector",
+        score: 0.2,
+        vectorScore: 0.1,
+        textScore: 0.5,
+      };
+      const selectHybridSearchResults = Reflect.get(manager, "selectHybridSearchResults") as (
+        merged: Array<typeof overlappingResult>,
+        keywordResults: Array<typeof overlappingResult & { id: string }>,
+        maxResults: number,
+        minScore: number,
+      ) => Array<typeof overlappingResult>;
+
+      const results = selectHybridSearchResults.call(
+        manager,
+        [overlappingResult],
+        [{ ...overlappingResult, id: "overlap" }],
+        10,
+        0.35,
+      );
+
+      expect(results.map((result) => result.path)).toStrictEqual(["memory/overlap.md"]);
+      expect(results[0]?.vectorScore).toBeGreaterThan(0);
+      expect(results[0]?.textScore).toBeGreaterThan(0);
+    } finally {
+      await manager.close?.();
+    }
+  });
+
+  it("preserves hybrid merger order when retaining keyword-only hits", async () => {
+    const cfg = createCfg({
+      minScore: 0.35,
+      hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
+    });
+    const manager = await getFreshManager(cfg);
+    try {
+      const keywordOnlyResult = {
+        path: "memory/keyword-first.md",
+        startLine: 2,
+        endLine: 2,
+        source: "memory" as const,
+        snippet: "keyword first",
+        score: 0.3,
+        vectorScore: 0,
+        textScore: 1,
+      };
+      const strictVectorResult = {
+        path: "memory/vector-second.md",
+        startLine: 1,
+        endLine: 1,
+        source: "memory" as const,
+        snippet: "strict vector second",
+        score: 0.63,
+        vectorScore: 0.9,
+        textScore: 0,
+      };
+      const selectHybridSearchResults = Reflect.get(manager, "selectHybridSearchResults") as (
+        merged: Array<typeof keywordOnlyResult>,
+        keywordResults: Array<typeof keywordOnlyResult & { id: string }>,
+        maxResults: number,
+        minScore: number,
+      ) => Array<typeof keywordOnlyResult>;
+
+      const results = selectHybridSearchResults.call(
+        manager,
+        [keywordOnlyResult, strictVectorResult],
+        [{ ...keywordOnlyResult, id: "keyword-only" }],
+        10,
+        0.35,
+      );
+
+      expect(results.map((result) => result.path)).toStrictEqual([
+        "memory/keyword-first.md",
+        "memory/vector-second.md",
+      ]);
     } finally {
       await manager.close?.();
     }
