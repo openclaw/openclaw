@@ -703,6 +703,20 @@ function shouldCatalogTool(tool: AnyAgentTool): boolean {
   return true;
 }
 
+function collectUniqueCatalogToolNames(tools: readonly AnyAgentTool[]): Set<string> {
+  const nameCounts = new Map<string, number>();
+  for (const tool of tools) {
+    if (shouldCatalogTool(tool)) {
+      nameCounts.set(tool.name, (nameCounts.get(tool.name) ?? 0) + 1);
+    }
+  }
+  return new Set(
+    Array.from(nameCounts)
+      .filter(([, count]) => count === 1)
+      .map(([name]) => name),
+  );
+}
+
 function shouldExposeControlTool(name: string, mode: ToolSearchMode): boolean {
   if (name === TOOL_SEARCH_CODE_MODE_TOOL_NAME) {
     return mode === "code";
@@ -932,11 +946,13 @@ export function applyToolSchemaDirectoryCatalog(params: {
   const hydrateToolNames = new Set(
     normalizeStringEntries(Array.from(params.hydrateToolNames ?? [])),
   );
+  const uniqueCatalogToolNames = collectUniqueCatalogToolNames(params.tools);
   return applyToolCatalogCompaction({
     ...params,
     enabled: config.enabled,
     isVisibleControlTool: (tool) => TOOL_SCHEMA_DIRECTORY_CONTROL_TOOL_NAMES.has(tool.name),
-    isVisibleCatalogTool: (tool) => hydrateToolNames.has(tool.name),
+    isVisibleCatalogTool: (tool) =>
+      hydrateToolNames.has(tool.name) && uniqueCatalogToolNames.has(tool.name),
   });
 }
 
@@ -965,9 +981,10 @@ export function resolveToolSearchCatalogTool(
     return undefined;
   }
   try {
-    return visibleCatalogEntries(resolveCatalog(ctx), options).find(
+    const matches = visibleCatalogEntries(resolveCatalog(ctx), options).filter(
       (entry) => entry.name === needle,
-    )?.tool as AnyAgentTool | undefined;
+    );
+    return matches.length === 1 ? (matches[0]?.tool as AnyAgentTool | undefined) : undefined;
   } catch (error) {
     if (error instanceof ToolInputError) {
       return undefined;
@@ -1142,7 +1159,12 @@ function formatToolSearchCatalogDirectory(entries: Array<ReturnType<typeof compa
   if (entries.length === 0) {
     return "Available deferred-schema tools: none.";
   }
+  const nameCounts = new Map<string, number>();
+  for (const entry of entries) {
+    nameCounts.set(entry.name, (nameCounts.get(entry.name) ?? 0) + 1);
+  }
   const lines = entries
+    .filter((entry) => nameCounts.get(entry.name) === 1)
     .toSorted((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
     .map(formatToolDirectoryEntry)
     .filter((line): line is string => Boolean(line));
@@ -1427,7 +1449,11 @@ export function estimateToolSchemaDirectoryToolNames(params: {
   const maxTools = Math.max(0, Math.min(12, params.maxTools ?? 4));
   const hydratableTools: AnyAgentTool[] = [];
   const externalToolNames = new Set<string>();
+  const uniqueCatalogToolNames = collectUniqueCatalogToolNames(params.tools);
   for (const tool of params.tools) {
+    if (!uniqueCatalogToolNames.has(tool.name)) {
+      continue;
+    }
     // MCP descriptions are untrusted; keep their schemas deferred until explicit describe/call.
     if (classifyTool(tool).source === "mcp") {
       externalToolNames.add(tool.name);
@@ -1518,13 +1544,20 @@ function findEntry(
   options?: CatalogVisibilityOptions,
 ): ToolSearchCatalogEntry {
   const needle = id.trim();
-  const entry = visibleCatalogEntries(catalog, options).find(
-    (candidate) => candidate.id === needle || candidate.name === needle,
-  );
-  if (!entry) {
+  const entries = visibleCatalogEntries(catalog, options);
+  const exactIdEntry = entries.find((candidate) => candidate.id === needle);
+  if (exactIdEntry) {
+    return exactIdEntry;
+  }
+  const namedEntries = entries.filter((candidate) => candidate.name === needle);
+  if (namedEntries.length > 1) {
+    throw new ToolInputError(`Ambiguous tool name: ${needle}; use an exact tool id.`);
+  }
+  const namedEntry = namedEntries[0];
+  if (!namedEntry) {
     throw new ToolInputError(`Unknown tool id: ${needle}`);
   }
-  return entry;
+  return namedEntry;
 }
 
 function findEntryByExactId(catalog: ToolSearchCatalogSession, id: string): ToolSearchCatalogEntry {

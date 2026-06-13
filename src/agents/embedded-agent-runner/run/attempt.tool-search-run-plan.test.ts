@@ -1,5 +1,6 @@
 // Coverage for Tool Search control planning and allowlist accounting.
 import { describe, expect, it } from "vitest";
+import { setPluginToolMeta } from "../../../plugins/tools.js";
 import {
   buildAutoAddedToolSearchControlNamesForAllowlistCheck,
   buildCallableToolNamesForEmptyAllowlistCheck,
@@ -307,6 +308,31 @@ describe("buildToolSearchRunPlan", () => {
     });
 
     expect([...plan.liveAllowedToolNames]).toEqual(["fake_plugin_tool", "sessions_spawn"]);
+    expect([...plan.capabilityToolNames]).toEqual(["fake_plugin_tool"]);
+  });
+
+  it("keeps MCP names out of OpenClaw capability guidance", () => {
+    const mcpTool = { name: "sessions_spawn" };
+    setPluginToolMeta(mcpTool as never, {
+      pluginId: "bundle-mcp",
+      optional: false,
+    });
+    const plan = buildToolSearchRunPlan({
+      visibleTools: [{ name: "tool_search" }] as never,
+      uncompactedTools: [{ name: "fake_plugin_tool" }, mcpTool] as never,
+      clientToolsCataloged: false,
+      catalogToolCount: 2,
+      controlsEnabled: true,
+      deferredToolsCallable: true,
+      controlNames: ["tool_search"],
+      explicitAllowlistSources: [],
+    });
+
+    expect([...plan.liveAllowedToolNames]).toEqual([
+      "fake_plugin_tool",
+      "sessions_spawn",
+      "tool_search",
+    ]);
     expect([...plan.capabilityToolNames]).toEqual(["fake_plugin_tool"]);
   });
 });

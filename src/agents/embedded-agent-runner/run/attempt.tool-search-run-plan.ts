@@ -1,6 +1,7 @@
 /**
  * Builds tool-search execution plans from allowlists and available controls.
  */
+import { getPluginToolMeta } from "../../../plugins/tools.js";
 import { isToolAllowedByPolicyName } from "../../tool-policy-match.js";
 import { normalizeToolName } from "../../tool-policy.js";
 import {
@@ -91,6 +92,14 @@ function collectExplicitlyAllowedClientToolNames(params: {
     );
 }
 
+function collectOpenClawCapabilityToolNames(
+  tools: CollectAllowedToolNamesParams["tools"],
+): Set<string> {
+  return collectAllowedToolNames({
+    tools: tools.filter((tool) => getPluginToolMeta(tool)?.pluginId !== "bundle-mcp"),
+  });
+}
+
 /**
  * Builds the complete tool-search allowlist plan for one run. Visible tools use
  * compacted prompt state, replay tools use uncompacted state, and catalog-backed
@@ -115,9 +124,9 @@ export function buildToolSearchRunPlan(params: {
     tools: params.uncompactedTools,
     clientTools: params.clientTools,
   });
-  const capabilityToolNames = collectAllowedToolNames({
-    tools: params.deferredToolsCallable ? params.uncompactedTools : params.visibleTools,
-  });
+  const capabilityToolNames = collectOpenClawCapabilityToolNames(
+    params.deferredToolsCallable ? params.uncompactedTools : params.visibleTools,
+  );
   if (params.controlsEnabled) {
     // A control that was visible in the compacted prompt must remain allowed
     // during replay even when the uncompacted tool set would otherwise omit it.
