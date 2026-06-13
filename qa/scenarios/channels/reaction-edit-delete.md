@@ -9,8 +9,7 @@ coverage:
     - reply-pipeline-transforms
   secondary:
     - plugin-registry-resolution
-objective: Verify the agent can use channel-owned message actions and that the
-  QA transcript reflects them.
+objective: Verify the agent can use channel-owned message actions and that the QA transcript reflects them.
 successCriteria:
   - Agent adds at least one reaction.
   - Agent edits or replaces a message when asked.
@@ -22,13 +21,12 @@ codeRefs:
   - extensions/qa-lab/src/self-check-scenario.ts
 execution:
   kind: flow
-  summary: Verify the agent can use channel-owned message actions and that the QA
-    transcript reflects them.
+  summary: Verify the agent can use channel-owned message actions and that the QA transcript reflects them.
   config:
-    target: channel:qa-room
-    seedText: seed message
-    editedText: seed message (edited)
-    reactionEmoji: white_check_mark
+    target: "channel:qa-room"
+    seedText: "seed message"
+    editedText: "seed message (edited)"
+    reactionEmoji: "white_check_mark"
 ```
 
 ```yaml qa-flow

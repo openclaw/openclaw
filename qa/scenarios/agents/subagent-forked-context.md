@@ -7,8 +7,7 @@ surface: subagents
 coverage:
   primary:
     - subagent-turns
-objective: Verify the agent can choose forked subagent context when the child
-  needs the current transcript.
+objective: Verify the agent can choose forked subagent context when the child needs the current transcript.
 successCriteria:
   - Agent launches a native subagent with context=fork.
   - Subagent uses the forked requester transcript to recover the visible code.
@@ -22,18 +21,10 @@ codeRefs:
   - src/agents/subagent-spawn.ts
 execution:
   kind: flow
-  summary: Ask the agent to delegate work that depends on the current transcript
-    and assert sessions_spawn carries context=fork.
+  summary: Ask the agent to delegate work that depends on the current transcript and assert sessions_spawn carries context=fork.
   config:
     contextNeedle: FORKED-CONTEXT-ALPHA
-    prompt: Forked subagent context QA check. The visible code in this current
-      conversation is FORKED-CONTEXT-ALPHA. Delegate to a native subagent to
-      report the visible code from the requester transcript. Do not include the
-      visible code in the child task text; the child must recover it from forked
-      transcript context. Use forked context if the child needs the current
-      transcript; otherwise it will not know the code. A spawn-accepted result
-      is not the answer. Wait for the child completion, then make sure
-      user-visible output includes the visible code.
+    prompt: "Forked subagent context QA check. The visible code in this current conversation is FORKED-CONTEXT-ALPHA. Delegate to a native subagent to report the visible code from the requester transcript. Do not include the visible code in the child task text; the child must recover it from forked transcript context. Use forked context if the child needs the current transcript; otherwise it will not know the code. A spawn-accepted result is not the answer. Wait for the child completion, then make sure user-visible output includes the visible code."
 ```
 
 ```yaml qa-flow

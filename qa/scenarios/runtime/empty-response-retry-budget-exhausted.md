@@ -9,13 +9,11 @@ coverage:
     - failure-recovery
   secondary:
     - compaction
-objective: Verify repeated empty GPT turns exhaust the retry budget after one
-  continuation attempt.
+objective: Verify repeated empty GPT turns exhaust the retry budget after one continuation attempt.
 successCriteria:
   - Scenario is mock-openai only so live lanes do not pick it up implicitly.
   - The agent performs the replay-safe read that makes retrying allowed.
-  - Mock trace shows the run reaches a terminal post-read turn without ever
-    producing the requested success marker.
+  - Mock trace shows the run reaches a terminal post-read turn without ever producing the requested success marker.
 docsRefs:
   - docs/help/testing.md
 codeRefs:
@@ -27,8 +25,7 @@ execution:
   config:
     requiredProvider: mock-openai
     promptSnippet: Empty response exhaustion QA check
-    prompt: "Empty response exhaustion QA check: read QA_KICKOFF_TASK.md, then
-      answer with exactly EMPTY-EXHAUSTED-OK."
+    prompt: "Empty response exhaustion QA check: read QA_KICKOFF_TASK.md, then answer with exactly EMPTY-EXHAUSTED-OK."
     retryNeedle: The previous attempt did not produce a user-visible answer.
 ```
 

@@ -11,9 +11,7 @@ coverage:
   secondary:
     - plugin-registry-resolution
     - provider-outbound-adapter-bridge
-objective: Reproduce the group-visible-reply bug class where message_tool mode
-  selected tool-only delivery even though group tool policy removed the message
-  tool.
+objective: Reproduce the group-visible-reply bug class where message_tool mode selected tool-only delivery even though group tool policy removed the message tool.
 gatewayConfigPatch:
   messages:
     groupChat:
@@ -28,8 +26,7 @@ gatewayConfigPatch:
 successCriteria:
   - The group policy removes the message tool for this room.
   - The mock provider returns a normal final answer with the marker.
-  - OpenClaw falls back to automatic delivery and posts the marker to the same
-    group.
+  - OpenClaw falls back to automatic delivery and posts the marker to the same group.
 docsRefs:
   - docs/channels/groups.md
   - docs/channels/qa-channel.md
@@ -38,13 +35,11 @@ codeRefs:
   - extensions/qa-channel/src/inbound.ts
 execution:
   kind: flow
-  summary: Verify message_tool visible replies degrade to automatic delivery when
-    the active group policy removes message.
+  summary: Verify message_tool visible replies degrade to automatic delivery when the active group policy removes message.
   config:
     conversationId: qa-fallback-room
     promptSnippet: qa group message unavailable fallback check
-    prompt: "@openclaw qa group message unavailable fallback check. exact marker:
-      `QA-GROUP-FALLBACK-OK`"
+    prompt: "@openclaw qa group message unavailable fallback check. exact marker: `QA-GROUP-FALLBACK-OK`"
     expectedMarker: QA-GROUP-FALLBACK-OK
 ```
 

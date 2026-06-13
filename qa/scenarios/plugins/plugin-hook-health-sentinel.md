@@ -10,12 +10,10 @@ coverage:
     - runtime-activation
   secondary:
     - tool-plugins
-objective: Fail the live parity lane when plugin hook crashes appear in gateway
-  logs during ordinary prompt and tool activity.
+objective: Fail the live parity lane when plugin hook crashes appear in gateway logs during ordinary prompt and tool activity.
 successCriteria:
   - An ordinary live agent turn completes with the expected marker.
-  - No `before_prompt_build` or `before_tool_call` plugin hook failure is logged
-    after the scenario cursor.
+  - No `before_prompt_build` or `before_tool_call` plugin hook failure is logged after the scenario cursor.
 docsRefs:
   - docs/plugins/hooks.md
   - qa/scenarios/index.md
@@ -24,8 +22,7 @@ codeRefs:
   - src/plugins/runtime.ts
 execution:
   kind: flow
-  summary: Mark the gateway log cursor, run a simple agent turn that may invoke
-    session_status, and fail on plugin hook crash sentinels.
+  summary: Mark the gateway log cursor, run a simple agent turn that may invoke session_status, and fail on plugin hook crash sentinels.
   config:
     expectedMarker: PLUGIN-HOOK-OK
 ```

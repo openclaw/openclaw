@@ -9,8 +9,7 @@ coverage:
     - tool-plugins
   secondary:
     - direct-tool-invoke-api
-objective: Verify OpenClaw can expose plugin tools over MCP and a real MCP
-  client can call one successfully.
+objective: Verify OpenClaw can expose plugin tools over MCP and a real MCP client can call one successfully.
 successCriteria:
   - Plugin tools MCP server lists memory_search.
   - A real MCP client calls memory_search successfully.
@@ -23,12 +22,11 @@ codeRefs:
   - extensions/qa-lab/src/suite.ts
 execution:
   kind: flow
-  summary: Verify OpenClaw can expose plugin tools over MCP and a real MCP client
-    can call one successfully.
+  summary: Verify OpenClaw can expose plugin tools over MCP and a real MCP client can call one successfully.
   config:
     memoryFact: "MCP fact: the codename is ORBIT-9."
-    query: ORBIT-9 codename
-    expectedNeedle: ORBIT-9
+    query: "ORBIT-9 codename"
+    expectedNeedle: "ORBIT-9"
 ```
 
 ```yaml qa-flow

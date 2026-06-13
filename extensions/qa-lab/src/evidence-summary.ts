@@ -277,10 +277,10 @@ function buildQaEvidenceCoverage(params: {
   });
   return [
     ...uniqueSortedStrings(params.primaryCoverageIds ?? []).map((id) =>
-      buildCoverage(id, "primary")
+      buildCoverage(id, "primary"),
     ),
     ...uniqueSortedStrings(params.secondaryCoverageIds ?? []).map((id) =>
-      buildCoverage(id, "secondary")
+      buildCoverage(id, "secondary"),
     ),
   ];
 }

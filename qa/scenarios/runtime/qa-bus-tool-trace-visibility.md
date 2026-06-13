@@ -21,8 +21,7 @@ codeRefs:
   - extensions/qa-lab/src/runtime-api.ts
 execution:
   kind: flow
-  summary: Add a synthetic tool-backed bus message and verify sanitized trace
-    assertions.
+  summary: Add a synthetic tool-backed bus message and verify sanitized trace assertions.
   config:
     expectedToolName: exec
     expectedRedaction: "[redacted]"

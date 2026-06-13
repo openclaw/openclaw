@@ -12,14 +12,11 @@ coverage:
     - abort-and-terminal-outcomes
     - session-and-run-coordination
     - automatic-final-reply-delivery
-objective: Verify channel-visible streaming settles into one coherent final
-  message without token-delta chatter.
+objective: Verify channel-visible streaming settles into one coherent final message without token-delta chatter.
 successCriteria:
   - Agent produces a final marker reply.
-  - QA channel transcript does not contain multiple partial outbound token
-    messages for the same turn.
-  - Any edit/chunk events leave exactly one final marker-bearing outbound
-    message.
+  - QA channel transcript does not contain multiple partial outbound token messages for the same turn.
+  - Any edit/chunk events leave exactly one final marker-bearing outbound message.
 docsRefs:
   - docs/concepts/streaming.md
   - docs/channels/qa-channel.md

@@ -9,14 +9,10 @@ coverage:
     - instruction-profile
   secondary:
     - turn-startup-and-runtime-choice
-objective: Verify the agent reads repo instruction files first, follows the
-  required tool order, and completes the first feasible action instead of
-  stopping at a plan.
+objective: Verify the agent reads repo instruction files first, follows the required tool order, and completes the first feasible action instead of stopping at a plan.
 successCriteria:
-  - Agent reads the seeded instruction files before writing the requested
-    artifact.
-  - Agent writes the requested artifact in the same run instead of returning
-    only a plan.
+  - Agent reads the seeded instruction files before writing the requested artifact.
+  - Agent writes the requested artifact in the same run instead of returning only a plan.
   - Agent does not ask for permission before the first feasible action.
   - Final reply makes the completed read/write sequence explicit.
 docsRefs:
@@ -28,8 +24,7 @@ codeRefs:
   - extensions/qa-lab/src/mock-openai-server.ts
 execution:
   kind: flow
-  summary: Verify the agent reads repo instructions first, then completes the
-    first bounded followthrough task without stalling.
+  summary: Verify the agent reads repo instructions first, then completes the first bounded followthrough task without stalling.
   config:
     workspaceFiles:
       AGENT.md: |-
@@ -49,32 +44,24 @@ execution:
 
         Stay brief, honest, and action-first.
         If the next tool action is feasible, do it before replying.
-      FOLLOWTHROUGH_INPUT.md: >-
+      FOLLOWTHROUGH_INPUT.md: |-
         Mission: prove you followed the repo contract.
-
-        Evidence path: AGENT.md -> SOUL.md -> FOLLOWTHROUGH_INPUT.md ->
-        repo-contract-summary.txt
-    prompt: >-
-      Repo contract followthrough check. Read AGENT.md, SOUL.md, and
-      FOLLOWTHROUGH_INPUT.md first.
-
-      Then follow the repo contract exactly, write ./repo-contract-summary.txt,
-      and reply with
-
+        Evidence path: AGENT.md -> SOUL.md -> FOLLOWTHROUGH_INPUT.md -> repo-contract-summary.txt
+    prompt: |-
+      Repo contract followthrough check. Read AGENT.md, SOUL.md, and FOLLOWTHROUGH_INPUT.md first.
+      Then follow the repo contract exactly, write ./repo-contract-summary.txt, and reply with
       three labeled lines: Read, Wrote, Status.
-
-      Do not stop after planning and do not ask for permission before the first
-      feasible action.
+      Do not stop after planning and do not ask for permission before the first feasible action.
     expectedReplyAll:
       - "read:"
       - "wrote:"
       - "status:"
     expectedArtifactAll:
-      - repo contract
+      - "repo contract"
     expectedArtifactAny:
-      - evidence path
-      - agent.md
-      - followthrough
+      - "evidence path"
+      - "agent.md"
+      - "followthrough"
     forbiddenNeedles:
       - need permission
       - need your approval

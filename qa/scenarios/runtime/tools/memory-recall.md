@@ -11,8 +11,7 @@ coverage:
 objective: Verify memory_recall parity when the memory plugin exposes the tool.
 successCriteria:
   - If memory_recall is present, the fixture exercises happy and failure paths.
-  - If memory_recall is absent, the fixture records the known-broken tracking
-    marker.
+  - If memory_recall is absent, the fixture records the known-broken tracking marker.
 docsRefs:
   - qa/scenarios/index.md
 codeRefs:
@@ -37,10 +36,9 @@ execution:
       reason: memory_recall is plugin-dependent and absent from some mock QA runs.
     knownBroken:
       issue: "#80173"
-      reason: memory_recall is plugin-dependent and absent from the default mock QA
-        run.
-    promptSnippet: target=memory_recall
-    failurePromptSnippet: failure target=memory_recall
+      reason: memory_recall is plugin-dependent and absent from the default mock QA run.
+    promptSnippet: "target=memory_recall"
+    failurePromptSnippet: "failure target=memory_recall"
 ```
 
 ```yaml qa-flow

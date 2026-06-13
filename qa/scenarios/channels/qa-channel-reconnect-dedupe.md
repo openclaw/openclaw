@@ -11,13 +11,11 @@ coverage:
     - session-and-run-coordination
     - automatic-final-reply-delivery
     - durable-outbound-send-orchestration
-objective: Verify qa-channel readiness polling keeps prior delivery stable and
-  does not replay the last outbound message.
+objective: Verify qa-channel readiness polling keeps prior delivery stable and does not replay the last outbound message.
 successCriteria:
   - Agent replies once before a reconnect-style readiness cycle.
   - qa-channel reports ready again without replaying prior outbound delivery.
-  - Follow-up delivery produces one new reply without duplicating the first
-    reply.
+  - Follow-up delivery produces one new reply without duplicating the first reply.
 docsRefs:
   - docs/channels/qa-channel.md
   - docs/gateway/configuration.md
@@ -27,13 +25,10 @@ codeRefs:
   - extensions/qa-lab/src/suite-runtime-gateway.ts
 execution:
   kind: flow
-  summary: Verify qa-channel readiness recovery does not duplicate old outbound
-    delivery.
+  summary: Verify qa-channel readiness recovery does not duplicate old outbound delivery.
   config:
-    firstPrompt: "@openclaw Reconnect dedupe setup marker. Reply exactly:
-      RECONNECT-FIRST-OK"
-    secondPrompt: "@openclaw Reconnect dedupe follow-up marker. Reply exactly:
-      RECONNECT-SECOND-OK"
+    firstPrompt: "@openclaw Reconnect dedupe setup marker. Reply exactly: RECONNECT-FIRST-OK"
+    secondPrompt: "@openclaw Reconnect dedupe follow-up marker. Reply exactly: RECONNECT-SECOND-OK"
     firstMarker: RECONNECT-FIRST-OK
     secondMarker: RECONNECT-SECOND-OK
 ```

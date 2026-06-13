@@ -11,14 +11,11 @@ coverage:
   secondary:
     - run-history
     - plugin-registry-resolution
-objective: Verify one naturally fired cron run in a single gateway uptime
-  produces exactly one qa-channel delivery for its marker.
+objective: Verify one naturally fired cron run in a single gateway uptime produces exactly one qa-channel delivery for its marker.
 successCriteria:
-  - A one-shot cron job fires from the scheduler timer without cron.run force
-    mode.
+  - A one-shot cron job fires from the scheduler timer without cron.run force mode.
   - The qa-channel receives exactly one outbound reply containing the run marker.
-  - No second outbound reply with the same marker appears during the duplicate
-    window.
+  - No second outbound reply with the same marker appears during the duplicate window.
 docsRefs:
   - docs/help/testing.md
   - docs/channels/qa-channel.md
@@ -30,15 +27,13 @@ codeRefs:
   - extensions/qa-lab/src/suite-runtime-transport.ts
 execution:
   kind: flow
-  summary: Let one cron job fire from the natural scheduler timer and assert
-    qa-channel does not receive a duplicate delivery for the same marker.
+  summary: Let one cron job fire from the natural scheduler timer and assert qa-channel does not receive a duplicate delivery for the same marker.
   config:
     channelId: qa-room
     channelTitle: QA Room
     fireDelayMs: 12000
     duplicateWindowMs: 8000
-    reminderPromptTemplate: "A natural QA cron dedupe check fired. Send a one-line
-      ping back to the room containing this exact marker: {{marker}}"
+    reminderPromptTemplate: "A natural QA cron dedupe check fired. Send a one-line ping back to the room containing this exact marker: {{marker}}"
 ```
 
 ```yaml qa-flow

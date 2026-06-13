@@ -37,8 +37,8 @@ execution:
     knownBroken:
       issue: "#80173"
       reason: tts is configuration-dependent and absent from the default mock QA run.
-    promptSnippet: target=tts
-    failurePromptSnippet: failure target=tts
+    promptSnippet: "target=tts"
+    failurePromptSnippet: "failure target=tts"
 ```
 
 ```yaml qa-flow

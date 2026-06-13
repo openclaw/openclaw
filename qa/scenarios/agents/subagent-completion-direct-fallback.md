@@ -11,14 +11,11 @@ coverage:
     - session-and-run-coordination
     - plugin-registry-resolution
     - automatic-final-reply-delivery
-objective: Verify a yielded parent still receives a successful subagent result
-  through direct fallback delivery when the dormant announce turn produces no
-  visible reply.
+objective: Verify a yielded parent still receives a successful subagent result through direct fallback delivery when the dormant announce turn produces no visible reply.
 successCriteria:
   - Parent launches a native subagent.
   - Parent yields instead of waiting in-turn.
-  - Subagent completion result is delivered to the original QA DM without a
-    thread id.
+  - Subagent completion result is delivered to the original QA DM without a thread id.
   - Durable task delivery is marked delivered, not failed.
 docsRefs:
   - docs/tools/subagents.md
@@ -31,13 +28,9 @@ codeRefs:
   - extensions/qa-lab/src/providers/mock-openai/server.ts
 execution:
   kind: flow
-  summary: Reproduce yielded-parent subagent completion delivery and require
-    frozen-result fallback to the QA DM.
+  summary: Reproduce yielded-parent subagent completion delivery and require frozen-result fallback to the QA DM.
   config:
-    prompt: "Subagent direct fallback QA check: spawn one native subagent worker.
-      The worker must finish with exactly QA-SUBAGENT-DIRECT-FALLBACK-OK. After
-      spawning it, call sessions_yield and wait for the completion event. Do not
-      use ACP."
+    prompt: "Subagent direct fallback QA check: spawn one native subagent worker. The worker must finish with exactly QA-SUBAGENT-DIRECT-FALLBACK-OK. After spawning it, call sessions_yield and wait for the completion event. Do not use ACP."
     expectedMarker: QA-SUBAGENT-DIRECT-FALLBACK-OK
     expectedLabel: qa-direct-fallback-worker
 ```

@@ -8,15 +8,12 @@ runtimeParityTier: optional
 coverage:
   primary:
     - image-generation-tool-invocation
-objective: Verify image_generate preserves arguments and result shape across
-  OpenClaw and Codex.
+objective: Verify image_generate preserves arguments and result shape across OpenClaw and Codex.
 successCriteria:
-  - Effective tools expose image_generate after QA image-generation config is
-    applied.
+  - Effective tools expose image_generate after QA image-generation config is applied.
   - The mock provider plans exactly one happy-path image_generate call.
   - The mock provider plans one denied-input failure-path image_generate call.
-  - Runtime parity coverage records async image start/result drift outside the
-    standard direct-loading gate.
+  - Runtime parity coverage records async image start/result drift outside the standard direct-loading gate.
 docsRefs:
   - docs/tools/image-generation.md
 codeRefs:
@@ -29,7 +26,7 @@ execution:
     toolName: image_generate
     ensureImageGeneration: true
     toolCoverage:
-      family: image-generate
+      family: image_generate
       actualTool: image_generate
       bucket: openclaw-dynamic-integration
       expectedLayer: openclaw-dynamic
@@ -38,11 +35,9 @@ execution:
       codexDefaultImpact: P4
       qaImpact: P1
       action: optional runtime parity gate with async image completion coverage
-      reason: image_generate is an OpenClaw integration tool whose happy path yields
-        for async completion, so standard direct call/result parity would
-        compare different lifecycle phases.
-    promptSnippet: target=image_generate
-    failurePromptSnippet: failure target=image_generate
+      reason: image_generate is an OpenClaw integration tool whose happy path yields for async completion, so standard direct call/result parity would compare different lifecycle phases.
+    promptSnippet: "target=image_generate"
+    failurePromptSnippet: "failure target=image_generate"
 ```
 
 ```yaml qa-flow

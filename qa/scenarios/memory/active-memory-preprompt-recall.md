@@ -10,9 +10,7 @@ coverage:
   secondary:
     - embedding-search
     - memory-search-and-store-tools
-objective: Verify Active Memory surfaces a memory-only preference before the
-  main reply, and that the same question stays unresolved when the plugin is
-  off.
+objective: Verify Active Memory surfaces a memory-only preference before the main reply, and that the same question stays unresolved when the plugin is off.
 plugins:
   - active-memory
 gatewayConfigPatch:
@@ -33,8 +31,7 @@ gatewayConfigPatch:
           maxSummaryChars: 220
 successCriteria:
   - With Active Memory off, the session shows no Active Memory plugin activity.
-  - With Active Memory on, plugin-owned evidence shows the Active Memory
-    sub-agent searched memory before the main reply.
+  - With Active Memory on, plugin-owned evidence shows the Active Memory sub-agent searched memory before the main reply.
   - Live lane proves the first user-visible reply uses the recalled preference.
 docsRefs:
   - docs/concepts/active-memory.md
@@ -45,19 +42,15 @@ codeRefs:
   - extensions/qa-lab/src/mock-openai-server.ts
 execution:
   kind: flow
-  summary: Verify Active Memory stays off when session-toggled off, runs memory
-    search/get when enabled, and helps a live model answer with the recalled
-    preference in the first visible reply.
+  summary: Verify Active Memory stays off when session-toggled off, runs memory search/get when enabled, and helps a live model answer with the recalled preference in the first visible reply.
   config:
     baselineConversationId: qa-active-memory-off
     activeConversationId: qa-active-memory-on
-    memoryFact: "Stable QA movie night usual favorite snack preference: lemon pepper
-      wings with blue cheese."
-    memoryQuery: QA movie night snack lemon pepper wings blue cheese
+    memoryFact: "Stable QA movie night usual favorite snack preference: lemon pepper wings with blue cheese."
+    memoryQuery: "QA movie night snack lemon pepper wings blue cheese"
     expectedNeedle: lemon pepper wings
-    prompt: "Silent snack recall check: what snack do I usually want for QA movie
-      night? Reply in one short sentence."
-    promptSnippet: Silent snack recall check
+    prompt: "Silent snack recall check: what snack do I usually want for QA movie night? Reply in one short sentence."
+    promptSnippet: "Silent snack recall check"
     transcriptDir: qa-memory-e2e
 ```
 

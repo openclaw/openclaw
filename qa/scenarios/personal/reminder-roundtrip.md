@@ -17,8 +17,7 @@ capabilities:
   - cron.add
   - cron.run
   - channel.reply
-objective: Verify a local personal-style reminder can be scheduled, forced, and
-  delivered through qa-channel without external services.
+objective: Verify a local personal-style reminder can be scheduled, forced, and delivered through qa-channel without external services.
 successCriteria:
   - Scenario schedules a fake personal reminder roughly one minute ahead.
   - Forced reminder delivery returns through qa-channel.
@@ -35,8 +34,7 @@ execution:
   config:
     channelId: qa-personal-room
     channelTitle: QA Personal Room
-    reminderPromptTemplate: "A local personal QA reminder fired. Reply in one short
-      sentence containing this exact marker: {{marker}}"
+    reminderPromptTemplate: "A local personal QA reminder fired. Reply in one short sentence containing this exact marker: {{marker}}"
 ```
 
 ```yaml qa-flow

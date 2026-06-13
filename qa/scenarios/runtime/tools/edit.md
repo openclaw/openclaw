@@ -8,15 +8,11 @@ runtimeParityTier: standard
 coverage:
   primary:
     - tool-call-handling
-objective: Verify targeted edit behavior is tracked across OpenClaw and Codex
-  while Codex owns edit natively.
+objective: Verify targeted edit behavior is tracked across OpenClaw and Codex while Codex owns edit natively.
 successCriteria:
-  - OpenClaw may expose OpenClaw edit while Codex app-server mode may omit
-    duplicate OpenClaw dynamic edit.
-  - Mock provider edit plans are reported as fixture intent, not as actual
-    runtime tool calls.
-  - The row stays report-only until the fixture validates native Codex edit
-    behavior directly.
+  - OpenClaw may expose OpenClaw edit while Codex app-server mode may omit duplicate OpenClaw dynamic edit.
+  - Mock provider edit plans are reported as fixture intent, not as actual runtime tool calls.
+  - The row stays report-only until the fixture validates native Codex edit behavior directly.
 docsRefs:
   - qa/scenarios/index.md
 codeRefs:
@@ -37,14 +33,12 @@ execution:
       codexDefaultImpact: P4
       qaImpact: P1
       action: split native edit behavior from OpenClaw dynamic tool parity
-      reason: Codex app-server intentionally owns edit natively; the fixture must not
-        require OpenClaw dynamic edit exposure.
+      reason: Codex app-server intentionally owns edit natively; the fixture must not require OpenClaw dynamic edit exposure.
     knownHarnessGap:
       issue: "#80319"
-      reason: QA tool-defaults currently needs native edit behavior coverage instead
-        of OpenClaw dynamic edit exposure.
-    promptSnippet: target=edit
-    failurePromptSnippet: failure target=edit
+      reason: QA tool-defaults currently needs native edit behavior coverage instead of OpenClaw dynamic edit exposure.
+    promptSnippet: "target=edit"
+    failurePromptSnippet: "failure target=edit"
 ```
 
 ```yaml qa-flow

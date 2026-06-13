@@ -10,14 +10,10 @@ coverage:
   secondary:
     - install-update-and-uninstall
     - session-and-transcript-recovery
-objective: Verify an agent can self-update an installed OpenClaw package from
-  2026.4.26 to latest by using the gateway update.run action, then recover
-  through the forced restart.
+objective: Verify an agent can self-update an installed OpenClaw package from 2026.4.26 to latest by using the gateway update.run action, then recover through the forced restart.
 successCriteria:
-  - The agent is explicitly instructed to use the gateway tool action update.run
-    instead of shell package-manager commands.
-  - The update request carries a restart note marker that can be observed after
-    the gateway restart.
+  - The agent is explicitly instructed to use the gateway tool action update.run instead of shell package-manager commands.
+  - The update request carries a restart note marker that can be observed after the gateway restart.
   - Gateway and qa-channel return healthy after update.run restarts the process.
 docsRefs:
   - docs/cli/update.md
@@ -29,12 +25,10 @@ codeRefs:
   - src/infra/restart.ts
 execution:
   kind: flow
-  summary: "Opt-in destructive package-update lane: ask the agent to update a
-    2026.4.26 install to latest via gateway action update.run and verify the
-    restart marker after recovery."
+  summary: "Opt-in destructive package-update lane: ask the agent to update a 2026.4.26 install to latest via gateway action update.run and verify the restart marker after recovery."
   config:
     requiredProviderMode: live-frontier
-    sourceVersion: 2026.4.26
+    sourceVersion: "2026.4.26"
     targetTag: latest
     allowEnv: OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF
     channelId: qa-room

@@ -9,8 +9,7 @@ coverage:
     - mixed-plugins
   secondary:
     - install-update-and-uninstall
-objective: Verify a newly added workspace skill shows up without a broken
-  intermediate state and can influence the next turn immediately.
+objective: Verify a newly added workspace skill shows up without a broken intermediate state and can influence the next turn immediately.
 successCriteria:
   - Skill is absent before install.
   - skills.status reports it after install without a restart.
@@ -23,23 +22,17 @@ codeRefs:
   - extensions/qa-lab/src/suite.ts
 execution:
   kind: flow
-  summary: Verify a newly added workspace skill shows up without a broken
-    intermediate state and can influence the next turn immediately.
+  summary: Verify a newly added workspace skill shows up without a broken intermediate state and can influence the next turn immediately.
   config:
     skillName: qa-hot-install-skill
-    skillBody: >-
+    skillBody: |-
       ---
-
       name: qa-hot-install-skill
-
       description: Hot install QA marker
-
       ---
-
-      When the user asks for the hot install marker exactly, reply with exactly:
-      HOT-INSTALL-OK
+      When the user asks for the hot install marker exactly, reply with exactly: HOT-INSTALL-OK
     prompt: "Hot install marker: give me the hot install marker exactly."
-    expectedContains: HOT-INSTALL-OK
+    expectedContains: "HOT-INSTALL-OK"
 ```
 
 ```yaml qa-flow

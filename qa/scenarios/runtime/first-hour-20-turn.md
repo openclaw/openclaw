@@ -10,8 +10,7 @@ coverage:
     - turn-startup-and-runtime-choice
   secondary:
     - token-pressure
-objective: Verify both runtimes preserve a same-session conversation across the
-  required 20-turn maintainer gate.
+objective: Verify both runtimes preserve a same-session conversation across the required 20-turn maintainer gate.
 successCriteria:
   - The same QA session accepts 20 sequential user turns.
   - Every turn receives the requested marker reply without losing session state.

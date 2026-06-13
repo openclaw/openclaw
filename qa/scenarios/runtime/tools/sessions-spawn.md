@@ -8,14 +8,12 @@ runtimeParityTier: standard
 coverage:
   primary:
     - subagent-turns
-objective: Verify sessions_spawn preserves arguments and result shape across
-  OpenClaw and Codex.
+objective: Verify sessions_spawn preserves arguments and result shape across OpenClaw and Codex.
 successCriteria:
   - Effective tools expose sessions_spawn.
   - The mock provider plans exactly one happy-path sessions_spawn call.
   - The mock provider plans one denied-input failure-path sessions_spawn call.
-  - Runtime parity coverage hard-fails call/result drift in the standard
-    direct-loading gate.
+  - Runtime parity coverage hard-fails call/result drift in the standard direct-loading gate.
 docsRefs:
   - qa/scenarios/index.md
 codeRefs:
@@ -27,7 +25,7 @@ execution:
   config:
     toolName: sessions_spawn
     toolCoverage:
-      family: sessions-spawn
+      family: sessions_spawn
       actualTool: sessions_spawn
       bucket: openclaw-dynamic-integration
       expectedLayer: openclaw-dynamic
@@ -36,10 +34,9 @@ execution:
       codexDefaultImpact: P4
       qaImpact: P1
       action: hard gate in the standard direct-loading tier
-      reason: sessions_spawn is an OpenClaw integration tool and must stay visible and
-        callable under OpenClaw and Codex direct runtime parity.
-    promptSnippet: target=sessions_spawn
-    failurePromptSnippet: failure target=sessions_spawn
+      reason: sessions_spawn is an OpenClaw integration tool and must stay visible and callable under OpenClaw and Codex direct runtime parity.
+    promptSnippet: "target=sessions_spawn"
+    failurePromptSnippet: "failure target=sessions_spawn"
 ```
 
 ```yaml qa-flow

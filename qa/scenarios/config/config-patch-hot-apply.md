@@ -9,8 +9,7 @@ coverage:
     - config-reload
   secondary:
     - mixed-plugins
-objective: Verify config.patch can disable a workspace skill and the restarted
-  gateway exposes the new disabled state cleanly.
+objective: Verify config.patch can disable a workspace skill and the restarted gateway exposes the new disabled state cleanly.
 successCriteria:
   - config.patch succeeds for the skill toggle change.
   - A workspace skill works before the patch.
@@ -23,22 +22,16 @@ codeRefs:
   - extensions/qa-lab/src/suite.ts
 execution:
   kind: flow
-  summary: Verify config.patch can disable a workspace skill and the restarted
-    gateway exposes the new disabled state cleanly.
+  summary: Verify config.patch can disable a workspace skill and the restarted gateway exposes the new disabled state cleanly.
   config:
     skillName: qa-hot-disable-skill
     successMarker: HOT-PATCH-DISABLED-OK
-    skillBody: >-
+    skillBody: |-
       ---
-
       name: qa-hot-disable-skill
-
       description: Hot disable QA marker
-
       ---
-
-      When the user asks for the hot disable marker exactly, reply with exactly:
-      HOT-PATCH-DISABLED-OK
+      When the user asks for the hot disable marker exactly, reply with exactly: HOT-PATCH-DISABLED-OK
 ```
 
 ```yaml qa-flow

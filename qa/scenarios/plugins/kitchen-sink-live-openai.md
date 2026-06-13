@@ -14,17 +14,12 @@ coverage:
     - tool-plugins
     - cached-health-snapshots
 risk: high
-objective: Verify the external Kitchen Sink plugin can be installed into a
-  qa-lab gateway, expose its major runtime surfaces, and coexist with a live
-  OpenAI provider turn.
+objective: Verify the external Kitchen Sink plugin can be installed into a qa-lab gateway, expose its major runtime surfaces, and coexist with a live OpenAI provider turn.
 successCriteria:
   - The npm Kitchen Sink package installs, enables, and inspects as loaded.
-  - Kitchen Sink command inventory, MCP tool, and channel status work after
-    gateway restart.
-  - A live OpenAI turn still completes while the Kitchen Sink plugin is
-    installed.
-  - Gateway logs and process metrics are captured and stay under broad anomaly
-    thresholds.
+  - Kitchen Sink command inventory, MCP tool, and channel status work after gateway restart.
+  - A live OpenAI turn still completes while the Kitchen Sink plugin is installed.
+  - Gateway logs and process metrics are captured and stay under broad anomaly thresholds.
 docsRefs:
   - docs/concepts/qa-e2e-automation.md
   - docs/channels/qa-channel.md
@@ -35,8 +30,7 @@ codeRefs:
   - scripts/e2e/kitchen-sink-plugin-docker.sh
 execution:
   kind: flow
-  summary: Install @openclaw/kitchen-sink, restart the gateway, exercise command
-    inventory/tool/channel/OpenAI paths, and record CPU/RSS/log evidence.
+  summary: Install @openclaw/kitchen-sink, restart the gateway, exercise command inventory/tool/channel/OpenAI paths, and record CPU/RSS/log evidence.
   config:
     requiredProviderMode: live-frontier
     requiredProvider: openai
@@ -94,32 +88,23 @@ execution:
     expectedAdversarialDiagnostics:
       - agent event subscription registration requires id and handle
       - agent tool result middleware must be a function
-      - agent harness "kitchen-sink-agent-harness" registration missing required
-        runtime methods
-      - channel "kitchen-sink-channel-probe" registration missing required
-        config helpers
+      - agent harness "kitchen-sink-agent-harness" registration missing required runtime methods
+      - channel "kitchen-sink-channel-probe" registration missing required config helpers
       - cli registration missing explicit commands metadata
       - only bundled plugins can register Codex app-server extension factories
-      - compaction provider "kitchen-sink-compaction-provider" registration
-        missing summarize
+      - compaction provider "kitchen-sink-compaction-provider" registration missing summarize
       - context engine registration missing id
-      - control UI descriptor registration requires id, surface, label, and
-        valid optional fields
+      - control UI descriptor registration requires id, surface, label, and valid optional fields
       - hosted media resolver registration missing resolver
-      - "http route registration missing or invalid auth:
-        /kitchen-sink/http-route"
-      - "plugin must declare contracts.embeddingProviders for adapter:
-        kitchen-sink-embedding-provider"
-      - "plugin must own memory slot or declare
-        contracts.memoryEmbeddingProviders for adapter:
-        kitchen-sink-memory-embedding-provider"
-      - trusted tool policy registration requires id, description, and evaluate()
+      - "http route registration missing or invalid auth: /kitchen-sink/http-route"
+      - "plugin must declare contracts.embeddingProviders for adapter: kitchen-sink-embedding-provider"
+      - "plugin must own memory slot or declare contracts.memoryEmbeddingProviders for adapter: kitchen-sink-memory-embedding-provider"
+      - "trusted tool policy registration requires id, description, and evaluate()"
       - memory prompt supplement registration missing builder
       - model catalog provider registration missing provider
       - node invoke policy registration missing commands
       - session extension registration requires namespace and description
-      - session scheduler job registration requires unique id, sessionKey, and
-        kind
+      - session scheduler job registration requires unique id, sessionKey, and kind
       - "plugin must declare contracts.tools for: kitchen-sink-tool"
       - tool metadata registration missing toolName
 ```

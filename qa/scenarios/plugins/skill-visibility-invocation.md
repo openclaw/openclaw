@@ -9,8 +9,7 @@ coverage:
     - mixed-plugins
   secondary:
     - direct-tool-invoke-api
-objective: Verify a workspace skill becomes visible in skills.status and
-  influences the next agent turn.
+objective: Verify a workspace skill becomes visible in skills.status and influences the next agent turn.
 successCriteria:
   - skills.status reports the seeded skill as visible and eligible.
   - The next agent turn reflects the skill instruction marker.
@@ -23,24 +22,17 @@ codeRefs:
   - extensions/qa-lab/src/suite.ts
 execution:
   kind: flow
-  summary: Verify a workspace skill becomes visible in skills.status and
-    influences the next agent turn.
+  summary: Verify a workspace skill becomes visible in skills.status and influences the next agent turn.
   config:
     skillName: qa-visible-skill
-    skillBody: >-
+    skillBody: |-
       ---
-
       name: qa-visible-skill
-
       description: Visible QA skill marker
-
       ---
-
-      When the user asks for the visible skill marker exactly, or explicitly
-      asks you to use qa-visible-skill, reply with exactly: VISIBLE-SKILL-OK
-    prompt: Use qa-visible-skill now. Reply exactly with the visible skill marker
-      and nothing else.
-    expectedContains: VISIBLE-SKILL-OK
+      When the user asks for the visible skill marker exactly, or explicitly asks you to use qa-visible-skill, reply with exactly: VISIBLE-SKILL-OK
+    prompt: "Use qa-visible-skill now. Reply exactly with the visible skill marker and nothing else."
+    expectedContains: "VISIBLE-SKILL-OK"
 ```
 
 ```yaml qa-flow

@@ -9,8 +9,7 @@ coverage:
     - restart-and-stop
   secondary:
     - session-and-transcript-recovery
-objective: Verify a restart-required config.apply restarts cleanly and delivers
-  the post-restart wake message back into the QA channel.
+objective: Verify a restart-required config.apply restarts cleanly and delivers the post-restart wake message back into the QA channel.
 successCriteria:
   - config.apply schedules a restart-required change.
   - Gateway becomes healthy again after restart.
@@ -23,11 +22,10 @@ codeRefs:
   - src/gateway/server-restart-sentinel.ts
 execution:
   kind: flow
-  summary: Verify a restart-required config.apply restarts cleanly and delivers
-    the post-restart wake message back into the QA channel.
+  summary: Verify a restart-required config.apply restarts cleanly and delivers the post-restart wake message back into the QA channel.
   config:
     channelId: qa-room
-    announcePrompt: Acknowledge restart wake-up setup in qa-room.
+    announcePrompt: "Acknowledge restart wake-up setup in qa-room."
 ```
 
 ```yaml qa-flow

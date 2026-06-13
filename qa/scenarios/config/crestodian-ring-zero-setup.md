@@ -10,16 +10,13 @@ coverage:
   secondary:
     - turn-startup-and-runtime-choice
     - setup-onboarding-flows
-objective: Verify Crestodian can bootstrap a fresh OpenClaw config, set the
-  default model, create an agent, configure Discord through a SecretRef,
-  validate config, and leave an audit trail.
+objective: Verify Crestodian can bootstrap a fresh OpenClaw config, set the default model, create an agent, configure Discord through a SecretRef, validate config, and leave an audit trail.
 successCriteria:
   - Crestodian reports missing config in an empty state dir.
   - Crestodian setup writes a workspace and default model.
   - Crestodian creates a non-main agent with its own workspace and model.
   - Crestodian enables the Discord plugin before writing Discord channel config.
-  - Crestodian configures Discord through an env SecretRef without persisting
-    the raw token.
+  - Crestodian configures Discord through an env SecretRef without persisting the raw token.
   - Config validation passes and audit entries exist for every applied write.
 docsRefs:
   - docs/cli/crestodian.md
@@ -32,8 +29,7 @@ codeRefs:
   - extensions/qa-lab/src/suite-runtime-agent-process.ts
 execution:
   kind: flow
-  summary: Drive the public Crestodian CLI in an isolated fresh state dir and
-    verify setup/model/agent/Discord/audit results.
+  summary: Drive the public Crestodian CLI in an isolated fresh state dir and verify setup/model/agent/Discord/audit results.
   config:
     specPath: scripts/e2e/crestodian-first-run-spec.json
 ```

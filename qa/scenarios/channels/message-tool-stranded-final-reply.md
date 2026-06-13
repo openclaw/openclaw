@@ -10,17 +10,13 @@ coverage:
   secondary:
     - plugin-registry-resolution
     - provider-outbound-adapter-bridge
-objective: "Reproduce #85714: under messages.visibleReplies=message_tool a long private
-  final reply that never calls the message tool is kept private (no outbound), and the
-  gateway emits the private-final WARN."
+objective: Reproduce #85714 — under messages.visibleReplies=message_tool a long private final reply that never calls the message tool is kept private (no outbound), and the gateway emits the private-final WARN.
 gatewayConfigPatch:
   messages:
     visibleReplies: message_tool
 successCriteria:
-  - The mock provider returns a long normal final answer and does not plan the
-    message tool.
-  - Under message_tool_only delivery the reply is kept private, so the direct
-    conversation receives no outbound message.
+  - The mock provider returns a long normal final answer and does not plan the message tool.
+  - Under message_tool_only delivery the reply is kept private, so the direct conversation receives no outbound message.
   - The gateway logs the private-final WARN from source-reply/private-final.
 docsRefs:
   - docs/channels/qa-channel.md
@@ -30,18 +26,13 @@ codeRefs:
   - src/auto-reply/reply/dispatch-from-config.ts
 execution:
   kind: flow
-  summary: Send a direct message_tool_only turn whose model reply omits the
-    message tool, and verify a substantive private final warns without outbound
-    delivery.
+  summary: Send a direct message_tool_only turn whose model reply omits the message tool, and verify a substantive private final warns without outbound delivery.
   config:
     conversationId: qa-stranded-dm
     promptSnippet: qa private final reply warning check
-    prompt: qa private final reply warning check. Reply to me directly in two
-      complete sentences with `QA-STRANDED-85714` in the first sentence and a
-      short explanation in the second sentence. Do NOT call any tool. Do NOT use
-      the message tool.
+    prompt: "qa private final reply warning check. Reply to me directly in two complete sentences with `QA-STRANDED-85714` in the first sentence and a short explanation in the second sentence. Do NOT call any tool. Do NOT use the message tool."
     expectedMarker: QA-STRANDED-85714
-    privateFinalLogNeedle: source-reply/private-final
+    privateFinalLogNeedle: "source-reply/private-final"
 ```
 
 ```yaml qa-flow

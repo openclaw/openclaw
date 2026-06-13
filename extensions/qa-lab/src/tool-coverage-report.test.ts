@@ -45,7 +45,7 @@ function makeScenario(
 function readToolCoverageConfig(config: Record<string, unknown>): Record<string, unknown> {
   const toolCoverage = config.toolCoverage;
   return typeof toolCoverage === "object" && toolCoverage !== null && !Array.isArray(toolCoverage)
-    ? toolCoverage
+    ? (toolCoverage as Record<string, unknown>)
     : {};
 }
 
@@ -595,12 +595,12 @@ describe("qa tool coverage report", () => {
         "bash",
         "exec",
         "fs.read",
-        "image-generate",
+        "image_generate",
         "memory.recall",
         "message-tool",
-        "sessions-spawn",
-        "tavily-search",
-        "web-fetch",
+        "sessions_spawn",
+        "tavily_search",
+        "web_fetch",
       ]),
     );
     const applyPatchRow = report.rows.find((row) => row.tool === "apply-patch");
@@ -625,26 +625,26 @@ describe("qa tool coverage report", () => {
         action: "keep report-only in coding profile",
       }),
     );
-    expect(report.rows.find((row) => row.tool === "image-generate")).toEqual(
+    expect(report.rows.find((row) => row.tool === "image_generate")).toEqual(
       expect.objectContaining({
         bucket: "openclaw-dynamic-integration",
         expectedLayer: "openclaw-dynamic",
         required: false,
       }),
     );
-    expect(report.rows.find((row) => row.tool === "tavily-search")).toEqual(
+    expect(report.rows.find((row) => row.tool === "tavily_search")).toEqual(
       expect.objectContaining({
         tracking:
           "#80173 Tavily tools are listed in the phase matrix but are not exposed by the current default tool surface.",
       }),
     );
-    expect(report.rows.find((row) => row.tool === "web-search")).toEqual(
+    expect(report.rows.find((row) => row.tool === "web_search")).toEqual(
       expect.objectContaining({
         bucket: "openclaw-dynamic-integration",
         capabilityLayer: "openclaw-dynamic-direct",
         required: true,
       }),
     );
-    expect(report.rows.find((row) => row.tool === "web-search")?.tracking).toBeUndefined();
+    expect(report.rows.find((row) => row.tool === "web_search")?.tracking).toBeUndefined();
   });
 });

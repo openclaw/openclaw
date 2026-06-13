@@ -10,8 +10,7 @@ coverage:
     - manual-cron-runs
   secondary:
     - plugin-registry-resolution
-objective: Verify the agent can schedule a cron reminder one minute in the
-  future and receive the follow-up in the QA channel.
+objective: Verify the agent can schedule a cron reminder one minute in the future and receive the follow-up in the QA channel.
 successCriteria:
   - Agent schedules a cron reminder roughly one minute ahead.
   - Reminder returns through qa-channel.
@@ -24,13 +23,11 @@ codeRefs:
   - extensions/qa-lab/src/self-check.ts
 execution:
   kind: flow
-  summary: Verify the agent can schedule a cron reminder one minute in the future
-    and receive the follow-up in the QA channel.
+  summary: Verify the agent can schedule a cron reminder one minute in the future and receive the follow-up in the QA channel.
   config:
     channelId: qa-room
     channelTitle: QA Room
-    reminderPromptTemplate: "A QA cron just fired. Send a one-line ping back to the
-      room containing this exact marker: {{marker}}"
+    reminderPromptTemplate: "A QA cron just fired. Send a one-line ping back to the room containing this exact marker: {{marker}}"
 ```
 
 ```yaml qa-flow

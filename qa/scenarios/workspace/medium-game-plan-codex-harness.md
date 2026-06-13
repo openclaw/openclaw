@@ -9,15 +9,12 @@ coverage:
     - runtime-assembly
   secondary:
     - native-codex-app-server-harness
-objective: Verify the Codex app-server harness can plan and build a
-  medium-complex self-contained browser game.
+objective: Verify the Codex app-server harness can plan and build a medium-complex self-contained browser game.
 successCriteria:
-  - A live-frontier run fails fast unless the selected primary model is
-    openai/gpt-5.5 with the Codex harness forced.
+  - A live-frontier run fails fast unless the selected primary model is openai/gpt-5.5 with the Codex harness forced.
   - The scenario forces the Codex embedded harness.
   - The prompt explicitly asks the agent to enter plan mode before editing.
-  - The agent writes a self-contained HTML game with a canvas loop, controls,
-    scoring, waves, pause, and restart.
+  - The agent writes a self-contained HTML game with a canvas loop, controls, scoring, waves, pause, and restart.
 docsRefs:
   - docs/plugins/sdk-agent-harness.md
   - docs/gateway/configuration-reference.md
@@ -28,9 +25,7 @@ codeRefs:
   - extensions/qa-lab/src/suite.ts
 execution:
   kind: flow
-  summary: Run with `pnpm openclaw qa suite --provider-mode live-frontier --model
-    openai/gpt-5.5 --alt-model openai/gpt-5.5 --fast --thinking medium
-    --scenario medium-game-plan-codex-harness`.
+  summary: Run with `pnpm openclaw qa suite --provider-mode live-frontier --model openai/gpt-5.5 --alt-model openai/gpt-5.5 --fast --thinking medium --scenario medium-game-plan-codex-harness`.
   config:
     requiredProvider: codex
     requiredModel: gpt-5.5
@@ -38,34 +33,20 @@ execution:
     artifactFile: star-garden-defenders-codex.html
     gameTitle: Star Garden Defenders
     minBytes: 5000
-    buildPrompt: >-
-      Enter plan mode first and write a short implementation plan before
-      editing.
+    buildPrompt: |-
+      Enter plan mode first and write a short implementation plan before editing.
 
-
-      Then build a medium-complex, self-contained browser game at
-      ./star-garden-defenders-codex.html.
-
+      Then build a medium-complex, self-contained browser game at ./star-garden-defenders-codex.html.
 
       Game: Star Garden Defenders.
-
       Requirements:
-
       - one HTML file only; no external assets, fonts, scripts, or network calls
-
       - canvas-based arcade loop with requestAnimationFrame
-
       - keyboard controls and mouse or pointer support
-
-      - player movement, enemy waves, collectibles or power-ups, collision
-      handling
-
+      - player movement, enemy waves, collectibles or power-ups, collision handling
       - score, lives or health, wave number, pause, restart, and game-over state
-
       - polished inline CSS and clear on-screen controls
-
-      - after writing the file, reply with the filename and the main systems
-      implemented
+      - after writing the file, reply with the filename and the main systems implemented
 ```
 
 ```yaml qa-flow

@@ -9,8 +9,7 @@ coverage:
     - provider-and-runtime-overrides
   secondary:
     - session-parity
-objective: Verify the agent can switch to a different configured model and
-  continue coherently.
+objective: Verify the agent can switch to a different configured model and continue coherently.
 successCriteria:
   - Agent reflects the model switch request.
   - Follow-up answer remains coherent with prior context.
@@ -22,11 +21,10 @@ codeRefs:
   - extensions/qa-lab/src/report.ts
 execution:
   kind: flow
-  summary: Verify the agent can switch to a different configured model and
-    continue coherently.
+  summary: Verify the agent can switch to a different configured model and continue coherently.
   config:
-    initialPrompt: Say hello from the default configured model.
-    followupPrompt: Continue the exchange after switching models and note the handoff.
+    initialPrompt: "Say hello from the default configured model."
+    followupPrompt: "Continue the exchange after switching models and note the handoff."
 ```
 
 ```yaml qa-flow

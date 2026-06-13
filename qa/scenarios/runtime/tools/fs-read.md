@@ -8,15 +8,11 @@ runtimeParityTier: standard
 coverage:
   primary:
     - tool-call-handling
-objective: Verify file read behavior is tracked across OpenClaw and Codex while
-  Codex owns read natively.
+objective: Verify file read behavior is tracked across OpenClaw and Codex while Codex owns read natively.
 successCriteria:
-  - OpenClaw may expose OpenClaw read while Codex app-server mode may omit
-    duplicate OpenClaw dynamic read.
-  - Mock provider read plans are reported as fixture intent, not as actual
-    runtime tool calls.
-  - The row stays report-only until failure-path injection proves native Codex
-    read behavior directly.
+  - OpenClaw may expose OpenClaw read while Codex app-server mode may omit duplicate OpenClaw dynamic read.
+  - Mock provider read plans are reported as fixture intent, not as actual runtime tool calls.
+  - The row stays report-only until failure-path injection proves native Codex read behavior directly.
 docsRefs:
   - qa/scenarios/index.md
 codeRefs:
@@ -37,15 +33,12 @@ execution:
       codexDefaultImpact: P4
       qaImpact: P2
       action: model native read behavior separately from provider-plan capture
-      reason: Codex app-server intentionally owns read natively; QA mock failure-path
-        capture currently reports provider-plan args, not proven Codex native
-        read behavior.
+      reason: Codex app-server intentionally owns read natively; QA mock failure-path capture currently reports provider-plan args, not proven Codex native read behavior.
     knownHarnessGap:
       issue: "#80312"
-      reason: QA mock failure-path capture currently reports provider-plan args, not
-        proven Codex native read behavior.
-    promptSnippet: target=read
-    failurePromptSnippet: failure target=read
+      reason: QA mock failure-path capture currently reports provider-plan args, not proven Codex native read behavior.
+    promptSnippet: "target=read"
+    failurePromptSnippet: "failure target=read"
 ```
 
 ```yaml qa-flow

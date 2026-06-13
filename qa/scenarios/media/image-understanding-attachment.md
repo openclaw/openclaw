@@ -9,8 +9,7 @@ coverage:
     - inbound-image-summarization
   secondary:
     - plugin-registry-resolution
-objective: Verify an attached image reaches the agent model and the agent can
-  describe what it sees.
+objective: Verify an attached image reaches the agent model and the agent can describe what it sees.
 successCriteria:
   - Agent receives at least one image attachment.
   - Final answer describes the visible image content in one short sentence.
@@ -24,20 +23,12 @@ codeRefs:
   - extensions/qa-lab/src/mock-openai-server.ts
 execution:
   kind: flow
-  summary: Verify an attached image reaches the agent model and the agent can
-    describe what it sees.
+  summary: Verify an attached image reaches the agent model and the agent can describe what it sees.
   config:
-    prompt: "Image understanding check: describe the top and bottom colors in the
-      attached image in one short sentence."
+    prompt: "Image understanding check: describe the top and bottom colors in the attached image in one short sentence."
     requiredColorGroups:
-      - - red
-        - scarlet
-        - crimson
-      - - blue
-        - azure
-        - teal
-        - cyan
-        - aqua
+      - [red, scarlet, crimson]
+      - [blue, azure, teal, cyan, aqua]
 ```
 
 ```yaml qa-flow

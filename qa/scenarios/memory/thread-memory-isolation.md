@@ -9,8 +9,7 @@ coverage:
     - cross-client-history
   secondary:
     - native-threads
-objective: Verify a memory-backed answer requested inside a thread stays
-  in-thread and does not leak into the root channel.
+objective: Verify a memory-backed answer requested inside a thread stays in-thread and does not leak into the root channel.
 successCriteria:
   - Agent uses memory tools inside the thread.
   - The hidden fact is answered correctly in the thread.
@@ -25,19 +24,16 @@ codeRefs:
   - extensions/qa-lab/src/suite.ts
 execution:
   kind: flow
-  summary: Verify a memory-backed answer requested inside a thread stays in-thread
-    and does not leak into the root channel.
+  summary: Verify a memory-backed answer requested inside a thread stays in-thread and does not leak into the root channel.
   config:
     memoryFact: "Thread-hidden codename: ORBIT-22."
-    memoryQuery: hidden thread codename ORBIT-22
-    expectedNeedle: ORBIT-22
+    memoryQuery: "hidden thread codename ORBIT-22"
+    expectedNeedle: "ORBIT-22"
     channelId: qa-room
     channelTitle: QA Room
-    threadTitle: Thread memory QA
-    prompt: "@openclaw Thread memory check: what is the hidden thread codename
-      stored only in memory? Use memory tools first and reply only in this
-      thread."
-    promptSnippet: Thread memory check
+    threadTitle: "Thread memory QA"
+    prompt: "@openclaw Thread memory check: what is the hidden thread codename stored only in memory? Use memory tools first and reply only in this thread."
+    promptSnippet: "Thread memory check"
 ```
 
 ```yaml qa-flow

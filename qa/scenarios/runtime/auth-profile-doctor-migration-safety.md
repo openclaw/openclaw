@@ -10,12 +10,10 @@ coverage:
     - openclaw-doctor
   secondary:
     - codex-oauth-profiles
-objective: Reproduce the doctor-migration auth cells as an automated fixture
-  matrix for Codex OAuth selection.
+objective: Reproduce the doctor-migration auth cells as an automated fixture matrix for Codex OAuth selection.
 successCriteria:
   - OAuth-only hosts select the openai OAuth profile and use the Codex harness.
-  - Mixed-profile hosts still select openai OAuth when an openai API-key profile
-    exists.
+  - Mixed-profile hosts still select openai OAuth when an openai API-key profile exists.
 docsRefs:
   - docs/cli/doctor.md
 codeRefs:

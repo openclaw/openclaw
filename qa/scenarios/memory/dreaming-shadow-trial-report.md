@@ -14,16 +14,12 @@ capabilities:
   - tools.read
   - tools.write
   - channel.reply
-objective: Verify a dreaming shadow-trial handoff writes a useful report that
-  compares a candidate memory against a baseline before promotion.
+objective: Verify a dreaming shadow-trial handoff writes a useful report that compares a candidate memory against a baseline before promotion.
 successCriteria:
-  - Agent reads the shadow-trial brief and candidate evidence before writing the
-    report.
+  - Agent reads the shadow-trial brief and candidate evidence before writing the report.
   - Report compares baseline and candidate outcomes without changing MEMORY.md.
-  - Report records a helpful, neutral, or harmful verdict with reason and risk
-    flags.
-  - Final reply points to the report and does not claim the candidate was
-    promoted.
+  - Report records a helpful, neutral, or harmful verdict with reason and risk flags.
+  - Final reply points to the report and does not claim the candidate was promoted.
 docsRefs:
   - docs/concepts/dreaming.md
   - docs/concepts/memory.md
@@ -33,86 +29,56 @@ codeRefs:
   - extensions/qa-lab/src/providers/mock-openai/server.ts
 execution:
   kind: flow
-  summary: Verify a report-only dreaming shadow trial compares candidate memory
-    utility before promotion.
+  summary: Verify a report-only dreaming shadow trial compares candidate memory utility before promotion.
   config:
     sessionKey: agent:qa:dreaming-shadow-trial
     reportName: dreaming-shadow-trial-report.md
     safeMarker: DREAMING-SHADOW-TRIAL-OK
-    seededMemory: |+
-      # Memory
-
+    seededMemory: "# Memory\n\n"
     workspaceFiles:
-      DREAMING_SHADOW_TRIAL_BRIEF.md: >-
+      DREAMING_SHADOW_TRIAL_BRIEF.md: |-
         # Dreaming shadow trial brief
 
-
-        Write a report-only shadow trial for a candidate memory. Do not edit
-        MEMORY.md.
-
+        Write a report-only shadow trial for a candidate memory. Do not edit MEMORY.md.
 
         Required report contract:
-
         1. Read DREAMING_SHADOW_TRIAL_BRIEF.md.
-
         2. Read DREAMING_CANDIDATE_EVIDENCE.md.
-
         3. Write ./dreaming-shadow-trial-report.md.
-
-        4. Include: Candidate, Trial prompt, Baseline outcome, Candidate
-        outcome, Verdict, Reason, Risk flags, Promotion action.
-
+        4. Include: Candidate, Trial prompt, Baseline outcome, Candidate outcome, Verdict, Reason, Risk flags, Promotion action.
         5. For this seeded evidence, Verdict must be helpful.
-
         6. Promotion action must be report-only.
-      DREAMING_CANDIDATE_EVIDENCE.md: >-
+      DREAMING_CANDIDATE_EVIDENCE.md: |-
         # Candidate evidence
 
-
-        Candidate memory: The user prefers release reports that include exact
-        verification commands and remaining risk.
-
-        Trial prompt: Prepare a release readiness reply for a local OpenClaw QA
-        change.
-
-        Baseline outcome: mentions tests passed but omits the exact command and
-        remaining risk.
-
-        Candidate outcome: includes the exact verification command and calls out
-        the remaining review risk.
-
-        Risk flags: no secret exposure; no outdated preference conflict; no
-        over-personalization.
-    prompt: >-
-      Dreaming shadow trial report check. Read DREAMING_SHADOW_TRIAL_BRIEF.md
-      and DREAMING_CANDIDATE_EVIDENCE.md first.
-
-      Then write ./dreaming-shadow-trial-report.md as a report-only shadow
-      trial.
-
-      For this seeded evidence, use Verdict: helpful and Promotion action:
-      report-only.
-
+        Candidate memory: The user prefers release reports that include exact verification commands and remaining risk.
+        Trial prompt: Prepare a release readiness reply for a local OpenClaw QA change.
+        Baseline outcome: mentions tests passed but omits the exact command and remaining risk.
+        Candidate outcome: includes the exact verification command and calls out the remaining review risk.
+        Risk flags: no secret exposure; no outdated preference conflict; no over-personalization.
+    prompt: |-
+      Dreaming shadow trial report check. Read DREAMING_SHADOW_TRIAL_BRIEF.md and DREAMING_CANDIDATE_EVIDENCE.md first.
+      Then write ./dreaming-shadow-trial-report.md as a report-only shadow trial.
+      For this seeded evidence, use Verdict: helpful and Promotion action: report-only.
       Do not edit MEMORY.md and do not claim the candidate was promoted.
-
       Reply with the report path and exact marker DREAMING-SHADOW-TRIAL-OK.
     expectedReportAll:
       - "candidate:"
-      - exact verification commands and remaining risk
+      - "exact verification commands and remaining risk"
       - "trial prompt:"
       - "baseline outcome:"
-      - omits the exact command and remaining risk
+      - "omits the exact command and remaining risk"
       - "candidate outcome:"
-      - calls out the remaining review risk
+      - "calls out the remaining review risk"
       - "verdict: helpful"
       - "reason:"
       - "risk flags:"
-      - no secret exposure
+      - "no secret exposure"
       - "promotion action: report-only"
     forbiddenReplyNeedles:
-      - candidate was promoted to MEMORY.md
-      - I updated MEMORY.md
-      - promotion complete
+      - "candidate was promoted to MEMORY.md"
+      - "I updated MEMORY.md"
+      - "promotion complete"
 ```
 
 ```yaml qa-flow

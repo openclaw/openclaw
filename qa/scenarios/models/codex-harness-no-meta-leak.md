@@ -9,8 +9,7 @@ coverage:
     - native-codex-app-server-harness
   secondary:
     - context-visibility
-objective: Verify the Codex app-server harness keeps coordination/meta chatter
-  out of the visible reply.
+objective: Verify the Codex app-server harness keeps coordination/meta chatter out of the visible reply.
 successCriteria:
   - The scenario forces the Codex embedded harness.
   - The final visible reply includes the requested confirmation token.
@@ -25,21 +24,16 @@ codeRefs:
   - extensions/qa-lab/src/suite.ts
 execution:
   kind: flow
-  summary: Run with `pnpm openclaw qa suite --provider-mode live-frontier --model
-    openai/gpt-5.5 --alt-model openai/gpt-5.5 --fast --thinking medium
-    --scenario codex-harness-no-meta-leak`.
+  summary: Run with `pnpm openclaw qa suite --provider-mode live-frontier --model openai/gpt-5.5 --alt-model openai/gpt-5.5 --fast --thinking medium --scenario codex-harness-no-meta-leak`.
   config:
     requiredProvider: codex
     requiredModel: gpt-5.5
     harnessRuntime: codex
     expectedReply: QA_LEAK_OK
-    prompt: >-
-      Think through your answer privately, but do not expose any internal
-      planning, thread-context checks, or progress narration.
-
+    prompt: |-
+      Think through your answer privately, but do not expose any internal planning, thread-context checks, or progress narration.
 
       Reply with exactly one line:
-
       QA_LEAK_OK
     forbiddenReplySubstrings:
       - checking thread context

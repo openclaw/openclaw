@@ -16,8 +16,7 @@ risk: medium
 capabilities:
   - memory.recall
   - channel.reply
-objective: Verify a fake personal preference can be remembered and recalled
-  later in the same QA personal conversation.
+objective: Verify a fake personal preference can be remembered and recalled later in the same QA personal conversation.
 successCriteria:
   - Agent acknowledges the fake preference without using real user memory.
   - Agent later recalls the same fake preference code.
@@ -34,15 +33,10 @@ execution:
   summary: Verify fake personal preference recall through the local QA memory path.
   config:
     sessionKey: agent:qa:personal-memory
-    rememberPrompt: "Please remember this fact for later: my fake personal QA
-      preference is that my preferred reminder label code is ORBIT-9. Use your
-      normal memory mechanism and reply exactly `Remembered ORBIT-9.` once
-      stored."
+    rememberPrompt: "Please remember this fact for later: my fake personal QA preference is that my preferred reminder label code is ORBIT-9. Use your normal memory mechanism and reply exactly `Remembered ORBIT-9.` once stored."
     rememberAckAny:
       - remembered orbit-9
-    recallPrompt: "Memory tools check: what fake personal reminder label code did I
-      ask you to remember earlier? Reply with the code only, plus at most one
-      short sentence."
+    recallPrompt: "Memory tools check: what fake personal reminder label code did I ask you to remember earlier? Reply with the code only, plus at most one short sentence."
     recallExpectedAny:
       - orbit-9
 ```

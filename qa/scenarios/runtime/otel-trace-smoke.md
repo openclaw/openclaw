@@ -9,15 +9,12 @@ coverage:
     - otlp-http-traces
   secondary:
     - model-and-runtime-telemetry
-objective: Verify a QA-lab gateway run emits bounded OpenTelemetry traces,
-  metrics, and logs through the diagnostics-otel plugin.
+objective: Verify a QA-lab gateway run emits bounded OpenTelemetry traces, metrics, and logs through the diagnostics-otel plugin.
 successCriteria:
-  - The diagnostics-otel plugin starts with trace, metric, and log export
-    enabled.
+  - The diagnostics-otel plugin starts with trace, metric, and log export enabled.
   - A minimal QA-channel agent turn completes.
   - The trace includes the selected agent harness lifecycle span.
-  - The run emits low-cardinality OpenTelemetry signals without content or raw
-    diagnostic identifiers.
+  - The run emits low-cardinality OpenTelemetry signals without content or raw diagnostic identifiers.
 plugins:
   - diagnostics-otel
 gatewayConfigPatch:

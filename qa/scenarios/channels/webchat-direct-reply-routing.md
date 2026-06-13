@@ -11,12 +11,10 @@ coverage:
   secondary:
     - chat-send-lifecycle
     - provider-outbound-adapter-bridge
-objective: Verify a current-chat reply is delivered as assistant text, not by
-  calling `message(action=send)` and ending with `Sent.`.
+objective: Verify a current-chat reply is delivered as assistant text, not by calling `message(action=send)` and ending with `Sent.`.
 successCriteria:
   - The visible outbound reply contains the requested marker exactly once.
-  - The session transcript does not include a `message(action=send)` call
-    followed by final assistant text `Sent.`.
+  - The session transcript does not include a `message(action=send)` call followed by final assistant text `Sent.`.
 docsRefs:
   - docs/concepts/qa-e2e-automation.md
   - qa/scenarios/index.md
@@ -25,8 +23,7 @@ codeRefs:
   - extensions/qa-lab/src/gateway-log-sentinel.ts
 execution:
   kind: flow
-  summary: Run a direct current-chat reply and inspect the actual transcript for
-    self-message routing.
+  summary: Run a direct current-chat reply and inspect the actual transcript for self-message routing.
   config:
     expectedMarker: WEBCHAT-DIRECT-REPLY-OK
 ```

@@ -11,15 +11,12 @@ coverage:
   secondary:
     - plugin-registry-resolution
     - inbound-image-summarization
-objective: Verify the embedded Control UI can observe a qa-channel-backed
-  session while the fake channel injects text and image turns that the agent
-  answers correctly.
+objective: Verify the embedded Control UI can observe a qa-channel-backed session while the fake channel injects text and image turns that the agent answers correctly.
 successCriteria:
   - Control UI opens directly on the target qa-channel session.
   - A text prompt delivered through qa-channel produces a correct outbound reply.
   - A later qa-channel image message produces a correct image-aware reply.
-  - The Control UI transcript shows both transport-side prompts and both final
-    answers.
+  - The Control UI transcript shows both transport-side prompts and both final answers.
 docsRefs:
   - docs/concepts/qa-e2e-automation.md
   - docs/channels/qa-channel.md
@@ -32,25 +29,16 @@ gatewayRuntime:
   forwardHostHome: true
 execution:
   kind: flow
-  summary: Open the Control UI on a qa-channel session with the generic QA web
-    driver, inject text and image turns through qa-channel, and verify the
-    replies in both the transport log and the UI transcript.
+  summary: Open the Control UI on a qa-channel session with the generic QA web driver, inject text and image turns through qa-channel, and verify the replies in both the transport log and the UI transcript.
   config:
     conversationId: control-ui-e2e
     textPrompt: "Control UI bridge check. Marker exact marker: `ui bridge armed`"
     uiExpectedNeedle: ui bridge armed
-    imagePrompt: "Image understanding check: describe the top and bottom colors in
-      the attached image in one short sentence."
+    imagePrompt: "Image understanding check: describe the top and bottom colors in the attached image in one short sentence."
     imagePromptNeedle: image understanding check
     requiredColorGroups:
-      - - red
-        - scarlet
-        - crimson
-      - - blue
-        - azure
-        - teal
-        - cyan
-        - aqua
+      - [red, scarlet, crimson]
+      - [blue, azure, teal, cyan, aqua]
 ```
 
 ```yaml qa-flow

@@ -10,8 +10,7 @@ coverage:
   secondary:
     - provider-and-runtime-overrides
     - session-parity
-objective: Verify /think lists provider-owned levels and remaps stored thinking
-  levels when the session model changes provider capabilities.
+objective: Verify /think lists provider-owned levels and remaps stored thinking levels when the session model changes provider capabilities.
 plugins:
   - anthropic
 gatewayConfigPatch:
@@ -21,12 +20,10 @@ gatewayConfigPatch:
         anthropic/claude-sonnet-4-6:
           params: {}
 successCriteria:
-  - Anthropic Claude Sonnet 4.6 advertises adaptive but not OpenAI-only xhigh or
-    Opus max.
+  - Anthropic Claude Sonnet 4.6 advertises adaptive but not OpenAI-only xhigh or Opus max.
   - A stored adaptive level remaps to medium when switching to OpenAI GPT-5.5.
   - OpenAI GPT-5.5 advertises xhigh but not adaptive or max.
-  - A stored xhigh level remaps to high when switching to an Anthropic model
-    without xhigh support.
+  - A stored xhigh level remaps to high when switching to an Anthropic model without xhigh support.
 docsRefs:
   - docs/tools/thinking.md
   - docs/help/testing.md
@@ -40,8 +37,7 @@ codeRefs:
   - extensions/openai/openai-provider.ts
 execution:
   kind: flow
-  summary: Select Anthropic, set adaptive, switch to OpenAI and verify medium
-    fallback, then set xhigh and verify high fallback on a non-xhigh model.
+  summary: Select Anthropic, set adaptive, switch to OpenAI and verify medium fallback, then set xhigh and verify high fallback on a non-xhigh model.
   config:
     requiredProviderMode: live-frontier
     requiredProvider: openai
