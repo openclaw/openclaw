@@ -2,15 +2,18 @@
 import { mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.js";
 import type { ProviderPlugin } from "../plugins/types.js";
+import { withEnvAsync } from "../test-utils/env.js";
 
 const mocks = vi.hoisted(() => ({
   resolveRuntimePluginDiscoveryProviders: vi.fn(),
   runProviderCatalog: vi.fn(),
   runProviderStaticCatalog: vi.fn(),
 }));
+const BUNDLED_PLUGINS_DIR = fileURLToPath(new URL("../../extensions/", import.meta.url));
 
 vi.mock("../plugins/provider-discovery.js", () => ({
   resolveRuntimePluginDiscoveryProviders: mocks.resolveRuntimePluginDiscoveryProviders,
@@ -225,17 +228,26 @@ describe("resolveImplicitProviders startup discovery scope", () => {
       },
     });
 
-    const providers = await resolveImplicitProviders({
-      agentDir: "/tmp/openclaw-agent",
-      config: {},
-      env: {
-        GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
-        GOOGLE_CLOUD_PROJECT: "vertex-project",
-        GOOGLE_CLOUD_LOCATION: "global",
-      } as NodeJS.ProcessEnv,
-      explicitProviders: {},
-      providerDiscoveryEntriesOnly: true,
-    });
+    const providers = await withEnvAsync(
+      {
+        OPENCLAW_BUNDLED_PLUGINS_DIR: BUNDLED_PLUGINS_DIR,
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+      },
+      async () =>
+        await resolveImplicitProviders({
+          agentDir: "/tmp/openclaw-agent",
+          config: {},
+          env: {
+            OPENCLAW_BUNDLED_PLUGINS_DIR: BUNDLED_PLUGINS_DIR,
+            OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+            GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
+            GOOGLE_CLOUD_PROJECT: "vertex-project",
+            GOOGLE_CLOUD_LOCATION: "global",
+          } as NodeJS.ProcessEnv,
+          explicitProviders: {},
+          providerDiscoveryEntriesOnly: true,
+        }),
+    );
 
     expect(providers?.["google-vertex"]?.apiKey).toBe("gcp-vertex-credentials");
   });

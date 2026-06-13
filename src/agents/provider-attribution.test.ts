@@ -73,6 +73,15 @@ const providerEndpointPlugins = vi.hoisted(() => [
         hosts: ["integrate.api.nvidia.com"],
         baseUrls: ["https://integrate.api.nvidia.com/v1"],
       },
+      {
+        endpointClass: "xiaomi-native",
+        hosts: [
+          "api.xiaomimimo.com",
+          "token-plan-ams.xiaomimimo.com",
+          "token-plan-cn.xiaomimimo.com",
+          "token-plan-sgp.xiaomimimo.com",
+        ],
+      },
     ],
     providerRequest: {
       providers: {
@@ -90,6 +99,8 @@ const providerEndpointPlugins = vi.hoisted(() => [
         openrouter: { family: "openrouter" },
         qwen: { family: "modelstudio" },
         together: { family: "together" },
+        xiaomi: { family: "xiaomi" },
+        "xiaomi-token-plan": { family: "xiaomi" },
         xai: { family: "xai" },
         zai: { family: "zai" },
       },
@@ -102,6 +113,15 @@ vi.mock("../plugins/plugin-registry.js", () => ({
     plugins: providerEndpointPlugins,
     diagnostics: [],
   }),
+}));
+
+vi.mock("../plugins/manifest-metadata-scan.js", () => ({
+  listOpenClawPluginManifestMetadata: () =>
+    providerEndpointPlugins.map((manifest, index) => ({
+      pluginDir: `provider-endpoint-fixture-${index}`,
+      manifest,
+      origin: "bundled",
+    })),
 }));
 
 import {
