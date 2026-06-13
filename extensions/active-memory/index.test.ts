@@ -2114,6 +2114,53 @@ describe("active-memory plugin", () => {
     expect(line).toContain("hits=3");
   });
 
+  it("recognizes usable persisted memory results after details are capped", () => {
+    const cappedDetails = {
+      persistedDetailsTruncated: true,
+      originalDetailKeys: ["results"],
+    };
+    expect(
+      testing.hasUsableMemoryResultInSessionRecord({
+        message: {
+          role: "toolResult",
+          toolName: "memory_search",
+          details: cappedDetails,
+          content: [{ type: "text", text: '{\n  "results": [\n    {"text": "ramen"}\n  ]\n}' }],
+        },
+      }),
+    ).toBe(true);
+    expect(
+      testing.hasUsableMemoryResultInSessionRecord({
+        message: {
+          role: "toolResult",
+          toolName: "memory_search",
+          details: cappedDetails,
+          content: [{ type: "text", text: '{\n  "results": []\n}' }],
+        },
+      }),
+    ).toBe(false);
+    expect(
+      testing.hasUsableMemoryResultInSessionRecord({
+        message: {
+          role: "toolResult",
+          toolName: "memory_recall",
+          details: cappedDetails,
+          content: [{ type: "text", text: "Found 2 memories:\n\n1. ramen\n2. chili crisp" }],
+        },
+      }),
+    ).toBe(true);
+    expect(
+      testing.hasUsableMemoryResultInSessionRecord({
+        message: {
+          role: "toolResult",
+          toolName: "memory_recall",
+          details: cappedDetails,
+          content: [{ type: "text", text: "No relevant memories found." }],
+        },
+      }),
+    ).toBe(false);
+  });
+
   it("replaces stale structured active-memory lines on a later empty run", async () => {
     const sessionKey = "agent:main:stale-active-memory-lines";
     hoisted.sessionStore[sessionKey] = {
@@ -3188,9 +3235,24 @@ describe("active-memory plugin", () => {
             role: "toolResult",
             toolName: "memory_search",
             details: {
-              results: [{ path: "memory/food.md", text: "User usually orders tonkotsu ramen." }],
-              debug: { backend: "qmd", hits: 1, searchMs: 8 },
+              persistedDetailsTruncated: true,
+              originalDetailKeys: ["results", "debug"],
             },
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(
+                  {
+                    results: [
+                      { path: "memory/food.md", text: "User usually orders tonkotsu ramen." },
+                    ],
+                    debug: { backend: "qmd", hits: 1, searchMs: 8 },
+                  },
+                  null,
+                  2,
+                ),
+              },
+            ],
           },
         },
         {

@@ -1752,10 +1752,18 @@ function hasUsableMemoryResultInSessionRecord(value: unknown): boolean {
   const toolName = normalizeOptionalString(message.toolName);
   const details = asRecord(message.details);
   if (toolName === "memory_search") {
-    return Array.isArray(details?.results) && details.results.length > 0;
+    if (Array.isArray(details?.results)) {
+      return details.results.length > 0;
+    }
+    // Oversized details are capped before transcript persistence, while the
+    // leading model-visible JSON still preserves whether results were present.
+    return /"results"\s*:\s*\[\s*([^\s\]])/.test(extractTextContent(message.content));
   }
   if (toolName === "memory_recall") {
-    return Array.isArray(details?.memories) && details.memories.length > 0;
+    if (Array.isArray(details?.memories)) {
+      return details.memories.length > 0;
+    }
+    return /^Found [1-9]\d* memories:/.test(extractTextContent(message.content));
   }
   return false;
 }
@@ -3178,6 +3186,7 @@ const testing = {
   buildPluginStatusLine,
   buildPromptPrefix,
   getCachedResult,
+  hasUsableMemoryResultInSessionRecord,
   isCircuitBreakerOpen,
   isMissingRegisteredMemoryToolsError,
   normalizePluginConfig,
