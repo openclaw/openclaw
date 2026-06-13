@@ -446,6 +446,51 @@ describe("AcpSessionManager runtime handles", () => {
     });
   });
 
+  it("does not replay persisted chat model or thinking options into Claude ensureSession", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    const sessionKey = "agent:claude:acp:binding:demo-binding:default:claude-options";
+    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+      const key = (paramsUnknown as { sessionKey?: string }).sessionKey ?? sessionKey;
+      return {
+        sessionKey: key,
+        storeSessionKey: key,
+        acp: {
+          ...readySessionMeta(),
+          agent: "claude",
+          runtimeOptions: {
+            model: "openai/gpt-5.5",
+            thinking: "off",
+            cwd: "/tmp/openclaw",
+          },
+        },
+      };
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey,
+      text: "after restart",
+      mode: "prompt",
+      requestId: "r-binding-restart-claude-options",
+    });
+
+    expectRecordFields(mockCallArg(runtimeState.ensureSession), {
+      sessionKey,
+      cwd: "/tmp/openclaw",
+    });
+    expect(runtimeState.ensureSession).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "openai/gpt-5.5",
+        thinking: "off",
+      }),
+    );
+  });
+
   it("does not resume persisted ACP identity for oneshot sessions after restart", async () => {
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({

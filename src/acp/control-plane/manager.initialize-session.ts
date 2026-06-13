@@ -20,6 +20,7 @@ import type {
 import {
   normalizeRuntimeOptions,
   normalizeText,
+  sanitizeRuntimeOptionsForAcpAgent,
   validateRuntimeOptionPatch,
 } from "./runtime-options.js";
 
@@ -44,9 +45,10 @@ export async function runManagerInitializeSession(params: {
     ...input.runtimeOptions,
     ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
   });
-  const requestedCwd = initialRuntimeOptions.cwd;
-  const requestedModel = initialRuntimeOptions.model;
-  const requestedThinking = initialRuntimeOptions.thinking;
+  const safeInitialRuntimeOptions = sanitizeRuntimeOptionsForAcpAgent(initialRuntimeOptions, agent);
+  const requestedCwd = safeInitialRuntimeOptions.cwd;
+  const requestedModel = safeInitialRuntimeOptions.model;
+  const requestedThinking = safeInitialRuntimeOptions.thinking;
   params.enforceConcurrentSessionLimit({
     cfg: input.cfg,
     sessionKey,
@@ -67,7 +69,7 @@ export async function runManagerInitializeSession(params: {
   });
   const effectiveCwd = normalizeText(handle.cwd) ?? requestedCwd;
   const effectiveRuntimeOptions = normalizeRuntimeOptions({
-    ...initialRuntimeOptions,
+    ...safeInitialRuntimeOptions,
     ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
   });
 

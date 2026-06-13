@@ -25,6 +25,7 @@ import {
   normalizeText,
   resolveRuntimeOptionsFromMeta,
   runtimeOptionsEqual,
+  sanitizeRuntimeOptionsForAcpAgent,
 } from "./runtime-options.js";
 
 /** Returns a reusable cached handle or initializes a fresh runtime session for the metadata. */
@@ -40,7 +41,10 @@ export async function ensureManagerRuntimeHandle(params: {
   const agent =
     normalizeText(params.meta.agent) || resolveAcpAgentFromSessionKey(params.sessionKey, "main");
   const mode = params.meta.mode;
-  const runtimeOptions = resolveRuntimeOptionsFromMeta(params.meta);
+  const runtimeOptions = sanitizeRuntimeOptionsForAcpAgent(
+    resolveRuntimeOptionsFromMeta(params.meta),
+    agent,
+  );
   const cwd = runtimeOptions.cwd ?? normalizeText(params.meta.cwd);
   const model = normalizeText(runtimeOptions.model);
   const thinking = normalizeText(runtimeOptions.thinking);

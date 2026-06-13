@@ -272,6 +272,19 @@ export function normalizeRuntimeOptions(
   };
 }
 
+export function sanitizeRuntimeOptionsForAcpAgent(
+  options: AcpSessionRuntimeOptions | undefined,
+  agent: string | undefined,
+): AcpSessionRuntimeOptions {
+  const normalized = normalizeRuntimeOptions(options);
+  if (normalizeLowercaseStringOrEmpty(agent) !== "claude") {
+    return normalized;
+  }
+
+  const { model: _model, thinking: _thinking, ...safeOptions } = normalized;
+  return normalizeRuntimeOptions(safeOptions);
+}
+
 export function mergeRuntimeOptions(params: {
   current?: AcpSessionRuntimeOptions;
   patch?: Partial<AcpSessionRuntimeOptions>;

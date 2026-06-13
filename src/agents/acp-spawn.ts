@@ -1017,6 +1017,7 @@ function resolveAcpSpawnRuntimeOptions(params: {
   thinking?: string;
   runTimeoutSeconds?: number;
 }): { ok: true; runtimeOptions?: AcpSpawnRuntimeOptions } | { ok: false; error: string } {
+  const isClaudeAcp = params.targetAgentId.trim().toLowerCase() === "claude";
   const policyAgentId = params.configAgentId ?? params.targetAgentId;
   const model = resolveConfiguredSubagentSpawnModelSelection({
     cfg: params.cfg,
@@ -1050,6 +1051,12 @@ function resolveAcpSpawnRuntimeOptions(params: {
   }
 
   const timeoutSeconds = resolveAcpRuntimeTimeoutSeconds(params.runTimeoutSeconds);
+  if (isClaudeAcp) {
+    return {
+      ok: true,
+      runtimeOptions: timeoutSeconds ? { timeoutSeconds } : undefined,
+    };
+  }
   const runtimeOptions =
     model || thinking || timeoutSeconds
       ? {

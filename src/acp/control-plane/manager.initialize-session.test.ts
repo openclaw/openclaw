@@ -103,6 +103,40 @@ describe("AcpSessionManager initializeSession", () => {
     });
   });
 
+  it("strips chat model and thinking options before initializing Claude ACP", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.upsertAcpSessionMetaMock.mockResolvedValue({
+      sessionKey: "agent:claude:acp:session-a",
+      storeSessionKey: "agent:claude:acp:session-a",
+      acp: readySessionMeta(),
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.initializeSession({
+      cfg: baseCfg,
+      sessionKey: "agent:claude:acp:session-a",
+      agent: "claude",
+      mode: "persistent",
+      runtimeOptions: {
+        model: "openai/gpt-5.5",
+        thinking: "off",
+      },
+    });
+
+    expect(extractRuntimeOptionsFromUpserts()).toEqual([undefined]);
+    expectRecordFields(mockCallArg(runtimeState.ensureSession), {
+      sessionKey: "agent:claude:acp:session-a",
+    });
+    expectNoMockCallFields(runtimeState.ensureSession, {
+      model: "openai/gpt-5.5",
+      thinking: "off",
+    });
+  });
+
   it("does not reapply startup runtime options as config controls on first turn", async () => {
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
