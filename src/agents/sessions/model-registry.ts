@@ -21,6 +21,7 @@ import type {
 } from "../../llm/types.js";
 import { registerOAuthProvider, resetOAuthProviders } from "../../llm/utils/oauth/index.js";
 import type { OAuthProviderInterface } from "../../llm/utils/oauth/types.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getAgentDir } from "../config.js";
 import { resolveModelPluginMetadataSnapshot } from "../model-discovery-context.js";
 import {
@@ -37,6 +38,8 @@ import {
   resolveConfigValueUncached,
   resolveHeadersOrThrow,
 } from "./resolve-config-value.js";
+
+const log = createSubsystemLogger("agents/model-registry");
 
 // Schema for OpenRouter routing preferences
 const PercentileCutoffsSchema = Type.Object({
@@ -355,9 +358,7 @@ export class ModelRegistry {
     }
   }
 
-  /**
-   * Get any error from loading models.json (undefined if no error).
-   */
+  /** Get any root or generated plugin catalog load error. */
   getError(): string | undefined {
     return this.loadError;
   }
@@ -371,6 +372,7 @@ export class ModelRegistry {
 
     if (error) {
       this.loadError = error;
+      log.warn(`model catalog load issue: ${error}`);
       // Plugin catalog failures can return salvaged models; root failures return empty.
     }
 
