@@ -1,3 +1,4 @@
+import { resolveStdioMcpServerLaunchConfig } from "../agents/mcp-stdio.js";
 // Normalizes MCP server config for runtime launch and validation.
 import { isRecord } from "../utils.js";
 import { readSourceConfigSnapshot } from "./io.js";
@@ -208,6 +209,27 @@ export async function setConfiguredMcpServer(params: {
   const next = structuredClone(loaded.config);
   const servers = normalizeConfiguredMcpServers(next.mcp?.servers);
   servers[name] = canonicalizeConfiguredMcpServer(params.server);
+
+  // Reject blocked stdio env keys at save time to avoid per-spawn journal floods.
+  const rawEnv =
+    isRecord(params.server) && isRecord(params.server.env)
+      ? (params.server.env as Record<string, unknown>)
+      : undefined;
+  if (rawEnv && Object.keys(rawEnv).length > 0) {
+    const resolved = resolveStdioMcpServerLaunchConfig(params.server);
+    if (resolved.ok) {
+      const safeEnvKeys = resolved.config.env ? Object.keys(resolved.config.env) : [];
+      const blockedKeys = Object.keys(rawEnv).filter((k) => !safeEnvKeys.includes(k));
+      if (blockedKeys.length > 0) {
+        return {
+          ok: false,
+          path: "",
+          error: `MCP server env contains blocked stdio keys: ${blockedKeys.map((k) => `"${k}"`).join(", ")}. These are dropped at spawn for startup safety. Remove them from the env config and use a wrapper script if needed.`,
+        };
+      }
+    }
+  }
+
   next.mcp = {
     ...next.mcp,
     servers,

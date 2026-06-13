@@ -209,4 +209,23 @@ describe("config mcp config", () => {
       });
     });
   });
+
+  it("rejects blocked stdio env keys at save time", async () => {
+    await withMcpConfigHome({}, async () => {
+      const setResult = await setConfiguredMcpServer({
+        name: "my_server",
+        server: {
+          command: "/path/to/python",
+          args: ["server.py"],
+          env: { PYTHONPATH: "/workspace", PYTHONUNBUFFERED: "1" },
+        },
+      });
+
+      expect(setResult.ok).toBe(false);
+      if (!setResult.ok) {
+        expect(setResult.error).toContain("blocked stdio keys");
+        expect(setResult.error).toContain("PYTHONPATH");
+      }
+    });
+  });
 });
