@@ -635,9 +635,13 @@ export function resolveTelegramTransport(
   });
   const defaultDispatcher = createTelegramDispatcher(defaultDispatcherResolution.policy);
   const shouldBypassEnvProxy = shouldBypassEnvProxyForTelegramApi();
+  const hasExplicitNetworkConfig =
+    dnsDecision.source === "config" &&
+    dnsDecision.value !== "ipv4first";
   const allowStickyFallback =
-    defaultDispatcher.mode === "direct" ||
-    (defaultDispatcher.mode === "env-proxy" && shouldBypassEnvProxy);
+    !hasExplicitNetworkConfig &&
+    (defaultDispatcher.mode === "direct" ||
+      (defaultDispatcher.mode === "env-proxy" && shouldBypassEnvProxy));
   const fallbackDispatcherPolicy = allowStickyFallback
     ? resolveTelegramDispatcherPolicy({
         autoSelectFamily: false,
