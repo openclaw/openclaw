@@ -1,3 +1,4 @@
+import { resolveControlDirectorCanonicalModelRef } from "../agents/control-director-contract.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import {
   inferUniqueProviderFromConfiguredModels,
@@ -70,6 +71,13 @@ function resolveDefaultModelRef(cfg: OpenClawConfig, agentId?: string): SessionD
     resolveAgentPrimaryModel(cfg, agentId) ??
     resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model) ??
     DEFAULT_MODEL;
+  const controlDirectorRef = resolveControlDirectorCanonicalModelRef({
+    agentId,
+    model: primary,
+  });
+  if (controlDirectorRef) {
+    return { provider: controlDirectorRef.provider, model: controlDirectorRef.model };
+  }
   return parseModelRef(primary, DEFAULT_PROVIDER);
 }
 
@@ -116,15 +124,18 @@ function normalizeCliRuntimeDisplayRef(
 export function resolveSessionDisplayModel(
   cfg: OpenClawConfig,
   row: SessionDisplayModelRow,
+  options?: { agentId?: string },
 ): string {
-  return resolveSessionDisplayModelRef(cfg, row).model;
+  return resolveSessionDisplayModelRef(cfg, row, options).model;
 }
 
 export function resolveSessionDisplayModelRef(
   cfg: OpenClawConfig,
   row: SessionDisplayModelRow,
+  options?: { agentId?: string },
 ): SessionDisplayModelRef {
-  const agentId = row.key.startsWith("agent:") ? row.key.split(":")[1] : undefined;
+  const agentId =
+    options?.agentId ?? (row.key.startsWith("agent:") ? row.key.split(":")[1] : undefined);
   const defaultRef = resolveDefaultModelRef(cfg, agentId);
   const normalizedOverride = normalizeStoredOverrideModel({
     providerOverride: row.providerOverride,
@@ -132,17 +143,30 @@ export function resolveSessionDisplayModelRef(
   });
 
   if (normalizedOverride.modelOverride) {
+    const controlDirectorRef = resolveControlDirectorCanonicalModelRef({
+      agentId,
+      provider: normalizedOverride.providerOverride,
+      model: normalizedOverride.modelOverride,
+    });
+    if (controlDirectorRef) {
+      return { provider: controlDirectorRef.provider, model: controlDirectorRef.model };
+    }
     return parseModelRef(
       normalizedOverride.modelOverride,
       normalizedOverride.providerOverride ?? defaultRef.provider,
     );
   }
   if (row.model) {
-    return normalizeCliRuntimeDisplayRef(
-      cfg,
-      parseModelRef(row.model, row.modelProvider ?? defaultRef.provider),
-      defaultRef,
-    );
+    const parsed = parseModelRef(row.model, row.modelProvider ?? defaultRef.provider);
+    const controlDirectorRef = resolveControlDirectorCanonicalModelRef({
+      agentId,
+      provider: row.modelProvider ?? parsed.provider,
+      model: row.model,
+    });
+    if (controlDirectorRef) {
+      return { provider: controlDirectorRef.provider, model: controlDirectorRef.model };
+    }
+    return normalizeCliRuntimeDisplayRef(cfg, parsed, defaultRef);
   }
   return defaultRef;
 }

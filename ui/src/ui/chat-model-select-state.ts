@@ -6,7 +6,14 @@ import {
   normalizeChatModelOverrideValue,
   resolvePreferredServerChatModelValue,
 } from "./chat-model-ref.ts";
+import {
+  formatControlDirectorPrimaryModelDisplay,
+  isControlDirectorAgentId,
+  isControlDirectorPrimaryModelRef,
+  resolveControlDirectorPrimaryModelValue,
+} from "./control-director-model.ts";
 import { pushUniqueTrimmedSelectOption } from "./select-options.ts";
+import { resolveAgentIdFromSessionKey } from "./session-key.ts";
 import type { ModelCatalogEntry } from "./types.ts";
 
 type ChatModelSelectStateInput = Pick<
@@ -31,23 +38,51 @@ function resolveActiveSessionRow(state: ChatModelSelectStateInput) {
   return state.sessionsResult?.sessions?.find((row) => row.key === state.sessionKey);
 }
 
+function isControlDirectorSession(state: ChatModelSelectStateInput): boolean {
+  return isControlDirectorAgentId(resolveAgentIdFromSessionKey(state.sessionKey));
+}
+
 export function resolveChatModelOverrideValue(state: ChatModelSelectStateInput): string {
   const catalog = state.chatModelCatalog ?? [];
+  const controlDirector = isControlDirectorSession(state);
 
   // Prefer the local cache — it reflects in-flight patches before sessionsResult refreshes.
   const cached = state.chatModelOverrides[state.sessionKey];
   if (cached) {
-    return normalizeChatModelOverrideValue(cached, catalog);
+    const cachedValue = normalizeChatModelOverrideValue(cached, catalog);
+    if (controlDirector && isControlDirectorPrimaryModelRef(cachedValue)) {
+      return "";
+    }
+    return cachedValue;
   }
   if (cached === null) {
     return "";
   }
 
   const activeRow = resolveActiveSessionRow(state);
+  if (
+    controlDirector &&
+    resolveControlDirectorPrimaryModelValue({
+      agentId: resolveAgentIdFromSessionKey(state.sessionKey),
+      provider: activeRow?.modelProvider,
+      model: activeRow?.model,
+    })
+  ) {
+    return "";
+  }
   return resolvePreferredServerChatModelValue(activeRow?.model, activeRow?.modelProvider, catalog);
 }
 
 function resolveDefaultModelValue(state: ChatModelSelectStateInput): string {
+  const agentId = resolveAgentIdFromSessionKey(state.sessionKey);
+  const canonicalControlDirectorDefault = resolveControlDirectorPrimaryModelValue({
+    agentId,
+    provider: state.sessionsResult?.defaults?.modelProvider,
+    model: state.sessionsResult?.defaults?.model,
+  });
+  if (canonicalControlDirectorDefault) {
+    return canonicalControlDirectorDefault;
+  }
   return resolvePreferredServerChatModelValue(
     state.sessionsResult?.defaults?.model,
     state.sessionsResult?.defaults?.modelProvider,
@@ -76,11 +111,16 @@ function buildChatModelOptions(
   if (currentOverride) {
     addOption(
       currentOverride,
-      formatCatalogChatModelDisplayFromLookup(currentOverride, displayLookup),
+      formatControlDirectorPrimaryModelDisplay(currentOverride) ??
+        formatCatalogChatModelDisplayFromLookup(currentOverride, displayLookup),
     );
   }
   if (defaultModel) {
-    addOption(defaultModel, formatCatalogChatModelDisplayFromLookup(defaultModel, displayLookup));
+    addOption(
+      defaultModel,
+      formatControlDirectorPrimaryModelDisplay(defaultModel) ??
+        formatCatalogChatModelDisplayFromLookup(defaultModel, displayLookup),
+    );
   }
   return options;
 }
@@ -92,7 +132,9 @@ export function resolveChatModelSelectState(
   const displayLookup = buildCatalogDisplayLookup(catalog);
   const currentOverride = resolveChatModelOverrideValue(state);
   const defaultModel = resolveDefaultModelValue(state);
-  const defaultDisplay = formatCatalogChatModelDisplayFromLookup(defaultModel, displayLookup);
+  const defaultDisplay =
+    formatControlDirectorPrimaryModelDisplay(defaultModel) ??
+    formatCatalogChatModelDisplayFromLookup(defaultModel, displayLookup);
 
   return {
     currentOverride,

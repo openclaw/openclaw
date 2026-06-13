@@ -2,6 +2,12 @@ import {
   resolveAgentModelFallbacksOverride,
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
+import {
+  CONTROL_DIRECTOR_PRIMARY_MODEL_ID,
+  CONTROL_DIRECTOR_PRIMARY_PROVIDER,
+  isControlDirectorAgentId,
+  isStaleControlDirectorPrimaryModelProvider,
+} from "../agents/control-director-contract.js";
 import { resolveAgentHarnessPolicy } from "../agents/harness/selection.js";
 import {
   modelKey,
@@ -150,6 +156,12 @@ export type DoctorSessionRouteStateManualReview = {
 export type DoctorSessionRouteStateScan = {
   repairs: DoctorSessionRouteStateRepair[];
   manualReview: DoctorSessionRouteStateManualReview[];
+};
+
+export type DoctorControlDirectorSessionModelRepair = {
+  key: string;
+  repairOverride: boolean;
+  repairRuntime: boolean;
 };
 
 function resolvePersistedOverrideModelRef(params: {
@@ -337,6 +349,40 @@ export function scanSessionRouteStateOwners(params: {
   return { repairs, manualReview };
 }
 
+export function scanControlDirectorSessionModelState(params: {
+  cfg: OpenClawConfig;
+  store: Record<string, Record<string, unknown>>;
+}): DoctorControlDirectorSessionModelRepair[] {
+  const repairs: DoctorControlDirectorSessionModelRepair[] = [];
+  for (const [key, entry] of Object.entries(params.store)) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const agentId = resolveSessionAgentId(params.cfg, key);
+    if (!isControlDirectorAgentId(agentId)) {
+      continue;
+    }
+    const runtimeProvider = normalizeString(entry.modelProvider);
+    const runtimeModel = normalizeString(entry.model);
+    const repairRuntime = isStaleControlDirectorPrimaryModelProvider({
+      agentId,
+      provider: runtimeProvider,
+      model: runtimeModel,
+    });
+    const overrideProvider = normalizeString(entry.providerOverride);
+    const overrideModel = normalizeString(entry.modelOverride);
+    const repairOverride = isStaleControlDirectorPrimaryModelProvider({
+      agentId,
+      provider: overrideProvider,
+      model: overrideModel,
+    });
+    if (repairOverride || repairRuntime) {
+      repairs.push({ key, repairOverride, repairRuntime });
+    }
+  }
+  return repairs;
+}
+
 function clearEntryKey(entry: Record<string, unknown>, key: string): boolean {
   if (entry[key] !== undefined) {
     delete entry[key];
@@ -369,6 +415,34 @@ function clearRecordKeys(
   }
   entry[recordKey] = Object.keys(next).length > 0 ? next : undefined;
   return true;
+}
+
+export function applyControlDirectorSessionModelRepair(params: {
+  entry: Record<string, unknown>;
+  repair: DoctorControlDirectorSessionModelRepair;
+  now: number;
+}): boolean {
+  let changed = false;
+  if (params.repair.repairOverride) {
+    changed = clearEntryKey(params.entry, "providerOverride") || changed;
+    changed = clearEntryKey(params.entry, "modelOverride") || changed;
+    changed = clearEntryKey(params.entry, "modelOverrideSource") || changed;
+    changed = clearEntryKey(params.entry, "liveModelSwitchPending") || changed;
+  }
+  if (params.repair.repairRuntime) {
+    if (params.entry.modelProvider !== CONTROL_DIRECTOR_PRIMARY_PROVIDER) {
+      params.entry.modelProvider = CONTROL_DIRECTOR_PRIMARY_PROVIDER;
+      changed = true;
+    }
+    if (params.entry.model !== CONTROL_DIRECTOR_PRIMARY_MODEL_ID) {
+      params.entry.model = CONTROL_DIRECTOR_PRIMARY_MODEL_ID;
+      changed = true;
+    }
+  }
+  if (changed) {
+    params.entry.updatedAt = params.now;
+  }
+  return changed;
 }
 
 export function applySessionRouteStateRepair(params: {
@@ -438,10 +512,6 @@ export async function runPluginSessionStateDoctorRepairs(params: {
   if (!storeMayContainPluginSessionRouteState(params.store)) {
     return;
   }
-  const owners = resolvePluginDoctorSessionRouteStateOwners({ cfg: params.cfg, env: params.env });
-  if (owners.length === 0) {
-    return;
-  }
   const routes = Object.fromEntries(
     Object.keys(params.store).map((sessionKey) => [
       sessionKey,
@@ -449,6 +519,59 @@ export async function runPluginSessionStateDoctorRepairs(params: {
     ]),
   );
   const store = params.store as unknown as Record<string, Record<string, unknown>>;
+  const controlDirectorRepairs = scanControlDirectorSessionModelState({
+    cfg: params.cfg,
+    store,
+  });
+  if (controlDirectorRepairs.length > 0) {
+    const staleCount = countSessionLabel(controlDirectorRepairs.length);
+    params.warnings.push(
+      [
+        `- Found stale Control Director Qwen3.6 Q8 session model pins in ${staleCount}.`,
+        "  These rows pointed the tuned Qwen3.6 alias at a non-Ollama provider, which can make the dashboard look like Control Director is not defaulting to Qwen3.6 Q8.",
+        `  Examples: ${controlDirectorRepairs
+          .slice(0, 3)
+          .map((repair) => repair.key)
+          .join(", ")}`,
+      ].join("\n"),
+    );
+    const repairState = await params.prompter.confirmRuntimeRepair({
+      message: `Repair stale Control Director Qwen3.6 Q8 session model pins for ${staleCount}?`,
+      initialValue: true,
+    });
+    if (repairState) {
+      let repaired = 0;
+      const repairedAt = Date.now();
+      const repairsByKey = new Map(controlDirectorRepairs.map((repair) => [repair.key, repair]));
+      await updateSessionStore(params.absoluteStorePath, (currentStore) => {
+        const currentMutableStore = currentStore as unknown as Record<
+          string,
+          Record<string, unknown>
+        >;
+        for (const [key, repair] of repairsByKey) {
+          const current = currentMutableStore[key];
+          if (
+            current &&
+            applyControlDirectorSessionModelRepair({ entry: current, repair, now: repairedAt })
+          ) {
+            repaired += 1;
+          }
+        }
+      });
+      if (repaired > 0) {
+        params.changes.push(
+          `- Repaired stale Control Director Qwen3.6 Q8 session model pins for ${countSessionLabel(
+            repaired,
+          )}.`,
+        );
+      }
+    }
+  }
+
+  const owners = resolvePluginDoctorSessionRouteStateOwners({ cfg: params.cfg, env: params.env });
+  if (owners.length === 0) {
+    return;
+  }
   const scan = scanSessionRouteStateOwners({ owners, store, routes });
   if (scan.repairs.length > 0) {
     for (const [ownerLabel, repairs] of groupRepairsByOwner(scan.repairs)) {

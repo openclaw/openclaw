@@ -261,7 +261,7 @@ export async function sessionsCommand(
       .map(([key, entry]) => {
         const row = toSessionDisplayRow(key, entry);
         const agentId = parseAgentSessionKey(row.key)?.agentId ?? target.agentId;
-        const modelRef = resolveSessionDisplayModelRef(cfg, row);
+        const modelRef = resolveSessionDisplayModelRef(cfg, row, { agentId });
         const agentRuntime = resolveModelAgentRuntimeMetadata({
           cfg,
           agentId,
@@ -309,7 +309,7 @@ export async function sessionsCommand(
       sessions: await Promise.all(
         rows.map(async (row) => {
           const r = toJsonSessionRow(row);
-          const modelRef = resolveSessionDisplayModelRef(cfg, r);
+          const modelRef = resolveSessionDisplayModelRef(cfg, r, { agentId: row.agentId });
           return {
             ...r,
             totalTokens: resolveSessionTotalTokens(r) ?? null,
@@ -368,7 +368,7 @@ export async function sessionsCommand(
   runtime.log(rich ? theme.heading(header) : header);
 
   for (const row of rows) {
-    const model = resolveSessionDisplayModel(cfg, row);
+    const model = resolveSessionDisplayModel(cfg, row, { agentId: row.agentId });
     const contextTokens =
       row.contextTokens ??
       configuredContextTokens ??
