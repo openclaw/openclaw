@@ -891,6 +891,68 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     expect(getAgentRunContext("test-session-id")).toBeUndefined();
   });
 
+  it("keeps shared cron context until overlapping invocations finish", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronSessionMock.mockImplementation(() => makeCronSession());
+    const { claimAgentRunContext, getAgentEventLifecycleGeneration, getAgentRunContext } =
+      await import("../../infra/agent-events.js");
+    let invocationCount = 0;
+    let releaseFirst = () => {};
+    let releaseSecond = () => {};
+    let markFirstStarted = () => {};
+    let markSecondStarted = () => {};
+    const firstStarted = new Promise<void>((resolve) => {
+      markFirstStarted = resolve;
+    });
+    const secondStarted = new Promise<void>((resolve) => {
+      markSecondStarted = resolve;
+    });
+    const firstBlocked = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const secondBlocked = new Promise<void>((resolve) => {
+      releaseSecond = resolve;
+    });
+    runEmbeddedAgentMock.mockImplementation(async () => {
+      claimAgentRunContext("test-session-id", {
+        sessionKey: "agent:default:cron:message-tool-policy",
+        sessionId: "test-session-id",
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      });
+      invocationCount += 1;
+      if (invocationCount === 1) {
+        markFirstStarted();
+        await firstBlocked;
+      } else {
+        markSecondStarted();
+        await secondBlocked;
+      }
+      return {
+        payloads: [{ text: "test output" }],
+        meta: { agentMeta: {} },
+      };
+    });
+    const currentSessionJob = makeMessageToolPolicyJob() as unknown as Record<string, unknown>;
+    currentSessionJob.sessionTarget = "current";
+    const runParams = {
+      ...makeParams(),
+      job: currentSessionJob as never,
+    };
+
+    const firstRun = runCronIsolatedAgentTurn(runParams);
+    await firstStarted;
+    const secondRun = runCronIsolatedAgentTurn(runParams);
+    await secondStarted;
+
+    releaseFirst();
+    await firstRun;
+    expect(getAgentRunContext("test-session-id")).toBeDefined();
+
+    releaseSecond();
+    await secondRun;
+    expect(getAgentRunContext("test-session-id")).toBeUndefined();
+  });
+
   it("releases a stale shared cron context replaced by this invocation", async () => {
     mockRunCronFallbackPassthrough();
     runEmbeddedAgentMock.mockRejectedValueOnce(new Error("runner failed"));

@@ -18,9 +18,9 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   claimAgentRunContext,
-  clearAgentRunContext,
   getAgentEventLifecycleGeneration,
   getAgentRunContext,
+  releaseAgentRunContext,
 } from "../../infra/agent-events.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import {
@@ -1234,12 +1234,9 @@ async function disposeCronRunContext(params: {
   sessionId: string;
   cronSession: MutableCronSession;
   ownsRunContext: boolean;
-  clearRunContext: boolean;
-  lifecycleGeneration: string;
+  runContextOwnerToken?: string;
 }): Promise<void> {
-  if (params.clearRunContext) {
-    clearAgentRunContext(params.sessionId, params.lifecycleGeneration);
-  }
+  releaseAgentRunContext(params.sessionId, params.runContextOwnerToken);
   if (params.ownsRunContext) {
     await retireSessionMcpRuntime({
       sessionId: params.sessionId,
@@ -1285,7 +1282,7 @@ export async function runCronIsolatedAgentTurn(params: {
   // Capture the stable run id before execution can rotate its persisted session.
   const initialSessionId = prepared.context.cronSession.sessionEntry.sessionId;
   const ownsRunContext = params.job.sessionTarget === "isolated";
-  let clearRunContext = ownsRunContext;
+  let runContextOwnerToken: string | undefined;
   let runLifecycleGeneration = admittedLifecycleGeneration;
   const notifyExecutionStarted = (info?: { lifecycleGeneration?: string }) => {
     if (info?.lifecycleGeneration) {
@@ -1334,19 +1331,21 @@ export async function runCronIsolatedAgentTurn(params: {
   try {
     assertAgentRunLifecycleGenerationCurrent(runLifecycleGeneration);
     const existingRunContext = getAgentRunContext(initialSessionId);
-    const replacesStaleRunContext =
-      existingRunContext?.lifecycleGeneration !== undefined &&
-      existingRunContext.lifecycleGeneration !== runLifecycleGeneration;
-    clearRunContext ||= existingRunContext === undefined || replacesStaleRunContext;
-    claimAgentRunContext(initialSessionId, {
-      ...existingRunContext,
-      sessionKey:
-        ownsRunContext || !existingRunContext?.sessionKey
-          ? prepared.context.runSessionKey
-          : existingRunContext.sessionKey,
-      sessionId: initialSessionId,
-      lifecycleGeneration: runLifecycleGeneration,
-    });
+    runContextOwnerToken = claimAgentRunContext(
+      initialSessionId,
+      {
+        sessionKey:
+          ownsRunContext || !existingRunContext?.sessionKey
+            ? prepared.context.runSessionKey
+            : existingRunContext.sessionKey,
+        sessionId: initialSessionId,
+        lifecycleGeneration: runLifecycleGeneration,
+      },
+      {
+        trackOwner: true,
+        ownsContext: ownsRunContext,
+      },
+    );
     const { executeCronRun } = await loadCronExecutorRuntime();
     const execution = await executeCronRun({
       cfg: params.cfg,
@@ -1438,8 +1437,7 @@ export async function runCronIsolatedAgentTurn(params: {
       sessionId: initialSessionId,
       cronSession: prepared.context.cronSession,
       ownsRunContext,
-      clearRunContext,
-      lifecycleGeneration: runLifecycleGeneration,
+      runContextOwnerToken,
     });
   }
 }

@@ -154,6 +154,15 @@ type AgentEventState = {
   seqByRun: Map<string, number>;
   listeners: Set<(evt: AgentEventPayload) => void>;
   runContextById: Map<string, AgentRunContext>;
+  runContextOwnersById?: Map<
+    string,
+    {
+      lifecycleGeneration: string;
+      ownerTokens: Set<string>;
+      preserveAfterRelease: boolean;
+      clearRequested: boolean;
+    }
+  >;
   lifecycleGeneration: string;
 };
 
@@ -260,20 +269,53 @@ export function registerAgentRunContext(runId: string, context: AgentRunContext)
   }
 }
 
+function getAgentRunContextOwners(state = getAgentEventState()) {
+  state.runContextOwnersById ??= new Map();
+  return state.runContextOwnersById;
+}
+
 /** Claims a run id for a newly admitted execution, replacing stale ownership. */
-export function claimAgentRunContext(runId: string, context: AgentRunContext) {
+export function claimAgentRunContext(
+  runId: string,
+  context: AgentRunContext,
+  options: { trackOwner?: boolean; ownsContext?: boolean } = {},
+): string | undefined {
   if (!runId) {
-    return;
+    return undefined;
   }
   const state = getAgentEventState();
   const lifecycleGeneration = context.lifecycleGeneration ?? state.lifecycleGeneration;
   const existing = state.runContextById.get(runId);
+  const ownersById = getAgentRunContextOwners(state);
+  const existingOwners = ownersById.get(runId);
+  let ownerToken: string | undefined;
+  if (options.trackOwner) {
+    ownerToken = randomUUID();
+    if (existingOwners?.lifecycleGeneration === lifecycleGeneration) {
+      existingOwners.ownerTokens.add(ownerToken);
+      if (options.ownsContext) {
+        existingOwners.preserveAfterRelease = false;
+      }
+    } else {
+      ownersById.set(runId, {
+        lifecycleGeneration,
+        ownerTokens: new Set([ownerToken]),
+        preserveAfterRelease:
+          options.ownsContext !== true && existing?.lifecycleGeneration === lifecycleGeneration,
+        clearRequested: false,
+      });
+    }
+  } else if (existingOwners?.lifecycleGeneration !== lifecycleGeneration) {
+    // Same-generation untracked claims refresh metadata inside the tracked
+    // execution. A new lifecycle replaces that ownership outright.
+    ownersById.delete(runId);
+  }
   if (existing?.lifecycleGeneration === lifecycleGeneration) {
     registerAgentRunContext(runId, {
       ...context,
       lifecycleGeneration,
     });
-    return;
+    return ownerToken;
   }
   state.runContextById.set(runId, {
     ...context,
@@ -281,6 +323,7 @@ export function claimAgentRunContext(runId: string, context: AgentRunContext) {
     registeredAt: context.registeredAt ?? Date.now(),
   });
   state.seqByRun.delete(runId);
+  return ownerToken;
 }
 
 /** Returns the currently registered context for a run, if it has not been cleared or swept. */
@@ -317,8 +360,35 @@ export function clearAgentRunContext(runId: string, lifecycleGeneration?: string
   if (lifecycleGeneration && existing && existing.lifecycleGeneration !== lifecycleGeneration) {
     return;
   }
+  const owners = getAgentRunContextOwners(state).get(runId);
+  if (owners?.ownerTokens.size) {
+    if (!lifecycleGeneration || owners.lifecycleGeneration === lifecycleGeneration) {
+      owners.clearRequested = true;
+    }
+    return;
+  }
   state.runContextById.delete(runId);
   state.seqByRun.delete(runId);
+}
+
+/** Releases one tracked owner and clears its context after the final owner exits. */
+export function releaseAgentRunContext(runId: string, ownerToken: string | undefined) {
+  if (!runId || !ownerToken) {
+    return;
+  }
+  const state = getAgentEventState();
+  const ownersById = getAgentRunContextOwners(state);
+  const owners = ownersById.get(runId);
+  if (!owners?.ownerTokens.delete(ownerToken)) {
+    return;
+  }
+  if (owners.ownerTokens.size > 0) {
+    return;
+  }
+  ownersById.delete(runId);
+  if (owners.clearRequested || !owners.preserveAfterRelease) {
+    clearAgentRunContext(runId, owners.lifecycleGeneration);
+  }
 }
 
 /**
@@ -337,6 +407,7 @@ export function sweepStaleRunContexts(maxAgeMs = 30 * 60 * 1000): number {
     if (age > maxAgeMs) {
       state.runContextById.delete(runId);
       state.seqByRun.delete(runId);
+      getAgentRunContextOwners(state).delete(runId);
       swept++;
     }
   }
@@ -345,8 +416,10 @@ export function sweepStaleRunContexts(maxAgeMs = 30 * 60 * 1000): number {
 
 /** Clears run context state without removing event listeners; test-only helper. */
 export function resetAgentRunContextForTest() {
-  getAgentEventState().runContextById.clear();
-  getAgentEventState().seqByRun.clear();
+  const state = getAgentEventState();
+  state.runContextById.clear();
+  state.seqByRun.clear();
+  getAgentRunContextOwners(state).clear();
 }
 
 /** Emits an agent event after assigning per-run sequence, timestamp, and context metadata. */
@@ -490,4 +563,5 @@ export function resetAgentEventsForTest() {
   state.seqByRun.clear();
   state.listeners.clear();
   state.runContextById.clear();
+  getAgentRunContextOwners(state).clear();
 }

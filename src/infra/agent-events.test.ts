@@ -11,6 +11,7 @@ import {
   listAgentRunsForSession,
   onAgentEvent,
   registerAgentRunContext,
+  releaseAgentRunContext,
   resetAgentEventsForTest,
   resetAgentRunContextForTest,
   rotateAgentEventLifecycleGeneration,
@@ -89,6 +90,81 @@ describe("agent-events sequencing", () => {
     stop();
 
     expect(seen).toEqual([1, 2]);
+  });
+
+  test("keeps a tracked context until every overlapping owner exits", () => {
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const firstOwner = claimAgentRunContext(
+      "shared-run",
+      { sessionKey: "main", lifecycleGeneration },
+      { trackOwner: true },
+    );
+    const secondOwner = claimAgentRunContext(
+      "shared-run",
+      { sessionKey: "main", lifecycleGeneration },
+      { trackOwner: true },
+    );
+
+    clearAgentRunContext("shared-run", lifecycleGeneration);
+    releaseAgentRunContext("shared-run", firstOwner);
+    expect(getAgentRunContext("shared-run")).toBeDefined();
+
+    releaseAgentRunContext("shared-run", secondOwner);
+    expect(getAgentRunContext("shared-run")).toBeUndefined();
+  });
+
+  test("clears tracked context after an inner same-generation reclaim", () => {
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const ownerToken = claimAgentRunContext(
+      "shared-run",
+      { sessionKey: "main", lifecycleGeneration },
+      { trackOwner: true },
+    );
+
+    claimAgentRunContext("shared-run", {
+      sessionKey: "main",
+      lifecycleGeneration,
+      verboseLevel: "off",
+    });
+    releaseAgentRunContext("shared-run", ownerToken);
+
+    expect(getAgentRunContext("shared-run")).toBeUndefined();
+  });
+
+  test("honors a matching clear deferred behind a tracked owner", () => {
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    registerAgentRunContext("shared-run", {
+      sessionKey: "main",
+      lifecycleGeneration,
+    });
+    const ownerToken = claimAgentRunContext(
+      "shared-run",
+      { sessionKey: "main", lifecycleGeneration },
+      { trackOwner: true },
+    );
+
+    clearAgentRunContext("shared-run", lifecycleGeneration);
+    releaseAgentRunContext("shared-run", ownerToken);
+
+    expect(getAgentRunContext("shared-run")).toBeUndefined();
+  });
+
+  test("full event reset clears tracked ownership", () => {
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    claimAgentRunContext(
+      "shared-run",
+      { sessionKey: "main", lifecycleGeneration },
+      { trackOwner: true },
+    );
+
+    resetAgentEventsForTest();
+    registerAgentRunContext("shared-run", {
+      sessionKey: "main",
+      lifecycleGeneration,
+    });
+    clearAgentRunContext("shared-run", lifecycleGeneration);
+
+    expect(getAgentRunContext("shared-run")).toBeUndefined();
   });
 
   test("drops stale explicit-generation events before shared listeners", () => {
