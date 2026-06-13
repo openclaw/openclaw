@@ -99,11 +99,21 @@ export function resolveSessionTranscriptCandidates(
       pushCandidate(() =>
         resolveSessionFilePath(sessionId, { sessionFile }, { sessionsDir, agentId }),
       );
+      // When the session file path is stale (filename UUID doesn't match the
+      // current session ID), resolveSessionFilePath may fall through to a
+      // generated path under the sessions dir if the stale file path points
+      // outside the agent sessions tree (e.g., a legacy ~/.openclaw/sessions/
+      // path from before the per-agent filing overhaul).  Include the raw
+      // path as an additional candidate so the archive step can still find
+      // and rename the old transcript file on disk.
+      pushCandidate(() => path.resolve(sessionFile));
     }
   } else if (sessionFile) {
     if (agentId) {
       if (sessionFileState !== "stale") {
         pushCandidate(() => resolveSessionFilePath(sessionId, { sessionFile }, { agentId }));
+      } else {
+        pushCandidate(() => path.resolve(sessionFile));
       }
     } else {
       const trimmed = sessionFile.trim();
@@ -117,6 +127,7 @@ export function resolveSessionTranscriptCandidates(
     pushCandidate(() => resolveSessionTranscriptPath(sessionId, agentId));
     if (sessionFile && sessionFileState === "stale") {
       pushCandidate(() => resolveSessionFilePath(sessionId, { sessionFile }, { agentId }));
+      pushCandidate(() => path.resolve(sessionFile));
     }
   }
 
