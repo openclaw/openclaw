@@ -414,7 +414,6 @@ export function startGatewayConfigReloader(opts: {
     }
     const next = chokidar.watch(opts.watchPath, {
       ignoreInitial: true,
-      awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
       usePolling: Boolean(process.env.VITEST),
     });
     next.on("add", scheduleFromWatcher);

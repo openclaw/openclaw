@@ -517,10 +517,6 @@ function createSkillsPathWatcher(target: WatchTarget, debounceMs: number): Skill
     // Skill root precedence and grouped discovery use the same bounded depth,
     // so watcher invalidation must observe that whole decision surface.
     depth: target.depth,
-    awaitWriteFinish: {
-      stabilityThreshold: debounceMs,
-      pollInterval: 100,
-    },
     ignored: (watchPath, stats) => shouldIgnoreSkillsWatchPath(watchPath, stats, { usePolling }),
   });
 

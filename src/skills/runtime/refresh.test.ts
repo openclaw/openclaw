@@ -64,7 +64,15 @@ describe("ensureSkillsWatcher", () => {
 
       // Each unique directory gets its own watcher (one path argument per call).
       const calls = watchMock.mock.calls as unknown as Array<
-        [string, { depth?: number; followSymlinks?: boolean; ignored?: unknown }]
+        [
+          string,
+          {
+            awaitWriteFinish?: unknown;
+            depth?: number;
+            followSymlinks?: boolean;
+            ignored?: unknown;
+          },
+        ]
       >;
       expect(calls.length).toBeGreaterThan(0);
       const targets = calls.map((call) => call[0]);
@@ -73,6 +81,7 @@ describe("ensureSkillsWatcher", () => {
 
       expect(typeof opts.ignored).toBe("function");
       expect(opts.followSymlinks).toBe(false);
+      expect(opts).not.toHaveProperty("awaitWriteFinish");
       const posix = (p: string) => p.replaceAll("\\", "/");
       expect(targets).toContain(workspaceSkillsRoot);
       expect(targets).toContain(posix(path.join(workspaceDir, ".agents", "skills")));

@@ -744,6 +744,27 @@ describe("startGatewayConfigReloader", () => {
     vi.restoreAllMocks();
   });
 
+  it("watches config changes without awaitWriteFinish polling", async () => {
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValue(makeSnapshot());
+
+    const { reloader } = createReloaderHarness(readSnapshot);
+    const watchOptions = vi.mocked(chokidar.watch).mock.calls[0]?.[1] as
+      | { awaitWriteFinish?: unknown; ignoreInitial?: boolean; usePolling?: boolean }
+      | undefined;
+
+    expect(watchOptions).toEqual(
+      expect.objectContaining({
+        ignoreInitial: true,
+        usePolling: Boolean(process.env.VITEST),
+      }),
+    );
+    expect(watchOptions).not.toHaveProperty("awaitWriteFinish");
+
+    await reloader.stop();
+  });
+
   it("retries missing snapshots and reloads once config file reappears", async () => {
     const readSnapshot = vi
       .fn<() => Promise<ConfigFileSnapshot>>()
