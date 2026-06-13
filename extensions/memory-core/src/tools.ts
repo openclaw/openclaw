@@ -1,6 +1,9 @@
 // Memory Core plugin module implements tools behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import type {
+  MemorySource,
+  ResolvedMemoryBackendConfig,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   asToolParamsRecord,
   jsonResult,
@@ -19,6 +22,7 @@ import {
   resolveMemoryDreamingConfig,
   resolveMemoryDeepDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { asRecord } from "./dreaming-shared.js";
 import { filterMemorySearchHitsBySessionVisibility } from "./session-search-visibility.js";
 import { recordShortTermRecalls } from "./short-term-promotion.js";
@@ -46,6 +50,7 @@ type MemoryManagerContext = Awaited<ReturnType<typeof getMemoryManagerContextWit
 type ActiveMemoryManagerContext = Extract<MemoryManagerContext, { manager: unknown }>;
 
 const MEMORY_SEARCH_TOOL_TIMEOUT_MS = 15_000;
+const MEMORY_SEARCH_TOOL_QMD_TIMEOUT_OVERHEAD_MS = 5_000;
 const MEMORY_SEARCH_TOOL_COOLDOWN_MS = 60_000;
 
 const memorySearchToolCooldowns = new Map<string, { until: number; error: string }>();
@@ -76,6 +81,23 @@ function recordMemorySearchToolCooldown(key: string, error: string): void {
   });
 }
 
+function resolveMemorySearchToolTimeoutMs(params: {
+  resolvedBackend?: ResolvedMemoryBackendConfig;
+  requestedCorpus?: "memory" | "wiki" | "all" | "sessions";
+}): number {
+  if (params.requestedCorpus === "wiki" || params.resolvedBackend?.backend !== "qmd") {
+    return MEMORY_SEARCH_TOOL_TIMEOUT_MS;
+  }
+  const qmdTimeoutMs = params.resolvedBackend.qmd?.limits.timeoutMs;
+  if (qmdTimeoutMs === undefined || qmdTimeoutMs <= MEMORY_SEARCH_TOOL_TIMEOUT_MS) {
+    return MEMORY_SEARCH_TOOL_TIMEOUT_MS;
+  }
+  return resolveTimerTimeoutMs(
+    qmdTimeoutMs + MEMORY_SEARCH_TOOL_QMD_TIMEOUT_OVERHEAD_MS,
+    MEMORY_SEARCH_TOOL_TIMEOUT_MS,
+  );
+}
+
 export const testing = {
   resetMemorySearchToolCooldowns() {
     memorySearchToolCooldowns.clear();
@@ -104,8 +126,9 @@ async function runMemorySearchToolWithDeadline<T>(params: {
   timeoutMs: number;
   run: (signal: AbortSignal) => Promise<T>;
 }): Promise<{ status: "ok"; value: T } | { status: "unavailable"; error: string }> {
+  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, MEMORY_SEARCH_TOOL_TIMEOUT_MS);
   const timeoutError = () =>
-    new Error(`memory_search timed out after ${Math.round(params.timeoutMs / 1000)}s`);
+    new Error(`memory_search timed out after ${Math.round(timeoutMs / 1000)}s`);
   // Abort the losing task when the deadline fires so in-flight embedding work
   // is cancelled instead of retrying orphaned for minutes after the tool
   // already returned "timed out" to the agent.
@@ -118,7 +141,7 @@ async function runMemorySearchToolWithDeadline<T>(params: {
       // timeout result with a provider-wrapped abort error.
       resolve("timeout");
       controller.abort(timeoutError());
-    }, params.timeoutMs);
+    }, timeoutMs);
     timer.unref?.();
   });
   const task = params.run(controller.signal);
@@ -393,6 +416,9 @@ export function createMemorySearchTool(options: {
         });
         const cooldown =
           requestedCorpus === "wiki" ? undefined : readMemorySearchToolCooldown(cooldownKey);
+        const memoryRuntime =
+          requestedCorpus === "wiki" ? undefined : await loadMemoryToolRuntime();
+        const resolvedBackend = memoryRuntime?.resolveMemoryBackendConfig({ cfg, agentId });
         let activeUnavailablePhase: "memory" | "supplement" | undefined;
         let failedUnavailablePhase: "memory" | "supplement" | undefined;
         const runUnavailablePhase = async <T>(
@@ -413,9 +439,11 @@ export function createMemorySearchTool(options: {
         };
 
         const outcome = await runMemorySearchToolWithDeadline({
-          timeoutMs: MEMORY_SEARCH_TOOL_TIMEOUT_MS,
+          timeoutMs: resolveMemorySearchToolTimeoutMs({
+            resolvedBackend,
+            requestedCorpus,
+          }),
           run: async (deadlineSignal) => {
-            const { resolveMemoryBackendConfig } = await loadMemoryToolRuntime();
             const shouldQuerySupplements = requestedCorpus === "wiki" || requestedCorpus === "all";
             const shouldQueryMemory = requestedCorpus !== "wiki" && !cooldown;
             if (cooldown && !shouldQuerySupplements) {
@@ -555,12 +583,11 @@ export function createMemorySearchTool(options: {
                   }
                   const status = activeMemory.manager.status();
                   const decorated = decorateCitations(rawResults, includeCitations);
-                  const resolved = resolveMemoryBackendConfig({ cfg, agentId });
                   const memoryResults =
                     status.backend === "qmd"
                       ? clampResultsByInjectedChars(
                           decorated,
-                          resolved.qmd?.limits.maxInjectedChars,
+                          resolvedBackend?.qmd?.limits.maxInjectedChars,
                         )
                       : decorated;
                   surfacedMemoryResults = memoryResults.map((result) => ({

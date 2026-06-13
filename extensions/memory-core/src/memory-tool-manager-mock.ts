@@ -68,15 +68,48 @@ const readAgentMemoryFileMock = vi.fn(
   async (params: MemoryReadParams) => await readFileImpl(params),
 );
 
+function resolvePositiveIntegerConfig(raw: unknown, fallback: number): number {
+  return typeof raw === "number" && Number.isFinite(raw) && raw > 0
+    ? Math.max(1, Math.floor(raw))
+    : fallback;
+}
+
 vi.mock("./tools.runtime.js", () => ({
   resolveMemoryBackendConfig: ({
     cfg,
   }: {
-    cfg?: { memory?: { backend?: string; qmd?: unknown } };
-  }) => ({
-    backend,
-    qmd: cfg?.memory?.qmd,
-  }),
+    cfg?: {
+      memory?: {
+        backend?: string;
+        qmd?: {
+          limits?: {
+            maxResults?: unknown;
+            maxSnippetChars?: unknown;
+            maxInjectedChars?: unknown;
+            timeoutMs?: unknown;
+          };
+        };
+      };
+    };
+  }) => {
+    const limits = cfg?.memory?.qmd?.limits;
+    return {
+      backend,
+      qmd:
+        backend === "qmd"
+          ? {
+              ...cfg?.memory?.qmd,
+              limits: {
+                ...limits,
+                maxResults: resolvePositiveIntegerConfig(limits?.maxResults, 4),
+                maxSnippetChars: resolvePositiveIntegerConfig(limits?.maxSnippetChars, 450),
+                maxInjectedChars: resolvePositiveIntegerConfig(limits?.maxInjectedChars, 2_200),
+                timeoutMs: resolvePositiveIntegerConfig(limits?.timeoutMs, 4_000),
+              },
+            }
+          : undefined,
+    };
+  },
   getMemorySearchManager: getMemorySearchManagerMock,
   readAgentMemoryFile: readAgentMemoryFileMock,
 }));

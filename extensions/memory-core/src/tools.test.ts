@@ -189,6 +189,96 @@ describe("memory_search unavailable payloads", () => {
     }
   });
 
+  it("lets QMD searches run past the default tool deadline when configured", async () => {
+    vi.useFakeTimers();
+    try {
+      setMemoryBackend("qmd");
+      let searchSignal: AbortSignal | undefined;
+      setMemorySearchImpl(async (opts) => {
+        searchSignal = opts?.signal;
+        return await new Promise((resolve) => {
+          setTimeout(() => {
+            resolve([
+              {
+                path: "MEMORY.md",
+                startLine: 1,
+                endLine: 2,
+                score: 0.9,
+                snippet: "slow qmd recall",
+                source: "memory" as const,
+              },
+            ]);
+          }, 16_000);
+        });
+      });
+      const tool = createMemorySearchToolOrThrow({
+        config: {
+          agents: { list: [{ id: "main", default: true }] },
+          memory: {
+            citations: "off",
+            backend: "qmd",
+            qmd: { limits: { timeoutMs: 60_000.5 } },
+          },
+        },
+      });
+
+      const resultPromise = tool.execute("slow-qmd-search", { query: "slow recall" });
+      await vi.advanceTimersByTimeAsync(16_000);
+
+      const result = await resultPromise;
+      expect(searchSignal?.aborted).toBe(false);
+      expect((result.details as { results?: Array<{ path: string }> }).results).toEqual([
+        {
+          corpus: "memory",
+          path: "MEMORY.md",
+          startLine: 1,
+          endLine: 2,
+          score: 0.9,
+          snippet: "slow qmd recall",
+          source: "memory",
+        },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a finite QMD tool deadline when the configured search does not settle", async () => {
+    vi.useFakeTimers();
+    try {
+      setMemoryBackend("qmd");
+      let settled = false;
+      setMemorySearchImpl(async () => await new Promise(() => {}));
+      const tool = createMemorySearchToolOrThrow({
+        config: {
+          agents: { list: [{ id: "main", default: true }] },
+          memory: {
+            backend: "qmd",
+            qmd: { limits: { timeoutMs: 60_000 } },
+          },
+        },
+      });
+
+      const resultPromise = tool.execute("stalled-qmd-search", { query: "slow recall" });
+      void resultPromise.then(() => {
+        settled = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(64_999);
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      const result = await resultPromise;
+      expectUnavailableMemorySearchDetails(result.details, {
+        error: "memory_search timed out after 65s",
+        warning: "Memory search is unavailable due to an embedding/provider error.",
+        action: "Check embedding provider configuration and retry memory_search.",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps the timeout result when an abort-aware search rejects on abort", async () => {
     vi.useFakeTimers();
     try {
