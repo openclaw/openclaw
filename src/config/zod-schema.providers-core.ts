@@ -1609,6 +1609,7 @@ export const MSTeamsConfigSchema = z
     mediaAllowHosts: z.array(z.string()).optional(),
     mediaAuthAllowHosts: z.array(z.string()).optional(),
     requireMention: z.boolean().optional(),
+    mentionPatterns: MentionPatternsPolicySchema.optional(),
     historyLimit: z.number().int().min(0).optional(),
     dmHistoryLimit: z.number().int().min(0).optional(),
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),

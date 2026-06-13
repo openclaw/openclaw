@@ -2,6 +2,7 @@
 import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
 import {
   buildChannelInboundEventContext,
+  buildMentionRegexes,
   logInboundDrop,
   resolveInboundMentionDecision,
   resolveInboundSessionEnvelopeContext,
@@ -37,6 +38,7 @@ import {
   type GraphThreadMessage,
 } from "../graph-thread.js";
 import { resolveGraphChatId } from "../graph-upload.js";
+import { isMSTeamsKeywordMention } from "../mentions.js";
 import {
   extractMSTeamsConversationMessageId,
   extractMSTeamsQuoteInfo,
@@ -522,10 +524,26 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       channelConfig,
     });
     const timestamp = parseMSTeamsActivityTimestamp(activity.timestamp);
+    // A non-@mention channel message that matches a configured mention pattern
+    // (e.g. the agent's name) counts as an implicit mention, so the agent answers
+    // when named without an `@`. Non-matching messages fall through to the
+    // requireMention gate below and are dropped before any model turn.
+    const keywordMention = isMSTeamsKeywordMention({
+      isDirectMessage,
+      alreadyMentioned: params.wasMentioned,
+      text,
+      fromId: activity.from?.id,
+      recipientId: activity.recipient?.id,
+      mentionRegexes: buildMentionRegexes(cfg, route.agentId, {
+        provider: "msteams",
+        conversationId,
+        providerPolicy: msteamsCfg?.mentionPatterns,
+      }),
+    });
     const mentionDecision = resolveInboundMentionDecision({
       facts: {
         canDetectMention: true,
-        wasMentioned: params.wasMentioned,
+        wasMentioned: params.wasMentioned || keywordMention,
         implicitMentionKinds: params.implicitMentionKinds,
       },
       policy: {
