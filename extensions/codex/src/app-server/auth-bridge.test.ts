@@ -677,14 +677,8 @@ describe("bridgeCodexAppServerStartOptions", () => {
     ).toBeUndefined();
   });
 
-  it("answers refresh requests from a discovered inline Codex OAuth profile", async () => {
+  it("answers refresh requests from a still-valid inline Codex OAuth profile", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
-    oauthMocks.refreshOpenAICodexToken.mockResolvedValueOnce({
-      access: "refreshed-ref-backed-access-token",
-      refresh: "refreshed-ref-backed-refresh-token",
-      expires: Date.now() + 60_000,
-      accountId: "account-ref-backed-refreshed",
-    });
     try {
       upsertAuthProfile({
         agentDir,
@@ -694,19 +688,19 @@ describe("bridgeCodexAppServerStartOptions", () => {
           provider: "openai",
           access: "ref-backed-access-token",
           refresh: "ref-backed-refresh-token",
-          expires: Date.now() + 60_000,
+          expires: Date.now() + 24 * 60 * 60_000,
           accountId: "account-ref-backed",
           email: "codex@example.test",
         },
       });
 
       await expect(refreshCodexAppServerAuthTokens({ agentDir })).resolves.toEqual({
-        accessToken: "refreshed-ref-backed-access-token",
-        chatgptAccountId: "account-ref-backed-refreshed",
+        accessToken: "ref-backed-access-token",
+        chatgptAccountId: "account-ref-backed",
         chatgptPlanType: null,
       });
 
-      expect(oauthMocks.refreshOpenAICodexToken).toHaveBeenCalledWith("ref-backed-refresh-token");
+      expect(oauthMocks.refreshOpenAICodexToken).not.toHaveBeenCalled();
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }
@@ -740,29 +734,23 @@ describe("bridgeCodexAppServerStartOptions", () => {
     }
   });
 
-  it("answers refresh from native Codex CLI OAuth without persisting an OpenClaw profile", async () => {
+  it("answers refresh from still-valid native Codex CLI OAuth without persisting an OpenClaw profile", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     const agentDir = path.join(root, "agent");
     const codexHome = path.join(root, "codex-cli");
     const authProfileStorePath = path.join(agentDir, "auth-profiles.json");
     vi.stubEnv("CODEX_HOME", codexHome);
-    oauthMocks.refreshOpenAICodexToken.mockResolvedValueOnce({
-      access: "fresh-cli-access-token",
-      refresh: "fresh-cli-refresh-token",
-      expires: Date.now() + 60_000,
-      accountId: "account-cli-refreshed",
-    });
     try {
       await writeCodexCliAuthFile(codexHome);
 
       await expect(refreshCodexAppServerAuthTokens({ agentDir })).resolves.toEqual({
-        accessToken: "fresh-cli-access-token",
-        chatgptAccountId: "account-cli-refreshed",
+        accessToken: "cli-access-token",
+        chatgptAccountId: "account-cli",
         chatgptPlanType: null,
       });
 
       await expectPathMissing(authProfileStorePath);
-      expect(oauthMocks.refreshOpenAICodexToken).toHaveBeenCalledWith("cli-refresh-token");
+      expect(oauthMocks.refreshOpenAICodexToken).not.toHaveBeenCalled();
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
@@ -1316,7 +1304,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
     }
   });
 
-  it("answers app-server ChatGPT token refresh requests from the bound profile", async () => {
+  it("refreshes near-expiry app-server ChatGPT tokens from the bound profile", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     oauthMocks.refreshOpenAICodexToken.mockResolvedValueOnce({
       access: "refreshed-access-token",
@@ -1355,7 +1343,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
     }
   });
 
-  it("does not persist an expired stale credential before forced token refresh succeeds", async () => {
+  it("does not persist a stale near-expiry credential before token refresh succeeds", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     const currentExpiry = Date.now() + 60_000;
     oauthMocks.refreshOpenAICodexToken.mockImplementationOnce(async () => {

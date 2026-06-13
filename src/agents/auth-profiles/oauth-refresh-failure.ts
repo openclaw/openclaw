@@ -67,7 +67,13 @@ export function classifyOAuthRefreshFailureReason(
   if (lower.includes("invalid_grant")) {
     return "invalid_grant";
   }
-  if (lower.includes("signing in again") || lower.includes("sign in again")) {
+  if (
+    lower.includes("app_session_terminated") ||
+    lower.includes("session has ended") ||
+    lower.includes("log in again") ||
+    lower.includes("signing in again") ||
+    lower.includes("sign in again")
+  ) {
     return "sign_in_again";
   }
   if (lower.includes("invalid refresh token")) {
