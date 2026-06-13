@@ -258,7 +258,6 @@ type ActiveRecallResult =
 type ActiveMemoryPartialTimeoutError = Error & {
   activeMemoryPartialReply?: string;
   activeMemorySearchDebug?: ActiveMemorySearchDebug;
-  activeMemoryHasUsableMemoryResult?: boolean;
 };
 
 type TranscriptReadLimits = {
@@ -2041,23 +2040,10 @@ async function readPartialAssistantText(
   return joined || null;
 }
 
-async function readMergedPartialAssistantText(
-  sessionFiles: readonly string[],
-): Promise<string | null> {
-  for (const sessionFile of new Set(sessionFiles)) {
-    const text = await readPartialAssistantText(sessionFile);
-    if (text) {
-      return text;
-    }
-  }
-  return null;
-}
-
 function attachPartialTimeoutData(
   error: unknown,
   partialReply: string | null,
   searchDebug: ActiveMemorySearchDebug | undefined,
-  hasUsableMemoryResult: boolean,
 ): void {
   if (!error || typeof error !== "object") {
     return;
@@ -2069,13 +2055,11 @@ function attachPartialTimeoutData(
   if (searchDebug) {
     target.activeMemorySearchDebug = searchDebug;
   }
-  target.activeMemoryHasUsableMemoryResult = hasUsableMemoryResult;
 }
 
 function readPartialTimeoutData(error: unknown): {
   rawReply?: string;
   searchDebug?: ActiveMemorySearchDebug;
-  hasUsableMemoryResult?: boolean;
 } {
   if (!error || typeof error !== "object") {
     return {};
@@ -2084,7 +2068,6 @@ function readPartialTimeoutData(error: unknown): {
   return {
     rawReply: normalizeOptionalString(source.activeMemoryPartialReply),
     searchDebug: source.activeMemorySearchDebug,
-    hasUsableMemoryResult: source.activeMemoryHasUsableMemoryResult,
   };
 }
 
@@ -2093,7 +2076,6 @@ async function waitForSubagentPartialTimeoutData(
 ): Promise<{
   rawReply?: string;
   searchDebug?: ActiveMemorySearchDebug;
-  hasUsableMemoryResult?: boolean;
 }> {
   if (!subagentPromise) {
     return {};
@@ -2126,33 +2108,24 @@ async function buildTimeoutRecallResult(params: {
   sessionFile?: string;
   rawReply?: string;
   searchDebug?: ActiveMemorySearchDebug;
-  hasUsableMemoryResult?: boolean;
-  toolsAllow: readonly string[];
   subagentPromise?: Promise<RecallSubagentResult>;
 }): Promise<ActiveRecallResult> {
-  const subagentPartialData =
-    params.rawReply || params.searchDebug
-      ? {}
-      : await waitForSubagentPartialTimeoutData(params.subagentPromise);
+  const subagentPartialData = params.rawReply
+    ? {}
+    : await waitForSubagentPartialTimeoutData(params.subagentPromise);
   const rawReply =
     params.rawReply ??
     subagentPartialData.rawReply ??
     (await readPartialAssistantText(params.sessionFile));
-  const transcriptState = params.sessionFile
-    ? await readActiveMemoryTranscriptState(params.sessionFile, undefined, params.toolsAllow)
-    : undefined;
   const summary = truncateSummary(
     normalizeActiveSummary(rawReply ?? "") ?? "",
     params.maxSummaryChars,
   );
   const searchDebug =
-    params.searchDebug ?? subagentPartialData.searchDebug ?? transcriptState?.searchDebug;
-  const canUseSummary =
-    !isUnavailableMemorySearchDebug(searchDebug) ||
-    params.hasUsableMemoryResult === true ||
-    subagentPartialData.hasUsableMemoryResult === true ||
-    transcriptState?.hasUsableMemoryResult === true;
-  if (summary.length === 0 || !canUseSummary) {
+    params.searchDebug ??
+    subagentPartialData.searchDebug ??
+    (params.sessionFile ? await readActiveMemorySearchDebug(params.sessionFile) : undefined);
+  if (summary.length === 0) {
     return {
       status: "timeout",
       elapsedMs: params.elapsedMs,
@@ -2726,17 +2699,9 @@ async function runRecallSubagent(params: {
     };
   } catch (error) {
     if (params.abortSignal?.aborted) {
-      const partialReply = await readMergedPartialAssistantText([activeSessionFile, sessionFile]);
-      const transcriptState = await readMergedActiveMemoryTranscriptState({
-        sessionFiles: [sessionFile, activeSessionFile],
-        toolsAllow: params.config.toolsAllow,
-      });
-      attachPartialTimeoutData(
-        error,
-        partialReply,
-        transcriptState.searchDebug,
-        transcriptState.hasUsableMemoryResult,
-      );
+      const partialReply = await readPartialAssistantText(activeSessionFile);
+      const searchDebug = await readActiveMemorySearchDebug(activeSessionFile);
+      attachPartialTimeoutData(error, partialReply, searchDebug);
     }
     if (
       !params.abortSignal?.aborted &&
@@ -2912,13 +2877,19 @@ async function maybeResolveActiveRecall(params: {
     }
 
     if (raceResult === TIMEOUT_SENTINEL) {
-      const result = await buildTimeoutRecallResult({
-        elapsedMs: Date.now() - startedAt,
-        maxSummaryChars: params.config.maxSummaryChars,
-        sessionFile,
-        toolsAllow: params.config.toolsAllow,
-        subagentPromise,
-      });
+      const result: ActiveRecallResult = fallbackHasUsableMemoryResult
+        ? {
+            status: "timeout",
+            elapsedMs: Date.now() - startedAt,
+            summary: null,
+            searchDebug: fallbackSearchDebug,
+          }
+        : await buildTimeoutRecallResult({
+            elapsedMs: Date.now() - startedAt,
+            maxSummaryChars: params.config.maxSummaryChars,
+            sessionFile,
+            subagentPromise,
+          });
       if (params.config.logging) {
         params.api.logger.info?.(
           `${logPrefix} done status=${result.status} elapsedMs=${String(result.elapsedMs)} summaryChars=${String(result.summary?.length ?? 0)}`,
@@ -3002,8 +2973,6 @@ async function maybeResolveActiveRecall(params: {
         sessionFile,
         rawReply: partialTimeoutData.rawReply,
         searchDebug: partialTimeoutData.searchDebug,
-        hasUsableMemoryResult: partialTimeoutData.hasUsableMemoryResult,
-        toolsAllow: params.config.toolsAllow,
       });
       if (params.config.logging) {
         params.api.logger.info?.(
