@@ -79,6 +79,8 @@ type CapturedMetric = {
 
 type CapturedLogRecord = {
   body: string | number | boolean | string[];
+  spanId: string;
+  traceId: string;
 };
 
 const DEFAULT_SCENARIO_ID = "otel-trace-smoke";
@@ -646,15 +648,21 @@ function decodeMetricRequest(body: Buffer): CapturedMetric[] {
 function decodeLogRecord(message: Uint8Array): CapturedLogRecord {
   const reader = new ProtoReader(message);
   let body: string | number | boolean | string[] = "";
+  let traceId = "";
+  let spanId = "";
   while (!reader.done()) {
     const { field, wire } = reader.tag();
     if (field === 5 && wire === 2) {
       body = normalizeOtlpValue(decodeAnyValue(reader.bytes()));
+    } else if (field === 9 && wire === 2) {
+      traceId = Buffer.from(reader.bytes()).toString("hex");
+    } else if (field === 10 && wire === 2) {
+      spanId = Buffer.from(reader.bytes()).toString("hex");
     } else {
       reader.skip(wire);
     }
   }
-  return { body };
+  return { body, spanId, traceId };
 }
 
 function decodeScopeLogs(message: Uint8Array): CapturedLogRecord[] {
@@ -1439,6 +1447,12 @@ function assertSmoke(params: {
   if (rawLogBodies.length > 0) {
     failures.push(`OTLP log records exported ${rawLogBodies.length} non-placeholder bodies`);
   }
+  const correlatedLogRecords = params.logRecords.filter(
+    (record) => record.traceId && record.spanId,
+  );
+  if (correlatedLogRecords.length === 0) {
+    failures.push("no OTLP log records included trace/span correlation ids");
+  }
 
   const attributeKeys = collectAttributeKeys(params.spans);
   const disallowed = [...DISALLOWED_ATTRIBUTE_KEYS].filter((key) => attributeKeys.has(key));
@@ -1568,6 +1582,9 @@ async function main() {
     spanCount: receiver.capturedSpans.length,
     metricCount: receiver.capturedMetrics.length,
     logRecordCount: receiver.capturedLogRecords.length,
+    logRecordsWithTraceContext: receiver.capturedLogRecords.filter(
+      (record) => record.traceId && record.spanId,
+    ).length,
     spanNames: assertion.spanNames,
     metricNames: assertion.metricNames,
     signalRequestCounts: assertion.signalRequestCounts,

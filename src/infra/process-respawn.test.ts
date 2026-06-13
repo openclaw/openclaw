@@ -342,6 +342,18 @@ describe("respawnGatewayProcessForUpdate", () => {
     );
   });
 
+  it("treats Linux OpenClaw gateway service markers as supervised for update restarts", () => {
+    clearSupervisorHints();
+    setPlatform("linux");
+    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+    process.env.OPENCLAW_SERVICE_KIND = "gateway";
+
+    const result = respawnGatewayProcessForUpdate();
+
+    expect(result).toEqual({ mode: "supervised" });
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
   it("returns failed when update detached respawn throws", () => {
     delete process.env.OPENCLAW_NO_RESPAWN;
     clearSupervisorHints();

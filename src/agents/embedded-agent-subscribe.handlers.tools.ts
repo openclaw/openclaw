@@ -28,13 +28,14 @@ import { normalizeInteractiveReply, normalizeMessagePresentation } from "../inte
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { truncateUtf16Safe } from "../utils.js";
-import { consumeAdjustedParamsForToolCall } from "./agent-tools.before-tool-call.state.js";
 import { normalizeAcceptedSessionSpawnResult } from "./accepted-session-spawn.js";
+import { consumeAdjustedParamsForToolCall } from "./agent-tools.before-tool-call.state.js";
 import { REQUIRED_PARAM_GROUPS, type RequiredParamGroup } from "./agent-tools.params.js";
 import type { ApplyPatchSummary } from "./apply-patch.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import { sanitizeForConsole } from "./console-sanitize.js";
 import { normalizeTextForComparison } from "./embedded-agent-helpers.js";
+import { isDeliveredMessageToolOnlySourceReplyResult } from "./embedded-agent-message-tool-source-reply.js";
 import { isMessagingTool, isMessagingToolSendAction } from "./embedded-agent-messaging.js";
 import type { MessagingToolSourceReplyPayload } from "./embedded-agent-messaging.types.js";
 import { hasCommittedMessagingToolResultDetails } from "./embedded-agent-runner/delivery-evidence.js";
@@ -1366,6 +1367,17 @@ export async function handleToolExecutionEnd(
     if (committedMediaUrls.length > 0) {
       ctx.state.messagingToolSentMediaUrls.push(...committedMediaUrls);
       ctx.trimMessagingToolSent();
+    }
+    if (
+      isDeliveredMessageToolOnlySourceReplyResult({
+        sourceReplyDeliveryMode: ctx.params.sourceReplyDeliveryMode,
+        toolName,
+        args: startArgs,
+        result,
+        isError: isToolError,
+      })
+    ) {
+      ctx.state.messageToolOnlySourceReplyDelivered = true;
     }
     const sourceReplyPayload = extractMessagingToolSourceReplyPayload(result);
     if (sourceReplyPayload) {
