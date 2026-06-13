@@ -385,11 +385,6 @@ export function resolveContextTokensForModel(params: {
     return params.contextTokensOverride;
   }
 
-  // Ensure background model discovery runs even for read-only paths
-  // that otherwise would never trigger async loading (cfg + allowAsyncLoad: false).
-  // Without this, Fix B's provider-qualified cache keys are never populated.
-  void ensureContextWindowCacheLoaded();
-
   const ref = resolveProviderModelRef({
     provider: params.provider,
     model: params.model,
@@ -419,6 +414,9 @@ export function resolveContextTokensForModel(params: {
         return configuredWindow;
       }
     }
+    // Kick off background model discovery for read-only paths that
+    // otherwise never trigger async loading (cfg + allowAsyncLoad: false).
+    void ensureContextWindowCacheLoaded();
   }
 
   // When provider is explicitly given and the model ID is bare (no slash),
