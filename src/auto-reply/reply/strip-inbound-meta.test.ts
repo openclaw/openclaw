@@ -1,6 +1,7 @@
 // Tests stripping untrusted inbound metadata while preserving user-visible content.
 import { describe, it, expect } from "vitest";
 import type { TemplateContext } from "../templating.js";
+import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "./delivery-hints.js";
 import { buildInboundUserContextPrefix } from "./inbound-meta.js";
 import {
   extractInboundSenderLabel,
@@ -267,11 +268,7 @@ describe("builder compatibility", () => {
   });
 
   it("strips narration-aware message-tool-only delivery hints from replayed user text", () => {
-    const input = [
-      "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send the final user-visible answer. Interim assistant text between tool calls is still shown to the user as progress narration, so narrate your work as you go.",
-      "",
-      "Actual user message",
-    ].join("\n");
+    const input = [MESSAGE_TOOL_ONLY_DELIVERY_HINT, "", "Actual user message"].join("\n");
 
     expect(stripInboundMetadata(input)).toBe("Actual user message");
   });

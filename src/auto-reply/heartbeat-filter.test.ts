@@ -11,6 +11,7 @@ import {
   HEARTBEAT_TRANSCRIPT_PROMPT,
   resolveHeartbeatPromptForResponseTool,
 } from "./heartbeat.js";
+import { MESSAGE_TOOL_DELIVERY_HINTS } from "./reply/delivery-hints.js";
 
 describe("isHeartbeatUserMessage", () => {
   it("matches heartbeat prompts", () => {
@@ -158,11 +159,7 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
   });
 
   it("removes OpenAI Responses input/output text heartbeat pairs", () => {
-    for (const deliveryHint of [
-      "Delivery: to send a message, use the `message` tool.",
-      "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
-      "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send the final user-visible answer. Interim assistant text between tool calls is still shown to the user as progress narration, so narrate your work as you go.",
-    ]) {
+    for (const deliveryHint of MESSAGE_TOOL_DELIVERY_HINTS) {
       const messages = [
         {
           role: "user",
