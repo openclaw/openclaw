@@ -3,8 +3,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { approveNodePairing, listNodePairing, requestNodePairing } from "../infra/node-pairing.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
+import { pairDeviceIdentity } from "./device-authz.test-helpers.js";
 import { connectGatewayClient } from "./test-helpers.e2e.js";
 import { installGatewayTestHooks, startServer } from "./test-helpers.js";
 
@@ -73,6 +75,75 @@ describe("node host version mismatch guard", () => {
         timeoutMessage: "expected version mismatch rejection",
       }),
     ).rejects.toThrow(/client version mismatch|version mismatch/i);
+  });
+
+  test("rejected local reconnect preserves the active node pending reapproval", async () => {
+    const pairedNode = await pairDeviceIdentity({
+      name: "node-version-mismatch-pending-reapproval",
+      role: "node",
+      scopes: [],
+      clientId: GATEWAY_CLIENT_NAMES.NODE_HOST,
+      clientMode: GATEWAY_CLIENT_MODES.NODE,
+    });
+    const initial = await requestNodePairing({
+      nodeId: pairedNode.identity.deviceId,
+      platform: "macos",
+      deviceFamily: "Mac",
+      commands: ["screen.snapshot"],
+    });
+    await approveNodePairing(initial.request.requestId, {
+      callerScopes: ["operator.pairing", "operator.write"],
+    });
+
+    const upgraded = await connectGatewayClient({
+      url: `ws://127.0.0.1:${port}`,
+      token: "secret",
+      role: "node",
+      clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+      clientDisplayName: "test-node-upgraded",
+      clientVersion: gatewayVersion,
+      instanceId: TEST_LOCAL_NODE_ID,
+      platform: "macos",
+      deviceFamily: "Mac",
+      mode: GATEWAY_CLIENT_MODES.NODE,
+      scopes: [],
+      commands: ["screen.snapshot", "system.run"],
+      deviceIdentity: pairedNode.identity,
+    });
+    try {
+      const pendingBefore = (await listNodePairing()).pending.find(
+        (entry) => entry.nodeId === pairedNode.identity.deviceId,
+      );
+      expect(pendingBefore?.commands).toEqual(["screen.snapshot", "system.run"]);
+
+      await expect(
+        connectGatewayClient({
+          url: `ws://127.0.0.1:${port}`,
+          token: "secret",
+          role: "node",
+          clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+          clientDisplayName: "test-node-reverted-stale",
+          clientVersion: "2020.1.1",
+          instanceId: TEST_LOCAL_NODE_ID,
+          platform: "macos",
+          deviceFamily: "Mac",
+          mode: GATEWAY_CLIENT_MODES.NODE,
+          scopes: [],
+          commands: ["screen.snapshot"],
+          deviceIdentity: pairedNode.identity,
+          timeoutMs: 5_000,
+          timeoutMessage: "expected version mismatch rejection",
+        }),
+      ).rejects.toThrow(/client version mismatch|version mismatch/i);
+
+      const pendingAfter = (await listNodePairing()).pending.find(
+        (entry) => entry.nodeId === pairedNode.identity.deviceId,
+      );
+      expect(pendingAfter?.requestId).toBe(pendingBefore?.requestId);
+      expect(pendingAfter?.commands).toEqual(["screen.snapshot", "system.run"]);
+    } finally {
+      await upgraded.stopAndWait({ timeoutMs: 2_000 });
+    }
   });
 
   test("local node with dev/test version is allowed (not a released version)", async () => {

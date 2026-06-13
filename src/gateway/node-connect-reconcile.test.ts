@@ -197,11 +197,8 @@ describe("reconcileNodePairingOnConnect", () => {
     expect(result.pendingPairing).toBeUndefined();
   });
 
-  it("rejects stale pending reapproval when the node returns to its approved surface", async () => {
+  it("defers stale pending reapproval cleanup when the node returns to its approved surface", async () => {
     const requestPairing = makePendingPairingRequest("req-unused");
-    const rejectPendingPairings = vi.fn(async () => [
-      { requestId: "req-stale", nodeId: "openclaw-ios" },
-    ]);
 
     const result = await reconcileNodePairingOnConnect({
       cfg: {} as never,
@@ -214,12 +211,10 @@ describe("reconcileNodePairingOnConnect", () => {
         commands: ["canvas.snapshot"],
       }),
       requestPairing,
-      rejectPendingPairings,
     });
 
     expect(requestPairing).not.toHaveBeenCalled();
-    expect(rejectPendingPairings).toHaveBeenCalledWith("openclaw-ios");
-    expect(result.resolvedPairings).toEqual([{ requestId: "req-stale", nodeId: "openclaw-ios" }]);
+    expect(result.shouldClearPendingPairings).toBe(true);
   });
 
   it("requires a fresh pairing request when paired node permissions change", async () => {

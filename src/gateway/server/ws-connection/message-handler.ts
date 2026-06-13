@@ -71,6 +71,7 @@ import {
   getNodePairingConnectSnapshot,
   rejectPendingNodePairingRequestsForNode,
   requestNodePairing,
+  type NodePairingPendingSnapshot,
   updatePairedNodeMetadata,
 } from "../../../infra/node-pairing.js";
 import { upsertPresence } from "../../../infra/system-presence.js";
@@ -1614,12 +1615,15 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             });
           }
         }
+        let pendingNodePairingCleanup:
+          | { nodeId: string; observed: NodePairingPendingSnapshot[] }
+          | undefined;
         if (role === "node") {
-          let reconciliation: Awaited<ReturnType<typeof reconcileNodePairingOnConnect>>;
           const nodePairingSnapshot = await getNodePairingConnectSnapshot(
             connectParams.device?.id ?? connectParams.client.id,
           );
           const pairedNode = nodePairingSnapshot.pairedNode;
+          let reconciliation: Awaited<ReturnType<typeof reconcileNodePairingOnConnect>>;
           try {
             reconciliation = await reconcileNodePairingOnConnect({
               cfg: getRuntimeConfig(),
@@ -1642,8 +1646,6 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                   throw error;
                 }
               },
-              rejectPendingPairings: async (nodeId) =>
-                await rejectPendingNodePairingRequestsForNode(nodeId, nodePairingSnapshot.pending),
             });
           } catch (error) {
             if (error instanceof NodePairingRateLimitError) {
@@ -1657,16 +1659,19 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             }
             throw error;
           }
-          const resolvedPairings = [
-            ...(reconciliation.pendingPairing?.created
-              ? (reconciliation.pendingPairing.superseded ?? [])
-              : []),
-            ...(reconciliation.resolvedPairings ?? []),
-          ];
-          if (resolvedPairings.length > 0 || reconciliation.pendingPairing?.created) {
+          if (reconciliation.shouldClearPendingPairings) {
+            pendingNodePairingCleanup = {
+              nodeId: reconciliation.nodeId,
+              observed: nodePairingSnapshot.pending,
+            };
+          }
+          const supersededPairings = reconciliation.pendingPairing?.created
+            ? (reconciliation.pendingPairing.superseded ?? [])
+            : [];
+          if (supersededPairings.length > 0 || reconciliation.pendingPairing?.created) {
             const requestContext = buildRequestContext();
             const resolvedAt = Date.now();
-            for (const superseded of resolvedPairings) {
+            for (const superseded of supersededPairings) {
               requestContext.broadcast(
                 "node.pair.resolved",
                 {
@@ -1853,6 +1858,31 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           const nodeSession = context.nodeRegistry.register(nextClient, {
             remoteIp: reportedClientIp,
           });
+          if (pendingNodePairingCleanup) {
+            try {
+              const resolvedPairings = await rejectPendingNodePairingRequestsForNode(
+                pendingNodePairingCleanup.nodeId,
+                pendingNodePairingCleanup.observed,
+              );
+              const resolvedAt = Date.now();
+              for (const resolved of resolvedPairings) {
+                context.broadcast(
+                  "node.pair.resolved",
+                  {
+                    requestId: resolved.requestId,
+                    nodeId: resolved.nodeId,
+                    decision: "rejected",
+                    ts: resolvedAt,
+                  },
+                  { dropIfSlow: true },
+                );
+              }
+            } catch (error) {
+              logGateway.warn(
+                `failed to clear stale pending pairings for ${pendingNodePairingCleanup.nodeId}: ${formatForLog(error)}`,
+              );
+            }
+          }
           const instanceIdRaw = connectParams.client.instanceId;
           const instanceIdLocal = typeof instanceIdRaw === "string" ? instanceIdRaw.trim() : "";
           const nodeIdsForPairing = new Set<string>([nodeSession.nodeId]);

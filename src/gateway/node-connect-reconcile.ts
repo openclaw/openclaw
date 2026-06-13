@@ -10,7 +10,6 @@ import {
 import type {
   NodePairingPairedNode,
   NodePairingRequestInput,
-  NodePairingSupersededRequest,
   RequestNodePairingResult,
 } from "../infra/node-pairing.js";
 import {
@@ -31,7 +30,7 @@ export type NodeConnectPairingReconcileResult = {
   declaredPermissions?: Record<string, boolean>;
   effectivePermissions?: Record<string, boolean>;
   pendingPairing?: RequestNodePairingResult;
-  resolvedPairings?: NodePairingSupersededRequest[];
+  shouldClearPendingPairings?: boolean;
 };
 
 function resolveApprovedReconnectCommands(params: {
@@ -117,7 +116,6 @@ export async function reconcileNodePairingOnConnect(params: {
   pairedNode: NodePairingPairedNode | null;
   reportedClientIp?: string;
   requestPairing: (input: NodePairingRequestInput) => Promise<RequestNodePairingResult | null>;
-  rejectPendingPairings?: (nodeId: string) => Promise<NodePairingSupersededRequest[]>;
 }): Promise<NodeConnectPairingReconcileResult> {
   const nodeId = params.connectParams.device?.id ?? params.connectParams.client.id;
   const policyNode = {
@@ -216,7 +214,6 @@ export async function reconcileNodePairingOnConnect(params: {
     };
   }
 
-  const resolvedPairings = await params.rejectPendingPairings?.(nodeId);
   return {
     nodeId,
     declaredCaps,
@@ -225,6 +222,6 @@ export async function reconcileNodePairingOnConnect(params: {
     effectiveCommands: declared,
     declaredPermissions,
     effectivePermissions: declaredPermissions,
-    ...(resolvedPairings && resolvedPairings.length > 0 ? { resolvedPairings } : {}),
+    shouldClearPendingPairings: true,
   };
 }
