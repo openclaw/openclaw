@@ -1129,11 +1129,13 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("capabilities= InlineButtons ,voice,inlinebuttons,Voice");
   });
 
-  it("includes agent id in runtime when provided", () => {
+  it("includes agent and session identity in runtime when provided", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       runtimeInfo: {
         agentId: "work",
+        sessionKey: "agent:main:main",
+        sessionId: "23ae7fce-3c27-4a51-b58e-d800d8ca091f",
         host: "host",
         os: "macOS",
         arch: "arm64",
@@ -1143,6 +1145,8 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("agent=work");
+    expect(prompt).toContain("session=agent:main:main");
+    expect(prompt).toContain("sessionId=23ae7fce-3c27-4a51-b58e-d800d8ca091f");
   });
 
   it("includes reasoning visibility hint", () => {
@@ -1160,6 +1164,8 @@ describe("buildAgentSystemPrompt", () => {
     const line = buildRuntimeLine(
       {
         agentId: "work",
+        sessionKey: "agent:main:subagent:runtime-check",
+        sessionId: "23ae7fce-3c27-4a51-b58e-d800d8ca091f",
         host: "host",
         repoRoot: "/repo",
         os: "macOS",
@@ -1174,6 +1180,8 @@ describe("buildAgentSystemPrompt", () => {
     );
 
     expect(line).toContain("agent=work");
+    expect(line).toContain("session=agent:main:subagent:runtime-check");
+    expect(line).toContain("sessionId=23ae7fce-3c27-4a51-b58e-d800d8ca091f");
     expect(line).toContain("host=host");
     expect(line).toContain("repo=/repo");
     expect(line).toContain("os=macOS (arm64)");

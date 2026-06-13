@@ -552,6 +552,8 @@ export async function prepareCliRunContext(
     contextFiles,
     modelDisplay,
     agentId: sessionAgentId,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
   });
   const transformedSystemPrompt =
     backendResolved.transformSystemPrompt?.({

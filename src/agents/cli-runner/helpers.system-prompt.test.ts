@@ -91,4 +91,19 @@ describe("buildCliAgentSystemPrompt", () => {
     expect(prompt).toContain("CLI-only command guidance.");
     expect(prompt).not.toContain("OpenClaw-only command guidance.");
   });
+
+  it("includes session identity in runtime when provided", () => {
+    const prompt = buildCliAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      tools: [],
+      modelDisplay: "test/model",
+      agentId: "main",
+      sessionKey: "agent:main:telegram:direct:peer",
+      sessionId: "session-123",
+    });
+
+    expect(prompt).toContain("agent=main");
+    expect(prompt).toContain("session=agent:main:telegram:direct:peer");
+    expect(prompt).toContain("sessionId=session-123");
+  });
 });
