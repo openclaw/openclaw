@@ -6,6 +6,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { createReadTool } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -269,6 +270,41 @@ describe("FS tools with workspaceOnly=false", () => {
     });
     const content = await fs.readFile(newFile, "utf-8");
     expect(content).toBe("first line\n");
+  });
+
+  it("normalizes file URL paths before appending (workspaceOnly=false)", async () => {
+    await fs.writeFile(outsideFile, "line one\n");
+
+    const tools = toolsFor(false);
+    const writeTool = tools.find((tool) => tool.name === "write");
+    expect(writeTool).toBeDefined();
+
+    await writeTool!.execute("test-append-file-url", {
+      path: pathToFileURL(outsideFile).href,
+      content: "line two\n",
+      append: true,
+    });
+
+    const content = await fs.readFile(outsideFile, "utf-8");
+    expect(content).toBe("line one\nline two\n");
+  });
+
+  it("strips malformed XML arg-value suffixes before appending", async () => {
+    await fs.writeFile(outsideFile, "line one\n");
+
+    const tools = toolsFor(false);
+    const writeTool = tools.find((tool) => tool.name === "write");
+    expect(writeTool).toBeDefined();
+
+    const result = await writeTool!.execute("test-append-malformed-suffix", {
+      path: `${outsideFile}</arg_value>>`,
+      content: "line two\n",
+      append: true,
+    });
+
+    expect(result.details).toMatchObject({ path: outsideFile, append: true });
+    const content = await fs.readFile(outsideFile, "utf-8");
+    expect(content).toBe("line one\nline two\n");
   });
 
   it("should overwrite (not append) when append=false", async () => {

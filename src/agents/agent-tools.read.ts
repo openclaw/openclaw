@@ -43,6 +43,7 @@ import {
   createWriteTool,
   withFileMutationQueue,
 } from "./sessions/index.js";
+import { resolveToCwd } from "./sessions/tools/path-utils.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
 
 export {
@@ -1169,17 +1170,18 @@ export function wrapToolWriteWithAppend(
       if (!filePath || !filePath.trim() || content === undefined || !content.trim()) {
         return tool.execute(toolCallId, args, signal, onUpdate);
       }
-      // Strip @ workspace-alias prefix and expand ~ before resolving; mirrors resolveToCwd semantics.
-      const normalized = filePath.startsWith("@") ? filePath.slice(1) : filePath;
-      const expanded = expandTildeToOsHome(normalized);
-      const resolved = path.isAbsolute(expanded) ? expanded : path.resolve(ops.root, expanded);
+      const normalizedPath = stripMalformedXmlArgValueSuffix(filePath);
+      if (!normalizedPath.trim()) {
+        throw malformedXmlArgValuePathError("path");
+      }
+      const resolved = resolveToCwd(normalizedPath, ops.root);
       await withFileMutationQueue(resolved, async () => {
         throwIfAborted(signal);
         await appendFileWithAbort(signal, () => ops.appendFile(resolved, content));
       });
       return {
-        content: [{ type: "text", text: `Appended to ${filePath}.` }],
-        details: { path: filePath, append: true },
+        content: [{ type: "text", text: `Appended to ${normalizedPath}.` }],
+        details: { path: normalizedPath, append: true },
       };
     },
   };
