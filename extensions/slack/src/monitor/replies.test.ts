@@ -673,8 +673,8 @@ describe("deliverReplies message_sent hook", () => {
     expect(event).toMatchObject({
       content: "two attachments",
       success: true,
-      messageId: "media-2",
     });
+    expect(event).not.toHaveProperty("messageId");
   });
 
   it("reports spoken text for media-only TTS supplements", async () => {
@@ -698,8 +698,8 @@ describe("deliverReplies message_sent hook", () => {
     expect(event).toMatchObject({
       content: "Spoken answer",
       success: true,
-      messageId: "tts-1",
     });
+    expect(event).not.toHaveProperty("messageId");
   });
 
   it("reports spoken text for explicit media-only TTS replies", async () => {
@@ -722,8 +722,8 @@ describe("deliverReplies message_sent hook", () => {
     expect(event).toMatchObject({
       content: "Explicit spoken answer",
       success: true,
-      messageId: "tts-2",
     });
+    expect(event).not.toHaveProperty("messageId");
   });
 
   it("keeps visible media captions ahead of hidden spoken text", async () => {
@@ -747,8 +747,8 @@ describe("deliverReplies message_sent hook", () => {
     expect(event).toMatchObject({
       content: "Visible caption",
       success: true,
-      messageId: "tts-3",
     });
+    expect(event).not.toHaveProperty("messageId");
   });
 
   it("emits only failure when a later attachment in the payload fails", async () => {

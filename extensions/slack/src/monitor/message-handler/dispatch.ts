@@ -883,7 +883,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       return false;
     }
     try {
-      const fallbackResult = await deliverReplies({
+      await deliverReplies({
         cfg: ctx.cfg,
         replies: [{ text: fallbackText } as ReplyPayload],
         target: prepared.replyTarget,
@@ -899,7 +899,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         deferMessageSentHooks: true,
       });
       markSlackStreamFallbackDelivered(session);
-      emitSuccessfulPendingStreamedDeliveries(fallbackResult?.messageId);
+      // The combined fallback can span multiple logical payloads and Slack
+      // chunks, so no single message `ts` correctly identifies every event.
+      emitSuccessfulPendingStreamedDeliveries();
       observedReplyDelivery = true;
       usedReplyThreadTs ??= session.threadTs;
       logVerbose(
@@ -923,7 +925,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     forcedThreadTs?: string;
   }): Promise<string | undefined> => {
     if (params.payload.isReasoning === true) {
-      return;
+      return undefined;
     }
     const replyThreadTs = resolveDeliveryThreadTs(params);
     const deliveryReplyThreadTs =

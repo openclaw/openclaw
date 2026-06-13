@@ -2108,9 +2108,14 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(emitSlackMessageSentHooksMock).toHaveBeenCalledTimes(1);
     expectMockCallArgFields(emitSlackMessageSentHooksMock, 0, "fallback message_sent", {
       content: FINAL_REPLY_TEXT,
-      messageId: "171234.901",
       success: true,
     });
+    expect(
+      requireRecord(
+        requireMockCall(emitSlackMessageSentHooksMock, 0, "fallback message_sent")[0],
+        "fallback message_sent",
+      ),
+    ).not.toHaveProperty("messageId");
   });
 
   it("emits message_sent for a tool-only stream fallback", async () => {
@@ -2139,9 +2144,14 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(emitSlackMessageSentHooksMock).toHaveBeenCalledTimes(1);
     expectMockCallArgFields(emitSlackMessageSentHooksMock, 0, "tool fallback message_sent", {
       content: "tool output",
-      messageId: "171234.902",
       success: true,
     });
+    expect(
+      requireRecord(
+        requireMockCall(emitSlackMessageSentHooksMock, 0, "tool fallback message_sent")[0],
+        "tool fallback message_sent",
+      ),
+    ).not.toHaveProperty("messageId");
   });
 
   it("emits acknowledged finals before a pending stream suffix falls back", async () => {

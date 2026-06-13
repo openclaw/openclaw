@@ -197,7 +197,9 @@ export async function deliverReplies(params: {
       throw error;
     }
     if (delivered !== "empty") {
-      emitSent(hookContent, lastResult);
+      // Slack file uploads return file IDs, not the posted message `ts` expected
+      // by message_sent consumers.
+      emitSent(hookContent, reply.hasMedia ? undefined : lastResult);
       latestResult = lastResult;
       params.runtime.log?.(`delivered reply to ${params.target}`);
     }
