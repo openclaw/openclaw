@@ -108,12 +108,15 @@ let editMessageFeishu: typeof import("./send.js").editMessageFeishu;
 let getMessageFeishu: typeof import("./send.js").getMessageFeishu;
 let listFeishuThreadMessages: typeof import("./send.js").listFeishuThreadMessages;
 let recordFeishuStreamingCardContent: typeof import("./streaming-card-content-index.js").recordFeishuStreamingCardContent;
+let recordLegacyFeishuStreamingCardContentForTests: typeof import("./streaming-card-content-index.js").testingHooks.recordLegacyFeishuStreamingCardContentForTests;
 let resetFeishuStreamingCardContentMemoryForTests: typeof import("./streaming-card-content-index.js").testingHooks.resetFeishuStreamingCardContentMemoryForTests;
 let resetFeishuStreamingCardContentIndexForTests: typeof import("./streaming-card-content-index.js").testingHooks.resetFeishuStreamingCardContentIndexForTests;
 let resolveFeishuCardTemplate: typeof import("./send.js").resolveFeishuCardTemplate;
+let sendCardFeishu: typeof import("./send.js").sendCardFeishu;
 let sendMarkdownCardFeishu: typeof import("./send.js").sendMarkdownCardFeishu;
 let sendMessageFeishu: typeof import("./send.js").sendMessageFeishu;
 let sendStructuredCardFeishu: typeof import("./send.js").sendStructuredCardFeishu;
+let updateCardFeishu: typeof import("./send.js").updateCardFeishu;
 
 describe("getMessageFeishu", () => {
   beforeAll(async () => {
@@ -123,13 +126,16 @@ describe("getMessageFeishu", () => {
       getMessageFeishu,
       listFeishuThreadMessages,
       resolveFeishuCardTemplate,
+      sendCardFeishu,
       sendMarkdownCardFeishu,
       sendMessageFeishu,
       sendStructuredCardFeishu,
+      updateCardFeishu,
     } = await import("./send.js"));
     ({
       recordFeishuStreamingCardContent,
       testingHooks: {
+        recordLegacyFeishuStreamingCardContentForTests,
         resetFeishuStreamingCardContentIndexForTests,
         resetFeishuStreamingCardContentMemoryForTests,
       },
@@ -378,7 +384,7 @@ describe("getMessageFeishu", () => {
 
     expect(result?.content).toBe("[Interactive Card]");
     expect(result?.contentType).toBe("interactive");
-    expect(mockRuntimeLoggerWarn).toHaveBeenCalledWith("feishu streaming card content index miss", {
+    expect(mockRuntimeLoggerWarn).toHaveBeenCalledWith("feishu outbound card content index miss", {
       fallbackKind: "client-upgrade",
       messageId: "om_legacy_card",
       cardId: undefined,
@@ -492,10 +498,244 @@ describe("getMessageFeishu", () => {
 
     expect(result?.content).toBe("persisted streaming content");
     expect(mockOpenSyncKeyedStore).toHaveBeenCalledWith({
-      namespace: "streaming-card-content",
+      namespace: "outbound-card-content",
       maxEntries: 20_000,
       defaultTtlMs: 7 * 24 * 60 * 60 * 1000,
     });
+  });
+
+  it("hydrates static structured card fallback from the outbound card content index", async () => {
+    const create = vi
+      .fn()
+      .mockResolvedValue({ code: 0, data: { message_id: "om_structured_index" } });
+    mockCreateFeishuClient.mockReturnValue({
+      im: {
+        message: {
+          create,
+          get: mockClientGet,
+          list: mockClientList,
+          patch: mockClientPatch,
+        },
+      },
+    });
+    mockResolveFeishuAccount.mockReturnValue({ accountId: "main", configured: true });
+
+    await sendStructuredCardFeishu({
+      cfg: {} as ClawdbotConfig,
+      to: "oc_structured_index",
+      text: "structured source text",
+      accountId: "main",
+    });
+    mockResolveFeishuAccount.mockReturnValue({ accountId: "main", configured: true });
+    mockClientGet.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: "om_structured_index",
+            chat_id: "oc_structured_index",
+            msg_type: "interactive",
+            body: {
+              content: JSON.stringify({
+                elements: [[{ tag: "text", text: "请升级至最新版本客户端，以查看内容" }]],
+              }),
+            },
+          },
+        ],
+      },
+    });
+
+    const result = await getMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_structured_index",
+      accountId: "main",
+    });
+
+    expect(result?.content).toBe("structured source text");
+  });
+
+  it("hydrates static markdown card fallback from the outbound card content index", async () => {
+    const create = vi
+      .fn()
+      .mockResolvedValue({ code: 0, data: { message_id: "om_markdown_index" } });
+    mockCreateFeishuClient.mockReturnValue({
+      im: {
+        message: {
+          create,
+          get: mockClientGet,
+          list: mockClientList,
+          patch: mockClientPatch,
+        },
+      },
+    });
+    mockResolveFeishuAccount.mockReturnValue({ accountId: "main", configured: true });
+
+    await sendMarkdownCardFeishu({
+      cfg: {} as ClawdbotConfig,
+      to: "oc_markdown_index",
+      text: "markdown source text",
+      accountId: "main",
+    });
+    mockResolveFeishuAccount.mockReturnValue({ accountId: "main", configured: true });
+    mockClientGet.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: "om_markdown_index",
+            chat_id: "oc_markdown_index",
+            msg_type: "interactive",
+            body: {
+              content: JSON.stringify({ type: "card", data: { card_id: "card_markdown" } }),
+            },
+          },
+        ],
+      },
+    });
+
+    const result = await getMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_markdown_index",
+      accountId: "main",
+    });
+
+    expect(result?.content).toBe("markdown source text");
+  });
+
+  it("indexes direct card sends only when explicit recoverable text is supplied", async () => {
+    const create = vi.fn().mockResolvedValue({ code: 0, data: { message_id: "om_direct_index" } });
+    mockCreateFeishuClient.mockReturnValue({
+      im: {
+        message: {
+          create,
+          get: mockClientGet,
+          list: mockClientList,
+          patch: mockClientPatch,
+        },
+      },
+    });
+    mockResolveFeishuAccount.mockReturnValue({ accountId: "main", configured: true });
+
+    await sendCardFeishu({
+      cfg: {} as ClawdbotConfig,
+      to: "oc_direct_index",
+      card: { schema: "2.0" },
+      accountId: "main",
+      recoverableText: "direct recoverable text",
+    });
+    mockResolveFeishuAccount.mockReturnValue({ accountId: "main", configured: true });
+    mockClientGet.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: "om_direct_index",
+            chat_id: "oc_direct_index",
+            msg_type: "interactive",
+            body: {
+              content: JSON.stringify({ type: "card", data: { card_id: "card_direct" } }),
+            },
+          },
+        ],
+      },
+    });
+
+    const result = await getMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_direct_index",
+      accountId: "main",
+    });
+
+    expect(result?.content).toBe("direct recoverable text");
+  });
+
+  it("does not index placeholder unknown message ids", async () => {
+    const create = vi.fn().mockResolvedValue({ code: 0, data: {} });
+    mockCreateFeishuClient.mockReturnValue({
+      im: {
+        message: {
+          create,
+          get: mockClientGet,
+          list: mockClientList,
+          patch: mockClientPatch,
+        },
+      },
+    });
+
+    await sendCardFeishu({
+      cfg: {} as ClawdbotConfig,
+      to: "oc_unknown_index",
+      card: { schema: "2.0" },
+      recoverableText: "must not persist",
+    });
+
+    expect(mockRuntimeStores.get("outbound-card-content")?.size ?? 0).toBe(0);
+  });
+
+  it("does not hydrate outbound card content across account scopes", async () => {
+    recordFeishuStreamingCardContent({
+      cardId: "card_account_scoped",
+      messageId: "om_account_scoped",
+      accountId: "main",
+      text: "main account content",
+    });
+    mockResolveFeishuAccount.mockReturnValue({ accountId: "other", configured: true });
+    mockClientGet.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: "om_account_scoped",
+            chat_id: "oc_account_scoped",
+            msg_type: "interactive",
+            body: {
+              content: JSON.stringify({ type: "card", data: { card_id: "card_account_scoped" } }),
+            },
+          },
+        ],
+      },
+    });
+
+    const result = await getMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_account_scoped",
+      accountId: "other",
+    });
+
+    expect(result?.content).toBe("[Interactive Card]");
+  });
+
+  it("keeps legacy streaming-card-content records readable", async () => {
+    recordLegacyFeishuStreamingCardContentForTests({
+      cardId: "card_legacy_namespace",
+      messageId: "om_legacy_namespace",
+      accountId: "main",
+      text: "legacy namespace content",
+    });
+    mockResolveFeishuAccount.mockReturnValue({ accountId: "main", configured: true });
+    mockClientGet.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: "om_legacy_namespace",
+            chat_id: "oc_legacy_namespace",
+            msg_type: "interactive",
+            body: {
+              content: JSON.stringify({ type: "card", data: { card_id: "card_legacy_namespace" } }),
+            },
+          },
+        ],
+      },
+    });
+
+    const result = await getMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_legacy_namespace",
+      accountId: "main",
+    });
+
+    expect(result?.content).toBe("legacy namespace content");
   });
 
   it("keeps the safe interactive fallback when the streaming card content index misses", async () => {
@@ -521,7 +761,7 @@ describe("getMessageFeishu", () => {
     });
 
     expect(result?.content).toBe("[Interactive Card]");
-    expect(mockRuntimeLoggerWarn).toHaveBeenCalledWith("feishu streaming card content index miss", {
+    expect(mockRuntimeLoggerWarn).toHaveBeenCalledWith("feishu outbound card content index miss", {
       fallbackKind: "card-reference",
       messageId: "om_stream_miss",
       cardId: "card_missing",
@@ -554,7 +794,7 @@ describe("getMessageFeishu", () => {
     });
 
     expect(result?.content).toBe("[Interactive Card]");
-    expect(mockRuntimeLoggerWarn).toHaveBeenCalledWith("feishu streaming card content index miss", {
+    expect(mockRuntimeLoggerWarn).toHaveBeenCalledWith("feishu outbound card content index miss", {
       fallbackKind: "client-upgrade",
       messageId: "om_upgrade_miss",
       cardId: undefined,
@@ -886,6 +1126,8 @@ describe("getMessageFeishu", () => {
 describe("editMessageFeishu", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockRuntimeStores.clear();
+    resetFeishuStreamingCardContentIndexForTests?.();
     mockResolveFeishuAccount.mockReturnValue({
       accountId: "default",
       configured: true,
@@ -950,6 +1192,97 @@ describe("editMessageFeishu", () => {
       },
     });
     expect(result).toEqual({ messageId: "om_card", contentType: "interactive" });
+  });
+
+  it("invalidates indexed card content when an interactive edit has no recoverable text", async () => {
+    recordFeishuStreamingCardContent({
+      messageId: "om_card_stale",
+      accountId: "default",
+      text: "stale card body",
+    });
+    recordLegacyFeishuStreamingCardContentForTests({
+      messageId: "om_card_stale",
+      accountId: "default",
+      text: "legacy stale card body",
+    });
+    mockClientPatch.mockResolvedValueOnce({ code: 0 });
+
+    await editMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_card_stale",
+      card: { schema: "2.0" },
+    });
+
+    mockCreateFeishuClient.mockReturnValue({
+      im: {
+        message: {
+          get: mockClientGet,
+        },
+      },
+    });
+    mockClientGet.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: "om_card_stale",
+            chat_id: "oc_card_stale",
+            msg_type: "interactive",
+            body: {
+              content: JSON.stringify({ type: "card", data: { card_id: "card_stale" } }),
+            },
+          },
+        ],
+      },
+    });
+
+    const result = await getMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_card_stale",
+    });
+
+    expect(result?.content).toBe("[Interactive Card]");
+  });
+
+  it("updates indexed card content when a card update supplies recoverable text", async () => {
+    mockClientPatch.mockResolvedValueOnce({ code: 0 });
+
+    await updateCardFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_card_update",
+      card: { schema: "2.0" },
+      recoverableText: "updated recoverable body",
+    });
+
+    mockCreateFeishuClient.mockReturnValue({
+      im: {
+        message: {
+          get: mockClientGet,
+        },
+      },
+    });
+    mockClientGet.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: "om_card_update",
+            chat_id: "oc_card_update",
+            msg_type: "interactive",
+            body: {
+              content: JSON.stringify({ type: "card", data: { card_id: "card_update" } }),
+            },
+          },
+        ],
+      },
+    });
+
+    const result = await getMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_card_update",
+    });
+
+    expect(result?.content).toBe("updated recoverable body");
   });
 });
 

@@ -21,7 +21,11 @@ import {
   toFeishuSendResult,
 } from "./send-result.js";
 import { resolveFeishuSendTarget } from "./send-target.js";
-import { lookupFeishuStreamingCardContent } from "./streaming-card-content-index.js";
+import {
+  invalidateFeishuOutboundCardContent,
+  lookupFeishuStreamingCardContent,
+  recordFeishuOutboundCardContent,
+} from "./streaming-card-content-index.js";
 import type { FeishuChatType, FeishuMessageInfo, FeishuSendResult } from "./types.js";
 
 const WITHDRAWN_REPLY_ERROR_CODES = new Set([230011, 231003]);
@@ -416,10 +420,10 @@ function logInteractiveCardHydrationMiss(context: {
   try {
     getFeishuRuntime()
       .logging.getChildLogger(
-        { channel: "feishu", surface: "streaming-card-content" },
+        { channel: "feishu", surface: "outbound-card-content" },
         { level: "warn" },
       )
-      .warn("feishu streaming card content index miss", {
+      .warn("feishu outbound card content index miss", {
         fallbackKind: context.fallbackKind,
         messageId: context.messageId,
         cardId: context.cardId,
@@ -754,16 +758,31 @@ export type SendFeishuCardParams = {
   replyInThread?: boolean;
   allowTopLevelReplyFallback?: boolean;
   accountId?: string;
+  /** Explicit display/source text safe to recover when Feishu later returns only a card shell. */
+  recoverableText?: string;
 };
 
 export async function sendCardFeishu(params: SendFeishuCardParams): Promise<FeishuSendResult> {
-  const { cfg, to, card, replyToMessageId, replyInThread, allowTopLevelReplyFallback, accountId } =
-    params;
-  const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({ cfg, to, accountId });
+  const {
+    cfg,
+    to,
+    card,
+    replyToMessageId,
+    replyInThread,
+    allowTopLevelReplyFallback,
+    accountId,
+    recoverableText,
+  } = params;
+  const {
+    client,
+    receiveId,
+    receiveIdType,
+    accountId: resolvedAccountId,
+  } = resolveFeishuSendTarget({ cfg, to, accountId });
   const content = JSON.stringify(card);
 
   const directParams = { receiveId, receiveIdType, content, msgType: "interactive" };
-  return sendReplyOrFallbackDirect(client, {
+  const result = await sendReplyOrFallbackDirect(client, {
     replyToMessageId,
     replyInThread,
     allowTopLevelReplyFallback,
@@ -773,6 +792,13 @@ export async function sendCardFeishu(params: SendFeishuCardParams): Promise<Feis
     directErrorPrefix: "Feishu card send failed",
     replyErrorPrefix: "Feishu card reply failed",
   });
+  recordFeishuOutboundCardContent({
+    messageId: result.messageId,
+    accountId: resolvedAccountId,
+    chatId: result.chatId,
+    text: recoverableText,
+  });
+  return result;
 }
 
 export async function editMessageFeishu(params: {
@@ -781,8 +807,10 @@ export async function editMessageFeishu(params: {
   text?: string;
   card?: Record<string, unknown>;
   accountId?: string;
+  /** Explicit display/source text safe to recover for edited interactive cards. */
+  recoverableText?: string;
 }): Promise<{ messageId: string; contentType: "post" | "interactive" }> {
-  const { cfg, messageId, text, card, accountId } = params;
+  const { cfg, messageId, text, card, accountId, recoverableText } = params;
   const account = resolveFeishuRuntimeAccount({ cfg, accountId });
   if (!account.configured) {
     throw new Error(`Feishu account "${account.accountId}" not configured`);
@@ -807,6 +835,16 @@ export async function editMessageFeishu(params: {
       throw new Error(`Feishu message edit failed: ${response.msg || `code ${response.code}`}`);
     }
 
+    if (recoverableText?.trim()) {
+      recordFeishuOutboundCardContent({
+        messageId,
+        accountId: account.accountId,
+        text: recoverableText,
+      });
+    } else {
+      invalidateFeishuOutboundCardContent({ messageId, accountId: account.accountId });
+    }
+
     return { messageId, contentType: "interactive" };
   }
 
@@ -826,6 +864,8 @@ export async function editMessageFeishu(params: {
     throw new Error(`Feishu message edit failed: ${response.msg || `code ${response.code}`}`);
   }
 
+  invalidateFeishuOutboundCardContent({ messageId, accountId: account.accountId });
+
   return { messageId, contentType: "post" };
 }
 
@@ -834,8 +874,10 @@ export async function updateCardFeishu(params: {
   messageId: string;
   card: Record<string, unknown>;
   accountId?: string;
+  /** Explicit display/source text safe to recover for updated interactive cards. */
+  recoverableText?: string;
 }): Promise<void> {
-  const { cfg, messageId, card, accountId } = params;
+  const { cfg, messageId, card, accountId, recoverableText } = params;
   const account = resolveFeishuRuntimeAccount({ cfg, accountId });
   if (!account.configured) {
     throw new Error(`Feishu account "${account.accountId}" not configured`);
@@ -851,6 +893,16 @@ export async function updateCardFeishu(params: {
 
   if (response.code !== 0) {
     throw new Error(`Feishu card update failed: ${response.msg || `code ${response.code}`}`);
+  }
+
+  if (recoverableText?.trim()) {
+    recordFeishuOutboundCardContent({
+      messageId,
+      accountId: account.accountId,
+      text: recoverableText,
+    });
+  } else {
+    invalidateFeishuOutboundCardContent({ messageId, accountId: account.accountId });
   }
 }
 
@@ -977,6 +1029,7 @@ export async function sendStructuredCardFeishu(params: {
     replyInThread,
     allowTopLevelReplyFallback,
     accountId,
+    recoverableText: cardText,
   });
 }
 
@@ -1020,5 +1073,6 @@ export async function sendMarkdownCardFeishu(params: {
     replyInThread,
     allowTopLevelReplyFallback,
     accountId,
+    recoverableText: cardText,
   });
 }

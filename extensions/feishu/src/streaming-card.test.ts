@@ -210,7 +210,7 @@ describe("FeishuStreamingSession", () => {
     chatId?: unknown;
     text?: unknown;
   }> {
-    return Array.from(mockRuntimeStores.get("streaming-card-content")?.values() ?? []) as Array<{
+    return Array.from(mockRuntimeStores.get("outbound-card-content")?.values() ?? []) as Array<{
       cardId?: unknown;
       messageId?: unknown;
       accountId?: unknown;
@@ -219,7 +219,7 @@ describe("FeishuStreamingSession", () => {
     }>;
   }
 
-  it("records card identity with empty text when streaming start succeeds", async () => {
+  it("does not persist empty streaming-start text", async () => {
     const { client } = mockStreamingTokenStart(() => ({
       code: 0,
       msg: "ok",
@@ -233,24 +233,7 @@ describe("FeishuStreamingSession", () => {
       accountId: "main",
     }).start("oc_stream_start", "chat_id");
 
-    expect(streamingCardContentEntries()).toEqual([
-      {
-        cardId: "card-1",
-        messageId: "om_1",
-        accountId: "main",
-        chatId: "oc_stream_start",
-        text: "",
-        updatedAt: expect.any(Number),
-      },
-      {
-        cardId: "card-1",
-        messageId: "om_1",
-        accountId: "main",
-        chatId: "oc_stream_start",
-        text: "",
-        updatedAt: expect.any(Number),
-      },
-    ]);
+    expect(streamingCardContentEntries()).toEqual([]);
   });
 
   it("records accepted update text and final close text", async () => {
@@ -301,6 +284,40 @@ describe("FeishuStreamingSession", () => {
         updatedAt: expect.any(Number),
       },
     ]);
+  });
+
+  it("invalidates indexed streaming content when close clears the card text", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(6_000);
+    const updateBodies: string[] = [];
+    const replaceBodies: string[] = [];
+    mockFetches(updateBodies, new Set<number>(), replaceBodies);
+
+    const session = new FeishuStreamingSession({} as never, {
+      appId: "app_clear_index",
+      appSecret: "secret",
+    });
+    setStreamingSessionInternals(session, {
+      state: {
+        cardId: "card_clear_index",
+        messageId: "om_clear_index",
+        accountId: "main",
+        chatId: "oc_clear_index",
+        sequence: 1,
+        currentText: "preview",
+        sentText: "preview",
+        hasNote: false,
+      },
+      lastUpdateTime: 4_000,
+    });
+
+    await session.update("preview text");
+    expect(streamingCardContentEntries()).toHaveLength(2);
+
+    await session.close("");
+
+    expect(replaceBodies).toHaveLength(1);
+    expect(streamingCardContentEntries()).toEqual([]);
   });
 
   it("flushes throttled pending text after the throttle window", async () => {
