@@ -72,6 +72,31 @@ describe("browser element commands", () => {
       },
     },
     {
+      name: "click-coords",
+      argv: [
+        "browser",
+        "click-coords",
+        "12.5",
+        "42",
+        "--target-id",
+        "tab-2",
+        "--double",
+        "--button",
+        "middle",
+        "--delay-ms",
+        "25",
+      ],
+      expectedBody: {
+        kind: "clickCoords",
+        x: 12.5,
+        y: 42,
+        targetId: "tab-2",
+        doubleClick: true,
+        button: "middle",
+        delayMs: 25,
+      },
+    },
+    {
       name: "type",
       argv: ["browser", "type", "input-1", "hello", "--submit", "--slowly", "--target-id", "tab-2"],
       expectedBody: {
