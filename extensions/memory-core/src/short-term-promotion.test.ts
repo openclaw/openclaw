@@ -6,7 +6,6 @@ import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-run
 import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-
 const memoryHostEventsMock = vi.hoisted(() => ({
   appendMemoryHostEvent: vi.fn(async () => {}),
 }));
@@ -20,7 +19,6 @@ import {
 vi.mock("openclaw/plugin-sdk/memory-host-events", () => ({
   appendMemoryHostEvent: memoryHostEventsMock.appendMemoryHostEvent,
 }));
-
 
 import {
   applyShortTermPromotions,
@@ -130,7 +128,6 @@ describe("short-term promotion", () => {
   function readEntrySnippet(entry: { snippet?: unknown }): string {
     return typeof entry.snippet === "string" ? entry.snippet : "";
   }
-
 
   async function expectEnoent(promise: Promise<unknown>): Promise<void> {
     await expect(promise).rejects.toHaveProperty("code", "ENOENT");
@@ -1094,7 +1091,6 @@ describe("short-term promotion", () => {
     });
   });
 
-
   it("reconciles existing promotion markers instead of appending duplicates", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
@@ -1215,7 +1211,6 @@ describe("short-term promotion", () => {
         "utf-8",
       );
       memoryHostEventsMock.appendMemoryHostEvent.mockClear();
-
 
       const secondApply = await applyShortTermPromotions({
         workspaceDir,
@@ -2065,6 +2060,36 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("normalizes out-of-range rank nowMs values instead of throwing", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-01", ["Rank timestamp fallback note."]);
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "timestamp fallback",
+        results: [
+          {
+            path: "memory/2026-04-01.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.92,
+            snippet: "Rank timestamp fallback note.",
+            source: "memory",
+          },
+        ],
+      });
+
+      await expect(
+        rankShortTermPromotionCandidates({
+          workspaceDir,
+          minScore: 0,
+          minRecallCount: 0,
+          minUniqueQueries: 0,
+          nowMs: Number.MAX_SAFE_INTEGER,
+        }),
+      ).resolves.toHaveLength(1);
+    });
+  });
+
   it("does not re-append candidates that were promoted in a prior run", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
@@ -2171,6 +2196,213 @@ describe("short-term promotion", () => {
       expect(memoryText).toContain("Latest promotion archive:");
       expect(memoryText).not.toContain("memory/2026-04-01.md:3-3");
       expect(archiveText).toContain("memory/2026-04-01.md:3-3");
+    });
+  });
+
+  it("rehydrates daily-ingested multi-line list snippets from the full live note range", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-05-28", [
+        "# 2026-05-28",
+        "",
+        "## 模型切换 (16:23)",
+        "- **需求**: 用户想使用小米 Mimo 模型作为默认",
+        "- **偏好**: 保持低成本默认路由",
+      ]);
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "__dreaming_daily__:2026-05-28",
+        signalType: "daily",
+        dedupeByQueryPerDay: true,
+        dayBucket: "2026-05-28",
+        results: [
+          {
+            path: "memory/2026-05-28.md",
+            startLine: 4,
+            endLine: 5,
+            score: 0.91,
+            snippet:
+              "模型切换 (16:23): **需求**: 用户想使用小米 Mimo 模型作为默认; **偏好**: 保持低成本默认路由",
+            source: "memory",
+          },
+        ],
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs: Date.parse("2026-05-31T00:00:00.000Z"),
+      });
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: ranked,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs: Date.parse("2026-05-31T00:00:00.000Z"),
+      });
+
+      expect(applied.applied).toBe(1);
+      expect(applied.appliedCandidates[0]?.startLine).toBe(4);
+      expect(applied.appliedCandidates[0]?.endLine).toBe(5);
+      expect(applied.appliedCandidates[0]?.snippet).toBe(
+        "模型切换 (16:23): **需求**: 用户想使用小米 Mimo 模型作为默认; **偏好**: 保持低成本默认路由",
+      );
+      const archiveText = await fs.readFile(applied.archivePath, "utf-8");
+      expect(archiveText).toContain("memory/2026-05-28.md:4-5");
+      expect(archiveText).toContain("模型切换 (16:23): **需求**");
+      expect(archiveText).toContain("**偏好**: 保持低成本默认路由");
+    });
+  });
+
+  it("rebuilds heading context from the live note during list rehydration", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-05-28", [
+        "# 2026-05-28",
+        "",
+        "## New model routing (16:23)",
+        "- Keep Xiaomi Mimo as the low-cost default.",
+      ]);
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "__dreaming_daily__:2026-05-28",
+        signalType: "daily",
+        dedupeByQueryPerDay: true,
+        dayBucket: "2026-05-28",
+        results: [
+          {
+            path: "memory/2026-05-28.md",
+            startLine: 4,
+            endLine: 4,
+            score: 0.91,
+            snippet: "Old model routing: Keep Xiaomi Mimo as the low-cost default.",
+            source: "memory",
+          },
+        ],
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs: Date.parse("2026-05-31T00:00:00.000Z"),
+      });
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: ranked,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs: Date.parse("2026-05-31T00:00:00.000Z"),
+      });
+
+      expect(applied.applied).toBe(1);
+      expect(applied.appliedCandidates[0]?.snippet).toBe(
+        "New model routing (16:23): Keep Xiaomi Mimo as the low-cost default.",
+      );
+      const archiveText = await fs.readFile(applied.archivePath, "utf-8");
+      expect(archiveText).toContain("New model routing (16:23)");
+      expect(archiveText).not.toContain("Old model routing");
+    });
+  });
+
+  it("does not rehydrate heading-prefixed list snippets without a live body", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-05-28", [
+        "# 2026-05-28",
+        "",
+        "## Model routing",
+        "",
+      ]);
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "__dreaming_daily__:2026-05-28",
+        signalType: "daily",
+        dedupeByQueryPerDay: true,
+        dayBucket: "2026-05-28",
+        results: [
+          {
+            path: "memory/2026-05-28.md",
+            startLine: 4,
+            endLine: 4,
+            score: 0.91,
+            snippet: "Model routing: Keep Xiaomi Mimo as the low-cost default.",
+            source: "memory",
+          },
+        ],
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs: Date.parse("2026-05-31T00:00:00.000Z"),
+      });
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: ranked,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs: Date.parse("2026-05-31T00:00:00.000Z"),
+      });
+
+      expect(applied.applied).toBe(0);
+    });
+  });
+
+  it("does not add heading context to ordinary list-item rehydration", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-05-28", [
+        "# 2026-05-28",
+        "",
+        "## Model routing",
+        "- Keep Xiaomi Mimo as the low-cost default.",
+      ]);
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "__dreaming_daily__:2026-05-28",
+        signalType: "daily",
+        dedupeByQueryPerDay: true,
+        dayBucket: "2026-05-28",
+        results: [
+          {
+            path: "memory/2026-05-28.md",
+            startLine: 4,
+            endLine: 4,
+            score: 0.91,
+            snippet: "Keep Xiaomi Mimo as the low-cost default.",
+            source: "memory",
+          },
+        ],
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs: Date.parse("2026-05-31T00:00:00.000Z"),
+      });
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: ranked,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs: Date.parse("2026-05-31T00:00:00.000Z"),
+      });
+
+      expect(applied.applied).toBe(1);
+      expect(applied.appliedCandidates[0]?.snippet).toBe(
+        "Keep Xiaomi Mimo as the low-cost default.",
+      );
+      const archiveText = await fs.readFile(applied.archivePath, "utf-8");
+      expect(archiveText).toContain("Keep Xiaomi Mimo as the low-cost default.");
+      expect(archiveText).not.toContain("Model routing: Keep Xiaomi Mimo");
     });
   });
 
@@ -2540,7 +2772,6 @@ describe("short-term promotion", () => {
   });
 
   it("leaves empty recall stores normalized without rewriting", async () => {
-
     await withTempWorkspace(async (workspaceDir) => {
       const repair = await repairShortTermPromotionArtifacts({ workspaceDir });
 
