@@ -136,7 +136,9 @@ export function isIncompleteTerminalAssistantTurn(params: {
 const PLANNING_ONLY_PROMISE_RE =
   /\b(?:i(?:'ll| will)|let me|lemme|i(?:'m| am)\s+(?:going to|gonna|about to)|first[, ]+i(?:'ll| will)|next[, ]+i(?:'ll| will)|i can (?:do that|check|look|inspect|investigate|verify|review|search|run|test|handle|take|start|launch|send|monitor))\b/i;
 const PLANNING_ONLY_PROGRESS_CLAIM_RE =
-  /^(?:i(?:'m| am)\s+)?(?:checking|running|working(?:\s+on\s+it)?|on\s+it|taking\s+a\s+look|inspecting|reading|searching|looking(?:\s+into|\s+at)?|debugging|testing|verifying|investigating|reviewing|fetching|probing|starting|launching|sending(?:\s+(?:it|this|that|the\s+\w+))?\s+off|kicking\s+(?:it|this|that|the\s+\w+\s+)?off|monitoring\s+(?:it|this|that|now|for\b))\b(?!\s*:)/i;
+  /^(?:i(?:'m| am)\s+)?(?:checking|running|working(?:\s+on\s+it)?|on\s+it|taking\s+a\s+look|inspecting|reading|searching|looking(?:\s+into|\s+at)?|debugging|testing|verifying|investigating|reviewing|fetching|probing|starting|launching|sending(?:\s+(?:it|this|that|the\s+\w+))?\s+off|kicking\s+(?:it|this|that|the\s+\w+\s+)?off|monitoring\s+(?:it|this|that|now|for\b))\b/i;
+const PLANNING_ONLY_PROGRESS_RESULT_RE =
+  /^(?:i(?:'m| am)\s+)?(?:checking|running|working|inspecting|reading|searching|looking|debugging|testing|verifying|investigating|reviewing|fetching|probing|monitoring)\b(?:\s*:|\s+(?:normally|smoothly|well|fine|healthy|successfully|as expected|idle|ready|available|unavailable|complete|completed|finished|failed|blocked|\d+\b|no\b|none\b))/i;
 const PLANNING_ONLY_COMPLETION_RE =
   /\b(?:done|finished|implemented|updated|fixed|changed|ran|verified|found|here(?:'s| is) what|blocked by|the blocker is|requires?|unavailable|not available|can't|cannot)\b/i;
 const PLANNING_ONLY_HEADING_RE = /^(?:plan|steps?|next steps?)\s*:/i;
@@ -144,8 +146,12 @@ const PLANNING_ONLY_BULLET_RE = /^(?:[-*•]\s+|\d+[.)]\s+)/u;
 const PLANNING_ONLY_MAX_VISIBLE_TEXT = 700;
 const PLANNING_ONLY_ACTION_VERB_RE =
   /\b(?:inspect(?:ing)?|investigat(?:e|ing)|check(?:ing)?|look(?:ing)?(?:\s+into|\s+at)?|read(?:ing)?|search(?:ing)?|find(?:ing)?|debug(?:ging)?|fix(?:ing)?|patch(?:ing)?|updat(?:e|ing)|chang(?:e|ing)|edit(?:ing)?|writ(?:e|ing)|implement(?:ing)?|runn?ing|run|test(?:ing)?|verify|verifying|review(?:ing)?|analy(?:s|z)(?:e|ing)|summari(?:s|z)(?:e|ing)|explain(?:ing)?|answer(?:ing)?|show(?:ing)?|shar(?:e|ing)|report(?:ing)?|prepar(?:e|ing)|captur(?:e|ing)|tak(?:e|ing)|handl(?:e|ing)|sort(?:ing|ed)?|follow(?:ing)?\s+up|get(?:ting)?\s+back|start(?:ing)?|launch(?:ing)?|send(?:ing)?|monitor(?:ing)?|refactor(?:ing)?|restart(?:ing)?|deploy(?:ing)?|ship(?:ping)?)\b/i;
-const ACTIONABLE_TASK_NOUN_RE =
-  /\b(?:endpoint|results?|proof|restart|model|default|question|image|pull request|pr|cron|scheduler|jobs?|status|logs?|build|tests?|deploy|bug|error|fix|patch|config|settings?|reply|delivery|runtime|gateway|container|docker|discord)\b/i;
+const ACTIONABLE_PROMPT_DIRECTIVE_RE =
+  /^\s*(?:(?:ok(?:ay)?|please|pls)\s+)?(?:check|look(?:\s+into|\s+at)?|read|write|edit|update|fix|investigate|debug|run|search|find|implement|add|remove|refactor|explain|summari(?:s|z)e|analy(?:s|z)e|review|tell|show|make|restart|deploy|prepare|generate|start|launch|send|monitor|set|load|hit|ask|wire|channel)\b/i;
+const ACTIONABLE_PROMPT_REQUEST_RE =
+  /\b(?:can|could|would|will|should)\s+you\b|\b(?:please|pls)\b|\b(?:help|tell|show)\s+me\b|\bwalk me through\b|\b(?:i|we)\s+(?:need|want|would like)\s+you\b/i;
+const ACTIONABLE_PROMPT_TERSE_REQUEST_RE =
+  /^(?!\s*(?:the|this|that|status update|fyi|heads up)\b).{0,120}\b(?:results?|proof)\b.{0,80}\b(?:now|after)\b/i;
 const PLANNING_ONLY_SHORT_PLACEHOLDER_RE =
   /\bi(?:'ll| will)\s+(?:do|handle|take care of|work on)\s+(?:it|that|this)\b/i;
 const PLANNING_ONLY_WAIT_PLACEHOLDER_RE =
@@ -932,6 +938,10 @@ function isDirectAcknowledgementAnswerPrompt(text: string): boolean {
   );
 }
 
+function isPlanningOnlyProgressClaim(text: string): boolean {
+  return PLANNING_ONLY_PROGRESS_CLAIM_RE.test(text) && !PLANNING_ONLY_PROGRESS_RESULT_RE.test(text);
+}
+
 function isLikelyActionableUserPrompt(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -942,8 +952,9 @@ function isLikelyActionableUserPrompt(text: string): boolean {
   }
   return (
     trimmed.includes("?") ||
-    PLANNING_ONLY_ACTION_VERB_RE.test(trimmed) ||
-    ACTIONABLE_TASK_NOUN_RE.test(trimmed)
+    ACTIONABLE_PROMPT_DIRECTIVE_RE.test(trimmed) ||
+    ACTIONABLE_PROMPT_REQUEST_RE.test(trimmed) ||
+    ACTIONABLE_PROMPT_TERSE_REQUEST_RE.test(trimmed)
   );
 }
 
@@ -976,7 +987,7 @@ function hasStructuredPlanningOnlyFormat(text: string): boolean {
   }
   const bulletLineCount = lines.filter((line) => PLANNING_ONLY_BULLET_RE.test(line)).length;
   const hasPlanningCueLine = lines.some(
-    (line) => PLANNING_ONLY_PROMISE_RE.test(line) || PLANNING_ONLY_PROGRESS_CLAIM_RE.test(line),
+    (line) => PLANNING_ONLY_PROMISE_RE.test(line) || isPlanningOnlyProgressClaim(line),
   );
   const hasPlanningHeading = PLANNING_ONLY_HEADING_RE.test(lines[0] ?? "");
   return (hasPlanningHeading && hasPlanningCueLine) || (bulletLineCount >= 2 && hasPlanningCueLine);
@@ -1100,7 +1111,7 @@ export function isPlanningOnlyAssistantText(
   }
   const classifierText = normalizePlanningOnlyClassifierText(text);
   const hasStructuredPlanningFormat = hasStructuredPlanningOnlyFormat(classifierText);
-  const hasProgressClaim = PLANNING_ONLY_PROGRESS_CLAIM_RE.test(classifierText);
+  const hasProgressClaim = isPlanningOnlyProgressClaim(classifierText);
   const hasShortPlaceholder = PLANNING_ONLY_SHORT_PLACEHOLDER_RE.test(classifierText);
   const hasWaitPlaceholder = PLANNING_ONLY_WAIT_PLACEHOLDER_RE.test(classifierText);
   const hasAckPlaceholder = PLANNING_ONLY_ACK_PLACEHOLDER_RE.test(classifierText);
@@ -1159,7 +1170,7 @@ function resolvePlanningOnlyTurnClassification(params: {
   }
   const classifierText = normalizePlanningOnlyClassifierText(text);
   const hasStructuredPlanningFormat = hasStructuredPlanningOnlyFormat(classifierText);
-  const hasProgressClaim = PLANNING_ONLY_PROGRESS_CLAIM_RE.test(classifierText);
+  const hasProgressClaim = isPlanningOnlyProgressClaim(classifierText);
   const hasShortPlaceholder = PLANNING_ONLY_SHORT_PLACEHOLDER_RE.test(classifierText);
   const hasWaitPlaceholder = PLANNING_ONLY_WAIT_PLACEHOLDER_RE.test(classifierText);
   const hasAckPlaceholder = PLANNING_ONLY_ACK_PLACEHOLDER_RE.test(classifierText);

@@ -2444,23 +2444,26 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     },
   );
 
-  it.each(["Running: 3 jobs.", "Checking: Fetched prices."])(
-    "does not classify result-style progress text %s as planning-only",
-    (assistantText) => {
-      const retryInstruction = resolvePlanningOnlyRetryInstruction({
-        provider: "custom-provider",
-        modelId: "custom-model",
-        prompt: "What is the current jobs status?",
-        aborted: false,
-        timedOut: false,
-        attempt: makeAttemptResult({
-          assistantTexts: [assistantText],
-        }),
-      });
+  it.each([
+    "Running: 3 jobs.",
+    "Checking: Fetched prices.",
+    "Running normally.",
+    "Working fine.",
+    "Running 3 jobs.",
+  ])("does not classify result-style progress text %s as planning-only", (assistantText) => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "custom-provider",
+      modelId: "custom-model",
+      prompt: "What is the current jobs status?",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [assistantText],
+      }),
+    });
 
-      expect(retryInstruction).toBeNull();
-    },
-  );
+    expect(retryInstruction).toBeNull();
+  });
 
   it.each([
     "Running a live cron check now — you should get real output, not a promise.",
@@ -2548,7 +2551,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       const retryInstruction = resolvePlanningOnlyRetryInstruction({
         provider: "custom-provider",
         modelId: "custom-model",
-        prompt: "endpoint results now",
+        prompt: "Show endpoint results now",
         aborted: false,
         timedOut: false,
         attempt: makeAttemptResult({
@@ -2566,7 +2569,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       const retryInstruction = resolvePlanningOnlyRetryInstruction({
         provider: "custom-provider",
         modelId: "custom-model",
-        prompt: "endpoint results now",
+        prompt: "Show endpoint results now",
         aborted: false,
         timedOut: false,
         attempt: makeAttemptResult({
@@ -2584,7 +2587,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       const retryInstruction = resolvePlanningOnlyRetryInstruction({
         provider: "custom-provider",
         modelId: "custom-model",
-        prompt: "endpoint results now",
+        prompt: "Show endpoint results now",
         aborted: false,
         timedOut: false,
         attempt: makeAttemptResult({
@@ -2613,6 +2616,24 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
   it.each(["I am heading out", "That was rough"])(
     "does not classify acknowledgements for conversational prompt %s as planning-only",
+    (prompt) => {
+      const retryInstruction = resolvePlanningOnlyRetryInstruction({
+        provider: "custom-provider",
+        modelId: "custom-model",
+        prompt,
+        aborted: false,
+        timedOut: false,
+        attempt: makeAttemptResult({
+          assistantTexts: ["Got it."],
+        }),
+      });
+
+      expect(retryInstruction).toBeNull();
+    },
+  );
+
+  it.each(["The endpoint is down.", "Status update: the container is running normally."])(
+    "does not classify acknowledgement of context statement %s as planning-only",
     (prompt) => {
       const retryInstruction = resolvePlanningOnlyRetryInstruction({
         provider: "custom-provider",
