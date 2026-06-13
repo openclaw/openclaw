@@ -978,7 +978,6 @@ export async function recordToolLoopOutcome(args: {
       const failed = Boolean(args.error);
       const mutatingAction =
         !blockedReason &&
-        !failed &&
         buildToolMutationState(record?.toolName ?? args.toolName, args.toolParams).mutatingAction;
       const asyncStarted =
         !blockedReason && !failed && details?.async === true && details.status === "started";

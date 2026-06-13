@@ -373,7 +373,7 @@ describe("cron tool", () => {
     });
     expect(result.terminalSummary).toEqual({
       privacy: "public",
-      text: "Scheduler enabled: unknown\nJobs: 1\nNext wake: none",
+      text: "Scheduler enabled: unknown\nJobs: 1\nNext wake: unknown",
     });
   });
 
@@ -460,6 +460,27 @@ describe("cron tool", () => {
 
     const params = expectSingleGatewayCallMethod("cron.list");
     expect(params).toEqual({ includeDisabled: false, agentId: "agent-123" });
+  });
+
+  it("summarizes the total cron list count without inventing a next wake", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      jobs: Array.from({ length: 200 }, (_, index) => ({ id: `job-${index}` })),
+      total: 250,
+      offset: 0,
+      limit: 200,
+      hasMore: true,
+      nextOffset: 200,
+    });
+    const tool = createTestCronTool();
+
+    const result = await tool.execute("call-list-summary", {
+      action: "list",
+    });
+
+    expect(result.terminalSummary).toEqual({
+      privacy: "public",
+      text: "Scheduler enabled: unknown\nJobs: 250\nNext wake: unknown",
+    });
   });
 
   it("prefers explicit cron list agent id over the requester session", async () => {

@@ -425,6 +425,33 @@ describe("before_tool_call loop detection behavior", () => {
     );
   });
 
+  it("marks failed mutating tool outcomes for replay-safety handling", async () => {
+    const onToolOutcome = vi.fn();
+    const execute = vi.fn().mockRejectedValue(new Error("write failed after partial update"));
+    const tool = createWrappedTool("write", execute, {
+      ...enabledLoopDetectionContext,
+      runId: "run-failed-mutating-outcome-observer",
+      onToolOutcome,
+    });
+
+    await expect(
+      tool.execute(
+        "write-failed-observer",
+        { path: "report.md", content: "updated" },
+        undefined,
+        undefined,
+      ),
+    ).rejects.toThrow("write failed after partial update");
+
+    expect(onToolOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "write",
+        mutatingAction: true,
+        failed: true,
+      }),
+    );
+  });
+
   it("marks successful async-started tool outcomes for replay-safety handling", async () => {
     const onToolOutcome = vi.fn();
     const execute = vi.fn().mockResolvedValue({

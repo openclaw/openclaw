@@ -437,15 +437,16 @@ function readCronIntrospectionJobCount(result: unknown): string {
   if (!isRecord(result)) {
     return "unknown";
   }
+  if (typeof result.total === "number" && Number.isFinite(result.total)) {
+    return String(result.total);
+  }
   if (Array.isArray(result.jobs)) {
     return String(result.jobs.length);
   }
   if (typeof result.jobs === "number" && Number.isFinite(result.jobs)) {
     return String(result.jobs);
   }
-  return typeof result.total === "number" && Number.isFinite(result.total)
-    ? String(result.total)
-    : "unknown";
+  return "unknown";
 }
 
 function readCronIntrospectionNextWake(
@@ -705,6 +706,7 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
           }
           return cronIntrospectionResult(
             selfRemoveOnlyJobId ? filterCronListResultToJobId(result, selfRemoveOnlyJobId) : result,
+            { missingNextWakeText: "unknown" },
           );
         }
         case "get": {

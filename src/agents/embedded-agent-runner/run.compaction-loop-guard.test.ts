@@ -177,15 +177,15 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
     expect(observations).toHaveLength(1);
     expect(observations[0]).toMatchObject({
       toolName: "status_probe",
-      resultText: "raw result for model context",
       terminalSummary: {
         privacy: "public",
         text: "Status probe completed",
       },
     });
+    expect(observations[0]).not.toHaveProperty("resultText");
   });
 
-  it("records thrown tool error text for terminal fallback", async () => {
+  it("records thrown tool failures without retaining error text", async () => {
     const observations: Parameters<ToolOutcomeObserver>[0][] = [];
 
     await executeThrowingWrappedToolOutcome(
@@ -199,9 +199,10 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
     expect(observations[0]).toEqual(
       expect.objectContaining({
         toolName: "gateway",
-        resultText: "gateway lookup failed",
+        failed: true,
       }),
     );
+    expect(observations[0]).not.toHaveProperty("resultText");
   });
 
   it("aborts the attempt out-of-band when identical (tool, args, result) repeats windowSize times after compaction", async () => {
