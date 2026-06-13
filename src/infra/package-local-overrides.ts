@@ -244,20 +244,29 @@ async function collectReferencedAddedOverridePaths(params: {
       .filter((change) => change.kind === "modified" && change.savedPath)
       .map((change) => [change.path, change]),
   );
-  const queue = params.changes
-    .filter((change) => change.kind === "modified" && change.savedPath)
-    .map((change) => ({
-      path: change.path,
-      rootPath: change.path,
-      sourcePath: change.savedPath as string,
-    }));
+  const queue = [
+    ...params.changes
+      .filter((change) => change.kind === "modified" && change.savedPath)
+      .map((change) => ({
+        path: change.path,
+        rootPath: change.path,
+        sourcePath: change.savedPath as string,
+      })),
+    ...[...params.actualSet]
+      .filter((relativePath) => !params.baselineSet.has(relativePath))
+      .map((relativePath) => ({
+        path: relativePath,
+        rootPath: relativePath,
+        sourcePath: resolveSafePackagePath(params.packageRoot, relativePath),
+      })),
+  ];
 
   while (queue.length > 0) {
     const current = queue.shift();
     if (!current) {
       continue;
     }
-    // Shared added files must be rescanned per modified root so partial-conflict
+    // Shared added files must be rescanned per override root so partial-conflict
     // reapply keeps each clean importer with its full dependency closure.
     const scanKey = `${current.rootPath}\0${current.path}`;
     if (scannedPathsByRoot.has(scanKey)) {
@@ -393,6 +402,7 @@ export async function captureLocalPackageOverrides(params: {
       changes.push({
         kind: "added",
         path: relativePath,
+        dependencies: referencedAdded.dependenciesByChangePath.get(relativePath) ?? [],
         savedPath: payload.savedPath,
         mode: payload.mode,
       });
@@ -535,7 +545,7 @@ async function preflightLocalOverrides(params: {
       }
     }
     for (const change of params.plan.changes) {
-      if (change.kind !== "modified" || conflictPaths.has(change.path)) {
+      if (change.kind === "deleted" || conflictPaths.has(change.path)) {
         continue;
       }
       if ((change.dependencies ?? []).some((dependency) => conflictPaths.has(dependency))) {
@@ -550,7 +560,7 @@ async function preflightLocalOverrides(params: {
       }
       const importers = params.plan.changes.filter(
         (candidate) =>
-          candidate.kind === "modified" && (candidate.dependencies ?? []).includes(change.path),
+          candidate.kind !== "deleted" && (candidate.dependencies ?? []).includes(change.path),
       );
       if (importers.length > 0 && importers.every((importer) => conflictPaths.has(importer.path))) {
         conflicts.push({ path: change.path, reason: "target-changed" });

@@ -378,6 +378,66 @@ describe("runGlobalPackageUpdateSteps", () => {
     );
   });
 
+  it("does not partially reapply standalone added dependency trees", async () => {
+    await withTempDir(
+      { prefix: "openclaw-package-update-local-standalone-tree-" },
+      async (base) => {
+        const prefix = path.join(base, "prefix");
+        const globalRoot = path.join(prefix, "lib", "node_modules");
+        const packageRoot = path.join(globalRoot, "openclaw");
+        const featurePath = path.join(packageRoot, "dist", "local-feature.js");
+        const helperPath = path.join(packageRoot, "dist", "local-helper.js");
+        await writePackageRoot(packageRoot, "1.0.0");
+        await fs.writeFile(featurePath, 'import "./local-helper.js";\n', "utf8");
+        await fs.writeFile(helperPath, "export const local = true;\n", "utf8");
+
+        const result = await runGlobalPackageUpdateSteps({
+          installTarget: createNpmTarget(globalRoot),
+          installSpec: "openclaw@2.0.0",
+          packageName: "openclaw",
+          packageRoot,
+          runCommand: createRootRunner(globalRoot),
+          runStep: async ({ name, argv, cwd }): Promise<PackageUpdateStepResult> => {
+            const prefixIndex = argv.indexOf("--prefix");
+            const stagePrefix = argv[prefixIndex + 1];
+            if (!stagePrefix) {
+              throw new Error("missing staged prefix");
+            }
+            const stagedPackageRoot = path.join(stagePrefix, "lib", "node_modules", "openclaw");
+            await writePackageRoot(stagedPackageRoot, "2.0.0");
+            await fs.writeFile(
+              path.join(stagedPackageRoot, "dist", "local-helper.js"),
+              "export const upstream = true;\n",
+              "utf8",
+            );
+            await writePackageDistInventory(stagedPackageRoot);
+            return {
+              name,
+              command: argv.join(" "),
+              cwd: cwd ?? process.cwd(),
+              durationMs: 1,
+              exitCode: 0,
+            };
+          },
+          reapplyLocalOverrides: true,
+          timeoutMs: 1000,
+        });
+
+        expect(result.failedStep).toBeNull();
+        expect(result.localOverrides?.status).toBe("conflict");
+        expect(result.localOverrides?.applied).toBe(0);
+        expect(result.localOverrides?.conflicts).toEqual([
+          { path: "dist/local-helper.js", reason: "target-exists" },
+          { path: "dist/local-feature.js", reason: "target-changed" },
+        ]);
+        await expectPathMissing(featurePath);
+        await expect(fs.readFile(helperPath, "utf8")).resolves.toBe(
+          "export const upstream = true;\n",
+        );
+      },
+    );
+  });
+
   it("aborts staged updates before package-manager work when local override capture fails", async () => {
     await withTempDir({ prefix: "openclaw-package-update-staged-capture-fail-" }, async (base) => {
       const prefix = path.join(base, "prefix");
