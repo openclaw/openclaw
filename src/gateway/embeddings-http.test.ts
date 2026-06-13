@@ -429,6 +429,38 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     );
   });
 
+  it("rejects x-openclaw-model for trusted write-only callers", async () => {
+    const port = await getFreePort();
+    const server = await startOpenAiCompatGatewayServer({
+      startGatewayServer,
+      port,
+      auth: { mode: "none" },
+      openAiChatCompletionsEnabled: true,
+    });
+    try {
+      createEmbeddingProviderMock.mockClear();
+      const res = await fetch(`http://127.0.0.1:${port}/v1/embeddings`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-openclaw-scopes": "operator.write",
+          "x-openclaw-model": "openai/text-embedding-3-small",
+        },
+        body: JSON.stringify({
+          model: "openclaw/default",
+          input: "hello",
+        }),
+      });
+      expect(res.status).toBe(403);
+      const json = (await res.json()) as { error?: { type?: string; message?: string } };
+      expect(json.error?.type).toBe("forbidden");
+      expect(json.error?.message).toBe("missing scope: operator.admin");
+      expect(createEmbeddingProviderMock).not.toHaveBeenCalled();
+    } finally {
+      await server.close({ reason: "embeddings model override auth test done" });
+    }
+  });
+
   it("rejects oversized batches", async () => {
     const res = await postEmbeddings({
       model: "openclaw/default",

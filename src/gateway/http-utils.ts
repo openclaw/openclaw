@@ -17,6 +17,7 @@ import { getHeader } from "./http-auth-utils.js";
 import { loadGatewayModelCatalog } from "./server-model-catalog.js";
 
 export {
+  authorizeOpenAiCompatibleHttpModelOverride,
   authorizeGatewayHttpRequestOrReply,
   authorizeScopedGatewayHttpRequestOrReply,
   checkGatewayHttpRequestAuth,

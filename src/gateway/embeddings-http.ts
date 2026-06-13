@@ -24,10 +24,11 @@ import type {
 } from "../plugins/memory-embedding-providers.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { sendJson } from "./http-common.js";
+import { sendJson, sendMissingScopeForbidden } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import {
   OPENCLAW_MODEL_ID,
+  authorizeOpenAiCompatibleHttpModelOverride,
   getHeader,
   resolveAgentIdForRequest,
   resolveAgentIdFromModel,
@@ -250,6 +251,11 @@ export async function handleOpenAiEmbeddingsHttpRequest(
     return false;
   }
   if (!handled) {
+    return true;
+  }
+  const modelOverrideAuth = authorizeOpenAiCompatibleHttpModelOverride(req, handled.requestAuth);
+  if (!modelOverrideAuth.allowed) {
+    sendMissingScopeForbidden(res, modelOverrideAuth.missingScope);
     return true;
   }
 

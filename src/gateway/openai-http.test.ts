@@ -287,6 +287,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           },
           {
             "x-openclaw-model": "openai/gpt-5.4",
+            "x-openclaw-scopes": "operator.admin, operator.write",
           },
         );
         expect(res.status).toBe(200);
@@ -314,6 +315,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           },
           {
             "x-openclaw-model": "gpt-5.4",
+            "x-openclaw-scopes": "operator.admin, operator.write",
           },
         );
         expect(res.status).toBe(200);
@@ -345,7 +347,27 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
             model: "openclaw",
             messages: [{ role: "user", content: "hi" }],
           },
-          { "x-openclaw-model": "openai/" },
+          { "x-openclaw-model": "openai/gpt-5.4" },
+        );
+        expect(res.status).toBe(403);
+        const json = (await res.json()) as { error?: { message?: string; type?: string } };
+        expect(json.error?.type).toBe("forbidden");
+        expect(json.error?.message).toBe("missing scope: operator.admin");
+        expect(agentCommand).toHaveBeenCalledTimes(0);
+      }
+
+      {
+        agentCommand.mockClear();
+        const res = await postChatCompletions(
+          port,
+          {
+            model: "openclaw",
+            messages: [{ role: "user", content: "hi" }],
+          },
+          {
+            "x-openclaw-model": "openai/",
+            "x-openclaw-scopes": "operator.admin, operator.write",
+          },
         );
         expect(res.status).toBe(400);
         const json = (await res.json()) as { error?: { type?: string; message?: string } };
