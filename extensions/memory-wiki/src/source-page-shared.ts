@@ -73,7 +73,33 @@ export async function writeImportedSourcePage(params: {
       if (isRegularFileStat(pageStat) && pageStat.nlink > 1) {
         await vault.remove(params.pagePath);
       }
-      await vault.write(params.pagePath, rendered);
+      let writeError: unknown;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          await vault.write(params.pagePath, rendered);
+          writeError = undefined;
+          break;
+        } catch (err) {
+          writeError = err;
+          if (
+            err instanceof FsSafeError &&
+            err.code === "path-alias" &&
+            attempt < 2
+          ) {
+            // path-alias can be a transient race when the bridge concurrently
+            // replaces source pages via atomic rename. Retry after a short
+            // backoff instead of aborting the whole call (#92134).
+            await new Promise<void>((resolve) => {
+              setTimeout(resolve, 10 * (attempt + 1));
+            });
+            continue;
+          }
+          break;
+        }
+      }
+      if (writeError !== undefined) {
+        throw writeError;
+      }
     } catch (error) {
       if (error instanceof FsSafeError) {
         if (error.code !== "symlink" && error.code !== "path-alias") {
