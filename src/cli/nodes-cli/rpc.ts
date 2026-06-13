@@ -36,7 +36,7 @@ export const callGatewayCli = async (
   method: string,
   opts: NodesRpcOpts,
   params?: unknown,
-  callOpts?: { scopes?: OperatorScope[]; transportTimeoutMs?: number },
+  callOpts?: { transportTimeoutMs?: number; useStoredDeviceAuth?: boolean },
 ) => {
   const runtime = await loadNodesCliRpcRuntime();
   return await runtime.callGatewayCliRuntime(method, opts, params, callOpts);
@@ -50,7 +50,7 @@ export const callNodeDiagnosticsGatewayCli = async (
 ) => {
   try {
     return await callGatewayCli(method, opts, params, {
-      scopes: ["operator.read", "operator.pairing"],
+      useStoredDeviceAuth: true,
     });
   } catch {
     return await callGatewayCli(method, opts, params);
@@ -168,6 +168,12 @@ export function unauthorizedHintForMessage(message: string): string | null {
 /** Resolve a node query to a node id via live node list or paired-node fallback. */
 export async function resolveNodeId(opts: NodesRpcOpts, query: string) {
   return (await resolveNode(opts, query)).nodeId;
+}
+
+/** Resolve a node through the pairing-aware diagnostics view when available. */
+export async function resolveNodeDiagnosticsId(opts: NodesRpcOpts, query: string) {
+  const res = await callNodeDiagnosticsGatewayCli("node.list", opts, {});
+  return resolveNodeFromNodeList(parseNodeList(res), query).nodeId;
 }
 
 /** Resolve a node query to the best available node record. */

@@ -14,6 +14,7 @@ type GatewayCallRequest = {
   mode?: string;
   params?: unknown;
   scopes?: unknown;
+  useStoredDeviceAuth?: boolean;
 };
 
 function formatRuntimeLogCallArg(value: unknown): string {
@@ -465,10 +466,9 @@ describe("cli program (nodes basics)", () => {
     for (const expected of expectedOutput) {
       expect(output).toContain(expected);
     }
-    expect(gatewayRequests().find((request) => request.method === "node.list")?.scopes).toEqual([
-      "operator.read",
-      "operator.pairing",
-    ]);
+    expect(
+      gatewayRequests().find((request) => request.method === "node.list")?.useStoredDeviceAuth,
+    ).toBe(true);
   });
 
   it("runs nodes describe and calls node.describe", async () => {
@@ -495,7 +495,7 @@ describe("cli program (nodes basics)", () => {
     );
     expect(describeRequest?.clientName).toBe("cli");
     expect(describeRequest?.mode).toBe("cli");
-    expect(describeRequest?.scopes).toEqual(["operator.read", "operator.pairing"]);
+    expect(describeRequest?.useStoredDeviceAuth).toBe(true);
 
     const out = getRuntimeOutput();
     expect(out).toContain("Commands");
@@ -550,9 +550,9 @@ describe("cli program (nodes basics)", () => {
 
   it("falls back to read-only node status when pairing diagnostics are unavailable", async () => {
     callGateway.mockImplementation(async (...args: unknown[]) => {
-      const opts = (args[0] ?? {}) as { method?: string; scopes?: unknown[] };
-      if (opts.method === "node.list" && opts.scopes?.includes("operator.pairing")) {
-        throw new Error("gateway closed (1008): pairing required");
+      const opts = (args[0] ?? {}) as { method?: string; useStoredDeviceAuth?: boolean };
+      if (opts.method === "node.list" && opts.useStoredDeviceAuth) {
+        throw new Error("stored device auth unavailable");
       }
       if (opts.method === "node.list") {
         return {
@@ -575,9 +575,53 @@ describe("cli program (nodes basics)", () => {
 
     const requests = gatewayRequests().filter((request) => request.method === "node.list");
     expect(requests).toHaveLength(2);
-    expect(requests[0]?.scopes).toEqual(["operator.read", "operator.pairing"]);
-    expect(requests[1]?.scopes).toBeUndefined();
+    expect(requests[0]?.useStoredDeviceAuth).toBe(true);
+    expect(requests[1]?.useStoredDeviceAuth).toBeUndefined();
     expect(getRuntimeOutput()).toContain("Read Only Node");
+  });
+
+  it("describes pending-only nodes through the pairing diagnostics view", async () => {
+    callGateway.mockImplementation(async (...args: unknown[]) => {
+      const opts = (args[0] ?? {}) as {
+        method?: string;
+        params?: { nodeId?: string };
+        useStoredDeviceAuth?: boolean;
+      };
+      if (opts.method === "node.list") {
+        return opts.useStoredDeviceAuth
+          ? {
+              nodes: [
+                {
+                  nodeId: "pending-only-node",
+                  displayName: "Pending Only Node",
+                  approvalState: "pending-approval",
+                  pendingRequestId: "pending-only-request",
+                  paired: false,
+                  connected: false,
+                },
+              ],
+            }
+          : { nodes: [] };
+      }
+      if (opts.method === "node.describe" && opts.params?.nodeId === "pending-only-node") {
+        return {
+          nodeId: "pending-only-node",
+          displayName: "Pending Only Node",
+          approvalState: "pending-approval",
+          pendingRequestId: "pending-only-request",
+          paired: false,
+          connected: false,
+        };
+      }
+      return { ok: true };
+    });
+
+    await runProgram(["nodes", "describe", "--node", "pending-only-node"]);
+
+    const describeRequest = gatewayRequests().find((request) => request.method === "node.describe");
+    expect(describeRequest?.params).toEqual({ nodeId: "pending-only-node" });
+    expect(describeRequest?.useStoredDeviceAuth).toBe(true);
+    expect(getRuntimeOutput()).toContain("pending-only-request");
   });
 
   it("does not recommend approval from a stale pending request id alone", async () => {

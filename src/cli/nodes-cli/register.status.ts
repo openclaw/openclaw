@@ -20,7 +20,7 @@ import {
   callGatewayCli,
   callNodeDiagnosticsGatewayCli,
   nodesCallOpts,
-  resolveNodeId,
+  resolveNodeDiagnosticsId,
 } from "./rpc.js";
 import type { NodeListNode, NodesRpcOpts, PairedNode } from "./types.js";
 
@@ -397,7 +397,7 @@ export function registerNodesStatusCommands(nodes: Command) {
       .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("describe", async () => {
-          const nodeId = await resolveNodeId(opts, opts.node ?? "");
+          const nodeId = await resolveNodeDiagnosticsId(opts, opts.node ?? "");
           const result = await callNodeDiagnosticsGatewayCli("node.describe", opts, {
             nodeId,
           });

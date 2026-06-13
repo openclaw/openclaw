@@ -746,6 +746,38 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.scopes).toStrictEqual([]);
   });
 
+  it("reuses stored device auth without requesting stronger scopes", async () => {
+    setLocalLoopbackGatewayConfig();
+    loadDeviceAuthTokenMock.mockReturnValue({
+      token: "paired-device-token",
+      role: "operator",
+      scopes: ["operator.read", "operator.pairing"],
+      updatedAtMs: 123,
+    });
+
+    await callGatewayCli({ method: "node.list", useStoredDeviceAuth: true });
+
+    expect(lastClientOptions?.token).toBeUndefined();
+    expect(lastClientOptions?.password).toBeUndefined();
+    expect(lastClientOptions?.scopes).toBeUndefined();
+    expect(lastClientOptions?.deviceIdentity).toEqual(deviceIdentityState.value);
+  });
+
+  it("fails before connecting when stored device auth is unavailable", async () => {
+    getRuntimeConfig.mockReturnValue({
+      gateway: { mode: "local", bind: "loopback", auth: { mode: "none" } },
+    });
+    setGatewayNetworkDefaults();
+    loadDeviceAuthTokenMock.mockReturnValue(null);
+
+    await expect(
+      callGatewayCli({ method: "node.list", useStoredDeviceAuth: true }),
+    ).rejects.toThrow("requires credentials before opening a websocket");
+
+    expect(lastClientOptions).toBeNull();
+    expect(startCalls).toBe(0);
+  });
+
   it("uses backend client metadata for explicit scoped default calls", async () => {
     setLocalLoopbackGatewayConfig();
 

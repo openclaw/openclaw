@@ -82,6 +82,7 @@ type CallGatewayBaseOptions = {
   platform?: string;
   mode?: GatewayClientMode;
   approvalRuntimeToken?: string;
+  useStoredDeviceAuth?: boolean;
   deviceIdentity?: DeviceIdentity | null;
   instanceId?: string;
   minProtocol?: number;
@@ -807,7 +808,7 @@ function ensureGatewaySupportsRequiredMethods(params: {
 
 async function executeGatewayRequestWithScopes<T>(params: {
   opts: CallGatewayBaseOptions;
-  scopes: OperatorScope[];
+  scopes: OperatorScope[] | undefined;
   url: string;
   token?: string;
   password?: string;
@@ -910,7 +911,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
       mode: opts.mode ?? GATEWAY_CLIENT_MODES.CLI,
       ...(opts.approvalRuntimeToken ? { approvalRuntimeToken: opts.approvalRuntimeToken } : {}),
       role: "operator",
-      scopes,
+      ...(Array.isArray(scopes) ? { scopes } : {}),
       deviceIdentity,
       minProtocol: opts.minProtocol ?? MIN_CLIENT_PROTOCOL_VERSION,
       maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,
@@ -1001,7 +1002,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
 
 async function callGatewayWithScopes<T = Record<string, unknown>>(
   opts: CallGatewayBaseOptions,
-  scopes: OperatorScope[],
+  scopes: OperatorScope[] | undefined,
 ): Promise<T> {
   const context = await resolveGatewayCallContext(opts);
   const { timeoutMs, safeTimerTimeoutMs } = resolveGatewayCallTimeout(
@@ -1017,6 +1018,11 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     errorHint: "Fix: pass --token or --password (or gatewayToken in tools).",
     configPath: context.configPath,
   });
+  if (opts.useStoredDeviceAuth && context.urlOverride) {
+    throw new GatewayExplicitAuthRequiredError(
+      "stored device auth is disabled for gateway URL overrides",
+    );
+  }
   ensureRemoteModeUrlConfigured(context);
   const connectionDetails = buildGatewayConnectionDetails({
     config: context.config,
@@ -1026,11 +1032,18 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
   });
   const url = connectionDetails.url;
   const tlsFingerprint = await resolveGatewayTlsFingerprint({ opts, context, url });
-  const { token, password } = resolvedCredentials;
+  const token = opts.useStoredDeviceAuth ? undefined : resolvedCredentials.token;
+  const password = opts.useStoredDeviceAuth ? undefined : resolvedCredentials.password;
   const deviceIdentity =
     opts.deviceIdentity === undefined
       ? resolveDeviceIdentityForGatewayCall({ opts, url, token, password })
       : opts.deviceIdentity;
+  if (opts.useStoredDeviceAuth && !hasStoredOperatorDeviceAuthToken(deviceIdentity)) {
+    throw new GatewayCredentialsRequiredError({
+      method: opts.method,
+      configPath: context.configPath,
+    });
+  }
   ensureGatewayCallCanAuthenticate({
     opts,
     context,
@@ -1040,7 +1053,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
   });
   return await executeGatewayRequestWithScopes<T>({
     opts,
-    scopes,
+    scopes: opts.useStoredDeviceAuth ? undefined : scopes,
     url,
     token,
     password,
