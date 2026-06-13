@@ -1305,6 +1305,28 @@ describe("before_tool_call requireApproval handling", () => {
       toolCallId: "exec-1",
       externalContent: { present: true, sources: ["web_fetch"] },
     });
+
+    console.log("[proof-case] pr=91800 split-wrapper-context web_fetch-to-exec provenance");
+    console.log("[proof-path] runtime=wrapToolWithBeforeToolCallHook -> runBeforeToolCallHook");
+    console.log("[proof-context] first_tool=web_fetch first_context_id=fetchContext");
+    console.log("[proof-context] second_tool=exec second_context_id=execContext");
+    console.log("[proof-context] shared_only=runId:run-split-fetch-then-exec");
+    console.log(
+      `[proof-observed] first_event_externalContent=${JSON.stringify((firstEvent as any).externalContent ?? null)}`,
+    );
+    console.log(
+      `[proof-observed] first_context_externalContent=${JSON.stringify((firstContext as any).externalContent ?? null)}`,
+    );
+    console.log(`[proof-observed] second_event_toolName=${(secondEvent as any).toolName}`);
+    console.log(`[proof-observed] second_event_runId=${(secondEvent as any).runId}`);
+    console.log(`[proof-observed] second_event_toolCallId=${(secondEvent as any).toolCallId}`);
+    console.log(
+      `[proof-observed] second_event_externalContent=${JSON.stringify((secondEvent as any).externalContent)}`,
+    );
+    console.log(
+      `[proof-observed] second_context_externalContent=${JSON.stringify((secondContext as any).externalContent)}`,
+    );
+    console.log("[proof-result] split-wrapper-context external provenance propagated=PASS");
   });
 
   it("passes host-derived apply_patch paths to before_tool_call hooks", async () => {
