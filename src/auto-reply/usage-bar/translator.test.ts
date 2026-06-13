@@ -90,25 +90,23 @@ describe("usage-bar segment forms", () => {
   it("each with item_scales picks a scale per window by position", () => {
     const seg = [
       {
-        text: "📊",
-        each: "limits.windows",
+        text: "W",
+        each: "windows",
         item: "{pct_left|meter:1:*}{resets_in_s|dur}",
         item_scales: ["weather", "plants"],
       },
     ];
     const out = render(seg, {
-      limits: {
-        windows: [
-          { pct_left: 92, resets_in_s: 17100 },
-          { pct_left: 70, resets_in_s: 570240 },
-        ],
-      },
+      windows: [
+        { pct_left: 92, resets_in_s: 17100 },
+        { pct_left: 70, resets_in_s: 570240 },
+      ],
     });
-    expect(out).toBe("📊 ☀️4h45m 🍀6.6d");
+    expect(out).toBe("W ☀️4h45m 🍀6.6d");
   });
 
   it("each drops the whole segment when the array is empty", () => {
-    expect(render([{ text: "📊", each: "limits.windows", item: "{x}" }], { limits: {} })).toBe("");
+    expect(render([{ text: "W", each: "windows", item: "{x}" }], {})).toBe("");
   });
 });
 
@@ -122,15 +120,9 @@ describe("usage-bar end-to-end with buildUsageContract", () => {
         fastMode: false,
         fallbackUsed: false,
         contextTokenBudget: 272000,
+        contextUsedTokens: 204000,
         usage: { input: 204000, output: 15, cacheRead: 0, cacheWrite: 0, total: 204015 },
-        limits: {
-          available: true,
-          source: "core",
-          windows: [
-            { label: "5h", used_pct: 8, pct_left: 92, resets_in_s: 17100 },
-            { label: "week", used_pct: 30, pct_left: 70, resets_in_s: 570240 },
-          ],
-        },
+        turnUsd: 0.03771985,
       },
       "discord",
     );
@@ -141,15 +133,8 @@ describe("usage-bar end-to-end with buildUsageContract", () => {
       { when: "model.reasoning", text: "{model.reasoning|alias:reasoning}" },
       { map: "state.fast_mode", cases: { true: "⚡", false: "🐌" } },
       { text: " | 📚 [{context.pct_used|meter:5:braille}]{context.max_tokens|num}" },
-      {
-        text: " | 📊",
-        each: "limits.windows",
-        item: "{pct_left|meter:1:*}{resets_in_s|dur}",
-        item_scales: ["weather", "plants"],
-      },
+      { text: " | ${cost.turn_usd|fixed:4}" },
     ];
-    expect(renderUsageBar(tpl(pieces), contract)).toBe(
-      "opus46 | med🐌 | 📚 [⣿⣿⣿⣧⠐]272k | 📊 ☀️4h45m 🍀6.6d",
-    );
+    expect(renderUsageBar(tpl(pieces), contract)).toBe("opus46 | med🐌 | 📚 [⣿⣿⣿⣧⠐]272k | $0.0377");
   });
 });
