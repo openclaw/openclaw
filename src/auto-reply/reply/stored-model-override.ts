@@ -1,6 +1,9 @@
 // Persists and resolves per-session model override choices.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { hasSessionAutoModelFallbackProvenance } from "../../agents/agent-scope.js";
+import {
+  hasSessionAutoModelFallbackProvenance,
+  isStaleAutoFallbackOriginOverride as isStaleAutoFallbackOriginSessionEntry,
+} from "../../agents/agent-scope.js";
 import {
   modelKey,
   normalizeModelRef,
@@ -155,31 +158,9 @@ export function isStaleAutoFallbackOriginOverride(params: {
   if (params.storedOverride?.source !== "session") {
     return false;
   }
-  const entry = params.sessionEntry;
-  const recoveredAutoFallbackOverride =
-    entry !== undefined &&
-    entry.modelOverrideSource === undefined &&
-    hasSessionAutoModelFallbackProvenance(entry);
-  if (entry?.modelOverrideSource !== "auto" && !recoveredAutoFallbackOverride) {
-    return false;
-  }
-  if (!entry) {
-    return false;
-  }
-
-  const primaryKey = resolveModelRefKey({
-    defaultProvider: params.defaultProvider,
-    overrideProvider: params.primaryProvider ?? params.defaultProvider,
-    overrideModel: params.primaryModel ?? params.defaultModel,
+  return isStaleAutoFallbackOriginSessionEntry({
+    entry: params.sessionEntry,
+    primaryProvider: params.primaryProvider ?? params.defaultProvider,
+    primaryModel: params.primaryModel ?? params.defaultModel,
   });
-  if (!primaryKey) {
-    return false;
-  }
-
-  const originKey = resolveModelRefKey({
-    defaultProvider: params.defaultProvider,
-    overrideProvider: entry.modelOverrideFallbackOriginProvider,
-    overrideModel: entry.modelOverrideFallbackOriginModel,
-  });
-  return originKey !== null && originKey !== primaryKey;
 }

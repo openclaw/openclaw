@@ -30,6 +30,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "./agent-scope-config.js";
+import { modelKey, normalizeModelRef } from "./model-selection-normalize.js";
 export {
   listAgentEntries,
   listAgentIds,
@@ -116,6 +117,56 @@ export function hasLegacyAutoFallbackWithoutOrigin(
     (!normalizeOptionalString(entry.modelOverrideFallbackOriginProvider) ||
       !normalizeOptionalString(entry.modelOverrideFallbackOriginModel))
   );
+}
+
+function resolveModelRefKey(params: {
+  provider?: string | null;
+  model?: string | null;
+}): string | null {
+  const provider = normalizeOptionalString(params.provider);
+  const model = normalizeOptionalString(params.model);
+  if (!provider || !model) {
+    return null;
+  }
+  const normalized = normalizeModelRef(provider, model);
+  return modelKey(normalized.provider, normalized.model);
+}
+
+/** Detects auto-fallback pins whose recorded primary origin no longer matches the current primary. */
+export function isStaleAutoFallbackOriginOverride(params: {
+  entry:
+    | Pick<
+        SessionEntry,
+        | "modelOverrideSource"
+        | "modelOverrideFallbackOriginProvider"
+        | "modelOverrideFallbackOriginModel"
+      >
+    | null
+    | undefined;
+  primaryProvider?: string | null;
+  primaryModel?: string | null;
+}): boolean {
+  const entry = params.entry;
+  if (!entry) {
+    return false;
+  }
+  const recoveredAutoFallbackOverride =
+    entry.modelOverrideSource === undefined && hasSessionAutoModelFallbackProvenance(entry);
+  if (entry.modelOverrideSource !== "auto" && !recoveredAutoFallbackOverride) {
+    return false;
+  }
+  const primaryKey = resolveModelRefKey({
+    provider: params.primaryProvider,
+    model: params.primaryModel,
+  });
+  if (!primaryKey) {
+    return false;
+  }
+  const originKey = resolveModelRefKey({
+    provider: entry.modelOverrideFallbackOriginProvider,
+    model: entry.modelOverrideFallbackOriginModel,
+  });
+  return originKey !== null && originKey !== primaryKey;
 }
 
 export function resolveAutoFallbackPrimaryProbe(params: {

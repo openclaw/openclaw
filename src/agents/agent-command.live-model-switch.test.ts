@@ -37,8 +37,10 @@ const state = vi.hoisted(() => ({
   ),
   resolveEffectiveModelFallbacksMock: vi.fn().mockReturnValue(undefined),
   hasLegacyAutoFallbackWithoutOriginMock: vi.fn((_entry: unknown) => false),
+  isStaleAutoFallbackOriginOverrideMock: vi.fn((_params: unknown) => false),
   resolveAutoFallbackPrimaryProbeMock: vi.fn((_params: unknown) => undefined as unknown),
   resolveChannelModelOverrideMock: vi.fn((_params: unknown) => null as unknown),
+  applyModelOverrideToSessionEntryMock: vi.fn((_params: unknown) => ({ updated: false })),
   assertLifecycleCurrentMock: vi.fn(),
   emitAgentEventMock: vi.fn(),
   registerAgentRunContextMock: vi.fn(),
@@ -346,7 +348,8 @@ vi.mock("../sessions/level-overrides.js", () => ({
 }));
 
 vi.mock("../sessions/model-overrides.js", () => ({
-  applyModelOverrideToSessionEntry: () => ({ updated: false }),
+  applyModelOverrideToSessionEntry: (params: unknown) =>
+    state.applyModelOverrideToSessionEntryMock(params),
   repairProviderWrappedModelOverride: () => ({ updated: false }),
 }));
 
@@ -384,6 +387,8 @@ vi.mock("./agent-scope.js", () => ({
   hasLegacyAutoFallbackWithoutOrigin: (entry: unknown) =>
     state.hasLegacyAutoFallbackWithoutOriginMock(entry),
   hasSessionAutoModelFallbackProvenance: () => false,
+  isStaleAutoFallbackOriginOverride: (params: unknown) =>
+    state.isStaleAutoFallbackOriginOverrideMock(params),
   listAgentEntries: () => [],
   listAgentIds: () => ["default"],
   markAutoFallbackPrimaryProbe: vi.fn(),
@@ -957,7 +962,9 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.resolveAgentSkillsFilterMock.mockReturnValue(undefined);
     state.loadManifestModelCatalogMock.mockReturnValue([]);
     state.hasLegacyAutoFallbackWithoutOriginMock.mockReturnValue(false);
+    state.isStaleAutoFallbackOriginOverrideMock.mockReturnValue(false);
     state.resolveAutoFallbackPrimaryProbeMock.mockReturnValue(undefined);
+    state.applyModelOverrideToSessionEntryMock.mockReturnValue({ updated: false });
     state.resolveChannelModelOverrideMock.mockImplementation((params: unknown) => {
       const input = params as {
         cfg?: { channels?: { modelByChannel?: Record<string, Record<string, string>> } };
@@ -1519,6 +1526,88 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     const fallbackParams = mockCallArg(state.runWithModelFallbackMock) as FallbackRunnerParams;
     expect(fallbackParams.provider).toBe("openai");
     expect(fallbackParams.model).toBe("channel-model");
+  });
+
+  it("clears stale auto fallback origin overrides before agent-command model selection", async () => {
+    setupSingleAttemptFallback();
+    state.isStaleAutoFallbackOriginOverrideMock.mockReturnValue(true);
+    state.applyModelOverrideToSessionEntryMock.mockImplementation((params: unknown) => {
+      const entry = (params as { entry: SessionEntry }).entry;
+      delete entry.providerOverride;
+      delete entry.modelOverride;
+      delete entry.modelOverrideSource;
+      delete entry.modelOverrideFallbackOriginProvider;
+      delete entry.modelOverrideFallbackOriginModel;
+      entry.updatedAt = 2;
+      return { updated: true };
+    });
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          model: "anthropic/claude-opus-4-8",
+        },
+      },
+    };
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-1",
+      updatedAt: 1,
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-7",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "anthropic",
+      modelOverrideFallbackOriginModel: "claude-haiku-4-5",
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+    };
+    const sessionStore: Record<string, SessionEntry> = { "agent:main:main": sessionEntry };
+    state.sessionEntryMock = sessionEntry;
+    state.sessionStoreMock = sessionStore;
+    state.storePathMock = "/tmp/openclaw-session-store.json";
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("anthropic", "claude-opus-4-8"));
+
+    await runBasicAgentCommand();
+
+    const staleOriginParams = requireRecord(
+      mockCallArg(state.isStaleAutoFallbackOriginOverrideMock),
+      "stale origin params",
+    );
+    expect(staleOriginParams.entry).toEqual(expect.objectContaining({ sessionId: "session-1" }));
+    expectRecordFields(staleOriginParams, {
+      primaryProvider: "anthropic",
+      primaryModel: "claude-opus-4-8",
+    });
+    const applyOverrideParams = requireRecord(
+      mockCallArg(state.applyModelOverrideToSessionEntryMock),
+      "apply model override params",
+    );
+    expect(applyOverrideParams.entry).toEqual(expect.objectContaining({ sessionId: "session-1" }));
+    expectRecordFields(applyOverrideParams, {
+      preserveAuthProfileOverride: true,
+    });
+    expectRecordFields(applyOverrideParams.selection, {
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      isDefault: true,
+    });
+    const cleanupPersist = state.persistSessionEntryMock.mock.calls
+      .map(
+        ([params]) => params as { entry?: SessionEntry; sessionKey?: string; storePath?: string },
+      )
+      .find((params) => params.entry?.updatedAt === 2);
+    expect(cleanupPersist).toEqual(
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        storePath: "/tmp/openclaw-session-store.json",
+      }),
+    );
+    expect(cleanupPersist?.entry?.providerOverride).toBeUndefined();
+    expect(cleanupPersist?.entry?.modelOverride).toBeUndefined();
+    expect(cleanupPersist?.entry?.modelOverrideSource).toBeUndefined();
+    expect(cleanupPersist?.entry?.modelOverrideFallbackOriginProvider).toBeUndefined();
+    expect(cleanupPersist?.entry?.modelOverrideFallbackOriginModel).toBeUndefined();
+    const fallbackParams = mockCallArg(state.runWithModelFallbackMock) as FallbackRunnerParams;
+    expect(fallbackParams.provider).toBe("anthropic");
+    expect(fallbackParams.model).toBe("claude-opus-4-8");
+    expect(state.resolveAutoFallbackPrimaryProbeMock).not.toHaveBeenCalled();
   });
 
   it("probes the channel primary when a session is pinned to an auto fallback", async () => {

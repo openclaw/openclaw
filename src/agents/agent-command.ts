@@ -73,6 +73,7 @@ import {
   entryMatchesAutoFallbackPrimaryProbe,
   hasLegacyAutoFallbackWithoutOrigin,
   hasSessionAutoModelFallbackProvenance,
+  isStaleAutoFallbackOriginOverride,
   listAgentIds,
   markAutoFallbackPrimaryProbe,
   resolveAutoFallbackPrimaryProbe,
@@ -1374,7 +1375,7 @@ async function agentCommandInternal(
       }
     }
 
-    const storedProviderOverride = hasLegacyAutoFallbackOverrideWithoutOrigin
+    let storedProviderOverride = hasLegacyAutoFallbackOverrideWithoutOrigin
       ? undefined
       : sessionEntry?.providerOverride?.trim();
     let storedModelOverride = hasLegacyAutoFallbackOverrideWithoutOrigin
@@ -1416,6 +1417,41 @@ async function agentCommandInternal(
       : null;
     const primaryProvider = normalizedChannelOverride?.provider ?? defaultProvider;
     const primaryModel = normalizedChannelOverride?.model ?? defaultModel;
+    const staleAutoFallbackOriginOverride =
+      !hasExplicitRunOverride &&
+      !hasLegacyAutoFallbackOverrideWithoutOrigin &&
+      hasStoredOverride &&
+      isStaleAutoFallbackOriginOverride({
+        entry: sessionEntry,
+        primaryProvider,
+        primaryModel,
+      });
+    if (
+      staleAutoFallbackOriginOverride &&
+      sessionEntry &&
+      sessionStore &&
+      sessionKey &&
+      !suppressVisibleSessionEffects
+    ) {
+      const { updated } = applyModelOverrideToSessionEntry({
+        entry: sessionEntry,
+        selection: { provider: primaryProvider, model: primaryModel, isDefault: true },
+        preserveAuthProfileOverride: true,
+      });
+      if (updated) {
+        storedModelOverrideSource = undefined;
+        await persistSessionEntry({
+          sessionStore,
+          sessionKey,
+          storePath,
+          entry: sessionEntry,
+        });
+      }
+    }
+    if (staleAutoFallbackOriginOverride) {
+      storedProviderOverride = undefined;
+      storedModelOverride = undefined;
+    }
     const hasEffectiveStoredOverride = Boolean(storedProviderOverride || storedModelOverride);
     if (normalizedChannelOverride && !hasEffectiveStoredOverride) {
       provider = normalizedChannelOverride.provider;
@@ -1435,14 +1471,15 @@ async function agentCommandInternal(
         model = normalizedStored.model;
       }
     }
-    const autoFallbackPrimaryProbe = !hasExplicitRunOverride
-      ? resolveAutoFallbackPrimaryProbe({
-          entry: sessionEntry,
-          sessionKey,
-          primaryProvider,
-          primaryModel,
-        })
-      : undefined;
+    const autoFallbackPrimaryProbe =
+      !hasExplicitRunOverride && !staleAutoFallbackOriginOverride
+        ? resolveAutoFallbackPrimaryProbe({
+            entry: sessionEntry,
+            sessionKey,
+            primaryProvider,
+            primaryModel,
+          })
+        : undefined;
     let autoFallbackPrimaryProbeSessionEntry: SessionEntry | undefined;
     if (autoFallbackPrimaryProbe && sessionEntry) {
       provider = autoFallbackPrimaryProbe.provider;
