@@ -25,6 +25,16 @@ type LifecycleEventLike = Pick<AgentEventPayload, "ts" | "sessionId"> & {
   };
 };
 
+/**
+ * Statuses the lifecycle layer can derive and persist. The display-only
+ * "stale" projection is produced by sessions.list and never written back, so
+ * it is excluded here to keep the derived snapshot/patch types sound.
+ */
+type PersistableSessionRunStatus = Exclude<SessionRunStatus, "stale">;
+
+// Input shape: callers pass an existing gateway row, whose status may carry the
+// display-only "stale" projection. The derivation never reads `status`, so the
+// wide type is accepted here without weakening the narrow output below.
 type LifecycleSessionShape = Pick<
   GatewaySessionRow,
   "updatedAt" | "status" | "startedAt" | "endedAt" | "runtimeMs" | "abortedLastRun"
@@ -35,7 +45,10 @@ type PersistedLifecycleSessionShape = Pick<
   "updatedAt" | "status" | "startedAt" | "endedAt" | "runtimeMs" | "abortedLastRun"
 >;
 
-type GatewaySessionLifecycleSnapshot = Partial<LifecycleSessionShape>;
+// Output shape: a lifecycle event only ever yields a persistable status.
+type GatewaySessionLifecycleSnapshot = Partial<
+  Omit<LifecycleSessionShape, "status"> & { status?: PersistableSessionRunStatus }
+>;
 
 function isFiniteTimestamp(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
@@ -48,7 +61,7 @@ function resolveLifecyclePhase(event: LifecycleEventLike): LifecyclePhase | null
 
 function mapAgentRunTerminalOutcomeToSessionStatus(
   outcome: AgentRunTerminalOutcome,
-): SessionRunStatus {
+): PersistableSessionRunStatus {
   switch (outcome.reason) {
     case "completed":
       return "done";
@@ -59,6 +72,7 @@ function mapAgentRunTerminalOutcomeToSessionStatus(
     case "aborted":
       return "killed";
     case "blocked":
+      return "blocked";
     case "failed":
       return "failed";
     default:
@@ -66,7 +80,7 @@ function mapAgentRunTerminalOutcomeToSessionStatus(
   }
 }
 
-function resolveTerminalStatus(event: LifecycleEventLike): SessionRunStatus {
+function resolveTerminalStatus(event: LifecycleEventLike): PersistableSessionRunStatus {
   const phase = resolveLifecyclePhase(event);
   const terminal = buildAgentRunTerminalOutcome({
     status: phase === "error" ? "error" : event.data?.aborted === true ? "timeout" : "ok",

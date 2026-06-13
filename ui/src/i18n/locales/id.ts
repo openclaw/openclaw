@@ -228,6 +228,8 @@ export const id: TranslationMap = {
     statusFailed: "Gagal",
     statusKilled: "Dihentikan paksa",
     statusTimeout: "Waktu habis",
+    statusBlocked: "Blocked",
+    statusStale: "Stale",
     model: "Model",
     provider: "Penyedia",
     runtime: "Runtime",

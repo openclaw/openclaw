@@ -227,6 +227,8 @@ export const ko: TranslationMap = {
     statusFailed: "실패",
     statusKilled: "종료됨",
     statusTimeout: "시간 초과",
+    statusBlocked: "Blocked",
+    statusStale: "Stale",
     model: "모델",
     provider: "제공업체",
     runtime: "런타임",

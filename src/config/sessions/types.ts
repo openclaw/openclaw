@@ -270,8 +270,12 @@ export type SessionEntry = {
   endedAt?: number;
   /** Accumulated runtime across subagent follow-up runs, persisted after completion. */
   runtimeMs?: number;
-  /** Final persisted subagent run status, used after in-memory run archival. */
-  status?: "running" | "done" | "failed" | "killed" | "timeout";
+  /**
+   * Final persisted subagent run status, used after in-memory run archival.
+   * "blocked" records runs terminated by the blocked-liveness watchdog; the
+   * display-only "stale" projection is never persisted here.
+   */
+  status?: "running" | "done" | "failed" | "killed" | "timeout" | "blocked";
   /**
    * Session-level stop cutoff captured when /stop is received.
    * Messages at/before this boundary are skipped to avoid replaying
@@ -414,7 +418,13 @@ export type SessionEntry = {
 export function isTerminalSessionStatus(
   status: unknown,
 ): status is Exclude<NonNullable<SessionEntry["status"]>, "running"> {
-  return status === "done" || status === "failed" || status === "killed" || status === "timeout";
+  return (
+    status === "done" ||
+    status === "failed" ||
+    status === "killed" ||
+    status === "timeout" ||
+    status === "blocked"
+  );
 }
 
 function isSessionPluginTraceLine(line: string): boolean {

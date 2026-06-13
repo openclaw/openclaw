@@ -56,6 +56,19 @@ unrelated sessions stay hidden. When visibility is restricted, `sessions_list`
 returns optional `visibility` metadata showing the effective mode and a warning that
 results may be scope-limited.
 
+Each row also carries a run `status`:
+
+- `running` -- a run is in progress, with a live run tracked in this gateway.
+- `done`, `failed`, `killed`, `timeout` -- terminal outcomes of the last run.
+- `blocked` -- the last run was ended by the blocked-liveness watchdog (it
+  stalled waiting on something). This is a terminal status, surfaced distinctly
+  from `failed` so a stuck run is recognizable.
+- `stale` -- a display-only projection: the row still claims `running`, but this
+  gateway sees no live run for it (no tracked run, no in-process embedded run,
+  no live sub-agent run, and it has not been updated within the staleness grace
+  window). This is the signature of a run orphaned by a crash or restart. The
+  projection is never written back to the session store.
+
 `sessions_history` fetches the conversation transcript for a specific session.
 By default, tool results are excluded -- pass `includeTools: true` to see them.
 The returned view is intentionally bounded and safety-filtered:

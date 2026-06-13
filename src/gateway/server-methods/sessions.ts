@@ -41,6 +41,10 @@ import {
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
 import {
+  listActiveEmbeddedRunSessionIds,
+  listActiveEmbeddedRunSessionKeys,
+} from "../../agents/embedded-agent-runner/run-state.js";
+import {
   abortEmbeddedAgentRun,
   isEmbeddedAgentRunActive,
   waitForEmbeddedAgentRunEnd,
@@ -122,7 +126,7 @@ import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
 import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
 import { chatHandlers } from "./chat.js";
 import { loadOptionalServerMethodModelCatalog } from "./optional-model-catalog.js";
-import { hasTrackedActiveSessionRun } from "./session-active-runs.js";
+import { hasTrackedActiveSessionRun, projectSessionRowRunStatus } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type {
   GatewayClient,
@@ -980,17 +984,31 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         const sessions = measureDiagnosticsTimelineSpanSync(
           "gateway.sessions.list.active_run_flags",
           () => {
-            return result.sessions.map((session) =>
-              Object.assign({}, session, {
-                hasActiveRun: hasTrackedActiveSessionRun({
-                  context,
-                  requestedKey: session.key,
-                  canonicalKey: session.key,
-                  ...(session.key === "global" && p.agentId ? { agentId: p.agentId } : {}),
-                  defaultAgentId: resolveDefaultAgentId(cfg),
-                }),
-              }),
-            );
+            const activeEmbeddedRunSessionIds = new Set(listActiveEmbeddedRunSessionIds());
+            const activeEmbeddedRunSessionKeys = new Set(listActiveEmbeddedRunSessionKeys());
+            const now = Date.now();
+            return result.sessions.map((session) => {
+              const hasActiveRun = hasTrackedActiveSessionRun({
+                context,
+                requestedKey: session.key,
+                canonicalKey: session.key,
+                ...(session.key === "global" && p.agentId ? { agentId: p.agentId } : {}),
+                defaultAgentId: resolveDefaultAgentId(cfg),
+              });
+              const projectedStatus = projectSessionRowRunStatus({
+                row: session,
+                hasActiveRun,
+                activeEmbeddedRunSessionIds,
+                activeEmbeddedRunSessionKeys,
+                now,
+              });
+              return Object.assign({}, session, {
+                hasActiveRun,
+                // Only the running→stale projection changes a value here; every
+                // other status passes through untouched.
+                ...(projectedStatus === session.status ? {} : { status: projectedStatus }),
+              });
+            });
           },
           {
             config: cfg,

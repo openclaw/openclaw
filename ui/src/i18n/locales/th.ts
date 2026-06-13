@@ -226,6 +226,8 @@ export const th: TranslationMap = {
     statusFailed: "ล้มเหลว",
     statusKilled: "ถูกยุติ",
     statusTimeout: "หมดเวลา",
+    statusBlocked: "Blocked",
+    statusStale: "Stale",
     model: "Model",
     provider: "Provider",
     runtime: "รันไทม์",

@@ -531,6 +531,19 @@ describe("sessions view", () => {
               hasActiveRun: true,
               status: "done",
             },
+            {
+              key: "agent:main:stale",
+              kind: "direct",
+              updatedAt: 4,
+              hasActiveRun: false,
+              status: "stale",
+            },
+            {
+              key: "agent:main:blocked",
+              kind: "direct",
+              updatedAt: 3,
+              status: "blocked",
+            },
           ]),
         ),
       ),
@@ -545,18 +558,24 @@ describe("sessions view", () => {
       "Idle",
       "Failed",
       "Done",
+      "Stale",
+      "Blocked",
     ]);
     expect(badges.map((badge) => [...badge.classList])).toEqual([
       ["session-status-badge", "session-status-badge--live"],
       ["session-status-badge", "session-status-badge--idle"],
       ["session-status-badge", "session-status-badge--failed"],
       ["session-status-badge", "session-status-badge--done"],
+      ["session-status-badge", "session-status-badge--idle"],
+      ["session-status-badge", "session-status-badge--failed"],
     ]);
     expect(badges.map((badge) => badge.getAttribute("aria-label"))).toEqual([
       "Status: Live",
       "Status: Idle",
       "Status: Failed",
       "Status: Done",
+      "Status: Stale",
+      "Status: Blocked",
     ]);
   });
 

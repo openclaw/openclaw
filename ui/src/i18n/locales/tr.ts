@@ -230,6 +230,8 @@ export const tr: TranslationMap = {
     statusFailed: "Başarısız",
     statusKilled: "Sonlandırıldı",
     statusTimeout: "Zaman aşımına uğradı",
+    statusBlocked: "Blocked",
+    statusStale: "Stale",
     model: "Model",
     provider: "Sağlayıcı",
     runtime: "Çalışma zamanı",

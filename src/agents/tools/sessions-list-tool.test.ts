@@ -45,6 +45,7 @@ type SessionsListDetails = {
     fastMode?: boolean;
     reasoningLevel?: string;
     responseUsage?: string;
+    status?: string;
     thinkingLevel?: string;
     verboseLevel?: string;
   }>;
@@ -196,6 +197,50 @@ describe("sessions-list-tool", () => {
     expect(session?.reasoningLevel).toBe("deep");
     expect(session?.elevatedLevel).toBe("on");
     expect(session?.responseUsage).toBe("full");
+  });
+
+  it("keeps stale and blocked run statuses and drops unknown values", async () => {
+    // Stale (projected by the gateway) and blocked (persisted terminal status)
+    // must survive tool projection so agents can spot dead or gated sessions.
+    mocks.gatewayCall.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "sessions.list") {
+        return {
+          path: "/tmp/sessions.json",
+          sessions: [
+            {
+              key: "agent:main:subagent:stale",
+              kind: "direct",
+              sessionId: "sess-stale",
+              status: "stale",
+            },
+            {
+              key: "agent:main:subagent:blocked",
+              kind: "direct",
+              sessionId: "sess-blocked",
+              status: "blocked",
+            },
+            {
+              key: "agent:main:subagent:bogus",
+              kind: "direct",
+              sessionId: "sess-bogus",
+              status: "exploded",
+            },
+          ],
+        };
+      }
+      return {};
+    });
+    const tool = createSessionsListTool({ config: {} as never });
+
+    const result = await tool.execute("call-status", {});
+    const details = getSessionsListDetails(result);
+
+    expect(details.sessions?.map((session) => session.status)).toEqual([
+      "stale",
+      "blocked",
+      undefined,
+    ]);
   });
 
   it.each([

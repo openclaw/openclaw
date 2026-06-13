@@ -27,8 +27,20 @@ export type GatewaySessionsDefaults = {
   thinkingDefault?: string;
 };
 
-/** Runtime status surfaced for the latest session run. */
-export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
+/**
+ * Runtime status surfaced for the latest session run.
+ * "blocked" is persisted by the blocked-liveness terminal mapping; "stale" is
+ * a display-only sessions.list projection for running rows without any live
+ * run evidence in this gateway process (never written to session stores).
+ */
+export type SessionRunStatus =
+  | "running"
+  | "done"
+  | "failed"
+  | "killed"
+  | "timeout"
+  | "blocked"
+  | "stale";
 
 type SubagentRunState = "active" | "interrupted" | "historical";
 

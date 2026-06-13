@@ -228,6 +228,8 @@ export const pt_BR: TranslationMap = {
     statusFailed: "Falhou",
     statusKilled: "Encerrada",
     statusTimeout: "Tempo esgotado",
+    statusBlocked: "Blocked",
+    statusStale: "Stale",
     model: "Modelo",
     provider: "Provedor",
     runtime: "Runtime",

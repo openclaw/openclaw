@@ -253,6 +253,48 @@ describe("listSessionsFromStore subagent metadata", () => {
     expect(row?.runtimeMs).toBe(3_500);
   });
 
+  test("treats a blocked persisted subagent status as a historical run", () => {
+    // "blocked" is a terminal status (the blocked-liveness watchdog fired), so a
+    // registry-only run carrying it must read as historical, not interrupted —
+    // the same parity it had when blocked was folded into "failed".
+    const now = Date.now();
+    const childSessionKey = "agent:main:subagent:blocked-history";
+    const store: Record<string, SessionEntry> = {
+      [childSessionKey]: {
+        sessionId: "sess-blocked-history",
+        updatedAt: now - 250,
+        spawnedBy: "agent:main:main",
+        status: "blocked",
+        startedAt: now - 4_000,
+      } as SessionEntry,
+    };
+
+    addSubagentRunForTests({
+      runId: "run-blocked-history",
+      childSessionKey,
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "blocked history task",
+      cleanup: "keep",
+      createdAt: now - 5_000,
+      startedAt: now - 4_000,
+      model: "openai/gpt-5.4",
+    });
+
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {},
+    });
+
+    const row = result.sessions.find((session) => session.key === childSessionKey);
+    expect(row?.status).toBe("blocked");
+    expect(row?.subagentRunState).toBe("historical");
+    expect(row?.hasActiveSubagentRun).toBe(false);
+  });
+
   test("does not keep childSessions attached to a stale older controller row", () => {
     const now = Date.now();
     const store: Record<string, SessionEntry> = {
