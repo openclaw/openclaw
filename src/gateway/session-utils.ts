@@ -2082,8 +2082,8 @@ export function buildGatewaySessionRow(params: {
     : resolvedModelIdentity;
   const { provider: modelProvider, model } = modelIdentity;
   const totalTokens =
-    resolvePositiveNumber(resolveFreshSessionTotalTokens(entry)) ??
-    resolvePositiveNumber(transcriptUsage?.totalTokens);
+    resolveNonNegativeNumber(resolveFreshSessionTotalTokens(entry)) ??
+    resolveNonNegativeNumber(transcriptUsage?.totalTokens);
   const totalTokensFresh =
     typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0
       ? true
