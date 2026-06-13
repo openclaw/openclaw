@@ -251,6 +251,58 @@ describe("installTestEnv", () => {
     expect(process.env.TEST_PROFILE_ONLY).toBeUndefined();
   });
 
+  it("excludes browser cache and profile directories from live auth staging", () => {
+    const realHome = createTempHome();
+    // Legitimate auth file that should be copied
+    writeFile(path.join(realHome, ".gemini", "auth.json"), '{"token":"secret"}\n');
+    // Browser cache directories that should be excluded
+    writeFile(
+      path.join(
+        realHome,
+        ".gemini",
+        "antigravity-browser-profile",
+        "Default",
+        "Cache",
+        "Cache_Data",
+        "data",
+      ),
+      "cache\n",
+    );
+    writeFile(
+      path.join(
+        realHome,
+        ".gemini",
+        "antigravity-browser-profile",
+        "Default",
+        "GPUCache",
+        "gpu-data",
+      ),
+      "gpucache\n",
+    );
+    writeFile(
+      path.join(realHome, ".gemini", "antigravity", "browser_recordings", "recording.json"),
+      "recording\n",
+    );
+    writeFile(path.join(realHome, ".gemini", "Service Worker", "CacheStorage", "sw-cache"), "sw\n");
+
+    process.env.HOME = realHome;
+    process.env.USERPROFILE = realHome;
+    process.env.OPENCLAW_LIVE_TEST = "1";
+    process.env.OPENCLAW_LIVE_TEST_QUIET = "1";
+
+    const testEnv = installTestEnv();
+    cleanupFns.push(testEnv.cleanup);
+
+    const tmpGemini = path.join(testEnv.tempHome, ".gemini");
+    // Auth files should be copied
+    expect(fs.existsSync(path.join(tmpGemini, "auth.json"))).toBe(true);
+    // Cache directories should NOT be copied
+    expect(fs.existsSync(path.join(tmpGemini, "antigravity-browser-profile"))).toBe(false);
+    // antigravity/ parent dir is not in the exclusion list, but browser_recordings inside it should be excluded
+    expect(fs.existsSync(path.join(tmpGemini, "antigravity", "browser_recordings"))).toBe(false);
+    expect(fs.existsSync(path.join(tmpGemini, "Service Worker"))).toBe(false);
+  });
+
   it("falls back to parsing ~/.profile when bash is unavailable", async () => {
     const realHome = createTempHome();
     writeFile(path.join(realHome, ".profile"), "export TEST_PROFILE_ONLY=from-profile\n");
