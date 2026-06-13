@@ -56,6 +56,7 @@ struct ExecApprovalsStoreRefactorTests {
         let home = root.appendingPathComponent("home", isDirectory: true)
         let stateDir = root.appendingPathComponent("state", isDirectory: true)
         defer { try? FileManager().removeItem(at: root) }
+        try Self.seedCurrentApprovalsFile(in: stateDir)
 
         try await self.withLockedEnv([
             "OPENCLAW_HOME": home.path,
@@ -195,5 +196,20 @@ struct ExecApprovalsStoreRefactorTests {
             throw MissingIdentifierError()
         }
         return identifier
+    }
+
+    private static func seedCurrentApprovalsFile(in stateDir: URL) throws {
+        try FileManager().createDirectory(at: stateDir, withIntermediateDirectories: true)
+        let file = ExecApprovalsFile(
+            version: 1,
+            socket: ExecApprovalsSocketConfig(
+                path: stateDir.appendingPathComponent("exec-approvals.sock").path,
+                token: "test-token"),
+            defaults: nil,
+            agents: [:])
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(file)
+            .write(to: stateDir.appendingPathComponent("exec-approvals.json"))
     }
 }
