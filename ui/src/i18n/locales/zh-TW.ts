@@ -373,7 +373,6 @@ export const zh_TW: TranslationMap = {
       host: "Host",
       agent: "代理",
       session: "工作階段",
-      cwd: "CWD",
       resolved: "Resolved",
       security: "Security",
       ask: "Ask",

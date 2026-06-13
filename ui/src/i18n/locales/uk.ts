@@ -377,7 +377,6 @@ export const uk: TranslationMap = {
       host: "Host",
       agent: "Агент",
       session: "Сеанс",
-      cwd: "CWD",
       resolved: "Resolved",
       security: "Security",
       ask: "Ask",

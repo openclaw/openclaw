@@ -377,7 +377,6 @@ export const fa: TranslationMap = {
       host: "میزبان",
       agent: "عامل",
       session: "جلسه",
-      cwd: "CWD",
       resolved: "حل‌شده",
       security: "امنیت",
       ask: "پرسش",

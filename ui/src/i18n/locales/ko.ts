@@ -375,7 +375,6 @@ export const ko: TranslationMap = {
       host: "Host",
       agent: "에이전트",
       session: "세션",
-      cwd: "CWD",
       resolved: "Resolved",
       security: "Security",
       ask: "Ask",

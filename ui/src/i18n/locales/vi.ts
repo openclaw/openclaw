@@ -376,7 +376,6 @@ export const vi: TranslationMap = {
       host: "Máy chủ",
       agent: "Agent",
       session: "Phiên",
-      cwd: "CWD",
       resolved: "Đã giải quyết",
       security: "Bảo mật",
       ask: "Hỏi",
