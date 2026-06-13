@@ -380,6 +380,7 @@ describe("workboard controller", () => {
     });
 
     expect(state.tasksByCardId.get(sampleCard.id)).toEqual(sampleTask);
+    expect(state.lifecycleTasksPrepared).toBe(false);
     expect(state.lastRefreshError).toBe("tasks unavailable");
   });
 
@@ -621,6 +622,43 @@ describe("workboard controller", () => {
     expect(firstBatch).toHaveLength(32);
     expect(secondBatch).toHaveLength(32);
     expect(secondBatch).not.toEqual(firstBatch);
+  });
+
+  it("requires a full lifecycle refresh after a partial bounded task poll", async () => {
+    const host = {};
+    const cards = Array.from({ length: 33 }, (_, index) => ({
+      ...sampleCard,
+      id: `card-${index}`,
+      status: "running" as const,
+      taskId: `task-${index}`,
+    }));
+    const tasks = cards.map((card) => ({
+      ...sampleTask,
+      id: card.taskId,
+      taskId: card.taskId,
+    }));
+    const client = createClient((method, params) => {
+      if (method === "workboard.cards.list") {
+        return { cards, statuses: ["todo", "running", "done"] };
+      }
+      if (method === "tasks.get") {
+        const taskId = (params as { taskId: string }).taskId;
+        return { task: tasks.find((task) => task.taskId === taskId) };
+      }
+      if (method === "tasks.list") {
+        return { tasks };
+      }
+      return {};
+    });
+
+    await refreshWorkboard({ host, client: client as never, source: "poll" });
+
+    expect(getWorkboardState(host).lifecycleTasksPrepared).toBe(false);
+    vi.clearAllMocks();
+    await syncWorkboardLifecycle({ host, client: client as never, sessions: [] });
+
+    expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
+    expect(client.request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
   });
 
   it("rediscovers a bounded batch of running task links during polls", async () => {

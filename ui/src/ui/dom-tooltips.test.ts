@@ -26,7 +26,9 @@ describe("native title tooltip promotion", () => {
     expect(button.getAttribute("data-tooltip")).toBe("Refresh");
     expect(button.getAttribute("data-native-tooltip-title")).toBe("Refresh");
     expect(button.getAttribute("data-floating-tooltip-active")).toBe("true");
-    expect(document.querySelector(".control-ui-floating-tooltip")?.textContent).toBe("Refresh");
+    const tooltip = document.querySelector<HTMLElement>(".control-ui-floating-tooltip");
+    expect(tooltip?.textContent).toBe("Refresh");
+    expect(button.getAttribute("aria-describedby")).toBe(tooltip?.id);
 
     restoreNativeTitleTooltip(button, root, "pointer");
 
@@ -35,6 +37,7 @@ describe("native title tooltip promotion", () => {
     expect(button.getAttribute("data-tooltip")).toBeNull();
     expect(button.getAttribute("data-native-tooltip-title")).toBeNull();
     expect(button.getAttribute("data-floating-tooltip-active")).toBeNull();
+    expect(button.getAttribute("aria-describedby")).toBeNull();
   });
 
   it("preserves existing accessible labels while promoting title tooltips", () => {
@@ -69,6 +72,25 @@ describe("native title tooltip promotion", () => {
 
     expect(button.getAttribute("title")).toBe("Chroma family");
     expect(button.getAttribute("aria-label")).toBeNull();
+  });
+
+  it("preserves existing descriptions while associating the floating tooltip", () => {
+    const root = document.createElement("div");
+    const button = document.createElement("button");
+    button.className = "btn";
+    button.title = "Chroma family";
+    button.textContent = "Claw";
+    button.setAttribute("aria-describedby", "existing-description");
+    root.append(button);
+
+    promoteNativeTitleTooltip(button, root, "pointer");
+
+    const tooltip = document.querySelector<HTMLElement>(".control-ui-floating-tooltip");
+    expect(button.getAttribute("aria-describedby")).toBe(`existing-description ${tooltip?.id}`);
+
+    restoreNativeTitleTooltip(button, root, "pointer");
+
+    expect(button.getAttribute("aria-describedby")).toBe("existing-description");
   });
 
   it("does not promote rich role-button containers", () => {
@@ -367,20 +389,22 @@ describe("native title tooltip promotion", () => {
     promoteNativeTitleTooltip(hovered, root, "pointer");
     refreshActiveFloatingTooltip(root);
 
-    expect(document.querySelector(".control-ui-floating-tooltip")?.textContent).toBe("Hovered");
+    const tooltip = document.querySelector<HTMLElement>(".control-ui-floating-tooltip");
+    expect(tooltip?.textContent).toBe("Hovered");
+    expect(hovered.getAttribute("aria-describedby")).toBe(tooltip?.id);
+    expect(focused.getAttribute("aria-describedby")).toBeNull();
 
     restoreNativeTitleTooltip(hovered, root, "pointer");
 
-    expect(document.querySelector(".control-ui-floating-tooltip")?.textContent).toBe("Focused");
-    expect(document.querySelector<HTMLElement>(".control-ui-floating-tooltip")?.dataset.open).toBe(
-      "true",
-    );
+    expect(tooltip?.textContent).toBe("Focused");
+    expect(tooltip?.dataset.open).toBe("true");
+    expect(hovered.getAttribute("aria-describedby")).toBeNull();
+    expect(focused.getAttribute("aria-describedby")).toBe(tooltip?.id);
 
     restoreNativeTitleTooltip(focused, root, "focus");
 
-    expect(document.querySelector<HTMLElement>(".control-ui-floating-tooltip")?.dataset.open).toBe(
-      "false",
-    );
+    expect(tooltip?.dataset.open).toBe("false");
+    expect(focused.getAttribute("aria-describedby")).toBeNull();
   });
 
   it("clears active floating tooltips and restores promoted titles", () => {

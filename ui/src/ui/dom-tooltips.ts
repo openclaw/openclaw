@@ -3,8 +3,10 @@ const TITLE_TOOLTIP_SELECTOR =
 const PROMOTED_TITLE_ATTR = "data-native-tooltip-title";
 const GENERATED_TOOLTIP_ATTR = "data-native-tooltip-generated";
 const GENERATED_ARIA_LABEL_ATTR = "data-native-tooltip-generated-aria-label";
+const GENERATED_ARIA_DESCRIBEDBY_ATTR = "data-native-tooltip-generated-aria-describedby";
 const ACTIVE_FLOATING_TOOLTIP_ATTR = "data-floating-tooltip-active";
 const FLOATING_TOOLTIP_CLASS = "control-ui-floating-tooltip";
+const FLOATING_TOOLTIP_ID = "control-ui-floating-tooltip";
 
 type FloatingTooltipTrigger = "focus" | "pointer";
 
@@ -108,12 +110,40 @@ function restorePromotedTooltipAccessibleName(element: HTMLElement) {
   element.removeAttribute(GENERATED_ARIA_LABEL_ATTR);
 }
 
+function ensureFloatingTooltipDescription(element: HTMLElement, tooltip: HTMLElement) {
+  const describedBy = element.getAttribute("aria-describedby")?.split(/\s+/).filter(Boolean) ?? [];
+  if (describedBy.includes(tooltip.id)) {
+    return;
+  }
+  element.setAttribute("aria-describedby", [...describedBy, tooltip.id].join(" "));
+  element.setAttribute(GENERATED_ARIA_DESCRIBEDBY_ATTR, "true");
+}
+
+function restoreFloatingTooltipDescription(element: HTMLElement) {
+  if (element.getAttribute(GENERATED_ARIA_DESCRIBEDBY_ATTR) !== "true") {
+    return;
+  }
+  const describedBy =
+    element
+      .getAttribute("aria-describedby")
+      ?.split(/\s+/)
+      .filter((id) => id && id !== FLOATING_TOOLTIP_ID) ?? [];
+  if (describedBy.length > 0) {
+    element.setAttribute("aria-describedby", describedBy.join(" "));
+  } else {
+    element.removeAttribute("aria-describedby");
+  }
+  element.removeAttribute(GENERATED_ARIA_DESCRIBEDBY_ATTR);
+}
+
 function getFloatingTooltip(): HTMLElement {
   const existing = document.querySelector<HTMLElement>(`.${FLOATING_TOOLTIP_CLASS}`);
   if (existing) {
+    existing.id = FLOATING_TOOLTIP_ID;
     return existing;
   }
   const tooltip = document.createElement("div");
+  tooltip.id = FLOATING_TOOLTIP_ID;
   tooltip.className = FLOATING_TOOLTIP_CLASS;
   tooltip.setAttribute("role", "tooltip");
   document.body.append(tooltip);
@@ -122,6 +152,11 @@ function getFloatingTooltip(): HTMLElement {
 
 function showFloatingTooltip(element: HTMLElement, text: string) {
   const tooltip = getFloatingTooltip();
+  if (activeFloatingTooltipOwner && activeFloatingTooltipOwner !== element) {
+    restoreFloatingTooltipDescription(activeFloatingTooltipOwner);
+  }
+  ensureFloatingTooltipDescription(element, tooltip);
+  activeFloatingTooltipOwner = element;
   const rect = element.getBoundingClientRect();
   const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
   const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
@@ -170,6 +205,10 @@ export function clearActiveFloatingTooltips(root: ParentNode = document): void {
       element.removeAttribute(GENERATED_TOOLTIP_ATTR);
     }
     restorePromotedTooltipAccessibleName(element);
+    restoreFloatingTooltipDescription(element);
+  }
+  if (activeFloatingTooltipOwner) {
+    restoreFloatingTooltipDescription(activeFloatingTooltipOwner);
   }
   activeFloatingTooltipOwner = null;
   stopFloatingTooltipViewportTracking();
@@ -203,7 +242,6 @@ export function promoteNativeTitleTooltip(
   triggers.add(trigger);
   activeFloatingTooltipTriggers.set(element, triggers);
   element.setAttribute(ACTIVE_FLOATING_TOOLTIP_ATTR, "true");
-  activeFloatingTooltipOwner = element;
   startFloatingTooltipViewportTracking(root);
   showFloatingTooltip(element, tooltipText);
   return element;
@@ -216,18 +254,21 @@ export function refreshActiveFloatingTooltip(root: ParentNode): HTMLElement | nu
       ? owner
       : root.querySelector<HTMLElement>(`[${ACTIVE_FLOATING_TOOLTIP_ATTR}]`);
   if (!element) {
+    if (activeFloatingTooltipOwner) {
+      restoreFloatingTooltipDescription(activeFloatingTooltipOwner);
+    }
     activeFloatingTooltipOwner = null;
     stopFloatingTooltipViewportTracking();
     hideFloatingTooltip();
     return null;
   }
-  activeFloatingTooltipOwner = element;
   startFloatingTooltipViewportTracking(root);
   const tooltipText = getTooltipText(element);
   if (!tooltipText) {
     element.removeAttribute(PROMOTED_TITLE_ATTR);
     element.removeAttribute(ACTIVE_FLOATING_TOOLTIP_ATTR);
     activeFloatingTooltipTriggers.delete(element);
+    restoreFloatingTooltipDescription(element);
     activeFloatingTooltipOwner = null;
     return refreshActiveFloatingTooltip(root);
   }
@@ -279,6 +320,7 @@ export function restoreNativeTitleTooltip(
     element.removeAttribute(GENERATED_TOOLTIP_ATTR);
   }
   restorePromotedTooltipAccessibleName(element);
+  restoreFloatingTooltipDescription(element);
   if (wasOwner) {
     activeFloatingTooltipOwner = null;
     refreshActiveFloatingTooltip(root);

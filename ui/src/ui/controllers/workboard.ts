@@ -1674,6 +1674,13 @@ function shouldRefreshWorkboardTasksForLifecycle(state: WorkboardUiState): boole
   );
 }
 
+function workboardTaskLinksReadyForLifecycle(state: WorkboardUiState): boolean {
+  return state.cards.every((card) => {
+    const taskId = normalizeString(card.taskId);
+    return !taskId || state.missingTaskIds.has(taskId) || state.tasksByCardId.has(card.id);
+  });
+}
+
 function normalizeDispatchSummary(value: unknown): WorkboardDispatchSummary {
   const countArray = (key: string) =>
     isRecord(value) && Array.isArray(value[key]) ? value[key].length : 0;
@@ -1735,6 +1742,7 @@ export async function loadWorkboard(params: {
       state.cards = normalized.cards;
       state.statuses = normalized.statuses;
       state.tasksByCardId = new Map();
+      let linkedTaskRefreshFailed = false;
       if (state.cards.length > 0) {
         const preparedTaskSummaries = state.cards.flatMap((card) => {
           const task = previousTasksByCardId.get(card.id);
@@ -1801,6 +1809,7 @@ export async function loadWorkboard(params: {
             applyTaskSummariesToState(state, taskSummaries, { missingTaskIds });
             state.lifecycleTaskRefreshFailed = false;
             if (taskRefreshError) {
+              linkedTaskRefreshFailed = true;
               state.lastRefreshError = taskRefreshError;
             }
           }
@@ -1808,6 +1817,7 @@ export async function loadWorkboard(params: {
           if (isCurrentWorkboardLoadGeneration(params.host, generation)) {
             if (params.taskRefresh === "linked") {
               applyTaskSummariesToState(state, preparedTaskSummaries);
+              linkedTaskRefreshFailed = true;
             } else {
               // Render-driven lifecycle sync runs after every update. Defer a
               // failed full task refresh until a later load instead of retrying immediately.
@@ -1822,7 +1832,10 @@ export async function loadWorkboard(params: {
       if (!isCurrentWorkboardLoadGeneration(params.host, generation)) {
         return false;
       }
-      state.lifecycleTasksPrepared = params.taskRefresh === "linked";
+      state.lifecycleTasksPrepared =
+        params.taskRefresh === "linked" &&
+        !linkedTaskRefreshFailed &&
+        workboardTaskLinksReadyForLifecycle(state);
       state.loaded = true;
       return true;
     } catch (error) {
