@@ -126,7 +126,7 @@ describe("package dist inventory", () => {
     },
   );
 
-  it.each(["2026.6.6", "2026.6.6-beta.2", "2026.6.7-alpha.5", "2026.6.10-alpha.2"])(
+  it.each(["2026.6.6", "2026.6.6-beta.2", "2026.6.7-alpha.6", "2026.6.10-alpha.2"])(
     "allows already-published package version %s without content inventory",
     async (version) => {
       await withTempDir(

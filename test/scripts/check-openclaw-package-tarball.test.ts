@@ -295,7 +295,7 @@ describe("check-openclaw-package-tarball", () => {
     "2026.6.5-beta.6",
     "2026.6.6",
     "2026.6.6-beta.2",
-    "2026.6.7-alpha.5",
+    "2026.6.7-alpha.6",
     "2026.6.10-alpha.2",
   ])("allows published package %s without content inventory", (version) => {
     withTarball(
