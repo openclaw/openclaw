@@ -2729,6 +2729,29 @@ describe("runReplyAgent response usage footer", () => {
     expect(text).not.toContain("Usage:");
   });
 
+  it("shows aggregate-only token totals in the built-in full footer", async () => {
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          provider: "anthropic",
+          model: "claude",
+          usage: { total: 1250 },
+        },
+      },
+    });
+
+    const res = await createRun({
+      responseUsage: "full",
+      sessionKey: "agent:main:whatsapp:dm:+1000",
+    });
+    const payload = Array.isArray(res) ? res[0] : res;
+    const text = payload?.text ?? "";
+    expect(text).toContain("↕️ 1.3k");
+    expect(text).not.toContain("↕️ ?/?");
+    expect(text).not.toContain("Usage:");
+  });
+
   it("shows configured costs for aws-sdk providers when responseUsage=full", async () => {
     runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "ok" }],
