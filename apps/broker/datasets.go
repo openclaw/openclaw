@@ -17,10 +17,15 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
 const datasetSampleLimit = 64 * 1024
+
+// defaultDatasetFreeSpaceFloorBytes keeps dataset writes from filling the
+// tenant volume, which also hosts the runtime workspace (1 GiB).
+const defaultDatasetFreeSpaceFloorBytes = int64(1 << 30)
 
 var datasetUploadLocks sync.Map
 
@@ -46,6 +51,92 @@ func datasetRoot() string {
 
 func uploadRoot() string {
 	return filepath.Join(datasetRoot(), ".uploads")
+}
+
+func datasetFreeSpaceFloorBytes() int64 {
+	raw := strings.TrimSpace(os.Getenv("DATASET_FREE_SPACE_FLOOR_BYTES"))
+	if n, err := strconv.ParseInt(raw, 10, 64); err == nil && n >= 0 {
+		return n
+	}
+	return defaultDatasetFreeSpaceFloorBytes
+}
+
+func datasetVolumeFreeBytes() (int64, error) {
+	root := datasetRoot()
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return 0, err
+	}
+	var st syscall.Statfs_t
+	if err := syscall.Statfs(root, &st); err != nil {
+		return 0, err
+	}
+	return int64(st.Bavail) * int64(st.Bsize), nil
+}
+
+// requireDatasetFreeSpace rejects dataset writes whose declared size would
+// push free space on the dataset volume below the floor (declared is 0 when
+// the size is unknown). The volume also hosts the tenant's runtime workspace,
+// so filling it bricks the runtime. Statfs failures fail open: the per-tenant
+// storage cap upstream still bounds total bytes.
+func requireDatasetFreeSpace(w http.ResponseWriter, declared int64) bool {
+	free, err := datasetVolumeFreeBytes()
+	if err != nil || free-declared >= datasetFreeSpaceFloorBytes() {
+		return true
+	}
+	writeVolumeFloorError(w)
+	return false
+}
+
+func writeVolumeFloorError(w http.ResponseWriter) {
+	floor := datasetFreeSpaceFloorBytes()
+	free, _ := datasetVolumeFreeBytes()
+	jsonError(w, http.StatusInsufficientStorage, "volume_free_space_floor",
+		fmt.Sprintf("the runtime volume is nearly full (%d bytes free, floor %d bytes); delete datasets or free up workspace files before uploading", free, floor))
+}
+
+// datasetPatchBudget pre-checks a PATCH against the free-space floor and
+// returns the byte budget the copy may write before crossing the reserve
+// (-1 when Statfs fails open). A declared Content-Length that cannot fit
+// above the floor is refused with 507 before any byte is written.
+func datasetPatchBudget(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	free, err := datasetVolumeFreeBytes()
+	if err != nil {
+		return -1, true
+	}
+	if free-max(r.ContentLength, 0) < datasetFreeSpaceFloorBytes() {
+		writeVolumeFloorError(w)
+		return 0, false
+	}
+	return free - datasetFreeSpaceFloorBytes(), true
+}
+
+// errVolumeFloorBudget reports that an unknown-length upload body tried to
+// write past the volume free-space budget.
+var errVolumeFloorBudget = errors.New("volume free-space floor budget exhausted")
+
+// floorBudgetReader yields at most budget bytes; if the underlying reader
+// still has data once the budget is spent, the next Read fails with
+// errVolumeFloorBudget so the copy stops before crossing the reserve.
+type floorBudgetReader struct {
+	r      io.Reader
+	budget int64
+}
+
+func (b *floorBudgetReader) Read(p []byte) (int, error) {
+	if b.budget <= 0 {
+		var probe [1]byte
+		n, err := b.r.Read(probe[:])
+		if n > 0 {
+			return 0, errVolumeFloorBudget
+		}
+		return 0, err
+	}
+	if int64(len(p)) > b.budget {
+		p = p[:b.budget]
+	}
+	n, err := b.r.Read(p)
+	b.budget -= int64(n)
+	return n, err
 }
 
 func bearerOrQueryToken(r *http.Request) string {
@@ -112,6 +203,27 @@ func parseUploadMetadata(raw string) map[string]string {
 	return out
 }
 
+// parseUploadLength returns the declared Upload-Length, or -1 when deferred.
+func parseUploadLength(r *http.Request) (int64, error) {
+	raw := r.Header.Get("Upload-Length")
+	if raw == "" {
+		return -1, nil
+	}
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || n < 0 {
+		return 0, errors.New("Upload-Length must be a non-negative integer")
+	}
+	return n, nil
+}
+
+func normalizedContentType(r *http.Request) string {
+	ct := strings.TrimSpace(r.Header.Get("Content-Type"))
+	if mediatype, _, err := mime.ParseMediaType(ct); err == nil {
+		return mediatype
+	}
+	return ct
+}
+
 func newDatasetUpload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonError(w, http.StatusMethodNotAllowed, "method_not_allowed",
@@ -121,15 +233,13 @@ func newDatasetUpload(w http.ResponseWriter, r *http.Request) {
 	if !requireBrokerAuth(w, r) {
 		return
 	}
-	length := int64(-1)
-	if raw := r.Header.Get("Upload-Length"); raw != "" {
-		n, err := strconv.ParseInt(raw, 10, 64)
-		if err != nil || n < 0 {
-			jsonError(w, http.StatusBadRequest, "invalid_upload_length",
-				"Upload-Length must be a non-negative integer")
-			return
-		}
-		length = n
+	length, err := parseUploadLength(r)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid_upload_length", err.Error())
+		return
+	}
+	if !requireDatasetFreeSpace(w, max(length, 0)) {
+		return
 	}
 	metadata := parseUploadMetadata(r.Header.Get("Upload-Metadata"))
 	filename, err := safeDatasetFilename(metadata["filename"])
@@ -137,11 +247,7 @@ func newDatasetUpload(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "invalid_filename", err.Error())
 		return
 	}
-	if ct := strings.TrimSpace(r.Header.Get("Content-Type")); ct != "" {
-		mediatype, _, err := mime.ParseMediaType(ct)
-		if err == nil {
-			ct = mediatype
-		}
+	if ct := normalizedContentType(r); ct != "" {
 		metadata["content_type"] = ct
 	}
 	uploadID, err := randomID("upl_")
@@ -396,6 +502,10 @@ func headDatasetUpload(w http.ResponseWriter, id string) {
 }
 
 func patchDatasetUpload(w http.ResponseWriter, r *http.Request, id string) {
+	budget, ok := datasetPatchBudget(w, r)
+	if !ok {
+		return
+	}
 	lock := datasetUploadLock(id)
 	lock.Lock()
 	defer lock.Unlock()
@@ -416,44 +526,17 @@ func patchDatasetUpload(w http.ResponseWriter, r *http.Request, id string) {
 			fmt.Sprintf("expected Upload-Offset %d", state.Offset))
 		return
 	}
-	f, err := os.OpenFile(uploadDataPath(id), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	f, err := openUploadFile(id, state.Offset)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "upload_append_failed", err.Error())
 		return
 	}
-	if err := f.Truncate(state.Offset); err != nil {
-		_ = f.Close()
+	n, ok := copyPatchBody(w, f, r, state, budget)
+	if !ok {
+		return
+	}
+	if err := syncAndCloseUploadFile(f); err != nil {
 		jsonError(w, http.StatusInternalServerError, "upload_append_failed", err.Error())
-		return
-	}
-	reader := io.Reader(r.Body)
-	remaining := int64(-1)
-	if state.Length >= 0 {
-		remaining = state.Length - state.Offset
-		reader = io.LimitReader(r.Body, remaining+1)
-	}
-	n, copyErr := io.Copy(f, reader)
-	if remaining >= 0 && n > remaining {
-		_ = f.Truncate(state.Offset)
-		_ = f.Sync()
-		_ = f.Close()
-		jsonError(w, http.StatusBadRequest, "upload_too_large",
-			"uploaded bytes exceed Upload-Length")
-		return
-	}
-	if copyErr != nil {
-		_ = f.Close()
-		jsonError(w, http.StatusInternalServerError, "upload_append_failed", copyErr.Error())
-		return
-	}
-	if err := f.Sync(); err != nil {
-		_ = f.Close()
-		jsonError(w, http.StatusInternalServerError, "upload_append_failed", err.Error())
-		return
-	}
-	closeErr := f.Close()
-	if closeErr != nil {
-		jsonError(w, http.StatusInternalServerError, "upload_append_failed", closeErr.Error())
 		return
 	}
 	state.Offset += n
@@ -464,6 +547,66 @@ func patchDatasetUpload(w http.ResponseWriter, r *http.Request, id string) {
 	w.Header().Set("Tus-Resumable", "1.0.0")
 	w.Header().Set("Upload-Offset", strconv.FormatInt(state.Offset, 10))
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func openUploadFile(id string, offset int64) (*os.File, error) {
+	f, err := os.OpenFile(uploadDataPath(id), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := f.Truncate(offset); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	return f, nil
+}
+
+func syncAndCloseUploadFile(f *os.File) error {
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
+}
+
+// copyPatchBody streams the request body into the chunk file, bounded by the
+// declared Upload-Length and the free-space budget (budget < 0 means
+// uncapped). On any refusal it discards the partial chunk, writes the error
+// response, and reports ok=false.
+func copyPatchBody(w http.ResponseWriter, f *os.File, r *http.Request, state datasetUploadState, budget int64) (int64, bool) {
+	reader := io.Reader(r.Body)
+	if budget >= 0 {
+		reader = &floorBudgetReader{r: reader, budget: budget}
+	}
+	remaining := int64(-1)
+	if state.Length >= 0 {
+		remaining = state.Length - state.Offset
+		reader = io.LimitReader(reader, remaining+1)
+	}
+	n, copyErr := io.Copy(f, reader)
+	switch {
+	case remaining >= 0 && n > remaining:
+		discardPartialChunk(f, state.Offset)
+		jsonError(w, http.StatusBadRequest, "upload_too_large",
+			"uploaded bytes exceed Upload-Length")
+	case errors.Is(copyErr, errVolumeFloorBudget):
+		discardPartialChunk(f, state.Offset)
+		writeVolumeFloorError(w)
+	case copyErr != nil:
+		_ = f.Close()
+		jsonError(w, http.StatusInternalServerError, "upload_append_failed", copyErr.Error())
+	default:
+		return n, true
+	}
+	return 0, false
+}
+
+// discardPartialChunk rewinds a refused PATCH to the last durable offset so
+// rejected bytes do not keep occupying the volume.
+func discardPartialChunk(f *os.File, offset int64) {
+	_ = f.Truncate(offset)
+	_ = f.Sync()
+	_ = f.Close()
 }
 
 type finalizeRequest struct {

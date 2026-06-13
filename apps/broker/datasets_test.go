@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -43,7 +45,9 @@ func createUpload(t *testing.T, mux http.Handler, filename string, length int, m
 	}
 	req := httptest.NewRequest(http.MethodPost, "/datasets/uploads", nil)
 	req.Header.Set("Authorization", "Bearer test-token")
-	req.Header.Set("Upload-Length", strconv.Itoa(length))
+	if length >= 0 {
+		req.Header.Set("Upload-Length", strconv.Itoa(length))
+	}
 	req.Header.Set("Upload-Metadata", meta)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
@@ -104,6 +108,179 @@ func TestDatasetUploadRequiresBrokerAuthAndTenantID(t *testing.T) {
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("expected 500 without tenant id, got %d", rec.Code)
+	}
+}
+
+func TestDatasetUploadFreeSpaceFloorAllowsWhenTrivialFloor(t *testing.T) {
+	setDatasetTestEnv(t)
+	t.Setenv("DATASET_FREE_SPACE_FLOOR_BYTES", "1")
+	mux := datasetMux()
+
+	uploadID, _ := createUpload(t, mux, "data.csv", 3)
+	req := httptest.NewRequest(http.MethodPatch, "/datasets/uploads/"+uploadID, strings.NewReader("abc"))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Upload-Offset", "0")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("patch under trivial floor status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDatasetUploadFreeSpaceFloorRejectsCreateAndPatch(t *testing.T) {
+	setDatasetTestEnv(t)
+	mux := datasetMux()
+	uploadID, _ := createUpload(t, mux, "data.csv", 3)
+
+	t.Setenv("DATASET_FREE_SPACE_FLOOR_BYTES", strconv.FormatInt(1<<60, 10))
+
+	req := httptest.NewRequest(http.MethodPost, "/datasets/uploads", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Upload-Length", "3")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusInsufficientStorage {
+		t.Fatalf("create above floor status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	assertVolumeFloorError(t, rec.Body.Bytes())
+
+	req = httptest.NewRequest(http.MethodPatch, "/datasets/uploads/"+uploadID, strings.NewReader("abc"))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Upload-Offset", "0")
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusInsufficientStorage {
+		t.Fatalf("patch above floor status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	assertVolumeFloorError(t, rec.Body.Bytes())
+	if got, err := os.ReadFile(uploadDataPath(uploadID)); err == nil {
+		t.Fatalf("patch above floor must not write chunk bytes, found %q", got)
+	}
+}
+
+// floorWithBudget reads the volume's real free space and pins the floor so
+// only `budget` bytes may be written before crossing the reserve.
+func floorWithBudget(t *testing.T, budget int64) {
+	t.Helper()
+	free, err := datasetVolumeFreeBytes()
+	if err != nil {
+		t.Fatalf("statfs dataset volume: %v", err)
+	}
+	if free <= budget {
+		t.Skipf("volume too full for budget test: free=%d budget=%d", free, budget)
+	}
+	t.Setenv("DATASET_FREE_SPACE_FLOOR_BYTES", strconv.FormatInt(free-budget, 10))
+}
+
+func TestDatasetCreateRejectsUploadLengthOverFloorBudget(t *testing.T) {
+	setDatasetTestEnv(t)
+	mux := datasetMux()
+	budget := int64(64 << 20)
+	floorWithBudget(t, budget)
+
+	req := httptest.NewRequest(http.MethodPost, "/datasets/uploads", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Upload-Length", strconv.FormatInt(budget+(1<<20), 10))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusInsufficientStorage {
+		t.Fatalf("create over budget status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	assertVolumeFloorError(t, rec.Body.Bytes())
+
+	// A declared length that fits above the floor is still admitted.
+	createUpload(t, mux, "fits.bin", 1024)
+}
+
+func TestDatasetPatchRejectsDeclaredBodyOverFloorBudget(t *testing.T) {
+	setDatasetTestEnv(t)
+	t.Setenv("DATASET_FREE_SPACE_FLOOR_BYTES", "1")
+	mux := datasetMux()
+	uploadID, _ := createUpload(t, mux, "data.bin", 32<<20)
+
+	// Free space starts just above the floor: only ~1 MiB budget remains.
+	floorWithBudget(t, 1<<20)
+
+	body := bytes.NewReader(make([]byte, 8<<20)) // declared Content-Length 8 MiB
+	req := httptest.NewRequest(http.MethodPatch, "/datasets/uploads/"+uploadID, body)
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Upload-Offset", "0")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusInsufficientStorage {
+		t.Fatalf("declared over-budget patch status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	assertVolumeFloorError(t, rec.Body.Bytes())
+	if _, err := os.Stat(uploadDataPath(uploadID)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("declared over-budget patch must not write chunk bytes, err=%v", err)
+	}
+}
+
+func TestDatasetPatchDeferredLengthStopsBeforeCrossingFloor(t *testing.T) {
+	setDatasetTestEnv(t)
+	t.Setenv("DATASET_FREE_SPACE_FLOOR_BYTES", "1")
+	mux := datasetMux()
+	uploadID, _ := createUpload(t, mux, "data.bin", -1) // deferred Upload-Length
+
+	budget := int64(1 << 20)
+	floorWithBudget(t, budget)
+
+	// io.MultiReader hides the concrete type, so httptest leaves
+	// ContentLength at -1 (chunked/unknown-length body).
+	body := io.MultiReader(bytes.NewReader(make([]byte, 8<<20)))
+	req := httptest.NewRequest(http.MethodPatch, "/datasets/uploads/"+uploadID, body)
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Upload-Offset", "0")
+	if req.ContentLength != -1 {
+		t.Fatalf("test setup: ContentLength=%d, want -1 (unknown)", req.ContentLength)
+	}
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusInsufficientStorage {
+		t.Fatalf("deferred-length over-budget patch status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	assertVolumeFloorError(t, rec.Body.Bytes())
+	if fi, err := os.Stat(uploadDataPath(uploadID)); err == nil && fi.Size() != 0 {
+		t.Fatalf("partial chunk must be discarded, size=%d", fi.Size())
+	}
+	state, err := readUploadState(uploadID)
+	if err != nil || state.Offset != 0 {
+		t.Fatalf("offset must stay durable at 0 for retry, err=%v offset=%d", err, state.Offset)
+	}
+	if free, err := datasetVolumeFreeBytes(); err == nil {
+		floor, _ := strconv.ParseInt(os.Getenv("DATASET_FREE_SPACE_FLOOR_BYTES"), 10, 64)
+		if free < floor {
+			t.Fatalf("volume crossed the reserve: free=%d floor=%d", free, floor)
+		}
+	}
+
+	// An unknown-length body that fits inside the budget still streams through.
+	req = httptest.NewRequest(http.MethodPatch, "/datasets/uploads/"+uploadID,
+		io.MultiReader(strings.NewReader("abc")))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Upload-Offset", "0")
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent || rec.Header().Get("Upload-Offset") != "3" {
+		t.Fatalf("under-budget deferred patch status=%d offset=%q body=%s",
+			rec.Code, rec.Header().Get("Upload-Offset"), rec.Body.String())
+	}
+	if got, err := os.ReadFile(uploadDataPath(uploadID)); err != nil || string(got) != "abc" {
+		t.Fatalf("budget reader corrupted data err=%v got=%q", err, got)
+	}
+}
+
+func assertVolumeFloorError(t *testing.T, body []byte) {
+	t.Helper()
+	var payload map[string]map[string]string
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("floor error body json: %v body=%s", err, body)
+	}
+	if payload["error"]["code"] != "volume_free_space_floor" {
+		t.Fatalf("floor error code=%q body=%s", payload["error"]["code"], body)
+	}
+	if !strings.Contains(payload["error"]["message"], "nearly full") {
+		t.Fatalf("floor error message=%q", payload["error"]["message"])
 	}
 }
 
