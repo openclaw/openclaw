@@ -325,16 +325,13 @@ function pushScorecardTaxonomyLines(lines: string[], report: QaScorecardTaxonomy
   lines.push(`- Mapping: ${report.taxonomyPath ?? "missing"}`);
   lines.push(`- Mapping ID: ${report.taxonomyId ?? "missing"}`);
   lines.push(`- Maturity taxonomy: ${report.taxonomy?.sourcePath ?? "missing"}`);
-  if (report.scoreSnapshotRef) {
-    lines.push(`- Maturity score snapshot: ${report.scoreSnapshotRef}`);
-  }
   const totalCoverageIds = report.mappedCoverageIdCount + report.unmappedCoverageIdCount;
   lines.push(`- Categories: ${report.categoryCount}`);
   lines.push(`- Profiles: ${report.profileCount}`);
   lines.push(
     `- Mapped coverage IDs: ${report.mappedCoverageIdCount}/${totalCoverageIds} (${report.mappedCoverageIdPercent.toFixed(1)}%)`,
   );
-  lines.push(`- Mapped scenarios: ${report.mappedScenarioCount}`);
+  lines.push(`- Mapped evidence refs: ${report.mappedEvidenceRefCount}`);
   lines.push(`- Unmapped coverage IDs: ${report.unmappedCoverageIdCount}`);
   lines.push(`- Validation warnings: ${report.validationIssueCount}`, "");
 
@@ -351,11 +348,13 @@ function pushScorecardTaxonomyLines(lines: string[], report: QaScorecardTaxonomy
     lines.push("### Category Mapping", "");
     for (const category of report.categories) {
       const coverage = category.coverageIds.length > 0 ? category.coverageIds.join(", ") : "none";
-      const scenarios =
-        category.scenarioRefs.length > 0 ? category.scenarioRefs.join(", ") : "none";
+      const evidenceRefs =
+        category.evidenceRefs.length > 0
+          ? category.evidenceRefs.map((ref) => `${ref.kind}:${ref.path}`).join(", ")
+          : "none";
       const profiles = category.profiles.length > 0 ? category.profiles.join(", ") : "none";
       lines.push(
-        `- ${category.id} (${category.taxonomySurfaceId} / ${category.taxonomyCategoryName}; ${category.mappingStatus}): profiles: ${profiles}; coverage: ${coverage}; scenarios: ${scenarios}`,
+        `- ${category.id} (${category.taxonomySurfaceId} / ${category.taxonomyCategoryName}; ${category.mappingStatus}): profiles: ${profiles}; coverage: ${coverage}; evidence: ${evidenceRefs}`,
       );
     }
     lines.push("");
