@@ -460,9 +460,11 @@
 
 .shell-nav {
   grid-area: nav;
+  position: relative;
+  z-index: 10;
   display: flex;
   min-height: 100%;
-  overflow: hidden;
+  overflow: visible;
   border-right: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
   transition: width var(--shell-focus-duration) var(--shell-focus-ease);
 }
