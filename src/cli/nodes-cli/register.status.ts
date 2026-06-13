@@ -140,10 +140,6 @@ function formatPendingApprovalCommand(raw: unknown, opts: NodesRpcOpts): string 
     return null;
   }
   const args = ["openclaw", "nodes", "approve", requestId];
-  const url = normalizeOptionalString(opts.url);
-  if (url) {
-    args.push("--url", url);
-  }
   const timeout = normalizeOptionalString(opts.timeout);
   if (timeout && timeout !== String(DEFAULT_NODES_RPC_TIMEOUT_MS)) {
     args.push("--timeout", timeout);
@@ -151,9 +147,13 @@ function formatPendingApprovalCommand(raw: unknown, opts: NodesRpcOpts): string 
   return formatCliCommand(args.map(quoteCliArg).join(" "));
 }
 
-function formatAuthFlagReminder(opts: NodesRpcOpts): string | null {
-  return normalizeOptionalString(opts.token)
-    ? "Reuse the same --token option when rerunning."
+function formatConnectionFlagReminder(opts: NodesRpcOpts): string | null {
+  const flags = [
+    normalizeOptionalString(opts.url) ? "--url" : null,
+    normalizeOptionalString(opts.token) ? "--token" : null,
+  ].filter((flag) => flag !== null);
+  return flags.length > 0
+    ? `Reuse the same ${flags.join("/")} option${flags.length === 1 ? "" : "s"} when rerunning.`
     : null;
 }
 
@@ -375,9 +375,9 @@ export function registerNodesStatusCommands(nodes: Command) {
                   `${action} pending for ${formatNodeTerminalLabel(node)}. Run ${sanitizeTerminalText(approveCommand)}`,
                 ),
               );
-              const authReminder = formatAuthFlagReminder(opts);
-              if (authReminder) {
-                defaultRuntime.log(warn(authReminder));
+              const connectionReminder = formatConnectionFlagReminder(opts);
+              if (connectionReminder) {
+                defaultRuntime.log(warn(connectionReminder));
               }
             }
           }
@@ -425,7 +425,7 @@ export function registerNodesStatusCommands(nodes: Command) {
           const approveCommand = isPendingApprovalState(approvalState)
             ? formatPendingApprovalCommand(pendingRequestId, opts)
             : null;
-          const authReminder = approveCommand ? formatAuthFlagReminder(opts) : null;
+          const connectionReminder = approveCommand ? formatConnectionFlagReminder(opts) : null;
           const family = typeof obj.deviceFamily === "string" ? obj.deviceFamily : null;
           const model = typeof obj.modelIdentifier === "string" ? obj.modelIdentifier : null;
           const client = formatClientLabel(obj as { clientId?: string; clientMode?: string });
@@ -474,7 +474,9 @@ export function registerNodesStatusCommands(nodes: Command) {
                   Value: sanitizeTerminalText(approveCommand),
                 }
               : null,
-            approveCommand && authReminder ? { Field: "Auth reminder", Value: authReminder } : null,
+            approveCommand && connectionReminder
+              ? { Field: "Connection reminder", Value: connectionReminder }
+              : null,
             { Field: "Caps", Value: caps ? sanitizeTerminalText(caps.join(", ")) : "?" },
           ].filter(Boolean) as Array<{ Field: string; Value: string }>;
 

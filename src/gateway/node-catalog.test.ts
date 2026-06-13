@@ -288,6 +288,7 @@ describe("gateway/node-catalog", () => {
           caps: ["camera"],
           declaredCommands: ["screen.snapshot", "system.run"],
           commands: ["screen.snapshot"],
+          declaredPermissions: { camera: true, screen: true },
           permissions: { camera: true },
           connectedAtMs: 1,
         },
@@ -300,6 +301,48 @@ describe("gateway/node-catalog", () => {
     expect(node?.pendingDeclaredCaps).toEqual(["camera", "screen"]);
     expect(node?.pendingDeclaredCommands).toEqual(["screen.snapshot", "system.run"]);
     expect(node?.pendingDeclaredPermissions).toEqual({ camera: true, screen: true });
+    expect(node?.caps).toEqual(["camera"]);
+    expect(node?.commands).toEqual(["screen.snapshot"]);
+    expect(node?.permissions).toEqual({ camera: true });
+  });
+
+  it("ignores a pending reapproval that no longer matches the live declaration", () => {
+    const catalog = createKnownNodeCatalog({
+      pairedDevices: [pairedDevice()],
+      pairedNodes: [
+        pairedNode({
+          caps: ["camera"],
+          commands: ["screen.snapshot"],
+          permissions: { camera: true },
+        }),
+      ],
+      pendingNodes: [pendingNode()],
+      connectedNodes: [
+        {
+          nodeId: "mac-1",
+          connId: "conn-1",
+          client: {} as never,
+          displayName: "Mac",
+          platform: "macos",
+          declaredCaps: ["camera"],
+          caps: ["camera"],
+          declaredCommands: ["screen.snapshot"],
+          commands: ["screen.snapshot"],
+          declaredPermissions: { camera: true },
+          permissions: { camera: true },
+          connectedAtMs: 1,
+        },
+      ],
+    });
+
+    const entry = getKnownNodeEntry(catalog, "mac-1");
+    expect(entry?.pendingNodePairing).toBeUndefined();
+    const node = getKnownNode(catalog, "mac-1");
+    expect(node?.approvalState).toBe("approved");
+    expect(node?.pendingRequestId).toBeUndefined();
+    expect(node?.pendingDeclaredCaps).toBeUndefined();
+    expect(node?.pendingDeclaredCommands).toBeUndefined();
+    expect(node?.pendingDeclaredPermissions).toBeUndefined();
     expect(node?.caps).toEqual(["camera"]);
     expect(node?.commands).toEqual(["screen.snapshot"]);
     expect(node?.permissions).toEqual({ camera: true });

@@ -3,6 +3,10 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeSortedUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { hasEffectivePairedDeviceRole, type PairedDevice } from "../infra/device-pairing.js";
+import {
+  sameNodeApprovalSurfaceSet,
+  sameNodePermissionSurface,
+} from "../infra/node-pairing-surface.js";
 import type { NodePairingPairedNode, NodePairingPendingRequest } from "../infra/node-pairing.js";
 import type { NodeListNode } from "../shared/node-list-types.js";
 import type { NodeSession } from "./node-registry.js";
@@ -106,6 +110,21 @@ function buildPendingNodeSource(entry: NodePairingPendingRequest): KnownNodePend
     commands: uniqueSortedStrings(entry.commands),
     permissions: entry.permissions,
   };
+}
+
+function resolveCurrentPendingNodePairing(params: {
+  pending?: KnownNodePendingSource;
+  live?: NodeSession;
+}): KnownNodePendingSource | undefined {
+  const { pending, live } = params;
+  if (!pending || !live) {
+    return pending;
+  }
+  return sameNodeApprovalSurfaceSet(pending.caps, live.declaredCaps) &&
+    sameNodeApprovalSurfaceSet(pending.commands, live.declaredCommands) &&
+    sameNodePermissionSurface(pending.permissions, live.declaredPermissions)
+    ? pending
+    : undefined;
 }
 
 function resolveEffectiveLastSeen(params: {
@@ -237,8 +256,11 @@ export function createKnownNodeCatalog(params: {
   for (const nodeId of nodeIds) {
     const devicePairing = devicePairingById.get(nodeId);
     const nodePairing = nodePairingById.get(nodeId);
-    const pendingNodePairing = pendingNodePairingById.get(nodeId);
     const live = liveById.get(nodeId);
+    const pendingNodePairing = resolveCurrentPendingNodePairing({
+      pending: pendingNodePairingById.get(nodeId),
+      live,
+    });
     entriesById.set(nodeId, {
       nodeId,
       devicePairing,

@@ -527,7 +527,7 @@ describe("cli program (nodes basics)", () => {
       "nodes",
       "status",
       "--url",
-      "ws://gateway.example:18789/openclaw?cluster=qa lab",
+      "ws://gateway-user:url-secret@gateway.example:18789/openclaw?cluster=qa",
       "--timeout",
       "3000",
       "--token",
@@ -535,10 +535,11 @@ describe("cli program (nodes basics)", () => {
     ]);
 
     const output = getRuntimeOutput();
-    expect(output).toContain(
-      "openclaw nodes approve request-reapproval --url 'ws://gateway.example:18789/openclaw?cluster=qa lab' --timeout 3000",
-    );
-    expect(output).toContain("Reuse the same --token option when rerunning.");
+    expect(output).toContain("openclaw nodes approve request-reapproval --timeout 3000");
+    expect(output).toContain("Reuse the same --url/--token options when rerunning.");
+    expect(output).not.toContain("gateway-user");
+    expect(output).not.toContain("url-secret");
+    expect(output).not.toContain("gateway.example");
     expect(output).not.toContain("secret-token");
   });
 
