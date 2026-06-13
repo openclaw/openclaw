@@ -1,8 +1,8 @@
 {
-  "name": "@openclaw/inworld-speech",
+  "name": "@openclaw/inworld-provider",
   "version": "2026.6.2",
   "private": true,
-  "description": "OpenClaw Inworld speech plugin",
+  "description": "OpenClaw Inworld provider plugin",
   "type": "module",
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
