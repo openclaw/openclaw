@@ -2156,6 +2156,7 @@ describe("abortChatRun", () => {
     expect(request).toHaveBeenCalledWith("chat.abort", {
       sessionKey: "main",
       runId: "run-1",
+      origin: "user-stop",
     });
     expect(state.lastError).toBe(
       "device identity required (use HTTPS/localhost or allow insecure auth explicitly)",

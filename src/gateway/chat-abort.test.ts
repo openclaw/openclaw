@@ -377,6 +377,38 @@ describe("abortChatRunById", () => {
       },
     });
   });
+
+  it("creates user-stop AbortError reason when stopReason is stop", () => {
+    const runId = "run-1";
+    const sessionKey = "main";
+    const entry = createActiveEntry(sessionKey);
+    const ops = createOps({ runId, entry });
+
+    const result = abortChatRunById(ops, { runId, sessionKey, stopReason: "stop" });
+
+    expect(result).toEqual({ aborted: true });
+    expect(entry.controller.signal.aborted).toBe(true);
+    const reason = entry.controller.signal.reason;
+    expect(reason).toBeInstanceOf(Error);
+    expect(reason.name).toBe("AbortError");
+    expect(reason.message).toContain("user stop command");
+  });
+
+  it("creates restart AbortError reason when stopReason is restart", () => {
+    const runId = "run-1";
+    const sessionKey = "main";
+    const entry = createActiveEntry(sessionKey);
+    const ops = createOps({ runId, entry });
+
+    const result = abortChatRunById(ops, { runId, sessionKey, stopReason: "restart" });
+
+    expect(result).toEqual({ aborted: true });
+    expect(entry.controller.signal.aborted).toBe(true);
+    const reason = entry.controller.signal.reason;
+    expect(reason).toBeInstanceOf(Error);
+    expect(reason.name).toBe("AbortError");
+    expect(reason.message).toContain("gateway restart");
+  });
 });
 
 describe("abortChatRunsForProvider", () => {

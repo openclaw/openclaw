@@ -58,12 +58,27 @@ export function isChatStopCommandText(text: string): boolean {
 }
 
 function createChatAbortSignalReason(stopReason: string | undefined): Error | undefined {
-  if (stopReason !== "timeout") {
-    return undefined;
+  if (stopReason === "timeout") {
+    const reason = new Error("chat run timed out");
+    reason.name = "TimeoutError";
+    return reason;
   }
-  const reason = new Error("chat run timed out");
-  reason.name = "TimeoutError";
-  return reason;
+  if (stopReason === "restart") {
+    const reason = new Error("chat run aborted for gateway restart");
+    reason.name = "AbortError";
+    return reason;
+  }
+  if (stopReason === "auth-revoked") {
+    const reason = new Error("chat run aborted for provider auth revocation");
+    reason.name = "AbortError";
+    return reason;
+  }
+  if (stopReason === "stop") {
+    const reason = new Error("chat run aborted by user stop command");
+    reason.name = "AbortError";
+    return reason;
+  }
+  return undefined;
 }
 
 export function resolveChatRunExpiresAtMs(params: {

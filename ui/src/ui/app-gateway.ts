@@ -828,11 +828,13 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
                   ...scopedAgentParamsForSession(host, abort.sessionKey),
                   ...(abort.agentId ? { agentId: abort.agentId } : {}),
                   runId: abort.runId,
+                  origin: "user-stop",
                 }
               : {
                   sessionKey: abort.sessionKey,
                   ...scopedAgentParamsForSession(host, abort.sessionKey),
                   ...(abort.agentId ? { agentId: abort.agentId } : {}),
+                  origin: "user-stop",
                 },
           )
           .catch((err: unknown) => {

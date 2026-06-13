@@ -548,7 +548,11 @@ export async function submitRealtimeTalkConsult(params: {
   const abortRun = () => {
     aborted = true;
     if (runId) {
-      void ctx.client.request("chat.abort", { sessionKey: ctx.sessionKey, runId });
+      void ctx.client.request("chat.abort", {
+        sessionKey: ctx.sessionKey,
+        runId,
+        origin: "user-stop",
+      });
     }
   };
   if (params.signal?.aborted) {

@@ -2955,6 +2955,7 @@ describe("handleAbortChat", () => {
     expect(request).toHaveBeenCalledWith("chat.abort", {
       runId: "run-main",
       sessionKey: "agent:main",
+      origin: "user-stop",
     });
     expect(host.chatMessage).toBe("next prompt");
     expect(host.chatRunId).toBe("run-main");
@@ -2974,6 +2975,7 @@ describe("handleAbortChat", () => {
     expect(request).toHaveBeenCalledWith("chat.abort", {
       runId: "run-main",
       sessionKey: "agent:main",
+      origin: "user-stop",
     });
     expect(host.chatMessage).toBe("");
   });

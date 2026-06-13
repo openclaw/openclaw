@@ -1220,6 +1220,7 @@ export async function abortChatRun(state: ChatState): Promise<boolean> {
               return isGlobalSessionKey(state.sessionKey) && agentId ? { agentId } : {};
             })(),
             runId,
+            origin: "user-stop",
           }
         : {
             sessionKey: state.sessionKey,
@@ -1227,6 +1228,7 @@ export async function abortChatRun(state: ChatState): Promise<boolean> {
               const agentId = resolveSelectedAgentId(state);
               return isGlobalSessionKey(state.sessionKey) && agentId ? { agentId } : {};
             })(),
+            origin: "user-stop",
           },
     );
     return true;

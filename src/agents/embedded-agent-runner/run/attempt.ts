@@ -636,6 +636,26 @@ function shouldPreservePromptErrorAfterCleanupError(params: {
   );
 }
 
+export function isUserAbortReason(reason: unknown): boolean {
+  if (!reason || typeof reason !== "object") {
+    return false;
+  }
+  const err = reason as Error;
+  if (err.name === "AbortError" && err.message?.includes("user stop command")) {
+    return true;
+  }
+  return false;
+}
+
+export function shouldSuppressTakeoverErrorOnUserAbort(params: {
+  cleanupError: unknown;
+  userInitiatedAbort: boolean;
+}): boolean {
+  return (
+    params.userInitiatedAbort && params.cleanupError instanceof EmbeddedAttemptSessionTakeoverError
+  );
+}
+
 class EmbeddedAttemptPromptErrorWithCleanupTakeoverError extends Error {
   readonly promptError: unknown;
   readonly cleanupError: EmbeddedAttemptSessionTakeoverError;
@@ -5380,6 +5400,16 @@ export async function runEmbeddedAttempt(
           ? new EmbeddedAttemptSessionTakeoverError(params.sessionFile)
           : undefined;
       const cleanupFailure = cleanupError ?? synthesizedCleanupTakeoverError;
+      const userInitiatedAbort =
+        Boolean(params.abortSignal?.aborted) &&
+        !timedOut &&
+        !idleTimedOut &&
+        !timedOutDuringCompaction &&
+        isUserAbortReason(getAbortReason(params.abortSignal!));
+      const shouldSuppressTakeover = shouldSuppressTakeoverErrorOnUserAbort({
+        cleanupError: cleanupFailure,
+        userInitiatedAbort,
+      });
       const shouldPreservePromptError = shouldPreservePromptErrorAfterCleanupError({
         promptError,
         cleanupError: cleanupFailure,
@@ -5400,7 +5430,13 @@ export async function runEmbeddedAttempt(
           : undefined,
       );
       if (cleanupFailure) {
-        if (shouldPreservePromptError) {
+        if (shouldSuppressTakeover) {
+          log.warn(
+            `embedded attempt cleanup detected session takeover on user-initiated abort; suppressing error from conversation context: ` +
+              `runId=${params.runId} sessionId=${params.sessionId} ` +
+              `cleanupError=${formatErrorMessage(cleanupFailure)}`,
+          );
+        } else if (shouldPreservePromptError) {
           log.warn(
             `embedded attempt cleanup detected session takeover after prompt failure; preserving prompt error: ` +
               `runId=${params.runId} sessionId=${params.sessionId} ` +
