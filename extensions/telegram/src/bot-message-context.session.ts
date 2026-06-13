@@ -45,6 +45,11 @@ import {
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
+import {
+  type TelegramGroupHistoryContextMode,
+  includesRecentTelegramGroupHistoryContext,
+  resolveTelegramGroupHistoryContextModeForAccount,
+} from "./group-history-context.js";
 import type { TelegramReplyChainEntry } from "./message-cache.js";
 
 export type TelegramInboundContextPayload = BuiltChannelInboundEventContext & {
@@ -176,6 +181,7 @@ export async function buildTelegramInboundContextPayload(params: {
   historyKey?: string;
   historyLimit: number;
   groupHistories: Map<string, HistoryEntry[]>;
+  groupHistoryContextMode?: TelegramGroupHistoryContextMode;
   groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
   topicConfig?: TelegramTopicConfig;
   stickerCacheHit: boolean;
@@ -225,6 +231,7 @@ export async function buildTelegramInboundContextPayload(params: {
     historyKey,
     historyLimit,
     groupHistories,
+    groupHistoryContextMode,
     groupConfig,
     topicConfig,
     stickerCacheHit,
@@ -377,8 +384,17 @@ export async function buildTelegramInboundContextPayload(params: {
     envelope: envelopeOptions,
   });
   const channelHistory = createChannelHistoryWindow({ historyMap: groupHistories });
+  const includeRecentGroupHistoryContext =
+    isGroup &&
+    includesRecentTelegramGroupHistoryContext(
+      groupHistoryContextMode ??
+        resolveTelegramGroupHistoryContextModeForAccount({
+          cfg,
+          accountId: route.accountId,
+        }),
+    );
   let combinedBody = body;
-  if (isGroup && historyKey && historyLimit > 0) {
+  if (includeRecentGroupHistoryContext && historyKey && historyLimit > 0) {
     combinedBody = channelHistory.buildPendingContext({
       historyKey,
       limit: historyLimit,
@@ -404,7 +420,7 @@ export async function buildTelegramInboundContextPayload(params: {
     botUsername: normalizeOptionalLowercaseString(primaryCtx.me?.username),
   });
   const inboundHistory =
-    isGroup && historyKey && historyLimit > 0
+    includeRecentGroupHistoryContext && historyKey && historyLimit > 0
       ? channelHistory.buildInboundHistory({
           historyKey,
           limit: historyLimit,

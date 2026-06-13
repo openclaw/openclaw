@@ -1770,6 +1770,7 @@ describe("createTelegramBot", () => {
       channels: {
         telegram: {
           groupPolicy: "open",
+          includeGroupHistoryContext: "recent",
           groups: { "*": { requireMention: false } },
         },
       },
@@ -1855,6 +1856,62 @@ describe("createTelegramBot", () => {
     expect(messagesById.get("201")?.body).toBe("After the incident review.");
   });
 
+  it("omits ambient group messages from default conversation prompt context", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
+      channels: {
+        telegram: {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["111", "222"],
+          groups: { "*": { requireMention: true } },
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+    const baseCtx = {
+      me: { id: 999, username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    };
+
+    await handler({
+      ...baseCtx,
+      message: {
+        chat: { id: 42, type: "group", title: "Ops" },
+        text: "Please run the maintenance step later.",
+        date: 1736380800,
+        message_id: 501,
+        from: { id: 111, is_bot: false, first_name: "Requester" },
+      },
+    });
+    expect(replySpy).not.toHaveBeenCalled();
+
+    await handler({
+      ...baseCtx,
+      message: {
+        chat: { id: 42, type: "group", title: "Ops" },
+        text: "@openclaw_bot Hello",
+        date: 1736380860,
+        message_id: 502,
+        from: { id: 222, is_bot: false, first_name: "Operator" },
+        entities: [{ type: "mention", offset: 0, length: 13 }],
+      },
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
+    expect(payload.UntrustedStructuredContext).toBeUndefined();
+    expect(payload.Body).not.toContain("Please run the maintenance step later.");
+  });
+
   it("updates cached bot messages from Telegram edit updates", async () => {
     onSpy.mockClear();
     replySpy.mockClear();
@@ -1868,6 +1925,7 @@ describe("createTelegramBot", () => {
       channels: {
         telegram: {
           groupPolicy: "open",
+          includeGroupHistoryContext: "recent",
           groups: { "*": { requireMention: false } },
         },
       },
