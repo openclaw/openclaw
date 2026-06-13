@@ -845,6 +845,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private readonly syncSettings: ReturnType<typeof resolveMemorySearchSyncConfig>;
   private readonly managedCollectionNames: string[];
   private readonly collectionRoots = new Map<string, CollectionRoot>();
+  private externalMcporterConfigPath: string | null = null;
   private readonly sources = new Set<MemorySource>();
   private readonly docPathCache = new Map<string, DocLocation>();
   private readonly exportedSessionState = new Map<
@@ -2867,6 +2868,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       this.workspaceDir,
       extractMcporterSourcePath(serialized),
     );
+    this.externalMcporterConfigPath = extractMcporterSourcePath(serialized) ?? null;
     const server = this.toMcporterRawServerEntry(serialized, rawEntry);
     if (!server) {
       if (serverName === "qmd") {
@@ -2967,6 +2969,18 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (mode === "generated") {
       delete env.XDG_CONFIG_HOME;
       delete env.MCPORTER_CONFIG;
+    }
+    if (mode === "discovery") {
+      // The OpenClaw runtime scopes XDG_CONFIG_HOME to its own state dir. For
+      // mcporter config discovery we need default/user layers instead, so drop
+      // XDG_CONFIG_HOME. Keep an explicit MCPORTER_CONFIG because that is a
+      // direct user intent.
+      delete env.XDG_CONFIG_HOME;
+    }
+    if (mode === "external" && this.externalMcporterConfigPath) {
+      // Point mcporter at the exact user/project config that defined the
+      // external server, so calls do not fall back to agent-scoped dirs.
+      env.MCPORTER_CONFIG = this.externalMcporterConfigPath;
     }
     return env;
   }

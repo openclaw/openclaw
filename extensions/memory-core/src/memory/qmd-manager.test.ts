@@ -4288,7 +4288,7 @@ describe("QmdMemoryManager", () => {
     );
     expect(configProbes).toHaveLength(1);
     const probeOpts = configProbes[0]?.[2] as { env?: NodeJS.ProcessEnv } | undefined;
-    expect(probeOpts?.env?.XDG_CONFIG_HOME).toBe(userXdgConfigHome);
+    expect(probeOpts?.env?.XDG_CONFIG_HOME).toBeUndefined();
     expect(probeOpts?.env?.XDG_CACHE_HOME).toBeUndefined();
     expect(probeOpts?.env?.QMD_CONFIG_DIR).toBeUndefined();
     expect(probeOpts?.env?.MCPORTER_CONFIG).toBe(userMcporterConfig);
