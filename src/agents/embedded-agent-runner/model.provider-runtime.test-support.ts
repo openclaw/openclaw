@@ -440,6 +440,7 @@ function buildDynamicModel(
               input: ["text"],
               cost: OPENROUTER_FALLBACK_COST,
               contextWindow: 128_000,
+              contextTokens: 128_000,
               maxTokens: 128_000,
             },
             fallback,

@@ -452,6 +452,7 @@ describe("manifest model suppression", () => {
           models: {
             providers: {
               openai: {
+                baseUrl: "",
                 models: [],
               },
             },

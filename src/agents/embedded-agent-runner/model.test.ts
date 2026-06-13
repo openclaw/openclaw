@@ -3498,7 +3498,7 @@ describe("resolveModel", () => {
     expect(runProviderDynamicModel).not.toHaveBeenCalled();
   });
 
-  it("does not prepare openai fallback for API-key auth profile gpt-5.3-codex-spark", async () => {
+  it("does not prepare openai fallback for mixed-case auth-order API-key gpt-5.3-codex-spark", async () => {
     mockOpenAICodexTemplateModel(discoverModels);
     const cfg = {
       auth: {
@@ -3515,7 +3515,7 @@ describe("resolveModel", () => {
     const prepareProviderDynamicModel = vi.fn(baseRuntimeHooks.prepareProviderDynamicModel);
     const runProviderDynamicModel = vi.fn(baseRuntimeHooks.runProviderDynamicModel);
 
-    const result = await resolveModelAsync("OpenAI", "GPT-5.3-Codex-Spark", "/tmp/agent", cfg, {
+    const result = await resolveModelAsync("openai", "gpt-5.3-codex-spark", "/tmp/agent", cfg, {
       authStorage: { mocked: true } as never,
       modelRegistry: discoverModels({ mocked: true } as never, "/tmp/agent"),
       runtimeHooks: {

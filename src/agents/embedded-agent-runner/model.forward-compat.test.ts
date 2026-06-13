@@ -1,6 +1,5 @@
 // Coverage for registry-backed model forward-compatibility fallbacks.
 import { describe, it, vi } from "vitest";
-import { buildOpenAIProvider } from "../../../extensions/openai/api.js";
 import {
   buildForwardCompatTemplate,
   expectResolvedForwardCompatFallbackWithRegistryResult,
@@ -85,32 +84,6 @@ function createRuntimeHooks() {
   return createProviderRuntimeTestMock({
     handledDynamicProviders: ["anthropic", "claude-cli", "zai", "openai"],
   });
-}
-
-function createRuntimeHooksWithOpenAIProviderNormalization() {
-  const runtimeHooks = createRuntimeHooks();
-  const openAIProvider = buildOpenAIProvider();
-  return {
-    ...runtimeHooks,
-    runProviderDynamicModel(params: {
-      provider: string;
-      context: { provider: string; modelId: string };
-    }) {
-      if (params.provider === "openai") {
-        return openAIProvider.resolveDynamicModel?.(params.context as never);
-      }
-      return runtimeHooks.runProviderDynamicModel(params as never);
-    },
-    normalizeProviderResolvedModelWithPlugin(params: {
-      provider: string;
-      context: { provider: string; modelId: string; model: unknown };
-    }) {
-      if (params.provider === "openai") {
-        return openAIProvider.normalizeResolvedModel?.(params.context as never);
-      }
-      return runtimeHooks.normalizeProviderResolvedModelWithPlugin(params as never);
-    },
-  };
 }
 
 function createRegistry(
@@ -227,7 +200,7 @@ describe("resolveModel forward-compat tail", () => {
 
   it("builds a zai forward-compat fallback for glm-5", runZaiForwardCompatFallback);
 
-  it("keeps Codex Spark text-only after OpenAI provider normalization", () => {
+  it("keeps Codex Spark text-only through injected OpenAI runtime hooks", () => {
     const result = resolveModelWithRegistry({
       provider: "openai",
       modelId: "gpt-5.3-codex-spark",
@@ -258,7 +231,7 @@ describe("resolveModel forward-compat tail", () => {
           }),
         },
       ]),
-      runtimeHooks: createRuntimeHooksWithOpenAIProviderNormalization(),
+      runtimeHooks: createRuntimeHooks(),
     });
 
     expectResolvedForwardCompatFallbackWithRegistryResult({
@@ -267,7 +240,7 @@ describe("resolveModel forward-compat tail", () => {
         provider: "openai",
         id: "gpt-5.3-codex-spark",
         api: "openai-chatgpt-responses",
-        baseUrl: "https://chatgpt.com/backend-api/codex",
+        baseUrl: "https://chatgpt.com/backend-api",
         input: ["text"],
         contextWindow: 128_000,
         contextTokens: 128_000,
