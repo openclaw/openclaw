@@ -2983,6 +2983,15 @@ export async function syncWorkboardLifecycle(params: {
       state,
     );
     if (tasksPreparedAt === null && workboardLifecycleRequiresTaskRefresh(state)) {
+      // A null result without a recorded failure means the shared refresh was
+      // invalidated. Ask only the current, unblocked reconciliation to retry.
+      if (
+        !state.lifecycleTaskRefreshFailed &&
+        isCurrentWorkboardLifecycleReconciliationEpoch(params.host, reconciliationEpoch) &&
+        !workboardLifecycleSyncBlocked(params.host, state)
+      ) {
+        params.requestUpdate?.();
+      }
       return;
     }
   }

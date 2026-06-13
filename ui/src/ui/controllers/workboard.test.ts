@@ -4396,6 +4396,87 @@ describe("workboard controller", () => {
     expect(state.lifecycleTasksPrepared).toBe(true);
   });
 
+  it("requests a fresh lifecycle sync after a shared task refresh is invalidated by a write", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const linked = {
+      ...sampleCard,
+      status: "running",
+      sessionKey: sampleTaskSessionKey,
+      runId: "run-1",
+      taskId: sampleTask.taskId,
+    } satisfies WorkboardCard;
+    const commented = {
+      ...linked,
+      updatedAt: 2,
+      metadata: { comments: [{ id: "comment-1", body: "Keep this", createdAt: 2 }] },
+    } satisfies WorkboardCard;
+    const completedTask = { ...sampleTask, status: "completed" as const, updatedAt: 3 };
+    const firstTaskList = createDeferred<unknown>();
+    let taskListCalls = 0;
+    state.loaded = true;
+    state.cards = [linked];
+    state.tasksByCardId.set(linked.id, sampleTask);
+    const client = createClient((method) => {
+      if (method === "tasks.list") {
+        taskListCalls += 1;
+        return taskListCalls === 1 ? firstTaskList.promise : { tasks: [completedTask] };
+      }
+      if (method === "workboard.cards.comment") {
+        return { card: commented };
+      }
+      if (method === "workboard.cards.update") {
+        return { card: { ...commented, status: "review", updatedAt: 4 } };
+      }
+      return {};
+    });
+    const requestUpdate = vi.fn();
+
+    const first = syncWorkboardLifecycle({
+      host,
+      client: client as never,
+      sessions: [],
+      requestUpdate,
+    });
+    await vi.waitFor(() => {
+      expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
+    });
+    await addWorkboardCardComment({
+      host,
+      client: client as never,
+      cardId: linked.id,
+      body: "Keep this",
+      requestUpdate,
+    });
+    vi.clearAllMocks();
+
+    const second = syncWorkboardLifecycle({
+      host,
+      client: client as never,
+      sessions: [],
+      requestUpdate,
+    });
+    firstTaskList.resolve({ tasks: [sampleTask] });
+    await Promise.all([first, second]);
+
+    expect(requestUpdate).toHaveBeenCalledOnce();
+    vi.clearAllMocks();
+
+    await syncWorkboardLifecycle({
+      host,
+      client: client as never,
+      sessions: [],
+      requestUpdate,
+    });
+
+    expect(client.request).toHaveBeenNthCalledWith(1, "tasks.list", { limit: 500 });
+    expect(client.request).toHaveBeenNthCalledWith(2, "workboard.cards.update", {
+      id: linked.id,
+      patch: expect.objectContaining({ status: "review" }),
+    });
+    expect(state.cards[0]?.status).toBe("review");
+  });
+
   it("authoritatively refreshes running linked cards without task ids before lifecycle sync", async () => {
     const host = {};
     const state = getWorkboardState(host);
