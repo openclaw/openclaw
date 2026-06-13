@@ -10,7 +10,7 @@ import {
   resolveAgentModelFallbacksOverride,
 } from "../agents/agent-scope.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles/store.js";
-import { resolveContextTokensForModel } from "../agents/context.js";
+import { ensureContextWindowCacheLoaded, resolveContextTokensForModel } from "../agents/context.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import { resolveModelAuthLabel } from "../agents/model-auth-label.js";
 import { CODEX_APP_SERVER_AUTH_MARKER } from "../agents/model-auth-markers.js";
@@ -94,13 +94,16 @@ function loadStatusQueueRuntime(): Promise<typeof import("./status-queue.runtime
   return runtimePromise;
 }
 
-// Context lookup stays synchronous/non-refreshing so status output does not
-// trigger provider/catalog IO while rendering a command response.
-function resolveStatusRuntimeContextTokens(params: {
+// Context lookup ensures the model context window cache is populated before
+// resolving tokens for the status command. Discovery is local-only (filesystem
+// I/O, ~10-50ms) and the load promise is deduplicated, so concurrent calls
+// share one discovery pass and subsequent calls are near-instant.
+async function resolveStatusRuntimeContextTokens(params: {
   cfg: OpenClawConfig;
   provider: string;
   model: string;
-}): number | undefined {
+}): Promise<number | undefined> {
+  await ensureContextWindowCacheLoaded();
   return resolveContextTokensForModel({
     cfg: params.cfg,
     provider: params.provider,
@@ -513,7 +516,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
   const explicitThinkingDefault =
     (agentConfig?.thinkingDefault as ThinkLevel | undefined) ??
     (agentDefaults.thinkingDefault as ThinkLevel | undefined);
-  const runtimeContextTokens = resolveStatusRuntimeContextTokens({
+  const runtimeContextTokens = await resolveStatusRuntimeContextTokens({
     cfg,
     provider: activeStatusProvider,
     model: modelRefs.active.model || model,
