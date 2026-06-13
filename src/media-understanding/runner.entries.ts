@@ -465,7 +465,7 @@ function isOpenAiDiarizedAudioPromptUnsupported(params: {
   model?: string;
   responseFormat?: string;
 }): boolean {
-  if (params.providerId !== "openai" && params.providerId !== "openai-codex") {
+  if (params.providerId !== "openai") {
     return false;
   }
   return (
