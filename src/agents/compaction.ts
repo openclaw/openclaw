@@ -79,6 +79,7 @@ const HANDOFF_INSTRUCTIONS = [
   "- Status of the latest tool executions (especially AutoClaw/Subagents).",
   "- Critical files currently being modified.",
   "- Pending items and next intended steps.",
+  "- Active CoT plan status (approach, completed/active/pending steps, and next actionable step) if a structured plan is active.",
 ].join("\n");
 
 /** Optional instruction policy for preserving identifiers during compaction. */

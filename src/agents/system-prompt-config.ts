@@ -24,6 +24,7 @@ export type ResolvedAgentSystemPromptConfig = Pick<
   | "modelAliasLines"
   | "memoryCitationsMode"
   | "fsWorkspaceOnly"
+  | "cotPlanningConfig"
 >;
 
 export type ConfiguredAgentSystemPromptParams = AgentSystemPromptRenderParams & {
@@ -51,6 +52,7 @@ export function resolveAgentSystemPromptConfig(params: {
     modelAliasLines: buildModelAliasLines(config),
     memoryCitationsMode: config?.memory?.citations,
     fsWorkspaceOnly: resolveEffectiveToolFsWorkspaceOnly({ cfg: config, agentId }),
+    cotPlanningConfig: config?.agents?.defaults?.cotPlanning,
   };
 }
 

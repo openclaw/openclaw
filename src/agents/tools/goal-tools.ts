@@ -22,6 +22,8 @@ import {
   readStringParam,
 } from "./common.js";
 
+import { SetPlanSchema, parseGoalPlan } from "./cot-planning-tools.js";
+
 type GoalToolOptions = {
   agentSessionKey?: string;
   runSessionKey?: string;
@@ -43,6 +45,7 @@ const CreateGoalToolSchema = Type.Object({
       description: "Optional positive token budget for this goal.",
     }),
   ),
+  plan: Type.Optional(SetPlanSchema),
 });
 
 const UpdateGoalToolSchema = Type.Object({
@@ -106,10 +109,17 @@ export function createCreateGoalTool(options: GoalToolOptions): AnyAgentTool {
         // Budgets are positive limits; zero would immediately make accounting ambiguous.
         throw new ToolInputError("token_budget must be positive");
       }
+      const rawPlan = params.plan;
+      const planSnapshot =
+        rawPlan && typeof rawPlan === "object"
+          ? parseGoalPlan(rawPlan as Record<string, unknown>)
+          : undefined;
+
       const goal = await createSessionGoal({
         ...resolveGoalSessionScope(options),
         objective,
         ...(tokenBudget !== undefined ? { tokenBudget } : {}),
+        ...(planSnapshot ? { planSnapshot } : {}),
       });
       return jsonResult({ status: "created", goal });
     },

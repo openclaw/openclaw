@@ -21,8 +21,15 @@ import {
   hasNativeApprovalPromptRuntimeCapability,
   isKnownNativeApprovalPromptChannel,
 } from "../channels/plugins/native-approval-prompt.js";
-import type { SubagentDelegationMode } from "../config/types.agent-defaults.js";
+import type { SubagentDelegationMode, AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
+import type { SessionGoal } from "../config/sessions/types.js";
+import {
+  shouldActivateCotPlanning,
+  shouldRenderCotProgress,
+  buildCotPlanningSystemPromptSection,
+  buildCotPlanProgressSection,
+} from "./cot-planning-prompt.js";
 import { buildMemoryPromptSection } from "../plugins/memory-state.js";
 import type { AgentPromptSurfaceKind } from "../plugins/types.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
@@ -741,6 +748,8 @@ export function buildAgentSystemPrompt(params: {
   includeMemorySection?: boolean;
   memoryCitationsMode?: MemoryCitationsMode;
   promptContribution?: ProviderSystemPromptContribution;
+  goal?: SessionGoal | null;
+  cotPlanningConfig?: AgentDefaultsConfig["cotPlanning"];
 }) {
   const acpEnabled = params.acpEnabled === true;
   const promptSurface = params.promptSurface ?? "openclaw_main";
@@ -983,6 +992,16 @@ export function buildAgentSystemPrompt(params: {
     bootstrapTruncationNotice: params.bootstrapTruncationNotice,
     contextFiles: contextFiles.ordered,
   });
+
+  const goal = params.goal;
+  const cotPlanningConfig = params.cotPlanningConfig;
+  const cotPlanningSection =
+    goal && shouldActivateCotPlanning({ goal, config: cotPlanningConfig })
+      ? buildCotPlanningSystemPromptSection({ goal })
+      : goal && shouldRenderCotProgress({ goal, config: cotPlanningConfig })
+        ? buildCotPlanProgressSection({ goal })
+        : [];
+
   const stablePrefixCacheKey = hashStablePromptInput({
     workspaceDir: params.workspaceDir,
     promptMode,
@@ -1023,6 +1042,8 @@ export function buildAgentSystemPrompt(params: {
     memorySection,
     acpEnabled,
     stableContextFiles: contextFiles.stable,
+    cotPlanningConfig,
+    cotPlanningSection,
   });
   const stablePrefix = cacheStablePromptPrefix(stablePrefixCacheKey, () => {
     const lines = [
@@ -1110,6 +1131,7 @@ export function buildAgentSystemPrompt(params: {
         override: providerStablePrefix,
         fallback: [],
       }),
+      ...cotPlanningSection,
       ...safetySection,
       "## OpenClaw Control",
       "Do not invent commands.",
