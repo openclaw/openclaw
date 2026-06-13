@@ -1,5 +1,6 @@
 // Canvas tests cover cli plugin behavior.
 import { Command } from "commander";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { registerNodesCanvasCommands, type CanvasCliDependencies } from "./cli.js";
 
@@ -25,7 +26,7 @@ function createCanvasCliDeps() {
       await action();
     },
     getNodesTheme: () => ({ ok: (value) => value }),
-    parseTimeoutMs: (raw) => (typeof raw === "string" ? Number.parseInt(raw, 10) : undefined),
+    parseTimeoutMs: (raw) => parseStrictPositiveInteger(raw),
     resolveNodeId: async (opts) => opts.node ?? "ios-node",
     buildNodeInvokeParams: ({ nodeId, command, params, timeoutMs }) => ({
       nodeId,
@@ -148,6 +149,39 @@ describe("canvas CLI", () => {
         from: "user",
       }),
     ).rejects.toThrow(message);
+    expect(deps.callGatewayCli).not.toHaveBeenCalled();
+  });
+
+  it("rejects out-of-range snapshot quality (5) before invoking node", async () => {
+    const program = new Command();
+    program.exitOverride();
+    const nodes = program.command("nodes");
+    const { deps } = createCanvasCliDeps();
+
+    registerNodesCanvasCommands(nodes, deps);
+
+    await expect(
+      program.parseAsync(["nodes", "canvas", "snapshot", "--node", "ios-node", "--quality", "5"], {
+        from: "user",
+      }),
+    ).rejects.toThrow(/--quality must be a number between 0 and 1, got 5/);
+    expect(deps.callGatewayCli).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid invoke-timeout before resolving node", async () => {
+    const program = new Command();
+    program.exitOverride();
+    const nodes = program.command("nodes");
+    const { deps, runtime } = createCanvasCliDeps();
+
+    registerNodesCanvasCommands(nodes, deps);
+
+    await expect(
+      program.parseAsync(
+        ["nodes", "canvas", "snapshot", "--node", "ios-node", "--invoke-timeout", "20ms"],
+        { from: "user" },
+      ),
+    ).rejects.toThrow(/--invoke-timeout must be a positive integer/);
     expect(deps.callGatewayCli).not.toHaveBeenCalled();
   });
 

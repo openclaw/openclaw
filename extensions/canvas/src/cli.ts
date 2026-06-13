@@ -122,6 +122,20 @@ function parseCanvasFiniteNumberOption(raw: string | undefined, flag: string): n
   return parsed;
 }
 
+function parseCanvasQualityOption(raw: string | undefined): number | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const parsed = parseStrictFiniteNumber(raw);
+  if (parsed === undefined) {
+    throw new Error(`--quality must be a number.`);
+  }
+  if (parsed < 0 || parsed > 1) {
+    throw new Error(`--quality must be a number between 0 and 1, got ${parsed}.`);
+  }
+  return parsed;
+}
+
 function parseNodeCandidates(raw: unknown): CanvasNodeCandidate[] {
   const payload =
     raw && typeof raw === "object" ? (raw as { nodes?: unknown; paired?: unknown }) : {};
@@ -247,6 +261,13 @@ async function invokeCanvas(
 ) {
   const nodeId = await deps.resolveNodeId(opts, normalizeOptionalString(opts.node) ?? "");
   const timeoutMs = deps.parseTimeoutMs(opts.invokeTimeout);
+  if (
+    typeof opts.invokeTimeout === "string" &&
+    opts.invokeTimeout.trim() &&
+    typeof timeoutMs !== "number"
+  ) {
+    throw new Error(`--invoke-timeout must be a positive integer, got "${opts.invokeTimeout}".`);
+  }
   return await deps.callGatewayCli(
     "node.invoke",
     opts,
@@ -278,7 +299,7 @@ export function registerNodesCanvasCommands(nodes: Command, deps: CanvasCliDepen
         await deps.runNodesCommand("canvas snapshot", async () => {
           const format = parseCanvasSnapshotRequestFormat(opts.format);
           const maxWidth = parseCanvasPositiveIntOption(opts.maxWidth, "--max-width");
-          const quality = parseCanvasFiniteNumberOption(opts.quality, "--quality");
+          const quality = parseCanvasQualityOption(opts.quality);
           const raw = await invokeCanvas(deps, opts, "canvas.snapshot", {
             format,
             maxWidth: Number.isFinite(maxWidth) ? maxWidth : undefined,
