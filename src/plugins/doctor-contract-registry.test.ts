@@ -372,7 +372,7 @@ describe("doctor-contract-registry module loader", () => {
       normalizeCompatibilityConfig: ({
         cfg,
       }: {
-        cfg: { models?: { providers?: Record<string, unknown> } };
+        cfg: { models?: { providers?: Record<string, Record<string, unknown>> } };
       }) => ({
         config: {
           ...cfg,
@@ -406,6 +406,7 @@ describe("doctor-contract-registry module loader", () => {
         providers: {
           "ollama-cloud": {
             baseUrl: "https://ai.ollama.com",
+            models: [],
           },
         },
       },
@@ -420,6 +421,7 @@ describe("doctor-contract-registry module loader", () => {
     expect(result.changes).toEqual(["normalized ollama cloud provider endpoint"]);
     expect(result.config.models?.providers?.["ollama-cloud"]).toEqual({
       baseUrl: "https://ollama.com",
+      models: [],
     });
   });
 
