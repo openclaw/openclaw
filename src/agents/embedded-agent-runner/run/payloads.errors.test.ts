@@ -786,6 +786,27 @@ describe("buildEmbeddedRunPayloads", () => {
     });
   });
 
+  it("summarizes cron bash failures from exit context and command excerpt", () => {
+    const payloads = buildPayloads({
+      isCronTrigger: true,
+      sessionKey: "agent:main:cron:birdweather",
+      lastToolError: {
+        toolName: "bash",
+        meta: "create folder ~/.openclaw/workspace/.tmp → run then set → run [ → run jq",
+        error: "Command exited with code 1",
+        mutatingAction: true,
+        commandExcerpt:
+          "mkdir -p ~/.openclaw/workspace/.tmp; if curl --fail https://example.test/webhook; then jq .; fi",
+      },
+      toolResultFormat: "markdown",
+    });
+
+    expectSinglePayloadSummary(payloads, {
+      text: "⚠️ 🛠️ Bash exited with code 1. Last command: `mkdir -p ~/.openclaw/workspace/.tmp; if curl --fail https://example.test/webhook; then jq .; fi`",
+      isError: true,
+    });
+  });
+
   it("keeps non-recoverable tool errors compact when verbose mode is on", () => {
     const payloads = buildPayloads({
       lastToolError: { toolName: "browser", error: "connection timeout" },

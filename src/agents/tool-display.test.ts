@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { resolveToolSearchCodeDisplayTarget } from "./tool-display-common.js";
-import { resolveExecDetail } from "./tool-display-exec.js";
+import { resolveExecCommandExcerpt, resolveExecDetail } from "./tool-display-exec.js";
 import { formatToolDetail, formatToolSummary, resolveToolDisplay } from "./tool-display.js";
 
 describe("tool display details", () => {
@@ -561,6 +561,18 @@ describe("compactRawCommand middle truncation", () => {
 
     expect(result).not.toContain("AKIDABCDEFGHIJKLMNOP1234567890");
     expect(result).toContain("AKIDAB…7890");
+  });
+
+  it("extracts redacted raw shell command excerpts for failure copy", () => {
+    const result = resolveExecCommandExcerpt("bash", {
+      command:
+        "bash -lc 'mkdir -p /tmp/openclaw && echo sk-proj-ABCDEFGHIJKLMNOP1234567890abcdefghij && echo done'",
+    });
+
+    expect(result).toContain("mkdir -p /tmp/openclaw");
+    expect(result).toContain("echo done");
+    expect(result).not.toContain("ABCDEFGHIJKLMNOP1234567890abcdefghij");
+    expect(resolveExecCommandExcerpt("message", { command: "echo hi" })).toBeUndefined();
   });
 });
 

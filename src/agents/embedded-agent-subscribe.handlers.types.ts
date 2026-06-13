@@ -45,6 +45,7 @@ export type ToolCallSummary = {
   meta?: string;
   mutatingAction: boolean;
   actionFingerprint?: string;
+  commandExcerpt?: string;
   fileTarget?: import("./tool-mutation.js").FileTarget;
 };
 

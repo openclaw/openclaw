@@ -63,6 +63,7 @@ import {
 import { inferToolMetaFromArgs } from "./embedded-agent-utils.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
 import type { AgentEvent } from "./runtime/index.js";
+import { resolveExecCommandExcerpt } from "./tool-display-exec.js";
 import { buildToolMutationState, isSameToolMutationAction } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
 
@@ -228,10 +229,12 @@ function isCronAddAction(args: unknown): boolean {
 
 function buildToolCallSummary(toolName: string, args: unknown, meta?: string): ToolCallSummary {
   const mutation = buildToolMutationState(toolName, args, meta);
+  const commandExcerpt = resolveExecCommandExcerpt(toolName, args);
   return {
     meta,
     mutatingAction: mutation.mutatingAction,
     actionFingerprint: mutation.actionFingerprint,
+    ...(commandExcerpt ? { commandExcerpt } : {}),
     fileTarget: mutation.fileTarget,
   };
 }
@@ -1206,6 +1209,7 @@ export async function handleToolExecutionEnd(
       middlewareError: isMiddlewareToolResultError(sanitizedResult) || undefined,
       mutatingAction: callSummary?.mutatingAction,
       actionFingerprint: callSummary?.actionFingerprint,
+      commandExcerpt: callSummary?.commandExcerpt,
       fileTarget: callSummary?.fileTarget,
     };
   } else if (ctx.state.lastToolError) {

@@ -499,6 +499,40 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     });
   });
 
+  it("records redacted exec command excerpts on the last tool error", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "tool-exec-command-excerpt",
+        args: {
+          command:
+            "bash -lc 'mkdir -p /tmp/openclaw && echo sk-proj-ABCDEFGHIJKLMNOP1234567890abcdefghij && echo done'",
+        },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-command-excerpt",
+        isError: true,
+        result: { error: "Command exited with code 1" },
+      } as never,
+    );
+
+    expect(ctx.state.lastToolError?.commandExcerpt).toContain("mkdir -p /tmp/openclaw");
+    expect(ctx.state.lastToolError?.commandExcerpt).toContain("echo done");
+    expect(ctx.state.lastToolError?.commandExcerpt).not.toContain(
+      "ABCDEFGHIJKLMNOP1234567890abcdefghij",
+    );
+  });
+
   it("clears edit failure when the retry succeeds through common file path aliases", async () => {
     const { ctx } = createTestContext();
 
