@@ -28,6 +28,7 @@ import { annotateInterSessionPromptText } from "../../sessions/input-provenance.
 import { resolveSkillsPromptForRun } from "../../skills/loading/workspace.js";
 import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
 import { resolveUserPath } from "../../utils.js";
+import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { externalCliDiscoveryForProviderAuth } from "../auth-profiles/external-cli-discovery.js";
 import { loadAuthProfileStoreForRuntime } from "../auth-profiles/store.js";
@@ -70,6 +71,7 @@ import {
 } from "../embedded-agent-runner/sandbox-skills.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
+import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
 import { ensureSandboxWorkspaceForSession } from "../sandbox.js";
 import { ensureSystemPromptCacheBoundary } from "../system-prompt-cache-boundary.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
@@ -535,6 +537,12 @@ export async function prepareCliRunContext(
           agentId: sessionAgentId,
           sessionKey: params.sessionKey?.trim() || params.sessionId,
         });
+  const runtimeChannel = normalizeMessageChannel(params.messageChannel ?? params.messageProvider);
+  const runtimeCapabilities = collectRuntimeChannelCapabilities({
+    cfg: params.config,
+    channel: runtimeChannel,
+    accountId: params.agentAccountId,
+  });
   const builtSystemPrompt = buildCliAgentSystemPrompt({
     workspaceDir,
     cwd,
@@ -543,6 +551,9 @@ export async function prepareCliRunContext(
     extraSystemPrompt,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     silentReplyPromptMode: params.silentReplyPromptMode,
+    runtimeChannel,
+    runtimeChatType: params.sessionEntry?.chatType,
+    runtimeCapabilities,
     ownerNumbers: params.ownerNumbers,
     heartbeatPrompt,
     docsPath: openClawReferences.docsPath ?? undefined,
