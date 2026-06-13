@@ -480,7 +480,7 @@ function schedulePendingLifecycleTimeout(params: {
     if (!entry) {
       return;
     }
-    if (entry.outcome?.status === "ok") {
+    if (entry.outcome?.status === "ok" || entry.pauseReason === "sessions_yield") {
       return;
     }
     const completionParams = {
@@ -1210,6 +1210,7 @@ const subagentRunManager = createSubagentRunManager({
   stopSweeper,
   resumeSubagentRun,
   clearPendingLifecycleError,
+  clearPendingLifecycleTimeout,
   resolveSubagentWaitTimeoutMs,
   scheduleOrphanRecovery: (args) => scheduleSubagentOrphanRecovery(args),
   resolveSubagentSessionCompletion,

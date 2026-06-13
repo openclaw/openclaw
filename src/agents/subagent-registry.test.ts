@@ -2117,6 +2117,68 @@ describe("subagent registry seam flow", () => {
     expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
   });
 
+  it("cancels a pending grace timer when agent.wait observes the yield after an aborted terminal (#92448)", async () => {
+    let resolveWait: (value: {
+      status: "ok";
+      startedAt: number;
+      endedAt: number;
+      yielded: true;
+    }) => void = () => {};
+    const waitResult = new Promise<{
+      status: "ok";
+      startedAt: number;
+      endedAt: number;
+      yielded: true;
+    }>((resolve) => {
+      resolveWait = resolve;
+    });
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        return waitResult;
+      }
+      return {};
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-wait-yield-after-pending-timeout",
+      childSessionKey: "agent:main:subagent:pending-wait-timeout",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "wait for child continuation through wait",
+      cleanup: "keep",
+    });
+
+    const lastOnAgentEventCall = mocks.onAgentEvent.mock.calls[
+      mocks.onAgentEvent.mock.calls.length - 1
+    ] as unknown as
+      | [(evt: { runId: string; stream: string; data: Record<string, unknown> }) => void]
+      | undefined;
+    const lifecycleHandler = lastOnAgentEventCall?.[0];
+    expect(lifecycleHandler).toBeTypeOf("function");
+
+    lifecycleHandler?.({
+      runId: "run-wait-yield-after-pending-timeout",
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: 111, endedAt: 222, aborted: true },
+    });
+    resolveWait({ status: "ok", startedAt: 111, endedAt: 333, yielded: true });
+
+    await waitForFast(() => {
+      const run = mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .find((entry) => entry.runId === "run-wait-yield-after-pending-timeout");
+      expect(run?.pauseReason).toBe("sessions_yield");
+    });
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    const run = mod
+      .listSubagentRunsForRequester("agent:main:main")
+      .find((entry) => entry.runId === "run-wait-yield-after-pending-timeout");
+    expect(run?.pauseReason).toBe("sessions_yield");
+    expect(run?.outcome?.status).not.toBe("timeout");
+    expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
+  });
+
   it("announces blocked agent.wait snapshots as errors instead of success", async () => {
     mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
       if (request.method === "agent.wait") {
