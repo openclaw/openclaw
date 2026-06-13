@@ -2059,7 +2059,7 @@ export async function runTelegramQaLive(params: {
             let details = redactPublicMetadata
               ? `reply matched in ${rttMs}ms${suffix}`
               : `reply message ${lastMatched.message.messageId} matched in ${rttMs}ms${suffix}`;
-            let resultRttMs = rttMs;
+            let resultRttMs: number | undefined = rttMs;
             let timing: QaEvidenceTiming | undefined;
             if (rttOptions?.checkIds.has(scenario.id)) {
               const rttResult = await runTelegramQaRttChecks({
@@ -2077,7 +2077,7 @@ export async function runTelegramQaLive(params: {
               driverOffset = rttResult.driverOffset;
               latestSutMessageId = rttResult.latestSutMessageId ?? latestSutMessageId;
               timing = rttResult.timing;
-              resultRttMs = rttResult.timing.p50Ms ?? resultRttMs;
+              resultRttMs = rttResult.timing.p50Ms;
               details = `${details}; ${rttResult.details}`;
               if (rttResult.passed < rttOptions.count) {
                 resultStatus = "fail";

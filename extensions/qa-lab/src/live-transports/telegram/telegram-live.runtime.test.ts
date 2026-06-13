@@ -217,6 +217,19 @@ describe("telegram live qa runtime", () => {
         failedSamples: 1,
       },
     });
+    expect(summarizeLiveTransportRttSamples([{ status: "fail" }, { status: "fail" }])).toEqual({
+      passed: 0,
+      failed: 2,
+      timing: {
+        rttMs: undefined,
+        avgMs: undefined,
+        p50Ms: undefined,
+        p95Ms: undefined,
+        maxMs: undefined,
+        samples: 2,
+        failedSamples: 2,
+      },
+    });
   });
 
   it("sanitizes and truncates Telegram live progress details", () => {
