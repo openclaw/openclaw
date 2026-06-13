@@ -1,5 +1,6 @@
 // Shared sessions.changed broadcaster for gateway RPC and chat-command mutations.
-import { normalizeAgentId, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import { loadGatewaySessionRow } from "../session-utils.js";
 import { hasTrackedActiveSessionRun } from "./session-active-runs.js";
 import type { GatewayRequestContext } from "./types.js";
