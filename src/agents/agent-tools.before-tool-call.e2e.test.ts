@@ -502,7 +502,7 @@ describe("before_tool_call loop detection behavior", () => {
     );
   });
 
-  it.each([{ ok: false }, { success: false }])(
+  it.each([{ ok: false }, { success: false }, { delivery_status: "failed" }])(
     "marks explicit false result flags as failed replay-safety observations",
     async (details) => {
       const onToolOutcome = vi.fn();
@@ -530,6 +530,33 @@ describe("before_tool_call loop detection behavior", () => {
       );
     },
   );
+
+  it("does not mark snake_case failed message outcomes as delivered", async () => {
+    const onToolOutcome = vi.fn();
+    const execute = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: "delivery failed" }],
+      details: { status: "ok", delivery_status: "failed" },
+    });
+    const tool = createWrappedTool("message", execute, {
+      ...enabledLoopDetectionContext,
+      runId: "run-snake-failed-message-outcome",
+      onToolOutcome,
+    });
+
+    await expectUnblockedToolExecution(tool, "message-snake-failed", {
+      action: "send",
+      to: "channel:123",
+      content: "not delivered",
+    });
+
+    expect(onToolOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "message",
+        failed: true,
+      }),
+    );
+    expect(onToolOutcome.mock.calls.at(-1)?.[0]).not.toHaveProperty("didSendViaMessagingTool");
+  });
 
   it("marks successful async-started tool outcomes for replay-safety handling", async () => {
     const onToolOutcome = vi.fn();

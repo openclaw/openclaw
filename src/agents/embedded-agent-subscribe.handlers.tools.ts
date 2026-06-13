@@ -80,6 +80,20 @@ const hookRunnerGlobalModuleLoader = createLazyImportLoader<HookRunnerGlobalModu
 );
 const LIVE_EXEC_OUTPUT_MAX_CHARS = 8000;
 const LIVE_EXEC_UPDATE_MIN_INTERVAL_MS = 250;
+const TOOL_RESULT_FAILURE_STATUSES = new Set([
+  "error",
+  "failed",
+  "partial_failed",
+  "timeout",
+  "timed_out",
+  "blocked",
+  "cancelled",
+  "canceled",
+  "suppressed",
+  "dry_run",
+  "cancelled_by_message_sending_hook",
+  "cancelled-by-message-sending-hook",
+]);
 const TRACE_REQUIRED_PARAM_GROUPS = {
   read: [{ keys: ["path", "file_path"], label: "path" }],
   write: REQUIRED_PARAM_GROUPS.write,
@@ -288,6 +302,22 @@ function emitTrackedItemEvent(ctx: ToolHandlerContext, itemData: AgentItemEventD
 
 function readToolResultDetailsRecord(result: unknown): Record<string, unknown> | undefined {
   return readRecordField(asOptionalObjectRecord(result)?.details);
+}
+
+function hasToolResultFailureDetails(details: Record<string, unknown> | undefined): boolean {
+  if (!details) {
+    return false;
+  }
+  const status = normalizeOptionalLowercaseString(details.status);
+  const deliveryStatus =
+    normalizeOptionalLowercaseString(details.deliveryStatus) ??
+    normalizeOptionalLowercaseString(details.delivery_status);
+  return (
+    details.ok === false ||
+    details.success === false ||
+    TOOL_RESULT_FAILURE_STATUSES.has(status ?? "") ||
+    TOOL_RESULT_FAILURE_STATUSES.has(deliveryStatus ?? "")
+  );
 }
 
 function isAsyncStartedToolResult(result: unknown): boolean {
@@ -582,7 +612,9 @@ function extractMessagingToolSourceReplyPayload(
   if (!details || details.sourceReplySink !== "internal-ui") {
     return undefined;
   }
-  const status = normalizeOptionalLowercaseString(details.deliveryStatus);
+  const status =
+    normalizeOptionalLowercaseString(details.deliveryStatus) ??
+    normalizeOptionalLowercaseString(details.delivery_status);
   if (status && status !== "sent") {
     return undefined;
   }
@@ -638,24 +670,14 @@ function hasCommittedMessagingToolSendResult(result: unknown): boolean {
   if (hasCommittedMessagingToolResultDetails(details)) {
     return true;
   }
-  const deliveryStatus = normalizeOptionalLowercaseString(details?.deliveryStatus);
+  const deliveryStatus =
+    normalizeOptionalLowercaseString(details.deliveryStatus) ??
+    normalizeOptionalLowercaseString(details.delivery_status);
   const status = normalizeOptionalLowercaseString(details?.status);
   if (deliveryStatus) {
     return false;
   }
-  if (
-    status === "failed" ||
-    status === "partial_failed" ||
-    status === "suppressed" ||
-    status === "dry_run" ||
-    status === "cancelled" ||
-    status === "canceled" ||
-    status === "cancelled_by_message_sending_hook" ||
-    status === "cancelled-by-message-sending-hook"
-  ) {
-    return false;
-  }
-  if (details.ok === false || details.success === false || (status && status !== "ok")) {
+  if (hasToolResultFailureDetails(details) || (status && status !== "ok")) {
     return false;
   }
   return details.ok === true || details.success === true || status === "ok" || contentReceipt;
@@ -1391,7 +1413,12 @@ export async function handleToolExecutionEnd(
   }
 
   // Track committed reminders only when cron.add completed successfully.
-  if (!isToolError && toolName === "cron" && isCronAddAction(executedArgs)) {
+  if (
+    !isToolError &&
+    toolName === "cron" &&
+    isCronAddAction(executedArgs) &&
+    !hasToolResultFailureDetails(readToolResultDetailsRecord(result))
+  ) {
     ctx.state.successfulCronAdds += 1;
   }
   if (!isToolError && toolName === HEARTBEAT_RESPONSE_TOOL_NAME) {

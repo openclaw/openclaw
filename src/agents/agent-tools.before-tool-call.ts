@@ -806,7 +806,11 @@ function hasFailedToolResultStatus(details: Record<string, unknown> | undefined)
   }
   const status = typeof details.status === "string" ? details.status.trim().toLowerCase() : "";
   const deliveryStatus =
-    typeof details.deliveryStatus === "string" ? details.deliveryStatus.trim().toLowerCase() : "";
+    typeof details.deliveryStatus === "string"
+      ? details.deliveryStatus.trim().toLowerCase()
+      : typeof details.delivery_status === "string"
+        ? details.delivery_status.trim().toLowerCase()
+        : "";
   return (
     TOOL_OUTCOME_FAILURE_STATUSES.has(status) || TOOL_OUTCOME_FAILURE_STATUSES.has(deliveryStatus)
   );
@@ -899,7 +903,11 @@ function hasCommittedMessagingToolSendOutcome(params: {
     return true;
   }
   const deliveryStatus =
-    typeof details.deliveryStatus === "string" ? details.deliveryStatus.trim().toLowerCase() : "";
+    typeof details.deliveryStatus === "string"
+      ? details.deliveryStatus.trim().toLowerCase()
+      : typeof details.delivery_status === "string"
+        ? details.delivery_status.trim().toLowerCase()
+        : "";
   if (deliveryStatus) {
     return false;
   }

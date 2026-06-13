@@ -401,6 +401,35 @@ describe("handleToolExecutionEnd cron.add commitment tracking", () => {
     expect(ctx.state.itemCompletedCount).toBe(1);
     expect(ctx.state.itemActiveIds.size).toBe(0);
   });
+
+  it.each([{ status: "failed" }, { status: "blocked" }, { ok: false }, { success: false }])(
+    "does not increment successfulCronAdds for returned failure details",
+    async (details) => {
+      const { ctx } = createTestContext();
+      await handleToolExecutionStart(
+        ctx as never,
+        {
+          type: "tool_execution_start",
+          toolName: "cron",
+          toolCallId: "tool-cron-returned-failure",
+          args: { action: "add", job: { name: "reminder" } },
+        } as never,
+      );
+
+      await handleToolExecutionEnd(
+        ctx as never,
+        {
+          type: "tool_execution_end",
+          toolName: "cron",
+          toolCallId: "tool-cron-returned-failure",
+          isError: false,
+          result: { details },
+        } as never,
+      );
+
+      expect(ctx.state.successfulCronAdds).toBe(0);
+    },
+  );
 });
 
 describe("handleToolExecutionEnd terminal fallback observations", () => {
@@ -1927,6 +1956,8 @@ describe("messaging tool media URL tracking", () => {
       ],
       ["tool-dry-run-ok", { details: { ok: true, dryRun: true } }],
       ["tool-dry-run-sent", { details: { deliveryStatus: "sent", dryRun: true } }],
+      ["tool-snake-failed-ok", { details: { ok: true, delivery_status: "failed" } }],
+      ["tool-snake-failed-status", { details: { status: "ok", delivery_status: "failed" } }],
     ] satisfies Array<[string, ToolExecutionEndEvent["result"]]>) {
       const { ctx } = createTestContext();
       await handleToolExecutionStart(ctx, {
@@ -2401,8 +2432,29 @@ describe("messaging tool media URL tracking", () => {
     ]);
   });
 
-  it("does not commit dry-run or external message sends as internal-ui source replies", async () => {
+  it("does not commit failed, dry-run, or external message sends as internal-ui source replies", async () => {
     const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-failed-source-reply",
+      args: { action: "send", message: "not delivered" },
+    });
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-failed-source-reply",
+      isError: false,
+      result: {
+        details: {
+          status: "ok",
+          delivery_status: "failed",
+          sourceReplySink: "internal-ui",
+          sourceReply: { text: "not delivered" },
+        },
+      },
+    });
 
     await handleToolExecutionStart(ctx, {
       type: "tool_execution_start",

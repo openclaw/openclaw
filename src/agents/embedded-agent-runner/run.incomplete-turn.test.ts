@@ -5873,6 +5873,36 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(retryInstruction).toBeNull();
   });
 
+  it("does not treat a question about the next planned action as authorization to act", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "custom-provider",
+      modelId: "custom-model",
+      prompt: "What will you do next?",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["I'll inspect the logs next."],
+      }),
+    });
+
+    expect(retryInstruction).toBeNull();
+  });
+
+  it("does not treat an advisory question as authorization to act", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "custom-provider",
+      modelId: "custom-model",
+      prompt: "Should you delete the file?",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["I'll delete the file."],
+      }),
+    });
+
+    expect(retryInstruction).toBeNull();
+  });
+
   it("blocks non-retryable planning-only text for arbitrary provider models", () => {
     const toolMetas = [{ toolName: "write", mutatingAction: true }];
     const blockedText = resolvePlanningOnlyBlockedPayloadText({

@@ -158,7 +158,7 @@ const PLANNING_ONLY_ACTION_VERB_RE =
 const ACTIONABLE_PROMPT_DIRECTIVE_RE =
   /^\s*(?:(?:ok(?:ay)?|please|pls)\s+)?(?:check|inspect|look(?:\s+into|\s+at)?|read|write|edit|update|fix|investigate|debug|run|search|find|implement|add|remove|refactor|explain|summari(?:s|z)e|analy(?:s|z)e|review|tell|show|make|restart|deploy|prepare|generate|start|launch|send|monitor|set|load|hit|ask|wire|channel)\b/i;
 const ACTIONABLE_PROMPT_REQUEST_RE =
-  /\b(?:can|could|would|will|should)\s+you\b|\b(?:help|tell|show)\s+me\b|\bwalk me through\b|\b(?:i|we)\s+(?:need|want|would like)\s+you\b/i;
+  /^(?:(?:please|hey|ok(?:ay)?)\s*,?\s*)?(?:can|could|would|will)\s+you\b|\b(?:help|tell|show)\s+me\b|\bwalk me through\b|\b(?:i|we)\s+(?:need|want|would like)\s+you\b/i;
 const ACTIONABLE_PROMPT_TERSE_REQUEST_RE =
   /^(?!\s*(?:the|this|that|status update|fyi|heads up)\b)(?:.{0,120}\b(?:results?|proof)\b.{0,80}\b(?:now|after)\b|.{0,120}\bdefault\s+for\s+(?:the\s+)?agent\b)/i;
 const PLANNING_ONLY_SHORT_PLACEHOLDER_RE =
@@ -1007,7 +1007,6 @@ function isLikelyActionableUserPrompt(text: string): boolean {
     return false;
   }
   return (
-    trimmed.includes("?") ||
     ACTIONABLE_PROMPT_DIRECTIVE_RE.test(trimmed) ||
     ACTIONABLE_PROMPT_REQUEST_RE.test(trimmed) ||
     ACTIONABLE_PROMPT_TERSE_REQUEST_RE.test(trimmed)
