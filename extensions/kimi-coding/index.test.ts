@@ -51,7 +51,10 @@ describe("kimi provider plugin", () => {
     await expect(
       provider.resolveUsageAuth?.({
         env: { KIMI_CODE_API_KEY: "env-kimi-code-key" },
-        resolveApiKeyFromConfigAndStore: (options?: { envDirect?: Array<string | undefined> }) => {
+        resolveApiKeyFromConfigAndStore: (options?: {
+          providerIds?: string[];
+          envDirect?: Array<string | undefined>;
+        }) => {
           expect(options?.providerIds).toEqual(["kimi", "kimi-code", "kimi-coding"]);
           expect(options?.envDirect).toEqual(["env-kimi-code-key", undefined, undefined]);
           return "resolved-kimi-key";
