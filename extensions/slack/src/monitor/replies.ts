@@ -26,6 +26,11 @@ export function readSlackReplyBlocks(payload: ReplyPayload) {
   return resolveSlackReplyBlocks(payload);
 }
 
+function resolveSlackMediaHookSpokenText(payload: ReplyPayload): string | undefined {
+  const spokenText = getReplyPayloadTtsSupplement(payload)?.spokenText ?? payload.spokenText;
+  return spokenText?.trim() || undefined;
+}
+
 export function resolveDeliveredSlackReplyThreadTs(params: {
   replyToMode: "off" | "first" | "all" | "batched";
   payloadReplyToId?: string;
@@ -147,9 +152,9 @@ export async function deliverReplies(params: {
       continue;
     }
 
-    const hookContent = reply.hasMedia
-      ? (getReplyPayloadTtsSupplement(payload)?.spokenText ?? reply.text)
-      : reply.trimmedText;
+    const spokenText = resolveSlackMediaHookSpokenText(payload);
+    const mediaHookContent = reply.hasText ? reply.text : spokenText || reply.text;
+    const hookContent = reply.hasMedia ? mediaHookContent : reply.trimmedText;
     let lastResult: SlackSendResult | undefined;
     let delivered: Awaited<ReturnType<typeof deliverTextOrMediaReply>>;
     try {
@@ -288,8 +293,16 @@ export async function deliverSlackSlashReplies(params: {
   textLimit: number;
   tableMode?: MarkdownTableMode;
   chunkMode?: ChunkMode;
+  messageSentHookTarget?: string;
+  accountId?: string;
+  sessionKeyForInternalHooks?: string;
+  isGroup?: boolean;
+  groupId?: string;
 }) {
-  const messages: Array<{ text: string; blocks?: ReturnType<typeof readSlackReplyBlocks> }> = [];
+  const deliveries: Array<{
+    hookContent: string;
+    messages: Array<{ text: string; blocks?: ReturnType<typeof readSlackReplyBlocks> }>;
+  }> = [];
   const chunkLimit = Math.min(params.textLimit, SLACK_TEXT_LIMIT);
   for (const payload of params.replies) {
     if (payload.isReasoning === true) {
@@ -302,7 +315,10 @@ export async function deliverSlackSlashReplies(params: {
         ? reply.trimmedText
         : undefined;
     if (slackBlocks?.length && !reply.hasMedia) {
-      messages.push({ text: text ?? "", blocks: slackBlocks });
+      deliveries.push({
+        hookContent: text ?? "",
+        messages: [{ text: text ?? "", blocks: slackBlocks }],
+      });
       continue;
     }
     const combined = [text ?? "", ...reply.mediaUrls].filter(Boolean).join("\n");
@@ -320,18 +336,48 @@ export async function deliverSlackSlashReplies(params: {
     if (!chunks.length && combined) {
       chunks.push(combined);
     }
-    for (const chunk of chunks) {
-      messages.push({ text: chunk });
-    }
+    deliveries.push({
+      hookContent: text ?? resolveSlackMediaHookSpokenText(payload) ?? combined,
+      messages: chunks.map((chunk) => ({ text: chunk })),
+    });
   }
 
-  if (messages.length === 0) {
+  if (deliveries.length === 0) {
     return;
   }
 
   // Slack slash command responses can be multi-part by sending follow-ups via response_url.
   const responseType = params.ephemeral ? "ephemeral" : "in_channel";
-  for (const message of messages) {
-    await params.respond({ ...message, response_type: responseType });
+  for (const delivery of deliveries) {
+    try {
+      for (const message of delivery.messages) {
+        await params.respond({ ...message, response_type: responseType });
+      }
+    } catch (error) {
+      if (params.messageSentHookTarget) {
+        emitSlackMessageSentHooks({
+          sessionKeyForInternalHooks: params.sessionKeyForInternalHooks,
+          to: params.messageSentHookTarget,
+          accountId: params.accountId,
+          content: delivery.hookContent,
+          success: false,
+          error: formatErrorMessage(error),
+          isGroup: params.isGroup,
+          groupId: params.groupId,
+        });
+      }
+      throw error;
+    }
+    if (params.messageSentHookTarget) {
+      emitSlackMessageSentHooks({
+        sessionKeyForInternalHooks: params.sessionKeyForInternalHooks,
+        to: params.messageSentHookTarget,
+        accountId: params.accountId,
+        content: delivery.hookContent,
+        success: true,
+        isGroup: params.isGroup,
+        groupId: params.groupId,
+      });
+    }
   }
 }

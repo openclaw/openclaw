@@ -308,6 +308,13 @@ describe("createSlackReplyDeliveryPlan", () => {
 });
 
 describe("deliverSlackSlashReplies chunking", () => {
+  beforeEach(() => {
+    messageHookRunner.hasHooks.mockReset();
+    messageHookRunner.hasHooks.mockReturnValue(false);
+    messageHookRunner.runMessageSent.mockReset();
+    triggerInternalHook.mockReset();
+  });
+
   it("keeps a 4205-character reply in a single slash response by default", async () => {
     const respond = vi.fn(async () => undefined);
     const text = "a".repeat(4205);
@@ -367,6 +374,115 @@ describe("deliverSlackSlashReplies chunking", () => {
     expect(respond).toHaveBeenCalledWith({
       text: "final answer",
       response_type: "in_channel",
+    });
+  });
+
+  it("emits terminal hooks for successful slash responses", async () => {
+    const respond = vi.fn(async () => undefined);
+    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
+
+    await deliverSlackSlashReplies({
+      replies: [{ text: "final answer" }],
+      respond,
+      ephemeral: false,
+      textLimit: 8000,
+      messageSentHookTarget: "user:U1",
+      accountId: "default",
+      sessionKeyForInternalHooks: "agent:main:slack:slash:u1",
+    });
+
+    const event = messageHookRunner.runMessageSent.mock.calls[0]?.[0] as Record<string, unknown>;
+    const context = messageHookRunner.runMessageSent.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(event).toMatchObject({
+      to: "user:U1",
+      content: "final answer",
+      success: true,
+      sessionKey: "agent:main:slack:slash:u1",
+    });
+    expect(context).toMatchObject({
+      conversationId: "user:U1",
+      sessionKey: "agent:main:slack:slash:u1",
+    });
+    expect(triggerInternalHook).toHaveBeenCalledOnce();
+  });
+
+  it("emits one terminal hook for a multi-part slash reply", async () => {
+    const respond = vi.fn(async () => undefined);
+    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
+
+    await deliverSlackSlashReplies({
+      replies: [{ text: "first\nsecond" }],
+      respond,
+      ephemeral: true,
+      textLimit: 8,
+      chunkMode: "newline",
+      messageSentHookTarget: "user:U1",
+    });
+
+    expect(respond).toHaveBeenCalledTimes(2);
+    expect(messageHookRunner.runMessageSent).toHaveBeenCalledOnce();
+    const event = messageHookRunner.runMessageSent.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(event).toMatchObject({
+      to: "user:U1",
+      content: "first\nsecond",
+      success: true,
+    });
+  });
+
+  it("emits only failure when a later slash response chunk throws", async () => {
+    const respond = vi
+      .fn<() => Promise<void>>()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("response_url_expired"));
+    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
+
+    await expect(
+      deliverSlackSlashReplies({
+        replies: [{ text: "first\nsecond" }],
+        respond,
+        ephemeral: true,
+        textLimit: 8,
+        chunkMode: "newline",
+        messageSentHookTarget: "user:U1",
+      }),
+    ).rejects.toThrow(/response_url_expired/);
+
+    expect(messageHookRunner.runMessageSent).toHaveBeenCalledOnce();
+    const event = messageHookRunner.runMessageSent.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(event).toMatchObject({
+      to: "user:U1",
+      content: "first\nsecond",
+      success: false,
+    });
+    expect(String(event.error)).toMatch(/response_url_expired/);
+  });
+
+  it("reports spoken text for media-only TTS slash replies", async () => {
+    const respond = vi.fn(async () => undefined);
+    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
+
+    await deliverSlackSlashReplies({
+      replies: [
+        {
+          mediaUrl: "https://example.com/tts.mp3",
+          audioAsVoice: true,
+          spokenText: "Spoken slash answer",
+        },
+      ],
+      respond,
+      ephemeral: true,
+      textLimit: 8000,
+      messageSentHookTarget: "user:U1",
+    });
+
+    expect(respond).toHaveBeenCalledWith({
+      text: "https://example.com/tts.mp3",
+      response_type: "ephemeral",
+    });
+    const event = messageHookRunner.runMessageSent.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(event).toMatchObject({
+      content: "Spoken slash answer",
+      success: true,
     });
   });
 });
@@ -583,6 +699,55 @@ describe("deliverReplies message_sent hook", () => {
       content: "Spoken answer",
       success: true,
       messageId: "tts-1",
+    });
+  });
+
+  it("reports spoken text for explicit media-only TTS replies", async () => {
+    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
+    sendMock.mockResolvedValue({ messageId: "tts-2", channelId: "C123" });
+
+    await deliverReplies(
+      baseParams({
+        replies: [
+          {
+            mediaUrl: "https://example.com/tts.mp3",
+            audioAsVoice: true,
+            spokenText: "  Explicit spoken answer  ",
+          },
+        ],
+      }),
+    );
+
+    const event = messageHookRunner.runMessageSent.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(event).toMatchObject({
+      content: "Explicit spoken answer",
+      success: true,
+      messageId: "tts-2",
+    });
+  });
+
+  it("keeps visible media captions ahead of hidden spoken text", async () => {
+    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
+    sendMock.mockResolvedValue({ messageId: "tts-3", channelId: "C123" });
+
+    await deliverReplies(
+      baseParams({
+        replies: [
+          {
+            text: "Visible caption",
+            mediaUrl: "https://example.com/tts.mp3",
+            audioAsVoice: true,
+            spokenText: "Hidden spoken answer",
+          },
+        ],
+      }),
+    );
+
+    const event = messageHookRunner.runMessageSent.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(event).toMatchObject({
+      content: "Visible caption",
+      success: true,
+      messageId: "tts-3",
     });
   });
 
