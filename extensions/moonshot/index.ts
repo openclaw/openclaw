@@ -61,12 +61,11 @@ export default defineSingleProviderPluginEntry({
     },
     applyNativeStreamingUsageCompat: ({ providerConfig }) =>
       applyMoonshotNativeStreamingUsageCompat(providerConfig),
-    // Strict sanitization preserves the first native Kimi ID and rewrites only
-    // later duplicates. Responses transports retain their existing replay policy.
     buildReplayPolicy: ({ modelApi, modelId }) =>
       buildOpenAICompatibleReplayPolicy(modelApi, {
         modelId,
         sanitizeToolCallIds: modelApi === "openai-completions",
+        duplicateToolCallIdStyle: "openai",
         dropReasoningFromHistory: false,
       }),
     ...moonshotThinkingStreamHooks,

@@ -44,7 +44,7 @@ describe("moonshot provider plugin", () => {
     });
   });
 
-  it("sanitizes duplicate tool-call ids for Moonshot completions replay", async () => {
+  it("rewrites duplicate tool-call ids with OpenAI-style ids for Moonshot replay", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 
     const policy = provider.buildReplayPolicy?.({
@@ -59,6 +59,7 @@ describe("moonshot provider plugin", () => {
       validateAnthropicTurns: true,
       sanitizeToolCallIds: true,
       toolCallIdMode: "strict",
+      duplicateToolCallIdStyle: "openai",
     });
     expect(policy).not.toHaveProperty("dropReasoningFromHistory");
   });
