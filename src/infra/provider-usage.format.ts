@@ -1,6 +1,11 @@
 // Formats provider usage summaries for CLI and status output.
 import { clampPercent } from "./provider-usage.shared.js";
-import type { ProviderUsageSnapshot, UsageSummary, UsageWindow } from "./provider-usage.types.js";
+import type {
+  ProviderUsageSnapshot,
+  UsageProviderId,
+  UsageSummary,
+  UsageWindow,
+} from "./provider-usage.types.js";
 
 // Compact reset times for chat/status lines; long windows fall back to a date.
 function formatResetRemaining(targetMs?: number, now?: number): string | null {
@@ -35,11 +40,19 @@ function formatResetRemaining(targetMs?: number, now?: number): string | null {
   }).format(new Date(targetMs));
 }
 
-function formatWindowShort(window: UsageWindow, now?: number): string {
+function formatWindowPercent(provider: UsageProviderId, window: UsageWindow): string {
+  if (provider === "minimax") {
+    const used = clampPercent(window.usedPercent);
+    return `${used.toFixed(0)}% used`;
+  }
   const remaining = clampPercent(100 - window.usedPercent);
+  return `${remaining.toFixed(0)}% left`;
+}
+
+function formatWindowShort(provider: UsageProviderId, window: UsageWindow, now?: number): string {
   const reset = formatResetRemaining(window.resetAt, now);
   const resetSuffix = reset ? ` ⏱${reset}` : "";
-  return `${remaining.toFixed(0)}% left (${window.label}${resetSuffix})`;
+  return `${formatWindowPercent(provider, window)} (${window.label}${resetSuffix})`;
 }
 
 /** Formats one provider snapshot into a short usage-window summary. */
@@ -61,10 +74,9 @@ export function formatUsageWindowSummary(
   const includeResets = opts?.includeResets ?? false;
   const windows = snapshot.windows.slice(0, maxWindows);
   const parts = windows.map((window) => {
-    const remaining = clampPercent(100 - window.usedPercent);
     const reset = includeResets ? formatResetRemaining(window.resetAt, now) : null;
     const resetSuffix = reset ? ` ⏱${reset}` : "";
-    return `${window.label} ${remaining.toFixed(0)}% left${resetSuffix}`;
+    return `${window.label} ${formatWindowPercent(snapshot.provider, window)}${resetSuffix}`;
   });
   return parts.join(" · ");
 }
@@ -87,7 +99,7 @@ export function formatUsageSummaryLine(
     const window = entry.windows.reduce((best, next) =>
       next.usedPercent > best.usedPercent ? next : best,
     );
-    return `${entry.displayName} ${formatWindowShort(window, opts?.now)}`;
+    return `${entry.displayName} ${formatWindowShort(entry.provider, window, opts?.now)}`;
   });
   return `📊 Usage: ${parts.join(" · ")}`;
 }
@@ -113,10 +125,11 @@ export function formatUsageReportLines(summary: UsageSummary, opts?: { now?: num
       lines.push(`    ${entry.summary.trim()}`);
     }
     for (const window of entry.windows) {
-      const remaining = clampPercent(100 - window.usedPercent);
       const reset = formatResetRemaining(window.resetAt, opts?.now);
       const resetSuffix = reset ? ` · resets ${reset}` : "";
-      lines.push(`    ${window.label}: ${remaining.toFixed(0)}% left${resetSuffix}`);
+      lines.push(
+        `    ${window.label}: ${formatWindowPercent(entry.provider, window)}${resetSuffix}`,
+      );
     }
   }
   return lines;

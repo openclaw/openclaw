@@ -94,6 +94,36 @@ describe("provider-usage.format", () => {
     );
   });
 
+  it("formats minimax windows as used percentage instead of remaining quota", () => {
+    const summary: UsageSummary = {
+      updatedAt: now,
+      providers: [
+        {
+          provider: "minimax",
+          displayName: "MiniMax",
+          plan: "API Key",
+          windows: [
+            { label: "24h", usedPercent: 100, resetAt: now + 86_400_000 },
+            { label: "1h", usedPercent: 26, resetAt: now + 86 * 60_000 },
+          ],
+        },
+      ],
+    };
+
+    expect(formatUsageWindowSummary(summary.providers[0], { now, includeResets: true })).toBe(
+      "24h 100% used ⏱1d 0h · 1h 26% used ⏱1h 26m",
+    );
+    expect(formatUsageSummaryLine(summary, { now })).toBe(
+      "📊 Usage: MiniMax 100% used (24h ⏱1d 0h)",
+    );
+    expect(formatUsageReportLines(summary, { now })).toEqual([
+      "Usage:",
+      "  MiniMax (API Key)",
+      "    24h: 100% used · resets 1d 0h",
+      "    1h: 26% used · resets 1h 26m",
+    ]);
+  });
+
   it("formats provider summary text for balance-only providers", () => {
     const summary: UsageSummary = {
       updatedAt: now,
