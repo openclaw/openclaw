@@ -552,12 +552,13 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
       const options = { duplicateToolCallIdStyle: "openai" as const };
 
       const out = sanitizeToolCallIdsForCloudCodeAssist(input, "strict", options);
-      const firstId = (
-        (out[0] as Extract<AgentMessage, { role: "assistant" }>).content?.[0] as { id?: string }
-      ).id;
-      const secondId = (
-        (out[2] as Extract<AgentMessage, { role: "assistant" }>).content?.[0] as { id?: string }
-      ).id;
+      const firstContent = (out[0] as Extract<AgentMessage, { role: "assistant" }>).content;
+      const secondContent = (out[2] as Extract<AgentMessage, { role: "assistant" }>).content;
+      if (!Array.isArray(firstContent) || !Array.isArray(secondContent)) {
+        throw new Error("Expected assistant tool-call content");
+      }
+      const firstId = (firstContent[0] as { id?: string }).id;
+      const secondId = (secondContent[0] as { id?: string }).id;
       expect(firstId).toBe("functions.read:0");
       expect(secondId).toMatch(/^call_[a-f0-9]{24}$/);
       expect((out[1] as Extract<AgentMessage, { role: "toolResult" }>).toolCallId).toBe(firstId);
