@@ -245,7 +245,7 @@ export async function promptGatewayConfig(
 
   if (authMode === "password") {
     const passwordInput = guardCancel(
-      await text({
+      await password({
         message: "Gateway password",
         validate: validateGatewayPasswordInput,
       }),

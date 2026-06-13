@@ -118,6 +118,9 @@ describe("promptGatewayConfig", () => {
       authConfigFactory: ({ mode, token, password }) => ({ mode, token, password }),
     });
     expect(result.token).toBe("generated-token");
+    expect(mocks.password).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Gateway token (blank to generate)" }),
+    );
   });
 
   it("does not set password to literal 'undefined' when prompt returns undefined", async () => {
@@ -129,6 +132,12 @@ describe("promptGatewayConfig", () => {
     });
     expect(call.password).not.toBe("undefined");
     expect(call.password).toBe("");
+    expect(mocks.password).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Gateway password",
+        validate: expect.any(Function),
+      }),
+    );
   });
 
   it("prompts for trusted-proxy configuration when trusted-proxy mode selected", async () => {
