@@ -2017,7 +2017,16 @@ export async function loadWorkboard(params: {
               ),
               [],
             );
-            taskSummaries = [...listedTaskSummaries, ...confirmationResult.tasks];
+            const previousTasksToPreserve = confirmationResult.error
+              ? preparedTaskSummaries.filter(
+                  (task) => !confirmationResult.missingTaskIds.has(task.taskId),
+                )
+              : [];
+            taskSummaries = [
+              ...listedTaskSummaries,
+              ...confirmationResult.tasks,
+              ...previousTasksToPreserve,
+            ];
             missingTaskIds = confirmationResult.missingTaskIds;
             taskRefreshError = confirmationResult.error;
           }
@@ -2970,11 +2979,11 @@ export async function syncWorkboardLifecycle(params: {
   requestUpdate?: () => void;
 }) {
   const state = getWorkboardState(params.host);
+  const taskRefreshRetryPending = workboardLifecycleTaskRefreshRetryPending(state);
   if (
     !params.client ||
     !state.loaded ||
-    (workboardLifecycleTaskRefreshRetryPending(state) &&
-      workboardLifecycleRequiresTaskRefresh(state)) ||
+    (taskRefreshRetryPending && workboardLifecycleRequiresTaskRefresh(state)) ||
     workboardLifecycleSyncBlocked(params.host, state)
   ) {
     return;
@@ -2983,7 +2992,11 @@ export async function syncWorkboardLifecycle(params: {
   let tasksPreparedAt = workboardLifecycleTasksPreparedAt(state);
   const tasksPrepared = tasksPreparedAt !== null;
   setWorkboardLifecycleTasksPrepared(state, false, { host: params.host });
-  if (!tasksPrepared && shouldRefreshWorkboardTasksForLifecycle(state)) {
+  if (
+    !tasksPrepared &&
+    !taskRefreshRetryPending &&
+    shouldRefreshWorkboardTasksForLifecycle(state)
+  ) {
     tasksPreparedAt = await refreshWorkboardLifecycleTasks(
       {
         host: params.host,
