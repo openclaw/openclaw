@@ -615,6 +615,7 @@ export const ja_JP: TranslationMap = {
     labelsPlaceholder: "ui, docs",
     searchPlaceholder: "カードを検索",
     allPriorities: "すべての優先度",
+    hideEmptyColumns: "Hide empty columns",
     emptyColumn: "ここに作業をドロップ",
     lifecycleUnlinked: "セッションなし",
     lifecycleUnlinkedDetail: "セッションを開始またはリンク",
