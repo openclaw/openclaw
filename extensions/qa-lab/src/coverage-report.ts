@@ -329,17 +329,22 @@ function pushScorecardTaxonomyLines(lines: string[], report: QaScorecardTaxonomy
   lines.push(`- Categories: ${report.categoryCount}`);
   lines.push(`- Profiles: ${report.profileCount}`);
   lines.push(
-    `- Mapped coverage IDs: ${report.mappedCoverageIdCount}/${totalCoverageIds} (${report.mappedCoverageIdPercent.toFixed(1)}%)`,
+    `- Fulfilled taxonomy categories: ${report.fulfilledCategoryCount}/${report.requiredCategoryCount} (${report.taxonomyFulfillmentPercent.toFixed(1)}%)`,
   );
-  lines.push(`- Mapped evidence refs: ${report.mappedEvidenceRefCount}`);
-  lines.push(`- Unmapped coverage IDs: ${report.unmappedCoverageIdCount}`);
+  lines.push(`- Evidence refs: ${report.evidenceRefCount}`);
+  lines.push(
+    `- Mapped QA coverage IDs: ${report.mappedCoverageIdCount}/${totalCoverageIds} (${report.mappedCoverageIdPercent.toFixed(1)}%)`,
+  );
+  lines.push(`- Unmapped QA coverage IDs: ${report.unmappedCoverageIdCount}`);
   lines.push(`- Validation warnings: ${report.validationIssueCount}`, "");
 
   if (report.profiles.length > 0) {
     lines.push("### Profiles", "");
     for (const profile of report.profiles) {
       const categories = profile.categoryIds.length > 0 ? profile.categoryIds.join(", ") : "none";
-      lines.push(`- ${profile.id}: ${profile.categoryIds.length} categories; ${categories}`);
+      lines.push(
+        `- ${profile.id}: ${profile.fulfilledCategoryCount}/${profile.requiredCategoryCount} fulfilled (${profile.fulfillmentPercent.toFixed(1)}%); ${categories}`,
+      );
     }
     lines.push("");
   }
@@ -349,8 +354,10 @@ function pushScorecardTaxonomyLines(lines: string[], report: QaScorecardTaxonomy
     for (const category of report.categories) {
       const coverage = category.coverageIds.length > 0 ? category.coverageIds.join(", ") : "none";
       const evidenceRefs =
-        category.evidenceRefs.length > 0
-          ? category.evidenceRefs.map((ref) => `${ref.kind}:${ref.path}`).join(", ")
+        category.evidence.length > 0
+          ? category.evidence
+              .map((ref) => `${ref.role}:${ref.kind}:${ref.path} (${ref.coverageIds.join(", ")})`)
+              .join(", ")
           : "none";
       const profiles = category.profiles.length > 0 ? category.profiles.join(", ") : "none";
       lines.push(

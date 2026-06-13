@@ -5,9 +5,9 @@ taxonomy:
   sourcePath: taxonomy.yaml
 profiles:
   - id: smoke-ci
-    description:
-      Deterministic PR and merge proof with mock model providers, synthetic qa-channel, and
-      local SDK-backed channel upstreams; no live external service required.
+    description: Deterministic PR and merge proof with mock model providers, synthetic
+      qa-channel, and local SDK-backed channel upstreams; no live external service
+      required.
     categoryIds:
       - agent-runtime-and-provider-execution.agent-turn-execution
       - session-memory-and-context-engine.token-management
@@ -24,9 +24,9 @@ profiles:
       - browser-control-ui-and-webchat.browser-ui
       - security-auth-pairing-and-secrets.credential-and-secret-hygiene
   - id: release
-    description:
-      Stable/LTS proof selector for live providers, live channels, package artifacts, upgrade
-      paths, and platform proof where the claim depends on real upstreams or release artifacts.
+    description: Stable/LTS proof selector for live providers, live channels, package
+      artifacts, upgrade paths, and platform proof where the claim depends on real
+      upstreams or release artifacts.
     categoryIds:
       - agent-runtime-and-provider-execution.agent-turn-execution
       - session-memory-and-context-engine.token-management
@@ -44,216 +44,78 @@ profiles:
       - security-auth-pairing-and-secrets.credential-and-secret-hygiene
 categories:
   - id: agent-runtime-and-provider-execution.agent-turn-execution
-    evidence:
-      coverageIds:
-        - channels.dm
-        - channels.streaming
-        - runtime.delivery
-      evidenceRefs:
-        - kind: qa-scenario
-          path: qa/scenarios/channels/dm-chat-baseline.md
-        - kind: qa-scenario
-          path: qa/scenarios/runtime/streaming-final-integrity.md
-    taxonomySurfaceId: agent-runtime-and-provider-execution
-    taxonomyCategoryName: Agent Turn Execution
+    coverageIds:
+      - channels.dm
+      - channels.streaming
+      - runtime.delivery
   - id: session-memory-and-context-engine.token-management
-    evidence:
-      coverageIds:
-        - runtime.compaction
-        - runtime.retry-policy
-      evidenceRefs:
-        - kind: qa-scenario
-          path: qa/scenarios/runtime/compaction-retry-mutating-tool.md
-    taxonomySurfaceId: session-memory-and-context-engine
-    taxonomyCategoryName: Token Management
+    coverageIds:
+      - runtime.compaction
+      - runtime.retry-policy
   - id: browser-automation-and-exec-sandbox-tools.tool-invocation-and-execution
-    evidence:
-      coverageIds:
-        - tools.apply-patch
-        - tools.exec
-        - tools.fs.read
-        - tools.fs.write
-        - tools.web-search
-      evidenceRefs:
-        - kind: qa-scenario
-          path: qa/scenarios/runtime/tools/apply-patch.md
-        - kind: qa-scenario
-          path: qa/scenarios/runtime/tools/exec.md
-        - kind: qa-scenario
-          path: qa/scenarios/runtime/tools/fs-read.md
-        - kind: qa-scenario
-          path: qa/scenarios/runtime/tools/fs-write.md
-        - kind: qa-scenario
-          path: qa/scenarios/runtime/tools/web-search.md
-    taxonomySurfaceId: browser-automation-and-exec-sandbox-tools
-    taxonomyCategoryName: Tool Invocation and Execution
+    coverageIds:
+      - tools.apply-patch
+      - tools.exec
+      - tools.fs.read
+      - tools.fs.write
+      - tools.web-search
   - id: security-auth-pairing-and-secrets.approval-policy-and-tool-safeguards
-    evidence:
-      coverageIds:
-        - runtime.approvals
-        - tools.followthrough
-        - personal.approval-denial
-      evidenceRefs:
-        - kind: qa-scenario
-          path: qa/scenarios/runtime/approval-turn-tool-followthrough.md
-        - kind: qa-scenario
-          path: qa/scenarios/personal/approval-denial-stop.md
-    taxonomySurfaceId: security-auth-pairing-and-secrets
-    taxonomyCategoryName: Approval Policy and Tool Safeguards
+    coverageIds:
+      - runtime.approvals
+      - tools.followthrough
+      - personal.approval-denial
   - id: telemetry-diagnostics-and-observability.telemetry-export
-    evidence:
-      coverageIds:
-        - telemetry.otel
-        - telemetry.prometheus
-        - harness.qa-lab
-      evidenceRefs:
-        - kind: qa-scenario
-          path: qa/scenarios/runtime/otel-trace-smoke.md
-        - kind: qa-scenario
-          path: qa/scenarios/runtime/docker-prometheus-smoke.md
-    taxonomySurfaceId: telemetry-diagnostics-and-observability
-    taxonomyCategoryName: Telemetry Export
+    coverageIds:
+      - telemetry.otel
+      - telemetry.prometheus
+      - harness.qa-lab
   - id: openai-codex-provider-path.responses-and-tool-compatibility
-    evidence:
-      coverageIds:
-        - models.openai
-        - models.live-openai
-        - tools.web-search
-      evidenceRefs:
-        - kind: qa-scenario
-          path: qa/scenarios/models/openai-native-web-search-live.md
-        - kind: qa-scenario
-          path: qa/scenarios/plugins/kitchen-sink-live-openai.md
-    taxonomySurfaceId: openai-codex-provider-path
-    taxonomyCategoryName: Responses and Tool Compatibility
+    coverageIds:
+      - models.openai
+      - models.live-openai
+      - tools.web-search
   - id: channel-framework.conversation-routing-and-delivery
-    evidence:
-      coverageIds:
-        - channels.qa-channel
-        - channels.dm
-        - channels.group-messages
-        - channels.group-visible-replies
-        - channels.threads
-        - channels.message-actions
-      evidenceRefs:
-        - kind: qa-scenario
-          path: qa/scenarios/channels/channel-chat-baseline.md
-        - kind: qa-scenario
-          path: qa/scenarios/channels/dm-chat-baseline.md
-        - kind: qa-scenario
-          path: qa/scenarios/channels/group-visible-reply-tool.md
-        - kind: qa-scenario
-          path: qa/scenarios/channels/reaction-edit-delete.md
-        - kind: qa-scenario
-          path: qa/scenarios/channels/thread-follow-up.md
-    taxonomySurfaceId: channel-framework
-    taxonomyCategoryName: Conversation Routing and Delivery
+    coverageIds:
+      - channels.qa-channel
+      - channels.dm
+      - channels.group-messages
+      - channels.group-visible-replies
+      - channels.threads
+      - channels.message-actions
   - id: session-memory-and-context-engine.memory
-    evidence:
-      coverageIds:
-        - memory.recall
-        - memory.active-recall
-        - memory.thread-isolation
-      evidenceRefs:
-        - kind: qa-scenario
-          path: qa/scenarios/memory/memory-recall.md
-        - kind: qa-scenario
-          path: qa/scenarios/memory/active-memory-preprompt-recall.md
-        - kind: qa-scenario
-          path: qa/scenarios/memory/thread-memory-isolation.md
-    taxonomySurfaceId: session-memory-and-context-engine
-    taxonomyCategoryName: Memory
+    coverageIds:
+      - memory.recall
+      - memory.active-recall
+      - memory.thread-isolation
   - id: session-memory-and-context-engine.diagnostics-maintenance-and-recovery
-    evidence:
-      coverageIds:
-        - memory.failure-handling
-        - runtime.fallbacks
-      evidenceRefs:
-        - kind: qa-scenario
-          path: qa/scenarios/memory/memory-failure-fallback.md
-    taxonomySurfaceId: session-memory-and-context-engine
-    taxonomyCategoryName: Diagnostics, Maintenance, and Recovery
+    coverageIds:
+      - memory.failure-handling
+      - runtime.fallbacks
   - id: automation-cron-hooks-tasks-polling.cron-jobs
-    evidence:
-      coverageIds:
-        - scheduling.cron
-        - scheduling.dedup
-      evidenceRefs:
-        - kind: qa-scenario
-          path: qa/scenarios/scheduling/cron-natural-fire-no-duplicate.md
-        - kind: qa-scenario
-          path: qa/scenarios/scheduling/cron-single-run-no-duplicate.md
-    taxonomySurfaceId: automation-cron-hooks-tasks-polling
-    taxonomyCategoryName: Cron Jobs
+    coverageIds:
+      - scheduling.cron
+      - scheduling.dedup
   - id: plugin-sdk-and-bundled-plugin-architecture.installing-and-running-plugins
-    evidence:
-      coverageIds:
-        - plugins.lifecycle
-        - plugins.kitchen-sink
-        - plugins.mcp-tools
-        - runtime.gateway-log-sentinel.plugin-contracts
-      evidenceRefs:
-        - kind: qa-scenario
-          path: qa/scenarios/plugins/plugin-lifecycle-hot-reload.md
-        - kind: qa-scenario
-          path: qa/scenarios/plugins/kitchen-sink-live-openai.md
-        - kind: qa-scenario
-          path: qa/scenarios/plugins/mcp-plugin-tools-call.md
-        - kind: qa-scenario
-          path: qa/scenarios/plugins/plugin-manifest-contract-health.md
-    taxonomySurfaceId: plugin-sdk-and-bundled-plugin-architecture
-    taxonomyCategoryName: Installing and running plugins
+    coverageIds:
+      - plugins.lifecycle
+      - plugins.kitchen-sink
+      - plugins.mcp-tools
+      - runtime.gateway-log-sentinel.plugin-contracts
   - id: media-understanding-and-media-generation.media-understanding
-    evidence:
-      coverageIds:
-        - media.image-understanding
-      evidenceRefs:
-        - kind: qa-scenario
-          path: qa/scenarios/media/image-understanding-attachment.md
-        - kind: qa-scenario
-          path: qa/scenarios/ui/control-ui-qa-channel-image-roundtrip.md
-    taxonomySurfaceId: media-understanding-and-media-generation
-    taxonomyCategoryName: Media Understanding
+    coverageIds:
+      - media.image-understanding
   - id: media-understanding-and-media-generation.media-generation
-    evidence:
-      coverageIds:
-        - media.image-generation
-        - tools.image-generate
-        - tools.tts
-      evidenceRefs:
-        - kind: qa-scenario
-          path: qa/scenarios/media/image-generation-roundtrip.md
-        - kind: qa-scenario
-          path: qa/scenarios/media/native-image-generation.md
-        - kind: qa-scenario
-          path: qa/scenarios/runtime/tools/image-generate.md
-        - kind: qa-scenario
-          path: qa/scenarios/runtime/tools/tts.md
-    taxonomySurfaceId: media-understanding-and-media-generation
-    taxonomyCategoryName: Media Generation
+    coverageIds:
+      - media.image-generation
+      - tools.image-generate
+      - tools.tts
   - id: browser-control-ui-and-webchat.browser-ui
-    evidence:
-      coverageIds:
-        - ui.control
-        - channels.qa-channel
-        - media.image-understanding
-      evidenceRefs:
-        - kind: qa-scenario
-          path: qa/scenarios/ui/control-ui-qa-channel-image-roundtrip.md
-        - kind: playwright
-          path: ui/src/ui/e2e/chat-flow.e2e.test.ts
-    taxonomySurfaceId: browser-control-ui-and-webchat
-    taxonomyCategoryName: Browser UI
+    coverageIds:
+      - ui.control
+      - channels.qa-channel
+      - media.image-understanding
   - id: security-auth-pairing-and-secrets.credential-and-secret-hygiene
-    evidence:
-      coverageIds:
-        - security.redaction
-        - personal.redaction
-        - qa.artifact-safety
-      evidenceRefs:
-        - kind: qa-scenario
-          path: qa/scenarios/security/secret-redaction-tool-logs.md
-        - kind: qa-scenario
-          path: qa/scenarios/personal/redaction-no-secret-leak.md
-    taxonomySurfaceId: security-auth-pairing-and-secrets
-    taxonomyCategoryName: Credential and Secret Hygiene
+    coverageIds:
+      - security.redaction
+      - personal.redaction
+      - qa.artifact-safety

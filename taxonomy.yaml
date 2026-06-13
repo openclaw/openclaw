@@ -46,6 +46,7 @@ surfaces:
     completeness_instructions: references/completeness/gateway-runtime.md
     categories:
       - name: Approvals and Remote Execution
+        id: approvals-and-remote-execution
         features:
           - name: Exec approvals
             description: Exec approval request, lookup, wait, resolve, and policy snapshot APIs.
@@ -68,6 +69,7 @@ surfaces:
         category_note: approval-and-execution-safety.md
         human_lts_override: true
       - name: HTTP APIs
+        id: http-apis
         features:
           - name: OpenAI-compatible APIs
             description: OpenAI-compatible HTTP APIs (`/v1/models`, `/v1/chat/completions`, `/v1/responses`, `/v1/embeddings`).
@@ -93,6 +95,7 @@ surfaces:
         category_note: http-apis.md
         human_lts_override: true
       - name: Hosted Web Surface
+        id: hosted-web-surface
         features:
           - name: Control UI
             description: Control UI hosting on the Gateway server.
@@ -117,6 +120,7 @@ surfaces:
         category_note: hosted-web-surface.md
         human_lts_override: true
       - name: Gateway RPC APIs and Events
+        id: gateway-rpc-apis-and-events
         features:
           - name: Health APIs
             description: '`health` and `status` RPCs.'
@@ -173,6 +177,7 @@ surfaces:
         category_note: core-rpc-coverage.md
         human_lts_override: true
       - name: Device Auth and Pairing
+        id: device-auth-and-pairing
         features:
           - name: Shared-secret login
             description: Shared-secret auth by token or password.
@@ -204,6 +209,7 @@ surfaces:
         category_note: device-identity-auth-and-pairing.md
         human_lts_override: true
       - name: Network Access and Discovery
+        id: network-access-and-discovery
         features:
           - name: Loopback and LAN access
             description: Loopback and LAN-facing Gateway exposure.
@@ -227,6 +233,7 @@ surfaces:
         category_note: network-exposure-and-transport-selection.md
         human_lts_override: true
       - name: Nodes and Remote Capabilities
+        id: nodes-and-remote-capabilities
         features:
           - name: Node presence
             description: Node presence in the same WS control plane as operator clients.
@@ -254,6 +261,7 @@ surfaces:
         category_note: node-transport-and-capability-relay.md
         human_lts_override: false
       - name: Health, Diagnostics, and Repair
+        id: health-diagnostics-and-repair
         features:
           - name: Health snapshots
             description: '`health` and `status` snapshots.'
@@ -279,6 +287,7 @@ surfaces:
         category_note: observability-health-and-repair.md
         human_lts_override: true
       - name: Protocol Compatibility
+        id: protocol-compatibility
         features:
           - name: Published protocol schema
             description: TypeBox as the protocol source of truth.
@@ -305,6 +314,7 @@ surfaces:
         category_note: protocol-typing-and-compatibility.md
         human_lts_override: true
       - name: Roles and Permissions
+        id: roles-and-permissions
         features:
           - name: Role negotiation
             description: '`operator` versus `node` role negotiation.'
@@ -325,6 +335,7 @@ surfaces:
         category_note: roles-scopes-and-operator-policy.md
         human_lts_override: true
       - name: Gateway Lifecycle
+        id: gateway-lifecycle
         features:
           - name: Foreground startup
             description: Local foreground startup via `openclaw gateway`.
@@ -349,6 +360,7 @@ surfaces:
         category_note: runtime-lifecycle-and-supervision.md
         human_lts_override: true
       - name: Security Controls
+        id: security-controls
         features:
           - name: Non-loopback auth
             description: Auth-required non-loopback exposure.
@@ -372,6 +384,7 @@ surfaces:
         category_note: security-and-hardening-posture.md
         human_lts_override: true
       - name: WebSocket Connection
+        id: websocket-connection
         features:
           - name: WebSocket transport
             description: WebSocket transport with JSON text frames.
@@ -412,6 +425,7 @@ surfaces:
     completeness_instructions: references/completeness/cli-install-update-onboard-doctor.md
     categories:
       - name: CLI Setup
+        id: cli-setup
         features:
           - name: Installer scripts
             description: Hosted installer scripts set up Node, install OpenClaw, and optionally start onboarding.
@@ -438,6 +452,7 @@ surfaces:
         category_note: package-install-and-cli-entrypoints.md
         human_lts_override: true
       - name: Onboarding and Auth Setup
+        id: onboarding-and-auth-setup
         features:
           - name: Guided onboarding
             description: openclaw onboard walks through workspace, gateway, model auth, channels, skills, and health setup.
@@ -459,6 +474,7 @@ surfaces:
         category_note: first-run-onboarding-and-auth-selection.md
         human_lts_override: true
       - name: Plugin and Channel Setup
+        id: plugin-and-channel-setup
         features:
           - name: Channel picker
             description: Onboarding can guide the operator through choosing which channels to configure.
@@ -480,6 +496,7 @@ surfaces:
         category_note: plugin-and-channel-setup-during-onboarding.md
         human_lts_override: false
       - name: Gateway Service Management
+        id: gateway-service-management
         features:
           - name: Foreground gateway runs
             description: Operators can run the gateway directly from the CLI for local development or ad hoc recovery.
@@ -501,6 +518,7 @@ surfaces:
         category_note: gateway-service-install-and-lifecycle.md
         human_lts_override: true
       - name: CLI Observability
+        id: cli-observability
         features:
           - name: Status snapshots
             description: openclaw status and related flags summarize runtime state, config health, and update context.
@@ -523,6 +541,7 @@ surfaces:
         category_note: status-health-logs-and-diagnostics-support-path.md
         human_lts_override: true
       - name: Doctor
+        id: doctor
         features:
           - name: Interactive repair
             description: openclaw doctor supports inspect, repair, non-interactive, and forceful repair postures.
@@ -557,6 +576,7 @@ surfaces:
         category_note: doctor-config-auth-plugin-and-lint.md
         human_lts_override: true
       - name: Updates and Upgrades
+        id: updates-and-upgrades
         features:
           - name: Update channels
             description: openclaw update supports stable, beta, and dev channel selection.
@@ -592,25 +612,32 @@ surfaces:
     completeness_instructions: references/completeness/plugin-sdk-and-bundled-plugin-architecture.md
     additional_validation:
       - name: Plugin SDK exports sync
+        id: plugin-sdk-exports-sync
         command: pnpm plugin-sdk:check-exports
         purpose: Verify generated public SDK exports still match the checked-in entrypoint inventory.
       - name: Plugin SDK API baseline
+        id: plugin-sdk-api-baseline
         command: pnpm plugin-sdk:api:check
         purpose: Detect public API drift in the packaged Plugin SDK surface.
       - name: Plugin SDK surface budget
+        id: plugin-sdk-surface-budget
         command: pnpm plugin-sdk:surface:check
         purpose: Enforce public SDK surface-size budgets and deprecated-export limits.
       - name: Plugin boundary report
+        id: plugin-boundary-report
         command: pnpm plugins:boundary-report:ci
         purpose: Fail on cross-owner reserved imports, unclassified reserved subpaths, and due compatibility debt.
       - name: Plugin npm release check
+        id: plugin-npm-release-check
         command: pnpm release:plugins:npm:check
         purpose: Validate publishable plugin npm metadata and release readiness.
       - name: Plugin ClawHub release check
+        id: plugin-clawhub-release-check
         command: pnpm release:plugins:clawhub:check
         purpose: Validate publishable plugin ClawHub metadata and release readiness.
     categories:
       - name: Authoring and Packaging plugins
+        id: authoring-and-packaging-plugins
         features:
           - name: Root SDK entrypoint
             description: Plugin authors use the supported root Plugin SDK entrypoint when the top-level contract is sufficient.
@@ -645,6 +672,7 @@ surfaces:
         category_note: public-sdk-api-and-subpaths.md
         human_lts_override: true
       - name: Bundled plugins
+        id: bundled-plugins
         features:
           - name: Bundled plugin listing
             description: Operators and maintainers can inspect the bundled plugin set and its published metadata.
@@ -667,6 +695,7 @@ surfaces:
         category_note: bundled-plugin-discovery-and-inventory.md
         human_lts_override: true
       - name: Canvas plugin
+        id: canvas-plugin
         features:
           - name: Hosted Canvas and A2UI surfaces
             description: Canvas plugin registers authenticated Gateway HTTP and WebSocket routes for hosted Canvas documents and A2UI runtime surfaces.
@@ -693,6 +722,7 @@ surfaces:
         category_note: canvas-plugin.md
         human_lts_override: false
       - name: Installing and running plugins
+        id: installing-and-running-plugins
         features:
           - name: Plugin setup
             description: Operators can run plugin setup flows without fully activating runtime behavior.
@@ -718,6 +748,7 @@ surfaces:
         category_note: runtime-loading-and-lifecycle.md
         human_lts_override: true
       - name: Channel plugins
+        id: channel-plugins
         features:
           - name: Inbound event handling
             description: Channel plugins register inbound hooks and normalize incoming events.
@@ -741,6 +772,7 @@ surfaces:
         category_note: channel-plugin-architecture.md
         human_lts_override: true
       - name: Provider and tool plugins
+        id: provider-and-tool-plugins
         features:
           - name: Provider plugins
             description: Provider plugins register models and capabilities with the runtime.
@@ -766,6 +798,7 @@ surfaces:
         category_note: provider-tool-plugin-architecture.md
         human_lts_override: true
       - name: Plugin approvals
+        id: plugin-approvals
         features:
           - name: Approval requests
             description: Plugin-initiated actions can request and resolve approvals through the standard flow.
@@ -790,6 +823,7 @@ surfaces:
         category_note: approval-and-security-boundaries.md
         human_lts_override: true
       - name: Publishing plugins
+        id: publishing-plugins
         features:
           - name: Install sources
             description: Supported plugin install sources are explicit and validated.
@@ -815,6 +849,7 @@ surfaces:
         category_note: distribution-release-and-compatibility.md
         human_lts_override: true
       - name: Testing plugins
+        id: testing-plugins
         features:
           - name: Test fixtures
             description: Fixtures provide reusable plugin metadata and runtime test inputs.
@@ -854,6 +889,7 @@ surfaces:
     completeness_instructions: references/completeness/agent-runtime-and-provider-execution.md
     categories:
       - name: Agent Turn Execution
+        id: agent-turn-execution
         features:
           - name: Turn startup and runtime choice
             description: Starting an agent turn and choosing gateway versus embedded runtime execution.
@@ -872,6 +908,7 @@ surfaces:
         category_note: agent-turn-orchestration-and-runtime-lifecycle.md
         human_lts_override: true
       - name: External Runtimes and Subagents
+        id: external-runtimes-and-subagents
         features:
           - name: External harness selection
             description: Choosing Codex app-server, ACP, and other external runtime harnesses.
@@ -893,6 +930,7 @@ surfaces:
         category_note: cli-harnesses-external-runtimes-and-subagents.md
         human_lts_override: false
       - name: Hosted Provider Execution
+        id: hosted-provider-execution
         features:
           - name: Hosted provider turns
             description: Running agent turns against hosted providers such as OpenAI, Anthropic, and Google.
@@ -916,6 +954,7 @@ surfaces:
         category_note: hosted-provider-adapters-and-payload-compatibility.md
         human_lts_override: true
       - name: Local and Self-hosted Providers
+        id: local-and-self-hosted-providers
         features:
           - name: Local provider profiles
             description: Local model profile configuration for Ollama and OpenAI-compatible local servers.
@@ -938,6 +977,7 @@ surfaces:
         category_note: local-and-self-hosted-provider-execution.md
         human_lts_override: false
       - name: Model and Runtime Selection
+        id: model-and-runtime-selection
         features:
           - name: Model reference selection
             description: Selecting the model reference for an agent turn from user or configured defaults.
@@ -959,6 +999,7 @@ surfaces:
         category_note: model-selection-provider-routing-and-runtime-policy.md
         human_lts_override: true
       - name: Provider Auth
+        id: provider-auth
         features:
           - name: Login and API-key setup
             description: Login, OAuth, and paste-key flows for provider access.
@@ -995,6 +1036,7 @@ surfaces:
         category_note: provider-auth-profiles-and-credential-health.md
         human_lts_override: true
       - name: Streaming and Progress
+        id: streaming-and-progress
         features:
           - name: Streaming replies
             description: Streaming block updates and partial assistant output before final delivery.
@@ -1010,6 +1052,7 @@ surfaces:
         category_note: streaming-progress-and-preview-visibility.md
         human_lts_override: false
       - name: Tool Calls and Response Handling
+        id: tool-calls-and-response-handling
         features:
           - name: Tool-call handling
             description: Reliable tool-call behavior across providers, including malformed or provider-specific payload differences.
@@ -1027,6 +1070,7 @@ surfaces:
         category_note: streaming-tool-call-and-response-normalization.md
         human_lts_override: true
       - name: Tool Execution Controls
+        id: tool-execution-controls
         features:
           - name: Tool availability rules
             description: Which tools are available during a turn after policy resolution and provider-based suppression.
@@ -1065,6 +1109,7 @@ surfaces:
     completeness_instructions: references/completeness/session-memory-and-context-engine.md
     categories:
       - name: CLI Session and Transcript Management
+        id: cli-session-and-transcript-management
         features:
           - name: CLI Session
             description: Covers CLI Session across `openclaw sessions`, `openclaw transcripts`, cleanup, show/list/path behavior, TUI session history actions, and Gateway-backed session management commands.
@@ -1082,6 +1127,7 @@ surfaces:
         category_note: cli-session-and-transcript-management.md
         human_lts_override: true
       - name: Token Management
+        id: token-management
         features:
           - name: Compaction
             description: Covers Compaction across manual and automatic compaction, preemptive overflow checks, context-window estimation, session pruning, tool-result trimming, compaction providers, retry/timeout behavior, and compacted transcript checkpoints.
@@ -1102,6 +1148,7 @@ surfaces:
         category_note: compaction-pruning-and-token-pressure.md
         human_lts_override: true
       - name: Context Engine
+        id: context-engine
         features:
           - name: Context Engine
             description: Covers Context Engine across context-engine selection, registry, host compatibility, legacy fallback, assemble/ingest/after-turn/compact lifecycle, runtime context projection, and the boundary between OpenClaw context assembly and native harness history.
@@ -1119,6 +1166,7 @@ surfaces:
         category_note: context-engine-and-runtime-assembly.md
         human_lts_override: true
       - name: Cross-client History and Session Parity
+        id: cross-client-history-and-session-parity
         features:
           - name: Cross-client History
             description: Covers Cross-client History across `chat.history`, `chat.send`, WebChat display projection, TUI session actions, Android chat/session selection, OpenAI-compatible history mapping, channel history windows, and history visibility across reset/restart.
@@ -1136,6 +1184,7 @@ surfaces:
         category_note: cross-client-history-and-session-parity.md
         human_lts_override: false
       - name: Diagnostics, Maintenance, and Recovery
+        id: diagnostics-maintenance-and-recovery
         features:
           - name: Session diagnostic reports
             description: Covers stuck-session diagnostics, diagnostic bundles, stability snapshots, and operator visibility into transcript and session health.
@@ -1157,6 +1206,7 @@ surfaces:
         category_note: diagnostics-maintenance-and-recovery.md
         human_lts_override: false
       - name: Core Prompts and Context
+        id: core-prompts-and-context
         features:
           - name: Instruction Profile
             description: Covers Instruction Profile across `AGENTS.md`, `USER.md`, `IDENTITY.md`, `SOUL.md`, project context injection, bootstrap truncation, untrusted supplemental context, context visibility config, and runtime-context leakage prevention.
@@ -1174,6 +1224,7 @@ surfaces:
         category_note: instruction-profile-and-context-visibility.md
         human_lts_override: true
       - name: Memory
+        id: memory
         features:
           - name: Memory Backend Storage
             description: Covers Memory Backend Storage across memory backend config, SQLite schema, vector acceleration, embedding provider selection, remote embedding fetch, QMD process/query parsing, session transcript indexing for search, extra paths, and backend security boundaries.
@@ -1204,6 +1255,7 @@ surfaces:
         category_note: memory-files-tools-and-active-memory.md
         human_lts_override: false
       - name: Session Routing
+        id: session-routing
         features:
           - name: Session Routing
             description: Covers Session Routing across `sessionKey` construction, target resolution, conversation bindings, session labels, per-conversation isolation, thread binding, model selection continuity tied to sessions, and agent/workspace store targeting.
@@ -1221,6 +1273,7 @@ surfaces:
         category_note: session-routing-and-conversation-binding.md
         human_lts_override: true
       - name: Transcript Persistence
+        id: transcript-persistence
         features:
           - name: Transcript Persistence
             description: Covers Transcript Persistence across JSONL session files, transcript append and redaction, session write locks, transcript rotation/archive behavior, disk budget cleanup, provider transcript stores, and restart/repair durability.
@@ -1251,6 +1304,7 @@ surfaces:
     completeness_instructions: references/completeness/channel-framework.md
     categories:
       - name: Channel Actions Commands and Approvals
+        id: channel-actions-commands-and-approvals
         features:
           - name: Channel-native commands
             description: Channel-native commands and command authorization gates
@@ -1275,6 +1329,7 @@ surfaces:
         category_note: channel-actions-commands-and-approvals.md
         human_lts_override: false
       - name: Channel Setup
+        id: channel-setup
         features:
           - name: Supported channel catalog
             description: Supported channel catalog and docs index
@@ -1298,6 +1353,7 @@ surfaces:
         category_note: channel-setup.md
         human_lts_override: true
       - name: Group Thread and Ambient Room Behavior
+        id: group-thread-and-ambient-room-behavior
         features:
           - name: Group/channel session isolation
             description: Group/channel session isolation and group history context
@@ -1322,6 +1378,7 @@ surfaces:
         category_note: group-thread-and-ambient-room-behavior.md
         human_lts_override: false
       - name: Inbound Access and Identity Gates
+        id: inbound-access-and-identity-gates
         features:
           - name: DM pairing
             description: DM pairing and allowFrom sender controls
@@ -1345,6 +1402,7 @@ surfaces:
         category_note: inbound-access-and-identity-gates.md
         human_lts_override: true
       - name: Media Attachments and Rich Channel Data
+        id: media-attachments-and-rich-channel-data
         features:
           - name: Inbound media normalization
             description: Inbound media normalization, attachment persistence, and history media context
@@ -1367,6 +1425,7 @@ surfaces:
         category_note: media-attachments-and-rich-channel-data.md
         human_lts_override: false
       - name: Outbound Delivery and Reply Pipeline
+        id: outbound-delivery-and-reply-pipeline
         features:
           - name: Automatic final reply delivery
             description: Automatic final reply delivery and strict message-tool-only visible delivery
@@ -1389,6 +1448,7 @@ surfaces:
         category_note: outbound-delivery-and-reply-pipeline.md
         human_lts_override: true
       - name: Conversation Routing and Delivery
+        id: conversation-routing-and-delivery
         features:
           - name: Inbound conversation routing
             description: Inbound and command conversation resolution across sessions, threads, and provider-owned targets.
@@ -1428,6 +1488,7 @@ surfaces:
         category_note: conversation-routing-and-delivery.md
         human_lts_override: true
       - name: Status Health and Operator Controls
+        id: status-health-and-operator-controls
         features:
           - name: channels.status
             description: channels.status, probes, account snapshots, and warnings
@@ -1463,6 +1524,7 @@ surfaces:
     completeness_instructions: references/completeness/security-auth-pairing-and-secrets.md
     categories:
       - name: Approval Policy and Tool Safeguards
+        id: approval-policy-and-tool-safeguards
         features:
           - name: Approval Policy
             description: Covers Approval Policy across exec approval policy, host-local approval stores, allowlist and ask modes, dangerous tool safeguards, native/chat approval routing, plugin approval routing, approval decisions, approval binding, and operator-facing CLI management.
@@ -1480,6 +1542,7 @@ surfaces:
         category_note: approval-policy-and-dangerous-tool-safeguards.md
         human_lts_override: true
       - name: Gateway Auth and Remote Access
+        id: gateway-auth-and-remote-access
         features:
           - name: Shared Gateway token/password auth
             description: Token and password auth for Gateway HTTP and WebSocket clients, including runtime auth resolution, startup validation, shared-secret comparison, and operator guidance.
@@ -1522,6 +1585,7 @@ surfaces:
         category_note: gateway-auth-and-network-exposure.md
         human_lts_override: true
       - name: Channel Access Control
+        id: channel-access-control
         features:
           - name: Channel Identity
             description: 'Covers Channel Identity across who can talk to OpenClaw through message channels: DM pairing codes, pairing stores, `dmPolicy`, `allowFrom`, and related channel identity, allowlists, and sender pairing behavior.'
@@ -1541,6 +1605,7 @@ surfaces:
         category_note: channel-identity-allowlists-and-sender-pairing.md
         human_lts_override: true
       - name: Device and Node Pairing
+        id: device-and-node-pairing
         features:
           - name: Setup codes
             description: Setup codes and QR pairing UX for mobile/node onboarding through the device-pair plugin
@@ -1583,6 +1648,7 @@ surfaces:
         category_note: device-identity-and-operator-pairing.md
         human_lts_override: true
       - name: Plugin Trust
+        id: plugin-trust
         features:
           - name: Plugin Installation Trust
             description: Covers Plugin Installation Trust across plugin manifest trust, plugin install/update safety scans, plugin allowlists, manifest-owned auth/secret metadata, and related plugin installation trust and security boundaries behavior.
@@ -1600,6 +1666,7 @@ surfaces:
         category_note: plugin-installation-trust-and-security-boundaries.md
         human_lts_override: false
       - name: Credential and Secret Hygiene
+        id: credential-and-secret-hygiene
         features:
           - name: Provider Auth Profiles
             description: 'Covers Provider Auth Profiles across provider credentials and auth health as a security/secrets surface: API keys, OAuth profiles, `auth-profiles.json`, auth order, and related provider auth profiles and api key health behavior.'
@@ -1644,6 +1711,7 @@ surfaces:
     completeness_instructions: references/completeness/telemetry-diagnostics-and-observability.md
     categories:
       - name: Health and Repair
+        id: health-and-repair
         features:
           - name: Background health-monitor loop
             description: Background health-monitor loop for configured channel accounts
@@ -1690,6 +1758,7 @@ surfaces:
         category_note: health-status-probes.md
         human_lts_override: true
       - name: Logging
+        id: logging
         features:
           - name: Rolling Gateway JSONL file logs
             description: Rolling Gateway JSONL file logs and console output
@@ -1712,6 +1781,7 @@ surfaces:
         category_note: logging-log-tail-and-redaction.md
         human_lts_override: true
       - name: Diagnostic Collection
+        id: diagnostic-collection
         features:
           - name: openclaw gateway diagnostics export
             description: openclaw gateway diagnostics export and --json / --output / log-size options
@@ -1744,6 +1814,7 @@ surfaces:
         category_note: diagnostics-export-support-bundles.md
         human_lts_override: false
       - name: Telemetry Export
+        id: telemetry-export
         features:
           - name: Diagnostic event types
             description: Diagnostic event types and trusted/internal/public subscription boundaries
@@ -1792,6 +1863,7 @@ surfaces:
         category_note: diagnostic-events-hooks-and-trace-context.md
         human_lts_override: false
       - name: Session Diagnostics
+        id: session-diagnostics
         features:
           - name: session.state
             description: session.state, session.stuck, session.long_running, session.stalled, session.recovery.*, and session.turn.created diagnostic events
@@ -1827,6 +1899,7 @@ surfaces:
     completeness_instructions: references/completeness/automation-cron-hooks-tasks-polling.md
     categories:
       - name: Cron Jobs
+        id: cron-jobs
         features:
           - name: Create/edit/remove jobs
             description: Covers Create/edit/remove jobs across cron job creation, listing, inspection, editing, and related cron job lifecycle behavior.
@@ -1886,6 +1959,7 @@ surfaces:
         category_note: cron-job-lifecycle.md
         human_lts_override: false
       - name: Event Ingress
+        id: event-ingress
         features:
           - name: Telegram long polling
             description: Covers Telegram long polling across channel-level long polling and webhook modes, especially Telegram and Zalo; polling liveness, leases, watchdog thresholds, and related channel polling and webhooks behavior.
@@ -1946,6 +2020,7 @@ surfaces:
         category_note: channel-polling-webhooks.md
         human_lts_override: false
       - name: Automation Hooks
+        id: automation-hooks
         features:
           - name: HOOK.md authoring
             description: Covers HOOK.md authoring across `HOOK.md` metadata, handler loading, bundled/managed/workspace/plugin hook discovery, eligibility policy, and related internal hooks behavior.
@@ -1990,6 +2065,7 @@ surfaces:
         category_note: internal-hooks.md
         human_lts_override: false
       - name: Background Tasks and Flows
+        id: background-tasks-and-flows
         features:
           - name: Task list/show/cancel
             description: Covers Task list/show/cancel across task creation, status transitions, runtime types, owner/session access, and related background task ledger behavior.
@@ -2031,6 +2107,7 @@ surfaces:
         category_note: background-task-ledger.md
         human_lts_override: false
       - name: Heartbeat
+        id: heartbeat
         features:
           - name: Heartbeat scheduling
             description: Covers Heartbeat scheduling across periodic heartbeat runs, active-hours and variable schedule behavior, wake/cooldown handling, heartbeat prompts and due-only task mode, and related heartbeat and commitments behavior.
@@ -2056,6 +2133,7 @@ surfaces:
         category_note: heartbeat-commitments.md
         human_lts_override: false
       - name: Polling Controls
+        id: polling-controls
         features:
           - name: openclaw message poll
             description: Covers openclaw message poll across `openclaw message poll`, channel poll adapters, poll parameter normalization, Teams/Matrix/Telegram poll support, and related message polls and process polling behavior.
@@ -2109,6 +2187,7 @@ surfaces:
     completeness_instructions: references/completeness/media-understanding-and-media-generation.md
     categories:
       - name: Media Intake and Access
+        id: media-intake-and-access
         features:
           - name: Local and remote media references
             description: 'Covers Local and remote media references across Included: Local and remote media references, including plain paths, `file://`, HTTP(S), and related media file intake, storage, and secure access behavior.'
@@ -2147,6 +2226,7 @@ surfaces:
         category_note: media-file-intake-storage-and-secure-access.md
         human_lts_override: false
       - name: Channel Media Handling
+        id: channel-media-handling
         features:
           - name: Inbound attachment staging
             description: Covers Inbound attachment staging across inbound attachment staging, sandbox rewrites, `MediaPath`/`MediaPaths`/`MediaUrls` templating, media notes, and related channel attachment staging and reply media delivery behavior.
@@ -2174,6 +2254,7 @@ surfaces:
         category_note: channel-attachment-staging-and-reply-media-delivery.md
         human_lts_override: false
       - name: Media Configuration
+        id: media-configuration
         features:
           - name: Media capability configuration
             description: tools.media image/audio/video config, shared and per-capability media model entries, provider/CLI entry resolution, auth-backed capability selection, fallback ordering, scope rules, concurrency, active-model skip behavior, offloaded image routing, image generation tool factory availability, image generation task status/list/duplicate guard, and generated-media delivery into the reply pipeline
@@ -2188,6 +2269,7 @@ surfaces:
         category_note: media-understanding-orchestration-and-configuration.md
         human_lts_override: false
       - name: Text-to-Speech Delivery
+        id: text-to-speech-delivery
         features:
           - name: TTS
             description: Covers TTS across `tts` agent/tool and Gateway methods, `messages.tts`, provider registry, directives, and related tts and outbound voice audio delivery behavior.
@@ -2205,6 +2287,7 @@ surfaces:
         category_note: tts-and-outbound-voice-audio-delivery.md
         human_lts_override: false
       - name: Media Understanding
+        id: media-understanding
         features:
           - name: Audio attachment selection
             description: Covers Audio attachment selection across batch audio/STT media understanding, local CLI fallbacks, provider transcription, voice-note preflight before mention gates, and related audio transcription and voice note understanding behavior.
@@ -2259,6 +2342,7 @@ surfaces:
         category_note: image-understanding-and-vision-routing.md
         human_lts_override: false
       - name: Media Generation
+        id: media-generation
         features:
           - name: Image generation tool invocation
             description: Covers Image generation tool invocation across `image_generate`, model selection, provider registration, provider capability listing, and related image generation tool and provider routing behavior.
@@ -2337,6 +2421,7 @@ surfaces:
     completeness_instructions: references/completeness/voice-and-realtime-talk.md
     categories:
       - name: Talk Providers
+        id: talk-providers
         features:
           - name: OpenAI Realtime voice backend bridge
             description: OpenAI Realtime voice backend bridge and browser WebRTC credential path
@@ -2367,6 +2452,7 @@ surfaces:
         category_note: talk-configuration-catalog-and-provider-selection.md
         human_lts_override: false
       - name: Realtime Talk Sessions
+        id: realtime-talk-sessions
         features:
           - name: Agent consult handoff
             description: Consult handoff behavior between active Talk sessions and agent runs.
@@ -2407,6 +2493,7 @@ surfaces:
         category_note: gateway-relay-and-realtime-session-runtime.md
         human_lts_override: false
       - name: Speech and Transcription
+        id: speech-and-transcription
         features:
           - name: Voice directives
             description: Voice directives and directive stripping before TTS playback.
@@ -2429,6 +2516,7 @@ surfaces:
         category_note: speech-transcription-directives-and-talk-speak.md
         human_lts_override: false
       - name: Native App Talk
+        id: native-app-talk
         features:
           - name: macOS native Talk mode
             description: macOS native Talk mode, speech recognition, TTS playback, and push-to-talk handoff
@@ -2448,6 +2536,7 @@ surfaces:
         category_note: native-app-talk-loops-ios-android-macos.md
         human_lts_override: false
       - name: Voice Wake and Routing
+        id: voice-wake-and-routing
         features:
           - name: Wake-word settings
             description: Gateway-owned wake-word settings and routing preferences.
@@ -2468,6 +2557,7 @@ surfaces:
         category_note: voice-wake-push-to-talk-and-routing.md
         human_lts_override: false
       - name: Talk Observability
+        id: talk-observability
         features:
           - name: Talk event logging
             description: Talk event logging and diagnostics event mapping
@@ -2504,6 +2594,7 @@ surfaces:
     completeness_instructions: references/completeness/browser-control-ui-and-webchat.md
     categories:
       - name: Browser Realtime Talk
+        id: browser-realtime-talk
         features:
           - name: Browser Talk start/stop
             description: Covers Browser Talk start/stop across browser Talk controls, Talk options, OpenAI browser WebRTC, Google Live/provider WebSocket, and related browser realtime talk behavior.
@@ -2531,6 +2622,7 @@ surfaces:
         category_note: browser-realtime-talk-controls-and-voice-transports.md
         human_lts_override: false
       - name: Browser Access and Trust
+        id: browser-access-and-trust
         features:
           - name: Device pairing
             description: Covers Device pairing across Control UI/WebChat Gateway connection setup, browser-origin checks, token/password auth, trusted-proxy and Tailscale Serve auth, and related gateway connection, auth, device pairing, and remote origins behavior.
@@ -2559,6 +2651,7 @@ surfaces:
         category_note: gateway-connection-auth-device-pairing-and-origins.md
         human_lts_override: false
       - name: Configuration
+        id: configuration
         features:
           - name: Config snapshots
             description: Covers Config snapshots across `config.get`, `config.set`, `config.apply`, `config.patch`, and related config schema editing and safe writes behavior.
@@ -2585,6 +2678,7 @@ surfaces:
         category_note: config-schema-editing-and-safe-writes.md
         human_lts_override: false
       - name: Browser UI
+        id: browser-ui
         features:
           - name: Gateway-hosted UI
             description: Covers Gateway-hosted UI across serving the Control UI bundle from the Gateway, root and base-path routing, static asset MIME/cache behavior, public PWA assets, and related control ui shell and routing behavior.
@@ -2628,6 +2722,7 @@ surfaces:
         category_note: control-ui-static-shell-routing-and-pwa.md
         human_lts_override: false
       - name: WebChat Conversations
+        id: webchat-conversations
         features:
           - name: Send and abort
             description: 'Covers Send and abort across browser chat composition and display UX after an authenticated Gateway connection exists: composer controls, slash commands, session and agent filtering, model/thinking overrides, and related chat composer and message rendering behavior.'
@@ -2687,6 +2782,7 @@ surfaces:
         category_note: chat-composer-session-model-controls-and-rendering.md
         human_lts_override: false
       - name: Operator Console
+        id: operator-console
         features:
           - name: Health/status/models
             description: Covers Health/status/models across Debug, Logs, Update, Activity, and related diagnostics, logs, update, and activity behavior.
@@ -2745,6 +2841,7 @@ surfaces:
     completeness_instructions: references/completeness/tui-and-terminal-ux.md
     categories:
       - name: Runtime Modes
+        id: runtime-modes
         features:
           - name: Gateway TUI launch
             description: Covers Gateway TUI launch across `openclaw tui`, `openclaw chat`, `openclaw terminal`, local-vs-Gateway option validation, launch relaunching from setup/hatch paths, initial message and timeout flags, and launch docs.
@@ -2800,6 +2897,7 @@ surfaces:
         category_note: launch-modes-and-cli-entrypoints.md
         human_lts_override: false
       - name: Input and Commands
+        id: input-and-commands
         features:
           - name: Message composition
             description: Covers Message composition across editor, submit handler, input history, slash/local shell routing, busy-submit behavior, paste fallback, backspace dedupe, Ctrl/Esc shortcuts, AltGr handling, and documented keyboard shortcuts.
@@ -2835,6 +2933,7 @@ surfaces:
         category_note: composer-keybindings-and-input-editing.md
         human_lts_override: false
       - name: Session Management
+        id: session-management
         features:
           - name: Session Lifecycle
             description: Covers Session Lifecycle across session-key resolution, last selected session persistence, session picker policy, history loading, and related session lifecycle, history, and resume behavior.
@@ -2854,6 +2953,7 @@ surfaces:
         category_note: session-lifecycle-history-and-resume.md
         human_lts_override: false
       - name: Local Shell Execution
+        id: local-shell-execution
         features:
           - name: Bang-command routing
             description: Covers Bang-command routing across `!` routing, local exec approval prompt, Yes/No overlay, command execution, output capture and cap, exit/error rendering, environment marker, cwd handling, and docs that distinguish local host execution from Gateway execution.
@@ -2878,6 +2978,7 @@ surfaces:
         category_note: local-shell-execution-and-approval-boundary.md
         human_lts_override: false
       - name: Rendering and Output Safety
+        id: rendering-and-output-safety
         features:
           - name: Streaming Message Rendering
             description: Covers Streaming Message Rendering across chat log rendering, assistant stream assembly, final/error resolution, thinking visibility, and related streaming message rendering and tool cards behavior.
@@ -2918,6 +3019,7 @@ surfaces:
     completeness_instructions: references/completeness/clawhub-and-external-plugin-distribution.md
     categories:
       - name: Publishing
+        id: publishing
         features:
           - name: ClawHub package publishing owner
             description: ClawHub package publishing owner and scope rules
@@ -2948,6 +3050,7 @@ surfaces:
         category_note: clawhub-and-npm-publishing-release-validation.md
         human_lts_override: false
       - name: Catalog Discovery
+        id: catalog-discovery
         features:
           - name: openclaw plugins search as the ClawHub
             description: openclaw plugins search as the ClawHub plugin lookup command
@@ -2972,6 +3075,7 @@ surfaces:
         category_note: clawhub-discovery-catalog-metadata-and-package-lookup.md
         human_lts_override: false
       - name: Compatibility and Trust
+        id: compatibility-and-trust
         features:
           - name: openclaw.compat.pluginApi
             description: openclaw.compat.pluginApi, build metadata, and host/gateway minimums
@@ -3018,6 +3122,7 @@ surfaces:
         category_note: compatibility-gates-and-official-external-catalog.md
         human_lts_override: false
       - name: Plugin Lifecycle and Health
+        id: plugin-lifecycle-and-health
         features:
           - name: Source prefixes
             description: Source prefixes and shorthand resolution for clawhub:, npm:,
@@ -3111,6 +3216,7 @@ surfaces:
     completeness_instructions: references/completeness/openclaw-app-sdk.md
     categories:
       - name: Client API
+        id: client-api
         features:
           - name: SDK entrypoints
             description: Public package imports and helper objects for external apps.
@@ -3132,6 +3238,7 @@ surfaces:
         category_note: client-api.md
         human_lts_override: false
       - name: Gateway Access
+        id: gateway-access
         features:
           - name: Gateway connect
             description: SDK construction for explicit Gateway connections.
@@ -3158,6 +3265,7 @@ surfaces:
         category_note: gateway-access.md
         human_lts_override: false
       - name: Agent Conversations
+        id: agent-conversations
         features:
           - name: Agent handles
             description: SDK-side agent object creation and lookup.
@@ -3186,6 +3294,7 @@ surfaces:
         category_note: agent-conversations.md
         human_lts_override: false
       - name: Events and Approvals
+        id: events-and-approvals
         features:
           - name: Event stream
             description: SDK stream subscription for app-wide and per-run events.
@@ -3211,6 +3320,7 @@ surfaces:
         category_note: events-and-approvals.md
         human_lts_override: false
       - name: Resource Helpers
+        id: resource-helpers
         features:
           - name: Models
             description: Typed model discovery helpers.
@@ -3234,6 +3344,7 @@ surfaces:
         category_note: resource-helpers.md
         human_lts_override: false
       - name: Compatibility
+        id: compatibility
         features:
           - name: Generated client
             description: Client generation from Gateway schemas.
@@ -3273,6 +3384,7 @@ surfaces:
     completeness_instructions: references/completeness/macos-gateway-host.md
     categories:
       - name: CLI Setup
+        id: cli-setup
         features:
           - name: Hosted installer
             description: Hosted installer and local-prefix install paths on macOS
@@ -3293,6 +3405,7 @@ surfaces:
         category_note: cli-install-runtime-prerequisites.md
         human_lts_override: false
       - name: Local Gateway Integration
+        id: local-gateway-integration
         features:
           - name: App local/remote connection mode
             description: App local/remote connection mode coordination
@@ -3327,6 +3440,7 @@ surfaces:
         category_note: local-gateway-mode-host-configuration.md
         human_lts_override: false
       - name: Remote Gateway Mode
+        id: remote-gateway-mode
         features:
           - name: macOS app "Remote over SSH"
             description: macOS app "Remote over SSH" and direct remote Gateway modes
@@ -3348,6 +3462,7 @@ surfaces:
         category_note: remote-gateway-mode-transport.md
         human_lts_override: false
       - name: Gateway Service Lifecycle
+        id: gateway-service-lifecycle
         features:
           - name: Per-user Gateway LaunchAgent install
             description: Per-user Gateway LaunchAgent install, stage, uninstall, start, stop, restart, and status
@@ -3386,6 +3501,7 @@ surfaces:
         category_note: launchagent-service-lifecycle.md
         human_lts_override: false
       - name: Diagnostics and Observability
+        id: diagnostics-and-observability
         features:
           - name: LaunchAgent log paths
             description: LaunchAgent log paths and app diagnostic log paths
@@ -3407,6 +3523,7 @@ surfaces:
         category_note: diagnostics-logs-operator-observability.md
         human_lts_override: false
       - name: Permissions and Native Capabilities
+        id: permissions-and-native-capabilities
         features:
           - name: macOS TCC permission prompts/status
             description: macOS TCC permission prompts/status for Accessibility, AppleScript, Screen Recording, Microphone, Speech Recognition, Camera, Location, Notifications, and Voice Wake
@@ -3425,6 +3542,7 @@ surfaces:
         category_note: macos-permissions-native-node-capabilities.md
         human_lts_override: false
       - name: Profiles and Isolation
+        id: profiles-and-isolation
         features:
           - name: Profile-specific LaunchAgent labels
             description: Profile-specific LaunchAgent labels and plist paths
@@ -3460,6 +3578,7 @@ surfaces:
     completeness_instructions: references/completeness/macos-companion-app.md
     categories:
       - name: Canvas
+        id: canvas
         features:
           - name: Canvas panel open/hide/navigate/eval/snapshot
             description: Canvas panel open/hide/navigate/eval/snapshot behavior, status, and operator-visible verification.
@@ -3479,6 +3598,7 @@ surfaces:
         category_note: canvas-a2ui.md
         human_lts_override: false
       - name: Local Setup
+        id: local-setup
         features:
           - name: Local mode Gateway attach/start/stop
             description: Local mode Gateway attach/start/stop behavior, status, and operator-visible verification.
@@ -3507,6 +3627,7 @@ surfaces:
         category_note: onboarding-cli-workspace.md
         human_lts_override: false
       - name: Status and Settings
+        id: status-and-settings
         features:
           - name: Menu-bar status
             description: Menu-bar status, action menu, status icon state, dock menu, dashboard/chat/canvas/talk shortcuts
@@ -3533,6 +3654,7 @@ surfaces:
         category_note: settings-health-diagnostics.md
         human_lts_override: false
       - name: Native Capabilities
+        id: native-capabilities
         features:
           - name: Mac node session connection
             description: Mac node session connection, capability and command advertisement
@@ -3558,6 +3680,7 @@ surfaces:
         category_note: node-mode-system-run-exec-host.md
         human_lts_override: false
       - name: Remote Connections
+        id: remote-connections
         features:
           - name: Remote connection mode selection
             description: Remote connection mode selection and configuration
@@ -3575,6 +3698,7 @@ surfaces:
         category_note: remote-mode-discovery-tunnels.md
         human_lts_override: false
       - name: Voice and Talk
+        id: voice-and-talk
         features:
           - name: Voice Wake runtime
             description: Voice Wake runtime, trigger detection, permissions, overlay, chimes, and forwarding
@@ -3593,6 +3717,7 @@ surfaces:
         category_note: voice-wake-talk.md
         human_lts_override: false
       - name: WebChat
+        id: webchat
         features:
           - name: Native SwiftUI WebChat window
             description: Native SwiftUI WebChat window and menu panel
@@ -3610,6 +3735,7 @@ surfaces:
         category_note: webchat-sessions.md
         human_lts_override: false
       - name: Remote WebChat
+        id: remote-webchat
         features:
           - name: macOS WebChat transport
             description: Covers macOS WebChat transport across native macOS WebChat, Gateway connection reuse, native chat transport mapping, window/panel presentation, and related remote webchat client bridges behavior.
@@ -3650,6 +3776,7 @@ surfaces:
     completeness_instructions: references/completeness/linux-gateway-host.md
     categories:
       - name: Host Setup and Updates
+        id: host-setup-and-updates
         features:
           - name: Linux CLI install
             description: Linux CLI installation paths and operator verification after install.
@@ -3672,6 +3799,7 @@ surfaces:
         category_note: linux-cli-install-and-update-path.md
         human_lts_override: true
       - name: Gateway Runtime and Service Control
+        id: gateway-runtime-and-service-control
         features:
           - name: Foreground Gateway Runtime
             description: Covers Foreground Gateway Runtime user-facing controls, state display, navigation, and rendering behavior for Foreground Gateway Runtime and Process Control.
@@ -3704,6 +3832,7 @@ surfaces:
         category_note: foreground-gateway-runtime-and-process-control.md
         human_lts_override: true
       - name: Remote Access and Security
+        id: remote-access-and-security
         features:
           - name: Remote Network Exposure
             description: Defines Remote Network Exposure authorization, trust, safety boundaries, and operator controls for Remote Network Exposure, Tls, and Tailscale.
@@ -3737,6 +3866,7 @@ surfaces:
         category_note: remote-network-exposure-tls-and-tailscale.md
         human_lts_override: true
       - name: Diagnostics and Repair
+        id: diagnostics-and-repair
         features:
           - name: Gateway diagnostic reports
             description: Covers Gateway status, diagnostic output, failure handling, and operator repair for diagnostics, logs, doctor, and repair workflows.
@@ -3763,6 +3893,7 @@ surfaces:
         category_note: diagnostics-logs-doctor-and-repair.md
         human_lts_override: true
       - name: Deployment Targets
+        id: deployment-targets
         features:
           - name: VPS
             description: Defines VPS setup, credential, configuration, and operator verification behavior for Vps, Container, and Cloud Deployment Guidance.
@@ -3800,6 +3931,7 @@ surfaces:
     completeness_instructions: references/completeness/linux-companion-app.md
     categories:
       - name: App Distribution
+        id: app-distribution
         features:
           - name: Native app package
             description: Native Linux companion-app package availability and installation path.
@@ -3818,6 +3950,7 @@ surfaces:
         category_note: packaging-install-update-desktop-integration.md
         human_lts_override: false
       - name: Gateway Connectivity
+        id: gateway-connectivity
         features:
           - name: Local Gateway attach and status
             description: Local Gateway attach, start, and status behavior from a Linux app.
@@ -3840,6 +3973,7 @@ surfaces:
         category_note: gateway-connection-pairing-local-remote.md
         human_lts_override: false
       - name: Chat and Sessions
+        id: chat-and-sessions
         features:
           - name: Native Linux chat window
             description: Native Linux chat window behavior, status, and operator-visible verification.
@@ -3858,6 +3992,7 @@ surfaces:
         category_note: native-chat-session-controls.md
         human_lts_override: false
       - name: Desktop Capabilities
+        id: desktop-capabilities
         features:
           - name: Linux desktop permissions
             description: Linux desktop permissions for notifications, microphone, screen, camera, accessibility, portals, and desktop-environment APIs
@@ -3897,6 +4032,7 @@ surfaces:
         category_note: desktop-permissions-secrets-sandbox.md
         human_lts_override: false
       - name: Status and Diagnostics
+        id: status-and-diagnostics
         features:
           - name: Native Linux app readiness
             description: Native Linux app readiness states
@@ -3940,6 +4076,7 @@ surfaces:
     completeness_instructions: references/completeness/windows-via-wsl2.md
     categories:
       - name: WSL Setup
+        id: wsl-setup
         features:
           - name: WSL2 + Ubuntu installation
             description: WSL2 and Ubuntu installation requirements.
@@ -3964,6 +4101,7 @@ surfaces:
         category_note: wsl2-install-and-runtime-prerequisites.md
         human_lts_override: true
       - name: CLI
+        id: cli
         features:
           - name: WSL2 CLI entrypoints
             description: openclaw CLI install, version, onboard, doctor, status, and update commands run inside the WSL2 Linux environment.
@@ -4001,6 +4139,7 @@ surfaces:
         category_note: wsl2-cli.md
         human_lts_override: true
       - name: Gateway Service Lifecycle
+        id: gateway-service-lifecycle
         features:
           - name: Onboarded systemd install
             description: openclaw onboard daemon installation inside WSL2.
@@ -4036,6 +4175,7 @@ surfaces:
         category_note: systemd-gateway-service-lifecycle.md
         human_lts_override: true
       - name: Gateway Access and Exposure
+        id: gateway-access-and-exposure
         features:
           - name: Gateway token/password auth
             description: Gateway token and password auth for clients running through WSL2.
@@ -4075,6 +4215,7 @@ surfaces:
         category_note: auth-secrets-and-exposure-posture.md
         human_lts_override: true
       - name: Diagnostics and Repair
+        id: diagnostics-and-repair
         features:
           - name: openclaw doctor
             description: openclaw doctor and repair/migration for WSL2 Gateway
@@ -4100,6 +4241,7 @@ surfaces:
         category_note: diagnostics-doctor-logs-and-repair.md
         human_lts_override: true
       - name: Browser and Control UI
+        id: browser-and-control-ui
         features:
           - name: WSL2 Gateway with Windows browser
             description: WSL2 Gateway with Windows browser and Windows Chrome
@@ -4138,6 +4280,7 @@ surfaces:
     completeness_instructions: references/completeness/native-windows-cli-and-gateway.md
     categories:
       - name: CLI
+        id: cli
         features:
           - name: PowerShell installer
             description: Native Windows install.ps1 hosted installer path and flags.
@@ -4175,6 +4318,7 @@ surfaces:
         category_note: native-powershell-install-and-cli-entrypoints.md
         human_lts_override: true
       - name: Gateway Management
+        id: gateway-management
         features:
           - name: openclaw gateway
             description: openclaw gateway, openclaw gateway run, openclaw gateway status, and foreground process behavior.
@@ -4216,6 +4360,7 @@ surfaces:
         category_note: native-gateway-foreground-runtime-and-process-control.md
         human_lts_override: false
       - name: Networking
+        id: networking
         features:
           - name: Native Windows host networking
             description: Native Windows host binding and Gateway exposure behavior.
@@ -4237,6 +4382,7 @@ surfaces:
         category_note: windows-host-networking-portproxy-and-remote-access.md
         human_lts_override: false
       - name: Updates
+        id: updates
         features:
           - name: openclaw update on native Windows package
             description: openclaw update on native Windows package installs
@@ -4270,6 +4416,7 @@ surfaces:
     completeness_instructions: references/completeness/native-windows-companion-app.md
     categories:
       - name: Installation and Updates
+        id: installation-and-updates
         features:
           - name: Official app download
             description: Official app download or installer path for the native Windows companion app.
@@ -4290,6 +4437,7 @@ surfaces:
         category_note: packaging-install-update-desktop-integration.md
         human_lts_override: false
       - name: Gateway Connection
+        id: gateway-connection
         features:
           - name: App-managed local Gateway attach/start
             description: App-managed local Gateway attach/start and status
@@ -4310,6 +4458,7 @@ surfaces:
         category_note: gateway-connection-pairing-local-remote.md
         human_lts_override: false
       - name: Chat Sessions
+        id: chat-sessions
         features:
           - name: Native Windows chat window
             description: Native Windows chat window, transcript, composer, session picker, model/thinking controls, abort/follow-up actions, reconnect handling, and tool rendering
@@ -4325,6 +4474,7 @@ surfaces:
         category_note: native-chat-session-controls.md
         human_lts_override: false
       - name: Status and Repair
+        id: status-and-repair
         features:
           - name: App health states
             description: App health states, Gateway/node readiness, diagnostic panels, log opening, update status, repair actions, and support bundle behavior
@@ -4349,6 +4499,7 @@ surfaces:
         category_note: diagnostics-health-operator-repair.md
         human_lts_override: false
       - name: Desktop Tools and Permissions
+        id: desktop-tools-and-permissions
         features:
           - name: Windows node identity
             description: Windows node identity and capability advertisement.
@@ -4400,6 +4551,7 @@ surfaces:
     completeness_instructions: references/completeness/android-app.md
     categories:
       - name: Media Capture
+        id: media-capture
         features:
           - name: Camera and media capture
             description: Camera listing, capture, photo, screen, and media capture behavior.
@@ -4413,6 +4565,7 @@ surfaces:
         category_note: camera-media-capture.md
         human_lts_override: false
       - name: Mobile Chat
+        id: mobile-chat
         features:
           - name: Chat tab
             description: Chat tab, session list/filtering, composer, image attachments, message parsing/rendering, model/provider status adjacent to chat, and Gateway chat RPC integration
@@ -4425,6 +4578,7 @@ surfaces:
         category_note: chat-sessions-ui.md
         human_lts_override: false
       - name: Connection Setup
+        id: connection-setup
         features:
           - name: Gateway discovery
             description: Gateway discovery, setup-code and manual endpoint parsing, WS/WSS connection setup, TLS trust decisions, device identity, stored device tokens, node/operator auth, and connection error handling
@@ -4439,6 +4593,7 @@ surfaces:
         category_note: gateway-pairing-security.md
         human_lts_override: false
       - name: Distribution
+        id: distribution
         features:
           - name: Public Google Play install path
             description: Public Google Play install path and source build/run entrypoints
@@ -4455,6 +4610,7 @@ surfaces:
         category_note: install-release-distribution.md
         human_lts_override: false
       - name: Settings
+        id: settings
         features:
           - name: Settings sheet
             description: Settings sheet and settings detail screens, permission request UX, notification forwarding controls, Nodes & Devices status, provider/model diagnostics, secure preferences, and copyable Gateway diagnostic report
@@ -4467,6 +4623,7 @@ surfaces:
         category_note: settings-permissions-diagnostics.md
         human_lts_override: false
       - name: Voice
+        id: voice
         features:
           - name: Voice tab
             description: Voice tab, manual mic capture, Talk Mode listen/think/speak loop, Gateway Talk config, talk.speak, realtime relay mode, voice capture service type, and voice e2e receiver/script
@@ -4480,6 +4637,7 @@ surfaces:
         category_note: voice-talk-wake.md
         human_lts_override: false
       - name: Device Runtime
+        id: device-runtime
         features:
           - name: Background reconnect and presence
             description: Foreground-service presence, reconnect, and node presence behavior.
@@ -4513,6 +4671,7 @@ surfaces:
     completeness_instructions: references/completeness/ios-app.md
     categories:
       - name: Media and Sharing
+        id: media-and-sharing
         features:
           - name: Camera list/snap/clip
             description: Camera list/snap/clip, photo-library latest image payloads, screen recording as media, Share Extension draft/send flow, attachment extraction, gateway relay settings for share, and mobile media payload limits
@@ -4526,6 +4685,7 @@ surfaces:
         category_note: camera-media-photos-and-share-extension.md
         human_lts_override: false
       - name: Canvas and Screen
+        id: canvas-and-screen
         features:
           - name: Canvas present/hide/navigate/eval/snapshot
             description: Canvas present/hide/navigate/eval/snapshot, A2UI reset/push/pushJSONL, WKWebView scaffold loading, trusted A2UI action bridge, screen recording, foreground command gates, and Gateway Canvas host URL handling
@@ -4539,6 +4699,7 @@ surfaces:
         category_note: canvas-screen-and-a2ui.md
         human_lts_override: false
       - name: Chat and Sessions
+        id: chat-and-sessions
         features:
           - name: Chat sessions and operator controls
             description: Operator session transport, Chat tab, chat composer/history/streaming/tool display, command-center, permissions, and session controls.
@@ -4554,6 +4715,7 @@ surfaces:
         category_note: chat-operator-ui-and-session-controls.md
         human_lts_override: false
       - name: Gateway Setup and Diagnostics
+        id: gateway-setup-and-diagnostics
         features:
           - name: Bonjour/local
             description: Bonjour/local and wide-area gateway discovery
@@ -4584,6 +4746,7 @@ surfaces:
         category_note: settings-permissions-and-diagnostics.md
         human_lts_override: false
       - name: Distribution
+        id: distribution
         features:
           - name: Internal preview status
             description: Internal preview status, source/Xcode manual deploy, local signing, XcodeGen project generation, Fastlane TestFlight archive/upload, versioning/changelog/metadata, release artifacts, and official-vs-local build flags
@@ -4596,6 +4759,7 @@ surfaces:
         category_note: install-signing-and-testflight-distribution.md
         human_lts_override: false
       - name: Device Commands
+        id: device-commands
         features:
           - name: Location modes
             description: Location modes, current location, significant-location events, motion activity and pedometer, contacts, calendar, reminders, permission request bridges, and personal-context command payloads
@@ -4616,6 +4780,7 @@ surfaces:
         category_note: node-capability-routing-and-device-commands.md
         human_lts_override: false
       - name: Notifications and Background
+        id: notifications-and-background
         features:
           - name: APNs registration and relay delivery
             description: Direct and relay-backed APNs registration, push relay trust, stored relay handles, background alive windows, and Live Activity updates.
@@ -4630,6 +4795,7 @@ surfaces:
         category_note: relay-push-background-and-live-activity.md
         human_lts_override: false
       - name: Voice
+        id: voice
         features:
           - name: Voice wake
             description: Voice wake, trigger-word sync, Talk Mode, push-to-talk commands, realtime Gateway relay, Speech and microphone permissions, audio session coordination, background suspension, and voice settings
@@ -4657,6 +4823,7 @@ surfaces:
     completeness_instructions: references/completeness/watchos-companion-surfaces.md
     categories:
       - name: Delivery and Recovery
+        id: delivery-and-recovery
         features:
           - name: APNs relay/direct registration as it affects
             description: APNs relay/direct registration as it affects watch approval wake/recovery
@@ -4682,6 +4849,7 @@ surfaces:
         category_note: apns-background-recovery-and-stale-approval-cleanup.md
         human_lts_override: false
       - name: Exec Approvals
+        id: exec-approvals
         features:
           - name: Watch exec approval prompt
             description: Watch exec approval prompt, snapshot, resolve, resolved, and expired payloads
@@ -4698,6 +4866,7 @@ surfaces:
         category_note: exec-approval-review-decisions-and-snapshots.md
         human_lts_override: false
       - name: Distribution and Support
+        id: distribution-and-support
         features:
           - name: Watch app
             description: Watch app and WatchKit extension targets
@@ -4721,6 +4890,7 @@ surfaces:
         category_note: packaging-signing-and-distribution-boundary.md
         human_lts_override: false
       - name: Notifications and Replies
+        id: notifications-and-replies
         features:
           - name: watch.status
             description: watch.status and watch.notify command contracts
@@ -4746,6 +4916,7 @@ surfaces:
         category_note: watch-notify-command-payloads-and-prompt-defaults.md
         human_lts_override: false
       - name: Watch App UI
+        id: watch-app-ui
         features:
           - name: Watch app entry point
             description: Watch app entry point and SwiftUI navigation
@@ -4775,6 +4946,7 @@ surfaces:
     completeness_instructions: references/completeness/raspberry-pi-small-linux-devices.md
     categories:
       - name: Setup and Compatibility
+        id: setup-and-compatibility
         features:
           - name: Hardware and 64-bit OS requirements
             description: Defines Hardware and 64-bit OS requirements setup, credential, configuration, and operator verification behavior for ARM Linux Setup and Prerequisites.
@@ -4827,6 +4999,7 @@ surfaces:
         category_note: arm-linux-install-and-runtime-prerequisites.md
         human_lts_override: false
       - name: Remote Access and Auth
+        id: remote-access-and-auth
         features:
           - name: Headless API-key auth
             description: Defines Headless API-key auth context assembly, persistence, token-pressure handling, and recovery behavior for Gateway Auth, Device Pairing, and Secrets.
@@ -4871,6 +5044,7 @@ surfaces:
         category_note: remote-access-tailscale-ssh-and-control-ui.md
         human_lts_override: false
       - name: Gateway Runtime
+        id: gateway-runtime
         features:
           - name: Always-on Gateway process
             description: Defines Always-on Gateway process setup, credential, configuration, and operator verification behavior for Headless Gateway and Model Setup.
@@ -4916,6 +5090,7 @@ surfaces:
         category_note: headless-gateway-runtime-and-model-routing.md
         human_lts_override: false
       - name: Performance and Diagnostics
+        id: performance-and-diagnostics
         features:
           - name: Swap and low-RAM tuning
             description: Defines Swap and low-RAM tuning setup, credential, configuration, and operator verification behavior for Resource Tuning and Diagnostics.
@@ -4958,6 +5133,7 @@ surfaces:
     completeness_instructions: references/completeness/docker-podman-hosting.md
     categories:
       - name: Container Setup
+        id: container-setup
         features:
           - name: Local Image Setup Script
             description: Covers Local Image Setup Script across `./scripts/docker/setup.sh` local-image and GHCR-image setup. Docker Compose gateway and sidecar CLI shape. First-run onboarding, token handling, bind/origin defaults, and post-start channel setup commands. Docker-only first-run notes, and related docker install, compose, and first-run setup behavior.
@@ -4982,6 +5158,7 @@ surfaces:
         category_note: docker-install-compose-and-first-run-setup.md
         human_lts_override: false
       - name: Container Operations
+        id: container-operations
         features:
           - name: Host CLI routing into running Docker/Podman
             description: Host CLI routing into running Docker/Podman containers
@@ -5023,6 +5200,7 @@ surfaces:
         category_note: runtime-configuration-state-volumes-and-secrets.md
         human_lts_override: false
       - name: Image Release and Validation
+        id: image-release-and-validation
         features:
           - name: Root Dockerfile build stages
             description: Root Dockerfile build stages, runtime image contents, optional browser and Docker CLI build args
@@ -5046,6 +5224,7 @@ surfaces:
         category_note: image-build-release-packaging-and-attestations.md
         human_lts_override: false
       - name: Agent Sandbox and Tooling
+        id: agent-sandbox-and-tooling
         features:
           - name: Docker gateway setup
             description: Docker gateway setup with OPENCLAW_SANDBOX, Docker CLI build arg, socket mount, sandbox config writes, and rollback behavior
@@ -5076,6 +5255,7 @@ surfaces:
     completeness_instructions: references/completeness/kubernetes-hosting.md
     categories:
       - name: Deployment Setup
+        id: deployment-setup
         features:
           - name: Kustomize packaging
             description: Kustomize-first deployment posture and Helm non-goal.
@@ -5101,6 +5281,7 @@ surfaces:
         category_note: deployment-setup.md
         human_lts_override: false
       - name: Configuration and Secrets
+        id: configuration-and-secrets
         features:
           - name: Agent instructions
             description: ConfigMap-based agent instruction injection.
@@ -5126,6 +5307,7 @@ surfaces:
         category_note: configuration-and-secrets.md
         human_lts_override: false
       - name: Access and Exposure
+        id: access-and-exposure
         features:
           - name: Port-forward access
             description: kubectl port-forward path for local Gateway access.
@@ -5152,6 +5334,7 @@ surfaces:
         category_note: access-and-exposure.md
         human_lts_override: false
       - name: Cluster Lifecycle
+        id: cluster-lifecycle
         features:
           - name: Resource layout
             description: Namespace, Deployment, Service, PVC, ConfigMap, and Secret inventory.
@@ -5190,6 +5373,7 @@ surfaces:
     completeness_instructions: references/completeness/nix-install-path.md
     categories:
       - name: Install Handoff
+        id: install-handoff
         features:
           - name: Nix install overview
             description: Covers Nix install overview across public Nix install page, install index discoverability, docs navigation, and the handoff to the first-party `nix-openclaw` Home Manager module. It excludes the actual external `openclaw/nix-openclaw` repository implementation, and related public nix docs and nix-openclaw handoff behavior.
@@ -5211,6 +5395,7 @@ surfaces:
         category_note: public-nix-docs-handoff.md
         human_lts_override: false
       - name: Plugin Lifecycle
+        id: plugin-lifecycle
         features:
           - name: Lifecycle command refusal
             description: Covers Lifecycle command refusal across plugin install/update/uninstall/enable/disable behavior in Nix mode, `/nix/store` hardlink handling, manifest registry safety, and user-facing guidance for declarative plugin selection.
@@ -5232,6 +5417,7 @@ surfaces:
         category_note: plugin-lifecycle-nix-store-loading.md
         human_lts_override: false
       - name: Activation and App UX
+        id: activation-and-app-ux
         features:
           - name: Environment activation
             description: Covers Environment activation across Nix mode activation, environment-variable detection, macOS default detection, and the operator docs that explain how Nix mode is enabled.
@@ -5260,6 +5446,7 @@ surfaces:
         category_note: nix-mode-activation-runtime-detection.md
         human_lts_override: false
       - name: Config and State
+        id: config-and-state
         features:
           - name: Immutable config guard
             description: Covers Immutable config guard across `OPENCLAW_NIX_MODE_CONFIG_IMMUTABLE` guard, source-edit guidance, config writer integration, and the agent-first Nix source instruction.
@@ -5290,6 +5477,7 @@ surfaces:
         category_note: state-config-path-immutable-store.md
         human_lts_override: false
       - name: Service Runtime and Guards
+        id: service-runtime-and-guards
         features:
           - name: Nix profile PATH discovery
             description: Covers Nix profile PATH discovery across `NIX_PROFILES` handling, `~/.nix-profile/bin` fallback, launchd/systemd service PATH generation, and adjacent safe binary resolution rules.
@@ -5338,6 +5526,7 @@ surfaces:
     completeness_instructions: references/completeness/discord.md
     categories:
       - name: Channel Setup and Operations
+        id: channel-setup-and-operations
         features:
           - name: Application and bot setup
             description: Covers Application and bot setup across Discord application/bot creation guidance, bot token and `applicationId` configuration, env and SecretRef token resolution, setup wizard/account inspection, and related bot setup and account configuration behavior.
@@ -5381,6 +5570,7 @@ surfaces:
         category_note: bot-setup-and-account-configuration.md
         human_lts_override: true
       - name: Access and Identity
+        id: access-and-identity
         features:
           - name: DM policy modes
             description: 'Covers DM policy modes across Discord direct-message `dmPolicy` modes: `pairing`, `allowlist`, `open`, and `disabled`. Canonical and legacy `allowFrom` resolution across top-level Discord config, and related dm pairing and sender authorization behavior.'
@@ -5409,6 +5599,7 @@ surfaces:
         category_note: dm-pairing-and-sender-authorization.md
         human_lts_override: true
       - name: Conversation Routing and Delivery
+        id: conversation-routing-and-delivery
         features:
           - name: Guild and channel admission
             description: Covers Guild and channel admission across Guild allowlist and `groupPolicy` admission for Discord guild channels and threads. `requireMention`, bot-loop prevention, command/mention bypasses, and unmentioned room-event history. Channel, and related guild channel routing and session isolation behavior.
@@ -5457,6 +5648,7 @@ surfaces:
         category_note: guild-channel-routing-and-session-isolation.md
         human_lts_override: true
       - name: Media and Rich Content
+        id: media-and-rich-content
         features:
           - name: Media and Rich Content
             description: Evidence scope for Media and Rich Content.
@@ -5468,6 +5660,7 @@ surfaces:
         category_note: media-attachments-and-voice-message-handling.md
         human_lts_override: true
       - name: Native Controls and Approvals
+        id: native-controls-and-approvals
         features:
           - name: Native slash command registration
             description: Native slash command registration and reconciliation for Discord application commands
@@ -5488,6 +5681,7 @@ surfaces:
         category_note: native-slash-commands-components-and-interactive-callbacks.md
         human_lts_override: false
       - name: Realtime Voice and Calls
+        id: realtime-voice-and-calls
         features:
           - name: Voice Channel Lifecycle
             description: Covers Voice Channel Lifecycle across Includes Discord voice channel sessions controlled by `/vc join`, `/vc status`, and `/vc leave`; config-driven `autoJoin`; `followUsers`; voice/stage channel allowlists; connect/reconnect and DAVE handling; `stt-tts`, `agent-proxy`, and related realtime voice channels behavior.
@@ -5528,6 +5722,7 @@ surfaces:
     completeness_instructions: references/completeness/telegram.md
     categories:
       - name: Channel Setup and Operations
+        id: channel-setup-and-operations
         features:
           - name: BotFather token creation
             description: BotFather token creation and first gateway start
@@ -5561,6 +5756,7 @@ surfaces:
         category_note: bot-setup-and-account-configuration.md
         human_lts_override: true
       - name: Access and Identity
+        id: access-and-identity
         features:
           - name: dmPolicy modes
             description: pairing, allowlist, open, and disabled
@@ -5596,6 +5792,7 @@ surfaces:
         category_note: dm-pairing-and-sender-authorization.md
         human_lts_override: true
       - name: Conversation Routing and Delivery
+        id: conversation-routing-and-delivery
         features:
           - name: Conversation Routing and Delivery
             description: Evidence scope for Conversation Routing and Delivery.
@@ -5609,6 +5806,7 @@ surfaces:
         category_note: group-forum-topic-and-session-routing.md
         human_lts_override: true
       - name: Media and Rich Content
+        id: media-and-rich-content
         features:
           - name: Media and Rich Content
             description: Evidence scope for Media and Rich Content.
@@ -5621,6 +5819,7 @@ surfaces:
         category_note: media-location-polls-and-rich-inputs.md
         human_lts_override: true
       - name: Native Controls and Approvals
+        id: native-controls-and-approvals
         features:
           - name: Inline keyboard rendering
             description: Inline keyboard rendering, callback query handling, Mini App URL buttons, and approval callbacks.
@@ -5666,6 +5865,7 @@ surfaces:
     completeness_instructions: references/completeness/whatsapp.md
     categories:
       - name: Channel Setup and Operations
+        id: channel-setup-and-operations
         features:
           - name: Official @openclaw/whatsapp plugin metadata
             description: Official @openclaw/whatsapp plugin metadata, package entrypoints, and setup discovery.
@@ -5691,6 +5891,7 @@ surfaces:
         category_note: operator-install-and-configuration.md
         human_lts_override: false
       - name: Access and Identity
+        id: access-and-identity
         features:
           - name: QR login
             description: QR login and agent login QR flows
@@ -5719,6 +5920,7 @@ surfaces:
         category_note: pairing-login-and-session-auth.md
         human_lts_override: false
       - name: Conversation Routing and Delivery
+        id: conversation-routing-and-delivery
         features:
           - name: Group allowlists
             description: Group allowlists, groupPolicy, exact group JIDs, requireMention, owner
@@ -5739,6 +5941,7 @@ surfaces:
         category_note: group-routing-and-activation.md
         human_lts_override: false
       - name: Media and Rich Content
+        id: media-and-rich-content
         features:
           - name: Inbound media download
             description: Inbound media download and placeholder construction, quoted media extraction, and file handoff.
@@ -5752,6 +5955,7 @@ surfaces:
         category_note: media-attachments-and-voice.md
         human_lts_override: false
       - name: Native Controls and Approvals
+        id: native-controls-and-approvals
         features:
           - name: Native exec
             description: Native exec and plugin approval delivery through WhatsApp
@@ -5779,6 +5983,7 @@ surfaces:
     completeness_instructions: references/completeness/slack.md
     categories:
       - name: Channel Setup and Operations
+        id: channel-setup-and-operations
         features:
           - name: App Install
             description: Covers App Install across installing `@openclaw/slack`, creating the Slack app, choosing recommended/minimal manifests, bot/app/user/signing-secret credential handling, and related app install, auth, manifest, and scopes behavior.
@@ -5828,6 +6033,7 @@ surfaces:
         category_note: app-install-auth-manifest-and-scopes.md
         human_lts_override: true
       - name: Access and Identity
+        id: access-and-identity
         features:
           - name: Access and Identity
             description: Evidence scope for Access and Identity.
@@ -5840,6 +6046,7 @@ surfaces:
         category_note: dm-pairing-and-sender-authorization.md
         human_lts_override: true
       - name: Conversation Routing and Delivery
+        id: conversation-routing-and-delivery
         features:
           - name: Channel allowlists
             description: Covers channel allowlists, `groupPolicy`, channel/user gates, mention gates, and subteam mention behavior.
@@ -5868,6 +6075,7 @@ surfaces:
         category_note: channel-thread-routing-and-session-isolation.md
         human_lts_override: true
       - name: Media and Rich Content
+        id: media-and-rich-content
         features:
           - name: Media and Rich Content
             description: Evidence scope for Media and Rich Content.
@@ -5880,6 +6088,7 @@ surfaces:
         category_note: media-attachments-files-and-vision.md
         human_lts_override: true
       - name: Native Controls and Approvals
+        id: native-controls-and-approvals
         features:
           - name: Slash Commands
             description: Covers Slash Commands across configured slash command mode, native slash commands, command registration expectations, session keys, and related slash commands and native command routing behavior.
@@ -5933,6 +6142,7 @@ surfaces:
     completeness_instructions: references/completeness/imessage-bluebubbles.md
     categories:
       - name: Channel Setup and Operations
+        id: channel-setup-and-operations
         features:
           - name: Translate legacy config
             description: Covers Translate legacy config across removal announcement, migration guide, config reference, old `channels.bluebubbles` key translation, group registry footgun, session caveats, attachment/action parity notes, and operator cutover checklist.
@@ -5979,6 +6189,7 @@ surfaces:
         category_note: setup-status-doctor-and-account-config.md
         human_lts_override: false
       - name: Access and Identity
+        id: access-and-identity
         features:
           - name: Authorize direct senders
             description: Covers Authorize direct senders across `dmPolicy`, `allowFrom`, pairing, sender identity normalization, and related dm pairing, access, and session routing behavior.
@@ -6008,6 +6219,7 @@ surfaces:
         category_note: dm-pairing-access-and-session-routing.md
         human_lts_override: false
       - name: Conversation Routing and Delivery
+        id: conversation-routing-and-delivery
         features:
           - name: Watch live messages
             description: Covers Watch live messages across inbound `watch.subscribe`, notification parsing, echo and self-chat guards, sent-message cache, same-sender DM coalescing, DM history, reaction event routing, catchup cursor/replay, and live cursor advancement.
@@ -6027,6 +6239,7 @@ surfaces:
         category_note: inbound-monitoring-coalescing-catchup-and-history.md
         human_lts_override: false
       - name: Media and Rich Content
+        id: media-and-rich-content
         features:
           - name: Media
             description: Covers Media across `includeAttachments`, attachment root allowlists, remote attachment roots, `remoteHost` SCP fetches, HEIC conversion, size caps, outbound media sends, `send-attachment`, text chunking, and media receipts.
@@ -6061,6 +6274,7 @@ surfaces:
         category_note: media-attachments-remote-fetch-and-chunking.md
         human_lts_override: false
       - name: Native Controls and Approvals
+        id: native-controls-and-approvals
         features:
           - name: Native Approvals
             description: Covers Native Approvals across native approval delivery, exec/plugin approval routing, reaction-based approval decisions, `/approve` authorization changes, and related native approvals, reactions, and operator control behavior.
@@ -6093,6 +6307,7 @@ surfaces:
     completeness_instructions: references/completeness/signal.md
     categories:
       - name: Channel Setup and Operations
+        id: channel-setup-and-operations
         features:
           - name: QR link setup
             description: Defines QR link setup setup, credential, configuration, and operator verification behavior for Setup, Install, and Account Provisioning.
@@ -6127,6 +6342,7 @@ surfaces:
         category_note: setup-install-account-provisioning.md
         human_lts_override: false
       - name: Access and Identity
+        id: access-and-identity
         features:
           - name: DM pairing
             description: Defines DM pairing setup, credential, configuration, and operator verification behavior for DM Pairing and Access Control.
@@ -6157,6 +6373,7 @@ surfaces:
         category_note: dm-pairing-access-control.md
         human_lts_override: false
       - name: Conversation Routing and Delivery
+        id: conversation-routing-and-delivery
         features:
           - name: Conversation Routing and Delivery
             description: Evidence scope for Conversation Routing and Delivery.
@@ -6168,6 +6385,7 @@ surfaces:
         category_note: group-routing-mention-history.md
         human_lts_override: false
       - name: Media and Rich Content
+        id: media-and-rich-content
         features:
           - name: Text delivery targets
             description: Covers Text delivery targets routing, session binding, history, and conversation context for Outbound Delivery, Media, Receipts, and Typing.
@@ -6201,6 +6419,7 @@ surfaces:
         category_note: outbound-delivery-media-receipts.md
         human_lts_override: false
       - name: Native Controls and Approvals
+        id: native-controls-and-approvals
         features:
           - name: Native approval routing
             description: Defines Native approval routing authorization, trust, safety boundaries, and operator controls for Approval Routing and Reaction Resolution.
@@ -6236,6 +6455,7 @@ surfaces:
     completeness_instructions: references/completeness/google-chat.md
     categories:
       - name: Channel Setup and Operations
+        id: channel-setup-and-operations
         features:
           - name: Google Cloud project setup
             description: Covers Google Cloud project setup across Google Chat plugin installation, Google Cloud project and Chat API setup, service account JSON/file/env credential selection, `audienceType`, and related setup auth and workspace app behavior.
@@ -6303,6 +6523,7 @@ surfaces:
         category_note: setup-auth-and-workspace-app.md
         human_lts_override: false
       - name: Access and Identity
+        id: access-and-identity
         features:
           - name: DM pairing approval
             description: Covers DM pairing approval across Google Chat DMs, `dm.policy`, `dm.allowFrom`, pairing challenges, and related dm pairing and sender authorization behavior.
@@ -6351,6 +6572,7 @@ surfaces:
         category_note: dm-pairing-and-sender-authorization.md
         human_lts_override: false
       - name: Conversation Routing and Delivery
+        id: conversation-routing-and-delivery
         features:
           - name: Conversation Routing and Delivery
             description: Evidence scope for Conversation Routing and Delivery.
@@ -6365,6 +6587,7 @@ surfaces:
         category_note: space-routing-mentions-and-session-isolation.md
         human_lts_override: false
       - name: Media and Rich Content
+        id: media-and-rich-content
         features:
           - name: Media and Rich Content
             description: Evidence scope for Media and Rich Content.
@@ -6379,6 +6602,7 @@ surfaces:
         category_note: media-attachments-and-file-transfer.md
         human_lts_override: false
       - name: Native Controls and Approvals
+        id: native-controls-and-approvals
         features:
           - name: Inbound attachments
             description: Covers Inbound attachments across inbound Google Chat attachment download, media store handoff, outbound media reply delivery, `upload-file`, and related media attachments and file transfer behavior.
@@ -6458,6 +6682,7 @@ surfaces:
     completeness_instructions: references/completeness/matrix.md
     categories:
       - name: Channel Setup and Operations
+        id: channel-setup-and-operations
         features:
           - name: Matrix plugin identity
             description: Matrix plugin identity, install metadata, runtime/setup entries, and account configuration.
@@ -6480,6 +6705,7 @@ surfaces:
         category_note: setup-config-and-account-selection.md
         human_lts_override: false
       - name: Access and Identity
+        id: access-and-identity
         features:
           - name: DM policy
             description: DM policy, pairing, allowFrom, groupAllowFrom, room allowlists, and live access checks.
@@ -6507,6 +6733,7 @@ surfaces:
         category_note: dm-room-routing-and-access-policy.md
         human_lts_override: false
       - name: Conversation Routing and Delivery
+        id: conversation-routing-and-delivery
         features:
           - name: Conversation Routing and Delivery
             description: Evidence scope for Conversation Routing and Delivery.
@@ -6518,6 +6745,7 @@ surfaces:
         category_note: threads-acp-and-subagent-bindings.md
         human_lts_override: false
       - name: Media and Rich Content
+        id: media-and-rich-content
         features:
           - name: Media and Rich Content
             description: Evidence scope for Media and Rich Content.
@@ -6529,6 +6757,7 @@ surfaces:
         category_note: outbound-messages-media-and-streaming.md
         human_lts_override: false
       - name: Native Controls and Approvals
+        id: native-controls-and-approvals
         features:
           - name: Channel action discovery
             description: Channel action discovery, account-scoped action gates, and tool schemas
@@ -6552,6 +6781,7 @@ surfaces:
         category_note: actions-profile-polls-reactions-and-room-tools.md
         human_lts_override: false
       - name: Encryption and Verification
+        id: encryption-and-verification
         features:
           - name: Encryption setup
             description: Encryption setup, crypto availability, recovery-key storage, and secret storage.
@@ -6582,6 +6812,7 @@ surfaces:
     completeness_instructions: references/completeness/microsoft-teams.md
     categories:
       - name: Channel Setup and Operations
+        id: channel-setup-and-operations
         features:
           - name: Teams CLI app creation
             description: Covers Microsoft Teams channel installation through `teams app create`, bot registration, manifest creation, credential generation, and setup verification.
@@ -6627,6 +6858,7 @@ surfaces:
         category_note: setup-app-registration-credentials-admin-install.md
         human_lts_override: false
       - name: Access and Identity
+        id: access-and-identity
         features:
           - name: DM pairing
             description: Covers DM pairing across DM pairing, `dmPolicy`, `allowFrom`, AAD ID matching, and related dm pairing and sender access behavior.
@@ -6664,6 +6896,7 @@ surfaces:
         category_note: dm-pairing-sender-authorization-config-writes.md
         human_lts_override: false
       - name: Conversation Routing and Delivery
+        id: conversation-routing-and-delivery
         features:
           - name: Team and channel allowlists
             description: Covers Teams/channel allowlists, stable conversation IDs, `channels.msteams.teams`, wildcard routing, and team/channel name resolution.
@@ -6693,6 +6926,7 @@ surfaces:
         category_note: team-channel-routing-mention-gates-sessions-thread-context.md
         human_lts_override: false
       - name: Media and Rich Content
+        id: media-and-rich-content
         features:
           - name: Inbound attachments
             description: Covers Inbound attachments across inbound attachments, inline images, `msteams://media` placeholders, Graph hosted content, and related media and file sharing behavior.
@@ -6715,6 +6949,7 @@ surfaces:
         category_note: media-attachments-file-consent-graph-file-flows.md
         human_lts_override: false
       - name: Native Controls and Approvals
+        id: native-controls-and-approvals
         features:
           - name: Message action discovery
             description: Covers Message action discovery across message-tool discovery, upload-file, poll, read/search, and related actions and approvals behavior.
@@ -6752,6 +6987,7 @@ surfaces:
     completeness_instructions: references/completeness/mattermost-line-irc-nextcloud-talk-nostr-twitch-tlon-synology-chat.md
     categories:
       - name: Channel Setup and Operations
+        id: channel-setup-and-operations
         features:
           - name: Channel Setup and Operations
             description: Evidence scope for Channel Setup and Operations.
@@ -6762,6 +6998,7 @@ surfaces:
         category_note: channel-setup-and-operations.md
         human_lts_override: false
       - name: Access and Identity
+        id: access-and-identity
         features:
           - name: Access and Identity
             description: Evidence scope for Access and Identity.
@@ -6772,6 +7009,7 @@ surfaces:
         category_note: access-and-identity.md
         human_lts_override: false
       - name: Conversation Routing and Delivery
+        id: conversation-routing-and-delivery
         features:
           - name: Conversation Routing and Delivery
             description: Evidence scope for Conversation Routing and Delivery.
@@ -6782,6 +7020,7 @@ surfaces:
         category_note: conversation-routing-and-delivery.md
         human_lts_override: false
       - name: Media and Rich Content
+        id: media-and-rich-content
         features:
           - name: Media and Rich Content
             description: Evidence scope for Media and Rich Content.
@@ -6806,6 +7045,7 @@ surfaces:
     completeness_instructions: references/completeness/feishu-qq-bot-wechat-yuanbao-zalo-zalo-personal-regional-channels.md
     categories:
       - name: Channel Setup and Operations
+        id: channel-setup-and-operations
         features:
           - name: Docs channel index
             description: Docs channel index, plugin reference pages, redirects, and pairing support list for regional channels
@@ -6830,6 +7070,7 @@ surfaces:
         category_note: shared-regional-channel-catalog-install-status.md
         human_lts_override: false
       - name: Access and Identity
+        id: access-and-identity
         features:
           - name: Access and Identity
             description: Evidence scope for Access and Identity.
@@ -6840,6 +7081,7 @@ surfaces:
         category_note: access-and-identity.md
         human_lts_override: false
       - name: Conversation Routing and Delivery
+        id: conversation-routing-and-delivery
         features:
           - name: Conversation Routing and Delivery
             description: Evidence scope for Conversation Routing and Delivery.
@@ -6850,6 +7092,7 @@ surfaces:
         category_note: conversation-routing-and-delivery.md
         human_lts_override: false
       - name: Media and Rich Content
+        id: media-and-rich-content
         features:
           - name: Media and Rich Content
             description: Evidence scope for Media and Rich Content.
@@ -6874,6 +7117,7 @@ surfaces:
     completeness_instructions: references/completeness/voice-call-channel.md
     categories:
       - name: Channel Setup and Operations
+        id: channel-setup-and-operations
         features:
           - name: Voice Call Channel
             description: Cli, Gateway Rpc, and Agent Tool
@@ -6891,6 +7135,7 @@ surfaces:
         category_note: setup-configuration-and-smoke.md
         human_lts_override: false
       - name: Access and Identity
+        id: access-and-identity
         features:
           - name: Voice Call Channel
             description: Webhook Exposure and Security
@@ -6903,6 +7148,7 @@ surfaces:
         category_note: webhook-exposure-and-security.md
         human_lts_override: false
       - name: Conversation Routing and Delivery
+        id: conversation-routing-and-delivery
         features:
           - name: Voice Call Channel
             description: Inbound Routing, Sessions, and Lifecycle
@@ -6914,6 +7160,7 @@ surfaces:
         category_note: inbound-routing-sessions-and-lifecycle.md
         human_lts_override: false
       - name: Media and Rich Content
+        id: media-and-rich-content
         features:
           - name: Voice Call Channel
             description: Provider Transports and Call Control
@@ -6930,6 +7177,7 @@ surfaces:
         category_note: provider-transports-and-call-control.md
         human_lts_override: false
       - name: Realtime Voice and Calls
+        id: realtime-voice-and-calls
         features:
           - name: Voice Call Channel
             description: Realtime Voice and Agent Consult
@@ -6959,6 +7207,7 @@ surfaces:
     completeness_instructions: references/completeness/openai-codex-provider-path.md
     categories:
       - name: Model and Auth
+        id: model-and-auth
         features:
           - name: Canonical OpenAI Model Routing
             description: 'Covers Canonical OpenAI Model Routing across user/operator-facing model route contract: canonical `openai/gpt-*` refs, legacy `openai-codex/*` model refs, model catalog rows, context limits, and related canonical openai model routing and catalog behavior.'
@@ -6995,6 +7244,7 @@ surfaces:
         category_note: canonical-openai-model-routing-and-catalog.md
         human_lts_override: true
       - name: Responses and Tool Compatibility
+        id: responses-and-tool-compatibility
         features:
           - name: Codex Responses Transport
             description: Covers Codex Responses Transport across low-level provider request/streaming path for `openai-codex-responses` and the shared OpenAI Responses conversion code used by direct OpenAI and Codex-auth compatibility routes.
@@ -7021,6 +7271,7 @@ surfaces:
         category_note: codex-responses-transport-and-payload-compatibility.md
         human_lts_override: true
       - name: Native Codex Harness
+        id: native-codex-harness
         features:
           - name: Native Codex App-server Harness
             description: Covers Native Codex App-server Harness across native Codex app-server runtime path used by OpenAI agent turns when the Codex harness owns thread identity, native model loop, compaction, native tools, and native app-server controls.
@@ -7039,6 +7290,7 @@ surfaces:
         category_note: native-codex-app-server-harness-and-thread-lifecycle.md
         human_lts_override: true
       - name: Image and Multimodal Input
+        id: image-and-multimodal-input
         features:
           - name: Image Generation Editing
             description: Covers Image Generation Editing across OpenAI image generation and editing, Codex OAuth image backend, transparent-background routing, Azure/private OpenAI image endpoints, and related image generation editing and multimodal input behavior.
@@ -7056,6 +7308,7 @@ surfaces:
         category_note: image-generation-editing-and-multimodal-input.md
         human_lts_override: false
       - name: Voice and Realtime Audio
+        id: voice-and-realtime-audio
         features:
           - name: Realtime Voice Transcription
             description: Covers Realtime Voice Transcription across OpenAI text-to-speech, batch speech-to-text, Realtime transcription, Realtime voice, browser Talk/WebRTC, backend WebSocket bridges, OAuth-backed client secret minting, Azure Realtime deployments, and voice-control behavior.
@@ -7087,6 +7340,7 @@ surfaces:
     completeness_instructions: references/completeness/anthropic-provider-path.md
     categories:
       - name: Provider Auth and Recovery
+        id: provider-auth-and-recovery
         features:
           - name: API-key onboarding
             description: 'Covers API-key onboarding across Anthropic credential surface before a model request is made: onboarding choices, API-key storage, Claude CLI credential migration, setup-token validation, and related credential setup and health behavior.'
@@ -7125,6 +7379,7 @@ surfaces:
         category_note: auth-onboarding-and-credential-profile-health.md
         human_lts_override: false
       - name: Model and Runtime Selection
+        id: model-and-runtime-selection
         features:
           - name: Bundled Claude catalog
             description: 'Covers Bundled Claude catalog across Anthropic model catalog and policy layer: bundled model rows, model aliases, current and future Claude model id normalization, runtime-provider selection, and related model catalog and policy behavior.'
@@ -7165,6 +7420,7 @@ surfaces:
         category_note: model-catalog-aliases-and-runtime-policy.md
         human_lts_override: false
       - name: Request Transport and Turn Semantics
+        id: request-transport-and-turn-semantics
         features:
           - name: API-key/OAuth transport
             description: 'Covers API-key/OAuth transport across direct Anthropic `api: "anthropic-messages"` request and stream behavior: API-key and OAuth transport setup, Anthropic beta headers, model-id normalization for direct hosts, payload construction, and related direct anthropic api behavior.'
@@ -7206,6 +7462,7 @@ surfaces:
         category_note: direct-anthropic-messages-transport-and-streaming.md
         human_lts_override: false
       - name: Prompt Cache and Context
+        id: prompt-cache-and-context
         features:
           - name: Cache retention
             description: 'Covers Cache retention across Anthropic-specific request knobs outside the core content stream: prompt cache retention, cache-control markers, system-prompt cache boundary, 1M context sizing, and related prompt cache and context behavior.'
@@ -7231,6 +7488,7 @@ surfaces:
         category_note: prompt-caching-context-windows-and-request-knobs.md
         human_lts_override: false
       - name: Media Inputs
+        id: media-inputs
         features:
           - name: Image input
             description: 'Covers Image input across Anthropic media understanding as part of the provider path: image input support, PDF native document input metadata, default media model selection, auto-priority, and related media inputs behavior.'
@@ -7265,6 +7523,7 @@ surfaces:
     completeness_instructions: references/completeness/google-provider-path.md
     categories:
       - name: Provider Setup and Credentials
+        id: provider-setup-and-credentials
         features:
           - name: API key onboarding
             description: Covers API key onboarding across direct `GEMINI_API_KEY` and `GOOGLE_API_KEY` auth, setup provider metadata, setup auth choices, provider config fields, and related provider auth and setup behavior.
@@ -7303,6 +7562,7 @@ surfaces:
         category_note: provider-auth-credentials-and-operator-setup.md
         human_lts_override: false
       - name: Model Routing and Endpoints
+        id: model-routing-and-endpoints
         features:
           - name: Catalog rows and aliases
             description: Covers Catalog rows and aliases across model catalog rows, model ID normalization, dynamic model resolution, provider hooks, and related model catalog and routing behavior.
@@ -7343,6 +7603,7 @@ surfaces:
         category_note: model-catalog-provider-routing-and-config-normalization.md
         human_lts_override: false
       - name: Direct Gemini Runtime
+        id: direct-gemini-runtime
         features:
           - name: Direct Gemini chat
             description: 'Covers Direct Gemini chat across direct `google-generative-ai` Gemini transport and shared Google message/stream conversion: request URL construction, request config, text/image/audio/video/tool payload conversion, function response handling, and related direct gemini api behavior.'
@@ -7382,6 +7643,7 @@ surfaces:
         category_note: direct-gemini-api-transport-streaming-and-multimodal-payloads.md
         human_lts_override: false
       - name: Media, Search, and Realtime
+        id: media-search-and-realtime
         features:
           - name: Bundled plugin distribution
             description: Covers Bundled plugin distribution across bundled `@openclaw/google-plugin` package, plugin manifest distribution, auto-enable metadata, capability-provider registration, and related google plugin adapters behavior.
@@ -7420,6 +7682,7 @@ surfaces:
         category_note: plugin-distribution-and-cross-surface-capability-adapters.md
         human_lts_override: false
       - name: Prompt Caching
+        id: prompt-caching
         features:
           - name: Cache retention config
             description: Covers Cache retention config across direct `google-generative-ai` Gemini prompt cache eligibility, `cacheRetention`, managed `cachedContents` create/reuse/refresh, manual `cachedContent` config, and related prompt caching behavior.
@@ -7459,6 +7722,7 @@ surfaces:
     completeness_instructions: references/completeness/openrouter-provider-path.md
     categories:
       - name: Provider Setup and Auth
+        id: provider-setup-and-auth
         features:
           - name: First-run setup
             description: 'Covers First-run setup across user-facing setup and provider registration: the `/providers/openrouter` docs, plugin manifest, provider registration hook, default model registration, and related operator setup and model selection behavior.'
@@ -7514,6 +7778,7 @@ surfaces:
         category_note: operator-setup-and-provider-registration.md
         human_lts_override: false
       - name: Chat Runtime and Normalization
+        id: chat-runtime-and-normalization
         features:
           - name: Chat completions route
             description: Covers Chat completions route across OpenRouter chat completions transport, `models.providers.openrouter.params.provider` routing, per-model routing overrides, OpenRouter proxy reasoning payloads, and related chat routing and reasoning behavior.
@@ -7568,6 +7833,7 @@ surfaces:
         category_note: chat-completions-transport-routing-and-reasoning.md
         human_lts_override: false
       - name: Provider Recovery and Diagnostics
+        id: provider-recovery-and-diagnostics
         features:
           - name: Timeout/retry classification
             description: Covers Timeout/retry classification across OpenRouter timeout and retry classification, provider-specific generic errors, auth/billing/key-limit classification, context overflow parsing, and related failover and diagnostics behavior.
@@ -7592,6 +7858,7 @@ surfaces:
         category_note: failover-errors-overflow-and-diagnostics.md
         human_lts_override: false
       - name: Media Generation and Speech
+        id: media-generation-and-speech
         features:
           - name: image_generate OpenRouter route
             description: Covers image_generate OpenRouter route across OpenRouter image, video, music, TTS, and related image, video, music, and speech behavior.
@@ -7639,6 +7906,7 @@ surfaces:
     completeness_instructions: references/completeness/local-model-providers-ollama-vllm-sglang-lm-studio.md
     categories:
       - name: Provider Setup, Lifecycle, and Diagnostics
+        id: provider-setup-lifecycle-and-diagnostics
         features:
           - name: Provider Selection
             description: Covers Provider Selection across provider choice, `openclaw onboard`, model-picker contributions, non-interactive setup, and related provider selection and onboarding behavior.
@@ -7691,6 +7959,7 @@ surfaces:
         category_note: provider-selection-and-onboarding.md
         human_lts_override: false
       - name: Native Provider Plugins
+        id: native-provider-plugins
         features:
           - name: Ollama setup and model pulling
             description: Covers Ollama setup and model pulling across native Ollama chat/model discovery, cloud+local/local-only setup, local auth markers, model pulling, and related ollama native provider behavior.
@@ -7729,6 +7998,7 @@ surfaces:
         category_note: ollama-native-provider.md
         human_lts_override: false
       - name: OpenAI-Compatible Runtime Compatibility
+        id: openai-compatible-runtime-compatibility
         features:
           - name: Bundled provider setup
             description: Covers Bundled provider setup across bundled `vllm` and `sglang` provider plugins, docs, default env/base URL behavior, `/v1/models` discovery, and related vllm and sglang openai-compatible providers behavior.
@@ -7765,6 +8035,7 @@ surfaces:
         category_note: request-stream-compatibility-and-tool-calling.md
         human_lts_override: false
       - name: Local Memory and Embeddings
+        id: local-memory-and-embeddings
         features:
           - name: Embedding provider selection
             description: Covers Embedding provider selection across local embedding provider registration for Ollama and LM Studio, memory host embedding behavior, memory search readiness, local `memoryFlush` model overrides, and related local embeddings and memory behavior.
@@ -7788,6 +8059,7 @@ surfaces:
         category_note: local-embeddings-and-memory-provider-usage.md
         human_lts_override: false
       - name: Network Safety and Prompt Controls
+        id: network-safety-and-prompt-controls
         features:
           - name: Safety Network
             description: Covers Safety Network across private-network and exact-origin trust for local provider base URLs, SSRF protections for self-hosted setup, special-token sanitization, local-model lean prompt behavior, and related safety network and prompt pressure controls behavior.
@@ -7819,6 +8091,7 @@ surfaces:
     completeness_instructions: references/completeness/long-tail-hosted-providers.md
     categories:
       - name: Hosted LLM Providers
+        id: hosted-llm-providers
         features:
           - name: Bedrock setup
             description: Covers Bedrock setup across Amazon Bedrock, Bedrock Mantle, Cloudflare AI Gateway, Vercel AI Gateway, and related cloud and gateway providers behavior.
@@ -7865,6 +8138,7 @@ surfaces:
         category_note: openai-compatible-hosted-text-adapters.md
         human_lts_override: false
       - name: Hosted Media Providers
+        id: hosted-media-providers
         features:
           - name: Image generation providers
             description: Covers Image generation providers across hosted image, video, and music generation provider paths, including DeepInfra, and related hosted media generation providers behavior.
@@ -7898,6 +8172,7 @@ surfaces:
         category_note: hosted-media-generation-providers.md
         human_lts_override: false
       - name: Provider Operations
+        id: provider-operations
         features:
           - name: Provider directory
             description: Covers Provider directory across public provider directory, provider docs links, model provider overview tables, manifest provider metadata, and related provider catalog and discovery behavior.
@@ -7959,6 +8234,7 @@ surfaces:
     completeness_instructions: references/completeness/web-search-tools.md
     categories:
       - name: Search Providers
+        id: search-providers
         features:
           - name: API-backed providers
             description: Covers API-backed providers provider routing, request shaping, streaming, and response normalization for Structured Search Providers.
@@ -8038,6 +8314,7 @@ surfaces:
         category_note: bundled-structured-search-providers.md
         human_lts_override: false
       - name: Setup and Diagnostics
+        id: setup-and-diagnostics
         features:
           - name: Provider credentials
             description: Defines Provider credentials setup, credential, configuration, and operator verification behavior for Setup and Credential Repair.
@@ -8079,6 +8356,7 @@ surfaces:
         category_note: operator-setup-provider-selection-and-credential-repair.md
         human_lts_override: false
       - name: Network Safety
+        id: network-safety
         features:
           - name: Network Safety
             description: Defines Network Safety authorization, trust, safety boundaries, and operator controls for Network Safety, Ssrf, Redirects, and Untrusted Content.
@@ -8103,6 +8381,7 @@ surfaces:
         category_note: network-safety-ssrf-redirects-and-untrusted-content.md
         human_lts_override: false
       - name: Tool Availability and Fetch
+        id: tool-availability-and-fetch
         features:
           - name: web_search exposure
             description: Defines web_search exposure setup, credential, configuration, and operator verification behavior for Tool Availability and Policy.
@@ -8160,6 +8439,7 @@ surfaces:
     completeness_instructions: references/completeness/browser-automation-and-exec-sandbox-tools.md
     categories:
       - name: Browser Automation
+        id: browser-automation
         features:
           - name: Browser Actions
             description: Covers Browser Actions across browser tool action schemas, navigate/act/snapshot/screenshot operations, AI/role/ARIA snapshot formats, action ref storage, and related browser actions, snapshots, and artifacts behavior.
@@ -8201,6 +8481,7 @@ surfaces:
         category_note: browser-actions-snapshots-and-artifacts.md
         human_lts_override: false
       - name: Tool Invocation and Execution
+        id: tool-invocation-and-execution
         features:
           - name: Exec Routing
             description: Covers Exec Routing across `exec` foreground and background execution, `yieldMs`, timeouts, PTY, and related exec routing and process lifecycle behavior.
@@ -8239,6 +8520,7 @@ surfaces:
         category_note: exec-routing-and-process-lifecycle.md
         human_lts_override: true
       - name: Sandbox and Tool Policy
+        id: sandbox-and-tool-policy
         features:
           - name: Sandbox Backends
             description: Covers Sandbox Backends across sandbox modes, scopes, workspace roots, workspaceAccess, and related sandbox backends and workspace isolation behavior.
@@ -8288,6 +8570,7 @@ surfaces:
     completeness_instructions: references/completeness/image-video-music-generation-tools.md
     categories:
       - name: Media Routing and Discovery
+        id: media-routing-and-discovery
         features:
           - name: default media model config
             description: Covers default media model config across `imageGenerationModel`, `videoGenerationModel`, `musicGenerationModel`, provider/model refs, and related model routing and tool discovery behavior.
@@ -8310,6 +8593,7 @@ surfaces:
         category_note: configuration-model-refs-and-provider-discovery.md
         human_lts_override: false
       - name: Task Lifecycle and Delivery
+        id: task-lifecycle-and-delivery
         features:
           - name: background task creation
             description: Covers background task creation across `image_generate`, `video_generate`, and `music_generate` tool exposure, background task scheduling, and related async task lifecycle behavior.
@@ -8356,6 +8640,7 @@ surfaces:
         category_note: session-backed-tool-invocation-and-task-lifecycle.md
         human_lts_override: false
       - name: Image Generation
+        id: image-generation
         features:
           - name: text-to-image
             description: 'Covers text-to-image across image generation and editing runtime behavior after a provider candidate has been selected: request normalization, timeout handling, reference-image inputs, image response parsing, and related image generation and editing behavior.'
@@ -8392,6 +8677,7 @@ surfaces:
         category_note: image-generation-and-editing-runtime.md
         human_lts_override: false
       - name: Video Generation
+        id: video-generation
         features:
           - name: text-to-video
             description: 'Covers text-to-video across video generation request normalization before provider execution: `generate`, `imageToVideo`, and `videoToVideo` modes, reference media typing and roles, and related video generation modes behavior.'
@@ -8436,6 +8722,7 @@ surfaces:
         category_note: video-generation-modes-and-request-normalization.md
         human_lts_override: false
       - name: Music Generation
+        id: music-generation
         features:
           - name: prompt and lyrics input
             description: Covers prompt and lyrics input across `music_generate`, prompt and lyrics inputs, instrumental mode, duration, and related music generation behavior.
