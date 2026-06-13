@@ -293,11 +293,22 @@ describe("handleDiscordMessagingAction", () => {
         guildId: "G1",
         channelId: "C1",
         includeArchived: true,
+        before: "2026-05-26T17:00:00.000Z",
         limit: 1,
       },
       enableAllActions,
     );
 
+    expect(mockCall(listThreadsDiscord, "listThreadsDiscord")).toEqual([
+      {
+        guildId: "G1",
+        channelId: "C1",
+        includeArchived: true,
+        before: "2026-05-26T17:00:00.000Z",
+        limit: 1,
+      },
+      { cfg: DISCORD_TEST_CFG },
+    ]);
     expect(result.details).toMatchObject({
       ok: true,
       complete: false,
@@ -309,6 +320,7 @@ describe("handleDiscordMessagingAction", () => {
         guildId: "G1",
         channelId: "C1",
         includeArchived: true,
+        before: "2026-05-26T17:00:00.000Z",
         limit: 1,
       },
     });
@@ -356,6 +368,38 @@ describe("handleDiscordMessagingAction", () => {
       hasMore: true,
       returnedCount: 1,
       source: "discord.threadList.archived",
+    });
+    expect(result.details).not.toHaveProperty("nextBefore");
+  });
+
+  it("marks active thread results complete when Discord returns no pagination state", async () => {
+    listThreadsDiscord.mockResolvedValueOnce({
+      threads: [{ id: "thread-active", name: "Current project" }],
+      members: [{ id: "member-1" }],
+    });
+
+    const result = await handleMessagingAction(
+      "threadList",
+      {
+        guildId: "G1",
+      },
+      enableAllActions,
+    );
+
+    expect(result.details).toMatchObject({
+      ok: true,
+      complete: true,
+      hasMore: false,
+      returnedCount: 1,
+      source: "discord.threadList.active",
+      query: {
+        guildId: "G1",
+        includeArchived: false,
+      },
+    });
+    expect((result.details as { threads?: unknown }).threads).toEqual({
+      threads: [{ id: "thread-active", name: "Current project" }],
+      members: [{ id: "member-1" }],
     });
     expect(result.details).not.toHaveProperty("nextBefore");
   });
