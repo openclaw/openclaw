@@ -106,4 +106,21 @@ describe("buildCliAgentSystemPrompt", () => {
     expect(prompt).toContain("session=agent:main:telegram:direct:peer");
     expect(prompt).toContain("sessionId=session-123");
   });
+
+  it("includes Telegram rich text guidance for CLI final replies", () => {
+    const prompt = buildCliAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      tools: [],
+      modelDisplay: "anthropic/claude-opus-4-8",
+      runtimeChannel: "telegram",
+      runtimeChatType: "direct",
+      runtimeCapabilities: ["richText"],
+    });
+
+    expect(prompt).toContain("Telegram rich text is available");
+    expect(prompt).toContain("headings, tables");
+    expect(prompt).toContain("This is not legacy MarkdownV2/parse_mode");
+    expect(prompt).toContain("channel=telegram");
+    expect(prompt).not.toContain("### message tool");
+  });
 });

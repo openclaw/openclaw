@@ -143,6 +143,7 @@ function buildPreparedContext(params?: {
   openClawHistoryPrompt?: string;
   provider?: string;
   model?: string;
+  executionMode?: PreparedCliRunContext["params"]["executionMode"];
   allowEmptyAssistantReplyAsSilent?: boolean;
 }): PreparedCliRunContext {
   // Common prepared context fixture for runPreparedCliAgent reliability branches.
@@ -170,6 +171,7 @@ function buildPreparedContext(params?: {
       timeoutMs: 1_000,
       runId: params?.runId ?? "run-2",
       lane: params?.lane,
+      executionMode: params?.executionMode,
       allowEmptyAssistantReplyAsSilent: params?.allowEmptyAssistantReplyAsSilent,
     },
     started: Date.now(),
@@ -370,6 +372,38 @@ describe("runCliAgent reliability", () => {
       reason: "cli:watchdog:stall",
       sessionKey: "agent:main:main",
     });
+  });
+
+  it("does not enqueue watchdog system events for side-question no-output timeouts", async () => {
+    enqueueSystemEventMock.mockClear();
+    requestHeartbeatMock.mockClear();
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "no-output-timeout",
+        exitCode: null,
+        exitSignal: "SIGKILL",
+        durationMs: 200,
+        stdout: "",
+        stderr: "",
+        timedOut: true,
+        noOutputTimedOut: true,
+      }),
+    );
+
+    await expect(
+      executePreparedCliRun(
+        buildPreparedContext({
+          sessionKey: "agent:main:main",
+          cliSessionId: "thread-123",
+          executionMode: "side-question",
+          runId: "run-side-question-timeout",
+        }),
+        "thread-123",
+      ),
+    ).rejects.toThrow("produced no output");
+
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatMock).not.toHaveBeenCalled();
   });
 
   it("fails with timeout when overall timeout trips", async () => {

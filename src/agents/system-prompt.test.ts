@@ -965,6 +965,57 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("`style` can be `primary`, `success`, or `danger`");
   });
 
+  it("describes Telegram rich text only for rich Telegram runtimes", () => {
+    const telegramPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["message"],
+      runtimeInfo: {
+        channel: "telegram",
+        capabilities: ["richText"],
+      },
+    });
+    const discordPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["message"],
+      runtimeInfo: {
+        channel: "discord",
+        capabilities: ["richText"],
+      },
+    });
+    const plainTelegramPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["message"],
+      runtimeInfo: {
+        channel: "telegram",
+      },
+    });
+
+    expect(telegramPrompt).toContain("Telegram rich text is available");
+    expect(telegramPrompt).toContain("<details><summary>...</summary>...</details>");
+    expect(telegramPrompt).toContain("This is not legacy MarkdownV2/parse_mode");
+    expect(telegramPrompt).toContain("Button labels are plain text only");
+    expect(telegramPrompt.indexOf("Telegram rich text is available")).toBeGreaterThan(
+      telegramPrompt.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY),
+    );
+    expect(discordPrompt).not.toContain("Telegram rich text is available");
+    expect(plainTelegramPrompt).not.toContain("Telegram rich text is available");
+  });
+
+  it("describes Telegram rich text for automatic final replies without the message tool", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: {
+        channel: "telegram",
+        capabilities: ["richText"],
+      },
+    });
+
+    expect(prompt).toContain("Reply in current session → automatically routes");
+    expect(prompt).toContain("Telegram rich text is available");
+    expect(prompt).toContain("headings, tables");
+    expect(prompt).not.toContain("### message tool");
+  });
+
   it("uses Slack interactive reply hints instead of generic inline button config guidance", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

@@ -486,6 +486,7 @@ function buildMessagingSection(params: {
   isMinimal: boolean;
   availableTools: Set<string>;
   inlineButtonsEnabled: boolean;
+  richTextEnabled: boolean;
   runtimeChannel?: string;
   runtimeChatType?: ChatType;
   messageChannelOptions?: string;
@@ -502,6 +503,7 @@ function buildMessagingSection(params: {
     messageToolOnly &&
     params.runtimeChannel === "discord" &&
     (params.runtimeChatType === "group" || params.runtimeChatType === "channel");
+  const telegramRichTextEnabled = params.runtimeChannel === "telegram" && params.richTextEnabled;
   const hasSessionsSpawn = params.availableTools.has("sessions_spawn");
   const hasSubagents = params.availableTools.has("subagents");
   const hasSessionsYield = params.availableTools.has("sessions_yield");
@@ -521,6 +523,9 @@ function buildMessagingSection(params: {
     messageToolOnly
       ? "- Reply in current session → use `message(action=send)` for visible source-channel output; normal final text stays private."
       : "- Reply in current session → automatically routes to the source channel (Signal, Telegram, etc.)",
+    telegramRichTextEnabled
+      ? "- Telegram rich text is available. Use Bot API 10.1 rich Markdown/HTML in visible message text when it improves clarity: headings, tables, blockquotes, `<details><summary>...</summary>...</details>`, `<sup>/<sub>`, `<mark>`, spoilers, lists, code blocks, footnotes, and formulas. This is not legacy MarkdownV2/parse_mode. Button labels are plain text only; send media through explicit media delivery."
+      : "",
     "- Cross-session messaging → use sessions_send(sessionKey, message)",
     subagentOrchestrationGuidance,
     completionEventGuidance,
@@ -1275,6 +1280,7 @@ export function buildAgentSystemPrompt(params: {
       isMinimal,
       availableTools,
       inlineButtonsEnabled,
+      richTextEnabled: runtimeCapabilitiesLower.has("richtext"),
       runtimeChannel,
       runtimeChatType,
       messageChannelOptions,
