@@ -158,7 +158,7 @@ function getApiKeyEnvVars(provider: string): readonly string[] | undefined {
   }
 
   if (provider === "kimi" || provider === "kimi-coding") {
-    return ["KIMI_API_KEY", "KIMICODE_API_KEY"];
+    return ["KIMI_CODE_API_KEY", "KIMI_API_KEY", "KIMICODE_API_KEY"];
   }
 
   const envMap: Record<string, string> = {

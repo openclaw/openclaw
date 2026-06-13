@@ -36,7 +36,7 @@ export default definePluginEntry({
       label: "Kimi",
       aliases: ["kimi-code", "kimi-coding"],
       docsPath: "/providers/moonshot",
-      envVars: ["KIMI_API_KEY", "KIMICODE_API_KEY", "KIMI_CODE_API_KEY"],
+      envVars: ["KIMI_CODE_API_KEY", "KIMI_API_KEY", "KIMICODE_API_KEY"],
       auth: [
         createProviderApiKeyAuthMethod({
           providerId: PROVIDER_ID,
@@ -111,13 +111,8 @@ export default definePluginEntry({
       }),
       resolveUsageAuth: async (ctx) => {
         const apiKey = ctx.resolveApiKeyFromConfigAndStore({
-          providerIds: [PROVIDER_ID, "kimi-code", "kimi-coding", "moonshot"],
-          envDirect: [
-            ctx.env.KIMI_CODE_API_KEY,
-            ctx.env.KIMI_API_KEY,
-            ctx.env.KIMICODE_API_KEY,
-            ctx.env.MOONSHOT_API_KEY,
-          ],
+          providerIds: [PROVIDER_ID, "kimi-code", "kimi-coding"],
+          envDirect: [ctx.env.KIMI_CODE_API_KEY, ctx.env.KIMI_API_KEY, ctx.env.KIMICODE_API_KEY],
         });
         return apiKey ? { token: apiKey } : null;
       },

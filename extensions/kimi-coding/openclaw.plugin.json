@@ -41,11 +41,11 @@
     "providers": [
       {
         "id": "kimi",
-        "envVars": ["KIMI_API_KEY", "KIMICODE_API_KEY"]
+        "envVars": ["KIMI_CODE_API_KEY", "KIMI_API_KEY", "KIMICODE_API_KEY"]
       },
       {
         "id": "kimi-coding",
-        "envVars": ["KIMI_API_KEY", "KIMICODE_API_KEY"]
+        "envVars": ["KIMI_CODE_API_KEY", "KIMI_API_KEY", "KIMICODE_API_KEY"]
       }
     ]
   },

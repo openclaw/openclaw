@@ -203,7 +203,7 @@ Choose your provider and follow the setup steps.
     **Best for:** code-focused tasks via the Kimi Coding endpoint.
 
     <Note>
-    Kimi Coding uses a different API key and provider prefix (`kimi/...`) than Moonshot (`moonshot/...`). The stable API model ref is `kimi/kimi-for-coding`; legacy refs `kimi/kimi-code` and `kimi/k2p5` remain accepted and normalize to that API model id.
+    Kimi Coding uses a different API key and provider prefix (`kimi/...`) than Moonshot (`moonshot/...`). Keys are not interchangeable. The stable API model ref is `kimi/kimi-for-coding`; legacy refs `kimi/kimi-code` and `kimi/k2p5` remain accepted and normalize to that API model id.
     </Note>
 
     <Steps>
@@ -234,7 +234,7 @@ Choose your provider and follow the setup steps.
 
     ```json5
     {
-      env: { KIMI_API_KEY: "sk-..." },
+      env: { KIMI_CODE_API_KEY: "sk-..." },
       agents: {
         defaults: {
           model: { primary: "kimi/kimi-for-coding" },
@@ -411,7 +411,7 @@ Config lives under `plugins.entries.moonshot.config.webSearch`:
     | ---------- | ---------------- | ----------------------------- | ------------------- |
     | Moonshot   | `moonshot/`      | `https://api.moonshot.ai/v1`  | `MOONSHOT_API_KEY`  |
     | Moonshot CN| `moonshot/`      | `https://api.moonshot.cn/v1`  | `MOONSHOT_API_KEY`  |
-    | Kimi Coding| `kimi/`          | Kimi Coding endpoint          | `KIMI_API_KEY`      |
+    | Kimi Coding| `kimi/`          | Kimi Coding endpoint          | `KIMI_CODE_API_KEY`, `KIMI_API_KEY`, or `KIMICODE_API_KEY` |
     | Web search | N/A              | Same as Moonshot API region   | `KIMI_API_KEY` or `MOONSHOT_API_KEY` |
 
     - Kimi web search uses `KIMI_API_KEY` or `MOONSHOT_API_KEY`, and defaults to `https://api.moonshot.ai/v1` with model `kimi-k2.6`.
