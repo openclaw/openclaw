@@ -3,10 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { normalizeConfigPatchReplacePath } from "../config/patch-replace-paths.js";
 import { GatewayClientRequestError } from "../gateway/client.js";
 import { testing as restartTesting } from "../infra/restart.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { normalizeConfigPatchReplacePath } from "../config/patch-replace-paths.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
@@ -395,15 +395,13 @@ describe("gateway tool", () => {
   it("distinguishes explicit terminal array consent from indexed consent", () => {
     expect(normalizeConfigPatchReplacePath("bindings[]")).toBe("bindings");
     expect(normalizeConfigPatchReplacePath("bindings[0]")).toBe("bindings[0]");
-    expect(normalizeConfigPatchReplacePath("agents.list[0].skills")).toBe(
-      "agents.list[].skills",
-    );
+    expect(normalizeConfigPatchReplacePath("agents.list[0].skills")).toBe("agents.list[].skills");
     expect(normalizeConfigPatchReplacePath(normalizeConfigPatchReplacePath("bindings[]"))).toBe(
       "bindings",
     );
-    expect(
-      normalizeConfigPatchReplacePath(normalizeConfigPatchReplacePath("bindings[0]")),
-    ).toBe("bindings[0]");
+    expect(normalizeConfigPatchReplacePath(normalizeConfigPatchReplacePath("bindings[0]"))).toBe(
+      "bindings[0]",
+    );
   });
 
   it("rejects config.patch when it changes safe bin approval paths", async () => {

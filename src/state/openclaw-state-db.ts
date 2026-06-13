@@ -1,6 +1,14 @@
 // OpenClaw state database manages shared persisted state and migrations.
 import { randomUUID } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import {
@@ -32,6 +40,7 @@ export const OPENCLAW_SQLITE_BUSY_TIMEOUT_MS = 30_000;
 const OPENCLAW_STATE_DIR_MODE = 0o700;
 const OPENCLAW_STATE_FILE_MODE = 0o600;
 const OPENCLAW_STATE_SIDECAR_SUFFIXES = ["", "-shm", "-wal"] as const;
+const log = createSubsystemLogger("openclaw-state-db");
 
 /** Open shared SQLite database handle plus WAL maintenance lifecycle. */
 export type OpenClawStateDatabase = {
@@ -201,6 +210,51 @@ function ensureOpenClawStatePermissions(pathname: string, env: NodeJS.ProcessEnv
     if (existsSync(candidate)) {
       bestEffortChmodSync(candidate, OPENCLAW_STATE_FILE_MODE);
     }
+  }
+}
+
+function isSqliteCorruptionError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const msg = error.message?.toLowerCase() ?? "";
+  const code = (error as NodeJS.ErrnoException).code ?? "";
+  return (
+    code === "SQLITE_CORRUPT" ||
+    msg.includes("malformed") ||
+    msg.includes("corrupt") ||
+    msg.includes("database disk image") ||
+    msg.includes("file is not a database")
+  );
+}
+
+function quarantineCorruptedOpenClawStateDatabase(pathname: string): string | null {
+  const quarantinePath = `${pathname}.corrupted.${Date.now()}`;
+  try {
+    for (const suffix of OPENCLAW_STATE_SIDECAR_SUFFIXES) {
+      if (!suffix) {
+        continue;
+      }
+      const sidecar = `${pathname}${suffix}`;
+      if (existsSync(sidecar)) {
+        renameSync(sidecar, `${quarantinePath}${suffix}`);
+      }
+    }
+    renameSync(pathname, quarantinePath);
+    return quarantinePath;
+  } catch {
+    for (const suffix of OPENCLAW_STATE_SIDECAR_SUFFIXES) {
+      if (!suffix) {
+        continue;
+      }
+      const movedSidecar = `${quarantinePath}${suffix}`;
+      if (existsSync(movedSidecar)) {
+        try {
+          renameSync(movedSidecar, `${pathname}${suffix}`);
+        } catch {}
+      }
+    }
+    return null;
   }
 }
 
@@ -895,6 +949,52 @@ function resolveDatabasePath(options: OpenClawStateDatabaseOptions = {}): string
   return options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env);
 }
 
+function openInitializedOpenClawStateDatabase(pathname: string): OpenClawStateDatabase {
+  const sqlite = requireNodeSqlite();
+  const db = new sqlite.DatabaseSync(pathname);
+  let walMaintenance: SqliteWalMaintenance | null = null;
+  try {
+    walMaintenance = configureSqliteWalMaintenance(db, {
+      databaseLabel: "openclaw-state",
+      databasePath: pathname,
+    });
+    db.exec("PRAGMA synchronous = NORMAL;");
+    db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
+    db.exec("PRAGMA foreign_keys = ON;");
+    ensureSchema(db, pathname);
+    return { db, path: pathname, walMaintenance };
+  } catch (err) {
+    walMaintenance?.close();
+    clearNodeSqliteKyselyCacheForDatabase(db);
+    db.close();
+    throw err;
+  }
+}
+
+function openOrRecoverOpenClawStateDatabase(
+  pathname: string,
+  env: NodeJS.ProcessEnv,
+): OpenClawStateDatabase {
+  try {
+    return openInitializedOpenClawStateDatabase(pathname);
+  } catch (error) {
+    if (!isSqliteCorruptionError(error) || !existsSync(pathname)) {
+      throw error;
+    }
+    const quarantinePath = quarantineCorruptedOpenClawStateDatabase(pathname);
+    if (!quarantinePath) {
+      throw error;
+    }
+    log.warn("Corrupted OpenClaw state database quarantined, creating fresh database", {
+      originalPath: pathname,
+      quarantinePath,
+      error: String(error),
+    });
+    ensureOpenClawStatePermissions(pathname, env);
+    return openInitializedOpenClawStateDatabase(pathname);
+  }
+}
+
 /** Open or return a cached shared state database after schema and migration checks. */
 export function openOpenClawStateDatabase(
   options: OpenClawStateDatabaseOptions = {},
@@ -913,24 +1013,8 @@ export function openOpenClawStateDatabase(
   }
 
   ensureOpenClawStatePermissions(pathname, env);
-  const sqlite = requireNodeSqlite();
-  const db = new sqlite.DatabaseSync(pathname);
-  const walMaintenance = configureSqliteWalMaintenance(db, {
-    databaseLabel: "openclaw-state",
-    databasePath: pathname,
-  });
-  db.exec("PRAGMA synchronous = NORMAL;");
-  db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
-  db.exec("PRAGMA foreign_keys = ON;");
-  try {
-    ensureSchema(db, pathname);
-  } catch (err) {
-    walMaintenance.close();
-    db.close();
-    throw err;
-  }
+  const database = openOrRecoverOpenClawStateDatabase(pathname, env);
   ensureOpenClawStatePermissions(pathname, env);
-  const database = { db, path: pathname, walMaintenance };
   cachedDatabases.set(pathname, database);
   return database;
 }

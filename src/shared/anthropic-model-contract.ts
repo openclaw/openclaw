@@ -1,8 +1,5 @@
 // Model-bound thinking cannot be exposed or replayed after a model switch.
-import {
-  resolveClaudeFable5ModelIdentity,
-  resolveClaudeModelIdentity,
-} from "@openclaw/llm-core";
+import { resolveClaudeFable5ModelIdentity, resolveClaudeModelIdentity } from "@openclaw/llm-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 export {
   resolveClaudeFable5ModelIdentity,
