@@ -45,6 +45,14 @@
   background: color-mix(in srgb, var(--panel) 84%, transparent);
 }
 
+@supports (backdrop-filter: blur(1px)) {
+  .chat-workspace-rail {
+    background: color-mix(in srgb, var(--panel) 72%, transparent);
+    backdrop-filter: blur(16px) saturate(1.5);
+    -webkit-backdrop-filter: blur(16px) saturate(1.5);
+  }
+}
+
 .chat-workspace-rail__header {
   display: flex;
   align-items: center;

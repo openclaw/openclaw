@@ -237,5 +237,59 @@ export function renderAgentOverview(params: {
         </div>
       </div>
     </section>
+
+    ${renderMemoryTiersCard(configLoading)} ${renderRoleContractsCard(configLoading)}
+  `;
+}
+
+function renderMemoryTiersCard(isLoading: boolean) {
+  if (isLoading) {
+    return html`
+      <section class="card" aria-busy="true" aria-label="Loading memory tiers">
+        <div class="card-title">Memory Tiers</div>
+        <div class="card-sub">Corpus configuration and retrieval tiers.</div>
+        <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 16px;">
+          <div class="skeleton skeleton-block stagger-1"></div>
+          <div class="skeleton skeleton-block stagger-2"></div>
+          <div class="skeleton skeleton-block stagger-3"></div>
+        </div>
+      </section>
+    `;
+  }
+  return html`
+    <section class="card">
+      <div class="card-title">Memory Tiers</div>
+      <div class="card-sub">Corpus configuration and retrieval tiers.</div>
+      <div class="agent-kv" style="margin-top: 16px;">
+        <div class="label">Corpus</div>
+        <div class="mono">memory</div>
+      </div>
+    </section>
+  `;
+}
+
+function renderRoleContractsCard(isLoading: boolean) {
+  if (isLoading) {
+    return html`
+      <section class="card" aria-busy="true" aria-label="Loading role contracts">
+        <div class="card-title">Role Contracts</div>
+        <div class="card-sub">Active soul files and persona bindings.</div>
+        <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 16px;">
+          <div class="skeleton skeleton-line skeleton-line--long stagger-1"></div>
+          <div class="skeleton skeleton-line skeleton-line--medium stagger-2"></div>
+          <div class="skeleton skeleton-line skeleton-line--short stagger-3"></div>
+        </div>
+      </section>
+    `;
+  }
+  return html`
+    <section class="card">
+      <div class="card-title">Role Contracts</div>
+      <div class="card-sub">Active soul files and persona bindings.</div>
+      <div class="agent-kv" style="margin-top: 16px;">
+        <div class="label">Soul file</div>
+        <div class="mono">SOUL.md</div>
+      </div>
+    </section>
   `;
 }

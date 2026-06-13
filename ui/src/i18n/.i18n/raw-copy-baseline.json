@@ -508,6 +508,20 @@
     {
       "count": 1,
       "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/agents-panels-overview.ts",
+      "text": "Loading memory tiers"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/agents-panels-overview.ts",
+      "text": "Loading role contracts"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
       "name": "title",
       "path": "ui/src/ui/views/agents-panels-overview.ts",
       "text": "Open Files tab"
@@ -520,11 +534,46 @@
       "text": "&times;"
     },
     {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-panels-overview.ts",
+      "text": "Active soul files and persona bindings."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-panels-overview.ts",
+      "text": "Corpus"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-panels-overview.ts",
+      "text": "Corpus configuration and retrieval tiers."
+    },
+    {
       "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/agents-panels-overview.ts",
       "text": "Fallbacks"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-panels-overview.ts",
+      "text": "memory"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-panels-overview.ts",
+      "text": "Memory Tiers"
     },
     {
       "count": 1,
@@ -555,6 +604,13 @@
       "text": "Primary Model"
     },
     {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-panels-overview.ts",
+      "text": "Role Contracts"
+    },
+    {
       "count": 1,
       "kind": "html-text",
       "name": "text",
@@ -567,6 +623,20 @@
       "name": "text",
       "path": "ui/src/ui/views/agents-panels-overview.ts",
       "text": "Skills Filter"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-panels-overview.ts",
+      "text": "Soul file"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/agents-panels-overview.ts",
+      "text": "SOUL.md"
     },
     {
       "count": 1,
