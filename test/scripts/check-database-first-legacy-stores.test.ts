@@ -729,6 +729,23 @@ describe("check-database-first-legacy-stores", () => {
     ]);
   });
 
+  it("flags fs removal calls targeting legacy store paths", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import fs from "node:fs/promises";
+        import syncFs from "node:fs";
+        await fs.rm("sessions.json", { force: true });
+        syncFs.unlinkSync("cron/jobs.json");
+      `,
+      "src/runtime/fs-remove-legacy-store.ts",
+    );
+
+    expect(violations).toEqual([
+      { kind: "legacy store filesystem write", line: 4 },
+      { kind: "legacy store filesystem write", line: 5 },
+    ]);
+  });
+
   it("flags legacy paths destructured from for-of tuple entries", () => {
     const violations = collectDatabaseFirstLegacyStoreViolations(
       `
@@ -826,6 +843,187 @@ describe("check-database-first-legacy-stores", () => {
     expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 5 }]);
   });
 
+  it("flags createRequire alias-backed CommonJS fs writes", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { createRequire } from "node:module";
+        const req = createRequire(import.meta.url);
+        const fs = req("node:fs");
+        fs.writeFileSync("sessions.json", "{}\\n");
+      `,
+      "src/runtime/create-require-alias-fs.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 5 }]);
+  });
+
+  it("flags copied createRequire alias-backed CommonJS fs writes", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { createRequire } from "node:module";
+        const req = createRequire(import.meta.url);
+        const req2 = req;
+        const fs = req2("node:fs");
+        fs.writeFileSync("sessions.json", "{}\\n");
+      `,
+      "src/runtime/copied-create-require-alias-fs.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 6 }]);
+  });
+
+  it("flags reassigned createRequire alias-backed CommonJS fs writes", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { createRequire } from "node:module";
+        let req;
+        req = createRequire(import.meta.url);
+        const fs = req("node:fs");
+        fs.writeFileSync("sessions.json", "{}\\n");
+      `,
+      "src/runtime/reassigned-create-require-alias-fs.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 6 }]);
+  });
+
+  it("flags reassigned createRequire aliases named require", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { createRequire } from "node:module";
+        let require;
+        require = createRequire(import.meta.url);
+        const fs = require("node:fs");
+        fs.writeFileSync("sessions.json", "{}\\n");
+      `,
+      "src/runtime/reassigned-create-require-name.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 6 }]);
+  });
+
+  it("refreshes hoisted wrappers after createRequire alias reassignment", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { createRequire } from "node:module";
+        let req;
+        function persist(filePath: string) {
+          const fs = req("node:fs");
+          fs.writeFileSync(filePath, "{}\\n");
+        }
+        req = createRequire(import.meta.url);
+        persist("sessions.json");
+      `,
+      "src/runtime/hoisted-wrapper-reassigned-create-require-alias.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 9 }]);
+  });
+
+  it("refreshes hoisted wrappers after nested createRequire alias reassignment", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { createRequire } from "node:module";
+        let req;
+        function persist(filePath: string) {
+          const fs = req("node:fs");
+          fs.writeFileSync(filePath, "{}\\n");
+        }
+        {
+          req = createRequire(import.meta.url);
+        }
+        persist("sessions.json");
+      `,
+      "src/runtime/hoisted-wrapper-nested-create-require-alias.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 11 }]);
+  });
+
+  it("refreshes block-scoped wrappers after nested outer createRequire alias reassignment", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { createRequire } from "node:module";
+        let req;
+        {
+          function persist(filePath: string) {
+            const fs = req("node:fs");
+            fs.writeFileSync(filePath, "{}\\n");
+          }
+          {
+            req = createRequire(import.meta.url);
+          }
+          persist("sessions.json");
+        }
+      `,
+      "src/runtime/block-wrapper-nested-create-require-alias.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 12 }]);
+  });
+
+  it("refreshes escaped wrappers after outer createRequire alias reassignment", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { createRequire } from "node:module";
+        let req;
+        let persist;
+        {
+          function inner(filePath: string) {
+            const fs = req("node:fs");
+            fs.writeFileSync(filePath, "{}\\n");
+          }
+          persist = inner;
+        }
+        req = createRequire(import.meta.url);
+        persist("sessions.json");
+      `,
+      "src/runtime/escaped-wrapper-create-require-alias.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 13 }]);
+  });
+
+  it("keeps escaped wrapper local require shadows after outer createRequire alias reassignment", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { createRequire } from "node:module";
+        let req;
+        let persist;
+        {
+          let req;
+          function inner(filePath: string) {
+            const fs = req("node:fs");
+            fs.writeFileSync(filePath, "{}\\n");
+          }
+          persist = inner;
+        }
+        req = createRequire(import.meta.url);
+        persist("sessions.json");
+      `,
+      "src/runtime/escaped-wrapper-local-require-shadow.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("does not treat parameter shadows as createRequire aliases", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { createRequire } from "node:module";
+        const req = createRequire(import.meta.url);
+        function save(req: (specifier: string) => { writeFileSync(path: string, value: string): void }) {
+          const fs = req("node:fs");
+          fs.writeFileSync("sessions.json", "");
+        }
+        save(customRequire);
+      `,
+      "src/runtime/create-require-parameter-shadow.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
   it("does not treat shadowed createRequire bindings as Node require", () => {
     const violations = collectDatabaseFirstLegacyStoreViolations(
       `
@@ -838,6 +1036,26 @@ describe("check-database-first-legacy-stores", () => {
         save(customCreateRequire);
       `,
       "src/runtime/shadowed-create-require.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("does not treat hoisted function createRequire shadows as Node require", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { createRequire } from "node:module";
+        function run() {
+          function createRequire(url: string) {
+            return customRequire(url);
+          }
+          const req = createRequire(import.meta.url);
+          const fs = req("node:fs");
+          fs.writeFileSync("sessions.json", "{}\\n");
+        }
+        run();
+      `,
+      "src/runtime/hoisted-create-require-shadow.ts",
     );
 
     expect(violations).toEqual([]);
@@ -1314,6 +1532,257 @@ describe("check-database-first-legacy-stores", () => {
     );
 
     expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 8 }]);
+  });
+
+  it("flags wrapper paths written through createRequire aliases", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { createRequire } from "node:module";
+        const req = createRequire(import.meta.url);
+        function persist(filePath: string) {
+          const fs = req("node:fs");
+          fs.writeFileSync(filePath, "{}\\n");
+        }
+        persist("sessions.json");
+      `,
+      "src/runtime/create-require-alias-wrapper.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 8 }]);
+  });
+
+  it("flags wrapper-local createRequire alias writes", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { createRequire } from "node:module";
+        function persist(filePath: string) {
+          const req = createRequire(import.meta.url);
+          const fs = req("node:fs");
+          fs.writeFileSync(filePath, "{}\\n");
+        }
+        persist("sessions.json");
+      `,
+      "src/runtime/wrapper-local-create-require-alias.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 8 }]);
+  });
+
+  it("flags wrapper-local copied createRequire aliases", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { createRequire } from "node:module";
+        function persist(filePath: string) {
+          const req = createRequire(import.meta.url);
+          const req2 = req;
+          const fs = req2("node:fs");
+          fs.writeFileSync(filePath, "{}\\n");
+        }
+        persist("sessions.json");
+      `,
+      "src/runtime/wrapper-copied-create-require-alias.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 9 }]);
+  });
+
+  it("flags wrapper-local createRequire aliases after local shadow reassignment", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { createRequire } from "node:module";
+        const req = createRequire(import.meta.url);
+        function persist(filePath: string) {
+          let req;
+          req = createRequire(import.meta.url);
+          const fs = req("node:fs");
+          fs.writeFileSync(filePath, "{}\\n");
+        }
+        persist("sessions.json");
+      `,
+      "src/runtime/wrapper-shadowed-reassigned-create-require-alias.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 10 }]);
+  });
+
+  it("flags wrapper-local reassigned createRequire aliases named require", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { createRequire } from "node:module";
+        function persist(filePath: string) {
+          let require;
+          require = createRequire(import.meta.url);
+          const fs = require("node:fs");
+          fs.writeFileSync(filePath, "{}\\n");
+        }
+        persist("sessions.json");
+      `,
+      "src/runtime/wrapper-reassigned-create-require-name.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 9 }]);
+  });
+
+  it("flags wrapper-local createRequire alias assignments inside blocks", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { createRequire } from "node:module";
+        function persist(filePath: string) {
+          let req;
+          {
+            req = createRequire(import.meta.url);
+          }
+          const fs = req("node:fs");
+          fs.writeFileSync(filePath, "{}\\n");
+        }
+        persist("sessions.json");
+      `,
+      "src/runtime/wrapper-block-create-require-assignment.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 11 }]);
+  });
+
+  it("does not treat wrapper-shadowed createRequire parameters as Node createRequire", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        function persist(
+          filePath: string,
+          createRequire: (url: string) => (specifier: string) => { writeFileSync(path: string, value: string): void },
+        ) {
+          const req = createRequire(import.meta.url);
+          const fs = req("node:fs");
+          fs.writeFileSync(filePath, "{}\\n");
+        }
+        persist("sessions.json", customCreateRequire);
+      `,
+      "src/runtime/wrapper-shadowed-create-require.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("does not treat wrapper hoisted function createRequire shadows as Node createRequire", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { createRequire } from "node:module";
+        function persist(filePath: string) {
+          function createRequire(url: string) {
+            return customRequire(url);
+          }
+          const req = createRequire(import.meta.url);
+          const fs = req("node:fs");
+          fs.writeFileSync(filePath, "{}\\n");
+        }
+        persist("sessions.json");
+      `,
+      "src/runtime/wrapper-hoisted-create-require-shadow.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("keeps wrapper lexical createRequire aliases when call sites shadow them", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { createRequire } from "node:module";
+        const req = createRequire(import.meta.url);
+        function persist(filePath: string) {
+          const fs = req("node:fs");
+          fs.writeFileSync(filePath, "{}\\n");
+        }
+        {
+          const req = customRequire;
+          persist("sessions.json");
+        }
+      `,
+      "src/runtime/wrapper-lexical-create-require-alias.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 10 }]);
+  });
+
+  it("keeps wrapper-local createRequire calls when call sites shadow createRequire", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { createRequire } from "node:module";
+        function persist(filePath: string) {
+          const req = createRequire(import.meta.url);
+          const fs = req("node:fs");
+          fs.writeFileSync(filePath, "{}\\n");
+        }
+        {
+          const createRequire = customCreateRequire;
+          persist("sessions.json");
+        }
+      `,
+      "src/runtime/wrapper-create-require-call-site-shadow.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 10 }]);
+  });
+
+  it("flags exhaustive conditional createRequire alias assignments", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { createRequire } from "node:module";
+        let req;
+        if (condition) {
+          req = createRequire(import.meta.url);
+        } else {
+          req = createRequire(import.meta.url);
+        }
+        const fs = req("node:fs");
+        fs.writeFileSync("sessions.json", "{}\\n");
+      `,
+      "src/runtime/conditional-create-require-alias.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 10 }]);
+  });
+
+  it("refreshes hoisted wrappers after exhaustive createRequire alias branches", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { createRequire } from "node:module";
+        let req;
+        function persist(filePath: string) {
+          const fs = req("node:fs");
+          fs.writeFileSync(filePath, "{}\\n");
+        }
+        if (condition) {
+          req = createRequire(import.meta.url);
+        } else {
+          req = createRequire(import.meta.url);
+        }
+        persist("sessions.json");
+      `,
+      "src/runtime/hoisted-wrapper-conditional-create-require-alias.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 13 }]);
+  });
+
+  it("keeps wrapper conditional createRequire alias branches", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { createRequire } from "node:module";
+        function persist(filePath: string) {
+          let req;
+          if (condition) {
+            req = createRequire(import.meta.url);
+          } else {
+            req = customRequire;
+          }
+          const fs = req("node:fs");
+          fs.writeFileSync(filePath, "{}\\n");
+        }
+        persist("sessions.json");
+      `,
+      "src/runtime/wrapper-conditional-create-require-alias.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 13 }]);
   });
 
   it("flags legacy paths passed through named wrapper options", () => {

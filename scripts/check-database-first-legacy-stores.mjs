@@ -18,6 +18,10 @@ const legacyWriteCallees = new Set([
   "createWriteStream",
   "open",
   "openSync",
+  "rm",
+  "rmSync",
+  "unlink",
+  "unlinkSync",
   "rename",
   "renameSync",
   "writeFile",
@@ -259,15 +263,15 @@ function collectCreateRequireBindings(sourceFile) {
   return bindings;
 }
 
-function isFsRequireExpression(expression, isRequireShadowed = () => false) {
+function isFsRequireExpression(expression, isRequireName = (name) => name === "require") {
   const call = unwrapExpression(expression);
   if (!ts.isCallExpression(call) || !ts.isIdentifier(unwrapExpression(call.expression))) {
     return false;
   }
+  const requireName = unwrapExpression(call.expression).text;
   const [specifier] = call.arguments;
   return (
-    unwrapExpression(call.expression).text === "require" &&
-    !isRequireShadowed() &&
+    isRequireName(requireName) &&
     specifier &&
     ts.isStringLiteralLike(specifier) &&
     fsModuleSpecifiers.has(specifier.text)
@@ -437,6 +441,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
   const fsSafeStoreFactoryAliasScopes = [fsSafeStoreFactoryAliases];
   const fsSafeStoreScopes = [new Map()];
   const fsSafeJsonStoreScopes = [new Map()];
+  const requireAliasScopes = [new Map([["require", true]])];
   const requireShadowScopes = [new Set()];
   const createRequireShadowScopes = [new Set()];
   const legacyPathScopes = [new Map()];
@@ -483,8 +488,22 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
     return requireShadowScopes[requireShadowScopes.length - 1];
   }
 
-  function isRequireShadowed() {
-    return requireShadowScopes.some((scope) => scope.has("require"));
+  function currentRequireAliasScope() {
+    return requireAliasScopes[requireAliasScopes.length - 1];
+  }
+
+  function resolveRequireAlias(name) {
+    for (let index = requireAliasScopes.length - 1; index >= 0; index--) {
+      const scope = requireAliasScopes[index];
+      if (scope.has(name)) {
+        return scope.get(name) === true;
+      }
+    }
+    return false;
+  }
+
+  function isNodeRequireName(name) {
+    return resolveRequireAlias(name);
   }
 
   function isCreateRequireShadowed(name) {
@@ -498,6 +517,14 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
       ts.isIdentifier(unwrapExpression(call.expression)) &&
       createRequireBindings.has(unwrapExpression(call.expression).text) &&
       !isCreateRequireShadowed(unwrapExpression(call.expression).text)
+    );
+  }
+
+  function isRequireAliasExpression(expression) {
+    const value = unwrapExpression(expression);
+    return (
+      isCreateRequireExpression(value) ||
+      (ts.isIdentifier(value) && resolveRequireAlias(value.text))
     );
   }
 
@@ -606,6 +633,32 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
       }
     }
     return aliases;
+  }
+
+  function visibleRequireAliasSnapshot(maxScopeIndex = requireAliasScopes.length - 1) {
+    const aliases = new Map();
+    const sourceScopes = new Map();
+    for (let index = 0; index <= maxScopeIndex; index++) {
+      const scope = requireAliasScopes[index];
+      if (!scope) {
+        continue;
+      }
+      for (const [name, value] of scope) {
+        aliases.set(name, value);
+        sourceScopes.set(name, index);
+      }
+    }
+    return { aliases, sourceScopes };
+  }
+
+  function visibleCreateRequireShadows() {
+    const shadows = new Set();
+    for (const scope of createRequireShadowScopes) {
+      for (const name of scope) {
+        shadows.add(name);
+      }
+    }
+    return shadows;
   }
 
   function fsModuleBindingWriteScope(name) {
@@ -728,6 +781,16 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
       }
     }
     return currentLiteralTextScope();
+  }
+
+  function requireAliasWriteTarget(name) {
+    for (let index = requireAliasScopes.length - 1; index >= 0; index--) {
+      const scope = requireAliasScopes[index];
+      if (scope.has(name)) {
+        return { index, scope };
+      }
+    }
+    return { index: requireAliasScopes.length - 1, scope: currentRequireAliasScope() };
   }
 
   function expressionLiteralCandidateTexts(node) {
@@ -1005,6 +1068,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
     fsSafeJsonStoreScopes.push(new Map());
     fsModuleBindingScopes.push(new Map());
     fsModulePropertyScopes.push(new Map());
+    requireAliasScopes.push(new Map());
     requireShadowScopes.push(new Set());
     createRequireShadowScopes.push(new Set());
     legacyPathScopes.push(new Map());
@@ -1031,6 +1095,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
     fsWriteAliasScopes.pop();
     createRequireShadowScopes.pop();
     requireShadowScopes.pop();
+    requireAliasScopes.pop();
   }
 
   function registerFsBindingParameter(name) {
@@ -1086,6 +1151,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
     fsSafeJsonStoreScopes.push(new Map());
     fsModuleBindingScopes.push(new Map());
     fsModulePropertyScopes.push(new Map());
+    requireAliasScopes.push(new Map());
     requireShadowScopes.push(new Set());
     createRequireShadowScopes.push(new Set());
     legacyPathScopes.push(new Map());
@@ -1098,6 +1164,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
         currentLegacyPathScope().set(name, false);
         currentLiteralTextScope().set(name, null);
         currentWrapperFunctionScope().set(name, null);
+        currentRequireAliasScope().set(name, false);
       }
       markFsWriteAliasShadows(parameter.name);
       markFsSafeStoreShadows(parameter.name);
@@ -1124,6 +1191,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
     fsWriteAliasScopes.pop();
     createRequireShadowScopes.pop();
     requireShadowScopes.pop();
+    requireAliasScopes.pop();
   }
 
   function dynamicFsImportThenCallback(node) {
@@ -1142,7 +1210,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
   function isFsModuleExpression(expression) {
     const receiver = unwrapExpression(expression);
     if (
-      isFsRequireExpression(receiver, isRequireShadowed) ||
+      isFsRequireExpression(receiver, isNodeRequireName) ||
       isFsDynamicImportExpression(receiver)
     ) {
       return true;
@@ -1157,7 +1225,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
     return (
       ts.isPropertyAccessExpression(receiver) &&
       receiver.name.text === "promises" &&
-      (isFsRequireExpression(receiver.expression, isRequireShadowed) ||
+      (isFsRequireExpression(receiver.expression, isNodeRequireName) ||
         isFsDynamicImportExpression(receiver.expression) ||
         (ts.isIdentifier(receiver.expression) &&
           resolveFsModuleBinding(receiver.expression.text)) ||
@@ -1736,7 +1804,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
   function isFsBindingExpression(expression) {
     const initializer = unwrapExpression(expression);
     if (
-      isFsRequireExpression(initializer, isRequireShadowed) ||
+      isFsRequireExpression(initializer, isNodeRequireName) ||
       isFsDynamicImportExpression(initializer)
     ) {
       return true;
@@ -1747,7 +1815,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
     return (
       ts.isPropertyAccessExpression(initializer) &&
       initializer.name.text === "promises" &&
-      (isFsRequireExpression(initializer.expression, isRequireShadowed) ||
+      (isFsRequireExpression(initializer.expression, isNodeRequireName) ||
         isFsDynamicImportExpression(initializer.expression) ||
         (ts.isIdentifier(initializer.expression) &&
           resolveFsModuleBinding(initializer.expression.text)))
@@ -2028,6 +2096,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
     fsSafeFactoryAlias,
     fsSafeStoreValue,
     fsSafeJsonStoreValue,
+    requireAlias,
   ) {
     const effects = currentBranchEffectScope();
     if (!effects) {
@@ -2040,6 +2109,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
       index,
       moduleValue,
       name,
+      requireAlias,
       writeAlias,
     });
   }
@@ -2142,18 +2212,23 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
       const mergedFsSafeJsonStoreValue =
         thenAssignment.fsSafeJsonStoreValue === true ||
         elseAssignment.fsSafeJsonStoreValue === true;
+      const mergedRequireAlias =
+        thenAssignment.requireAlias === true || elseAssignment.requireAlias === true;
       if (applyToTargetScopes) {
         fsModuleBindingScopes[index].set(name, mergedModuleValue);
         fsWriteAliasScopes[index].set(name, mergedWriteAlias);
         fsSafeStoreFactoryAliasScopes[index].set(name, mergedFsSafeFactoryAlias);
         fsSafeStoreScopes[index].set(name, mergedFsSafeStoreValue);
         fsSafeJsonStoreScopes[index].set(name, mergedFsSafeJsonStoreValue);
+        requireAliasScopes[index].set(name, mergedRequireAlias);
       }
       currentFsModuleBindingScope().set(name, mergedModuleValue);
       currentFsWriteAliasScope().set(name, mergedWriteAlias);
       currentFsSafeStoreFactoryAliasScope().set(name, mergedFsSafeFactoryAlias);
       currentFsSafeStoreScope().set(name, mergedFsSafeStoreValue);
       currentFsSafeJsonStoreScope().set(name, mergedFsSafeJsonStoreValue);
+      currentRequireAliasScope().set(name, mergedRequireAlias);
+      refreshCurrentWrapperFunctionAliases();
       if (parentEffect) {
         parentEffect.fsIdentifierAssignments.set(branchIdentifierAssignmentKey(index, name), {
           fsSafeFactoryAlias: mergedFsSafeFactoryAlias,
@@ -2162,6 +2237,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
           index,
           moduleValue: mergedModuleValue,
           name,
+          requireAlias: mergedRequireAlias,
           writeAlias: mergedWriteAlias,
         });
       }
@@ -2591,6 +2667,8 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
     baseFsWriteAliases,
     baseFsModuleBindings,
     baseFsModuleProperties,
+    baseRequireAliases,
+    baseCreateRequireShadows,
     activeWrapperNodes = new Set(),
   ) {
     if (activeWrapperNodes.has(node)) {
@@ -2601,6 +2679,8 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
     const bodyFsWriteAliasScopes = [new Map(baseFsWriteAliases)];
     const bodyFsModuleBindingScopes = [new Map(baseFsModuleBindings)];
     const bodyFsModulePropertyScopes = [new Map(baseFsModuleProperties)];
+    const bodyRequireAliasScopes = [new Map(baseRequireAliases)];
+    const wrapperCreateRequireShadowScopes = [new Set(baseCreateRequireShadows)];
     const destructuredParameterPropertyScopes = [new Map()];
     const destructuredParameterPropertyMergeScopes = [new Map()];
     const parameterObjectBindingScopes = [new Map()];
@@ -2627,6 +2707,10 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
 
     function currentBodyFsModulePropertyScope() {
       return bodyFsModulePropertyScopes[bodyFsModulePropertyScopes.length - 1];
+    }
+
+    function currentBodyRequireAliasScope() {
+      return bodyRequireAliasScopes[bodyRequireAliasScopes.length - 1];
     }
 
     function currentDestructuredParameterPropertyScope() {
@@ -2677,6 +2761,10 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
 
     function currentFsModuleShadowScope() {
       return fsModuleShadowScopes[fsModuleShadowScopes.length - 1];
+    }
+
+    function currentWrapperCreateRequireShadowScope() {
+      return wrapperCreateRequireShadowScopes[wrapperCreateRequireShadowScopes.length - 1];
     }
 
     function currentParameterObjectShadowScope() {
@@ -3100,6 +3188,8 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
       fsAliasShadowScopes.push(new Set());
       fsModuleShadowScopes.push(new Set());
       wrapperRequireShadowScopes.push(new Set());
+      wrapperCreateRequireShadowScopes.push(new Set());
+      bodyRequireAliasScopes.push(new Map());
       parameterObjectShadowScopes.push(new Set());
       parameterObjectAssignmentShadowScopes.push(new Set());
       wrapperBranchEffectScopes.push(branchEffects);
@@ -3110,6 +3200,8 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
       const parameterObjectAssignmentShadows = parameterObjectAssignmentShadowScopes.pop();
       parameterObjectShadowScopes.pop();
       wrapperRequireShadowScopes.pop();
+      wrapperCreateRequireShadowScopes.pop();
+      bodyRequireAliasScopes.pop();
       fsModuleShadowScopes.pop();
       fsAliasShadowScopes.pop();
       shadowScopes.pop();
@@ -3191,14 +3283,71 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
       return false;
     }
 
-    function isWrapperRequireShadowed() {
-      return wrapperRequireShadowScopes.some((scope) => scope.has("require"));
+    function isWrapperRequireName(name) {
+      return resolveBodyRequireAlias(name);
     }
 
     function markWrapperRequireShadows(name) {
-      if (bindingPatternNames(name).includes("require")) {
-        wrapperRequireShadowScopes[wrapperRequireShadowScopes.length - 1].add("require");
+      for (const bindingName of bindingPatternNames(name)) {
+        if (
+          bindingName === "require" ||
+          resolveBodyRequireAlias(bindingName) ||
+          resolveRequireAlias(bindingName)
+        ) {
+          wrapperRequireShadowScopes[wrapperRequireShadowScopes.length - 1].add(bindingName);
+        }
+        currentBodyRequireAliasScope().set(bindingName, false);
       }
+    }
+
+    function isWrapperCreateRequireShadowed(name) {
+      return wrapperCreateRequireShadowScopes.some((scope) => scope.has(name));
+    }
+
+    function isWrapperCreateRequireExpression(expression) {
+      const call = unwrapExpression(expression);
+      return (
+        ts.isCallExpression(call) &&
+        ts.isIdentifier(unwrapExpression(call.expression)) &&
+        createRequireBindings.has(unwrapExpression(call.expression).text) &&
+        !isWrapperCreateRequireShadowed(unwrapExpression(call.expression).text)
+      );
+    }
+
+    function isWrapperRequireAliasExpression(expression) {
+      const value = unwrapExpression(expression);
+      return (
+        isWrapperCreateRequireExpression(value) ||
+        (ts.isIdentifier(value) && resolveBodyRequireAlias(value.text))
+      );
+    }
+
+    function markWrapperCreateRequireShadows(name) {
+      for (const bindingName of bindingPatternNames(name)) {
+        if (createRequireBindings.has(bindingName)) {
+          currentWrapperCreateRequireShadowScope().add(bindingName);
+        }
+      }
+    }
+
+    function resolveBodyRequireAlias(name) {
+      for (let index = bodyRequireAliasScopes.length - 1; index >= 0; index--) {
+        const scope = bodyRequireAliasScopes[index];
+        if (scope.has(name)) {
+          return scope.get(name) === true;
+        }
+      }
+      return false;
+    }
+
+    function bodyRequireAliasWriteScope(name) {
+      for (let index = bodyRequireAliasScopes.length - 1; index >= 0; index--) {
+        const scope = bodyRequireAliasScopes[index];
+        if (scope.has(name)) {
+          return scope;
+        }
+      }
+      return currentBodyRequireAliasScope();
     }
 
     function shadowVisibleBodyFsWriteObjectAliases(objectName) {
@@ -3260,7 +3409,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
     function isWrapperFsBindingExpression(expression) {
       const initializer = unwrapExpression(expression);
       if (
-        isFsRequireExpression(initializer, isWrapperRequireShadowed) ||
+        isFsRequireExpression(initializer, isWrapperRequireName) ||
         isFsDynamicImportExpression(initializer)
       ) {
         return true;
@@ -3273,7 +3422,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
       return (
         ts.isPropertyAccessExpression(initializer) &&
         initializer.name.text === "promises" &&
-        (isFsRequireExpression(initializer.expression, isWrapperRequireShadowed) ||
+        (isFsRequireExpression(initializer.expression, isWrapperRequireName) ||
           isFsDynamicImportExpression(initializer.expression) ||
           (ts.isIdentifier(initializer.expression) &&
             !isFsModuleShadowed(initializer.expression.text) &&
@@ -3293,7 +3442,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
     function isWrapperFsModuleExpression(expression) {
       const receiver = unwrapExpression(expression);
       if (
-        isFsRequireExpression(receiver, isWrapperRequireShadowed) ||
+        isFsRequireExpression(receiver, isWrapperRequireName) ||
         isFsDynamicImportExpression(receiver)
       ) {
         return true;
@@ -3308,7 +3457,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
       return (
         ts.isPropertyAccessExpression(receiver) &&
         receiver.name.text === "promises" &&
-        (isFsRequireExpression(receiver.expression, isWrapperRequireShadowed) ||
+        (isFsRequireExpression(receiver.expression, isWrapperRequireName) ||
           isFsDynamicImportExpression(receiver.expression) ||
           (ts.isIdentifier(receiver.expression) &&
             !isFsModuleShadowed(receiver.expression.text) &&
@@ -3393,6 +3542,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
       markFsAliasShadows(parameter.name);
       markFsModuleShadows(parameter.name);
       markWrapperRequireShadows(parameter.name);
+      markWrapperCreateRequireShadows(parameter.name);
       registerBodyFsModuleTypeProperties(parameter.name, parameter.type);
       for (const [name, binding] of parameterPropertyBindings(parameter, index)) {
         currentDestructuredParameterPropertyScope().set(name, binding);
@@ -3400,6 +3550,15 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
     });
 
     const propertyUses = new Map();
+    function registerHoistedWrapperFunctionShadows(statements) {
+      for (const statement of statements) {
+        if (ts.isFunctionDeclaration(statement) && statement.name) {
+          markWrapperRequireShadows(statement.name);
+          markWrapperCreateRequireShadows(statement.name);
+        }
+      }
+    }
+
     function visitBody(current) {
       if (current !== node && ts.isFunctionLike(current)) {
         return;
@@ -3486,6 +3645,9 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
           ts.isCatchClause(current))
       ) {
         pushWrapperBodyScope();
+        if ("statements" in current) {
+          registerHoistedWrapperFunctionShadows(current.statements);
+        }
         ts.forEachChild(current, visitBody);
         popWrapperBodyScope();
         return;
@@ -3502,18 +3664,24 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
         );
         if (ts.isIdentifier(current.name)) {
           shadowVisibleBodyFsWriteObjectAliases(current.name.text);
+          if (current.initializer && isWrapperRequireAliasExpression(current.initializer)) {
+            currentBodyRequireAliasScope().set(current.name.text, true);
+          } else {
+            markWrapperRequireShadows(current.name);
+          }
           if (current.initializer && isWrapperFsBindingExpression(current.initializer)) {
             currentBodyFsModuleBindingScope().set(current.name.text, true);
           } else {
             markFsModuleShadows(current.name);
           }
-          markWrapperRequireShadows(current.name);
           if (current.initializer) {
             registerBodyFsWriteObjectAliases(current.name.text, current.initializer);
           }
+          markWrapperCreateRequireShadows(current.name);
         } else if (!isFsAliasBinding) {
           markFsModuleShadows(current.name);
           markWrapperRequireShadows(current.name);
+          markWrapperCreateRequireShadows(current.name);
         }
         const initializerPropertyAccess = current.initializer
           ? namedObjectPropertyAccess(current.initializer)
@@ -3574,6 +3742,14 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
           current.left.text,
           legacyWrapperFsWriteName(current.right),
         );
+        const requireAliasScope = bodyRequireAliasWriteScope(current.left.text);
+        const nextRequireAlias = isWrapperRequireAliasExpression(current.right);
+        requireAliasScope.set(
+          current.left.text,
+          currentConditionalWrapperBodyScope()
+            ? requireAliasScope.get(current.left.text) === true || nextRequireAlias
+            : nextRequireAlias,
+        );
         shadowVisibleBodyFsWriteObjectAliases(current.left.text);
         clearBodyFsWriteObjectAliases(currentBodyFsWriteAliasScope(), current.left.text);
         registerBodyFsWriteObjectAliases(current.left.text, current.right);
@@ -3617,6 +3793,8 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
             record.aliases,
             record.moduleBindings,
             record.moduleProperties,
+            record.requireAliases,
+            record.createRequireShadows,
             activeWrapperNodes,
           );
           for (const [index, propertyNames] of forwardedPropertyUses) {
@@ -3637,6 +3815,9 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
       ts.forEachChild(current, visitBody);
     }
     if (node.body) {
+      if ("statements" in node.body) {
+        registerHoistedWrapperFunctionShadows(node.body.statements);
+      }
       visitBody(node.body);
     }
     activeWrapperNodes.delete(node);
@@ -3644,12 +3825,16 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
   }
 
   function wrapperRecordForNode(node) {
+    const requireAliasSnapshot = visibleRequireAliasSnapshot();
     return {
       aliases: visibleFsWriteAliases(),
+      createRequireShadows: visibleCreateRequireShadows(),
       lexicalScopeIndex: wrapperFunctionScopes.length - 1,
       moduleBindings: visibleFsModuleBindings(),
       moduleProperties: visibleFsModuleProperties(),
       node,
+      requireAliases: requireAliasSnapshot.aliases,
+      requireAliasSourceScopes: requireAliasSnapshot.sourceScopes,
     };
   }
 
@@ -3769,10 +3954,13 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
   function cloneWrapperRecord(record) {
     return {
       aliases: new Map(record.aliases),
+      createRequireShadows: new Set(record.createRequireShadows),
       lexicalScopeIndex: record.lexicalScopeIndex,
       moduleBindings: new Map(record.moduleBindings),
       moduleProperties: new Map(record.moduleProperties),
       node: record.node,
+      requireAliases: new Map(record.requireAliases),
+      requireAliasSourceScopes: new Map(record.requireAliasSourceScopes),
     };
   }
 
@@ -3788,6 +3976,8 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
     const aliases = visibleFsWriteAliases();
     const moduleBindings = visibleFsModuleBindings();
     const moduleProperties = visibleFsModuleProperties();
+    const requireAliasSnapshot = visibleRequireAliasSnapshot();
+    const createRequireShadows = visibleCreateRequireShadows();
     const currentLexicalScopeIndex = wrapperFunctionScopes.length - 1;
     for (const value of currentWrapperFunctionScope().values()) {
       for (const record of wrapperRecords(value)) {
@@ -3797,13 +3987,54 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
         record.aliases = aliases;
         record.moduleBindings = moduleBindings;
         record.moduleProperties = moduleProperties;
+        record.requireAliases = requireAliasSnapshot.aliases;
+        record.requireAliasSourceScopes = requireAliasSnapshot.sourceScopes;
+        record.createRequireShadows = createRequireShadows;
       }
+    }
+  }
+
+  function refreshWrapperRequireAliasesAtScope(scopeIndex) {
+    const wrapperScope = wrapperFunctionScopes[scopeIndex];
+    if (!wrapperScope) {
+      return;
+    }
+    const requireAliasSnapshot = visibleRequireAliasSnapshot(scopeIndex);
+    for (const value of wrapperScope.values()) {
+      for (const record of wrapperRecords(value)) {
+        if (record.lexicalScopeIndex === scopeIndex) {
+          record.requireAliases = requireAliasSnapshot.aliases;
+          record.requireAliasSourceScopes = requireAliasSnapshot.sourceScopes;
+          continue;
+        }
+        if (record.lexicalScopeIndex > scopeIndex) {
+          for (const [name, alias] of requireAliasSnapshot.aliases) {
+            const recordSourceScope = record.requireAliasSourceScopes.get(name);
+            if (recordSourceScope === undefined || recordSourceScope <= scopeIndex) {
+              record.requireAliases.set(name, alias);
+              record.requireAliasSourceScopes.set(
+                name,
+                requireAliasSnapshot.sourceScopes.get(name) ?? scopeIndex,
+              );
+            }
+          }
+        }
+      }
+    }
+  }
+
+  function refreshWrapperRequireAliasesFromScope(scopeIndex) {
+    for (let index = scopeIndex; index < wrapperFunctionScopes.length; index++) {
+      refreshWrapperRequireAliasesAtScope(index);
     }
   }
 
   function registerHoistedWrapperFunctions(statements) {
     for (const statement of statements) {
       if (ts.isFunctionDeclaration(statement) && statement.name) {
+        markRequireShadows(statement.name);
+        markCreateRequireShadows(statement.name);
+        currentRequireAliasScope().set(statement.name.text, false);
         registerWrapperFunction(statement.name.text, statement);
       }
     }
@@ -3979,6 +4210,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
     fsSafeJsonStoreScopes.push(new Map());
     fsModuleBindingScopes.push(new Map());
     fsModulePropertyScopes.push(new Map());
+    requireAliasScopes.push(new Map());
     requireShadowScopes.push(new Set());
     createRequireShadowScopes.push(new Set());
     legacyPathScopes.push(new Map());
@@ -4000,6 +4232,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
     fsWriteAliasScopes.pop();
     createRequireShadowScopes.pop();
     requireShadowScopes.pop();
+    requireAliasScopes.pop();
     conditionalExecutionScopes.pop();
   }
 
@@ -4039,6 +4272,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
       fsSafeJsonStoreScopes.push(new Map());
       fsModuleBindingScopes.push(new Map());
       fsModulePropertyScopes.push(new Map());
+      requireAliasScopes.push(new Map());
       requireShadowScopes.push(new Set());
       createRequireShadowScopes.push(new Set());
       legacyPathScopes.push(new Map());
@@ -4069,6 +4303,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
       fsWriteAliasScopes.pop();
       createRequireShadowScopes.pop();
       requireShadowScopes.pop();
+      requireAliasScopes.pop();
       return;
     }
 
@@ -4080,6 +4315,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
       fsSafeJsonStoreScopes.push(new Map());
       fsModuleBindingScopes.push(new Map());
       fsModulePropertyScopes.push(new Map());
+      requireAliasScopes.push(new Map());
       requireShadowScopes.push(new Set());
       createRequireShadowScopes.push(new Set());
       legacyPathScopes.push(new Map());
@@ -4105,6 +4341,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
       fsWriteAliasScopes.pop();
       createRequireShadowScopes.pop();
       requireShadowScopes.pop();
+      requireAliasScopes.pop();
       return;
     }
 
@@ -4149,6 +4386,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
         if (!(node.name.text === "require" && isCreateRequireExpression(node.initializer))) {
           markRequireShadows(node.name);
         }
+        currentRequireAliasScope().set(node.name.text, isRequireAliasExpression(node.initializer));
         markCreateRequireShadows(node.name);
         collectFsWriteAliasesFromBinding(node);
         markFsWriteAliasShadows(node.name);
@@ -4188,6 +4426,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
         currentFsSafeStoreFactoryAliasScope().set(node.name.text, null);
         currentFsSafeStoreScope().set(node.name.text, false);
         currentFsSafeJsonStoreScope().set(node.name.text, false);
+        currentRequireAliasScope().set(node.name.text, false);
         currentLegacyPathScope().set(node.name.text, false);
         currentLiteralTextScope().set(node.name.text, null);
         currentWrapperFunctionScope().set(node.name.text, null);
@@ -4221,6 +4460,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
         currentFsSafeStoreFactoryAliasScope().set(name, null);
         currentFsSafeStoreScope().set(name, false);
         currentFsSafeJsonStoreScope().set(name, false);
+        currentRequireAliasScope().set(name, false);
         currentLegacyPathScope().set(name, false);
         currentLiteralTextScope().set(name, null);
         currentWrapperFunctionScope().set(name, null);
@@ -4250,6 +4490,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
       const nextFsSafeFactoryAlias = fsSafeStoreFactoryAliasName(node.right);
       const nextFsSafeStoreValue = isFsSafeStoreExpression(node.right);
       const nextFsSafeJsonStoreValue = expressionContainsFsSafeJsonStoreLegacyPath(node.right);
+      const nextRequireAlias = isRequireAliasExpression(node.right);
       const conditionalWrite =
         currentConditionalExecutionScope() && !conditionalExecutionScopes[index];
       pathScope.set(
@@ -4288,6 +4529,10 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
         );
         fsSafeStoreWriteScope(node.left.text).set(node.left.text, nextFsSafeStoreValue);
         fsSafeJsonStoreWriteScope(node.left.text).set(node.left.text, nextFsSafeJsonStoreValue);
+        const requireAliasTarget = requireAliasWriteTarget(node.left.text);
+        requireAliasTarget.scope.set(node.left.text, nextRequireAlias);
+        refreshCurrentWrapperFunctionAliases();
+        refreshWrapperRequireAliasesFromScope(requireAliasTarget.index);
         markFsModulePropertyShadows(node.left);
         clearLegacyObjectProperties(propertyScope, node.left.text);
         markLegacyObjectProperties(node.left.text, node.right, propertyScope);
@@ -4331,11 +4576,17 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
           node.left.text,
           fsSafeJsonStoreScope.get(node.left.text) === true || nextFsSafeJsonStoreValue,
         );
+        requireAliasScopes[index].set(
+          node.left.text,
+          requireAliasScopes[index].get(node.left.text) === true || nextRequireAlias,
+        );
         currentFsModuleBindingScope().set(node.left.text, nextFsModuleValue);
         currentFsWriteAliasScope().set(node.left.text, nextFsWriteAlias);
         currentFsSafeStoreFactoryAliasScope().set(node.left.text, nextFsSafeFactoryAlias);
         currentFsSafeStoreScope().set(node.left.text, nextFsSafeStoreValue);
         currentFsSafeJsonStoreScope().set(node.left.text, nextFsSafeJsonStoreValue);
+        currentRequireAliasScope().set(node.left.text, nextRequireAlias);
+        refreshCurrentWrapperFunctionAliases();
         recordBranchFsIdentifierAssignment(
           index,
           node.left.text,
@@ -4344,6 +4595,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
           nextFsSafeFactoryAlias,
           nextFsSafeStoreValue,
           nextFsSafeJsonStoreValue,
+          nextRequireAlias,
         );
         registerFsWriteObjectAliases(node.left.text, node.right, fsWriteAliasScopes[index], true);
         registerFsSafeStoreObjectAliases(
@@ -4505,6 +4757,8 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
           record.aliases,
           record.moduleBindings,
           record.moduleProperties,
+          record.requireAliases,
+          record.createRequireShadows,
         );
         for (const [index, propertyNames] of propertyParameters) {
           const argument = node.arguments[index];
