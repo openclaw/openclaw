@@ -3902,6 +3902,62 @@ describe("check-database-first-legacy-stores", () => {
     expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 668 }]);
   });
 
+  it("allows current legacy-debt writes after harmless line movement", () => {
+    const content = `
+      import path from "node:path";
+      import { writeJson } from "../infra/json-files.js";
+      const STORAGE_META_FILENAME = "storage-meta.json";
+      function writeStoredRootMetadata(filePath: string, metadata: unknown) {
+        return writeJson(filePath, metadata);
+      }
+      ${"\n".repeat(8)}
+      writeStoredRootMetadata(path.join(params.rootDir, STORAGE_META_FILENAME), {
+        homeserver: metadata.homeserver,
+        userId: metadata.userId,
+        accountId: metadata.accountId ?? DEFAULT_ACCOUNT_KEY,
+        accessTokenHash: metadata.accessTokenHash,
+        deviceId: metadata.deviceId ?? null,
+        currentTokenStateClaimed: true,
+        createdAt: metadata.createdAt ?? new Date().toISOString(),
+      });
+    `;
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      content,
+      "extensions/matrix/src/matrix/client/storage.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("flags duplicate copies of current legacy-debt writes", () => {
+    const allowedWrite = `
+      writeStoredRootMetadata(path.join(params.rootDir, STORAGE_META_FILENAME), {
+        homeserver: metadata.homeserver,
+        userId: metadata.userId,
+        accountId: metadata.accountId ?? DEFAULT_ACCOUNT_KEY,
+        accessTokenHash: metadata.accessTokenHash,
+        deviceId: metadata.deviceId ?? null,
+        currentTokenStateClaimed: true,
+        createdAt: metadata.createdAt ?? new Date().toISOString(),
+      });
+    `;
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import path from "node:path";
+        import { writeJson } from "../infra/json-files.js";
+        const STORAGE_META_FILENAME = "storage-meta.json";
+        function writeStoredRootMetadata(filePath: string, metadata: unknown) {
+          return writeJson(filePath, metadata);
+        }
+        ${allowedWrite}
+        ${allowedWrite}
+      `,
+      "extensions/matrix/src/matrix/client/storage.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 20 }]);
+  });
+
   it("allows doctor and migration owners to import or archive legacy files", () => {
     const violations = collectDatabaseFirstLegacyStoreViolations(
       `

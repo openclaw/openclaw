@@ -104,11 +104,11 @@ const allowedFixturePaths = new Set([
   "extensions/qa-matrix/src/runners/contract/scenario-runtime-e2ee-destructive.ts",
 ]);
 
-const allowedCurrentLegacyWriteViolations = new Set([
-  "extensions/matrix/src/matrix/client/storage.ts:668:legacy store filesystem write:writeStoredRootMetadata(path.join(params.rootDir, STORAGE_META_FILENAME), { homeserver: metadata.homeserver, userId: metadata.userId, accountId: metadata.accountId ?? DEFAULT_ACCOUNT_KEY, accessTokenHash: metadata.accessTokenHash, deviceId: metadata.deviceId ?? null, currentTokenStateClaimed: true, createdAt: metadata.createdAt ?? new Date().toISOString(), })",
-  "extensions/matrix/src/matrix/client/storage.ts:691:legacy store filesystem write:writeStoredRootMetadata(path.join(params.rootDir, STORAGE_META_FILENAME), { homeserver: metadata.homeserver, userId: metadata.userId, accountId: metadata.accountId ?? DEFAULT_ACCOUNT_KEY, accessTokenHash: metadata.accessTokenHash, deviceId, currentTokenStateClaimed: metadata.currentTokenStateClaimed === true, createdAt: metadata.createdAt ?? new Date().toISOString(), })",
-  "extensions/memory-wiki/src/compile.ts:1346:legacy store filesystem write:root.write(relativePath, content)",
-]);
+const allowedCurrentLegacyWriteViolations = [
+  "extensions/matrix/src/matrix/client/storage.ts:legacy store filesystem write:writeStoredRootMetadata(path.join(params.rootDir, STORAGE_META_FILENAME), { homeserver: metadata.homeserver, userId: metadata.userId, accountId: metadata.accountId ?? DEFAULT_ACCOUNT_KEY, accessTokenHash: metadata.accessTokenHash, deviceId: metadata.deviceId ?? null, currentTokenStateClaimed: true, createdAt: metadata.createdAt ?? new Date().toISOString(), })",
+  "extensions/matrix/src/matrix/client/storage.ts:legacy store filesystem write:writeStoredRootMetadata(path.join(params.rootDir, STORAGE_META_FILENAME), { homeserver: metadata.homeserver, userId: metadata.userId, accountId: metadata.accountId ?? DEFAULT_ACCOUNT_KEY, accessTokenHash: metadata.accessTokenHash, deviceId, currentTokenStateClaimed: metadata.currentTokenStateClaimed === true, createdAt: metadata.createdAt ?? new Date().toISOString(), })",
+  "extensions/memory-wiki/src/compile.ts:legacy store filesystem write:root.write(relativePath, content)",
+];
 
 const sourceFileExtensions = new Set([".cjs", ".cts", ".js", ".mjs", ".mts", ".ts", ".tsx"]);
 
@@ -178,10 +178,32 @@ function normalizedSourceText(sourceFile, node) {
   return node.getText(sourceFile).replace(/\s+/gu, " ");
 }
 
-function isAllowedCurrentLegacyViolation(relativePath, sourceFile, fingerprintNode, line, kind) {
-  return allowedCurrentLegacyWriteViolations.has(
-    `${relativePath}:${line}:${kind}:${normalizedSourceText(sourceFile, fingerprintNode)}`,
-  );
+function currentLegacyWriteViolationAllowances() {
+  const allowances = new Map();
+  for (const fingerprint of allowedCurrentLegacyWriteViolations) {
+    allowances.set(fingerprint, (allowances.get(fingerprint) ?? 0) + 1);
+  }
+  return allowances;
+}
+
+function consumeAllowedCurrentLegacyViolation(
+  allowances,
+  relativePath,
+  sourceFile,
+  fingerprintNode,
+  kind,
+) {
+  const fingerprint = `${relativePath}:${kind}:${normalizedSourceText(sourceFile, fingerprintNode)}`;
+  const remaining = allowances.get(fingerprint) ?? 0;
+  if (remaining === 0) {
+    return false;
+  }
+  if (remaining === 1) {
+    allowances.delete(fingerprint);
+  } else {
+    allowances.set(fingerprint, remaining - 1);
+  }
+  return true;
 }
 
 function isSourceFile(filePath) {
@@ -430,6 +452,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
   }
 
   const sourceFile = ts.createSourceFile(relativePath, content, ts.ScriptTarget.Latest, true);
+  const currentLegacyWriteAllowances = currentLegacyWriteViolationAllowances();
   const createRequireBindings = collectCreateRequireBindings(sourceFile);
   const { fsModuleBindings, fsWriteAliases, fsSafeStoreFactoryAliases } =
     collectFsBindings(sourceFile);
@@ -453,7 +476,15 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
 
   function addViolation(node, kind, fingerprintNode = node) {
     const line = toLine(sourceFile, node);
-    if (isAllowedCurrentLegacyViolation(relativePath, sourceFile, fingerprintNode, line, kind)) {
+    if (
+      consumeAllowedCurrentLegacyViolation(
+        currentLegacyWriteAllowances,
+        relativePath,
+        sourceFile,
+        fingerprintNode,
+        kind,
+      )
+    ) {
       return;
     }
     const key = `${line}:${kind}`;
