@@ -68,8 +68,13 @@ import {
   type QaRuntimeParityTier,
 } from "./scenario-catalog.js";
 import { resolveQaScenarioPackScenarioIds } from "./scenario-packs.js";
-import { runQaSuiteFromRuntime, type QaSuiteRuntimeResult } from "./suite-launch.runtime.js";
+import {
+  runQaFlowSuiteFromRuntime,
+  runQaSuiteFromRuntime,
+  type QaSuiteRuntimeResult,
+} from "./suite-launch.runtime.js";
 import { readQaSuiteFailedOrSkippedScenarioCountFromFile } from "./suite-summary.js";
+import type { QaSuiteResult } from "./suite.js";
 import {
   buildTokenEfficiencyReport,
   renderTokenEfficiencyMarkdownReport,
@@ -276,13 +281,7 @@ function hasQaSuiteRetryableNetworkCode(error: unknown) {
   return false;
 }
 
-function isQaTestFileSuiteResult(
-  result: QaSuiteRuntimeResult,
-): result is Extract<QaSuiteRuntimeResult, { evidencePath: string }> {
-  return "evidencePath" in result;
-}
-
-async function assertQaSuiteArtifacts(result: QaSuiteRuntimeResult) {
+async function assertQaSuiteReportArtifact(result: { reportPath: string }) {
   try {
     await fs.access(result.reportPath);
   } catch (error) {
@@ -292,11 +291,20 @@ async function assertQaSuiteArtifacts(result: QaSuiteRuntimeResult) {
       { cause: error },
     );
   }
-  if (isQaTestFileSuiteResult(result)) {
-    await fs.access(result.evidencePath);
+}
+
+async function assertQaFlowSuiteArtifacts(result: QaSuiteResult) {
+  await assertQaSuiteReportArtifact(result);
+  await readQaSuiteFailedOrSkippedScenarioCountFromFile(result.summaryPath);
+}
+
+async function assertQaSuiteArtifacts(result: QaSuiteRuntimeResult) {
+  if (result.executionKind === "test-file") {
+    await assertQaSuiteReportArtifact(result.result);
+    await fs.access(result.result.evidencePath);
     return;
   }
-  await readQaSuiteFailedOrSkippedScenarioCountFromFile(result.summaryPath);
+  await assertQaFlowSuiteArtifacts(result.result);
 }
 
 async function runQaSuiteFromRuntimeWithInfraRetry(
@@ -307,6 +315,28 @@ async function runQaSuiteFromRuntimeWithInfraRetry(
     try {
       const result = await runQaSuiteFromRuntime(params);
       await assertQaSuiteArtifacts(result);
+      return result;
+    } catch (error) {
+      const retryable = isQaSuiteInfraRetryableError(error);
+      if (!retryable || attempt >= maxRetries) {
+        throw error;
+      }
+      process.stderr.write(
+        `[qa-suite] infra retry ${attempt + 1}/${maxRetries}: ${formatErrorMessage(error)}\n`,
+      );
+    }
+  }
+  throw new Error("unreachable qa suite retry state");
+}
+
+async function runQaFlowSuiteFromRuntimeWithInfraRetry(
+  params: Parameters<typeof runQaFlowSuiteFromRuntime>[0],
+  maxRetries = QA_SUITE_INFRA_RETRY_LIMIT,
+) {
+  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    try {
+      const result = await runQaFlowSuiteFromRuntime(params);
+      await assertQaFlowSuiteArtifacts(result);
       return result;
     } catch (error) {
       const retryable = isQaSuiteInfraRetryableError(error);
@@ -336,7 +366,7 @@ async function runQaParityPreflight(params: {
     "preflight",
     `suite-${Date.now().toString(36)}`,
   );
-  const result = await runQaSuiteFromRuntimeWithInfraRetry({
+  const result = await runQaFlowSuiteFromRuntimeWithInfraRetry({
     repoRoot: params.repoRoot,
     outputDir,
     transportId: params.transportId,
@@ -346,9 +376,6 @@ async function runQaParityPreflight(params: {
     scenarioIds: ["approval-turn-tool-followthrough"],
     concurrency: 1,
   });
-  if (isQaTestFileSuiteResult(result)) {
-    throw new Error("QA parity preflight requires execution.kind: flow scenarios.");
-  }
   process.stdout.write(`QA parity preflight watch: ${result.watchUrl}\n`);
   process.stdout.write(`QA parity preflight report: ${result.reportPath}\n`);
   process.stdout.write(`QA parity preflight summary: ${result.summaryPath}\n`);
@@ -690,7 +717,7 @@ export async function runQaSuiteCommand(opts: {
     return;
   }
   const thinkingDefault = parseQaThinkingLevel("--thinking", opts.thinking);
-  const result = await runQaSuiteFromRuntimeWithInfraRetry({
+  const runtimeResult = await runQaSuiteFromRuntimeWithInfraRetry({
     repoRoot,
     outputDir: resolveRepoRelativeOutputDir(repoRoot, opts.outputDir),
     transportId,
@@ -707,7 +734,8 @@ export async function runQaSuiteCommand(opts: {
       : {}),
     ...(runtimePair ? { runtimePair } : {}),
   });
-  if (isQaTestFileSuiteResult(result)) {
+  if (runtimeResult.executionKind === "test-file") {
+    const result = runtimeResult.result;
     process.stdout.write(`QA suite report: ${result.reportPath}\n`);
     process.stdout.write(`QA suite evidence: ${result.evidencePath}\n`);
     if (!allowFailures && result.results.some((scenario) => scenario.status !== "pass")) {
@@ -715,6 +743,7 @@ export async function runQaSuiteCommand(opts: {
     }
     return;
   }
+  const result = runtimeResult.result;
   process.stdout.write(`QA suite watch: ${result.watchUrl}\n`);
   process.stdout.write(`QA suite report: ${result.reportPath}\n`);
   process.stdout.write(`QA suite summary: ${result.summaryPath}\n`);

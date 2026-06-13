@@ -103,16 +103,6 @@ type RunJudgeFn = (params: {
   timeoutMs: number;
 }) => Promise<string | null>;
 
-function isQaFlowSuiteResult(result: unknown): result is QaSuiteResult {
-  return (
-    result !== null &&
-    result !== undefined &&
-    typeof result === "object" &&
-    "summaryPath" in result &&
-    "watchUrl" in result
-  );
-}
-
 export type QaCharacterEvalParams = {
   repoRoot?: string;
   outputDir?: string;
@@ -436,12 +426,8 @@ async function defaultRunJudge(params: {
 }
 
 async function defaultRunSuite(params: Parameters<RunSuiteFn>[0]) {
-  const { runQaSuiteFromRuntime } = await import("./suite-launch.runtime.js");
-  const result = await runQaSuiteFromRuntime(params);
-  if (!isQaFlowSuiteResult(result)) {
-    throw new Error("character eval requires execution.kind: flow scenarios.");
-  }
-  return result;
+  const { runQaFlowSuiteFromRuntime } = await import("./suite-launch.runtime.js");
+  return await runQaFlowSuiteFromRuntime(params);
 }
 
 function renderCharacterEvalReport(params: {

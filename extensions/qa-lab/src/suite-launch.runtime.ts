@@ -10,7 +10,15 @@ import {
   type QaTestFileScenarioRunResult,
 } from "./test-file-scenario-runner.js";
 
-export type QaSuiteRuntimeResult = QaSuiteResult | QaTestFileScenarioRunResult;
+export type QaSuiteRuntimeResult =
+  | {
+      executionKind: "flow";
+      result: QaSuiteResult;
+    }
+  | {
+      executionKind: "test-file";
+      result: QaTestFileScenarioRunResult;
+    };
 
 async function loadQaLabServerRuntime() {
   const { startQaLabServer } = await import("./lab-server.js");
@@ -76,8 +84,20 @@ export async function runQaSuiteFromRuntime(
 ): Promise<QaSuiteRuntimeResult> {
   const testFileResult = await runQaTestFileSuiteIfSelected(args[0]);
   if (testFileResult) {
-    return testFileResult;
+    return {
+      executionKind: "test-file",
+      result: testFileResult,
+    };
   }
+  return {
+    executionKind: "flow",
+    result: await runQaFlowSuiteFromRuntime(...args),
+  };
+}
+
+export async function runQaFlowSuiteFromRuntime(
+  ...args: [QaSuiteRunParams?]
+): Promise<QaSuiteResult> {
   const { runQaSuite } = await import("./suite.js");
   const params = args[0];
   return await runQaSuite({

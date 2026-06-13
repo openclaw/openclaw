@@ -54,12 +54,18 @@ describe("qa suite runtime launcher", () => {
   });
 
   it("routes selected flow scenarios to the flow suite engine", async () => {
-    await runQaSuiteFromRuntime({
+    const result = await runQaSuiteFromRuntime({
       repoRoot: process.cwd(),
       providerMode: "mock-openai",
       scenarioIds: ["channel-chat-baseline"],
     });
 
+    expect(result).toMatchObject({
+      executionKind: "flow",
+      result: {
+        summaryPath: "/tmp/qa-flow/qa-suite-summary.json",
+      },
+    });
     expect(runQaSuite).toHaveBeenCalledTimes(1);
     expect(runQaSuite).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -82,7 +88,10 @@ describe("qa suite runtime launcher", () => {
     });
 
     expect(result).toMatchObject({
-      evidencePath: "/tmp/qa-test-file/qa-evidence.json",
+      executionKind: "test-file",
+      result: {
+        evidencePath: "/tmp/qa-test-file/qa-evidence.json",
+      },
     });
     expect(runQaSuite).not.toHaveBeenCalled();
     expect(runQaTestFileScenarios).toHaveBeenCalledTimes(1);

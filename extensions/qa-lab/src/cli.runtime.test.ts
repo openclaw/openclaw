@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   runQaManualLane,
+  runQaFlowSuiteFromRuntime,
   runQaSuiteFromRuntime,
   runQaCharacterEval,
   runQaMultipass,
@@ -18,6 +19,7 @@ const {
   defaultQaRuntimeModelForMode,
 } = vi.hoisted(() => ({
   runQaManualLane: vi.fn(),
+  runQaFlowSuiteFromRuntime: vi.fn(),
   runQaSuiteFromRuntime: vi.fn(),
   runQaCharacterEval: vi.fn(),
   runQaMultipass: vi.fn(),
@@ -36,6 +38,7 @@ vi.mock("./manual-lane.runtime.js", () => ({
 }));
 
 vi.mock("./suite-launch.runtime.js", () => ({
+  runQaFlowSuiteFromRuntime,
   runQaSuiteFromRuntime,
 }));
 
@@ -115,6 +118,41 @@ function expectWriteContains(mock: unknown, fragment: string): void {
   ).toBe(true);
 }
 
+function flowSuiteRuntimeResult(params: {
+  reportPath: string;
+  summaryPath: string;
+  scenarios?: unknown[];
+}) {
+  return {
+    executionKind: "flow",
+    result: {
+      outputDir: path.dirname(params.reportPath),
+      reportPath: params.reportPath,
+      summaryPath: params.summaryPath,
+      report: "# QA Suite Report\n",
+      scenarios: params.scenarios ?? [],
+      watchUrl: "http://127.0.0.1:43124",
+    },
+  };
+}
+
+function testFileSuiteRuntimeResult(params: {
+  evidencePath: string;
+  outputDir: string;
+  reportPath: string;
+  results?: unknown[];
+}) {
+  return {
+    executionKind: "test-file",
+    result: {
+      outputDir: params.outputDir,
+      reportPath: params.reportPath,
+      evidencePath: params.evidencePath,
+      results: params.results ?? [{ status: "pass" }],
+    },
+  };
+}
+
 describe("qa cli runtime", () => {
   let stdoutWrite: ReturnType<typeof vi.spyOn>;
   let stderrWrite: ReturnType<typeof vi.spyOn>;
@@ -157,6 +195,7 @@ describe("qa cli runtime", () => {
     );
     stdoutWrite = vi.spyOn(process.stdout, "write").mockReturnValue(true);
     stderrWrite = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    runQaFlowSuiteFromRuntime.mockReset();
     runQaSuiteFromRuntime.mockReset();
     runQaCharacterEval.mockReset();
     runQaManualLane.mockReset();
@@ -171,7 +210,13 @@ describe("qa cli runtime", () => {
       (mode: string, options?: { alternate?: boolean }) =>
         defaultQaProviderModelForMode(mode as QaProviderModeInput, options),
     );
-    runQaSuiteFromRuntime.mockResolvedValue({
+    runQaSuiteFromRuntime.mockResolvedValue(
+      flowSuiteRuntimeResult({
+        reportPath: suiteReportPath,
+        summaryPath: suiteSummaryPath,
+      }),
+    );
+    runQaFlowSuiteFromRuntime.mockResolvedValue({
       watchUrl: "http://127.0.0.1:43124",
       reportPath: suiteReportPath,
       summaryPath: suiteSummaryPath,
@@ -245,12 +290,13 @@ describe("qa cli runtime", () => {
   it("runs selected Playwright scenarios through the suite command", async () => {
     const evidencePath = path.join(suiteArtifactsDir, "qa-evidence.json");
     await fs.writeFile(evidencePath, JSON.stringify({ entries: [] }), "utf8");
-    runQaSuiteFromRuntime.mockResolvedValueOnce({
-      outputDir: suiteArtifactsDir,
-      reportPath: suiteReportPath,
-      evidencePath,
-      results: [{ status: "pass" }],
-    });
+    runQaSuiteFromRuntime.mockResolvedValueOnce(
+      testFileSuiteRuntimeResult({
+        outputDir: suiteArtifactsDir,
+        reportPath: suiteReportPath,
+        evidencePath,
+      }),
+    );
 
     await runQaSuiteCommand({
       repoRoot: process.cwd(),
@@ -570,12 +616,12 @@ describe("qa cli runtime", () => {
       }),
       "utf8",
     );
-    runQaSuiteFromRuntime.mockResolvedValueOnce({
-      watchUrl: "http://127.0.0.1:43124",
-      reportPath: suiteReportPath,
-      summaryPath: suiteSummaryPath,
-      scenarios: [],
-    });
+    runQaSuiteFromRuntime.mockResolvedValueOnce(
+      flowSuiteRuntimeResult({
+        reportPath: suiteReportPath,
+        summaryPath: suiteSummaryPath,
+      }),
+    );
 
     try {
       await runQaSuiteCommand({
@@ -603,12 +649,12 @@ describe("qa cli runtime", () => {
       }),
       "utf8",
     );
-    runQaSuiteFromRuntime.mockResolvedValueOnce({
-      watchUrl: "http://127.0.0.1:43124",
-      reportPath: suiteReportPath,
-      summaryPath: suiteSummaryPath,
-      scenarios: [],
-    });
+    runQaSuiteFromRuntime.mockResolvedValueOnce(
+      flowSuiteRuntimeResult({
+        reportPath: suiteReportPath,
+        summaryPath: suiteSummaryPath,
+      }),
+    );
 
     try {
       await runQaSuiteCommand({
@@ -635,18 +681,19 @@ describe("qa cli runtime", () => {
       }),
       "utf8",
     );
-    runQaSuiteFromRuntime.mockResolvedValueOnce({
-      watchUrl: "http://127.0.0.1:43124",
-      reportPath: suiteReportPath,
-      summaryPath: suiteSummaryPath,
-      scenarios: [
-        {
-          name: "channel chat baseline",
-          status: "fail",
-          steps: [],
-        },
-      ],
-    });
+    runQaSuiteFromRuntime.mockResolvedValueOnce(
+      flowSuiteRuntimeResult({
+        reportPath: suiteReportPath,
+        summaryPath: suiteSummaryPath,
+        scenarios: [
+          {
+            name: "channel chat baseline",
+            status: "fail",
+            steps: [],
+          },
+        ],
+      }),
+    );
 
     try {
       await runQaSuiteCommand({
@@ -664,12 +711,12 @@ describe("qa cli runtime", () => {
       .mockRejectedValueOnce(
         new QaSuiteInfraError("agent_wait_failed", "agent.wait failed: gateway call timed out"),
       )
-      .mockResolvedValueOnce({
-        watchUrl: "http://127.0.0.1:43124",
-        reportPath: suiteReportPath,
-        summaryPath: suiteSummaryPath,
-        scenarios: [],
-      });
+      .mockResolvedValueOnce(
+        flowSuiteRuntimeResult({
+          reportPath: suiteReportPath,
+          summaryPath: suiteSummaryPath,
+        }),
+      );
 
     await runQaSuiteCommand({
       repoRoot: "/tmp/openclaw-repo",
@@ -687,12 +734,12 @@ describe("qa cli runtime", () => {
           "timed out after 180000ms waiting for qa-channel ready; last status: no qa-channel accounts reported",
         ),
       )
-      .mockResolvedValueOnce({
-        watchUrl: "http://127.0.0.1:43124",
-        reportPath: suiteReportPath,
-        summaryPath: suiteSummaryPath,
-        scenarios: [],
-      });
+      .mockResolvedValueOnce(
+        flowSuiteRuntimeResult({
+          reportPath: suiteReportPath,
+          summaryPath: suiteSummaryPath,
+        }),
+      );
 
     await runQaSuiteCommand({
       repoRoot: "/tmp/openclaw-repo",
@@ -734,18 +781,19 @@ describe("qa cli runtime", () => {
       }),
       "utf8",
     );
-    runQaSuiteFromRuntime.mockResolvedValueOnce({
-      watchUrl: "http://127.0.0.1:43124",
-      reportPath: suiteReportPath,
-      summaryPath: suiteSummaryPath,
-      scenarios: [
-        {
-          name: "channel chat baseline",
-          status: "fail",
-          steps: [],
-        },
-      ],
-    });
+    runQaSuiteFromRuntime.mockResolvedValueOnce(
+      flowSuiteRuntimeResult({
+        reportPath: suiteReportPath,
+        summaryPath: suiteSummaryPath,
+        scenarios: [
+          {
+            name: "channel chat baseline",
+            status: "fail",
+            steps: [],
+          },
+        ],
+      }),
+    );
 
     try {
       await runQaSuiteCommand({
@@ -768,7 +816,7 @@ describe("qa cli runtime", () => {
       preflight: true,
     });
 
-    const preflightArgs = mockFirstObjectArg(runQaSuiteFromRuntime);
+    const preflightArgs = mockFirstObjectArg(runQaFlowSuiteFromRuntime);
     expectFields(preflightArgs, {
       repoRoot,
       transportId: "qa-channel",
@@ -797,7 +845,7 @@ describe("qa cli runtime", () => {
       }),
       "utf8",
     );
-    runQaSuiteFromRuntime.mockResolvedValueOnce({
+    runQaFlowSuiteFromRuntime.mockResolvedValueOnce({
       watchUrl: "http://127.0.0.1:43124",
       reportPath: suiteReportPath,
       summaryPath: suiteSummaryPath,
@@ -827,7 +875,7 @@ describe("qa cli runtime", () => {
       }),
       "utf8",
     );
-    runQaSuiteFromRuntime.mockResolvedValueOnce({
+    runQaFlowSuiteFromRuntime.mockResolvedValueOnce({
       watchUrl: "http://127.0.0.1:43124",
       reportPath: suiteReportPath,
       summaryPath: suiteSummaryPath,
