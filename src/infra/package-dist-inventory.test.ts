@@ -202,30 +202,33 @@ describe("package dist inventory", () => {
     },
   );
 
-  it.each(["2026.6.6", "2026.6.6-beta.2", "2026.6.7-alpha.6", "2026.6.10-alpha.2"])(
-    "allows already-published package version %s without content inventory",
-    async (version) => {
-      await withTempDir(
-        { prefix: "openclaw-dist-content-inventory-legacy-" },
-        async (packageRoot) => {
-          const currentFile = path.join(packageRoot, "dist", "current.js");
-          await fs.mkdir(path.dirname(currentFile), { recursive: true });
-          await fs.writeFile(currentFile, "export const value = 1;\n", "utf8");
-          await fs.writeFile(
-            path.join(packageRoot, "package.json"),
-            JSON.stringify({ name: "openclaw", version }),
-            "utf8",
-          );
-          await writePackageDistInventory(packageRoot);
-          await fs.rm(path.join(packageRoot, "dist", "postinstall-content-inventory.json"));
+  it.each([
+    "2026.6.6",
+    "2026.6.6-beta.2",
+    "2026.6.7-alpha.6",
+    "2026.6.7-beta.1",
+    "2026.6.10-alpha.2",
+  ])("allows already-published package version %s without content inventory", async (version) => {
+    await withTempDir(
+      { prefix: "openclaw-dist-content-inventory-legacy-" },
+      async (packageRoot) => {
+        const currentFile = path.join(packageRoot, "dist", "current.js");
+        await fs.mkdir(path.dirname(currentFile), { recursive: true });
+        await fs.writeFile(currentFile, "export const value = 1;\n", "utf8");
+        await fs.writeFile(
+          path.join(packageRoot, "package.json"),
+          JSON.stringify({ name: "openclaw", version }),
+          "utf8",
+        );
+        await writePackageDistInventory(packageRoot);
+        await fs.rm(path.join(packageRoot, "dist", "postinstall-content-inventory.json"));
 
-          await expect(
-            collectPackageDistContentInventoryErrors(packageRoot),
-          ).resolves.toStrictEqual([]);
-        },
-      );
-    },
-  );
+        await expect(collectPackageDistContentInventoryErrors(packageRoot)).resolves.toStrictEqual(
+          [],
+        );
+      },
+    );
+  });
 
   it("keeps npm-omitted dist artifacts out of the inventory", async () => {
     await withTempDir({ prefix: "openclaw-dist-inventory-pack-" }, async (packageRoot) => {

@@ -9,6 +9,7 @@ const LEGACY_CONTENT_INVENTORY_PRERELEASES = new Set([
   "2026.6.7-alpha.4",
   "2026.6.7-alpha.5",
   "2026.6.7-alpha.6",
+  "2026.6.7-beta.1",
   "2026.6.8-alpha.1",
   "2026.6.9-alpha.1",
   "2026.6.9-alpha.2",

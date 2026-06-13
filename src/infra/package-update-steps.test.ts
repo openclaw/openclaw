@@ -159,6 +159,81 @@ describe("runGlobalPackageUpdateSteps", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32").each([
+    ["modified", "outside"],
+    ["deleted", "outside"],
+    ["added", "outside"],
+    ["modified", "inside"],
+    ["deleted", "inside"],
+    ["added", "inside"],
+  ] as const)(
+    "does not reapply %s overrides after a target ancestor becomes an %s symlink",
+    async (overrideKind, redirectKind) => {
+      await withTempDir(
+        {
+          prefix: `openclaw-package-update-local-symlink-race-${overrideKind}-${redirectKind}-`,
+        },
+        async (base) => {
+          const packageRoot = path.join(base, "package");
+          const redirectRoot =
+            redirectKind === "outside"
+              ? path.join(base, "outside")
+              : path.join(packageRoot, "redirect");
+          const indexPath = path.join(packageRoot, "dist", "index.js");
+          const addedPath = path.join(packageRoot, "dist", "local.js");
+          const redirectIndexPath = path.join(redirectRoot, "index.js");
+          const redirectAddedPath = path.join(redirectRoot, "local.js");
+          await writePackageRoot(packageRoot, "1.0.0");
+          if (overrideKind === "modified") {
+            await fs.writeFile(indexPath, "export const local = true;\n", "utf8");
+          } else if (overrideKind === "deleted") {
+            await fs.rm(indexPath);
+          } else {
+            await fs.writeFile(addedPath, "export const local = true;\n", "utf8");
+          }
+
+          const plan = await captureLocalPackageOverrides({ packageRoot });
+          expect(plan).not.toBeNull();
+          await writePackageRoot(packageRoot, "2.0.0");
+          if (overrideKind === "added") {
+            await fs.rm(addedPath);
+            await writePackageDistInventory(packageRoot);
+          }
+          await fs.mkdir(redirectRoot, { recursive: true });
+          await fs.writeFile(redirectIndexPath, "export const redirect = true;\n", "utf8");
+
+          const realMkdtemp = fs.mkdtemp.bind(fs);
+          const mkdtempSpy = vi
+            .spyOn(fs, "mkdtemp")
+            .mockImplementation(async (prefixArg, options) => {
+              if (prefixArg.endsWith(`${path.sep}rollback-`)) {
+                await fs.rm(path.join(packageRoot, "dist"), { recursive: true, force: true });
+                await fs.symlink(redirectRoot, path.join(packageRoot, "dist"), "dir");
+              }
+              return await realMkdtemp(prefixArg, options);
+            });
+
+          try {
+            const result = await applyLocalPackageOverrides({
+              packageRoot,
+              plan,
+              reapply: true,
+            });
+
+            expect(result.status).toBe("error");
+            expect(result.applied).toBe(0);
+            await expect(fs.readFile(redirectIndexPath, "utf8")).resolves.toBe(
+              "export const redirect = true;\n",
+            );
+            await expectPathMissing(redirectAddedPath);
+          } finally {
+            mkdtempSpy.mockRestore();
+          }
+        },
+      );
+    },
+  );
+
   it.runIf(process.platform !== "win32").each(["modified", "deleted"] as const)(
     "does not reapply %s overrides over upstream mode changes",
     async (overrideKind) => {
@@ -2807,7 +2882,7 @@ describe("runGlobalPackageUpdateSteps", () => {
           const globalDir = path.join(base, "pnpm", "global");
           const globalRoot = path.join(globalDir, "5", "node_modules");
           const packageRoot = path.join(globalRoot, "openclaw");
-          await writePackageRoot(packageRoot, "2026.6.6");
+          await writePackageRoot(packageRoot, "2026.6.7-beta.1");
           await fs.rm(path.join(packageRoot, "dist", "postinstall-content-inventory.json"));
 
           const runStep = vi.fn(async ({ name, argv, cwd }): Promise<PackageUpdateStepResult> => {
@@ -3098,12 +3173,15 @@ describe("runGlobalPackageUpdateSteps", () => {
         expect(plan).not.toBeNull();
         await writePackageRoot(packageRoot, "2.0.0");
 
-        const realChmod = fs.chmod.bind(fs);
-        const chmodSpy = vi.spyOn(fs, "chmod").mockImplementation(async (targetPath, mode) => {
-          if (targetPath === indexPath) {
-            throw createFsError("EACCES", "override chmod failed");
+        const realOpen = fs.open.bind(fs);
+        const openSpy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+          const handle = await realOpen(...args);
+          if (path.basename(String(args[0])).startsWith(".openclaw-override-")) {
+            vi.spyOn(handle, "chmod").mockRejectedValueOnce(
+              createFsError("EACCES", "override chmod failed"),
+            );
           }
-          return await realChmod(targetPath, mode);
+          return handle;
         });
 
         try {
@@ -3118,7 +3196,7 @@ describe("runGlobalPackageUpdateSteps", () => {
           expect(result.conflicts).toEqual([{ path: "dist/index.js", reason: "apply-failed" }]);
           await expect(fs.readFile(indexPath, "utf8")).resolves.toBe("export {};\n");
         } finally {
-          chmodSpy.mockRestore();
+          openSpy.mockRestore();
         }
       });
     },
@@ -3159,24 +3237,20 @@ describe("runGlobalPackageUpdateSteps", () => {
           };
         },
       );
-      const realCopyFile = fs.copyFile.bind(fs);
+      const realRename = fs.rename.bind(fs);
       let applyFailureTriggered = false;
-      const copyFileSpy = vi
-        .spyOn(fs, "copyFile")
-        .mockImplementation(async (...args: Parameters<typeof fs.copyFile>) => {
-          const [source, destination] = args.map(String);
+      const renameSpy = vi
+        .spyOn(fs, "rename")
+        .mockImplementation(async (...args: Parameters<typeof fs.rename>) => {
+          const [, destination] = args.map(String);
           if (destination === helperPath) {
             applyFailureTriggered = true;
-            throw createFsError("EIO", "reapply copy failed");
+            throw createFsError("EIO", "reapply rename failed");
           }
-          if (
-            applyFailureTriggered &&
-            source.includes(`${path.sep}rollback-`) &&
-            destination === indexPath
-          ) {
+          if (applyFailureTriggered && destination === indexPath) {
             throw createFsError("EACCES", "rollback restore failed");
           }
-          return await realCopyFile(...args);
+          return await realRename(...args);
         });
 
       try {
@@ -3216,7 +3290,7 @@ describe("runGlobalPackageUpdateSteps", () => {
           ),
         ).resolves.toBe("export {};\n");
       } finally {
-        copyFileSpy.mockRestore();
+        renameSpy.mockRestore();
       }
     });
   });
@@ -3258,17 +3332,17 @@ describe("runGlobalPackageUpdateSteps", () => {
             };
           },
         );
-        const realCopyFile = fs.copyFile.bind(fs);
+        const realRename = fs.rename.bind(fs);
         const realRm = fs.rm.bind(fs);
         let applyFailureTriggered = false;
-        const copyFileSpy = vi
-          .spyOn(fs, "copyFile")
-          .mockImplementation(async (...args: Parameters<typeof fs.copyFile>) => {
+        const renameSpy = vi
+          .spyOn(fs, "rename")
+          .mockImplementation(async (...args: Parameters<typeof fs.rename>) => {
             if (String(args[1]) === helperPath) {
               applyFailureTriggered = true;
-              throw createFsError("EIO", "reapply copy failed");
+              throw createFsError("EIO", "reapply rename failed");
             }
-            return await realCopyFile(...args);
+            return await realRename(...args);
           });
         const rmSpy = vi
           .spyOn(fs, "rm")
@@ -3307,7 +3381,7 @@ describe("runGlobalPackageUpdateSteps", () => {
           );
           expect(rollbackDir).toBeDefined();
         } finally {
-          copyFileSpy.mockRestore();
+          renameSpy.mockRestore();
           rmSpy.mockRestore();
         }
       },
