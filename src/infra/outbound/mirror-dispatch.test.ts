@@ -44,6 +44,18 @@ describe("mirror-dispatch", () => {
     expect(resolveChannelMirrorDispatcher("telegram", "default")).toBeUndefined();
   });
 
+  it("uses the sole dispatcher only for a wildcard target, not an explicit account mismatch", () => {
+    resetMirrorDispatchForTest();
+    const a = vi.fn();
+    registerChannelMirrorDispatcher("telegram", "default", a);
+    // A wildcard target (no pinned account) may use the only registered dispatcher.
+    expect(resolveChannelMirrorDispatcher("telegram")).toBe(a);
+    expect(resolveChannelMirrorDispatcher("telegram", "")).toBe(a);
+    // An explicit, DIFFERENT account fails closed even though only one is registered
+    // — never mirror through an account the target did not pin.
+    expect(resolveChannelMirrorDispatcher("telegram", "acct2")).toBeUndefined();
+  });
+
   it("keys dispatchers by account and fails closed on a multi-account mismatch", async () => {
     resetMirrorDispatchForTest();
     const accA = vi.fn();

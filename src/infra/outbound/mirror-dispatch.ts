@@ -174,12 +174,13 @@ export function channelHasMirrorDispatcher(channel: string): boolean {
 }
 
 /**
- * Resolve the dispatcher for a target's (channel, account). Exact account match
- * is required when more than one account is registered for the channel — on a
- * mismatch we fail closed (return undefined) rather than mirror through the wrong
- * account, and the post-hoc final echo then delivers via the target's own account
- * routing. A single registered account is unambiguous (single-account install, or
- * a wildcard target with no pinned accountId), so it matches regardless.
+ * Resolve the dispatcher for a target's (channel, account). An exact account match
+ * is always preferred. A WILDCARD target — one with no pinned accountId — may use
+ * the sole registered dispatcher (single-account install). But a target that pins
+ * an EXPLICIT account which does not match fails closed (returns undefined) even
+ * when only one account is registered: a mirror must never render through a
+ * different account than the one the target pinned. On a miss the post-hoc final
+ * echo handles the target via its own account routing.
  */
 export function resolveChannelMirrorDispatcher(
   channel: string,
@@ -189,11 +190,13 @@ export function resolveChannelMirrorDispatcher(
   if (!byAccount || byAccount.size === 0) {
     return undefined;
   }
-  const exact = byAccount.get(normalizeDispatcherAccountId(accountId));
+  const key = normalizeDispatcherAccountId(accountId);
+  const exact = byAccount.get(key);
   if (exact) {
     return exact;
   }
-  if (byAccount.size === 1) {
+  // Sole-dispatcher fallback ONLY for a wildcard target (no pinned account).
+  if (key === "" && byAccount.size === 1) {
     return [...byAccount.values()][0];
   }
   return undefined;
