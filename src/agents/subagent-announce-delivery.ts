@@ -873,6 +873,34 @@ function sourceDeliveryTargetsMatchExact(
   return true;
 }
 
+function sourceDeliveryTargetsMatchGeneratedMediaEvidence(
+  target: SourceDeliveryMessageToolTarget,
+  deliveryTarget: {
+    channel?: string;
+    accountId?: string;
+    to?: string;
+    threadId?: string | number;
+  },
+): boolean {
+  if (!sourceDeliveryTargetsMatch(target, deliveryTarget)) {
+    return false;
+  }
+  const expectedAccountId = normalizeTargetField(deliveryTarget.accountId);
+  const observedAccountId = normalizeTargetField(target.accountId);
+  if (expectedAccountId && observedAccountId && observedAccountId !== expectedAccountId) {
+    return false;
+  }
+  const expectedThreadId = normalizeTargetField(deliveryTarget.threadId);
+  if (expectedThreadId) {
+    const observedThreadId = normalizeObservedSourceDeliveryThreadId(target);
+    if (observedThreadId) {
+      return observedThreadId === expectedThreadId;
+    }
+    return target.threadImplicit === true && target.threadSuppressed !== true;
+  }
+  return true;
+}
+
 function hasMatchingMessagingToolDeliveryTarget(
   result: NonNullable<ReturnType<typeof getGatewayAgentResult>>,
   deliveryTarget: {
@@ -1431,7 +1459,7 @@ function collectMessagingToolDeliveredMediaUrlsForTarget(
       targetedUrls.add(url);
     }
     if (
-      !sourceDeliveryTargetsMatchExact(
+      !sourceDeliveryTargetsMatchGeneratedMediaEvidence(
         targetRecord as SourceDeliveryMessageToolTarget,
         deliveryTarget,
       )
