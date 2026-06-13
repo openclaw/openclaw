@@ -3,10 +3,12 @@ import {
   createPluginRegistryFixture,
   registerVirtualTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
+  clearMemoryRerankers,
   getRegisteredMemoryReranker,
   getRegisteredMemoryRerankerEntry,
+  registerMemoryReranker,
 } from "../../plugin-sdk/memory-core-host-engine-reranker.js";
 
 describe("memory reranker registration", () => {
@@ -84,5 +86,43 @@ describe("memory reranker registration", () => {
     const entry = getRegisteredMemoryRerankerEntry("demo-reranker");
     expect(reranker?.id).toBe("demo-reranker");
     expect(entry?.ownerPluginId).toBe("memory-core");
+  });
+});
+
+describe("MMR upgrade path", () => {
+  afterEach(() => {
+    clearMemoryRerankers();
+  });
+
+  it("before plugin registers: getRegisteredMemoryReranker returns undefined", () => {
+    // Registry is empty (cleared by afterEach from any prior test). Proves that
+    // mmr.enabled=true with a named provider doesn't phantom-resolve to a stale
+    // or default reranker when the plugin is absent.
+    expect(getRegisteredMemoryReranker("memory-mmr")).toBeUndefined();
+  });
+
+  it("after plugin registers: getRegisteredMemoryReranker returns the reranker", () => {
+    registerMemoryReranker({
+      id: "memory-mmr",
+      rerank: async (params) =>
+        params.documents.map((document) => ({ id: document.id, score: document.score })),
+    });
+
+    expect(getRegisteredMemoryReranker("memory-mmr")?.id).toBe("memory-mmr");
+  });
+
+  it("after reload clears registry: lookup reverts to undefined (reload doesn't silently break reranking)", () => {
+    // Simulates plugin being loaded, then a reload/restart clearing the registry
+    // before the plugin re-registers. createReranker will receive undefined and
+    // fall through to score-sorted results rather than calling a stale adapter.
+    registerMemoryReranker({
+      id: "memory-mmr",
+      rerank: async (params) =>
+        params.documents.map((document) => ({ id: document.id, score: document.score })),
+    });
+
+    clearMemoryRerankers();
+
+    expect(getRegisteredMemoryReranker("memory-mmr")).toBeUndefined();
   });
 });

@@ -310,5 +310,87 @@ describe("memory hybrid helpers", () => {
       expect(merged[0]?.path).toBe("memory/a.md");
       expect(merged[1]?.path).toBe("memory/b.md");
     });
+
+    it("mmr.enabled=true, named provider but plugin not installed → fail-open; score-sorted results returned", async () => {
+      // Simulates the upgrade case: user has mmr.enabled=true in config but the
+      // memory-mmr plugin is not installed (createReranker returns undefined for
+      // an unregistered id, so no adapter is passed).
+      const merged = await mergeHybridResults({
+        vectorWeight: 0.7,
+        textWeight: 0.3,
+        vector: [
+          {
+            id: "a",
+            path: "memory/a.md",
+            startLine: 1,
+            endLine: 2,
+            source: "memory",
+            snippet: "vec-a",
+            vectorScore: 0.9,
+          },
+          {
+            id: "b",
+            path: "memory/b.md",
+            startLine: 3,
+            endLine: 4,
+            source: "memory",
+            snippet: "vec-b",
+            vectorScore: 0.8,
+          },
+        ],
+        keyword: [],
+        mmr: { enabled: true, lambda: 0.7, provider: "memory-mmr", fallback: "none" },
+        // No reranker adapter: createReranker returns undefined when plugin is not registered.
+      });
+
+      expect(mockReranker).not.toHaveBeenCalled();
+      expect(merged).toHaveLength(2);
+      // Fail-open: score-ordered results, no error thrown
+      expect(merged[0]?.path).toBe("memory/a.md");
+      expect(merged[1]?.path).toBe("memory/b.md");
+    });
+
+    it("mmr.enabled=true, provider and fallback configured but neither plugin installed → fail-open; score-sorted results returned", async () => {
+      // Simulates: user has both a primary and fallback reranker configured but
+      // neither plugin is installed (e.g. after an incomplete upgrade or reload).
+      const merged = await mergeHybridResults({
+        vectorWeight: 0.7,
+        textWeight: 0.3,
+        vector: [
+          {
+            id: "a",
+            path: "memory/a.md",
+            startLine: 1,
+            endLine: 2,
+            source: "memory",
+            snippet: "vec-a",
+            vectorScore: 0.9,
+          },
+          {
+            id: "b",
+            path: "memory/b.md",
+            startLine: 3,
+            endLine: 4,
+            source: "memory",
+            snippet: "vec-b",
+            vectorScore: 0.8,
+          },
+        ],
+        keyword: [],
+        mmr: {
+          enabled: true,
+          lambda: 0.7,
+          provider: "memory-mmr",
+          fallback: "memory-mmr-fallback",
+        },
+        // Neither adapter passed: both plugins absent after upgrade/reload.
+      });
+
+      expect(mockReranker).not.toHaveBeenCalled();
+      expect(merged).toHaveLength(2);
+      // Fail-open: score-ordered results, no error thrown
+      expect(merged[0]?.path).toBe("memory/a.md");
+      expect(merged[1]?.path).toBe("memory/b.md");
+    });
   });
 });
