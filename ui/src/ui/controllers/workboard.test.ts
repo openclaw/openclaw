@@ -416,6 +416,45 @@ describe("workboard controller", () => {
     expect(state.lifecycleTasksPrepared).toBe(true);
   });
 
+  it("preserves mutation errors during successful passive poll refreshes", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.error = "move denied";
+    const client = createClient({
+      "workboard.cards.list": { cards: [sampleCard], statuses: ["todo", "done"] },
+      "tasks.list": { tasks: [] },
+    });
+
+    await refreshWorkboard({
+      host,
+      client: client as never,
+      source: "poll",
+    });
+
+    expect(state.error).toBe("move denied");
+    expect(state.lastRefreshError).toBeNull();
+    expect(state.lastRefreshAt).toEqual(expect.any(Number));
+  });
+
+  it("records passive poll failures without replacing mutation errors", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.error = "move denied";
+    const client = createClient(() => {
+      throw new Error("refresh unavailable");
+    });
+
+    await refreshWorkboard({
+      host,
+      client: client as never,
+      source: "poll",
+    });
+
+    expect(state.error).toBe("move denied");
+    expect(state.lastRefreshError).toBe("refresh unavailable");
+    expect(state.lastRefreshAt).toBeNull();
+  });
+
   it("does not mark a disconnected refresh as successful", async () => {
     const host = {};
     const updates: Array<string | null> = [];

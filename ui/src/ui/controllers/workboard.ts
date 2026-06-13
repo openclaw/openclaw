@@ -1899,6 +1899,7 @@ export async function loadWorkboard(params: {
   force?: boolean;
   refreshDiagnostics?: boolean;
   taskRefresh?: "all" | "linked";
+  preserveError?: boolean;
 }): Promise<boolean> {
   const state = getWorkboardState(params.host);
   if (
@@ -1927,7 +1928,9 @@ export async function loadWorkboard(params: {
   const generation = nextWorkboardLoadGeneration(params.host);
   state.loadAttempted = true;
   state.loading = true;
-  state.error = null;
+  if (!params.preserveError) {
+    state.error = null;
+  }
   if (params.taskRefresh !== "linked" || !state.lifecycleTaskRefreshFailed) {
     state.lastRefreshError = null;
   }
@@ -2076,7 +2079,11 @@ export async function loadWorkboard(params: {
       return true;
     } catch (error) {
       if (isCurrentWorkboardLoadGeneration(params.host, generation)) {
-        state.error = formatError(error);
+        if (params.preserveError) {
+          state.lastRefreshError = formatError(error);
+        } else {
+          state.error = formatError(error);
+        }
       }
       return false;
     } finally {
@@ -2132,9 +2139,10 @@ export async function refreshWorkboard(params: {
       force: true,
       refreshDiagnostics: params.refreshDiagnostics,
       taskRefresh: params.source === "poll" ? "linked" : "all",
+      preserveError: params.source === "poll",
     });
     state.lastRefreshSource = params.source;
-    if (state.error) {
+    if (params.source !== "poll" && state.error) {
       state.lastRefreshError = state.error;
     } else if (refreshed) {
       state.lastRefreshAt = Date.now();
