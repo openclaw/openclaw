@@ -22,6 +22,8 @@ type MockBeforeToolCallHookResult =
   | { blocked: false; params: unknown };
 
 type ScopedToolsCall = {
+  sessionId?: string;
+  onYield?: (message: string) => Promise<void> | void;
   sessionKey?: string;
   accountId?: string;
   messageProvider?: string;
@@ -80,8 +82,10 @@ const resolveGatewayScopedToolsMock = vi.hoisted(() =>
   })),
 );
 
+const runtimeConfigMock = vi.hoisted(() => ({ session: { mainKey: "main" } }));
+
 vi.mock("../config/io.js", () => ({
-  getRuntimeConfig: () => ({ session: { mainKey: "main" } }),
+  getRuntimeConfig: () => runtimeConfigMock,
 }));
 
 vi.mock("../config/sessions.js", () => ({
@@ -105,6 +109,10 @@ import {
   ensureMcpLoopbackServer,
   startMcpLoopbackServer,
 } from "./mcp-http.js";
+import {
+  clearMcpLoopbackYieldContext,
+  registerMcpLoopbackYieldContext,
+} from "./mcp-http.loopback-runtime.js";
 import { McpLoopbackToolCache } from "./mcp-http.runtime.js";
 
 let server: Awaited<ReturnType<typeof startMcpLoopbackServer>> | undefined;
@@ -672,6 +680,7 @@ describe("mcp loopback server", () => {
       token: runtime?.nonOwnerToken,
       headers: jsonHeaders({
         "x-session-key": "agent:main:telegram:group:chat123",
+        "x-openclaw-session-id": "run-session-123",
         "x-openclaw-account-id": "work",
         "x-openclaw-message-channel": "telegram",
         "x-openclaw-current-channel-id": "telegram:chat123",
@@ -687,6 +696,7 @@ describe("mcp loopback server", () => {
     expect(response.status).toBe(200);
     const call = getScopedToolsCall(0);
     expect(call.sessionKey).toBe("agent:main:telegram:group:chat123");
+    expect(call.sessionId).toBe("run-session-123");
     expect(call.accountId).toBe("work");
     expect(call.messageProvider).toBe("telegram");
     expect(call.currentChannelId).toBe("telegram:chat123");
@@ -704,6 +714,91 @@ describe("mcp loopback server", () => {
       "exec",
       "process",
     ]);
+  });
+
+  it("keeps loopback tool cache entries separate by session id", async () => {
+    const { runtime } = await startLoopbackServerForTest();
+    const sendToolsList = async (sessionId: string) =>
+      await sendLoopbackToolsList({
+        token: runtime?.ownerToken,
+        headers: {
+          "x-session-key": "agent:main:telegram:group:chat123",
+          "x-openclaw-session-id": sessionId,
+          "x-openclaw-message-channel": "telegram",
+        },
+      });
+
+    expect((await sendToolsList("run-session-a")).status).toBe(200);
+    expect((await sendToolsList("run-session-b")).status).toBe(200);
+
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(2);
+    expect(getScopedToolsCall(0).sessionId).toBe("run-session-a");
+    expect(getScopedToolsCall(1).sessionId).toBe("run-session-b");
+  });
+
+  it("refreshes cached yield tools for consecutive runs with the same session id", async () => {
+    const { runtime } = await startLoopbackServerForTest();
+    resolveGatewayScopedToolsMock.mockImplementation((params): MockGatewayScopedTools => {
+      const call = params as ScopedToolsCall;
+      return {
+        agentId: "main",
+        tools: [
+          {
+            name: "sessions_yield",
+            description: "yield current run",
+            parameters: { type: "object", properties: {} },
+            execute: async (_toolCallId, args) => {
+              const message = (args as { message?: string }).message ?? "yielded";
+              await Promise.resolve(call.onYield?.(message));
+              return {
+                content: [{ type: "text", text: JSON.stringify({ status: "yielded", message }) }],
+              };
+            },
+          },
+        ],
+      };
+    });
+    const headers = {
+      "x-session-key": "agent:main:telegram:group:chat123",
+      "x-openclaw-session-id": "run-session-reused",
+      "x-openclaw-message-channel": "telegram",
+    };
+
+    const firstContext = registerMcpLoopbackYieldContext("run-session-reused");
+    try {
+      expect(
+        (
+          await sendLoopbackToolCall({
+            token: runtime?.ownerToken,
+            name: "sessions_yield",
+            args: { message: "first yield" },
+            headers,
+          })
+        ).status,
+      ).toBe(200);
+      expect(firstContext).toMatchObject({ yielded: true, message: "first yield" });
+    } finally {
+      clearMcpLoopbackYieldContext("run-session-reused", firstContext);
+    }
+
+    const secondContext = registerMcpLoopbackYieldContext("run-session-reused");
+    try {
+      expect(
+        (
+          await sendLoopbackToolCall({
+            token: runtime?.ownerToken,
+            name: "sessions_yield",
+            args: { message: "second yield" },
+            headers,
+          })
+        ).status,
+      ).toBe(200);
+      expect(secondContext).toMatchObject({ yielded: true, message: "second yield" });
+    } finally {
+      clearMcpLoopbackYieldContext("run-session-reused", secondContext);
+    }
+
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(2);
   });
 
   it("keeps loopback tool cache entries separate by inbound event kind, delivery mode, and inbound audio", async () => {
@@ -1258,6 +1353,9 @@ describe("createMcpLoopbackServerConfig", () => {
     expect(config.mcpServers?.openclaw?.url).toBe("http://127.0.0.1:23119/mcp");
     expect(config.mcpServers?.openclaw?.headers?.Authorization).toBe(
       "Bearer ${OPENCLAW_MCP_TOKEN}",
+    );
+    expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-session-id"]).toBe(
+      "${OPENCLAW_MCP_SESSION_ID}",
     );
     expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-message-channel"]).toBe(
       "${OPENCLAW_MCP_MESSAGE_CHANNEL}",
