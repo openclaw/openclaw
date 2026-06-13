@@ -10,7 +10,6 @@ import {
   isReplyRunAbortableForCompaction,
   isReplyRunStreamingForSessionId,
   queueReplyRunMessage,
-  resolveActiveReplyRunSessionId,
   waitForReplyRunEndBySessionId,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import {
@@ -48,6 +47,7 @@ export {
   getActiveEmbeddedRunCount,
   listActiveEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys,
+  resolveActiveEmbeddedRunSessionId,
   type ActiveEmbeddedRunSnapshot,
   type EmbeddedAgentQueueHandle,
   type EmbeddedAgentQueueMessageOptions,
@@ -554,17 +554,6 @@ export function resolveActiveEmbeddedRunHandleSessionIdBySessionFile(
   }
   return ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(
     resolveEmbeddedSessionFileKey(normalizedSessionFile),
-  );
-}
-
-export function resolveActiveEmbeddedRunSessionId(sessionKey: string): string | undefined {
-  const normalizedSessionKey = sessionKey.trim();
-  if (!normalizedSessionKey) {
-    return undefined;
-  }
-  return (
-    resolveActiveReplyRunSessionId(normalizedSessionKey) ??
-    ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.get(normalizedSessionKey)
   );
 }
 

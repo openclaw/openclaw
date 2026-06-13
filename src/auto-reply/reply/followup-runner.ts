@@ -24,7 +24,11 @@ import { updateSessionStore, type SessionEntry } from "../../config/sessions.js"
 import { readSessionEntry } from "../../config/sessions/store-load.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
-import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
+import {
+  captureAgentRunLifecycleGeneration,
+  emitAgentEvent,
+  registerAgentRunContext,
+} from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
@@ -683,6 +687,7 @@ export function createFollowupRunner(params: {
           isControlUiVisible: shouldSurfaceToControlUi,
         });
       }
+      let lifecycleGeneration = captureAgentRunLifecycleGeneration(runId);
       let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
         activeSessionEntry?.systemPromptReport,
       );
@@ -879,6 +884,7 @@ export function createFollowupRunner(params: {
                 });
                 const result = await runCliAgentWithLifecycle({
                   runId,
+                  lifecycleGeneration,
                   provider: cliExecutionProvider,
                   startedAt: cliLifecycleStartedAt,
                   emitLifecycleTerminal: false,
@@ -1007,6 +1013,7 @@ export function createFollowupRunner(params: {
               const followupCurrentMessageId = resolveFollowupCurrentMessageId();
               const result = await runEmbeddedAgent({
                 allowGatewaySubagentBinding: true,
+                lifecycleGeneration,
                 replyOperation,
                 sessionId: run.sessionId,
                 sessionKey: run.sessionKey,
@@ -1071,6 +1078,11 @@ export function createFollowupRunner(params: {
                 runTimeoutOverrideMs: run.runTimeoutOverrideMs,
                 runId,
                 abortSignal: runAbortSignal,
+                onExecutionStarted: (info) => {
+                  if (info?.lifecycleGeneration) {
+                    lifecycleGeneration = info.lifecycleGeneration;
+                  }
+                },
                 images: queuedImages,
                 imageOrder: queuedImageOrder,
                 allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
@@ -1131,6 +1143,7 @@ export function createFollowupRunner(params: {
         ) {
           emitAgentEvent({
             runId,
+            lifecycleGeneration,
             stream: "lifecycle",
             data: {
               phase: "end",
@@ -1150,6 +1163,7 @@ export function createFollowupRunner(params: {
         if (pendingDeferredCliTerminal) {
           emitAgentEvent({
             runId,
+            lifecycleGeneration,
             stream: "lifecycle",
             data: {
               phase: "error",

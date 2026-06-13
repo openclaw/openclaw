@@ -151,8 +151,15 @@ type RestartRunAbortParams = {
   markMainSessionsAbortedForRestart?: (params: {
     sessionKeys: Set<string>;
     sessionIds: Set<string>;
+    activeRuns: Array<{
+      runId: string;
+      lifecycleGeneration: string;
+      sessionKey: string;
+      sessionId: string;
+    }>;
     reason: string;
   }) => Promise<void> | void;
+  resolveActiveSessionIdForKey?: (sessionKey: string) => string | undefined;
 };
 
 /** Wait for pending replies and active runs to drain before restart shutdown. */
@@ -191,24 +198,47 @@ async function waitForRestartReplyDrain(params: {
 }
 
 function collectActiveRestartSessionRefs(
-  chatAbortControllers: Map<string, ChatAbortControllerEntry>,
-): { sessionKeys: Set<string>; sessionIds: Set<string> } {
+  params: Pick<RestartRunAbortParams, "chatAbortControllers" | "resolveActiveSessionIdForKey">,
+): {
+  sessionKeys: Set<string>;
+  sessionIds: Set<string>;
+  activeRuns: Array<{
+    runId: string;
+    lifecycleGeneration: string;
+    sessionKey: string;
+    sessionId: string;
+  }>;
+} {
   const sessionKeys = new Set<string>();
   const sessionIds = new Set<string>();
-  for (const entry of chatAbortControllers.values()) {
+  const activeRuns = [];
+  for (const [runId, entry] of params.chatAbortControllers) {
     if (entry.controller.signal.aborted) {
       continue;
     }
     const sessionKey = entry.sessionKey.trim();
-    const sessionId = entry.sessionId.trim();
     if (sessionKey) {
       sessionKeys.add(sessionKey);
     }
+    // Registration metadata can predate a reset or compaction session-id rotation.
+    const resolvedSessionId =
+      entry.kind === "agent" || !sessionKey
+        ? undefined
+        : params.resolveActiveSessionIdForKey?.(sessionKey);
+    const sessionId = resolvedSessionId || entry.sessionId.trim();
     if (sessionId) {
       sessionIds.add(sessionId);
     }
+    if (runId && entry.lifecycleGeneration && sessionKey && sessionId) {
+      activeRuns.push({
+        runId,
+        lifecycleGeneration: entry.lifecycleGeneration,
+        sessionKey,
+        sessionId,
+      });
+    }
   }
-  return { sessionKeys, sessionIds };
+  return { sessionKeys, sessionIds, activeRuns };
 }
 
 async function markActiveRunsForRestartRecovery(
@@ -220,7 +250,7 @@ async function markActiveRunsForRestartRecovery(
   if (!params.markMainSessionsAbortedForRestart) {
     return;
   }
-  const refs = collectActiveRestartSessionRefs(params.chatAbortControllers);
+  const refs = collectActiveRestartSessionRefs(params);
   if (refs.sessionKeys.size === 0 && refs.sessionIds.size === 0) {
     return;
   }
@@ -559,6 +589,7 @@ export function createGatewayCloseHandler(
                 broadcast: params.broadcast,
                 nodeSendToSession: params.nodeSendToSession,
                 markMainSessionsAbortedForRestart: params.markMainSessionsAbortedForRestart,
+                resolveActiveSessionIdForKey: params.resolveActiveSessionIdForKey,
                 timeoutMs: drainTimeoutMs,
                 warnings,
               }),

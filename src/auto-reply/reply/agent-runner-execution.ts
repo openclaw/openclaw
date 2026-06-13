@@ -63,7 +63,11 @@ import {
 import { resolveSilentReplyPolicy } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
-import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
+import {
+  captureAgentRunLifecycleGeneration,
+  emitAgentEvent,
+  registerAgentRunContext,
+} from "../../infra/agent-events.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { logSessionTurnCreated } from "../../logging/diagnostic.js";
@@ -1307,7 +1311,11 @@ function isReplyOperationRestartAbort(replyOperation?: ReplyOperation): boolean 
   );
 }
 
-function createEmbeddedLifecycleTerminalBackstop(params: { runId: string; sessionKey?: string }) {
+function createEmbeddedLifecycleTerminalBackstop(params: {
+  runId: string;
+  sessionKey?: string;
+  getLifecycleGeneration: () => string;
+}) {
   let terminalEmitted = false;
   let startedAt: number | undefined;
 
@@ -1358,6 +1366,7 @@ function createEmbeddedLifecycleTerminalBackstop(params: { runId: string; sessio
     }
     emitAgentEvent({
       runId: params.runId,
+      lifecycleGeneration: params.getLifecycleGeneration(),
       ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
       stream: "lifecycle",
       data,
@@ -1665,6 +1674,7 @@ export async function runAgentTurnWithFallback(params: {
       isControlUiVisible: shouldSurfaceToControlUi,
     });
   }
+  let lifecycleGeneration = captureAgentRunLifecycleGeneration(runId);
   let runResult: Awaited<ReturnType<typeof runEmbeddedAgent>>;
   let fallbackProvider = params.followupRun.run.provider;
   let fallbackModel = params.followupRun.run.model;
@@ -2117,6 +2127,7 @@ export async function runAgentTurnWithFallback(params: {
               const result = await agentTurnTiming.measure("cli_run", () =>
                 runCliAgentWithLifecycle({
                   runId,
+                  lifecycleGeneration,
                   provider: cliExecutionProvider,
                   onAgentRunStart: notifyAgentRunStart,
                   suppressAssistantBridge: params.followupRun.run.silentExpected,
@@ -2298,6 +2309,7 @@ export async function runAgentTurnWithFallback(params: {
               const lifecycleBackstop = createEmbeddedLifecycleTerminalBackstop({
                 runId,
                 sessionKey: params.sessionKey,
+                getLifecycleGeneration: () => lifecycleGeneration,
               });
               try {
                 // Profiler-only milestone: it exposes time spent before Codex
@@ -2311,6 +2323,7 @@ export async function runAgentTurnWithFallback(params: {
                 const result = await agentTurnTiming.measure("embedded_run", () =>
                   runEmbeddedAgent({
                     ...embeddedContext,
+                    lifecycleGeneration,
                     allowGatewaySubagentBinding: true,
                     trigger: params.isHeartbeat ? "heartbeat" : "user",
                     groupId: resolveGroupSessionKey(params.sessionCtx)?.id,
@@ -2367,6 +2380,11 @@ export async function runAgentTurnWithFallback(params: {
                     imageOrder: currentTurnImages.imageOrder,
                     abortSignal: runAbortSignal,
                     replyOperation: params.replyOperation,
+                    onExecutionStarted: (info) => {
+                      if (info?.lifecycleGeneration) {
+                        lifecycleGeneration = info.lifecycleGeneration;
+                      }
+                    },
                     blockReplyBreak: params.resolvedBlockStreamingBreak,
                     blockReplyChunking: params.blockReplyChunking,
                     onPartialReply: async (payload) => {
@@ -2957,6 +2975,7 @@ export async function runAgentTurnWithFallback(params: {
 
       emitAgentEvent({
         runId,
+        lifecycleGeneration,
         ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
         stream: "lifecycle",
         data: {

@@ -12,7 +12,11 @@ import { inferToolMetaFromArgs } from "../../agents/embedded-agent-utils.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent.js";
 import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
 import type { AgentEventPayload } from "../../infra/agent-events.js";
-import { emitAgentEvent, onAgentEvent } from "../../infra/agent-events.js";
+import {
+  emitAgentEvent,
+  onAgentEvent,
+  withAgentRunLifecycleGeneration,
+} from "../../infra/agent-events.js";
 import { formatToolAggregate } from "../tool-meta.js";
 
 function isClaudeCliProvider(provider: string): boolean {
@@ -288,8 +292,9 @@ function createCommentaryEventBridge(params: {
   });
 }
 
-export async function runCliAgentWithLifecycle(params: {
+type RunCliAgentWithLifecycleParams = {
   runId: string;
+  lifecycleGeneration?: string;
   provider: string;
   runParams: RunCliAgentParams;
   startedAt?: number;
@@ -303,7 +308,22 @@ export async function runCliAgentWithLifecycle(params: {
   onCommentaryText?: (payload: { text: string; itemId?: string }) => Promise<void>;
   onErrorBeforeLifecycle?: (err: unknown) => Promise<void>;
   transformResult?: (result: EmbeddedAgentRunResult) => EmbeddedAgentRunResult;
-}): Promise<EmbeddedAgentRunResult> {
+};
+
+export function runCliAgentWithLifecycle(
+  params: RunCliAgentWithLifecycleParams,
+): Promise<EmbeddedAgentRunResult> {
+  if (!params.lifecycleGeneration) {
+    return runCliAgentWithLifecycleInternal(params);
+  }
+  return withAgentRunLifecycleGeneration(params.lifecycleGeneration, () =>
+    runCliAgentWithLifecycleInternal(params),
+  );
+}
+
+async function runCliAgentWithLifecycleInternal(
+  params: RunCliAgentWithLifecycleParams,
+): Promise<EmbeddedAgentRunResult> {
   const startedAt = params.startedAt ?? Date.now();
   const emitLifecycleStart = params.emitLifecycleStart ?? true;
   const emitLifecycleTerminal = params.emitLifecycleTerminal ?? true;
@@ -311,6 +331,9 @@ export async function runCliAgentWithLifecycle(params: {
   if (emitLifecycleStart) {
     emitAgentEvent({
       runId: params.runId,
+      ...(params.runParams.sessionKey ? { sessionKey: params.runParams.sessionKey } : {}),
+      ...(params.runParams.sessionId ? { sessionId: params.runParams.sessionId } : {}),
+      ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
       stream: "lifecycle",
       data: {
         phase: "start",
@@ -364,6 +387,9 @@ export async function runCliAgentWithLifecycle(params: {
     if (emitLifecycleTerminal) {
       emitAgentEvent({
         runId: params.runId,
+        ...(params.runParams.sessionKey ? { sessionKey: params.runParams.sessionKey } : {}),
+        ...(params.runParams.sessionId ? { sessionId: params.runParams.sessionId } : {}),
+        ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
         stream: "lifecycle",
         data: {
           phase: "end",
@@ -380,6 +406,9 @@ export async function runCliAgentWithLifecycle(params: {
     if (emitLifecycleTerminal) {
       emitAgentEvent({
         runId: params.runId,
+        ...(params.runParams.sessionKey ? { sessionKey: params.runParams.sessionKey } : {}),
+        ...(params.runParams.sessionId ? { sessionId: params.runParams.sessionId } : {}),
+        ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
         stream: "lifecycle",
         data: {
           phase: "error",
@@ -398,6 +427,9 @@ export async function runCliAgentWithLifecycle(params: {
     if (emitLifecycleTerminal && !lifecycleTerminalEmitted) {
       emitAgentEvent({
         runId: params.runId,
+        ...(params.runParams.sessionKey ? { sessionKey: params.runParams.sessionKey } : {}),
+        ...(params.runParams.sessionId ? { sessionId: params.runParams.sessionId } : {}),
+        ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
         stream: "lifecycle",
         data: {
           phase: "error",

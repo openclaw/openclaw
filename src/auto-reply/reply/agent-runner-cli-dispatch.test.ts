@@ -1,10 +1,62 @@
 // Tests CLI dispatch arguments and runtime selection for agent runner turns.
 import { describe, expect, it, vi } from "vitest";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
+
+const cliDispatchMocks = vi.hoisted(() => ({
+  emitAgentEvent: vi.fn(),
+  runCliAgent: vi.fn(),
+}));
+
+vi.mock("../../agents/cli-runner.js", () => ({
+  runCliAgent: (...args: unknown[]) => cliDispatchMocks.runCliAgent(...args),
+}));
+
+vi.mock("../../infra/agent-events.js", () => ({
+  emitAgentEvent: (...args: unknown[]) => cliDispatchMocks.emitAgentEvent(...args),
+  onAgentEvent: vi.fn(() => () => undefined),
+  withAgentRunLifecycleGeneration: (_generation: string, run: () => unknown) => run(),
+}));
+
 import {
   createCliToolSummaryTracker,
   keepCliSessionBindingOnlyWhenReused,
+  runCliAgentWithLifecycle,
 } from "./agent-runner-cli-dispatch.js";
+
+describe("runCliAgentWithLifecycle", () => {
+  it("keeps the captured lifecycle generation on start and terminal events", async () => {
+    cliDispatchMocks.emitAgentEvent.mockClear();
+    cliDispatchMocks.runCliAgent.mockResolvedValueOnce({
+      payloads: [],
+      meta: { durationMs: 1 },
+    } satisfies EmbeddedAgentRunResult);
+
+    await runCliAgentWithLifecycle({
+      runId: "run-before-restart",
+      lifecycleGeneration: "pre-restart-generation",
+      provider: "claude-cli",
+      runParams: {
+        sessionId: "session-1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        prompt: "hello",
+        provider: "claude-cli",
+        model: "claude",
+        thinkLevel: "off",
+        timeoutMs: 1_000,
+        runId: "run-before-restart",
+      },
+    });
+
+    const lifecycleEvents = cliDispatchMocks.emitAgentEvent.mock.calls
+      .map(([event]) => event as { stream?: string; lifecycleGeneration?: string })
+      .filter((event) => event.stream === "lifecycle");
+    expect(lifecycleEvents).toHaveLength(2);
+    expect(
+      lifecycleEvents.every((event) => event.lifecycleGeneration === "pre-restart-generation"),
+    ).toBe(true);
+  });
+});
 
 describe("keepCliSessionBindingOnlyWhenReused", () => {
   it("keeps the first room-event CLI binding when no binding exists yet", () => {

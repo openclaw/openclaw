@@ -6,6 +6,7 @@ import {
   getActiveReplyRunCount,
   listActiveReplyRunSessionKeys,
   listActiveReplyRunSessionIds,
+  resolveActiveReplyRunSessionId,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 
@@ -133,4 +134,16 @@ export function listActiveEmbeddedRunSessionIds(): string[] {
       ...listActiveReplyRunSessionIds(),
     ]),
   ].toSorted((a, b) => a.localeCompare(b));
+}
+
+/** Resolves the current session id for an active run after resets or compaction. */
+export function resolveActiveEmbeddedRunSessionId(sessionKey: string): string | undefined {
+  const normalizedSessionKey = sessionKey.trim();
+  if (!normalizedSessionKey) {
+    return undefined;
+  }
+  return (
+    resolveActiveReplyRunSessionId(normalizedSessionKey) ??
+    ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.get(normalizedSessionKey)
+  );
 }

@@ -70,7 +70,10 @@ import {
 } from "../../config/sessions.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { registerAgentRunContext } from "../../infra/agent-events.js";
+import {
+  claimAgentRunContext,
+  getAgentEventLifecycleGeneration,
+} from "../../infra/agent-events.js";
 import { formatUncaughtError, readErrorName } from "../../infra/errors.js";
 import {
   resolveAgentDeliveryPlanWithSessionRoute,
@@ -1122,6 +1125,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     const cfg = context.getRuntimeConfig();
     const idem = request.idempotencyKey;
     const runId = idem;
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const execApprovalFollowupApprovalId = parseExecApprovalFollowupApprovalId(idem);
     if (execApprovalFollowupApprovalId && !canUseInternalRuntimeHandoff) {
       respond(
@@ -1565,6 +1569,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       let resolvedSessionAgentId: string | undefined;
       let isNewSession = false;
       let skipAgentInitialSessionTouch = false;
+      let pendingChatRun: { sessionKey: string; agentId?: string } | undefined;
 
       const resetCommandMatch = message.match(RESET_COMMAND_RE);
       if (resetCommandMatch && requestedSessionKey) {
@@ -2144,21 +2149,14 @@ export const agentHandlers: GatewayRequestHandlers = {
         ) {
           const selectedGlobalAgentId =
             canonicalSessionKey === "global" ? sessionAgentId : undefined;
-          context.addChatRun(idem, {
+          pendingChatRun = {
             sessionKey: canonicalSessionKey,
             ...(selectedGlobalAgentId ? { agentId: selectedGlobalAgentId } : {}),
-            clientRunId: idem,
-          });
+          };
           if (requestedBestEffortDeliver === undefined) {
             bestEffortDeliver = true;
           }
         }
-        registerAgentRunContext(
-          idem,
-          suppressVisibleSessionEffects
-            ? { isControlUiVisible: false }
-            : { sessionKey: canonicalSessionKey },
-        );
       }
 
       const activeSessionAgentId =
@@ -2337,6 +2335,31 @@ export const agentHandlers: GatewayRequestHandlers = {
         });
         return;
       }
+      if (lifecycleGeneration !== getAgentEventLifecycleGeneration()) {
+        const stopReason = "gateway_restart";
+        agentRunAccepted = true;
+        setAbortedAgentDedupeEntries({
+          dedupe: context.dedupe,
+          keys: agentDedupeKeys,
+          agentId: resolvedSessionKey === "global" ? activeSessionAgentId : undefined,
+          runId,
+          stopReason,
+        });
+        respond(
+          true,
+          {
+            runId,
+            status: "timeout" as const,
+            summary: "aborted",
+            stopReason,
+            timeoutPhase: "queue" as const,
+            providerStarted: false,
+          },
+          undefined,
+          { runId },
+        );
+        return;
+      }
 
       // Register before the accepted ack so an immediate chat.abort/sessions.abort
       // cannot race the active-run entry. Agent RPC runs use the agent timeout;
@@ -2367,6 +2390,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         authProviderId: activeAuthProvider,
         controlUiVisible: !suppressVisibleSessionEffects,
         kind: "agent",
+        lifecycleGeneration,
       });
       const existingRunAbort = context.chatAbortControllers.get(runId);
       if (!activeRunAbort.registered && existingRunAbort) {
@@ -2376,6 +2400,22 @@ export const agentHandlers: GatewayRequestHandlers = {
           runId,
         });
         return;
+      }
+      if (activeRunAbort.registered) {
+        if (pendingChatRun) {
+          context.addChatRun(runId, {
+            ...pendingChatRun,
+            clientRunId: runId,
+          });
+        }
+        if (resolvedSessionKey) {
+          claimAgentRunContext(
+            runId,
+            suppressVisibleSessionEffects
+              ? { isControlUiVisible: false, lifecycleGeneration }
+              : { sessionKey: resolvedSessionKey, lifecycleGeneration },
+          );
+        }
       }
 
       const resolvedThreadId = explicitThreadId ?? deliveryPlan.resolvedThreadId;
@@ -2589,6 +2629,7 @@ export const agentHandlers: GatewayRequestHandlers = {
                 }),
               cleanupBundleMcpOnRunEnd: request.cleanupBundleMcpOnRunEnd,
               abortSignal: activeRunAbort.controller.signal,
+              lifecycleGeneration,
               onActiveModelSelected: ({ provider }) => {
                 updateChatRunProvider(context.chatAbortControllers, {
                   runId,
@@ -2597,6 +2638,11 @@ export const agentHandlers: GatewayRequestHandlers = {
                     config: cfgForAgent ?? cfg,
                   }),
                 });
+              },
+              onSessionIdChanged: (sessionId) => {
+                if (activeRunAbort.entry) {
+                  activeRunAbort.entry.sessionId = sessionId;
+                }
               },
               // Internal-only: allow workspace override for spawned subagent runs.
               workspaceDir: resolveIngressWorkspaceOverrideForSpawnedRun({

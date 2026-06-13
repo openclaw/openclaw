@@ -9,6 +9,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { sanitizePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
+  type RestartRecoveryRun,
   type SessionEntry,
   loadSessionStore,
   resolveAllAgentSessionStoreTargetsSync,
@@ -20,6 +21,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { readSessionMessagesAsync } from "../gateway/session-utils.fs.js";
 import { resolveGatewaySessionStoreTarget } from "../gateway/session-utils.js";
+import {
+  getAgentEventLifecycleGeneration,
+  listAgentRunsForSession,
+} from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { CommandLane } from "../process/lanes.js";
 import { isAcpSessionKey, isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
@@ -125,11 +130,26 @@ export async function markRestartAbortedMainSessions(params: {
   stateDir?: string;
   sessionKeys?: Iterable<string>;
   sessionIds?: Iterable<string>;
+  activeRuns?: Iterable<
+    RestartRecoveryRun & {
+      sessionKey: string;
+      sessionId: string;
+    }
+  >;
   reason?: string;
 }): Promise<{ marked: number; skipped: number }> {
   const sessionKeys = normalizeStringSet(params.sessionKeys);
   const sessionIds = normalizeStringSet(params.sessionIds);
   const preferSessionIdMatch = sessionIds.size > 0;
+  const activeRuns = [...(params.activeRuns ?? [])]
+    .map((run) => ({
+      runId: run.runId.trim(),
+      lifecycleGeneration: run.lifecycleGeneration.trim(),
+      sessionKey: run.sessionKey.trim(),
+      sessionId: run.sessionId.trim(),
+    }))
+    .filter((run) => run.runId && run.lifecycleGeneration && (run.sessionKey || run.sessionId));
+  const currentLifecycleGeneration = getAgentEventLifecycleGeneration();
   const result = { marked: 0, skipped: 0 };
   if (sessionKeys.size === 0 && sessionIds.size === 0) {
     return result;
@@ -198,6 +218,42 @@ export async function markRestartAbortedMainSessions(params: {
             continue;
           }
           entry.abortedLastRun = true;
+          const recoveryRuns = new Map<string, RestartRecoveryRun>();
+          for (const run of entry.restartRecoveryRuns ?? []) {
+            if (run.lifecycleGeneration === currentLifecycleGeneration) {
+              recoveryRuns.set(`${run.runId}\u0000${run.lifecycleGeneration}`, run);
+            }
+          }
+          const replaceActiveRunMarker = (run: RestartRecoveryRun) => {
+            for (const [key, existingRun] of recoveryRuns) {
+              if (existingRun.runId === run.runId) {
+                recoveryRuns.delete(key);
+              }
+            }
+            recoveryRuns.set(`${run.runId}\u0000${run.lifecycleGeneration}`, run);
+          };
+          for (const run of listAgentRunsForSession({
+            sessionKey,
+            sessionId: entry.sessionId,
+          })) {
+            replaceActiveRunMarker(run);
+          }
+          for (const run of activeRuns) {
+            const matchesEntry = run.sessionId
+              ? run.sessionId === entry.sessionId
+              : run.sessionKey === sessionKey;
+            if (matchesEntry) {
+              replaceActiveRunMarker({
+                runId: run.runId,
+                lifecycleGeneration: run.lifecycleGeneration,
+              });
+            }
+          }
+          entry.restartRecoveryRuns = [...recoveryRuns.values()].toSorted((a, b) =>
+            a.runId === b.runId
+              ? a.lifecycleGeneration.localeCompare(b.lifecycleGeneration)
+              : a.runId.localeCompare(b.runId),
+          );
           entry.updatedAt = Date.now();
           store[sessionKey] = entry;
           result.marked++;
@@ -242,7 +298,10 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
       storePath,
       (store) => {
         for (const [sessionKey, entry] of Object.entries(store)) {
-          if (!entry || entry.status !== "running" || entry.abortedLastRun === true) {
+          if (!entry) {
+            continue;
+          }
+          if (entry.status !== "running" || entry.abortedLastRun === true) {
             continue;
           }
           if (shouldSkipMainRecovery(entry, sessionKey)) {

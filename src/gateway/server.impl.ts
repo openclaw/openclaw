@@ -2,7 +2,10 @@
 // and WebSocket surfaces, config reload hooks, and graceful restart/shutdown.
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { getActiveEmbeddedRunCount } from "../agents/embedded-agent-runner/run-state.js";
+import {
+  getActiveEmbeddedRunCount,
+  resolveActiveEmbeddedRunSessionId,
+} from "../agents/embedded-agent-runner/run-state.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import {
   getLoadedChannelPluginEntryById,
@@ -1049,7 +1052,13 @@ export async function startGatewayServer(
       removeChatRun,
       agentRunSeq,
       nodeSendToSession,
-      markMainSessionsAbortedForRestart: async ({ sessionKeys, sessionIds, reason }) => {
+      resolveActiveSessionIdForKey: resolveActiveEmbeddedRunSessionId,
+      markMainSessionsAbortedForRestart: async ({
+        sessionKeys,
+        sessionIds,
+        activeRuns,
+        reason,
+      }) => {
         if (sessionKeys.size === 0 && sessionIds.size === 0) {
           return;
         }
@@ -1059,6 +1068,7 @@ export async function startGatewayServer(
           cfg: getRuntimeConfig(),
           sessionKeys,
           sessionIds,
+          activeRuns,
           reason,
         });
       },

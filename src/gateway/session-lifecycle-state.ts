@@ -12,6 +12,8 @@ import type { GatewaySessionRow, SessionRunStatus } from "./session-utils.types.
 type LifecyclePhase = "start" | "end" | "error";
 
 type LifecycleEventLike = Pick<AgentEventPayload, "ts" | "sessionId"> & {
+  runId?: string;
+  lifecycleGeneration?: string;
   data?: {
     phase?: unknown;
     startedAt?: unknown;
@@ -32,7 +34,13 @@ type LifecycleSessionShape = Pick<
 
 type PersistedLifecycleSessionShape = Pick<
   SessionEntry,
-  "updatedAt" | "status" | "startedAt" | "endedAt" | "runtimeMs" | "abortedLastRun"
+  | "updatedAt"
+  | "status"
+  | "startedAt"
+  | "endedAt"
+  | "runtimeMs"
+  | "abortedLastRun"
+  | "restartRecoveryRuns"
 >;
 
 type GatewaySessionLifecycleSnapshot = Partial<LifecycleSessionShape>;
@@ -166,6 +174,9 @@ export function derivePersistedSessionLifecyclePatch(params: {
   entry?: Partial<PersistedLifecycleSessionShape> | null;
   event: LifecycleEventLike;
 }): Partial<PersistedLifecycleSessionShape> {
+  if (isRestartRecoveryLifecycleEvent(params)) {
+    return {};
+  }
   const snapshot = deriveGatewaySessionLifecycleSnapshot({
     session: params.entry ?? undefined,
     event: params.event,
@@ -174,6 +185,21 @@ export function derivePersistedSessionLifecyclePatch(params: {
     ...snapshot,
     updatedAt: typeof snapshot.updatedAt === "number" ? snapshot.updatedAt : undefined,
   };
+}
+
+export function isRestartRecoveryLifecycleEvent(params: {
+  entry?: Pick<SessionEntry, "restartRecoveryRuns"> | null;
+  event: Pick<LifecycleEventLike, "runId" | "lifecycleGeneration">;
+}): boolean {
+  const runId = params.event.runId?.trim();
+  const lifecycleGeneration = params.event.lifecycleGeneration?.trim();
+  return Boolean(
+    runId &&
+    lifecycleGeneration &&
+    params.entry?.restartRecoveryRuns?.some(
+      (run) => run.runId === runId && run.lifecycleGeneration === lifecycleGeneration,
+    ),
+  );
 }
 
 /**
@@ -227,10 +253,11 @@ export async function persistGatewaySessionLifecycleEvent(params: {
       if (isStaleLifecycleEventForSession({ owningSessionId, currentSessionId: entry.sessionId })) {
         return null;
       }
-      return derivePersistedSessionLifecyclePatch({
+      const patch = derivePersistedSessionLifecyclePatch({
         entry,
         event: params.event,
       });
+      return Object.keys(patch).length > 0 ? patch : null;
     },
   });
 }

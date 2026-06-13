@@ -685,6 +685,7 @@ describe("createGatewayCloseHandler", () => {
           controller,
           sessionId: "session-id-1",
           sessionKey: "agent:main:main",
+          lifecycleGeneration: "generation-1",
           startedAtMs: Date.now(),
           expiresAtMs: Date.now() + 60_000,
         },
@@ -695,6 +696,7 @@ describe("createGatewayCloseHandler", () => {
           controller: agentController,
           sessionId: "session-id-2",
           sessionKey: "agent:main:test:direct:source",
+          lifecycleGeneration: "generation-1",
           startedAtMs: Date.now(),
           expiresAtMs: Date.now() + 60_000,
           kind: "agent" as const,
@@ -706,6 +708,7 @@ describe("createGatewayCloseHandler", () => {
           controller: alreadyAbortedController,
           sessionId: "stale-session-id",
           sessionKey: "agent:main:stale",
+          lifecycleGeneration: "generation-1",
           startedAtMs: Date.now(),
           expiresAtMs: Date.now() + 60_000,
         },
@@ -723,6 +726,15 @@ describe("createGatewayCloseHandler", () => {
         chatAbortControllers,
         markMainSessionsAbortedForRestart,
         removeChatRun,
+        resolveActiveSessionIdForKey: (sessionKey) => {
+          if (sessionKey === "agent:main:main") {
+            return "current-session-id-1";
+          }
+          if (sessionKey === "agent:main:test:direct:source") {
+            return "stale-agent-registry-id";
+          }
+          return undefined;
+        },
       }),
     );
 
@@ -740,9 +752,66 @@ describe("createGatewayCloseHandler", () => {
     expect(markerCall?.[0]?.sessionKeys).toStrictEqual(
       new Set(["agent:main:main", "agent:main:test:direct:source"]),
     );
-    expect(markerCall?.[0]?.sessionIds).toStrictEqual(new Set(["session-id-1", "session-id-2"]));
+    expect(markerCall?.[0]?.sessionIds).toStrictEqual(
+      new Set(["current-session-id-1", "session-id-2"]),
+    );
+    expect(markerCall?.[0]?.activeRuns).toEqual([
+      {
+        runId: "run-1",
+        lifecycleGeneration: "generation-1",
+        sessionKey: "agent:main:main",
+        sessionId: "current-session-id-1",
+      },
+      {
+        runId: "agent-run-1",
+        lifecycleGeneration: "generation-1",
+        sessionKey: "agent:main:test:direct:source",
+        sessionId: "session-id-2",
+      },
+    ]);
     expect(controller.signal.aborted).toBe(true);
     expect(agentController.signal.aborted).toBe(true);
+  });
+
+  it("continues restart shutdown when marking active main sessions fails", async () => {
+    const controller = new AbortController();
+    const chatAbortControllers = new Map([
+      [
+        "run-1",
+        {
+          controller,
+          sessionId: "session-id-1",
+          sessionKey: "agent:main:main",
+          startedAtMs: Date.now(),
+          expiresAtMs: Date.now() + 60_000,
+        },
+      ],
+    ]);
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        chatAbortControllers,
+        markMainSessionsAbortedForRestart: vi.fn(async () => {
+          throw new Error("marker unavailable");
+        }),
+      }),
+    );
+
+    const result = await close({
+      reason: "gateway restarting",
+      restartExpectedMs: 123,
+      drainTimeoutMs: 0,
+    });
+
+    expect(result.warnings).toContain("restart-main-session-marker");
+    expect(controller.signal.aborted).toBe(true);
+    expect(chatAbortControllers.size).toBe(0);
+    expect(
+      mocks.logWarn.mock.calls.some(([message]) =>
+        String(message).includes(
+          "failed to mark active main session(s) for restart recovery: Error: marker unavailable",
+        ),
+      ),
+    ).toBe(true);
   });
 
   it("continues restart shutdown and records a warning when gateway pre-restart hook stalls", async () => {

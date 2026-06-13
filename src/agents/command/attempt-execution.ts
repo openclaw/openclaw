@@ -446,6 +446,7 @@ export function runAgentAttempt(params: {
   timeoutMs: number;
   runTimeoutOverrideMs?: number;
   runId: string;
+  lifecycleGeneration: string;
   opts: AgentCommandOpts;
   runContext: ReturnType<typeof resolveAgentRunContext>;
   spawnedBy: string | undefined;
@@ -469,6 +470,7 @@ export function runAgentAttempt(params: {
   sessionHasHistory?: boolean;
   suppressPromptPersistenceOnRetry?: boolean;
   onUserMessagePersisted?: (message: Extract<AgentMessage, { role: "user" }>) => void;
+  onLifecycleGenerationChanged?: (lifecycleGeneration: string) => void;
 }) {
   const isRawModelRun = params.opts.modelRun === true || params.opts.promptMode === "none";
   const claudeCliFallbackPrelude =
@@ -617,6 +619,7 @@ export function runAgentAttempt(params: {
         timeoutMs: params.timeoutMs,
         runTimeoutOverrideMs: params.runTimeoutOverrideMs,
         runId: params.runId,
+        lifecycleGeneration: params.lifecycleGeneration,
         lane: params.opts.lane,
         extraSystemPrompt: params.opts.extraSystemPrompt,
         inputProvenance: params.opts.inputProvenance,
@@ -733,6 +736,7 @@ export function runAgentAttempt(params: {
     bashElevated: params.opts.bashElevated,
     timeoutMs: params.timeoutMs,
     runId: params.runId,
+    lifecycleGeneration: params.lifecycleGeneration,
     lane: params.opts.lane,
     abortSignal: params.opts.abortSignal,
     extraSystemPrompt: params.opts.extraSystemPrompt,
@@ -755,6 +759,12 @@ export function runAgentAttempt(params: {
     deferTerminalLifecycleEnd: params.deferTerminalLifecycleEnd,
     suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
     onUserMessagePersisted: params.onUserMessagePersisted,
+    onExecutionStarted: (info) => {
+      if (info?.lifecycleGeneration) {
+        params.onLifecycleGenerationChanged?.(info.lifecycleGeneration);
+      }
+    },
+    onSessionIdChanged: params.opts.onSessionIdChanged,
     bootstrapPromptWarningSignaturesSeen,
     bootstrapPromptWarningSignature,
   });
@@ -780,9 +790,14 @@ export function buildAcpResult(params: {
   };
 }
 
-export function emitAcpLifecycleStart(params: { runId: string; startedAt: number }) {
+export function emitAcpLifecycleStart(params: {
+  runId: string;
+  startedAt: number;
+  lifecycleGeneration?: string;
+}) {
   emitAgentEvent({
     runId: params.runId,
+    ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
     stream: "lifecycle",
     data: {
       phase: "start",
@@ -878,9 +893,10 @@ export function emitAcpRuntimeEvent(params: {
   });
 }
 
-export function emitAcpLifecycleEnd(params: { runId: string }) {
+export function emitAcpLifecycleEnd(params: { runId: string; lifecycleGeneration?: string }) {
   emitAgentEvent({
     runId: params.runId,
+    ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
     stream: "lifecycle",
     data: {
       phase: "end",
@@ -893,9 +909,11 @@ export function emitAcpLifecycleError(params: {
   runId: string;
   error: unknown;
   sessionKey?: string;
+  lifecycleGeneration?: string;
 }) {
   emitAgentEvent({
     runId: params.runId,
+    ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
     stream: "lifecycle",
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     data: {

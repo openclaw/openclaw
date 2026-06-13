@@ -236,6 +236,8 @@ type FallbackRunnerParams = {
 };
 
 type EmbeddedAgentParams = {
+  lifecycleGeneration?: string;
+  onExecutionStarted?: (info?: { lifecycleGeneration?: string }) => void;
   onBlockReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
   onToolResult?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
   onItemEvent?: (payload: {
@@ -3948,6 +3950,64 @@ describe("runAgentTurnWithFallback", () => {
       replayInvalid: true,
     });
     expect(typeof lifecycleData.endedAt).toBe("number");
+  });
+
+  it("uses a rebound lifecycle generation for embedded terminal events", async () => {
+    const agentEvents = await import("../../infra/agent-events.js");
+    const emitAgentEvent = vi.mocked(agentEvents.emitAgentEvent);
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      params.onExecutionStarted?.({ lifecycleGeneration: "post-restart" });
+      await params.onAgentEvent?.({
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 1_000 },
+      });
+      throw new Error("rebound failure");
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: { runId: "run-rebound" } as GetReplyOptions,
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("final");
+    const lifecycleEvents = emitAgentEvent.mock.calls
+      .map((call) => call[0])
+      .filter(
+        (event) =>
+          event.runId === "run-rebound" &&
+          event.stream === "lifecycle" &&
+          (event.data.phase === "error" || event.data.fallbackExhaustedFailure === true),
+      );
+    expect(lifecycleEvents.length).toBeGreaterThan(0);
+    expect(lifecycleEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          lifecycleGeneration: "post-restart",
+        }),
+      ]),
+    );
+    expect(lifecycleEvents.every((event) => event.lifecycleGeneration === "post-restart")).toBe(
+      true,
+    );
   });
 
   it("does not duplicate embedded lifecycle terminal events already reported by the runner", async () => {

@@ -802,7 +802,10 @@ export async function runGatewayLoop(params: {
         reloadTaskRegistryFromStore,
         resetAllLanes,
         resetGatewayRestartStateForInProcessRestart,
+        rotateAgentEventLifecycleGeneration,
       } = await loadGatewayLifecycleRuntimeModule();
+      // Rotate ownership before reset pumps preserved queue entries.
+      rotateAgentEventLifecycleGeneration();
       resetAllLanes();
       clearRuntimeConfigSnapshot();
       resetGatewayRestartStateForInProcessRestart();

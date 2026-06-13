@@ -781,6 +781,43 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     expect(cronSession.store).toBeUndefined();
   });
 
+  it("does not let old cron cleanup clear a newer same-id run context", async () => {
+    mockRunCronFallbackPassthrough();
+    const {
+      claimAgentRunContext,
+      clearAgentRunContext,
+      getAgentRunContext,
+      rotateAgentEventLifecycleGeneration,
+    } = await import("../../infra/agent-events.js");
+    let newerLifecycleGeneration = "";
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (runParams: {
+        onExecutionStarted?: (info?: { lifecycleGeneration?: string }) => void;
+      }) => {
+        runParams.onExecutionStarted?.();
+        newerLifecycleGeneration = rotateAgentEventLifecycleGeneration();
+        claimAgentRunContext("test-session-id", {
+          sessionKey: "agent:default:cron:message-tool-policy",
+          sessionId: "test-session-id",
+          lifecycleGeneration: newerLifecycleGeneration,
+        });
+        return {
+          payloads: [{ text: "test output" }],
+          meta: { agentMeta: {} },
+        };
+      },
+    );
+
+    await runCronIsolatedAgentTurn(makeParams());
+
+    expect(getAgentRunContext("test-session-id")).toEqual(
+      expect.objectContaining({
+        lifecycleGeneration: newerLifecycleGeneration,
+      }),
+    );
+    clearAgentRunContext("test-session-id", newerLifecycleGeneration);
+  });
+
   it("keeps shared cron run context references active after completion", async () => {
     const cronSession = makeCronSession({
       store: { "agent:default:cron:message-tool-policy": { retained: true } },

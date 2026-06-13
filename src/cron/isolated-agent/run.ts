@@ -15,7 +15,12 @@ import {
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { clearAgentRunContext } from "../../infra/agent-events.js";
+import {
+  claimAgentRunContext,
+  clearAgentRunContext,
+  getAgentEventLifecycleGeneration,
+  getAgentRunContext,
+} from "../../infra/agent-events.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import {
   createSourceDeliveryPlan,
@@ -1228,9 +1233,10 @@ async function disposeCronRunContext(params: {
   sessionId: string;
   cronSession: MutableCronSession;
   ownsRunContext: boolean;
+  lifecycleGeneration: string;
 }): Promise<void> {
   if (params.ownsRunContext) {
-    clearAgentRunContext(params.sessionId);
+    clearAgentRunContext(params.sessionId, params.lifecycleGeneration);
     await retireSessionMcpRuntime({
       sessionId: params.sessionId,
       reason: "isolated-cron-dispose",
@@ -1271,7 +1277,24 @@ export async function runCronIsolatedAgentTurn(params: {
   if (!prepared.ok) {
     return prepared.result;
   }
-  const notifyExecutionStarted = () =>
+  // Capture the stable run id before execution can rotate its persisted session.
+  const initialSessionId = prepared.context.cronSession.sessionEntry.sessionId;
+  const ownsRunContext = params.job.sessionTarget === "isolated";
+  let runLifecycleGeneration = getAgentEventLifecycleGeneration();
+  const existingRunContext = getAgentRunContext(initialSessionId);
+  claimAgentRunContext(initialSessionId, {
+    ...existingRunContext,
+    sessionKey:
+      ownsRunContext || !existingRunContext?.sessionKey
+        ? prepared.context.runSessionKey
+        : existingRunContext.sessionKey,
+    sessionId: initialSessionId,
+    lifecycleGeneration: runLifecycleGeneration,
+  });
+  const notifyExecutionStarted = (info?: { lifecycleGeneration?: string }) => {
+    if (info?.lifecycleGeneration) {
+      runLifecycleGeneration = info.lifecycleGeneration;
+    }
     params.onExecutionStarted?.({
       jobId: params.job.id,
       agentId: prepared.context.agentId,
@@ -1281,6 +1304,7 @@ export async function runCronIsolatedAgentTurn(params: {
       provider: prepared.context.liveSelection.provider,
       model: prepared.context.liveSelection.model,
     });
+  };
   const notifyExecutionPhase = (
     info: Pick<CronAgentExecutionPhaseUpdate, "phase"> &
       Partial<Omit<CronAgentExecutionPhaseUpdate, "jobId" | "phase">>,
@@ -1295,10 +1319,6 @@ export async function runCronIsolatedAgentTurn(params: {
       ...info,
     });
   };
-
-  // Capture the sessionId before the try block so the finally block clears
-  // the correct context even if adoptCronRunSessionMetadata() rotates it.
-  const initialSessionId = prepared.context.cronSession.sessionEntry.sessionId;
 
   const turnStartedAtMs = Date.now();
   const diagnosticsEnabled = isDiagnosticsEnabled(params.cfg);
@@ -1406,7 +1426,8 @@ export async function runCronIsolatedAgentTurn(params: {
     await disposeCronRunContext({
       sessionId: initialSessionId,
       cronSession: prepared.context.cronSession,
-      ownsRunContext: params.job.sessionTarget === "isolated",
+      ownsRunContext,
+      lifecycleGeneration: runLifecycleGeneration,
     });
   }
 }

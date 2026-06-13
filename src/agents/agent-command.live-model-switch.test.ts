@@ -270,10 +270,14 @@ vi.mock("./internal-session-effects.js", () => ({
 }));
 
 vi.mock("../infra/agent-events.js", () => ({
+  assertAgentRunLifecycleGenerationCurrent: vi.fn(),
+  captureAgentRunLifecycleGeneration: () => "test-generation",
   clearAgentRunContext: (...args: unknown[]) => state.clearAgentRunContextMock(...args),
   emitAgentEvent: (...args: unknown[]) => state.emitAgentEventMock(...args),
+  getAgentEventLifecycleGeneration: () => "test-generation",
   onAgentEvent: vi.fn(),
   registerAgentRunContext: (...args: unknown[]) => state.registerAgentRunContextMock(...args),
+  withAgentRunLifecycleGeneration: (_generation: string, run: () => unknown) => run(),
 }));
 
 vi.mock("../infra/outbound/session-context.js", () => ({
@@ -1129,6 +1133,36 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     ).toBeLessThan(deliveryOrder);
     expect(deliveryOrder).toBeLessThan(
       state.emitAgentEventMock.mock.invocationCallOrder[lastEndIndex] ?? 0,
+    );
+  });
+
+  it("uses an embedded queue rebound generation for terminal lifecycle and cleanup", async () => {
+    setupSingleAttemptFallback();
+    state.runAgentAttemptMock.mockImplementation(async (attemptParams: unknown) => {
+      (
+        attemptParams as {
+          onLifecycleGenerationChanged?: (lifecycleGeneration: string) => void;
+        }
+      ).onLifecycleGenerationChanged?.("post-restart-generation");
+      return makeSuccessResult("openai", "gpt-5.4");
+    });
+
+    await runBasicAgentCommand();
+
+    const lifecycleEnd = state.emitAgentEventMock.mock.calls
+      .map(
+        (call) =>
+          call[0] as {
+            stream?: string;
+            data?: { phase?: string };
+            lifecycleGeneration?: string;
+          },
+      )
+      .find((event) => event.stream === "lifecycle" && event.data?.phase === "end");
+    expect(lifecycleEnd?.lifecycleGeneration).toBe("post-restart-generation");
+    expect(state.clearAgentRunContextMock).toHaveBeenCalledWith(
+      expect.any(String),
+      "post-restart-generation",
     );
   });
 

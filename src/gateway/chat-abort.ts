@@ -8,7 +8,7 @@ import {
 import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { emitAgentEvent } from "../infra/agent-events.js";
+import { emitAgentEvent, getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { projectLiveAssistantBufferedText } from "./live-chat-projector.js";
 
@@ -18,6 +18,7 @@ export type ChatAbortControllerEntry = {
   controller: AbortController;
   sessionId: string;
   sessionKey: string;
+  lifecycleGeneration?: string;
   agentId?: string;
   startedAtMs: number;
   expiresAtMs: number;
@@ -123,6 +124,7 @@ export function registerChatAbortController(params: {
   authProviderId?: string;
   controlUiVisible?: boolean;
   kind?: ChatAbortControllerEntry["kind"];
+  lifecycleGeneration?: string;
   now?: number;
   expiresAtMs?: number;
 }): RegisteredChatAbortController {
@@ -148,6 +150,7 @@ export function registerChatAbortController(params: {
     controller,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
+    lifecycleGeneration: params.lifecycleGeneration ?? getAgentEventLifecycleGeneration(),
     agentId: normalizeActiveAgentId(params.agentId),
     startedAtMs: now,
     expiresAtMs:
@@ -438,6 +441,7 @@ export function abortChatRunById(
   }
   emitAgentEvent({
     runId,
+    ...(active.lifecycleGeneration ? { lifecycleGeneration: active.lifecycleGeneration } : {}),
     sessionKey,
     agentId: active.agentId,
     stream: "lifecycle",

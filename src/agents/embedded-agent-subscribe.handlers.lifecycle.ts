@@ -35,6 +35,12 @@ export function handleAgentStart(ctx: EmbeddedAgentSubscribeContext) {
   ctx.log.debug(`embedded run agent start: runId=${ctx.params.runId}`);
   emitAgentEvent({
     runId: ctx.params.runId,
+    ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
+    ...(ctx.params.sessionId ? { sessionId: ctx.params.sessionId } : {}),
+    ...(ctx.params.agentId ? { agentId: ctx.params.agentId } : {}),
+    ...(ctx.params.lifecycleGeneration
+      ? { lifecycleGeneration: ctx.params.lifecycleGeneration }
+      : {}),
     stream: "lifecycle",
     data: {
       phase: "start",
@@ -149,6 +155,12 @@ export function handleAgentEnd(
     if (isError) {
       emitAgentEvent({
         runId: ctx.params.runId,
+        ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
+        ...(ctx.params.sessionId ? { sessionId: ctx.params.sessionId } : {}),
+        ...(ctx.params.agentId ? { agentId: ctx.params.agentId } : {}),
+        ...(ctx.params.lifecycleGeneration
+          ? { lifecycleGeneration: ctx.params.lifecycleGeneration }
+          : {}),
         stream: "lifecycle",
         data: {
           phase: "error",
@@ -174,6 +186,12 @@ export function handleAgentEnd(
     const successPhase = ctx.params.terminalLifecyclePhase ?? "end";
     emitAgentEvent({
       runId: ctx.params.runId,
+      ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
+      ...(ctx.params.sessionId ? { sessionId: ctx.params.sessionId } : {}),
+      ...(ctx.params.agentId ? { agentId: ctx.params.agentId } : {}),
+      ...(ctx.params.lifecycleGeneration
+        ? { lifecycleGeneration: ctx.params.lifecycleGeneration }
+        : {}),
       stream: "lifecycle",
       data: {
         phase: successPhase,

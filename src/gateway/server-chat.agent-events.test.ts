@@ -83,6 +83,7 @@ describe("agent event handler", () => {
     lifecycleErrorRetryGraceMs?: number;
     isChatSendRunActive?: (runId: string) => boolean;
     clearTrackedActiveRun?: AgentEventHandlerOptions["clearTrackedActiveRun"];
+    resolveActiveLifecycleGenerationForRun?: (runId: string) => string | undefined;
   }) {
     const nowSpy =
       params?.now === undefined ? undefined : vi.spyOn(Date, "now").mockReturnValue(params.now);
@@ -113,6 +114,7 @@ describe("agent event handler", () => {
       lifecycleErrorRetryGraceMs: params?.lifecycleErrorRetryGraceMs,
       isChatSendRunActive: params?.isChatSendRunActive,
       clearTrackedActiveRun: params?.clearTrackedActiveRun ?? clearTrackedActiveRun,
+      resolveActiveLifecycleGenerationForRun: params?.resolveActiveLifecycleGenerationForRun,
     });
 
     return {
@@ -2055,6 +2057,211 @@ describe("agent event handler", () => {
       });
     }
     resetAgentRunContextForTest();
+  });
+
+  it("suppresses late pre-restart lifecycle events from live projections", () => {
+    vi.mocked(loadSessionEntry).mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      store: {},
+      entry: {
+        sessionId: "session-recovery",
+        updatedAt: 2_000,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryRuns: [
+          {
+            runId: "interrupted-run",
+            lifecycleGeneration: "pre-restart",
+          },
+        ],
+      },
+      canonicalKey: "session-recovery",
+      legacyKey: undefined,
+    });
+    const {
+      broadcast,
+      broadcastToConnIds,
+      chatRunState,
+      clearAgentRunContext,
+      clearTrackedActiveRun,
+      handler,
+      sessionEventSubscribers,
+    } = createHarness({
+      resolveSessionKeyForRun: () => "session-recovery",
+      lifecycleErrorRetryGraceMs: 0,
+    });
+    sessionEventSubscribers.subscribe("conn-session");
+    chatRunState.registry.add("interrupted-run", {
+      sessionKey: "session-recovery",
+      clientRunId: "interrupted-run",
+    });
+
+    handler({
+      runId: "interrupted-run",
+      lifecycleGeneration: "pre-restart",
+      seq: 2,
+      stream: "lifecycle",
+      sessionKey: "session-recovery",
+      sessionId: "session-recovery",
+      ts: 2_100,
+      data: {
+        phase: "end",
+        endedAt: 2_100,
+      },
+    });
+
+    expect(chatBroadcastCalls(broadcast)).toHaveLength(0);
+    expect(
+      broadcastToConnIds.mock.calls.filter(([event]) => event === "sessions.changed"),
+    ).toHaveLength(0);
+    expect(persistGatewaySessionLifecycleEventMock).not.toHaveBeenCalled();
+    expect(chatRunState.registry.peek("interrupted-run")).toBeUndefined();
+    expect(clearAgentRunContext).toHaveBeenCalledWith("interrupted-run");
+    expect(clearTrackedActiveRun).toHaveBeenCalledWith({
+      runId: "interrupted-run",
+      clientRunId: "interrupted-run",
+      sessionKey: "session-recovery",
+    });
+  });
+
+  it("does not clear a same-id retry when an old restart terminal arrives", () => {
+    vi.mocked(loadSessionEntry).mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      store: {},
+      entry: {
+        sessionId: "session-recovery",
+        updatedAt: 2_000,
+        status: "running",
+        restartRecoveryRuns: [
+          {
+            runId: "shared-run",
+            lifecycleGeneration: "pre-restart",
+          },
+        ],
+      },
+      canonicalKey: "session-recovery",
+      legacyKey: undefined,
+    });
+    registerAgentRunContext("shared-run", {
+      sessionKey: "session-recovery",
+      sessionId: "session-recovery",
+      lifecycleGeneration: "pre-restart",
+    });
+    const { agentRunSeq, chatRunState, clearAgentRunContext, clearTrackedActiveRun, handler } =
+      createHarness({
+        resolveSessionKeyForRun: () => "session-recovery",
+        lifecycleErrorRetryGraceMs: 0,
+        resolveActiveLifecycleGenerationForRun: () => "post-restart",
+      });
+    agentRunSeq.set("shared-run", 4);
+    chatRunState.registry.add("shared-run", {
+      sessionKey: "session-recovery",
+      clientRunId: "shared-run",
+    });
+    chatRunState.buffers.set("shared-run", "new retry output");
+
+    handler({
+      runId: "shared-run",
+      lifecycleGeneration: "pre-restart",
+      seq: 3,
+      stream: "lifecycle",
+      sessionKey: "session-recovery",
+      sessionId: "session-recovery",
+      ts: 2_100,
+      data: {
+        phase: "end",
+        endedAt: 2_100,
+      },
+    });
+
+    expect(chatRunState.registry.peek("shared-run")).toBeDefined();
+    expect(chatRunState.buffers.get("shared-run")).toBe("new retry output");
+    expect(agentRunSeq.get("shared-run")).toBe(4);
+    expect(clearAgentRunContext).not.toHaveBeenCalled();
+    expect(clearTrackedActiveRun).not.toHaveBeenCalled();
+    expect(persistGatewaySessionLifecycleEventMock).not.toHaveBeenCalled();
+  });
+
+  it("cancels a deferred old-generation error before a same-id retry", () => {
+    vi.useFakeTimers();
+    let activeLifecycleGeneration = "pre-restart";
+    registerAgentRunContext("shared-run", {
+      sessionKey: "session-recovery",
+      sessionId: "session-recovery",
+      lifecycleGeneration: activeLifecycleGeneration,
+    });
+    const { chatRunState, clearAgentRunContext, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-recovery",
+      lifecycleErrorRetryGraceMs: 100,
+      resolveActiveLifecycleGenerationForRun: () => activeLifecycleGeneration,
+    });
+    chatRunState.registry.add("shared-run", {
+      sessionKey: "session-recovery",
+      clientRunId: "shared-run",
+    });
+
+    handler({
+      runId: "shared-run",
+      lifecycleGeneration: "pre-restart",
+      seq: 1,
+      stream: "lifecycle",
+      sessionKey: "session-recovery",
+      sessionId: "session-recovery",
+      ts: 2_000,
+      data: {
+        phase: "error",
+        error: "retryable provider failure",
+        endedAt: 2_000,
+      },
+    });
+    expect(vi.getTimerCount()).toBe(1);
+
+    vi.mocked(loadSessionEntry).mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      store: {},
+      entry: {
+        sessionId: "session-recovery",
+        updatedAt: 2_000,
+        status: "running",
+        restartRecoveryRuns: [
+          {
+            runId: "shared-run",
+            lifecycleGeneration: "pre-restart",
+          },
+        ],
+      },
+      canonicalKey: "session-recovery",
+      legacyKey: undefined,
+    });
+    resetAgentRunContextForTest();
+    activeLifecycleGeneration = "post-restart";
+    registerAgentRunContext("shared-run", {
+      sessionKey: "session-recovery",
+      sessionId: "session-recovery",
+      lifecycleGeneration: activeLifecycleGeneration,
+    });
+
+    handler({
+      runId: "shared-run",
+      lifecycleGeneration: "pre-restart",
+      seq: 2,
+      stream: "lifecycle",
+      sessionKey: "session-recovery",
+      sessionId: "session-recovery",
+      ts: 2_100,
+      data: {
+        phase: "end",
+        endedAt: 2_100,
+      },
+    });
+
+    expect(vi.getTimerCount()).toBe(0);
+    vi.advanceTimersByTime(100);
+    expect(chatRunState.registry.peek("shared-run")).toBeDefined();
+    expect(clearAgentRunContext).not.toHaveBeenCalled();
   });
 
   it("clears tracked active runs before terminal sessions.changed broadcasts", () => {
