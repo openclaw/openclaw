@@ -1,7 +1,7 @@
-import { createSubsystemLogger } from "../../src/logging/subsystem.js";
-import { registerInternalHook, type InternalHookEvent, isMessageReceivedEvent, isMessageSentEvent } from "../../src/hooks/internal-hooks.js";
-import type { PluginRuntime } from "../../src/plugins/runtime/types.js";
-import type { PluginLogger } from "../../src/plugins/types.js";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-logger";
+import { registerInternalHook, type InternalHookEvent, isMessageReceivedEvent, isMessageSentEvent } from "openclaw/plugin-sdk/hook-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/runtime";
+import type { PluginLogger } from "openclaw/plugin-sdk/types";
 import { createSupabaseClient } from "./supabase-client.js";
 
 /**
