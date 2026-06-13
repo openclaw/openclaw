@@ -1734,11 +1734,11 @@ function canaryFailureMessage(params: {
         return [
           "1. Check whether the SUT bot is replying in the group without threading to the driver message.",
           "2. Confirm the Telegram native command path preserves reply-to behavior for group commands.",
-          "3. Inspect the observed messages artifact for the mismatched SUT message id and reply target.",
+          "3. Inspect telegram-qa-report.md and gateway debug logs for the mismatched SUT message id and reply target.",
         ];
       case "sut_reply_empty":
         return [
-          "1. Inspect the observed messages artifact to confirm whether the SUT sent media-only or blank text.",
+          "1. Inspect telegram-qa-report.md to confirm whether the SUT sent media-only or blank text.",
           "2. Check whether the Telegram native command response path produced an empty or suppressed reply.",
           "3. Confirm the SUT command completed successfully in gateway logs.",
         ];
