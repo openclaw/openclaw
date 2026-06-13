@@ -1406,20 +1406,32 @@ function expandDirectoryHydrationGroups(params: {
 }
 
 export function estimateToolSchemaDirectoryToolNames(params: {
-  tools: readonly Pick<AnyAgentTool, "name" | "description">[];
+  tools: readonly AnyAgentTool[];
   query?: string;
   maxTools?: number;
   requiredToolNames?: Iterable<string>;
 }): string[] {
   const maxTools = Math.max(0, Math.min(12, params.maxTools ?? 4));
-  const required = normalizeStringEntries(Array.from(params.requiredToolNames ?? []));
+  const hydratableTools: AnyAgentTool[] = [];
+  const externalToolNames = new Set<string>();
+  for (const tool of params.tools) {
+    // MCP descriptions are untrusted; keep their schemas deferred until explicit describe/call.
+    if (classifyTool(tool).source === "mcp") {
+      externalToolNames.add(tool.name);
+      continue;
+    }
+    hydratableTools.push(tool);
+  }
+  const required = normalizeStringEntries(Array.from(params.requiredToolNames ?? [])).filter(
+    (name) => !externalToolNames.has(name),
+  );
   const requiredSet = new Set(required);
   const query = params.query?.trim() ?? "";
   if (!query && required.length >= maxTools) {
     return required.slice(0, maxTools);
   }
   const intent = readToolDirectoryIntent(query);
-  const scored = params.tools
+  const scored = hydratableTools
     .filter((tool) => !TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name))
     .map((tool) => ({
       name: tool.name,
@@ -1432,7 +1444,7 @@ export function estimateToolSchemaDirectoryToolNames(params: {
   const selected = uniqueStrings([...required, ...scored.map((entry) => entry.name)]);
   return expandDirectoryHydrationGroups({
     selectedNames: selected,
-    tools: params.tools,
+    tools: hydratableTools,
     intent,
     maxTools,
   });
