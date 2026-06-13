@@ -309,6 +309,51 @@ describe("workboard controller", () => {
     expect(state.lastRefreshAt).toEqual(expect.any(Number));
   });
 
+  it("defers task-backed lifecycle sync until a later load enrichment succeeds", async () => {
+    const host = {};
+    const linkedCard = {
+      ...sampleCard,
+      taskId: sampleTask.taskId,
+      sessionKey: sampleTaskSessionKey,
+      runId: "run-1",
+    } satisfies WorkboardCard;
+    const requestUpdate = vi.fn();
+    let tasksAvailable = false;
+    const client = createClient((method) => {
+      if (method === "workboard.cards.list") {
+        return { cards: [linkedCard], statuses: ["todo", "done"] };
+      }
+      if (method === "tasks.list") {
+        if (!tasksAvailable) {
+          throw new Error("tasks unavailable");
+        }
+        return { tasks: [sampleTask] };
+      }
+      return {};
+    });
+
+    await loadWorkboard({
+      host,
+      client: client as never,
+      force: true,
+      requestUpdate,
+    });
+    vi.clearAllMocks();
+
+    await syncWorkboardLifecycle({ host, client: client as never, sessions: [], requestUpdate });
+    await syncWorkboardLifecycle({ host, client: client as never, sessions: [], requestUpdate });
+
+    expect(client.request).not.toHaveBeenCalled();
+    expect(requestUpdate).not.toHaveBeenCalled();
+
+    tasksAvailable = true;
+    await loadWorkboard({ host, client: client as never, force: true });
+    vi.clearAllMocks();
+    await syncWorkboardLifecycle({ host, client: client as never, sessions: [] });
+
+    expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
+  });
+
   it("keeps prepared task summaries when bounded poll enrichment fails", async () => {
     const host = {};
     const state = getWorkboardState(host);
@@ -776,6 +821,7 @@ describe("workboard controller", () => {
     const host = {};
     const state = getWorkboardState(host);
     state.loading = true;
+    state.lifecycleTaskRefreshFailed = true;
     const requestUpdates: Array<[loading: boolean, dispatching: boolean]> = [];
     const client = createClient({
       "workboard.cards.dispatch": {
@@ -799,6 +845,7 @@ describe("workboard controller", () => {
     expect(requestUpdates.at(-1)).toEqual([true, false]);
     expect(state.loading).toBe(true);
     expect(state.dispatching).toBe(false);
+    expect(state.lifecycleTaskRefreshFailed).toBe(false);
     expect(client.request).toHaveBeenCalledWith("workboard.cards.dispatch", {});
   });
 
@@ -945,6 +992,7 @@ describe("workboard controller", () => {
     expect(state.cards).toEqual([dispatchedCard]);
     expect(state.loaded).toBe(true);
     expect(state.tasksByCardId.size).toBe(0);
+    expect(state.lifecycleTaskRefreshFailed).toBe(true);
     expect(state.lastRefreshError).toBe("task ledger unavailable");
   });
 
@@ -3659,6 +3707,38 @@ describe("workboard controller", () => {
       }),
     });
     expect(state.tasksByCardId.get("card-1")).toMatchObject({ status: "completed" });
+  });
+
+  it("does not retry a failed lifecycle task refresh on the next render", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const linked = {
+      ...sampleCard,
+      status: "running",
+      sessionKey: sampleTaskSessionKey,
+      runId: "run-1",
+      taskId: "task-1",
+    } satisfies WorkboardCard;
+    state.loaded = true;
+    state.cards = [linked];
+    state.tasksByCardId.set("card-1", sampleTask);
+    const requestUpdate = vi.fn();
+    const client = createClient((method) => {
+      if (method === "tasks.list") {
+        throw new Error("tasks unavailable");
+      }
+      return {};
+    });
+
+    await syncWorkboardLifecycle({ host, client: client as never, sessions: [], requestUpdate });
+    expect(client.request).toHaveBeenCalledOnce();
+    expect(requestUpdate).toHaveBeenCalledOnce();
+    vi.clearAllMocks();
+
+    await syncWorkboardLifecycle({ host, client: client as never, sessions: [], requestUpdate });
+
+    expect(client.request).not.toHaveBeenCalled();
+    expect(requestUpdate).not.toHaveBeenCalled();
   });
 
   it("does not resume lifecycle writes when dispatch starts during task refresh", async () => {

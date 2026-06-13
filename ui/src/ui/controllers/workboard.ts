@@ -393,6 +393,7 @@ export type WorkboardUiState = {
   lastRefreshSource: WorkboardRefreshSource | null;
   pollRefreshInProgress: boolean;
   lifecycleTasksPrepared: boolean;
+  lifecycleTaskRefreshFailed: boolean;
   draftOpen: boolean;
   draftSaving: boolean;
   editingCardId: string | null;
@@ -488,6 +489,7 @@ function createDefaultState(): WorkboardUiState {
     lastRefreshSource: null,
     pollRefreshInProgress: false,
     lifecycleTasksPrepared: false,
+    lifecycleTaskRefreshFailed: false,
     draftOpen: false,
     draftSaving: false,
     editingCardId: null,
@@ -1797,6 +1799,7 @@ export async function loadWorkboard(params: {
               }
             }
             applyTaskSummariesToState(state, taskSummaries, { missingTaskIds });
+            state.lifecycleTaskRefreshFailed = false;
             if (taskRefreshError) {
               state.lastRefreshError = taskRefreshError;
             }
@@ -1805,10 +1808,16 @@ export async function loadWorkboard(params: {
           if (isCurrentWorkboardLoadGeneration(params.host, generation)) {
             if (params.taskRefresh === "linked") {
               applyTaskSummariesToState(state, preparedTaskSummaries);
+            } else {
+              // Render-driven lifecycle sync runs after every update. Defer a
+              // failed full task refresh until a later load instead of retrying immediately.
+              state.lifecycleTaskRefreshFailed = true;
             }
             state.lastRefreshError = formatError(error);
           }
         }
+      } else {
+        state.lifecycleTaskRefreshFailed = false;
       }
       if (!isCurrentWorkboardLoadGeneration(params.host, generation)) {
         return false;
@@ -2544,6 +2553,7 @@ export async function syncWorkboardLifecycle(params: {
     !params.client ||
     !state.loaded ||
     params.canWrite === false ||
+    (state.lifecycleTaskRefreshFailed && shouldRefreshWorkboardTasksForLifecycle(state)) ||
     workboardLifecycleSyncBlocked(params.host, state)
   ) {
     return;
@@ -2561,6 +2571,7 @@ export async function syncWorkboardLifecycle(params: {
         return;
       }
       applyTaskSummariesToState(state, taskSummaries);
+      state.lifecycleTaskRefreshFailed = false;
     } catch (error) {
       if (
         !isCurrentWorkboardLoadGeneration(params.host, generation) ||
@@ -2569,8 +2580,10 @@ export async function syncWorkboardLifecycle(params: {
         return;
       }
       state.tasksByCardId = new Map();
+      state.lifecycleTaskRefreshFailed = true;
       state.error = formatError(error);
       params.requestUpdate?.();
+      return;
     }
   }
   if (workboardLifecycleSyncBlocked(params.host, state)) {
@@ -2897,7 +2910,9 @@ export async function dispatchWorkboard(params: {
     state.tasksByCardId = new Map();
     try {
       applyTaskSummariesToState(state, await listWorkboardTasks(params.client));
+      state.lifecycleTaskRefreshFailed = false;
     } catch (error) {
+      state.lifecycleTaskRefreshFailed = true;
       state.lastRefreshError = formatError(error);
     }
     state.loaded = true;
