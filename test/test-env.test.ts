@@ -1,5 +1,6 @@
 // Test environment tests validate shared env setup helpers.
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -275,5 +276,37 @@ describe("installTestEnv", () => {
 
     expect(testEnv.tempHome).toBe(realHome);
     expect(process.env.TEST_PROFILE_ONLY).toBe("from-profile");
+  });
+
+  it("skips excluded cache subdirectories when staging auth dirs", async () => {
+    const { installTestEnv: installLiveTestEnv } = await importFreshModule<
+      typeof import("./test-env.js")
+    >(import.meta.url, "./test-env.js?scope=cache-exclude");
+
+    const realHome = os.homedir();
+    const savedHome = process.env.HOME;
+    const savedLive = process.env.LIVE;
+    const savedOpenclawLive = process.env.OPENCLAW_LIVE_TEST;
+
+    process.env.HOME = realHome;
+    process.env.LIVE = "1";
+    delete process.env.OPENCLAW_LIVE_USE_REAL_HOME;
+    process.env.OPENCLAW_LIVE_TEST_QUIET = "1";
+
+    const testEnv = installLiveTestEnv();
+
+    // .gemini should be staged but large cache dirs should not
+    const geminiDir = path.join(testEnv.tempHome, ".gemini");
+    expect(fs.existsSync(geminiDir)).toBe(true);
+    // These cache dirs must be absent in the temp copy
+    const cacheDirs = ["cache", "Code Cache", "GPUCache", "Service Worker"];
+    for (const cacheDir of cacheDirs) {
+      expect(fs.existsSync(path.join(geminiDir, cacheDir))).toBe(false);
+    }
+
+    process.env.HOME = savedHome;
+    process.env.LIVE = savedLive;
+    process.env.OPENCLAW_LIVE_TEST = savedOpenclawLive;
+    testEnv.cleanup();
   });
 });

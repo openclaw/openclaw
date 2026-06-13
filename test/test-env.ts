@@ -9,6 +9,25 @@ import JSON5 from "json5";
 type RestoreEntry = { key: string; value: string | undefined };
 
 const LIVE_EXTERNAL_AUTH_DIRS = [".claude/backups", ".gemini", ".minimax"] as const;
+
+/**
+ * Subdirectories to skip when staging external auth dirs into the temp home.
+ * These are typically browser caches or profile data that can be multi-GB.
+ */
+const LIVE_EXTERNAL_AUTH_EXCLUDE_SUBDIRS = [
+  "cache",
+  "Code Cache",
+  "GPUCache",
+  "Service Worker",
+  "IndexedDB",
+  "Session Storage",
+  "Local Storage",
+  "DawnGraphiteCache",
+  "DawnWebGPUCache",
+  "ShaderCache",
+  "GrShaderCache",
+  "Crashpad",
+] as const;
 const LIVE_EXTERNAL_AUTH_FILES = [
   ".claude.json",
   ".claude/.credentials.json",
@@ -249,14 +268,31 @@ function ensureParentDir(targetPath: string): void {
   fs.mkdirSync(path.dirname(targetPath), { recursive: true });
 }
 
-function copyDirIfExists(sourcePath: string, targetPath: string): void {
+function copyDirIfExists(
+  sourcePath: string,
+  targetPath: string,
+  options?: { excludeDirs?: readonly string[] },
+): void {
   if (!fs.existsSync(sourcePath)) {
     return;
   }
+  const excludedDirs = options?.excludeDirs
+    ? new Set(options.excludeDirs.map((d) => d.replace(/\/$|\\$/u, "")))
+    : null;
   fs.mkdirSync(targetPath, { recursive: true });
   fs.cpSync(sourcePath, targetPath, {
     recursive: true,
     force: true,
+    filter: excludedDirs
+      ? (src) => {
+          const rel = path.relative(sourcePath, src);
+          if (!rel) {
+            return true;
+          }
+          const parts = rel.split(path.sep);
+          return !parts.some((part) => excludedDirs.has(part));
+        }
+      : undefined,
   });
 }
 
@@ -408,7 +444,9 @@ function stageLiveTestState(params: {
   copyLiveAuthProfiles(realStateDir, tempStateDir);
 
   for (const authDir of LIVE_EXTERNAL_AUTH_DIRS) {
-    copyDirIfExists(path.join(params.realHome, authDir), path.join(params.tempHome, authDir));
+    copyDirIfExists(path.join(params.realHome, authDir), path.join(params.tempHome, authDir), {
+      excludeDirs: LIVE_EXTERNAL_AUTH_EXCLUDE_SUBDIRS,
+    });
   }
   for (const authFile of LIVE_EXTERNAL_AUTH_FILES) {
     copyFileIfExists(path.join(params.realHome, authFile), path.join(params.tempHome, authFile));
