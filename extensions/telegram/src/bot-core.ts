@@ -249,6 +249,18 @@ export function createTelegramBotCore(
     }
   });
 
+  // Answer callback queries immediately before sequentialize queues them behind
+  // agent turns for the same chat/topic. Telegram has a ~15s server-side timeout
+  // for answerCallbackQuery; if an agent turn is already processing, sequentialize
+  // delays the answer beyond that window and the user sees a stuck loading spinner.
+  bot.use(async (ctx, next) => {
+    const callback = ctx.callbackQuery;
+    if (callback) {
+      void bot.api.answerCallbackQuery(callback.id).catch(() => {});
+    }
+    await next();
+  });
+
   bot.use(botRuntime.sequentialize(getTelegramSequentialKey));
 
   const rawUpdateLogger = createSubsystemLogger("gateway/channels/telegram/raw-update");
