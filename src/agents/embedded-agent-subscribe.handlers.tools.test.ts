@@ -2030,7 +2030,7 @@ describe("messaging tool media URL tracking", () => {
         details: undefined,
       },
     ],
-  ])("commits plugin message sends with successful %s results", async (_label, result) => {
+  ])("does not commit plugin message sends with ambiguous %s results", async (_label, result) => {
     const { ctx } = createTestContext();
 
     await handleToolExecutionStart(ctx, {
@@ -2052,11 +2052,8 @@ describe("messaging tool media URL tracking", () => {
       result,
     });
 
-    expect(ctx.state.messagingToolSentTexts).toEqual(["sent through plugin"]);
-    expectRecordFields(requireSingleMessagingTarget(ctx), "messaging target", {
-      to: "channel:mattermost",
-      text: "sent through plugin",
-    });
+    expect(ctx.state.messagingToolSentTexts).toHaveLength(0);
+    expect(ctx.state.messagingToolSentTargets).toHaveLength(0);
   });
 
   it("does not commit ambiguous message send results as delivered", async () => {
@@ -2072,6 +2069,14 @@ describe("messaging tool media URL tracking", () => {
       ["tool-dry-run-sent", { details: { deliveryStatus: "sent", dryRun: true } }],
       ["tool-snake-failed-ok", { details: { ok: true, delivery_status: "failed" } }],
       ["tool-snake-failed-status", { details: { status: "ok", delivery_status: "failed" } }],
+      [
+        "tool-nested-dry-run-ok",
+        {
+          content: [{ type: "text", text: "dry run" }],
+          details: { ok: true, result: { dryRun: true } },
+        },
+      ],
+      ["tool-nested-failed-ok", { details: { status: "ok", result: { status: "failed" } } }],
     ] satisfies Array<[string, ToolExecutionEndEvent["result"]]>) {
       const { ctx } = createTestContext();
       await handleToolExecutionStart(ctx, {

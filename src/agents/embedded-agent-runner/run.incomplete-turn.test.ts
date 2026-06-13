@@ -1876,6 +1876,64 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expectWarnMessageWith("surfacing read tool fallback");
   });
 
+  it("preserves a concise prompt-aware final answer after completed safe tool work", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "Absolutely." }]);
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (params: unknown) => {
+      const attemptParams = params as {
+        onToolOutcome?: (observation: {
+          toolName: string;
+          argsHash: string;
+          resultHash: string;
+          resultText?: string;
+        }) => void;
+      };
+      attemptParams.onToolOutcome?.({
+        toolName: "read",
+        argsHash: "current",
+        resultHash: "status-result",
+        resultText: "approach details",
+      });
+      const toolMetas = [{ toolName: "read", mutatingAction: false }];
+      return makeAttemptResult({
+        assistantTexts: ["Absolutely."],
+        itemLifecycle: {
+          startedCount: 1,
+          completedCount: 1,
+          activeCount: 0,
+        },
+        toolMetas,
+        replayMetadata: buildAttemptReplayMetadata({
+          toolMetas,
+          didSendViaMessagingTool: false,
+          messagingToolSentTexts: [],
+          messagingToolSentMediaUrls: [],
+          successfulCronAdds: 0,
+        }),
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "mock-openai",
+          model: "gpt-5.4",
+          content: [{ type: "text", text: "Absolutely." }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      });
+    });
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      prompt: "Does this approach make sense?",
+      provider: "mock-openai",
+      model: "gpt-5.4",
+      runId: "run-prompt-aware-answer-after-tool-work",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(warnMessages()).toEqual([]);
+    expect(result.payloads).toEqual([{ text: "Absolutely." }]);
+    expect(JSON.stringify(result.payloads)).not.toContain("read completed");
+  });
+
   it("does not reuse tool fallback observations from earlier retry attempts", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedRunEmbeddedAttempt

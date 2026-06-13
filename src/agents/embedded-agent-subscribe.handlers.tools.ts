@@ -321,6 +321,36 @@ function hasToolResultFailureDetails(details: Record<string, unknown> | undefine
   );
 }
 
+function hasMessagingToolNonDeliveryEvidence(value: unknown, depth = 0): boolean {
+  if (Array.isArray(value)) {
+    return (
+      depth < 3 && value.some((entry) => hasMessagingToolNonDeliveryEvidence(entry, depth + 1))
+    );
+  }
+  const record = readRecordField(value);
+  if (!record) {
+    return false;
+  }
+  const deliveryStatus =
+    normalizeOptionalLowercaseString(record.deliveryStatus) ??
+    normalizeOptionalLowercaseString(record.delivery_status);
+  const status = normalizeOptionalLowercaseString(record.status);
+  if (
+    record.dryRun === true ||
+    hasToolResultFailureDetails(record) ||
+    (deliveryStatus && deliveryStatus !== "sent" && deliveryStatus !== "partial_failed") ||
+    (status && status !== "ok" && status !== "sent" && status !== "partial_failed")
+  ) {
+    return true;
+  }
+  if (depth >= 3) {
+    return false;
+  }
+  return [record.result, record.results, record.payloadOutcomes].some((entry) =>
+    hasMessagingToolNonDeliveryEvidence(entry, depth + 1),
+  );
+}
+
 function isAsyncStartedToolResult(result: unknown): boolean {
   const details = readToolResultDetailsRecord(result);
   return details?.async === true && details.status === "started";
@@ -662,18 +692,17 @@ function extractMessagingToolSourceReplyPayload(
 function hasCommittedMessagingToolSendResult(result: unknown): boolean {
   const details = readToolResultDetailsRecord(result);
   const contentReceipt = hasCommittedMessagingToolResultContent(result);
-  const successfulTextResult =
-    typeof result === "string"
-      ? result.trim().length > 0
-      : Boolean(extractToolResultText(result)?.trim());
   if (!details) {
-    return contentReceipt || successfulTextResult;
+    return contentReceipt;
   }
   if (details.dryRun === true) {
     return false;
   }
-  if (hasCommittedMessagingToolResultDetails(details)) {
+  if (hasCommittedMessagingToolResultDetails(details) || contentReceipt) {
     return true;
+  }
+  if (hasMessagingToolNonDeliveryEvidence(details)) {
+    return false;
   }
   const deliveryStatus =
     normalizeOptionalLowercaseString(details.deliveryStatus) ??
@@ -685,13 +714,7 @@ function hasCommittedMessagingToolSendResult(result: unknown): boolean {
   if (hasToolResultFailureDetails(details) || (status && status !== "ok")) {
     return false;
   }
-  return (
-    details.ok === true ||
-    details.success === true ||
-    status === "ok" ||
-    contentReceipt ||
-    successfulTextResult
-  );
+  return details.ok === true || details.success === true || status === "ok";
 }
 
 function queuePendingToolMedia(

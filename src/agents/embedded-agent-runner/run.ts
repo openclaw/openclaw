@@ -440,6 +440,18 @@ function hasPayloadMedia(payload: EmbeddedRunReplyPayload): boolean {
   return Boolean(payload.mediaUrl?.trim() || payload.mediaUrls?.some((url) => url.trim()));
 }
 
+function hasVisibleTerminalReplyPayload(payload: EmbeddedRunReplyPayload): boolean {
+  return Boolean(
+    payload.isError !== true &&
+    payload.isReasoning !== true &&
+    (payload.text?.trim() ||
+      hasPayloadMedia(payload) ||
+      payload.presentation ||
+      payload.interactive ||
+      payload.channelData),
+  );
+}
+
 function terminalPayloadsHaveError(
   payloads: EmbeddedAgentRunResult["payloads"] | undefined,
 ): boolean {
@@ -465,6 +477,7 @@ function isAsyncTaskTerminalError(
 
 function areTerminalPayloadsPlanningOnlyText(
   payloads: EmbeddedAgentRunResult["payloads"] | undefined,
+  prompt?: string,
 ): boolean {
   if (!payloads?.length) {
     return false;
@@ -487,7 +500,9 @@ function areTerminalPayloadsPlanningOnlyText(
     }
     texts.push(text);
   }
-  return isPlanningOnlyAssistantText(texts);
+  return prompt === undefined
+    ? isPlanningOnlyAssistantText(texts)
+    : isPlanningOnlyAssistantTextForPrompt({ assistantTexts: texts, prompt });
 }
 
 function buildAsyncTaskTerminalPayloads(
@@ -3604,6 +3619,13 @@ export async function runEmbeddedAgent(
           });
           const payloadsForTerminalPathArePlanningOnlyText =
             areTerminalPayloadsPlanningOnlyText(payloadsForTerminalPath);
+          const terminalAssistantStopReason = (attempt.lastAssistant?.stopReason ?? "")
+            .trim()
+            .toLowerCase();
+          const payloadsForTerminalPathHavePromptAwareFinalReply =
+            ["completed", "end_turn", "stop"].includes(terminalAssistantStopReason) &&
+            payloadsForTerminalPath?.some(hasVisibleTerminalReplyPayload) === true &&
+            !areTerminalPayloadsPlanningOnlyText(payloadsForTerminalPath, params.prompt);
           const assistantTextsForTerminalPathArePlanningOnlyText =
             payloadCount === 0 && isPlanningOnlyAssistantText(attempt.assistantTexts);
           const terminalPathHasPlanningOnlyText =
@@ -3749,13 +3771,15 @@ export async function runEmbeddedAgent(
           }
           const incompleteTurnText = emptyAssistantReplyIsSilent
             ? null
-            : resolveIncompleteTurnPayloadText({
-                payloadCount,
-                aborted,
-                externalAbort,
-                timedOut,
-                attempt,
-              });
+            : payloadsForTerminalPathHavePromptAwareFinalReply
+              ? null
+              : resolveIncompleteTurnPayloadText({
+                  payloadCount,
+                  aborted,
+                  externalAbort,
+                  timedOut,
+                  attempt,
+                });
           if (
             !emptyAssistantReplyIsSilent &&
             attemptCompactionCount > 0 &&
@@ -4219,8 +4243,10 @@ export async function runEmbeddedAgent(
             ? [{ text: SILENT_REPLY_TOKEN }]
             : payloadsForTerminalPath;
           const renderedTerminalPayloads = terminalPayloads?.length ? terminalPayloads : undefined;
-          const renderedPayloadsArePlanningOnlyText =
-            areTerminalPayloadsPlanningOnlyText(renderedTerminalPayloads);
+          const renderedPayloadsArePlanningOnlyText = areTerminalPayloadsPlanningOnlyText(
+            renderedTerminalPayloads,
+            params.prompt,
+          );
           const renderedPayloadsHaveMedia =
             renderedTerminalPayloads?.some(hasPayloadMedia) === true;
           const renderedPayloadsHaveError =
@@ -4286,6 +4312,7 @@ export async function runEmbeddedAgent(
               : undefined);
           const assistantTextPayloadsArePlanningOnlyText = areTerminalPayloadsPlanningOnlyText(
             assistantTextTerminalPayloads,
+            params.prompt,
           );
           const finalAssistantHasVisibleText = Boolean(finalAssistantVisibleText?.trim());
           const successfulToolTerminalFallback =
@@ -4329,7 +4356,10 @@ export async function runEmbeddedAgent(
               : null;
           const visibleTerminalPayloads =
             asyncTaskTerminalPayloads ??
-            (successfulToolTerminalFallback && !finalAssistantHasVisibleText
+            (successfulToolTerminalFallback &&
+            !finalAssistantHasVisibleText &&
+            !renderedTerminalPayloads &&
+            !assistantTextTerminalPayloads
               ? [successfulToolTerminalFallback]
               : undefined) ??
             (successfulToolTerminalFallback && shouldPreferToolFallbackOverPlanningText
