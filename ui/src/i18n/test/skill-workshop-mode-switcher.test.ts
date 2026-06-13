@@ -33,8 +33,8 @@ describe("Skill Workshop mode switcher i18n", () => {
     const modeSwitcher = (en.skillWorkshop as { modeSwitcher?: unknown }).modeSwitcher;
     expect(modeSwitcher).toBeTypeOf("object");
     const map = modeSwitcher as Record<string, unknown>;
-    expect(Object.keys(map).sort()).toEqual(
-      ["board", "boardTitle", "label", "today", "todayTitle"].sort(),
+    expect(Object.keys(map).toSorted()).toEqual(
+      ["board", "boardTitle", "label", "today", "todayTitle"].toSorted(),
     );
   });
 
