@@ -53,7 +53,7 @@ import {
 } from "../skills/loading/source.js";
 import type { SkillSnapshot, SkillTelemetrySource } from "../skills/types.js";
 import { resolveSkillWorkshopToolApproval } from "../skills/workshop/policy.js";
-import { isPlainObject } from "../utils.js";
+import { isPlainObject, truncateUtf16Safe } from "../utils.js";
 import {
   adjustedParamsByToolCallId,
   buildAdjustedParamsKey,
@@ -69,7 +69,10 @@ import {
 } from "./code-mode-control-tools.js";
 import { isMessagingTool, isMessagingToolSendAction } from "./embedded-agent-messaging.js";
 import type { MessagingToolSend } from "./embedded-agent-messaging.types.js";
-import { hasCommittedMessagingToolResultDetails } from "./embedded-agent-runner/delivery-evidence.js";
+import {
+  hasCommittedMessagingToolResultContent,
+  hasCommittedMessagingToolResultDetails,
+} from "./embedded-agent-runner/delivery-evidence.js";
 import type { AgentToolTerminalResultFallback, AgentToolTerminalSummary } from "./runtime/index.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { buildToolMutationState } from "./tool-mutation.js";
@@ -223,6 +226,7 @@ const BEFORE_TOOL_CALL_HOOK_FAILURE_REASON =
 const MAX_TRACKED_ADJUSTED_PARAMS = 1024;
 const LOOP_WARNING_BUCKET_SIZE = 10;
 const MAX_LOOP_WARNING_KEYS = 256;
+const TOOL_OUTCOME_RESULT_TEXT_MAX_CHARS = 64_000;
 
 /**
  * Error used when before_tool_call intentionally vetoes a tool call.
@@ -775,18 +779,6 @@ function readToolTerminalSummary(result: unknown): AgentToolTerminalSummary | un
   };
 }
 
-function readToolErrorText(error: unknown): string | undefined {
-  if (error instanceof Error) {
-    const message = error.message.trim();
-    return message || undefined;
-  }
-  if (typeof error === "string") {
-    const message = error.trim();
-    return message || undefined;
-  }
-  return undefined;
-}
-
 function readResultDetailsRecord(result: unknown): Record<string, unknown> | undefined {
   return isPlainObject(result) && isPlainObject(result.details) ? result.details : undefined;
 }
@@ -891,7 +883,15 @@ function hasCommittedMessagingToolSendOutcome(params: {
   ) {
     return false;
   }
-  return details.ok === true || details.success === true || status === "ok";
+  if (details.ok === false || details.success === false || (status && status !== "ok")) {
+    return false;
+  }
+  return (
+    details.ok === true ||
+    details.success === true ||
+    status === "ok" ||
+    hasCommittedMessagingToolResultContent(params.result)
+  );
 }
 
 function summarizeToolParams(params: unknown): DiagnosticToolParamsSummary {
@@ -982,9 +982,16 @@ export async function recordToolLoopOutcome(args: {
         buildToolMutationState(record?.toolName ?? args.toolName, args.toolParams).mutatingAction;
       const asyncStarted =
         !blockedReason && !failed && details?.async === true && details.status === "started";
-      const resultText = blockedReason
-        ? undefined
-        : (readToolResultText(args.result) ?? readToolErrorText(args.error));
+      const rawResultText =
+        !blockedReason &&
+        !failed &&
+        args.terminalResultFallback &&
+        args.terminalResultFallback.mode !== "none"
+          ? readToolResultText(args.result)
+          : undefined;
+      const resultText = rawResultText
+        ? truncateUtf16Safe(rawResultText, TOOL_OUTCOME_RESULT_TEXT_MAX_CHARS)
+        : undefined;
       const terminalSummary =
         blockedReason || failed ? undefined : readToolTerminalSummary(args.result);
       const didSendViaMessagingTool = hasCommittedMessagingToolSendOutcome({

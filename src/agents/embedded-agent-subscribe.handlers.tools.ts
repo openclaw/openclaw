@@ -38,7 +38,10 @@ import { normalizeTextForComparison } from "./embedded-agent-helpers.js";
 import { isDeliveredMessageToolOnlySourceReplyResult } from "./embedded-agent-message-tool-source-reply.js";
 import { isMessagingTool, isMessagingToolSendAction } from "./embedded-agent-messaging.js";
 import type { MessagingToolSourceReplyPayload } from "./embedded-agent-messaging.types.js";
-import { hasCommittedMessagingToolResultDetails } from "./embedded-agent-runner/delivery-evidence.js";
+import {
+  hasCommittedMessagingToolResultContent,
+  hasCommittedMessagingToolResultDetails,
+} from "./embedded-agent-runner/delivery-evidence.js";
 import { mergeEmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
 import type {
   ToolCallSummary,
@@ -651,7 +654,15 @@ function hasCommittedMessagingToolSendResult(result: unknown): boolean {
   ) {
     return false;
   }
-  return details.ok === true || details.success === true || status === "ok";
+  if (details.ok === false || details.success === false || (status && status !== "ok")) {
+    return false;
+  }
+  return (
+    details.ok === true ||
+    details.success === true ||
+    status === "ok" ||
+    hasCommittedMessagingToolResultContent(result)
+  );
 }
 
 function queuePendingToolMedia(

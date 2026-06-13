@@ -174,10 +174,15 @@ function applyFactoryTerminalResultFallback(
   if (!result || !terminalResultFallback) {
     return result;
   }
-  const applyFallback = (tool: AnyAgentTool): AnyAgentTool => ({
-    ...tool,
-    terminalResultFallback,
-  });
+  const applyFallback = (tool: AnyAgentTool): AnyAgentTool => {
+    Object.defineProperty(tool, "terminalResultFallback", {
+      configurable: true,
+      enumerable: true,
+      value: terminalResultFallback,
+      writable: true,
+    });
+    return tool;
+  };
   return Array.isArray(result) ? result.map(applyFallback) : applyFallback(result);
 }
 

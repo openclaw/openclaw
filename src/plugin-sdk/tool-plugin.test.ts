@@ -439,6 +439,72 @@ describe("defineToolPlugin", () => {
     });
   });
 
+  it("preserves class-backed factory tools when applying terminal fallbacks", async () => {
+    class ClassBackedTool {
+      readonly #prefix = "class";
+      readonly label = "Factory Echo";
+      readonly description = "Echo input.";
+      readonly parameters = Type.Object({ input: Type.String() });
+
+      get name() {
+        return "factory_echo";
+      }
+
+      async execute(_toolCallId: string, params: { input?: unknown }) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `${this.#prefix}:${typeof params.input === "string" ? params.input : ""}`,
+            },
+          ],
+          details: undefined,
+        };
+      }
+    }
+
+    let createdTool: ClassBackedTool | undefined;
+    const entry = defineToolPlugin({
+      id: "class-factory-tools",
+      name: "Class Factory Tools",
+      description: "Class factory tool demo.",
+      tools: (tool) => [
+        tool({
+          name: "factory_echo",
+          label: "Factory Echo",
+          description: "Echo input.",
+          parameters: Type.Object({ input: Type.String() }),
+          terminalResultFallback: { mode: "safe_text", prefix: "Echo:" },
+          factory: () => {
+            createdTool = new ClassBackedTool();
+            return createdTool;
+          },
+        }),
+      ],
+    });
+    const captured = createCapturedPluginRegistration({ id: "class-factory-tools" });
+    const registerTool = vi.fn();
+    captured.api.registerTool = registerTool as typeof captured.api.registerTool;
+
+    entry.register(captured.api);
+
+    const factory = registerTool.mock.calls[0]?.[0] as () => unknown;
+    const factoryTool = factory() as ClassBackedTool & {
+      terminalResultFallback?: { mode: string; prefix?: string };
+    };
+    expect(factoryTool).toBe(createdTool);
+    expect(factoryTool).toBeInstanceOf(ClassBackedTool);
+    expect(factoryTool.name).toBe("factory_echo");
+    expect(typeof factoryTool.execute).toBe("function");
+    expect(factoryTool.terminalResultFallback).toEqual({
+      mode: "safe_text",
+      prefix: "Echo:",
+    });
+    await expect(factoryTool.execute("call-1", { input: "hello" })).resolves.toMatchObject({
+      content: [{ type: "text", text: "class:hello" }],
+    });
+  });
+
   it("defaults author config to a strict empty object schema", () => {
     const entry = defineToolPlugin({
       id: "empty-config",

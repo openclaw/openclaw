@@ -158,6 +158,72 @@ describe("agent tool definition adapter", () => {
     );
   });
 
+  it("bounds retained terminal fallback result text", async () => {
+    const onToolOutcome = vi.fn();
+    const output = "x".repeat(70_000);
+    const tool = {
+      name: "large_status",
+      label: "Large Status",
+      description: "returns a large status",
+      parameters: Type.Object({}),
+      terminalResultFallback: { mode: "safe_text" },
+      execute: async () => ({
+        content: [{ type: "text" as const, text: output }],
+        details: { ok: true },
+      }),
+    } satisfies AgentTool;
+
+    const [def] = toToolDefinitions([tool], {
+      sessionId: "adapter-terminal-fallback-large-result",
+      runId: "run-adapter-terminal-fallback-large-result",
+      onToolOutcome,
+    });
+    if (!def) {
+      throw new Error("missing tool definition");
+    }
+
+    await def.execute("call-adapter-large-result", {}, undefined, undefined, extensionContext);
+
+    expect(onToolOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "large_status",
+        resultText: "x".repeat(64_000),
+        terminalResultFallback: { mode: "safe_text" },
+      }),
+    );
+  });
+
+  it("does not retain raw result text without a declared terminal fallback", async () => {
+    const onToolOutcome = vi.fn();
+    const tool = {
+      name: "private_status",
+      label: "Private Status",
+      description: "returns private status",
+      parameters: Type.Object({}),
+      execute: async () => ({
+        content: [{ type: "text" as const, text: "private customer payload" }],
+        details: { ok: true },
+      }),
+    } satisfies AgentTool;
+
+    const [def] = toToolDefinitions([tool], {
+      sessionId: "adapter-no-terminal-fallback-result",
+      runId: "run-adapter-no-terminal-fallback-result",
+      onToolOutcome,
+    });
+    if (!def) {
+      throw new Error("missing tool definition");
+    }
+
+    await def.execute("call-adapter-private-result", {}, undefined, undefined, extensionContext);
+
+    expect(onToolOutcome).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        resultText: expect.anything(),
+      }),
+    );
+  });
+
   it("records message tool text aliases for terminal fallback delivery evidence", async () => {
     const onToolOutcome = vi.fn();
     const tool = {
@@ -197,6 +263,58 @@ describe("agent tool definition adapter", () => {
         toolName: "message",
         didSendViaMessagingTool: true,
         messagingToolSentTexts: ["alias text"],
+      }),
+    );
+  });
+
+  it("records plugin message content receipts as delivery evidence", async () => {
+    const onToolOutcome = vi.fn();
+    const tool = {
+      name: "message",
+      label: "Message",
+      description: "sends a plugin message",
+      parameters: Type.Object({
+        action: Type.String(),
+        to: Type.String(),
+        text: Type.String(),
+      }),
+      execute: async () => ({
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({
+              ok: true,
+              channel: "mattermost",
+              messageId: "message-1",
+            }),
+          },
+        ],
+        details: {},
+      }),
+    } satisfies AgentTool;
+
+    const [def] = toToolDefinitions([tool], {
+      sessionId: "adapter-message-content-receipt",
+      runId: "run-adapter-message-content-receipt",
+      onToolOutcome,
+    });
+    if (!def) {
+      throw new Error("missing tool definition");
+    }
+
+    await def.execute(
+      "call-adapter-message-content-receipt",
+      { action: "send", to: "mattermost:channel-1", text: "plugin text" },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(onToolOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "message",
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: ["plugin text"],
       }),
     );
   });
@@ -260,7 +378,7 @@ describe("agent tool definition adapter", () => {
     );
   });
 
-  it("records adapter error results for terminal fallback", async () => {
+  it("does not retain adapter error text without a terminal fallback", async () => {
     const onToolOutcome = vi.fn();
     const tool = {
       name: "status_check",
@@ -287,7 +405,11 @@ describe("agent tool definition adapter", () => {
       expect.objectContaining({
         toolName: "status_check",
         failed: true,
-        resultText: expect.stringContaining("service unavailable"),
+      }),
+    );
+    expect(onToolOutcome).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        resultText: expect.anything(),
       }),
     );
   });

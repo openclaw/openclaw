@@ -263,6 +263,38 @@ export function hasCommittedMessagingToolResultDetails(details: unknown): boolea
   return hasCommittedMessagingToolResultDetailsAtDepth(details, 0);
 }
 
+export function hasCommittedMessagingToolResultContent(result: unknown): boolean {
+  const record = readRecord(result);
+  if (!record || !Array.isArray(record.content)) {
+    return false;
+  }
+  return record.content.some((block) => {
+    const content = readRecord(block);
+    if (content?.type !== "text" || typeof content.text !== "string") {
+      return false;
+    }
+    try {
+      const receipt = readRecord(JSON.parse(content.text));
+      if (!receipt) {
+        return false;
+      }
+      const status = readLowercaseString(receipt.status);
+      const deliveryStatus =
+        readLowercaseString(receipt.deliveryStatus) ?? readLowercaseString(receipt.delivery_status);
+      const hasExplicitSuccess =
+        receipt.ok === true ||
+        receipt.success === true ||
+        status === "ok" ||
+        status === "partial_failed" ||
+        deliveryStatus === "sent" ||
+        deliveryStatus === "partial_failed";
+      return hasExplicitSuccess && hasCommittedMessagingToolResultDetails(receipt);
+    } catch {
+      return false;
+    }
+  });
+}
+
 export function getGatewayAgentResult(response: unknown): AgentDeliveryEvidence | null {
   if (!response || typeof response !== "object") {
     return null;
