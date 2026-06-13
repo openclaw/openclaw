@@ -2061,7 +2061,7 @@ export async function loadWorkboard(params: {
           requestUpdate: params.requestUpdate,
         });
       }
-      if (params.taskRefresh !== "linked" && !lifecycleTaskRefreshFailed) {
+      if (!lifecycleTaskRefreshFailed) {
         state.lifecycleTaskRefreshError = null;
       }
       if (nextTaskRefreshError) {
@@ -2959,7 +2959,6 @@ export async function syncWorkboardLifecycle(params: {
   if (
     !params.client ||
     !state.loaded ||
-    params.canWrite === false ||
     (workboardLifecycleTaskRefreshRetryPending(state) &&
       shouldRefreshWorkboardTasksForLifecycle(state)) ||
     workboardLifecycleSyncBlocked(params.host, state)
@@ -2987,6 +2986,16 @@ export async function syncWorkboardLifecycle(params: {
     !isCurrentWorkboardLifecycleReconciliationEpoch(params.host, reconciliationEpoch) ||
     workboardLifecycleSyncBlocked(params.host, state)
   ) {
+    return;
+  }
+  // Read-only operators still need task-refresh recovery. Gate only the
+  // lifecycle card writeback after the shared task snapshot is current.
+  if (params.canWrite === false) {
+    setWorkboardLifecycleTasksPrepared(state, true, {
+      host: params.host,
+      preparedAt: tasksPreparedAt ?? Date.now(),
+      requestUpdate: params.requestUpdate,
+    });
     return;
   }
   const syncKeys = getLifecycleSyncKeys(params.host);

@@ -337,6 +337,23 @@ describe("workboard controller", () => {
     expect(state.lastRefreshError).toBeNull();
   });
 
+  it("clears lifecycle task errors when a linked poll finds no cards", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.lifecycleTaskRefreshFailed = true;
+    state.lifecycleTaskRefreshRetryAt = Date.now() + 5000;
+    state.lifecycleTaskRefreshError = "tasks unavailable";
+    const client = createClient({
+      "workboard.cards.list": { cards: [], statuses: ["todo", "running", "done"] },
+    });
+
+    await loadWorkboard({ host, client: client as never, force: true, taskRefresh: "linked" });
+
+    expect(state.lifecycleTaskRefreshFailed).toBe(false);
+    expect(state.lifecycleTaskRefreshRetryAt).toBeNull();
+    expect(state.lifecycleTaskRefreshError).toBeNull();
+  });
+
   it("reuses exact-confirmed full-load tasks for the next lifecycle sync", async () => {
     const host = {};
     const linked = {
@@ -5097,6 +5114,39 @@ describe("workboard controller", () => {
 
     expect(client.request).not.toHaveBeenCalled();
     expect(state.error).toBeNull();
+  });
+
+  it("recovers task refresh failures for read-only workboard clients", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const linked = {
+      ...sampleCard,
+      status: "running",
+      sessionKey: sampleTaskSessionKey,
+      runId: sampleTask.runId,
+      taskId: sampleTask.taskId,
+    } satisfies WorkboardCard;
+    state.loaded = true;
+    state.cards = [linked];
+    state.lifecycleTaskRefreshFailed = true;
+    state.lifecycleTaskRefreshError = "tasks unavailable";
+    state.lastRefreshError = "tasks unavailable";
+    const client = createClient({ "tasks.list": { tasks: [sampleTask] } });
+
+    await syncWorkboardLifecycle({
+      host,
+      client: client as never,
+      sessions: [],
+      canWrite: false,
+    });
+
+    expect(client.request).toHaveBeenCalledOnce();
+    expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
+    expect(client.request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
+    expect(state.lifecycleTaskRefreshFailed).toBe(false);
+    expect(state.lifecycleTaskRefreshError).toBeNull();
+    expect(state.lastRefreshError).toBeNull();
+    expect(state.lifecycleTasksPrepared).toBe(true);
   });
 
   it("resyncs cards manually moved back to an active lifecycle column", async () => {
