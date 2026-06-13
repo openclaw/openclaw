@@ -23,12 +23,36 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function hasPieces(value: unknown): boolean {
+  return Array.isArray(value) && value.some(isPlainObject);
+}
+
+function hasOutputPieces(output: unknown): boolean {
+  if (!isPlainObject(output)) {
+    return false;
+  }
+  if (hasPieces(output.default)) {
+    return true;
+  }
+  const surfaces = output.surfaces;
+  return (
+    isPlainObject(surfaces) &&
+    Object.values(surfaces).some((surfacePieces) => hasPieces(surfacePieces))
+  );
+}
+
 function isUsableTemplate(value: unknown): value is UsageBarTemplate {
   if (!isPlainObject(value)) {
     return false;
   }
-  const hasOutput = typeof value.output === "object" && value.output !== null;
-  return hasOutput || Array.isArray(value.segments);
+  if (hasOutputPieces(value.output) || hasPieces(value.segments)) {
+    return true;
+  }
+  const surfaces = value.surfaces;
+  return (
+    isPlainObject(surfaces) &&
+    Object.values(surfaces).some((surface) => isPlainObject(surface) && hasPieces(surface.segments))
+  );
 }
 
 function readTemplateFile(path: string): UsageBarTemplate | undefined {

@@ -36,6 +36,8 @@ describe("loadUsageBarTemplate", () => {
 
   it("falls back to the built-in template for an unusable inline object", () => {
     expect(loadUsageBarTemplate({ nope: true })).toBe(DEFAULT_USAGE_BAR_TEMPLATE);
+    expect(loadUsageBarTemplate({ output: {} })).toBe(DEFAULT_USAGE_BAR_TEMPLATE);
+    expect(loadUsageBarTemplate({ output: { default: [] } })).toBe(DEFAULT_USAGE_BAR_TEMPLATE);
   });
 
   it("loads and parses a template file", () => {
@@ -45,6 +47,11 @@ describe("loadUsageBarTemplate", () => {
 
   it("falls back to the built-in template for invalid JSON", () => {
     const path = tmpFile("bad.json", "{ not json");
+    expect(loadUsageBarTemplate(path)).toBe(DEFAULT_USAGE_BAR_TEMPLATE);
+  });
+
+  it("falls back to the built-in template for an empty template file", () => {
+    const path = tmpFile("empty.json", JSON.stringify({ output: { default: [] } }));
     expect(loadUsageBarTemplate(path)).toBe(DEFAULT_USAGE_BAR_TEMPLATE);
   });
 
