@@ -205,6 +205,30 @@ Dangerous or privacy-heavy commands such as `camera.snap`, `camera.clip`, and
 `gateway.nodes.allowCommands`. `gateway.nodes.denyCommands` always wins over
 defaults and extra allowlist entries.
 
+Example Gateway config (`~/.openclaw/openclaw.json`) for enabling selected
+high-risk node commands:
+
+```json5
+{
+  gateway: {
+    nodes: {
+      // Add only the high-risk commands this Gateway should expose.
+      allowCommands: ["camera.snap", "screen.record"],
+      // Keep exact denials for commands that must stay unavailable.
+      denyCommands: ["camera.clip"],
+    },
+  },
+}
+```
+
+Use exact node command names. `denyCommands` is also exact-match and removes a
+command even when a platform default or `allowCommands` entry would otherwise
+allow it. If your config was generated with high-risk commands in
+`denyCommands`, remove the same command there before adding it to
+`allowCommands`.
+See [Gateway configuration reference](/gateway/configuration-reference#gateway-field-details)
+for the complete `gateway.nodes` field list.
+
 Plugin-owned node commands can add a Gateway node-invoke policy. That policy
 runs after the allowlist check and before forwarding to the node, so raw
 `node.invoke`, CLI helpers, and dedicated agent tools share the same plugin
