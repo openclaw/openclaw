@@ -294,11 +294,11 @@ describe("workboard controller", () => {
     }));
     const tasks = cards.map((card, index) => ({
       ...sampleTask,
-      id: card.taskId!,
-      taskId: card.taskId!,
+      id: card.taskId,
+      taskId: card.taskId,
       runId: `run-${index}`,
     }));
-    state.tasksByCardId = new Map(cards.map((card, index) => [card.id, tasks[index]!]));
+    state.tasksByCardId = new Map(cards.map((card, index) => [card.id, tasks[index]]));
     let failedTaskRequests = 0;
     const client = createClient((method, params) => {
       if (method === "workboard.cards.list") {
