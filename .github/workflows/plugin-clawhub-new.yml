@@ -135,9 +135,13 @@ jobs:
           matrix_json="$(
             jq -c '
               [
-                .bootstrapCandidates[]? + { bootstrapMode: "publish" },
+                .bootstrapCandidates[]? + {
+                  bootstrapMode: "publish",
+                  requiresManualOverride: false
+                },
                 .missingTrustedPublisher[]? + {
-                  bootstrapMode: (if .alreadyPublished then "configure-only" else "publish" end)
+                  bootstrapMode: (if .alreadyPublished then "configure-only" else "publish" end),
+                  requiresManualOverride: true
                 }
               ]
             ' .local/plugin-clawhub-release-plan.json
@@ -336,17 +340,47 @@ jobs:
           chmod +x "${RUNNER_TEMP}/clawhub"
           echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
 
-      - name: Publish ClawHub bootstrap package
+      - name: Write ClawHub token config
+        if: inputs.dry_run != true
         env:
           CLAWHUB_REGISTRY: ${{ env.CLAWHUB_REGISTRY }}
           CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
-          OPENCLAW_CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          config_path="${RUNNER_TEMP}/clawhub-config.json"
+          CONFIG_PATH="${config_path}" node --input-type=module <<'NODE'
+          import { writeFileSync } from "node:fs";
+
+          const registry = process.env.CLAWHUB_REGISTRY?.trim();
+          const token = process.env.CLAWHUB_TOKEN?.trim();
+          const configPath = process.env.CONFIG_PATH;
+          if (!registry) {
+            throw new Error("CLAWHUB_REGISTRY is required for token-gated ClawHub bootstrap.");
+          }
+          if (!token) {
+            throw new Error("CLAWHUB_TOKEN is required for token-gated ClawHub bootstrap.");
+          }
+          if (!configPath) {
+            throw new Error("CONFIG_PATH is required.");
+          }
+
+          writeFileSync(configPath, `${JSON.stringify({ registry, token }, null, 2)}\n`, {
+            encoding: "utf8",
+            mode: 0o600,
+          });
+          NODE
+          echo "CLAWHUB_CONFIG_PATH=${config_path}" >> "${GITHUB_ENV}"
+
+      - name: Publish ClawHub bootstrap package
+        env:
+          CLAWHUB_REGISTRY: ${{ env.CLAWHUB_REGISTRY }}
           SOURCE_REPO: ${{ github.repository }}
           SOURCE_COMMIT: ${{ needs.resolve_bootstrap_plan.outputs.ref_revision }}
           SOURCE_REF: ${{ github.ref }}
           PACKAGE_TAG: ${{ matrix.plugin.publishTag }}
           PACKAGE_DIR: ${{ matrix.plugin.packageDir }}
           BOOTSTRAP_MODE: ${{ matrix.plugin.bootstrapMode }}
+          REQUIRES_MANUAL_OVERRIDE: ${{ matrix.plugin.requiresManualOverride && 'true' || 'false' }}
           DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
           OPENCLAW_PLUGIN_NPM_RUNTIME_BUILD: "0"
         run: |
@@ -356,6 +390,9 @@ jobs:
           elif [[ "${DRY_RUN}" == "true" ]]; then
             bash scripts/plugin-clawhub-publish.sh --dry-run "${PACKAGE_DIR}"
           else
+            if [[ "${REQUIRES_MANUAL_OVERRIDE}" == "true" ]]; then
+              export OPENCLAW_CLAWHUB_MANUAL_OVERRIDE_REASON="GitHub Actions trusted publisher repair before OIDC migration"
+            fi
             bash scripts/plugin-clawhub-publish.sh --publish "${PACKAGE_DIR}"
           fi
 
@@ -363,8 +400,6 @@ jobs:
         if: inputs.dry_run != true
         env:
           CLAWHUB_CLI_PACKAGE: ${{ env.CLAWHUB_CLI_PACKAGE }}
-          CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
-          OPENCLAW_CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
           PACKAGE_NAME: ${{ matrix.plugin.packageName }}
         run: |
           set -euo pipefail

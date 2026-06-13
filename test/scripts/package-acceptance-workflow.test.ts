@@ -1596,6 +1596,9 @@ describe("package artifact reuse", () => {
       "Dry-run publish target differs from workflow ref; allowing validation-only dispatch.",
     );
     expect(clawHubWorkflow).toContain(
+      "github.event_name == 'workflow_dispatch' && inputs.dry_run != true && inputs.publish_scope == 'selected' && steps.plan.outputs.skipped_published_count != '0'",
+    );
+    expect(clawHubWorkflow).toContain(
       "uses: openclaw/clawhub/.github/workflows/package-publish.yml@9d49df109d4ad3dc8a6ecf05d26b39f46d294721",
     );
     expect(clawHubWorkflow).toContain("dry_run:");
@@ -1703,6 +1706,9 @@ describe("package artifact reuse", () => {
     expect(releaseWorkflow).toContain("Workflow completion waits for ClawHub");
     expect(releaseWorkflow).toContain("Workflow completion does not wait for ClawHub");
     expect(releaseWorkflow).toContain('[[ "${WAIT_FOR_CLAWHUB}" == "true" ]]');
+    expect(releaseWorkflow).toContain(
+      '[[ -n "${plugin_clawhub_bootstrap_run_id}" && "${WAIT_FOR_CLAWHUB}" == "true" ]]',
+    );
     expect(clawHubReleasePlanScript).toContain("--skip-clawhub");
     expect(pluginNpmWorkflow).toContain("Validate release publish approval run");
     expect(clawHubWorkflow).toContain("Validate release publish approval run");
@@ -1744,10 +1750,23 @@ describe("package artifact reuse", () => {
       "CLAW-277 03 - Split OpenClaw plugin ClawHub publishing into OIDC release and token bootstrap workflows",
     );
     expect(clawHubNewWorkflow).toContain("Usage: clawhub package trusted-publisher set");
+    expect(clawHubNewWorkflow).toContain("Write ClawHub token config");
+    expect(clawHubNewWorkflow).toContain("CLAWHUB_CONFIG_PATH=${config_path}");
+    expect(clawHubNewWorkflow).toContain(
+      "CLAWHUB_REGISTRY is required for token-gated ClawHub bootstrap.",
+    );
+    expect(clawHubNewWorkflow).toContain(
+      "CLAWHUB_TOKEN is required for token-gated ClawHub bootstrap.",
+    );
+    expect(clawHubNewWorkflow).toContain("JSON.stringify({ registry, token }, null, 2)");
     expect(clawHubNewWorkflow).toContain("Publish ClawHub bootstrap package");
     expect(clawHubNewWorkflow).toContain("bash scripts/plugin-clawhub-publish.sh --publish");
     expect(clawHubNewWorkflow).toContain("bootstrapMode");
     expect(clawHubNewWorkflow).toContain("BOOTSTRAP_MODE: ${{ matrix.plugin.bootstrapMode }}");
+    expect(clawHubNewWorkflow).toContain("requiresManualOverride");
+    expect(clawHubNewWorkflow).toContain(
+      'OPENCLAW_CLAWHUB_MANUAL_OVERRIDE_REASON="GitHub Actions trusted publisher repair before OIDC migration"',
+    );
     expect(clawHubNewWorkflow).toContain("configure-only");
     expect(clawHubNewWorkflow).toContain(
       "version is already present on ClawHub; configuring trusted publisher only",

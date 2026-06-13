@@ -1055,7 +1055,7 @@ jobs:
             exit 1
           fi
 
-          if [[ -n "${plugin_clawhub_bootstrap_run_id}" ]]; then
+          if [[ -n "${plugin_clawhub_bootstrap_run_id}" && "${WAIT_FOR_CLAWHUB}" == "true" ]]; then
             echo "Waiting for plugin-clawhub-new.yml bootstrap to finish before continuing release publish."
             if wait_for_run plugin-clawhub-new.yml "${plugin_clawhub_bootstrap_run_id}"; then
               plugin_clawhub_bootstrap_completed="true"
