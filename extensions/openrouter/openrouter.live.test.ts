@@ -62,6 +62,40 @@ async function completeOpenRouterChat(params: {
   });
 }
 
+async function expectWeatherToolCall(client: OpenAI, model: string): Promise<void> {
+  const response = await client.chat.completions.create({
+    model,
+    messages: [{ role: "user", content: "Call get_weather for Paris." }],
+    tools: [
+      {
+        type: "function",
+        function: {
+          name: "get_weather",
+          description: "Get the weather for a city.",
+          parameters: {
+            type: "object",
+            properties: { city: { type: "string" } },
+            required: ["city"],
+            additionalProperties: false,
+          },
+        },
+      },
+    ],
+    tool_choice: {
+      type: "function",
+      function: { name: "get_weather" },
+    },
+    max_tokens: 64,
+  });
+
+  const toolCall = response.choices[0]?.message?.tool_calls?.find(
+    (call) => call.type === "function",
+  );
+  expect(toolCall?.type).toBe("function");
+  expect(toolCall?.function.name).toBe("get_weather");
+  expect(JSON.parse(toolCall?.function.arguments ?? "{}")).toMatchObject({ city: "Paris" });
+}
+
 async function fetchOpenRouterModelIds(): Promise<string[]> {
   const response = await fetch(OPENROUTER_MODELS_URL, {
     headers: { "accept-encoding": "identity" },
@@ -119,44 +153,8 @@ describeLive("openrouter plugin live", () => {
         model: autoResolved,
       }) ?? autoResolved;
     expect(autoModel.id).toBe("openrouter/auto");
-    const autoResponse = await client.chat.completions.create({
-      model: autoModel.id,
-      messages: [{ role: "user", content: "Reply with exactly OK." }],
-      max_tokens: 16,
-    });
-    expect(autoResponse.choices[0]?.message?.content?.trim()).toMatch(/^OK[.!]?$/);
-
-    const response = await client.chat.completions.create({
-      model: normalized.id,
-      messages: [{ role: "user", content: "Call get_weather for Paris." }],
-      tools: [
-        {
-          type: "function",
-          function: {
-            name: "get_weather",
-            description: "Get the weather for a city.",
-            parameters: {
-              type: "object",
-              properties: { city: { type: "string" } },
-              required: ["city"],
-              additionalProperties: false,
-            },
-          },
-        },
-      ],
-      tool_choice: {
-        type: "function",
-        function: { name: "get_weather" },
-      },
-      max_tokens: 64,
-    });
-
-    const toolCall = response.choices[0]?.message?.tool_calls?.find(
-      (call) => call.type === "function",
-    );
-    expect(toolCall?.type).toBe("function");
-    expect(toolCall?.function.name).toBe("get_weather");
-    expect(JSON.parse(toolCall?.function.arguments ?? "{}")).toMatchObject({ city: "Paris" });
+    await expectWeatherToolCall(client, autoModel.id);
+    await expectWeatherToolCall(client, normalized.id);
   }, 30_000);
 });
 

@@ -11,6 +11,24 @@ import {
   expectUnifiedModelCatalogProviderRegistration,
 } from "openclaw/plugin-sdk/provider-test-contracts";
 import { describe, expect, it, vi } from "vitest";
+
+const { getOpenRouterModelCapabilitiesMock, loadOpenRouterModelCapabilitiesMock } = vi.hoisted(
+  () => ({
+    getOpenRouterModelCapabilitiesMock: vi.fn(),
+    loadOpenRouterModelCapabilitiesMock: vi.fn(async () => {}),
+  }),
+);
+
+vi.mock("openclaw/plugin-sdk/provider-stream-family", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/provider-stream-family")>();
+  return {
+    ...actual,
+    getOpenRouterModelCapabilities: getOpenRouterModelCapabilitiesMock,
+    loadOpenRouterModelCapabilities: loadOpenRouterModelCapabilitiesMock,
+  };
+});
+
 import openrouterPlugin from "./index.js";
 import {
   buildOpenrouterProvider,
@@ -202,6 +220,59 @@ describe("openrouter provider hooks", () => {
   it("uses the canonical prefixed OpenRouter auto model id", () => {
     expect(buildOpenrouterProvider().models?.map((model) => model.id)).toContain("openrouter/auto");
     expect(buildOpenrouterProvider().models?.map((model) => model.id)).not.toContain("auto");
+  });
+
+  it("normalizes OpenRouter API ids before capability loading and lookup", async () => {
+    getOpenRouterModelCapabilitiesMock.mockReset();
+    loadOpenRouterModelCapabilitiesMock.mockClear();
+    getOpenRouterModelCapabilitiesMock.mockReturnValue({
+      name: "Claude Sonnet 4.6",
+      reasoning: true,
+      input: ["text", "image"],
+      supportsTools: true,
+      cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200_000,
+      maxTokens: 64_000,
+    });
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    const modelId = "openrouter/anthropic/claude-sonnet-4.6";
+    const context = {
+      provider: "openrouter",
+      modelId,
+      modelRegistry: { find: vi.fn(() => null) },
+    } as never;
+
+    await provider.prepareDynamicModel?.(context);
+    const model = provider.resolveDynamicModel?.(context);
+
+    expect(loadOpenRouterModelCapabilitiesMock).toHaveBeenCalledWith("anthropic/claude-sonnet-4.6");
+    expect(getOpenRouterModelCapabilitiesMock).toHaveBeenCalledWith("anthropic/claude-sonnet-4.6");
+    expect(model).toMatchObject({
+      id: modelId,
+      name: "Claude Sonnet 4.6",
+      reasoning: true,
+      input: ["text", "image"],
+      compat: { supportsTools: true },
+      contextWindow: 200_000,
+      maxTokens: 64_000,
+    });
+  });
+
+  it("keeps native OpenRouter namespace ids for capability lookup", async () => {
+    getOpenRouterModelCapabilitiesMock.mockReset();
+    loadOpenRouterModelCapabilitiesMock.mockClear();
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    const context = {
+      provider: "openrouter",
+      modelId: "openrouter/auto",
+      modelRegistry: { find: vi.fn(() => null) },
+    } as never;
+
+    await provider.prepareDynamicModel?.(context);
+    provider.resolveDynamicModel?.(context);
+
+    expect(loadOpenRouterModelCapabilitiesMock).toHaveBeenCalledWith("openrouter/auto");
+    expect(getOpenRouterModelCapabilitiesMock).toHaveBeenCalledWith("openrouter/auto");
   });
 
   it("does not include retired stealth models in the bundled catalog", () => {

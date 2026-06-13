@@ -76,7 +76,8 @@ export default definePluginEntry({
     function buildDynamicOpenRouterModel(
       ctx: ProviderResolveDynamicModelContext,
     ): ProviderRuntimeModel {
-      const capabilities = getOpenRouterModelCapabilities(ctx.modelId);
+      const apiModelId = normalizeOpenRouterApiModelId(ctx.modelId) ?? ctx.modelId;
+      const capabilities = getOpenRouterModelCapabilities(apiModelId);
       return {
         id: ctx.modelId,
         name: capabilities?.name ?? ctx.modelId,
@@ -169,7 +170,9 @@ export default definePluginEntry({
       },
       resolveDynamicModel: (ctx) => buildDynamicOpenRouterModel(ctx),
       prepareDynamicModel: async (ctx) => {
-        await loadOpenRouterModelCapabilities(ctx.modelId);
+        await loadOpenRouterModelCapabilities(
+          normalizeOpenRouterApiModelId(ctx.modelId) ?? ctx.modelId,
+        );
       },
       normalizeConfig: ({ providerConfig }) => {
         const normalizedBaseUrl = normalizeOpenRouterBaseUrl(providerConfig.baseUrl);
