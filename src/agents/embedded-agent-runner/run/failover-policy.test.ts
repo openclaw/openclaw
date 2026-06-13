@@ -117,6 +117,7 @@ describe("resolveRunFailoverDecision", () => {
         idleTimedOut: false,
         timedOutDuringCompaction: false,
         timedOutDuringToolExecution: false,
+        timedOutByRunBudget: false,
         profileRotated: false,
       }),
     ).toEqual({
@@ -137,6 +138,7 @@ describe("resolveRunFailoverDecision", () => {
         idleTimedOut: false,
         timedOutDuringCompaction: false,
         timedOutDuringToolExecution: false,
+        timedOutByRunBudget: false,
         profileRotated: false,
       }),
     ).toEqual({
@@ -159,6 +161,7 @@ describe("resolveRunFailoverDecision", () => {
         idleTimedOut: false,
         timedOutDuringCompaction: false,
         timedOutDuringToolExecution: false,
+        timedOutByRunBudget: false,
         profileRotated: false,
       }),
     ).toEqual({
@@ -180,6 +183,7 @@ describe("resolveRunFailoverDecision", () => {
         idleTimedOut: false,
         timedOutDuringCompaction: false,
         timedOutDuringToolExecution: false,
+        timedOutByRunBudget: false,
         profileRotated: true,
       }),
     ).toEqual({
@@ -201,6 +205,7 @@ describe("resolveRunFailoverDecision", () => {
         idleTimedOut: false,
         timedOutDuringCompaction: false,
         timedOutDuringToolExecution: false,
+        timedOutByRunBudget: false,
         profileRotated: true,
       }),
     ).toEqual({
@@ -221,6 +226,7 @@ describe("resolveRunFailoverDecision", () => {
         idleTimedOut: false,
         timedOutDuringCompaction: false,
         timedOutDuringToolExecution: false,
+        timedOutByRunBudget: false,
         profileRotated: false,
       }),
     ).toEqual({
@@ -258,6 +264,7 @@ describe("resolveRunFailoverDecision", () => {
         idleTimedOut: false,
         timedOutDuringCompaction: false,
         timedOutDuringToolExecution: true,
+        timedOutByRunBudget: false,
         profileRotated: false,
       }),
     ).toEqual({
@@ -278,6 +285,7 @@ describe("resolveRunFailoverDecision", () => {
         idleTimedOut: false,
         timedOutDuringCompaction: false,
         timedOutDuringToolExecution: true,
+        timedOutByRunBudget: false,
         profileRotated: true,
       }),
     ).toEqual({
@@ -298,6 +306,7 @@ describe("resolveRunFailoverDecision", () => {
         idleTimedOut: false,
         timedOutDuringCompaction: false,
         timedOutDuringToolExecution: false,
+        timedOutByRunBudget: false,
         profileRotated: false,
       }),
     ).toEqual({
@@ -407,6 +416,7 @@ describe("resolveRunFailoverDecision", () => {
         idleTimedOut: true,
         timedOutDuringCompaction: false,
         timedOutDuringToolExecution: true,
+        timedOutByRunBudget: false,
         profileRotated: false,
       }),
     ).toEqual({
@@ -428,6 +438,7 @@ describe("resolveRunFailoverDecision", () => {
         idleTimedOut: true,
         timedOutDuringCompaction: false,
         timedOutDuringToolExecution: true,
+        timedOutByRunBudget: false,
         profileRotated: true,
       }),
     ).toEqual({
@@ -449,6 +460,7 @@ describe("resolveRunFailoverDecision", () => {
         idleTimedOut: false,
         timedOutDuringCompaction: false,
         timedOutDuringToolExecution: false,
+        timedOutByRunBudget: false,
         profileRotated: false,
       }),
     ).toEqual({
@@ -470,6 +482,7 @@ describe("resolveRunFailoverDecision", () => {
         idleTimedOut: true,
         timedOutDuringCompaction: false,
         timedOutDuringToolExecution: false,
+        timedOutByRunBudget: false,
         profileRotated: false,
       }),
     ).toEqual({
@@ -491,6 +504,7 @@ describe("resolveRunFailoverDecision", () => {
         idleTimedOut: true,
         timedOutDuringCompaction: false,
         timedOutDuringToolExecution: false,
+        timedOutByRunBudget: false,
         profileRotated: true,
       }),
     ).toEqual({
@@ -551,6 +565,7 @@ describe("resolveRunFailoverDecision", () => {
         idleTimedOut: true,
         timedOutDuringCompaction: false,
         timedOutDuringToolExecution: false,
+        timedOutByRunBudget: false,
         profileRotated: true,
       }),
     ).toEqual({
@@ -572,11 +587,54 @@ describe("resolveRunFailoverDecision", () => {
         idleTimedOut: true,
         timedOutDuringCompaction: false,
         timedOutDuringToolExecution: false,
+        timedOutByRunBudget: false,
         profileRotated: false,
       }),
     ).toEqual({
       action: "surface_error",
       reason: null,
+    });
+  });
+
+  it("does not rotate or fallback assistant timeouts that exhausted the run budget (#60388)", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "assistant",
+        aborted: true,
+        externalAbort: false,
+        fallbackConfigured: true,
+        failoverFailure: false,
+        failoverReason: null,
+        timedOut: true,
+        idleTimedOut: false,
+        timedOutDuringCompaction: false,
+        timedOutDuringToolExecution: false,
+        timedOutByRunBudget: true,
+        profileRotated: false,
+      }),
+    ).toEqual({
+      action: "continue_normal",
+    });
+  });
+
+  it("does not fallback assistant run-budget timeouts even after profile rotation exhausted (#60388)", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "assistant",
+        aborted: true,
+        externalAbort: false,
+        fallbackConfigured: true,
+        failoverFailure: false,
+        failoverReason: null,
+        timedOut: true,
+        idleTimedOut: false,
+        timedOutDuringCompaction: false,
+        timedOutDuringToolExecution: false,
+        timedOutByRunBudget: true,
+        profileRotated: true,
+      }),
+    ).toEqual({
+      action: "continue_normal",
     });
   });
 });
