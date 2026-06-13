@@ -44,4 +44,30 @@ describe("Codex agent harness supports()", () => {
     const result = narrowHarness.supports({ provider: "openai", requestedRuntime: "codex" });
     expect(result.supported).toBe(false);
   });
+
+  it("matches multi-token ids composed entirely of recognized tokens", () => {
+    // The separator-normalized canonical Codex ids must still resolve.
+    for (const provider of ["openai-codex", "OpenAI-Codex", "openai_codex", "openai:codex"]) {
+      expect(harness.supports({ provider, requestedRuntime: "codex" })).toEqual({
+        supported: true,
+        priority: 100,
+      });
+    }
+  });
+
+  it("does NOT hijack non-Codex providers that merely contain a recognized token (#918 codex P2)", () => {
+    // Regression anchor for the codex finding (harness.ts:54): a single
+    // recognized token among otherwise-unrecognized ones must NOT route an
+    // OpenAI-compatible / proxy provider into the Codex app-server harness at
+    // priority 100, which would break that provider's normal runtime.
+    for (const provider of [
+      "custom-openai-proxy",
+      "azure-openai",
+      "openai-proxy",
+      "codex-clone-router",
+    ]) {
+      const result = harness.supports({ provider, requestedRuntime: "codex" });
+      expect(result.supported).toBe(false);
+    }
+  });
 });

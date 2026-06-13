@@ -174,6 +174,45 @@ function recoverPendingSessionDeliveries(params: {
   timer.unref?.();
 }
 
+function recoverPendingContinuations(params: { log: GatewayRuntimeServiceLogger }): void {
+  // Delegate recovery must run before same-session continue_work recovery to
+  // preserve normal post-turn ordering when a restart happens after both were
+  // queued in the same turn.
+  const timer = setTimeout(() => {
+    void (async () => {
+      const [delegateModule, workModule] = await Promise.all([
+        import("../auto-reply/continuation/delegate-dispatch.js"),
+        import("../auto-reply/continuation/work-dispatch.js"),
+      ]);
+      const delegateLog = params.log.child("continuation-delegate-recovery");
+      const delegateSummary = await delegateModule.recoverPendingContinuationDelegates();
+      if (
+        delegateSummary.sessions > 0 ||
+        delegateSummary.dispatched > 0 ||
+        delegateSummary.rejected > 0
+      ) {
+        delegateLog.info(
+          `replayed sessions=${delegateSummary.sessions} dispatched=${delegateSummary.dispatched} rejected=${delegateSummary.rejected}`,
+        );
+      }
+
+      const workLog = params.log.child("continuation-work-recovery");
+      const workSummary = await workModule.recoverPendingContinuationWork();
+      if (
+        workSummary.sessions > 0 ||
+        workSummary.dispatched > 0 ||
+        workSummary.failed > 0 ||
+        workSummary.reaped > 0
+      ) {
+        workLog.info(
+          `replayed sessions=${workSummary.sessions} dispatched=${workSummary.dispatched} failed=${workSummary.failed} reaped=${workSummary.reaped}`,
+        );
+      }
+    })().catch((err: unknown) => params.log.error(`Continuation recovery failed: ${String(err)}`));
+  }, 1_400);
+  timer.unref?.();
+}
+
 function startGatewayModelPricingRefreshOnDemand(params: {
   config: OpenClawConfig;
   pluginLookUpTable?: PluginMetadataRegistryView;
@@ -241,6 +280,9 @@ export function activateGatewayScheduledServices(params: {
     deps: params.deps,
     log: params.log,
     maxEnqueuedAt: params.sessionDeliveryRecoveryMaxEnqueuedAt,
+  });
+  recoverPendingContinuations({
+    log: params.log,
   });
   const stopModelPricingRefresh = !isVitestRuntimeEnv()
     ? startGatewayModelPricingRefreshOnDemand({

@@ -238,6 +238,7 @@ export function createMSTeamsReplyDispatcher(params: {
     core.system.enqueueSystemEvent(sentences.join(" "), {
       sessionKey: params.sessionKey,
       contextKey: `msteams:delivery-failure:${params.conversationRef.conversation?.id ?? "unknown"}`,
+      forceSenderIsOwnerFalse: true,
     });
   };
 

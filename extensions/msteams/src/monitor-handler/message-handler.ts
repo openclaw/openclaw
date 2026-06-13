@@ -511,6 +511,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       core.system.enqueueSystemEvent(`${inboundLabel}: ${preview}`, {
         sessionKey: route.sessionKey,
         contextKey: `msteams:message:${conversationId}:${activity.id ?? "unknown"}`,
+        forceSenderIsOwnerFalse: true,
       });
 
     const channelId = conversationId;
@@ -677,6 +678,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           core.system.enqueueSystemEvent(formatParentContextEvent(parentSummary), {
             sessionKey: route.sessionKey,
             contextKey: `msteams:thread-parent:${conversationId}:${activity.replyToId}`,
+            forceSenderIsOwnerFalse: true,
           });
           markParentContextInjected(route.sessionKey, activity.replyToId);
         }

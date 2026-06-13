@@ -8,7 +8,10 @@ export const autoReplyCoreTestExclude = ["src/auto-reply/reply*.test.ts"];
 
 export const autoReplyTopLevelReplyTestInclude = ["src/auto-reply/reply*.test.ts"];
 
-export const autoReplyReplySubtreeTestInclude = ["src/auto-reply/reply/**/*.test.ts"];
+export const autoReplyReplySubtreeTestInclude = [
+  "src/auto-reply/reply/**/*.test.ts",
+  "src/auto-reply/continuation/**/*.test.ts",
+];
 
 export const fullSuiteVitestShards = [
   {

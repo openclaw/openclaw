@@ -1,5 +1,5 @@
 // Covers managed task-flow audit summaries and stale-flow classification.
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createRunningTaskRun as createRunningTaskRunOrNull } from "./task-executor.js";
@@ -80,12 +80,15 @@ async function withTaskFlowAuditStateDir(run: (root: string) => Promise<void>): 
 }
 
 describe("task-flow-registry audit", () => {
-  afterEach(() => {
+  function resetTaskFlowAuditTestState() {
     ORIGINAL_ENV.restore();
     resetTaskRegistryDeliveryRuntimeForTests();
     resetTaskRegistryForTests();
-    resetTaskFlowRegistryForTests();
-  });
+    resetTaskFlowRegistryForTests({ persist: false });
+  }
+
+  beforeEach(resetTaskFlowAuditTestState);
+  afterEach(resetTaskFlowAuditTestState);
 
   it("surfaces restore failures as task-flow audit findings", () => {
     configureTaskFlowRegistryRuntime({

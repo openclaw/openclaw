@@ -61,6 +61,19 @@ export function createCodexAppServerAgentHarness(options?: {
       if (providerIds.has(provider)) {
         return { supported: true, priority: 100 };
       }
+      // Normalize multi-token provider ids that are composed ENTIRELY of
+      // recognized provider tokens (e.g. "OpenAI-Codex", "openai_codex",
+      // "openai:codex") by splitting on common separators. Match only when
+      // EVERY token is in the allowlist: a single recognized token among
+      // otherwise-unrecognized ones (e.g. "custom-openai-proxy", "azure-openai")
+      // must NOT route into the Codex harness, which would otherwise hijack
+      // non-Codex OpenAI-compatible providers at priority 100 and break their
+      // normal provider runtime. Operators with a non-standard exact Codex
+      // provider id can register it explicitly via `providerIds`.
+      const tokens = provider.split(/[-_:\s/]+/).filter(Boolean);
+      if (tokens.length > 1 && tokens.every((token) => providerIds.has(token))) {
+        return { supported: true, priority: 100 };
+      }
       return {
         supported: false,
         reason: `provider is not one of: ${[...providerIds].toSorted().join(", ")}`,

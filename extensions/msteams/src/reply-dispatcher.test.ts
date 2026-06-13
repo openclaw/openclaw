@@ -595,6 +595,7 @@ describe("createMSTeamsReplyDispatcher", () => {
     expect(context).toEqual({
       sessionKey: "agent:main:main",
       contextKey: "msteams:delivery-failure:conv",
+      forceSenderIsOwnerFalse: true,
     });
   });
 

@@ -1,10 +1,10 @@
 // Covers OpenAI-compatible embedding provider plugin behavior.
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { EmbeddingProviderCreateOptions } from "./embedding-providers.js";
-import { getRegisteredEmbeddingProvider } from "./embedding-providers.js";
+import { clearEmbeddingProviders, getRegisteredEmbeddingProvider } from "./embedding-providers.js";
 import {
   createOpenAICompatibleEmbeddingProvider,
   openAICompatibleEmbeddingProviderAdapter,
@@ -119,6 +119,11 @@ async function startEmbeddingServer(params?: {
 afterEach(async () => {
   const pending = servers.splice(0);
   await Promise.all(pending.map((server) => server.close()));
+  clearEmbeddingProviders();
+});
+
+beforeEach(() => {
+  clearEmbeddingProviders();
 });
 
 describe("openai-compatible generic embedding provider", () => {

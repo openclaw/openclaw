@@ -12,6 +12,7 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
+import { mergeSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   forgetActiveSessionForShutdown,
@@ -275,10 +276,13 @@ export async function incrementCompactionCount(params: {
   }
   const incrementBy = Math.max(0, amount);
   const nextCount = (entry.compactionCount ?? 0) + incrementBy;
-  // Build update payload with compaction count and optionally updated token counts
+  // Build update payload with compaction count and optionally updated token counts.
+  // Reset lastContextPressureBand: compaction reduces context, so band-tracking
+  // history is stale; next pressure-check should start fresh.
   const updates: Partial<SessionEntry> = {
     compactionCount: nextCount,
     updatedAt: now,
+    lastContextPressureBand: undefined,
   };
   const explicitNewSessionFile = normalizeOptionalString(newSessionFile);
   const sessionIdChanged = Boolean(newSessionId && newSessionId !== entry.sessionId);
@@ -295,6 +299,12 @@ export async function incrementCompactionCount(params: {
         storePath,
         newSessionId,
       });
+    // SessionId rotation handled by mergeSessionEntry policy: when sessionId
+    // changes, policy rolls sessionStartedAt to the merge-time updatedAt so
+    // sessionStartedAt === updatedAt holds for the new logical-session epoch.
+    // (Explicitly setting updates.sessionStartedAt here would short-circuit
+    // the policy + drift by ~1ms vs merge-time Date.now(), breaking the
+    // sessionStartedAt-equals-updatedAt invariant the rotation-test asserts.)
     updates.usageFamilyKey = entry.usageFamilyKey ?? sessionKey;
     updates.usageFamilySessionIds = Array.from(
       new Set([...(entry.usageFamilySessionIds ?? []), entry.sessionId, newSessionId]),
@@ -315,17 +325,22 @@ export async function incrementCompactionCount(params: {
   } else if (incrementBy > 0) {
     updates.totalTokensFresh = false;
   }
-  sessionStore[sessionKey] = {
-    ...entry,
-    ...updates,
-  };
+  sessionStore[sessionKey] = mergeSessionEntry(entry, updates, { now });
   if (storePath) {
-    await updateSessionStore(storePath, (store) => {
-      store[sessionKey] = {
-        ...store[sessionKey],
-        ...updates,
-      };
-    });
+    await updateSessionStore(
+      storePath,
+      (store) => {
+        // Merge-or-create from the active in-memory entry to preserve
+        // sessionId/sessionStartedAt/other-fields on the first-turn case
+        // (when on-disk store has no entry yet). canonical-primitive applies
+        // policy-based merge semantics (e.g. sessionStartedAt-rotation when
+        // sessionId changes). Thread captured `now` through both merge call
+        // sites so updatedAt + sessionStartedAt share a single-source-of-truth
+        // timestamp and remain byte-identical when sessionId rotates.
+        store[sessionKey] = mergeSessionEntry(store[sessionKey] ?? entry, updates, { now });
+      },
+      { activeSessionKey: sessionKey },
+    );
   }
   if ((sessionIdChanged || sessionFileChanged) && cfg) {
     emitCompactionSessionLifecycleHooks({

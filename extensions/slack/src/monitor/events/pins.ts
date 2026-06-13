@@ -44,6 +44,7 @@ async function handleSlackPinEvent(params: {
       {
         sessionKey: ingressContext.sessionKey,
         contextKey: `slack:pin:${contextKeySuffix}:${channelId ?? "unknown"}:${messageId ?? "unknown"}`,
+        forceSenderIsOwnerFalse: true,
       },
     );
   } catch (err) {

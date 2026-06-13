@@ -193,6 +193,7 @@ export async function handleInboundMatrixReaction(params: {
   params.core.system.enqueueSystemEvent(text, {
     sessionKey: route.sessionKey,
     contextKey: `matrix:reaction:add:${params.roomId}:${reaction.eventId}:${params.senderId}:${reaction.key}`,
+    forceSenderIsOwnerFalse: true,
   });
   params.logVerboseMessage(
     `matrix: reaction event enqueued room=${params.roomId} target=${reaction.eventId} sender=${params.senderId} emoji=${reaction.key}`,

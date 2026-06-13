@@ -5,12 +5,12 @@
  */
 import fsSync, { promises as fs } from "node:fs";
 import path from "node:path";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES } from "../config/agent-limits.js";
 import { getRuntimeConfig } from "../config/config.js";
 import {
   loadSessionStore,
   resolveAgentIdFromSessionKey,
+  resolveSessionStoreEntry,
   resolveStorePath,
   updateSessionStore,
   type SessionEntry,
@@ -97,17 +97,8 @@ export function logAnnounceGiveUp(entry: SubagentRunRecord, reason: "retry-limit
 // Session keys may differ only by casing after legacy writes. Prefer exact
 // matches, then fall back to normalized lookup for recovery paths.
 function findSessionEntryByKey(store: Record<string, SessionEntry>, sessionKey: string) {
-  const direct = store[sessionKey];
-  if (direct) {
-    return direct;
-  }
-  const normalized = normalizeLowercaseStringOrEmpty(sessionKey);
-  for (const [key, entry] of Object.entries(store)) {
-    if (normalizeLowercaseStringOrEmpty(key) === normalized) {
-      return entry;
-    }
-  }
-  return undefined;
+  const resolved = resolveSessionStoreEntry({ store, sessionKey });
+  return resolved.existing;
 }
 
 /** Persists child session timing/status derived from the subagent registry row. */
@@ -130,7 +121,8 @@ export async function persistSubagentSessionTiming(entry: SubagentRunRecord) {
   const status = resolveSubagentSessionStatus(entry);
 
   await updateSessionStore(storePath, (store) => {
-    const sessionEntry = findSessionEntryByKey(store, childSessionKey);
+    const resolved = resolveSessionStoreEntry({ store, sessionKey: childSessionKey });
+    const sessionEntry = resolved.existing;
     if (!sessionEntry) {
       return;
     }
@@ -157,6 +149,13 @@ export async function persistSubagentSessionTiming(entry: SubagentRunRecord) {
       sessionEntry.status = status;
     } else {
       delete sessionEntry.status;
+    }
+
+    // Re-anchor under normalizedKey and clean up any legacy duplicates so
+    // that future reads don't pick the wrong copy.
+    store[resolved.normalizedKey] = sessionEntry;
+    for (const legacyKey of resolved.legacyKeys) {
+      delete store[legacyKey];
     }
   });
 }

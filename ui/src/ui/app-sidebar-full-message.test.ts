@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { describe, expect, it, vi } from "vitest";
+import { useHermeticOpenclawEnv } from "../../../test/vitest/hermetic-openclaw-env.js";
 import type { SidebarContent } from "./sidebar-content.ts";
 
 describe("OpenClawApp full-message sidebar upgrade", () => {
@@ -8,6 +9,8 @@ describe("OpenClawApp full-message sidebar upgrade", () => {
     await import("./app.ts");
     return document.createElement("openclaw-app") as import("./app.ts").OpenClawApp;
   }
+
+  useHermeticOpenclawEnv();
 
   it("defaults canvas embeds to strict sandbox before bootstrap config loads", async () => {
     const app = await createApp();
