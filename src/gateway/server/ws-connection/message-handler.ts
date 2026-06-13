@@ -2001,28 +2001,31 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         }
         if (pendingNodePairingCleanup) {
           const context = buildRequestContext();
-          try {
-            const resolvedPairings = await rejectPendingNodePairingRequestsForNode(
-              pendingNodePairingCleanup.nodeId,
-              pendingNodePairingCleanup.observed,
-            );
-            const resolvedAt = Date.now();
-            for (const resolved of resolvedPairings) {
-              context.broadcast(
-                "node.pair.resolved",
-                {
-                  requestId: resolved.requestId,
-                  nodeId: resolved.nodeId,
-                  decision: "rejected",
-                  ts: resolvedAt,
-                },
-                { dropIfSlow: true },
+          // A newer overlapping reconnect may now own the node and its pending approval.
+          if (context.nodeRegistry.get(pendingNodePairingCleanup.nodeId)?.connId === connId) {
+            try {
+              const resolvedPairings = await rejectPendingNodePairingRequestsForNode(
+                pendingNodePairingCleanup.nodeId,
+                pendingNodePairingCleanup.observed,
+              );
+              const resolvedAt = Date.now();
+              for (const resolved of resolvedPairings) {
+                context.broadcast(
+                  "node.pair.resolved",
+                  {
+                    requestId: resolved.requestId,
+                    nodeId: resolved.nodeId,
+                    decision: "rejected",
+                    ts: resolvedAt,
+                  },
+                  { dropIfSlow: true },
+                );
+              }
+            } catch (error) {
+              logGateway.warn(
+                `failed to clear stale pending pairings for ${pendingNodePairingCleanup.nodeId}: ${formatForLog(error)}`,
               );
             }
-          } catch (error) {
-            logGateway.warn(
-              `failed to clear stale pending pairings for ${pendingNodePairingCleanup.nodeId}: ${formatForLog(error)}`,
-            );
           }
         }
         logWs("out", "hello-ok", {
