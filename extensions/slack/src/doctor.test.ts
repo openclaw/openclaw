@@ -67,6 +67,7 @@ describe("slack doctor", () => {
     const warnings = await collectSlackWarnings({
       channels: {
         "example-channel": {},
+        development: {},
         C0AL2GDUA7J: {},
         c0al2gdua7k: {},
         "channel:C0AL2GDUA7L": {},
@@ -77,8 +78,9 @@ describe("slack doctor", () => {
     const nameKeyWarnings = warnings.filter((warning) =>
       warning.includes("keyed by a channel name"),
     );
-    expect(nameKeyWarnings).toHaveLength(1);
+    expect(nameKeyWarnings).toHaveLength(2);
     expect(nameKeyWarnings[0]).toContain('channels.slack.channels."example-channel"');
+    expect(nameKeyWarnings[1]).toContain('channels.slack.channels."development"');
   });
 
   it("uses account policy and name-matching overrides for name-keyed channels (#81665)", async () => {
@@ -113,7 +115,7 @@ describe("slack doctor", () => {
       { groupPolicy: "open" },
     );
     expect(sharedOpenWarnings.some((warning) => warning.includes("keyed by a channel name"))).toBe(
-      false,
+      true,
     );
   });
 

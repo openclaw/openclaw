@@ -3,7 +3,6 @@ import type { ChannelDoctorAdapter } from "openclaw/plugin-sdk/channel-contract"
 import { createDangerousNameMatchingMutableAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
 import type { GroupPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { collectProviderDangerousNameMatchingScopes } from "openclaw/plugin-sdk/runtime-doctor";
-import { resolveDefaultGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import {
   legacyConfigRules as SLACK_LEGACY_CONFIG_RULES,
   normalizeCompatibilityConfig as normalizeSlackCompatibilityConfig,
@@ -51,8 +50,19 @@ const collectSlackMutableAllowlistWarnings =
     },
   });
 
-// Match every ID form accepted by Slack channel routing, including normalized config keys.
-const SLACK_CHANNEL_ID_RE = /^(?:channel:)?[CGD][A-Z0-9]{8,}$/i;
+// Bare lowercase keys overlap Slack's channel-name syntax. Accept the observed lowercase ID form
+// with a numeric second character; explicit `channel:` keys remain unambiguous.
+const SLACK_CANONICAL_CHANNEL_ID_RE = /^[CGD][A-Z0-9]{8,}$/;
+const SLACK_LOWERCASE_CHANNEL_ID_RE = /^[cgd][0-9][a-z0-9]{7,}$/;
+const SLACK_PREFIXED_CHANNEL_ID_RE = /^channel:[CGD][A-Z0-9]{8,}$/i;
+
+function looksLikeSlackChannelId(channelKey: string): boolean {
+  return (
+    SLACK_CANONICAL_CHANNEL_ID_RE.test(channelKey) ||
+    SLACK_LOWERCASE_CHANNEL_ID_RE.test(channelKey) ||
+    SLACK_PREFIXED_CHANNEL_ID_RE.test(channelKey)
+  );
+}
 
 function collectSlackNameKeyedChannelWarnings({ cfg }: { cfg: OpenClawConfig }): string[] {
   const warnings: string[] = [];
@@ -61,7 +71,6 @@ function collectSlackNameKeyedChannelWarnings({ cfg }: { cfg: OpenClawConfig }):
     slackCfg && typeof slackCfg.groupPolicy === "string"
       ? (slackCfg.groupPolicy as GroupPolicy)
       : undefined;
-  const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
   for (const scope of collectProviderDangerousNameMatchingScopes(cfg, "slack")) {
     if (scope.dangerousNameMatchingEnabled) {
       continue;
@@ -70,8 +79,8 @@ function collectSlackNameKeyedChannelWarnings({ cfg }: { cfg: OpenClawConfig }):
       typeof scope.account.groupPolicy === "string"
         ? (scope.account.groupPolicy as GroupPolicy)
         : providerGroupPolicy;
-    // Doctor reads authored config, while Slack's runtime schema materializes this default.
-    const effectiveGroupPolicy = scopedGroupPolicy ?? defaultGroupPolicy ?? "allowlist";
+    // Slack's schema materializes this provider default before runtime account merging.
+    const effectiveGroupPolicy = scopedGroupPolicy ?? "allowlist";
     if (effectiveGroupPolicy !== "allowlist") {
       continue;
     }
@@ -80,7 +89,7 @@ function collectSlackNameKeyedChannelWarnings({ cfg }: { cfg: OpenClawConfig }):
       continue;
     }
     for (const channelKey of Object.keys(channels)) {
-      if (channelKey === "*" || SLACK_CHANNEL_ID_RE.test(channelKey)) {
+      if (channelKey === "*" || looksLikeSlackChannelId(channelKey)) {
         continue;
       }
       warnings.push(
