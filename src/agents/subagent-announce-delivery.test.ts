@@ -5010,7 +5010,9 @@ describe("deliverSubagentAnnouncement requester session backfill (issue #86034)"
       );
       for (const call of asMock(dispatchGatewayMethodInProcess).mock.calls) {
         const params = call[1] as Record<string, unknown> | undefined;
-        if (!params) continue;
+        if (!params) {
+          continue;
+        }
         expect(params.to).not.toBe("signal-stale-target");
         expect(params.channel).not.toBe("signal");
       }
