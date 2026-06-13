@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import {
   testing as replyRunTesting,
   createReplyOperation,
@@ -1276,7 +1277,7 @@ describe("runCliAgent reliability", () => {
     releaseAgentEnd();
   });
 
-  it("persists approved CLI user turns before model execution", async () => {
+  it("persists approved CLI user turns and successful assistant output", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({
         reason: "exit",
@@ -1289,7 +1290,7 @@ describe("runCliAgent reliability", () => {
         noOutputTimedOut: false,
       }),
     );
-    const { dir, sessionFile } = createSessionFile();
+    const { dir, sessionFile, storePath } = createSessionFile();
     const onUserMessagePersisted = vi.fn();
 
     try {
@@ -1305,6 +1306,8 @@ describe("runCliAgent reliability", () => {
           sessionFile,
           workspaceDir: dir,
           prompt: "runtime prompt",
+          persistAssistantTranscript: true,
+          storePath,
           userTurnTranscriptRecorder: createCliUserTurnRecorder({
             text: "display prompt",
             sessionFile,
@@ -1316,6 +1319,9 @@ describe("runCliAgent reliability", () => {
       });
 
       expect(result.payloads).toEqual([{ text: "hello from cli" }]);
+      expect(getReplyPayloadMetadata(result.payloads?.[0] ?? {})).toMatchObject({
+        assistantTranscriptOwned: true,
+      });
       expect(onUserMessagePersisted).toHaveBeenCalledOnce();
       expect(onUserMessagePersisted).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1331,7 +1337,180 @@ describe("runCliAgent reliability", () => {
           content: "display prompt",
         }),
       );
+      expect(messages).toContainEqual(
+        expect.objectContaining({
+          role: "assistant",
+          content: [{ type: "text", text: "hello from cli" }],
+          api: "cli",
+          provider: "codex-cli",
+          model: "gpt-5.4",
+          idempotencyKey: "cli-assistant:run-persist-cli",
+        }),
+      );
       expect(JSON.stringify(messages)).not.toContain("runtime prompt");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("lets before_message_write block CLI assistant persistence without delivery fallback", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "before_message_write"),
+      runBeforeMessageWrite: vi.fn(() => ({ block: true })),
+    };
+    setHookRunnerForTest(hookRunner);
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "secret CLI output",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    const { dir, sessionFile, storePath } = createSessionFile();
+
+    try {
+      const context = buildPreparedContext({
+        sessionKey: "agent:main:main",
+        runId: "run-blocked-cli",
+      });
+      const result = await runPreparedCliAgent({
+        ...context,
+        params: {
+          ...context.params,
+          agentId: "main",
+          sessionFile,
+          workspaceDir: dir,
+          persistAssistantTranscript: true,
+          storePath,
+        },
+      });
+
+      expect(result.payloads).toEqual([{ text: "secret CLI output" }]);
+      expect(getReplyPayloadMetadata(result.payloads?.[0] ?? {})).toMatchObject({
+        assistantTranscriptOwned: true,
+      });
+      expect(readTranscriptMessages(sessionFile)).toEqual([]);
+      expect(hookRunner.runBeforeMessageWrite).toHaveBeenCalledOnce();
+      expect(
+        callArg(hookRunner.runBeforeMessageWrite, 0, 1, "before_message_write context"),
+      ).toEqual({
+        agentId: "main",
+        sessionKey: "agent:main:main",
+      });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not append late CLI output after the session key is rebound", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "late CLI output",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    const { dir, sessionFile, storePath } = createSessionFile();
+    const replacementFile = path.join(path.dirname(sessionFile), "s2.jsonl");
+    fs.writeFileSync(
+      replacementFile,
+      `${JSON.stringify({
+        type: "session",
+        version: CURRENT_SESSION_VERSION,
+        id: "s2",
+        timestamp: new Date(0).toISOString(),
+        cwd: dir,
+      })}\n`,
+      "utf-8",
+    );
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        "agent:main:main": {
+          sessionId: "s2",
+          sessionFile: replacementFile,
+          updatedAt: Date.now(),
+        },
+      }),
+      "utf-8",
+    );
+
+    try {
+      const context = buildPreparedContext({
+        sessionKey: "agent:main:main",
+        runId: "run-rebound-cli",
+      });
+      const result = await runPreparedCliAgent({
+        ...context,
+        params: {
+          ...context.params,
+          agentId: "main",
+          sessionFile,
+          workspaceDir: dir,
+          persistAssistantTranscript: true,
+          storePath,
+        },
+      });
+
+      expect(result.payloads).toEqual([{ text: "late CLI output" }]);
+      expect(getReplyPayloadMetadata(result.payloads?.[0] ?? {})).toMatchObject({
+        assistantTranscriptOwned: true,
+      });
+      expect(readTranscriptMessages(sessionFile)).toEqual([]);
+      expect(readTranscriptMessages(replacementFile)).toEqual([]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not persist private room-event assistant output", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "private ambient output",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    const { dir, sessionFile, storePath } = createSessionFile();
+
+    try {
+      const context = buildPreparedContext({
+        sessionKey: "agent:main:main",
+        runId: "run-private-room-event",
+      });
+      const result = await runPreparedCliAgent({
+        ...context,
+        params: {
+          ...context.params,
+          agentId: "main",
+          sessionFile,
+          workspaceDir: dir,
+          persistAssistantTranscript: true,
+          storePath,
+          currentInboundEventKind: "room_event",
+        },
+      });
+
+      expect(result.payloads).toEqual([{ text: "private ambient output" }]);
+      expect(getReplyPayloadMetadata(result.payloads?.[0] ?? {})).toMatchObject({
+        assistantTranscriptOwned: true,
+      });
+      expect(readTranscriptMessages(sessionFile)).toEqual([]);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

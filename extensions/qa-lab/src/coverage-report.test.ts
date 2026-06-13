@@ -1,6 +1,11 @@
 // Qa Lab tests cover coverage report plugin behavior.
 import { describe, expect, it } from "vitest";
-import { buildQaCoverageInventory, renderQaCoverageMarkdownReport } from "./coverage-report.js";
+import {
+  buildQaCoverageInventory,
+  findQaScenarioMatches,
+  renderQaCoverageMarkdownReport,
+  renderQaScenarioMatchesMarkdownReport,
+} from "./coverage-report.js";
 import { readQaScenarioPack } from "./scenario-catalog.js";
 import { buildQaScorecardTaxonomyReport, parseQaScorecardTaxonomy } from "./scorecard-taxonomy.js";
 
@@ -136,6 +141,33 @@ describe("qa coverage report", () => {
     );
     expect(report).toContain("### Unmapped Coverage IDs");
     expect(report).toContain("agents.subagents");
+  });
+
+  it("renders Playwright matches as qa suite targets", () => {
+    const matches = findQaScenarioMatches(readQaScenarioPack().scenarios, "chat-flow.e2e");
+    const report = renderQaScenarioMatchesMarkdownReport({
+      query: "chat-flow.e2e",
+      matches,
+    });
+
+    expect(report).toContain(
+      "- Suite command: `pnpm openclaw qa suite --scenario control-ui-chat-flow-playwright`",
+    );
+    expect(report).toContain("  - execution: playwright ui/src/ui/e2e/chat-flow.e2e.test.ts");
+  });
+
+  it("splits qa suite targets when matches mix execution kinds", () => {
+    const matches = findQaScenarioMatches(readQaScenarioPack().scenarios, "control-ui");
+    const report = renderQaScenarioMatchesMarkdownReport({
+      query: "control-ui",
+      matches,
+    });
+
+    expect(report).toContain("- Suite commands:");
+    expect(report).toContain("  - flow: `pnpm openclaw qa suite --scenario");
+    expect(report).toContain(
+      "  - playwright: `pnpm openclaw qa suite --scenario control-ui-chat-flow-playwright`",
+    );
   });
 
   it("reports taxonomy mapping gaps as scorecard signals", () => {

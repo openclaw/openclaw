@@ -610,6 +610,7 @@ export const th: TranslationMap = {
     labelsPlaceholder: "ui, docs",
     searchPlaceholder: "ค้นหาการ์ด",
     allPriorities: "ทุกลำดับความสำคัญ",
+    hideEmptyColumns: "Hide empty columns",
     emptyColumn: "วางงานที่นี่",
     lifecycleUnlinked: "ไม่มีเซสชัน",
     lifecycleUnlinkedDetail: "เริ่มหรือเชื่อมโยงเซสชัน",

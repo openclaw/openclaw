@@ -616,6 +616,7 @@ export const de: TranslationMap = {
     labelsPlaceholder: "ui, docs",
     searchPlaceholder: "Karten suchen",
     allPriorities: "Alle Prioritäten",
+    hideEmptyColumns: "Hide empty columns",
     emptyColumn: "Arbeit hier ablegen",
     lifecycleUnlinked: "Keine Sitzung",
     lifecycleUnlinkedDetail: "Sitzung starten oder verknüpfen",

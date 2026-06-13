@@ -30,6 +30,23 @@ title: "Usage tracking"
 - CLI: `openclaw channels list` prints the same usage snapshot alongside provider config (use `--no-usage` to skip).
 - macOS menu bar: "Usage" section under Context (only if available).
 
+## Custom `/usage full` footer
+
+Set `messages.usageTemplate` to customize the per-response `/usage full`
+footer. The value can be an inline template object or a JSON file path:
+
+```json
+{
+  "messages": {
+    "usageTemplate": "~/.openclaw/usage-footer.json"
+  }
+}
+```
+
+Templates read the `openclaw.usageLine.v1` contract and can use `scales`,
+`aliases`, and `output.surfaces` to render channel-specific footers. Missing,
+unreadable, invalid, or empty templates fall back to the built-in usage line.
+
 ## Providers + credentials
 
 - **Anthropic (Claude)**: OAuth tokens in auth profiles.

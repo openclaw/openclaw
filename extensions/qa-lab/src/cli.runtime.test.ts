@@ -6,7 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   runQaManualLane,
-  runQaSuiteFromRuntime,
+  runQaFlowSuiteFromRuntime,
+  runQaSuite,
   runQaCharacterEval,
   runQaMultipass,
   listTelegramQaScenarioCatalog,
@@ -18,7 +19,8 @@ const {
   defaultQaRuntimeModelForMode,
 } = vi.hoisted(() => ({
   runQaManualLane: vi.fn(),
-  runQaSuiteFromRuntime: vi.fn(),
+  runQaFlowSuiteFromRuntime: vi.fn(),
+  runQaSuite: vi.fn(),
   runQaCharacterEval: vi.fn(),
   runQaMultipass: vi.fn(),
   listTelegramQaScenarioCatalog: vi.fn(),
@@ -36,7 +38,8 @@ vi.mock("./manual-lane.runtime.js", () => ({
 }));
 
 vi.mock("./suite-launch.runtime.js", () => ({
-  runQaSuiteFromRuntime,
+  runQaFlowSuiteFromRuntime,
+  runQaSuite,
 }));
 
 vi.mock("./character-eval.js", () => ({
@@ -115,10 +118,51 @@ function expectWriteContains(mock: unknown, fragment: string): void {
   ).toBe(true);
 }
 
+function flowSuiteRuntimeResult(params: {
+  evidencePath?: string;
+  reportPath: string;
+  summaryPath: string;
+  scenarios?: unknown[];
+}) {
+  return {
+    executionKind: "flow",
+    result: {
+      outputDir: path.dirname(params.reportPath),
+      evidencePath:
+        params.evidencePath ?? path.join(path.dirname(params.reportPath), "qa-evidence.json"),
+      reportPath: params.reportPath,
+      summaryPath: params.summaryPath,
+      report: "# QA Suite Report\n",
+      scenarios: params.scenarios ?? [],
+      watchUrl: "http://127.0.0.1:43124",
+    },
+  };
+}
+
+function testFileSuiteRuntimeResult(params: {
+  evidencePath: string;
+  executionKind?: "vitest" | "playwright";
+  outputDir: string;
+  reportPath: string;
+  results?: unknown[];
+}) {
+  return {
+    executionKind: params.executionKind ?? "playwright",
+    result: {
+      outputDir: params.outputDir,
+      executionKind: params.executionKind ?? "playwright",
+      reportPath: params.reportPath,
+      evidencePath: params.evidencePath,
+      results: params.results ?? [{ status: "pass" }],
+    },
+  };
+}
+
 describe("qa cli runtime", () => {
   let stdoutWrite: ReturnType<typeof vi.spyOn>;
   let stderrWrite: ReturnType<typeof vi.spyOn>;
   let suiteArtifactsDir: string;
+  let suiteEvidencePath: string;
   let suiteReportPath: string;
   let suiteSummaryPath: string;
   let telegramArtifactsDir: string;
@@ -126,11 +170,13 @@ describe("qa cli runtime", () => {
 
   beforeEach(async () => {
     suiteArtifactsDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-suite-runtime-"));
+    suiteEvidencePath = path.join(suiteArtifactsDir, "qa-evidence.json");
     suiteReportPath = path.join(suiteArtifactsDir, "qa-suite-report.md");
     suiteSummaryPath = path.join(suiteArtifactsDir, "qa-suite-summary.json");
     telegramArtifactsDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-telegram-runtime-"));
     telegramSummaryPath = path.join(telegramArtifactsDir, QA_EVIDENCE_FILENAME);
     await fs.writeFile(suiteReportPath, "# QA Suite Report\n", "utf8");
+    await fs.writeFile(suiteEvidencePath, JSON.stringify({ entries: [] }), "utf8");
     await fs.writeFile(
       suiteSummaryPath,
       JSON.stringify({
@@ -157,7 +203,8 @@ describe("qa cli runtime", () => {
     );
     stdoutWrite = vi.spyOn(process.stdout, "write").mockReturnValue(true);
     stderrWrite = vi.spyOn(process.stderr, "write").mockReturnValue(true);
-    runQaSuiteFromRuntime.mockReset();
+    runQaFlowSuiteFromRuntime.mockReset();
+    runQaSuite.mockReset();
     runQaCharacterEval.mockReset();
     runQaManualLane.mockReset();
     runQaMultipass.mockReset();
@@ -171,7 +218,15 @@ describe("qa cli runtime", () => {
       (mode: string, options?: { alternate?: boolean }) =>
         defaultQaProviderModelForMode(mode as QaProviderModeInput, options),
     );
-    runQaSuiteFromRuntime.mockResolvedValue({
+    runQaSuite.mockResolvedValue(
+      flowSuiteRuntimeResult({
+        reportPath: suiteReportPath,
+        summaryPath: suiteSummaryPath,
+      }),
+    );
+    runQaFlowSuiteFromRuntime.mockResolvedValue({
+      outputDir: suiteArtifactsDir,
+      evidencePath: suiteEvidencePath,
       watchUrl: "http://127.0.0.1:43124",
       reportPath: suiteReportPath,
       summaryPath: suiteSummaryPath,
@@ -242,6 +297,48 @@ describe("qa cli runtime", () => {
     await fs.rm(telegramArtifactsDir, { recursive: true, force: true });
   });
 
+  it("runs selected Playwright scenarios through the suite command", async () => {
+    const evidencePath = path.join(suiteArtifactsDir, "qa-evidence.json");
+    await fs.writeFile(evidencePath, JSON.stringify({ entries: [] }), "utf8");
+    runQaSuite.mockResolvedValueOnce(
+      testFileSuiteRuntimeResult({
+        outputDir: suiteArtifactsDir,
+        reportPath: suiteReportPath,
+        evidencePath,
+      }),
+    );
+
+    await runQaSuiteCommand({
+      repoRoot: process.cwd(),
+      outputDir: ".artifacts/qa-e2e/scenario-test",
+      primaryModel: "mock-openai/gpt-5.5",
+      scenarioIds: ["control-ui-chat-flow-playwright"],
+    });
+
+    expect(runQaSuite).toHaveBeenCalledWith({
+      repoRoot: process.cwd(),
+      outputDir: path.join(process.cwd(), ".artifacts", "qa-e2e", "scenario-test"),
+      transportId: "qa-channel",
+      primaryModel: "mock-openai/gpt-5.5",
+      alternateModel: undefined,
+      fastMode: undefined,
+      scenarioIds: ["control-ui-chat-flow-playwright"],
+    });
+    expectWriteContains(stdoutWrite, `QA suite evidence: ${evidencePath}`);
+  });
+
+  it("rejects host-only resource options for Playwright scenarios", async () => {
+    await expect(
+      runQaSuiteCommand({
+        repoRoot: process.cwd(),
+        image: "lts",
+        scenarioIds: ["control-ui-chat-flow-playwright"],
+      }),
+    ).rejects.toThrow("--image, --cpus, --memory, and --disk require --runner multipass");
+
+    expect(runQaSuite).not.toHaveBeenCalled();
+  });
+
   it("resolves suite repo-root-relative paths before dispatching", async () => {
     await runQaSuiteCommand({
       repoRoot: "/tmp/openclaw-repo",
@@ -254,7 +351,7 @@ describe("qa cli runtime", () => {
       scenarioIds: ["approval-turn-tool-followthrough"],
     });
 
-    expect(runQaSuiteFromRuntime).toHaveBeenCalledWith({
+    expect(runQaSuite).toHaveBeenCalledWith({
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       outputDir: path.resolve("/tmp/openclaw-repo", ".artifacts/qa/frontier"),
       transportId: "qa-channel",
@@ -275,7 +372,7 @@ describe("qa cli runtime", () => {
       enabledPluginIds: ["browser", "memory-core"],
     });
 
-    expect(runQaSuiteFromRuntime).toHaveBeenCalledWith({
+    expect(runQaSuite).toHaveBeenCalledWith({
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       outputDir: undefined,
       transportId: "qa-channel",
@@ -296,7 +393,7 @@ describe("qa cli runtime", () => {
       runtimePair: "openclaw,codex",
     });
 
-    expect(runQaSuiteFromRuntime).toHaveBeenCalledWith({
+    expect(runQaSuite).toHaveBeenCalledWith({
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       outputDir: undefined,
       transportId: "qa-channel",
@@ -318,7 +415,7 @@ describe("qa cli runtime", () => {
         runtimePair: "legacy-runtime,codex",
       }),
     ).rejects.toThrow('--runtime-pair only supports "openclaw" and "codex".');
-    expect(runQaSuiteFromRuntime).not.toHaveBeenCalled();
+    expect(runQaSuite).not.toHaveBeenCalled();
   });
 
   it("accepts legacy pi as a runtime-pair suite alias", async () => {
@@ -329,7 +426,7 @@ describe("qa cli runtime", () => {
       runtimePair: "pi,codex",
     });
 
-    expect(runQaSuiteFromRuntime).toHaveBeenCalledWith(
+    expect(runQaSuite).toHaveBeenCalledWith(
       expect.objectContaining({
         repoRoot: path.resolve("/tmp/openclaw-repo"),
         runtimePair: ["openclaw", "codex"],
@@ -346,7 +443,7 @@ describe("qa cli runtime", () => {
       scenarioIds: ["thread-memory-isolation"],
     });
 
-    expect(runQaSuiteFromRuntime).toHaveBeenCalledWith({
+    expect(runQaSuite).toHaveBeenCalledWith({
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       outputDir: undefined,
       transportId: "qa-channel",
@@ -493,12 +590,13 @@ describe("qa cli runtime", () => {
       concurrency: 3,
     });
 
-    expectFields(mockFirstObjectArg(runQaSuiteFromRuntime), {
+    expectFields(mockFirstObjectArg(runQaSuite), {
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       transportId: "qa-channel",
       scenarioIds: ["channel-chat-baseline", "thread-follow-up"],
       concurrency: 3,
     });
+    expectWriteContains(stdoutWrite, `QA suite evidence: ${suiteEvidencePath}`);
   });
 
   it("rejects fractional suite concurrency from programmatic callers", async () => {
@@ -509,7 +607,7 @@ describe("qa cli runtime", () => {
         concurrency: 1.5,
       }),
     ).rejects.toThrow("--concurrency must be a positive integer");
-    expect(runQaSuiteFromRuntime).not.toHaveBeenCalled();
+    expect(runQaSuite).not.toHaveBeenCalled();
   });
 
   it("sets a failing exit code when host suite scenarios fail", async () => {
@@ -527,12 +625,12 @@ describe("qa cli runtime", () => {
       }),
       "utf8",
     );
-    runQaSuiteFromRuntime.mockResolvedValueOnce({
-      watchUrl: "http://127.0.0.1:43124",
-      reportPath: suiteReportPath,
-      summaryPath: suiteSummaryPath,
-      scenarios: [],
-    });
+    runQaSuite.mockResolvedValueOnce(
+      flowSuiteRuntimeResult({
+        reportPath: suiteReportPath,
+        summaryPath: suiteSummaryPath,
+      }),
+    );
 
     try {
       await runQaSuiteCommand({
@@ -560,12 +658,12 @@ describe("qa cli runtime", () => {
       }),
       "utf8",
     );
-    runQaSuiteFromRuntime.mockResolvedValueOnce({
-      watchUrl: "http://127.0.0.1:43124",
-      reportPath: suiteReportPath,
-      summaryPath: suiteSummaryPath,
-      scenarios: [],
-    });
+    runQaSuite.mockResolvedValueOnce(
+      flowSuiteRuntimeResult({
+        reportPath: suiteReportPath,
+        summaryPath: suiteSummaryPath,
+      }),
+    );
 
     try {
       await runQaSuiteCommand({
@@ -592,18 +690,19 @@ describe("qa cli runtime", () => {
       }),
       "utf8",
     );
-    runQaSuiteFromRuntime.mockResolvedValueOnce({
-      watchUrl: "http://127.0.0.1:43124",
-      reportPath: suiteReportPath,
-      summaryPath: suiteSummaryPath,
-      scenarios: [
-        {
-          name: "channel chat baseline",
-          status: "fail",
-          steps: [],
-        },
-      ],
-    });
+    runQaSuite.mockResolvedValueOnce(
+      flowSuiteRuntimeResult({
+        reportPath: suiteReportPath,
+        summaryPath: suiteSummaryPath,
+        scenarios: [
+          {
+            name: "channel chat baseline",
+            status: "fail",
+            steps: [],
+          },
+        ],
+      }),
+    );
 
     try {
       await runQaSuiteCommand({
@@ -617,45 +716,45 @@ describe("qa cli runtime", () => {
   });
 
   it("retries host suite runs once for retryable infra failures", async () => {
-    runQaSuiteFromRuntime
+    runQaSuite
       .mockRejectedValueOnce(
         new QaSuiteInfraError("agent_wait_failed", "agent.wait failed: gateway call timed out"),
       )
-      .mockResolvedValueOnce({
-        watchUrl: "http://127.0.0.1:43124",
-        reportPath: suiteReportPath,
-        summaryPath: suiteSummaryPath,
-        scenarios: [],
-      });
+      .mockResolvedValueOnce(
+        flowSuiteRuntimeResult({
+          reportPath: suiteReportPath,
+          summaryPath: suiteSummaryPath,
+        }),
+      );
 
     await runQaSuiteCommand({
       repoRoot: "/tmp/openclaw-repo",
     });
 
-    expect(runQaSuiteFromRuntime).toHaveBeenCalledTimes(2);
+    expect(runQaSuite).toHaveBeenCalledTimes(2);
     expectWriteContains(stderrWrite, "[qa-suite] infra retry 1/1: agent.wait failed");
   });
 
   it("retries host suite runs once for qa-channel readiness timeouts", async () => {
-    runQaSuiteFromRuntime
+    runQaSuite
       .mockRejectedValueOnce(
         new QaSuiteInfraError(
           "transport_ready_timeout",
           "timed out after 180000ms waiting for qa-channel ready; last status: no qa-channel accounts reported",
         ),
       )
-      .mockResolvedValueOnce({
-        watchUrl: "http://127.0.0.1:43124",
-        reportPath: suiteReportPath,
-        summaryPath: suiteSummaryPath,
-        scenarios: [],
-      });
+      .mockResolvedValueOnce(
+        flowSuiteRuntimeResult({
+          reportPath: suiteReportPath,
+          summaryPath: suiteSummaryPath,
+        }),
+      );
 
     await runQaSuiteCommand({
       repoRoot: "/tmp/openclaw-repo",
     });
 
-    expect(runQaSuiteFromRuntime).toHaveBeenCalledTimes(2);
+    expect(runQaSuite).toHaveBeenCalledTimes(2);
     expectWriteContains(
       stderrWrite,
       "[qa-suite] infra retry 1/1: timed out after 180000ms waiting for qa-channel ready",
@@ -663,7 +762,7 @@ describe("qa cli runtime", () => {
   });
 
   it("does not retry host suite runs for generic timeout wording", async () => {
-    runQaSuiteFromRuntime.mockRejectedValueOnce(
+    runQaSuite.mockRejectedValueOnce(
       new Error("approval-turn timed out waiting for post-approval read"),
     );
 
@@ -673,7 +772,7 @@ describe("qa cli runtime", () => {
       }),
     ).rejects.toThrow("approval-turn timed out waiting for post-approval read");
 
-    expect(runQaSuiteFromRuntime).toHaveBeenCalledTimes(1);
+    expect(runQaSuite).toHaveBeenCalledTimes(1);
   });
 
   it("does not retry host suite runs for semantic failures", async () => {
@@ -691,24 +790,25 @@ describe("qa cli runtime", () => {
       }),
       "utf8",
     );
-    runQaSuiteFromRuntime.mockResolvedValueOnce({
-      watchUrl: "http://127.0.0.1:43124",
-      reportPath: suiteReportPath,
-      summaryPath: suiteSummaryPath,
-      scenarios: [
-        {
-          name: "channel chat baseline",
-          status: "fail",
-          steps: [],
-        },
-      ],
-    });
+    runQaSuite.mockResolvedValueOnce(
+      flowSuiteRuntimeResult({
+        reportPath: suiteReportPath,
+        summaryPath: suiteSummaryPath,
+        scenarios: [
+          {
+            name: "channel chat baseline",
+            status: "fail",
+            steps: [],
+          },
+        ],
+      }),
+    );
 
     try {
       await runQaSuiteCommand({
         repoRoot: "/tmp/openclaw-repo",
       });
-      expect(runQaSuiteFromRuntime).toHaveBeenCalledTimes(1);
+      expect(runQaSuite).toHaveBeenCalledTimes(1);
       expect(process.exitCode).toBe(1);
     } finally {
       process.exitCode = priorExitCode;
@@ -725,7 +825,7 @@ describe("qa cli runtime", () => {
       preflight: true,
     });
 
-    const preflightArgs = mockFirstObjectArg(runQaSuiteFromRuntime);
+    const preflightArgs = mockFirstObjectArg(runQaFlowSuiteFromRuntime);
     expectFields(preflightArgs, {
       repoRoot,
       transportId: "qa-channel",
@@ -754,7 +854,9 @@ describe("qa cli runtime", () => {
       }),
       "utf8",
     );
-    runQaSuiteFromRuntime.mockResolvedValueOnce({
+    runQaFlowSuiteFromRuntime.mockResolvedValueOnce({
+      outputDir: suiteArtifactsDir,
+      evidencePath: suiteEvidencePath,
       watchUrl: "http://127.0.0.1:43124",
       reportPath: suiteReportPath,
       summaryPath: suiteSummaryPath,
@@ -784,7 +886,9 @@ describe("qa cli runtime", () => {
       }),
       "utf8",
     );
-    runQaSuiteFromRuntime.mockResolvedValueOnce({
+    runQaFlowSuiteFromRuntime.mockResolvedValueOnce({
+      outputDir: suiteArtifactsDir,
+      evidencePath: suiteEvidencePath,
       watchUrl: "http://127.0.0.1:43124",
       reportPath: suiteReportPath,
       summaryPath: suiteSummaryPath,
@@ -823,7 +927,7 @@ describe("qa cli runtime", () => {
       scenarioIds: ["claude-cli-provider-capabilities-subscription"],
     });
 
-    expectFields(mockFirstObjectArg(runQaSuiteFromRuntime), {
+    expectFields(mockFirstObjectArg(runQaSuite), {
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       providerMode: "live-frontier",
       primaryModel: "claude-cli/claude-sonnet-4-6",
@@ -840,7 +944,7 @@ describe("qa cli runtime", () => {
       scenarioIds: ["channel-chat-baseline"],
     });
 
-    expectFields(mockFirstObjectArg(runQaSuiteFromRuntime), {
+    expectFields(mockFirstObjectArg(runQaSuite), {
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       scenarioIds: [
         "channel-chat-baseline",
@@ -867,7 +971,7 @@ describe("qa cli runtime", () => {
       scenarioIds: ["channel-chat-baseline"],
     });
 
-    expectFields(mockFirstObjectArg(runQaSuiteFromRuntime), {
+    expectFields(mockFirstObjectArg(runQaSuite), {
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       scenarioIds: [
         "channel-chat-baseline",
@@ -892,7 +996,7 @@ describe("qa cli runtime", () => {
       scenarioIds: ["channel-chat-baseline", "runtime-tool-bash"],
     });
 
-    expectFields(mockFirstObjectArg(runQaSuiteFromRuntime), {
+    expectFields(mockFirstObjectArg(runQaSuite), {
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       scenarioIds: [
         "channel-chat-baseline",
@@ -925,7 +1029,7 @@ describe("qa cli runtime", () => {
       runtimeParityTier: ["optional,soak"],
     });
 
-    expectFields(mockFirstObjectArg(runQaSuiteFromRuntime), {
+    expectFields(mockFirstObjectArg(runQaSuite), {
       scenarioIds: [
         "runtime-soak-100-turn",
         "runtime-tool-image-generate",
@@ -1465,7 +1569,21 @@ describe("qa cli runtime", () => {
       memory: "4G",
       disk: "24G",
     });
-    expect(runQaSuiteFromRuntime).not.toHaveBeenCalled();
+    expect(runQaSuite).not.toHaveBeenCalled();
+  });
+
+  it("rejects Vitest and Playwright scenarios on the multipass runner", async () => {
+    await expect(
+      runQaSuiteCommand({
+        repoRoot: "/tmp/openclaw-repo",
+        runner: "multipass",
+        scenarioIds: ["control-ui-chat-flow-playwright"],
+      }),
+    ).rejects.toThrow(
+      "--runner multipass requires execution.kind: flow scenarios; unsupported scenario(s): control-ui-chat-flow-playwright (playwright)",
+    );
+
+    expect(runQaMultipass).not.toHaveBeenCalled();
   });
 
   it("passes runtime-pair suite selection through to the multipass runner", async () => {
@@ -1720,7 +1838,7 @@ describe("qa cli runtime", () => {
       alternateModel: "anthropic/claude-opus-4-8",
     });
 
-    expect(runQaSuiteFromRuntime).toHaveBeenCalledWith({
+    expect(runQaSuite).toHaveBeenCalledWith({
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       outputDir: undefined,
       transportId: "qa-channel",

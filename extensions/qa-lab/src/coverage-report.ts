@@ -23,6 +23,8 @@ type QaScenarioSearchMatch = QaCoverageScenarioSummary & {
   coverageIds: string[];
   docsRefs: string[];
   codeRefs: string[];
+  executionKind: QaSeedScenarioWithSource["execution"]["kind"];
+  executionPath?: string;
   runtimeParityTier?: string;
   requiredProviderMode?: string;
   requiredProvider?: string;
@@ -138,6 +140,8 @@ function summarizeScenarioSearchMatch(scenario: QaSeedScenarioWithSource): QaSce
     ].toSorted((left, right) => left.localeCompare(right)),
     docsRefs: [...(scenario.docsRefs ?? [])],
     codeRefs: [...(scenario.codeRefs ?? [])],
+    executionKind: scenario.execution.kind,
+    ...(scenario.execution.kind !== "flow" ? { executionPath: scenario.execution.path } : {}),
     runtimeParityTier: scenario.runtimeParityTier,
     requiredProviderMode: stringifyConfigValue(config.requiredProviderMode),
     requiredProvider: stringifyConfigValue(config.requiredProvider),
@@ -444,11 +448,31 @@ function formatOptionalScenarioMetadata(match: QaScenarioSearchMatch) {
   return metadata.length > 0 ? metadata.join("; ") : "none";
 }
 
+function formatSuiteCommand(matches: readonly QaScenarioSearchMatch[]) {
+  const scenarioArgs = matches.map((match) => `--scenario ${match.id}`).join(" ");
+  return `pnpm openclaw qa suite ${scenarioArgs}`;
+}
+
+function scenarioMatchCommandGroups(matches: readonly QaScenarioSearchMatch[]) {
+  const groups = new Map<QaScenarioSearchMatch["executionKind"], QaScenarioSearchMatch[]>();
+  for (const match of matches) {
+    const existing = groups.get(match.executionKind) ?? [];
+    existing.push(match);
+    groups.set(match.executionKind, existing);
+  }
+  const executionOrder: QaScenarioSearchMatch["executionKind"][] = ["flow", "vitest", "playwright"];
+  return executionOrder
+    .map((executionKind) => ({
+      executionKind,
+      matches: groups.get(executionKind) ?? [],
+    }))
+    .filter((group) => group.matches.length > 0);
+}
+
 export function renderQaScenarioMatchesMarkdownReport(params: {
   query: string;
   matches: readonly QaScenarioSearchMatch[];
 }) {
-  const scenarioArgs = params.matches.map((match) => `--scenario ${match.id}`).join(" ");
   const lines = [
     "# QA Scenario Matches",
     "",
@@ -456,8 +480,14 @@ export function renderQaScenarioMatchesMarkdownReport(params: {
     `- Matches: ${params.matches.length}`,
   ];
 
-  if (scenarioArgs) {
-    lines.push(`- Suite command: \`pnpm openclaw qa suite ${scenarioArgs}\``);
+  const commandGroups = scenarioMatchCommandGroups(params.matches);
+  if (commandGroups.length === 1) {
+    lines.push(`- Suite command: \`${formatSuiteCommand(commandGroups[0].matches)}\``);
+  } else if (commandGroups.length > 1) {
+    lines.push("- Suite commands:");
+    for (const group of commandGroups) {
+      lines.push(`  - ${group.executionKind}: \`${formatSuiteCommand(group.matches)}\``);
+    }
   }
   lines.push("");
 
@@ -470,6 +500,11 @@ export function renderQaScenarioMatchesMarkdownReport(params: {
     lines.push(`- ${match.id}: ${match.title}`);
     lines.push(`  - source: ${match.sourcePath}`);
     lines.push(`  - surface: ${match.surfaces.join(", ")}`);
+    lines.push(
+      match.executionKind === "flow"
+        ? "  - execution: flow (qa-flow block)"
+        : `  - execution: ${match.executionKind} ${match.executionPath ?? "missing"}`,
+    );
     lines.push(`  - coverage: ${match.coverageIds.join(", ") || "none"}`);
     lines.push(`  - live requirements: ${formatOptionalScenarioMetadata(match)}`);
     if (match.codeRefs.length > 0) {
