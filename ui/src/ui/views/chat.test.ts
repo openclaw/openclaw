@@ -2296,6 +2296,7 @@ describe("chat session controls", () => {
       includeUnknown: true,
       limit: 50,
       search: "telegram",
+      includeDerivedTitles: true,
     });
     expect(loadSessionsMock).not.toHaveBeenCalled();
   });
@@ -2361,6 +2362,7 @@ describe("chat session controls", () => {
       includeUnknown: true,
       limit: 50,
       search: "tele",
+      includeDerivedTitles: true,
     });
   });
 
@@ -2508,6 +2510,7 @@ describe("chat session controls", () => {
       includeGlobal: true,
       includeUnknown: true,
       limit: 50,
+      includeDerivedTitles: true,
     });
   });
 
@@ -2553,6 +2556,7 @@ describe("chat session controls", () => {
       includeUnknown: true,
       limit: 50,
       search: "tele",
+      includeDerivedTitles: true,
     });
 
     input!.value = "telegram";
@@ -2565,6 +2569,7 @@ describe("chat session controls", () => {
       includeUnknown: true,
       limit: 50,
       search: "telegram",
+      includeDerivedTitles: true,
     });
 
     resolveTelegram(
@@ -2653,6 +2658,7 @@ describe("chat session controls", () => {
       limit: 50,
       offset: 50,
       search: "telegram",
+      includeDerivedTitles: true,
     });
   });
 
@@ -2732,6 +2738,7 @@ describe("chat session controls", () => {
       includeGlobal: true,
       includeUnknown: true,
       limit: 50,
+      includeDerivedTitles: true,
     });
     expect(request).toHaveBeenCalledWith("sessions.list", {
       agentId: "main",
@@ -2740,6 +2747,7 @@ describe("chat session controls", () => {
       includeUnknown: true,
       limit: 50,
       offset: 2,
+      includeDerivedTitles: true,
     });
     expect(request.mock.calls.some(([, params]) => params?.offset === 50)).toBe(false);
   });
@@ -2788,6 +2796,7 @@ describe("chat session controls", () => {
       includeGlobal: true,
       includeUnknown: true,
       limit: 50,
+      includeDerivedTitles: true,
     });
     expect(request.mock.calls.some(([, params]) => Object.hasOwn(params ?? {}, "agentId"))).toBe(
       false,
@@ -2868,6 +2877,7 @@ describe("chat session controls", () => {
       includeGlobal: true,
       includeUnknown: true,
       limit: 50,
+      includeDerivedTitles: true,
     });
     expect(request).toHaveBeenCalledWith("sessions.list", {
       agentId: "ops",
@@ -2875,6 +2885,7 @@ describe("chat session controls", () => {
       includeGlobal: true,
       includeUnknown: true,
       limit: 50,
+      includeDerivedTitles: true,
     });
   });
 
