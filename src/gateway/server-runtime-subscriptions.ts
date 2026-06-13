@@ -84,7 +84,13 @@ export function startGatewayEventSubscriptions(params: {
             }
           }
         },
-        trackTrackedRunTerminalPersistence: ({ runId, clientRunId, observedAt, persistence }) => {
+        trackTrackedRunTerminalPersistence: ({
+          runId,
+          clientRunId,
+          sessionId: terminalSessionId,
+          observedAt,
+          persistence,
+        }) => {
           const candidateRunIds = runId === clientRunId ? [runId] : [runId, clientRunId];
           for (const candidateRunId of candidateRunIds) {
             const entry = params.chatAbortControllers.get(candidateRunId);
@@ -102,7 +108,7 @@ export function startGatewayEventSubscriptions(params: {
               }
               const lifecycleGeneration = entry.lifecycleGeneration?.trim();
               const sessionKey = entry.sessionKey.trim();
-              const sessionId = entry.sessionId.trim();
+              const sessionId = terminalSessionId?.trim() || entry.sessionId.trim();
               if (
                 entry.controlUiVisible !== false &&
                 lifecycleGeneration &&

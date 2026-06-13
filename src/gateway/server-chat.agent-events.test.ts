@@ -2213,6 +2213,7 @@ describe("agent event handler", () => {
       runId: "completed-during-marker-write",
       clientRunId: "completed-during-marker-write",
       sessionKey: "session-recovery",
+      sessionId: "session-recovery",
       observedAt: 2_100,
       persistence: expect.any(Promise),
     });

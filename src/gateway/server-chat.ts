@@ -281,6 +281,7 @@ export type AgentEventHandlerOptions = {
     runId: string;
     clientRunId: string;
     sessionKey: string;
+    sessionId?: string;
     observedAt: number;
     persistence: Promise<void>;
   }) => void;
@@ -669,6 +670,7 @@ export function createAgentEventHandler({
           runId: evt.runId,
           clientRunId,
           sessionKey,
+          sessionId: evt.sessionId,
           observedAt: evt.ts,
           persistence,
         });

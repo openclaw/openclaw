@@ -30,7 +30,9 @@ import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import {
   captureAgentRunLifecycleGeneration,
+  clearAgentRunContext,
   emitAgentEvent,
+  getAgentEventLifecycleGeneration,
   registerAgentRunContext,
 } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -644,6 +646,16 @@ export function createFollowupRunner(params: {
             );
           }
         : undefined;
+      let lifecycleGeneration = captureAgentRunLifecycleGeneration(runId);
+      if (run.sessionKey) {
+        registerAgentRunContext(runId, {
+          sessionKey: run.sessionKey,
+          ...(run.sessionId ? { sessionId: run.sessionId } : {}),
+          lifecycleGeneration,
+          verboseLevel: run.verboseLevel,
+          isControlUiVisible: shouldSurfaceToControlUi,
+        });
+      }
       try {
         activeSessionEntry = await runPreflightCompactionIfNeeded({
           cfg: runtimeConfig,
@@ -660,6 +672,7 @@ export function createFollowupRunner(params: {
           onCompactionNotice: notifyPreflightCompaction,
         });
       } catch (err) {
+        clearAgentRunContext(runId, lifecycleGeneration);
         const message = formatErrorMessage(err);
         replyOperation.fail("run_failed", err);
         const preflightCompactionFailureText = buildPreflightCompactionFailureText(message, {
@@ -687,11 +700,11 @@ export function createFollowupRunner(params: {
         registerAgentRunContext(runId, {
           sessionKey: run.sessionKey,
           ...(owningSessionId ? { sessionId: owningSessionId } : {}),
+          lifecycleGeneration,
           verboseLevel: run.verboseLevel,
           isControlUiVisible: shouldSurfaceToControlUi,
         });
       }
-      let lifecycleGeneration = captureAgentRunLifecycleGeneration(runId);
       let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
         activeSessionEntry?.systemPromptReport,
       );
@@ -1182,6 +1195,9 @@ export function createFollowupRunner(params: {
             },
           });
           pendingDeferredCliTerminal = undefined;
+        }
+        if (lifecycleGeneration !== getAgentEventLifecycleGeneration()) {
+          clearAgentRunContext(runId, lifecycleGeneration);
         }
         await drainProgressDeliveries();
         defaultRuntime.error?.(`Followup agent failed before reply: ${message}`);

@@ -6420,7 +6420,7 @@ describe("gateway agent handler chat.abort integration", () => {
     expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, {
       runId,
       status: "timeout",
-      stopReason: "gateway_restart",
+      stopReason: "restart",
       timeoutPhase: "queue",
       providerStarted: false,
     });

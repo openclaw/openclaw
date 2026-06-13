@@ -41,7 +41,10 @@ import {
 import { AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION } from "../../agents/internal-event-contract.js";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
-import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
+import {
+  AGENT_RUN_RESTART_ABORT_STOP_REASON,
+  isAgentRunRestartAbortReason,
+} from "../../agents/run-termination.js";
 import {
   normalizeAgentRunTimeoutPhase,
   normalizeProviderStarted,
@@ -2341,7 +2344,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         return;
       }
       if (lifecycleGeneration !== getAgentEventLifecycleGeneration()) {
-        const stopReason = "gateway_restart";
+        const stopReason = AGENT_RUN_RESTART_ABORT_STOP_REASON;
         agentRunAccepted = true;
         setAbortedAgentDedupeEntries({
           dedupe: context.dedupe,
