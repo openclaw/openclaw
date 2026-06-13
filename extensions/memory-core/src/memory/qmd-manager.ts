@@ -2815,10 +2815,8 @@ export class QmdMemoryManager implements MemorySearchManager {
       args: ["mcp"],
       env: this.buildMcporterQmdEnv(),
     };
-    // Only keep the QMD MCP server warm when the user has not explicitly opted
-    // out of daemon management. The default (undefined) keeps daemon enabled.
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-boolean-literal-compare
-    if (this.qmd.mcporter.startDaemon !== false) {
+    // Only keep the QMD MCP server warm when the resolved config enables daemon management.
+    if (this.qmd.mcporter.startDaemon) {
       server.lifecycle = { mode: "keep-alive", idleTimeoutMs: 300_000 };
     }
     return server;
