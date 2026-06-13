@@ -178,12 +178,22 @@ function normalizedSourceText(sourceFile, node) {
   return node.getText(sourceFile).replace(/\s+/gu, " ");
 }
 
-function currentLegacyWriteViolationAllowances() {
+function currentLegacyWriteViolationAllowances(relativePath = null) {
   const allowances = new Map();
+  const relativePrefix = typeof relativePath === "string" ? relativePath.concat(":") : null;
   for (const fingerprint of allowedCurrentLegacyWriteViolations) {
+    if (relativePrefix !== null && !fingerprint.startsWith(relativePrefix)) {
+      continue;
+    }
     allowances.set(fingerprint, (allowances.get(fingerprint) ?? 0) + 1);
   }
   return allowances;
+}
+
+function currentLegacyWriteViolationPath(fingerprint) {
+  const marker = ":legacy store filesystem write:";
+  const markerIndex = fingerprint.indexOf(marker);
+  return markerIndex === -1 ? null : fingerprint.slice(0, markerIndex);
 }
 
 function consumeAllowedCurrentLegacyViolation(
@@ -446,13 +456,18 @@ function legacyCandidateTexts(sourceFile, node) {
 /**
  * Finds database-first legacy-store violations in one TypeScript/JavaScript source file.
  */
-export function collectDatabaseFirstLegacyStoreViolations(content, relativePath = "source.ts") {
+export function collectDatabaseFirstLegacyStoreViolations(
+  content,
+  relativePath = "source.ts",
+  scanOptions = {},
+) {
   if (isAllowedLegacyOwnerPath(relativePath)) {
     return [];
   }
 
   const sourceFile = ts.createSourceFile(relativePath, content, ts.ScriptTarget.Latest, true);
-  const currentLegacyWriteAllowances = currentLegacyWriteViolationAllowances();
+  const currentLegacyWriteAllowances =
+    scanOptions.currentLegacyWriteAllowances ?? currentLegacyWriteViolationAllowances(relativePath);
   const createRequireBindings = collectCreateRequireBindings(sourceFile);
   const { fsModuleBindings, fsWriteAliases, fsSafeStoreFactoryAliases } =
     collectFsBindings(sourceFile);
@@ -841,7 +856,12 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
         return [unwrapped.text];
       }
       if (ts.isTemplateExpression(unwrapped)) {
-        return [templateCandidateText(unwrapped)];
+        let joined = [unwrapped.head.text];
+        for (const span of unwrapped.templateSpans) {
+          joined = combineSegmentOptions(joined, expressionSegmentOptions(span.expression));
+          joined = combineSegmentOptions(joined, [span.literal.text]);
+        }
+        return joined.length > 0 ? joined : ["*"];
       }
       if (
         ts.isBinaryExpression(unwrapped) &&
@@ -894,6 +914,10 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
         }
       }
       ts.forEachChild(current, visitCandidate);
+    }
+    const expressionOptions = expressionSegmentOptions(node);
+    if (expressionOptions.some((option) => option !== "*")) {
+      candidates.push(...expressionOptions);
     }
     visitCandidate(node);
     if (segmentOptions.length > 1) {
@@ -4812,6 +4836,13 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
   }
 
   visit(sourceFile);
+  if (
+    scanOptions.enforceCurrentLegacyAllowlist &&
+    !scanOptions.currentLegacyWriteAllowances &&
+    currentLegacyWriteAllowances.size > 0
+  ) {
+    violations.push({ kind: "stale current legacy write allowlist", line: 1 });
+  }
   return violations;
 }
 
@@ -4823,13 +4854,20 @@ export async function main() {
   const sourceRoots = databaseFirstLegacyStoreSourceRoots.map((root) => path.join(repoRoot, root));
   const files = await collectDatabaseFirstLegacyStoreSourceFiles(sourceRoots);
   const violations = [];
+  const currentLegacyWriteAllowances = currentLegacyWriteViolationAllowances();
 
   for (const filePath of files) {
     const relativePath = path.relative(repoRoot, filePath).replaceAll(path.sep, "/");
     const content = await fs.readFile(filePath, "utf8");
-    for (const violation of collectDatabaseFirstLegacyStoreViolations(content, relativePath)) {
+    for (const violation of collectDatabaseFirstLegacyStoreViolations(content, relativePath, {
+      currentLegacyWriteAllowances,
+    })) {
       violations.push(`${relativePath}:${violation.line} ${violation.kind}`);
     }
+  }
+  for (const fingerprint of currentLegacyWriteAllowances.keys()) {
+    const relativePath = currentLegacyWriteViolationPath(fingerprint) ?? "<unknown>";
+    violations.push(`${relativePath}:1 stale current legacy write allowlist`);
   }
 
   if (violations.length === 0) {

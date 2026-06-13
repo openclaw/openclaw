@@ -157,6 +157,24 @@ describe("check-database-first-legacy-stores", () => {
     ]);
   });
 
+  it("flags legacy paths assembled from template literal constants", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        const sessionBase = "sessions";
+        const cronRuns = "cron/runs";
+        await fs.writeFile(\`\${sessionBase}.json\`, "{}\\n");
+        await fs.appendFile(\`\${cronRuns}/job.jsonl\`, "{}\\n");
+      `,
+      "src/runtime/template-constant-legacy-store.ts",
+    );
+
+    expect(violations).toEqual([
+      { kind: "legacy store filesystem write", line: 5 },
+      { kind: "legacy store filesystem write", line: 6 },
+    ]);
+  });
+
   it("does not leak conditional literal path constants", () => {
     const violations = collectDatabaseFirstLegacyStoreViolations(
       `
@@ -3972,6 +3990,18 @@ describe("check-database-first-legacy-stores", () => {
     );
 
     expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 20 }]);
+  });
+
+  it("flags stale current legacy-debt allowlist entries during full scans", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        export const STORAGE_META_FILENAME = "storage-meta.json";
+      `,
+      "extensions/matrix/src/matrix/client/storage.ts",
+      { enforceCurrentLegacyAllowlist: true },
+    );
+
+    expect(violations).toEqual([{ kind: "stale current legacy write allowlist", line: 1 }]);
   });
 
   it("allows doctor and migration owners to import or archive legacy files", () => {
