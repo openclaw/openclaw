@@ -25,12 +25,7 @@ function tmpFile(name: string, contents: string): string {
 }
 
 describe("loadUsageBarTemplate", () => {
-  it("returns an inline template object when usable", () => {
-    expect(loadUsageBarTemplate(tplA as Record<string, unknown>)).toBe(tplA);
-  });
-
-  it("returns undefined for an unusable inline object or when unset", () => {
-    expect(loadUsageBarTemplate({ nope: true })).toBeUndefined();
+  it("returns undefined when unset", () => {
     expect(loadUsageBarTemplate(undefined)).toBeUndefined();
   });
 
@@ -38,6 +33,28 @@ describe("loadUsageBarTemplate", () => {
     const tpl = loadUsageBarTemplate("default");
     expect(tpl).toBeDefined();
     expect((tpl as { output?: unknown }).output).toBeDefined();
+  });
+
+  it("merges an inline override over the default (vocab extends, surfaces replace)", () => {
+    const merged = loadUsageBarTemplate({
+      scales: { mine: "ab" },
+      output: { surfaces: { discord: [{ text: "X" }] } },
+    }) as {
+      scales: Record<string, unknown>;
+      output: { surfaces: Record<string, unknown>; default?: unknown };
+    };
+    // added scale, and the default palette is still present
+    expect(merged.scales.mine).toBe("ab");
+    expect(merged.scales.braille).toBeDefined();
+    // the overridden channel is replaced; the default fallback survives
+    expect(merged.output.surfaces.discord).toEqual([{ text: "X" }]);
+    expect(merged.output.default).toBeDefined();
+  });
+
+  it("does not mutate the shared default when merging an override", () => {
+    loadUsageBarTemplate({ scales: { mine: "ab" } });
+    const bare = loadUsageBarTemplate("default") as { scales: Record<string, unknown> };
+    expect(bare.scales.mine).toBeUndefined();
   });
 
   it("loads and parses a template file", () => {
