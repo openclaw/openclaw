@@ -104,6 +104,7 @@ type UserTurnTranscriptPersistResult = {
   sessionEntry: UserTurnSessionEntry | undefined;
   messageId: string;
   message: PersistedUserTurnMessage;
+  appended: boolean;
 };
 
 type UserTurnTranscriptTargetResolver =
@@ -398,6 +399,7 @@ export async function appendUserTurnTranscriptMessage(
       sessionFile: string;
       messageId: string;
       message: PersistedUserTurnMessage;
+      appended: boolean;
     }
   | undefined
 > {
@@ -440,6 +442,7 @@ export async function appendUserTurnTranscriptMessage(
     sessionFile: params.transcriptPath,
     messageId: appended.messageId,
     message: appended.message,
+    appended: appended.appended,
   };
 }
 

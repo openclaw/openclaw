@@ -213,7 +213,7 @@ const ttsMocks = vi.hoisted(() => {
   };
 });
 const transcriptMocks = vi.hoisted(() => ({
-  persistAcpDispatchTranscript: vi.fn(async (_params: unknown) => undefined),
+  persistAcpDispatchTranscript: vi.fn(async (_params: unknown) => ({ saveOutcome: "saved" })),
   appendAssistantMessageToSessionTranscript: vi.fn(async (_params: unknown) => ({
     ok: true,
     sessionFile: "/tmp/session.jsonl",

@@ -45,23 +45,24 @@ openclaw hooks info session-memory
 
 ## Event types
 
-| Event                    | When it fires                                              |
-| ------------------------ | ---------------------------------------------------------- |
-| `command:new`            | `/new` command issued                                      |
-| `command:reset`          | `/reset` command issued                                    |
-| `command:stop`           | `/stop` command issued                                     |
-| `command`                | Any command event (general listener)                       |
-| `session:compact:before` | Before compaction summarizes history                       |
-| `session:compact:after`  | After compaction completes                                 |
-| `session:patch`          | When session properties are modified                       |
-| `agent:bootstrap`        | Before workspace bootstrap files are injected              |
-| `gateway:startup`        | After channels start and hooks are loaded                  |
-| `gateway:shutdown`       | When gateway shutdown begins                               |
-| `gateway:pre-restart`    | Before an expected gateway restart                         |
-| `message:received`       | Inbound message from any channel                           |
-| `message:transcribed`    | After audio transcription completes                        |
-| `message:preprocessed`   | After media and link preprocessing completes or is skipped |
-| `message:sent`           | Outbound message delivered                                 |
+| Event                        | When it fires                                                    |
+| ---------------------------- | ---------------------------------------------------------------- |
+| `command:new`                | `/new` command issued                                            |
+| `command:reset`              | `/reset` command issued                                          |
+| `command:stop`               | `/stop` command issued                                           |
+| `command`                    | Any command event (general listener)                             |
+| `session:compact:before`     | Before compaction summarizes history                             |
+| `session:compact:after`      | After compaction completes                                       |
+| `session:patch`              | When session properties are modified                             |
+| `agent:bootstrap`            | Before workspace bootstrap files are injected                    |
+| `agent:turn:transcript:save` | After an ACP agent turn transcript save phase reaches an outcome |
+| `gateway:startup`            | After channels start and hooks are loaded                        |
+| `gateway:shutdown`           | When gateway shutdown begins                                     |
+| `gateway:pre-restart`        | Before an expected gateway restart                               |
+| `message:received`           | Inbound message from any channel                                 |
+| `message:transcribed`        | After audio transcription completes                              |
+| `message:preprocessed`       | After media and link preprocessing completes or is skipped       |
+| `message:sent`               | Outbound message delivered                                       |
 
 ## Writing hooks
 
@@ -134,6 +135,8 @@ reply channel and ignore pushed messages.
 **Message events** (`message:received`): `context.from`, `context.content`, `context.channelId`, `context.metadata` (provider-specific data including `senderId`, `senderName`, `guildId`). `context.content` prefers a nonblank command body for command-like messages, then falls back to the raw inbound body and generic body; it does not include agent-only enrichment such as thread history or link summaries.
 
 **Message events** (`message:sent`): `context.to`, `context.content`, `context.success`, `context.channelId`.
+
+**Agent turn transcript save events** (`agent:turn:transcript:save`): `context.sessionKey`, `context.success`, `context.saveOutcome`, `context.turnSuccess`, `context.durationMs`, optional `context.turnErrorCode`, optional `context.saveError`, and optional `context.saveSkipReason`. Its `saveOutcome` field is `saved`, `skipped`, or `failed`; `success` is true only for `saved`. `turnSuccess` preserves the underlying runtime turn outcome. It is scheduled after the ACP turn transcript save phase reaches an outcome, including save failure, no registered save callback, a save callback returning no durable-write evidence, or a save layer declining the durable-readiness boundary. Hooks that need to read completed durable turn transcript state should require `context.saveOutcome === "saved"`. Hook handlers run through bounded fire-and-forget dispatch; they are not awaited before later ACP state transitions or runtime cleanup. The event does not embed transcript text.
 
 **Message events** (`message:transcribed`): `context.transcript`, `context.from`, `context.channelId`, `context.mediaPath`.
 

@@ -7,6 +7,13 @@ import type {
 } from "@openclaw/acp-core/runtime/types";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
+import { fireAndForgetBoundedHook } from "../../hooks/fire-and-forget.js";
+import {
+  type AgentTurnSaveHookContext,
+  createInternalHookEvent,
+  triggerInternalHook,
+} from "../../hooks/internal-hooks.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { isAcpSessionKey } from "../../sessions/session-key-utils.js";
 import { AcpRuntimeError } from "../runtime/errors.js";
 import { runManagerCancelSession } from "./manager.cancel-session.js";
@@ -36,6 +43,9 @@ import {
   type AcpManagerObservabilitySnapshot,
   type AcpRunTurnInput,
   type AcpSessionManagerDeps,
+  type AcpTurnCompletionHookContext,
+  type AcpTurnSaveHookResult,
+  type AcpTurnSaveHookContext,
   type AcpSessionResolution,
   type AcpSessionRuntimeOptions,
   type AcpSessionStatus,
@@ -307,7 +317,13 @@ export class AcpSessionManager {
           ensureRuntimeHandle: this.ensureRuntimeHandle.bind(this),
           applyRuntimeControls: this.applyRuntimeControls.bind(this),
           setSessionState: this.setSessionState.bind(this),
-          recordTurnCompletion: this.recordTurnCompletion.bind(this),
+          recordTurnCompletion: async (completionParams) =>
+            await this.recordTurnCompletion({
+              sessionKey,
+              startedAt: completionParams.startedAt,
+              errorCode: completionParams.errorCode,
+              beforeSaveHook: input.onBeforeTurnSaveHook,
+            }),
           reconcileRuntimeSessionIdentifiers: this.reconcileRuntimeSessionIdentifiers.bind(this),
           writeSessionMeta: this.writeSessionMeta.bind(this),
         }),
@@ -404,16 +420,106 @@ export class AcpSessionManager {
     }
   }
 
-  private recordTurnCompletion(params: { startedAt: number; errorCode?: AcpRuntimeError["code"] }) {
+  private async recordTurnCompletion(params: {
+    sessionKey: string;
+    startedAt: number;
+    errorCode?: AcpRuntimeError["code"];
+    beforeSaveHook?: (
+      context: AcpTurnCompletionHookContext,
+    ) => Promise<AcpTurnSaveHookResult | false | void> | AcpTurnSaveHookResult | false | void;
+  }) {
     const durationMs = Math.max(0, Date.now() - params.startedAt);
     this.turnLatencyStats.totalMs += durationMs;
     this.turnLatencyStats.maxMs = Math.max(this.turnLatencyStats.maxMs, durationMs);
     if (params.errorCode) {
       this.turnLatencyStats.failed += 1;
       this.recordErrorCode(params.errorCode);
+    } else {
+      this.turnLatencyStats.completed += 1;
+    }
+    const context = {
+      sessionKey: params.sessionKey,
+      success: !params.errorCode,
+      durationMs,
+      ...(params.errorCode ? { errorCode: params.errorCode } : {}),
+    } satisfies AcpTurnCompletionHookContext;
+    const saveContextBase = {
+      sessionKey: params.sessionKey,
+      turnSuccess: context.success,
+      durationMs,
+      ...(params.errorCode ? { turnErrorCode: params.errorCode } : {}),
+    };
+    if (!params.beforeSaveHook) {
+      this.emitTurnSaveHook({
+        ...saveContextBase,
+        success: false,
+        saveOutcome: "skipped",
+        saveSkipReason: "no_save_callback",
+      });
       return;
     }
-    this.turnLatencyStats.completed += 1;
+    try {
+      const beforeSaveResult = await params.beforeSaveHook(context);
+      const saveOutcome = this.normalizeTurnSaveHookResult(beforeSaveResult);
+      this.emitTurnSaveHook({
+        ...saveContextBase,
+        success: saveOutcome.saveOutcome === "saved",
+        ...saveOutcome,
+      });
+    } catch (error) {
+      const saveError = formatErrorMessage(error);
+      logVerbose(
+        `acp-manager: before agent:turn:transcript:save hook callback failed for ${params.sessionKey}: ${saveError}`,
+      );
+      this.emitTurnSaveHook({
+        ...saveContextBase,
+        success: false,
+        saveOutcome: "failed",
+        saveError,
+      });
+    }
+  }
+
+  private normalizeTurnSaveHookResult(
+    result: AcpTurnSaveHookResult | false | void,
+  ): AcpTurnSaveHookResult {
+    if (result === false) {
+      return { saveOutcome: "skipped", saveSkipReason: "declined" };
+    }
+    if (result === undefined) {
+      return { saveOutcome: "skipped", saveSkipReason: "no_save_evidence" };
+    }
+    if (result && typeof result === "object") {
+      if (result.saveOutcome === "saved") {
+        return { saveOutcome: "saved" };
+      }
+      if (result.saveOutcome === "skipped") {
+        if (result.saveSkipReason !== undefined && typeof result.saveSkipReason !== "string") {
+          throw new Error("invalid ACP turn transcript save skip reason");
+        }
+        return {
+          saveOutcome: "skipped",
+          ...(result.saveSkipReason ? { saveSkipReason: result.saveSkipReason } : {}),
+        };
+      }
+      throw new Error("invalid ACP turn transcript save outcome");
+    }
+    throw new Error("invalid ACP turn transcript save outcome");
+  }
+
+  private emitTurnSaveHook(context: AcpTurnSaveHookContext): void {
+    fireAndForgetBoundedHook(
+      () =>
+        triggerInternalHook(
+          createInternalHookEvent(
+            "agent",
+            "turn:transcript:save",
+            context.sessionKey,
+            context satisfies AgentTurnSaveHookContext,
+          ),
+        ),
+      "agent:turn:transcript:save internal hook failed",
+    );
   }
 
   private recordErrorCode(code: string): void {

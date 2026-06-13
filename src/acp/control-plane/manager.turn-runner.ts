@@ -62,7 +62,7 @@ export async function runManagerTurn(params: {
   recordTurnCompletion: (params: {
     startedAt: number;
     errorCode?: AcpRuntimeError["code"];
-  }) => void;
+  }) => Promise<void> | void;
   reconcileRuntimeSessionIdentifiers: ReconcileManagerRuntimeSessionIdentifiers;
   writeSessionMeta: WriteManagerSessionMeta;
 }): Promise<void> {
@@ -105,7 +105,7 @@ export async function runManagerTurn(params: {
             `All ACP backends failed (${backendAttempts.length}): ${failedBackends}`,
           )
         : error;
-    params.recordTurnCompletion({
+    await params.recordTurnCompletion({
       startedAt: turnStartedAt,
       errorCode: errorToRecord.code,
     });
@@ -289,7 +289,7 @@ export async function runManagerTurn(params: {
               "ACP turn ended without a terminal done event.",
             );
           }
-          params.recordTurnCompletion({
+          await params.recordTurnCompletion({
             startedAt: turnStartedAt,
           });
           if (taskContext) {

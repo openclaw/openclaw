@@ -164,6 +164,36 @@ export type MessagePreprocessedHookEvent = InternalHookEvent & {
   context: MessagePreprocessedHookContext;
 };
 
+/**
+ * Context provided to `agent:turn:transcript:save` hook handlers.
+ * Fired after the ACP turn transcript save phase reaches an outcome.
+ */
+export type AgentTurnSaveHookContext = {
+  /** Session key identifying the agent session whose turn transcript save phase completed. */
+  sessionKey: string;
+  /** Whether the save phase completed successfully. */
+  success: boolean;
+  /** Specific save phase outcome observed before this event was emitted. */
+  saveOutcome: "saved" | "skipped" | "failed";
+  /** Whether the underlying ACP runtime turn completed successfully. */
+  turnSuccess: boolean;
+  /** Wall-clock duration of the turn in milliseconds. */
+  durationMs: number;
+  /** ACP runtime error code when the turn failed. Omitted for successful turns. */
+  turnErrorCode?: string;
+  /** Error message when the save phase failed by throwing. */
+  saveError?: string;
+  /** Reason the save phase skipped the durable-readiness boundary. */
+  saveSkipReason?: string;
+};
+
+/** Internal hook event emitted after each agent turn transcript save phase reaches an outcome. */
+export type AgentTurnSaveHookEvent = InternalHookEvent & {
+  type: "agent";
+  action: "turn:transcript:save";
+  context: AgentTurnSaveHookContext;
+};
+
 export type SessionPatchHookContext = {
   sessionEntry: SessionEntry;
   patch: SessionsPatchParams;
@@ -361,6 +391,13 @@ function hasBooleanContextField<T extends Record<string, unknown>>(
   return typeof context[key] === "boolean";
 }
 
+function hasNumberContextField<T extends Record<string, unknown>>(
+  context: Partial<T>,
+  key: keyof T,
+): boolean {
+  return typeof context[key] === "number";
+}
+
 export function isAgentBootstrapEvent(event: InternalHookEvent): event is AgentBootstrapHookEvent {
   if (!isHookEventTypeAndAction(event, "agent", "bootstrap")) {
     return false;
@@ -441,6 +478,29 @@ export function isMessagePreprocessedEvent(
     return false;
   }
   return hasStringContextField(context, "channelId");
+}
+
+export function isAgentTurnSaveEvent(event: InternalHookEvent): event is AgentTurnSaveHookEvent {
+  if (!isHookEventTypeAndAction(event, "agent", "turn:transcript:save")) {
+    return false;
+  }
+  const context = getHookContext<AgentTurnSaveHookContext>(event);
+  if (!context) {
+    return false;
+  }
+  return (
+    hasStringContextField(context, "sessionKey") &&
+    hasBooleanContextField(context, "success") &&
+    (context.saveOutcome === "saved" ||
+      context.saveOutcome === "skipped" ||
+      context.saveOutcome === "failed") &&
+    context.success === (context.saveOutcome === "saved") &&
+    hasBooleanContextField(context, "turnSuccess") &&
+    hasNumberContextField(context, "durationMs") &&
+    (context.turnErrorCode === undefined || typeof context.turnErrorCode === "string") &&
+    (context.saveError === undefined || typeof context.saveError === "string") &&
+    (context.saveSkipReason === undefined || typeof context.saveSkipReason === "string")
+  );
 }
 
 export function isSessionPatchEvent(event: InternalHookEvent): event is SessionPatchHookEvent {
