@@ -235,6 +235,7 @@ describe("resolveModelRuntimePolicy", () => {
     ).toEqual({
       policy: { id: "claude-cli" },
       source: "model",
+      matchedProvider: "anthropic",
     });
   });
 
@@ -260,6 +261,7 @@ describe("resolveModelRuntimePolicy", () => {
     ).toEqual({
       policy: { id: "claude-cli" },
       source: "provider",
+      matchedProvider: "anthropic",
     });
   });
 
