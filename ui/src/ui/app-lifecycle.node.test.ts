@@ -121,6 +121,7 @@ describe("handleDisconnected", () => {
     state.lifecycleTasksPreparedAt = Date.now();
     state.lifecycleTaskRefreshFailed = true;
     state.lifecycleTaskRefreshRetryAt = Date.now() + 5000;
+    state.lifecycleTaskRefreshError = "task refresh unavailable";
     state.lifecycleConfirmedTaskIds.add("task-1");
     state.lifecycleTaskConfirmationStartedAt = Date.now();
 
@@ -128,6 +129,7 @@ describe("handleDisconnected", () => {
 
     expect(state.lifecycleTasksPrepared).toBe(false);
     expect(state.lifecycleTaskRefreshFailed).toBe(false);
+    expect(state.lifecycleTaskRefreshError).toBeNull();
     expect(state.lifecycleConfirmedTaskIds.size).toBe(0);
     expect(state.lifecycleTaskConfirmationStartedAt).toBeNull();
     vi.unstubAllGlobals();

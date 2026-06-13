@@ -283,6 +283,60 @@ describe("workboard controller", () => {
     expect(client.request).not.toHaveBeenCalled();
   });
 
+  it("keeps linked-poll task failures sticky until a full refresh succeeds", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const cards = Array.from({ length: 33 }, (_, index) => ({
+      ...sampleCard,
+      id: `card-${index}`,
+      status: "running" as const,
+      taskId: `task-${index}`,
+    }));
+    const tasks = cards.map((card, index) => ({
+      ...sampleTask,
+      id: card.taskId!,
+      taskId: card.taskId!,
+      runId: `run-${index}`,
+    }));
+    state.tasksByCardId = new Map(cards.map((card, index) => [card.id, tasks[index]!]));
+    let failedTaskRequests = 0;
+    const client = createClient((method, params) => {
+      if (method === "workboard.cards.list") {
+        return { cards, statuses: ["todo", "running", "done"] };
+      }
+      if (method === "tasks.list") {
+        return { tasks };
+      }
+      if (method === "tasks.get") {
+        const taskId = (params as { taskId: string }).taskId;
+        if (taskId === "task-31") {
+          failedTaskRequests += 1;
+          throw new Error("task-31 unavailable");
+        }
+        return { task: tasks.find((task) => task.taskId === taskId) };
+      }
+      return {};
+    });
+
+    await loadWorkboard({ host, client: client as never, force: true, taskRefresh: "linked" });
+    const retryAt = state.lifecycleTaskRefreshRetryAt;
+    expect(state.lifecycleTaskRefreshFailed).toBe(true);
+    expect(state.lifecycleTasksPrepared).toBe(false);
+    expect(state.lastRefreshError).toBe("task-31 unavailable");
+
+    await loadWorkboard({ host, client: client as never, force: true, taskRefresh: "linked" });
+    expect(failedTaskRequests).toBe(1);
+    expect(state.lifecycleTaskRefreshFailed).toBe(true);
+    expect(state.lifecycleTaskRefreshRetryAt).toBe(retryAt);
+    expect(state.lifecycleTasksPrepared).toBe(false);
+    expect(state.lastRefreshError).toBe("task-31 unavailable");
+
+    await loadWorkboard({ host, client: client as never, force: true, taskRefresh: "all" });
+    expect(state.lifecycleTaskRefreshFailed).toBe(false);
+    expect(state.lifecycleTasksPrepared).toBe(true);
+    expect(state.lastRefreshError).toBeNull();
+  });
+
   it("reuses exact-confirmed full-load tasks for the next lifecycle sync", async () => {
     const host = {};
     const linked = {
@@ -4266,7 +4320,8 @@ describe("workboard controller", () => {
 
     expect(client.request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
     expect(state.lifecycleTaskRefreshFailed).toBe(true);
-    expect(state.error).toBe("task confirmation unavailable");
+    expect(state.error).toBeNull();
+    expect(state.lifecycleTaskRefreshError).toBe("task confirmation unavailable");
   });
 
   it("keeps prepared task lifecycle state after no-op syncs", async () => {
@@ -4360,6 +4415,7 @@ describe("workboard controller", () => {
     await syncWorkboardLifecycle({ host, client: client as never, sessions: [], requestUpdate });
     expect(client.request).toHaveBeenCalledOnce();
     expect(requestUpdate).toHaveBeenCalledOnce();
+    expect(state.lifecycleTaskRefreshError).toBe("tasks unavailable");
     vi.clearAllMocks();
 
     await syncWorkboardLifecycle({ host, client: client as never, sessions: [], requestUpdate });
@@ -4371,10 +4427,14 @@ describe("workboard controller", () => {
     await vi.advanceTimersByTimeAsync(5000);
     expect(requestUpdate).toHaveBeenCalledOnce();
     vi.clearAllMocks();
+    state.error = "unrelated write error";
     await syncWorkboardLifecycle({ host, client: client as never, sessions: [], requestUpdate });
 
     expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
     expect(state.lifecycleTaskRefreshFailed).toBe(false);
+    expect(state.lifecycleTaskRefreshError).toBeNull();
+    expect(state.error).toBe("unrelated write error");
+    expect(requestUpdate).toHaveBeenCalledOnce();
   });
 
   it("does not resume lifecycle writes when dispatch starts during task refresh", async () => {
@@ -4727,7 +4787,7 @@ describe("workboard controller", () => {
     expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
   });
 
-  it("does not retry a failed lifecycle sync for the same card and session state", async () => {
+  it("does not retry a failed lifecycle task refresh before backoff", async () => {
     const host = {};
     const state = getWorkboardState(host);
     const linked = {
@@ -4760,7 +4820,8 @@ describe("workboard controller", () => {
     });
 
     expect(client.request).toHaveBeenCalledOnce();
-    expect(state.error).toBe("write denied");
+    expect(state.error).toBeNull();
+    expect(state.lifecycleTaskRefreshError).toBe("write denied");
   });
 
   it("stops linked sessions and marks cards blocked", async () => {

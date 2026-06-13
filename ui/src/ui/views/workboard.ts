@@ -2551,6 +2551,7 @@ export function renderWorkboard(props: WorkboardProps) {
     tasksByCardId: state.tasksByCardId,
     sessions: props.sessions,
   });
+  const visibleError = state.error ?? state.lifecycleTaskRefreshError;
   const writable = canMutate(props);
   const byStatus = new Map<WorkboardStatus, WorkboardCard[]>();
   for (const status of state.statuses) {
@@ -2807,7 +2808,7 @@ export function renderWorkboard(props: WorkboardProps) {
           </div>
         </div>
         ${renderHealthStrip(state, health, props.onRequestUpdate)}
-        ${state.error ? html`<div class="callout danger">${state.error}</div>` : nothing}
+        ${visibleError ? html`<div class="callout danger">${visibleError}</div>` : nothing}
         ${renderDispatchSummary(state)}
         ${showEmptyState || visibleStatuses.length === 0
           ? renderWorkboardEmptyState()

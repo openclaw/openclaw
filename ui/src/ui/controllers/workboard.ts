@@ -396,6 +396,7 @@ export type WorkboardUiState = {
   lifecycleTasksPreparedAt: number | null;
   lifecycleTaskRefreshFailed: boolean;
   lifecycleTaskRefreshRetryAt: number | null;
+  lifecycleTaskRefreshError: string | null;
   lifecycleConfirmedTaskIds: Set<string>;
   lifecycleTaskConfirmationStartedAt: number | null;
   draftOpen: boolean;
@@ -506,6 +507,7 @@ export function stopWorkboardLifecycleRefresh(host: WorkboardHost) {
   if (state) {
     setWorkboardLifecycleTasksPrepared(state, false);
     setWorkboardLifecycleTaskRefreshFailed(state, false);
+    state.lifecycleTaskRefreshError = null;
     resetWorkboardLifecycleTaskConfirmations(state);
   }
   nextWorkboardLoadGeneration(host);
@@ -622,6 +624,7 @@ function createDefaultState(): WorkboardUiState {
     lifecycleTasksPreparedAt: null,
     lifecycleTaskRefreshFailed: false,
     lifecycleTaskRefreshRetryAt: null,
+    lifecycleTaskRefreshError: null,
     lifecycleConfirmedTaskIds: new Set(),
     lifecycleTaskConfirmationStartedAt: null,
     draftOpen: false,
@@ -1898,7 +1901,9 @@ export async function loadWorkboard(params: {
   state.loadAttempted = true;
   state.loading = true;
   state.error = null;
-  state.lastRefreshError = null;
+  if (params.taskRefresh !== "linked" || !state.lifecycleTaskRefreshFailed) {
+    state.lastRefreshError = null;
+  }
   params.requestUpdate?.();
   const loadPromise = (async () => {
     try {
@@ -1922,8 +1927,8 @@ export async function loadWorkboard(params: {
         tasksByCardId: new Map(),
         missingTaskIds: new Set(state.missingTaskIds),
       };
-      let linkedTaskRefreshFailed = false;
       let lifecycleTaskRefreshFailed = state.lifecycleTaskRefreshFailed;
+      let preserveLifecycleTaskRefreshFailure = false;
       let nextTaskRefreshError: string | null = null;
       let nextUnfilteredCursor: string | null | undefined;
       if (taskLinkState.cards.length > 0) {
@@ -1983,20 +1988,20 @@ export async function loadWorkboard(params: {
           }
           nextUnfilteredCursor = pollResult?.nextUnfilteredCursor;
           applyTaskSummariesToState(taskLinkState, taskSummaries, { missingTaskIds });
-          lifecycleTaskRefreshFailed = Boolean(taskRefreshError);
+          preserveLifecycleTaskRefreshFailure =
+            params.taskRefresh === "linked" &&
+            state.lifecycleTaskRefreshFailed &&
+            !taskRefreshError;
+          lifecycleTaskRefreshFailed =
+            Boolean(taskRefreshError) || preserveLifecycleTaskRefreshFailure;
           if (taskRefreshError) {
-            linkedTaskRefreshFailed = true;
             nextTaskRefreshError = taskRefreshError;
           }
         } catch (error) {
           applyTaskSummariesToState(taskLinkState, preparedTaskSummaries);
-          if (params.taskRefresh === "linked") {
-            linkedTaskRefreshFailed = true;
-          } else {
-            // Render-driven lifecycle sync runs after every update. Defer a
-            // failed full task refresh until a later load instead of retrying immediately.
-            lifecycleTaskRefreshFailed = true;
-          }
+          // Render-driven lifecycle sync runs after every update. Defer a
+          // failed task refresh until a later authoritative refresh.
+          lifecycleTaskRefreshFailed = true;
           nextTaskRefreshError = formatError(error);
         }
       } else {
@@ -2020,16 +2025,21 @@ export async function loadWorkboard(params: {
       state.tasksByCardId = taskLinkState.tasksByCardId;
       state.missingTaskIds = taskLinkState.missingTaskIds;
       resetWorkboardLifecycleTaskConfirmations(state);
-      setWorkboardLifecycleTaskRefreshFailed(state, lifecycleTaskRefreshFailed, {
-        host: params.host,
-        requestUpdate: params.requestUpdate,
-      });
+      if (!preserveLifecycleTaskRefreshFailure) {
+        setWorkboardLifecycleTaskRefreshFailed(state, lifecycleTaskRefreshFailed, {
+          host: params.host,
+          requestUpdate: params.requestUpdate,
+        });
+      }
+      if (params.taskRefresh !== "linked" && !lifecycleTaskRefreshFailed) {
+        state.lifecycleTaskRefreshError = null;
+      }
       if (nextTaskRefreshError) {
         state.lastRefreshError = nextTaskRefreshError;
       }
       setWorkboardLifecycleTasksPrepared(
         state,
-        !linkedTaskRefreshFailed &&
+        !lifecycleTaskRefreshFailed &&
           workboardTaskLinksReadyForLifecycle(taskLinkState, {
             requireRunningTaskDiscovery: params.taskRefresh === "linked",
           }),
@@ -2072,7 +2082,9 @@ export async function refreshWorkboard(params: {
   const startedAt = Date.now();
   state.lastRefreshStartedAt = startedAt;
   state.lastRefreshSource = params.source;
-  state.lastRefreshError = null;
+  if (params.source !== "poll" || !state.lifecycleTaskRefreshFailed) {
+    state.lastRefreshError = null;
+  }
   if (params.source === "poll") {
     state.pollRefreshInProgress = true;
   }
@@ -2844,7 +2856,7 @@ export async function syncWorkboardLifecycle(params: {
           host: params.host,
           requestUpdate: params.requestUpdate,
         });
-        state.error = confirmationResult.error;
+        state.lifecycleTaskRefreshError = confirmationResult.error;
         params.requestUpdate?.();
         return;
       }
@@ -2857,7 +2869,13 @@ export async function syncWorkboardLifecycle(params: {
         return;
       }
       resetWorkboardLifecycleTaskConfirmations(state);
+      const recoveredFromTaskRefresh =
+        state.lifecycleTaskRefreshFailed || state.lifecycleTaskRefreshError !== null;
       setWorkboardLifecycleTaskRefreshFailed(state, false, { host: params.host });
+      state.lifecycleTaskRefreshError = null;
+      if (recoveredFromTaskRefresh) {
+        params.requestUpdate?.();
+      }
       tasksPreparedAt = Date.now();
     } catch (error) {
       if (
@@ -2872,7 +2890,7 @@ export async function syncWorkboardLifecycle(params: {
         host: params.host,
         requestUpdate: params.requestUpdate,
       });
-      state.error = formatError(error);
+      state.lifecycleTaskRefreshError = formatError(error);
       params.requestUpdate?.();
       return;
     }

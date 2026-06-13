@@ -60,6 +60,32 @@ describe("renderWorkboard", () => {
     );
   });
 
+  it("renders lifecycle refresh errors without replacing generic errors", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.lifecycleTaskRefreshError = "Task refresh unavailable";
+    const container = document.createElement("div");
+    const props: WorkboardRenderProps = {
+      host,
+      client: null,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+    };
+
+    renderInto(container, props);
+    expect(container.querySelector(".callout.danger")?.textContent).toBe(
+      "Task refresh unavailable",
+    );
+
+    state.error = "Write denied";
+    renderInto(container, props);
+    expect(container.querySelector(".callout.danger")?.textContent).toBe("Write denied");
+  });
+
   it("stops and does not rearm auto-refresh while disconnected", async () => {
     vi.useFakeTimers();
     const host = {};
