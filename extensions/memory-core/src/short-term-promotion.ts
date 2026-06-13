@@ -350,6 +350,39 @@ function normalizeSnippet(raw: string): string {
   return trimmed.replace(/\s+/g, " ");
 }
 
+const MARKDOWN_PLACEHOLDER_LINE_RE = /^[-*+]$/;
+const MARKDOWN_HEADING_LINE_RE = /^#{1,6}\s+\S.*$/;
+const COLLAPSED_MARKDOWN_SKELETON_RE = /^(?:#{1,6}\s+.+?\s[-*+](?=\s+#{1,6}\s+|$)\s*)+$/;
+
+function isMarkdownPlaceholderSnippet(raw: string): boolean {
+  const snippet = normalizeSnippet(raw);
+  if (!snippet || MARKDOWN_PLACEHOLDER_LINE_RE.test(snippet)) {
+    return true;
+  }
+  if (COLLAPSED_MARKDOWN_SKELETON_RE.test(snippet)) {
+    return true;
+  }
+  const nonEmptyLines = raw
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  return (
+    nonEmptyLines.length > 0 &&
+    nonEmptyLines.every(
+      (line) => MARKDOWN_PLACEHOLDER_LINE_RE.test(line) || MARKDOWN_HEADING_LINE_RE.test(line),
+    )
+  );
+}
+
+function isPromotableShortTermSnippet(raw: string): boolean {
+  const snippet = normalizeSnippet(raw);
+  return (
+    Boolean(snippet) &&
+    !isMarkdownPlaceholderSnippet(raw) &&
+    !isContaminatedDreamingSnippet(snippet)
+  );
+}
+
 function truncateShortTermSnippet(snippet: string): string {
   if (snippet.length <= SHORT_TERM_RECALL_MAX_SNIPPET_CHARS) {
     return snippet;
@@ -603,7 +636,7 @@ export function normalizeShortTermRecallStore(raw: unknown, nowIso: string): Sho
           ? entry.claimHash.trim()
           : undefined;
       const fullSnippet = typeof entry.snippet === "string" ? normalizeSnippet(entry.snippet) : "";
-      if (fullSnippet && isContaminatedDreamingSnippet(fullSnippet)) {
+      if (!isPromotableShortTermSnippet(fullSnippet)) {
         continue;
       }
       const snippet = truncateShortTermSnippet(fullSnippet);
@@ -1393,7 +1426,7 @@ export async function recordShortTermRecalls(params: {
       const normalizedPath = normalizeMemoryPath(result.path);
       const rawSnippet = normalizeSnippet(result.snippet);
       const snippet = truncateShortTermSnippet(rawSnippet);
-      if (!rawSnippet || isContaminatedDreamingSnippet(rawSnippet)) {
+      if (!isPromotableShortTermSnippet(result.snippet)) {
         continue;
       }
       const claimHash = buildClaimHash(rawSnippet);
@@ -1501,8 +1534,7 @@ export async function recordGroundedShortTermCandidates(params: {
       const snippet = truncateShortTermSnippet(rawSnippet);
       const normalizedPath = normalizeMemoryPath(item.path);
       if (
-        !rawSnippet ||
-        isContaminatedDreamingSnippet(rawSnippet) ||
+        !isPromotableShortTermSnippet(item.snippet) ||
         !normalizedPath ||
         !isShortTermMemoryPath(normalizedPath) ||
         !Number.isFinite(item.startLine) ||
@@ -1766,7 +1798,7 @@ export async function rankShortTermPromotionCandidates(
     if (!entry || entry.source !== "memory" || !isShortTermMemoryPath(entry.path)) {
       continue;
     }
-    if (isContaminatedDreamingSnippet(entry.snippet)) {
+    if (!isPromotableShortTermSnippet(entry.snippet)) {
       continue;
     }
     if (!includePromoted && entry.promotedAt) {
@@ -2342,7 +2374,7 @@ export async function applyShortTermPromotions(
     const store = await readStore(workspaceDir, nowIso);
     const selected = options.candidates
       .filter((candidate) => {
-        if (isContaminatedDreamingSnippet(candidate.snippet)) {
+        if (!isPromotableShortTermSnippet(candidate.snippet)) {
           return false;
         }
         if (candidate.promotedAt) {
@@ -2380,7 +2412,7 @@ export async function applyShortTermPromotions(
     const rehydratedSelected: PromotionCandidate[] = [];
     for (const candidate of selected) {
       const rehydrated = await rehydratePromotionCandidate(workspaceDir, candidate);
-      if (rehydrated && !isContaminatedDreamingSnippet(rehydrated.snippet)) {
+      if (rehydrated && isPromotableShortTermSnippet(rehydrated.snippet)) {
         rehydratedSelected.push(rehydrated);
       }
     }

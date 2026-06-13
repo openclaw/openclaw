@@ -1464,6 +1464,56 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("does not record markdown placeholder snippets for short-term promotion", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "empty daily sections",
+        results: [
+          {
+            path: "memory/2026-04-03.md",
+            startLine: 2,
+            endLine: 2,
+            score: 0.96,
+            snippet: "-",
+            source: "memory",
+          },
+          {
+            path: "memory/2026-04-03.md",
+            startLine: 4,
+            endLine: 7,
+            score: 0.96,
+            snippet: "## Tagesnotizen\n-\n\n## Entscheidungen\n-",
+            source: "memory",
+          },
+        ],
+      });
+      await recordGroundedShortTermCandidates({
+        workspaceDir,
+        query: "empty daily sections",
+        items: [
+          {
+            path: "memory/2026-04-03.md",
+            startLine: 8,
+            endLine: 8,
+            score: 0.96,
+            snippet: "*",
+          },
+        ],
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+
+      expect(ranked).toStrictEqual([]);
+      expect(Object.keys(await readRecallStoreEntries(workspaceDir))).toStrictEqual([]);
+    });
+  });
+
   it("treats diff-prefixed dreaming snippets as contaminated", () => {
     expect(
       testing.isContaminatedDreamingSnippet(
@@ -1834,6 +1884,50 @@ describe("short-term promotion", () => {
       const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
       expect(memoryText).toContain("- Gateway binds loopback and port 18789");
       expect(memoryText).not.toContain("- - Gateway binds loopback and port 18789");
+    });
+  });
+
+  it("does not apply direct promotion candidates that rehydrate to markdown skeletons", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-01", ["## Entscheidungen", "-"]);
+
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: [
+          {
+            key: "memory:memory/2026-04-01.md:1:2",
+            path: "memory/2026-04-01.md",
+            startLine: 1,
+            endLine: 2,
+            source: "memory",
+            snippet: "## Entscheidungen -",
+            recallCount: 2,
+            avgScore: 0.95,
+            maxScore: 0.95,
+            uniqueQueries: 2,
+            firstRecalledAt: "2026-04-01T00:00:00.000Z",
+            lastRecalledAt: "2026-04-02T00:00:00.000Z",
+            ageDays: 0,
+            score: 0.95,
+            recallDays: ["2026-04-01", "2026-04-02"],
+            conceptTags: ["entscheidungen"],
+            components: {
+              frequency: 0.4,
+              relevance: 0.95,
+              diversity: 0.4,
+              recency: 1,
+              consolidation: 0.4,
+              conceptual: 0.2,
+            },
+          },
+        ],
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+
+      expect(applied.applied).toBe(0);
+      await expectEnoent(fs.access(path.join(workspaceDir, "MEMORY.md")));
     });
   });
 
