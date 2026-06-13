@@ -57,6 +57,8 @@ const SLACK_PREFIXED_LOWERCASE_CHANNEL_ID_RE = /^channel:[cgd][0-9][a-z0-9]{7,}$
 // Letter-leading lowercase forms may be valid IDs or human names. Warn conditionally instead of
 // claiming they are unroutable.
 const SLACK_AMBIGUOUS_LOWERCASE_CHANNEL_ID_RE = /^(?:channel:)?[cgd][a-z][a-z0-9]{7,}$/;
+// Slack supports international channel names, and runtime name matching preserves exact names.
+// Keep Unicode letters/marks/numbers while enforcing lowercase, length, and punctuation rules.
 const SLACK_CHANNEL_NAME_RE = /^[\p{L}\p{M}\p{N}_-]{1,80}$/u;
 const SLACK_CHANNEL_NAME_ALPHANUMERIC_RE = /[\p{L}\p{N}]/u;
 
