@@ -465,6 +465,10 @@ describe("cli program (nodes basics)", () => {
     for (const expected of expectedOutput) {
       expect(output).toContain(expected);
     }
+    expect(gatewayRequests().find((request) => request.method === "node.list")?.scopes).toEqual([
+      "operator.read",
+      "operator.pairing",
+    ]);
   });
 
   it("runs nodes describe and calls node.describe", async () => {
@@ -491,6 +495,7 @@ describe("cli program (nodes basics)", () => {
     );
     expect(describeRequest?.clientName).toBe("cli");
     expect(describeRequest?.mode).toBe("cli");
+    expect(describeRequest?.scopes).toEqual(["operator.read", "operator.pairing"]);
 
     const out = getRuntimeOutput();
     expect(out).toContain("Commands");
@@ -541,6 +546,38 @@ describe("cli program (nodes basics)", () => {
     expect(output).not.toContain("url-secret");
     expect(output).not.toContain("gateway.example");
     expect(output).not.toContain("secret-token");
+  });
+
+  it("falls back to read-only node status when pairing diagnostics are unavailable", async () => {
+    callGateway.mockImplementation(async (...args: unknown[]) => {
+      const opts = (args[0] ?? {}) as { method?: string; scopes?: unknown[] };
+      if (opts.method === "node.list" && opts.scopes?.includes("operator.pairing")) {
+        throw new Error("gateway closed (1008): pairing required");
+      }
+      if (opts.method === "node.list") {
+        return {
+          ts: Date.now(),
+          nodes: [
+            {
+              nodeId: "read-only-node",
+              displayName: "Read Only Node",
+              approvalState: "approved",
+              paired: true,
+              connected: false,
+            },
+          ],
+        };
+      }
+      return { ok: true };
+    });
+
+    await runProgram(["nodes", "status"]);
+
+    const requests = gatewayRequests().filter((request) => request.method === "node.list");
+    expect(requests).toHaveLength(2);
+    expect(requests[0]?.scopes).toEqual(["operator.read", "operator.pairing"]);
+    expect(requests[1]?.scopes).toBeUndefined();
+    expect(getRuntimeOutput()).toContain("Read Only Node");
   });
 
   it("does not recommend approval from a stale pending request id alone", async () => {

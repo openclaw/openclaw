@@ -36,10 +36,25 @@ export const callGatewayCli = async (
   method: string,
   opts: NodesRpcOpts,
   params?: unknown,
-  callOpts?: { transportTimeoutMs?: number },
+  callOpts?: { scopes?: OperatorScope[]; transportTimeoutMs?: number },
 ) => {
   const runtime = await loadNodesCliRpcRuntime();
   return await runtime.callGatewayCliRuntime(method, opts, params, callOpts);
+};
+
+/** Read node diagnostics with pairing details when authorized, otherwise keep read-only access. */
+export const callNodeDiagnosticsGatewayCli = async (
+  method: "node.list" | "node.describe",
+  opts: NodesRpcOpts,
+  params?: unknown,
+) => {
+  try {
+    return await callGatewayCli(method, opts, params, {
+      scopes: ["operator.read", "operator.pairing"],
+    });
+  } catch {
+    return await callGatewayCli(method, opts, params);
+  }
 };
 
 /** Call pairing approval methods with explicit operator scopes. */

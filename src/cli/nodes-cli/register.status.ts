@@ -16,7 +16,12 @@ import { parseDurationMs } from "../parse-duration.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import { formatPermissions, parseNodeList, parsePairingList } from "./format.js";
 import { renderPendingPairingRequestsTable } from "./pairing-render.js";
-import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
+import {
+  callGatewayCli,
+  callNodeDiagnosticsGatewayCli,
+  nodesCallOpts,
+  resolveNodeId,
+} from "./rpc.js";
 import type { NodeListNode, NodesRpcOpts, PairedNode } from "./types.js";
 
 type PairedNodeListRow = PairedNode & Partial<NodeListNode>;
@@ -253,7 +258,7 @@ export function registerNodesStatusCommands(nodes: Command) {
         await runNodesCommand("status", async () => {
           const connectedOnly = Boolean(opts.connected);
           const sinceMs = parseSinceMs(opts.lastConnected, "Invalid --last-connected");
-          const result = await callGatewayCli("node.list", opts, {});
+          const result = await callNodeDiagnosticsGatewayCli("node.list", opts, {});
           const obj: Record<string, unknown> =
             typeof result === "object" && result !== null ? result : {};
           const { ok, warn, muted } = getNodesTheme();
@@ -393,7 +398,7 @@ export function registerNodesStatusCommands(nodes: Command) {
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("describe", async () => {
           const nodeId = await resolveNodeId(opts, opts.node ?? "");
-          const result = await callGatewayCli("node.describe", opts, {
+          const result = await callNodeDiagnosticsGatewayCli("node.describe", opts, {
             nodeId,
           });
           if (opts.json) {
