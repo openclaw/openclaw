@@ -8,6 +8,7 @@ type GatewayModelCatalogConfig = ReturnType<typeof getRuntimeConfig>;
 type LoadModelCatalog = (params: {
   config: GatewayModelCatalogConfig;
   readOnly?: boolean;
+  requireCacheableResult?: boolean;
 }) => Promise<GatewayModelChoice[]>;
 type LoadGatewayModelCatalogParams = {
   getConfig?: () => GatewayModelCatalogConfig;
@@ -23,6 +24,14 @@ type GatewayModelCatalogCache = {
 };
 
 const loadModelCatalogModule = async () => await import("../agents/model-catalog.js");
+
+function partialModelCatalogFromError(error: unknown): GatewayModelChoice[] | null {
+  if (!(error instanceof Error) || error.name !== "PartialModelCatalogError") {
+    return null;
+  }
+  const catalog = (error as { catalog?: unknown }).catalog;
+  return Array.isArray(catalog) ? (catalog as GatewayModelChoice[]) : null;
+}
 
 function createGatewayModelCatalogCache(): GatewayModelCatalogCache {
   return {
@@ -73,9 +82,30 @@ function startGatewayModelCatalogRefresh(
   const readOnly = params?.readOnly !== false;
   const refreshGeneration = cache.staleGeneration;
   const refresh = resolveLoadModelCatalog(params)
-    .then((loadModelCatalog) => loadModelCatalog({ config, readOnly }))
-    .then((catalog) => {
-      if ((readOnly || catalog.length > 0) && refreshGeneration === cache.staleGeneration) {
+    .then(async (loadModelCatalog) => {
+      try {
+        return {
+          catalog: await loadModelCatalog({
+            config,
+            readOnly,
+            ...(readOnly ? {} : { requireCacheableResult: true }),
+          }),
+          cacheable: true,
+        };
+      } catch (error) {
+        const partialCatalog = partialModelCatalogFromError(error);
+        if (partialCatalog) {
+          return { catalog: partialCatalog, cacheable: false };
+        }
+        throw error;
+      }
+    })
+    .then(({ catalog, cacheable }) => {
+      if (
+        cacheable &&
+        (readOnly || catalog.length > 0) &&
+        refreshGeneration === cache.staleGeneration
+      ) {
         cache.lastSuccessfulCatalog = catalog;
         cache.appliedGeneration = cache.staleGeneration;
       }

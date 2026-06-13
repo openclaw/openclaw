@@ -89,7 +89,7 @@ async function listMainSessionWithThinking(params: {
   primaryModel: string;
   sessionModelProvider: string;
   sessionModel: string;
-  loadGatewayModelCatalog?: () => Promise<
+  loadGatewayModelCatalog?: (params?: { readOnly?: boolean }) => Promise<
     Array<{
       provider: string;
       id: string;
