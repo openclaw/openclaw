@@ -24,6 +24,7 @@ export type UsageProviderId =
   | "deepseek"
   | "github-copilot"
   | "google-gemini-cli"
+  | "kimi"
   | "minimax"
   | "openai"
   | "xiaomi"

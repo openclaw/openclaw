@@ -2,6 +2,7 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
+import { fetchKimiUsage } from "openclaw/plugin-sdk/provider-usage";
 import type { SecretInput } from "openclaw/plugin-sdk/secret-input";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { applyKimiCodeConfig, KIMI_CODING_MODEL_REF } from "./onboard.js";
@@ -35,7 +36,7 @@ export default definePluginEntry({
       label: "Kimi",
       aliases: ["kimi-code", "kimi-coding"],
       docsPath: "/providers/moonshot",
-      envVars: ["KIMI_API_KEY", "KIMICODE_API_KEY"],
+      envVars: ["KIMI_API_KEY", "KIMICODE_API_KEY", "KIMI_CODE_API_KEY"],
       auth: [
         createProviderApiKeyAuthMethod({
           providerId: PROVIDER_ID,
@@ -108,6 +109,26 @@ export default definePluginEntry({
         ],
         defaultLevel: "off",
       }),
+      resolveUsageAuth: async (ctx) => {
+        const apiKey = ctx.resolveApiKeyFromConfigAndStore({
+          providerIds: [PROVIDER_ID, "kimi-code", "kimi-coding", "moonshot"],
+          envDirect: [
+            ctx.env.KIMI_CODE_API_KEY,
+            ctx.env.KIMI_API_KEY,
+            ctx.env.KIMICODE_API_KEY,
+            ctx.env.MOONSHOT_API_KEY,
+          ],
+        });
+        return apiKey ? { token: apiKey } : null;
+      },
+      fetchUsageSnapshot: async (ctx) => {
+        const configuredProvider = findExplicitProviderConfig(
+          ctx.config.models?.providers as Record<string, unknown> | undefined,
+          PROVIDER_ID,
+        );
+        const baseUrl = normalizeOptionalString(configuredProvider?.baseUrl);
+        return await fetchKimiUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn, { baseUrl });
+      },
       wrapStreamFn: wrapKimiProviderStream,
     });
   },
