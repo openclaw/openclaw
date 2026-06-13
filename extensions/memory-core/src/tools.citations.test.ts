@@ -164,13 +164,34 @@ describe("memory tools", () => {
     });
   });
 
-  it("uses one-shot CLI memory manager mode for memory_search", async () => {
+  it("uses default memory manager mode for shared memory_search", async () => {
     setMemoryBackend("qmd");
     const tool = createMemorySearchToolOrThrow({
       config: asOpenClawConfig({
         memory: { backend: "qmd", qmd: { command: "qmd" } },
         agents: { list: [{ id: "main", default: true }] },
       }),
+    });
+
+    await tool.execute("call_default_purpose", { query: "contact phrase" });
+
+    expect(getMemorySearchManagerMockParams()).toEqual([
+      expect.objectContaining({
+        agentId: "main",
+        purpose: undefined,
+      }),
+    ]);
+    expect(getMemoryCloseMockCalls()).toBe(0);
+  });
+
+  it("uses one-shot CLI memory manager mode for explicit local CLI memory_search", async () => {
+    setMemoryBackend("qmd");
+    const tool = createMemorySearchToolOrThrow({
+      config: asOpenClawConfig({
+        memory: { backend: "qmd", qmd: { command: "qmd" } },
+        agents: { list: [{ id: "main", default: true }] },
+      }),
+      oneShotCliRun: true,
     });
 
     await tool.execute("call_cli_purpose", { query: "contact phrase" });

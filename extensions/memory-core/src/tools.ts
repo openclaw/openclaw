@@ -365,6 +365,7 @@ export function createMemorySearchTool(options: {
   agentId?: string;
   agentSessionKey?: string;
   sandboxed?: boolean;
+  oneShotCliRun?: boolean;
 }) {
   return createMemoryTool({
     options,
@@ -420,9 +421,10 @@ export function createMemorySearchTool(options: {
             if (cooldown && !shouldQuerySupplements) {
               return jsonResult(buildMemorySearchUnavailableResult(cooldown.error));
             }
+            const memoryManagerPurpose = options.oneShotCliRun ? "cli" : undefined;
             const memoryManagersToClose = new Set<ActiveMemoryManagerContext["manager"]>();
             const trackMemoryManager = (context: MemoryManagerContext): MemoryManagerContext => {
-              if (isActiveMemoryManagerContext(context)) {
+              if (memoryManagerPurpose === "cli" && isActiveMemoryManagerContext(context)) {
                 memoryManagersToClose.add(context.manager);
               }
               return context;
@@ -434,7 +436,7 @@ export function createMemorySearchTool(options: {
                       await getMemoryManagerContextWithPurpose({
                         cfg,
                         agentId,
-                        purpose: "cli",
+                        purpose: memoryManagerPurpose,
                       }),
                     ),
                   )
@@ -514,7 +516,7 @@ export function createMemorySearchTool(options: {
                       await getMemoryManagerContextWithPurpose({
                         cfg,
                         agentId,
-                        purpose: "cli",
+                        purpose: memoryManagerPurpose,
                       }),
                     );
                     if ("error" in refreshed) {
