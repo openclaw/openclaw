@@ -157,8 +157,9 @@ those edits before the package swap, verifies the new package first, and keeps
 the verified package in place by default while printing the local override
 recovery directory for manual inspection and restore. Use
 `--reapply-local-overrides` only for trusted local edits on that update run; the
-opt-in reapplies changes whose target file did not change upstream and leaves
-conflicting files in the recovery directory instead of overwriting the update.
+opt-in reapplies the full captured set only when every target remains safe and
+unchanged upstream. If any target conflicts, no captured changes are reapplied;
+the full set remains in the recovery directory instead of overwriting the update.
 
 When a local managed Gateway service is installed and restart is enabled,
 package-manager and git-checkout updates stop the running service before

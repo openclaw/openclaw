@@ -226,8 +226,8 @@ function normalizeFileMode(mode: number): number {
 async function copyFileWithMode(source: string, destination: string, mode?: number): Promise<void> {
   await fs.mkdir(path.dirname(destination), { recursive: true });
   await fs.copyFile(source, destination);
-  if (mode !== undefined) {
-    await fs.chmod(destination, mode).catch(() => undefined);
+  if (mode !== undefined && process.platform !== "win32") {
+    await fs.chmod(destination, mode);
   }
 }
 

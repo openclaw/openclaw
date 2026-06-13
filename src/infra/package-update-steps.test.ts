@@ -3047,6 +3047,45 @@ describe("runGlobalPackageUpdateSteps", () => {
     });
   });
 
+  it.runIf(process.platform !== "win32")(
+    "rolls back and reports override chmod failures",
+    async () => {
+      await withTempDir({ prefix: "openclaw-package-update-local-chmod-fail-" }, async (base) => {
+        const packageRoot = path.join(base, "package");
+        const indexPath = path.join(packageRoot, "dist", "index.js");
+        await writePackageRoot(packageRoot, "1.0.0");
+        await fs.writeFile(indexPath, "export const local = true;\n", "utf8");
+
+        const plan = await captureLocalPackageOverrides({ packageRoot });
+        expect(plan).not.toBeNull();
+        await writePackageRoot(packageRoot, "2.0.0");
+
+        const realChmod = fs.chmod.bind(fs);
+        const chmodSpy = vi.spyOn(fs, "chmod").mockImplementation(async (targetPath, mode) => {
+          if (targetPath === indexPath) {
+            throw createFsError("EACCES", "override chmod failed");
+          }
+          return await realChmod(targetPath, mode);
+        });
+
+        try {
+          const result = await applyLocalPackageOverrides({
+            packageRoot,
+            plan,
+            reapply: true,
+          });
+
+          expect(result.status).toBe("error");
+          expect(result.applied).toBe(0);
+          expect(result.conflicts).toEqual([{ path: "dist/index.js", reason: "apply-failed" }]);
+          await expect(fs.readFile(indexPath, "utf8")).resolves.toBe("export {};\n");
+        } finally {
+          chmodSpy.mockRestore();
+        }
+      });
+    },
+  );
+
   it("reports and preserves rollback data when reapply rollback is incomplete", async () => {
     await withTempDir({ prefix: "openclaw-package-update-local-rollback-fail-" }, async (base) => {
       const prefix = path.join(base, "prefix");
