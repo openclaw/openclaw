@@ -16,12 +16,13 @@ afterEach(async () => {
   await fs.promises.rm(tempRoot, { recursive: true, force: true });
 });
 
-function createRuntime() {
+function createRuntime(currentCfg?: OpenClawConfig) {
   const replaceConfigFile = vi.fn(async () => {});
   return {
     runtime: {
       config: {
         replaceConfigFile,
+        current: vi.fn(() => currentCfg ?? ({} as OpenClawConfig)),
       },
     } as unknown as PluginRuntime,
     replaceConfigFile,
@@ -151,6 +152,46 @@ describe("maybeCreateDynamicAgent", () => {
     });
 
     expect(result.created).toBe(false);
+    expect(replaceConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("returns runtime current config when binding already exists", async () => {
+    const currentCfg = {
+      agents: {
+        list: [
+          {
+            id: "feishu-ou_sender",
+            workspace: path.join(tempRoot, "existing-workspace"),
+            agentDir: path.join(tempRoot, "existing-agent"),
+          },
+        ],
+      },
+      bindings: [
+        {
+          agentId: "feishu-ou_sender",
+          match: {
+            channel: "feishu",
+            peer: { kind: "direct", id: "ou_sender" },
+          },
+        },
+      ],
+    } as OpenClawConfig;
+    const { runtime, replaceConfigFile } = createRuntime(currentCfg);
+
+    const result = await maybeCreateDynamicAgent({
+      cfg: {
+        agents: { list: [] },
+        bindings: [],
+      } as OpenClawConfig,
+      runtime,
+      senderOpenId: "ou_sender",
+      dynamicCfg: createDynamicConfig(),
+      configWritesAllowed: true,
+      log: vi.fn(),
+    });
+
+    expect(result.created).toBe(false);
+    expect(result.updatedCfg).toBe(currentCfg);
     expect(replaceConfigFile).not.toHaveBeenCalled();
   });
 });

@@ -31,16 +31,33 @@ export async function maybeCreateDynamicAgent(params: {
   }
 
   // Check if there's already a binding for this user
+  // Check both the in-memory cfg (fast path) and the runtime's current config
+  // (which may have been hot-reloaded after a previous config write).
   const existingBindings = cfg.bindings ?? [];
-  const hasBinding = existingBindings.some(
+  const hasBindingInCfg = existingBindings.some(
     (b) =>
       b.match?.channel === "feishu" &&
       b.match?.peer?.kind === "direct" &&
       b.match?.peer?.id === senderOpenId,
   );
 
-  if (hasBinding) {
+  if (hasBindingInCfg) {
     return { created: false, updatedCfg: cfg };
+  }
+
+  // Check runtime's current config — it may have the binding from a previous
+  // config write that hot-reloaded after the in-memory cfg was snapshotted.
+  const currentCfg = runtime.config.current() as OpenClawConfig;
+  const currentBindings = currentCfg.bindings ?? [];
+  const hasBindingInCurrentCfg = currentBindings.some(
+    (b) =>
+      b.match?.channel === "feishu" &&
+      b.match?.peer?.kind === "direct" &&
+      b.match?.peer?.id === senderOpenId,
+  );
+
+  if (hasBindingInCurrentCfg) {
+    return { created: false, updatedCfg: currentCfg };
   }
 
   // Check maxAgents limit if configured
