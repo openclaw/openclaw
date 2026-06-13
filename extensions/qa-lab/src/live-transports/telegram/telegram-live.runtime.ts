@@ -1454,16 +1454,15 @@ async function runTelegramQaScenarioStep(params: {
   groupId: string;
   latestSutMessageId?: number;
   observedMessages: TelegramObservedMessage[];
+  replyTimeoutMs?: number;
   scenario: TelegramQaScenarioDefinition;
   step: TelegramQaScenarioStep;
   sutBotId: number;
 }) {
+  const fallbackTimeoutMs = params.step.timeoutMs ?? params.scenario.timeoutMs;
   const stepTimeoutMs = params.step.expectReply
-    ? resolveTelegramQaScenarioTimeoutMs(
-        params.step.timeoutMs ?? params.scenario.timeoutMs,
-        params.env,
-      )
-    : (params.step.timeoutMs ?? params.scenario.timeoutMs);
+    ? (params.replyTimeoutMs ?? resolveTelegramQaScenarioTimeoutMs(fallbackTimeoutMs, params.env))
+    : fallbackTimeoutMs;
   const requestStartedAtMs = Date.now();
   const sent = await sendGroupMessage(
     params.driverToken,
@@ -1552,11 +1551,9 @@ async function runTelegramQaRttChecks(params: {
         groupId: params.groupId,
         latestSutMessageId,
         observedMessages: params.observedMessages,
+        replyTimeoutMs: params.rttOptions.timeoutMs,
         scenario: params.scenario,
-        step: {
-          ...steps[0],
-          timeoutMs: params.rttOptions.timeoutMs,
-        },
+        step: steps[0],
         sutBotId: params.sutBotId,
       });
       if (!stepResult.matched) {
