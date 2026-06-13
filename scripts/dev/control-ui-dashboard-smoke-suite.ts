@@ -89,6 +89,17 @@ function suiteSteps(
       },
     },
     {
+      name: "Control Director no-response dashboard smoke",
+      command: ["pnpm", "ui:smoke:control-director-no-response"],
+      env: {
+        OPENCLAW_CONTROL_UI_CONTROL_DIRECTOR_ARTIFACT_DIR: join(
+          artifactRoot,
+          "control-ui-control-director-no-response",
+          suffix,
+        ),
+      },
+    },
+    {
       name: "SNES Studio dashboard smoke",
       command: ["pnpm", "ui:smoke:snes-studio"],
       env: {

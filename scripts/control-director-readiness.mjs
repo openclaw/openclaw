@@ -124,6 +124,68 @@ function detectControlDirectorThinkingEscalationPolicy() {
   }
 }
 
+function detectControlDirectorCompletionEvidencePolicy() {
+  try {
+    const source = fs.readFileSync(CONTROL_DIRECTOR_CONTRACT_SOURCE, "utf8");
+    return (
+      source.includes("A completion claim must include the concrete evidence") &&
+      source.includes('status === "complete"') &&
+      source.includes("verified evidence for complete status")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function detectControlDirectorContinueUntilCompletePolicy() {
+  try {
+    const source = fs.readFileSync(CONTROL_DIRECTOR_CONTRACT_SOURCE, "utf8");
+    return (
+      source.includes("Continue until the requested task is complete") &&
+      source.includes("Do not stop at advice or a proposed next step") &&
+      source.includes("when you can safely continue executing")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function detectControlDirectorExplicitStatusPolicy() {
+  try {
+    const source = fs.readFileSync(CONTROL_DIRECTOR_CONTRACT_SOURCE, "utf8");
+    return (
+      source.includes("parseExplicitControlDirectorFinalStatus") &&
+      source.includes("explicit completion status") &&
+      source.includes("!explicitStatus")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function detectControlDirectorRuntimeFinalOutputGuard() {
+  try {
+    const contractSource = fs.readFileSync(CONTROL_DIRECTOR_CONTRACT_SOURCE, "utf8");
+    const deliveryGuardSource = fs.readFileSync(
+      path.join(REPO_ROOT, "src/agents/control-director-delivery-guards.ts"),
+      "utf8",
+    );
+    const agentCommandSource = fs.readFileSync(
+      path.join(REPO_ROOT, "src/agents/agent-command.ts"),
+      "utf8",
+    );
+    return (
+      contractSource.includes("applyControlDirectorFinalOutputGuard") &&
+      contractSource.includes("rewrote_unsupported_complete") &&
+      deliveryGuardSource.includes("applyControlDirectorFinalOutputGuard") &&
+      deliveryGuardSource.includes("controlDirectorGuardAudit") &&
+      agentCommandSource.includes("applyControlDirectorDeliveryGuards")
+    );
+  } catch {
+    return false;
+  }
+}
+
 function readOllamaEnvFromLaunchctl() {
   const uid = typeof process.getuid === "function" ? process.getuid() : null;
   if (uid === null) {
@@ -247,6 +309,38 @@ export function buildControlDirectorReadinessScorecard(params) {
       "thinking-escalation-policy",
       "Control Director thinking-as-needed escalation policy is present",
       params.thinkingEscalationPolicy === true,
+      true,
+    ),
+  );
+  facts.push(
+    fact(
+      "continue-until-complete-policy",
+      "Control Director continue-until-complete policy is present",
+      params.continueUntilCompletePolicy === true,
+      true,
+    ),
+  );
+  facts.push(
+    fact(
+      "complete-evidence-policy",
+      "Control Director complete-status evidence gate is present",
+      params.completionEvidencePolicy === true,
+      true,
+    ),
+  );
+  facts.push(
+    fact(
+      "explicit-status-policy",
+      "Control Director explicit final status gate is present",
+      params.explicitStatusPolicy === true,
+      true,
+    ),
+  );
+  facts.push(
+    fact(
+      "runtime-final-output-guard",
+      "Control Director runtime final-output guard is wired",
+      params.runtimeFinalOutputGuard === true,
       true,
     ),
   );
@@ -445,6 +539,10 @@ export async function main(argv = process.argv.slice(2)) {
     ollamaEnvError,
     ollamaPrimaryChatSmoke,
     thinkingEscalationPolicy: detectControlDirectorThinkingEscalationPolicy(),
+    continueUntilCompletePolicy: detectControlDirectorContinueUntilCompletePolicy(),
+    completionEvidencePolicy: detectControlDirectorCompletionEvidencePolicy(),
+    explicitStatusPolicy: detectControlDirectorExplicitStatusPolicy(),
+    runtimeFinalOutputGuard: detectControlDirectorRuntimeFinalOutputGuard(),
   });
   if (args.json) {
     console.log(JSON.stringify(scorecard, null, 2));

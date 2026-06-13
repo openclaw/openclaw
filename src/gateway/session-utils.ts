@@ -10,6 +10,7 @@ import {
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
 import { lookupContextTokens, resolveContextTokensForModel } from "../agents/context.js";
+import { resolveControlDirectorCanonicalModelRef } from "../agents/control-director-contract.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import {
   findModelCatalogEntry,
@@ -1403,6 +1404,14 @@ export function resolveSessionModelRef(
     modelOverride: entry?.modelOverride,
   });
   if (normalizedOverride.providerOverride && normalizedOverride.modelOverride) {
+    const controlDirectorRef = resolveControlDirectorCanonicalModelRef({
+      agentId,
+      provider: normalizedOverride.providerOverride,
+      model: normalizedOverride.modelOverride,
+    });
+    if (controlDirectorRef) {
+      return { provider: controlDirectorRef.provider, model: controlDirectorRef.model };
+    }
     return resolvePersistedSelectedModelRef({
       defaultProvider: normalizedOverride.providerOverride,
       overrideProvider: normalizedOverride.providerOverride,
@@ -1413,6 +1422,14 @@ export function resolveSessionModelRef(
   const runtimeProvider = normalizeOptionalString(entry?.modelProvider);
   const runtimeModel = normalizeOptionalString(entry?.model);
   if (runtimeProvider && runtimeModel) {
+    const controlDirectorRef = resolveControlDirectorCanonicalModelRef({
+      agentId,
+      provider: runtimeProvider,
+      model: runtimeModel,
+    });
+    if (controlDirectorRef) {
+      return { provider: controlDirectorRef.provider, model: controlDirectorRef.model };
+    }
     return { provider: runtimeProvider, model: runtimeModel };
   }
 
@@ -1528,6 +1545,14 @@ export function resolveSessionModelIdentityRef(
   const runtimeModel = entry?.model?.trim();
   const runtimeProvider = entry?.modelProvider?.trim();
   if (runtimeModel) {
+    const controlDirectorRef = resolveControlDirectorCanonicalModelRef({
+      agentId,
+      provider: runtimeProvider,
+      model: runtimeModel,
+    });
+    if (controlDirectorRef) {
+      return { provider: controlDirectorRef.provider, model: controlDirectorRef.model };
+    }
     if (runtimeProvider) {
       return { provider: runtimeProvider, model: runtimeModel };
     }
@@ -1580,6 +1605,14 @@ export function resolveSessionDisplayModelIdentityRef(params: {
 }): { provider?: string; model?: string } {
   const provider = normalizeOptionalString(params.provider);
   const model = normalizeOptionalString(params.model);
+  const controlDirectorRef = resolveControlDirectorCanonicalModelRef({
+    agentId: params.agentId,
+    provider,
+    model,
+  });
+  if (controlDirectorRef) {
+    return { provider: controlDirectorRef.provider, model: controlDirectorRef.model };
+  }
   if (!provider || !model || !isCliProvider(provider, params.cfg)) {
     return { provider, model };
   }
@@ -1914,6 +1947,9 @@ export function buildGatewaySessionRow(params: {
     compactionCheckpointCount: entry?.compactionCheckpoints?.length,
     latestCompactionCheckpoint,
     judgeGuardAudit: entry?.judgeGuardAudit,
+    controlDirectorGuardAudit: entry?.controlDirectorGuardAudit,
+    controlDirectorLivenessAudit: entry?.controlDirectorLivenessAudit,
+    controlDirectorMissionLedger: entry?.controlDirectorMissionLedger,
     pluginExtensions: pluginExtensions.length > 0 ? pluginExtensions : undefined,
   };
 }

@@ -27,6 +27,8 @@ const state = vi.hoisted(() => ({
   runAgentAttemptMock: vi.fn(),
   resolveEffectiveModelFallbacksMock: vi.fn().mockReturnValue(undefined),
   emitAgentEventMock: vi.fn(),
+  enqueueSystemEventMock: vi.fn((..._args: unknown[]) => true),
+  requestHeartbeatMock: vi.fn(),
   registerAgentRunContextMock: vi.fn(),
   clearAgentRunContextMock: vi.fn(),
   updateSessionStoreAfterAgentRunMock: vi.fn(),
@@ -46,6 +48,7 @@ const state = vi.hoisted(() => ({
   authProfileStoreMock: { profiles: {} } as { profiles: Record<string, unknown> },
   sessionEntryMock: undefined as unknown,
   sessionStoreMock: undefined as unknown,
+  storePathMock: undefined as string | undefined,
 }));
 
 vi.mock("./model-fallback.js", () => ({
@@ -99,7 +102,7 @@ vi.mock("./command/session.js", () => ({
       skillsSnapshot: { prompt: "", skills: [], version: 0 },
     },
     sessionStore: state.sessionStoreMock,
-    storePath: undefined,
+    storePath: state.storePathMock,
     isNewSession: false,
     persistedThinking: undefined,
     persistedVerbose: undefined,
@@ -186,6 +189,15 @@ vi.mock("../config/sessions.js", () => ({
   ),
 }));
 
+vi.mock("../config/sessions/store.js", () => ({
+  updateSessionStore: vi.fn(
+    async (_path: string, fn: (store: Record<string, unknown>) => unknown) => {
+      const store = (state.sessionStoreMock as Record<string, unknown> | undefined) ?? {};
+      return fn(store);
+    },
+  ),
+}));
+
 vi.mock("../config/sessions/transcript-resolve.runtime.js", () => ({
   resolveSessionTranscriptFile: async () => ({
     sessionFile: "/tmp/session.jsonl",
@@ -198,6 +210,14 @@ vi.mock("../infra/agent-events.js", () => ({
   emitAgentEvent: (...args: unknown[]) => state.emitAgentEventMock(...args),
   onAgentEvent: vi.fn(),
   registerAgentRunContext: (...args: unknown[]) => state.registerAgentRunContextMock(...args),
+}));
+
+vi.mock("../infra/heartbeat-wake.js", () => ({
+  requestHeartbeat: (...args: unknown[]) => state.requestHeartbeatMock(...args),
+}));
+
+vi.mock("../infra/system-events.js", () => ({
+  enqueueSystemEvent: (...args: unknown[]) => state.enqueueSystemEventMock(...args),
 }));
 
 vi.mock("../infra/outbound/session-context.js", () => ({
@@ -224,8 +244,10 @@ vi.mock("../logging/subsystem.js", () => ({
 }));
 
 vi.mock("../routing/session-key.js", () => ({
+  isSubagentSessionKey: (key?: string | null) => key?.includes(":subagent:") ?? false,
   normalizeAgentId: (id: string) => id,
   normalizeMainKey: (key?: string | null) => key?.trim() || "main",
+  resolveAgentIdFromSessionKey: (key?: string | null) => key?.split(":")[1] ?? "default",
 }));
 
 vi.mock("../runtime.js", () => ({
@@ -267,6 +289,13 @@ vi.mock("../utils/message-channel.js", () => ({
 vi.mock("./agent-scope.js", () => ({
   listAgentEntries: () => [],
   listAgentIds: () => ["default", "main"],
+  resolveAgentSelector: (_cfg: unknown, selector: string | undefined | null) => {
+    const agentId = selector?.trim();
+    if (agentId === "default" || agentId === "main") {
+      return { ok: true, agentId, selector: agentId, source: "id" };
+    }
+    return { ok: false, reason: agentId ? "unknown" : "missing", selector: agentId ?? "" };
+  },
   resolveAgentConfig: () => undefined,
   resolveAgentDir: () => "/tmp/agent",
   resolveEffectiveModelFallbacks: state.resolveEffectiveModelFallbacksMock,
@@ -574,6 +603,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.authProfileStoreMock = { profiles: {} };
     state.sessionEntryMock = undefined;
     state.sessionStoreMock = undefined;
+    state.storePathMock = undefined;
     state.buildWorkspaceSkillSnapshotMock.mockReturnValue({
       prompt: "",
       skills: [],
@@ -705,6 +735,179 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       }),
     );
     expect(state.resolveThinkingDefaultMock).not.toHaveBeenCalled();
+  });
+
+  it("guards unsupported Control Director complete output before delivery and records audit", async () => {
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          model: { primary: "ollama/openclaw-control-qwen36-27b:latest" },
+        },
+      },
+    };
+    const sessionEntry = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+    };
+    const sessionStore: Record<string, typeof sessionEntry & Record<string, unknown>> = {
+      "agent:main": sessionEntry,
+    };
+    state.sessionEntryMock = sessionEntry;
+    state.sessionStoreMock = sessionStore;
+    state.storePathMock = "/tmp/session-store.json";
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      const result = await params.run(params.provider, params.model);
+      return {
+        result,
+        provider: params.provider,
+        model: params.model,
+        attempts: [],
+      };
+    });
+    state.runAgentAttemptMock.mockResolvedValue({
+      payloads: [
+        {
+          text: [
+            "Completion Grade: 10/10",
+            "Criticality: 10/10",
+            "Next build gap: none.",
+            "Status: complete",
+          ].join("\n"),
+        },
+      ],
+      meta: {
+        durationMs: 100,
+        aborted: false,
+        stopReason: "end_turn",
+        agentMeta: { provider: "ollama", model: "openclaw-control-qwen36-27b:latest" },
+      },
+    });
+
+    await agentCommand({
+      message: "Implement the plan and verify completion.",
+      to: "+1234567890",
+      senderIsOwner: true,
+      agentId: "main",
+      runId: "run-control-guard",
+    });
+
+    const deliveryArg = state.deliverAgentCommandResultMock.mock.calls[0]?.[0] as
+      | { payloads?: Array<{ text?: string }> }
+      | undefined;
+    expect(deliveryArg?.payloads?.[0]?.text).toContain("completion guard blocked");
+    expect(deliveryArg?.payloads?.[0]?.text).toContain("Status: blocked");
+    expect(sessionStore["agent:main"]?.controlDirectorGuardAudit).toEqual([
+      expect.objectContaining({
+        runId: "run-control-guard",
+        action: "rewrote_unsupported_complete",
+        originalStatus: "complete",
+        nextStatus: "blocked",
+        payloadsChecked: 1,
+        payloadsRewritten: 1,
+      }),
+    ]);
+    expect(state.emitAgentEventMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-control-guard",
+        stream: "control_director_guard",
+        data: expect.objectContaining({
+          action: "rewrote_unsupported_complete",
+          nextStatus: "blocked",
+        }),
+      }),
+    );
+    expect(sessionStore["agent:main"]?.controlDirectorMissionLedger).toEqual([
+      expect.objectContaining({
+        missionId: "control-director:run-control-guard",
+        runId: "run-control-guard",
+        status: "blocked",
+        finalStatus: "blocked",
+        guardActions: ["rewrote_unsupported_complete"],
+      }),
+    ]);
+  });
+
+  it("synthesizes a visible Control Director liveness response and queues one safe continuation", async () => {
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          model: { primary: "ollama/openclaw-control-qwen36-27b:latest" },
+        },
+      },
+    };
+    const sessionEntry = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+    };
+    const sessionStore: Record<string, typeof sessionEntry & Record<string, unknown>> = {
+      "agent:main": sessionEntry,
+    };
+    state.sessionEntryMock = sessionEntry;
+    state.sessionStoreMock = sessionStore;
+    state.storePathMock = "/tmp/session-store.json";
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      const result = await params.run(params.provider, params.model);
+      return {
+        result,
+        provider: params.provider,
+        model: params.model,
+        attempts: [],
+      };
+    });
+    state.runAgentAttemptMock.mockResolvedValue(
+      makeEmptyResult("ollama", "openclaw-control-qwen36-27b:latest"),
+    );
+
+    await agentCommand({
+      message: "Keep working until this is complete.",
+      to: "+1234567890",
+      senderIsOwner: true,
+      agentId: "main",
+      runId: "run-control-liveness",
+    });
+
+    const deliveryArg = state.deliverAgentCommandResultMock.mock.calls[0]?.[0] as
+      | { payloads?: Array<{ text?: string }> }
+      | undefined;
+    expect(deliveryArg?.payloads?.[0]?.text).toContain("liveness watchdog");
+    expect(deliveryArg?.payloads?.[0]?.text).toContain("Safe continuation queued: yes");
+    expect(deliveryArg?.payloads?.[0]?.text).toContain("Status: blocked");
+    expect(state.enqueueSystemEventMock).toHaveBeenCalledWith(
+      expect.stringContaining("Control Director safe continuation request."),
+      expect.objectContaining({
+        sessionKey: "agent:main",
+        contextKey: "control-director:run-control-liveness:continuation:1",
+        trusted: true,
+      }),
+    );
+    expect(state.requestHeartbeatMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: "other",
+        intent: "immediate",
+        reason: "control-director-continuation",
+        sessionKey: "agent:main",
+      }),
+    );
+    expect(sessionStore["agent:main"]?.controlDirectorLivenessAudit).toEqual([
+      expect.objectContaining({
+        runId: "run-control-liveness",
+        action: "queued_safe_continuation",
+        classification: "empty",
+        continuationQueued: true,
+        payloadsSynthesized: 1,
+      }),
+    ]);
+    expect(sessionStore["agent:main"]?.controlDirectorMissionLedger).toEqual([
+      expect.objectContaining({
+        missionId: "control-director:run-control-liveness",
+        runId: "run-control-liveness",
+        status: "continuation_queued",
+        continuationCount: 1,
+        watchdogActions: ["queued_safe_continuation:queued"],
+      }),
+    ]);
   });
 
   it("keeps explicit Control Director CLI thinking overrides ahead of auto-escalation", async () => {
@@ -1196,6 +1399,62 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(transcriptParams.transcriptBody).toContain("A background task completed.");
     expect(transcriptParams.transcriptBody).not.toContain(INTERNAL_RUNTIME_CONTEXT_BEGIN);
     expect(transcriptParams.transcriptBody).not.toContain(INTERNAL_RUNTIME_CONTEXT_END);
+  });
+
+  it("guards unsupported Control Director complete output from ACP delivery", async () => {
+    state.acpResolveSessionMock.mockReturnValue({
+      kind: "ready",
+      meta: {
+        agent: "claude",
+        cwd: "/tmp/workspace",
+      },
+    });
+    state.acpRunTurnMock.mockImplementation(async (params: unknown) => {
+      const onEvent = (params as { onEvent?: (event: unknown) => void }).onEvent;
+      onEvent?.({
+        type: "text_delta",
+        stream: "output",
+        text: [
+          "Completion Grade: 10/10",
+          "Criticality: 10/10",
+          "Next build gap: none.",
+          "Status: complete",
+        ].join("\n"),
+      });
+      onEvent?.({ type: "done", stopReason: "end_turn" });
+    });
+    const sessionEntry = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+    };
+    const sessionStore: Record<string, typeof sessionEntry & Record<string, unknown>> = {
+      "agent:main": sessionEntry,
+    };
+    state.sessionEntryMock = sessionEntry;
+    state.sessionStoreMock = sessionStore;
+    state.storePathMock = "/tmp/session-store.json";
+
+    await agentCommand({
+      message: "finish the ACP task",
+      sessionKey: "agent:main",
+      senderIsOwner: true,
+      agentId: "main",
+      runId: "run-control-guard-acp",
+    });
+
+    const deliveryArg = state.deliverAgentCommandResultMock.mock.calls[0]?.[0] as
+      | { payloads?: Array<{ text?: string }> }
+      | undefined;
+    expect(deliveryArg?.payloads?.[0]?.text).toContain("completion guard blocked");
+    expect(deliveryArg?.payloads?.[0]?.text).toContain("Status: blocked");
+    expect(sessionStore["agent:main"]?.controlDirectorGuardAudit).toEqual([
+      expect.objectContaining({
+        runId: "run-control-guard-acp",
+        action: "rewrote_unsupported_complete",
+        nextStatus: "blocked",
+      }),
+    ]);
   });
 
   it("allows manual ACP spawn turns when ACP dispatch is disabled", async () => {

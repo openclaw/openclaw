@@ -1422,7 +1422,9 @@
     "android:test": "cd apps/android && ./gradlew :app:testPlayDebugUnitTest",
     "android:test:integration": "node scripts/run-with-env.mjs OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_ANDROID_NODE=1 -- node scripts/run-vitest.mjs run --config test/vitest/vitest.live.config.ts src/gateway/android-node.capabilities.live.test.ts",
     "android:test:third-party": "cd apps/android && ./gradlew :app:testThirdPartyDebugUnitTest",
+    "agents:eval": "node scripts/agent-role-eval.mjs",
     "agents:eval:contracts": "node scripts/agent-role-eval.mjs --contracts-only",
+    "agents:eval:live:self-contained": "node scripts/agent-role-eval.mjs --live --self-contained",
     "audit:seams": "node scripts/audit-seams.mjs",
     "build": "node scripts/build-all.mjs",
     "build:ci-artifacts": "node scripts/build-all.mjs ciArtifacts",
@@ -1854,7 +1856,8 @@
     "ui:smoke:projects": "node --import tsx scripts/dev/control-ui-projects-smoke.ts",
     "ui:smoke:self-improvement": "node --import tsx scripts/dev/control-ui-self-improvement-smoke.ts",
     "ui:smoke:snes-studio": "node --import tsx scripts/dev/control-ui-snes-studio-smoke.ts",
-    "ui:smoke:dashboard": "node --import tsx scripts/dev/control-ui-dashboard-smoke-suite.ts"
+    "ui:smoke:dashboard": "node --import tsx scripts/dev/control-ui-dashboard-smoke-suite.ts",
+    "ui:smoke:control-director-no-response": "node --import tsx scripts/dev/control-ui-control-director-no-response-smoke.ts"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "0.22.1",

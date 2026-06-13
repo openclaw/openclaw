@@ -53,6 +53,7 @@ import { resolveAgentRunContext } from "./command/run-context.js";
 import { resolveSession } from "./command/session.js";
 import type { AgentCommandIngressOpts, AgentCommandOpts } from "./command/types.js";
 import { resolveControlDirectorThinkingEscalation } from "./control-director-contract.js";
+import { applyControlDirectorDeliveryGuards } from "./control-director-delivery-guards.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import { resolveFastModeState } from "./fast-mode.js";
 import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
@@ -258,6 +259,10 @@ const OVERRIDE_FIELDS_CLEARED_BY_DELETE: OverrideFieldClearedByDelete[] = [
 
 const OVERRIDE_VALUE_MAX_LENGTH = 256;
 const MAX_JUDGE_GUARD_AUDIT_ENTRIES = 20;
+const MAX_CONTROL_DIRECTOR_GUARD_AUDIT_ENTRIES = 20;
+const MAX_CONTROL_DIRECTOR_LIVENESS_AUDIT_ENTRIES = 20;
+const MAX_CONTROL_DIRECTOR_MISSION_LEDGER_ENTRIES = 20;
+const CONTROL_DIRECTOR_REQUEST_SUMMARY_MAX = 240;
 
 async function persistSessionEntry(params: PersistSessionEntryParams): Promise<void> {
   await persistSessionEntryBase({
@@ -311,6 +316,43 @@ function normalizeExplicitOverrideInput(raw: string, kind: "provider" | "model")
     throw new Error(`${label} override contains invalid control characters.`);
   }
   return trimmed;
+}
+
+function hasControlDirectorNoResponseFallbackPayload(
+  payloads: readonly { text?: unknown; isError?: unknown }[] | undefined,
+): boolean {
+  return (payloads ?? []).some((payload) => {
+    const text = normalizeOptionalString(payload.text) ?? "";
+    return (
+      payload.isError === true &&
+      /agent couldn['’]?t generate a response|agent could not generate a response|please try again/iu.test(
+        text,
+      )
+    );
+  });
+}
+
+function resolveControlDirectorEmbeddedClassification(params: {
+  payloads: readonly { text?: unknown; isError?: unknown }[] | undefined;
+  finalAssistantVisibleText?: string | undefined;
+  livenessState?: string | undefined;
+  classification?: string | undefined;
+}): "empty" | "reasoning-only" | "planning-only" | undefined {
+  if (
+    params.classification === "empty" ||
+    params.classification === "reasoning-only" ||
+    params.classification === "planning-only"
+  ) {
+    return params.classification;
+  }
+  if (
+    hasControlDirectorNoResponseFallbackPayload(params.payloads) ||
+    (normalizeOptionalString(params.livenessState) === "blocked" &&
+      !normalizeOptionalString(params.finalAssistantVisibleText))
+  ) {
+    return "empty";
+  }
+  return undefined;
 }
 
 async function prepareAgentCommandExecution(
@@ -640,7 +682,23 @@ async function agentCommandInternal(
         stopReason,
         abortSignal: opts.abortSignal,
       });
-      const payloads = result.payloads;
+      const controlDirectorGuardResult = await applyControlDirectorDeliveryGuards({
+        agentId: sessionAgentId,
+        payloads: result.payloads,
+        finalAssistantVisibleText: finalText,
+        classification: finalText.trim() ? undefined : "empty",
+        canQueueContinuation: Boolean(sessionKey),
+        externalAbort: opts.abortSignal?.aborted === true,
+        runId,
+        sessionId,
+        sessionKey,
+        sessionEntry,
+        sessionStore,
+        storePath,
+        requestBody: body,
+      });
+      const payloads = controlDirectorGuardResult.payloads;
+      sessionEntry = controlDirectorGuardResult.sessionEntry ?? sessionEntry;
       const { deliverAgentCommandResult } = await loadDeliveryRuntime();
 
       return await deliverAgentCommandResult({
@@ -1315,7 +1373,7 @@ async function agentCommandInternal(
       payloads: result.payloads ?? [],
       internalEvents: opts.internalEvents,
     });
-    const payloads = guardedFinalOutput.payloads;
+    let payloads = guardedFinalOutput.payloads;
     if (guardedFinalOutput.audit) {
       const auditEntry = buildSessionJudgeGuardAuditEntry({
         audit: guardedFinalOutput.audit,
@@ -1350,6 +1408,30 @@ async function agentCommandInternal(
         }
       }
     }
+
+    const controlDirectorGuardResult = await applyControlDirectorDeliveryGuards({
+      agentId: sessionAgentId,
+      payloads,
+      finalAssistantVisibleText: result.meta.finalAssistantVisibleText,
+      classification: resolveControlDirectorEmbeddedClassification({
+        payloads,
+        finalAssistantVisibleText: result.meta.finalAssistantVisibleText,
+        livenessState: result.meta.livenessState,
+        classification: result.meta.agentHarnessResultClassification,
+      }),
+      canQueueContinuation: Boolean(sessionKey),
+      externalAbort: result.meta.aborted === true || opts.abortSignal?.aborted === true,
+      approvalPending: Boolean(result.meta.pendingToolCalls?.length),
+      runId,
+      sessionId,
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      storePath,
+      requestBody: body,
+    });
+    payloads = controlDirectorGuardResult.payloads;
+    sessionEntry = controlDirectorGuardResult.sessionEntry ?? sessionEntry;
 
     // Phase 2: Persist pending final delivery for main sessions before attempting delivery.
     // This ensures that if the process restarts during delivery, the payload is durable.

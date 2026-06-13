@@ -70,6 +70,10 @@ describe("control-director-readiness", () => {
       },
       ollamaPrimaryChatSmoke: { ok: true, detail: "status=200" },
       thinkingEscalationPolicy: true,
+      continueUntilCompletePolicy: true,
+      completionEvidencePolicy: true,
+      explicitStatusPolicy: true,
+      runtimeFinalOutputGuard: true,
     });
 
     expect(scorecard.productionReady).toBe(true);
@@ -92,6 +96,10 @@ describe("control-director-readiness", () => {
       },
       ollamaPrimaryChatSmoke: { ok: true, detail: "status=200" },
       thinkingEscalationPolicy: true,
+      continueUntilCompletePolicy: true,
+      completionEvidencePolicy: true,
+      explicitStatusPolicy: true,
+      runtimeFinalOutputGuard: true,
     });
 
     expect(scorecard.productionReady).toBe(false);
@@ -114,11 +122,123 @@ describe("control-director-readiness", () => {
       },
       ollamaPrimaryChatSmoke: { ok: true, detail: "status=200" },
       thinkingEscalationPolicy: false,
+      continueUntilCompletePolicy: true,
+      completionEvidencePolicy: true,
+      explicitStatusPolicy: true,
+      runtimeFinalOutputGuard: true,
     });
 
     expect(scorecard.productionReady).toBe(false);
     expect(scorecard.failedCritical).toContain(
       "Control Director thinking-as-needed escalation policy is present",
+    );
+  });
+
+  it("flags a missing continue-until-complete policy as a critical readiness gap", () => {
+    const scorecard = buildControlDirectorReadinessScorecard({
+      config: createConfig(),
+      ollamaModels: new Map([
+        ["openclaw-control-qwen36-27b:latest", { digest: "same" }],
+        ["qwen3.6:27b-q8_0", { digest: "same" }],
+        ["openclaw-control-qwen25-32b:latest", { digest: "fallback" }],
+      ]),
+      ollamaEnv: {
+        OLLAMA_FLASH_ATTENTION: "1",
+        OLLAMA_KV_CACHE_TYPE: "q8_0",
+        OLLAMA_NUM_PARALLEL: "1",
+      },
+      ollamaPrimaryChatSmoke: { ok: true, detail: "status=200" },
+      thinkingEscalationPolicy: true,
+      continueUntilCompletePolicy: false,
+      completionEvidencePolicy: true,
+      explicitStatusPolicy: true,
+      runtimeFinalOutputGuard: true,
+    });
+
+    expect(scorecard.productionReady).toBe(false);
+    expect(scorecard.failedCritical).toContain(
+      "Control Director continue-until-complete policy is present",
+    );
+  });
+
+  it("flags a missing complete-status evidence gate as a critical readiness gap", () => {
+    const scorecard = buildControlDirectorReadinessScorecard({
+      config: createConfig(),
+      ollamaModels: new Map([
+        ["openclaw-control-qwen36-27b:latest", { digest: "same" }],
+        ["qwen3.6:27b-q8_0", { digest: "same" }],
+        ["openclaw-control-qwen25-32b:latest", { digest: "fallback" }],
+      ]),
+      ollamaEnv: {
+        OLLAMA_FLASH_ATTENTION: "1",
+        OLLAMA_KV_CACHE_TYPE: "q8_0",
+        OLLAMA_NUM_PARALLEL: "1",
+      },
+      ollamaPrimaryChatSmoke: { ok: true, detail: "status=200" },
+      thinkingEscalationPolicy: true,
+      continueUntilCompletePolicy: true,
+      completionEvidencePolicy: false,
+      explicitStatusPolicy: true,
+      runtimeFinalOutputGuard: true,
+    });
+
+    expect(scorecard.productionReady).toBe(false);
+    expect(scorecard.failedCritical).toContain(
+      "Control Director complete-status evidence gate is present",
+    );
+  });
+
+  it("flags a missing explicit final status gate as a critical readiness gap", () => {
+    const scorecard = buildControlDirectorReadinessScorecard({
+      config: createConfig(),
+      ollamaModels: new Map([
+        ["openclaw-control-qwen36-27b:latest", { digest: "same" }],
+        ["qwen3.6:27b-q8_0", { digest: "same" }],
+        ["openclaw-control-qwen25-32b:latest", { digest: "fallback" }],
+      ]),
+      ollamaEnv: {
+        OLLAMA_FLASH_ATTENTION: "1",
+        OLLAMA_KV_CACHE_TYPE: "q8_0",
+        OLLAMA_NUM_PARALLEL: "1",
+      },
+      ollamaPrimaryChatSmoke: { ok: true, detail: "status=200" },
+      thinkingEscalationPolicy: true,
+      continueUntilCompletePolicy: true,
+      completionEvidencePolicy: true,
+      explicitStatusPolicy: false,
+      runtimeFinalOutputGuard: true,
+    });
+
+    expect(scorecard.productionReady).toBe(false);
+    expect(scorecard.failedCritical).toContain(
+      "Control Director explicit final status gate is present",
+    );
+  });
+
+  it("flags a missing runtime final-output guard as a critical readiness gap", () => {
+    const scorecard = buildControlDirectorReadinessScorecard({
+      config: createConfig(),
+      ollamaModels: new Map([
+        ["openclaw-control-qwen36-27b:latest", { digest: "same" }],
+        ["qwen3.6:27b-q8_0", { digest: "same" }],
+        ["openclaw-control-qwen25-32b:latest", { digest: "fallback" }],
+      ]),
+      ollamaEnv: {
+        OLLAMA_FLASH_ATTENTION: "1",
+        OLLAMA_KV_CACHE_TYPE: "q8_0",
+        OLLAMA_NUM_PARALLEL: "1",
+      },
+      ollamaPrimaryChatSmoke: { ok: true, detail: "status=200" },
+      thinkingEscalationPolicy: true,
+      continueUntilCompletePolicy: true,
+      completionEvidencePolicy: true,
+      explicitStatusPolicy: true,
+      runtimeFinalOutputGuard: false,
+    });
+
+    expect(scorecard.productionReady).toBe(false);
+    expect(scorecard.failedCritical).toContain(
+      "Control Director runtime final-output guard is wired",
     );
   });
 
@@ -141,6 +261,10 @@ describe("control-director-readiness", () => {
         detail: "status=500 model failed to load",
       },
       thinkingEscalationPolicy: true,
+      continueUntilCompletePolicy: true,
+      completionEvidencePolicy: true,
+      explicitStatusPolicy: true,
+      runtimeFinalOutputGuard: true,
     });
 
     expect(scorecard.productionReady).toBe(false);

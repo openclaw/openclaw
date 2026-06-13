@@ -69,6 +69,99 @@ describe("listSessionsFromStore subagent metadata", () => {
     ]);
   });
 
+  test("projects Control Director guard audit entries into dashboard session rows", () => {
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store: {},
+      key: "agent:main:main",
+      entry: {
+        sessionId: "sess-main",
+        updatedAt: 10,
+        controlDirectorGuardAudit: [
+          {
+            ts: 9,
+            runId: "run-control-director-guard",
+            action: "rewrote_unsupported_complete",
+            originalStatus: "complete",
+            nextStatus: "blocked",
+            missing: ["evidence"],
+            payloadsChecked: 1,
+            payloadsRewritten: 1,
+          },
+        ],
+      } as SessionEntry,
+    });
+
+    expect(row.controlDirectorGuardAudit).toEqual([
+      expect.objectContaining({
+        runId: "run-control-director-guard",
+        action: "rewrote_unsupported_complete",
+        nextStatus: "blocked",
+        payloadsRewritten: 1,
+      }),
+    ]);
+  });
+
+  test("projects Control Director liveness audit and mission ledger into dashboard session rows", () => {
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store: {},
+      key: "agent:main:main",
+      entry: {
+        sessionId: "sess-main",
+        updatedAt: 10,
+        controlDirectorLivenessAudit: [
+          {
+            ts: 9,
+            runId: "run-control-director-liveness",
+            action: "queued_safe_continuation",
+            reason: "empty final response",
+            classification: "empty",
+            nextStatus: "blocked",
+            continuationCount: 0,
+            continuationQueued: true,
+            payloadsChecked: 0,
+            payloadsSynthesized: 1,
+          },
+        ],
+        controlDirectorMissionLedger: [
+          {
+            missionId: "control-director:run-control-director-liveness",
+            runId: "run-control-director-liveness",
+            requestSummary: "continue until done",
+            status: "continuation_queued",
+            startedAt: 8,
+            updatedAt: 9,
+            continuationCount: 1,
+            finalStatus: "blocked",
+            verifiedEvidenceSummary: "liveness watchdog synthesized a blocked report",
+            nextBuildGap: "queued continuation must verify evidence",
+            completionGrade: 7,
+            criticality: 10,
+            watchdogActions: ["queued_safe_continuation:queued"],
+          },
+        ],
+      } as SessionEntry,
+    });
+
+    expect(row.controlDirectorLivenessAudit).toEqual([
+      expect.objectContaining({
+        runId: "run-control-director-liveness",
+        action: "queued_safe_continuation",
+        continuationQueued: true,
+      }),
+    ]);
+    expect(row.controlDirectorMissionLedger).toEqual([
+      expect.objectContaining({
+        missionId: "control-director:run-control-director-liveness",
+        status: "continuation_queued",
+        continuationCount: 1,
+      }),
+    ]);
+  });
+
   test("searches channel-derived display names before row enrichment", () => {
     const result = listSessionsFromStore({
       cfg,

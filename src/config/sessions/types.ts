@@ -160,6 +160,52 @@ export type SessionJudgeGuardAuditEntry = {
   payloadsRewritten: number;
 };
 
+export type SessionControlDirectorGuardAuditEntry = {
+  ts: number;
+  runId?: string;
+  action: "rewrote_unsupported_complete" | "repaired_missing_required_fields";
+  originalStatus?: "complete" | "blocked" | "needs_user_input" | null;
+  nextStatus: "complete" | "blocked" | "needs_user_input";
+  missing: string[];
+  payloadsChecked: number;
+  payloadsRewritten: number;
+};
+
+export type SessionControlDirectorLivenessAuditEntry = {
+  ts: number;
+  runId?: string;
+  action:
+    | "synthesized_blocked_no_visible_output"
+    | "synthesized_blocked_incomplete_classification"
+    | "queued_safe_continuation"
+    | "blocked_continuation_limit"
+    | "blocked_unsafe_continuation";
+  reason: string;
+  classification?: "empty" | "reasoning-only" | "planning-only";
+  nextStatus: "blocked";
+  continuationCount: number;
+  continuationQueued: boolean;
+  payloadsChecked: number;
+  payloadsSynthesized: number;
+};
+
+export type SessionControlDirectorMissionLedgerEntry = {
+  missionId: string;
+  runId?: string;
+  requestSummary: string;
+  status: "running" | "complete" | "blocked" | "needs_user_input" | "continuation_queued";
+  startedAt: number;
+  updatedAt: number;
+  continuationCount: number;
+  finalStatus?: "complete" | "blocked" | "needs_user_input" | null;
+  verifiedEvidenceSummary?: string;
+  nextBuildGap?: string;
+  completionGrade?: number;
+  criticality?: number;
+  guardActions?: string[];
+  watchdogActions?: string[];
+};
+
 export type LaneExecutionState =
   | "active"
   | "draining"
@@ -233,6 +279,12 @@ export type SessionEntry = {
   subagentRecovery?: SubagentRecoveryState;
   /** Capped audit trail for Judge-driven final-reply rewrites. */
   judgeGuardAudit?: SessionJudgeGuardAuditEntry[];
+  /** Capped audit trail for Control Director runtime completion-contract rewrites. */
+  controlDirectorGuardAudit?: SessionControlDirectorGuardAuditEntry[];
+  /** Capped audit trail for Control Director liveness watchdog interventions. */
+  controlDirectorLivenessAudit?: SessionControlDirectorLivenessAuditEntry[];
+  /** Capped mission ledger for Control Director run status, proof, and continuation state. */
+  controlDirectorMissionLedger?: SessionControlDirectorMissionLedgerEntry[];
   /** Quota cascade protection and state-aware failover status. */
   quotaSuspension?: QuotaSuspension;
   /** Timestamp (ms) when the current sessionId first became active. */

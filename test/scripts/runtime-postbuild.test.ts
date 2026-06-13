@@ -373,6 +373,33 @@ describe("runtime postbuild static assets", () => {
     );
   });
 
+  it("keeps stable aliases when stale legacy chunks re-export the stable alias", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-");
+    const distDir = path.join(rootDir, "dist");
+    await fs.mkdir(distDir, { recursive: true });
+    await fs.writeFile(
+      path.join(distDir, "runtime-plugins.runtime-Old111.js"),
+      'export * from "./runtime-plugins.runtime.js";\n',
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(distDir, "runtime-plugins.runtime-New222.js"),
+      "export const ensureRuntimePluginsLoaded = () => true;\n",
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(distDir, "runtime-plugins.runtime-Old333.js"),
+      'export * from "./runtime-plugins.runtime.js";\n',
+      "utf8",
+    );
+
+    writeStableRootRuntimeAliases({ rootDir });
+
+    expect(await fs.readFile(path.join(distDir, "runtime-plugins.runtime.js"), "utf8")).toBe(
+      'export * from "./runtime-plugins.runtime-New222.js";\n',
+    );
+  });
+
   it("rewrites root runtime imports to stable aliases", async () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-");
     const distDir = path.join(rootDir, "dist");

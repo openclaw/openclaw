@@ -168,8 +168,19 @@ function collectStableRootRuntimeAliasCandidates(params) {
 
 function resolveStableRootRuntimeAliasCandidate(params) {
   const { aliasFileName, candidates, distDir, fsImpl } = params;
-  if (candidates.length === 1) {
-    return candidates[0];
+  const nonSelfAliasCandidates = candidates.filter((candidate) => {
+    const filePath = path.join(distDir, candidate);
+    try {
+      const source = fsImpl.readFileSync(filePath, "utf8");
+      return !source.includes(`"./${aliasFileName}"`) && !source.includes(`'./${aliasFileName}'`);
+    } catch {
+      return true;
+    }
+  });
+  const effectiveCandidates =
+    nonSelfAliasCandidates.length > 0 ? nonSelfAliasCandidates : candidates;
+  if (effectiveCandidates.length === 1) {
+    return effectiveCandidates[0];
   }
   if (aliasFileName === PLUGIN_INSTALL_RUNTIME_ALIAS.aliasFileName) {
     return resolveRootRuntimeCandidateByMarkers({
@@ -179,8 +190,8 @@ function resolveStableRootRuntimeAliasCandidate(params) {
       sourceIncludes: PLUGIN_INSTALL_RUNTIME_ALIAS.sourceIncludes,
     });
   }
-  const candidateSet = new Set(candidates);
-  const wrappers = candidates.filter((candidate) => {
+  const candidateSet = new Set(effectiveCandidates);
+  const wrappers = effectiveCandidates.filter((candidate) => {
     const filePath = path.join(distDir, candidate);
     let source;
     try {
@@ -188,7 +199,7 @@ function resolveStableRootRuntimeAliasCandidate(params) {
     } catch {
       return false;
     }
-    return candidates.some(
+    return effectiveCandidates.some(
       (target) =>
         target !== candidate &&
         candidateSet.has(target) &&

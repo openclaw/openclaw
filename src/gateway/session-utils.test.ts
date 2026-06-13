@@ -245,6 +245,55 @@ describe("gateway session utils", () => {
     });
   });
 
+  test("stale Control Director Qwen alias rows normalize to the canonical Ollama alias", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "ollama/openclaw-control-qwen25-32b:latest",
+          },
+        },
+        list: [
+          {
+            id: "main",
+            default: true,
+            name: "Control Director",
+            model: {
+              primary: "ollama/openclaw-control-qwen36-27b:latest",
+              fallbacks: ["ollama/openclaw-control-qwen25-32b:latest"],
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    const entry = {
+      sessionId: "stale-control-director",
+      updatedAt: 1,
+      modelProvider: "openai",
+      model: "openclaw-control-qwen36-27b",
+    } satisfies SessionEntry;
+
+    expect(resolveSessionModelRef(cfg, entry, "main")).toEqual({
+      provider: "ollama",
+      model: "openclaw-control-qwen36-27b:latest",
+    });
+    expect(resolveSessionModelIdentityRef(cfg, entry, "main")).toEqual({
+      provider: "ollama",
+      model: "openclaw-control-qwen36-27b:latest",
+    });
+
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: {},
+      key: "main",
+      entry,
+    });
+
+    expect(row.modelProvider).toBe("ollama");
+    expect(row.model).toBe("openclaw-control-qwen36-27b:latest");
+  });
+
   test("session defaults and rows use catalog reasoning metadata for provider thinking options", () => {
     const registry = createEmptyPluginRegistry();
     registry.providers.push({

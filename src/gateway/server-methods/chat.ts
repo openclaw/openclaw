@@ -9,7 +9,7 @@ import { rewriteTranscriptEntriesInSessionFile } from "../../agents/pi-embedded-
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox/context.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
-import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { getReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import { stageSandboxMedia } from "../../auto-reply/reply/stage-sandbox-media.js";
 import type { MsgContext, TemplateContext } from "../../auto-reply/templating.js";
@@ -171,6 +171,64 @@ function collectArtifactIdsFromReplyPayloads(
     }
   }
   return [...new Set(ids)];
+}
+
+function buildControlDirectorGuardedStatusTextFromSessionEntry(
+  entry: unknown,
+  runId: string,
+): string | undefined {
+  if (!entry || typeof entry !== "object") {
+    return undefined;
+  }
+  const record = entry as {
+    controlDirectorLivenessAudit?: Array<{
+      runId?: string;
+      reason?: string;
+    }>;
+    controlDirectorMissionLedger?: Array<{
+      runId?: string;
+      verifiedEvidenceSummary?: string;
+      nextBuildGap?: string;
+      completionGrade?: number;
+      criticality?: number;
+      status?: string;
+      finalStatus?: string | null;
+      guardActions?: string[];
+      watchdogActions?: string[];
+    }>;
+  };
+  const liveness = (record.controlDirectorLivenessAudit ?? [])
+    .toReversed()
+    .find((candidate) => candidate.runId === runId);
+  const ledger = (record.controlDirectorMissionLedger ?? [])
+    .toReversed()
+    .find(
+      (candidate) =>
+        candidate.runId === runId &&
+        (candidate.status === "blocked" || candidate.finalStatus === "blocked") &&
+        ((candidate.guardActions?.length ?? 0) > 0 || (candidate.watchdogActions?.length ?? 0) > 0),
+    );
+  if (!liveness || !ledger) {
+    return undefined;
+  }
+  const verifiedEvidenceSummary =
+    ledger.verifiedEvidenceSummary?.trim() ||
+    "Control Director runtime liveness audit recorded a blocked no-response path.";
+  const nextBuildGap =
+    ledger.nextBuildGap?.trim() ||
+    liveness.reason?.trim() ||
+    "Resolve the Control Director liveness blocker before claiming completion.";
+  const completionGrade = typeof ledger.completionGrade === "number" ? ledger.completionGrade : 7;
+  const criticality = typeof ledger.criticality === "number" ? ledger.criticality : 10;
+  return [
+    "Control Director liveness watchdog blocked a silent final response.",
+    "",
+    `Verified state: ${verifiedEvidenceSummary}`,
+    `Next build gap: ${nextBuildGap}`,
+    `Completion Grade: ${completionGrade}/10`,
+    `Criticality: ${criticality}/10`,
+    "Status: blocked",
+  ].join("\n");
 }
 
 type AbortedPartialSnapshot = {
@@ -2815,12 +2873,112 @@ export const chatHandlers: GatewayRequestHandlers = {
                     message,
                   });
                 }
-              } else if (!hasBeforeAgentRunGate) {
-                await emitUserTranscriptUpdate().catch((transcriptErr) => {
-                  context.logGateway.warn(
-                    `webchat user transcript update failed after agent run: ${formatForLog(transcriptErr)}`,
+              } else {
+                let broadcastedControlDirectorGuardedFinal = false;
+                const controlDirectorGuardedFinalPayloads = deliveredReplies
+                  .filter(
+                    (entry) =>
+                      entry.kind === "final" &&
+                      getReplyPayloadMetadata(entry.payload)?.controlDirectorGuardedFinal === true,
+                  )
+                  .map((entry) => entry.payload);
+                if (controlDirectorGuardedFinalPayloads.length > 0) {
+                  const finalPayloads = await normalizeWebchatReplyMediaPathsForDisplay({
+                    cfg,
+                    sessionKey,
+                    agentId,
+                    accountId,
+                    payloads: controlDirectorGuardedFinalPayloads,
+                  });
+                  const { storePath: latestStorePath, entry: latestEntry } =
+                    loadSessionEntry(sessionKey);
+                  const sessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
+                  const transcriptReply = buildTranscriptReplyText(finalPayloads);
+                  if (transcriptReply) {
+                    const appended = await appendAssistantTranscriptMessage({
+                      message: transcriptReply,
+                      sessionId,
+                      storePath: latestStorePath,
+                      sessionFile: latestEntry?.sessionFile,
+                      agentId,
+                      createIfMissing: true,
+                      cfg,
+                    });
+                    const now = Date.now();
+                    const message = appended.ok
+                      ? appended.message
+                      : {
+                          role: "assistant",
+                          content: [{ type: "text", text: transcriptReply }],
+                          text: transcriptReply,
+                          timestamp: now,
+                          stopReason: "stop",
+                          usage: { input: 0, output: 0, totalTokens: 0 },
+                        };
+                    if (!appended.ok) {
+                      context.logGateway.warn(
+                        `webchat guarded final transcript append failed: ${appended.error ?? "unknown error"}`,
+                      );
+                    }
+                    broadcastChatFinal({
+                      context,
+                      runId: clientRunId,
+                      sessionKey,
+                      message,
+                    });
+                    broadcastedControlDirectorGuardedFinal = true;
+                  }
+                }
+                if (!broadcastedControlDirectorGuardedFinal) {
+                  const { storePath: latestStorePath, entry: latestEntry } =
+                    loadSessionEntry(sessionKey);
+                  const guardedStatusText = buildControlDirectorGuardedStatusTextFromSessionEntry(
+                    latestEntry,
+                    clientRunId,
                   );
-                });
+                  if (guardedStatusText) {
+                    const sessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
+                    const appended = await appendAssistantTranscriptMessage({
+                      message: guardedStatusText,
+                      sessionId,
+                      storePath: latestStorePath,
+                      sessionFile: latestEntry?.sessionFile,
+                      agentId,
+                      createIfMissing: true,
+                      cfg,
+                    });
+                    const now = Date.now();
+                    const message = appended.ok
+                      ? appended.message
+                      : {
+                          role: "assistant",
+                          content: [{ type: "text", text: guardedStatusText }],
+                          text: guardedStatusText,
+                          timestamp: now,
+                          stopReason: "stop",
+                          usage: { input: 0, output: 0, totalTokens: 0 },
+                        };
+                    if (!appended.ok) {
+                      context.logGateway.warn(
+                        `webchat guarded status transcript append failed: ${appended.error ?? "unknown error"}`,
+                      );
+                    }
+                    deliveredReplies.push({ payload: { text: guardedStatusText }, kind: "final" });
+                    broadcastChatFinal({
+                      context,
+                      runId: clientRunId,
+                      sessionKey,
+                      message,
+                    });
+                  }
+                }
+                if (!hasBeforeAgentRunGate) {
+                  await emitUserTranscriptUpdate().catch((transcriptErr) => {
+                    context.logGateway.warn(
+                      `webchat user transcript update failed after agent run: ${formatForLog(transcriptErr)}`,
+                    );
+                  });
+                }
               }
               if (!context.chatAbortedRuns.has(clientRunId)) {
                 const finalText = collectFinalTextFromReplyPayloads(deliveredReplies);
