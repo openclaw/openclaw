@@ -2271,7 +2271,12 @@ describe("createFollowupRunner progress forwarding", () => {
       }),
     );
 
-    expect(onToolStart).not.toHaveBeenCalled();
+    expect(onToolStart).toHaveBeenCalledWith({
+      name: "exec",
+      phase: "start",
+      args: { command: "echo hidden" },
+      detailMode: undefined,
+    });
     expect(onItemEvent).not.toHaveBeenCalled();
     expect(onCommandOutput).not.toHaveBeenCalled();
     expect(onCompactionStart).not.toHaveBeenCalled();
@@ -2322,7 +2327,12 @@ describe("createFollowupRunner progress forwarding", () => {
       }),
     );
 
-    expect(onToolStart).not.toHaveBeenCalled();
+    expect(onToolStart).toHaveBeenCalledWith({
+      name: "exec",
+      phase: "start",
+      args: { command: "echo hidden" },
+      detailMode: undefined,
+    });
     expect(onCommandOutput).not.toHaveBeenCalled();
     expect(routeReplyMock).not.toHaveBeenCalled();
   });
@@ -2515,7 +2525,12 @@ describe("createFollowupRunner progress forwarding", () => {
       }),
     );
 
-    expect(onToolStart).not.toHaveBeenCalled();
+    expect(onToolStart).toHaveBeenCalledWith({
+      name: "exec",
+      phase: "start",
+      args: { command: "echo hidden" },
+      detailMode: undefined,
+    });
   });
 });
 
