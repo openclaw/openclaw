@@ -248,7 +248,9 @@ export function resolveModelRuntimePolicy(params: {
   agentId?: string;
   sessionKey?: string;
 }): ResolvedModelRuntimePolicy {
+  const callerProvider = normalizeProviderId(params.provider ?? "");
   const effectiveProvider = resolveEffectiveProvider(params.provider, params.modelId);
+  const inferredMatchedProvider = callerProvider ? undefined : effectiveProvider;
   if (process.env.OPENCLAW_BUILD_PRIVATE_QA === "1") {
     const forcedRuntime = process.env.OPENCLAW_QA_FORCE_RUNTIME?.trim().toLowerCase();
     if (forcedRuntime === "openclaw" || forcedRuntime === "codex") {
@@ -274,7 +276,11 @@ export function resolveModelRuntimePolicy(params: {
     modelId: params.modelId,
   });
   if (hasRuntimePolicy(modelConfig?.agentRuntime)) {
-    return { policy: modelConfig?.agentRuntime, source: "model" };
+    return {
+      policy: modelConfig?.agentRuntime,
+      source: "model",
+      ...(inferredMatchedProvider ? { matchedProvider: inferredMatchedProvider } : {}),
+    };
   }
   const agentWildcardModelPolicy = resolveAgentModelEntryRuntimePolicy({
     ...params,
@@ -285,7 +291,11 @@ export function resolveModelRuntimePolicy(params: {
     return agentWildcardModelPolicy;
   }
   if (hasRuntimePolicy(providerConfig?.agentRuntime)) {
-    return { policy: providerConfig?.agentRuntime, source: "provider" };
+    return {
+      policy: providerConfig?.agentRuntime,
+      source: "provider",
+      ...(inferredMatchedProvider ? { matchedProvider: inferredMatchedProvider } : {}),
+    };
   }
   return {};
 }
