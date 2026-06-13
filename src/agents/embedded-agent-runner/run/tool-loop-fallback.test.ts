@@ -101,7 +101,7 @@ describe("tool-loop terminal fallback", () => {
           },
           {
             toolName: "status",
-            argsHash: "current",
+            argsHash: "third",
             resultHash: "blocked",
             blockedReason: "tool-loop",
           },
@@ -335,7 +335,7 @@ describe("tool-loop terminal fallback", () => {
           },
           {
             toolName: "status",
-            argsHash: "third",
+            argsHash: "current",
             resultHash: "blocked",
             blockedReason: "tool-loop",
           },
@@ -394,7 +394,7 @@ describe("tool-loop terminal fallback", () => {
           },
           {
             toolName: "status",
-            argsHash: "third",
+            argsHash: "current",
             resultHash: "blocked",
             blockedReason: "tool-loop",
           },
@@ -600,6 +600,36 @@ describe("tool-loop terminal fallback", () => {
       }),
     ).toEqual({
       text: "Jobs: 0",
+    });
+  });
+
+  it("does not use a same-tool fallback from a different blocked action", () => {
+    expect(
+      resolveToolLoopAbortFallbackPayload({
+        observations: [
+          {
+            toolName: "cron",
+            argsHash: "status",
+            resultHash: "status-result",
+            resultText: '{ "enabled": true, "jobs": 0, "nextWakeAtMs": null }',
+            terminalResultFallback: {
+              mode: "structured_summary",
+              fields: [{ label: "Jobs", paths: [["jobs"]], format: "count" }],
+            },
+          },
+          {
+            toolName: "cron",
+            argsHash: "add",
+            resultHash: "blocked",
+            blockedReason: "tool-loop",
+            blockedMessage: "CRITICAL: repeated cron add calls.",
+          },
+        ],
+      }),
+    ).toEqual({
+      text:
+        "I stopped because cron repeated the same tool call without progress. " +
+        "No user-facing result text was provided.",
     });
   });
 

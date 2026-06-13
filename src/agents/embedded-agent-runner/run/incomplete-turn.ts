@@ -101,6 +101,7 @@ type SilentToolResultAttempt = Pick<
   | "yieldDetected"
   | "didSendDeterministicApprovalPrompt"
   | "lastToolError"
+  | "itemLifecycle"
   | "messagesSnapshot"
   | "toolMetas"
 >;
@@ -654,6 +655,7 @@ export function resolveTerminalToolResultReplyPayload(params: {
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt ||
     params.attempt.lastToolError ||
+    hasUnsettledAttemptItems(params.attempt) ||
     (params.attempt.messagesSnapshot?.length ?? 0) === 0
   ) {
     return null;

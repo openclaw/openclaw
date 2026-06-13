@@ -500,8 +500,9 @@ export function resolveToolLoopAbortFallback(params: {
   if (!coverageObservations) {
     return undefined;
   }
+  const blockedActionIdentity = resolveToolActionIdentity(blockedObservation);
   const blockedToolSuccessfulObservations = coverageObservations.filter(
-    (observation) => observation.toolName === blockedObservation.toolName,
+    (observation) => resolveToolActionIdentity(observation) === blockedActionIdentity,
   );
   const toolOwnedPublicPayload = resolveToolOwnedPublicPayload({
     successfulObservations: blockedToolSuccessfulObservations,

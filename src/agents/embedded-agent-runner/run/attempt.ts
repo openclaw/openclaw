@@ -5175,6 +5175,7 @@ export async function runEmbeddedAttempt(
           yieldDetected,
           didSendDeterministicApprovalPrompt: didSendDeterministicApprovalPromptNow,
           lastToolError,
+          itemLifecycle: getItemLifecycle(),
           messagesSnapshot,
           toolMetas: toolMetasNormalized,
         },

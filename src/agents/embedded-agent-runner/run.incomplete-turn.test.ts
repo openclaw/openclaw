@@ -404,6 +404,48 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     });
   });
 
+  it.each([
+    {
+      name: "active",
+      itemLifecycle: { startedCount: 2, completedCount: 1, activeCount: 1 },
+    },
+    {
+      name: "started but unfinished",
+      itemLifecycle: { startedCount: 2, completedCount: 1, activeCount: 0 },
+    },
+  ])(
+    "does not synthesize a completed terminal reply while an item is $name",
+    ({ itemLifecycle }) => {
+      const payload = resolveTerminalToolResultReplyPayload({
+        isCronTrigger: false,
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt: makeAttemptResult({
+          assistantTexts: [],
+          itemLifecycle,
+          toolMetas: [{ toolName: "exec" }],
+          messagesSnapshot: [
+            {
+              role: "toolResult",
+              content: [{ type: "text", text: "first command completed" }],
+              details: { aggregated: "first command completed" },
+            } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+            {
+              role: "assistant",
+              stopReason: "stop",
+              provider: "openai",
+              model: "gpt-5.4",
+              content: [],
+            } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+          ],
+        }),
+      });
+
+      expect(payload).toBeNull();
+    },
+  );
+
   it("does not reuse an older tool result when a newer tool call is pending", () => {
     const payload = resolveTerminalToolResultReplyPayload({
       isCronTrigger: false,
