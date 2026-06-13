@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   hasCommittedMessagingToolDeliveryEvidence,
@@ -2133,7 +2134,14 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
   it.each([
     ["presentation", { presentation: { title: "Status", blocks: [] } }],
-    ["interactive", { interactive: { blocks: [{ type: "buttons" as const, buttons: [] }] } }],
+    [
+      "interactive",
+      {
+        interactive: {
+          blocks: [{ type: "buttons" as const, buttons: [{ label: "Open", value: "open" }] }],
+        },
+      },
+    ],
   ])("preserves planning-like text with a %s payload", async (_name, richPayload) => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     const payload = { text: "Checking the deployment status now.", ...richPayload };
@@ -2180,7 +2188,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     ["channel data", { channelData: {} }],
   ])("retries an empty %s payload after completed safe tool work", async (_name, payload) => {
     mockedClassifyFailoverReason.mockReturnValue(null);
-    mockedBuildEmbeddedRunPayloads.mockReturnValue([payload]);
+    mockedBuildEmbeddedRunPayloads.mockReturnValue([payload as unknown as ReplyPayload]);
     const toolMetas = [{ toolName: "read", mutatingAction: false }];
     mockedRunEmbeddedAttempt.mockResolvedValue(
       makeAttemptResult({
@@ -2218,6 +2226,49 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT + 1);
     expect(runAttemptCall(1).prompt).toContain(EMPTY_RESPONSE_RETRY_INSTRUCTION);
+  });
+
+  it.each([
+    ["presentation", { presentation: {} }],
+    ["interactive", { interactive: {} }],
+    ["channel data", { channelData: {} }],
+  ])("does not let empty %s metadata bypass planning-only recovery", async (_name, richPayload) => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    const payload = { text: "Checking the deployment status now.", ...richPayload };
+    mockedBuildEmbeddedRunPayloads.mockReturnValue([payload as unknown as ReplyPayload]);
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        assistantTexts: [payload.text],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "mock-openai",
+          model: "gpt-5.4",
+          content: [{ type: "text", text: payload.text }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      prompt: "Please check the deployment status.",
+      provider: "mock-openai",
+      model: "gpt-5.4",
+      runId: `run-empty-${_name.replace(" ", "-")}-metadata-planning-only`,
+      config: {
+        agents: {
+          defaults: {
+            embeddedAgent: {
+              executionContract: "strict-agentic",
+            },
+          },
+          list: [{ id: "main" }],
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
+    expect(result.payloads).toEqual([{ text: PLANNING_ONLY_BLOCKED_TEXT, isError: true }]);
   });
 
   it("does not apply planning-only classification to OpenAI-compatible xAI models", async () => {
@@ -4348,10 +4399,60 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(result.meta.livenessState).toBe("working");
   });
 
+  it("preserves replay warnings instead of hiding mutations behind async task summaries", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [
+          {
+            toolName: "image_generate",
+            asyncStarted: true,
+            asyncTaskId: "task-image-after-write",
+            asyncTaskRunId: "tool:image_generate:run-after-write",
+          },
+          {
+            toolName: "write",
+            mutatingAction: true,
+          },
+        ],
+        asyncTaskTerminalResults: [
+          {
+            taskId: "task-image-after-write",
+            runId: "tool:image_generate:run-after-write",
+            status: "succeeded",
+            taskKind: "image_generation",
+            terminalSummary: "Generated final image.",
+          },
+        ],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "toolUse",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      trigger: "manual",
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "run-async-terminal-preserves-replay-warning",
+    });
+
+    expect(result.payloads?.[0]).toMatchObject({ isError: true });
+    expect(result.payloads?.[0]?.text).toContain("verify before retrying");
+    expect(JSON.stringify(result.payloads)).not.toContain("image generation task finished");
+  });
+
   it.each([
     { status: "failed", terminalOutcome: undefined, statusText: "failed" },
     { status: "timed_out", terminalOutcome: undefined, statusText: "timed_out" },
     { status: "cancelled", terminalOutcome: undefined, statusText: "cancelled" },
+    { status: "canceled", terminalOutcome: undefined, statusText: "canceled" },
     { status: "lost", terminalOutcome: undefined, statusText: "lost" },
     { status: "succeeded", terminalOutcome: "blocked", statusText: "succeeded/blocked" },
   ])(
@@ -5508,6 +5609,32 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       hasCommittedMessagingToolResultDetails({
         success: false,
         deliveryStatus: "sent",
+      }),
+    ).toBe(false);
+    expect(
+      hasCommittedMessagingToolResultDetails({
+        status: "failed",
+        deliveryStatus: "sent",
+      }),
+    ).toBe(false);
+    expect(
+      hasCommittedMessagingToolResultDetails({
+        deliveryStatus: "sent",
+        result: {
+          dryRun: true,
+          messageId: "dry-run-message",
+        },
+      }),
+    ).toBe(false);
+    expect(
+      hasCommittedMessagingToolResultDetails({
+        deliveryStatus: "sent",
+        payloadOutcomes: [
+          {
+            status: "failed",
+            messageId: "failed-message",
+          },
+        ],
       }),
     ).toBe(false);
     expect(

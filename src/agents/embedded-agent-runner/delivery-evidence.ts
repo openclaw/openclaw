@@ -262,6 +262,41 @@ function hasInternalSourceReplyEvidence(details: Record<string, unknown>): boole
   return hasVisibleReplyShape(details.sourceReply) || hasVisibleReplyShape(details);
 }
 
+function hasExplicitNonDeliveryEvidenceAtDepth(value: unknown, depth: number): boolean {
+  const record = readRecord(value);
+  if (!record) {
+    return false;
+  }
+  if (hasExplicitNonDeliveryFlag(record)) {
+    return true;
+  }
+  if (depth >= 3) {
+    return false;
+  }
+  return (
+    hasExplicitNonDeliveryEvidenceAtDepth(record.result, depth + 1) ||
+    [record.results, record.payloadOutcomes].some(
+      (entries) =>
+        Array.isArray(entries) &&
+        entries.some((entry) => hasExplicitNonDeliveryEvidenceAtDepth(entry, depth + 1)),
+    )
+  );
+}
+
+function hasNestedExplicitNonDeliveryEvidence(record: Record<string, unknown>, depth: number) {
+  if (depth >= 3) {
+    return false;
+  }
+  return (
+    hasExplicitNonDeliveryEvidenceAtDepth(record.result, depth + 1) ||
+    [record.results, record.payloadOutcomes].some(
+      (entries) =>
+        Array.isArray(entries) &&
+        entries.some((entry) => hasExplicitNonDeliveryEvidenceAtDepth(entry, depth + 1)),
+    )
+  );
+}
+
 function hasCommittedMessagingToolResultDetailsAtDepth(details: unknown, depth: number): boolean {
   const record = readRecord(details);
   if (!record) {
@@ -275,22 +310,20 @@ function hasCommittedMessagingToolResultDetailsAtDepth(details: unknown, depth: 
   }
   const deliveryStatus =
     readLowercaseString(record.deliveryStatus) ?? readLowercaseString(record.delivery_status);
+  const status = readLowercaseString(record.status);
   if (deliveryStatus && deliveryStatus !== "sent" && deliveryStatus !== "partial_failed") {
     return false;
   }
-  if (deliveryStatus === "sent") {
-    return true;
+  if (status && status !== "partial_failed" && isKnownNonSentDeliveryStatus(status)) {
+    return false;
   }
-  const status = readLowercaseString(record.status);
   if (
-    !deliveryStatus &&
-    status &&
-    status !== "partial_failed" &&
-    isKnownNonSentDeliveryStatus(status)
+    (deliveryStatus === "sent" || status === "sent") &&
+    hasNestedExplicitNonDeliveryEvidence(record, depth)
   ) {
     return false;
   }
-  if (status === "sent") {
+  if (deliveryStatus === "sent" || status === "sent") {
     return true;
   }
   return (

@@ -451,7 +451,13 @@ function buildAssistantTextTerminalPayloadsFromTexts(
 
 type EmbeddedRunReplyPayload = NonNullable<EmbeddedAgentRunResult["payloads"]>[number];
 
-const ASYNC_TASK_TERMINAL_ERROR_STATUSES = new Set(["failed", "timed_out", "cancelled", "lost"]);
+const ASYNC_TASK_TERMINAL_ERROR_STATUSES = new Set([
+  "failed",
+  "timed_out",
+  "cancelled",
+  "canceled",
+  "lost",
+]);
 
 function hasPayloadMedia(payload: EmbeddedRunReplyPayload): boolean {
   return Boolean(payload.mediaUrl?.trim() || payload.mediaUrls?.some((url) => url.trim()));
@@ -497,9 +503,11 @@ function areTerminalPayloadsPlanningOnlyText(
       payload.isError === true ||
       payload.isReasoning === true ||
       hasPayloadMedia(payload) ||
-      payload.presentation ||
-      payload.interactive ||
-      payload.channelData
+      hasVisibleReplyShape({
+        presentation: payload.presentation,
+        interactive: payload.interactive,
+        channelData: payload.channelData,
+      })
     ) {
       return false;
     }
@@ -514,9 +522,27 @@ function areTerminalPayloadsPlanningOnlyText(
     : isPlanningOnlyAssistantTextForPrompt({ assistantTexts: texts, prompt });
 }
 
+function hasUnrelatedPotentialSideEffectsForAsyncTaskFallback(
+  attempt: EmbeddedRunAttemptForRunner,
+): boolean {
+  return (
+    hasSideEffectProgressEvidence(attempt) ||
+    toolMetasHavePotentialSideEffects(
+      attempt.toolMetas.filter((toolMeta) => toolMeta.asyncStarted !== true),
+    )
+  );
+}
+
 function buildAsyncTaskTerminalPayloads(
   attempt: EmbeddedRunAttemptForRunner,
+  priorAttemptsHadPotentialSideEffects = false,
 ): EmbeddedAgentRunResult["payloads"] | undefined {
+  if (
+    priorAttemptsHadPotentialSideEffects ||
+    hasUnrelatedPotentialSideEffectsForAsyncTaskFallback(attempt)
+  ) {
+    return undefined;
+  }
   const terminalTaskPayloads = (attempt.asyncTaskTerminalResults ?? [])
     .map((task) => {
       const taskKind = normalizeOptionalString(task.taskKind)?.replace(/[_-]+/g, " ");
@@ -3609,7 +3635,7 @@ export async function runEmbeddedAgent(
               emptyAssistantReplyIsSilent: false,
             });
             const promptTimeoutAsyncFallback = canUsePromptTimeoutTerminalFallback
-              ? buildAsyncTaskTerminalPayloads(attempt)
+              ? buildAsyncTaskTerminalPayloads(attempt, priorAttemptsHadPotentialSideEffects)
               : undefined;
             const promptTimeoutToolFallback = canUsePromptTimeoutTerminalFallback
               ? resolveAttemptSuccessfulToolTerminalFallback({
@@ -4007,7 +4033,7 @@ export async function runEmbeddedAgent(
             : null;
           const nonRetryablePlanningOnlyAsyncFallback =
             nonRetryablePlanningOnlyText && canUseAttemptTerminalFallback
-              ? buildAsyncTaskTerminalPayloads(attempt)
+              ? buildAsyncTaskTerminalPayloads(attempt, priorAttemptsHadPotentialSideEffects)
               : undefined;
           const nonRetryablePlanningOnlyToolFallback =
             nonRetryablePlanningOnlyText && canUseAttemptTerminalFallback
@@ -4078,7 +4104,7 @@ export async function runEmbeddedAgent(
           }
           if (reasoningOnlyRetriesExhausted && !finalAssistantVisibleText) {
             const reasoningOnlyAsyncFallback = canUseAttemptTerminalFallback
-              ? buildAsyncTaskTerminalPayloads(attempt)
+              ? buildAsyncTaskTerminalPayloads(attempt, priorAttemptsHadPotentialSideEffects)
               : undefined;
             const reasoningOnlyToolFallback = canUseAttemptTerminalFallback
               ? resolveAttemptSuccessfulToolTerminalFallback({
@@ -4208,7 +4234,7 @@ export async function runEmbeddedAgent(
               ? payloadsForTerminalPath
               : undefined;
             const incompleteTurnAsyncTaskPayloads = canUseAttemptTerminalFallback
-              ? buildAsyncTaskTerminalPayloads(attempt)
+              ? buildAsyncTaskTerminalPayloads(attempt, priorAttemptsHadPotentialSideEffects)
               : undefined;
             const incompleteTurnToolFallback = canUseAttemptTerminalFallback
               ? resolveAttemptSuccessfulToolTerminalFallback({
@@ -4431,7 +4457,7 @@ export async function runEmbeddedAgent(
             !completedAssistantTextTerminalPayloads &&
             (!renderedTerminalPayloads || renderedPayloadsNeedPlanningReplacement) &&
             canUseAttemptTerminalFallback
-              ? buildAsyncTaskTerminalPayloads(attempt)
+              ? buildAsyncTaskTerminalPayloads(attempt, priorAttemptsHadPotentialSideEffects)
               : undefined;
           const assistantTextTerminalPayloads =
             completedAssistantTextTerminalPayloads ??
