@@ -2856,9 +2856,24 @@ async function refreshWorkboardLifecycleTasks(
         ),
         [],
       );
+      const previousTasksToPreserve = confirmationResult.error
+        ? taskLinkState.cards.flatMap((card) => {
+            const task = previousTasksByCardId.get(card.id);
+            return task &&
+              !confirmationResult.missingTaskIds.has(task.taskId) &&
+              taskMatchesTrackedCardLink(task, card, taskLinkState.missingTaskIds)
+              ? [task]
+              : [];
+          })
+        : [];
       applyTaskSummariesToState(
         taskLinkState,
-        [...taskSummaries, ...previouslyConfirmedTasks, ...confirmationResult.tasks],
+        [
+          ...taskSummaries,
+          ...previouslyConfirmedTasks,
+          ...confirmationResult.tasks,
+          ...previousTasksToPreserve,
+        ],
         { missingTaskIds: confirmationResult.missingTaskIds },
       );
       if (

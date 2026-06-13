@@ -4457,6 +4457,8 @@ describe("workboard controller", () => {
     const linked = {
       ...sampleCard,
       status: "ready",
+      sessionKey: sampleTaskSessionKey,
+      runId: "run-1",
       taskId: missingTaskId,
     } satisfies WorkboardCard;
     state.loaded = true;
@@ -4474,6 +4476,44 @@ describe("workboard controller", () => {
     expect(state.tasksByCardId.get(linked.id)).toEqual(replacementTask);
     expect(state.missingTaskIds).toEqual(new Set([missingTaskId]));
     expect(state.lifecycleTaskRefreshError).toBe("tasks unavailable");
+  });
+
+  it("preserves a tracked replacement when exact confirmation fails", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const missingTaskId = "task-pruned-from-ledger";
+    const replacementTask = {
+      ...sampleTask,
+      id: "task-replacement",
+      taskId: "task-replacement",
+    };
+    const linked = {
+      ...sampleCard,
+      status: "ready",
+      sessionKey: sampleTaskSessionKey,
+      runId: "run-1",
+      taskId: missingTaskId,
+    } satisfies WorkboardCard;
+    state.loaded = true;
+    state.cards = [linked];
+    state.tasksByCardId.set(linked.id, replacementTask);
+    state.missingTaskIds = new Set([missingTaskId]);
+    const client = createClient((method) => {
+      if (method === "tasks.list") {
+        return { tasks: [] };
+      }
+      throw new Error("task confirmation unavailable");
+    });
+
+    await syncWorkboardLifecycle({ host, client: client as never, sessions: [] });
+
+    expect(client.request).toHaveBeenNthCalledWith(1, "tasks.list", { limit: 500 });
+    expect(client.request).toHaveBeenNthCalledWith(2, "tasks.get", {
+      taskId: replacementTask.taskId,
+    });
+    expect(state.tasksByCardId.get(linked.id)).toEqual(replacementTask);
+    expect(state.missingTaskIds).toEqual(new Set([missingTaskId]));
+    expect(state.lifecycleTaskRefreshError).toBe("task confirmation unavailable");
   });
 
   it("defers lifecycle writes when exact confirmation after task listing fails", async () => {
