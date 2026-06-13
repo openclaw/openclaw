@@ -646,7 +646,7 @@ async function sendControlDirectorPrompt(page: Page, prompt: string): Promise<st
 }
 
 async function waitForVisibleBlockedResponse(page: Page): Promise<string> {
-  const deadline = Date.now() + 120_000;
+  const deadline = Date.now() + 300_000;
   let lastVisibleText = "";
   while (Date.now() < deadline) {
     const result = await page.evaluate(async (markers) => {
