@@ -53,7 +53,11 @@ export function describeSessionsSpawnTool(options?: {
     "Subagents inherit parent workspace.",
     "Native subagents get task in first visible `[Subagent Task]` message.",
     'Native only: `context="fork"` only when child needs current transcript; else omit or `isolated`.',
-    "Use for fresh child-session work.",
+    "Delegation guidance:",
+    "- Delegate: sidecar/parallel work, bounded subtasks, long reads, web searches, large file processing, debugging in remote workspaces, multi-step batch commands.",
+    "- Do NOT delegate: trivial 1-step lookups, work that must happen in sequence with immediate main-thread consumption, single-line edits, quick glace-and-decide reads.",
+    "- After delegating: advance other non-dependent work in parallel; do not idle-wait on child completion.",
+    "- Parallel: split independent subtasks across multiple sub-agents when they share no outputs.",
   ];
   if (options?.acpAvailable === false) {
     return baseDescription.join(" ");
