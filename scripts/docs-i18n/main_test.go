@@ -219,6 +219,201 @@ func TestRunDocsI18NRewritesFinalLocalizedPageLinks(t *testing.T) {
 	}
 }
 
+func TestRunDocsI18NDoesNotSkipOutputAfterPostprocessFailure(t *testing.T) {
+	t.Parallel()
+
+	docsRoot := t.TempDir()
+	sourcePath := filepath.Join(docsRoot, "gateway", "index.md")
+	writeFile(t, sourcePath, stringsJoin(
+		"---",
+		"title: Gateway",
+		"---",
+		"",
+		"See [Troubleshooting](/gateway/troubleshooting).",
+	))
+
+	skip, outputPath, err := processFileDoc(context.Background(), fakeDocsTranslator{}, docsRoot, sourcePath, "en", "zh-CN", true)
+	if err != nil {
+		t.Fatalf("processFileDoc failed: %v", err)
+	}
+	if skip {
+		t.Fatal("processFileDoc unexpectedly skipped translation")
+	}
+	if err := postprocessLocalizedDocs(docsRoot, "zh-CN", []string{outputPath}); err == nil {
+		t.Fatal("expected missing docs.json to fail postprocess")
+	}
+
+	sourceBytes, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatalf("read source failed: %v", err)
+	}
+	status, err := classifyDocOutput(outputPath, hashBytes(sourceBytes), "zh-CN")
+	if err != nil {
+		t.Fatalf("classifyDocOutput failed: %v", err)
+	}
+	if status != docOutputNeedsPostprocess {
+		t.Fatalf("expected failed-postprocess output to need postprocess, got %v", status)
+	}
+}
+
+func TestRunDocsI18NOnlyBecomesSkippableAfterPostprocessSucceeds(t *testing.T) {
+	t.Parallel()
+
+	docsRoot := t.TempDir()
+	writeFile(t, filepath.Join(docsRoot, ".i18n", "glossary.zh-CN.json"), "[]")
+	writeFile(t, filepath.Join(docsRoot, "docs.json"), `{"redirects":[]}`)
+	sourcePath := filepath.Join(docsRoot, "gateway", "index.md")
+	writeFile(t, sourcePath, stringsJoin(
+		"---",
+		"title: Gateway",
+		"---",
+		"",
+		"See [Troubleshooting](/gateway/troubleshooting).",
+	))
+	writeFile(t, filepath.Join(docsRoot, "gateway", "troubleshooting.md"), "# Troubleshooting\n")
+
+	skip, outputPath, err := processFileDoc(context.Background(), fakeDocsTranslator{}, docsRoot, sourcePath, "en", "zh-CN", true)
+	if err != nil {
+		t.Fatalf("processFileDoc failed: %v", err)
+	}
+	if skip {
+		t.Fatal("processFileDoc unexpectedly skipped translation")
+	}
+
+	sourceBytes, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatalf("read source failed: %v", err)
+	}
+	status, err := classifyDocOutput(outputPath, hashBytes(sourceBytes), "zh-CN")
+	if err != nil {
+		t.Fatalf("classifyDocOutput before postprocess failed: %v", err)
+	}
+	if status != docOutputNeedsPostprocess {
+		t.Fatalf("expected pending postprocess output to need postprocess, got %v", status)
+	}
+
+	if err := postprocessLocalizedDocs(docsRoot, "zh-CN", []string{outputPath}); err != nil {
+		t.Fatalf("postprocessLocalizedDocs failed: %v", err)
+	}
+
+	status, err = classifyDocOutput(outputPath, hashBytes(sourceBytes), "zh-CN")
+	if err != nil {
+		t.Fatalf("classifyDocOutput after postprocess failed: %v", err)
+	}
+	if status != docOutputReady {
+		t.Fatalf("expected postprocessed output to be ready, got %v:\n%s", status, mustReadFile(t, outputPath))
+	}
+}
+
+func TestClassifyDocOutputKeepsEnglishTargetsHashOnly(t *testing.T) {
+	t.Parallel()
+
+	docsRoot := t.TempDir()
+	sourcePath := filepath.Join(docsRoot, "gateway", "index.md")
+	writeFile(t, sourcePath, stringsJoin(
+		"---",
+		"title: Gateway",
+		"---",
+		"",
+		"See [Troubleshooting](/gateway/troubleshooting).",
+	))
+	outputPath := filepath.Join(docsRoot, "en", "gateway", "index.md")
+	writeFile(t, outputPath, stringsJoin(
+		"---",
+		"title: Gateway",
+		"x-i18n:",
+		"  source_hash: "+hashBytes([]byte(mustReadFile(t, sourcePath))),
+		"  postprocess_version: "+localizedLinkPostprocessPending,
+		"---",
+		"",
+		"See [Troubleshooting](/gateway/troubleshooting).",
+	))
+
+	status, err := classifyDocOutput(outputPath, hashBytes([]byte(mustReadFile(t, sourcePath))), "en")
+	if err != nil {
+		t.Fatalf("classifyDocOutput for English target failed: %v", err)
+	}
+	if status != docOutputReady {
+		t.Fatalf("expected English target to remain ready with matching source hash, got %v", status)
+	}
+}
+
+func TestFilterDocQueueSchedulesLegacyOutputsForPostprocessOnly(t *testing.T) {
+	t.Parallel()
+
+	docsRoot := t.TempDir()
+	sourcePath := filepath.Join(docsRoot, "gateway", "index.md")
+	writeFile(t, sourcePath, "# Gateway\n")
+	outputPath := filepath.Join(docsRoot, "zh-CN", "gateway", "index.md")
+	writeFile(t, outputPath, stringsJoin(
+		"---",
+		"title: 网关",
+		"x-i18n:",
+		"  source_hash: "+hashBytes([]byte(mustReadFile(t, sourcePath))),
+		"---",
+		"",
+		"See [Troubleshooting](/gateway/troubleshooting).",
+	))
+
+	pending, skipped, existingOutputs, err := filterDocQueue(docsRoot, "zh-CN", []string{sourcePath}, 0)
+	if err != nil {
+		t.Fatalf("filterDocQueue failed: %v", err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("expected legacy matching output to skip translation, got pending=%v", pending)
+	}
+	if skipped != 1 {
+		t.Fatalf("expected one skipped translation, got %d", skipped)
+	}
+	if len(existingOutputs) != 1 || existingOutputs[0] != outputPath {
+		t.Fatalf("expected existing output to be queued for postprocess, got %v", existingOutputs)
+	}
+}
+
+func TestFilterDocQueueHonorsMaxAcrossPostprocessOutputs(t *testing.T) {
+	t.Parallel()
+
+	docsRoot := t.TempDir()
+	firstSource := filepath.Join(docsRoot, "gateway", "index.md")
+	secondSource := filepath.Join(docsRoot, "providers", "example-provider.md")
+	writeFile(t, firstSource, "# Gateway\n")
+	writeFile(t, secondSource, "# Example provider\n")
+	firstOutput := filepath.Join(docsRoot, "zh-CN", "gateway", "index.md")
+	secondOutput := filepath.Join(docsRoot, "zh-CN", "providers", "example-provider.md")
+	writeFile(t, firstOutput, stringsJoin(
+		"---",
+		"title: 网关",
+		"x-i18n:",
+		"  source_hash: "+hashBytes([]byte(mustReadFile(t, firstSource))),
+		"---",
+		"",
+		"# 网关",
+	))
+	writeFile(t, secondOutput, stringsJoin(
+		"---",
+		"title: 示例 provider",
+		"x-i18n:",
+		"  source_hash: "+hashBytes([]byte(mustReadFile(t, secondSource))),
+		"---",
+		"",
+		"# 示例 provider",
+	))
+
+	pending, skipped, existingOutputs, err := filterDocQueue(docsRoot, "zh-CN", []string{firstSource, secondSource}, 1)
+	if err != nil {
+		t.Fatalf("filterDocQueue failed: %v", err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("expected no translations to be queued, got %v", pending)
+	}
+	if skipped != 1 {
+		t.Fatalf("expected one bounded postprocess-only skip, got %d", skipped)
+	}
+	if len(existingOutputs) != 1 || existingOutputs[0] != firstOutput {
+		t.Fatalf("expected only first output to be queued for postprocess, got %v", existingOutputs)
+	}
+}
+
 func TestRunDocsI18NAllowPartialKeepsEarlierSuccessfulDocOutputs(t *testing.T) {
 	t.Parallel()
 
