@@ -1440,7 +1440,7 @@ describe("createFollowupRunner runtime config", () => {
       }),
     );
 
-    expect(onToolStart).not.toHaveBeenCalled();
+    expect(onToolStart).toHaveBeenCalledTimes(1);
   });
 
   it("bridges queued CLI inter-tool commentary into onItemEvent for live preview", async () => {
@@ -2203,7 +2203,7 @@ describe("createFollowupRunner progress forwarding", () => {
       }),
     );
 
-    expect(onToolStart).not.toHaveBeenCalled();
+    expect(onToolStart).toHaveBeenCalledTimes(1);
     expect(onItemEvent).not.toHaveBeenCalled();
     expect(onCommandOutput).not.toHaveBeenCalled();
     expect(onCompactionStart).not.toHaveBeenCalled();
@@ -2254,7 +2254,7 @@ describe("createFollowupRunner progress forwarding", () => {
       }),
     );
 
-    expect(onToolStart).not.toHaveBeenCalled();
+    expect(onToolStart).toHaveBeenCalledTimes(1);
     expect(onCommandOutput).not.toHaveBeenCalled();
     expect(routeReplyMock).not.toHaveBeenCalled();
   });
@@ -2447,7 +2447,7 @@ describe("createFollowupRunner progress forwarding", () => {
       }),
     );
 
-    expect(onToolStart).not.toHaveBeenCalled();
+    expect(onToolStart).toHaveBeenCalledTimes(1);
   });
 });
 

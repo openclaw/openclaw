@@ -132,10 +132,10 @@ async function forwardFollowupProgressEvent(params: {
 }) {
   const { evt, opts } = params;
   const emitChannelProgress = params.emitChannelProgress !== false;
-  if (!emitChannelProgress && evt.stream !== "compaction") {
-    return;
-  }
 
+  // Always forward tool start events for status reaction callbacks, even when
+  // verbose progress is off. Channel handlers gate status reactions and draft
+  // progress internally, so the callback firing is always safe.
   if (evt.stream === "tool") {
     const phase = readStringValue(evt.data.phase) ?? "";
     const name = readStringValue(evt.data.name);
@@ -150,6 +150,10 @@ async function forwardFollowupProgressEvent(params: {
         detailMode: params.detailMode,
       });
     }
+  }
+
+  if (!emitChannelProgress && evt.stream !== "compaction") {
+    return;
   }
 
   const suppressItemChannelProgress =
