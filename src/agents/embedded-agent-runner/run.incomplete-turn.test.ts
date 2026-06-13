@@ -525,6 +525,41 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(payload).toBeNull();
   });
 
+  it.each([
+    { ok: true, result: { status: "failed" } },
+    { success: true, result: { dryRun: true } },
+  ])(
+    "does not synthesize a completed terminal reply from nested non-delivery details",
+    (details) => {
+      const payload = resolveTerminalToolResultReplyPayload({
+        isCronTrigger: false,
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt: makeAttemptResult({
+          assistantTexts: [],
+          toolMetas: [{ toolName: "exec" }],
+          messagesSnapshot: [
+            {
+              role: "toolResult",
+              content: [{ type: "text", text: "operation completed" }],
+              details,
+            } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+            {
+              role: "assistant",
+              stopReason: "stop",
+              provider: "openai",
+              model: "gpt-5.4",
+              content: [],
+            } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+          ],
+        }),
+      });
+
+      expect(payload).toBeNull();
+    },
+  );
+
   it("does not reuse an older NO_REPLY tool result without current-attempt tool activity", () => {
     const payload = resolveSilentToolResultReplyPayload({
       isCronTrigger: true,
@@ -954,6 +989,88 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       stopReason: "tool_loop_abort",
       finishReason: "tool_loop_abort",
     });
+  });
+
+  it("preserves live replay state when a loop abort has an unresolved tool failure", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    const sentTarget = { tool: "message", provider: "discord", to: "channel-1" };
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (params: unknown) => {
+      const attemptParams = params as {
+        abortSignal?: AbortSignal;
+        onAttemptStateChange?: (state: {
+          replayState: { replayInvalid: boolean; hadPotentialSideEffects: boolean };
+          didSendViaMessagingTool: boolean;
+          didDeliverSourceReplyViaMessageTool: boolean;
+          didSendDeterministicApprovalPrompt: boolean;
+          messagingToolSentTexts: string[];
+          messagingToolSentMediaUrls: string[];
+          messagingToolSentTargets: Array<Record<string, unknown>>;
+          messagingToolSourceReplyPayloads: Array<{ text: string }>;
+          acceptedSessionSpawns: Array<{ runId: string; childSessionKey: string }>;
+          successfulCronAdds: number;
+        }) => void;
+        onToolOutcome?: (observation: {
+          toolName: string;
+          argsHash: string;
+          resultHash: string;
+          failed?: boolean;
+          mutatingAction?: boolean;
+          blockedReason?: string;
+          blockedMessage?: string;
+        }) => void;
+      };
+      attemptParams.onAttemptStateChange?.({
+        replayState: { replayInvalid: true, hadPotentialSideEffects: true },
+        didSendViaMessagingTool: true,
+        didDeliverSourceReplyViaMessageTool: false,
+        didSendDeterministicApprovalPrompt: false,
+        messagingToolSentTexts: ["already sent"],
+        messagingToolSentMediaUrls: [],
+        messagingToolSentTargets: [sentTarget],
+        messagingToolSourceReplyPayloads: [],
+        acceptedSessionSpawns: [],
+        successfulCronAdds: 0,
+      });
+      attemptParams.onToolOutcome?.({
+        toolName: "message",
+        argsHash: "send",
+        resultHash: "failed",
+        failed: true,
+        mutatingAction: true,
+      });
+      attemptParams.onToolOutcome?.({
+        toolName: "message",
+        argsHash: "send",
+        resultHash: "blocked",
+        blockedReason: "tool-loop",
+        blockedMessage: "CRITICAL: repeated message calls.",
+      });
+      expect(attemptParams.abortSignal?.aborted).toBe(true);
+      throw new Error("Request was aborted.");
+    });
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "xai",
+      model: "grok-composer-2.5-fast",
+      runId: "run-tool-loop-after-unresolved-failure",
+    });
+
+    expect(result.payloads).toEqual([
+      {
+        text: "I stopped because repeated tool calls did not make progress. No user-facing result text was provided.",
+        isError: true,
+      },
+      {
+        text: "⚠️ Some tool actions may have already been executed — please verify before retrying.",
+        isError: true,
+      },
+    ]);
+    expect(result.meta.livenessState).toBe("blocked");
+    expect(result.meta.replayInvalid).toBe(true);
+    expect(result.didSendViaMessagingTool).toBe(true);
+    expect(result.messagingToolSentTexts).toEqual(["already sent"]);
+    expect(result.messagingToolSentTargets).toEqual([sentTarget]);
   });
 
   it("warns when an unknown plugin tool completed before a later tool loop abort", async () => {

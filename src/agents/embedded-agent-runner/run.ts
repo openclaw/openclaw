@@ -227,6 +227,8 @@ const COMPACTION_CONTINUATION_RETRY_INSTRUCTION =
   "The previous attempt compacted the conversation context before producing a final user-visible answer. Continue from the compacted transcript and produce the final answer now. Do not restart from scratch, do not repeat completed work, and do not rerun tools unless the transcript clearly lacks required evidence.";
 const REPLAY_UNSAFE_TOOL_LOOP_WARNING =
   "⚠️ Some tool actions may have already been executed — please verify before retrying.";
+const TOOL_LOOP_ABORT_ERROR_TEXT =
+  "I stopped because repeated tool calls did not make progress. No user-facing result text was provided.";
 const NO_REAL_CONVERSATION_MESSAGES_REASON = "no real conversation messages";
 const BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX =
   "Before accepting the previous final answer, apply this revision request and produce the revised final answer. Do not repeat completed work or rerun tools unless the request explicitly requires it.";
@@ -1868,16 +1870,14 @@ export async function runEmbeddedAgent(
           } else {
             parentAbortSignal?.addEventListener("abort", relayParentAbort, { once: true });
           }
-          const buildToolLoopAbortFallbackResult = (): EmbeddedAgentRunResult | undefined => {
+          const buildToolLoopAbortFallbackResult = (): EmbeddedAgentRunResult => {
             const fallback = resolveToolLoopAbortFallback({
               observations: currentAttemptToolLoopObservations,
             });
-            if (!fallback) {
-              return undefined;
-            }
             log.warn(
-              `tool loop abort returned fallback payload: runId=${params.runId} sessionId=${params.sessionId} ` +
-                `provider=${provider}/${modelId} tool=${fallback.toolName}`,
+              `tool loop abort returned ${fallback ? "fallback payload" : "blocked error"}: ` +
+                `runId=${params.runId} sessionId=${params.sessionId} provider=${provider}/${modelId} ` +
+                `tool=${fallback?.toolName ?? "unknown"}`,
             );
             const messagingToolSentTexts = [
               ...accumulatedMessagingToolSentTexts,
@@ -1935,7 +1935,7 @@ export async function runEmbeddedAgent(
             });
             return {
               payloads: [
-                fallback.payload,
+                fallback?.payload ?? { text: TOOL_LOOP_ABORT_ERROR_TEXT, isError: true },
                 ...(hadPotentialSideEffects
                   ? [{ text: REPLAY_UNSAFE_TOOL_LOOP_WARNING, isError: true }]
                   : []),
@@ -2123,10 +2123,7 @@ export async function runEmbeddedAgent(
           })
             .catch((err: unknown): never | EmbeddedAgentRunResult => {
               if (toolLoopAbortError) {
-                const fallbackResult = buildToolLoopAbortFallbackResult();
-                if (fallbackResult) {
-                  return fallbackResult;
-                }
+                return buildToolLoopAbortFallbackResult();
               }
               throw toolLoopAbortError ?? err;
             })
@@ -2140,11 +2137,7 @@ export async function runEmbeddedAgent(
             return rawAttempt;
           }
           if (toolLoopAbortError) {
-            const fallbackResult = buildToolLoopAbortFallbackResult();
-            if (fallbackResult) {
-              return fallbackResult;
-            }
-            throw toolLoopAbortError;
+            return buildToolLoopAbortFallbackResult();
           }
           const attempt = normalizeEmbeddedRunAttemptResult(rawAttempt);
 

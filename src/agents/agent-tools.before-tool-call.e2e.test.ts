@@ -585,6 +585,35 @@ describe("before_tool_call loop detection behavior", () => {
     expect(onToolOutcome.mock.calls.at(-1)?.[0]).not.toHaveProperty("didSendViaMessagingTool");
   });
 
+  it.each([
+    ["plugin success status", { success: true, status: "success" }],
+    ["nested plugin completion status", { ok: true, result: { status: "completed" } }],
+  ])("marks explicit message success with %s as delivered", async (_label, details) => {
+    const onToolOutcome = vi.fn();
+    const execute = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: "delivered" }],
+      details,
+    });
+    const tool = createWrappedTool("message", execute, {
+      ...enabledLoopDetectionContext,
+      runId: "run-plugin-success-message-outcome",
+      onToolOutcome,
+    });
+
+    await expectUnblockedToolExecution(tool, "message-plugin-success", {
+      action: "send",
+      to: "channel:123",
+      content: "delivered",
+    });
+
+    expect(onToolOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "message",
+        didSendViaMessagingTool: true,
+      }),
+    );
+  });
+
   it("marks successful async-started tool outcomes for replay-safety handling", async () => {
     const onToolOutcome = vi.fn();
     const execute = vi.fn().mockResolvedValue({

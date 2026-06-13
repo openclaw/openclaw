@@ -552,24 +552,35 @@ function hasToolCallContent(message: AgentMessage): boolean {
   });
 }
 
-function hasTerminalToolResultFailure(message: AgentMessage): boolean {
-  const details =
-    message && typeof message === "object" && !Array.isArray(message)
-      ? (message as { details?: unknown }).details
-      : undefined;
-  if (!details || typeof details !== "object" || Array.isArray(details)) {
+function hasTerminalToolResultDryRunOrFailureEvidence(value: unknown, depth = 0): boolean {
+  if (Array.isArray(value)) {
+    return (
+      depth < 3 &&
+      value.some((entry) => hasTerminalToolResultDryRunOrFailureEvidence(entry, depth + 1))
+    );
+  }
+  if (!value || typeof value !== "object") {
     return false;
   }
-  const record = details as Record<string, unknown>;
+  const record = value as Record<string, unknown>;
   const status = normalizeLowercaseStringOrEmpty(record.status);
   const deliveryStatus = normalizeLowercaseStringOrEmpty(
     record.deliveryStatus ?? record.delivery_status,
   );
-  return (
+  if (
+    record.dryRun === true ||
     record.ok === false ||
     record.success === false ||
     TERMINAL_TOOL_RESULT_ERROR_STATUSES.has(status) ||
     TERMINAL_TOOL_RESULT_ERROR_STATUSES.has(deliveryStatus)
+  ) {
+    return true;
+  }
+  if (depth >= 3) {
+    return false;
+  }
+  return [record.result, record.results, record.payloadOutcomes].some((entry) =>
+    hasTerminalToolResultDryRunOrFailureEvidence(entry, depth + 1),
   );
 }
 
@@ -581,9 +592,13 @@ function resolveTrailingToolResultText(messages: readonly AgentMessage[]): strin
     }
     const role = normalizeLowercaseStringOrEmpty(message?.role);
     if (isToolResultRole(role)) {
+      const details =
+        message && typeof message === "object" && !Array.isArray(message)
+          ? (message as { details?: unknown }).details
+          : undefined;
       if (
         (message as { isError?: boolean }).isError === true ||
-        hasTerminalToolResultFailure(message)
+        hasTerminalToolResultDryRunOrFailureEvidence(details)
       ) {
         return null;
       }

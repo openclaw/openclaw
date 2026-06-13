@@ -1912,6 +1912,38 @@ describe("messaging tool media URL tracking", () => {
     expect(ctx.state.pendingMessagingTargets.has("tool-status-only-sent")).toBe(false);
   });
 
+  it.each([
+    ["plugin success status", { success: true, status: "success" }],
+    ["nested plugin completion status", { ok: true, result: { status: "completed" } }],
+  ])("commits explicit message success with %s", async (_label, details) => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-plugin-success",
+      args: {
+        action: "send",
+        to: "channel:123",
+        content: "confirmed by plugin",
+      },
+    });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-plugin-success",
+      isError: false,
+      result: { details },
+    });
+
+    expect(ctx.state.messagingToolSentTexts).toEqual(["confirmed by plugin"]);
+    expectRecordFields(requireSingleMessagingTarget(ctx), "messaging target", {
+      to: "channel:123",
+      text: "confirmed by plugin",
+    });
+  });
+
   it("commits partially failed message sends when delivery results prove a send", async () => {
     const { ctx } = createTestContext();
 

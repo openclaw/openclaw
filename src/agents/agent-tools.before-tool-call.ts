@@ -1007,19 +1007,7 @@ function hasMessagingToolNonDeliveryEvidence(value: unknown, depth = 0): boolean
   if (!isPlainObject(value)) {
     return false;
   }
-  const deliveryStatus =
-    typeof value.deliveryStatus === "string"
-      ? value.deliveryStatus.trim().toLowerCase()
-      : typeof value.delivery_status === "string"
-        ? value.delivery_status.trim().toLowerCase()
-        : "";
-  const status = typeof value.status === "string" ? value.status.trim().toLowerCase() : "";
-  if (
-    value.dryRun === true ||
-    hasFailedToolResultStatus(value) ||
-    (deliveryStatus && deliveryStatus !== "sent" && deliveryStatus !== "partial_failed") ||
-    (status && status !== "ok" && status !== "sent" && status !== "partial_failed")
-  ) {
+  if (value.dryRun === true || hasFailedToolResultStatus(value)) {
     return true;
   }
   if (depth >= 3) {
@@ -1119,31 +1107,7 @@ function hasCommittedMessagingToolSendOutcome(params: {
   if (hasMessagingToolNonDeliveryEvidence(details)) {
     return false;
   }
-  const deliveryStatus =
-    typeof details.deliveryStatus === "string"
-      ? details.deliveryStatus.trim().toLowerCase()
-      : typeof details.delivery_status === "string"
-        ? details.delivery_status.trim().toLowerCase()
-        : "";
-  if (deliveryStatus) {
-    return false;
-  }
   const status = typeof details.status === "string" ? details.status.trim().toLowerCase() : "";
-  if (
-    status === "failed" ||
-    status === "partial_failed" ||
-    status === "suppressed" ||
-    status === "dry_run" ||
-    status === "cancelled" ||
-    status === "canceled" ||
-    status === "cancelled_by_message_sending_hook" ||
-    status === "cancelled-by-message-sending-hook"
-  ) {
-    return false;
-  }
-  if (details.ok === false || details.success === false || (status && status !== "ok")) {
-    return false;
-  }
   return details.ok === true || details.success === true || status === "ok";
 }
 

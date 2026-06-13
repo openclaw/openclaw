@@ -352,16 +352,7 @@ function hasMessagingToolNonDeliveryEvidence(value: unknown, depth = 0): boolean
   if (!record) {
     return false;
   }
-  const deliveryStatus =
-    normalizeOptionalLowercaseString(record.deliveryStatus) ??
-    normalizeOptionalLowercaseString(record.delivery_status);
-  const status = normalizeOptionalLowercaseString(record.status);
-  if (
-    record.dryRun === true ||
-    hasToolResultFailureDetails(record) ||
-    (deliveryStatus && deliveryStatus !== "sent" && deliveryStatus !== "partial_failed") ||
-    (status && status !== "ok" && status !== "sent" && status !== "partial_failed")
-  ) {
+  if (record.dryRun === true || hasToolResultFailureDetails(record)) {
     return true;
   }
   if (depth >= 3) {
@@ -725,16 +716,7 @@ function hasCommittedMessagingToolSendResult(result: unknown): boolean {
   if (hasMessagingToolNonDeliveryEvidence(details)) {
     return false;
   }
-  const deliveryStatus =
-    normalizeOptionalLowercaseString(details.deliveryStatus) ??
-    normalizeOptionalLowercaseString(details.delivery_status);
   const status = normalizeOptionalLowercaseString(details?.status);
-  if (deliveryStatus) {
-    return false;
-  }
-  if (hasToolResultFailureDetails(details) || (status && status !== "ok")) {
-    return false;
-  }
   return details.ok === true || details.success === true || status === "ok";
 }
 
