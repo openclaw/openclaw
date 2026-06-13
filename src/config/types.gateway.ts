@@ -452,6 +452,13 @@ export type GatewayNodesConfig = {
   allowCommands?: string[];
   /** Commands to deny even if they appear in the defaults or node claims. */
   denyCommands?: string[];
+  /**
+   * Default timeout (ms) for gateway→node `node.invoke` calls that do not
+   * specify their own timeout. Raise this for nodes that legitimately run
+   * long commands. Must be a positive integer; invalid values fall back to
+   * the built-in 30000 default.
+   */
+  invokeTimeoutMs?: number;
 };
 
 export type GatewayToolsConfig = {
