@@ -22,13 +22,28 @@ function expandPath(p: string): string {
   return isAbsolute(p) ? p : resolve(p);
 }
 
-function isUsableTemplate(value: unknown): value is UsageBarTemplate {
-  if (typeof value !== "object" || value === null) {
-    return false;
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Deep-merge a user override OVER the built-in default, like other openclaw
+ * config objects: nested objects are merged key-by-key (so `scales`/`aliases`
+ * extend rather than replace), while arrays and scalars from the override win
+ * (a `output.surfaces.<channel>` piece-list replaces that channel's default).
+ * Never mutates `base` — each level is cloned.
+ */
+function mergeTemplate(
+  base: Record<string, unknown>,
+  override: Record<string, unknown>,
+): UsageBarTemplate {
+  const out: Record<string, unknown> = { ...base };
+  for (const [key, value] of Object.entries(override)) {
+    const prev = out[key];
+    out[key] =
+      isPlainObject(prev) && isPlainObject(value) ? mergeTemplate(prev, value) : value;
   }
-  const obj = value as Record<string, unknown>;
-  const hasOutput = typeof obj.output === "object" && obj.output !== null;
-  return hasOutput || Array.isArray(obj.segments);
+  return out;
 }
 
 function readTemplateFile(path: string): UsageBarTemplate | undefined {
@@ -40,7 +55,7 @@ function readTemplateFile(path: string): UsageBarTemplate | undefined {
   }
   try {
     const parsed: unknown = JSON.parse(raw);
-    return isUsableTemplate(parsed) ? parsed : undefined;
+    return isPlainObject(parsed) ? parsed : undefined;
   } catch {
     return undefined;
   }
@@ -71,18 +86,24 @@ export function loadUsageBarTemplate(
   if (!configured) {
     return undefined;
   }
-  if (typeof configured === "object") {
-    return isUsableTemplate(configured) ? configured : undefined;
-  }
+  // The bare default, no override.
   if (configured === DEFAULT_SENTINEL) {
     return DEFAULT_USAGE_BAR_TEMPLATE;
   }
+  // Inline override object → merged over the default.
+  if (typeof configured === "object") {
+    return isPlainObject(configured)
+      ? mergeTemplate(DEFAULT_USAGE_BAR_TEMPLATE, configured)
+      : undefined;
+  }
+  // File path → parsed override merged over the default. A missing/invalid file
+  // yields no override (undefined), so the caller falls back to the built-in line.
   const path = expandPath(configured);
   const cached = fileCache.get(path);
-  if (cached) {
-    return cached.template ?? (cached.watcher ? undefined : cacheTemplateFile(path));
-  }
-  return cacheTemplateFile(path);
+  const override = cached
+    ? (cached.template ?? (cached.watcher ? undefined : cacheTemplateFile(path)))
+    : cacheTemplateFile(path);
+  return override ? mergeTemplate(DEFAULT_USAGE_BAR_TEMPLATE, override) : undefined;
 }
 
 export function clearUsageBarTemplateCacheForTest(): void {

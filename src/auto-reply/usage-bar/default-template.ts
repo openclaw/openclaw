@@ -29,8 +29,17 @@ import type { UsageBarTemplate } from "./translator.js";
  */
 export const DEFAULT_USAGE_BAR_TEMPLATE: UsageBarTemplate = {
   schema: "openclaw.usageBar.v1",
+  // Full glyph-ramp palette shipped by default; a user template can add more
+  // or override by name. Each is low→high (string = one glyph per char).
   scales: {
     braille: "⠐⡀⡄⡆⡇⣇⣧⣷⣿",
+    block: "░▏▎▍▌▋▊▉█",
+    shade: "░▒▓█",
+    moon: "🌑🌘🌗🌖🌕",
+    level: "▁▂▃▄▅▆▇█",
+    weather: ["🥶", "☁️", "🌥", "⛅️", "🌤", "☀️"],
+    plants: ["🪾", "🍂", "🌱", "☘️", "🍀", "🌿"],
+    moons6: ["🌑", "🌚", "🌘", "🌗", "🌖", "🌝"],
   },
   aliases: {
     models: {
