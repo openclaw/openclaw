@@ -1,3 +1,4 @@
+import { ensureContextWindowCacheLoaded } from "../agents/context.js";
 // Gateway early-startup runtime helpers.
 // Starts discovery, remote skills, task maintenance, and delayed maintenance setup.
 import type { GatewayTailscaleMode } from "../config/types.gateway.js";
@@ -116,6 +117,13 @@ export async function startGatewayEarlyRuntime(params: {
   let getActiveTaskCount = () => 0;
 
   if (!params.minimalTestGateway) {
+    // Warm the model context window discovery cache before the HTTP server
+    // starts, so the very first /status call after restart shows correct
+    // per-model context windows instead of the DEFAULT_CONTEXT_TOKENS fallback.
+    // Discovery is local-only (~10-50ms filesystem I/O) and internally caught.
+    // This is a companion to the lazy-guard in resolveStatusRuntimeContextTokens.
+    void ensureContextWindowCacheLoaded();
+
     const [{ primeRemoteSkillsCache, setSkillsRemoteRegistry }, taskRegistryMaintenance] =
       await measureStartup(params.startupTrace, "runtime.early.lazy-runtime-imports", () =>
         Promise.all([
