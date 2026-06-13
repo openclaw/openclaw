@@ -4,8 +4,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { toRepoRelativePath } from "./cli-paths.js";
 import { QA_EVIDENCE_FILENAME, type QaEvidenceStatus } from "./evidence-summary.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
+import { shellQuote } from "./shell-quote.js";
 
 export type QaScenarioCommandExecution = {
   args: string[];
@@ -50,14 +52,6 @@ export type QaScenarioRunArtifacts<TScenario extends QaRunnableScenario> = {
   reportPath: string;
   results: QaScenarioCommandResultEntry<TScenario>[];
 };
-
-export function toRepoRelativePath(repoRoot: string, absolutePath: string) {
-  return path.relative(repoRoot, absolutePath).split(path.sep).join("/");
-}
-
-function shellQuote(value: string) {
-  return /^[A-Za-z0-9_./:=@+-]+$/u.test(value) ? value : `'${value.replaceAll("'", "'\\''")}'`;
-}
 
 function formatCommand(step: QaScenarioCommandStep) {
   return [step.command, ...step.args].map(shellQuote).join(" ");

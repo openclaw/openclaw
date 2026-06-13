@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
 import { z } from "zod";
+import { isRepoRootRelativeRef } from "./cli-paths.js";
 
 export const DEFAULT_QA_AGENT_IDENTITY_MARKDOWN = `# Dev C-3PO
 
@@ -45,10 +46,6 @@ const qaScenarioConfigSchema = z.record(z.string(), z.unknown()).superRefine((co
     }
   }
 });
-
-function isRepoRootRelativeRef(value: string) {
-  return !path.isAbsolute(value) && value.split(/[\\/]+/u).every((part) => part !== "..");
-}
 
 const qaScenarioRepoRefSchema = z
   .string()

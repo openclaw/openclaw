@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
 import { z } from "zod";
+import { isRepoRootRelativeRef } from "./cli-paths.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 
 export const QA_SCORECARD_TAXONOMY_PATH = "taxonomy-mappings.yaml";
@@ -14,10 +15,6 @@ const qaScorecardIdSchema = z
   .regex(/^[a-z0-9]+(?:[.-][a-z0-9]+)*$/, {
     message: "scorecard and coverage ids must use lowercase dotted or dashed tokens",
   });
-
-function isRepoRootRelativeRef(value: string) {
-  return !path.isAbsolute(value) && value.split(/[\\/]+/u).every((part) => part !== "..");
-}
 
 const qaScorecardRepoRefSchema = z
   .string()
