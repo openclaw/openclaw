@@ -340,6 +340,36 @@ export const sendAnimationSpy: AnyAsyncMock = grammySpies.sendAnimationSpy;
 export const sendPhotoSpy: AnyAsyncMock = grammySpies.sendPhotoSpy;
 export const getFileSpy: AnyAsyncMock = grammySpies.getFileSpy;
 
+type RichMessageParams = {
+  chat_id?: string | number;
+  message_id?: number;
+  rich_message?: {
+    markdown?: string;
+    html?: string;
+  };
+  [key: string]: unknown;
+};
+
+function getRichMessageText(params: RichMessageParams): string {
+  return params.rich_message?.markdown ?? params.rich_message?.html ?? "";
+}
+
+function toLegacyMessageParams(params: RichMessageParams): Record<string, unknown> {
+  const { chat_id: _chatId, message_id: _messageId, rich_message: _richMessage, ...rest } = params;
+  const replyParameters = rest.reply_parameters;
+  if (
+    replyParameters &&
+    typeof replyParameters === "object" &&
+    !("quote" in replyParameters) &&
+    typeof (replyParameters as { message_id?: unknown }).message_id === "number"
+  ) {
+    rest.reply_to_message_id = (replyParameters as { message_id: number }).message_id;
+    rest.allow_sending_without_reply = true;
+    delete rest.reply_parameters;
+  }
+  return rest;
+}
+
 const runnerHoisted = vi.hoisted(() => ({
   sequentializeMiddleware: vi.fn(async (_ctx: unknown, next?: () => Promise<void>) => {
     if (typeof next === "function") {
@@ -369,6 +399,21 @@ export const telegramBotRuntimeForTest: TelegramBotRuntimeForTest = {
       sendAnimation: grammySpies.sendAnimationSpy,
       sendPhoto: grammySpies.sendPhotoSpy,
       getFile: grammySpies.getFileSpy,
+      raw: {
+        sendRichMessage: async (params: RichMessageParams) =>
+          grammySpies.sendMessageSpy(
+            params.chat_id,
+            getRichMessageText(params),
+            toLegacyMessageParams(params),
+          ),
+        editMessageText: async (params: RichMessageParams) =>
+          grammySpies.editMessageTextSpy(
+            params.chat_id,
+            params.message_id,
+            getRichMessageText(params),
+            toLegacyMessageParams(params),
+          ),
+      },
     };
     use = grammySpies.middlewareUseSpy;
     on = grammySpies.onSpy;

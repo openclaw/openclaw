@@ -59,10 +59,9 @@ async function writeLiveGatewayConfig(params: {
       list: [{ id: "dev", default: true }],
       defaults: {
         workspace: params.workspace,
-        agentRuntime: { id: "codex" },
         skipBootstrap: true,
         model: { primary: params.modelKey },
-        models: { [params.modelKey]: {} },
+        models: { [params.modelKey]: { agentRuntime: { id: "codex" } } },
         sandbox: { mode: "off" },
       },
     },
