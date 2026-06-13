@@ -137,4 +137,33 @@ describe("read tool", () => {
 
     expect(textContent(result)).toBe(expected);
   });
+
+  it("falls back to UTF-8 with replacement when auto-detection fails on non-Windows", async () => {
+    // When no encoding is specified and UTF-8 fails, the read tool should
+    // attempt Windows codepage detection (which returns null on non-Windows),
+    // then fall back to UTF-8 with replacement characters.
+    // This test verifies the fallback behavior on non-Windows platforms.
+    const invalidUtf8Bytes = Buffer.from([0xc4, 0xe3, 0xba, 0xc3]); // Invalid UTF-8 sequence
+    const tool = createReadToolDefinition("/workspace", {
+      operations: {
+        access: async () => {},
+        detectImageMimeType: async () => null,
+        readFile: async () => invalidUtf8Bytes,
+      },
+    });
+
+    const result = await tool.execute(
+      "call-1",
+      { path: "note.txt" }, // No encoding specified
+      undefined,
+      undefined,
+      {} as never,
+    );
+
+    // Should not throw, should return something (UTF-8 with replacement chars)
+    const text = textContent(result);
+    expect(text).toBeTruthy();
+    // On non-Windows, this will be replacement characters ()
+    // On Windows with GBK codepage, this might decode to actual Chinese
+  });
 });

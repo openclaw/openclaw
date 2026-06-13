@@ -8,6 +8,7 @@ import { access as fsAccess, readFile as fsReadFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { resolveWindowsConsoleEncoding } from "../../../infra/windows-encoding.js";
 import type { ImageContent, Model, TextContent } from "../../../llm/types.js";
 import {
   classifyMediaReferenceSource,
@@ -255,20 +256,48 @@ function formatReadResult(
 }
 
 function decodeReadBuffer(buffer: Buffer, encoding?: string): string {
-  if (!encoding) {
-    return buffer.toString("utf-8");
+  // If explicit encoding is provided, use it directly
+  if (encoding) {
+    const normalized = encoding.toLowerCase().replace(/[^a-z0-9-]/g, "");
+    if (normalized === "utf8" || normalized === "utf-8") {
+      return buffer.toString("utf-8");
+    }
+    try {
+      // Use TextDecoder for legacy encodings (GBK, Latin-1, etc.)
+      // Node.js 24+ supports these encodings natively via TextDecoder
+      return new TextDecoder(normalized).decode(buffer);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Unsupported encoding "${encoding}": ${message}`, { cause: error });
+    }
   }
-  const normalized = encoding.toLowerCase().replace(/[^a-z0-9-]/g, "");
-  if (normalized === "utf8" || normalized === "utf-8") {
-    return buffer.toString("utf-8");
+
+  // No explicit encoding: try UTF-8 first, then fallback to Windows codepage detection
+  // This matches the behavior of decodeWindowsOutputBuffer for cross-platform consistency
+  const utf8 = decodeStrictUtf8(buffer);
+  if (utf8 !== null) {
+    return utf8;
   }
+
+  // UTF-8 failed, try Windows codepage detection (works on Windows, returns null on other platforms)
+  const windowsEncoding = resolveWindowsConsoleEncoding();
+  if (windowsEncoding && windowsEncoding !== "utf-8") {
+    try {
+      return new TextDecoder(windowsEncoding).decode(buffer);
+    } catch {
+      // Fallback to UTF-8 with replacement characters if codepage detection fails
+    }
+  }
+
+  // Final fallback: UTF-8 with replacement characters
+  return buffer.toString("utf-8");
+}
+
+function decodeStrictUtf8(buffer: Buffer): string | null {
   try {
-    // Use TextDecoder for legacy encodings (GBK, Latin-1, etc.)
-    // Node.js 24+ supports these encodings natively via TextDecoder
-    return new TextDecoder(normalized).decode(buffer);
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Unsupported encoding "${encoding}": ${message}`, { cause: error });
+    return new TextDecoder("utf-8", { fatal: true }).decode(buffer);
+  } catch {
+    return null;
   }
 }
 
