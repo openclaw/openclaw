@@ -875,6 +875,46 @@ describe("embedded attempt session lock lifecycle", () => {
     expect(release).toHaveBeenCalledTimes(2);
   });
 
+  it("uses digest-only fence checks after prompt lock reacquire", async () => {
+    const sessionFile = await createTempSessionFile();
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLockLocalDigestFence = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockLocalDigestFence,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+    await expect(controller.withSessionWriteLock(() => "warmup")).resolves.toBe("warmup");
+
+    const stableStat = await fs.stat(sessionFile, { bigint: true });
+    const driftedStat = cloneBigIntStatWith(stableStat, {
+      ctimeNs: stableStat.ctimeNs + 1_000_000n,
+    });
+    const statSpy = vi.spyOn(fs, "stat").mockImplementation(async (target, options) => {
+      if (target === sessionFile && options?.bigint === true) {
+        return driftedStat;
+      }
+      throw new Error(`unexpected stat call for ${String(target)}`);
+    });
+    const readFileSpy = vi.spyOn(fs, "readFile").mockImplementation(async (target, options) => {
+      if (target === sessionFile && options === "utf8") {
+        throw Object.assign(new Error("forced readFile failure"), { code: "EIO" });
+      }
+      throw new Error(`unexpected readFile call for ${String(target)}`);
+    });
+
+    try {
+      await expect(controller.withSessionWriteLock(() => "finalize")).resolves.toBe("finalize");
+    } finally {
+      readFileSpy.mockRestore();
+      statSpy.mockRestore();
+    }
+    expect(controller.hasSessionTakeover()).toBe(false);
+    expect(acquireSessionWriteLockLocalDigestFence).toHaveBeenCalledTimes(3);
+    expect(release).toHaveBeenCalledTimes(3);
+  });
+
   it("trusts owned writes after accepting ctime-only fingerprint drift", async () => {
     const sessionFile = await createTempSessionFile();
     const release = vi.fn(async () => {});
