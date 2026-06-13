@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { parseOxlintShardArgs, resolveOxlintShards } from "../../scripts/run-oxlint-shards.mjs";
 import {
   filterSparseMissingOxlintTargets,
   shouldPrepareExtensionPackageBoundaryArtifacts,
@@ -39,6 +40,17 @@ describe("run-oxlint", () => {
 
     expect(shardedLintRunner).toContain("OPENCLAW_OXLINT_SHARDS_SERIAL");
     expect(shardedLintRunner).toContain("runShardsSerial");
+  });
+
+  it("keeps sharded lint wrapper flags out of oxlint passthrough args", () => {
+    expect(parseOxlintShardArgs(["--only=core", "--split-core", "--quiet"])).toEqual({
+      only: ["core"],
+      splitCore: true,
+      passThroughArgs: ["--quiet"],
+    });
+    expect(
+      resolveOxlintShards({ only: ["core"], splitCore: true }).map((shard) => shard.name),
+    ).toEqual(["core-src", "core-ui", "core-packages"]);
   });
 
   it("filters tracked targets missing from sparse checkouts", () => {
