@@ -1559,6 +1559,7 @@ export async function runHeartbeatOnce(opts: {
   }
 
   let runSessionKey = sessionKey;
+  let outboundPolicySessionKey: string | undefined;
   if (useIsolatedSession) {
     const configuredSession = resolveHeartbeatSession(cfg, agentId, heartbeat);
     // Collapse only the repeated `:heartbeat` suffixes introduced by wake-triggered
@@ -1628,6 +1629,7 @@ export async function runHeartbeatOnce(opts: {
       }
     }
     runSessionKey = isolatedSessionKey;
+    outboundPolicySessionKey = isolatedBaseSessionKey;
   }
   // Update task last run times AFTER successful heartbeat completion
   const updateTaskTimestamps = async () => {
@@ -1708,7 +1710,7 @@ export async function runHeartbeatOnce(opts: {
     cfg,
     agentId,
     sessionKey: runSessionKey,
-    policySessionKey: runSessionKey === sessionKey ? undefined : sessionKey,
+    policySessionKey: outboundPolicySessionKey,
   });
   const canAttemptHeartbeatOk = Boolean(
     !hasDueCommitments && visibility.showOk && delivery.channel !== "none" && delivery.to,

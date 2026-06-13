@@ -40,24 +40,28 @@ function latestDeliveryRequest(): DeliveryRequest {
   return request as DeliveryRequest;
 }
 
+function makeIsolatedLastTargetConfig(tmpDir: string, storePath: string): OpenClawConfig {
+  return {
+    agents: {
+      list: [{ id: "main", default: true }],
+      defaults: {
+        workspace: tmpDir,
+        heartbeat: {
+          every: "5m",
+          target: "last",
+          isolatedSession: true,
+        },
+      },
+    },
+    channels: { whatsapp: { allowFrom: ["*"] } },
+    session: { store: storePath },
+  };
+}
+
 describe("runHeartbeatOnce - isolated heartbeat outbound session mirror", () => {
   it("uses the isolated run key for outbound delivery while base session owns target and state", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-      const cfg: OpenClawConfig = {
-        agents: {
-          list: [{ id: "main", default: true }],
-          defaults: {
-            workspace: tmpDir,
-            heartbeat: {
-              every: "5m",
-              target: "last",
-              isolatedSession: true,
-            },
-          },
-        },
-        channels: { whatsapp: { allowFrom: ["*"] } },
-        session: { store: storePath },
-      };
+      const cfg = makeIsolatedLastTargetConfig(tmpDir, storePath);
       const baseSessionKey = resolveMainSessionKey(cfg);
       const isolatedSessionKey = `${baseSessionKey}:heartbeat`;
       const nowMs = Date.now();
@@ -121,6 +125,54 @@ describe("runHeartbeatOnce - isolated heartbeat outbound session mirror", () => 
       });
       expect(store[isolatedSessionKey]?.heartbeatTaskState).toBeUndefined();
       expect(store[isolatedSessionKey]?.lastHeartbeatText).toBeUndefined();
+    });
+  });
+
+  it("keeps the base policy key when wake re-entry starts from the isolated key", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = makeIsolatedLastTargetConfig(tmpDir, storePath);
+      const baseSessionKey = resolveMainSessionKey(cfg);
+      const isolatedSessionKey = `${baseSessionKey}:heartbeat`;
+      const nowMs = Date.now();
+
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [isolatedSessionKey]: {
+            sessionId: "isolated-session",
+            updatedAt: nowMs - 1_000,
+            lastChannel: "whatsapp",
+            lastProvider: "whatsapp",
+            lastTo: "+15551234567",
+            heartbeatIsolatedBaseSessionKey: baseSessionKey,
+          },
+        }),
+        "utf-8",
+      );
+      replySpy.mockResolvedValueOnce({ text: "Wake result needs attention." });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        sessionKey: isolatedSessionKey,
+        deps: {
+          getReplyFromConfig: replySpy,
+          getQueueSize: () => 0,
+          nowMs: () => nowMs,
+        },
+      });
+
+      expect(result.status).toBe("ran");
+      expect(replySpy.mock.calls[0]?.[0]).toMatchObject({
+        SessionKey: isolatedSessionKey,
+      });
+      expect(latestDeliveryRequest()).toMatchObject({
+        channel: "whatsapp",
+        to: "+15551234567",
+        session: {
+          key: isolatedSessionKey,
+          policyKey: baseSessionKey,
+        },
+      });
     });
   });
 });
