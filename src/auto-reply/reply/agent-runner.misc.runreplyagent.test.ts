@@ -2707,6 +2707,28 @@ describe("runReplyAgent response usage footer", () => {
     expect(text).not.toContain("· session ");
   });
 
+  it("keeps partial token counts in the built-in full footer", async () => {
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          provider: "anthropic",
+          model: "claude",
+          usage: { output: 125 },
+        },
+      },
+    });
+
+    const res = await createRun({
+      responseUsage: "full",
+      sessionKey: "agent:main:whatsapp:dm:+1000",
+    });
+    const payload = Array.isArray(res) ? res[0] : res;
+    const text = payload?.text ?? "";
+    expect(text).toContain("↕️ ?/125");
+    expect(text).not.toContain("Usage:");
+  });
+
   it("shows configured costs for aws-sdk providers when responseUsage=full", async () => {
     runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "ok" }],
