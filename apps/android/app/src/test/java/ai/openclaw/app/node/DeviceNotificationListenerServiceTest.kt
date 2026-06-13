@@ -9,7 +9,7 @@ import ai.openclaw.app.SecurePrefs
 import ai.openclaw.app.isWithinQuietHours
 import android.app.Notification
 import android.content.Context
-import android.os.UserHandle
+import android.os.Process
 import android.service.notification.StatusBarNotification
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -229,9 +229,9 @@ class DeviceNotificationListenerServiceTest {
       "tag-$id",
       1_000,
       0,
+      0,
       notification,
-      UserHandle.of(0),
-      null,
+      Process.myUserHandle(),
       postTimeMs,
     )
   }
