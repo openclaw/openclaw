@@ -73,7 +73,7 @@ export function loadUsageBarTemplate(
   const path = expandPath(configured);
   const cached = fileCache.get(path);
   if (cached) {
-    return cached.template;
+    return cached.template ?? (cached.watcher ? undefined : cacheTemplateFile(path));
   }
   return cacheTemplateFile(path);
 }

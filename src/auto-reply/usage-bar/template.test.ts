@@ -44,14 +44,19 @@ describe("loadUsageBarTemplate", () => {
     expect(loadUsageBarTemplate(path)).toBeUndefined();
   });
 
-  it("caches a missing path as no template", () => {
+  it("reloads a path after an initial miss", () => {
     dir = mkdtempSync(join(tmpdir(), "usage-template-"));
     const missing = join(dir, "missing.json");
     expect(loadUsageBarTemplate(missing)).toBeUndefined();
     writeFileSync(missing, JSON.stringify(tplB));
-    expect(loadUsageBarTemplate(missing)).toBeUndefined();
-    clearUsageBarTemplateCacheForTest();
     expect(loadUsageBarTemplate(missing)).toMatchObject(tplB);
+  });
+
+  it("reloads a path after invalid JSON is fixed", () => {
+    const path = tmpFile("bad.json", "{ not json");
+    expect(loadUsageBarTemplate(path)).toBeUndefined();
+    writeFileSync(path, JSON.stringify(tplB));
+    expect(loadUsageBarTemplate(path)).toMatchObject(tplB);
   });
 
   it("serves the cached template without re-reading the file", () => {
