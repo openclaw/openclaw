@@ -1207,7 +1207,9 @@ describe("self-improvement LLM reviewer", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
-        fetchCalls.push(String(input));
+        fetchCalls.push(
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
+        );
         return new Response(JSON.stringify({ data: [{ id: "moonshotai/Kimi-K2.6" }] }), {
           status: 200,
           headers: { "content-type": "application/json" },
@@ -1255,7 +1257,9 @@ describe("self-improvement LLM reviewer", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
-        fetchCalls.push(String(input));
+        fetchCalls.push(
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
+        );
         return new Response(
           JSON.stringify({
             models: [
@@ -1407,7 +1411,9 @@ describe("self-improvement LLM reviewer", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
-        fetchCalls.push(String(input));
+        fetchCalls.push(
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
+        );
         return new Response(JSON.stringify({ data: [{ id: "local-reviewer" }] }), {
           status: 200,
           headers: { "content-type": "application/json" },

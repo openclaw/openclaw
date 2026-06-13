@@ -103,7 +103,7 @@ function proposal(overrides: Partial<SelfImprovementProposal> = {}): SelfImprove
 
 function event(overrides: Partial<SelfImprovementAuditEvent>): SelfImprovementAuditEvent {
   return {
-    id: overrides.id ?? `sie_${String(overrides.kind ?? "event")}`,
+    id: overrides.id ?? `sie_${overrides.kind ?? "event"}`,
     createdAt: overrides.createdAt ?? now,
     kind: overrides.kind ?? "background_cycle",
     actor: overrides.actor ?? "governor",

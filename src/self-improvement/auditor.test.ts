@@ -92,9 +92,7 @@ describe("auditSelfImprovementOpportunities", () => {
       "memory_curator",
       "memory_curator",
     ]);
-    expect(result.recommendations.every((entry) => entry.safety.mutationAllowed === false)).toBe(
-      true,
-    );
+    expect(result.recommendations.every((entry) => !entry.safety.mutationAllowed)).toBe(true);
   });
 
   it("detects broader continuous-improvement themes without direct mutation", async () => {
@@ -180,8 +178,7 @@ describe("auditSelfImprovementOpportunities", () => {
     ).toBe("program_manager");
     expect(
       result.recommendations.every(
-        (entry) =>
-          entry.safety.mutationAllowed === false && entry.analysis.mode === "deterministic",
+        (entry) => !entry.safety.mutationAllowed && entry.analysis.mode === "deterministic",
       ),
     ).toBe(true);
   });
@@ -235,9 +232,7 @@ describe("auditSelfImprovementOpportunities", () => {
       result.recommendations.find((entry) => entry.category === "workflow_simplification")?.route
         .role,
     ).toBe("program_manager");
-    expect(result.recommendations.every((entry) => entry.safety.mutationAllowed === false)).toBe(
-      true,
-    );
+    expect(result.recommendations.every((entry) => !entry.safety.mutationAllowed)).toBe(true);
   });
 
   it("uses sanitized audit ledger signals for continuous-improvement recommendations", async () => {
