@@ -220,6 +220,32 @@ describe("workboard controller", () => {
     expect(state.missingTaskIds).toEqual(new Set());
   });
 
+  it("keeps a canonical task link over a newer loose session match", async () => {
+    const host = {};
+    const linked = {
+      ...sampleCard,
+      taskId: sampleTask.taskId,
+      sessionKey: sampleTaskSessionKey,
+      runId: sampleTask.runId,
+    } satisfies WorkboardCard;
+    const unrelated = {
+      ...sampleTask,
+      id: "task-unrelated",
+      taskId: "task-unrelated",
+      updatedAt: 10,
+    };
+    const client = createClient({
+      "workboard.cards.list": { cards: [linked], statuses: ["todo", "done"] },
+      "tasks.list": { tasks: [sampleTask, unrelated] },
+    });
+
+    await loadWorkboard({ host, client: client as never, force: true });
+
+    const state = getWorkboardState(host);
+    expect(state.cards[0]).toMatchObject({ taskId: sampleTask.taskId });
+    expect(state.tasksByCardId.get(sampleCard.id)).toEqual(sampleTask);
+  });
+
   it("records poll refresh state until the final reconciliation render", async () => {
     const host = {};
     const client = createClient({
@@ -1513,6 +1539,52 @@ describe("workboard controller", () => {
         sessions: [],
       }).failedAttempts,
     ).toBe(3);
+  });
+
+  it("matches failed attempts by session when only one record has a run id", () => {
+    const taskRunOnly = {
+      ...sampleCard,
+      id: "task-run-only",
+      metadata: {
+        failureCount: 1,
+        attempts: [
+          {
+            id: "attempt-task-run-only",
+            sessionKey: sampleTaskSessionKey,
+            status: "blocked",
+            startedAt: 1,
+          },
+        ],
+      },
+    } satisfies WorkboardCard;
+    const attemptRunOnly = {
+      ...sampleCard,
+      id: "attempt-run-only",
+      metadata: {
+        failureCount: 1,
+        attempts: [
+          {
+            id: "attempt-run-only",
+            runId: "run-1",
+            sessionKey: sampleTaskSessionKey,
+            status: "blocked",
+            startedAt: 1,
+          },
+        ],
+      },
+    } satisfies WorkboardCard;
+    const tasksByCardId = new Map<string, WorkboardTaskSummary>([
+      ["task-run-only", { ...sampleTask, status: "failed" }],
+      ["attempt-run-only", { ...sampleTask, status: "failed", runId: undefined }],
+    ]);
+
+    expect(
+      summarizeWorkboardHealth({
+        cards: [taskRunOnly, attemptRunOnly],
+        tasksByCardId,
+        sessions: [],
+      }).failedAttempts,
+    ).toBe(2);
   });
 
   it("filters built-in Workboard view presets", () => {

@@ -566,8 +566,8 @@ function taskFailureRepresentedByCard(
       ) {
         return false;
       }
-      if (task.runId || attempt.runId) {
-        return Boolean(task.runId && attempt.runId === task.runId);
+      if (task.runId && attempt.runId) {
+        return attempt.runId === task.runId;
       }
       return Boolean(
         attempt.sessionKey &&
@@ -1572,14 +1572,29 @@ function buildWorkboardTaskIndex(tasks: readonly WorkboardTaskSummary[]): Workbo
 function findLatestTaskForCard(
   index: WorkboardTaskIndex,
   card: WorkboardCard,
+  missingTaskIds?: ReadonlySet<string>,
 ): WorkboardTaskSummary | null {
+  const cardTaskId = normalizeString(card.taskId);
+  if (cardTaskId) {
+    let latestExact: WorkboardTaskSummary | null = null;
+    for (const task of index.byId.get(cardTaskId) ?? []) {
+      if (
+        taskMatchesCanonicalCardLink(task, card) &&
+        (!latestExact || taskUpdatedAtValue(task) > taskUpdatedAtValue(latestExact))
+      ) {
+        latestExact = task;
+      }
+    }
+    if (latestExact || !missingTaskIds?.has(cardTaskId)) {
+      return latestExact;
+    }
+  }
   const candidates = new Set<WorkboardTaskSummary>();
   const addCandidates = (tasks: readonly WorkboardTaskSummary[] | undefined) => {
     for (const task of tasks ?? []) {
       candidates.add(task);
     }
   };
-  addCandidates(index.byId.get(normalizeString(card.taskId) ?? ""));
   addCandidates(index.byRunId.get(workboardCardRunId(card) ?? ""));
   addCandidates(index.bySessionKey.get(workboardCardSessionKey(card) ?? ""));
   let latest: WorkboardTaskSummary | null = null;
@@ -1609,7 +1624,7 @@ function selectWorkboardMissingTaskConfirmationIds(
       !taskId ||
       seen.has(taskId) ||
       missingTaskIds.has(taskId) ||
-      findLatestTaskForCard(taskIndex, card)
+      findLatestTaskForCard(taskIndex, card, missingTaskIds)
     ) {
       continue;
     }
@@ -1630,14 +1645,11 @@ function applyTaskSummariesToState(
   const taskIndex = buildWorkboardTaskIndex(tasks);
   // Keep historical card links read-only while remembering exact ledger misses.
   // Confirmed misses stop blocking starts without writes from passive refresh paths.
-  const missingTaskIds = new Set(state.missingTaskIds);
+  const missingTaskIds = new Set([...state.missingTaskIds, ...(options.missingTaskIds ?? [])]);
   const cards = state.cards.map((card) => {
     const cardTaskId = normalizeString(card.taskId);
-    const task = findLatestTaskForCard(taskIndex, card);
+    const task = findLatestTaskForCard(taskIndex, card, missingTaskIds);
     if (!task) {
-      if (cardTaskId && options.missingTaskIds?.has(cardTaskId)) {
-        missingTaskIds.add(cardTaskId);
-      }
       return card;
     }
     tasksByCardId.set(card.id, task);
