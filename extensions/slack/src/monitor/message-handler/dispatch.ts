@@ -1241,6 +1241,14 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             ...(edit.blocks?.length ? { blocks: edit.blocks } : {}),
             threadTs: edit.threadTs,
           });
+          emitSlackMessageSentHooks({
+            ...messageSentHookContext,
+            to: prepared.replyTarget,
+            accountId: account.accountId,
+            content: trimmedFinalText,
+            success: true,
+            messageId: preview.messageId,
+          });
           draftPreviewCommitted = true;
           observedFinalReplyDelivery = true;
         },

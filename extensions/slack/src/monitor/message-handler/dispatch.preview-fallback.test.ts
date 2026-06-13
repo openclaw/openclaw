@@ -1515,6 +1515,13 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       messageId: "171234.567",
       text: "✅",
     });
+    expect(emitSlackMessageSentHooksMock).toHaveBeenCalledTimes(1);
+    expectMockCallArgFields(emitSlackMessageSentHooksMock, 0, "preview message_sent", {
+      content: "✅",
+      success: true,
+      messageId: "171234.567",
+      sessionKeyForInternalHooks: "agent:agent-1:slack:C123",
+    });
     expect(deliverRepliesMock).not.toHaveBeenCalled();
     expect(draftStream.clear).not.toHaveBeenCalled();
   });
