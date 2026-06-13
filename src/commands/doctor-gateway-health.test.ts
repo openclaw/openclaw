@@ -255,6 +255,24 @@ describe("probeGatewayMemoryStatus", () => {
     });
   });
 
+  it("sends probe: true when deep is requested", async () => {
+    callGateway.mockResolvedValue({ embedding: { ok: true, checked: true } });
+
+    await expect(probeGatewayMemoryStatus({ cfg, deep: true })).resolves.toEqual({
+      checked: true,
+      ready: true,
+      error: undefined,
+      skipped: false,
+    });
+
+    expect(callGateway).toHaveBeenCalledWith({
+      method: "doctor.memory.status",
+      params: { probe: true },
+      timeoutMs: 8_000,
+      config: cfg,
+    });
+  });
+
   it("keeps non-timeout gateway errors as explicit failures", async () => {
     callGateway.mockRejectedValue(new Error("gateway closed (1006): no close reason"));
 
