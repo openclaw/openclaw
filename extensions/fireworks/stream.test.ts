@@ -15,7 +15,7 @@ function capturePayload(params: {
 }): Record<string, unknown> {
   let captured: Record<string, unknown> = {};
   const baseStreamFn: StreamFn = (_model, _context, options) => {
-    const payload: Record<string, unknown> = { ...params.initialPayload };
+    const payload = { ...params.initialPayload };
     options?.onPayload?.(payload, _model);
     captured = payload;
     return {} as ReturnType<StreamFn>;
@@ -74,32 +74,39 @@ describe("createFireworksKimiThinkingDisabledWrapper", () => {
     ).toEqual({ thinking: { type: "disabled" } });
   });
 
-  it("strips reasoning fields so dynamic Kimi models cannot re-enable visible CoT", () => {
-    // kimi-k2p5 is not a manifest row, so its reasoning:false is not guaranteed
-    // upstream; the wrapper must still drop any reasoning fields locally.
-    for (const modelId of [
-      "accounts/fireworks/models/kimi-k2p5",
-      "accounts/fireworks/models/kimi-k2p6",
-    ]) {
-      expect(
-        capturePayload({
-          provider: "fireworks",
-          api: "openai-completions",
-          modelId,
-          initialPayload: {
-            reasoning_effort: "low",
-            reasoning: { effort: "low" },
-            reasoningEffort: "low",
-          },
-        }),
-      ).toEqual({ thinking: { type: "disabled" } });
-    }
+  it("strips reasoning fields when disabling Fireworks Kimi thinking", () => {
+    const k2p5Payload = capturePayload({
+      provider: "fireworks",
+      api: "openai-completions",
+      modelId: "accounts/fireworks/models/kimi-k2p5",
+      initialPayload: {
+        reasoning_effort: "low",
+        reasoning: { effort: "low" },
+        reasoningEffort: "low",
+      },
+    });
+    const k2p6Payload = capturePayload({
+      provider: "fireworks",
+      api: "openai-completions",
+      modelId: "accounts/fireworks/models/kimi-k2p6",
+      initialPayload: {
+        reasoning_effort: "low",
+        reasoning: { effort: "low" },
+        reasoningEffort: "low",
+      },
+    });
+
+    expect(k2p5Payload).toEqual({ thinking: { type: "disabled" } });
+    expect(k2p6Payload).toEqual({ thinking: { type: "disabled" } });
   });
 
-  it("passes the thinking-disabled payload to caller onPayload hooks", () => {
+  it("passes sanitized payloads to caller onPayload hooks", () => {
     let callbackPayload: Record<string, unknown> = {};
     const baseStreamFn: StreamFn = (_model, _context, options) => {
-      const payload = {};
+      const payload = {
+        reasoning_effort: "high",
+        reasoning: { effort: "high" },
+      };
       options?.onPayload?.(payload, _model);
       return {} as ReturnType<StreamFn>;
     };

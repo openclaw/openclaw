@@ -6,7 +6,7 @@ import type {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
-export const FIREWORKS_MANIFEST_PROVIDER = buildManifestModelProviderConfig({
+const FIREWORKS_MANIFEST_PROVIDER = buildManifestModelProviderConfig({
   providerId: "fireworks",
   catalog: manifest.modelCatalog.providers.fireworks,
 });
@@ -30,6 +30,10 @@ export const FIREWORKS_DEFAULT_CONTEXT_WINDOW = FIREWORKS_DEFAULT_MODEL.contextW
 export const FIREWORKS_DEFAULT_MAX_TOKENS = FIREWORKS_DEFAULT_MODEL.maxTokens;
 export const FIREWORKS_K2_6_CONTEXT_WINDOW = FIREWORKS_K2_6_MODEL.contextWindow;
 export const FIREWORKS_K2_6_MAX_TOKENS = FIREWORKS_K2_6_MODEL.maxTokens;
+
+export function isFireworksCatalogModelId(modelId: string): boolean {
+  return FIREWORKS_MANIFEST_PROVIDER.models.some((model) => model.id === modelId);
+}
 
 export function buildFireworksCatalogModels(): ModelDefinitionConfig[] {
   return FIREWORKS_MANIFEST_PROVIDER.models.map((model) => structuredClone(model));

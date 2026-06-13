@@ -676,6 +676,16 @@ describe("resolveModel", () => {
   });
 
   it("prefers user openclaw.json config over the Fireworks manifest for the same id", () => {
+    resolveBundledStaticCatalogModelMock.mockReturnValue({
+      ...makeModel("accounts/fireworks/models/kimi-k2p6"),
+      provider: "fireworks",
+      name: "Kimi K2.6",
+      api: "openai-completions",
+      baseUrl: "https://api.fireworks.ai/inference/v1",
+      input: ["text", "image"],
+      contextWindow: 262_144,
+      maxTokens: 262_144,
+    });
     const cfg = {
       models: {
         providers: {
@@ -708,7 +718,13 @@ describe("resolveModel", () => {
       contextWindow: 300_000,
       maxTokens: 300_000,
     });
-    expect(resolveBundledStaticCatalogModelMock).not.toHaveBeenCalled();
+    expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "fireworks",
+        modelId: "accounts/fireworks/models/kimi-k2p6",
+        cfg,
+      }),
+    );
   });
 
   it("keeps provider dynamic metadata for runtime-preferred models", async () => {
