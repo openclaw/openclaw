@@ -1753,6 +1753,10 @@ function resolveSiblingTestTarget(changedPath, cwd) {
   return fs.existsSync(path.join(cwd, sibling)) ? sibling : null;
 }
 
+function shouldCombineSiblingTestWithImportGraph(changedPath) {
+  return changedPath.startsWith("test/helpers/");
+}
+
 function shouldRouteChangedTargetWithoutImportGraph(changedPath) {
   return (
     changedPath.endsWith(".live.test.ts") ||
@@ -1771,7 +1775,7 @@ function resolvePreciseChangedTestTargets(changedPath, options) {
     return [changedPath];
   }
   const siblingTest = resolveSiblingTestTarget(changedPath, cwd);
-  if (siblingTest) {
+  if (siblingTest && !shouldCombineSiblingTestWithImportGraph(changedPath)) {
     return [siblingTest];
   }
   if (BROAD_ONLY_TEST_HELPERS.has(changedPath)) {
@@ -1788,10 +1792,10 @@ function resolvePreciseChangedTestTargets(changedPath, options) {
       forceFull: options.forceFullImportGraph === true,
     });
     if (affectedTests.length > 0) {
-      return affectedTests;
+      return siblingTest ? uniqueOrdered([siblingTest, ...affectedTests]) : affectedTests;
     }
   }
-  return null;
+  return siblingTest ? [siblingTest] : null;
 }
 
 function isDeletedChangedTestTarget(changedPath, cwd) {

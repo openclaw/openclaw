@@ -1123,6 +1123,8 @@ describe("scripts/test-projects changed-target routing", () => {
     withTinyGitRepo(
       {
         "test/helpers/temp-dir.ts": "export const tempDir = 'x';\n",
+        "test/helpers/temp-dir.test.ts":
+          "import { tempDir } from './temp-dir.js';\nvoid tempDir;\n",
         "src/foo.test.ts":
           "import { tempDir } from '../test/helpers/temp-dir.js';\nvoid tempDir;\n",
       },
@@ -1131,7 +1133,7 @@ describe("scripts/test-projects changed-target routing", () => {
       },
     );
 
-    expect(targets).toEqual(["src/foo.test.ts"]);
+    expect(targets).toEqual(["test/helpers/temp-dir.test.ts", "src/foo.test.ts"]);
   });
 
   it("keeps the broad changed run available for shared test helpers", () => {
