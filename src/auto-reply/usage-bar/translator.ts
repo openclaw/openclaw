@@ -1,20 +1,3 @@
-// Declarative usage-bar translator — the in-core port of the reference
-// `usage_bar.py` engine. It is a TRANSLATOR, not a dictionary: it contains no
-// glyphs, no layout, and no default footer — only mechanisms. All *content*
-// (which glyphs make a meter, the segment order, the framing) is DATA in the
-// template (`scales` / `aliases` / `output`). See usage-bar/template.ts.
-//
-// Verbs, used as {path|verb:args|fallback}:
-//   num                3000 -> "3.0k"      (compact count)
-//   fixed:N            0.03771985 -> "0.0377"  (fixed-decimal; N digits, default 2)
-//   dur                14820 -> "4h07m"    (seconds -> reset)
-//   pct                96 -> "96%"
-//   inv                100-value complement (88 -> 12); pipe before another verb
-//   alias:TABLE        look value up in aliases[TABLE]; echo raw value if unlisted
-//   meter:WIDTH:SCALE  0-100 value -> WIDTH cells from scales[SCALE] (graded
-//                      boundary cell); meter:1 = a single glyph
-// Segment forms: text / when / map+cases / each(+item, item_scales).
-
 export type UsageBarTemplate = Record<string, unknown>;
 export type UsageContract = Record<string, unknown>;
 type Vocab = Record<string, unknown>;
@@ -22,23 +5,16 @@ type Vocab = Record<string, unknown>;
 const isObject = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
 
-// A "scale" is an ordered glyph vocabulary. Strings must be split by CODE POINT
-// (not UTF-16 unit) so astral glyphs like 🌑 stay intact — JS string indexing
-// would slice a surrogate pair in half.
 function toGlyphs(scale: unknown): string[] {
   if (Array.isArray(scale)) {
     return scale.filter((g): g is string => typeof g === "string");
   }
   if (typeof scale === "string") {
-    // Array.from iterates by code point (like spread) so astral glyphs survive,
-    // without tripping no-misused-spread. Scales are single-code-point glyphs;
-    // multi-code-point emoji (e.g. ☀️) are supplied as array scales instead.
     return Array.from(scale);
   }
   return [];
 }
 
-// --- number formatters (algorithms, not content) ----------------------------
 function num(value: unknown): string {
   if (value === null || value === undefined || value === "") {
     return "";
@@ -111,7 +87,6 @@ function norm(value: unknown): number {
   return Math.max(0, Math.min(100, n)) / 100;
 }
 
-// --- meter mechanism (glyphs supplied by the template, not here) --------------
 function meter(value: unknown, width: number, scale: unknown): string {
   const glyphs = toGlyphs(scale);
   if (glyphs.length < 2 || width < 1) {
@@ -171,7 +146,6 @@ function applyVerb(name: string, args: string[], value: unknown, vocab: Vocab): 
   }
 }
 
-// --- template walker ----------------------------------------------------------
 function getPath(ctx: unknown, path: string): unknown {
   let cur: unknown = ctx;
   for (const part of path.split(".")) {
@@ -273,7 +247,6 @@ function resolveLayout(
     const sep = typeof output.sep === "string" ? output.sep : "";
     return { sep, pieces: Array.isArray(pieces) ? (pieces as Segment[]) : [] };
   }
-  // legacy: top-level surfaces.<surface>.{sep,segments} over top-level sep/segments
   const ov =
     typeof surface === "string" &&
     isObject(template.surfaces) &&
@@ -290,11 +263,6 @@ function resolveLayout(
   return { sep, pieces: segments as Segment[] };
 }
 
-/**
- * Render a usage footer from a template + contract. Returns "" when the template
- * produces nothing (caller falls back to the boring built-in footer). Never
- * throws for malformed templates — best-effort, fail-open.
- */
 export function renderUsageBar(template: UsageBarTemplate, contract: UsageContract): string {
   try {
     const { sep, pieces } = resolveLayout(template, contract.surface);

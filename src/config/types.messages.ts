@@ -139,15 +139,7 @@ export type MessagesConfig = {
    * Default: none
    */
   responsePrefix?: string;
-  /**
-   * Custom `/usage full` footer template (the declarative `openclaw.usageBar.v1`
-   * format: `scales` / `aliases` / `output.surfaces`). When set and usable, the
-   * per-reply footer is rendered from it instead of the built-in line; an absent,
-   * unreadable, or invalid template falls back to the built-in (fail-open).
-   *
-   * - string: path to a JSON template file (supports a leading `~`).
-   * - object: an inline template.
-   */
+  /** Custom `/usage full` footer template, inline or JSON file path. */
   usageTemplate?: string | Record<string, unknown>;
   groupChat?: GroupChatConfig;
   queue?: QueueConfig;

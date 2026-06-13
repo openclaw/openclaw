@@ -4,8 +4,6 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { clearUsageBarTemplateCacheForTest, loadUsageBarTemplate } from "./template.js";
 
-// Two structurally-valid templates (isUsableTemplate accepts either an `output`
-// object or a `segments` array) so we can tell which one resolved.
 const tplA = { segments: [{ text: "A" }] };
 const tplB = { output: { lines: [] } };
 
@@ -46,25 +44,23 @@ describe("loadUsageBarTemplate", () => {
     expect(loadUsageBarTemplate(path)).toBeUndefined();
   });
 
-  it("does not cache a missing file, so a later-created template is picked up", () => {
+  it("caches a missing path as no template", () => {
     dir = mkdtempSync(join(tmpdir(), "usage-template-"));
     const missing = join(dir, "missing.json");
     expect(loadUsageBarTemplate(missing)).toBeUndefined();
     writeFileSync(missing, JSON.stringify(tplB));
+    expect(loadUsageBarTemplate(missing)).toBeUndefined();
+    clearUsageBarTemplateCacheForTest();
     expect(loadUsageBarTemplate(missing)).toMatchObject(tplB);
   });
 
-  it("serves the cached template on the hot path without re-reading the file", () => {
+  it("serves the cached template without re-reading the file", () => {
     const path = tmpFile("t.json", JSON.stringify(tplA));
-    expect(loadUsageBarTemplate(path)).toMatchObject(tplA); // first load caches
+    expect(loadUsageBarTemplate(path)).toMatchObject(tplA);
 
-    // Change the file on disk. The reply path must NOT re-read synchronously, so
-    // the very next call still returns the cached value (the watcher refresh is
-    // async and has not fired within this synchronous sequence).
     writeFileSync(path, JSON.stringify(tplB));
     expect(loadUsageBarTemplate(path)).toMatchObject(tplA);
 
-    // After an explicit cache reset the fresh content loads.
     clearUsageBarTemplateCacheForTest();
     expect(loadUsageBarTemplate(path)).toMatchObject(tplB);
   });
