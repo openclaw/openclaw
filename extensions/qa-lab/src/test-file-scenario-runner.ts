@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import {
   buildPlaywrightEvidenceSummary,
+  buildVitestEvidenceSummary,
   QA_EVIDENCE_SUMMARY_KIND,
   QA_EVIDENCE_SUMMARY_SCHEMA_VERSION,
   validateQaEvidenceSummaryJson,
@@ -20,11 +21,13 @@ import {
   type QaScenarioRunArtifacts,
 } from "./scenario-command-runner.js";
 
-export type QaPlaywrightScenario = QaSeedScenarioWithSource & {
-  execution: Extract<QaSeedScenarioWithSource["execution"], { kind: "playwright" }>;
+export type QaTestFileScenario = QaSeedScenarioWithSource & {
+  execution: Extract<QaSeedScenarioWithSource["execution"], { kind: "vitest" | "playwright" }>;
 };
 
-export type QaPlaywrightScenarioRunParams = {
+type QaTestFileExecutionKind = QaTestFileScenario["execution"]["kind"];
+
+export type QaTestFileScenarioRunParams = {
   env?: NodeJS.ProcessEnv;
   outputDir: string;
   primaryModel: string;
@@ -34,13 +37,29 @@ export type QaPlaywrightScenarioRunParams = {
   scenarios: readonly QaSeedScenarioWithSource[];
 };
 
-export function isQaPlaywrightScenario(
+type QaTestFileRunnerDefinition = {
+  buildEvidenceSummary: typeof buildVitestEvidenceSummary;
+  buildSteps(scenario: QaTestFileScenario): QaScenarioCommandStep[];
+  reportFilename: string;
+  reportTitle: string;
+};
+
+export function isQaTestFileScenario(
   scenario: QaSeedScenarioWithSource,
-): scenario is QaPlaywrightScenario {
-  return scenario.execution.kind === "playwright";
+): scenario is QaTestFileScenario {
+  return scenario.execution.kind === "vitest" || scenario.execution.kind === "playwright";
 }
 
-function buildPlaywrightSteps(scenario: QaPlaywrightScenario): QaScenarioCommandStep[] {
+function vitestSteps(scenario: QaTestFileScenario): QaScenarioCommandStep[] {
+  return [
+    {
+      command: process.execPath,
+      args: ["scripts/run-vitest.mjs", scenario.execution.path, "--reporter=verbose"],
+    },
+  ];
+}
+
+function playwrightSteps(scenario: QaTestFileScenario): QaScenarioCommandStep[] {
   return [
     {
       command: process.execPath,
@@ -62,28 +81,55 @@ function buildPlaywrightSteps(scenario: QaPlaywrightScenario): QaScenarioCommand
   ];
 }
 
-async function runQaPlaywrightScenario(params: {
+const testFileRunnerDefinitions: Record<QaTestFileExecutionKind, QaTestFileRunnerDefinition> = {
+  vitest: {
+    buildEvidenceSummary: buildVitestEvidenceSummary,
+    buildSteps: vitestSteps,
+    reportFilename: "qa-vitest-report.md",
+    reportTitle: "QA Vitest Scenario Report",
+  },
+  playwright: {
+    buildEvidenceSummary: buildPlaywrightEvidenceSummary,
+    buildSteps: playwrightSteps,
+    reportFilename: "qa-playwright-report.md",
+    reportTitle: "QA Playwright Scenario Report",
+  },
+};
+
+async function runQaTestFileScenario(params: {
   env: NodeJS.ProcessEnv;
   outputDir: string;
   repoRoot: string;
   runCommand: QaScenarioCommandRunner;
-  scenario: QaPlaywrightScenario;
+  scenario: QaTestFileScenario;
 }) {
+  const definition = testFileRunnerDefinitions[params.scenario.execution.kind];
   return await runScenarioCommandSteps({
     ...params,
-    steps: buildPlaywrightSteps(params.scenario),
+    steps: definition.buildSteps(params.scenario),
   });
 }
 
-function buildPlaywrightScenarioEvidence(params: {
+function resolveTestFileExecutionKind(scenarios: readonly QaTestFileScenario[]) {
+  const kinds = new Set(scenarios.map((scenario) => scenario.execution.kind));
+  if (kinds.size > 1) {
+    throw new Error("qa suite cannot mix Vitest and Playwright scenarios in one invocation.");
+  }
+  const [kind] = kinds;
+  return kind;
+}
+
+function buildTestFileEvidence(params: {
   artifactPaths: { kind: string; path: string }[];
   generatedAt: string;
+  kind: QaTestFileExecutionKind;
   primaryModel: string;
   providerMode: QaProviderMode;
-  results: readonly QaScenarioCommandResultEntry<QaPlaywrightScenario>[];
+  results: readonly QaScenarioCommandResultEntry<QaTestFileScenario>[];
   env?: NodeJS.ProcessEnv;
 }) {
-  const evidence = buildPlaywrightEvidenceSummary({
+  const definition = testFileRunnerDefinitions[params.kind];
+  const evidence = definition.buildEvidenceSummary({
     artifactPaths: params.artifactPaths,
     env: params.env,
     generatedAt: params.generatedAt,
@@ -105,23 +151,25 @@ function buildPlaywrightScenarioEvidence(params: {
   });
 }
 
-export async function runQaPlaywrightScenarios(
-  params: QaPlaywrightScenarioRunParams,
-): Promise<QaScenarioRunArtifacts<QaPlaywrightScenario>> {
-  const scenarios = params.scenarios.filter(isQaPlaywrightScenario);
-  if (scenarios.length === 0) {
-    throw new Error("qa suite found no Playwright scenarios to run.");
+export async function runQaTestFileScenarios(
+  params: QaTestFileScenarioRunParams,
+): Promise<QaScenarioRunArtifacts<QaTestFileScenario>> {
+  const scenarios = params.scenarios.filter(isQaTestFileScenario);
+  const kind = resolveTestFileExecutionKind(scenarios);
+  if (!kind) {
+    throw new Error("qa suite found no Vitest or Playwright scenarios to run.");
   }
+  const definition = testFileRunnerDefinitions[kind];
   await fs.mkdir(params.outputDir, { recursive: true });
   const runCommand = params.runCommand ?? runQaScenarioCommand;
   const env = {
     ...process.env,
     ...params.env,
   };
-  const results: QaScenarioCommandResultEntry<QaPlaywrightScenario>[] = [];
+  const results: QaScenarioCommandResultEntry<QaTestFileScenario>[] = [];
   for (const scenario of scenarios) {
     results.push(
-      await runQaPlaywrightScenario({
+      await runQaTestFileScenario({
         env,
         outputDir: params.outputDir,
         repoRoot: params.repoRoot,
@@ -131,16 +179,17 @@ export async function runQaPlaywrightScenarios(
     );
   }
   const generatedAt = new Date().toISOString();
-  const reportPath = path.join(params.outputDir, "qa-playwright-report.md");
+  const reportPath = path.join(params.outputDir, definition.reportFilename);
   const artifactPaths = buildScenarioArtifactPaths({
     reportPath,
     repoRoot: params.repoRoot,
     results,
   });
-  const evidence = buildPlaywrightScenarioEvidence({
+  const evidence = buildTestFileEvidence({
     artifactPaths,
     env,
     generatedAt,
+    kind,
     primaryModel: params.primaryModel,
     providerMode: params.providerMode,
     results,
@@ -149,8 +198,8 @@ export async function runQaPlaywrightScenarios(
     evidence,
     generatedAt,
     outputDir: params.outputDir,
-    reportFilename: "qa-playwright-report.md",
-    reportTitle: "QA Playwright Scenario Report",
+    reportFilename: definition.reportFilename,
+    reportTitle: definition.reportTitle,
     repoRoot: params.repoRoot,
     results,
   });

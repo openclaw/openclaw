@@ -115,6 +115,9 @@ describe("qa scenario catalog", () => {
     const scenario = readQaScenarioById("control-ui-chat-flow-playwright");
 
     expect(scenario.execution.kind).toBe("playwright");
+    if (scenario.execution.kind !== "playwright") {
+      throw new Error("expected Playwright scenario execution");
+    }
     expect(scenario.execution.path).toBe("ui/src/ui/e2e/chat-flow.e2e.test.ts");
     expect(scenario.execution.flow).toBeUndefined();
     expect(scenario.coverage?.primary).toContain("ui.control");

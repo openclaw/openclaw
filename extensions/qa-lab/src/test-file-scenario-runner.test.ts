@@ -3,57 +3,63 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { validateQaEvidenceSummaryJson } from "./evidence-summary.js";
-import { runQaPlaywrightScenarios } from "./playwright-scenario-runner.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import type { QaScenarioCommandExecution } from "./scenario-command-runner.js";
+import { runQaTestFileScenarios } from "./test-file-scenario-runner.js";
 
 const tempRoots: string[] = [];
 
-function makePlaywrightScenario(pathLocal: string): QaSeedScenarioWithSource {
+function makeTestFileScenario(
+  executionKind: "vitest" | "playwright",
+  pathLocal: string,
+): QaSeedScenarioWithSource {
   return {
-    id: "scenario-playwright",
-    title: "playwright scenario",
-    surface: "control-ui",
-    category: "browser-control-ui-and-webchat.browser-ui",
+    id: `scenario-${executionKind}`,
+    title: `${executionKind} scenario`,
+    surface: executionKind === "playwright" ? "control-ui" : "qa-lab",
+    category:
+      executionKind === "playwright"
+        ? "browser-control-ui-and-webchat.browser-ui"
+        : "qa-lab.coverage",
     coverage: {
-      primary: ["ui.control"],
-      secondary: ["ui.streaming"],
+      primary: [executionKind === "playwright" ? "ui.control" : "qa.coverage"],
+      secondary: [executionKind === "playwright" ? "ui.streaming" : "qa.reporting"],
     },
-    objective: "Exercise Playwright scenario evidence.",
-    successCriteria: ["The scenario passes."],
+    objective: `Exercise ${executionKind} scenario evidence.`,
+    successCriteria: ["The scenario writes structured evidence."],
     docsRefs: ["docs/concepts/qa-e2e-automation.md"],
     codeRefs: [pathLocal],
-    sourcePath: "qa/scenarios/ui/scenario-playwright.md",
+    sourcePath: `qa/scenarios/ui/scenario-${executionKind}.md`,
     execution: {
-      kind: "playwright",
+      kind: executionKind,
       path: pathLocal,
     },
   };
 }
 
-async function makeTempRepo() {
-  const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-playwright-scenario-"));
+async function makeTempRepo(prefix: string) {
+  const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
   tempRoots.push(repoRoot);
   await fs.mkdir(path.join(repoRoot, ".artifacts", "qa-e2e"), { recursive: true });
   return repoRoot;
 }
 
-describe("qa playwright scenario runner", () => {
+describe("qa test file scenario runner", () => {
   afterEach(async () => {
     await Promise.all(
       tempRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
     );
   });
 
-  it("runs the repo UI e2e command and writes Playwright evidence", async () => {
-    const repoRoot = await makeTempRepo();
+  it("runs Playwright scenarios with the repo UI e2e command and writes Playwright evidence", async () => {
+    const repoRoot = await makeTempRepo("qa-playwright-scenario-");
     const commands: QaScenarioCommandExecution[] = [];
-    const result = await runQaPlaywrightScenarios({
+    const result = await runQaTestFileScenarios({
       repoRoot,
       outputDir: path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-playwright"),
       providerMode: "mock-openai",
       primaryModel: "mock-openai/gpt-5.5",
-      scenarios: [makePlaywrightScenario("ui/src/ui/e2e/chat-flow.e2e.test.ts")],
+      scenarios: [makeTestFileScenario("playwright", "ui/src/ui/e2e/chat-flow.e2e.test.ts")],
       runCommand: async (command) => {
         commands.push(command);
         return {
@@ -139,5 +145,78 @@ describe("qa playwright scenario runner", () => {
       },
     });
     expect(await fs.readFile(result.reportPath, "utf8")).toContain("Evidence summary");
+  });
+
+  it("runs Vitest scenarios with the declared test path and writes Vitest evidence", async () => {
+    const repoRoot = await makeTempRepo("qa-vitest-scenario-");
+    const commands: QaScenarioCommandExecution[] = [];
+    const result = await runQaTestFileScenarios({
+      repoRoot,
+      outputDir: path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-vitest"),
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.5",
+      scenarios: [makeTestFileScenario("vitest", "extensions/qa-lab/src/coverage-report.test.ts")],
+      runCommand: async (command) => {
+        commands.push(command);
+        return {
+          exitCode: 1,
+          stdout: "",
+          stderr: "failed\n",
+        };
+      },
+    });
+
+    expect(commands.map((command) => command.args)).toEqual([
+      [
+        "scripts/run-vitest.mjs",
+        "extensions/qa-lab/src/coverage-report.test.ts",
+        "--reporter=verbose",
+      ],
+    ]);
+    const evidence = validateQaEvidenceSummaryJson(
+      JSON.parse(await fs.readFile(result.evidencePath, "utf8")),
+    );
+    expect(evidence.entries[0]).toMatchObject({
+      test: {
+        kind: "vitest-test",
+        id: "scenario-vitest",
+        source: {
+          path: "extensions/qa-lab/src/coverage-report.test.ts",
+        },
+      },
+      mapping: {
+        coverage: [
+          {
+            id: "qa.coverage",
+            role: "primary",
+          },
+          {
+            id: "qa.reporting",
+            role: "secondary",
+          },
+        ],
+      },
+      execution: {
+        runner: "vitest",
+        artifacts: [
+          {
+            kind: "report",
+            path: ".artifacts/qa-e2e/scenario-vitest/qa-vitest-report.md",
+            source: "vitest",
+          },
+          {
+            kind: "log",
+            path: ".artifacts/qa-e2e/scenario-vitest/scenario-vitest.log",
+            source: "vitest",
+          },
+        ],
+      },
+      result: {
+        status: "fail",
+        failure: {
+          reason: "node exited with 1",
+        },
+      },
+    });
   });
 });

@@ -64,12 +64,16 @@ const qaFlowScenarioExecutionSchema = z.object({
   config: qaScenarioConfigSchema.optional(),
 });
 
-const qaTestFileScenarioExecutionSchema = z.object({
-  kind: z.enum(["vitest", "playwright"]),
+const qaTestFileScenarioExecutionBaseSchema = z.object({
   summary: z.string().trim().min(1).optional(),
   path: qaScenarioRepoRefSchema,
   config: qaScenarioConfigSchema.optional(),
 });
+
+const qaTestFileScenarioExecutionSchema = z.discriminatedUnion("kind", [
+  qaTestFileScenarioExecutionBaseSchema.extend({ kind: z.literal("vitest") }),
+  qaTestFileScenarioExecutionBaseSchema.extend({ kind: z.literal("playwright") }),
+]);
 
 const qaScenarioExecutionSchema = z.union([
   qaFlowScenarioExecutionSchema,
