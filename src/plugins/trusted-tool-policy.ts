@@ -1,6 +1,8 @@
 // Resolves trusted tool policy for plugins from runtime config.
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { emitTrustedDiagnosticEvent } from "../infra/diagnostic-events.js";
+import { createSecurityMatrixBeforeToolCallAuditEvent } from "../security/security-matrix/before-tool-call.js";
 import { isPlainObject } from "../utils.js";
 import type {
   PluginHookBeforeToolCallEvent,
@@ -130,6 +132,52 @@ function trustedPolicyFailureResult(
   };
 }
 
+function emitSecurityMatrixTrustedPolicyDiagnostic(
+  event: PluginHookBeforeToolCallEvent,
+  ctx: PluginHookToolContext,
+): void {
+  try {
+    const auditEvent = createSecurityMatrixBeforeToolCallAuditEvent({
+      toolName: event.toolName,
+      toolSource: "core",
+      toolOwner: "trusted-tool-policy",
+      actor: "agent",
+      influencedBy: [],
+      approvalState: "none",
+      operatorPolicy: "unknown",
+    });
+    const attributes: Record<string, string | number | boolean> = {
+      toolName: auditEvent.toolName,
+      toolSource: auditEvent.toolSource ?? "core",
+      toolOwner: auditEvent.toolOwner ?? "trusted-tool-policy",
+      actor: auditEvent.actor,
+      capability: auditEvent.capability,
+      approvalState: auditEvent.approvalState,
+      operatorPolicy: auditEvent.operatorPolicy,
+      policyDecision: auditEvent.policyDecision,
+      decision: auditEvent.decision,
+      matched: auditEvent.matched,
+    };
+    const runId = event.runId ?? ctx.runId;
+    if (runId) {
+      attributes.runId = runId;
+    }
+    const toolCallId = event.toolCallId ?? ctx.toolCallId;
+    if (toolCallId) {
+      attributes.toolCallId = toolCallId;
+    }
+    emitTrustedDiagnosticEvent({
+      type: "log.record",
+      level: "debug",
+      message: "security_matrix.evaluated",
+      loggerName: "security/matrix",
+      attributes,
+    });
+  } catch {
+    // Security Matrix diagnostics are observe-only and must never affect policy decisions.
+  }
+}
+
 /** Lists trusted tool policies for status and diagnostics. */
 export function getTrustedToolPolicyDiagnosticEntries(): TrustedToolPolicyDiagnosticEntry[] {
   return copyTrustedPolicyRegistrations(getActivePluginRegistry()).map((registration) => {
@@ -220,6 +268,7 @@ export async function runTrustedToolPolicies(
       ...currentDerivedEvent,
     };
   };
+  emitSecurityMatrixTrustedPolicyDiagnostic(buildEvent(), ctx);
   for (const registration of policies) {
     const pluginId = readTrustedPolicyPluginId(registration);
     if (!pluginId) {
