@@ -100,10 +100,7 @@ import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import { resolveSessionSuspensionReason, suspendSession } from "../session-suspension.js";
-import {
-  NON_DELIVERABLE_TERMINAL_REPLY_TEXT,
-  normalizeGenericTerminalToolResultText,
-} from "../terminal-reply.js";
+import { NON_DELIVERABLE_TERMINAL_REPLY_TEXT } from "../terminal-reply.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
@@ -224,6 +221,8 @@ const MID_TURN_PRECHECK_CONTINUATION_PROMPT =
   "Continue from the current transcript after the latest tool result. Do not repeat the original user request, and do not rerun completed tools unless the transcript shows they are still needed.";
 const COMPACTION_CONTINUATION_RETRY_INSTRUCTION =
   "The previous attempt compacted the conversation context before producing a final user-visible answer. Continue from the compacted transcript and produce the final answer now. Do not restart from scratch, do not repeat completed work, and do not rerun tools unless the transcript clearly lacks required evidence.";
+const REPLAY_UNSAFE_TOOL_LOOP_WARNING =
+  "⚠️ Some tool actions may have already been executed — please verify before retrying.";
 const NO_REAL_CONVERSATION_MESSAGES_REASON = "no real conversation messages";
 const BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX =
   "Before accepting the previous final answer, apply this revision request and produce the revised final answer. Do not repeat completed work or rerun tools unless the request explicitly requires it.";
@@ -484,22 +483,14 @@ function buildAsyncTaskTerminalPayloads(
 ): EmbeddedAgentRunResult["payloads"] | undefined {
   const terminalTaskPayloads = (attempt.asyncTaskTerminalResults ?? [])
     .map((task) => {
-      const taskLabel = task.taskKind ? `${task.taskKind} task` : "Background task";
-      const taskRef = task.taskId || task.runId || "unknown";
+      const taskKind = normalizeOptionalString(task.taskKind)?.replace(/[_-]+/g, " ");
+      const taskLabel = taskKind ? `${taskKind} task` : "Background task";
       const status = normalizeOptionalString(task.status);
       const outcome = normalizeOptionalString(task.terminalOutcome);
-      const summary = normalizeGenericTerminalToolResultText(
-        task.terminalSummary ?? task.progressSummary,
-      );
       const statusText = [status, outcome && outcome !== status ? outcome : undefined]
         .filter(Boolean)
         .join("/");
-      const text = [
-        `${taskLabel} ${taskRef}${statusText ? ` finished with ${statusText}` : " finished"}.`,
-        summary,
-      ]
-        .filter((line): line is string => Boolean(line))
-        .join("\n");
+      const text = `${taskLabel}${statusText ? ` finished with ${statusText}` : " finished"}.`;
       return {
         text,
         ...(isAsyncTaskTerminalError(task) ? { isError: true } : {}),
@@ -514,12 +505,7 @@ function buildAsyncTaskTerminalPayloads(
   if (startedTasks.length === 0) {
     return undefined;
   }
-  const taskDescriptions = startedTasks.map((toolMeta) => {
-    const refs = [toolMeta.asyncTaskId, toolMeta.asyncTaskRunId]
-      .map((value) => normalizeOptionalString(value))
-      .filter((value): value is string => Boolean(value));
-    return `${toolMeta.toolName}${refs.length ? ` (${refs.join(", ")})` : ""}`;
-  });
+  const taskDescriptions = startedTasks.map((toolMeta) => toolMeta.toolName);
   return [
     {
       text:
@@ -1862,6 +1848,10 @@ export async function runEmbeddedAgent(
             const didSendViaMessagingTool = currentAttemptToolLoopObservations.some(
               (observation) => observation.didSendViaMessagingTool === true,
             );
+            const hadPotentialSideEffects = currentAttemptToolLoopObservations.some(
+              (observation) =>
+                observation.mutatingAction === true || observation.didSendViaMessagingTool === true,
+            );
             const agentMeta = buildErrorAgentMeta({
               sessionId: activeSessionId,
               sessionFile: activeSessionFile,
@@ -1873,7 +1863,12 @@ export async function runEmbeddedAgent(
               lastTurnTotal,
             });
             return {
-              payloads: [fallback.payload],
+              payloads: [
+                fallback.payload,
+                ...(hadPotentialSideEffects
+                  ? [{ text: REPLAY_UNSAFE_TOOL_LOOP_WARNING, isError: true }]
+                  : []),
+              ],
               meta: {
                 durationMs: Date.now() - started,
                 agentMeta,

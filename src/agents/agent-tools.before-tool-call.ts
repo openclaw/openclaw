@@ -72,6 +72,7 @@ import type { MessagingToolSend } from "./embedded-agent-messaging.types.js";
 import { hasCommittedMessagingToolResultDetails } from "./embedded-agent-runner/delivery-evidence.js";
 import type { AgentToolTerminalResultFallback, AgentToolTerminalSummary } from "./runtime/index.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
+import { buildToolMutationState } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -87,6 +88,7 @@ export type ToolOutcomeObservation = {
   messagingToolSentTexts?: string[];
   messagingToolSentMediaUrls?: string[];
   messagingToolSentTargets?: MessagingToolSend[];
+  mutatingAction?: boolean;
   failed?: boolean;
   blockedReason?: string;
   blockedMessage?: string;
@@ -973,6 +975,10 @@ export async function recordToolLoopOutcome(args: {
     if ((record?.resultHash || shouldEmitHashlessToolLoopBlock) && args.ctx.onToolOutcome) {
       const blockedMessage = typeof details?.reason === "string" ? details.reason : undefined;
       const failed = Boolean(args.error);
+      const mutatingAction =
+        !blockedReason &&
+        !failed &&
+        buildToolMutationState(record?.toolName ?? args.toolName, args.toolParams).mutatingAction;
       const resultText = blockedReason
         ? undefined
         : (readToolResultText(args.result) ?? readToolErrorText(args.error));
@@ -1019,6 +1025,7 @@ export async function recordToolLoopOutcome(args: {
           ? { messagingToolSentMediaUrls: messagingMediaUrls }
           : {}),
         ...(messagingTarget ? { messagingToolSentTargets: [messagingTarget] } : {}),
+        ...(mutatingAction ? { mutatingAction } : {}),
         ...(failed ? { failed } : {}),
         ...(args.terminalResultFallback
           ? { terminalResultFallback: args.terminalResultFallback }

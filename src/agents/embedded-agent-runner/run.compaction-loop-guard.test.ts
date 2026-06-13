@@ -262,6 +262,10 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
           "I stopped because gateway repeated the same tool call without progress. " +
           "No user-facing result text was provided.",
       },
+      {
+        text: "⚠️ Some tool actions may have already been executed — please verify before retrying.",
+        isError: true,
+      },
     ]);
     expect(result.meta.livenessState).toBe("blocked");
     expect(result.meta.completion).toEqual({
@@ -525,6 +529,10 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
         text:
           "I stopped because gateway repeated the same tool call without progress. " +
           "No user-facing result text was provided.",
+      },
+      {
+        text: "⚠️ Some tool actions may have already been executed — please verify before retrying.",
+        isError: true,
       },
     ]);
     expect(result.meta.livenessState).toBe("blocked");

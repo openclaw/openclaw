@@ -398,6 +398,31 @@ describe("before_tool_call loop detection behavior", () => {
     expect(blockedObservation?.resultHash).toBeUndefined();
   });
 
+  it("marks successful mutating tool outcomes for replay-safety handling", async () => {
+    const onToolOutcome = vi.fn();
+    const execute = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: "updated report.md" }],
+      details: { ok: true },
+    });
+    const tool = createWrappedTool("write", execute, {
+      ...enabledLoopDetectionContext,
+      runId: "run-mutating-outcome-observer",
+      onToolOutcome,
+    });
+
+    await expectUnblockedToolExecution(tool, "write-observer", {
+      path: "report.md",
+      content: "updated",
+    });
+
+    expect(onToolOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "write",
+        mutatingAction: true,
+      }),
+    );
+  });
+
   it("does not carry loop history across run ids", async () => {
     const execute = vi.fn().mockResolvedValue({
       content: [{ type: "text", text: "same output" }],

@@ -645,6 +645,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
           messagingToolSentTexts?: string[];
           messagingToolSentMediaUrls?: string[];
           messagingToolSentTargets?: Array<Record<string, unknown>>;
+          mutatingAction?: boolean;
           blockedReason?: string;
           blockedMessage?: string;
         }) => void;
@@ -658,6 +659,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         didSendViaMessagingTool: true,
         messagingToolSentTexts: ["sent"],
         messagingToolSentMediaUrls: ["file:///tmp/render.png"],
+        mutatingAction: true,
         messagingToolSentTargets: [
           {
             tool: "message",
@@ -689,6 +691,10 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(result.payloads).toEqual([
       {
         text: "Status:\nsent",
+      },
+      {
+        text: "⚠️ Some tool actions may have already been executed — please verify before retrying.",
+        isError: true,
       },
     ]);
     expect(result.meta.livenessState).toBe("blocked");
@@ -766,6 +772,66 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       stopReason: "tool_loop_abort",
       finishReason: "tool_loop_abort",
     });
+  });
+
+  it("warns about prior mutating work when a later tool loop aborts", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (params: unknown) => {
+      const attemptParams = params as {
+        abortSignal?: AbortSignal;
+        onToolOutcome?: (observation: {
+          toolName: string;
+          argsHash: string;
+          resultHash: string;
+          resultText?: string;
+          terminalResultFallback?: { mode: "safe_text"; prefix?: string };
+          mutatingAction?: boolean;
+          blockedReason?: string;
+          blockedMessage?: string;
+        }) => void;
+      };
+      attemptParams.onToolOutcome?.({
+        toolName: "write",
+        argsHash: "report",
+        resultHash: "write-result",
+        resultText: "updated report.md",
+        mutatingAction: true,
+      });
+      attemptParams.onToolOutcome?.({
+        toolName: "status_probe",
+        argsHash: "current",
+        resultHash: "status-result",
+        resultText: "healthy",
+        terminalResultFallback: { mode: "safe_text", prefix: "Status:" },
+      });
+      attemptParams.onToolOutcome?.({
+        toolName: "status_probe",
+        argsHash: "current",
+        resultHash: "blocked-result",
+        blockedReason: "tool-loop",
+        blockedMessage:
+          "CRITICAL: You are alternating between repeated tool-call patterns with no progress.",
+      });
+      expect(attemptParams.abortSignal?.aborted).toBe(true);
+      throw new Error("Request was aborted.");
+    });
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "xai",
+      model: "grok-composer-2.5-fast",
+      runId: "run-tool-loop-after-mutation",
+    });
+
+    expect(result.payloads).toEqual([
+      { text: "Status:\nhealthy" },
+      {
+        text: "⚠️ Some tool actions may have already been executed — please verify before retrying.",
+        isError: true,
+      },
+    ]);
+    expect(result.meta.livenessState).toBe("blocked");
+    expect(result.meta.replayInvalid).toBe(true);
   });
 
   it("surfaces a tool-declared terminal result after successful side-effect tool work without a final answer", async () => {
@@ -1128,6 +1194,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         isError: true,
       },
     ]);
+    expect(JSON.stringify(result.payloads)).not.toContain("secret-value");
     expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
   });
 
@@ -1174,15 +1241,15 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
     expect(result.payloads).toEqual([
       {
-        text:
-          "image_generation task task-image-timeout finished with succeeded.\n" +
-          "Generated image. API_KEY=***",
+        text: "image generation task finished with succeeded.",
       },
       {
         text: "Request timed out before a response was generated. Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
         isError: true,
       },
     ]);
+    expect(JSON.stringify(result.payloads)).not.toContain("secret-value");
+    expect(JSON.stringify(result.payloads)).not.toContain("task-image-timeout");
     expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
   });
 
@@ -2377,6 +2444,24 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     },
   );
 
+  it.each(["Running: 3 jobs.", "Checking: Fetched prices."])(
+    "does not classify result-style progress text %s as planning-only",
+    (assistantText) => {
+      const retryInstruction = resolvePlanningOnlyRetryInstruction({
+        provider: "custom-provider",
+        modelId: "custom-model",
+        prompt: "What is the current jobs status?",
+        aborted: false,
+        timedOut: false,
+        attempt: makeAttemptResult({
+          assistantTexts: [assistantText],
+        }),
+      });
+
+      expect(retryInstruction).toBeNull();
+    },
+  );
+
   it.each([
     "Running a live cron check now — you should get real output, not a promise.",
     "Starting the live cron check now.",
@@ -3095,7 +3180,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       {
         text:
           "Background task started, but the model did not provide a final answer.\n" +
-          "Task: image_generate (task-image-1, tool:image_generate:run-1).",
+          "Task: image_generate.",
       },
     ]);
     expect(result.meta.livenessState).toBe("working");
@@ -3144,11 +3229,11 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
     expect(result.payloads).toEqual([
       {
-        text:
-          "image_generation task task-image-2 finished with succeeded.\n" +
-          "Generated image. API_KEY=***",
+        text: "image generation task finished with succeeded.",
       },
     ]);
+    expect(JSON.stringify(result.payloads)).not.toContain("secret-value");
+    expect(JSON.stringify(result.payloads)).not.toContain("task-image-2");
     expect(result.meta.livenessState).toBe("working");
   });
 
@@ -3204,12 +3289,12 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
       expect(result.payloads).toEqual([
         {
-          text:
-            `image_generation task task-image-failed finished with ${statusText}.\n` +
-            "Image generation needs follow-up.",
+          text: `image generation task finished with ${statusText}.`,
           isError: true,
         },
       ]);
+      expect(JSON.stringify(result.payloads)).not.toContain("task-image-failed");
+      expect(JSON.stringify(result.payloads)).not.toContain("needs follow-up");
       expect(result.meta.livenessState).toBe("blocked");
     },
   );
@@ -3304,9 +3389,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
     expect(result.payloads).toEqual([
       {
-        text:
-          "image_generation task task-image-3 finished with succeeded.\n" +
-          "Generated final image.",
+        text: "image generation task finished with succeeded.",
       },
     ]);
     expect(JSON.stringify(result.payloads)).not.toContain(PLANNING_ONLY_BLOCKED_TEXT);

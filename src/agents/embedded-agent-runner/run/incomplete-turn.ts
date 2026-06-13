@@ -136,7 +136,7 @@ export function isIncompleteTerminalAssistantTurn(params: {
 const PLANNING_ONLY_PROMISE_RE =
   /\b(?:i(?:'ll| will)|let me|lemme|i(?:'m| am)\s+(?:going to|gonna|about to)|first[, ]+i(?:'ll| will)|next[, ]+i(?:'ll| will)|i can (?:do that|check|look|inspect|investigate|verify|review|search|run|test|handle|take|start|launch|send|monitor))\b/i;
 const PLANNING_ONLY_PROGRESS_CLAIM_RE =
-  /^(?:i(?:'m| am)\s+)?(?:checking|running|working(?:\s+on\s+it)?|on\s+it|taking\s+a\s+look|inspecting|reading|searching|looking(?:\s+into|\s+at)?|debugging|testing|verifying|investigating|reviewing|fetching|probing|starting|launching|sending(?:\s+(?:it|this|that|the\s+\w+))?\s+off|kicking\s+(?:it|this|that|the\s+\w+\s+)?off|monitoring\s+(?:it|this|that|now|for\b))\b/i;
+  /^(?:i(?:'m| am)\s+)?(?:checking|running|working(?:\s+on\s+it)?|on\s+it|taking\s+a\s+look|inspecting|reading|searching|looking(?:\s+into|\s+at)?|debugging|testing|verifying|investigating|reviewing|fetching|probing|starting|launching|sending(?:\s+(?:it|this|that|the\s+\w+))?\s+off|kicking\s+(?:it|this|that|the\s+\w+\s+)?off|monitoring\s+(?:it|this|that|now|for\b))\b(?!\s*:)/i;
 const PLANNING_ONLY_COMPLETION_RE =
   /\b(?:done|finished|implemented|updated|fixed|changed|ran|verified|found|here(?:'s| is) what|blocked by|the blocker is|requires?|unavailable|not available|can't|cannot)\b/i;
 const PLANNING_ONLY_HEADING_RE = /^(?:plan|steps?|next steps?)\s*:/i;

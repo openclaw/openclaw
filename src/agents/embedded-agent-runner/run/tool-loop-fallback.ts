@@ -17,6 +17,7 @@ export type ToolLoopObservation = Omit<PostCompactionGuardObservation, "resultHa
   messagingToolSentTexts?: string[];
   messagingToolSentMediaUrls?: string[];
   messagingToolSentTargets?: MessagingToolSend[];
+  mutatingAction?: boolean;
   failed?: boolean;
   blockedReason?: string;
   blockedMessage?: string;
