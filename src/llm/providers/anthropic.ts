@@ -1148,8 +1148,12 @@ function buildParams(
     }
   }
 
-  if (options?.toolChoice) {
-    params.tool_choice = normalizeAnthropicToolChoice(model, options.toolChoice);
+  const toolChoice = normalizeAnthropicToolChoice(
+    model,
+    options?.toolChoice ?? (supportsAdaptiveThinking(model) ? "auto" : undefined),
+  );
+  if (toolChoice) {
+    params.tool_choice = toolChoice;
   }
 
   return params;

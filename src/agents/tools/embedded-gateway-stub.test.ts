@@ -1,19 +1,41 @@
 // Embedded gateway stub tests cover in-process gateway methods used by agent
 // tools when no external gateway transport is available.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmbeddedCallGateway } from "./embedded-gateway-stub.js";
+
+type EmbeddedLoadSessionEntryResult = {
+  cfg: Record<string, unknown>;
+  storePath: string;
+  entry: {
+    sessionId: string;
+    sessionFile?: string;
+    usageFamilySessionIds?: string[];
+  };
+};
 
 const runtime = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(() => ({ agents: { list: [{ id: "main", default: true }] } })),
   resolveSessionKeyFromResolveParams: vi.fn(),
   resolveSessionAgentId: vi.fn(() => "main"),
-  loadSessionEntry: vi.fn(() => ({
-    cfg: {},
-    storePath: "/tmp/openclaw-sessions.json",
-    entry: { sessionId: "sess-main" },
-  })),
+  loadSessionEntry: vi.fn(
+    (): EmbeddedLoadSessionEntryResult => ({
+      cfg: {},
+      storePath: "/tmp/openclaw-sessions.json",
+      entry: { sessionId: "sess-main" },
+    }),
+  ),
   resolveSessionModelRef: vi.fn(() => ({ provider: "openai" })),
-  readSessionMessagesAsync: vi.fn(async (): Promise<unknown[]> => []),
+  readSessionMessagesAsync: vi.fn(
+    async (
+      _sessionId: string,
+      _storePath: string,
+      _sessionFile: string | undefined,
+      _opts: unknown,
+    ): Promise<unknown[]> => [],
+  ),
   augmentChatHistoryWithCliSessionImports: vi.fn(
     ({ localMessages }: { localMessages?: unknown[] }) => localMessages ?? [],
   ),
@@ -134,6 +156,85 @@ describe("embedded gateway stub", () => {
       },
     );
     expect(result.messages).toEqual(projectedMessages);
+  });
+
+  it("reads embedded chat history from reset ancestor transcripts when includeFamily is set", async () => {
+    const sessionsDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-embedded-family-"));
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const ancestorActive = path.join(sessionsDir, "ancestor-session.jsonl");
+    const ancestorArchive = path.join(
+      sessionsDir,
+      "ancestor-session.jsonl.reset.2026-06-04T00-00-00.000Z",
+    );
+    const currentActive = path.join(sessionsDir, "current-session.jsonl");
+    const currentArchive = path.join(
+      sessionsDir,
+      "current-session-topic-123.jsonl.reset.2026-06-04T01-00-00.000Z",
+    );
+    for (const file of [
+      storePath,
+      ancestorActive,
+      ancestorArchive,
+      currentActive,
+      currentArchive,
+    ]) {
+      fs.writeFileSync(file, "", "utf8");
+    }
+    runtime.loadSessionEntry.mockReturnValueOnce({
+      cfg: {},
+      storePath,
+      entry: {
+        sessionId: "current-session",
+        sessionFile: currentActive,
+        usageFamilySessionIds: ["ancestor-session", "current-session"],
+      },
+    });
+    runtime.readSessionMessagesAsync.mockImplementation(
+      async (sessionId: string, _storePath: string, sessionFile: string | undefined) => [
+        { role: "user", content: `${sessionId}:${path.basename(sessionFile ?? "")}` },
+      ],
+    );
+
+    const callGateway = createEmbeddedCallGateway();
+    const result = await callGateway<{ includeFamily?: boolean; messages: unknown[] }>({
+      method: "chat.history",
+      params: { sessionKey: "agent:main:main", includeFamily: true },
+    });
+
+    expect(result.includeFamily).toBe(true);
+    expect(runtime.readSessionMessagesAsync).toHaveBeenCalledTimes(4);
+    expect(runtime.readSessionMessagesAsync).toHaveBeenNthCalledWith(
+      1,
+      "ancestor-session",
+      storePath,
+      ancestorArchive,
+      expect.any(Object),
+    );
+    expect(runtime.readSessionMessagesAsync).toHaveBeenNthCalledWith(
+      2,
+      "ancestor-session",
+      storePath,
+      ancestorActive,
+      expect.any(Object),
+    );
+    expect(runtime.readSessionMessagesAsync).toHaveBeenNthCalledWith(
+      3,
+      "current-session",
+      storePath,
+      currentArchive,
+      expect.any(Object),
+    );
+    expect(runtime.readSessionMessagesAsync).toHaveBeenNthCalledWith(
+      4,
+      "current-session",
+      storePath,
+      currentActive,
+      expect.any(Object),
+    );
+    expect(runtime.projectRecentChatDisplayMessages).toHaveBeenCalledWith(result.messages, {
+      maxChars: 100_000,
+      maxMessages: 200,
+    });
   });
 
   it("scopes embedded global chat history to the requested agent", async () => {

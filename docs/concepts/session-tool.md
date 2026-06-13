@@ -57,7 +57,13 @@ returns optional `visibility` metadata showing the effective mode and a warning 
 results may be scope-limited.
 
 `sessions_history` fetches the conversation transcript for a specific session.
-By default, tool results are excluded -- pass `includeTools: true` to see them.
+By default, it reads only the active transcript for that session and excludes
+tool results. Pass `includeTools: true` to see tool calls/results. Pass
+`includeFamily: true` to opt in to reset-family history: OpenClaw will include
+reset-ancestor transcripts linked through the session family before the active
+session transcript. `resetAncestors: true` is an alias for `includeFamily: true`
+on this tool. The underlying Gateway `chat.history` method uses the same
+`includeFamily` flag; omitted or `false` keeps the active-history default.
 The returned view is intentionally bounded and safety-filtered:
 
 - assistant text is normalized before recall:
