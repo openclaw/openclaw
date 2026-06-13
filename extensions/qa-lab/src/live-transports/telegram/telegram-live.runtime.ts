@@ -1816,6 +1816,7 @@ export async function runTelegramQaLive(params: {
   );
 
   const credentialLease = await acquireQaCredentialLease({
+    env,
     kind: "telegram",
     source: params.credentialSource,
     role: params.credentialRole,
