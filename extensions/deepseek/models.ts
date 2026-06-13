@@ -18,6 +18,14 @@ export function buildDeepSeekModelDefinition(
   return {
     ...model,
     api: "openai-completions",
+    // DeepSeek uses prefix-based prompt caching. The cache key must be sent
+    // so DeepSeek can recognize repeated prefixes and return cached_tokens.
+    // Without this flag, the boundary-aware cache system drops the key and
+    // DeepSeek never reports cache hits (#91016).
+    compat: {
+      ...model.compat,
+      supportsPromptCacheKey: true,
+    },
   };
 }
 

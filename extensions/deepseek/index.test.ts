@@ -10,6 +10,7 @@ import { createProviderUsageFetch, makeResponse } from "openclaw/plugin-sdk/test
 import { describe, expect, it } from "vitest";
 import { runSingleProviderCatalog } from "../test-support/provider-model-test-helpers.js";
 import deepseekPlugin from "./index.js";
+import { buildDeepSeekModelDefinition } from "./models.js";
 import { createDeepSeekV4ThinkingWrapper } from "./stream.js";
 
 type OpenAICompletionsModel = Model<"openai-completions">;
@@ -523,5 +524,31 @@ describe("deepseek provider plugin", () => {
         contextWindow: 65536,
       },
     ]);
+  });
+
+  it("enables prompt cache key for DeepSeek models (#91016)", () => {
+    const def = buildDeepSeekModelDefinition({
+      id: "deepseek-v4-flash",
+      name: "DeepSeek V4 Flash",
+      input: ["text"],
+      reasoning: true,
+      cost: { input: 0.2, output: 0.5, cacheRead: 0.05, cacheWrite: 0.5 },
+    });
+
+    expect(def.compat?.supportsPromptCacheKey).toBe(true);
+  });
+
+  it("preserves existing compat fields when adding prompt cache key", () => {
+    const def = buildDeepSeekModelDefinition({
+      id: "deepseek-v4-pro",
+      name: "DeepSeek V4 Pro",
+      input: ["text"],
+      reasoning: true,
+      cost: { input: 0.5, output: 1.5, cacheRead: 0.1, cacheWrite: 1.5 },
+      compat: { supportsTools: false },
+    });
+
+    expect(def.compat?.supportsPromptCacheKey).toBe(true);
+    expect(def.compat?.supportsTools).toBe(false);
   });
 });
