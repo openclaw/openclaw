@@ -350,13 +350,25 @@ function normalizeSnippet(raw: string): string {
   return trimmed.replace(/\s+/g, " ");
 }
 
-const MARKDOWN_PLACEHOLDER_LINE_RE = /^[-*+]$/;
 const MARKDOWN_HEADING_LINE_RE = /^#{1,6}\s+\S.*$/;
-const COLLAPSED_MARKDOWN_SKELETON_RE = /^(?:#{1,6}\s+.+?\s[-*+](?=\s+#{1,6}\s+|$)\s*)+$/;
+const COLLAPSED_MARKDOWN_SKELETON_RE =
+  /^(?:#{1,6}\s+.+?\s(?:[-*+]+|>+|`{3,}|~{3,}|\|+|\|?:?-{3,}:?\|?)(?=\s+#{1,6}\s+|$)\s*)+$/;
+
+function isMarkdownPlaceholderLine(line: string): boolean {
+  const compact = line.replace(/\s+/g, "");
+  return (
+    /^[-*+]+$/.test(compact) ||
+    /^>+$/.test(compact) ||
+    /^`{3,}$/.test(compact) ||
+    /^~{3,}$/.test(compact) ||
+    /^\|+$/.test(compact) ||
+    /^\|?:?-{3,}:?(?:\|:?-{3,}:?)*\|?$/.test(compact)
+  );
+}
 
 function isMarkdownPlaceholderSnippet(raw: string): boolean {
   const snippet = normalizeSnippet(raw);
-  if (!snippet || MARKDOWN_PLACEHOLDER_LINE_RE.test(snippet)) {
+  if (!snippet || isMarkdownPlaceholderLine(snippet)) {
     return true;
   }
   if (COLLAPSED_MARKDOWN_SKELETON_RE.test(snippet)) {
@@ -366,10 +378,11 @@ function isMarkdownPlaceholderSnippet(raw: string): boolean {
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter((line) => line.length > 0);
+  const hasPlaceholderLine = nonEmptyLines.some(isMarkdownPlaceholderLine);
   return (
-    nonEmptyLines.length > 0 &&
+    hasPlaceholderLine &&
     nonEmptyLines.every(
-      (line) => MARKDOWN_PLACEHOLDER_LINE_RE.test(line) || MARKDOWN_HEADING_LINE_RE.test(line),
+      (line) => isMarkdownPlaceholderLine(line) || MARKDOWN_HEADING_LINE_RE.test(line),
     )
   );
 }

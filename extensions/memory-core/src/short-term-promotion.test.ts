@@ -1486,6 +1486,22 @@ describe("short-term promotion", () => {
             snippet: "## Tagesnotizen\n-\n\n## Entscheidungen\n-",
             source: "memory",
           },
+          {
+            path: "memory/2026-04-03.md",
+            startLine: 8,
+            endLine: 8,
+            score: 0.96,
+            snippet: ">",
+            source: "memory",
+          },
+          {
+            path: "memory/2026-04-03.md",
+            startLine: 9,
+            endLine: 9,
+            score: 0.96,
+            snippet: "```",
+            source: "memory",
+          },
         ],
       });
       await recordGroundedShortTermCandidates({
@@ -1494,10 +1510,24 @@ describe("short-term promotion", () => {
         items: [
           {
             path: "memory/2026-04-03.md",
-            startLine: 8,
-            endLine: 8,
+            startLine: 10,
+            endLine: 10,
             score: 0.96,
             snippet: "*",
+          },
+          {
+            path: "memory/2026-04-03.md",
+            startLine: 11,
+            endLine: 11,
+            score: 0.96,
+            snippet: "---",
+          },
+          {
+            path: "memory/2026-04-03.md",
+            startLine: 12,
+            endLine: 12,
+            score: 0.96,
+            snippet: "|---|",
           },
         ],
       });
@@ -1511,6 +1541,44 @@ describe("short-term promotion", () => {
 
       expect(ranked).toStrictEqual([]);
       expect(Object.keys(await readRecallStoreEntries(workspaceDir))).toStrictEqual([]);
+    });
+  });
+
+  it("keeps meaningful heading snippets promotable", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-04", ["## API keys rotated"]);
+      await recordGroundedShortTermCandidates({
+        workspaceDir,
+        query: "api key rotation",
+        items: [
+          {
+            path: "memory/2026-04-04.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.97,
+            snippet: "## API keys rotated",
+          },
+        ],
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+      expect(ranked).toHaveLength(1);
+
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: ranked,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+      expect(applied.applied).toBe(1);
+      const memory = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+      expect(memory).toContain("API keys rotated");
     });
   });
 
