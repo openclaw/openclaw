@@ -204,10 +204,10 @@
           }
         ],
         "install": {
-          "npmSpec": "@acedatacloud/openclaw-provider@2026.5.33",
+          "npmSpec": "@acedatacloud/openclaw-provider@2026.5.34",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.4.2",
-          "expectedIntegrity": "sha512-+DjgalysMMo7nJl9ngRXzugc+Tl7lSLw5eKvuPKILKpevg2Fg2Kz3iW6TM8SBg7mVuRqLRKx2w4ksKdhyBRBnw=="
+          "expectedIntegrity": "sha512-sEqhlHCXQrcuA119ML14FuXZ/8XAppquz7Oh5iB/fF3tsKblJiOnCcLqZkBzlAoh0gNCzf3cBUKvWgaSV9xjYQ=="
         }
       }
     }
