@@ -1614,12 +1614,18 @@ function selectWorkboardMissingTaskConfirmationIds(
   cards: readonly WorkboardCard[],
   tasks: readonly WorkboardTaskSummary[],
   missingTaskIds: ReadonlySet<string>,
+  previousTasksByCardId: ReadonlyMap<string, WorkboardTaskSummary> = new Map(),
 ): string[] {
   const taskIndex = buildWorkboardTaskIndex(tasks);
   const ids: string[] = [];
   const seen = new Set<string>();
   for (const card of cards) {
-    const taskId = normalizeString(card.taskId);
+    const previousTask = previousTasksByCardId.get(card.id);
+    const previousMatches = previousTask
+      ? taskMatchesTrackedCardLink(previousTask, card, missingTaskIds)
+      : false;
+    const taskId =
+      previousMatches && previousTask ? previousTask.taskId : normalizeString(card.taskId);
     if (
       !taskId ||
       seen.has(taskId) ||
@@ -1683,15 +1689,29 @@ function shouldRefreshWorkboardTasksForLifecycle(state: WorkboardUiState): boole
     state.tasksByCardId.size > 0 ||
     state.cards.some((card) => {
       const taskId = normalizeString(card.taskId);
-      return Boolean(taskId && !state.missingTaskIds.has(taskId));
+      return (
+        Boolean(taskId && !state.missingTaskIds.has(taskId)) ||
+        (card.status === "running" && Boolean(workboardCardSessionKey(card)))
+      );
     })
   );
 }
 
-function workboardTaskLinksReadyForLifecycle(state: WorkboardTaskLinkState): boolean {
+function workboardTaskLinksReadyForLifecycle(
+  state: WorkboardTaskLinkState,
+  options: { requireRunningTaskDiscovery?: boolean } = {},
+): boolean {
   return state.cards.every((card) => {
     const taskId = normalizeString(card.taskId);
-    return !taskId || state.missingTaskIds.has(taskId) || state.tasksByCardId.has(card.id);
+    if (taskId) {
+      return state.missingTaskIds.has(taskId) || state.tasksByCardId.has(card.id);
+    }
+    return (
+      !options.requireRunningTaskDiscovery ||
+      card.status !== "running" ||
+      !workboardCardSessionKey(card) ||
+      state.tasksByCardId.has(card.id)
+    );
   });
 }
 
@@ -1814,6 +1834,7 @@ export async function loadWorkboard(params: {
                 taskLinkState.cards,
                 listedTaskSummaries,
                 taskLinkState.missingTaskIds,
+                previousTasksByCardId,
               ),
               [],
             );
@@ -1864,7 +1885,10 @@ export async function loadWorkboard(params: {
         state.lastRefreshError = nextTaskRefreshError;
       }
       state.lifecycleTasksPrepared =
-        !linkedTaskRefreshFailed && workboardTaskLinksReadyForLifecycle(taskLinkState);
+        !linkedTaskRefreshFailed &&
+        workboardTaskLinksReadyForLifecycle(taskLinkState, {
+          requireRunningTaskDiscovery: params.taskRefresh === "linked",
+        });
       state.loaded = true;
       return true;
     } catch (error) {
@@ -2612,14 +2636,45 @@ export async function syncWorkboardLifecycle(params: {
   if (!tasksPrepared && shouldRefreshWorkboardTasksForLifecycle(state)) {
     const generation = nextWorkboardLoadGeneration(params.host);
     try {
+      const previousTasksByCardId = state.tasksByCardId;
+      const taskLinkState: WorkboardTaskLinkState = {
+        cards: state.cards,
+        tasksByCardId: new Map(),
+        missingTaskIds: new Set(state.missingTaskIds),
+      };
       const taskSummaries = await listWorkboardTasks(params.client);
+      const confirmationResult = await getWorkboardTaskPollBatch(
+        params.client,
+        selectWorkboardMissingTaskConfirmationIds(
+          params.host,
+          taskLinkState.cards,
+          taskSummaries,
+          taskLinkState.missingTaskIds,
+          previousTasksByCardId,
+        ),
+        [],
+      );
+      applyTaskSummariesToState(taskLinkState, [...taskSummaries, ...confirmationResult.tasks], {
+        missingTaskIds: confirmationResult.missingTaskIds,
+      });
       if (
         !isCurrentWorkboardLoadGeneration(params.host, generation) ||
         workboardLifecycleSyncBlocked(params.host, state)
       ) {
         return;
       }
-      applyTaskSummariesToState(state, taskSummaries);
+      state.cards = taskLinkState.cards;
+      state.tasksByCardId = taskLinkState.tasksByCardId;
+      state.missingTaskIds = taskLinkState.missingTaskIds;
+      if (confirmationResult.error) {
+        state.lifecycleTaskRefreshFailed = true;
+        state.error = confirmationResult.error;
+        params.requestUpdate?.();
+        return;
+      }
+      if (!workboardTaskLinksReadyForLifecycle(taskLinkState)) {
+        return;
+      }
       state.lifecycleTaskRefreshFailed = false;
     } catch (error) {
       if (

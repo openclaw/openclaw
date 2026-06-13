@@ -817,6 +817,7 @@ describe("workboard controller", () => {
       sessionKey: "agent:worker-0:subagent:workboard-default-card-0",
       limit: 500,
     });
+    expect(getWorkboardState(host).lifecycleTasksPrepared).toBe(false);
 
     vi.clearAllMocks();
     await refreshWorkboard({ host, client: client as never, source: "poll" });
@@ -2055,16 +2056,17 @@ describe("workboard controller", () => {
       sessions: [{ ...sampleSession, hasActiveRun: false, status: "done", updatedAt: 1 }],
     });
 
-    expect(client.request).toHaveBeenCalledTimes(2);
+    expect(client.request).toHaveBeenCalledTimes(3);
     expect(client.request).toHaveBeenCalledWith("workboard.cards.update", {
       id: "card-1",
       patch: expect.objectContaining({ status: "running" }),
     });
-    expect(client.request.mock.calls[1]?.[1]).toMatchObject({
+    expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
+    expect(client.request.mock.calls[2]?.[1]).toMatchObject({
       id: "card-1",
       patch: { execution: expect.objectContaining({ status: "review" }) },
     });
-    expect(requestPatch(client, 1)).not.toHaveProperty("status");
+    expect(requestPatch(client, 2)).not.toHaveProperty("status");
     expect(state.cards[0]).toMatchObject({ status: "running" });
   });
 
@@ -3325,17 +3327,18 @@ describe("workboard controller", () => {
       sessions: [{ ...sampleSession, hasActiveRun: false, status: "done", updatedAt: 1 }],
     });
 
-    expect(client.request).toHaveBeenCalledTimes(2);
+    expect(client.request).toHaveBeenCalledTimes(3);
     expect(client.request).toHaveBeenCalledWith("workboard.cards.move", {
       id: "card-1",
       status: "running",
       position: 2000,
     });
-    expect(client.request.mock.calls[1]?.[1]).toMatchObject({
+    expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
+    expect(client.request.mock.calls[2]?.[1]).toMatchObject({
       id: "card-1",
       patch: { execution: expect.objectContaining({ status: "review" }) },
     });
-    expect(requestPatch(client, 1)).not.toHaveProperty("status");
+    expect(requestPatch(client, 2)).not.toHaveProperty("status");
     expect(state.cards[0]).toMatchObject({ status: "running", position: 2000 });
   });
 
@@ -3922,7 +3925,9 @@ describe("workboard controller", () => {
       ],
     });
 
-    expect(client.request).not.toHaveBeenCalled();
+    expect(client.request).toHaveBeenCalledOnce();
+    expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
+    expect(client.request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
     expect(state.cards[0]?.status).toBe("running");
   });
 
@@ -3991,6 +3996,124 @@ describe("workboard controller", () => {
       }),
     });
     expect(state.tasksByCardId.get("card-1")).toMatchObject({ status: "completed" });
+  });
+
+  it("authoritatively refreshes running linked cards without task ids before lifecycle sync", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        ...sampleCard,
+        status: "running",
+        sessionKey: sampleTaskSessionKey,
+        runId: "run-1",
+      },
+    ];
+    const client = createClient({
+      "tasks.list": { tasks: [] },
+    });
+
+    await syncWorkboardLifecycle({ host, client: client as never, sessions: [] });
+
+    expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
+    expect(client.request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
+    expect(state.lifecycleTasksPrepared).toBe(true);
+  });
+
+  it("exact-confirms task list omissions before lifecycle writes", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const linked = {
+      ...sampleCard,
+      status: "running",
+      sessionKey: sampleTaskSessionKey,
+      runId: "run-1",
+      taskId: sampleTask.taskId,
+    } satisfies WorkboardCard;
+    state.loaded = true;
+    state.cards = [linked];
+    state.tasksByCardId.set(linked.id, sampleTask);
+    const client = createClient({
+      "tasks.list": { tasks: [] },
+      "tasks.get": { task: sampleTask },
+    });
+
+    await syncWorkboardLifecycle({ host, client: client as never, sessions: [] });
+
+    expect(client.request).toHaveBeenNthCalledWith(1, "tasks.list", { limit: 500 });
+    expect(client.request).toHaveBeenNthCalledWith(2, "tasks.get", {
+      taskId: sampleTask.taskId,
+    });
+    expect(client.request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
+    expect(state.tasksByCardId.get(linked.id)).toEqual(sampleTask);
+    expect(state.lifecycleTasksPrepared).toBe(true);
+  });
+
+  it("exact-confirms a tracked replacement omitted from lifecycle task listing", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const missingTaskId = "task-pruned-from-ledger";
+    const replacementTask = {
+      ...sampleTask,
+      id: "task-replacement",
+      taskId: "task-replacement",
+    };
+    const linked = {
+      ...sampleCard,
+      status: "running",
+      sessionKey: sampleTaskSessionKey,
+      runId: "run-1",
+      taskId: missingTaskId,
+    } satisfies WorkboardCard;
+    state.loaded = true;
+    state.cards = [linked];
+    state.tasksByCardId.set(linked.id, replacementTask);
+    state.missingTaskIds = new Set([missingTaskId]);
+    const client = createClient({
+      "tasks.list": { tasks: [] },
+      "tasks.get": { task: replacementTask },
+    });
+
+    await syncWorkboardLifecycle({ host, client: client as never, sessions: [] });
+
+    expect(client.request).toHaveBeenCalledWith("tasks.get", {
+      taskId: replacementTask.taskId,
+    });
+    expect(client.request).not.toHaveBeenCalledWith("tasks.get", { taskId: missingTaskId });
+    expect(client.request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
+    expect(state.tasksByCardId.get(linked.id)).toEqual(replacementTask);
+    expect(state.missingTaskIds).toEqual(new Set([missingTaskId]));
+  });
+
+  it("defers lifecycle writes when exact confirmation after task listing fails", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const linked = {
+      ...sampleCard,
+      status: "running",
+      sessionKey: sampleTaskSessionKey,
+      runId: "run-1",
+      taskId: sampleTask.taskId,
+    } satisfies WorkboardCard;
+    state.loaded = true;
+    state.cards = [linked];
+    state.tasksByCardId.set(linked.id, sampleTask);
+    const client = createClient((method) => {
+      if (method === "tasks.list") {
+        return { tasks: [] };
+      }
+      if (method === "tasks.get") {
+        throw new Error("task confirmation unavailable");
+      }
+      return {};
+    });
+
+    await syncWorkboardLifecycle({ host, client: client as never, sessions: [] });
+
+    expect(client.request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
+    expect(state.lifecycleTaskRefreshFailed).toBe(true);
+    expect(state.error).toBe("task confirmation unavailable");
   });
 
   it("keeps prepared task lifecycle state after no-op syncs", async () => {
@@ -4302,7 +4425,9 @@ describe("workboard controller", () => {
       sessions: [{ ...sampleSession, updatedAt: staleUpdatedAt, hasActiveRun: false }],
     });
 
-    expect(client.request).not.toHaveBeenCalled();
+    expect(client.request).toHaveBeenCalledOnce();
+    expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
+    expect(client.request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
   });
 
   it("does not mark executions blocked when the linked session is missing from the current list", async () => {
@@ -4334,7 +4459,9 @@ describe("workboard controller", () => {
       sessions: [],
     });
 
-    expect(client.request).not.toHaveBeenCalled();
+    expect(client.request).toHaveBeenCalledOnce();
+    expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
+    expect(client.request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
   });
 
   it("skips lifecycle writeback for read-only workboard clients", async () => {
@@ -4392,7 +4519,8 @@ describe("workboard controller", () => {
       sessions: [completedSession],
     });
 
-    expect(client.request).toHaveBeenCalledTimes(2);
+    expect(client.request).toHaveBeenCalledTimes(3);
+    expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
   });
 
   it("does not retry a failed lifecycle sync for the same card and session state", async () => {
