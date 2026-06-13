@@ -96,9 +96,10 @@ function resolveStartupEntryPath(env: GatewayServiceEnv, extension?: "cmd" | "vb
 function resolveStartupEntryPaths(env: GatewayServiceEnv): string[] {
   const primaryPath = resolveStartupEntryPath(env);
   const legacyCmdPath = resolveStartupEntryPath(env, "cmd");
-  // Hidden VBS launchers supersede cmd launchers, but uninstall must remove the
-  // legacy cmd path from older installs too.
-  return uniqueStrings([primaryPath, legacyCmdPath]);
+  const legacyVbsPath = resolveStartupEntryPath(env, "vbs");
+  // Hidden VBS launchers supersede cmd launchers, but cleanup must remove both
+  // launcher variants left by older installs or changed settings.
+  return uniqueStrings([primaryPath, legacyCmdPath, legacyVbsPath]);
 }
 
 // `/TR` is parsed by schtasks itself, while the generated `gateway.cmd` line is parsed by cmd.exe.
@@ -227,7 +228,7 @@ function resolveSchtasksCreateUser(env: GatewayServiceEnv, taskUser: string | nu
 
 function shouldUseHiddenWindowsTaskLauncher(env: GatewayServiceEnv): boolean {
   const value = normalizeLowercaseStringOrEmpty(env.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER);
-  return value === "1" || value === "true" || value === "yes";
+  return value !== "0" && value !== "false" && value !== "no";
 }
 
 function resolveTaskLauncherScriptPath(env: GatewayServiceEnv, scriptPath: string): string {
