@@ -124,7 +124,7 @@ async function main() {
   console.log("MiniMax usage display now correctly shows 'X% used' instead of 'X% left'");
 }
 
-main().catch((err) => {
+main().catch((err: unknown) => {
   console.error(err);
   process.exitCode = 1;
 });
