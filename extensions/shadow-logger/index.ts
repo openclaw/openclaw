@@ -1,4 +1,4 @@
-import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-logger";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import { registerInternalHook, type InternalHookEvent, isMessageReceivedEvent, isMessageSentEvent } from "openclaw/plugin-sdk/hook-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime";
 import type { PluginLogger } from "openclaw/plugin-sdk/types";
