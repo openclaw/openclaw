@@ -10,7 +10,8 @@ import {
 import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import { resolveConfiguredProviderFallback } from "../agents/configured-provider-fallback.js";
-import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { resolveContextTokensForModel } from "../agents/context.js";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { parseModelRef, resolvePersistedSelectedModelRef } from "../agents/model-selection.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -98,40 +99,6 @@ function resolveConfiguredStatusModelRef(params: {
   return { provider: params.defaultProvider, model: params.defaultModel };
 }
 
-function resolveConfiguredProviderContextTokens(
-  cfg: OpenClawConfig | undefined,
-  provider: string,
-  model: string,
-): number | undefined {
-  const providers = cfg?.models?.providers;
-  if (!providers || typeof providers !== "object") {
-    return undefined;
-  }
-  const providerKey = normalizeProviderId(provider);
-  for (const [id, providerConfig] of Object.entries(providers)) {
-    if (normalizeProviderId(id) !== providerKey || !Array.isArray(providerConfig?.models)) {
-      continue;
-    }
-    for (const entry of providerConfig.models) {
-      const contextTokens =
-        typeof entry?.contextTokens === "number"
-          ? entry.contextTokens
-          : typeof entry?.contextWindow === "number"
-            ? entry.contextWindow
-            : undefined;
-      if (
-        typeof entry?.id === "string" &&
-        entry.id === model &&
-        typeof contextTokens === "number" &&
-        contextTokens > 0
-      ) {
-        return contextTokens;
-      }
-    }
-  }
-  return undefined;
-}
-
 function resolveSessionModelRef(
   cfg: OpenClawConfig,
   entry?:
@@ -192,32 +159,6 @@ function resolveSessionRuntimeLabel(params: {
     resolvedHarness,
     fallbackProvider: params.provider,
   });
-}
-
-function resolveContextTokensForModel(params: {
-  cfg?: OpenClawConfig;
-  provider?: string;
-  model?: string;
-  contextTokensOverride?: number;
-  fallbackContextTokens?: number;
-  allowAsyncLoad?: boolean;
-}): number | undefined {
-  void params.allowAsyncLoad;
-  // Status summaries are synchronous/read-only; caller passes allowAsyncLoad for interface parity only.
-  if (typeof params.contextTokensOverride === "number" && params.contextTokensOverride > 0) {
-    return params.contextTokensOverride;
-  }
-  if (params.provider && params.model) {
-    const configuredContextTokens = resolveConfiguredProviderContextTokens(
-      params.cfg,
-      params.provider,
-      params.model,
-    );
-    if (configuredContextTokens !== undefined) {
-      return configuredContextTokens;
-    }
-  }
-  return params.fallbackContextTokens ?? DEFAULT_CONTEXT_TOKENS;
 }
 
 export const statusSummaryRuntime = {
