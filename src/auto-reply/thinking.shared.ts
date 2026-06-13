@@ -191,6 +191,34 @@ export function resolveResponseUsageMode(raw?: string | null): UsageDisplayLevel
   return normalizeUsageDisplay(raw) ?? "off";
 }
 
+/**
+ * Config shape for `messages.responseUsage`: either a bare default mode, or a
+ * per-channel map carrying an optional `default` fallback.
+ */
+export type ResponseUsageInput = "on" | "off" | "tokens" | "full";
+export type ResponseUsageDefaultConfig =
+  | ResponseUsageInput
+  | { default?: ResponseUsageInput; [channel: string]: ResponseUsageInput | undefined };
+
+/**
+ * Resolve the configured default `responseUsage` for a reply channel from
+ * `messages.responseUsage`. Returns `undefined` when nothing is configured, so a
+ * caller's `??` chain falls through to the session value / `off` (i.e. unchanged
+ * behavior when unset). Precedence within the config: channel entry → `default`.
+ */
+export function resolveMessagesResponseUsageDefault(
+  configured: ResponseUsageDefaultConfig | undefined,
+  channel?: string,
+): ResponseUsageInput | undefined {
+  if (typeof configured === "string") {
+    return configured;
+  }
+  if (configured && typeof configured === "object") {
+    return (channel ? configured[channel] : undefined) ?? configured.default;
+  }
+  return undefined;
+}
+
 /** Normalizes elevated execution policy values. */
 export function normalizeElevatedLevel(raw?: string | null): ElevatedLevel | undefined {
   if (!raw) {
