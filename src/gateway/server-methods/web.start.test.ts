@@ -180,6 +180,55 @@ describe("webHandlers web.login.start", () => {
       undefined,
     );
   });
+
+  it("ignores unreadable channel gateway descriptors when resolving the login provider", async () => {
+    const loginWithQrStart = vi.fn().mockResolvedValue({
+      connected: true,
+      message: "connected",
+    });
+    const unreadableDescriptor = Object.defineProperty({}, "name", {
+      get() {
+        throw new Error("channel gateway descriptor name getter exploded");
+      },
+    });
+    mocks.listChannelPlugins.mockReturnValue([
+      {
+        id: "broken-channel",
+        gatewayMethodDescriptors: [unreadableDescriptor],
+        gateway: { loginWithQrStart: vi.fn() },
+      },
+      {
+        id: "whatsapp",
+        gatewayMethodDescriptors: [{ name: "web.login.start" }],
+        gateway: { loginWithQrStart },
+      },
+    ]);
+    const respond = vi.fn();
+
+    await webHandlers["web.login.start"](
+      createOptions(
+        { accountId: "default" },
+        {
+          respond,
+        },
+      ),
+    );
+
+    expect(loginWithQrStart).toHaveBeenCalledWith({
+      accountId: "default",
+      force: false,
+      timeoutMs: undefined,
+      verbose: false,
+    });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        connected: true,
+        message: "connected",
+      },
+      undefined,
+    );
+  });
 });
 
 describe("webHandlers web.login.wait", () => {

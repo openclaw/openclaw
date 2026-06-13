@@ -56,6 +56,7 @@ import {
 } from "../secrets/runtime-state.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
+import { listChannelGatewayMethodNames } from "./channel-gateway-methods.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
 import {
   STARTUP_UNAVAILABLE_GATEWAY_METHODS,
@@ -731,10 +732,7 @@ export async function startGatewayServer(
   const listStartupChannelGatewayMethods = () => {
     const methods: string[] = [];
     for (const plugin of listGatewayStartupChannelPlugins()) {
-      methods.push(...(plugin.gatewayMethods ?? []));
-      for (const descriptor of plugin.gatewayMethodDescriptors ?? []) {
-        methods.push(descriptor.name);
-      }
+      methods.push(...listChannelGatewayMethodNames(plugin));
     }
     return methods;
   };

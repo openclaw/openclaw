@@ -8,6 +8,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
+import { channelGatewayMethodNamesInclude } from "../channel-gateway-methods.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -17,10 +18,7 @@ const WEB_LOGIN_METHODS = new Set(["web.login.start", "web.login.wait"]);
 /** Resolves the channel plugin that currently owns web QR-login methods. */
 const resolveWebLoginProvider = () =>
   listChannelPlugins().find((plugin) =>
-    [
-      ...(plugin.gatewayMethods ?? []),
-      ...(plugin.gatewayMethodDescriptors ?? []).map((descriptor) => descriptor.name),
-    ].some((method) => WEB_LOGIN_METHODS.has(method)),
+    channelGatewayMethodNamesInclude(plugin, WEB_LOGIN_METHODS),
   ) ?? null;
 
 type WebLoginProvider = NonNullable<ReturnType<typeof resolveWebLoginProvider>>;
