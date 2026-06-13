@@ -3411,6 +3411,28 @@ describe("check-database-first-legacy-stores", () => {
     ]);
   });
 
+  it("flags new writes in current legacy-debt files", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import fs from "node:fs";
+        fs.writeFileSync("sessions.json", "{}\\n");
+      `,
+      "extensions/matrix/src/matrix/client/storage.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 3 }]);
+  });
+
+  it("flags changed writes on current legacy-debt lines", () => {
+    const content = `import fs from "node:fs";${"\n".repeat(667)}fs.writeFileSync("sessions.json", "{}\\n");`;
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      content,
+      "extensions/matrix/src/matrix/client/storage.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 668 }]);
+  });
+
   it("allows doctor and migration owners to import or archive legacy files", () => {
     const violations = collectDatabaseFirstLegacyStoreViolations(
       `

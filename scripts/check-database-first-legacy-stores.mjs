@@ -100,15 +100,10 @@ const allowedFixturePaths = new Set([
   "extensions/qa-matrix/src/runners/contract/scenario-runtime-e2ee-destructive.ts",
 ]);
 
-const allowedCurrentLegacyWritePaths = new Set([
-  "extensions/codex/src/app-server/trajectory.ts",
-  "extensions/file-transfer/src/shared/audit.ts",
-  "extensions/memory-wiki/src/compile.ts",
-  "src/crestodian/audit.ts",
-  "src/memory-host-sdk/events.ts",
-  "src/infra/restart-sentinel.ts",
-  "src/infra/restart.ts",
-  "extensions/matrix/src/matrix/client/storage.ts",
+const allowedCurrentLegacyWriteViolations = new Set([
+  "extensions/matrix/src/matrix/client/storage.ts:668:legacy store filesystem write:writeStoredRootMetadata(path.join(params.rootDir, STORAGE_META_FILENAME), { homeserver: metadata.homeserver, userId: metadata.userId, accountId: metadata.accountId ?? DEFAULT_ACCOUNT_KEY, accessTokenHash: metadata.accessTokenHash, deviceId: metadata.deviceId ?? null, currentTokenStateClaimed: true, createdAt: metadata.createdAt ?? new Date().toISOString(), })",
+  "extensions/matrix/src/matrix/client/storage.ts:691:legacy store filesystem write:writeStoredRootMetadata(path.join(params.rootDir, STORAGE_META_FILENAME), { homeserver: metadata.homeserver, userId: metadata.userId, accountId: metadata.accountId ?? DEFAULT_ACCOUNT_KEY, accessTokenHash: metadata.accessTokenHash, deviceId, currentTokenStateClaimed: metadata.currentTokenStateClaimed === true, createdAt: metadata.createdAt ?? new Date().toISOString(), })",
+  "extensions/memory-wiki/src/compile.ts:1346:legacy store filesystem write:root.write(relativePath, content)",
 ]);
 
 const sourceFileExtensions = new Set([".cjs", ".cts", ".js", ".mjs", ".mts", ".ts", ".tsx"]);
@@ -167,12 +162,21 @@ const sourceTestSuffixes = [
 function isAllowedLegacyOwnerPath(relativePath) {
   return (
     allowedFixturePaths.has(relativePath) ||
-    allowedCurrentLegacyWritePaths.has(relativePath) ||
     allowedRuntimeMigrationPaths.some((allowed) => relativePath.startsWith(allowed)) ||
     /^extensions\/[^/]+\/(?:doctor-contract-api|legacy-state-migrations-api)\.ts$/u.test(
       relativePath,
     ) ||
     /^extensions\/[^/]+\/.*migrations?(?:[./-][^/]*)?\.ts$/u.test(relativePath)
+  );
+}
+
+function normalizedSourceText(sourceFile, node) {
+  return node.getText(sourceFile).replace(/\s+/gu, " ");
+}
+
+function isAllowedCurrentLegacyViolation(relativePath, sourceFile, fingerprintNode, line, kind) {
+  return allowedCurrentLegacyWriteViolations.has(
+    `${relativePath}:${line}:${kind}:${normalizedSourceText(sourceFile, fingerprintNode)}`,
   );
 }
 
@@ -442,8 +446,11 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
   const conditionalExecutionScopes = [false];
   const branchEffectScopes = [];
 
-  function addViolation(node, kind) {
+  function addViolation(node, kind, fingerprintNode = node) {
     const line = toLine(sourceFile, node);
+    if (isAllowedCurrentLegacyViolation(relativePath, sourceFile, fingerprintNode, line, kind)) {
+      return;
+    }
     const key = `${line}:${kind}`;
     if (seenViolations.has(key)) {
       return;
@@ -4478,17 +4485,17 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
           pathArgumentContainsLegacyStore(argument),
         )
       ) {
-        addViolation(node.expression, "legacy store filesystem write");
+        addViolation(node.expression, "legacy store filesystem write", node);
       }
       if (
         fsSafeStoreWritePathArguments(node).some((argument) =>
           pathArgumentContainsLegacyStore(argument),
         )
       ) {
-        addViolation(node.expression, "legacy store filesystem write");
+        addViolation(node.expression, "legacy store filesystem write", node);
       }
       if (fsSafeJsonStoreWriteContainsLegacyStore(node)) {
-        addViolation(node.expression, "legacy store filesystem write");
+        addViolation(node.expression, "legacy store filesystem write", node);
       }
       const wrapperName = callExpressionName(node.expression);
       const wrapperRecord = wrapperName ? resolveWrapperFunction(wrapperName) : null;
@@ -4506,7 +4513,7 @@ export function collectDatabaseFirstLegacyStoreViolations(content, relativePath 
               wrapperPathUseContainsLegacyStore(record.node, index, propertyName, argument),
             )
           ) {
-            addViolation(node.expression, "legacy store filesystem write");
+            addViolation(node.expression, "legacy store filesystem write", node);
             break;
           }
         }
