@@ -12,7 +12,8 @@ import {
   type QaReportScenario,
 } from "openclaw/plugin-sdk/qa-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { buildQaSuiteEvidenceSummary } from "./evidence-summary.js";
+import { QaSuiteArtifactError } from "./errors.js";
+import { buildQaSuiteEvidenceSummary, QA_EVIDENCE_FILENAME } from "./evidence-summary.js";
 import { startQaGatewayChild, type QaCliBackendAuthMode } from "./gateway-child.js";
 import type {
   QaLabLatestReport,
@@ -60,7 +61,7 @@ import {
   resolveQaSuiteWorkerStartStaggerMs,
   resolveQaSuiteOutputDir,
   scenarioRequiresControlUi,
-  selectQaSuiteScenarios,
+  selectQaFlowSuiteScenarios,
   shouldUseIsolatedQaSuiteScenarioWorkers,
   splitModelRef,
 } from "./suite-planning.js";
@@ -274,6 +275,7 @@ function liveTurnTimeoutMs(
 
 export type QaSuiteResult = {
   outputDir: string;
+  evidencePath: string;
   reportPath: string;
   summaryPath: string;
   report: string;
@@ -691,7 +693,7 @@ async function runQaRuntimeParitySuite(params: {
               runtime,
             );
             const cellStartedAt = Date.now();
-            const cellResult = await runQaSuite({
+            const cellResult = await runQaFlowSuite({
               repoRoot: params.repoRoot,
               outputDir: cellOutputDir,
               providerMode: params.providerMode,
@@ -784,7 +786,7 @@ async function runQaRuntimeParitySuite(params: {
     );
 
     const finishedAt = new Date();
-    const { report, reportPath, summaryPath } = await writeQaSuiteArtifacts({
+    const { evidencePath, report, reportPath, summaryPath } = await writeQaSuiteArtifacts({
       outputDir: params.outputDir,
       startedAt: params.startedAt,
       finishedAt,
@@ -816,6 +818,7 @@ async function runQaRuntimeParitySuite(params: {
     });
     return {
       outputDir: params.outputDir,
+      evidencePath,
       reportPath,
       summaryPath,
       report,
@@ -852,6 +855,7 @@ async function writeQaSuiteArtifacts(params: {
 }) {
   const reportPath = path.join(params.outputDir, "qa-suite-report.md");
   const summaryPath = path.join(params.outputDir, "qa-suite-summary.json");
+  const evidencePath = path.join(params.outputDir, QA_EVIDENCE_FILENAME);
   const report = renderQaMarkdownReport({
     title: "OpenClaw QA Scenario Suite",
     startedAt: params.startedAt,
@@ -882,12 +886,35 @@ async function writeQaSuiteArtifacts(params: {
         })
       : undefined;
   await fs.writeFile(reportPath, report, "utf8");
+  if (evidence) {
+    await fs.writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`, "utf8");
+  }
   await fs.writeFile(
     summaryPath,
-    `${JSON.stringify(buildQaSuiteSummaryJson({ ...params, evidence }), null, 2)}\n`,
+    `${JSON.stringify(buildQaSuiteSummaryJson(params), null, 2)}\n`,
     "utf8",
   );
-  return { report, reportPath, summaryPath };
+  await assertQaSuiteArtifactWritten("report", reportPath);
+  await assertQaSuiteArtifactWritten("summary", summaryPath);
+  if (evidence) {
+    await assertQaSuiteArtifactWritten("evidence", evidencePath);
+  }
+  return { evidencePath, report, reportPath, summaryPath };
+}
+
+async function assertQaSuiteArtifactWritten(
+  kind: "evidence" | "report" | "summary",
+  filePath: string,
+) {
+  try {
+    await fs.access(filePath);
+  } catch (error) {
+    throw new QaSuiteArtifactError(
+      `${kind}_missing`,
+      `QA suite did not produce ${kind} artifact at ${filePath}: ${formatErrorMessage(error)}`,
+      { cause: error },
+    );
+  }
 }
 
 function buildQaSuiteRuntimeMetrics(params: {
@@ -1019,7 +1046,7 @@ async function captureGatewayHeapSnapshotCheckpoint(params: {
   };
 }
 
-export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResult> {
+export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuiteResult> {
   const startedAt = new Date();
   const repoRoot = path.resolve(params?.repoRoot ?? process.cwd());
   const providerMode = normalizeQaProviderMode(
@@ -1040,7 +1067,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
       : isQaFastModeEnabled({ primaryModel, alternateModel });
   const outputDir = await resolveQaSuiteOutputDir(repoRoot, params?.outputDir);
   const catalog = readQaBootstrapScenarioCatalog();
-  const selectedScenarios = selectQaSuiteScenarios({
+  const selectedScenarios = selectQaFlowSuiteScenarios({
     scenarios: catalog.scenarios,
     scenarioIds: params?.scenarioIds,
     providerMode,
@@ -1197,7 +1224,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
           updateScenarioRun();
           try {
             const scenarioOutputDir = path.join(outputDir, "scenarios", scenario.id);
-            const result: QaSuiteResult = await runQaSuite(
+            const result: QaSuiteResult = await runQaFlowSuite(
               buildQaIsolatedScenarioWorkerParams({
                 repoRoot,
                 outputDir: scenarioOutputDir,
@@ -1287,7 +1314,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
         finishedAt: finishedAt.toISOString(),
         scenarios: [...liveScenarioOutcomes],
       });
-      const { report, reportPath, summaryPath } = await writeQaSuiteArtifacts({
+      const { evidencePath, report, reportPath, summaryPath } = await writeQaSuiteArtifacts({
         outputDir,
         startedAt,
         finishedAt,
@@ -1301,7 +1328,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
         concurrency,
         isolatedWorkers: true,
         // When the caller supplied an explicit non-empty --scenario filter,
-        // record the executed (post-selectQaSuiteScenarios-normalized) ids
+        // record the executed (post-selectQaFlowSuiteScenarios-normalized) ids
         // so the summary matches what actually ran. When the caller passed
         // nothing or an empty array ("no filter, full lane catalog"),
         // preserve the unfiltered = null semantic so the summary stays
@@ -1322,6 +1349,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
       );
       return {
         outputDir,
+        evidencePath,
         reportPath,
         summaryPath,
         report,
@@ -1546,7 +1574,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
       finishedAt: finishedAt.toISOString(),
       scenarios: [...liveScenarioOutcomes],
     });
-    const { report, reportPath, summaryPath } = await writeQaSuiteArtifacts({
+    const { evidencePath, report, reportPath, summaryPath } = await writeQaSuiteArtifacts({
       outputDir,
       startedAt,
       finishedAt,
@@ -1580,6 +1608,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
 
     return {
       outputDir,
+      evidencePath,
       reportPath,
       summaryPath,
       report,
@@ -1626,4 +1655,5 @@ export const qaSuiteProgressTesting = {
   shouldRunQaSuiteWithIsolatedScenarioWorkers,
   shouldLogQaSuiteProgress,
   waitForQaLabReadyOrStopOwned,
+  writeQaSuiteArtifacts,
 };
