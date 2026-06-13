@@ -186,6 +186,30 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     });
   });
 
+  it("classifies empty terminal results after replay-safe completed tool activity", () => {
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "xai",
+      model: "grok-composer-2.5-fast",
+      result: {
+        payloads: [],
+        meta: {
+          durationMs: 42,
+          replayInvalid: false,
+          toolSummary: {
+            tools: ["status_probe"],
+            calls: 1,
+            hadFailure: false,
+          },
+        },
+      },
+    });
+
+    expect(result).toMatchObject({
+      reason: "format",
+      code: "empty_result",
+    });
+  });
+
   it("classifies incomplete terminal results after replay-safe completed tool activity", () => {
     const result = classifyEmbeddedAgentRunResultForModelFallback({
       provider: "xai",

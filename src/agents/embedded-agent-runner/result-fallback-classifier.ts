@@ -145,9 +145,6 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
   if (payloads.length === 0 && hasDeliberateSilentTerminalReply(params.result)) {
     return null;
   }
-  if (payloads.length === 0 && hasCompletedToolActivityEvidence(params.result)) {
-    return null;
-  }
   if (payloads.length === 0) {
     return {
       message: `${params.provider}/${params.model} ended without a visible assistant reply`,

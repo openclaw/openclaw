@@ -5856,6 +5856,11 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     "What is the best approach for fixing this?",
     "What strategy would you recommend for this?",
     "How should we approach this?",
+    "Tell me your plan for deleting old backups",
+    "Can you tell me your plan for deleting old backups?",
+    "Please tell me your plan for deleting old backups",
+    "Can you please show me your approach for deleting old backups?",
+    "Could you explain your strategy for deleting old backups?",
   ])("does not retry when the user explicitly asked only for a plan: %s", (prompt) => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "custom-provider",

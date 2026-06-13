@@ -271,6 +271,8 @@ const ACK_EXECUTION_NORMALIZED_SET = new Set([
 ]);
 const EXPLICIT_PLANNING_REQUEST_RE =
   /\b(?:what(?:'s| is| would be)\s+(?:(?:the|your|our|my)\s+)?(?:(?:best|right|recommended|safest)\s+)?(?:plan|approach|way|strategy)|what\s+(?:plan|approach|strategy)\s+would\s+you\s+recommend|give me (?:a )?(?:plan|approach|outline)|outline (?:the )?(?:plan|approach|steps)|(?:only|just) (?:plan|outline)|how would you\b|how should (?:i|we|you) (?:approach|plan|handle|tackle)\b|propose (?:a )?(?:plan|approach))\b/i;
+const EXPLICIT_PLAN_DESCRIPTION_REQUEST_RE =
+  /^(?:please\s+)?(?:(?:can|could|would|will)\s+you\s+)?(?:please\s+)?(?:(?:tell|show)\s+me\s+|(?:describe|explain)\s+)(?:(?:the|your|our|my|a)\s+)?(?:plan|approach|outline|steps|strategy)\b/i;
 const NON_ACTIONABLE_CONTEXT_UPDATE_RE =
   /^\s*(?:i|we)\b(?!.{0,120}\b(?:need|want|would like)\s+you\b).{0,180}\b(?:haven't|have not|am not|ain't|haven’t)\b.{0,120}\b(?:yet|though|fyi|heads up)\b/i;
 const NON_ACTIONABLE_PROMPT_NORMALIZED_SET = new Set([
@@ -978,7 +980,11 @@ function isLikelyNonActionableUserPrompt(text: string): boolean {
 
 function isExplicitPlanningOnlyUserPrompt(text: string): boolean {
   const trimmed = text.trim();
-  return trimmed.length > 0 && EXPLICIT_PLANNING_REQUEST_RE.test(trimmed);
+  return (
+    trimmed.length > 0 &&
+    (EXPLICIT_PLANNING_REQUEST_RE.test(trimmed) ||
+      EXPLICIT_PLAN_DESCRIPTION_REQUEST_RE.test(trimmed))
+  );
 }
 
 function isExplicitAcknowledgementRequestPrompt(text: string): boolean {

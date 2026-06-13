@@ -1712,6 +1712,21 @@ export async function runEmbeddedAgent(
         };
         let authRetryPending = false;
         let accumulatedReplayState = createEmbeddedRunReplayState();
+        let accumulatedDidSendViaMessagingTool = false;
+        let accumulatedDidDeliverSourceReplyViaMessageTool = false;
+        let accumulatedDidSendDeterministicApprovalPrompt = false;
+        const accumulatedMessagingToolSentTexts: string[] = [];
+        const accumulatedMessagingToolSentMediaUrls: string[] = [];
+        const accumulatedMessagingToolSentTargets: NonNullable<
+          EmbeddedAgentRunResult["messagingToolSentTargets"]
+        > = [];
+        const accumulatedMessagingToolSourceReplyPayloads: NonNullable<
+          EmbeddedAgentRunResult["messagingToolSourceReplyPayloads"]
+        > = [];
+        const accumulatedAcceptedSessionSpawns: NonNullable<
+          EmbeddedAgentRunResult["acceptedSessionSpawns"]
+        > = [];
+        let accumulatedSuccessfulCronAdds = 0;
         // Hoisted so the retry-limit error path can use the most recent API total.
         let lastTurnTotal: number | undefined;
         while (true) {
@@ -1843,20 +1858,34 @@ export async function runEmbeddedAgent(
               `tool loop abort returned fallback payload: runId=${params.runId} sessionId=${params.sessionId} ` +
                 `provider=${provider}/${modelId} tool=${fallback.toolName}`,
             );
-            const messagingToolSentTexts = currentAttemptToolLoopObservations.flatMap(
-              (observation) => observation.messagingToolSentTexts ?? [],
-            );
-            const messagingToolSentMediaUrls = currentAttemptToolLoopObservations.flatMap(
-              (observation) => observation.messagingToolSentMediaUrls ?? [],
-            );
-            const messagingToolSentTargets = currentAttemptToolLoopObservations.flatMap(
-              (observation) => observation.messagingToolSentTargets ?? [],
-            );
-            const didSendViaMessagingTool = currentAttemptToolLoopObservations.some(
-              (observation) => observation.didSendViaMessagingTool === true,
-            );
+            const messagingToolSentTexts = [
+              ...accumulatedMessagingToolSentTexts,
+              ...currentAttemptToolLoopObservations.flatMap(
+                (observation) => observation.messagingToolSentTexts ?? [],
+              ),
+            ];
+            const messagingToolSentMediaUrls = [
+              ...accumulatedMessagingToolSentMediaUrls,
+              ...currentAttemptToolLoopObservations.flatMap(
+                (observation) => observation.messagingToolSentMediaUrls ?? [],
+              ),
+            ];
+            const messagingToolSentTargets = [
+              ...accumulatedMessagingToolSentTargets,
+              ...currentAttemptToolLoopObservations.flatMap(
+                (observation) => observation.messagingToolSentTargets ?? [],
+              ),
+            ];
+            const didSendViaMessagingTool =
+              accumulatedDidSendViaMessagingTool ||
+              currentAttemptToolLoopObservations.some(
+                (observation) => observation.didSendViaMessagingTool === true,
+              );
             const hadPotentialSideEffects =
+              accumulatedReplayState.hadPotentialSideEffects ||
               didSendViaMessagingTool ||
+              accumulatedSuccessfulCronAdds > 0 ||
+              accumulatedAcceptedSessionSpawns.length > 0 ||
               toolMetasHavePotentialSideEffects(
                 currentAttemptToolLoopObservations.filter(
                   (observation) => !observation.blockedReason,
@@ -1897,10 +1926,15 @@ export async function runEmbeddedAgent(
                 },
               },
               didSendViaMessagingTool,
-              didSendDeterministicApprovalPrompt: false,
+              didDeliverSourceReplyViaMessageTool:
+                accumulatedDidDeliverSourceReplyViaMessageTool || undefined,
+              didSendDeterministicApprovalPrompt: accumulatedDidSendDeterministicApprovalPrompt,
               messagingToolSentTexts,
               messagingToolSentMediaUrls,
               messagingToolSentTargets,
+              messagingToolSourceReplyPayloads: accumulatedMessagingToolSourceReplyPayloads,
+              successfulCronAdds: accumulatedSuccessfulCronAdds,
+              acceptedSessionSpawns: accumulatedAcceptedSessionSpawns,
             };
           };
           const rawAttempt = await runEmbeddedAttemptWithBackend({
@@ -2205,6 +2239,19 @@ export async function runEmbeddedAgent(
             accumulatedReplayState,
             attempt.replayMetadata,
           );
+          accumulatedDidSendViaMessagingTool ||= attempt.didSendViaMessagingTool;
+          accumulatedDidDeliverSourceReplyViaMessageTool ||=
+            attempt.didDeliverSourceReplyViaMessageTool === true;
+          accumulatedDidSendDeterministicApprovalPrompt ||=
+            attempt.didSendDeterministicApprovalPrompt === true;
+          accumulatedMessagingToolSentTexts.push(...attempt.messagingToolSentTexts);
+          accumulatedMessagingToolSentMediaUrls.push(...attempt.messagingToolSentMediaUrls);
+          accumulatedMessagingToolSentTargets.push(...attempt.messagingToolSentTargets);
+          accumulatedMessagingToolSourceReplyPayloads.push(
+            ...(attempt.messagingToolSourceReplyPayloads ?? []),
+          );
+          accumulatedSuccessfulCronAdds += attempt.successfulCronAdds ?? 0;
+          accumulatedAcceptedSessionSpawns.push(...(attempt.acceptedSessionSpawns ?? []));
           const formattedAssistantErrorText = sessionAssistantForCandidate
             ? formatAssistantErrorText(sessionAssistantForCandidate, {
                 cfg: params.config,
