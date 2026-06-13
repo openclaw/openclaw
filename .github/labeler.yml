@@ -15,6 +15,11 @@
       - any-glob-to-any-file:
           - "extensions/pixverse/**"
           - "docs/providers/pixverse.md"
+"plugin: nearai":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/nearai/**"
+          - "docs/providers/nearai.md"
 "channel: discord":
   - changed-files:
       - any-glob-to-any-file:
