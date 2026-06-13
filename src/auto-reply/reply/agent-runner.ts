@@ -16,6 +16,7 @@ import {
   queueEmbeddedAgentMessageWithOutcomeAsync,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
+import { resolveAgentIdentity } from "../../agents/identity.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { deriveContextPromptTokens, hasNonzeroUsage, normalizeUsage } from "../../agents/usage.js";
@@ -40,8 +41,6 @@ import {
   freezeDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
-import { getProviderUsageLimitsCached } from "../../infra/provider-usage.limits.js";
-import { resolveAgentIdentity } from "../../agents/identity.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
@@ -1740,95 +1739,73 @@ export async function runReplyAgent(params: {
     const providerUsed =
       runResult.meta?.agentMeta?.provider ?? fallbackProvider ?? followupRun.run.provider;
 
-    // Hand the turn's execution state to the reply_payload_sending hook (harness-
-    // agnostic: every harness produces runResult.meta). A footer/readout plugin
-    // reads it at deliver time, correlated by runId/sessionKey.
     {
       const winnerProvider = runResult.meta?.executionTrace?.winnerProvider ?? providerUsed;
       const winnerModel = runResult.meta?.executionTrace?.winnerModel ?? modelUsed;
       const ctxTokens = runResult.meta?.agentMeta?.contextTokens;
       const compactions = runResult.meta?.agentMeta?.compactionCount;
       const lastCallUsage = runResult.meta?.agentMeta?.lastCallUsage;
-      recordReplyUsageState(
-        { runId, sessionKey },
-        {
-          provider: providerUsed,
-          model: modelUsed,
-          resolvedRef:
-            winnerProvider && winnerModel ? `${winnerProvider}/${winnerModel}` : undefined,
-          reasoningEffort:
-            typeof followupRun.run.thinkLevel === "string" ? followupRun.run.thinkLevel : undefined,
-          fastMode: resolveFastModeState({
-            cfg,
-            provider: providerUsed ?? "",
-            model: modelUsed ?? "",
-            agentId: followupRun.run.agentId,
-            sessionEntry: activeSessionEntry,
-          }).enabled,
-          fallbackUsed: runResult.meta?.executionTrace?.fallbackUsed === true,
-          // Richer per-turn atoms for usage rendering (/usage + plugins).
+      recordReplyUsageState(runId, {
+        provider: providerUsed,
+        model: modelUsed,
+        resolvedRef: winnerProvider && winnerModel ? `${winnerProvider}/${winnerModel}` : undefined,
+        reasoningEffort:
+          typeof followupRun.run.thinkLevel === "string" ? followupRun.run.thinkLevel : undefined,
+        fastMode: resolveFastModeState({
+          cfg,
+          provider: providerUsed ?? "",
+          model: modelUsed ?? "",
           agentId: followupRun.run.agentId,
-          sessionId: followupRun.run.sessionId,
-          chatType: typeof sessionCtx.ChatType === "string" ? sessionCtx.ChatType : undefined,
-          authMode: runResult.meta?.requestShaping?.authMode ?? undefined,
-          overrideSource: activeSessionEntry?.modelOverrideSource ?? undefined,
-          requested:
-            followupRun.run.provider && followupRun.run.model
-              ? `${followupRun.run.provider}/${followupRun.run.model}`
-              : undefined,
-          turnUsd: usage
-            ? estimateUsageCost({
-                usage,
-                cost: resolveModelCostConfig({
-                  provider: providerUsed,
-                  model: modelUsed,
-                  config: cfg,
-                }),
-              })
+          sessionEntry: activeSessionEntry,
+        }).enabled,
+        fallbackUsed: runResult.meta?.executionTrace?.fallbackUsed === true,
+        agentId: followupRun.run.agentId,
+        sessionId: followupRun.run.sessionId,
+        chatType: typeof sessionCtx.ChatType === "string" ? sessionCtx.ChatType : undefined,
+        authMode: runResult.meta?.requestShaping?.authMode ?? undefined,
+        overrideSource: activeSessionEntry?.modelOverrideSource ?? undefined,
+        requested:
+          followupRun.run.provider && followupRun.run.model
+            ? `${followupRun.run.provider}/${followupRun.run.model}`
             : undefined,
-          durationMs: Date.now() - runStartedAt,
-          identity: resolveAgentIdentity(cfg, followupRun.run.agentId),
-          compactionCount: typeof compactions === "number" ? compactions : undefined,
-          contextTokenBudget:
-            typeof ctxTokens === "number" && Number.isFinite(ctxTokens) ? ctxTokens : undefined,
-          // Real end-of-turn context occupancy (final call's prompt tokens), so
-          // the footer's context gauge is a point-in-time state and not the
-          // multi-call aggregate. `promptTokens` is the agentMeta value already
-          // resolved above.
-          contextUsedTokens:
-            typeof promptTokens === "number" && Number.isFinite(promptTokens)
-              ? promptTokens
-              : undefined,
-          usage: usage
-            ? {
-                input: usage.input,
-                output: usage.output,
-                cacheRead: usage.cacheRead,
-                cacheWrite: usage.cacheWrite,
-                total: usage.total,
-              }
+        turnUsd: usage
+          ? estimateUsageCost({
+              usage,
+              cost: resolveModelCostConfig({
+                provider: providerUsed,
+                model: modelUsed,
+                config: cfg,
+              }),
+            })
+          : undefined,
+        durationMs: Date.now() - runStartedAt,
+        identity: resolveAgentIdentity(cfg, followupRun.run.agentId),
+        compactionCount: typeof compactions === "number" ? compactions : undefined,
+        contextTokenBudget:
+          typeof ctxTokens === "number" && Number.isFinite(ctxTokens) ? ctxTokens : undefined,
+        contextUsedTokens:
+          typeof promptTokens === "number" && Number.isFinite(promptTokens)
+            ? promptTokens
             : undefined,
-          // Final model call only (vs the turn aggregate in `usage`).
-          lastUsage: lastCallUsage
-            ? {
-                input: lastCallUsage.input,
-                output: lastCallUsage.output,
-                cacheRead: lastCallUsage.cacheRead,
-                cacheWrite: lastCallUsage.cacheWrite,
-                total: lastCallUsage.total,
-              }
-            : undefined,
-          // Provider subscription/limit windows for the 📊 readout. Non-blocking
-          // (stale-while-revalidate): returns cached windows or undefined on a
-          // cold cache and refreshes in the background, so it never delays the
-          // reply. Credential-aware: the turn's authMode is threaded through so an
-          // api-key OpenAI turn resolves to no provider (undefined limits) instead
-          // of borrowing OAuth/ChatGPT windows. Undefined for api-key / unmapped.
-          limits: getProviderUsageLimitsCached(providerUsed, {
-            credentialType: runResult.meta?.requestShaping?.authMode ?? undefined,
-          }),
-        },
-      );
+        usage: usage
+          ? {
+              input: usage.input,
+              output: usage.output,
+              cacheRead: usage.cacheRead,
+              cacheWrite: usage.cacheWrite,
+              total: usage.total,
+            }
+          : undefined,
+        lastUsage: lastCallUsage
+          ? {
+              input: lastCallUsage.input,
+              output: lastCallUsage.output,
+              cacheRead: lastCallUsage.cacheRead,
+              cacheWrite: lastCallUsage.cacheWrite,
+              total: lastCallUsage.total,
+            }
+          : undefined,
+      });
     }
     const verboseEnabled = resolvedVerboseLevel !== "off";
     const preserveUserFacingSessionState = shouldPreserveUserFacingSessionStateForInputProvenance(

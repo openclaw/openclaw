@@ -9,7 +9,6 @@ import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TtsAutoMode } from "../config/types.tts.js";
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
-import type { ReplyUsageLimits } from "../infra/provider-usage.types.js";
 import type {
   PluginHookBeforeAgentStartEvent,
   PluginHookBeforeAgentStartResult,
@@ -568,12 +567,6 @@ export type PluginHookReplyUsageState = {
     cacheWrite?: number;
     total?: number;
   };
-  /**
-   * Provider subscription/usage-limit windows for the active provider, attached
-   * by core when it records the snapshot. Absent for api-key / unmapped
-   * providers (and on the first turn before the background refresh lands).
-   */
-  limits?: ReplyUsageLimits;
 };
 
 export type PluginHookReplyPayloadSendingEvent = {
@@ -583,13 +576,8 @@ export type PluginHookReplyPayloadSendingEvent = {
   sessionKey?: string;
   runId?: string;
   /**
-   * Per-turn usage snapshot — **best-effort, present only on live dispatcher
-   * delivery.** It is intentionally absent on routed durable deliveries and on
-   * recovered queue replays: those re-run this hook as a stateless transform over
-   * the original payload (see `QueuedDeliveryPayload`), and a point-in-time usage
-   * snapshot is not stateless — replaying it after a restart would surface stale
-   * numbers. Consumers (e.g. a usage footer) must treat this as optional and
-   * degrade gracefully when it is undefined.
+   * Per-turn usage snapshot for live dispatcher delivery. Absent on durable
+   * delivery/replay paths, and whenever no exact run correlation is available.
    */
   usageState?: PluginHookReplyUsageState;
 };
