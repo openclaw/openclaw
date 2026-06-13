@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
+import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -329,7 +330,9 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       message: { role: "user", content: "prior user text", timestamp: 1 },
     });
     const resolveBootstrapContextForRun = vi.fn(async () => ({
-      bootstrapFiles: [{ path: "AGENTS.md", content: "bootstrap" }],
+      bootstrapFiles: [
+        { name: "AGENTS.md" as const, path: "AGENTS.md", content: "bootstrap", missing: false },
+      ],
       contextFiles: [{ path: "context.md", content: "context" }],
     }));
     const ensureMcpLoopbackServer = vi.fn(createTestMcpLoopbackServer);
@@ -368,7 +371,18 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       getActiveMcpLoopbackRuntime: vi.fn(() => undefined),
       createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
       resolveMcpLoopbackBearerToken: vi.fn(() => "token"),
-      resolveMcpLoopbackScopedTools: vi.fn(() => ({ agentId: "main", tools: [{ name: "exec" }] })),
+      resolveMcpLoopbackScopedTools: vi.fn(() => ({
+        agentId: "main",
+        tools: [
+          {
+            name: "exec",
+            label: "exec",
+            description: "test exec tool",
+            parameters: Type.Object({}, { additionalProperties: false }),
+            execute: vi.fn(async () => ({ content: [], details: { ok: true } })),
+          },
+        ],
+      })),
       resolveOpenClawReferencePaths: vi.fn(async () => ({ docsPath: "docs", sourcePath: "src" })),
     });
 
