@@ -50,12 +50,13 @@ const collectSlackMutableAllowlistWarnings =
     },
   });
 
-// Bare lowercase keys overlap Slack's channel-name syntax. Accept the observed lowercase ID form
-// with a numeric second character; explicit `channel:` keys remain unambiguous.
 const SLACK_CANONICAL_CHANNEL_ID_RE = /^[CGD][A-Z0-9]{8,}$/;
 const SLACK_LOWERCASE_CHANNEL_ID_RE = /^[cgd][0-9][a-z0-9]{7,}$/;
 const SLACK_PREFIXED_CANONICAL_CHANNEL_ID_RE = /^channel:[CGD][A-Z0-9]{8,}$/;
-const SLACK_PREFIXED_LOWERCASE_CHANNEL_ID_RE = /^channel:[cgd][a-z0-9]{8,}$/;
+const SLACK_PREFIXED_LOWERCASE_CHANNEL_ID_RE = /^channel:[cgd][0-9][a-z0-9]{7,}$/;
+// Letter-leading lowercase forms may be valid IDs or human names. Warn conditionally instead of
+// claiming they are unroutable.
+const SLACK_AMBIGUOUS_LOWERCASE_CHANNEL_ID_RE = /^(?:channel:)?[cgd][a-z][a-z0-9]{7,}$/;
 
 function looksLikeSlackChannelId(channelKey: string): boolean {
   return (
@@ -75,9 +76,6 @@ function collectSlackNameKeyedChannelWarnings({ cfg }: { cfg: OpenClawConfig }):
       : undefined;
   const providerChannels = asObjectRecord(slackCfg?.channels);
   for (const scope of collectProviderDangerousNameMatchingScopes(cfg, "slack")) {
-    if (scope.dangerousNameMatchingEnabled) {
-      continue;
-    }
     const scopedGroupPolicy =
       typeof scope.account.groupPolicy === "string"
         ? (scope.account.groupPolicy as GroupPolicy)
@@ -93,13 +91,28 @@ function collectSlackNameKeyedChannelWarnings({ cfg }: { cfg: OpenClawConfig }):
       continue;
     }
     const channelsPrefix = accountChannels ? scope.prefix : "channels.slack";
+    const fallbackDescription = Object.hasOwn(channels, "*")
+      ? `${channelsPrefix}.channels."*" applies instead and this entry's overrides are ignored`
+      : "messages from the channel are dropped";
     for (const channelKey of Object.keys(channels)) {
       if (channelKey === "*" || looksLikeSlackChannelId(channelKey)) {
         continue;
       }
+      const hasChannelPrefix = channelKey.toLowerCase().startsWith("channel:");
+      if (scope.dangerousNameMatchingEnabled && !hasChannelPrefix) {
+        continue;
+      }
+      if (SLACK_AMBIGUOUS_LOWERCASE_CHANNEL_ID_RE.test(channelKey)) {
+        warnings.add(
+          `${channelsPrefix}.channels."${channelKey}" is ambiguous: it may be a lowercase Slack channel ID or a channel name. ` +
+            `If it is a channel name, inbound allowlist routing will not match it and ${fallbackDescription}. ` +
+            `Re-key it with the channel's stable ID (e.g. C0123ABCD, from the channel's About details or conversations.info).`,
+        );
+        continue;
+      }
       warnings.add(
         `${channelsPrefix}.channels."${channelKey}" is keyed by a channel name or non-canonical ID form, not a routable Slack channel ID; ` +
-          `under groupPolicy: "allowlist" this entry never matches and messages in that channel are silently dropped. ` +
+          `under groupPolicy: "allowlist" inbound routing does not match this entry, so ${fallbackDescription}. ` +
           `Re-key it with the channel's ID (e.g. C0123ABCD, from the channel's About details or conversations.info).`,
       );
     }

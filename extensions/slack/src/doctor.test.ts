@@ -72,6 +72,7 @@ describe("slack doctor", () => {
         c0al2gdua7k: {},
         "channel:C0AL2GDUA7L": {},
         "channel:c0al2gdua7m": {},
+        "channel:customers": {},
         "CHANNEL:C0AL2GDUA7N": {},
         "channel:C0al2gdua7p": {},
         "*": {},
@@ -79,13 +80,17 @@ describe("slack doctor", () => {
     });
 
     const nameKeyWarnings = warnings.filter((warning) =>
-      warning.includes("not a routable Slack channel ID"),
+      warning.includes("Re-key it with the channel's"),
     );
-    expect(nameKeyWarnings).toHaveLength(4);
+    expect(nameKeyWarnings).toHaveLength(5);
     expect(nameKeyWarnings[0]).toContain('channels.slack.channels."example-channel"');
-    expect(nameKeyWarnings[1]).toContain('channels.slack.channels."development"');
-    expect(nameKeyWarnings[2]).toContain('channels.slack.channels."CHANNEL:C0AL2GDUA7N"');
-    expect(nameKeyWarnings[3]).toContain('channels.slack.channels."channel:C0al2gdua7p"');
+    expect(nameKeyWarnings[0]).toContain('channels.slack.channels."*" applies instead');
+    expect(nameKeyWarnings[1]).toContain('channels.slack.channels."development" is ambiguous');
+    expect(nameKeyWarnings[2]).toContain(
+      'channels.slack.channels."channel:customers" is ambiguous',
+    );
+    expect(nameKeyWarnings[3]).toContain('channels.slack.channels."CHANNEL:C0AL2GDUA7N"');
+    expect(nameKeyWarnings[4]).toContain('channels.slack.channels."channel:C0al2gdua7p"');
   });
 
   it("uses account policy and name-matching overrides for name-keyed channels (#81665)", async () => {
@@ -106,22 +111,26 @@ describe("slack doctor", () => {
         nameMatching: {
           groupPolicy: "allowlist",
           dangerouslyAllowNameMatching: true,
-          channels: { support: {} },
+          channels: { support: {}, "channel:customers": {} },
         },
       },
     });
 
     const nameKeyWarnings = warnings.filter((warning) =>
-      warning.includes("not a routable Slack channel ID"),
+      warning.includes("Re-key it with the channel's"),
     );
-    expect(nameKeyWarnings).toHaveLength(2);
+    expect(nameKeyWarnings).toHaveLength(3);
     expect(nameKeyWarnings[0]).toContain('channels.slack.channels."root-room"');
+    expect(nameKeyWarnings[0]).toContain("messages from the channel are dropped");
     expect(nameKeyWarnings[1]).toContain(
       'channels.slack.accounts.explicitAllowlist.channels."engineering"',
     );
+    expect(nameKeyWarnings[2]).toContain(
+      'channels.slack.accounts.nameMatching.channels."channel:customers" is ambiguous',
+    );
 
     const sharedOpenWarnings = await collectSlackWarnings(
-      { channels: { general: {} } },
+      { channels: { "shared-room": {} } },
       { groupPolicy: "open" },
     );
     expect(
