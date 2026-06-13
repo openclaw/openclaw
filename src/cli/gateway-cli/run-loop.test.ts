@@ -76,7 +76,7 @@ const markUpdateRestartSentinelFailure = vi.fn<(reason: string) => Promise<null>
   async (_reason: string) => null,
 );
 const abortEmbeddedAgentRun = vi.fn(
-  (_sessionId?: string, _opts?: { mode?: "all" | "compacting" }) => false,
+  (_sessionId?: string, _opts?: { mode?: "all" | "compacting"; reason?: "restart" }) => false,
 );
 const getActiveEmbeddedRunCount = vi.fn(() => 0);
 const listActiveEmbeddedRunSessionIds = vi.fn(() => [] as string[]);
@@ -168,8 +168,10 @@ vi.mock("../../tasks/task-registry.maintenance.js", () => ({
 }));
 
 vi.mock("../../agents/embedded-agent-runner/runs.js", () => ({
-  abortEmbeddedAgentRun: (sessionId?: string, opts?: { mode?: "all" | "compacting" }) =>
-    abortEmbeddedAgentRun(sessionId, opts),
+  abortEmbeddedAgentRun: (
+    sessionId?: string,
+    opts?: { mode?: "all" | "compacting"; reason?: "restart" },
+  ) => abortEmbeddedAgentRun(sessionId, opts),
   getActiveEmbeddedRunCount: () => getActiveEmbeddedRunCount(),
   listActiveEmbeddedRunSessionIds: () => listActiveEmbeddedRunSessionIds(),
   listActiveEmbeddedRunSessionKeys: () => listActiveEmbeddedRunSessionKeys(),
@@ -528,8 +530,14 @@ describe("runGatewayLoop", () => {
       });
 
       expect(waitForActiveEmbeddedRuns).toHaveBeenCalledWith(undefined);
-      expect(abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, { mode: "compacting" });
-      expect(abortEmbeddedAgentRun).not.toHaveBeenCalledWith(undefined, { mode: "all" });
+      expect(abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, {
+        mode: "compacting",
+        reason: "restart",
+      });
+      expect(abortEmbeddedAgentRun).not.toHaveBeenCalledWith(undefined, {
+        mode: "all",
+        reason: "restart",
+      });
       expectRestartCloseCall(close, 15_000);
       expect(start).toHaveBeenCalledTimes(2);
 
@@ -564,8 +572,14 @@ describe("runGatewayLoop", () => {
       });
 
       expect(waitForActiveEmbeddedRuns).toHaveBeenCalledWith(undefined);
-      expect(abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, { mode: "compacting" });
-      expect(abortEmbeddedAgentRun).not.toHaveBeenCalledWith(undefined, { mode: "all" });
+      expect(abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, {
+        mode: "compacting",
+        reason: "restart",
+      });
+      expect(abortEmbeddedAgentRun).not.toHaveBeenCalledWith(undefined, {
+        mode: "all",
+        reason: "restart",
+      });
       expectRestartCloseCall(close, 15_000);
       expect(start).toHaveBeenCalledTimes(2);
 
@@ -600,8 +614,14 @@ describe("runGatewayLoop", () => {
 
       expect(waitForActiveTasks).toHaveBeenCalledWith(90_000);
       expect(waitForActiveEmbeddedRuns).toHaveBeenCalledWith(90_000);
-      expect(abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, { mode: "compacting" });
-      expect(abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, { mode: "all" });
+      expect(abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, {
+        mode: "compacting",
+        reason: "restart",
+      });
+      expect(abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, {
+        mode: "all",
+        reason: "restart",
+      });
       expect(gatewayLog.warn).toHaveBeenCalledWith(ACTIVE_RUN_DRAIN_TIMEOUT_LOG);
       expect(gatewayLog.warn).toHaveBeenCalledWith(DRAIN_TIMEOUT_LOG);
       expect(markRestartAbortedMainSessions).toHaveBeenCalledWith({
@@ -653,8 +673,14 @@ describe("runGatewayLoop", () => {
 
       expect(waitForActiveTasks).not.toHaveBeenCalled();
       expect(waitForActiveEmbeddedRuns).not.toHaveBeenCalled();
-      expect(abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, { mode: "compacting" });
-      expect(abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, { mode: "all" });
+      expect(abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, {
+        mode: "compacting",
+        reason: "restart",
+      });
+      expect(abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, {
+        mode: "all",
+        reason: "restart",
+      });
       expect(markRestartAbortedMainSessions).toHaveBeenCalledWith({
         cfg: {
           gateway: {
@@ -665,7 +691,7 @@ describe("runGatewayLoop", () => {
         },
         sessionIds: new Set(["session-deferral-timeout"]),
         sessionKeys: new Set(["agent:main:deferral-timeout"]),
-        reason: "config reload forced restart",
+        reason: "gateway restart drain",
       });
       expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledOnce();
       expectRestartCloseCall(close, 0);
@@ -712,7 +738,10 @@ describe("runGatewayLoop", () => {
 
       expect(waitForActiveTasks).not.toHaveBeenCalled();
       expect(waitForActiveEmbeddedRuns).not.toHaveBeenCalled();
-      expect(abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, { mode: "all" });
+      expect(abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, {
+        mode: "all",
+        reason: "restart",
+      });
       expect(markRestartAbortedMainSessions).toHaveBeenCalledWith({
         cfg: {
           gateway: {
@@ -723,7 +752,7 @@ describe("runGatewayLoop", () => {
         },
         sessionIds: new Set(["session-forced-task"]),
         sessionKeys: new Set(["agent:main:forced-task"]),
-        reason: "forced gateway restart",
+        reason: "gateway restart drain",
       });
       expect(gatewayLog.warn).toHaveBeenCalledWith(
         "restart blocked by active background task run(s): taskId=task-force runId=run-force status=running runtime=cron label=forced",
@@ -821,10 +850,16 @@ describe("runGatewayLoop", () => {
         setImmediate(resolve);
       });
 
-      expect(abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, { mode: "compacting" });
+      expect(abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, {
+        mode: "compacting",
+        reason: "restart",
+      });
       expect(waitForActiveTasks).toHaveBeenCalledWith(1_234);
       expect(waitForActiveEmbeddedRuns).toHaveBeenCalledWith(1_234);
-      expect(abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, { mode: "all" });
+      expect(abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, {
+        mode: "all",
+        reason: "restart",
+      });
       expect(markRestartAbortedMainSessions).toHaveBeenCalledWith({
         cfg: {
           gateway: {
@@ -835,7 +870,7 @@ describe("runGatewayLoop", () => {
         },
         sessionIds: new Set(["session-issue-82433"]),
         sessionKeys: new Set(["agent:main:issue-82433"]),
-        reason: "gateway restart drain timeout",
+        reason: "gateway restart drain",
       });
       expect(markGatewayDraining).toHaveBeenCalledTimes(1);
       expect(gatewayLog.warn).toHaveBeenCalledWith(DRAIN_TIMEOUT_LOG);
@@ -1334,7 +1369,7 @@ describe("runGatewayLoop", () => {
         },
         sessionIds: new Set(["session-file-intent"]),
         sessionKeys: new Set(["agent:main:file-intent"]),
-        reason: "file-intent restart",
+        reason: "gateway restart drain",
       });
       expect(start).toHaveBeenCalledTimes(2);
 

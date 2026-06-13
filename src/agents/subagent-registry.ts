@@ -1146,6 +1146,15 @@ function ensureListener() {
         );
         return;
       }
+      if (phase === "error") {
+        schedulePendingLifecycleError({
+          runId: evt.runId,
+          endedAt,
+          startedAt,
+          error,
+        });
+        return;
+      }
       if (isBlockedLivenessState(livenessState)) {
         clearPendingLifecycleError(evt.runId);
         clearPendingLifecycleTimeout(evt.runId);

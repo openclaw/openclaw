@@ -6,6 +6,7 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
 import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
+import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
 import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentEvent, getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
@@ -38,6 +39,16 @@ export type ChatAbortControllerEntry = {
    * idempotency guard until normal cleanup removes it.
    */
   projectSessionActive?: boolean;
+  /** True after the terminal session-store update has completed. */
+  projectSessionTerminalPersisted?: boolean;
+  /** A terminal lifecycle event was observed and is awaiting persistence. */
+  projectSessionTerminalPending?: boolean;
+  /** Store timestamp expected from the observed terminal lifecycle event. */
+  projectSessionTerminalObservedAt?: number;
+  /** In-flight terminal session-store update used by restart shutdown. */
+  projectSessionTerminalPersistence?: Promise<void>;
+  /** Caller completion requested cleanup before terminal lifecycle persistence settled. */
+  registrationCleanupRequested?: boolean;
   /**
    * Which RPC owns this registration. Absent (undefined) is treated as
    * `"chat-send"` so pre-existing callers that constructed entries without
@@ -47,11 +58,19 @@ export type ChatAbortControllerEntry = {
   kind?: "chat-send" | "agent";
 };
 
+export type RestartRecoveryCandidate = {
+  runId: string;
+  lifecycleGeneration: string;
+  sessionKey: string;
+  sessionId: string;
+  observedAt?: number;
+};
+
 type RegisteredChatAbortController = {
   controller: AbortController;
   registered: boolean;
   entry?: ChatAbortControllerEntry;
-  cleanup: () => void;
+  cleanup: (opts?: { force?: boolean }) => void;
 };
 
 export function isChatStopCommandText(text: string): boolean {
@@ -59,6 +78,9 @@ export function isChatStopCommandText(text: string): boolean {
 }
 
 function createChatAbortSignalReason(stopReason: string | undefined): Error | undefined {
+  if (stopReason === "restart") {
+    return createAgentRunRestartAbortError();
+  }
   if (stopReason !== "timeout") {
     return undefined;
   }
@@ -129,9 +151,34 @@ export function registerChatAbortController(params: {
   expiresAtMs?: number;
 }): RegisteredChatAbortController {
   const controller = new AbortController();
-  const cleanup = () => {
+  const cleanup = (opts?: { force?: boolean }) => {
     const entry = params.chatAbortControllers.get(params.runId);
     if (entry?.controller === controller) {
+      if (opts?.force === true) {
+        params.chatAbortControllers.delete(params.runId);
+        return;
+      }
+      entry.registrationCleanupRequested = true;
+      // Terminal event handling owns final removal once the event has been
+      // observed. Runs that never emitted a terminal event still clean up here.
+      if (entry.projectSessionTerminalPending === true) {
+        return;
+      }
+      const persistence = entry.projectSessionTerminalPersistence;
+      if (persistence) {
+        void persistence
+          .then(() => {
+            if (params.chatAbortControllers.get(params.runId)?.controller === controller) {
+              params.chatAbortControllers.delete(params.runId);
+            }
+          })
+          .catch(() => {
+            if (params.chatAbortControllers.get(params.runId)?.controller === controller) {
+              params.chatAbortControllers.delete(params.runId);
+            }
+          });
+        return;
+      }
       params.chatAbortControllers.delete(params.runId);
     }
   };

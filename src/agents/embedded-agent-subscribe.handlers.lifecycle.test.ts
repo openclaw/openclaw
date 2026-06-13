@@ -20,6 +20,7 @@ function createContext(
     onBeforeLifecycleTerminal?: () => void | Promise<void>;
     onBlockReply?: ((payload: unknown) => void) | undefined;
     onBlockReplyFlush?: () => void | Promise<void>;
+    resolveTerminalStopReason?: () => string | undefined;
   },
 ): EmbeddedAgentSubscribeContext {
   // Lifecycle tests only need terminal state and delivery callbacks; omitted
@@ -34,6 +35,7 @@ function createContext(
       sessionKey: "agent:main:main",
       onAgentEvent: overrides?.onAgentEvent,
       onBeforeLifecycleTerminal: overrides?.onBeforeLifecycleTerminal,
+      resolveTerminalStopReason: overrides?.resolveTerminalStopReason,
       ...(onBlockReply ? { onBlockReply } : {}),
       onBlockReplyFlush: overrides?.onBlockReplyFlush,
     },
@@ -249,6 +251,38 @@ describe("handleAgentEnd", () => {
       data: {
         phase: "end",
         stopReason: "aborted",
+      },
+    });
+  });
+
+  it("overrides embedded abort terminals with the restart stop reason", async () => {
+    emitAgentEventMock.mockClear();
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(undefined, {
+      onAgentEvent,
+      resolveTerminalStopReason: () => "restart",
+    });
+    ctx.state.terminalStopReason = "aborted";
+    ctx.state.terminalAborted = true;
+
+    await handleAgentEnd(ctx);
+
+    expect(emitAgentEventMock).toHaveBeenCalledWith({
+      runId: "run-1",
+      sessionKey: "agent:main:main",
+      stream: "lifecycle",
+      data: expect.objectContaining({
+        phase: "end",
+        stopReason: "restart",
+        aborted: true,
+      }),
+    });
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        stopReason: "restart",
+        aborted: true,
       },
     });
   });

@@ -440,11 +440,11 @@ function prepareEmbeddedAgentQueueMessage(
 export function abortEmbeddedAgentRun(sessionId: string): boolean;
 export function abortEmbeddedAgentRun(
   sessionId: undefined,
-  opts: { mode: "all" | "compacting" },
+  opts: { mode: "all" | "compacting"; reason?: "restart" },
 ): boolean;
 export function abortEmbeddedAgentRun(
   sessionId?: string,
-  opts?: { mode?: "all" | "compacting" },
+  opts?: { mode?: "all" | "compacting"; reason?: "restart" },
 ): boolean {
   if (typeof sessionId === "string" && sessionId.length > 0) {
     const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
@@ -457,7 +457,7 @@ export function abortEmbeddedAgentRun(
     }
     diag.debug(`aborting run: sessionId=${sessionId}`);
     try {
-      handle.abort();
+      handle.abort(opts?.reason);
     } catch (err) {
       diag.warn(`abort failed: sessionId=${sessionId} err=${String(err)}`);
       return false;
@@ -476,7 +476,7 @@ export function abortEmbeddedAgentRun(
       }
       diag.debug(params.formatDebugMessage(id));
       try {
-        handle.abort();
+        handle.abort(opts?.reason);
         aborted = true;
       } catch (err) {
         diag.warn(`abort failed: sessionId=${id} err=${String(err)}`);

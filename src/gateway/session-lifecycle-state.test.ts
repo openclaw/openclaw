@@ -159,7 +159,7 @@ describe("session lifecycle state", () => {
         stopReason: "restart",
         endedAt: 1_800,
       },
-      expected: terminalPatch(1_050, 1_800, "timeout", false),
+      expected: terminalPatch(1_050, 1_800, "killed", true),
     });
   });
 
@@ -171,12 +171,9 @@ describe("session lifecycle state", () => {
         stopReason: "restart",
       },
       {
-        phase: "end",
-        aborted: true,
-        stopReason: "aborted",
-      },
-      {
         phase: "error",
+        aborted: true,
+        stopReason: "restart",
         error: "request aborted",
       },
     ] as const) {
@@ -197,6 +194,132 @@ describe("session lifecycle state", () => {
         expected: {},
       });
     }
+  });
+
+  it.each([
+    {
+      name: "user cancellation",
+      data: {
+        phase: "end",
+        aborted: true,
+        stopReason: "aborted",
+        endedAt: 1_800,
+      } as const,
+      expected: {
+        ...terminalPatch(1_050, 1_800, "killed", true),
+        restartRecoveryRuns: undefined,
+      },
+    },
+    {
+      name: "provider timeout",
+      data: {
+        phase: "end",
+        aborted: true,
+        stopReason: "timeout",
+        endedAt: 1_800,
+      } as const,
+      expected: {
+        ...terminalPatch(1_050, 1_800, "timeout", false),
+        restartRecoveryRuns: undefined,
+      },
+    },
+  ])("persists $name terminal state despite a restart marker", ({ data, expected }) => {
+    expectPersistedLifecyclePatch({
+      entry: {
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryRuns: [
+          {
+            runId: "restart-run",
+            lifecycleGeneration: "pre-restart",
+          },
+        ],
+      },
+      runId: "restart-run",
+      lifecycleGeneration: "pre-restart",
+      data,
+      expected,
+    });
+  });
+
+  it("preserves restart recovery state through a delayed lifecycle start", () => {
+    expectPersistedLifecyclePatch({
+      entry: {
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryRuns: [
+          {
+            runId: "restart-run",
+            lifecycleGeneration: "pre-restart",
+          },
+        ],
+      },
+      runId: "restart-run",
+      lifecycleGeneration: "pre-restart",
+      data: {
+        phase: "start",
+        startedAt: 1_500,
+      },
+      expected: {},
+    });
+  });
+
+  it("persists successful marked-run completion and removes its recovery marker", () => {
+    expectPersistedLifecyclePatch({
+      entry: {
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryRuns: [
+          {
+            runId: "restart-run",
+            lifecycleGeneration: "pre-restart",
+          },
+        ],
+      },
+      runId: "restart-run",
+      lifecycleGeneration: "pre-restart",
+      data: {
+        phase: "end",
+        endedAt: 1_800,
+      },
+      expected: {
+        ...terminalPatch(1_050, 1_800, "done", false),
+        restartRecoveryRuns: undefined,
+      },
+    });
+  });
+
+  it("keeps session recovery active while another marked run remains", () => {
+    expectPersistedLifecyclePatch({
+      entry: {
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryRuns: [
+          {
+            runId: "completed-run",
+            lifecycleGeneration: "pre-restart",
+          },
+          {
+            runId: "interrupted-run",
+            lifecycleGeneration: "pre-restart",
+          },
+        ],
+      },
+      runId: "completed-run",
+      lifecycleGeneration: "pre-restart",
+      data: {
+        phase: "end",
+        endedAt: 1_800,
+      },
+      expected: {
+        restartRecoveryRuns: [
+          {
+            runId: "interrupted-run",
+            lifecycleGeneration: "pre-restart",
+          },
+        ],
+      },
+    });
   });
 
   it("persists lifecycle events from a recovery run with a different run id", () => {

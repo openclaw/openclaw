@@ -39,6 +39,7 @@ let setRuntimeConfigSnapshot: typeof import("../../config/config.js").setRuntime
 let createMockFollowupRun: typeof import("./test-helpers.js").createMockFollowupRun;
 let createMockTypingController: typeof import("./test-helpers.js").createMockTypingController;
 let createReplyOperationForTest: typeof import("./reply-run-registry.js").createReplyOperation;
+let abortActiveReplyRunsForTest: typeof import("./reply-run-registry.js").abortActiveReplyRuns;
 let replyRunTestingForTest: typeof import("./reply-run-registry.js").testing;
 let cliBackendsTestingForTest: typeof import("../../agents/cli-backends.js").testing;
 let setReplyPayloadMetadataForTest: typeof import("../reply-payload.js").setReplyPayloadMetadata;
@@ -463,8 +464,11 @@ async function loadFreshFollowupRunnerModuleForTest() {
   ({ clearFollowupQueue, enqueueFollowupRun } = await import("./queue.js"));
   sessionRunAccounting = await import("./session-run-accounting.js");
   ({ createMockFollowupRun, createMockTypingController } = await import("./test-helpers.js"));
-  ({ createReplyOperation: createReplyOperationForTest, testing: replyRunTestingForTest } =
-    await import("./reply-run-registry.js"));
+  ({
+    abortActiveReplyRuns: abortActiveReplyRunsForTest,
+    createReplyOperation: createReplyOperationForTest,
+    testing: replyRunTestingForTest,
+  } = await import("./reply-run-registry.js"));
   ({ setReplyPayloadMetadata: setReplyPayloadMetadataForTest } =
     await import("../reply-payload.js"));
 }
@@ -1597,6 +1601,86 @@ describe("createFollowupRunner runtime config", () => {
     const embeddedCall = requireLastMockCallArg(runEmbeddedAgentMock, "run embedded agent");
     expect(embeddedCall.suppressAssistantErrorPersistence).toBe(false);
     expect(lifecyclePhases).toEqual(["start", "start", "end"]);
+  });
+
+  it("suppresses deferred CLI success after restart cancellation", async () => {
+    const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+      "../../infra/agent-events.js",
+    );
+    const lifecycleEvents: Array<Record<string, unknown>> = [];
+    const unsubscribe = realAgentEvents.onAgentEvent((evt) => {
+      if (evt.stream === "lifecycle") {
+        lifecycleEvents.push(evt.data);
+      }
+    });
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": { command: "claude" },
+          },
+          models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    };
+    let resolveCli: (() => void) | undefined;
+    runCliAgentMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveCli = () =>
+            resolve({
+              payloads: [{ text: "completed after restart" }],
+              meta: {
+                agentMeta: {
+                  provider: "claude-cli",
+                  model: "claude-opus-4-7",
+                },
+              },
+            });
+        }),
+    );
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey: "main",
+      defaultModel: "anthropic/claude-opus-4-7",
+    });
+
+    try {
+      const pending = runner(
+        createQueuedRun({
+          originatingChannel: "telegram",
+          originatingTo: "chat-1",
+          run: {
+            config: runtimeConfig,
+            provider: "anthropic",
+            model: "claude-opus-4-7",
+            messageProvider: "telegram",
+          },
+        }),
+      );
+      await vi.waitFor(() => {
+        expect(runCliAgentMock).toHaveBeenCalledTimes(1);
+      });
+      expect(abortActiveReplyRunsForTest({ mode: "all" })).toBe(true);
+      resolveCli?.();
+      await pending;
+    } finally {
+      unsubscribe();
+    }
+
+    expect(lifecycleEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          phase: "error",
+          aborted: true,
+          stopReason: "restart",
+        }),
+      ]),
+    );
+    expect(routeReplyMock).not.toHaveBeenCalled();
   });
 
   it("uses the active runtime snapshot for queued embedded followup runs", async () => {

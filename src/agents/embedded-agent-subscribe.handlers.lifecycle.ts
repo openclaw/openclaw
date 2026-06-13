@@ -137,6 +137,7 @@ export function handleAgentEnd(
 
   const emitLifecycleTerminal = () => {
     const terminalStopReason =
+      ctx.params.resolveTerminalStopReason?.() ??
       ctx.state.terminalStopReason ??
       (!isError && isAssistantMessage(lastAssistant) ? lastAssistant.stopReason : undefined);
     const terminalAborted =

@@ -17,6 +17,10 @@ import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection-cli.js";
 import {
+  isAgentRunRestartAbortReason,
+  resolveAgentRunAbortLifecycleFields,
+} from "../../agents/run-termination.js";
+import {
   buildAgentRuntimeDeliveryPlan,
   buildAgentRuntimeOutcomePlan,
 } from "../../agents/runtime-plan/build.js";
@@ -1136,6 +1140,9 @@ export function createFollowupRunner(params: {
         runResult = fallbackResult.result;
         fallbackProvider = fallbackResult.provider;
         fallbackModel = fallbackResult.model;
+        if (isAgentRunRestartAbortReason(runAbortSignal.reason)) {
+          throw runAbortSignal.reason;
+        }
         if (
           pendingDeferredCliTerminal &&
           pendingDeferredCliTerminal.provider === fallbackProvider &&
@@ -1149,6 +1156,7 @@ export function createFollowupRunner(params: {
               phase: "end",
               startedAt: pendingDeferredCliTerminal.startedAt,
               endedAt: Date.now(),
+              ...resolveAgentRunAbortLifecycleFields(runAbortSignal),
             },
           });
         }
@@ -1170,6 +1178,7 @@ export function createFollowupRunner(params: {
               startedAt: pendingDeferredCliTerminal.startedAt,
               endedAt: Date.now(),
               error: message,
+              ...resolveAgentRunAbortLifecycleFields(runAbortSignal),
             },
           });
           pendingDeferredCliTerminal = undefined;

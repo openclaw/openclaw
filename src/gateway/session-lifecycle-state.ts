@@ -49,7 +49,7 @@ function isFiniteTimestamp(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
-function resolveLifecyclePhase(event: LifecycleEventLike): LifecyclePhase | null {
+function resolveLifecyclePhase(event: Pick<LifecycleEventLike, "data">): LifecyclePhase | null {
   const phase = typeof event.data?.phase === "string" ? event.data.phase : "";
   return phase === "start" || phase === "end" || phase === "error" ? phase : null;
 }
@@ -181,24 +181,59 @@ export function derivePersistedSessionLifecyclePatch(params: {
     session: params.entry ?? undefined,
     event: params.event,
   });
-  return {
+  const patch: Partial<PersistedLifecycleSessionShape> = {
     ...snapshot,
     updatedAt: typeof snapshot.updatedAt === "number" ? snapshot.updatedAt : undefined,
   };
+  const runId = params.event.runId?.trim();
+  const lifecycleGeneration = params.event.lifecycleGeneration?.trim();
+  const restartRecoveryRuns = params.entry?.restartRecoveryRuns;
+  if (
+    resolveLifecyclePhase(params.event) !== "start" &&
+    runId &&
+    lifecycleGeneration &&
+    restartRecoveryRuns?.some(
+      (run) => run.runId === runId && run.lifecycleGeneration === lifecycleGeneration,
+    )
+  ) {
+    const remainingRuns = restartRecoveryRuns.filter(
+      (run) => run.runId !== runId || run.lifecycleGeneration !== lifecycleGeneration,
+    );
+    if (remainingRuns.length > 0) {
+      return { restartRecoveryRuns: remainingRuns };
+    }
+    patch.restartRecoveryRuns = undefined;
+  }
+  return patch;
+}
+
+export function deriveGatewaySessionLifecycleProjectionPatch(params: {
+  entry?: Partial<PersistedLifecycleSessionShape> | null;
+  event: LifecycleEventLike;
+}): GatewaySessionLifecycleSnapshot {
+  const { restartRecoveryRuns: _restartRecoveryRuns, ...patch } =
+    derivePersistedSessionLifecyclePatch(params);
+  return patch;
 }
 
 export function isRestartRecoveryLifecycleEvent(params: {
   entry?: Pick<SessionEntry, "restartRecoveryRuns"> | null;
-  event: Pick<LifecycleEventLike, "runId" | "lifecycleGeneration">;
+  event: Pick<LifecycleEventLike, "runId" | "lifecycleGeneration" | "data">;
 }): boolean {
   const runId = params.event.runId?.trim();
   const lifecycleGeneration = params.event.lifecycleGeneration?.trim();
-  return Boolean(
+  const phase = resolveLifecyclePhase(params.event);
+  const interrupted = params.event.data?.stopReason === "restart";
+  const matchesRecoveryRun = Boolean(
     runId &&
     lifecycleGeneration &&
     params.entry?.restartRecoveryRuns?.some(
       (run) => run.runId === runId && run.lifecycleGeneration === lifecycleGeneration,
     ),
+  );
+  return (
+    matchesRecoveryRun &&
+    (phase === "start" || ((phase === "end" || phase === "error") && interrupted))
   );
 }
 
@@ -246,6 +281,7 @@ export async function persistGatewaySessionLifecycleEvent(params: {
     sessionKey: sessionEntry.canonicalKey,
     skipMaintenance: true,
     takeCacheOwnership: true,
+    requireWriteSuccess: true,
     update: async (entry) => {
       // Reject a pre-reset run's lifecycle event: sessions.reset rotates the row
       // to a new sessionId under the same sessionKey, so an old in-flight run's

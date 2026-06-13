@@ -43,6 +43,7 @@ import { resolveAvailableAgentHarnessPolicy } from "../harness/selection.js";
 import { resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
 import { isCliProvider } from "../model-selection.js";
 import { resolveOpenAIRuntimeProvider } from "../openai-routing.js";
+import { resolveAgentRunAbortLifecycleFields } from "../run-termination.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { acquireSessionWriteLock, resolveSessionWriteLockOptions } from "../session-write-lock.js";
@@ -780,12 +781,13 @@ export function buildAcpResult(params: {
     text: params.payloadText,
   });
   const payloads = normalizedFinalPayload ? [normalizedFinalPayload] : [];
+  const abortFields = resolveAgentRunAbortLifecycleFields(params.abortSignal);
   return {
     payloads,
     meta: {
       durationMs: Date.now() - params.startedAt,
-      aborted: params.abortSignal?.aborted === true,
-      stopReason: params.stopReason,
+      aborted: abortFields.aborted ?? false,
+      stopReason: abortFields.stopReason ?? params.stopReason,
     },
   };
 }
@@ -893,7 +895,11 @@ export function emitAcpRuntimeEvent(params: {
   });
 }
 
-export function emitAcpLifecycleEnd(params: { runId: string; lifecycleGeneration?: string }) {
+export function emitAcpLifecycleEnd(params: {
+  runId: string;
+  lifecycleGeneration?: string;
+  abortSignal?: AbortSignal;
+}) {
   emitAgentEvent({
     runId: params.runId,
     ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
@@ -901,6 +907,7 @@ export function emitAcpLifecycleEnd(params: { runId: string; lifecycleGeneration
     data: {
       phase: "end",
       endedAt: Date.now(),
+      ...resolveAgentRunAbortLifecycleFields(params.abortSignal),
     },
   });
 }
@@ -910,6 +917,7 @@ export function emitAcpLifecycleError(params: {
   error: unknown;
   sessionKey?: string;
   lifecycleGeneration?: string;
+  abortSignal?: AbortSignal;
 }) {
   emitAgentEvent({
     runId: params.runId,
@@ -920,6 +928,7 @@ export function emitAcpLifecycleError(params: {
       phase: "error",
       error: formatAcpErrorChain(params.error),
       endedAt: Date.now(),
+      ...resolveAgentRunAbortLifecycleFields(params.abortSignal),
     },
   });
 }

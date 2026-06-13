@@ -59,6 +59,7 @@ import {
 } from "../secrets/runtime-state.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
+import type { RestartRecoveryCandidate } from "./chat-abort.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
 import {
   STARTUP_UNAVAILABLE_GATEWAY_METHODS,
@@ -928,6 +929,7 @@ export async function startGatewayServer(
       getReadiness,
     }),
   );
+  const restartRecoveryCandidates = new Map<string, RestartRecoveryCandidate>();
   const { createGatewayNodeSessionRuntime } = await import("./server-node-session-runtime.js");
   const {
     nodeRegistry,
@@ -1049,6 +1051,7 @@ export async function startGatewayServer(
       lifecycleUnsub: runtimeState.lifecycleUnsub,
       chatRunState,
       chatAbortControllers,
+      restartRecoveryCandidates,
       removeChatRun,
       agentRunSeq,
       nodeSendToSession,
@@ -1058,6 +1061,7 @@ export async function startGatewayServer(
         sessionIds,
         activeRuns,
         reason,
+        isActiveRun,
       }) => {
         if (sessionKeys.size === 0 && sessionIds.size === 0) {
           return;
@@ -1069,6 +1073,7 @@ export async function startGatewayServer(
           sessionKeys,
           sessionIds,
           activeRuns,
+          isActiveRun,
           reason,
         });
       },
@@ -1118,6 +1123,7 @@ export async function startGatewayServer(
           logHealth,
           dedupe,
           chatAbortControllers,
+          restartRecoveryCandidates,
           chatRunState,
           chatRunBuffers,
           chatDeltaSentAt,
@@ -1160,6 +1166,7 @@ export async function startGatewayServer(
         sessionEventSubscribers,
         sessionMessageSubscribers,
         chatAbortControllers,
+        restartRecoveryCandidates,
       }),
     );
     Object.assign(runtimeState, runtimeSubscriptions);

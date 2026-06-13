@@ -2777,6 +2777,101 @@ describe("subagent registry seam flow", () => {
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
   });
 
+  it("announces restart lifecycle end events as killed subagent failures", async () => {
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        return { status: "pending" };
+      }
+      return {};
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-restart-end",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "restart task",
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+    });
+
+    const lastOnAgentEventCall = mocks.onAgentEvent.mock.calls[
+      mocks.onAgentEvent.mock.calls.length - 1
+    ] as unknown as
+      | [(evt: { runId: string; stream: string; data: Record<string, unknown> }) => void]
+      | undefined;
+    const lifecycleHandler = lastOnAgentEventCall?.[0];
+    lifecycleHandler?.({
+      runId: "run-restart-end",
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        startedAt: 10,
+        endedAt: 20,
+        aborted: true,
+        stopReason: "restart",
+      },
+    });
+
+    await waitForFast(() => {
+      const run = mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .find((entry) => entry.runId === "run-restart-end");
+      expect(run?.endedReason).toBe("subagent-killed");
+      expect(run?.outcome?.status).toBe("error");
+      expect(run?.cleanupCompletedAt).toBeTypeOf("number");
+      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("announces restart lifecycle error events as killed subagent failures", async () => {
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        return { status: "pending" };
+      }
+      return {};
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-restart-error",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "restart error task",
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+    });
+
+    const lastOnAgentEventCall = mocks.onAgentEvent.mock.calls[
+      mocks.onAgentEvent.mock.calls.length - 1
+    ] as unknown as
+      | [(evt: { runId: string; stream: string; data: Record<string, unknown> }) => void]
+      | undefined;
+    const lifecycleHandler = lastOnAgentEventCall?.[0];
+    lifecycleHandler?.({
+      runId: "run-restart-error",
+      stream: "lifecycle",
+      data: {
+        phase: "error",
+        startedAt: 10,
+        endedAt: 20,
+        error: "ACP turn failed before completion",
+        aborted: true,
+        stopReason: "restart",
+      },
+    });
+
+    await waitForFast(() => {
+      const run = mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .find((entry) => entry.runId === "run-restart-error");
+      expect(run?.endedReason).toBe("subagent-killed");
+      expect(run?.outcome?.status).toBe("error");
+      expect(run?.cleanupCompletedAt).toBeTypeOf("number");
+      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("resumes ended cleanup when lifecycle killed completion rejects before cleanup", async () => {
     mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
       if (request.method === "agent.wait") {

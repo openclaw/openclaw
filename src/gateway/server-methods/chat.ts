@@ -3351,7 +3351,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           performance.now() - prepareAttachmentsStartedAtMs,
         );
       } catch (err) {
-        activeRunAbort.cleanup();
+        activeRunAbort.cleanup({ force: true });
         clearAgentRunContext(clientRunId, lifecycleGeneration);
         clearActiveChatSendDedupeRun(context.dedupe, activeChatSendDedupeKey, clientRunId);
         logAttachmentFailure(context.logGateway, "chat.send attachment parse/stage failed", err);
@@ -4527,7 +4527,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           context.removeChatRun(clientRunId, clientRunId, sessionKey);
         });
     } catch (err) {
-      activeRunAbort.cleanup();
+      activeRunAbort.cleanup({ force: true });
       clearAgentRunContext(clientRunId, lifecycleGeneration);
       clearActiveChatSendDedupeRun(context.dedupe, activeChatSendDedupeKey, clientRunId);
       context.removeChatRun(clientRunId, clientRunId, sessionKey);

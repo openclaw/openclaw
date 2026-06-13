@@ -134,8 +134,16 @@ export async function markRestartAbortedMainSessions(params: {
     RestartRecoveryRun & {
       sessionKey: string;
       sessionId: string;
+      observedAt?: number;
     }
   >;
+  isActiveRun?: (
+    run: RestartRecoveryRun & {
+      sessionKey: string;
+      sessionId: string;
+      observedAt?: number;
+    },
+  ) => boolean;
   reason?: string;
 }): Promise<{ marked: number; skipped: number }> {
   const sessionKeys = normalizeStringSet(params.sessionKeys);
@@ -147,6 +155,7 @@ export async function markRestartAbortedMainSessions(params: {
       lifecycleGeneration: run.lifecycleGeneration.trim(),
       sessionKey: run.sessionKey.trim(),
       sessionId: run.sessionId.trim(),
+      observedAt: normalizeFiniteTimestamp(run.observedAt),
     }))
     .filter((run) => run.runId && run.lifecycleGeneration && (run.sessionKey || run.sessionId));
   const currentLifecycleGeneration = getAgentEventLifecycleGeneration();
@@ -203,7 +212,27 @@ export async function markRestartAbortedMainSessions(params: {
       storePath,
       (store) => {
         for (const [sessionKey, entry] of Object.entries(store)) {
-          if (!entry || entry.status !== "running") {
+          if (!entry) {
+            continue;
+          }
+          const registeredActiveRuns = listAgentRunsForSession({
+            sessionKey,
+            sessionId: entry.sessionId,
+          });
+          const matchingActiveRuns = activeRuns.filter(
+            (run) =>
+              (run.sessionId ? run.sessionId === entry.sessionId : run.sessionKey === sessionKey) &&
+              (entry.status === "running" ||
+                run.observedAt === undefined ||
+                normalizeFiniteTimestamp(entry.updatedAt) === undefined ||
+                entry.updatedAt < run.observedAt) &&
+              params.isActiveRun?.(run) !== false,
+          );
+          if (
+            entry.status !== "running" &&
+            matchingActiveRuns.length === 0 &&
+            registeredActiveRuns.length === 0
+          ) {
             continue;
           }
           const matches =
@@ -217,7 +246,14 @@ export async function markRestartAbortedMainSessions(params: {
             result.skipped++;
             continue;
           }
+          const wasRunning = entry.status === "running";
+          entry.status = "running";
           entry.abortedLastRun = true;
+          if (!wasRunning) {
+            entry.startedAt = undefined;
+            entry.endedAt = undefined;
+            entry.runtimeMs = undefined;
+          }
           const recoveryRuns = new Map<string, RestartRecoveryRun>();
           for (const run of entry.restartRecoveryRuns ?? []) {
             if (run.lifecycleGeneration === currentLifecycleGeneration) {
@@ -232,22 +268,14 @@ export async function markRestartAbortedMainSessions(params: {
             }
             recoveryRuns.set(`${run.runId}\u0000${run.lifecycleGeneration}`, run);
           };
-          for (const run of listAgentRunsForSession({
-            sessionKey,
-            sessionId: entry.sessionId,
-          })) {
+          for (const run of registeredActiveRuns) {
             replaceActiveRunMarker(run);
           }
-          for (const run of activeRuns) {
-            const matchesEntry = run.sessionId
-              ? run.sessionId === entry.sessionId
-              : run.sessionKey === sessionKey;
-            if (matchesEntry) {
-              replaceActiveRunMarker({
-                runId: run.runId,
-                lifecycleGeneration: run.lifecycleGeneration,
-              });
-            }
+          for (const run of matchingActiveRuns) {
+            replaceActiveRunMarker({
+              runId: run.runId,
+              lifecycleGeneration: run.lifecycleGeneration,
+            });
           }
           entry.restartRecoveryRuns = [...recoveryRuns.values()].toSorted((a, b) =>
             a.runId === b.runId
@@ -259,7 +287,7 @@ export async function markRestartAbortedMainSessions(params: {
           result.marked++;
         }
       },
-      { skipMaintenance: true },
+      { skipMaintenance: true, requireWriteSuccess: true },
     );
   }
 

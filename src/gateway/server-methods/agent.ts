@@ -41,6 +41,7 @@ import {
 import { AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION } from "../../agents/internal-event-contract.js";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
+import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
 import {
   normalizeAgentRunTimeoutPhase,
   normalizeProviderStarted,
@@ -851,6 +852,9 @@ function isGatewayAgentAbortRejection(error: unknown, signal: AbortSignal): bool
   if (!signal.aborted) {
     return false;
   }
+  if (isAgentRunRestartAbortReason(signal.reason)) {
+    return true;
+  }
   if (readErrorName(signal.reason) === "TimeoutError") {
     return true;
   }
@@ -860,7 +864,10 @@ function isGatewayAgentAbortRejection(error: unknown, signal: AbortSignal): bool
   return isAbortError(error) || readErrorName(error) === "TimeoutError";
 }
 
-function resolveGatewayAgentAbortStopReason(signal: AbortSignal): "rpc" | "timeout" {
+function resolveGatewayAgentAbortStopReason(signal: AbortSignal): "restart" | "rpc" | "timeout" {
+  if (isAgentRunRestartAbortReason(signal.reason)) {
+    return "restart";
+  }
   return readErrorName(signal.reason) === "TimeoutError" ? "timeout" : "rpc";
 }
 
@@ -887,6 +894,7 @@ function dispatchAgentRunFromGateway(params: {
    * touching a same-runId entry owned by a concurrent chat.send.
    */
   abortController: AbortController;
+  cleanupAbortController: () => void;
   respond: GatewayRequestHandlerOptions["respond"];
   context: GatewayRequestHandlerOptions["context"];
   taskTrackingMode: Exclude<GatewayAgentTaskTrackingMode, "plugin_subagent">;
@@ -996,10 +1004,7 @@ function dispatchAgentRunFromGateway(params: {
       });
     })
     .finally(() => {
-      const entry = params.context.chatAbortControllers.get(params.runId);
-      if (entry?.controller === params.abortController) {
-        params.context.chatAbortControllers.delete(params.runId);
-      }
+      params.cleanupAbortController();
     });
 }
 
@@ -2658,6 +2663,7 @@ export const agentHandlers: GatewayRequestHandlers = {
             runId,
             dedupeKeys: agentDedupeKeys,
             abortController: activeRunAbort.controller,
+            cleanupAbortController: activeRunAbort.cleanup,
             respond,
             context,
             taskTrackingMode: dispatchTaskTrackingMode,
@@ -2686,7 +2692,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           });
         } finally {
           if (!dispatched) {
-            activeRunAbort.cleanup();
+            activeRunAbort.cleanup({ force: true });
           }
         }
       })();

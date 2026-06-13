@@ -7,6 +7,7 @@ import {
   registerExecApprovalFollowupRuntimeHandoff,
   resetExecApprovalFollowupRuntimeHandoffsForTests,
 } from "../../agents/bash-tools.exec-approval-followup-state.js";
+import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import {
   getSubagentRunByChildSessionKey,
   resetSubagentRegistryForTests,
@@ -3465,6 +3466,43 @@ describe("gateway agent handler", () => {
     });
   });
 
+  it("preserves restart ownership for aborted async gateway agent rejections", async () => {
+    await withTempDir({ prefix: "openclaw-gateway-agent-task-restart-abort-" }, async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      primeMainAgentRun();
+      const abortError = createAgentRunRestartAbortError();
+      const wrappedError = new Error("ACP turn failed before completion", {
+        cause: abortError,
+      });
+      wrappedError.name = "AcpRuntimeError";
+      const context = makeContext();
+      const runId = "task-registry-agent-run-restart-abort";
+      mocks.agentCommand.mockImplementationOnce(() => {
+        context.chatAbortControllers.get(runId)?.controller.abort(abortError);
+        return Promise.reject(wrappedError);
+      });
+
+      await invokeAgent(
+        {
+          message: "background cli task",
+          sessionKey: "agent:main:main",
+          idempotencyKey: runId,
+        },
+        { context, reqId: runId },
+      );
+
+      await waitForAssertion(() => {
+        expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, {
+          runId,
+          status: "timeout",
+          summary: "aborted",
+          stopReason: "restart",
+        });
+      });
+    });
+  });
+
   it("classifies timeout async gateway agent rejections as timed out", async () => {
     await withTempDir({ prefix: "openclaw-gateway-agent-task-timeout-error-" }, async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
@@ -6844,6 +6882,48 @@ describe("gateway agent handler chat.abort integration", () => {
       { context, reqId: runId },
     );
 
+    await waitForAssertion(() => {
+      expect(context.chatAbortControllers.has(runId)).toBe(false);
+    });
+  });
+
+  it("retains agent RPC registration until terminal persistence settles", async () => {
+    prime();
+    let resolveAgent: (value: {
+      payloads: Array<{ text: string }>;
+      meta: { durationMs: number };
+    }) => void = () => undefined;
+    const agentResult = new Promise<{
+      payloads: Array<{ text: string }>;
+      meta: { durationMs: number };
+    }>((resolve) => {
+      resolveAgent = resolve;
+    });
+    mocks.agentCommand.mockReturnValueOnce(agentResult);
+
+    const context = makeContext();
+    const runId = "idem-abort-cleanup-persisting";
+    await invokeAgent(
+      {
+        message: "hi",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        idempotencyKey: runId,
+      },
+      { context, reqId: runId },
+    );
+
+    const entry = requireValue(context.chatAbortControllers.get(runId), "chat abort entry missing");
+    let resolvePersistence: () => void = () => undefined;
+    entry.projectSessionTerminalPersistence = new Promise<void>((resolve) => {
+      resolvePersistence = resolve;
+    });
+    resolveAgent({ payloads: [{ text: "ok" }], meta: { durationMs: 1 } });
+
+    await waitForAssertion(() => {
+      expect(context.chatAbortControllers.has(runId)).toBe(true);
+    });
+    resolvePersistence();
     await waitForAssertion(() => {
       expect(context.chatAbortControllers.has(runId)).toBe(false);
     });

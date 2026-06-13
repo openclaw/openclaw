@@ -125,6 +125,10 @@ import {
 } from "./model-visibility-policy.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "./openai-routing.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
+import {
+  isAgentRunRestartAbortReason,
+  resolveAgentRunAbortLifecycleFields,
+} from "./run-termination.js";
 import { normalizeSpawnedRunMetadata } from "./spawned-context.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 import { ensureAgentWorkspace } from "./workspace.js";
@@ -227,6 +231,23 @@ function parseAgentCommandModelRef(
 
 type AttemptExecutionRuntime = typeof import("./command/attempt-execution.runtime.js");
 type AgentAttemptResult = Awaited<ReturnType<AttemptExecutionRuntime["runAgentAttempt"]>>;
+
+function applyAgentRunAbortMetadata<T extends { meta: object }>(
+  result: T,
+  signal: AbortSignal | undefined,
+): T {
+  const abortFields = resolveAgentRunAbortLifecycleFields(signal);
+  if (abortFields.aborted !== true) {
+    return result;
+  }
+  return {
+    ...result,
+    meta: {
+      ...result.meta,
+      ...abortFields,
+    },
+  };
+}
 type AcpManagerRuntime = typeof import("../acp/control-plane/manager.js");
 type AcpPolicyRuntime = typeof import("../acp/policy.js");
 type AcpRuntimeErrorsRuntime = typeof import("../acp/runtime/errors.js");
@@ -1003,6 +1024,9 @@ async function agentCommandInternal(
             });
           },
         });
+        if (isAgentRunRestartAbortReason(opts.abortSignal?.reason)) {
+          throw opts.abortSignal?.reason;
+        }
       } catch (error) {
         const { toAcpRuntimeError } = await loadAcpRuntimeErrorsRuntime();
         const acpError = toAcpRuntimeError({
@@ -1015,11 +1039,10 @@ async function agentCommandInternal(
           error: acpError,
           sessionKey,
           lifecycleGeneration,
+          abortSignal: opts.abortSignal,
         });
         throw acpError;
       }
-
-      attemptExecutionRuntime.emitAcpLifecycleEnd({ runId, lifecycleGeneration });
 
       const finalTextRaw = visibleTextAccumulator.finalizeRaw();
       const finalText = visibleTextAccumulator.finalize();
@@ -1076,13 +1099,32 @@ async function agentCommandInternal(
           `ACP transcript persistence failed for ${sessionKey}: ${formatErrorMessage(error)}`,
         );
       }
-
-      const result = attemptExecutionRuntime.buildAcpResult({
-        payloadText: finalText,
-        startedAt,
-        stopReason,
+      const restartAbortReason = opts.abortSignal?.reason;
+      if (isAgentRunRestartAbortReason(restartAbortReason)) {
+        attemptExecutionRuntime.emitAcpLifecycleError({
+          runId,
+          error: restartAbortReason,
+          sessionKey,
+          lifecycleGeneration,
+          abortSignal: opts.abortSignal,
+        });
+        throw restartAbortReason;
+      }
+      attemptExecutionRuntime.emitAcpLifecycleEnd({
+        runId,
+        lifecycleGeneration,
         abortSignal: opts.abortSignal,
       });
+
+      const result = applyAgentRunAbortMetadata(
+        attemptExecutionRuntime.buildAcpResult({
+          payloadText: finalText,
+          startedAt,
+          stopReason,
+          abortSignal: opts.abortSignal,
+        }),
+        opts.abortSignal,
+      );
       const payloads = result.payloads;
       const { deliverAgentCommandResult } = await loadDeliveryRuntime();
 
@@ -1630,6 +1672,7 @@ async function agentCommandInternal(
           endedAt: Date.now(),
           aborted: runResult.meta.aborted ?? false,
           stopReason: runResult.meta.stopReason,
+          ...resolveAgentRunAbortLifecycleFields(opts.abortSignal),
         },
       });
     };
@@ -1652,6 +1695,7 @@ async function agentCommandInternal(
           endedAt: Date.now(),
           aborted: runResult.meta.aborted ?? false,
           stopReason,
+          ...resolveAgentRunAbortLifecycleFields(opts.abortSignal),
         },
       });
     };
@@ -1669,6 +1713,7 @@ async function agentCommandInternal(
           startedAt,
           endedAt: Date.now(),
           error: error instanceof Error ? error.message : "Agent run failed",
+          ...resolveAgentRunAbortLifecycleFields(opts.abortSignal),
         },
       });
     };
@@ -1825,7 +1870,10 @@ async function agentCommandInternal(
             });
           },
         });
-        result = fallbackResult.result;
+        result = applyAgentRunAbortMetadata(fallbackResult.result, opts.abortSignal);
+        if (isAgentRunRestartAbortReason(opts.abortSignal?.reason)) {
+          throw opts.abortSignal?.reason;
+        }
         fallbackProvider = fallbackResult.provider;
         fallbackModel = fallbackResult.model;
         if (
@@ -1986,6 +2034,7 @@ async function agentCommandInternal(
               startedAt,
               endedAt: Date.now(),
               error: err instanceof Error ? err.message : "Agent run failed",
+              ...resolveAgentRunAbortLifecycleFields(opts.abortSignal),
             },
           });
         }

@@ -10,6 +10,10 @@ import { clearCliSession } from "../../agents/cli-session.js";
 import { extractToolResultText } from "../../agents/embedded-agent-subscribe.tools.js";
 import { inferToolMetaFromArgs } from "../../agents/embedded-agent-utils.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent.js";
+import {
+  isAgentRunRestartAbortReason,
+  resolveAgentRunAbortLifecycleFields,
+} from "../../agents/run-termination.js";
 import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
 import type { AgentEventPayload } from "../../infra/agent-events.js";
 import {
@@ -372,6 +376,10 @@ async function runCliAgentWithLifecycleInternal(
       ...params.runParams,
       emitCommentaryText: Boolean(params.onCommentaryText),
     });
+    const restartAbortReason = params.runParams.abortSignal?.reason;
+    if (isAgentRunRestartAbortReason(restartAbortReason)) {
+      throw restartAbortReason;
+    }
     const result = params.transformResult?.(rawResult) ?? rawResult;
     await stopAgentEventBridges(bridges);
 
@@ -395,6 +403,7 @@ async function runCliAgentWithLifecycleInternal(
           phase: "end",
           startedAt,
           endedAt: Date.now(),
+          ...resolveAgentRunAbortLifecycleFields(params.runParams.abortSignal),
         },
       });
       lifecycleTerminalEmitted = true;
@@ -415,6 +424,7 @@ async function runCliAgentWithLifecycleInternal(
           startedAt,
           endedAt: Date.now(),
           error: String(err),
+          ...resolveAgentRunAbortLifecycleFields(params.runParams.abortSignal),
         },
       });
       lifecycleTerminalEmitted = true;
@@ -436,6 +446,7 @@ async function runCliAgentWithLifecycleInternal(
           startedAt,
           endedAt: Date.now(),
           error: "CLI run completed without lifecycle terminal event",
+          ...resolveAgentRunAbortLifecycleFields(params.runParams.abortSignal),
         },
       });
     }

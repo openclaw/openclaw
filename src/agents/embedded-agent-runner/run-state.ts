@@ -23,7 +23,7 @@ export type EmbeddedAgentQueueHandle = {
   isCompacting: () => boolean;
   supportsTranscriptCommitWait?: boolean;
   cancel?: (reason?: "user_abort" | "restart" | "superseded") => void;
-  abort: () => void;
+  abort: (reason?: "restart") => void;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
 };
 
