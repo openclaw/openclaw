@@ -67,7 +67,12 @@ export function scanEmptyAllowlistPolicyWarnings(
           params.shouldSkipDefaultEmptyGroupAllowlistWarning,
       }),
     );
-    if (params.extraWarningsForAccount) {
+    // Plugin-specific extra warnings (e.g. Telegram's group-allowlist check)
+    // run for real accounts and for the top-level when no accounts exist.
+    // When sub-accounts are present the top-level is a parent/fallback, so
+    // skip extra warnings for it to avoid false positives on empty top-level
+    // groupAllowFrom.
+    if (params.extraWarningsForAccount && !skipGroupAllowlistCheck) {
       warnings.push(
         ...params.extraWarningsForAccount({
           account,
