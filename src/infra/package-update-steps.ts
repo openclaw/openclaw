@@ -355,33 +355,45 @@ function pushLocalOverridesStep(params: {
   });
 }
 
-function unsupportedLocalOverridesResult(message: string): LocalPackageOverridesResult {
+type LocalPackageOverridesCaptureResult =
+  | { status: "captured"; plan: LocalPackageOverridesPlan | null }
+  | { status: "error"; failedStep: PackageUpdateStepResult };
+
+function createLocalOverridesFailureStep(params: {
+  packageRoot: string;
+  command: string;
+  message: string;
+  durationMs: number;
+}): PackageUpdateStepResult {
   return {
-    status: "unsupported",
-    added: 0,
-    modified: 0,
-    deleted: 0,
-    applied: 0,
-    conflicts: [],
-    warnings: [message],
+    name: "local overrides",
+    command: params.command,
+    cwd: params.packageRoot,
+    durationMs: params.durationMs,
+    exitCode: 1,
+    stdoutTail: null,
+    stderrTail: params.message,
   };
 }
 
-async function captureLocalPackageOverridesForUpdate(packageRoot: string): Promise<{
-  plan: LocalPackageOverridesPlan | null;
-  unsupported: LocalPackageOverridesResult | null;
-}> {
+async function captureLocalPackageOverridesForUpdate(
+  packageRoot: string,
+): Promise<LocalPackageOverridesCaptureResult> {
+  const startedAt = Date.now();
   try {
     return {
+      status: "captured",
       plan: await captureLocalPackageOverrides({ packageRoot }),
-      unsupported: null,
     };
   } catch (error) {
     return {
-      plan: null,
-      unsupported: unsupportedLocalOverridesResult(
-        `Local OpenClaw changes could not be inspected before update and were not preserved: ${formatError(error)}`,
-      ),
+      status: "error",
+      failedStep: createLocalOverridesFailureStep({
+        packageRoot,
+        command: `inspect local OpenClaw changes in ${packageRoot}`,
+        durationMs: Date.now() - startedAt,
+        message: `Local OpenClaw changes could not be inspected safely before update: ${formatError(error)}`,
+      }),
     };
   }
 }
@@ -600,27 +612,53 @@ export async function runGlobalPackageUpdateSteps(params: {
     }
 
     const steps: PackageUpdateStepResult[] = [];
-    const installCommandTarget = stagedInstall?.installTarget ?? params.installTarget;
-    const preUpdateLivePackageRoot = !stagedInstall
-      ? (params.installTarget.packageRoot ??
-        params.packageRoot ??
-        (
-          await resolveGlobalInstallTarget({
-            manager: params.installTarget,
-            runCommand: params.runCommand,
-            timeoutMs: params.timeoutMs,
-          })
-        ).packageRoot ??
-        null)
-      : null;
+    const livePackageRoot =
+      params.installTarget.packageRoot ??
+      params.packageRoot ??
+      (
+        await resolveGlobalInstallTarget({
+          manager: params.installTarget,
+          runCommand: params.runCommand,
+          timeoutMs: params.timeoutMs,
+        })
+      ).packageRoot ??
+      null;
     let preUpdateLocalOverridesPlan: LocalPackageOverridesPlan | null = null;
-    let preUpdateLocalOverridesUnsupported: LocalPackageOverridesResult | null = null;
-    if (preUpdateLivePackageRoot) {
-      const capturedLocalOverrides =
-        await captureLocalPackageOverridesForUpdate(preUpdateLivePackageRoot);
-      preUpdateLocalOverridesPlan = capturedLocalOverrides.plan;
-      preUpdateLocalOverridesUnsupported = capturedLocalOverrides.unsupported;
+    if (livePackageRoot) {
+      // Preflight capture before package-manager work so unsafe installed inventory
+      // cannot turn an in-place update into unrecoverable executable content loss.
+      const capturedLocalOverrides = await captureLocalPackageOverridesForUpdate(livePackageRoot);
+      if (capturedLocalOverrides.status === "error") {
+        return {
+          steps: [capturedLocalOverrides.failedStep],
+          verifiedPackageRoot: livePackageRoot,
+          afterVersion: null,
+          failedStep: capturedLocalOverrides.failedStep,
+        };
+      }
+      if (stagedInstall && capturedLocalOverrides.plan) {
+        // Staged installs recapture immediately before swap so the preserved plan
+        // includes edits made while the candidate package was being prepared.
+        const cleanupStartedAt = Date.now();
+        if (!(await removePathBestEffort(capturedLocalOverrides.plan.recoveryDir))) {
+          const failedStep = createLocalOverridesFailureStep({
+            packageRoot: livePackageRoot,
+            command: `discard staged preflight local OpenClaw changes in ${livePackageRoot}`,
+            durationMs: Date.now() - cleanupStartedAt,
+            message: `Local OpenClaw changes were inspected before update, but the temporary recovery bundle could not be removed: ${capturedLocalOverrides.plan.recoveryDir}`,
+          });
+          return {
+            steps: [failedStep],
+            verifiedPackageRoot: livePackageRoot,
+            afterVersion: null,
+            failedStep,
+          };
+        }
+      } else {
+        preUpdateLocalOverridesPlan = capturedLocalOverrides.plan;
+      }
     }
+    const installCommandTarget = stagedInstall?.installTarget ?? params.installTarget;
     const preparedSpec = await prepareNpmGitSourceInstallSpec({
       installTarget: installCommandTarget,
       installSpec: params.installSpec,
@@ -701,34 +739,20 @@ export async function runGlobalPackageUpdateSteps(params: {
       }
     }
 
-    const livePackageRoot =
-      params.installTarget.packageRoot ??
-      params.packageRoot ??
-      preUpdateLivePackageRoot ??
-      (
-        await resolveGlobalInstallTarget({
-          manager: params.installTarget,
-          runCommand: params.runCommand,
-          timeoutMs: params.timeoutMs,
-        })
-      ).packageRoot ??
-      null;
     const verificationPackageRoot = stagedInstall?.packageRoot ?? livePackageRoot;
     let verifiedPackageRoot = livePackageRoot ?? verificationPackageRoot;
     const preservePreUpdateLocalOverrides = async () => {
-      if (localOverrides || !preUpdateLivePackageRoot) {
+      if (localOverrides || !livePackageRoot) {
         return;
       }
-      localOverrides =
-        preUpdateLocalOverridesUnsupported ??
-        (await applyLocalPackageOverrides({
-          packageRoot: preUpdateLivePackageRoot,
-          plan: preUpdateLocalOverridesPlan,
-          reapply: false,
-        }));
+      localOverrides = await applyLocalPackageOverrides({
+        packageRoot: livePackageRoot,
+        plan: preUpdateLocalOverridesPlan,
+        reapply: false,
+      });
       pushLocalOverridesStep({
         steps,
-        packageRoot: preUpdateLivePackageRoot,
+        packageRoot: livePackageRoot,
         localOverrides,
       });
     };
@@ -766,49 +790,54 @@ export async function runGlobalPackageUpdateSteps(params: {
         });
       }
       if (!stagedInstall && verificationErrors.length > 0 && livePackageRoot) {
-        localOverrides =
-          preUpdateLocalOverridesUnsupported ??
-          (await applyLocalPackageOverrides({
-            packageRoot: livePackageRoot,
-            plan: preUpdateLocalOverridesPlan,
-            reapply: false,
-          }));
+        localOverrides = await applyLocalPackageOverrides({
+          packageRoot: livePackageRoot,
+          plan: preUpdateLocalOverridesPlan,
+          reapply: false,
+        });
         pushLocalOverridesStep({ steps, packageRoot: livePackageRoot, localOverrides });
       }
 
       if (stagedInstall && verificationErrors.length === 0) {
         const capturedLocalOverrides = livePackageRoot
           ? await captureLocalPackageOverridesForUpdate(livePackageRoot)
-          : { plan: null, unsupported: null };
-        const swapStep = await swapStagedNpmInstall({
-          stage: stagedInstall,
-          installTarget: params.installTarget,
-          packageName: params.packageName,
-        });
-        steps.push(swapStep);
-        if (swapStep.exitCode === 0) {
-          const activePackageRoot = params.installTarget.packageRoot ?? verifiedPackageRoot;
-          verifiedPackageRoot = activePackageRoot;
-          afterVersion = candidateVersion;
-          if (activePackageRoot) {
-            localOverrides =
-              capturedLocalOverrides.unsupported ??
-              (await applyLocalPackageOverrides({
+          : ({ status: "captured", plan: null } satisfies LocalPackageOverridesCaptureResult);
+        if (capturedLocalOverrides.status === "error") {
+          steps.push(capturedLocalOverrides.failedStep);
+        } else {
+          const swapStep = await swapStagedNpmInstall({
+            stage: stagedInstall,
+            installTarget: params.installTarget,
+            packageName: params.packageName,
+          });
+          steps.push(swapStep);
+          if (swapStep.exitCode === 0) {
+            const activePackageRoot = params.installTarget.packageRoot ?? verifiedPackageRoot;
+            verifiedPackageRoot = activePackageRoot;
+            afterVersion = candidateVersion;
+            if (activePackageRoot) {
+              localOverrides = await applyLocalPackageOverrides({
                 packageRoot: activePackageRoot,
                 plan: capturedLocalOverrides.plan,
                 reapply: params.reapplyLocalOverrides === true,
-              }));
-            pushLocalOverridesStep({ steps, packageRoot: activePackageRoot, localOverrides });
+              });
+              pushLocalOverridesStep({ steps, packageRoot: activePackageRoot, localOverrides });
+            }
+          } else if (livePackageRoot) {
+            localOverrides = await applyLocalPackageOverrides({
+              packageRoot: livePackageRoot,
+              plan: capturedLocalOverrides.plan,
+              reapply: false,
+            });
+            pushLocalOverridesStep({ steps, packageRoot: livePackageRoot, localOverrides });
           }
         }
       } else if (!stagedInstall && verificationErrors.length === 0 && livePackageRoot) {
-        localOverrides =
-          preUpdateLocalOverridesUnsupported ??
-          (await applyLocalPackageOverrides({
-            packageRoot: livePackageRoot,
-            plan: preUpdateLocalOverridesPlan,
-            reapply: params.reapplyLocalOverrides === true,
-          }));
+        localOverrides = await applyLocalPackageOverrides({
+          packageRoot: livePackageRoot,
+          plan: preUpdateLocalOverridesPlan,
+          reapply: params.reapplyLocalOverrides === true,
+        });
         pushLocalOverridesStep({ steps, packageRoot: livePackageRoot, localOverrides });
       }
 

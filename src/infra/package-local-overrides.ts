@@ -20,7 +20,7 @@ type LocalPackageOverrideChange = {
 };
 
 export type LocalPackageOverridesResult = {
-  status: "unsupported" | "none" | "preserved" | "applied" | "conflict" | "error";
+  status: "none" | "preserved" | "applied" | "conflict" | "error";
   added: number;
   modified: number;
   deleted: number;
