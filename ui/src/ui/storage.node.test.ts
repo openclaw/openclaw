@@ -148,6 +148,7 @@ describe("loadSettings default gateway URL derivation", () => {
       recentSessionsCollapsed: false,
       borderRadius: 50,
       textScale: 100,
+      workspaceFilesCollapsed: false,
       sessionsByGateway: {
         "wss://gateway.example:8443/openclaw": {
           sessionKey: "agent",
@@ -181,6 +182,7 @@ describe("loadSettings default gateway URL derivation", () => {
       navWidth: 220,
       navGroupsCollapsed: {},
       borderRadius: 50,
+      workspaceFilesCollapsed: false,
       textScale: 100,
     });
 
@@ -213,6 +215,7 @@ describe("loadSettings default gateway URL derivation", () => {
       navWidth: 220,
       navGroupsCollapsed: {},
       borderRadius: 50,
+      workspaceFilesCollapsed: false,
     });
 
     saveSettings({
@@ -230,6 +233,7 @@ describe("loadSettings default gateway URL derivation", () => {
       navWidth: 220,
       navGroupsCollapsed: {},
       borderRadius: 50,
+      workspaceFilesCollapsed: false,
     });
 
     const settings = loadSettings();
@@ -259,6 +263,7 @@ describe("loadSettings default gateway URL derivation", () => {
       navWidth: 220,
       navGroupsCollapsed: {},
       borderRadius: 50,
+      workspaceFilesCollapsed: false,
     });
     const settings = loadSettings();
     expect(settings.gatewayUrl).toBe(gwUrl);
@@ -278,6 +283,7 @@ describe("loadSettings default gateway URL derivation", () => {
       navGroupsCollapsed: {},
       recentSessionsCollapsed: false,
       borderRadius: 50,
+      workspaceFilesCollapsed: false,
       textScale: 100,
       sessionsByGateway: {
         [gwUrl]: {
@@ -287,6 +293,69 @@ describe("loadSettings default gateway URL derivation", () => {
       },
     });
     expect(sessionStorage.length).toBe(1);
+  });
+
+  it("defaults workspace files collapsed to false", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/",
+    });
+
+    expect(loadSettings().workspaceFilesCollapsed).toBe(false);
+  });
+
+  it("persists workspace files collapse state across save and load", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/",
+    });
+
+    const gwUrl = expectedGatewayUrl("");
+    saveSettings({
+      gatewayUrl: gwUrl,
+      token: "",
+      sessionKey: "main",
+      lastActiveSessionKey: "main",
+      theme: "claw",
+      themeMode: "system",
+      chatShowThinking: true,
+      chatShowToolCalls: true,
+      chatAutoScroll: "near-bottom",
+      splitRatio: 0.6,
+      navCollapsed: false,
+      navWidth: 220,
+      navGroupsCollapsed: {},
+      recentSessionsCollapsed: false,
+      workspaceFilesCollapsed: true,
+      borderRadius: 50,
+      textScale: 100,
+    });
+
+    expect(loadSettings().workspaceFilesCollapsed).toBe(true);
+
+    saveSettings({
+      gatewayUrl: gwUrl,
+      token: "",
+      sessionKey: "main",
+      lastActiveSessionKey: "main",
+      theme: "claw",
+      themeMode: "system",
+      chatShowThinking: true,
+      chatShowToolCalls: true,
+      chatAutoScroll: "near-bottom",
+      splitRatio: 0.6,
+      navCollapsed: false,
+      navWidth: 220,
+      navGroupsCollapsed: {},
+      recentSessionsCollapsed: false,
+      workspaceFilesCollapsed: false,
+      borderRadius: 50,
+      textScale: 100,
+    });
+
+    expect(loadSettings().workspaceFilesCollapsed).toBe(false);
   });
 
   it("persists recent sessions collapse state across save and load", () => {
@@ -313,6 +382,7 @@ describe("loadSettings default gateway URL derivation", () => {
       navGroupsCollapsed: {},
       recentSessionsCollapsed: true,
       borderRadius: 50,
+      workspaceFilesCollapsed: false,
       textScale: 100,
     });
 
@@ -334,6 +404,7 @@ describe("loadSettings default gateway URL derivation", () => {
       navGroupsCollapsed: {},
       recentSessionsCollapsed: false,
       borderRadius: 50,
+      workspaceFilesCollapsed: false,
       textScale: 100,
     });
 
@@ -414,6 +485,7 @@ describe("loadSettings default gateway URL derivation", () => {
       navWidth: 220,
       navGroupsCollapsed: {},
       borderRadius: 50,
+      workspaceFilesCollapsed: false,
     });
     saveSettings({
       gatewayUrl: gwUrl,
@@ -429,6 +501,7 @@ describe("loadSettings default gateway URL derivation", () => {
       navWidth: 220,
       navGroupsCollapsed: {},
       borderRadius: 50,
+      workspaceFilesCollapsed: false,
     });
 
     expect(loadSettings().token).toBe("");
@@ -457,6 +530,7 @@ describe("loadSettings default gateway URL derivation", () => {
       navWidth: 320,
       navGroupsCollapsed: {},
       borderRadius: 50,
+      workspaceFilesCollapsed: false,
     });
 
     const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
@@ -492,6 +566,7 @@ describe("loadSettings default gateway URL derivation", () => {
       navWidth: 220,
       navGroupsCollapsed: {},
       borderRadius: 50,
+      workspaceFilesCollapsed: false,
       customTheme,
     });
 
@@ -522,6 +597,7 @@ describe("loadSettings default gateway URL derivation", () => {
         navWidth: 220,
         navGroupsCollapsed: {},
         borderRadius: 50,
+      workspaceFilesCollapsed: false,
         customTheme: {
           sourceUrl: "https://tweakcn.com/themes/broken",
           themeId: "broken",
@@ -566,6 +642,7 @@ describe("loadSettings default gateway URL derivation", () => {
       navWidth: 220,
       navGroupsCollapsed: {},
       borderRadius: 50,
+      workspaceFilesCollapsed: false,
     });
 
     const settings = loadSettings();
@@ -609,6 +686,7 @@ describe("loadSettings default gateway URL derivation", () => {
       navWidth: 220,
       navGroupsCollapsed: {},
       borderRadius: 50,
+      workspaceFilesCollapsed: false,
     });
 
     const persisted = JSON.parse(localStorage.getItem(scopedKey) ?? "{}");
