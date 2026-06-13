@@ -31,7 +31,7 @@ function getEmbeddedAgentParams(): {
 describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", () => {
   setupRunCronIsolatedAgentTurnSuite();
 
-  it("always passes authProfileFailurePolicy=local so cron failures do not pollute shared auth profile cooldowns", async () => {
+  it("uses transient-local auth cooldown policy for cron throttling failures", async () => {
     mockRunCronFallbackPassthrough();
 
     await runCronIsolatedAgentTurn(
@@ -48,7 +48,7 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
 
     expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
     expect(getEmbeddedAgentParams()).toMatchObject({
-      authProfileFailurePolicy: "local",
+      authProfileFailurePolicy: "local_transient",
     });
   });
 

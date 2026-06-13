@@ -304,9 +304,9 @@ export function createCronPromptExecutor(params: {
           authProfileIdSource: params.liveSelection.authProfileId
             ? params.liveSelection.authProfileIdSource
             : undefined,
-          // Scheduled run: route failures run-local so cron overloaded/rate_limit
-          // cannot impose profile-wide cooldowns on shared auth-profile health.
-          authProfileFailurePolicy: "local",
+          // Scheduled run: keep bursty cron overloaded/rate_limit local, while
+          // still sharing real credential/account failures across auth profiles.
+          authProfileFailurePolicy: "local_transient",
           thinkLevel: params.thinkLevel,
           fastMode: resolveFastModeState({
             cfg: params.cfgWithAgentDefaults,
