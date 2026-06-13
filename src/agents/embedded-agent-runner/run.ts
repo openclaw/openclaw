@@ -118,6 +118,7 @@ import {
   hasMessagingToolDeliveryEvidence,
   hasMessagingToolSideEffectEvidence,
   hasSideEffectProgressEvidence,
+  hasVisibleReplyShape,
   hasVisibleOutboundDeliveryEvidence,
 } from "./delivery-evidence.js";
 import { resolveEmbeddedRunFailureSignal } from "./failure-signal.js";
@@ -457,15 +458,7 @@ function hasPayloadMedia(payload: EmbeddedRunReplyPayload): boolean {
 }
 
 function hasVisibleTerminalReplyPayload(payload: EmbeddedRunReplyPayload): boolean {
-  return Boolean(
-    payload.isError !== true &&
-    payload.isReasoning !== true &&
-    (payload.text?.trim() ||
-      hasPayloadMedia(payload) ||
-      payload.presentation ||
-      payload.interactive ||
-      payload.channelData),
-  );
+  return payload.isError !== true && payload.isReasoning !== true && hasVisibleReplyShape(payload);
 }
 
 function terminalPayloadsHaveError(
@@ -3528,13 +3521,21 @@ export async function runEmbeddedAgent(
           const finalAssistantStopReason = (sessionLastAssistant?.stopReason ?? "")
             .trim()
             .toLowerCase();
+          const finalAssistantCandidateAfterPromptTimeout = (
+            finalAssistantVisibleText ?? finalAssistantRawText
+          )?.trim();
+          const finalAssistantMatchesObservedAssistantText =
+            finalAssistantCandidateAfterPromptTimeout !== undefined &&
+            (attempt.assistantTexts ?? []).some(
+              (text) => text.trim() === finalAssistantCandidateAfterPromptTimeout,
+            );
           const recoveredFinalAssistantCandidateAfterPromptTimeout =
             timedOutDuringPrompt &&
             attempt.didDeliverSourceReplyViaMessageTool !== true &&
             (!hasMessagingToolSideEffectEvidence(attempt) ||
-              !(attempt.assistantTexts ?? []).some((text) => text.trim().length > 0)) &&
+              !finalAssistantMatchesObservedAssistantText) &&
             ["completed", "end_turn", "stop"].includes(finalAssistantStopReason)
-              ? (finalAssistantVisibleText ?? finalAssistantRawText)?.trim()
+              ? finalAssistantCandidateAfterPromptTimeout
               : undefined;
           const recoveredFinalAssistantPlanningOnlyText =
             recoveredFinalAssistantCandidateAfterPromptTimeout

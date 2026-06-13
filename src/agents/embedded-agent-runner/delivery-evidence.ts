@@ -270,6 +270,9 @@ function hasCommittedMessagingToolResultDetailsAtDepth(details: unknown, depth: 
   if (record.dryRun === true) {
     return false;
   }
+  if (record.ok === false || record.success === false) {
+    return false;
+  }
   const deliveryStatus =
     readLowercaseString(record.deliveryStatus) ?? readLowercaseString(record.delivery_status);
   if (deliveryStatus && deliveryStatus !== "sent" && deliveryStatus !== "partial_failed") {

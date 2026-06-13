@@ -1714,7 +1714,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     const finalText = "The external notification was sent, and the source-channel summary is done.";
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
-        assistantTexts: [],
+        assistantTexts: ["Sending the external notification now."],
         timedOut: true,
         didSendViaMessagingTool: true,
         messagingToolSentTexts: ["External notification"],
@@ -2174,6 +2174,52 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(result.meta.livenessState).toBe("working");
   });
 
+  it.each([
+    ["presentation", { presentation: {} }],
+    ["interactive", { interactive: {} }],
+    ["channel data", { channelData: {} }],
+  ])("retries an empty %s payload after completed safe tool work", async (_name, payload) => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedBuildEmbeddedRunPayloads.mockReturnValue([payload]);
+    const toolMetas = [{ toolName: "read", mutatingAction: false }];
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        assistantTexts: [],
+        itemLifecycle: {
+          startedCount: 1,
+          completedCount: 1,
+          activeCount: 0,
+        },
+        toolMetas,
+        replayMetadata: buildAttemptReplayMetadata({
+          toolMetas,
+          didSendViaMessagingTool: false,
+          messagingToolSentTexts: [],
+          messagingToolSentMediaUrls: [],
+          successfulCronAdds: 0,
+        }),
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "mock-openai",
+          model: "gpt-5.4",
+          content: [],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      prompt: "Please check the deployment status.",
+      provider: "mock-openai",
+      model: "gpt-5.4",
+      runId: `run-empty-${_name.replace(" ", "-")}-payload-after-tool-work`,
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT + 1);
+    expect(runAttemptCall(1).prompt).toContain(EMPTY_RESPONSE_RETRY_INSTRUCTION);
+  });
+
   it("does not apply planning-only classification to OpenAI-compatible xAI models", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedResolveModelAsync.mockResolvedValue({
@@ -2563,7 +2609,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-    expect(result.payloads).toEqual([{ text: PLANNING_ONLY_BLOCKED_TEXT, isError: true }]);
+    expect(result.payloads).toEqual([
+      { text: PLANNING_ONLY_REPLAY_UNSAFE_BLOCKED_TEXT, isError: true },
+    ]);
     expect(result.meta.livenessState).toBe("blocked");
   });
 
@@ -5450,6 +5498,18 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         deliveryStatus: "sent",
       }),
     ).toBe(true);
+    expect(
+      hasCommittedMessagingToolResultDetails({
+        ok: false,
+        messageId: "request-id",
+      }),
+    ).toBe(false);
+    expect(
+      hasCommittedMessagingToolResultDetails({
+        success: false,
+        deliveryStatus: "sent",
+      }),
+    ).toBe(false);
     expect(
       hasCommittedMessagingToolResultDetails({
         status: "partial_failed",
