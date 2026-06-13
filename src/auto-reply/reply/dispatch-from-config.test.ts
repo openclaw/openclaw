@@ -1271,6 +1271,57 @@ describe("dispatchReplyFromConfig", () => {
     });
   });
 
+  it("mirrors reset acknowledgements into the canonically prepared Slack session", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const sessionKey = "Agent:Main:Slack:Channel:C123";
+    const preparedSessionKey = "agent:main:slack:channel:c123";
+    sessionStoreMocks.currentEntry = {
+      sessionId: "previous-session",
+      updatedAt: Date.now(),
+    };
+    transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "slack",
+        Surface: "slack",
+        OriginatingChannel: "slack",
+        OriginatingTo: "channel:C123",
+        ChatType: "group",
+        SessionKey: sessionKey,
+        MessageSid: "slack-reset-message",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async (_ctx, opts) => {
+        (
+          opts as GetReplyOptions & {
+            onSessionPrepared?: (binding: {
+              sessionKey?: string;
+              sessionId: string;
+              storePath?: string;
+            }) => void;
+          }
+        ).onSessionPrepared?.({
+          sessionKey: preparedSessionKey,
+          sessionId: "new-session",
+          storePath: "/tmp/rotated-sessions.json",
+        });
+        return { text: "✅ New session started." };
+      },
+    });
+
+    expect(transcriptMocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey,
+        expectedSessionId: "new-session",
+        storePath: "/tmp/rotated-sessions.json",
+        text: "✅ New session started.",
+      }),
+    );
+  });
+
   it.each([
     ["embedded", { assistantMessageIndex: 7 }],
     ["CLI", { assistantTranscriptOwned: true }],

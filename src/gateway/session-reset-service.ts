@@ -754,7 +754,7 @@ export async function performGatewaySessionReset(params: {
   reason: "new" | "reset";
   commandSource: string;
 }): Promise<
-  | { ok: true; key: string; entry: SessionEntry; agentId: string }
+  | { ok: true; key: string; entry: SessionEntry; agentId: string; storePath: string }
   | { ok: false; error: ReturnType<typeof errorShape> }
 > {
   const resetTarget = (() => {
@@ -1014,5 +1014,11 @@ export async function performGatewaySessionReset(params: {
       reason: "session-reset",
     });
   }
-  return { ok: true, key: target.canonicalKey, entry: next, agentId: target.agentId };
+  return {
+    ok: true,
+    key: target.canonicalKey,
+    entry: next,
+    agentId: target.agentId,
+    storePath,
+  };
 }

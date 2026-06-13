@@ -43,6 +43,7 @@ import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { shouldSuppressLocalExecApprovalPrompt } from "../../channels/plugins/exec-approval-local.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
+import { normalizeExplicitSessionKey } from "../../config/sessions/explicit-session-key-normalization.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import {
   appendAssistantMessageToSessionTranscript,
@@ -142,6 +143,7 @@ import type {
 } from "./dispatch-from-config.types.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
+import type { ReplySessionBinding } from "./get-reply.types.js";
 import { claimInboundDedupe, commitInboundDedupe, releaseInboundDedupe } from "./inbound-dedupe.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
@@ -180,6 +182,7 @@ type TranscriptMirror = SourceReplyTranscriptMirror & {
 };
 type InternalReplyResolverOptions = {
   onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
+  onSessionPrepared?: (binding: ReplySessionBinding) => void;
 };
 
 class DispatchReplyOperationAbortedError extends Error {
@@ -1225,6 +1228,34 @@ export async function dispatchReplyFromConfig(
   const sessionStoreEntry = boundAcpDispatchSessionKey
     ? resolveSessionStoreLookup({ ...ctx, SessionKey: boundAcpDispatchSessionKey }, cfg)
     : initialSessionStoreEntry;
+  let preparedSessionBinding: ReplySessionBinding | undefined =
+    sessionStoreEntry.sessionKey && sessionStoreEntry.entry?.sessionId
+      ? {
+          sessionKey: sessionStoreEntry.sessionKey,
+          sessionId: sessionStoreEntry.entry.sessionId,
+          storePath: sessionStoreEntry.storePath,
+        }
+      : undefined;
+  const sessionKeysMatch = (left?: string, right?: string) =>
+    Boolean(
+      left &&
+      right &&
+      normalizeExplicitSessionKey(left, ctx) === normalizeExplicitSessionKey(right, ctx),
+    );
+  const notePreparedSession = (binding: ReplySessionBinding) => {
+    if (sessionKeysMatch(binding.sessionKey, sessionStoreEntry.sessionKey)) {
+      preparedSessionBinding = binding;
+    }
+  };
+  const resolvePreparedTranscriptBinding = (mirrorSessionKey?: string) => {
+    if (
+      !preparedSessionBinding ||
+      !sessionKeysMatch(mirrorSessionKey, preparedSessionBinding.sessionKey)
+    ) {
+      return undefined;
+    }
+    return preparedSessionBinding;
+  };
   const sessionAgentId = resolveSessionAgentId({
     sessionKey: acpDispatchSessionKey,
     config: cfg,
@@ -2250,14 +2281,16 @@ export async function dispatchReplyFromConfig(
       await flushPendingCommentaryProgress();
       throwIfFinalDeliveryAborted();
       const payloadMetadata = getReplyPayloadMetadata(payload);
+      const sourceReplySessionBinding = resolvePreparedTranscriptBinding(
+        payloadMetadata?.sourceReplyTranscriptMirror?.sessionKey,
+      );
       const sourceReplyTranscriptMirror = payloadMetadata?.sourceReplyTranscriptMirror
         ? {
             ...payloadMetadata.sourceReplyTranscriptMirror,
-            ...(payloadMetadata.sourceReplyTranscriptMirror.sessionKey ===
-              sessionStoreEntry.sessionKey && sessionStoreEntry.entry?.sessionId
-              ? { expectedSessionId: sessionStoreEntry.entry.sessionId }
+            ...(sourceReplySessionBinding
+              ? { expectedSessionId: sourceReplySessionBinding.sessionId }
               : {}),
-            storePath: sessionStoreEntry.storePath,
+            storePath: sourceReplySessionBinding?.storePath ?? sessionStoreEntry.storePath,
           }
         : undefined;
       const hasTranscriptOwner =
@@ -2309,6 +2342,9 @@ export async function dispatchReplyFromConfig(
       const transcriptMirrorSourceId =
         normalizeOptionalString(messageIdForHook) ??
         normalizeOptionalString(params.replyOptions?.runId);
+      const transcriptMirrorSessionBinding = resolvePreparedTranscriptBinding(
+        transcriptMirrorSessionKey,
+      );
       const transcriptMirror =
         sourceReplyTranscriptMirror ??
         (!hasTranscriptOwner &&
@@ -2319,11 +2355,10 @@ export async function dispatchReplyFromConfig(
               {
                 sessionKey: transcriptMirrorSessionKey,
                 agentId: sessionAgentId,
-                ...(transcriptMirrorSessionKey === sessionStoreEntry.sessionKey &&
-                sessionStoreEntry.entry?.sessionId
-                  ? { expectedSessionId: sessionStoreEntry.entry.sessionId }
+                ...(transcriptMirrorSessionBinding
+                  ? { expectedSessionId: transcriptMirrorSessionBinding.sessionId }
                   : {}),
-                storePath: sessionStoreEntry.storePath,
+                storePath: transcriptMirrorSessionBinding?.storePath ?? sessionStoreEntry.storePath,
                 preferText: true,
                 idempotencyKey: transcriptMirrorSourceId
                   ? `channel-final:${transcriptMirrorSourceId}:${options.deliveryId ?? "single"}`
@@ -2795,6 +2830,7 @@ export async function dispatchReplyFromConfig(
             sourceReplyDeliveryMode,
             ...({
               onSessionMetadataChanges: notifySessionMetadataChanges,
+              onSessionPrepared: notePreparedSession,
             } satisfies InternalReplyResolverOptions),
             onObservedReplyDelivery: markObservedReplyDelivery,
             suppressToolErrorWarnings,
