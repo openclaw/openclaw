@@ -1,5 +1,6 @@
 // Channel plugin blocker tests cover doctor diagnostics for blocked channel plugin setup.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import * as manifestRegistry from "../../../plugins/manifest-registry.js";
 import {
   collectConfiguredChannelPluginBlockerWarnings,
@@ -11,8 +12,11 @@ describe("channel plugin blockers", () => {
     vi.restoreAllMocks();
   });
 
-  it("skips plugin registry work when config has no configured channel surfaces", () => {
-    const registrySpy = vi.spyOn(manifestRegistry, "loadPluginManifestRegistry");
+  it("returns no blockers when config and manifest env have no channel surfaces", () => {
+    const registrySpy = vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
+      plugins: [],
+      diagnostics: [],
+    });
 
     const hits = scanConfiguredChannelPluginBlockers({
       channels: {
@@ -23,7 +27,7 @@ describe("channel plugin blockers", () => {
     });
 
     expect(hits).toStrictEqual([]);
-    expect(registrySpy).not.toHaveBeenCalled();
+    expect(registrySpy).toHaveBeenCalled();
   });
 
   it("reports external channel plugins that are installed but not explicitly enabled", () => {
@@ -57,6 +61,69 @@ describe("channel plugin blockers", () => {
     ]);
     expect(collectConfiguredChannelPluginBlockerWarnings(hits)).toEqual([
       '- channels.discord: channel is configured, but external plugin "discord" is installed without explicit trust. Add plugins.entries.discord.enabled=true. Fix plugin enablement before relying on setup guidance for this channel.',
+    ]);
+  });
+
+  it("reports blockers for enabled-only channel intent", () => {
+    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
+      plugins: [
+        {
+          id: "discord",
+          origin: "global",
+          channels: ["discord"],
+          enabledByDefault: false,
+        },
+      ],
+      diagnostics: [],
+    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+
+    const hits = scanConfiguredChannelPluginBlockers({
+      plugins: {
+        enabled: false,
+      },
+      channels: {
+        discord: {
+          enabled: true,
+        },
+      },
+    });
+
+    expect(hits).toEqual([
+      {
+        channelId: "discord",
+        pluginId: "discord",
+        reason: "plugins disabled",
+      },
+    ]);
+  });
+
+  it("normalizes explicit channel ids before matching plugin owners", () => {
+    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
+      plugins: [
+        {
+          id: "discord",
+          origin: "global",
+          channels: ["discord"],
+          enabledByDefault: false,
+        },
+      ],
+      diagnostics: [],
+    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+
+    const hits = scanConfiguredChannelPluginBlockers({
+      channels: {
+        Discord: {
+          enabled: true,
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(hits).toEqual([
+      {
+        channelId: "discord",
+        pluginId: "discord",
+        reason: "missing explicit enablement",
+      },
     ]);
   });
 
@@ -182,6 +249,362 @@ describe("channel plugin blockers", () => {
     ]);
   });
 
+  it("diagnoses an env-only channel whose preferred external owner lacks trust", () => {
+    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
+      plugins: [
+        {
+          id: "telegram",
+          origin: "bundled",
+          channels: ["telegram"],
+          enabledByDefault: true,
+        },
+        {
+          id: "modern-telegram",
+          origin: "config",
+          channels: ["telegram"],
+          enabledByDefault: false,
+          channelConfigs: {
+            telegram: {
+              schema: { type: "object" },
+              preferOver: ["telegram"],
+            },
+          },
+        },
+      ],
+      diagnostics: [],
+    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+
+    const hits = scanConfiguredChannelPluginBlockers(
+      {
+        plugins: {
+          entries: {
+            telegram: { enabled: false },
+            "modern-telegram": { enabled: true },
+          },
+        },
+      },
+      {
+        TELEGRAM_BOT_TOKEN: "configured",
+      } as NodeJS.ProcessEnv,
+      {},
+    );
+
+    expect(hits).toEqual([
+      {
+        channelId: "telegram",
+        pluginId: "modern-telegram",
+        reason: "missing explicit enablement",
+      },
+    ]);
+  });
+
+  it("diagnoses an external-only manifest env channel that lacks source trust", () => {
+    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
+      plugins: [
+        {
+          id: "discord",
+          origin: "global",
+          channels: ["discord"],
+          channelEnvVars: {
+            discord: ["DISCORD_BOT_TOKEN"],
+          },
+          enabledByDefault: false,
+        },
+      ],
+      diagnostics: [],
+    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+
+    const hits = scanConfiguredChannelPluginBlockers(
+      {
+        plugins: {
+          entries: {
+            discord: { enabled: true },
+          },
+        },
+      },
+      {
+        DISCORD_BOT_TOKEN: "configured",
+      } as NodeJS.ProcessEnv,
+      {},
+    );
+
+    expect(hits).toEqual([
+      {
+        channelId: "discord",
+        pluginId: "discord",
+        reason: "missing explicit enablement",
+      },
+    ]);
+  });
+
+  it("keeps manifest env trust diagnostics scoped to the declaring owner", () => {
+    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
+      plugins: [
+        {
+          id: "bundled-chat",
+          origin: "bundled",
+          channels: ["shared-chat"],
+          enabledByDefault: true,
+        },
+        {
+          id: "external-chat",
+          origin: "config",
+          channels: ["shared-chat"],
+          channelEnvVars: {
+            "shared-chat": ["EXTERNAL_CHAT_TOKEN"],
+          },
+          enabledByDefault: false,
+        },
+      ],
+      diagnostics: [],
+    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+
+    const hits = scanConfiguredChannelPluginBlockers(
+      {
+        plugins: {
+          entries: {
+            "external-chat": { enabled: true },
+          },
+        },
+      },
+      {
+        EXTERNAL_CHAT_TOKEN: "configured",
+      } as NodeJS.ProcessEnv,
+      {},
+    );
+
+    expect(hits).toEqual([
+      {
+        channelId: "shared-chat",
+        pluginId: "external-chat",
+        reason: "missing explicit enablement",
+      },
+    ]);
+  });
+
+  it("does not report unrelated blocked owners for a manifest env trigger", () => {
+    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
+      plugins: [
+        {
+          id: "triggered-chat",
+          origin: "config",
+          channels: ["shared-chat"],
+          channelEnvVars: {
+            "shared-chat": ["TRIGGERED_CHAT_TOKEN"],
+          },
+          enabledByDefault: false,
+        },
+        {
+          id: "unrelated-chat",
+          origin: "config",
+          channels: ["shared-chat"],
+          enabledByDefault: false,
+        },
+      ],
+      diagnostics: [],
+    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+
+    const hits = scanConfiguredChannelPluginBlockers({}, {
+      TRIGGERED_CHAT_TOKEN: "configured",
+    } as NodeJS.ProcessEnv);
+
+    expect(hits).toEqual([
+      {
+        channelId: "shared-chat",
+        pluginId: "triggered-chat",
+        reason: "missing explicit enablement",
+      },
+    ]);
+  });
+
+  it("ignores manifest env mappings for channels the plugin does not own", () => {
+    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
+      plugins: [
+        {
+          id: "external-chat",
+          origin: "config",
+          channels: ["external-chat"],
+          channelEnvVars: {
+            discord: ["EXTERNAL_CHAT_TOKEN"],
+          },
+          enabledByDefault: false,
+        },
+      ],
+      diagnostics: [],
+    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+
+    const hits = scanConfiguredChannelPluginBlockers({}, {
+      EXTERNAL_CHAT_TOKEN: "configured",
+    } as NodeJS.ProcessEnv);
+
+    expect(hits).toStrictEqual([]);
+  });
+
+  it("diagnoses a manifest env channel whose bundled owner is opt-in", () => {
+    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
+      plugins: [
+        {
+          id: "twitch",
+          origin: "bundled",
+          channels: ["twitch"],
+          channelEnvVars: {
+            twitch: ["OPENCLAW_TWITCH_ACCESS_TOKEN"],
+          },
+          enabledByDefault: false,
+        },
+      ],
+      diagnostics: [],
+    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+
+    const hits = scanConfiguredChannelPluginBlockers({}, {
+      OPENCLAW_TWITCH_ACCESS_TOKEN: "configured",
+    } as NodeJS.ProcessEnv);
+
+    expect(hits).toEqual([
+      {
+        channelId: "twitch",
+        pluginId: "twitch",
+        reason: "not enabled",
+      },
+    ]);
+    expect(collectConfiguredChannelPluginBlockerWarnings(hits)).toEqual([
+      '- channels.twitch: channel is configured, but plugin "twitch" is installed but not enabled. Add plugins.entries.twitch.enabled=true. Fix plugin enablement before relying on setup guidance for this channel.',
+    ]);
+  });
+
+  it("includes both actions for a bundled opt-in owner under a restrictive allowlist", () => {
+    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
+      plugins: [
+        {
+          id: "twitch",
+          origin: "bundled",
+          channels: ["twitch"],
+          channelEnvVars: {
+            twitch: ["OPENCLAW_TWITCH_ACCESS_TOKEN"],
+          },
+          enabledByDefault: false,
+        },
+      ],
+      diagnostics: [],
+    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+
+    const hits = scanConfiguredChannelPluginBlockers(
+      {
+        plugins: {
+          allow: ["browser"],
+        },
+      },
+      {
+        OPENCLAW_TWITCH_ACCESS_TOKEN: "configured",
+      } as NodeJS.ProcessEnv,
+    );
+
+    expect(hits).toEqual([
+      {
+        channelId: "twitch",
+        pluginId: "twitch",
+        reason: "not enabled and not in allowlist",
+      },
+    ]);
+    expect(collectConfiguredChannelPluginBlockerWarnings(hits)).toEqual([
+      '- channels.twitch: channel is configured, but plugin "twitch" is not enabled and is omitted from plugins.allow. Add plugins.entries.twitch.enabled=true and include "twitch" in plugins.allow. Fix plugin enablement before relying on setup guidance for this channel.',
+    ]);
+  });
+
+  it("keeps manifest env blockers when another channel is explicitly configured", () => {
+    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
+      plugins: [
+        {
+          id: "discord",
+          origin: "global",
+          channels: ["discord"],
+          channelEnvVars: {
+            discord: ["DISCORD_BOT_TOKEN"],
+          },
+          enabledByDefault: false,
+        },
+      ],
+      diagnostics: [],
+    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+
+    const hits = scanConfiguredChannelPluginBlockers(
+      {
+        channels: {
+          telegram: {
+            enabled: true,
+          },
+        },
+        plugins: {
+          entries: {
+            discord: { enabled: true },
+          },
+        },
+      },
+      {
+        DISCORD_BOT_TOKEN: "configured",
+      } as NodeJS.ProcessEnv,
+      {
+        channels: {
+          telegram: {
+            enabled: true,
+          },
+        },
+      },
+    );
+
+    expect(hits).toEqual([
+      {
+        channelId: "discord",
+        pluginId: "discord",
+        reason: "missing explicit enablement",
+      },
+    ]);
+  });
+
+  it("honors explicit channel disablement over manifest env triggers", () => {
+    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
+      plugins: [
+        {
+          id: "discord",
+          origin: "global",
+          channels: ["discord"],
+          channelEnvVars: {
+            discord: ["DISCORD_BOT_TOKEN"],
+          },
+          enabledByDefault: false,
+        },
+      ],
+      diagnostics: [],
+    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+
+    const hits = scanConfiguredChannelPluginBlockers(
+      {
+        channels: {
+          discord: {
+            enabled: false,
+          },
+        },
+        plugins: {
+          entries: {
+            discord: { enabled: true },
+          },
+        },
+      },
+      {
+        DISCORD_BOT_TOKEN: "configured",
+      } as NodeJS.ProcessEnv,
+      {
+        channels: {
+          discord: {
+            enabled: false,
+          },
+        },
+      },
+    );
+
+    expect(hits).toStrictEqual([]);
+  });
+
   it("accepts an auto-enabled bundled owner under a restrictive source allowlist", () => {
     vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
       plugins: [
@@ -296,7 +719,7 @@ describe("channel plugin blockers", () => {
       },
     ]);
     expect(collectConfiguredChannelPluginBlockerWarnings(hits)).toEqual([
-      '- channels.discord: channel is configured, but external plugin "discord" is installed but omitted from plugins.allow. Include "discord" in plugins.allow. Fix plugin enablement before relying on setup guidance for this channel.',
+      '- channels.discord: channel is configured, but plugin "discord" is installed but omitted from plugins.allow. Include "discord" in plugins.allow. Fix plugin enablement before relying on setup guidance for this channel.',
     ]);
   });
 
