@@ -17,12 +17,14 @@ import {
   resolveNodeCommandAllowlist,
   resolveNodePairingCommandAllowlist,
 } from "./node-command-policy.js";
+import { resolveNodeIdentityId } from "./node-identity.js";
 
 // Node connect reconciliation turns declared caps/commands/permissions into the
 // effective runtime surface. New or upgraded surfaces create a pending pairing
 // request while already-approved surfaces are intersected with the declaration.
 export type NodeConnectPairingReconcileResult = {
   nodeId: string;
+  registrationNodeId: string;
   declaredCaps: string[];
   effectiveCaps: string[];
   declaredCommands: string[];
@@ -86,6 +88,21 @@ function intersectPermissionSurface(params: {
   return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }
 
+function normalizeTrimmedString(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function isPairedNodeOwnedByDevice(params: {
+  pairedNode: NodePairingPairedNode;
+  deviceId: string;
+}): boolean {
+  const ownerDeviceId = normalizeTrimmedString(params.pairedNode.ownerDeviceId);
+  if (ownerDeviceId) {
+    return ownerDeviceId === params.deviceId;
+  }
+  return params.pairedNode.nodeId === params.deviceId;
+}
+
 function buildNodePairingRequestInput(params: {
   nodeId: string;
   connectParams: ConnectParams;
@@ -96,6 +113,7 @@ function buildNodePairingRequestInput(params: {
 }): NodePairingRequestInput {
   return {
     nodeId: params.nodeId,
+    ownerDeviceId: normalizeTrimmedString(params.connectParams.device?.id) || undefined,
     displayName: params.connectParams.client.displayName,
     platform: params.connectParams.client.platform,
     version: params.connectParams.client.version,
@@ -116,7 +134,20 @@ export async function reconcileNodePairingOnConnect(params: {
   reportedClientIp?: string;
   requestPairing: (input: NodePairingRequestInput) => Promise<RequestNodePairingResult | null>;
 }): Promise<NodeConnectPairingReconcileResult> {
-  const nodeId = params.connectParams.device?.id ?? params.connectParams.client.id;
+  const nodeId =
+    resolveNodeIdentityId({ connect: params.connectParams }) ?? params.connectParams.client.id;
+  const deviceId = normalizeTrimmedString(params.connectParams.device?.id);
+  const pairedNodeIsOwned =
+    params.pairedNode && deviceId
+      ? isPairedNodeOwnedByDevice({ pairedNode: params.pairedNode, deviceId })
+      : false;
+  const pairedNode = pairedNodeIsOwned ? params.pairedNode : null;
+  const registrationNodeId =
+    params.pairedNode && !pairedNodeIsOwned ? deviceId || params.connectParams.client.id : nodeId;
+  // Owner-checked adoption (isPairedNodeOwnedByDevice via ownerDeviceId or fallback nodeId==deviceId)
+  // intentionally allows moving persisted paired state from raw device id to custom nodeId
+  // on upgrade. The ownerDeviceId binding (set at initial pairing) gates it to the authenticated
+  // device owner. See node-identity.ts for the centralized resolver.
   const policyNode = {
     platform: params.connectParams.client.platform,
     deviceFamily: params.connectParams.client.deviceFamily,
@@ -133,7 +164,7 @@ export async function reconcileNodePairingOnConnect(params: {
   const declaredCaps = normalizeNodeApprovalSurfaceList(params.connectParams.caps);
   const declaredPermissions = normalizePermissionMap(params.connectParams.permissions);
 
-  if (!params.pairedNode) {
+  if (!pairedNode) {
     const pendingPairing = await params.requestPairing(
       buildNodePairingRequestInput({
         nodeId,
@@ -149,6 +180,7 @@ export async function reconcileNodePairingOnConnect(params: {
     }
     return {
       nodeId,
+      registrationNodeId,
       declaredCaps,
       effectiveCaps: [],
       declaredCommands: declared,
@@ -161,18 +193,18 @@ export async function reconcileNodePairingOnConnect(params: {
 
   const runtimeAllowlist = resolveNodeCommandAllowlist(params.cfg, {
     ...policyNode,
-    approvedCommands: params.pairedNode.commands,
+    approvedCommands: pairedNode.commands,
   });
   const approvedCommands = resolveApprovedReconnectCommands({
-    pairedCommands: params.pairedNode.commands,
+    pairedCommands: pairedNode.commands,
     allowlist: runtimeAllowlist,
   });
-  const approvedCaps = normalizeNodeApprovalSurfaceList(params.pairedNode.caps);
-  const approvedPermissions = normalizePermissionMap(params.pairedNode.permissions);
+  const approvedCaps = normalizeNodeApprovalSurfaceList(pairedNode.caps);
+  const approvedPermissions = normalizePermissionMap(pairedNode.permissions);
   const hasCommandUpgrade = declared.some((command) => !approvedCommands.includes(command));
-  const hasCapabilityChange = !sameNodeApprovalSurfaceSet(params.pairedNode.caps, declaredCaps);
+  const hasCapabilityChange = !sameNodeApprovalSurfaceSet(pairedNode.caps, declaredCaps);
   const hasPermissionChange = !sameNodePermissionSurface(
-    params.pairedNode.permissions,
+    pairedNode.permissions,
     declaredPermissions,
   );
   const effectiveApprovedDeclaredCaps = intersectApprovalSurfaceList({
@@ -203,6 +235,7 @@ export async function reconcileNodePairingOnConnect(params: {
     );
     return {
       nodeId,
+      registrationNodeId,
       declaredCaps,
       effectiveCaps: effectiveApprovedDeclaredCaps,
       declaredCommands: declared,
@@ -215,6 +248,7 @@ export async function reconcileNodePairingOnConnect(params: {
 
   return {
     nodeId,
+    registrationNodeId,
     declaredCaps,
     effectiveCaps: declaredCaps,
     declaredCommands: declared,

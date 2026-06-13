@@ -22,15 +22,6 @@ import {
 } from "./nodes.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
-function resolveClientNodeId(
-  client: { connect?: { device?: { id?: string }; client?: { id?: string } } } | null,
-): string | null {
-  const nodeId = client?.connect?.device?.id ?? client?.connect?.client?.id ?? "";
-  const trimmed = nodeId.trim();
-  return trimmed.length > 0 ? trimmed : null;
-}
-
-/** Gateway handlers for queueing work until a paired node reconnects. */
 export const nodePendingHandlers: GatewayRequestHandlers = {
   "node.pending.drain": async ({ params, respond, client }) => {
     if (!validateNodePendingDrainParams(params)) {
@@ -41,18 +32,19 @@ export const nodePendingHandlers: GatewayRequestHandlers = {
       });
       return;
     }
-    const nodeId = resolveClientNodeId(client);
-    if (!nodeId) {
+    const nodeIdentity = client?.nodeIdentity?.nodeId;
+    if (!nodeIdentity) {
       respond(
         false,
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          "node.pending.drain requires a connected device identity",
+          "node.pending.drain requires an approved node identity",
         ),
       );
       return;
     }
+    const nodeId = nodeIdentity;
     const p = params as { maxItems?: number };
     const drained = drainNodePendingWork(nodeId, {
       maxItems: p.maxItems,

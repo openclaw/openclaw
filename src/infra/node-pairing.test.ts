@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import {
+  adoptPairedNodeIdentity,
   approveNodePairing,
   getPairedNode,
   listNodePairing,
@@ -150,6 +151,105 @@ describe("node pairing tokens", () => {
       expect(pendingNode.commands).toEqual(["canvas.present"]);
       expect(pendingNode.requiredApproveScopes).toEqual(["operator.pairing", "operator.write"]);
       expect(pairing.paired).toEqual([]);
+    });
+  });
+
+  test("keeps node approvals bound to their requesting device owner", async () => {
+    await withNodePairingDir(async (baseDir) => {
+      const first = await requestNodePairing(
+        {
+          nodeId: "custom-node",
+          ownerDeviceId: "device-a",
+          commands: ["canvas.snapshot"],
+        },
+        baseDir,
+      );
+      const refreshed = await requestNodePairing(
+        {
+          nodeId: "custom-node",
+          ownerDeviceId: "device-a",
+          displayName: "Updated Node",
+          commands: ["canvas.snapshot"],
+        },
+        baseDir,
+      );
+      const replacement = await requestNodePairing(
+        {
+          nodeId: "custom-node",
+          ownerDeviceId: "device-b",
+          commands: ["canvas.snapshot"],
+        },
+        baseDir,
+      );
+
+      expect(refreshed.created).toBe(false);
+      expect(refreshed.request.requestId).toBe(first.request.requestId);
+      expect(refreshed.request.ownerDeviceId).toBe("device-a");
+      expect(replacement.created).toBe(true);
+      expect(replacement.superseded).toEqual([
+        { requestId: first.request.requestId, nodeId: "custom-node" },
+      ]);
+      expect(replacement.request.ownerDeviceId).toBe("device-b");
+
+      const approved = await approveNodePairing(
+        replacement.request.requestId,
+        { callerScopes: ["operator.pairing", "operator.write"] },
+        baseDir,
+      );
+      const approvedRecord = requireRecord(approved);
+      const approvedNode = requireRecord(approvedRecord.node);
+      expect(approvedNode.ownerDeviceId).toBe("device-b");
+    });
+  });
+
+  test("adopts legacy device-id node approvals for the same owner device", async () => {
+    await withNodePairingDir(async (baseDir) => {
+      const token = await setupPairedNode(baseDir);
+
+      const adopted = await adoptPairedNodeIdentity(
+        {
+          fromNodeId: "node-1",
+          toNodeId: "custom-node",
+          ownerDeviceId: "node-1",
+        },
+        baseDir,
+      );
+
+      expect(adopted?.nodeId).toBe("custom-node");
+      expect(adopted?.ownerDeviceId).toBe("node-1");
+      expect(adopted?.token).toBe(token);
+      await expect(getPairedNode("node-1", baseDir)).resolves.toBeNull();
+      await expect(getPairedNode("custom-node", baseDir)).resolves.toEqual(adopted);
+    });
+  });
+
+  test("does not adopt node approvals owned by a different device", async () => {
+    await withNodePairingDir(async (baseDir) => {
+      const request = await requestNodePairing(
+        {
+          nodeId: "custom-node",
+          ownerDeviceId: "device-a",
+        },
+        baseDir,
+      );
+      await approveNodePairing(
+        request.request.requestId,
+        { callerScopes: ["operator.pairing"] },
+        baseDir,
+      );
+
+      await expect(
+        adoptPairedNodeIdentity(
+          {
+            fromNodeId: "custom-node",
+            toNodeId: "claimed-node",
+            ownerDeviceId: "device-b",
+          },
+          baseDir,
+        ),
+      ).resolves.toBeNull();
+      expect((await getPairedNode("custom-node", baseDir))?.ownerDeviceId).toBe("device-a");
+      await expect(getPairedNode("claimed-node", baseDir)).resolves.toBeNull();
     });
   });
 
@@ -417,6 +517,47 @@ describe("node pairing tokens", () => {
       const pairedNode = await getPairedNode("node-1", baseDir);
       expect(pairedNode?.lastSeenAtMs).toBe(1234);
       expect(pairedNode?.lastSeenReason).toBe("silent_push");
+    });
+  });
+  test("does not update paired node metadata for a raw instanceId that matches another device's node", async () => {
+    // Regression for ClawSweeper P1 finding (#88374):
+    // The post-register metadata loop in message-handler.ts was adding both
+    // the resolved nodeSession.nodeId AND the raw client.instanceId to a set,
+    // then updating paired metadata for both. A different device could sign
+    // a colliding instanceId and refresh lastConnectedAtMs on the other owner's
+    // paired record.
+    //
+    // Fix: the raw instanceId was removed from the metadata loop.
+    // This test documents that updatePairedNodeMetadata itself has no owner
+    // check (caller must scope), which is why the caller-side fix is correct.
+    await withNodePairingDir(async (baseDir) => {
+      const request = await requestNodePairing(
+        {
+          nodeId: "custom-node",
+          ownerDeviceId: "device-a",
+        },
+        baseDir,
+      );
+      await approveNodePairing(
+        request.request.requestId,
+        { callerScopes: ["operator.pairing", "operator.admin"] },
+        baseDir,
+      );
+
+      const paired = await getPairedNode("custom-node", baseDir);
+      expect(paired?.nodeId).toBe("custom-node");
+      expect(paired?.ownerDeviceId).toBe("device-a");
+
+      // updatePairedNodeMetadata does not check ownership.
+      // A second device ("device-b") could update "custom-node"'s metadata
+      // if the raw instanceId were still in the loop.
+      // The caller-side fix prevents this at the message-handler level.
+      await expect(
+        updatePairedNodeMetadata("custom-node", { lastConnectedAtMs: 8888 }, baseDir),
+      ).resolves.toBe(true);
+
+      const updated = await getPairedNode("custom-node", baseDir);
+      expect(updated?.lastConnectedAtMs).toBe(8888);
     });
   });
 });

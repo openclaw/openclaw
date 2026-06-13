@@ -68,6 +68,7 @@ import {
   runWithDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
 import {
+  adoptPairedNodeIdentity,
   getPairedNode,
   requestNodePairing,
   updatePairedNodeMetadata,
@@ -106,6 +107,7 @@ import {
   resolveClientIp,
 } from "../../net.js";
 import { reconcileNodePairingOnConnect } from "../../node-connect-reconcile.js";
+import { resolveNodeIdentityId } from "../../node-identity.js";
 import {
   resolveNodePairingClientIpSource,
   shouldAutoApproveNodePairingFromTrustedCidrs,
@@ -1613,11 +1615,22 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             });
           }
         }
+        let nodeIdentity: GatewayWsClient["nodeIdentity"];
         if (role === "node") {
+          const nodeId =
+            resolveNodeIdentityId({ connect: connectParams }) ?? connectParams.client.id;
+          const deviceNodeId =
+            typeof connectParams.device?.id === "string" ? connectParams.device.id.trim() : "";
+          const pairedNode =
+            (await getPairedNode(nodeId)) ??
+            (deviceNodeId && deviceNodeId !== nodeId
+              ? await adoptPairedNodeIdentity({
+                  fromNodeId: deviceNodeId,
+                  toNodeId: nodeId,
+                  ownerDeviceId: deviceNodeId,
+                })
+              : null);
           let reconciliation: Awaited<ReturnType<typeof reconcileNodePairingOnConnect>>;
-          const pairedNode = await getPairedNode(
-            connectParams.device?.id ?? connectParams.client.id,
-          );
           try {
             reconciliation = await reconcileNodePairingOnConnect({
               cfg: getRuntimeConfig(),
@@ -1632,9 +1645,20 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                     clientIp: browserRateLimitClientIp,
                   });
                 } catch (error) {
-                  if (error instanceof NodePairingRateLimitError && pairedNode) {
-                    // Paired upgrade reconnects can keep their approved surface;
-                    // only the fresh pending request is throttled here.
+                  if (
+                    error instanceof NodePairingRateLimitError &&
+                    pairedNode &&
+                    (typeof connectParams.device?.id === "string"
+                      ? connectParams.device.id.trim()
+                      : "") ===
+                      (typeof pairedNode.ownerDeviceId === "string"
+                        ? pairedNode.ownerDeviceId.trim()
+                        : "")
+                  ) {
+                    // Paired upgrade reconnects where the owning device is verified
+                    // can keep their approved surface; only the fresh pending request
+                    // is throttled here. Unmatched owners propagate rate_limited
+                    // to the outer catch so the client receives the intended response.
                     return null;
                   }
                   throw error;
@@ -1683,6 +1707,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           connectParams.caps = reconciliation.effectiveCaps;
           connectParams.commands = reconciliation.effectiveCommands;
           connectParams.permissions = reconciliation.effectivePermissions;
+          nodeIdentity = { nodeId: reconciliation.registrationNodeId };
         }
 
         const shouldTrackPresence = !isGatewayCliClient(connectParams.client);
@@ -1740,6 +1765,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           sharedGatewaySessionGeneration: sessionSharedGatewaySessionGeneration,
           presenceKey,
           clientIp: reportedClientIp,
+          ...(nodeIdentity ? { nodeIdentity } : {}),
           ...(isTrustedApprovalRuntime ? { internal: { approvalRuntime: true } } : {}),
           ...(Object.keys(pluginSurfaceUrls).length > 0 ? { pluginSurfaceUrls } : {}),
           ...(Object.keys(pluginNodeCapabilitySurfaces).length > 0
@@ -1837,19 +1863,17 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           const nodeSession = context.nodeRegistry.register(nextClient, {
             remoteIp: reportedClientIp,
           });
-          const instanceIdRaw = connectParams.client.instanceId;
-          const instanceIdLocal = typeof instanceIdRaw === "string" ? instanceIdRaw.trim() : "";
-          const nodeIdsForPairing = new Set<string>([nodeSession.nodeId]);
-          if (instanceIdLocal) {
-            nodeIdsForPairing.add(instanceIdLocal);
-          }
-          for (const nodeId of nodeIdsForPairing) {
-            void updatePairedNodeMetadata(nodeId, {
-              lastConnectedAtMs: nodeSession.connectedAtMs,
-            }).catch((err: unknown) =>
-              logGateway.warn(`failed to record last connect for ${nodeId}: ${formatForLog(err)}`),
-            );
-          }
+          // Only update metadata for the registered node identity (resolved by resolveNodeIdentityId).
+          // The raw client.instanceId is intentionally excluded here because it has not been
+          // owner-scope verified and a colliding instanceId from a different device could
+          // refresh lastConnectedAtMs on another owner's paired node record.
+          void updatePairedNodeMetadata(nodeSession.nodeId, {
+            lastConnectedAtMs: nodeSession.connectedAtMs,
+          }).catch((err: unknown) =>
+            logGateway.warn(
+              `failed to record last connect for ${nodeSession.nodeId}: ${formatForLog(err)}`,
+            ),
+          );
           recordRemoteNodeInfo({
             nodeId: nodeSession.nodeId,
             displayName: nodeSession.displayName,

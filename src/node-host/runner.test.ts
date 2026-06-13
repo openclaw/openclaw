@@ -7,12 +7,19 @@ import {
   runNodeHost,
 } from "./runner.js";
 
+type TestNodeHostConfig = {
+  version: 1;
+  nodeId: string;
+};
+
 const mocks = vi.hoisted(() => ({
   capturedGatewayClientOptions: [] as GatewayClientOptions[],
-  ensureNodeHostConfig: vi.fn(async () => ({
-    version: 1,
-    nodeId: "node-test",
-  })),
+  ensureNodeHostConfig: vi.fn(
+    async (): Promise<TestNodeHostConfig> => ({
+      version: 1,
+      nodeId: "node-test",
+    }),
+  ),
   saveNodeHostConfig: vi.fn(async () => undefined),
   getRuntimeConfig: vi.fn(() => ({
     gateway: {
@@ -100,6 +107,24 @@ describe("runNodeHost", () => {
     );
     expect(mocks.capturedGatewayClientOptions[0]?.deviceFamily).toBe(
       resolveNodeHostGatewayDeviceFamily(process.platform),
+    );
+  });
+
+  it("passes the custom node id to Gateway client when --node-id provided", async () => {
+    await expect(
+      runNodeHost({
+        gatewayHost: "127.0.0.1",
+        gatewayPort: 18789,
+        nodeId: " custom-node-id ",
+      }),
+    ).rejects.toThrow("event loop readiness timeout");
+
+    const opts = mocks.capturedGatewayClientOptions.at(-1);
+    expect(opts?.instanceId).toBe("custom-node-id");
+    expect(mocks.saveNodeHostConfig).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        nodeId: "custom-node-id",
+      }),
     );
   });
 });

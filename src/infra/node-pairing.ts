@@ -1,5 +1,6 @@
 // Manages node pairing identities for gateway and remote device trust.
 import { randomUUID } from "node:crypto";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeArrayBackedTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { resolveMissingRequestedScope } from "../shared/operator-scope-compat.js";
 import { type NodeApprovalScope, resolveNodePairApprovalScopes } from "./node-pairing-authz.js";
@@ -18,6 +19,7 @@ import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
 
 type NodeDeclaredSurface = {
   nodeId: string;
+  ownerDeviceId?: string;
   clientId?: string;
   clientMode?: string;
   displayName?: string;
@@ -95,6 +97,7 @@ function buildPendingNodePairingRequest(params: {
   return {
     requestId: params.requestId ?? randomUUID(),
     nodeId: params.req.nodeId,
+    ownerDeviceId: params.req.ownerDeviceId,
     clientId: params.req.clientId,
     clientMode: params.req.clientMode,
     displayName: params.req.displayName,
@@ -119,6 +122,7 @@ function refreshPendingNodePairingRequest(
 ): NodePairingPendingRequest {
   return {
     ...existing,
+    ownerDeviceId: incoming.ownerDeviceId ?? existing.ownerDeviceId,
     clientId: incoming.clientId ?? existing.clientId,
     clientMode: incoming.clientMode ?? existing.clientMode,
     displayName: incoming.displayName ?? existing.displayName,
@@ -147,7 +151,8 @@ function samePendingApprovalSurface(
     normalizeArrayBackedTrimmedStringList(incoming.commands) ?? existing.commands;
   const incomingPermissions = incoming.permissions ?? existing.permissions;
   return (
-    // Metadata-only reconnects may refresh one pending request; approval-surface changes supersede.
+    normalizeOptionalString(existing.ownerDeviceId) ===
+      normalizeOptionalString(incoming.ownerDeviceId) &&
     sameNodeApprovalSurfaceSet(existing.caps, incomingCaps) &&
     sameNodeApprovalSurfaceSet(existing.commands, incomingCommands) &&
     sameNodePermissionSurface(existing.permissions, incomingPermissions)
@@ -161,6 +166,7 @@ function mergeNodePairingReplacementInput(params: {
   const latest = params.existing[0];
   return {
     nodeId: params.incoming.nodeId,
+    ownerDeviceId: params.incoming.ownerDeviceId ?? latest?.ownerDeviceId,
     clientId: params.incoming.clientId ?? latest?.clientId,
     clientMode: params.incoming.clientMode ?? latest?.clientMode,
     displayName: params.incoming.displayName ?? latest?.displayName,
@@ -312,6 +318,7 @@ export async function approveNodePairing(
     const existing = state.pairedByNodeId[pending.nodeId];
     const node: NodePairingPairedNode = {
       nodeId: pending.nodeId,
+      ownerDeviceId: pending.ownerDeviceId,
       token: newToken(),
       clientId: pending.clientId,
       clientMode: pending.clientMode,
@@ -375,6 +382,41 @@ export async function removePairedNode(
 }
 
 /** Verify a paired node token and return the approved node record on success. */
+export async function adoptPairedNodeIdentity(
+  params: { fromNodeId: string; toNodeId: string; ownerDeviceId: string },
+  baseDir?: string,
+): Promise<NodePairingPairedNode | null> {
+  return await withLock(async () => {
+    const state = await loadState(baseDir);
+    const fromNodeId = normalizeNodeId(params.fromNodeId);
+    const toNodeId = normalizeNodeId(params.toNodeId);
+    const ownerDeviceId = normalizeOptionalString(params.ownerDeviceId);
+    if (!fromNodeId || !toNodeId || !ownerDeviceId || fromNodeId === toNodeId) {
+      return null;
+    }
+    if (state.pairedByNodeId[toNodeId]) {
+      return null;
+    }
+    const existing = state.pairedByNodeId[fromNodeId];
+    if (!existing) {
+      return null;
+    }
+    const existingOwnerDeviceId = normalizeOptionalString(existing.ownerDeviceId);
+    if (existingOwnerDeviceId && existingOwnerDeviceId !== ownerDeviceId) {
+      return null;
+    }
+    const next: NodePairingPairedNode = {
+      ...existing,
+      nodeId: toNodeId,
+      ownerDeviceId,
+    };
+    delete state.pairedByNodeId[fromNodeId];
+    state.pairedByNodeId[toNodeId] = next;
+    await persistState(state, baseDir);
+    return next;
+  });
+}
+
 export async function verifyNodeToken(
   nodeId: string,
   token: string,
@@ -392,7 +434,12 @@ export async function verifyNodeToken(
 /** Update non-auth metadata for a paired node heartbeat/status refresh. */
 export async function updatePairedNodeMetadata(
   nodeId: string,
-  patch: Partial<Omit<NodePairingPairedNode, "nodeId" | "token" | "createdAtMs" | "approvedAtMs">>,
+  patch: Partial<
+    Omit<
+      NodePairingPairedNode,
+      "nodeId" | "ownerDeviceId" | "token" | "createdAtMs" | "approvedAtMs"
+    >
+  >,
   baseDir?: string,
 ): Promise<boolean> {
   return await withLock(async () => {

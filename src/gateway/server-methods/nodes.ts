@@ -58,6 +58,7 @@ import {
   normalizeDeclaredNodeCommands,
   resolveNodeCommandAllowlist,
 } from "../node-command-policy.js";
+import { resolveNodeIdentityId } from "../node-identity.js";
 import { applyPluginNodeInvokePolicy } from "../node-invoke-plugin-policy.js";
 import { sanitizeNodeInvokeParamsForForwarding } from "../node-invoke-sanitize.js";
 import type { NodeSession } from "../node-registry.js";
@@ -1009,7 +1010,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
       });
       return;
     }
-    const nodeId = client?.connect?.device?.id ?? client?.connect?.client?.id;
+    const nodeId = resolveNodeIdentityId(client) ?? null;
     const trimmedNodeId = normalizeOptionalString(nodeId) ?? "";
     if (!trimmedNodeId) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
@@ -1044,7 +1045,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
       });
       return;
     }
-    const nodeId = client?.connect?.device?.id ?? client?.connect?.client?.id;
+    const nodeId = resolveNodeIdentityId(client) ?? null;
     const trimmedNodeId = normalizeOptionalString(nodeId) ?? "";
     if (!trimmedNodeId) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
@@ -1384,7 +1385,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
           : null;
     await respondUnavailableOnThrow(respond, async () => {
       const { handleNodeEvent } = await import("../server-node-events.js");
-      const nodeId = client?.connect?.device?.id ?? client?.connect?.client?.id ?? "node";
+      const nodeId = resolveNodeIdentityId(client) ?? client?.connect?.client?.id ?? "node";
       const nodeContext: NodeEventContext = {
         deps: context.deps,
         broadcast: context.broadcast,

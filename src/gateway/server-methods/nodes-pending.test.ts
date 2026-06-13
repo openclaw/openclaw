@@ -73,7 +73,10 @@ describe("node.pending handlers", () => {
     await nodePendingHandlers["node.pending.drain"]({
       params: { maxItems: 3 },
       respond: respond as never,
-      client: { connect: { device: { id: "ios-node-1" } } } as never,
+      client: {
+        nodeIdentity: { nodeId: "ios-node-1" },
+        connect: { device: { id: "ios-node-1" } },
+      } as never,
       context: makeContext() as never,
       req: { type: "req", id: "req-node-pending-drain", method: "node.pending.drain" },
       isWebchatConnect: () => false,
@@ -95,6 +98,49 @@ describe("node.pending handlers", () => {
     );
   });
 
+  it("drains pending work for a custom node instance identity", async () => {
+    mocks.drainNodePendingWork.mockReturnValue({
+      revision: 3,
+      items: [],
+      hasMore: false,
+    });
+    const respond = vi.fn();
+
+    await nodePendingHandlers["node.pending.drain"]({
+      params: { maxItems: 2 },
+      respond: respond as never,
+      client: {
+        nodeIdentity: { nodeId: "custom-node-id" },
+        connect: {
+          client: {
+            id: "node-host",
+            mode: "node",
+            instanceId: " custom-node-id ",
+          },
+          device: { id: "device-uuid" },
+        },
+      } as never,
+      context: makeContext() as never,
+      req: { type: "req", id: "req-node-pending-drain-custom", method: "node.pending.drain" },
+      isWebchatConnect: () => false,
+    });
+
+    expect(mocks.drainNodePendingWork).toHaveBeenCalledWith("custom-node-id", {
+      maxItems: 2,
+      includeDefaultStatus: true,
+    });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        nodeId: "custom-node-id",
+        revision: 3,
+        items: [],
+        hasMore: false,
+      },
+      undefined,
+    );
+  });
+
   it("rejects node.pending.drain without a connected device identity", async () => {
     const respond = vi.fn();
 
@@ -109,7 +155,7 @@ describe("node.pending handlers", () => {
 
     const call = respondCall(respond);
     expect(call?.[0]).toBe(false);
-    expect(call?.[2]?.message).toContain("connected device identity");
+    expect(call?.[2]?.message).toContain("approved node identity");
   });
 
   it("enqueues pending work and wakes a disconnected node once", async () => {
