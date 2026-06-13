@@ -115,6 +115,7 @@ async function probeLocalOverrideTarget(
 
 async function resolveLocalOverrideTopologyPath(
   packageRoot: string,
+  realPackageRoot: string,
   relativePath: string,
 ): Promise<string> {
   const segments = normalizeDistPath(relativePath).split("/");
@@ -126,7 +127,17 @@ async function resolveLocalOverrideTopologyPath(
     const existingPath = path.join(packageRoot, ...segments.slice(0, existingSegmentCount));
     try {
       const realExistingPath = await fs.realpath(existingPath);
-      return path.resolve(realExistingPath, ...segments.slice(existingSegmentCount));
+      const resolvedTopologyPath = path.resolve(
+        realExistingPath,
+        ...segments.slice(existingSegmentCount),
+      );
+      if (
+        resolvedTopologyPath === realPackageRoot ||
+        resolvedTopologyPath.startsWith(`${realPackageRoot}${path.sep}`)
+      ) {
+        return resolvedTopologyPath;
+      }
+      throw new Error(`local override topology escapes package root: ${relativePath}`);
     } catch (error) {
       if (!isMissingPathError(error)) {
         throw error;
@@ -490,18 +501,25 @@ async function preflightLocalOverrides(params: {
       conflicts.push({ path: change.path, reason: "target-hardlinked" });
       continue;
     }
-    if (nextEntry.sha256 !== change.baseline.sha256) {
+    if (
+      nextEntry.sha256 !== change.baseline.sha256 ||
+      nextEntry.mode !== normalizeFileMode(change.baseline.mode)
+    ) {
       conflicts.push({ path: change.path, reason: "target-changed" });
     }
   }
   const conflictingPaths = new Set(conflicts.map((conflict) => conflict.path));
   const topologyPaths = new Map<string, string>();
-  let topologyResolutionFailed = false;
+  const realPackageRoot = await fs.realpath(params.packageRoot).catch(() => null);
+  let topologyResolutionFailed = realPackageRoot === null;
   for (const change of params.plan.changes) {
+    if (!realPackageRoot) {
+      break;
+    }
     try {
       topologyPaths.set(
         change.path,
-        await resolveLocalOverrideTopologyPath(params.packageRoot, change.path),
+        await resolveLocalOverrideTopologyPath(params.packageRoot, realPackageRoot, change.path),
       );
     } catch {
       topologyResolutionFailed = true;

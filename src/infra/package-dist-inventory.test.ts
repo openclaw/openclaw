@@ -58,6 +58,33 @@ describe("package dist inventory", () => {
     });
   });
 
+  it("rejects duplicate normalized content inventory paths", async () => {
+    await withTempDir(
+      { prefix: "openclaw-dist-content-inventory-duplicate-" },
+      async (packageRoot) => {
+        const currentFile = path.join(packageRoot, "dist", "current.js");
+        await fs.mkdir(path.dirname(currentFile), { recursive: true });
+        await fs.writeFile(currentFile, "export const value = 1;\n", "utf8");
+        await writePackageDistInventory(packageRoot);
+
+        const contentInventory = await readPackageDistContentInventoryIfPresent(packageRoot);
+        const entry = contentInventory?.[0];
+        if (!entry) {
+          throw new Error("expected content inventory entry");
+        }
+        await fs.writeFile(
+          path.join(packageRoot, "dist", "postinstall-content-inventory.json"),
+          `${JSON.stringify([entry, { ...entry, path: "dist\\current.js" }], null, 2)}\n`,
+          "utf8",
+        );
+
+        await expect(readPackageDistContentInventoryIfPresent(packageRoot)).rejects.toThrow(
+          "Invalid package dist content inventory",
+        );
+      },
+    );
+  });
+
   it("reports stale content hashes", async () => {
     await withTempDir({ prefix: "openclaw-dist-content-inventory-stale-" }, async (packageRoot) => {
       const currentFile = path.join(packageRoot, "dist", "current.js");

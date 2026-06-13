@@ -6,6 +6,10 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { writePackageDistInventory } from "./package-dist-inventory.js";
 import {
+  applyLocalPackageOverrides,
+  captureLocalPackageOverrides,
+} from "./package-local-overrides.js";
+import {
   runGlobalPackageUpdateSteps,
   type PackageUpdateStepResult,
 } from "./package-update-steps.js";
@@ -95,6 +99,81 @@ function createRootRunner(globalRoot: string): CommandRunner {
 }
 
 describe("runGlobalPackageUpdateSteps", () => {
+  it.runIf(process.platform !== "win32")(
+    "does not reapply added overrides through symlinked target ancestors",
+    async () => {
+      await withTempDir(
+        { prefix: "openclaw-package-update-local-symlink-ancestor-" },
+        async (base) => {
+          const packageRoot = path.join(base, "package");
+          const outsideRoot = path.join(base, "outside");
+          const localAddedPath = path.join(packageRoot, "dist", "local", "added.js");
+          await writePackageRoot(packageRoot, "1.0.0");
+          await fs.mkdir(path.dirname(localAddedPath), { recursive: true });
+          await fs.writeFile(localAddedPath, "export const local = true;\n", "utf8");
+
+          const plan = await captureLocalPackageOverrides({ packageRoot });
+          expect(plan).not.toBeNull();
+          await fs.rm(path.join(packageRoot, "dist"), { recursive: true, force: true });
+          await fs.mkdir(outsideRoot, { recursive: true });
+          await fs.symlink(outsideRoot, path.join(packageRoot, "dist"), "dir");
+
+          const result = await applyLocalPackageOverrides({
+            packageRoot,
+            plan,
+            reapply: true,
+          });
+
+          expect(result.status).toBe("conflict");
+          expect(result.applied).toBe(0);
+          expect(result.conflicts).toEqual([
+            { path: "dist/local/added.js", reason: "target-inspection-failed" },
+          ]);
+          await expectPathMissing(path.join(outsideRoot, "local", "added.js"));
+        },
+      );
+    },
+  );
+
+  it.runIf(process.platform !== "win32").each(["modified", "deleted"] as const)(
+    "does not reapply %s overrides over upstream mode changes",
+    async (overrideKind) => {
+      await withTempDir(
+        { prefix: `openclaw-package-update-local-mode-${overrideKind}-` },
+        async (base) => {
+          const packageRoot = path.join(base, "package");
+          const indexPath = path.join(packageRoot, "dist", "index.js");
+          await writePackageRoot(packageRoot, "1.0.0");
+          await fs.chmod(indexPath, 0o644);
+          await writePackageDistInventory(packageRoot);
+          if (overrideKind === "modified") {
+            await fs.writeFile(indexPath, "export const local = true;\n", "utf8");
+          } else {
+            await fs.rm(indexPath);
+          }
+
+          const plan = await captureLocalPackageOverrides({ packageRoot });
+          expect(plan).not.toBeNull();
+          await fs.writeFile(indexPath, "export {};\n", "utf8");
+          await fs.chmod(indexPath, 0o755);
+          await writePackageDistInventory(packageRoot);
+
+          const result = await applyLocalPackageOverrides({
+            packageRoot,
+            plan,
+            reapply: true,
+          });
+
+          expect(result.status).toBe("conflict");
+          expect(result.applied).toBe(0);
+          expect(result.conflicts).toEqual([{ path: "dist/index.js", reason: "target-changed" }]);
+          await expect(fs.readFile(indexPath, "utf8")).resolves.toBe("export {};\n");
+          expect((await fs.stat(indexPath)).mode & 0o777).toBe(0o755);
+        },
+      );
+    },
+  );
+
   it("installs npm updates into a clean staged prefix before swapping the global package", async () => {
     await withTempDir({ prefix: "openclaw-package-update-staged-" }, async (base) => {
       const prefix = path.join(base, "prefix");

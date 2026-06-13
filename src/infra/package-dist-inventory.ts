@@ -595,14 +595,18 @@ export async function readPackageDistContentInventoryIfPresent(
       `Invalid package dist content inventory at ${PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH}`,
     );
   }
-  return parsed
-    .map((entry) => ({
-      path: normalizeRelativePath(entry.path),
-      sha256: entry.sha256,
-      mode: normalizeFileMode(entry.mode),
-      size: entry.size,
-    }))
-    .toSorted((left, right) => left.path.localeCompare(right.path));
+  const normalized = parsed.map((entry) => ({
+    path: normalizeRelativePath(entry.path),
+    sha256: entry.sha256,
+    mode: normalizeFileMode(entry.mode),
+    size: entry.size,
+  }));
+  if (new Set(normalized.map((entry) => entry.path)).size !== normalized.length) {
+    throw new Error(
+      `Invalid package dist content inventory at ${PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH}`,
+    );
+  }
+  return normalized.toSorted((left, right) => left.path.localeCompare(right.path));
 }
 
 function formatContentInventoryEntry(entry: PackageDistContentInventoryEntry): string {
