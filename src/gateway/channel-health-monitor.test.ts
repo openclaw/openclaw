@@ -168,6 +168,45 @@ async function advanceHealthCheck() {
 }
 
 describe("channel-health-monitor", () => {
+  it("defers channel restarts while the gateway event loop is saturated (#89785)", async () => {
+    const now = Date.now();
+    const manager = createSnapshotManager({
+      telegram: { default: disconnectedAccount(now - 300_000) },
+    });
+    const monitor = await startAndRunCheck(manager, {
+      getEventLoopHealth: () => ({ degraded: true, reasons: ["event_loop_delay"] }),
+    });
+    // The disconnected channel would normally be restarted, but a saturated
+    // event loop must not be hammered with restarts (restart-cascade #89785).
+    expect(manager.stopChannel).not.toHaveBeenCalled();
+    expect(manager.startChannel).not.toHaveBeenCalled();
+    monitor.stop();
+  });
+
+  it("resumes channel restarts once the gateway event loop recovers (#89785)", async () => {
+    const now = Date.now();
+    const manager = createSnapshotManager({
+      telegram: { default: disconnectedAccount(now - 300_000) },
+    });
+    let degraded = true;
+    const monitor = startDefaultMonitor(manager, {
+      getEventLoopHealth: () => ({
+        degraded,
+        reasons: degraded ? ["event_loop_delay"] : [],
+      }),
+    });
+    // First cycle: event loop saturated -> restart deferred, nothing recorded.
+    await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS + 1);
+    expect(manager.stopChannel).not.toHaveBeenCalled();
+    expect(manager.startChannel).not.toHaveBeenCalled();
+    // Event loop recovers: the still-disconnected channel is restarted normally.
+    degraded = false;
+    await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS + 1);
+    expect(manager.stopChannel).toHaveBeenCalledWith("telegram", "default", { manual: false });
+    expect(manager.startChannel).toHaveBeenCalledWith("telegram", "default");
+    monitor.stop();
+  });
+
   beforeEach(() => {
     vi.useFakeTimers();
   });

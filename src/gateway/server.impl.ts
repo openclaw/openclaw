@@ -1177,6 +1177,7 @@ export async function startGatewayServer(
         cfgAtStart,
         channelManager,
         log,
+        getEventLoopHealth: readinessEventLoopHealth.snapshot,
       }),
     );
     Object.assign(runtimeState, runtimeServices);

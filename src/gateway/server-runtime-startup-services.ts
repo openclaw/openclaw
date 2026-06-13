@@ -19,6 +19,7 @@ export type GatewayChannelManager = Parameters<
 export function startGatewayChannelHealthMonitor(params: {
   cfg: OpenClawConfig;
   channelManager: GatewayChannelManager;
+  getEventLoopHealth?: Parameters<typeof startChannelHealthMonitor>[0]["getEventLoopHealth"];
 }): ChannelHealthMonitor | null {
   const healthCheckMinutes = params.cfg.gateway?.channelHealthCheckMinutes;
   if (healthCheckMinutes === 0) {
@@ -33,6 +34,7 @@ export function startGatewayChannelHealthMonitor(params: {
       staleEventThresholdMs: staleEventThresholdMinutes * 60_000,
     }),
     ...(maxRestartsPerHour != null && { maxRestartsPerHour }),
+    ...(params.getEventLoopHealth && { getEventLoopHealth: params.getEventLoopHealth }),
   });
 }
 
@@ -42,6 +44,7 @@ export function startGatewayRuntimeServices(params: {
   cfgAtStart: OpenClawConfig;
   channelManager: GatewayChannelManager;
   log: GatewayRuntimeServiceLogger;
+  getEventLoopHealth?: Parameters<typeof startChannelHealthMonitor>[0]["getEventLoopHealth"];
 }): {
   heartbeatRunner: ReturnType<typeof createNoopHeartbeatRunner>;
   channelHealthMonitor: ChannelHealthMonitor | null;
@@ -50,6 +53,7 @@ export function startGatewayRuntimeServices(params: {
   const channelHealthMonitor = startGatewayChannelHealthMonitor({
     cfg: params.cfgAtStart,
     channelManager: params.channelManager,
+    ...(params.getEventLoopHealth && { getEventLoopHealth: params.getEventLoopHealth }),
   });
 
   return {

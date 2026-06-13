@@ -45,6 +45,15 @@ type ChannelHealthMonitorDeps = {
   cooldownCycles?: number;
   maxRestartsPerHour?: number;
   abortSignal?: AbortSignal;
+  /**
+   * Reads current gateway event-loop health. When the loop is degraded
+   * (saturated), channel start/connect phases run slowly and can look
+   * "unhealthy" to this monitor; restarting them then re-enters the same slow
+   * start and piles more startup work onto an already-pegged loop. Used to
+   * defer restarts during saturation and avoid the restart-cascade described in
+   * issue #89785.
+   */
+  getEventLoopHealth?: () => { degraded: boolean; reasons?: readonly string[] } | undefined;
 };
 
 export type ChannelHealthMonitor = {
@@ -83,6 +92,7 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
     cooldownCycles = DEFAULT_COOLDOWN_CYCLES,
     maxRestartsPerHour = DEFAULT_MAX_RESTARTS_PER_HOUR,
     abortSignal,
+    getEventLoopHealth,
   } = deps;
   const checkIntervalMs = resolveTimerTimeoutMs(deps.checkIntervalMs, DEFAULT_CHECK_INTERVAL_MS);
   const timing = resolveTimingPolicy(deps);
@@ -112,6 +122,17 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
         return;
       }
 
+      // When the gateway event loop is saturated, channel start/connect phases
+      // run slowly and look "unhealthy" to this monitor. Restarting them then
+      // re-enters the same slow start and piles more startup work onto an
+      // already-pegged loop — the restart-cascade observed under Telegram
+      // multi-account churn (issue #89785). Defer restarts until the loop
+      // recovers; a genuinely dead channel is still restarted on a later cycle
+      // once load settles.
+      const eventLoopHealth = getEventLoopHealth?.();
+      const deferRestartsForEventLoop = eventLoopHealth?.degraded === true;
+      let loggedEventLoopDeferral = false;
+
       const snapshot = channelManager.getRuntimeSnapshot();
 
       for (const [channelId, accounts] of Object.entries(snapshot.channelAccounts)) {
@@ -136,6 +157,18 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           };
           const health = evaluateChannelHealth(status, healthPolicy);
           if (health.healthy) {
+            continue;
+          }
+
+          if (deferRestartsForEventLoop) {
+            if (!loggedEventLoopDeferral) {
+              loggedEventLoopDeferral = true;
+              log.warn?.(
+                `health-monitor: deferring channel restarts while gateway event loop is degraded (reasons: ${
+                  eventLoopHealth?.reasons?.join(", ") || "unknown"
+                })`,
+              );
+            }
             continue;
           }
 
