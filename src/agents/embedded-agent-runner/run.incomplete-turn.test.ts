@@ -1860,6 +1860,56 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      name: "an active sibling tool",
+      itemLifecycle: { startedCount: 2, completedCount: 1, activeCount: 1 },
+    },
+    {
+      name: "a started-but-unfinished sibling tool",
+      itemLifecycle: { startedCount: 2, completedCount: 1, activeCount: 0 },
+    },
+  ])("does not include tool fallback while $name remains", async ({ itemLifecycle }) => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (params: unknown) => {
+      const attemptParams = params as {
+        onToolOutcome?: (observation: {
+          toolName: string;
+          argsHash: string;
+          resultHash: string;
+          resultText?: string;
+        }) => void;
+      };
+      attemptParams.onToolOutcome?.({
+        toolName: "read",
+        argsHash: "current",
+        resultHash: "result-1",
+        resultText: "status: ok",
+      });
+      return makeAttemptResult({
+        assistantTexts: [],
+        timedOut: true,
+        itemLifecycle,
+        toolMetas: [{ toolName: "read", mutatingAction: false }],
+      });
+    });
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-prompt-timeout-unsettled-tool-no-fallback",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads).toEqual([
+      {
+        text: "Request timed out before a response was generated. Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
+        isError: true,
+      },
+    ]);
+  });
+
   it("includes async task fallback before timeout error when final answer times out after background work", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
@@ -3806,7 +3856,16 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(retryInstruction).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
   });
 
-  it("does not retry planning-only detection after an item has started", () => {
+  it.each([
+    {
+      name: "active",
+      itemLifecycle: { startedCount: 1, completedCount: 0, activeCount: 1 },
+    },
+    {
+      name: "started but unfinished",
+      itemLifecycle: { startedCount: 1, completedCount: 0, activeCount: 0 },
+    },
+  ])("does not retry planning-only detection while an item is $name", ({ itemLifecycle }) => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "openai",
       modelId: "gpt-5.4",
@@ -3815,11 +3874,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       timedOut: false,
       attempt: makeAttemptResult({
         assistantTexts: ["I'll inspect the code, make the change, and run the checks."],
-        itemLifecycle: {
-          startedCount: 1,
-          completedCount: 0,
-          activeCount: 1,
-        },
+        itemLifecycle,
       }),
     });
 
@@ -5147,7 +5202,11 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         assistantTexts: [],
         didSendViaMessagingTool: true,
         messagingToolSourceReplyPayloads: [
-          { interactive: { blocks: [{ type: "buttons", buttons: [] }] } },
+          {
+            interactive: {
+              blocks: [{ type: "buttons", buttons: [{ label: "Open", value: "open" }] }],
+            },
+          },
         ],
         lastAssistant: {
           role: "assistant",
@@ -5479,19 +5538,46 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         messagingToolSentMediaUrls: [],
         messagingToolSentTargets: [],
         messagingToolSourceReplyPayloads: [
-          { interactive: { blocks: [{ type: "buttons", buttons: [] }] } },
+          {
+            interactive: {
+              blocks: [{ type: "buttons", buttons: [{ label: "Open", value: "open" }] }],
+            },
+          },
         ],
       }),
     ).toBe(true);
   });
 
-  it("does not treat empty source-reply payloads as visible delivery", () => {
+  it.each([
+    { name: "blank text", payload: { text: " " } },
+    { name: "presentation object", payload: { presentation: {} } },
+    { name: "interactive object", payload: { interactive: {} } },
+    { name: "channel data object", payload: { channelData: {} } },
+    {
+      name: "interactive block",
+      payload: { interactive: { blocks: [{ type: "buttons", buttons: [] }] } },
+    },
+  ])("does not treat empty source-reply $name as visible delivery", ({ payload }) => {
     expect(
       hasCommittedMessagingToolDeliveryEvidence({
         messagingToolSentTexts: [],
         messagingToolSentMediaUrls: [],
         messagingToolSentTargets: [],
-        messagingToolSourceReplyPayloads: [{ text: " " }],
+        messagingToolSourceReplyPayloads: [payload],
+      }),
+    ).toBe(false);
+  });
+
+  it.each([
+    { name: "presentation", target: { presentation: {} } },
+    { name: "interactive", target: { interactive: {} } },
+    { name: "channel data", target: { channelData: {} } },
+  ])("does not treat empty rich $name messaging target as visible delivery", ({ target }) => {
+    expect(
+      hasCommittedMessagingToolDeliveryEvidence({
+        messagingToolSentTexts: [],
+        messagingToolSentMediaUrls: [],
+        messagingToolSentTargets: [{ tool: "message", ...target }],
       }),
     ).toBe(false);
   });
@@ -6511,6 +6597,40 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   });
 
   it.each([
+    "Can you not delete the file?",
+    "Could you please avoid restarting production?",
+    "Can you ensure you don't delete the file?",
+  ])("does not treat a negated action request as authorization to act: %s", (prompt) => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      prompt,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["Understood."],
+      }),
+    });
+
+    expect(retryInstruction).toBeNull();
+  });
+
+  it("keeps a safe action request with a constraint actionable", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      prompt: "Can you check the config without changing it?",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["I'll check the config."],
+      }),
+    });
+
+    expect(retryInstruction).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
+  });
+
+  it.each([
     "Should you delete the file?",
     "How will you delete the file?",
     "Why would you restart production?",
@@ -6825,6 +6945,25 @@ describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
         itemLifecycle: {
           startedCount: 2,
           completedCount: 1,
+          activeCount: 1,
+        },
+      },
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("does not retry a single replay-safe tool while its item remains unfinished", () => {
+    const result = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      prompt: "Please inspect the code, make the change, and run the checks.",
+      aborted: false,
+      timedOut: false,
+      attempt: {
+        ...makeAttemptWithTools(["read"], "I'll inspect the code next."),
+        itemLifecycle: {
+          startedCount: 1,
+          completedCount: 0,
           activeCount: 1,
         },
       },

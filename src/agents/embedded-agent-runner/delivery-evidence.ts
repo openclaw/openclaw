@@ -1,3 +1,4 @@
+import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { hasAcceptedSessionSpawn } from "../accepted-session-spawn.js";
 
 type AgentPayloadLike = {
@@ -49,14 +50,18 @@ export function hasVisibleReplyShape(value: unknown): boolean {
     channelData?: unknown;
     attachments?: unknown;
   };
-  return Boolean(
+  return (
     hasNonEmptyString(record.text) ||
     hasNonEmptyString(record.mediaUrl) ||
     hasNonEmptyStringArray(record.mediaUrls) ||
-    hasVisibleAttachmentReference(record.attachments) ||
-    record.presentation ||
-    record.interactive ||
-    record.channelData,
+    hasReplyPayloadContent(
+      {
+        presentation: record.presentation,
+        interactive: record.interactive,
+        channelData: record.channelData,
+      },
+      { extraContent: hasVisibleAttachmentReference(record.attachments) },
+    )
   );
 }
 

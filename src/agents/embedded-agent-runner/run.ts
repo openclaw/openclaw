@@ -174,6 +174,7 @@ import {
   resolveAckExecutionFastPathInstruction,
   resolveAttemptReplayMetadata,
   extractPlanningOnlyPlanDetails,
+  hasUnsettledAttemptItems,
   isPlanningOnlyAssistantText,
   isPlanningOnlyAssistantTextForPrompt,
   resolveEmptyResponseRetryInstruction,
@@ -565,6 +566,7 @@ function canSurfaceAttemptTerminalFallback(params: {
     !params.attempt.lastToolError &&
     !params.attempt.clientToolCalls?.length &&
     !params.attempt.yieldDetected &&
+    !hasUnsettledAttemptItems(params.attempt) &&
     !hasVisibleOutboundDeliveryEvidence(params.attempt)
   );
 }
@@ -3888,6 +3890,7 @@ export async function runEmbeddedAgent(
             !attempt.yieldDetected &&
             !attempt.didSendDeterministicApprovalPrompt &&
             !attempt.lastToolError &&
+            !hasUnsettledAttemptItems(attempt) &&
             !resolveAttemptReplayMetadata(attempt).hadPotentialSideEffects &&
             compactionContinuationRetryAttempts < 1
           ) {

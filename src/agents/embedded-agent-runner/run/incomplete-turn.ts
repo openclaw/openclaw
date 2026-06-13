@@ -165,6 +165,8 @@ const ACTIONABLE_PROMPT_POLITE_DIRECTIVE_RE =
   /\bplease\s+(?:check|inspect|look(?:\s+into|\s+at)?|read|write|edit|update|fix|investigate|debug|run|search|find|implement|add|remove|refactor|explain|summari(?:s|z)e|analy(?:s|z)e|review|tell|show|make|restart|deploy|prepare|generate|start|launch|send|monitor|set|load|hit|ask|wire|channel)\b/i;
 const ACTIONABLE_PROMPT_REQUEST_RE =
   /\b(?:can|could|would|will)\s+you\b|\b(?:help|tell|show)\s+me\b|\bwalk me through\b|\b(?:i|we)\s+(?:need|want|would like)\s+you\b/i;
+const NON_AUTHORIZING_NEGATED_ACTION_REQUEST_RE =
+  /\b(?:can|could|would|will)\s+you\s+(?:(?:please\s+)?(?:not|never|avoid|refrain\s+from)\b|[^?\n]{0,80}\b(?:ensure|make\s+sure)\b[^?\n]{0,80}(?:\b(?:not|never)\b|\bdo\s+not\b|\bdon['’]t\b))/i;
 const NON_AUTHORIZING_ADVISORY_PROMPT_RE =
   /^(?:(?:hey|hi|hello)\b[\s,!:-]*)?(?:please[\s,]+)?(?:(?:(?:what|which|how|why|where|who|whom|whose)\b[^?\n]{0,200}\b|when\s+)(?:can|could|would|will|should|do|does|did|are|is)\s+you\b|(?:(?:can|could|would|will)\s+you\s+)?(?:please\s+)?(?:(?:explain|describe|walk\s+me\s+through|help\s+me\s+understand)\b|(?:tell\s+me|show\s+me)\b[^?\n]{0,200}\b(?:how|why|what|which|when|where|whether|steps?|procedure|instructions?)\b))/i;
 const EXPLICIT_ADVISORY_FOLLOW_UP_ACTION_RE =
@@ -827,6 +829,7 @@ function shouldSkipPlanningOnlyRetry(params: {
     params.attempt.didSendDeterministicApprovalPrompt ||
     hasReplayBlockingToolError(params.attempt) ||
     hasAcceptedSessionSpawn(params.attempt.acceptedSessionSpawns) ||
+    hasUnsettledAttemptItems(params.attempt) ||
     resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects,
   );
 }
@@ -839,6 +842,15 @@ function hasReplayBlockingToolError(
     return false;
   }
   return error.mutatingAction ?? isLikelyMutatingToolName(error.toolName);
+}
+
+export function hasUnsettledAttemptItems(
+  attempt: Pick<EmbeddedRunAttemptResult, "itemLifecycle">,
+): boolean {
+  const startedCount = attempt.itemLifecycle?.startedCount ?? 0;
+  const completedCount = attempt.itemLifecycle?.completedCount ?? 0;
+  const activeCount = attempt.itemLifecycle?.activeCount ?? 0;
+  return activeCount > 0 || completedCount < startedCount;
 }
 
 /** Allows configured silent handling for replay-safe empty, reasoning-only, or explicit silent turns. */
@@ -1102,6 +1114,7 @@ function isLikelyActionableUserPrompt(text: string): boolean {
   if (
     isLikelyNonActionableUserPrompt(trimmed) ||
     isExplicitPlanningOnlyUserPrompt(trimmed) ||
+    NON_AUTHORIZING_NEGATED_ACTION_REQUEST_RE.test(trimmed) ||
     (NON_AUTHORIZING_ADVISORY_PROMPT_RE.test(trimmed) &&
       !EXPLICIT_ADVISORY_FOLLOW_UP_ACTION_RE.test(trimmed))
   ) {
@@ -1431,6 +1444,7 @@ export function resolvePlanningOnlyRetryInstruction(params: {
       executionContract: params.executionContract,
     }) ||
     hasReplayBlockingToolError(params.attempt) ||
+    hasUnsettledAttemptItems(params.attempt) ||
     (hasNonPlanToolActivity(params.attempt.toolMetas) &&
       !planningOnly.allowSingleActionRetryBypass &&
       !allowRetrySafeToolActivity) ||
