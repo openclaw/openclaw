@@ -113,16 +113,10 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
           const normalized = normalizeWhatsAppTarget(conversationId);
           return normalized ? { conversationId: normalized } : null;
         },
-        matchInboundConversation: ({ compiledBinding, conversationId, parentConversationId }) => {
+        matchInboundConversation: ({ compiledBinding, conversationId }) => {
           const normalizedConversationId = normalizeWhatsAppTarget(conversationId);
           if (normalizedConversationId === compiledBinding.conversationId) {
             return { conversationId: compiledBinding.conversationId, matchPriority: 2 };
-          }
-          const normalizedParentConversationId = parentConversationId
-            ? normalizeWhatsAppTarget(parentConversationId)
-            : null;
-          if (normalizedParentConversationId === compiledBinding.conversationId) {
-            return { conversationId: compiledBinding.conversationId, matchPriority: 1 };
           }
           return null;
         },

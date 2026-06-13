@@ -252,4 +252,25 @@ describe("createWebOnMessageHandler configured ACP bindings", () => {
       "whatsapp: configured ACP binding unavailable for conversation +15551234567: acpx backend unavailable",
     );
   });
+
+  it("keeps the ordinary WhatsApp route when no configured ACP binding matches", async () => {
+    const { handler } = createHandler();
+    resolveConfiguredBindingRouteMock.mockImplementationOnce(({ route }) => ({
+      bindingResolution: null,
+      route,
+    }));
+
+    await handler(createMessage());
+
+    expect(ensureConfiguredBindingRouteReadyMock).not.toHaveBeenCalled();
+    expect(processMessageMock).toHaveBeenCalledTimes(1);
+    expect(processMessageMock.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        route: expect.objectContaining({
+          sessionKey: baseRoute.sessionKey,
+          matchedBy: baseRoute.matchedBy,
+        }),
+      }),
+    );
+  });
 });
