@@ -34,10 +34,12 @@ describe("qa scenario catalog", () => {
       pack.scenarios
         .filter((scenario) => scenario.execution?.kind !== "flow")
         .map((scenario) => scenario.id),
-    ).toStrictEqual([]);
+    ).toStrictEqual(["control-ui-chat-flow-playwright"]);
     expect(
-      pack.scenarios.filter((scenario) => (scenario.execution.flow?.steps.length ?? 0) > 0),
-    ).not.toStrictEqual([]);
+      pack.scenarios
+        .filter((scenario) => scenario.execution.kind === "flow")
+        .every((scenario) => (scenario.execution.flow?.steps.length ?? 0) > 0),
+    ).toBe(true);
     expect(
       pack.scenarios
         .filter((scenario) => !(scenario.coverage?.primary.length ?? 0))
@@ -91,9 +93,11 @@ describe("qa scenario catalog", () => {
     expect(fallbackConfig?.gracefulFallbackAny as string[] | undefined).toContain(
       "will not reveal",
     );
-    expect(JSON.stringify(readQaScenarioById("memory-failure-fallback").execution.flow)).toContain(
-      "liveTurnTimeoutMs(env, 180000)",
+    const fallbackFlow = JSON.stringify(
+      readQaScenarioById("memory-failure-fallback").execution.flow,
     );
+    expect(fallbackFlow).toContain("liveTurnTimeoutMs(env, 180000)");
+    expect(fallbackFlow).toContain('"replacePaths":["tools.deny"]');
     expect(bundledSkill.title).toBe("Bundled plugin skill runtime");
     expect(bundledSkillConfig?.pluginId).toBe("open-prose");
     expect(bundledSkillConfig?.expectedSkillName).toBe("prose");
@@ -105,6 +109,18 @@ describe("qa scenario catalog", () => {
     const scenario = readQaScenarioById("control-ui-qa-channel-image-roundtrip");
 
     expect(scenario.gatewayRuntime?.forwardHostHome).toBe(true);
+  });
+
+  it("loads Playwright execution scenarios from markdown", () => {
+    const scenario = readQaScenarioById("control-ui-chat-flow-playwright");
+
+    expect(scenario.execution.kind).toBe("playwright");
+    if (scenario.execution.kind !== "playwright") {
+      throw new Error("expected Playwright scenario execution");
+    }
+    expect(scenario.execution.path).toBe("ui/src/ui/e2e/chat-flow.e2e.test.ts");
+    expect(scenario.execution.flow).toBeUndefined();
+    expect(scenario.coverage?.primary).toContain("ui.control");
   });
 
   it("loads runtime parity tier metadata for first-hour and soak lanes", () => {
@@ -412,7 +428,10 @@ describe("qa scenario catalog", () => {
       "kitchen-sink-realtime-voice-provider",
     );
     expect(config?.expectedAdversarialDiagnostics).toContain(
-      "only bundled plugins can register agent tool result middleware",
+      "agent tool result middleware must be a function",
+    );
+    expect(config?.expectedAdversarialDiagnostics).toContain(
+      "trusted tool policy registration requires id, description, and evaluate()",
     );
     expect(config?.expectedAdversarialDiagnostics).toContain(
       "control UI descriptor registration requires id, surface, label, and valid optional fields",

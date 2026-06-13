@@ -332,7 +332,7 @@ describe("WhatsApp QA live runtime", () => {
     expect(scenarios.map(({ id }) => id)).toEqual(["whatsapp-canary", "whatsapp-pairing-block"]);
   });
 
-  it("reports standard WhatsApp live transport scenario coverage", () => {
+  it("reports WhatsApp live transport standard scenario coverage", () => {
     expect(testing.WHATSAPP_QA_STANDARD_SCENARIO_IDS).toEqual([
       "canary",
       "mention-gating",
@@ -904,7 +904,7 @@ describe("WhatsApp QA live runtime", () => {
     expect(waitCallCount).toBe(2);
   });
 
-  it("selects native approval scenarios by id without changing standard coverage", () => {
+  it("selects native approval scenarios by id without changing standard scenario coverage", () => {
     const scenarios = testing.findScenarios([
       "whatsapp-approval-exec-native",
       "whatsapp-approval-exec-reaction-native",
@@ -1181,6 +1181,7 @@ describe("WhatsApp QA live runtime", () => {
       {
         id: "whatsapp-mention-gating",
         title: "WhatsApp group mention gating",
+        standardId: "mention-gating",
         status: "fail",
         details: "setup exploded",
       },

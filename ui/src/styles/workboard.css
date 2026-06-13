@@ -96,7 +96,7 @@
   border-color: var(--workboard-control-border-hover);
 }
 
-.workboard .input:focus {
+.workboard .input:focus-visible {
   border-color: color-mix(in srgb, var(--accent) 70%, var(--border-strong));
   outline: none;
   box-shadow:
@@ -135,6 +135,25 @@
 .workboard-toolbar__filters .input[type="search"] {
   width: min(420px, 100%);
   min-width: min(280px, 100%);
+}
+
+.workboard-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: var(--workboard-control-height);
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.workboard-toggle input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--accent);
 }
 
 .workboard-modal {

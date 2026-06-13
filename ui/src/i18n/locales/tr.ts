@@ -615,6 +615,7 @@ export const tr: TranslationMap = {
     labelsPlaceholder: "ui, docs",
     searchPlaceholder: "Kartlarda ara",
     allPriorities: "Tüm öncelikler",
+    hideEmptyColumns: "Hide empty columns",
     emptyColumn: "İşi buraya bırakın",
     lifecycleUnlinked: "Oturum yok",
     lifecycleUnlinkedDetail: "Bir oturum başlatın veya bağlayın",
@@ -1613,6 +1614,8 @@ export const tr: TranslationMap = {
     },
     jobDetail: {
       system: "Sistem",
+      command: "Command",
+      cwd: "CWD",
       prompt: "İstem",
       delivery: "Teslimat",
       agent: "Aracı",

@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, test } from "vitest";
+import { writeSessionStoreForTestAsync } from "../config/sessions/test-helpers.js";
 import {
   appendAssistantMessageToSessionTranscript,
   appendExactAssistantMessageToSessionTranscript,
@@ -434,26 +435,18 @@ describe("session history HTTP endpoints", () => {
       ].join("\n"),
       "utf-8",
     );
-    await fs.writeFile(
-      storePath,
-      JSON.stringify(
-        {
-          "agent:main:main": {
-            sessionId: "sess-stale-main",
-            sessionFile: staleTranscriptPath,
-            updatedAt: 1,
-          },
-          "agent:main:MAIN": {
-            sessionId: "sess-fresh-main",
-            sessionFile: freshTranscriptPath,
-            updatedAt: 2,
-          },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    await writeSessionStoreForTestAsync(storePath, {
+      "agent:main:main": {
+        sessionId: "sess-stale-main",
+        sessionFile: staleTranscriptPath,
+        updatedAt: 1,
+      },
+      "agent:main:MAIN": {
+        sessionId: "sess-fresh-main",
+        sessionFile: freshTranscriptPath,
+        updatedAt: 2,
+      },
+    });
 
     await expectSessionHistoryText({
       sessionKey: "agent:main:main",

@@ -612,6 +612,7 @@ export const id: TranslationMap = {
     labelsPlaceholder: "ui, docs",
     searchPlaceholder: "Cari kartu",
     allPriorities: "Semua prioritas",
+    hideEmptyColumns: "Hide empty columns",
     emptyColumn: "Letakkan pekerjaan di sini",
     lifecycleUnlinked: "Tidak ada sesi",
     lifecycleUnlinkedDetail: "Mulai atau tautkan sesi",
@@ -1603,6 +1604,8 @@ export const id: TranslationMap = {
     },
     jobDetail: {
       system: "Sistem",
+      command: "Command",
+      cwd: "CWD",
       prompt: "Prompt",
       delivery: "Pengiriman",
       agent: "Agen",

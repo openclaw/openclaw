@@ -648,6 +648,6 @@ describe("gateway run option collisions", () => {
         ).rejects.toThrow("__exit__:1");
       },
     );
-    expect(runtimeErrors[0]).toContain("Use either --passw***d or --password-file.");
+    expect(runtimeErrors[0]).toContain("Use either --password or --password-file.");
   });
 });

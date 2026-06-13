@@ -547,7 +547,8 @@ export async function runGatewayLoop(params: {
               // Best-effort abort for compacting runs so long compaction operations
               // don't hold session write locks across restart boundaries.
               if (activeRuns > 0) {
-                abortEmbeddedAgentRun(undefined, { mode: "compacting" });
+                await markActiveMainSessionsForRestart("gateway restart drain");
+                abortEmbeddedAgentRun(undefined, { mode: "compacting", reason: "restart" });
               }
 
               if (activeTasks > 0 || activeRuns > 0) {
@@ -565,7 +566,7 @@ export async function runGatewayLoop(params: {
                   await markActiveMainSessionsForRestart(
                     restartIntent.reason ?? "forced gateway restart",
                   );
-                  abortEmbeddedAgentRun(undefined, { mode: "all" });
+                  abortEmbeddedAgentRun(undefined, { mode: "all", reason: "restart" });
                 } else {
                   const stillPendingDrainLogger = createStillPendingDrainLogger();
                   let abortedAfterRunTimeout = false;
@@ -584,7 +585,7 @@ export async function runGatewayLoop(params: {
                       gatewayLog.warn(
                         "active embedded run drain timeout reached; aborting active run(s) before restart",
                       );
-                      abortEmbeddedAgentRun(undefined, { mode: "all" });
+                      abortEmbeddedAgentRun(undefined, { mode: "all", reason: "restart" });
                       abortedAfterRunTimeout = true;
                     }
                     tasksDrain = await tasksDrainPromise;
@@ -600,7 +601,7 @@ export async function runGatewayLoop(params: {
                     // Final best-effort abort to avoid carrying active runs into the
                     // next lifecycle when drain time budget is exhausted.
                     if (!abortedAfterRunTimeout) {
-                      abortEmbeddedAgentRun(undefined, { mode: "all" });
+                      abortEmbeddedAgentRun(undefined, { mode: "all", reason: "restart" });
                     }
                   }
                 }
@@ -802,7 +803,10 @@ export async function runGatewayLoop(params: {
         reloadTaskRegistryFromStore,
         resetAllLanes,
         resetGatewayRestartStateForInProcessRestart,
+        rotateAgentEventLifecycleGeneration,
       } = await loadGatewayLifecycleRuntimeModule();
+      // Rotate ownership before reset pumps preserved queue entries.
+      rotateAgentEventLifecycleGeneration();
       resetAllLanes();
       clearRuntimeConfigSnapshot();
       resetGatewayRestartStateForInProcessRestart();

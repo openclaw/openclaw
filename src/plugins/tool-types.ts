@@ -47,6 +47,11 @@ export type OpenClawPluginToolContext = {
   /** Trusted sender id from inbound context (runtime-provided, not tool args). */
   requesterSenderId?: string;
   sandboxed?: boolean;
+  /**
+   * True for explicit one-shot local CLI runs that must release plugin-owned
+   * process resources before the command exits.
+   */
+  oneShotCliRun?: boolean;
 };
 
 export type OpenClawPluginToolFactory = (

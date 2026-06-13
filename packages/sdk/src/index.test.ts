@@ -156,6 +156,23 @@ describe("OpenClaw SDK", () => {
     expect(result.error?.message).toBe("aborted by operator");
   });
 
+  it("maps restart wait snapshots to cancelled", async () => {
+    const transport = new FakeTransport({
+      "agent.wait": {
+        status: "timeout",
+        runId: "run_restart",
+        stopReason: "restart",
+        providerStarted: true,
+      },
+    });
+    const oc = new OpenClaw({ transport });
+
+    const result = await oc.runs.wait("run_restart");
+
+    expect(result.runId).toBe("run_restart");
+    expect(result.status).toBe("cancelled");
+  });
+
   it("maps provider-started rpc timeout wait snapshots to timed_out", async () => {
     const transport = new FakeTransport({
       "agent.wait": {
@@ -1209,9 +1226,57 @@ describe("OpenClaw SDK", () => {
     expect(cancelled.runId).toBe("run_1");
     expect(cancelled.data).toEqual({ phase: "end", aborted: true, stopReason: "rpc" });
 
-    const hardTimeout = normalizeGatewayEvent({
+    const restartCancelled = normalizeGatewayEvent({
       event: "agent",
       seq: 6,
+      payload: {
+        runId: "run_1",
+        stream: "lifecycle",
+        ts,
+        data: {
+          phase: "end",
+          aborted: true,
+          stopReason: "restart",
+          providerStarted: true,
+        },
+      },
+    });
+    expect(restartCancelled.type).toBe("run.cancelled");
+    expect(restartCancelled.runId).toBe("run_1");
+    expect(restartCancelled.data).toEqual({
+      phase: "end",
+      aborted: true,
+      stopReason: "restart",
+      providerStarted: true,
+    });
+
+    const restartErrorCancelled = normalizeGatewayEvent({
+      event: "agent",
+      seq: 7,
+      payload: {
+        runId: "run_1",
+        stream: "lifecycle",
+        ts,
+        data: {
+          phase: "error",
+          aborted: true,
+          stopReason: "restart",
+          error: "agent run aborted for restart",
+        },
+      },
+    });
+    expect(restartErrorCancelled.type).toBe("run.cancelled");
+    expect(restartErrorCancelled.runId).toBe("run_1");
+    expect(restartErrorCancelled.data).toEqual({
+      phase: "error",
+      aborted: true,
+      stopReason: "restart",
+      error: "agent run aborted for restart",
+    });
+
+    const hardTimeout = normalizeGatewayEvent({
+      event: "agent",
+      seq: 8,
       payload: {
         runId: "run_1",
         stream: "lifecycle",
@@ -1237,7 +1302,7 @@ describe("OpenClaw SDK", () => {
 
     const hardTimeoutError = normalizeGatewayEvent({
       event: "agent",
-      seq: 7,
+      seq: 9,
       payload: {
         runId: "run_1",
         stream: "lifecycle",
@@ -1261,7 +1326,7 @@ describe("OpenClaw SDK", () => {
 
     const providerStartedError = normalizeGatewayEvent({
       event: "agent",
-      seq: 8,
+      seq: 10,
       payload: {
         runId: "run_1",
         stream: "lifecycle",
@@ -1283,7 +1348,7 @@ describe("OpenClaw SDK", () => {
 
     const hardTimeoutEnd = normalizeGatewayEvent({
       event: "agent",
-      seq: 9,
+      seq: 11,
       payload: {
         runId: "run_1",
         stream: "lifecycle",
@@ -1305,7 +1370,7 @@ describe("OpenClaw SDK", () => {
 
     const providerStartedEnd = normalizeGatewayEvent({
       event: "agent",
-      seq: 10,
+      seq: 12,
       payload: {
         runId: "run_1",
         stream: "lifecycle",
@@ -1325,7 +1390,7 @@ describe("OpenClaw SDK", () => {
 
     const authRevoked = normalizeGatewayEvent({
       event: "agent",
-      seq: 10,
+      seq: 13,
       payload: {
         runId: "run_1",
         stream: "lifecycle",
@@ -1343,7 +1408,7 @@ describe("OpenClaw SDK", () => {
 
     const timedOut = normalizeGatewayEvent({
       event: "agent",
-      seq: 11,
+      seq: 14,
       payload: {
         runId: "run_1",
         stream: "lifecycle",

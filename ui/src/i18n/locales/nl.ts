@@ -614,6 +614,7 @@ export const nl: TranslationMap = {
     labelsPlaceholder: "ui, docs",
     searchPlaceholder: "Kaarten zoeken",
     allPriorities: "Alle prioriteiten",
+    hideEmptyColumns: "Hide empty columns",
     emptyColumn: "Sleep werk hierheen",
     lifecycleUnlinked: "Geen sessie",
     lifecycleUnlinkedDetail: "Start of koppel een sessie",
@@ -1610,6 +1611,8 @@ export const nl: TranslationMap = {
     },
     jobDetail: {
       system: "Systeem",
+      command: "Command",
+      cwd: "CWD",
       prompt: "Prompt",
       delivery: "Levering",
       agent: "Agent",

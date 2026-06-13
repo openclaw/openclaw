@@ -9,15 +9,18 @@ import {
   resolveSessionAgentId,
   resolveAgentModelFallbacksOverride,
 } from "../agents/agent-scope.js";
+import { ensureAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import { resolveModelAuthLabel } from "../agents/model-auth-label.js";
+import { CODEX_APP_SERVER_AUTH_MARKER } from "../agents/model-auth-markers.js";
 import {
   areRuntimeModelRefsEquivalent,
   shouldPreferActiveRuntimeAliasAuthLabel,
 } from "../agents/model-runtime-aliases.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../agents/openai-routing.js";
+import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
@@ -109,6 +112,7 @@ function resolveStatusRuntimeContextTokens(params: {
 function shouldLoadUsageSummary(params: {
   provider?: string;
   selectedModelAuth?: string;
+  credentialType?: string;
 }): boolean {
   if (!params.provider) {
     return false;
@@ -119,7 +123,12 @@ function shouldLoadUsageSummary(params: {
   // OAuth/token usage endpoints are meaningful only for providers authenticated
   // through those modes; skip API-key sessions to avoid slow unavailable calls.
   const auth = normalizeOptionalLowercaseString(params.selectedModelAuth);
-  return Boolean(auth?.startsWith("oauth") || auth?.startsWith("token"));
+  return Boolean(
+    params.credentialType === "oauth" ||
+    params.credentialType === "token" ||
+    auth?.startsWith("oauth") ||
+    auth?.startsWith("token"),
+  );
 }
 
 function resolveUsageCredentialType(authLabel?: string): "oauth" | "token" | "api_key" | undefined {
@@ -137,6 +146,47 @@ function resolveUsageCredentialType(authLabel?: string): "oauth" | "token" | "ap
     return "api_key";
   }
   return undefined;
+}
+
+function resolveCodexSyntheticUsageAuthProfileId(params: {
+  profileId: string | undefined;
+  cfg: OpenClawConfig;
+  agentDir?: string;
+}): string | undefined {
+  const normalizedProfileId = params.profileId?.trim();
+  if (!normalizedProfileId) {
+    return undefined;
+  }
+  try {
+    const store = ensureAuthProfileStore(params.agentDir, {
+      allowKeychainPrompt: false,
+      config: params.cfg,
+      readOnly: true,
+      syncExternalCli: false,
+    });
+    const credential = store.profiles[normalizedProfileId];
+    if (!credential) {
+      return undefined;
+    }
+    const credentialProvider = normalizeOptionalLowercaseString(credential.provider);
+    const resolvedProvider = resolveProviderIdForAuth(credential.provider, { config: params.cfg });
+    return resolvedProvider === "openai" ||
+      credentialProvider === "openai-codex" ||
+      credentialProvider === "codex-cli"
+      ? normalizedProfileId
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function shouldUseCodexSyntheticUsage(params: {
+  provider?: string;
+  effectiveHarness?: string;
+}): boolean {
+  const harness = normalizeOptionalLowercaseString(params.effectiveHarness);
+  const provider = normalizeOptionalLowercaseString(params.provider);
+  return harness === "codex" && (provider === "openai" || provider === "codex");
 }
 
 function formatSessionTaskLine(sessionKey: string): string | undefined {
@@ -323,7 +373,21 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     selectedModelAuth = activeModelAuth;
   }
   const usageAuthLabel = modelRefs.activeDiffers ? activeModelAuth : selectedModelAuth;
-  const usageCredentialType = resolveUsageCredentialType(usageAuthLabel);
+  const selectedUsageCredentialType = resolveUsageCredentialType(usageAuthLabel);
+  const useCodexSyntheticUsage =
+    shouldUseCodexSyntheticUsage({
+      provider: activeStatusProvider,
+      effectiveHarness,
+    }) &&
+    (selectedUsageCredentialType === "oauth" || selectedUsageCredentialType === "token");
+  const codexUsageAuthProfileId = useCodexSyntheticUsage
+    ? resolveCodexSyntheticUsageAuthProfileId({
+        profileId: sessionEntry?.authProfileOverride,
+        cfg,
+        agentDir: statusAgentDir,
+      })
+    : undefined;
+  const usageCredentialType = useCodexSyntheticUsage ? "token" : selectedUsageCredentialType;
   const currentUsageProvider =
     resolveUsageProviderId(activeStatusProvider, { credentialType: usageCredentialType }) ??
     resolveUsageProviderId(activeProvider, { credentialType: usageCredentialType });
@@ -333,18 +397,31 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     shouldLoadUsageSummary({
       provider: currentUsageProvider,
       selectedModelAuth: usageAuthLabel,
+      credentialType: usageCredentialType,
     })
   ) {
     try {
       // Usage summary is optional operator context. Bound it tightly so a slow
       // provider usage probe cannot delay the status command.
-      const usageSummaryTimeoutMs = 3500;
+      const usageSummaryTimeoutMs = useCodexSyntheticUsage ? 8000 : 3500;
       let usageTimeout: NodeJS.Timeout | undefined;
       const usageSummary = await Promise.race([
         loadProviderUsageSummary({
           timeoutMs: usageSummaryTimeoutMs,
           providers: [currentUsageProvider],
           agentDir: statusAgentDir,
+          workspaceDir: statusWorkspaceDir,
+          config: cfg,
+          auth: useCodexSyntheticUsage
+            ? [
+                {
+                  provider: "openai",
+                  token: CODEX_APP_SERVER_AUTH_MARKER,
+                  ...(codexUsageAuthProfileId ? { authProfileId: codexUsageAuthProfileId } : {}),
+                  hookProvider: "codex",
+                },
+              ]
+            : undefined,
         }),
         new Promise<never>((_, reject) => {
           usageTimeout = setTimeout(
