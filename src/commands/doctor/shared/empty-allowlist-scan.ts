@@ -98,7 +98,13 @@ export function scanEmptyAllowlistPolicyWarnings(
     // When non-disabled sub-accounts exist, the top-level config's empty
     // groupAllowFrom is a parent/fallback, not a standalone account policy.
     // Skip the group-allowlist warning (but still run DM and extra warnings).
-    checkAccount(channelConfig, `channels.${channelName}`, channelName, undefined, hasAnyAccounts);
+    checkAccount(
+      channelConfig,
+      `channels.${channelName}`,
+      channelName,
+      undefined,
+      hasAnyAccounts ? true : undefined,
+    );
 
     if (!accounts) {
       continue;
