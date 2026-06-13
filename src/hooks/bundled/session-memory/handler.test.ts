@@ -551,6 +551,56 @@ describe("session-memory hook", () => {
     expect(memoryContent).toContain("user: External follow-up");
   });
 
+  it("deduplicates cleaned assistant messages that point to the raw thinking transcript entry", async () => {
+    const sessionContent = [
+      JSON.stringify({
+        type: "message",
+        id: "user-1",
+        parentId: null,
+        message: { role: "user", content: "What happened?" },
+      }),
+      JSON.stringify({
+        type: "message",
+        id: "assistant-raw-1",
+        parentId: "user-1",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "private reasoning" },
+            { type: "text", text: "Here is the answer." },
+          ],
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        id: "assistant-clean-1",
+        parentId: "assistant-raw-1",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Here is the answer." }],
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        id: "user-2",
+        parentId: "assistant-clean-1",
+        message: { role: "user", content: "Thanks" },
+      }),
+      JSON.stringify({
+        type: "message",
+        id: "assistant-2",
+        parentId: "user-2",
+        message: { role: "assistant", content: "You're welcome" },
+      }),
+    ].join("\n");
+    const memoryContent = await readSessionTranscript({ sessionContent });
+
+    expect(memoryContent).toContain("user: What happened?");
+    expect(memoryContent?.match(/assistant: Here is the answer\./g)).toHaveLength(1);
+    expect(memoryContent).toContain("user: Thanks");
+    expect(memoryContent).toContain("assistant: You're welcome");
+  });
+
   it("filters out command messages starting with /", async () => {
     const sessionContent = createMockSessionContent([
       { role: "user", content: "/help" },
