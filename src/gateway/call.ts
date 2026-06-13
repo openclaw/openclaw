@@ -958,9 +958,10 @@ async function executeGatewayRequestWithScopes<T>(params: {
         );
       },
       onConnectError: (err) => {
+        const isGatewayClientRequestError = err.name === "GatewayClientRequestError";
         const shouldSurface =
           isGatewayConnectAssemblyError(err) ||
-          (surfaceGatewayClientRequestErrors && err.name === "GatewayClientRequestError");
+          (surfaceGatewayClientRequestErrors && isGatewayClientRequestError);
         if (settled || !shouldSurface) {
           return;
         }
