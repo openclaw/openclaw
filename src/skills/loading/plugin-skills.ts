@@ -53,6 +53,7 @@ export function resolvePluginSkillDirs(params: {
   const acpRuntimeAvailable = isAcpRuntimeSpawnAvailable({ config });
   const memorySlot = normalizedPlugins.slots.memory;
   let selectedMemoryPluginId: string | null = null;
+  const realpathCache = new Map<string, string>();
   const seen = new Set<string>();
   const resolved: string[] = [];
 
@@ -96,7 +97,12 @@ export function resolvePluginSkillDirs(params: {
         log.warn(`plugin skill path not found (${record.id}): ${candidate}`);
         continue;
       }
-      if (!isPathInsideWithRealpath(record.rootDir, candidate, { requireRealpath: true })) {
+      if (
+        !isPathInsideWithRealpath(record.rootDir, candidate, {
+          requireRealpath: true,
+          cache: realpathCache,
+        })
+      ) {
         log.warn(`plugin skill path escapes plugin root (${record.id}): ${candidate}`);
         continue;
       }
@@ -130,8 +136,12 @@ function resolvePluginSkillLinkType(
  * If the directory contains a direct SKILL.md it is published as-is.
  * Otherwise child subdirectories that contain SKILL.md are expanded.
  */
-function collectSkillTargets(dir: string, targets: Map<string, string>): void {
-  if (hasPublishableSkillFile({ skillDir: dir, rootDir: dir })) {
+function collectSkillTargets(
+  dir: string,
+  targets: Map<string, string>,
+  realpathCache: Map<string, string>,
+): void {
+  if (hasPublishableSkillFile({ skillDir: dir, rootDir: dir, realpathCache })) {
     const basename = path.basename(dir);
     const existing = targets.get(basename);
     if (existing) {
@@ -152,7 +162,7 @@ function collectSkillTargets(dir: string, targets: Map<string, string>): void {
   }).entries;
   for (const entry of entries) {
     const childPath = entry.path;
-    if (!hasPublishableSkillFile({ skillDir: childPath, rootDir: dir })) {
+    if (!hasPublishableSkillFile({ skillDir: childPath, rootDir: dir, realpathCache })) {
       continue;
     }
     const basename = entry.name;
@@ -168,7 +178,11 @@ function collectSkillTargets(dir: string, targets: Map<string, string>): void {
   }
 }
 
-function hasPublishableSkillFile(params: { skillDir: string; rootDir: string }): boolean {
+function hasPublishableSkillFile(params: {
+  skillDir: string;
+  rootDir: string;
+  realpathCache: Map<string, string>;
+}): boolean {
   const skillMd = path.join(params.skillDir, "SKILL.md");
   let skillMdStat: fs.Stats;
   try {
@@ -180,7 +194,12 @@ function hasPublishableSkillFile(params: { skillDir: string; rootDir: string }):
     log.warn(`plugin skill SKILL.md is not a regular file: ${skillMd}`);
     return false;
   }
-  if (!isPathInsideWithRealpath(params.rootDir, skillMd, { requireRealpath: true })) {
+  if (
+    !isPathInsideWithRealpath(params.rootDir, skillMd, {
+      requireRealpath: true,
+      cache: params.realpathCache,
+    })
+  ) {
     log.warn(`plugin skill SKILL.md escapes declared skill root: ${skillMd}`);
     return false;
   }
@@ -198,13 +217,14 @@ function hasPublishableSkillFile(params: { skillDir: string; rootDir: string }):
 function publishPluginSkills(skillDirs: string[], opts?: { pluginSkillsDir?: string }): void {
   const pluginSkillsDir = opts?.pluginSkillsDir ?? resolveDefaultPluginSkillsDir();
   const managedTargets = new Map<string, string>();
+  const realpathCache = new Map<string, string>();
 
   // Collect basename → target mappings, reporting collisions.
   // Directories that contain SKILL.md are published as-is.
   // Parent containers (e.g. ./skills/) are expanded to their child
   // directories that each contain a SKILL.md.
   for (const dir of skillDirs) {
-    collectSkillTargets(dir, managedTargets);
+    collectSkillTargets(dir, managedTargets, realpathCache);
   }
 
   // Plugin skill symlinks are owned by OpenClaw and publish at extra-dir
