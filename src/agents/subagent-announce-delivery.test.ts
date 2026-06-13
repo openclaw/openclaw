@@ -4015,6 +4015,147 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("directly delivers text completion proactively after active wake failure to avoid locked-session handoff", async () => {
+    // When the active requester wake fails and a direct-message delivery target
+    // exists, deliverTextCompletionDirect should run before the requester-agent
+    // handoff so the completion is not lost to a SessionWriteLockTimeoutError.
+    const callGateway = vi.fn(async () => {
+      throw new Error("handoff should not be called");
+    }) as unknown as typeof runtimeCallGateway;
+    const sendMessage = createSendMessageMock();
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeSequenceMock([
+      "transcript_commit_wait_unsupported",
+      "no_active_run",
+    ]);
+    const origin = {
+      channel: "discord",
+      to: "dm:U123",
+      accountId: "acct-1",
+    };
+    testing.setDepsForTest({
+      callGateway,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-session-dm",
+        isActive: true,
+      }),
+      getRuntimeConfig: () => ({}) as never,
+      sendMessage,
+      queueEmbeddedAgentMessageWithOutcome,
+    });
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:main:discord:dm:U123",
+      targetRequesterSessionKey: "agent:main:discord:dm:U123",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterOrigin: origin,
+      requesterSessionOrigin: origin,
+      completionDirectOrigin: origin,
+      directOrigin: origin,
+      requesterIsSubagent: false,
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+      directIdempotencyKey: "announce-dm-proactive-text-fallback",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "dm proactive text fallback",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "child completion output",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    // Active wake was attempted twice (transcript_commit_wait_unsupported + no_active_run)
+    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(2);
+    // Handoff was never attempted — proactive text delivery skipped it
+    expect(callGateway).not.toHaveBeenCalled();
+    // Text was delivered directly to the external channel
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        to: "dm:U123",
+        content: "child completion output",
+      }),
+    );
+  });
+
+  it("caps direct text completion delivery at 4000 characters", async () => {
+    const callGateway = createGatewayMock({
+      result: { payloads: [] },
+    });
+    const sendMessage = createSendMessageMock();
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeSequenceMock([
+      "transcript_commit_wait_unsupported",
+      "no_active_run",
+    ]);
+    const longResult = "x".repeat(5_000);
+    const origin = {
+      channel: "discord",
+      to: "dm:U123",
+      accountId: "acct-1",
+    };
+    testing.setDepsForTest({
+      callGateway,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-session-dm-cap",
+        isActive: true,
+      }),
+      getRuntimeConfig: () => ({}) as never,
+      sendMessage,
+      queueEmbeddedAgentMessageWithOutcome,
+    });
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:main:discord:dm:U123",
+      targetRequesterSessionKey: "agent:main:discord:dm:U123",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterOrigin: origin,
+      requesterSessionOrigin: origin,
+      completionDirectOrigin: origin,
+      directOrigin: origin,
+      requesterIsSubagent: false,
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+      directIdempotencyKey: "announce-dm-cap-text",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "dm cap test",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: longResult,
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    const sentContent = (sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][0]
+      .content as string;
+    expect(sentContent.length).toBeLessThan(longResult.length);
+    expect(sentContent).toContain("…(truncated");
+    // First 4000 chars preserved
+    expect(sentContent.startsWith("x".repeat(4_000))).toBe(true);
+  });
+
   it("directly delivers stale isolated cron run media completions", async () => {
     const callGateway = createGatewayMock();
     const sendMessage = createSendMessageMock();
