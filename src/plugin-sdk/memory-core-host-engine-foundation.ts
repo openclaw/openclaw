@@ -41,7 +41,7 @@ export { detectMime } from "@openclaw/media-core/mime";
 export { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 export {
   deleteQmdSessionExportCacheEntries,
-  listQmdSessionExportCacheSessionFiles,
+  listQmdSessionExportCacheEntries,
   readQmdSessionExportCacheEntry,
   upsertQmdSessionExportCacheEntry,
   type QmdSessionExportCacheOptions,

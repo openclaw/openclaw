@@ -403,21 +403,21 @@ export function upsertQmdSessionExportCacheEntry(
   }, options);
 }
 
-/** List cached source files for one QMD export target scope. */
-export function listQmdSessionExportCacheSessionFiles(
+/** List cached rows for one QMD export target scope. */
+export function listQmdSessionExportCacheEntries(
   options: QmdSessionExportCacheOptions,
   key: Pick<QmdSessionExportCacheKey, "exportDir" | "renderVersion">,
-): string[] {
+): QmdSessionExportCacheEntry[] {
   const database = openOpenClawAgentDatabase(options);
   const db = getNodeSqliteKysely<OpenClawAgentQmdExportCacheDatabase>(database.db);
   return executeSqliteQuerySync(
     database.db,
     db
       .selectFrom("qmd_session_export_cache")
-      .select("session_file")
+      .selectAll()
       .where("export_dir", "=", key.exportDir)
       .where("render_version", "=", key.renderVersion),
-  ).rows.map((row) => row.session_file);
+  ).rows.map(toQmdSessionExportCacheEntry);
 }
 
 /** Delete specific QMD session export cache rows for one export target scope. */

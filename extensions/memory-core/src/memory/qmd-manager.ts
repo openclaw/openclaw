@@ -12,14 +12,13 @@ import {
   createSubsystemLogger,
   deleteQmdSessionExportCacheEntries,
   isPathInside,
-  listQmdSessionExportCacheSessionFiles,
+  listQmdSessionExportCacheEntries,
   root,
   resolveAgentContextLimits,
   resolveMemorySearchSyncConfig,
   resolveAgentWorkspaceDir,
   resolveGlobalSingleton,
   resolveStateDir,
-  readQmdSessionExportCacheEntry,
   upsertQmdSessionExportCacheEntry,
   type OpenClawConfig,
   type QmdSessionExportCacheOptions,
@@ -2512,6 +2511,13 @@ export class QmdMemoryManager implements MemorySearchManager {
       ? Date.now() - this.sessionExporter.retentionMs
       : null;
     const exportCacheOptions = this.exportCacheOptions();
+    const cachedEntries = listQmdSessionExportCacheEntries(exportCacheOptions, {
+      exportDir,
+      renderVersion: SESSION_EXPORT_RENDER_VERSION,
+    });
+    const cachedBySessionFile = new Map(
+      cachedEntries.map((entry) => [entry.sessionFile, entry] as const),
+    );
     for (const sessionFile of files) {
       let stat: Awaited<ReturnType<typeof fs.stat>>;
       try {
@@ -2523,11 +2529,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       }
       const targetName = `${path.basename(sessionFile, ".jsonl")}.md`;
       const target = path.join(exportDir, targetName);
-      const cached = readQmdSessionExportCacheEntry(exportCacheOptions, {
-        sessionFile,
-        exportDir,
-        renderVersion: SESSION_EXPORT_RENDER_VERSION,
-      });
+      const cached = cachedBySessionFile.get(sessionFile) ?? null;
       // Fast path: stat fields match the cached identity AND the content
       // fingerprint confirms the file bytes are unchanged. Skip the full
       // entry build, redaction, hashing, and write entirely.
@@ -2606,10 +2608,9 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
     // Remove stale cache entries: session files no longer tracked or whose
     // cached target has drifted outside the current export dir.
-    const staleSessionFiles = listQmdSessionExportCacheSessionFiles(exportCacheOptions, {
-      exportDir,
-      renderVersion: SESSION_EXPORT_RENDER_VERSION,
-    }).filter((sf) => !tracked.has(sf));
+    const staleSessionFiles = cachedEntries
+      .map((entry) => entry.sessionFile)
+      .filter((sessionFile) => !tracked.has(sessionFile));
     deleteQmdSessionExportCacheEntries(exportCacheOptions, {
       exportDir,
       renderVersion: SESSION_EXPORT_RENDER_VERSION,
