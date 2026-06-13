@@ -10,13 +10,21 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { withFileLock } from "openclaw/plugin-sdk/file-lock";
 import {
   createSubsystemLogger,
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
   isPathInside,
+  openOpenClawAgentDatabase,
   root,
   resolveAgentContextLimits,
   resolveMemorySearchSyncConfig,
   resolveAgentWorkspaceDir,
   resolveGlobalSingleton,
   resolveStateDir,
+  runOpenClawAgentWriteTransaction,
+  writeFileWithinRoot,
+  type OpenClawAgentDatabaseOptions,
+  type OpenClawAgentKyselyDatabase,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
@@ -89,8 +97,37 @@ const QMD_EMBED_BACKOFF_MAX_MS = 60 * 60 * 1000;
 // written to <qmdDir>/sessions/*.md. The persistent export-state cache uses
 // this to invalidate stale entries cleanly across deploys.
 const SESSION_EXPORT_RENDER_VERSION = 1;
-const SESSION_EXPORT_STATE_FILE = ".export-state.json";
-const SESSION_EXPORT_STATE_FORMAT_VERSION = 1;
+// Number of bytes read from the start and end of a JSONL file to produce a
+// lightweight content fingerprint. Sized to span a typical last-line append
+// while staying well under a single read syscall's worth of IO.
+const QMD_EXPORT_FINGERPRINT_EDGE_BYTES = 512;
+
+type QmdExportCacheDatabase = Pick<OpenClawAgentKyselyDatabase, "qmd_session_export_cache">;
+
+// Compute a cheap content fingerprint from the first and last N bytes of a
+// JSONL file. This is NOT a full-file hash — it catches truncate-and-rewrite
+// attacks that preserve size and mtime but change content, without the IO cost
+// of reading the entire file. Combined with inode, it makes the fast path
+// safe against backup restores and transcript rewrites.
+async function computeContentFingerprint(filePath: string): Promise<string> {
+  const fd = await fs.open(filePath, "r");
+  try {
+    const stat = await fd.stat();
+    const size = stat.size;
+    const edgeBytes = QMD_EXPORT_FINGERPRINT_EDGE_BYTES;
+    const headBuf = Buffer.alloc(Math.min(edgeBytes, size));
+    await fd.read(headBuf, 0, headBuf.length, 0);
+    let tailBuf = headBuf;
+    if (size > edgeBytes) {
+      tailBuf = Buffer.alloc(Math.min(edgeBytes, size - edgeBytes));
+      await fd.read(tailBuf, 0, tailBuf.length, Math.max(0, size - tailBuf.length));
+    }
+    return crypto.createHash("sha1").update(headBuf).update(tailBuf).digest("hex");
+  } finally {
+    await fd.close();
+  }
+}
+
 const QMD_EMBED_LOCK_MIN_WAIT_MS = 15 * 60 * 1000;
 const QMD_WRITE_LOCK_MIN_WAIT_MS = 5 * 60 * 1000;
 const QMD_EMBED_LOCK_RETRY_TEMPLATE = {
@@ -385,16 +422,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     string,
     { rel: string; abs: string; source: MemorySource }
   >();
-  private readonly exportedSessionState = new Map<
-    string,
-    {
-      hash: string;
-      mtimeMs: number;
-      size: number;
-      target: string;
-    }
-  >();
-  private exportedSessionStateLoaded = false;
+  private agentDb: import("node:sqlite").DatabaseSync | null = null;
   private readonly maxQmdOutputChars = MAX_QMD_OUTPUT_CHARS;
   private readonly sessionExporter: SessionExporterConfig | null;
   private updateTimer: NodeJS.Timeout | null = null;
@@ -2473,23 +2501,32 @@ export class QmdMemoryManager implements MemorySearchManager {
     return this.db;
   }
 
+  private agentDbOptions(): OpenClawAgentDatabaseOptions {
+    return { agentId: this.agentId, env: process.env };
+  }
+
+  private getAgentDb(): import("node:sqlite").DatabaseSync {
+    if (!this.agentDb) {
+      this.agentDb = openOpenClawAgentDatabase(this.agentDbOptions()).db;
+    }
+    return this.agentDb;
+  }
+
   private async exportSessions(): Promise<void> {
     if (!this.sessionExporter) {
       return;
     }
     const exportDir = this.sessionExporter.dir;
     await fs.mkdir(exportDir, { recursive: true });
-    if (!this.exportedSessionStateLoaded) {
-      await this.loadExportedSessionState();
-      this.exportedSessionStateLoaded = true;
-    }
+    const exportRoot = await root(exportDir);
     const files = await listSessionFilesForAgent(this.agentId);
     const keep = new Set<string>();
     const tracked = new Set<string>();
     const cutoff = this.sessionExporter.retentionMs
       ? Date.now() - this.sessionExporter.retentionMs
       : null;
-    let stateMutated = false;
+    const db = this.getAgentDb();
+    const kysely = getNodeSqliteKysely<QmdExportCacheDatabase>(db);
     for (const sessionFile of files) {
       let stat: Awaited<ReturnType<typeof fs.stat>>;
       try {
@@ -2499,29 +2536,42 @@ export class QmdMemoryManager implements MemorySearchManager {
         // any stale export below.
         continue;
       }
-      const cached = this.exportedSessionState.get(sessionFile);
-      // Fast path: source bytes look unchanged (size + mtime match) AND we
-      // know the export target qmd should consume. Skip the entry build,
-      // redaction, hashing, and write entirely.
+      const cached = executeSqliteQueryTakeFirstSync(
+        db,
+        kysely
+          .selectFrom("qmd_session_export_cache")
+          .selectAll()
+          .where("session_file", "=", sessionFile)
+          .where("export_dir", "=", exportDir)
+          .where("render_version", "=", SESSION_EXPORT_RENDER_VERSION),
+      );
+      // Fast path: stat fields match the cached identity AND the content
+      // fingerprint confirms the file bytes are unchanged. Skip the full
+      // entry build, redaction, hashing, and write entirely.
       let cachedTargetMissing = false;
-      if (cached && cached.size === stat.size && cached.mtimeMs === stat.mtimeMs) {
+      if (
+        cached &&
+        cached.size === stat.size &&
+        cached.mtime_ms === stat.mtimeMs &&
+        cached.ino === stat.ino
+      ) {
         if (cutoff && stat.mtimeMs < cutoff) {
           continue;
         }
-        // Verify the cached export target still exists on disk. The cache
-        // can survive after a `qmd/sessions/*.md` export is deleted out
-        // from under us (manual cleanup, errant rm, partial restore). If
-        // we trusted the size+mtime match alone, we'd permanently skip
-        // rebuilding the missing markdown until the source jsonl changed.
-        // On a missing target, fall through to the slow rebuild path below
-        // and force a write even when the cached hash/mtime still match.
-        try {
-          await fs.access(cached.target);
-          tracked.add(sessionFile);
-          keep.add(cached.target);
-          continue;
-        } catch {
-          cachedTargetMissing = true;
+        // Verify content fingerprint: cheap sha1 over first+last 512 bytes
+        // catches any in-place modification that preserved size+mtime+ino.
+        const fingerprint = await computeContentFingerprint(sessionFile);
+        if (fingerprint === cached.content_fingerprint) {
+          // Verify the cached export target still exists on disk. If it was
+          // deleted out from under us, fall through to the slow rebuild path.
+          try {
+            await fs.access(cached.target);
+            tracked.add(sessionFile);
+            keep.add(cached.target);
+            continue;
+          } catch {
+            cachedTargetMissing = true;
+          }
         }
       }
       // Slow path: rebuild the entry and write the markdown if needed.
@@ -2539,7 +2589,7 @@ export class QmdMemoryManager implements MemorySearchManager {
         cachedTargetMissing ||
         !cached ||
         cached.hash !== entry.hash ||
-        cached.mtimeMs !== entry.mtimeMs
+        cached.mtime_ms !== entry.mtimeMs
       ) {
         await writeFileWithinRoot({
           rootDir: exportDir,
@@ -2548,13 +2598,38 @@ export class QmdMemoryManager implements MemorySearchManager {
           encoding: "utf-8",
         });
       }
-      this.exportedSessionState.set(sessionFile, {
-        hash: entry.hash,
-        mtimeMs: entry.mtimeMs,
-        size: stat.size,
-        target,
-      });
-      stateMutated = true;
+      const fingerprint = await computeContentFingerprint(sessionFile);
+      runOpenClawAgentWriteTransaction((agentDatabase) => {
+        const writeKysely = getNodeSqliteKysely<QmdExportCacheDatabase>(agentDatabase.db);
+        executeSqliteQuerySync(
+          agentDatabase.db,
+          writeKysely
+            .insertInto("qmd_session_export_cache")
+            .values({
+              session_file: sessionFile,
+              export_dir: exportDir,
+              render_version: SESSION_EXPORT_RENDER_VERSION,
+              size: stat.size,
+              mtime_ms: stat.mtimeMs,
+              ino: stat.ino,
+              content_fingerprint: fingerprint,
+              hash: entry.hash,
+              target,
+              updated_at: Date.now(),
+            })
+            .onConflict((conflict) =>
+              conflict.columns(["session_file", "export_dir", "render_version"]).doUpdateSet({
+                size: stat.size,
+                mtime_ms: stat.mtimeMs,
+                ino: stat.ino,
+                content_fingerprint: fingerprint,
+                hash: entry.hash,
+                target,
+                updated_at: Date.now(),
+              }),
+            ),
+        );
+      }, this.agentDbOptions());
       keep.add(target);
     }
     const exported = await exportRoot.list(".").catch(() => []);
@@ -2564,127 +2639,35 @@ export class QmdMemoryManager implements MemorySearchManager {
       }
       const full = path.join(exportDir, name);
       if (!keep.has(full)) {
-        await fs.rm(full, { force: true });
-        stateMutated = true;
+        await exportRoot.remove(name).catch(() => undefined);
       }
     }
-    for (const [sessionFile, state] of this.exportedSessionState) {
-      if (!tracked.has(sessionFile) || !isPathInside(exportDir, state.target)) {
-        this.exportedSessionState.delete(sessionFile);
-        stateMutated = true;
-      }
-    }
-    if (stateMutated) {
-      await this.persistExportedSessionState();
-    }
-  }
-
-  private get sessionExportStatePath(): string | null {
-    if (!this.sessionExporter) {
-      return null;
-    }
-    return path.join(this.sessionExporter.dir, SESSION_EXPORT_STATE_FILE);
-  }
-
-  private async loadExportedSessionState(): Promise<void> {
-    const statePath = this.sessionExportStatePath;
-    if (!statePath || !this.sessionExporter) {
-      return;
-    }
-    let raw: string;
-    try {
-      raw = await fs.readFile(statePath, "utf-8");
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-        log.debug(`qmd export-state load failed for agent "${this.agentId}": ${String(err)}`);
-      }
-      return;
-    }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch (err) {
-      log.debug(
-        `qmd export-state parse failed for agent "${this.agentId}": ${String(err)}; ignoring cache`,
-      );
-      return;
-    }
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return;
-    }
-    const candidate = parsed as {
-      version?: unknown;
-      renderVersion?: unknown;
-      exportDir?: unknown;
-      entries?: unknown;
-    };
-    if (
-      candidate.version !== SESSION_EXPORT_STATE_FORMAT_VERSION ||
-      candidate.renderVersion !== SESSION_EXPORT_RENDER_VERSION ||
-      candidate.exportDir !== this.sessionExporter.dir ||
-      !Array.isArray(candidate.entries)
-    ) {
-      // Schema, render rules, or export dir changed — invalidate quietly.
-      return;
-    }
-    let loaded = 0;
-    for (const item of candidate.entries) {
-      if (!Array.isArray(item) || item.length !== 2) {
-        continue;
-      }
-      const [sessionFile, payload] = item;
-      if (typeof sessionFile !== "string" || !payload || typeof payload !== "object") {
-        continue;
-      }
-      const record = payload as {
-        hash?: unknown;
-        mtimeMs?: unknown;
-        size?: unknown;
-      };
-      if (
-        typeof record.hash !== "string" ||
-        typeof record.mtimeMs !== "number" ||
-        typeof record.size !== "number"
-      ) {
-        continue;
-      }
-      const targetName = `${path.basename(sessionFile, ".jsonl")}.md`;
-      this.exportedSessionState.set(sessionFile, {
-        hash: record.hash,
-        mtimeMs: record.mtimeMs,
-        size: record.size,
-        target: path.join(this.sessionExporter.dir, targetName),
-      });
-      loaded += 1;
-    }
-    if (loaded > 0) {
-      log.debug(`qmd export-state loaded for agent "${this.agentId}" entries=${loaded}`);
-    }
-  }
-
-  private async persistExportedSessionState(): Promise<void> {
-    if (!this.sessionExporter) {
-      return;
-    }
-    const entries: Array<[string, { hash: string; mtimeMs: number; size: number }]> = [];
-    for (const [sessionFile, state] of this.exportedSessionState) {
-      entries.push([sessionFile, { hash: state.hash, mtimeMs: state.mtimeMs, size: state.size }]);
-    }
-    const payload = JSON.stringify({
-      version: SESSION_EXPORT_STATE_FORMAT_VERSION,
-      renderVersion: SESSION_EXPORT_RENDER_VERSION,
-      exportDir: this.sessionExporter.dir,
-      entries,
-    });
-    try {
-      await writeFileWithinRoot({
-        rootDir: this.sessionExporter.dir,
-        relativePath: SESSION_EXPORT_STATE_FILE,
-        data: payload,
-        encoding: "utf-8",
-      });
-    } catch (err) {
-      log.warn(`qmd export-state persist failed for agent "${this.agentId}": ${String(err)}`);
+    // Remove stale cache entries: session files no longer tracked or whose
+    // cached target has drifted outside the current export dir.
+    const staleSessionFiles = executeSqliteQuerySync(
+      db,
+      kysely
+        .selectFrom("qmd_session_export_cache")
+        .select("session_file")
+        .where("export_dir", "=", exportDir)
+        .where("render_version", "=", SESSION_EXPORT_RENDER_VERSION),
+    )
+      .rows.map((r) => r.session_file)
+      .filter((sf) => !tracked.has(sf));
+    if (staleSessionFiles.length > 0) {
+      runOpenClawAgentWriteTransaction((agentDatabase) => {
+        const writeKysely = getNodeSqliteKysely<QmdExportCacheDatabase>(agentDatabase.db);
+        for (const sf of staleSessionFiles) {
+          executeSqliteQuerySync(
+            agentDatabase.db,
+            writeKysely
+              .deleteFrom("qmd_session_export_cache")
+              .where("session_file", "=", sf)
+              .where("export_dir", "=", exportDir)
+              .where("render_version", "=", SESSION_EXPORT_RENDER_VERSION),
+          );
+        }
+      }, this.agentDbOptions());
     }
   }
 
