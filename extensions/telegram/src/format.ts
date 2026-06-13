@@ -395,8 +395,7 @@ function promoteEscapedSupportedTelegramTags(text: string, openTags: string[]): 
 }
 
 function preserveSupportedTelegramHtmlTags(html: string): string {
-  let codeDepth = 0;
-  let preDepth = 0;
+  const openTags: string[] = [];
   let result = "";
   let lastIndex = 0;
   const openEscapedTags: string[] = [];
@@ -406,27 +405,25 @@ function preserveSupportedTelegramHtmlTags(html: string): string {
   while ((match = HTML_TAG_PATTERN.exec(html)) !== null) {
     const tagStart = match.index;
     const tagEnd = HTML_TAG_PATTERN.lastIndex;
-    const tagName = normalizeLowercaseStringOrEmpty(match[2]);
-    const isClosing = match[1] === "</";
     const textBefore = html.slice(lastIndex, tagStart);
+    const rawTag = html.slice(tagStart, tagEnd);
+
+    const inCodeOrPre = openTags.some((t) => t === "code" || t === "pre");
     result +=
-      codeDepth > 0 || preDepth > 0
+      inCodeOrPre
         ? textBefore
         : promoteEscapedSupportedTelegramTags(textBefore, openEscapedTags);
 
-    if (tagName === "code") {
-      codeDepth = isClosing ? Math.max(0, codeDepth - 1) : codeDepth + 1;
-    } else if (tagName === "pre") {
-      preDepth = isClosing ? Math.max(0, preDepth - 1) : preDepth + 1;
-    }
-
-    result += html.slice(tagStart, tagEnd);
+    const cleanedTag = preserveTelegramHtmlTag(rawTag, openTags, (t) => {
+      return t.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    });
+    result += cleanedTag;
     lastIndex = tagEnd;
   }
 
   const remainingText = html.slice(lastIndex);
   result +=
-    codeDepth > 0 || preDepth > 0
+    openTags.some((t) => t === "code" || t === "pre")
       ? remainingText
       : promoteEscapedSupportedTelegramTags(remainingText, openEscapedTags);
   return result;
