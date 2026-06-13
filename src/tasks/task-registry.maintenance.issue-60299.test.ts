@@ -66,6 +66,7 @@ function createTaskRegistryMaintenanceHarness(params: {
   cronStore?: CronStoreFile;
   cronRunLogEntries?: Record<string, CronRunLogEntry[]>;
   runtimeAuthoritative?: boolean;
+  terminalSubagentRunEndedAt?: Record<string, number>;
 }) {
   const sessionStore = params.sessionStore ?? {};
   const acpEntry = params.acpEntry;
@@ -73,6 +74,7 @@ function createTaskRegistryMaintenanceHarness(params: {
   const activeRunIds = new Set(params.activeRunIds ?? []);
   const activeAcpSessionKeys = new Set(params.activeAcpSessionKeys ?? []);
   const cronRunLogEntries = params.cronRunLogEntries ?? {};
+  const terminalSubagentRunEndedAt = params.terminalSubagentRunEndedAt ?? {};
   const currentTasks = new Map(params.tasks.map((task) => [task.taskId, { ...task }]));
 
   const runtime: TaskRegistryMaintenanceRuntime = {
@@ -175,6 +177,7 @@ function createTaskRegistryMaintenanceHarness(params: {
     resolveCronJobsStorePath: () => "/tmp/openclaw-test-cron/jobs.json",
     loadCronJobsStoreSync: () => params.cronStore ?? { version: 1, jobs: [] },
     readCronRunLogEntriesSync: ({ jobId }) => (jobId ? (cronRunLogEntries[jobId] ?? []) : []),
+    getSubagentRunEndedAt: (runId: string) => terminalSubagentRunEndedAt[runId],
   };
 
   setTaskRegistryMaintenanceRuntimeForTests(runtime);
@@ -725,5 +728,155 @@ describe("task-registry maintenance issue #60299", () => {
       throw new Error("Expected task recovery hook now timestamp");
     }
     expect(hookNow).toBeGreaterThanOrEqual(beforeMaintenance);
+  });
+});
+
+describe("task-registry maintenance issue #90444", () => {
+  it("marks a running subagent task lost when its in-memory run is terminal", async () => {
+    // Regression: the kill path defers task-row finalization to maintenance to
+    // avoid the kill-vs-complete race. Maintenance must detect terminal
+    // in-memory subagent runs and clear their stuck running task rows.
+    const runId = "run-killed-zombie-90444";
+    const task = makeStaleTask({
+      runtime: "subagent",
+      runId,
+      childSessionKey: "agent:main:subagent:zombie-90444",
+    });
+
+    // Session store still has an entry (kill happened before session cleanup).
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      sessionStore: {
+        "agent:main:subagent:zombie-90444": {
+          sessionId: "sess-zombie-90444",
+          updatedAt: Date.now(),
+        },
+      },
+      // The in-memory run is terminal (endedAt set).
+      terminalSubagentRunEndedAt: { [runId]: Date.now() - 5000 },
+      runtimeAuthoritative: true,
+    });
+
+    expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 1 });
+    expectTaskStatus(currentTasks, task.taskId, "lost");
+  });
+
+  it("keeps a running subagent task live when its in-memory run has not ended", async () => {
+    const runId = "run-active-subagent-90444";
+    const task = makeStaleTask({
+      runtime: "subagent",
+      runId,
+      childSessionKey: "agent:main:subagent:active-90444",
+    });
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      sessionStore: {
+        "agent:main:subagent:active-90444": {
+          sessionId: "sess-active-90444",
+          updatedAt: Date.now(),
+        },
+      },
+      // No endedAt in the terminal map → run is still live.
+      terminalSubagentRunEndedAt: {},
+      runtimeAuthoritative: true,
+    });
+
+    expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 0 });
+    expectTaskStatus(currentTasks, task.taskId, "running");
+  });
+
+  it("marks a killed subagent task lost in non-authoritative (CLI maintenance) context", async () => {
+    const runId = "run-nonauth-zombie-90444";
+    const task = makeStaleTask({
+      runtime: "subagent",
+      runId,
+      childSessionKey: "agent:main:subagent:nonauth-90444",
+    });
+
+    // CLI maintenance reads endedAt from the SQLite-backed snapshot rather than
+    // the process-local in-memory map, so it can finalize kills the gateway
+    // persisted to SQLite even when isRuntimeAuthoritative() is false.
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      sessionStore: {
+        "agent:main:subagent:nonauth-90444": {
+          sessionId: "sess-nonauth-90444",
+          updatedAt: Date.now(),
+        },
+      },
+      terminalSubagentRunEndedAt: { [runId]: Date.now() - 5000 },
+      runtimeAuthoritative: false,
+    });
+
+    expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 1 });
+    expectTaskStatus(currentTasks, task.taskId, "lost");
+  });
+
+  it("marks a freshly killed subagent task lost before the lost-grace window expires", async () => {
+    // Regression for the timing gap ClawSweeper caught: the terminal-run check
+    // must fire in shouldMarkLost before hasLostGraceExpired so a task killed
+    // seconds ago is finalized on the next sweep, not after 5+ minutes.
+    const now = Date.now();
+    const runId = "run-fresh-killed-90444";
+    const task = makeStaleTask({
+      runtime: "subagent",
+      runId,
+      childSessionKey: "agent:main:subagent:fresh-90444",
+      // Fresh timestamps: task was created and killed 30 s ago, well within
+      // the 5-minute TASK_RECONCILE_GRACE_MS window.
+      createdAt: now - 30_000,
+      startedAt: now - 30_000,
+      lastEventAt: now - 30_000,
+    });
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      sessionStore: {
+        "agent:main:subagent:fresh-90444": {
+          sessionId: "sess-fresh-90444",
+          updatedAt: now,
+        },
+      },
+      terminalSubagentRunEndedAt: { [runId]: now - 5_000 },
+      runtimeAuthoritative: true,
+    });
+
+    expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 1 });
+    expectTaskStatus(currentTasks, task.taskId, "lost");
+  });
+
+  it("marks a same-run CLI peer task lost when the parent subagent run is terminal", async () => {
+    // Regression for #90444: the issue reports both the parent runtime='subagent'
+    // row and the child runtime='cli' row for the same run staying stuck. The
+    // terminal-run fast path must cover both runtimes.
+    const runId = "run-cli-peer-90444";
+    const subagentTask = makeStaleTask({
+      runtime: "subagent",
+      runId,
+      childSessionKey: "agent:main:subagent:peer-90444",
+    });
+    const cliPeerTask = makeStaleTask({
+      runtime: "cli",
+      sourceId: runId,
+      childSessionKey: "agent:main:cli:peer-90444",
+    });
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [subagentTask, cliPeerTask],
+      sessionStore: {
+        "agent:main:subagent:peer-90444": {
+          sessionId: "sess-sub-peer-90444",
+          updatedAt: Date.now(),
+        },
+        "agent:main:cli:peer-90444": { sessionId: "sess-cli-peer-90444", updatedAt: Date.now() },
+      },
+      terminalSubagentRunEndedAt: { [runId]: Date.now() - 5000 },
+      runtimeAuthoritative: true,
+    });
+
+    expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 2 });
+    expectTaskStatus(currentTasks, subagentTask.taskId, "lost");
+    expectTaskStatus(currentTasks, cliPeerTask.taskId, "lost");
   });
 });
