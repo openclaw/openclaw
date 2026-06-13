@@ -1034,12 +1034,6 @@ importers:
         specifier: 2026.5.28
         version: 2026.5.28
 
-  extensions/memory-external-reranker:
-    devDependencies:
-      '@openclaw/plugin-sdk':
-        specifier: workspace:*
-        version: link:../../packages/plugin-sdk
-
   extensions/memory-lancedb:
     dependencies:
       '@lancedb/lancedb':
@@ -1058,15 +1052,6 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
-
-  extensions/memory-mmr:
-    devDependencies:
-      '@openclaw/plugin-sdk':
-        specifier: workspace:*
-        version: link:../../packages/plugin-sdk
-      openclaw:
-        specifier: 2026.5.28
-        version: 2026.5.28
 
   extensions/memory-wiki:
     dependencies:
