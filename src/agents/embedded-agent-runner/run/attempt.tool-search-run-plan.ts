@@ -136,6 +136,7 @@ export function buildToolSearchRunPlan(params: {
     for (const controlName of TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES) {
       if (!visibleAllowedToolNames.has(controlName)) {
         liveAllowedToolNames.delete(controlName);
+        capabilityToolNames.delete(controlName);
       }
     }
     for (const visibleName of visibleAllowedToolNames) {

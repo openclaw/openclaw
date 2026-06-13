@@ -167,7 +167,7 @@ describe("buildToolSearchRunPlan", () => {
         { name: "tool_describe" },
         { name: "tool_call" },
       ] as never,
-      uncompactedTools: [{ name: "fake_plugin_tool" }] as never,
+      uncompactedTools: [{ name: "tool_search_code" }, { name: "fake_plugin_tool" }] as never,
       clientTools: [
         {
           type: "function",
