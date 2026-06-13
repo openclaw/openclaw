@@ -165,8 +165,10 @@ const ACTIONABLE_PROMPT_POLITE_DIRECTIVE_RE =
   /\bplease\s+(?:check|inspect|look(?:\s+into|\s+at)?|read|write|edit|update|fix|investigate|debug|run|search|find|implement|add|remove|refactor|explain|summari(?:s|z)e|analy(?:s|z)e|review|tell|show|make|restart|deploy|prepare|generate|start|launch|send|monitor|set|load|hit|ask|wire|channel)\b/i;
 const ACTIONABLE_PROMPT_REQUEST_RE =
   /\b(?:can|could|would|will)\s+you\b|\b(?:help|tell|show)\s+me\b|\bwalk me through\b|\b(?:i|we)\s+(?:need|want|would like)\s+you\b/i;
-const ACTIONABLE_PROMPT_PLANNED_ACTION_QUESTION_RE =
-  /^(?:what|which)\b[^?]*\b(?:can|could|would|will)\s+you\b/i;
+const NON_AUTHORIZING_ADVISORY_PROMPT_RE =
+  /^(?:(?:hey|hi|hello)\b[\s,!:-]*)?(?:please[\s,]+)?(?:(?:(?:what|which|how|why|where|who|whom|whose)\b[^?\n]{0,200}\b|when\s+)(?:can|could|would|will|should|do|does|did|are|is)\s+you\b|(?:(?:can|could|would|will)\s+you\s+)?(?:please\s+)?(?:(?:explain|describe|walk\s+me\s+through|help\s+me\s+understand)\b|(?:tell\s+me|show\s+me)\b[^?\n]{0,200}\b(?:how|why|what|which|when|where|whether|steps?|procedure|instructions?)\b))/i;
+const EXPLICIT_ADVISORY_FOLLOW_UP_ACTION_RE =
+  /[.!?]\s*(?:(?:and\s+)?(?:then|next|after(?:ward|wards| that))\s+)?(?:please\s+)?(?:go\s+ahead(?:\s+and)?\s+)?(?:check|inspect|look(?:\s+into|\s+at)?|read|write|edit|update|fix|investigate|debug|run|search|find|implement|add|remove|delete|create|move|rename|copy|install|uninstall|enable|disable|configure|reset|archive|cancel|stop|test|verify|start|launch|send|deploy|ship|migrate|restart|set|load|hit|ask|wire|channel)\b/i;
 const ACTIONABLE_PROMPT_TERSE_REQUEST_RE =
   /^(?!\s*(?:the|this|that|status update|fyi|heads up)\b)(?:.{0,120}\b(?:results?|proof)\b.{0,80}\b(?:now|after)\b|.{0,120}\bdefault\s+for\s+(?:the\s+)?agent\b)/i;
 const PLANNING_ONLY_SHORT_PLACEHOLDER_RE =
@@ -1067,6 +1069,7 @@ function isExplicitPlanningOnlyUserPrompt(text: string): boolean {
   return (
     trimmed.length > 0 &&
     !EXPLICIT_PLAN_AND_EXECUTE_REQUEST_RE.test(trimmed) &&
+    !EXPLICIT_ADVISORY_FOLLOW_UP_ACTION_RE.test(trimmed) &&
     (EXPLICIT_PLANNING_REQUEST_RE.test(trimmed) ||
       EXPLICIT_PLAN_DESCRIPTION_REQUEST_RE.test(trimmed) ||
       EXPLICIT_PLAN_CREATION_REQUEST_RE.test(trimmed) ||
@@ -1096,15 +1099,20 @@ function isLikelyActionableUserPrompt(text: string): boolean {
   if (!trimmed) {
     return false;
   }
-  if (isLikelyNonActionableUserPrompt(trimmed) || isExplicitPlanningOnlyUserPrompt(trimmed)) {
+  if (
+    isLikelyNonActionableUserPrompt(trimmed) ||
+    isExplicitPlanningOnlyUserPrompt(trimmed) ||
+    (NON_AUTHORIZING_ADVISORY_PROMPT_RE.test(trimmed) &&
+      !EXPLICIT_ADVISORY_FOLLOW_UP_ACTION_RE.test(trimmed))
+  ) {
     return false;
   }
   return (
     EXPLICIT_PLAN_AND_EXECUTE_REQUEST_RE.test(trimmed) ||
+    EXPLICIT_ADVISORY_FOLLOW_UP_ACTION_RE.test(trimmed) ||
     ACTIONABLE_PROMPT_DIRECTIVE_RE.test(trimmed) ||
     ACTIONABLE_PROMPT_POLITE_DIRECTIVE_RE.test(trimmed) ||
-    (ACTIONABLE_PROMPT_REQUEST_RE.test(trimmed) &&
-      !ACTIONABLE_PROMPT_PLANNED_ACTION_QUESTION_RE.test(trimmed)) ||
+    ACTIONABLE_PROMPT_REQUEST_RE.test(trimmed) ||
     ACTIONABLE_PROMPT_TERSE_REQUEST_RE.test(trimmed)
   );
 }

@@ -6510,11 +6510,23 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(retryInstruction).toBeNull();
   });
 
-  it("does not treat an advisory question as authorization to act", () => {
+  it.each([
+    "Should you delete the file?",
+    "How will you delete the file?",
+    "Why would you restart production?",
+    "What files will you delete?",
+    "Explain how to remove the database",
+    "Explain the steps to delete old backups",
+    "Please show me how you would delete old backups",
+    "Walk me through deleting the database",
+    "Help me understand how to remove the database",
+    "Explain how to remove the database and then delete old backups",
+    "How would you remove the database, then delete old backups?",
+  ])("does not treat an advisory question as authorization to act: %s", (prompt) => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "openai",
       modelId: "gpt-5.4",
-      prompt: "Should you delete the file?",
+      prompt,
       aborted: false,
       timedOut: false,
       attempt: makeAttemptResult({
@@ -6523,6 +6535,25 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     });
 
     expect(retryInstruction).toBeNull();
+  });
+
+  it.each([
+    "How would you delete old backups? Then delete them.",
+    "Explain how to remove the database. Then remove it.",
+    "How will you delete the file? Please delete it.",
+  ])("keeps advisory prompts with a separate execution request actionable: %s", (prompt) => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      prompt,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["I'll delete the file."],
+      }),
+    });
+
+    expect(retryInstruction).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
   });
 
   it("does not block planning-only text for arbitrary provider models", () => {
