@@ -96,7 +96,7 @@
   border-color: var(--workboard-control-border-hover);
 }
 
-.workboard .input:focus {
+.workboard .input:focus-visible {
   border-color: color-mix(in srgb, var(--accent) 70%, var(--border-strong));
   outline: none;
   box-shadow:
