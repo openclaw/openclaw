@@ -35,6 +35,7 @@ import {
 } from "./app-defaults.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import { connectGateway as connectGatewayInternal } from "./app-gateway.ts";
+import { resolveDashboardShortcutAction } from "./app-keyboard-shortcuts.ts";
 import {
   handleConnected,
   handleDisconnected,
@@ -716,45 +717,37 @@ export class OpenClawApp extends LitElement {
     onPopStateInternal(this as unknown as Parameters<typeof onPopStateInternal>[0]);
   topbarObserver: ResizeObserver | null = null;
   private globalKeydownHandler = (e: KeyboardEvent) => {
-    if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === "k") {
-      e.preventDefault();
-      this.paletteOpen = !this.paletteOpen;
-      if (this.paletteOpen) {
-        this.paletteQuery = "";
-        this.paletteActiveIndex = 0;
-      }
-    }
-  };
-  private chatMobileControlsKeydownHandler = (e: KeyboardEvent) => {
-    if (e.key !== "Escape") {
+    const action = resolveDashboardShortcutAction(e, {
+      tab: this.tab,
+      paletteOpen: this.paletteOpen,
+      chatNewMessagesBelow: this.chatNewMessagesBelow,
+      chatManualRefreshInFlight: this.chatManualRefreshInFlight,
+      chatMobileControlsOpen: this.chatMobileControlsOpen,
+      chatSessionPickerOpen: this.chatSessionPickerOpen,
+      navDrawerOpen: this.navDrawerOpen,
+      sessionSwitchNoticeActive: Boolean(this.sessionSwitchNotice),
+      sidebarOpen: this.sidebarOpen,
+      onboarding: this.onboarding,
+    });
+    if (!action) {
       return;
     }
-    if (this.chatSessionPickerOpen) {
-      e.preventDefault();
-      this.chatSessionPickerOpen = false;
-      this.chatSessionPickerSurface = null;
-      return;
-    }
-    const openComposerDetails = this.querySelectorAll<HTMLDetailsElement>(
-      ".chat-controls__inline-select[open], .agent-chat__talk-select[open], .agent-chat__talk-options-advanced[open]",
-    );
-    if (openComposerDetails.length > 0) {
-      e.preventDefault();
-      openComposerDetails.forEach((details) => {
-        details.open = false;
-      });
-      return;
-    }
-    if (this.realtimeTalkOptionsOpen) {
-      e.preventDefault();
-      this.realtimeTalkOptionsOpen = false;
-      return;
-    }
-    if (!this.chatMobileControlsOpen) {
-      return;
-    }
+
     e.preventDefault();
-    this.setChatMobileControlsOpen(false, { restoreFocus: true });
+    switch (action) {
+      case "toggle-palette":
+        this.toggleCommandPalette();
+        break;
+      case "focus-composer":
+        this.focusChatComposer();
+        break;
+      case "scroll-new-messages":
+        this.scrollToBottom();
+        break;
+      case "dismiss-transient":
+        this.dismissDashboardTransient();
+        break;
+    }
   };
   private chatMobileControlsPointerdownHandler = (e: Event) => {
     const path = e.composedPath();
@@ -817,7 +810,6 @@ export class OpenClawApp extends LitElement {
       }
     };
     document.addEventListener("keydown", this.globalKeydownHandler);
-    document.addEventListener("keydown", this.chatMobileControlsKeydownHandler);
     document.addEventListener("pointerdown", this.chatMobileControlsPointerdownHandler);
     handleConnected(this as unknown as Parameters<typeof handleConnected>[0]);
     this.nativeBridgeCleanup = initNativeBridge(this);
@@ -832,7 +824,6 @@ export class OpenClawApp extends LitElement {
     document.removeEventListener("keydown", this.globalKeydownHandler);
     this.nativeBridgeCleanup?.();
     this.nativeBridgeCleanup = null;
-    document.removeEventListener("keydown", this.chatMobileControlsKeydownHandler);
     document.removeEventListener("pointerdown", this.chatMobileControlsPointerdownHandler);
     if (this.sessionSwitchNoticeTimer !== null) {
       window.clearTimeout(this.sessionSwitchNoticeTimer);
@@ -938,6 +929,77 @@ export class OpenClawApp extends LitElement {
       this as unknown as Parameters<typeof applyLocalUserIdentityInternal>[0],
       next,
     );
+  }
+
+  private toggleCommandPalette() {
+    this.paletteOpen = !this.paletteOpen;
+    if (this.paletteOpen) {
+      this.paletteQuery = "";
+      this.paletteActiveIndex = 0;
+    }
+  }
+
+  private focusChatComposer() {
+    if (this.tab !== "chat") {
+      this.setTab("chat");
+    }
+    void this.updateComplete.then(() => {
+      requestAnimationFrame(() => {
+        const composer = this.querySelector<HTMLTextAreaElement>(
+          ".agent-chat__composer-combobox textarea",
+        );
+        if (!composer) {
+          return;
+        }
+        try {
+          composer.focus({ preventScroll: true });
+        } catch {
+          composer.focus();
+        }
+      });
+    });
+  }
+
+  private clearSessionSwitchNotice() {
+    if (this.sessionSwitchNoticeTimer !== null) {
+      window.clearTimeout(this.sessionSwitchNoticeTimer);
+      this.sessionSwitchNoticeTimer = null;
+    }
+    if (this.sessionSwitchFlashTimer !== null) {
+      window.clearTimeout(this.sessionSwitchFlashTimer);
+      this.sessionSwitchFlashTimer = null;
+    }
+    this.sessionSwitchNotice = null;
+    this.sessionSwitchFlashKey = null;
+  }
+
+  private dismissDashboardTransient() {
+    if (this.paletteOpen) {
+      this.paletteOpen = false;
+      this.paletteQuery = "";
+      this.paletteActiveIndex = 0;
+      return;
+    }
+    if (this.chatSessionPickerOpen) {
+      this.chatSessionPickerOpen = false;
+      this.chatSessionPickerSurface = null;
+      return;
+    }
+    if (this.chatMobileControlsOpen) {
+      this.setChatMobileControlsOpen(false, { restoreFocus: true });
+      return;
+    }
+    if (this.navDrawerOpen) {
+      this.navDrawerOpen = false;
+      return;
+    }
+    if (this.sessionSwitchNotice) {
+      this.clearSessionSwitchNotice();
+      return;
+    }
+    if (this.sidebarOpen) {
+      this.handleCloseSidebar();
+    }
   }
 
   setTab(next: Tab) {

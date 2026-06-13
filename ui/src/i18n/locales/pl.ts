@@ -1300,6 +1300,11 @@ export const pl: TranslationMap = {
     updateNow: "Aktualizuj teraz",
     dismissUpdateBanner: "Odrzuć baner aktualizacji",
     switchedSession: "Przełączono na {session}",
+    newMessages: {
+      label: "New messages",
+      shortcut: "N",
+      title: "New messages ({shortcut})",
+    },
     welcome: {
       ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",

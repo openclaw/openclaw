@@ -1295,6 +1295,11 @@ export const id: TranslationMap = {
     updateNow: "Perbarui sekarang",
     dismissUpdateBanner: "Tutup banner pembaruan",
     switchedSession: "Beralih ke {session}",
+    newMessages: {
+      label: "New messages",
+      shortcut: "N",
+      title: "New messages ({shortcut})",
+    },
     welcome: {
       ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",

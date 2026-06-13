@@ -1260,6 +1260,11 @@ export const zh_CN: TranslationMap = {
     updateNow: "立即更新",
     dismissUpdateBanner: "关闭更新横幅",
     switchedSession: "已切换到 {session}",
+    newMessages: {
+      label: "New messages",
+      shortcut: "N",
+      title: "New messages ({shortcut})",
+    },
     welcome: {
       ready: "准备好聊天",
       hintBeforeShortcut: "在下方输入消息 · 输入",

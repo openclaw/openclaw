@@ -1542,6 +1542,23 @@ describe("chat voice controls", () => {
 
     expect(onDismissError).toHaveBeenCalledTimes(1);
   });
+
+  it("shows the new-message keyboard shortcut on the jump button", () => {
+    const onScrollToBottom = vi.fn();
+    const container = renderChatView({
+      showNewMessages: true,
+      onScrollToBottom,
+    });
+
+    const button = container.querySelector<HTMLButtonElement>(".chat-new-messages");
+    expect(button?.getAttribute("aria-label")).toBe("New messages");
+    expect(button?.getAttribute("aria-keyshortcuts")).toBe("N");
+    expect(button?.getAttribute("title")).toBe("New messages (N)");
+    expect(button?.querySelector("kbd")?.textContent).toBe("N");
+
+    button?.click();
+    expect(onScrollToBottom).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("chat slash menu accessibility", () => {

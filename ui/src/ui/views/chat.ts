@@ -1360,6 +1360,15 @@ function renderSearchBar(requestUpdate: () => void): TemplateResult | typeof not
           vs.searchQuery = (e.target as HTMLInputElement).value;
           requestUpdate();
         }}
+        @keydown=${(e: KeyboardEvent) => {
+          if (e.key !== "Escape") {
+            return;
+          }
+          e.preventDefault();
+          vs.searchOpen = false;
+          vs.searchQuery = "";
+          requestUpdate();
+        }}
       />
       <button
         class="btn btn--ghost"
@@ -1595,6 +1604,8 @@ export function renderChat(props: ChatProps) {
     props.compactionStatus?.phase === "active" || props.compactionStatus?.phase === "retrying";
   const activeSession = props.sessions?.sessions?.find((row) => row.key === props.sessionKey);
   const reasoningLevel = activeSession?.reasoningLevel ?? "off";
+  const newMessagesLabel = t("chat.newMessages.label");
+  const newMessagesShortcut = t("chat.newMessages.shortcut");
   const showReasoning = props.showThinking && reasoningLevel !== "off";
   const assistantIdentity = {
     name: props.assistantName,
@@ -2109,8 +2120,15 @@ export function renderChat(props: ChatProps) {
       ${renderSideResult(props.sideResult, props.onDismissSideResult)}
       ${props.showNewMessages
         ? html`
-            <button class="chat-new-messages" type="button" @click=${props.onScrollToBottom}>
-              ${icons.arrowDown} New messages
+            <button
+              class="chat-new-messages"
+              type="button"
+              @click=${props.onScrollToBottom}
+              aria-label=${newMessagesLabel}
+              aria-keyshortcuts=${newMessagesShortcut}
+              title=${t("chat.newMessages.title", { shortcut: newMessagesShortcut })}
+            >
+              ${icons.arrowDown} <span>${newMessagesLabel}</span><kbd>${newMessagesShortcut}</kbd>
             </button>
           `
         : nothing}

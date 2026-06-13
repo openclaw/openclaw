@@ -204,6 +204,18 @@
   stroke-linejoin: round;
 }
 
+.chat-new-messages kbd {
+  display: inline-block;
+  padding: 1px 5px;
+  font-size: 10px;
+  line-height: 1.2;
+  font-family: var(--font-mono);
+  color: var(--muted);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
 .context-notice__action--busy svg {
   animation: compaction-spin 1s linear infinite;
 }

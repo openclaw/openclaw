@@ -14,6 +14,17 @@ function nextFrame() {
   });
 }
 
+function dispatchDashboardKey(target: EventTarget, key: string, init: KeyboardEventInit = {}) {
+  const event = new KeyboardEvent("keydown", {
+    key,
+    bubbles: true,
+    cancelable: true,
+    ...init,
+  });
+  target.dispatchEvent(event);
+  return event;
+}
+
 function expectElement<T extends Element>(
   root: Element,
   selector: string,
@@ -621,6 +632,18 @@ describe("control UI routing", () => {
       "chat-settings-popover--open",
     ]);
 
+    const composer = expectElement(app, "textarea", HTMLTextAreaElement);
+    composer.focus();
+    const editableEscape = dispatchDashboardKey(composer, "Escape");
+    await app.updateComplete;
+
+    expect(editableEscape.defaultPrevented).toBe(false);
+    expect(app.chatMobileControlsOpen).toBe(true);
+    expect([...expectElement(app, ".chat-settings-popover", HTMLElement).classList]).toEqual([
+      "chat-settings-popover",
+      "chat-settings-popover--open",
+    ]);
+
     document.body.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, composed: true }));
     await app.updateComplete;
 
@@ -635,6 +658,126 @@ describe("control UI routing", () => {
     app.setTab("channels");
     await app.updateComplete;
     expect(app.chatMobileControlsOpen).toBe(false);
+  });
+
+  it("routes guarded dashboard shortcuts to chat actions", async () => {
+    const app = mountApp("/sessions");
+    await app.updateComplete;
+
+    const slash = dispatchDashboardKey(document, "/");
+    await app.updateComplete;
+    await nextFrame();
+
+    expect(slash.defaultPrevented).toBe(true);
+    expect(app.tab).toBe("chat");
+    const composer = expectElement(app, "textarea", HTMLTextAreaElement);
+    expect(document.activeElement).toBe(composer);
+    composer.blur();
+
+    const scrollToBottom = vi.spyOn(app, "scrollToBottom").mockImplementation(() => undefined);
+    const inactiveJump = dispatchDashboardKey(document, "n");
+
+    expect(inactiveJump.defaultPrevented).toBe(false);
+    expect(scrollToBottom).not.toHaveBeenCalled();
+
+    app.chatNewMessagesBelow = true;
+    await app.updateComplete;
+
+    const jump = dispatchDashboardKey(document, "n");
+
+    expect(jump.defaultPrevented).toBe(true);
+    expect(scrollToBottom).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not dispatch printable dashboard shortcuts from editable targets", async () => {
+    const app = mountApp("/sessions");
+    await app.updateComplete;
+
+    app.chatNewMessagesBelow = true;
+    const scrollToBottom = vi.spyOn(app, "scrollToBottom").mockImplementation(() => undefined);
+    const richEditable = document.createElement("div");
+    richEditable.setAttribute("contenteditable", "true");
+    const plaintextEditable = document.createElement("div");
+    plaintextEditable.setAttribute("contenteditable", "plaintext-only");
+    const roleTextbox = document.createElement("div");
+    roleTextbox.setAttribute("role", "textbox");
+    roleTextbox.tabIndex = 0;
+    const targets = [
+      document.createElement("input"),
+      document.createElement("textarea"),
+      document.createElement("select"),
+      richEditable,
+      plaintextEditable,
+      roleTextbox,
+      Object.assign(document.createElement("div"), { className: "cm-editor", tabIndex: 0 }),
+      Object.assign(document.createElement("div"), { className: "monaco-editor", tabIndex: 0 }),
+    ];
+
+    for (const target of targets) {
+      document.body.append(target);
+      target.focus();
+
+      const slash = dispatchDashboardKey(target, "/");
+      const jump = dispatchDashboardKey(target, "n");
+
+      expect(slash.defaultPrevented).toBe(false);
+      expect(jump.defaultPrevented).toBe(false);
+      expect(app.tab).toBe("sessions");
+
+      target.remove();
+    }
+
+    expect(scrollToBottom).not.toHaveBeenCalled();
+  });
+
+  it("preserves the command palette shortcut in editable targets", async () => {
+    const app = mountApp("/chat");
+    await app.updateComplete;
+
+    const composer = expectElement(app, "textarea", HTMLTextAreaElement);
+    composer.focus();
+    const shortcut = dispatchDashboardKey(composer, "k", { ctrlKey: true });
+    await app.updateComplete;
+
+    expect(shortcut.defaultPrevented).toBe(true);
+    expect(app.paletteOpen).toBe(true);
+    expect(app.paletteQuery).toBe("");
+    expect(app.paletteActiveIndex).toBe(0);
+  });
+
+  it("dismisses dashboard transient state on Escape in priority order", async () => {
+    const app = mountApp("/chat");
+    await app.updateComplete;
+
+    app.chatMobileControlsOpen = true;
+    app.chatSessionPickerOpen = true;
+    app.chatSessionPickerSurface = "mobile";
+    await app.updateComplete;
+
+    const pickerEscape = dispatchDashboardKey(document, "Escape");
+    await app.updateComplete;
+
+    expect(pickerEscape.defaultPrevented).toBe(true);
+    expect(app.chatSessionPickerOpen).toBe(false);
+    expect(app.chatSessionPickerSurface).toBe(null);
+    expect(app.chatMobileControlsOpen).toBe(true);
+
+    const controlsEscape = dispatchDashboardKey(document, "Escape");
+    await app.updateComplete;
+
+    expect(controlsEscape.defaultPrevented).toBe(true);
+    expect(app.chatMobileControlsOpen).toBe(false);
+
+    app.paletteOpen = true;
+    app.paletteQuery = "agent";
+    await app.updateComplete;
+
+    const paletteEscape = dispatchDashboardKey(document, "Escape");
+    await app.updateComplete;
+
+    expect(paletteEscape.defaultPrevented).toBe(true);
+    expect(app.paletteOpen).toBe(false);
+    expect(app.paletteQuery).toBe("");
   });
 
   it("preserves session navigation without hiding the page chrome", async () => {
