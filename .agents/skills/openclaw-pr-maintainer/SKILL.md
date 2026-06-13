@@ -285,8 +285,10 @@ gh search issues --repo openclaw/openclaw --match title,body --limit 50 \
 - Leave a review conversation unresolved only when reviewer or maintainer judgment is still needed.
 - Before landing any PR with non-trivial code changes, run `$autoreview` until no accepted/actionable findings remain, unless equivalent manual review already covered it, the change is trivial/docs-only, or the user opts out.
 - When landing or merging any PR, follow the global `/landpr` process.
+- Do not edit `CHANGELOG.md` for routine PR maintenance, review follow-up, conflict repair, contributor-branch preparation, tests, docs, or feature/fix PR refreshes. Changelog edits are release-managed only and require an explicit release/changelog task.
 - Use `scripts/committer "<msg>" <file...>` for scoped commits instead of manual `git add` and `git commit`.
 - Keep commit messages concise and action-oriented.
+- Do not add assistant, agent, or non-Codex coauthor/credit trailers to commits or public PR comments unless Val explicitly asks for that attribution.
 - Group related changes; avoid bundling unrelated refactors.
 - Use `.github/pull_request_template.md` for PR submissions and `.github/ISSUE_TEMPLATE/` for issues.
 - Do not commit PR-only artifacts such as screenshots under `.github/pr-assets`; attach them to the PR/comment or use an external artifact store instead.

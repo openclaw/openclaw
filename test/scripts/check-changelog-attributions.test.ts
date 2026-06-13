@@ -1,6 +1,6 @@
 // Check Changelog Attributions tests cover check changelog attributions script behavior.
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -10,7 +10,6 @@ import {
   requiresExplicitHumanChangelogThanks,
 } from "../../scripts/check-changelog-attributions.mjs";
 
-const changelogScriptPath = path.join(process.cwd(), "scripts", "pr-lib", "changelog.sh");
 const commonScriptPath = path.join(process.cwd(), "scripts", "pr-lib", "common.sh");
 const gatesScriptPath = path.join(process.cwd(), "scripts", "pr-lib", "gates.sh");
 
@@ -50,32 +49,6 @@ function createRepoWithChangelog(content: string): string {
   const repo = mkdtempSync(path.join(os.tmpdir(), "openclaw-changelog-policy-"));
   writeFileSync(repo + "/CHANGELOG.md", content, "utf8");
   return repo;
-}
-
-function validateChangelogEntry(repo: string, contrib: string): string {
-  return run(
-    repo,
-    "bash",
-    [
-      "-c",
-      'source "$OPENCLAW_PR_CHANGELOG_SH"; validate_changelog_entry_for_pr 123 "$OPENCLAW_TEST_CONTRIB"',
-    ],
-    {
-      OPENCLAW_PR_CHANGELOG_SH: changelogScriptPath,
-      OPENCLAW_TEST_CONTRIB: contrib,
-    },
-  );
-}
-
-function validateChangelogAttributionPolicy(repo: string): string {
-  return run(
-    repo,
-    "bash",
-    ["-c", 'source "$OPENCLAW_PR_CHANGELOG_SH"; validate_changelog_attribution_policy'],
-    {
-      OPENCLAW_PR_CHANGELOG_SH: changelogScriptPath,
-    },
-  );
 }
 
 describe("check-changelog-attributions", () => {
@@ -152,47 +125,16 @@ describe("check-changelog-attributions", () => {
     expect(requiresExplicitHumanChangelogThanks("")).toBe(false);
   });
 
-  it("requires explicit human thanks for bot PR changelog entries", () => {
-    const repo = createRepoWithPrChangelogDiff("- Bot repair (#123).");
-    try {
-      let output = "";
-      try {
-        validateChangelogEntry(repo, "dependabot[bot]");
-      } catch (error) {
-        output = String((error as { stdout?: unknown }).stdout ?? error);
-      }
-      expect(output).toContain("must include an explicit human Thanks @handle");
-    } finally {
-      rmSync(repo, { recursive: true, force: true });
-    }
-  });
-
-  it("accepts explicit human thanks for bot PR changelog entries", () => {
-    const repo = createRepoWithPrChangelogDiff("- Bot repair (#123). Thanks @alice.");
-    try {
-      expect(validateChangelogEntry(repo, "dependabot[bot]")).toContain("explicit thanks");
-    } finally {
-      rmSync(repo, { recursive: true, force: true });
-    }
-  });
-
-  it("keeps non-bot forbidden contributors on the no-thanks fallback", () => {
-    const repo = createRepoWithPrChangelogDiff("- Maintainer repair (#123).");
-    try {
-      expect(validateChangelogEntry(repo, "steipete")).toContain("skipping thanks check");
-    } finally {
-      rmSync(repo, { recursive: true, force: true });
-    }
-  });
-
-  it("runs the shell attribution policy over real changelog content", () => {
+  it("runs the attribution policy CLI over real changelog content", () => {
     const forbiddenRepo = createRepoWithChangelog(
       "# Changelog\n\n## Unreleased\n\n### Fixes\n\n- Bot repair. Thanks @dependabot[bot].\n",
     );
     try {
       let output = "";
       try {
-        validateChangelogAttributionPolicy(forbiddenRepo);
+        run(forbiddenRepo, "node", [
+          path.join(process.cwd(), "scripts/check-changelog-attributions.mjs"),
+        ]);
       } catch (error) {
         output = String((error as { stderr?: unknown }).stderr ?? error);
       }
@@ -206,53 +148,52 @@ describe("check-changelog-attributions", () => {
       "# Changelog\n\n## Unreleased\n\n### Fixes\n\n- User fix. Thanks @alice.\n",
     );
     try {
-      expect(validateChangelogAttributionPolicy(allowedRepo)).toBe("");
+      expect(
+        run(allowedRepo, "node", [
+          path.join(process.cwd(), "scripts/check-changelog-attributions.mjs"),
+        ]),
+      ).toBe("");
     } finally {
       rmSync(allowedRepo, { recursive: true, force: true });
     }
   });
 
-  it("runs changelog attribution policy from prepare gates when CHANGELOG changes", () => {
+  it("rejects changelog changes from prepare gates", () => {
     const repo = createRepoWithPrChangelogDiff("- User fix (#123). Thanks @alice.");
-    const callsPath = path.join(repo, "calls.log");
     mkdirSync(path.join(repo, ".local"));
     writeFileSync(path.join(repo, ".local", "pr-meta.env"), "PR_AUTHOR=alice\n", "utf8");
     try {
-      const output = run(
-        repo,
-        "bash",
-        [
-          "-c",
-          `
+      let output = "";
+      try {
+        run(
+          repo,
+          "bash",
+          [
+            "-c",
+            `
 set -euo pipefail
 source "$OPENCLAW_PR_COMMON_SH"
-source "$OPENCLAW_PR_CHANGELOG_SH"
 source "$OPENCLAW_PR_GATES_SH"
 
 enter_worktree() { :; }
 checkout_prep_branch() { :; }
 bootstrap_deps_if_needed() { :; }
 require_artifact() { [ -s "$1" ]; }
-normalize_pr_changelog_entries() { printf 'normalize\\n' >>"$OPENCLAW_TEST_CALLS"; }
-validate_changelog_attribution_policy() { printf 'policy\\n' >>"$OPENCLAW_TEST_CALLS"; }
-validate_changelog_merge_hygiene() { printf 'merge-hygiene\\n' >>"$OPENCLAW_TEST_CALLS"; }
-validate_changelog_entry_for_pr() { printf 'entry:%s:%s\\n' "$1" "$2" >>"$OPENCLAW_TEST_CALLS"; }
-run_quiet_logged() { printf 'gate:%s\\n' "$1" >>"$OPENCLAW_TEST_CALLS"; }
+run_quiet_logged() { echo "unexpected gate: $1"; exit 99; }
 
 prepare_gates 123
 `,
-        ],
-        {
-          OPENCLAW_PR_COMMON_SH: commonScriptPath,
-          OPENCLAW_PR_CHANGELOG_SH: changelogScriptPath,
-          OPENCLAW_PR_GATES_SH: gatesScriptPath,
-          OPENCLAW_TEST_CALLS: callsPath,
-        },
-      );
-      const calls = readFileSync(callsPath, "utf8");
+          ],
+          {
+            OPENCLAW_PR_COMMON_SH: commonScriptPath,
+            OPENCLAW_PR_GATES_SH: gatesScriptPath,
+          },
+        );
+      } catch (error) {
+        output = String((error as { stdout?: unknown }).stdout ?? error);
+      }
 
-      expect(output).toContain("docs_only=true");
-      expect(calls).toContain("normalize\npolicy\n");
+      expect(output).toContain("CHANGELOG.md changes are release-managed only");
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }
