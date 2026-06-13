@@ -1018,7 +1018,11 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     errorHint: "Fix: pass --token or --password (or gatewayToken in tools).",
     configPath: context.configPath,
   });
-  if (opts.useStoredDeviceAuth && context.urlOverride) {
+  const useStoredDeviceAuth =
+    opts.useStoredDeviceAuth === true &&
+    !resolvedCredentials.token &&
+    !resolvedCredentials.password;
+  if (useStoredDeviceAuth && context.urlOverride) {
     throw new GatewayExplicitAuthRequiredError(
       "stored device auth is disabled for gateway URL overrides",
     );
@@ -1032,13 +1036,13 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
   });
   const url = connectionDetails.url;
   const tlsFingerprint = await resolveGatewayTlsFingerprint({ opts, context, url });
-  const token = opts.useStoredDeviceAuth ? undefined : resolvedCredentials.token;
-  const password = opts.useStoredDeviceAuth ? undefined : resolvedCredentials.password;
+  const token = useStoredDeviceAuth ? undefined : resolvedCredentials.token;
+  const password = useStoredDeviceAuth ? undefined : resolvedCredentials.password;
   const deviceIdentity =
     opts.deviceIdentity === undefined
       ? resolveDeviceIdentityForGatewayCall({ opts, url, token, password })
       : opts.deviceIdentity;
-  if (opts.useStoredDeviceAuth && !hasStoredOperatorDeviceAuthToken(deviceIdentity)) {
+  if (useStoredDeviceAuth && !hasStoredOperatorDeviceAuthToken(deviceIdentity)) {
     throw new GatewayCredentialsRequiredError({
       method: opts.method,
       configPath: context.configPath,
@@ -1053,7 +1057,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
   });
   return await executeGatewayRequestWithScopes<T>({
     opts,
-    scopes: opts.useStoredDeviceAuth ? undefined : scopes,
+    scopes: useStoredDeviceAuth ? undefined : scopes,
     url,
     token,
     password,

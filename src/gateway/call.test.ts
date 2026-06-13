@@ -763,6 +763,30 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.deviceIdentity).toEqual(deviceIdentityState.value);
   });
 
+  it("preserves explicit credentials instead of replacing them with stored device auth", async () => {
+    setLocalLoopbackGatewayConfig();
+
+    await callGatewayCli({
+      method: "node.list",
+      token: "explicit-token",
+      useStoredDeviceAuth: true,
+    });
+
+    expect(lastClientOptions?.token).toBe("explicit-token");
+    expect(lastClientOptions?.scopes).toEqual(["operator.read"]);
+  });
+
+  it("preserves configured remote credentials instead of sending stored device auth", async () => {
+    getRuntimeConfig.mockReturnValue(makeRemotePasswordGatewayConfig("remote-password"));
+    setGatewayNetworkDefaults();
+
+    await callGatewayCli({ method: "node.list", useStoredDeviceAuth: true });
+
+    expect(lastClientOptions?.url).toBe("wss://remote.example:18789");
+    expect(lastClientOptions?.password).toBe("remote-password");
+    expect(lastClientOptions?.scopes).toEqual(["operator.read"]);
+  });
+
   it("fails before connecting when stored device auth is unavailable", async () => {
     getRuntimeConfig.mockReturnValue({
       gateway: { mode: "local", bind: "loopback", auth: { mode: "none" } },
