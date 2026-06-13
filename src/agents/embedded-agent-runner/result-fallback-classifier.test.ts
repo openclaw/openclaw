@@ -210,7 +210,7 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     });
   });
 
-  it("classifies incomplete terminal results after replay-safe completed tool activity", () => {
+  it("does not classify incomplete terminal results when replay safety is missing", () => {
     const result = classifyEmbeddedAgentRunResultForModelFallback({
       provider: "xai",
       model: "grok-composer-2.5-fast",
@@ -232,10 +232,7 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
       },
     });
 
-    expect(result).toMatchObject({
-      reason: "format",
-      code: "incomplete_result",
-    });
+    expect(result).toBeNull();
   });
 
   it("does not classify incomplete terminal results after replay-invalid completed tool activity", () => {

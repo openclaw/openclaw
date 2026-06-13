@@ -180,7 +180,11 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
         provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryProvider,
         model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
         result: createContractRunResult({
-          meta: { durationMs: 1, toolSummary: { calls: 1, tools: ["read"] } },
+          meta: {
+            durationMs: 1,
+            replayInvalid: false,
+            toolSummary: { calls: 1, tools: ["read"] },
+          },
         }),
       }),
     ).toMatchObject({

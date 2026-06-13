@@ -1491,6 +1491,7 @@ describe("runWithModelFallback", () => {
       payloads: [],
       meta: {
         durationMs: 1,
+        replayInvalid: false,
         toolSummary: {
           calls: 1,
           tools: ["mcp_write"],

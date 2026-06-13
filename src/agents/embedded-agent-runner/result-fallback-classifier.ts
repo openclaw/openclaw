@@ -3,6 +3,7 @@ import type { FailoverReason } from "../embedded-agent-helpers/types.js";
 import type { ModelFallbackResultClassification } from "../model-fallback.js";
 import { hasDeliberateSilentTerminalReply } from "../terminal-reply.js";
 import {
+  hasCompletedToolActivityEvidence,
   hasErrorAgentPayload,
   hasSideEffectProgressEvidence,
   hasVisibleAgentPayload,
@@ -92,6 +93,12 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
     return null;
   }
   if (params.result.meta.replayInvalid === true) {
+    return null;
+  }
+  if (
+    hasCompletedToolActivityEvidence(params.result) &&
+    params.result.meta.replayInvalid !== false
+  ) {
     return null;
   }
   if (hasSideEffectProgressEvidence(params.result)) {
