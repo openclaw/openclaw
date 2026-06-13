@@ -355,7 +355,7 @@ describe("ensureApiKeyFromEnvOrPrompt", () => {
       .fn<WizardPrompter["text"]>()
       .mockResolvedValueOnce("/providers/minimax/apiKey")
       .mockResolvedValueOnce("MINIMAX_API_KEY");
-    const note = vi.fn(async () => undefined);
+    const note = vi.fn<WizardPrompter["note"]>().mockResolvedValue(undefined);
     const setCredential = vi.fn(async () => undefined);
 
     const result = await ensureMinimaxApiKeyWithEnvRefPrompter({
@@ -378,12 +378,14 @@ describe("ensureApiKeyFromEnvOrPrompt", () => {
 
     expect(result).toBe("env-key");
     expectMinimaxEnvRefCredentialStored(setCredential);
-    expect(note).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "Could not validate provider reference filemain:/providers/minimax/apiKey.",
-      ),
-      "Reference check failed",
+    const failureNote = note.mock.calls.find(([, title]) => title === "Reference check failed");
+    expect(failureNote?.[0]).toContain(
+      "Could not validate provider reference filemain:/providers/minimax/apiKey.",
     );
+    expect(failureNote?.[0]).toContain(
+      "secrets.providers.filemain.path is not readable: /tmp/does-not-exist-secrets.json",
+    );
+    expect(failureNote?.[0]).toContain("Check your provider configuration and try again.");
     expect(note).toHaveBeenCalledWith(
       expect.stringContaining(
         "secrets.providers.filemain.path is not readable: /tmp/does-not-exist-secrets.json",
