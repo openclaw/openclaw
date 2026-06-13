@@ -50,10 +50,13 @@ const collectSlackMutableAllowlistWarnings =
     },
   });
 
-const SLACK_CANONICAL_CHANNEL_ID_RE = /^[CGD][A-Z0-9]{8,}$/;
-const SLACK_LOWERCASE_CHANNEL_ID_RE = /^[cgd][0-9][a-z0-9]{7,}$/;
-const SLACK_PREFIXED_CANONICAL_CHANNEL_ID_RE = /^channel:[CGD][A-Z0-9]{8,}$/;
-const SLACK_PREFIXED_LOWERCASE_CHANNEL_ID_RE = /^channel:[cgd][0-9][a-z0-9]{7,}$/;
+const SLACK_CANONICAL_CHANNEL_ID_RE = /^[CG][A-Z0-9]{8,}$/;
+const SLACK_LOWERCASE_CHANNEL_ID_RE = /^[cg][0-9][a-z0-9]{7,}$/;
+const SLACK_PREFIXED_CANONICAL_CHANNEL_ID_RE = /^channel:[CG][A-Z0-9]{8,}$/;
+const SLACK_PREFIXED_LOWERCASE_CHANNEL_ID_RE = /^channel:[cg][0-9][a-z0-9]{7,}$/;
+const SLACK_CANONICAL_DM_ID_RE = /^(?:channel:)?D[A-Z0-9]{8,}$/;
+const SLACK_PREFIXED_LOWERCASE_DM_ID_RE = /^channel:d[a-z0-9]{8,}$/;
+const SLACK_AMBIGUOUS_LOWERCASE_DM_ID_RE = /^d[a-z0-9]{8,}$/;
 // Letter-leading lowercase forms may be valid IDs or human names. Warn conditionally instead of
 // claiming they are unroutable.
 const SLACK_AMBIGUOUS_LOWERCASE_CHANNEL_ID_RE = /^(?:channel:)?[cgd][a-z][a-z0-9]{7,}$/;
@@ -68,6 +71,12 @@ function looksLikeSlackChannelId(channelKey: string): boolean {
     SLACK_LOWERCASE_CHANNEL_ID_RE.test(channelKey) ||
     SLACK_PREFIXED_CANONICAL_CHANNEL_ID_RE.test(channelKey) ||
     SLACK_PREFIXED_LOWERCASE_CHANNEL_ID_RE.test(channelKey)
+  );
+}
+
+function looksLikeSlackDmId(channelKey: string): boolean {
+  return (
+    SLACK_CANONICAL_DM_ID_RE.test(channelKey) || SLACK_PREFIXED_LOWERCASE_DM_ID_RE.test(channelKey)
   );
 }
 
@@ -96,10 +105,8 @@ function collectSlackNameKeyedChannelWarnings({ cfg }: { cfg: OpenClawConfig }):
       typeof account.groupPolicy === "string" ? (account.groupPolicy as GroupPolicy) : undefined;
     // Slack's schema materializes this provider default before runtime account merging.
     const effectiveGroupPolicy = scopedGroupPolicy ?? "allowlist";
-    if (effectiveGroupPolicy === "disabled") {
-      continue;
-    }
     const rawAccount = asObjectRecord(accounts?.[accountId]);
+    const accountPrefix = rawAccount ? `channels.slack.accounts.${accountId}` : "channels.slack";
     const accountChannels = asObjectRecord(rawAccount?.channels);
     const channels = accountChannels ?? providerChannels;
     if (!channels) {
@@ -114,11 +121,37 @@ function collectSlackNameKeyedChannelWarnings({ cfg }: { cfg: OpenClawConfig }):
         ? 'this entry\'s overrides are ignored and the channel remains allowed by groupPolicy: "open"'
         : "messages from the channel are dropped";
     for (const channelKey of Object.keys(channels)) {
-      if (channelKey === "*" || looksLikeSlackChannelId(channelKey)) {
+      if (channelKey === "*") {
+        continue;
+      }
+      if (looksLikeSlackDmId(channelKey)) {
+        warnings.add(
+          `${channelsPrefix}.channels."${channelKey}" is a Slack DM conversation ID, but ${channelsPrefix}.channels only configures channel and group rooms. ` +
+            `Configure DM access with ${accountPrefix}.dmPolicy and ${accountPrefix}.allowFrom instead.`,
+        );
+        continue;
+      }
+      if (SLACK_AMBIGUOUS_LOWERCASE_DM_ID_RE.test(channelKey)) {
+        if (
+          account.dangerouslyAllowNameMatching === true &&
+          looksLikeSlackChannelNameKey(channelKey)
+        ) {
+          continue;
+        }
+        warnings.add(
+          `${channelsPrefix}.channels."${channelKey}" is ambiguous: it may be a lowercase Slack DM conversation ID or a channel name. ` +
+            `Configure DMs with ${accountPrefix}.dmPolicy and ${accountPrefix}.allowFrom; otherwise re-key the room with its stable C/G ID.`,
+        );
+        continue;
+      }
+      if (effectiveGroupPolicy === "disabled") {
         continue;
       }
       const channelConfig = asObjectRecord(channels[channelKey]);
       if (effectiveGroupPolicy === "open" && Object.keys(channelConfig ?? {}).length === 0) {
+        continue;
+      }
+      if (looksLikeSlackChannelId(channelKey)) {
         continue;
       }
       if (

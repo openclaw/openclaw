@@ -67,11 +67,14 @@ describe("slack doctor", () => {
     const warnings = await collectSlackWarnings({
       channels: {
         "example-channel": {},
-        development: {},
+        community: {},
         C0AL2GDUA7J: {},
         c0al2gdua7k: {},
         "channel:C0AL2GDUA7L": {},
         "channel:c0al2gdua7m": {},
+        D0AL2GDUA7Q: {},
+        "channel:d0al2gdua7r": {},
+        "channel:dabcdefgh": {},
         "channel:customers": {},
         "CHANNEL:C0AL2GDUA7N": {},
         "channel:C0al2gdua7p": {},
@@ -85,12 +88,20 @@ describe("slack doctor", () => {
     expect(nameKeyWarnings).toHaveLength(5);
     expect(nameKeyWarnings[0]).toContain('channels.slack.channels."example-channel"');
     expect(nameKeyWarnings[0]).toContain('channels.slack.channels."*" applies instead');
-    expect(nameKeyWarnings[1]).toContain('channels.slack.channels."development" is ambiguous');
+    expect(nameKeyWarnings[1]).toContain('channels.slack.channels."community" is ambiguous');
     expect(nameKeyWarnings[2]).toContain(
       'channels.slack.channels."channel:customers" is ambiguous',
     );
     expect(nameKeyWarnings[3]).toContain('channels.slack.channels."CHANNEL:C0AL2GDUA7N"');
     expect(nameKeyWarnings[4]).toContain('channels.slack.channels."channel:C0al2gdua7p"');
+    const dmWarnings = warnings.filter((warning) =>
+      warning.includes("is a Slack DM conversation ID"),
+    );
+    expect(dmWarnings).toHaveLength(3);
+    expect(dmWarnings[0]).toContain('channels.slack.channels."D0AL2GDUA7Q"');
+    expect(dmWarnings[1]).toContain('channels.slack.channels."channel:d0al2gdua7r"');
+    expect(dmWarnings[2]).toContain('channels.slack.channels."channel:dabcdefgh"');
+    expect(dmWarnings[0]).toContain("channels.slack.dmPolicy");
   });
 
   it("uses account policy and name-matching overrides for name-keyed channels (#81665)", async () => {
@@ -116,6 +127,8 @@ describe("slack doctor", () => {
             support: {},
             "#help": {},
             "crème-brûlée": {},
+            d0customers: {},
+            dabcdefgh: {},
             "channel:customers": {},
             "<#C0AL2GDUA7J>": {},
             "slack:C0AL2GDUA7K": {},
@@ -198,6 +211,69 @@ describe("slack doctor", () => {
 
     expect(warnings).toEqual([expect.stringContaining('channels.slack.channels."private-room"')]);
     expect(warnings[0]).toContain("the channel remains allowed");
+  });
+
+  it("warns for DM IDs regardless of room policy and uses account-scoped remediation", async () => {
+    const openWarnings = await collectSlackWarnings({
+      groupPolicy: "open",
+      channels: {
+        D0AL2GDUA7S: {},
+      },
+    });
+    expect(openWarnings).toEqual([
+      expect.stringContaining('channels.slack.channels."D0AL2GDUA7S"'),
+    ]);
+
+    const disabledAccountWarnings = await collectSlackWarnings({
+      accounts: {
+        work: {
+          groupPolicy: "disabled",
+          channels: {
+            "channel:d0al2gdua7t": {},
+          },
+        },
+      },
+    });
+    expect(disabledAccountWarnings).toEqual([
+      expect.stringContaining('channels.slack.accounts.work.channels."channel:d0al2gdua7t"'),
+    ]);
+    expect(disabledAccountWarnings[0]).toContain("channels.slack.accounts.work.dmPolicy");
+    expect(disabledAccountWarnings[0]).toContain("channels.slack.accounts.work.allowFrom");
+
+    const inheritedChannelWarnings = await collectSlackWarnings({
+      channels: {
+        D0AL2GDUA7U: {},
+      },
+      accounts: {
+        work: {
+          groupPolicy: "disabled",
+          dmPolicy: "allowlist",
+          allowFrom: ["U0AL2GDUA7U"],
+        },
+      },
+    });
+    expect(inheritedChannelWarnings).toEqual([
+      expect.stringContaining('channels.slack.channels."D0AL2GDUA7U"'),
+    ]);
+    expect(inheritedChannelWarnings[0]).toContain("channels.slack.accounts.work.dmPolicy");
+  });
+
+  it("treats bare lowercase D forms as ambiguous without name matching", async () => {
+    const warnings = await collectSlackWarnings({
+      channels: {
+        d0customers: {},
+        dabcdefgh: {},
+      },
+    });
+
+    expect(warnings).toHaveLength(2);
+    expect(warnings[0]).toContain(
+      'channels.slack.channels."d0customers" is ambiguous: it may be a lowercase Slack DM conversation ID or a channel name',
+    );
+    expect(warnings[1]).toContain(
+      'channels.slack.channels."dabcdefgh" is ambiguous: it may be a lowercase Slack DM conversation ID or a channel name',
+    );
+    expect(warnings[0]).toContain("stable C/G ID");
   });
 
   it("does not audit provider defaults as a standalone named account (#81665)", async () => {
