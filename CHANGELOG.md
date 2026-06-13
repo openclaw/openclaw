@@ -22,10 +22,6 @@ Docs: https://docs.openclaw.ai
 - Channels/mobile: add the QQBot group mention toggle, improve iPad and iPhone control surfaces, and expose the active connection host in the TUI footer. (#91423, #91557, #89909) Thanks @cxyhhhhh, @Solvely-Colin, and @baskduf.
 - Performance: prewarm TUI runtime plugins, deduplicate plugin auto-enable fanout, trim dense text-delta snapshots, and reuse prepared startup model metadata. (#90782, #89978, #91580, #91531) Thanks @RomneyDa and @ai-hpc.
 
-### Changes
-
-- Memory/QMD: persist a per-file export-state cache to `<qmdDir>/sessions/.export-state.json` and add a size/mtime stat fast path before `buildSessionEntry()` in `qmd-manager.exportSessions()`, so agents with thousands of session transcripts skip the full JSONL read, parse, redact, hash, and render pipeline when the source file is unchanged across boot and 5-minute interval syncs. The cache is gated by `SESSION_EXPORT_RENDER_VERSION` and the resolved export directory and is invalidated cleanly on schema, render-version, or `exportDir` mismatch. Thanks @zeroaltitude.
-
 ### Fixes
 
 - Agent/session recovery: drop stale approval follow-ups after session rebind, remove drained reply-queue items by identity, recover stale main and visible replies, preserve Codex context-engine compaction ownership, lower the default compaction timeout to 180 seconds while respecting explicit configuration, and keep provider-failure terminal lifecycle state correct. (#85679, #91450, #91566, #91840, #91590, #91361, #91895) Thanks @openperf, @yetval, @joshavant, @wangmiao0668000666, and @TurboTheTurtle.
