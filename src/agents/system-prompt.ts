@@ -486,6 +486,7 @@ function buildMessagingSection(params: {
   isMinimal: boolean;
   availableTools: Set<string>;
   inlineButtonsEnabled: boolean;
+  richTextEnabled: boolean;
   runtimeChannel?: string;
   runtimeChatType?: ChatType;
   messageChannelOptions?: string;
@@ -502,6 +503,7 @@ function buildMessagingSection(params: {
     messageToolOnly &&
     params.runtimeChannel === "discord" &&
     (params.runtimeChatType === "group" || params.runtimeChatType === "channel");
+  const telegramRichTextEnabled = params.runtimeChannel === "telegram" && params.richTextEnabled;
   const hasSessionsSpawn = params.availableTools.has("sessions_spawn");
   const hasSubagents = params.availableTools.has("subagents");
   const hasSessionsYield = params.availableTools.has("sessions_yield");
@@ -550,6 +552,9 @@ function buildMessagingSection(params: {
               : params.runtimeChannel
                 ? `- Inline buttons not enabled for ${params.runtimeChannel}. If you need them, ask to set ${params.runtimeChannel}.capabilities.inlineButtons ("dm"|"group"|"all"|"allowlist").`
                 : ""
+            : "",
+          telegramRichTextEnabled
+            ? "- Telegram rich text is available. When it improves clarity, use valid Bot API 10.1 rich Markdown/HTML in visible message text: headings, tables, blockquotes, `<details><summary>...</summary>...</details>`, `<sup>/<sub>`, `<mark>`, spoilers, lists, code blocks, footnotes, formulas, and supported rich media blocks. Button labels are plain text only."
             : "",
           ...(params.messageToolHints ?? []),
         ]
@@ -1275,6 +1280,7 @@ export function buildAgentSystemPrompt(params: {
       isMinimal,
       availableTools,
       inlineButtonsEnabled,
+      richTextEnabled: runtimeCapabilitiesLower.has("richtext"),
       runtimeChannel,
       runtimeChatType,
       messageChannelOptions,

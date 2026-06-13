@@ -1,7 +1,7 @@
 // Telegram tests cover channel actions.contract plugin behavior.
 import { installChannelActionsContractSuite } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { describe } from "vitest";
+import { describe, expect, it } from "vitest";
 import { telegramPlugin } from "../api.js";
 
 describe("telegram actions contract", () => {
@@ -21,5 +21,19 @@ describe("telegram actions contract", () => {
         expectedCapabilities: ["delivery-pin", "presentation"],
       },
     ],
+  });
+
+  it("advertises Telegram rich text to the agent prompt", () => {
+    const capabilities = telegramPlugin.agentPrompt?.messageToolCapabilities?.({
+      cfg: {
+        channels: {
+          telegram: {
+            botToken: "123:telegram-test-token",
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(capabilities).toContain("richText");
   });
 });

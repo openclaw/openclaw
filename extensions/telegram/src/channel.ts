@@ -771,7 +771,7 @@ export const telegramPlugin = createChatChannelPlugin({
           cfg,
           accountId: accountId ?? undefined,
         });
-        return inlineButtonsScope === "off" ? [] : ["inlineButtons"];
+        return inlineButtonsScope === "off" ? ["richText"] : ["inlineButtons", "richText"];
       },
       reactionGuidance: ({ cfg, accountId }) => {
         const level = resolveTelegramReactionLevel({
