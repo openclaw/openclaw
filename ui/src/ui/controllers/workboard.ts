@@ -3240,7 +3240,8 @@ export async function stopWorkboardCard(params: {
   const state = getWorkboardState(params.host);
   const sessionKey = workboardCardSessionKey(params.card);
   const task = state.tasksByCardId.get(params.card.id);
-  const taskId = params.card.taskId ?? task?.taskId;
+  const cardTaskId = normalizeString(params.card.taskId);
+  const taskId = cardTaskId && !state.missingTaskIds.has(cardTaskId) ? cardTaskId : task?.taskId;
   if (
     !params.client ||
     state.dispatching ||

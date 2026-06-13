@@ -4103,6 +4103,43 @@ describe("workboard controller", () => {
     });
   });
 
+  it("cancels a tracked replacement instead of its confirmed-missing task link", async () => {
+    const host = {};
+    const missingTaskId = "task-pruned-from-ledger";
+    const replacementTask = {
+      ...sampleTask,
+      id: "task-replacement",
+      taskId: "task-replacement",
+    };
+    const linked = {
+      ...sampleCard,
+      sessionKey: sampleTaskSessionKey,
+      runId: "run-1",
+      taskId: missingTaskId,
+    };
+    const blocked = { ...linked, status: "blocked" };
+    const state = getWorkboardState(host);
+    state.cards = [linked];
+    state.tasksByCardId.set("card-1", replacementTask);
+    state.missingTaskIds = new Set([missingTaskId]);
+    const client = createClient({
+      "tasks.cancel": { cancelled: true },
+      "chat.abort": { aborted: true, runIds: ["run-1"] },
+      "workboard.cards.update": { card: blocked },
+    });
+
+    await stopWorkboardCard({ host, client: client as never, card: linked });
+
+    expect(client.request).toHaveBeenNthCalledWith(1, "tasks.cancel", {
+      taskId: replacementTask.taskId,
+      reason: "Stopped from Workboard.",
+    });
+    expect(state.tasksByCardId.get("card-1")).toMatchObject({
+      taskId: replacementTask.taskId,
+      status: "cancelled",
+    });
+  });
+
   it("cancels unresolved task-only cards through their canonical task id", async () => {
     const host = {};
     const linked = { ...sampleCard, status: "running" as const, taskId: "task-1" };
