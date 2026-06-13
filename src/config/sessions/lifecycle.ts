@@ -165,9 +165,11 @@ export function resolveTerminalMainSessionTranscriptRegistryCheck(
   if (!hasTerminalLifecycle) {
     return undefined;
   }
-  if (params.entry.status === "failed") {
-    // Failed rows with a present transcript stay reusable for retry/recovery.
-    // Callers already rotate failed rows when the transcript is missing.
+  if (params.entry.status === "failed" || params.entry.status === "blocked") {
+    // Failed/blocked rows with a present transcript stay reusable for
+    // retry/recovery. Callers already rotate them when the transcript is
+    // missing. "blocked" was previously folded into "failed" here, so keep
+    // the same rotation behavior now that it is a distinct status.
     return undefined;
   }
   // updatedAt is touched after managed transcript appends; endedAt can predate

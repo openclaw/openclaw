@@ -75,7 +75,9 @@ function readSessionRunStatus(value: unknown): SessionRunStatus | undefined {
     value === "done" ||
     value === "failed" ||
     value === "killed" ||
-    value === "timeout"
+    value === "timeout" ||
+    value === "blocked" ||
+    value === "stale"
     ? value
     : undefined;
 }

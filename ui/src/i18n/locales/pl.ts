@@ -229,6 +229,8 @@ export const pl: TranslationMap = {
     statusFailed: "Niepowodzenie",
     statusKilled: "Zatrzymane",
     statusTimeout: "Upłynął limit czasu",
+    statusBlocked: "Blocked",
+    statusStale: "Stale",
     model: "Model",
     provider: "Dostawca",
     runtime: "Środowisko uruchomieniowe",

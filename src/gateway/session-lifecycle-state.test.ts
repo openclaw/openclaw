@@ -204,6 +204,17 @@ describe("session lifecycle state", () => {
       status: "timeout",
       abortedLastRun: false,
     },
+    {
+      name: "maps blocked liveness lifecycle errors to blocked sessions",
+      data: {
+        phase: "error",
+        error: "run blocked waiting on external input",
+        livenessState: "blocked",
+        endedAt: 1_550,
+      },
+      status: "blocked",
+      abortedLastRun: false,
+    },
   ])("$name", ({ data, status, abortedLastRun }) => {
     expectPersistedLifecyclePatch({
       data,

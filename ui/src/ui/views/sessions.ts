@@ -191,6 +191,10 @@ function formatSessionRunStatus(status: SessionRunStatus): string {
       return t("sessionsView.statusKilled");
     case "timeout":
       return t("sessionsView.statusTimeout");
+    case "blocked":
+      return t("sessionsView.statusBlocked");
+    case "stale":
+      return t("sessionsView.statusStale");
     default:
       return t("sessionsView.statusUnknown");
   }
@@ -205,6 +209,11 @@ function resolveSessionStatusBadge(row: GatewaySessionRow): {
   }
   if (row.status === "running" && row.hasActiveRun === false) {
     return { label: t("sessionsView.statusIdle"), tone: "idle" };
+  }
+  if (row.status === "stale") {
+    // A running row with no live run evidence in this gateway: surface it as a
+    // soft idle-toned warning rather than an alarming failure.
+    return { label: formatSessionRunStatus("stale"), tone: "idle" };
   }
   if (row.status) {
     const tone = row.status === "done" ? "done" : ("failed" as const);

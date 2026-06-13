@@ -229,6 +229,8 @@ export const fa: TranslationMap = {
     statusFailed: "ناموفق",
     statusKilled: "متوقف شد",
     statusTimeout: "زمان به پایان رسید",
+    statusBlocked: "Blocked",
+    statusStale: "Stale",
     model: "مدل",
     provider: "ارائه‌دهنده",
     runtime: "زمان اجرا",

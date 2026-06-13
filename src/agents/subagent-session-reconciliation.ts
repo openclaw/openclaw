@@ -152,6 +152,17 @@ export function resolveCompletionFromSessionEntry(
       reason: SUBAGENT_ENDED_REASON_KILLED,
     };
   }
+  if (status === "blocked") {
+    if (!isFreshForRun(sessionEntry, opts?.notBeforeMs)) {
+      return null;
+    }
+    return {
+      startedAt,
+      endedAt,
+      outcome: { status: "error", error: "subagent run ended blocked" },
+      reason: SUBAGENT_ENDED_REASON_ERROR,
+    };
+  }
   if (status !== "running" && typeof sessionEntry?.endedAt === "number") {
     if (!isFreshForRun(sessionEntry, opts?.notBeforeMs)) {
       return null;
