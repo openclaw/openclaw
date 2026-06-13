@@ -234,8 +234,7 @@ async function prepareGeminiCliAuthHome(
   credential: GeminiAuthProfileCredential | undefined,
 ): Promise<PreparedGeminiCliExecution | null> {
   return (
-    (await prepareGeminiCliOAuthHome(credential)) ??
-    (await prepareGeminiCliApiKeyHome(credential))
+    (await prepareGeminiCliOAuthHome(credential)) ?? (await prepareGeminiCliApiKeyHome(credential))
   );
 }
 

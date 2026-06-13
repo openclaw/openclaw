@@ -223,7 +223,9 @@ function shouldRefreshAuthProfileForExecution(params: {
   return Boolean(
     params.backendId === "google-gemini-cli" &&
     params.authProfileId &&
-    params.authCredential?.type === "oauth",
+    (params.authCredential?.type === "oauth" ||
+      params.authCredential?.type === "api_key" ||
+      params.authCredential?.type === "token"),
   );
 }
 
@@ -311,7 +313,7 @@ export async function prepareCliRunContext(
         profileId: authProfileId,
       }),
     });
-    await resolveApiKeyForProfile({
+    const resolvedAuth = await resolveApiKeyForProfile({
       cfg: params.config,
       store: writableAuthStore,
       profileId: authProfileId,
@@ -325,6 +327,14 @@ export async function prepareCliRunContext(
       }),
     });
     authCredential = authStore.profiles[authProfileId];
+    if (resolvedAuth && authCredential) {
+      authCredential =
+        authCredential.type === "api_key"
+          ? { ...authCredential, key: resolvedAuth.apiKey }
+          : authCredential.type === "token"
+            ? { ...authCredential, token: resolvedAuth.apiKey }
+            : { ...authCredential, access: resolvedAuth.apiKey };
+    }
   }
   const extraSystemPrompt = params.extraSystemPrompt?.trim() ?? "";
   // Use the static portion (excluding per-message inbound metadata) for session reuse hashing.

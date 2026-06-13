@@ -142,7 +142,9 @@ describe("google gemini cli backend auth bridge", () => {
       expect(JSON.parse(settingsRaw)).toEqual({
         security: { auth: { selectedType: "gemini-api-key" } },
       });
-      await expect(fs.access(path.join(home ?? "", ".gemini", "oauth_creds.json"))).rejects.toThrow();
+      await expect(
+        fs.access(path.join(home ?? "", ".gemini", "oauth_creds.json")),
+      ).rejects.toThrow();
     } finally {
       await prepared?.cleanup?.();
       await fs.rm(workspaceDir, { recursive: true, force: true });
