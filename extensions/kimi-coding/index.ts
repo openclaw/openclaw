@@ -45,7 +45,7 @@ export default definePluginEntry({
           hint: "Kimi K2.6 + Kimi",
           optionKey: "kimiCodeApiKey",
           flagName: "--kimi-code-api-key",
-          envVar: "KIMI_API_KEY",
+          envVar: "KIMI_CODE_API_KEY",
           promptMessage: "Enter Kimi API key",
           defaultModel: KIMI_CODING_MODEL_REF,
           expectedProviders: ["kimi", "kimi-code", "kimi-coding"],
