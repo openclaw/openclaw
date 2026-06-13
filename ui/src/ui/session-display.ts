@@ -100,6 +100,10 @@ export function resolveSessionDisplayName(
   if (displayName && displayName !== key) {
     return applyTypedPrefix(displayName);
   }
+  const derivedTitle = normalizeOptionalString(row?.derivedTitle) ?? "";
+  if (derivedTitle && derivedTitle !== key) {
+    return applyTypedPrefix(derivedTitle);
+  }
   return fallbackName;
 }
 
