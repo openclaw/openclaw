@@ -838,6 +838,31 @@ describe("tool-loop terminal fallback", () => {
     ).toBeUndefined();
   });
 
+  it("does not let a later same-tool fallback hide an earlier uncovered action", () => {
+    expect(
+      resolveSuccessfulToolTerminalFallback({
+        requireDeclaredPresentableFallback: true,
+        observations: [
+          {
+            toolName: "cron",
+            argsHash: "add",
+            resultHash: "add-result",
+            mutatingAction: true,
+          },
+          {
+            toolName: "cron",
+            argsHash: "status",
+            resultHash: "status-result",
+            terminalSummary: {
+              text: "Scheduler has 2 jobs.",
+              privacy: "public",
+            },
+          },
+        ],
+      }),
+    ).toBeUndefined();
+  });
+
   it.each([
     {
       name: "public summary",

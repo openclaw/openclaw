@@ -5912,6 +5912,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     "Can you prepare an approach for migrating the database?",
     "Can you write me a plan for deleting old backups?",
     "Could you send me a plan for deleting old backups?",
+    "Could you plan deleting old backups?",
+    "Can you outline a plan for migration?",
   ])("does not retry when the user explicitly asked only for a plan: %s", (prompt) => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "openai",
@@ -5927,6 +5929,21 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     });
 
     expect(retryInstruction).toBeNull();
+  });
+
+  it("keeps a direct plan-and-execute request actionable", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      prompt: "Could you plan and then delete old backups?",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["Plan:\n1. I'll inspect the backups\n2. I'll delete the old backups"],
+      }),
+    });
+
+    expect(retryInstruction).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
   });
 
   it("does not treat a question about the next planned action as authorization to act", () => {

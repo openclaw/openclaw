@@ -352,23 +352,21 @@ export function resolveSuccessfulToolTerminalFallback(params: {
   observations: readonly ToolLoopObservation[];
   requireDeclaredPresentableFallback?: boolean;
 }): ToolLoopFallbackResolution | undefined {
-  const successfulObservationsAfterFailures = selectSuccessfulObservationsAfterLatestToolFailure(
+  const coverageObservations = selectSuccessfulObservationsAfterLatestToolFailure(
     params.observations,
   );
-  const successfulObservations = successfulObservationsAfterFailures
-    ? selectLatestSuccessfulObservationPerTool(successfulObservationsAfterFailures)
-    : undefined;
-  if (!successfulObservations?.length) {
+  if (!coverageObservations?.length) {
     return undefined;
   }
   if (
     params.requireDeclaredPresentableFallback &&
-    !successfulObservations.every((observation) =>
+    !coverageObservations.every((observation) =>
       resolveToolOwnedPublicPayload({ successfulObservations: [observation] }),
     )
   ) {
     return undefined;
   }
+  const successfulObservations = selectLatestSuccessfulObservationPerTool(coverageObservations);
   const allSuccessfulToolNames = new Set(
     successfulObservations.map((observation) => observation.toolName),
   );
