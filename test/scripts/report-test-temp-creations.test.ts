@@ -37,6 +37,7 @@ afterEach(() => {
 
 describe("report-test-temp-creations", () => {
   it("keeps a non-executed warning fixture for changed-gate proof", () => {
+    // openclaw-temp-dir: allow test fixture for the temp warning report
     const warningFixture = 'fs.mkdtempSync("openclaw-warning-fixture-")';
 
     expect(warningFixture).toContain("mkdtempSync");
@@ -112,6 +113,54 @@ describe("report-test-temp-creations", () => {
     ]);
   });
 
+  it("honors explicit allow comments with reasons", () => {
+    const mkdtempCall = ["fs.", "mkdtemp", 'Sync("case-")'].join("");
+    const tmpDirCall = ["tmp.", "dir", 'Sync({ prefix: "case-" })'].join("");
+    const allowedSource = `const allowed = ${mkdtempCall};`;
+    const inlineAllowedSource = `const inlineAllowed = ${tmpDirCall}; // openclaw-temp-dir: allow verifies tmp API behavior`;
+    const blockedSource = `const blocked = ${mkdtempCall};`;
+    const stringMarkerSource = `const stringMarker = ${mkdtempCall}; const note = "openclaw-temp-dir: allow quoted text";`;
+    const emptyReasonSource = `const emptyReason = ${mkdtempCall};`;
+    const diff = [
+      "diff --git a/test/helpers/raw-temp.test.ts b/test/helpers/raw-temp.test.ts",
+      "--- a/test/helpers/raw-temp.test.ts",
+      "+++ b/test/helpers/raw-temp.test.ts",
+      "@@ -1,0 +2,5 @@",
+      "+// openclaw-temp-dir: allow verifies raw fs cleanup behavior",
+      `+${allowedSource}`,
+      `+${inlineAllowedSource}`,
+      `+${blockedSource}`,
+      `+${stringMarkerSource}`,
+      "diff --git a/test/helpers/empty-allow.test.ts b/test/helpers/empty-allow.test.ts",
+      "--- a/test/helpers/empty-allow.test.ts",
+      "+++ b/test/helpers/empty-allow.test.ts",
+      "@@ -1,0 +2,2 @@",
+      "+// openclaw-temp-dir: allow",
+      `+${emptyReasonSource}`,
+    ].join("\n");
+
+    expect(collectTempCreationFindingsFromDiff(diff)).toEqual([
+      {
+        file: "test/helpers/raw-temp.test.ts",
+        line: 5,
+        reason: "new mkdtemp temp directory creation",
+        source: blockedSource,
+      },
+      {
+        file: "test/helpers/raw-temp.test.ts",
+        line: 6,
+        reason: "new mkdtemp temp directory creation",
+        source: stringMarkerSource,
+      },
+      {
+        file: "test/helpers/empty-allow.test.ts",
+        line: 3,
+        reason: "new mkdtemp temp directory creation",
+        source: emptyReasonSource,
+      },
+    ]);
+  });
+
   it("prints help with usage, outputs, and examples", () => {
     const output = execFileSync(
       process.execPath,
@@ -134,6 +183,7 @@ describe("report-test-temp-creations", () => {
         file: "test/helpers/temp,fixture.ts",
         line: 12,
         reason: "new mkdtemp temp directory creation",
+        // openclaw-temp-dir: allow test fixture for GitHub warning formatting
         source: "const tempRoot = fs.mkdtempSync();",
       }),
     ).toBe(

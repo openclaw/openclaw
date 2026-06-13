@@ -64,9 +64,17 @@ it("uses a temp workspace", () => {
 
 Use `makeTempDir(tempDirs, prefix)` and `cleanupTempDirs(tempDirs)` when a test
 already owns an array or set of paths. Avoid new bare `fs.mkdtemp*` calls in
-tests unless a case is explicitly verifying raw temp-dir behavior. For
-migration visibility, `node scripts/report-test-temp-creations.mjs` reports new
-bare temp-dir creation in added diff lines without blocking existing cleanup
+tests unless a case is explicitly verifying raw temp-dir behavior. Add an
+auditable allow comment with a concrete reason when a test intentionally needs a
+bare temp directory:
+
+```ts
+// openclaw-temp-dir: allow verifies raw fs cleanup behavior
+const workspace = fs.mkdtempSync(prefix);
+```
+
+For migration visibility, `node scripts/report-test-temp-creations.mjs` reports
+new bare temp-dir creation in added diff lines without blocking existing cleanup
 styles. Its file scope intentionally follows the same test-path classification
 used by `scripts/changed-lanes.mjs` instead of maintaining a separate test-helper
 filename heuristic. `check:changed` runs this report for changed test paths as a

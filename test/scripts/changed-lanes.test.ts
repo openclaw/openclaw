@@ -146,6 +146,7 @@ afterEach(() => {
 
 describe("scripts/changed-lanes", () => {
   it("keeps a non-executed changed-gate warning fixture", () => {
+    // openclaw-temp-dir: allow test fixture for the temp warning report
     const warningFixture = 'fs.mkdtemp("openclaw-warning-fixture-", () => {})';
 
     expect(warningFixture).toContain("mkdtemp");

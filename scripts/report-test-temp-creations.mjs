@@ -17,6 +17,8 @@ const FINDING_PATTERNS = [
     reason: "new tmp.dir temp directory creation",
   },
 ];
+const TEMP_DIR_ALLOW_COMMENT_RE =
+  /(?:^|\s)(?:\/\/|\/\*|\*|#)\s*openclaw-temp-dir:\s*allow\s+(.+)$/u;
 
 function usage() {
   return `Usage: node scripts/report-test-temp-creations.mjs [options]
@@ -25,6 +27,8 @@ Description:
   Reports new bare test temp-directory creation patterns in added diff lines.
   This is a low-noise migration aid, not a cleanup data-flow checker. It does
   not scan existing lines and does not decide whether cleanup is sufficient.
+  Add "openclaw-temp-dir: allow <reason>" in a same-line or immediately
+  preceding added comment when a test intentionally needs bare temp creation.
   File scope intentionally reuses scripts/changed-lanes.mjs test-path
   classification instead of maintaining a separate test-helper heuristic.
 
@@ -71,6 +75,16 @@ function escapeGithubCommandValue(value) {
 
 function escapeGithubCommandProperty(value) {
   return escapeGithubCommandValue(value).replaceAll(":", "%3A").replaceAll(",", "%2C");
+}
+
+function hasTempDirAllowMarker(source) {
+  const reason = source.match(TEMP_DIR_ALLOW_COMMENT_RE)?.[1]?.trim() ?? "";
+  return reason.length > 0;
+}
+
+function isTempDirAllowComment(source) {
+  const trimmed = source.trim();
+  return /^(?:\/\/|\/\*|\*|#)/u.test(trimmed) && hasTempDirAllowMarker(trimmed);
 }
 
 export function formatGithubWarning(finding) {
@@ -121,44 +135,57 @@ export function collectTempCreationFindingsFromDiff(diffText) {
   const findings = [];
   let currentFile = null;
   let currentLine = 0;
+  let allowNextLine = null;
 
   for (const line of diffText.split(/\r?\n/u)) {
     const fileMatch = line.match(/^\+\+\+ b\/(.+)$/u);
     if (fileMatch) {
       currentFile = normalizePath(fileMatch[1]);
+      allowNextLine = null;
       continue;
     }
     if (line === "+++ /dev/null") {
       currentFile = null;
+      allowNextLine = null;
       continue;
     }
 
     const hunkMatch = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/u);
     if (hunkMatch) {
       currentLine = Number.parseInt(hunkMatch[1], 10);
+      allowNextLine = null;
       continue;
     }
 
     if (line.startsWith("+") && !line.startsWith("+++")) {
       if (currentFile && isTestFile(currentFile)) {
         const source = line.slice(1);
+        const allowed =
+          hasTempDirAllowMarker(source) ||
+          (allowNextLine?.file === currentFile && allowNextLine.line === currentLine);
         for (const { pattern, reason } of FINDING_PATTERNS) {
           if (pattern.test(source)) {
-            findings.push({
-              file: currentFile,
-              line: currentLine,
-              reason,
-              source: source.trim(),
-            });
+            if (!allowed) {
+              findings.push({
+                file: currentFile,
+                line: currentLine,
+                reason,
+                source: source.trim(),
+              });
+            }
             break;
           }
         }
+        allowNextLine = isTempDirAllowComment(source)
+          ? { file: currentFile, line: currentLine + 1 }
+          : null;
       }
       currentLine += 1;
       continue;
     }
 
     if (line.startsWith(" ") || line === "") {
+      allowNextLine = null;
       currentLine += 1;
     }
   }
