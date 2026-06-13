@@ -178,7 +178,7 @@ describe("tool-loop terminal fallback", () => {
     ).toBeUndefined();
   });
 
-  it("does not reuse a stale success after the blocked tool later fails", () => {
+  it("does not return a loop-abort fallback after an unresolved blocked-tool failure", () => {
     expect(
       resolveToolLoopAbortFallbackPayload({
         observations: [
@@ -205,11 +205,36 @@ describe("tool-loop terminal fallback", () => {
           },
         ],
       }),
-    ).toEqual({
-      text:
-        "I stopped because status repeated the same tool call without progress. " +
-        "No user-facing result text was provided.",
-    });
+    ).toBeUndefined();
+  });
+
+  it("does not hide an unresolved other-tool failure behind a loop-abort fallback", () => {
+    expect(
+      resolveToolLoopAbortFallbackPayload({
+        observations: [
+          {
+            toolName: "status",
+            argsHash: "current",
+            resultHash: "success-result",
+            resultText: "healthy",
+            terminalResultFallback: { mode: "safe_text", prefix: "Status:" },
+          },
+          {
+            toolName: "write",
+            argsHash: "update",
+            resultHash: "failed-result",
+            failed: true,
+            mutatingAction: true,
+          },
+          {
+            toolName: "status",
+            argsHash: "current",
+            resultHash: "blocked",
+            blockedReason: "tool-loop",
+          },
+        ],
+      }),
+    ).toBeUndefined();
   });
 
   it("uses a blocked tool success that occurred after its latest failure", () => {

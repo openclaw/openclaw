@@ -333,15 +333,15 @@ export function resolveToolLoopAbortFallback(params: {
     return undefined;
   }
 
-  const blockedToolObservations = params.observations
-    .slice(0, blockedObservationIndex)
-    .filter((observation) => observation.toolName === blockedObservation.toolName);
-  const lastFailureIndex = blockedToolObservations.findLastIndex(
-    (observation) => observation.failed === true,
+  const coverageObservations = selectSuccessfulObservationsAfterLatestToolFailure(
+    params.observations.slice(0, blockedObservationIndex),
   );
-  const blockedToolSuccessfulObservations = blockedToolObservations
-    .slice(lastFailureIndex + 1)
-    .filter(isSuccessfulObservation);
+  if (!coverageObservations) {
+    return undefined;
+  }
+  const blockedToolSuccessfulObservations = coverageObservations.filter(
+    (observation) => observation.toolName === blockedObservation.toolName,
+  );
   const toolOwnedPublicPayload = resolveToolOwnedPublicPayload({
     successfulObservations: blockedToolSuccessfulObservations,
   });

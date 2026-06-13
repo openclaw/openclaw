@@ -115,6 +115,7 @@ import { resolveContextEngineCapabilities } from "./context-engine-capabilities.
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 import {
   hasMessagingToolDeliveryEvidence,
+  hasMessagingToolSideEffectEvidence,
   hasSideEffectProgressEvidence,
   hasVisibleOutboundDeliveryEvidence,
 } from "./delivery-evidence.js";
@@ -3435,6 +3436,7 @@ export async function runEmbeddedAgent(
             .toLowerCase();
           const recoveredFinalAssistantCandidateAfterPromptTimeout =
             timedOutDuringPrompt &&
+            !hasMessagingToolSideEffectEvidence(attempt) &&
             ["completed", "end_turn", "stop"].includes(finalAssistantStopReason)
               ? (finalAssistantVisibleText ?? finalAssistantRawText)?.trim()
               : undefined;

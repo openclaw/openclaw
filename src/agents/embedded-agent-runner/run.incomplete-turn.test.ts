@@ -6176,6 +6176,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     "Could you plan and then delete old backups?",
     "Please make a plan and then delete old backups.",
     "Can you outline a plan and then delete old backups?",
+    "Please plan, execute, and report the migration.",
+    "Please plan, fix, and verify the failing shard.",
   ])("keeps plan-and-execute request actionable: %s", (prompt) => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "openai",
