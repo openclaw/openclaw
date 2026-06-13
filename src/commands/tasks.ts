@@ -4,6 +4,7 @@
 import fs from "node:fs";
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { TasksCancelResult } from "../../packages/gateway-protocol/src/index.js";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { formatLookupMiss } from "../cli/error-format.js";
@@ -16,6 +17,11 @@ import {
   type SessionEntry,
 } from "../config/sessions.js";
 import { loadCronJobsStoreSync, resolveCronJobsStorePath } from "../cron/store.js";
+import {
+  callGateway,
+  isGatewayCredentialsRequiredError,
+  isGatewayTransportError,
+} from "../gateway/call.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { getTaskById, updateTaskNotifyPolicyById } from "../tasks/runtime-internal.js";
@@ -45,6 +51,7 @@ import {
 } from "../tasks/task-registry.reconcile.js";
 import { summarizeTaskRecords } from "../tasks/task-registry.summary.js";
 import type { TaskNotifyPolicy, TaskRecord } from "../tasks/task-registry.types.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
   buildTaskSystemAuditFindings,
   type TaskSystemAuditCode,
@@ -76,6 +83,29 @@ function formatTaskTimestamp(value: number | undefined): string {
 
 async function loadTaskCancelConfig() {
   return getRuntimeConfig();
+}
+
+async function tryCancelTaskViaGateway(params: {
+  cfg: Awaited<ReturnType<typeof loadTaskCancelConfig>>;
+  taskId: string;
+}): Promise<TasksCancelResult | null> {
+  try {
+    return await callGateway<TasksCancelResult>({
+      config: params.cfg,
+      method: "tasks.cancel",
+      params: {
+        taskId: params.taskId,
+      },
+      mode: GATEWAY_CLIENT_MODES.CLI,
+      clientName: GATEWAY_CLIENT_NAMES.CLI,
+      requiredMethods: ["tasks.cancel"],
+    });
+  } catch (error) {
+    if (isGatewayTransportError(error) || isGatewayCredentialsRequiredError(error)) {
+      return null;
+    }
+    throw error;
+  }
 }
 
 function configureTaskMaintenanceFromConfig(): void {
@@ -498,10 +528,17 @@ export async function tasksCancelCommand(opts: { lookup: string }, runtime: Runt
     runtime.exit(1);
     return;
   }
-  const result = await cancelDetachedTaskRunById({
-    cfg: await loadTaskCancelConfig(),
+  const cfg = await loadTaskCancelConfig();
+  const gatewayResult = await tryCancelTaskViaGateway({
+    cfg,
     taskId: task.taskId,
   });
+  const result =
+    gatewayResult ??
+    (await cancelDetachedTaskRunById({
+      cfg,
+      taskId: task.taskId,
+    }));
   if (!result.found) {
     runtime.error(result.reason ?? formatTaskLookupMiss(opts.lookup));
     runtime.exit(1);
@@ -513,8 +550,11 @@ export async function tasksCancelCommand(opts: { lookup: string }, runtime: Runt
     return;
   }
   const updated = getTaskById(task.taskId);
+  const gatewayTask = gatewayResult?.task;
+  const runtimeName = updated?.runtime ?? gatewayTask?.runtime ?? task.runtime;
+  const runId = updated?.runId ?? gatewayTask?.runId;
   runtime.log(
-    `Cancelled ${updated?.taskId ?? task.taskId} (${updated?.runtime ?? task.runtime})${updated?.runId ? ` run ${updated.runId}` : ""}.`,
+    `Cancelled ${updated?.taskId ?? gatewayTask?.taskId ?? task.taskId} (${runtimeName})${runId ? ` run ${runId}` : ""}.`,
   );
 }
 

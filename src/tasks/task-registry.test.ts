@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AcpSessionStoreEntry } from "../acp/runtime/session-meta.js";
 import { startAcpSpawnParentStreamRelay } from "../agents/acp-spawn-parent-stream.js";
-import { resetCronActiveJobsForTests } from "../cron/active-jobs.js";
+import { markCronJobActive, resetCronActiveJobsForTests } from "../cron/active-jobs.js";
 import {
   emitAgentEvent,
   registerAgentRunContext,
@@ -3523,6 +3523,66 @@ describe("task-registry", () => {
       expectRecordFields(result.task, {
         taskId: task.taskId,
         status: "cancelled",
+      });
+    });
+  });
+
+  it("cancels active cron tasks through the cron active job registry", async () => {
+    await withTaskRegistryTempDir(async () => {
+      const cancelCronJob = vi.fn();
+      const task = createTaskRecord({
+        runtime: "cron",
+        sourceId: "cron-job-cancel",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "cron-run-cancel",
+        task: "Recurring job",
+        status: "running",
+        deliveryStatus: "pending",
+      });
+      markCronJobActive("cron-job-cancel", cancelCronJob);
+
+      const result = await cancelTaskById({
+        cfg: {} as never,
+        taskId: task.taskId,
+      });
+
+      expect(cancelCronJob).toHaveBeenCalledWith("Cancelled by operator.");
+      expectRecordFields(result, {
+        found: true,
+        cancelled: true,
+      });
+      expectRecordFields(result.task, {
+        taskId: task.taskId,
+        status: "cancelled",
+        error: "Cancelled by operator.",
+      });
+    });
+  });
+
+  it("reports cron tasks that are not active in this Gateway process", async () => {
+    await withTaskRegistryTempDir(async () => {
+      const task = createTaskRecord({
+        runtime: "cron",
+        sourceId: "cron-job-inactive",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "cron-run-inactive",
+        task: "Recurring job",
+        status: "running",
+        deliveryStatus: "pending",
+      });
+
+      const result = await cancelTaskById({
+        cfg: {} as never,
+        taskId: task.taskId,
+      });
+
+      expect(result).toEqual({
+        found: true,
+        cancelled: false,
+        reason: "Cron job is not running in this Gateway process.",
+        task,
       });
     });
   });

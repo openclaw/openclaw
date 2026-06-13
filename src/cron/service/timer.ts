@@ -15,7 +15,7 @@ import {
 } from "../../routing/session-key.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
-import { clearCronJobActive, markCronJobActive } from "../active-jobs.js";
+import { clearCronJobActive, markCronJobActive, registerCronJobCancel } from "../active-jobs.js";
 import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-plan.js";
 import { resolveCronExecutionRetryHint } from "../retry-hint.js";
 import {
@@ -123,56 +123,70 @@ export async function executeJobCoreWithTimeout(
   job: CronJob,
 ): Promise<Awaited<ReturnType<typeof executeJobCore>>> {
   const jobTimeoutMs = resolveCronJobTimeoutMs(job);
-  if (typeof jobTimeoutMs !== "number") {
-    return await executeJobCore(state, job);
-  }
-
   const runAbortController = new AbortController();
-  let timeoutReason: string | undefined;
-  const timeoutMarker = Symbol("cron-timeout");
-  let resolveTimeout: ((value: typeof timeoutMarker) => void) | undefined;
-  const timeoutPromise = new Promise<typeof timeoutMarker>((resolve) => {
-    resolveTimeout = resolve;
+  let abortReason: string | undefined;
+  let abortKind: "cancel" | "timeout" | undefined;
+  const abortMarker = Symbol("cron-abort");
+  let resolveAbort: ((value: typeof abortMarker) => void) | undefined;
+  const abortPromise = new Promise<typeof abortMarker>((resolve) => {
+    resolveAbort = resolve;
   });
 
   // Detached agent runs report setup phases separately; defer the wall-clock
   // timeout until the runner starts so cold setup gets a clearer failure reason.
   const deferTimeoutUntilExecutionStart =
-    job.sessionTarget !== "main" && job.payload.kind === "agentTurn";
-  const triggerTimeout = (reason: string) => {
+    typeof jobTimeoutMs === "number" &&
+    job.sessionTarget !== "main" &&
+    job.payload.kind === "agentTurn";
+  const triggerAbort = (kind: "cancel" | "timeout", reason: string) => {
     if (runAbortController.signal.aborted) {
       return;
     }
-    timeoutReason = reason;
+    abortKind = kind;
+    abortReason = reason;
     runAbortController.abort(reason);
-    resolveTimeout?.(timeoutMarker);
+    resolveAbort?.(abortMarker);
   };
-  const watchdog = createCronAgentWatchdog({
-    deferUntilRunner: deferTimeoutUntilExecutionStart,
-    jobTimeoutMs,
-    triggerTimeout,
-  });
+  const unregisterCancel = registerCronJobCancel(job.id, (reason) => triggerAbort("cancel", reason));
+  const watchdog =
+    typeof jobTimeoutMs === "number"
+      ? createCronAgentWatchdog({
+          deferUntilRunner: deferTimeoutUntilExecutionStart,
+          jobTimeoutMs,
+          triggerTimeout: (reason) => triggerAbort("timeout", reason),
+        })
+      : undefined;
   const corePromise = executeJobCore(state, job, runAbortController.signal, {
-    onExecutionStarted: deferTimeoutUntilExecutionStart ? watchdog.noteRunnerStarted : undefined,
-    onExecutionPhase: deferTimeoutUntilExecutionStart ? watchdog.notePhase : undefined,
+    onExecutionStarted: deferTimeoutUntilExecutionStart ? watchdog?.noteRunnerStarted : undefined,
+    onExecutionPhase: deferTimeoutUntilExecutionStart ? watchdog?.notePhase : undefined,
   });
-  watchdog.start();
+  watchdog?.start();
   void corePromise.catch((err: unknown) => {
     if (runAbortController.signal.aborted) {
       state.deps.log.warn(
         { jobId: job.id, err: String(err) },
-        "cron: job core rejected after timeout abort",
+        "cron: job core rejected after abort",
       );
     }
   });
   try {
-    const first = await Promise.race([corePromise, timeoutPromise]);
-    if (first !== timeoutMarker) {
+    const first = await Promise.race([corePromise, abortPromise]);
+    if (first !== abortMarker) {
       return first;
     }
-    const activeExecution = watchdog.activeExecution();
-    await cleanupTimedOutCronAgentRun(state, job, jobTimeoutMs, activeExecution);
-    const error = timeoutReason ?? timeoutErrorMessage(activeExecution);
+    if (abortKind === "timeout") {
+      const activeExecution = watchdog?.activeExecution();
+      await cleanupTimedOutCronAgentRun(state, job, jobTimeoutMs ?? 0, activeExecution);
+      const error = abortReason ?? timeoutErrorMessage(activeExecution);
+      return {
+        status: "error",
+        error,
+        diagnostics: createCronRunDiagnosticsFromError("cron-setup", error, {
+          nowMs: state.deps.nowMs,
+        }),
+      };
+    }
+    const error = abortReason ?? abortErrorMessage(runAbortController.signal);
     return {
       status: "error",
       error,
@@ -181,7 +195,8 @@ export async function executeJobCoreWithTimeout(
       }),
     };
   } finally {
-    watchdog.dispose();
+    unregisterCancel();
+    watchdog?.dispose();
   }
 }
 

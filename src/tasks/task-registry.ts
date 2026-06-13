@@ -9,6 +9,7 @@ import {
 } from "../agents/agent-run-terminal-outcome.js";
 import { shouldRouteCompletionThroughRequesterSession } from "../auto-reply/reply/completion-delivery-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { cancelCronJobActive } from "../cron/active-jobs.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
@@ -2079,7 +2080,21 @@ export async function cancelTaskById(params: {
   }
   const childSessionKey = task.childSessionKey?.trim();
   try {
-    if (task.runtime !== "cli") {
+    if (task.runtime === "cron") {
+      const jobId = task.sourceId?.trim();
+      const cronCancel = cancelCronJobActive(
+        jobId ?? "",
+        params.reason?.trim() || "Cancelled by operator.",
+      );
+      if (!cronCancel.found || !cronCancel.cancelled) {
+        return {
+          found: true,
+          cancelled: false,
+          reason: cronCancel.reason ?? "Cron job is not cancellable.",
+          task: cloneTaskRecord(task),
+        };
+      }
+    } else if (task.runtime !== "cli") {
       if (!childSessionKey) {
         if (!isChildlessCodexNativeSubagentTask(task)) {
           return {

@@ -7,6 +7,7 @@ import { createCronServiceState } from "../../cron/service/state.js";
 import { executeJobCore, onTimer } from "../../cron/service/timer.js";
 import { loadCronStore } from "../../cron/store.js";
 import type { CronJob } from "../../cron/types.js";
+import { cancelCronJobActive, resetCronActiveJobsForTests } from "../active-jobs.js";
 import * as detachedTaskRuntime from "../../tasks/detached-task-runtime.js";
 import { findTaskByRunId, resetTaskRegistryForTests } from "../../tasks/task-registry.js";
 import { formatTaskStatusDetail } from "../../tasks/task-status.js";
@@ -48,6 +49,7 @@ function createDueIsolatedAgentJob(params: { now: number }): CronJob {
 }
 
 afterEach(() => {
+  resetCronActiveJobsForTests();
   resetTaskRegistryForTests();
 });
 
@@ -270,6 +272,62 @@ describe("cron service timer seam coverage", () => {
 
     resolveRun?.({ status: "ok", summary: "done" });
     await timerRun;
+  });
+
+  it("aborts no-timeout isolated cron runs when the active cron task is cancelled", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeat = vi.fn();
+    let observedAbortSignal: AbortSignal | undefined;
+    const runIsolatedAgentJob = vi.fn(async (params: { abortSignal?: AbortSignal }) => {
+      observedAbortSignal = params.abortSignal;
+      await new Promise<void>((resolve) => {
+        if (!params.abortSignal || params.abortSignal.aborted) {
+          resolve();
+          return;
+        }
+        params.abortSignal.addEventListener("abort", () => resolve(), { once: true });
+      });
+      if (params.abortSignal?.aborted) {
+        return { status: "error" as const, error: String(params.abortSignal.reason) };
+      }
+      return { status: "ok" as const, summary: "done" };
+    });
+    const job = createDueIsolatedAgentJob({ now });
+    job.payload = { kind: "agentTurn", message: "run isolated cron", timeoutSeconds: 0 };
+
+    await writeCronStoreSnapshot({
+      storePath,
+      jobs: [job],
+    });
+
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      log: logger,
+      nowMs: () => now,
+      enqueueSystemEvent,
+      requestHeartbeat,
+      runIsolatedAgentJob,
+    });
+
+    const timerRun = onTimer(state);
+    await vi.waitFor(() => {
+      expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+    });
+
+    expect(cancelCronJobActive("isolated-agent-job", "operator requested cancellation")).toEqual({
+      found: true,
+      cancelled: true,
+    });
+    await timerRun;
+
+    expect(observedAbortSignal?.aborted).toBe(true);
+    const persisted = await loadCronStore(storePath);
+    const persistedJob = persisted.jobs.find((entry) => entry.id === "isolated-agent-job");
+    expect(persistedJob?.state.lastStatus).toBe("error");
+    expect(persistedJob?.state.lastError).toContain("operator requested cancellation");
   });
 
   it("keeps scheduler progress when task ledger creation fails", async () => {

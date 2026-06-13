@@ -13,12 +13,32 @@ import {
   createTaskRecord as createTaskRecordOrNull,
   resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
+  getTaskById,
 } from "../tasks/task-registry.js";
 import * as taskRegistryMaintenance from "../tasks/task-registry.maintenance.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { tasksAuditCommand, tasksMaintenanceCommand, tasksShowCommand } from "./tasks.js";
+import {
+  tasksAuditCommand,
+  tasksCancelCommand,
+  tasksMaintenanceCommand,
+  tasksShowCommand,
+} from "./tasks.js";
+
+const gatewayMocks = vi.hoisted(() => ({
+  callGateway: vi.fn(),
+  isGatewayCredentialsRequiredError: vi.fn(() => false),
+  isGatewayTransportError: vi.fn(
+    (error: unknown) => error instanceof Error && error.name === "GatewayTransportError",
+  ),
+}));
+
+vi.mock("../gateway/call.js", () => ({
+  callGateway: gatewayMocks.callGateway,
+  isGatewayCredentialsRequiredError: gatewayMocks.isGatewayCredentialsRequiredError,
+  isGatewayTransportError: gatewayMocks.isGatewayTransportError,
+}));
 
 function createRuntime(): RuntimeEnv {
   return {
@@ -96,6 +116,69 @@ describe("tasks commands", () => {
     resetTaskRegistryDeliveryRuntimeForTests();
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
+    gatewayMocks.callGateway.mockReset();
+    gatewayMocks.isGatewayCredentialsRequiredError.mockClear();
+    gatewayMocks.isGatewayTransportError.mockClear();
+  });
+
+  it("routes task cancellation through the Gateway when available", async () => {
+    await withTaskCommandStateDir(async () => {
+      const task = createTaskRecord({
+        runtime: "cron",
+        sourceId: "cron-job-1",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "cron-run-1",
+        status: "running",
+        task: "Run cron job",
+      });
+      gatewayMocks.callGateway.mockResolvedValue({
+        found: true,
+        cancelled: true,
+        task: {
+          id: task.taskId,
+          taskId: task.taskId,
+          runtime: "cron",
+          status: "cancelled",
+          runId: "cron-run-1",
+        },
+      });
+
+      const runtime = createRuntime();
+      await tasksCancelCommand({ lookup: task.taskId }, runtime);
+
+      expect(gatewayMocks.callGateway).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: "tasks.cancel",
+          params: { taskId: task.taskId },
+          requiredMethods: ["tasks.cancel"],
+        }),
+      );
+      expect(runtime.log).toHaveBeenCalledWith(`Cancelled ${task.taskId} (cron) run cron-run-1.`);
+    });
+  });
+
+  it("falls back to local task cancellation when the Gateway is unavailable", async () => {
+    await withTaskCommandStateDir(async () => {
+      const task = createTaskRecord({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "cli-run-1",
+        status: "running",
+        task: "Run local task",
+      });
+      const transportError = new Error("gateway unavailable");
+      transportError.name = "GatewayTransportError";
+      gatewayMocks.callGateway.mockRejectedValue(transportError);
+
+      const runtime = createRuntime();
+      await tasksCancelCommand({ lookup: task.taskId }, runtime);
+
+      expect(gatewayMocks.callGateway).toHaveBeenCalledOnce();
+      expect(getTaskById(task.taskId)?.status).toBe("cancelled");
+      expect(runtime.log).toHaveBeenCalledWith(`Cancelled ${task.taskId} (cli) run cli-run-1.`);
+    });
   });
 
   it("keeps audit JSON stable and sorts combined findings before limiting", async () => {
