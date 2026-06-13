@@ -357,6 +357,34 @@ export async function rejectNodePairing(
   });
 }
 
+/** Reject every pending request for one node while preserving its approved record. */
+export async function rejectPendingNodePairingRequestsForNode(
+  nodeId: string,
+  baseDir?: string,
+): Promise<NodePairingSupersededRequest[]> {
+  return await withLock(async () => {
+    const state = await loadState(baseDir);
+    const normalized = normalizeNodeId(nodeId);
+    if (!normalized) {
+      return [];
+    }
+    const rejected = Object.values(state.pendingById)
+      .filter((pending) => pending.nodeId === normalized)
+      .toSorted((left, right) => right.ts - left.ts);
+    if (rejected.length === 0) {
+      return [];
+    }
+    for (const pending of rejected) {
+      delete state.pendingById[pending.requestId];
+    }
+    await persistState(state, baseDir);
+    return rejected.map((pending) => ({
+      requestId: pending.requestId,
+      nodeId: pending.nodeId,
+    }));
+  });
+}
+
 /** Remove a paired node without disturbing unrelated pending requests. */
 export async function removePairedNode(
   nodeId: string,

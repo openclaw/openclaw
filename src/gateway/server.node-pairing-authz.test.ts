@@ -356,8 +356,14 @@ describe("gateway node pairing authorization", () => {
           pendingRequestId?: string;
         }>;
       }>({
-        url: `ws://127.0.0.1:${getStarted().port}`,
-        token: "secret",
+        config: {
+          gateway: {
+            mode: "local",
+            bind: "loopback",
+            port: getStarted().port,
+            auth: { mode: "token", token: "secret" },
+          },
+        },
         method: "node.list",
         scopes: ["operator.read", "operator.pairing"],
         requireLocalBackendSharedAuth: true,
@@ -448,6 +454,50 @@ describe("gateway node pairing authorization", () => {
   });
 
   describeWithGatewayServer("paired node reconnects", (getStarted) => {
+    test("clears stale reapproval when a node returns to its approved surface", async () => {
+      const pairedNode = await pairDeviceIdentity({
+        name: "node-reverted-reapproval",
+        role: "node",
+        scopes: [],
+        clientId: GATEWAY_CLIENT_NAMES.NODE_HOST,
+        clientMode: GATEWAY_CLIENT_MODES.NODE,
+      });
+      const initial = await requestNodePairing({
+        nodeId: pairedNode.identity.deviceId,
+        platform: "macos",
+        deviceFamily: "Mac",
+        commands: ["screen.snapshot"],
+      });
+      await approveNodePairing(initial.request.requestId, {
+        callerScopes: ["operator.pairing", "operator.write"],
+      });
+
+      const upgraded = await connectNodeClient({
+        port: getStarted().port,
+        deviceIdentity: pairedNode.identity,
+        commands: ["screen.snapshot", "system.run"],
+      });
+      await upgraded.stopAndWait();
+      expect(
+        (await listNodePairing()).pending.some(
+          (entry) => entry.nodeId === pairedNode.identity.deviceId,
+        ),
+      ).toBe(true);
+
+      const reverted = await connectNodeClient({
+        port: getStarted().port,
+        deviceIdentity: pairedNode.identity,
+        commands: ["screen.snapshot"],
+      });
+      await reverted.stopAndWait();
+
+      expect(
+        (await listNodePairing()).pending.some(
+          (entry) => entry.nodeId === pairedNode.identity.deviceId,
+        ),
+      ).toBe(false);
+    });
+
     test("requests re-pairing when a paired node reconnects with upgraded commands", async () => {
       await expectRePairingRequest({
         started: getStarted(),

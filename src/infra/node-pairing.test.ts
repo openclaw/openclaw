@@ -6,6 +6,7 @@ import {
   approveNodePairing,
   getPairedNode,
   listNodePairing,
+  rejectPendingNodePairingRequestsForNode,
   removePairedNode,
   requestNodePairing,
   updatePairedNodeMetadata,
@@ -324,6 +325,33 @@ describe("node pairing tokens", () => {
       expect(pairing.pending[0]?.requestId).toBe(pending.request.requestId);
       expect(pairing.pending[0]?.nodeId).toBe("node-2");
       expect(pairing.paired).toEqual([]);
+    });
+  });
+
+  test("rejects every pending request for one node without removing its approval", async () => {
+    await withNodePairingDir(async (baseDir) => {
+      await setupPairedNode(baseDir);
+      const pending = await requestNodePairing(
+        {
+          nodeId: "node-1",
+          platform: "darwin",
+          commands: ["system.run", "canvas.snapshot"],
+        },
+        baseDir,
+      );
+
+      await expect(rejectPendingNodePairingRequestsForNode("node-1", baseDir)).resolves.toEqual([
+        { requestId: pending.request.requestId, nodeId: "node-1" },
+      ]);
+      await expect(rejectPendingNodePairingRequestsForNode("node-1", baseDir)).resolves.toEqual([]);
+
+      const pairing = await listNodePairing(baseDir);
+      expect(pairing.pending).toEqual([]);
+      expect(pairing.paired).toHaveLength(1);
+      expect(pairing.paired[0]?.nodeId).toBe("node-1");
+      await expect(getPairedNode("node-1", baseDir)).resolves.toMatchObject({
+        commands: ["system.run"],
+      });
     });
   });
 

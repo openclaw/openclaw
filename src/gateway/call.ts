@@ -1037,6 +1037,11 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     opts.timeoutMs,
     context.config.gateway?.handshakeTimeoutMs,
   );
+  if (opts.requireLocalBackendSharedAuth && (context.urlOverride || context.isRemoteMode)) {
+    throw new GatewayLocalBackendSharedAuthUnavailableError(
+      "local backend shared auth is limited to the configured local gateway",
+    );
+  }
   const useStoredDeviceAuth = opts.useStoredDeviceAuth === true;
   if (
     useStoredDeviceAuth &&

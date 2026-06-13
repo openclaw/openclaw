@@ -69,6 +69,7 @@ import {
 } from "../../../infra/diagnostic-trace-context.js";
 import {
   getPairedNode,
+  rejectPendingNodePairingRequestsForNode,
   requestNodePairing,
   updatePairedNodeMetadata,
 } from "../../../infra/node-pairing.js";
@@ -1640,6 +1641,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                   throw error;
                 }
               },
+              rejectPendingPairings: rejectPendingNodePairingRequestsForNode,
             });
           } catch (error) {
             if (error instanceof NodePairingRateLimitError) {
@@ -1653,10 +1655,16 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             }
             throw error;
           }
-          if (reconciliation.pendingPairing?.created) {
+          const resolvedPairings = [
+            ...(reconciliation.pendingPairing?.created
+              ? (reconciliation.pendingPairing.superseded ?? [])
+              : []),
+            ...(reconciliation.resolvedPairings ?? []),
+          ];
+          if (resolvedPairings.length > 0 || reconciliation.pendingPairing?.created) {
             const requestContext = buildRequestContext();
             const resolvedAt = Date.now();
-            for (const superseded of reconciliation.pendingPairing.superseded ?? []) {
+            for (const superseded of resolvedPairings) {
               requestContext.broadcast(
                 "node.pair.resolved",
                 {
@@ -1668,9 +1676,15 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                 { dropIfSlow: true },
               );
             }
-            requestContext.broadcast("node.pair.requested", reconciliation.pendingPairing.request, {
-              dropIfSlow: true,
-            });
+            if (reconciliation.pendingPairing?.created) {
+              requestContext.broadcast(
+                "node.pair.requested",
+                reconciliation.pendingPairing.request,
+                {
+                  dropIfSlow: true,
+                },
+              );
+            }
           }
           const nodeConnectParams = connectParams as ConnectParams & {
             declaredCaps?: string[];

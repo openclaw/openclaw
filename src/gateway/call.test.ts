@@ -895,6 +895,43 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions).toBeNull();
   });
 
+  it("rejects required local backend shared auth for loopback URL overrides", async () => {
+    await expect(
+      callGateway({
+        method: "node.list",
+        url: "ws://127.0.0.1:18789",
+        token: "explicit-token",
+        scopes: ["operator.read", "operator.pairing"],
+        requireLocalBackendSharedAuth: true,
+      }),
+    ).rejects.toMatchObject({ name: "GatewayLocalBackendSharedAuthUnavailableError" });
+
+    expect(lastClientOptions).toBeNull();
+  });
+
+  it("rejects required local backend shared auth for remote-mode loopback tunnels", async () => {
+    getRuntimeConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "ws://127.0.0.1:18789",
+          token: "remote-token",
+        },
+      },
+    });
+    setGatewayNetworkDefaults();
+
+    await expect(
+      callGateway({
+        method: "node.list",
+        scopes: ["operator.read", "operator.pairing"],
+        requireLocalBackendSharedAuth: true,
+      }),
+    ).rejects.toMatchObject({ name: "GatewayLocalBackendSharedAuthUnavailableError" });
+
+    expect(lastClientOptions).toBeNull();
+  });
+
   it("uses backend client metadata for explicit scoped default calls", async () => {
     setLocalLoopbackGatewayConfig();
 
