@@ -2744,11 +2744,21 @@ describe("runReplyAgent response usage footer", () => {
     const res = await createRun({
       responseUsage: "full",
       sessionKey: "agent:main:whatsapp:dm:+1000",
+      config: {
+        models: {
+          providers: {
+            anthropic: {
+              models: [{ id: "claude", cost: { input: 3, output: 15 } }],
+            },
+          },
+        },
+      },
     });
     const payload = Array.isArray(res) ? res[0] : res;
     const text = payload?.text ?? "";
     expect(text).toContain("↕️ 1.3k");
     expect(text).not.toContain("↕️ ?/?");
+    expect(text).not.toContain("💰");
     expect(text).not.toContain("Usage:");
   });
 
