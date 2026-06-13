@@ -35,11 +35,19 @@ function formatResetRemaining(targetMs?: number, now?: number): string | null {
   }).format(new Date(targetMs));
 }
 
-function formatWindowShort(window: UsageWindow, now?: number): string {
-  const remaining = clampPercent(100 - window.usedPercent);
+function formatWindowShort(
+  window: UsageWindow,
+  now?: number,
+  opts?: { provider?: string },
+): string {
+  const isMinimax = opts?.provider === "minimax";
+  const percent = isMinimax
+    ? clampPercent(window.usedPercent)
+    : clampPercent(100 - window.usedPercent);
+  const label = isMinimax ? "used" : "left";
   const reset = formatResetRemaining(window.resetAt, now);
   const resetSuffix = reset ? ` ⏱${reset}` : "";
-  return `${remaining.toFixed(0)}% left (${window.label}${resetSuffix})`;
+  return `${percent.toFixed(0)}% ${label} (${window.label}${resetSuffix})`;
 }
 
 /** Formats one provider snapshot into a short usage-window summary. */
@@ -60,11 +68,15 @@ export function formatUsageWindowSummary(
       : snapshot.windows.length;
   const includeResets = opts?.includeResets ?? false;
   const windows = snapshot.windows.slice(0, maxWindows);
+  const isMinimax = snapshot.provider === "minimax";
   const parts = windows.map((window) => {
-    const remaining = clampPercent(100 - window.usedPercent);
+    const percent = isMinimax
+      ? clampPercent(window.usedPercent)
+      : clampPercent(100 - window.usedPercent);
+    const label = isMinimax ? "used" : "left";
     const reset = includeResets ? formatResetRemaining(window.resetAt, now) : null;
     const resetSuffix = reset ? ` ⏱${reset}` : "";
-    return `${window.label} ${remaining.toFixed(0)}% left${resetSuffix}`;
+    return `${window.label} ${percent.toFixed(0)}% ${label}${resetSuffix}`;
   });
   return parts.join(" · ");
 }
@@ -87,7 +99,7 @@ export function formatUsageSummaryLine(
     const window = entry.windows.reduce((best, next) =>
       next.usedPercent > best.usedPercent ? next : best,
     );
-    return `${entry.displayName} ${formatWindowShort(window, opts?.now)}`;
+    return `${entry.displayName} ${formatWindowShort(window, opts?.now, { provider: entry.provider })}`;
   });
   return `📊 Usage: ${parts.join(" · ")}`;
 }
@@ -112,11 +124,15 @@ export function formatUsageReportLines(summary: UsageSummary, opts?: { now?: num
     if (entry.summary?.trim()) {
       lines.push(`    ${entry.summary.trim()}`);
     }
+    const isMinimax = entry.provider === "minimax";
     for (const window of entry.windows) {
-      const remaining = clampPercent(100 - window.usedPercent);
+      const percent = isMinimax
+        ? clampPercent(window.usedPercent)
+        : clampPercent(100 - window.usedPercent);
+      const label = isMinimax ? "used" : "left";
       const reset = formatResetRemaining(window.resetAt, opts?.now);
       const resetSuffix = reset ? ` · resets ${reset}` : "";
-      lines.push(`    ${window.label}: ${remaining.toFixed(0)}% left${resetSuffix}`);
+      lines.push(`    ${window.label}: ${percent.toFixed(0)}% ${label}${resetSuffix}`);
     }
   }
   return lines;
