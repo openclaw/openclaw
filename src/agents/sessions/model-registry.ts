@@ -371,7 +371,7 @@ export class ModelRegistry {
 
     if (error) {
       this.loadError = error;
-      // Keep the prior empty/default registry shape when models.json failed to load.
+      // Plugin catalog failures can return salvaged models; root failures return empty.
     }
 
     let combined = customModels;
@@ -444,6 +444,7 @@ export class ModelRegistry {
       }
 
       const models = this.parseModels(configForUse);
+      const pluginCatalogErrors: string[] = [];
       if (options.includePluginCatalogs !== false) {
         for (const pluginCatalog of listPluginModelCatalogFiles(dirname(modelsJsonPath))) {
           const pluginResult = this.loadCustomModels(pluginCatalog.path, {
@@ -452,13 +453,14 @@ export class ModelRegistry {
             requireGeneratedCatalog: true,
           });
           if (pluginResult.error) {
-            return pluginResult;
+            pluginCatalogErrors.push(pluginResult.error);
+            continue;
           }
           models.push(...pluginResult.models);
         }
       }
 
-      return { models, error: undefined };
+      return { models, error: pluginCatalogErrors.join("\n\n") || undefined };
     } catch (error) {
       if (error instanceof SyntaxError) {
         if (options.requireGeneratedCatalog === true) {
