@@ -2,6 +2,7 @@
  * Builds and installs embedded-agent system prompts.
  */
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
+import type { ChatType } from "../../channels/chat-type.js";
 import type { SubagentDelegationMode } from "../../config/types.agent-defaults.js";
 import type { MemoryCitationsMode } from "../../config/types.memory.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -56,6 +57,8 @@ export function buildEmbeddedSystemPrompt(params: {
   nativeCommandGuidanceLines?: string[];
   runtimeInfo: {
     agentId?: string;
+    sessionKey?: string;
+    sessionId?: string;
     host: string;
     os: string;
     arch: string;
@@ -64,6 +67,7 @@ export function buildEmbeddedSystemPrompt(params: {
     provider?: string;
     capabilities?: string[];
     channel?: string;
+    chatType?: ChatType;
     /** Supported message actions for the current channel (e.g., react, edit, unsend) */
     channelActions?: string[];
     activeProcessSessions?: ActiveProcessSessionReference[];

@@ -46,6 +46,7 @@ const ANTHROPIC_GA_1M_MODEL_PREFIXES = [
   "claude-sonnet-4.6",
 ] as const;
 export const ANTHROPIC_CONTEXT_1M_TOKENS = 1_048_576;
+export const ANTHROPIC_FABLE_CONTEXT_TOKENS = 1_000_000;
 const CONFIG_LOAD_RETRY_POLICY: BackoffPolicy = {
   initialMs: 1_000,
   maxMs: 60_000,
@@ -67,9 +68,8 @@ export function applyDiscoveredContextWindows(params: {
         : typeof model.contextWindow === "number"
           ? Math.trunc(model.contextWindow)
           : undefined;
-    const contextTokens = shouldUseDiscoveredAnthropicGa1MContextWindow(model)
-      ? ANTHROPIC_CONTEXT_1M_TOKENS
-      : discoveredContextTokens;
+    const contextTokens =
+      resolveDiscoveredAnthropicFixedContextWindow(model) ?? discoveredContextTokens;
     if (!contextTokens || contextTokens <= 0) {
       continue;
     }
@@ -323,37 +323,39 @@ function resolveConfiguredProviderContextTokens(
   return findContextTokens((id) => normalizeProviderId(id) === normalizedProvider);
 }
 
-function isAnthropic1MModel(provider: string, model: string): boolean {
-  if (provider !== "anthropic" && provider !== "claude-cli") {
-    return false;
-  }
+function resolveAnthropicFixedContextWindow(provider: string, model: string): number | undefined {
   const modelId = resolveModelFamilyId(model);
-  return ANTHROPIC_GA_1M_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix));
+  if (
+    (provider === "anthropic" || provider === "anthropic-vertex") &&
+    modelId.startsWith("claude-fable-5")
+  ) {
+    return ANTHROPIC_FABLE_CONTEXT_TOKENS;
+  }
+  if (provider !== "anthropic" && provider !== "claude-cli") {
+    return undefined;
+  }
+  return ANTHROPIC_GA_1M_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix))
+    ? ANTHROPIC_CONTEXT_1M_TOKENS
+    : undefined;
 }
 
-function shouldUseAnthropicGa1MContextWindow(params: {
-  provider?: string;
-  model: string;
-}): boolean {
-  const provider = params.provider ? normalizeProviderId(params.provider) : "";
-  return isAnthropic1MModel(provider, params.model);
-}
-
-function shouldUseDiscoveredAnthropicGa1MContextWindow(model: ModelEntry): boolean {
+function resolveDiscoveredAnthropicFixedContextWindow(model: ModelEntry): number | undefined {
   const provider =
     typeof model.provider === "string" ? normalizeProviderId(model.provider) : undefined;
   const modelId = model.id;
   if (provider) {
-    return isAnthropic1MModel(provider, modelId);
+    return resolveAnthropicFixedContextWindow(provider, modelId);
   }
   const normalized = normalizeLowercaseStringOrEmpty(modelId);
   const slash = normalized.indexOf("/");
   if (slash < 0) {
-    return false;
+    return undefined;
   }
   const inferredProvider = normalizeProviderId(normalized.slice(0, slash));
   const inferredModel = normalized.slice(slash + 1);
-  return inferredProvider === "claude-cli" && isAnthropic1MModel(inferredProvider, inferredModel);
+  return inferredProvider === "claude-cli"
+    ? resolveAnthropicFixedContextWindow(inferredProvider, inferredModel)
+    : undefined;
 }
 
 function resolveModelFamilyId(modelId: string): string {
@@ -379,8 +381,11 @@ export function resolveContextTokensForModel(params: {
   });
   const explicitProvider = params.provider?.trim();
   if (ref) {
-    if (explicitProvider && isAnthropic1MModel(ref.provider, ref.model)) {
-      return ANTHROPIC_CONTEXT_1M_TOKENS;
+    if (explicitProvider) {
+      const fixedContextWindow = resolveAnthropicFixedContextWindow(ref.provider, ref.model);
+      if (fixedContextWindow !== undefined) {
+        return fixedContextWindow;
+      }
     }
     // Only do the config direct scan when the caller explicitly passed a
     // provider. When provider is inferred from a slash in the model string
@@ -399,10 +404,6 @@ export function resolveContextTokensForModel(params: {
         return configuredWindow;
       }
     }
-  }
-
-  if (explicitProvider && ref && shouldUseAnthropicGa1MContextWindow(ref)) {
-    return ANTHROPIC_CONTEXT_1M_TOKENS;
   }
 
   // When provider is explicitly given and the model ID is bare (no slash),

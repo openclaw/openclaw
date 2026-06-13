@@ -18,11 +18,13 @@ most Linux-compatible Gateway runtime.
 Windows Hub is the native WinUI companion app for Windows 10 20H2+ and Windows 11. It installs without administrator privileges and is published with signed
 x64 and ARM64 installers on OpenClaw releases.
 
-Download the latest stable installer:
+Download the latest stable installer from the [OpenClaw releases page](https://github.com/openclaw/openclaw/releases):
 
-- [OpenClawCompanion-Setup-x64.exe](https://github.com/openclaw/openclaw/releases/latest/download/OpenClawCompanion-Setup-x64.exe)
-- [OpenClawCompanion-Setup-arm64.exe](https://github.com/openclaw/openclaw/releases/latest/download/OpenClawCompanion-Setup-arm64.exe)
-- [Checksums](https://github.com/openclaw/openclaw/releases/latest/download/OpenClawCompanion-SHA256SUMS.txt)
+- [OpenClawCompanion-Setup-x64.exe](https://github.com/openclaw/openclaw/releases/download/v2026.6.5/OpenClawCompanion-Setup-x64.exe)
+- [OpenClawCompanion-Setup-arm64.exe](https://github.com/openclaw/openclaw/releases/download/v2026.6.5/OpenClawCompanion-Setup-arm64.exe)
+- [Checksums](https://github.com/openclaw/openclaw/releases/download/v2026.6.5/OpenClawCompanion-SHA256SUMS.txt)
+
+If a download link above returns a 404, visit the [releases page](https://github.com/openclaw/openclaw/releases) and look for the `OpenClawCompanion-Setup-*` assets on the latest release.
 
 After install, launch **OpenClaw Companion** from the Start menu or the system
 tray. The installer also adds shortcuts for Gateway Setup, Chat, Settings,

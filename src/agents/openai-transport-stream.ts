@@ -35,7 +35,6 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { resolveProviderTransportTurnStateWithPlugin } from "../plugins/provider-runtime.js";
 import { isOpenAICompatibleAzureResponsesBaseUrl } from "../shared/azure-openai-responses-client-compat.js";
-import { isGemma4ModelId } from "../shared/google-models.js";
 import {
   isResponsesTextContentPartType,
   isResponsesTextDeltaEventType,
@@ -2209,7 +2208,8 @@ export function buildOpenAIResponsesParams(
   const payloadPolicy = resolveOpenAIResponsesPayloadPolicy(model, {
     storeMode: "disable",
   });
-  const policyAllowsReplayIds = payloadPolicy.explicitStore !== false;
+  const policyAllowsReplayIds =
+    payloadPolicy.explicitStore !== false && !payloadPolicy.shouldStripStore;
   const replayResponsesItemIds =
     !isNativeCodexResponses && (options?.replayResponsesItemIds ?? policyAllowsReplayIds);
   const messages = convertResponsesMessages(
@@ -3239,9 +3239,23 @@ function parseDeepSeekDsmlInvokeArguments(body: string): Record<string, unknown>
   return null;
 }
 
+// Cache compiled attribute matchers by name so the streaming parser does not
+// recompile a RegExp on every chunk/parameter it scans.
+const xmlAttributeRegexCache = new Map<string, RegExp>();
+
+function xmlAttributeRegex(name: string): RegExp {
+  const cached = xmlAttributeRegexCache.get(name);
+  if (cached) {
+    return cached;
+  }
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(`\\b${escaped}=("([^"]*)"|'([^']*)'|([^\\s>]+))`);
+  xmlAttributeRegexCache.set(name, pattern);
+  return pattern;
+}
+
 function parseXmlAttribute(attributes: string, name: string): string | null {
-  const pattern = new RegExp(`\\b${name}=("([^"]*)"|'([^']*)'|([^\\s>]+))`);
-  const match = pattern.exec(attributes);
+  const match = xmlAttributeRegex(name).exec(attributes);
   const value = match?.[2] ?? match?.[3] ?? match?.[4];
   return value ? decodeDeepSeekDsmlText(value) : null;
 }
@@ -3934,6 +3948,7 @@ const REASONING_CONTENT_REPLAY_MODEL_IDS = new Set([
   "kimi-for-coding",
   "kimi-k2.5",
   "kimi-k2.6",
+  "kimi-k2.7-code",
   "kimi-k2-thinking",
   "kimi-k2-thinking-turbo",
   "mimo-v2-pro",
@@ -4015,7 +4030,7 @@ function shouldPreserveOpenRouterReasoningReplay(model: OpenAIModeModel): boolea
 }
 
 function shouldTrustReasoningContentReplayMetadata(model: OpenAIModeModel): boolean {
-  if (!model.reasoning || isGemma4ModelId(model.id)) {
+  if (!model.reasoning) {
     return false;
   }
   const provider = model.provider.trim().toLowerCase();

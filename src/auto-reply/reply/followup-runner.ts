@@ -29,10 +29,14 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
-import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
+import {
+  getReplyPayloadMetadata,
+  markReplyPayloadForSourceSuppressionDelivery,
+} from "../reply-payload.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
   clearDroppedCliSessionBinding,
+  createCliToolSummaryTracker,
   keepCliSessionBindingOnlyWhenReused,
   runCliAgentWithLifecycle,
 } from "./agent-runner-cli-dispatch.js";
@@ -382,6 +386,10 @@ export function createFollowupRunner(params: {
 
       // Route to originating channel if set, otherwise fall back to dispatcher.
       if (deliveryRoute === "origin" && isRoutableChannel(originatingChannel) && originatingTo) {
+        const payloadMetadata = getReplyPayloadMetadata(payload);
+        const hasTranscriptOwner =
+          payloadMetadata?.assistantMessageIndex !== undefined ||
+          payloadMetadata?.assistantTranscriptOwned === true;
         const result = await routeReply({
           payload,
           channel: originatingChannel,
@@ -394,7 +402,7 @@ export function createFollowupRunner(params: {
           requesterSenderE164: queued.run.senderE164,
           threadId: queued.originatingThreadId,
           cfg: runtimeConfig,
-          mirror: options.mirror,
+          mirror: hasTranscriptOwner ? false : options.mirror,
           replyKind,
           runId: options.runId,
         });
@@ -826,6 +834,29 @@ export function createFollowupRunner(params: {
             const notifyUserMessagePersisted = () => {
               queuedUserMessagePersistedAcrossFallback = true;
             };
+            // Shared by the embedded onToolResult callback and the CLI tool
+            // summary tracker so both runners deliver identical durable summaries.
+            const deliverFollowupToolSummary = (payload: ReplyPayload) =>
+              enqueueProgressDelivery(async () => {
+                if (
+                  run.sourceReplyDeliveryMode === "message_tool_only" &&
+                  !shouldEmitToolResultProgress()
+                ) {
+                  return;
+                }
+                await sendFollowupPayloads(
+                  [payload],
+                  effectiveQueued,
+                  {
+                    provider,
+                    modelId: model,
+                  },
+                  { kind: "tool", mirror: false, runId },
+                );
+                if (payload.isError === true) {
+                  markVisibleToolErrorProgress();
+                }
+              });
             try {
               if (isCliProvider(cliExecutionProvider, runtimeConfig)) {
                 const cliSessionBinding = getCliSessionBinding(
@@ -840,6 +871,12 @@ export function createFollowupRunner(params: {
                   startedAt: cliLifecycleStartedAt,
                 };
                 const followupCurrentMessageId = resolveFollowupCurrentMessageId();
+                const cliToolSummaryTracker = createCliToolSummaryTracker({
+                  detailMode: toolProgressDetail,
+                  shouldEmitToolResult: shouldEmitToolResultProgress,
+                  shouldEmitToolOutput: shouldEmitToolOutputProgress,
+                  deliver: deliverFollowupToolSummary,
+                });
                 const result = await runCliAgentWithLifecycle({
                   runId,
                   provider: cliExecutionProvider,
@@ -847,11 +884,15 @@ export function createFollowupRunner(params: {
                   emitLifecycleTerminal: false,
                   onAgentRunStart: () => opts?.onAgentRunStart?.(runId),
                   suppressAssistantBridge: run.silentExpected,
-                  onToolEvent: async ({ name, phase, args }) => {
+                  onToolEvent: async (payload) => {
+                    await cliToolSummaryTracker.noteToolEvent(payload);
+                    if (payload.phase === "result") {
+                      return;
+                    }
                     await forwardFollowupProgressEvent({
                       evt: {
                         stream: "tool",
-                        data: { name, phase, args },
+                        data: { name: payload.name, phase: payload.phase, args: payload.args },
                       },
                       opts,
                       detailMode: toolProgressDetail,
@@ -897,6 +938,10 @@ export function createFollowupRunner(params: {
                     suppressNextUserMessagePersistence: suppressQueuedUserPersistenceForCandidate,
                     userTurnTranscriptRecorder,
                     onUserMessagePersisted: notifyUserMessagePersisted,
+                    persistAssistantTranscript:
+                      queued.currentInboundEventKind !== "room_event" &&
+                      run.suppressTranscriptOnlyAssistantPersistence !== true,
+                    storePath,
                     currentInboundEventKind: queued.currentInboundEventKind,
                     currentInboundAudio: queued.currentInboundAudio,
                     currentInboundContext: queued.currentInboundContext,
@@ -906,9 +951,9 @@ export function createFollowupRunner(params: {
                     ...resolveRunAuthProfile(candidateRun, cliExecutionProvider, {
                       config: runtimeConfig,
                     }),
-                    classifyCommentaryText: opts?.commentaryProgressEnabled !== undefined,
                     thinkLevel: run.thinkLevel,
                     timeoutMs: run.timeoutMs,
+                    runTimeoutOverrideMs: run.runTimeoutOverrideMs,
                     runId,
                     extraSystemPrompt: run.extraSystemPrompt,
                     sourceReplyDeliveryMode: run.sourceReplyDeliveryMode,
@@ -938,6 +983,8 @@ export function createFollowupRunner(params: {
                         : undefined,
                     currentMessageId: followupCurrentMessageId,
                     agentAccountId: run.agentAccountId,
+                    senderId: run.senderId,
+                    senderIsOwner: run.senderIsOwner,
                     disableTools: opts?.disableTools,
                     abortSignal: runAbortSignal,
                   },
@@ -967,6 +1014,7 @@ export function createFollowupRunner(params: {
                 trigger: "user",
                 messageChannel: queued.originatingChannel ?? undefined,
                 messageProvider: run.messageProvider,
+                chatType: run.chatType,
                 agentAccountId: run.agentAccountId,
                 messageTo: queued.originatingTo,
                 messageThreadId: queued.originatingThreadId,
@@ -1020,6 +1068,7 @@ export function createFollowupRunner(params: {
                 execOverrides: run.execOverrides,
                 bashElevated: run.bashElevated,
                 timeoutMs: run.timeoutMs,
+                runTimeoutOverrideMs: run.runTimeoutOverrideMs,
                 runId,
                 abortSignal: runAbortSignal,
                 images: queuedImages,
@@ -1034,27 +1083,7 @@ export function createFollowupRunner(params: {
                 toolProgressDetail,
                 shouldEmitToolResult: shouldEmitToolResultProgress,
                 shouldEmitToolOutput: shouldEmitToolOutputProgress,
-                onToolResult: (payload) =>
-                  enqueueProgressDelivery(async () => {
-                    if (
-                      run.sourceReplyDeliveryMode === "message_tool_only" &&
-                      !shouldEmitToolResultProgress()
-                    ) {
-                      return;
-                    }
-                    await sendFollowupPayloads(
-                      [payload],
-                      effectiveQueued,
-                      {
-                        provider,
-                        modelId: model,
-                      },
-                      { kind: "tool", mirror: false, runId },
-                    );
-                    if (payload.isError === true) {
-                      markVisibleToolErrorProgress();
-                    }
-                  }),
+                onToolResult: deliverFollowupToolSummary,
                 onAgentEvent: (evt) =>
                   enqueueProgressDelivery(async () => {
                     await forwardFollowupProgressEvent({

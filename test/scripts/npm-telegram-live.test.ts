@@ -115,6 +115,9 @@ describe("package Telegram live Docker E2E", () => {
 
     expect(script).toContain("OPENCLAW_NPM_TELEGRAM_PACKAGE_TGZ");
     expect(script).toContain("OPENCLAW_CURRENT_PACKAGE_TGZ");
+    expect(script).toContain('-e OPENCLAW_QA_PACKAGE_SOURCE="$package_install_source"');
+    expect(script).toContain('-e OPENCLAW_QA_PACKAGE_SOURCE_KIND="$package_source_kind"');
+    expect(script).toContain("OPENCLAW_QA_PACKAGE_SOURCE_SHA");
     expect(script).toContain(
       'package_mount_args=(-v "$resolved_package_tgz:$package_install_source:ro")',
     );
@@ -193,12 +196,14 @@ describe("package Telegram live Docker E2E", () => {
   });
 
   it("gates package Telegram status on the summary artifact", async () => {
-    const summaryPath = path.join(mkTempRoot(), "telegram-qa-summary.json");
+    const summaryPath = path.join(mkTempRoot(), "qa-evidence.json");
     writeFileSync(
       summaryPath,
       JSON.stringify({
-        counts: { total: 1, passed: 1, failed: 0 },
-        scenarios: [{ status: "fail" }],
+        kind: "openclaw.qa.evidence-summary",
+        schemaVersion: 2,
+        generatedAt: "2026-05-01T00:00:00.000Z",
+        entries: [{ result: { status: "fail" } }],
       }),
       "utf8",
     );

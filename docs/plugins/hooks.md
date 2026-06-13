@@ -425,12 +425,17 @@ even when the channel payload has no visible text/caption. Rewriting that
 `content` updates the hook-visible transcript only; it is not rendered as a
 media caption.
 
+`reply_payload_sending` events may include `usageState`, a best-effort live
+per-turn model/usage/context snapshot. Durable delivery, recovered replay, and
+replies without exact run correlation omit it.
+
 Message hook contexts expose stable correlation fields when available:
 `ctx.sessionKey`, `ctx.runId`, `ctx.messageId`, `ctx.senderId`, `ctx.trace`,
 `ctx.traceId`, `ctx.spanId`, `ctx.parentSpanId`, and `ctx.callDepth`. Inbound
 and `before_dispatch` contexts also expose reply metadata when the channel has
-visibility-filtered quoted message data: `replyToId`, `replyToBody`, and
-`replyToSender`. Prefer these first-class fields before reading legacy metadata.
+visibility-filtered quoted message data: `replyToId`, `replyToIdFull`,
+`replyToBody`, `replyToSender`, and `replyToIsQuote`. Prefer these first-class
+fields before reading legacy metadata.
 
 Prefer typed `threadId` and `replyToId` fields before using channel-specific
 metadata.

@@ -613,6 +613,7 @@ export const fa: TranslationMap = {
     labelsPlaceholder: "ui, docs",
     searchPlaceholder: "جستجوی کارت‌ها",
     allPriorities: "همه اولویت‌ها",
+    hideEmptyColumns: "Hide empty columns",
     emptyColumn: "کار را اینجا رها کنید",
     lifecycleUnlinked: "بدون جلسه",
     lifecycleUnlinkedDetail: "یک جلسه را شروع یا پیوند کنید",
@@ -1604,6 +1605,8 @@ export const fa: TranslationMap = {
     },
     jobDetail: {
       system: "سیستم",
+      command: "Command",
+      cwd: "CWD",
       prompt: "پرامپت",
       delivery: "تحویل",
       agent: "عامل",

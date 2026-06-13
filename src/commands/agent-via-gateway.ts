@@ -842,6 +842,7 @@ export async function agentCliCommand(
     replyAccountId: gatewayDispatchOpts.replyAccount,
     cleanupBundleMcpOnRunEnd: true,
     cleanupCliLiveSessionOnRunEnd: true,
+    oneShotCliRun: dispatchOpts.local === true,
     abortSignal: signalBridge.signal,
   };
   try {

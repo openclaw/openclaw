@@ -1184,6 +1184,131 @@ describe("chat loading skeleton", () => {
     expect(container.querySelectorAll(".chat-reading-indicator")).toHaveLength(1);
   });
 
+  it("shows prompt-bar progress while the current session send is awaiting acknowledgement", () => {
+    const container = renderChatView({
+      sending: true,
+      queue: [
+        {
+          id: "send-main",
+          text: "hello",
+          createdAt: 1,
+          sendRunId: "run-main",
+          sendState: "sending",
+          sessionKey: "main",
+        },
+      ],
+    });
+
+    const status = container.querySelector(".agent-chat__run-status--in-progress");
+    expect(status).toBeInstanceOf(HTMLElement);
+    expect(status?.textContent).toContain("In progress");
+    expect(status?.closest(".agent-chat__toolbar-left")).not.toBeNull();
+  });
+
+  it("does not show prompt-bar progress for another session send", () => {
+    const container = renderChatView({
+      sessionKey: "session-b",
+      sending: true,
+      queue: [
+        {
+          id: "send-a",
+          text: "hello from A",
+          createdAt: 1,
+          sendRunId: "run-a",
+          sendState: "sending",
+          sessionKey: "session-a",
+        },
+      ],
+    });
+
+    expect(container.querySelector(".agent-chat__run-status--in-progress")).toBeNull();
+  });
+
+  it("shows prompt-bar progress while the current session send waits for model switching", () => {
+    const container = renderChatView({
+      queue: [
+        {
+          id: "send-main",
+          text: "hello",
+          createdAt: 1,
+          sendRunId: "run-main",
+          sendState: "waiting-model",
+          sessionKey: "main",
+        },
+      ],
+    });
+
+    const status = container.querySelector(".agent-chat__run-status--in-progress");
+    expect(status).toBeInstanceOf(HTMLElement);
+    expect(status?.textContent).toContain("In progress");
+  });
+
+  it("shows active model-switch progress over the previous run's terminal status", () => {
+    const container = renderChatView({
+      runStatus: {
+        phase: "done",
+        runId: "run-previous",
+        sessionKey: "main",
+        occurredAt: 1_000,
+      },
+      queue: [
+        {
+          id: "send-main",
+          text: "hello",
+          createdAt: 999,
+          sendRunId: "run-main",
+          sendState: "waiting-model",
+          sessionKey: "main",
+        },
+      ],
+    });
+
+    expect(container.querySelector(".agent-chat__run-status--in-progress")).not.toBeNull();
+    expect(container.querySelector(".agent-chat__run-status--done")).toBeNull();
+  });
+
+  it("keeps terminal status for the submitted run while its acknowledgement is pending", () => {
+    const occurredAt = Date.now();
+    const container = renderChatView({
+      runStatus: {
+        phase: "done",
+        runId: "run-main",
+        sessionKey: "main",
+        occurredAt,
+      },
+      queue: [
+        {
+          id: "send-main",
+          text: "hello",
+          createdAt: 999,
+          sendRunId: "run-main",
+          sendState: "sending",
+          sessionKey: "main",
+        },
+      ],
+    });
+
+    expect(container.querySelector(".agent-chat__run-status--done")).not.toBeNull();
+    expect(container.querySelector(".agent-chat__run-status--in-progress")).toBeNull();
+  });
+
+  it("does not show prompt-bar progress for reconnect-waiting sends", () => {
+    const container = renderChatView({
+      queue: [
+        {
+          id: "send-main",
+          text: "hello",
+          createdAt: 1,
+          sendRunId: "run-main",
+          sendState: "waiting-reconnect",
+          sessionKey: "main",
+        },
+      ],
+    });
+
+    expect(container.querySelector(".agent-chat__run-status--in-progress")).toBeNull();
+  });
+
   it("lets terminal run status win over stale abortable session UI", () => {
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
     try {
