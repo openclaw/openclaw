@@ -10,7 +10,11 @@ import {
   errorShape,
   type GatewayRequestHandlerOptions,
 } from "openclaw/plugin-sdk/gateway-runtime";
-import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  definePluginEntry,
+  type OpenClawPluginApi,
+  type OpenClawPluginNodeInvokePolicy,
+} from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type } from "typebox";
 import {
@@ -40,6 +44,7 @@ import { isGoogleMeetBrowserManualActionError } from "./src/transports/chrome-cr
 
 let googleMeetCreateModulePromise: Promise<typeof import("./src/create.js")> | null = null;
 let googleMeetCliModulePromise: Promise<typeof import("./src/cli.js")> | null = null;
+const GOOGLE_MEET_CHROME_NODE_COMMAND = "googlemeet.chrome";
 
 const loadGoogleMeetCreateModule = async () => {
   googleMeetCreateModulePromise ??= import("./src/create.js");
@@ -356,6 +361,42 @@ function json(payload: unknown) {
   return {
     content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
     details: payload,
+  };
+}
+
+function copyCommand(value: string[] | undefined): string[] | undefined {
+  return value ? [...value] : undefined;
+}
+
+function buildGoogleMeetChromeStartParams(
+  params: Record<string, unknown>,
+  config: GoogleMeetConfig,
+): Record<string, unknown> {
+  return {
+    ...params,
+    browserProfile: config.chrome.browserProfile,
+    audioInputCommand: copyCommand(config.chrome.audioInputCommand),
+    audioOutputCommand: copyCommand(config.chrome.audioOutputCommand),
+    audioBridgeCommand: copyCommand(config.chrome.audioBridgeCommand),
+    audioBridgeHealthCommand: copyCommand(config.chrome.audioBridgeHealthCommand),
+  };
+}
+
+function createGoogleMeetChromeNodeInvokePolicy(
+  config: GoogleMeetConfig,
+): OpenClawPluginNodeInvokePolicy {
+  return {
+    commands: [GOOGLE_MEET_CHROME_NODE_COMMAND],
+    dangerous: true,
+    handle: (ctx) => {
+      const raw = asParamRecord(ctx.params);
+      if (raw.action !== "start") {
+        return ctx.invokeNode();
+      }
+      return ctx.invokeNode({
+        params: buildGoogleMeetChromeStartParams(raw, config),
+      });
+    },
   };
 }
 
@@ -1196,10 +1237,12 @@ export default definePluginEntry({
     );
 
     api.registerNodeHostCommand({
-      command: "googlemeet.chrome",
+      command: GOOGLE_MEET_CHROME_NODE_COMMAND,
       cap: "google-meet",
+      dangerous: true,
       handle: handleGoogleMeetNodeHostCommand,
     });
+    api.registerNodeInvokePolicy(createGoogleMeetChromeNodeInvokePolicy(config));
 
     api.registerCli(
       async ({ program }) => {

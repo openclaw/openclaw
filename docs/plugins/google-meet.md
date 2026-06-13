@@ -334,6 +334,12 @@ Route Meet through that node on the Gateway host:
 }
 ```
 
+Chrome-node audio helper commands come from the Google Meet plugin config
+(`chrome.audioInputCommand`, `chrome.audioOutputCommand`,
+`chrome.audioBridgeCommand`, and `chrome.audioBridgeHealthCommand`). Direct
+`nodes invoke` calls for `googlemeet.chrome` cannot override those command
+arrays per request.
+
 Now join normally from the Gateway host:
 
 ```bash

@@ -854,8 +854,8 @@ describe("google-meet plugin", () => {
     ]);
   });
 
-  it("registers the node-host command used by chrome-node transport", () => {
-    const { nodeHostCommands } = setup();
+  it("registers the node-host command and policy used by chrome-node transport", () => {
+    const { nodeHostCommands, nodeInvokePolicies } = setup();
 
     const command = nodeHostCommands.find(
       (entry): entry is Record<string, unknown> =>
@@ -865,7 +865,71 @@ describe("google-meet plugin", () => {
       throw new Error("expected googlemeet.chrome node host command");
     }
     expect(command.cap).toBe("google-meet");
+    expect(command.dangerous).toBe(true);
     expect(typeof command.handle).toBe("function");
+
+    const policy = nodeInvokePolicies.find(
+      (entry): entry is Record<string, unknown> =>
+        isRecord(entry) &&
+        Array.isArray(entry.commands) &&
+        entry.commands.includes("googlemeet.chrome"),
+    );
+    if (!policy) {
+      throw new Error("expected googlemeet.chrome node invoke policy");
+    }
+    expect(policy.dangerous).toBe(true);
+    expect(typeof policy.handle).toBe("function");
+  });
+
+  it("forwards chrome-node start with config-owned audio commands", async () => {
+    const { nodeInvokePolicies } = setup({
+      chrome: {
+        browserProfile: "Profile 1",
+        audioInputCommand: ["trusted-capture", "--rate", "24k"],
+        audioOutputCommand: ["trusted-play", "--rate", "24k"],
+        audioBridgeCommand: ["trusted-bridge", "start"],
+        audioBridgeHealthCommand: ["trusted-bridge", "health"],
+      },
+    });
+    const policy = nodeInvokePolicies.find(
+      (entry): entry is Record<string, unknown> =>
+        isRecord(entry) &&
+        Array.isArray(entry.commands) &&
+        entry.commands.includes("googlemeet.chrome"),
+    );
+    if (!policy || typeof policy.handle !== "function") {
+      throw new Error("expected googlemeet.chrome node invoke policy handler");
+    }
+    const invokeNode = vi.fn(async () => ({ ok: true, payload: { launched: false } }));
+
+    await policy.handle({
+      params: {
+        action: "start",
+        url: "https://meet.google.com/abc-defg-hij",
+        mode: "bidi",
+        launch: false,
+        browserProfile: "Attacker Profile",
+        audioInputCommand: ["attacker-capture"],
+        audioOutputCommand: ["attacker-play"],
+        audioBridgeCommand: ["attacker-bridge"],
+        audioBridgeHealthCommand: ["attacker-health"],
+      },
+      invokeNode,
+    });
+
+    const forwarded = requireRecord(mockCallArg(invokeNode, 0), "node policy invoke override");
+    const params = requireRecord(forwarded.params, "forwarded node params");
+    expect(params).toMatchObject({
+      action: "start",
+      url: "https://meet.google.com/abc-defg-hij",
+      mode: "bidi",
+      launch: false,
+      browserProfile: "Profile 1",
+      audioInputCommand: ["trusted-capture", "--rate", "24k"],
+      audioOutputCommand: ["trusted-play", "--rate", "24k"],
+      audioBridgeCommand: ["trusted-bridge", "start"],
+      audioBridgeHealthCommand: ["trusted-bridge", "health"],
+    });
   });
 
   it("keeps the agent tool visible on non-macOS hosts but blocks local Chrome talk-back joins", async () => {
