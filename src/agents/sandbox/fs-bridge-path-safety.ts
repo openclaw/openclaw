@@ -192,6 +192,24 @@ export class SandboxFsPathGuard {
     });
   }
 
+  /**
+   * Anchors a stat of an allowed mount root onto the root itself. Parent
+   * anchoring cannot work there: the parent lives outside every mount, so
+   * stat of the OpenClaw-owned bind target (for example the workspace root)
+   * would be rejected as a mount escape. Read-only stat only; mutations of
+   * mount roots stay invalid.
+   */
+  resolveMountRootStatEntry(target: SandboxResolvedFsPath): AnchoredSandboxEntry | null {
+    const normalized = normalizeContainerPath(target.containerPath);
+    const mount = this.mountsByContainer.find(
+      (candidate) => normalizeContainerPath(candidate.containerRoot) === normalized,
+    );
+    if (!mount) {
+      return null;
+    }
+    return { canonicalParentPath: normalized, basename: "." };
+  }
+
   async resolveAnchoredSandboxEntry(
     target: SandboxResolvedFsPath,
     action: string,

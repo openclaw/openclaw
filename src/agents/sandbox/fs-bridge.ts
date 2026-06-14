@@ -17,7 +17,11 @@ import {
   buildPinnedWritePlan,
 } from "./fs-bridge-mutation-helper.js";
 import { SandboxFsPathGuard } from "./fs-bridge-path-safety.js";
-import { buildStatPlan, type SandboxFsCommandPlan } from "./fs-bridge-shell-command-plans.js";
+import {
+  buildStatPlan,
+  SANDBOX_STAT_PARENT_NOT_FOUND_EXIT_CODE,
+  type SandboxFsCommandPlan,
+} from "./fs-bridge-shell-command-plans.js";
 import { parseSandboxStatMtimeMs, parseSandboxStatSize } from "./fs-bridge-stat-parse.js";
 import type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "./fs-bridge.types.js";
 import {
@@ -201,14 +205,20 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     signal?: AbortSignal;
   }): Promise<SandboxFsStat | null> {
     const target = this.resolveResolvedPath(params);
-    const anchoredTarget = await this.pathGuard.resolveAnchoredSandboxEntry(target, "stat files");
+    const anchoredTarget =
+      this.pathGuard.resolveMountRootStatEntry(target) ??
+      (await this.pathGuard.resolveAnchoredSandboxEntry(target, "stat files"));
+    const hostStat = fs.statSync(target.hostPath, { throwIfNoEntry: false });
     const result = await this.runPlannedCommand(
-      buildStatPlan(target, anchoredTarget),
+      buildStatPlan(target, anchoredTarget, hostStat?.isDirectory() ? "directory" : undefined),
       params.signal,
     );
     if (result.code !== 0) {
       const stderr = result.stderr.toString("utf8");
-      if (stderr.includes("No such file or directory")) {
+      if (
+        result.code === SANDBOX_STAT_PARENT_NOT_FOUND_EXIT_CODE ||
+        stderr.includes("No such file or directory")
+      ) {
         return null;
       }
       const message = stderr.trim() || `stat failed with code ${result.code}`;
