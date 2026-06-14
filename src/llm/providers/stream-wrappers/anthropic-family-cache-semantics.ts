@@ -52,6 +52,12 @@ export function isOpenRouterAnthropicModelRef(provider: string, modelId: string)
   );
 }
 
+/** Matches LiteLLM model IDs that refer to Anthropic Claude models. */
+export function isLiteLLMAnthropicModel(modelId: string): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(modelId);
+  return normalized.includes("claude") || normalized.startsWith("anthropic/");
+}
+
 export function isAnthropicFamilyCacheTtlEligible(params: {
   provider: string;
   modelApi?: string;
@@ -100,6 +106,17 @@ export function resolveAnthropicCacheRetentionFamily(params: {
     normalizedProvider !== "amazon-bedrock" &&
     params.hasExplicitCacheConfig &&
     params.modelApi === "anthropic-messages"
+  ) {
+    return "custom-anthropic-api";
+  }
+  // LiteLLM proxying Anthropic models: honor explicit cache config.
+  // LiteLLM uses the openai-completions API path so modelApi won't be "anthropic-messages",
+  // but it natively passes through cache_control fields to Anthropic.
+  if (
+    normalizedProvider === "litellm" &&
+    params.hasExplicitCacheConfig &&
+    typeof params.modelId === "string" &&
+    isLiteLLMAnthropicModel(params.modelId)
   ) {
     return "custom-anthropic-api";
   }
