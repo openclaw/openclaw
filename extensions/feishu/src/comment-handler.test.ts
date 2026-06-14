@@ -53,6 +53,8 @@ function buildConfig(overrides?: Partial<ClawdbotConfig>): ClawdbotConfig {
   } as ClawdbotConfig;
 }
 
+let currentRuntimeConfig = buildConfig();
+
 function buildResolvedRoute(matchedBy: "binding.channel" | "default" = "binding.channel") {
   return {
     agentId: "main",
@@ -131,7 +133,7 @@ function createTestRuntime(overrides?: {
 
   return {
     config: {
-      current: vi.fn(() => overrides?.currentCfg ?? ({} as ClawdbotConfig)),
+      current: vi.fn(() => overrides?.currentCfg ?? currentRuntimeConfig),
     },
     channel: {
       routing: {
@@ -204,6 +206,7 @@ describe("handleFeishuCommentEvent", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    currentRuntimeConfig = buildConfig();
     maybeCreateDynamicAgentMock.mockImplementation(async ({ cfg }) => ({
       created: false,
       updatedCfg: cfg,

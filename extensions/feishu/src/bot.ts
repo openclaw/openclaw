@@ -827,6 +827,23 @@ export async function handleFeishuMessage(params: {
     let effectiveDmIngress = dmIngress;
     let effectiveShouldComputeCommandAuthorized =
       directAuthorization?.shouldComputeCommandAuthorized ?? shouldComputeCommandAuthorized;
+    let effectiveCfg = cfg;
+    if (isDirect) {
+      const currentCfg = getFeishuRuntime().config.current() as ClawdbotConfig;
+      if (currentCfg !== effectiveCfg) {
+        const currentAuthorization = await resolveDirectAuthorization(currentCfg, true);
+        if (currentAuthorization.ingress.ingress.admission !== "dispatch") {
+          await rejectDirectAuthorization(currentAuthorization);
+          return;
+        }
+        effectiveCfg = currentCfg;
+        effectiveDmPolicy = currentAuthorization.dmPolicy;
+        effectiveConfigAllowFrom = currentAuthorization.configAllowFrom;
+        effectiveDmIngress = currentAuthorization.ingress;
+        effectiveShouldComputeCommandAuthorized =
+          currentAuthorization.shouldComputeCommandAuthorized;
+      }
+    }
 
     // In group chats, the session is scoped to the group, but the *speaker* is the sender.
     // Using a group-scoped From causes the agent to treat different users as the same person.
@@ -854,7 +871,7 @@ export async function handleFeishuMessage(params: {
     }
 
     let route = core.channel.routing.resolveAgentRoute({
-      cfg,
+      cfg: effectiveCfg,
       channel: "feishu",
       accountId: account.accountId,
       peer: {
@@ -866,67 +883,44 @@ export async function handleFeishuMessage(params: {
 
     // Refresh a binding written after this request snapshot, or create the DM's
     // dynamic agent when the current account policy enables it.
-    let effectiveCfg = cfg;
     if (!isGroup && route.matchedBy === "default") {
       const runtimeLocal = getFeishuRuntime();
-      const currentCfg = runtimeLocal.config.current() as ClawdbotConfig;
-      if (currentCfg !== effectiveCfg) {
-        const currentAuthorization = await resolveDirectAuthorization(currentCfg, true);
-        if (currentAuthorization.ingress.ingress.admission !== "dispatch") {
-          await rejectDirectAuthorization(currentAuthorization);
+      const result = await maybeCreateDynamicAgent({
+        cfg: effectiveCfg,
+        runtime: runtimeLocal,
+        accountId: account.accountId,
+        senderOpenId: ctx.senderOpenId,
+        canCreateForConfig: async (candidateCfg) => {
+          const authorization = await resolveDirectAuthorization(candidateCfg, false);
+          return authorization.ingress.ingress.admission === "dispatch";
+        },
+        log: (msg) => log(msg),
+      });
+      if (result.created || result.updatedCfg !== effectiveCfg) {
+        const refreshedAuthorization = await resolveDirectAuthorization(result.updatedCfg, false);
+        if (refreshedAuthorization.ingress.ingress.admission !== "dispatch") {
+          log(
+            `feishu[${account.accountId}]: current policy rejected stale DM from ${ctx.senderOpenId} ` +
+              `before adopting refreshed dynamic route (dmPolicy=${refreshedAuthorization.dmPolicy})`,
+          );
           return;
         }
-        effectiveCfg = currentCfg;
-        effectiveDmPolicy = currentAuthorization.dmPolicy;
-        effectiveConfigAllowFrom = currentAuthorization.configAllowFrom;
-        effectiveDmIngress = currentAuthorization.ingress;
+        effectiveCfg = result.updatedCfg;
+        effectiveDmPolicy = refreshedAuthorization.dmPolicy;
+        effectiveConfigAllowFrom = refreshedAuthorization.configAllowFrom;
+        effectiveDmIngress = refreshedAuthorization.ingress;
         effectiveShouldComputeCommandAuthorized =
-          currentAuthorization.shouldComputeCommandAuthorized;
+          refreshedAuthorization.shouldComputeCommandAuthorized;
         route = core.channel.routing.resolveAgentRoute({
-          cfg: currentCfg,
+          cfg: result.updatedCfg,
           channel: "feishu",
           accountId: account.accountId,
           peer: { kind: "direct", id: ctx.senderOpenId },
         });
-      }
-      if (route.matchedBy === "default") {
-        const result = await maybeCreateDynamicAgent({
-          cfg: effectiveCfg,
-          runtime: runtimeLocal,
-          accountId: account.accountId,
-          senderOpenId: ctx.senderOpenId,
-          canCreateForConfig: async (candidateCfg) => {
-            const authorization = await resolveDirectAuthorization(candidateCfg, false);
-            return authorization.ingress.ingress.admission === "dispatch";
-          },
-          log: (msg) => log(msg),
-        });
-        if (result.created || result.updatedCfg !== effectiveCfg) {
-          const refreshedAuthorization = await resolveDirectAuthorization(result.updatedCfg, false);
-          if (refreshedAuthorization.ingress.ingress.admission !== "dispatch") {
-            log(
-              `feishu[${account.accountId}]: current policy rejected stale DM from ${ctx.senderOpenId} ` +
-                `before adopting refreshed dynamic route (dmPolicy=${refreshedAuthorization.dmPolicy})`,
-            );
-            return;
-          }
-          effectiveCfg = result.updatedCfg;
-          effectiveDmPolicy = refreshedAuthorization.dmPolicy;
-          effectiveConfigAllowFrom = refreshedAuthorization.configAllowFrom;
-          effectiveDmIngress = refreshedAuthorization.ingress;
-          effectiveShouldComputeCommandAuthorized =
-            refreshedAuthorization.shouldComputeCommandAuthorized;
-          route = core.channel.routing.resolveAgentRoute({
-            cfg: result.updatedCfg,
-            channel: "feishu",
-            accountId: account.accountId,
-            peer: { kind: "direct", id: ctx.senderOpenId },
-          });
-          if (result.created) {
-            log(
-              `feishu[${account.accountId}]: dynamic agent created, new route: ${route.sessionKey}`,
-            );
-          }
+        if (result.created) {
+          log(
+            `feishu[${account.accountId}]: dynamic agent created, new route: ${route.sessionKey}`,
+          );
         }
       }
     }

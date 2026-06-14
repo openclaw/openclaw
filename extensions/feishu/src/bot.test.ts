@@ -1337,6 +1337,38 @@ describe("handleFeishuMessage command authorization", () => {
     expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
   });
 
+  it("reauthorizes current policy before dispatching an existing bound route", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    mockResolveAgentRoute.mockReturnValue({
+      ...buildDefaultResolveRoute(),
+      matchedBy: "binding.peer",
+    });
+    const cfg = {
+      channels: { feishu: { dmPolicy: "open", allowFrom: ["*"] } },
+    } as ClawdbotConfig;
+    const currentCfg = {
+      channels: { feishu: { dmPolicy: "allowlist", allowFrom: ["ou-admin"] } },
+    } as ClawdbotConfig;
+
+    await dispatchMessage({
+      cfg,
+      currentCfg,
+      event: {
+        sender: { sender_id: { open_id: "ou-attacker" } },
+        message: {
+          message_id: "msg-bound-refreshed-policy-deny",
+          chat_id: "oc-dm",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "hello" }),
+        },
+      },
+    });
+
+    expect(mockFinalizeInboundContext).not.toHaveBeenCalled();
+    expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
+  });
+
   it("issues a pairing challenge before dynamic creation when current policy requires it", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
     mockReadAllowFromStore.mockResolvedValue([]);

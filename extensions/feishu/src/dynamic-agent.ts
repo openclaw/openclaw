@@ -2,8 +2,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-writes";
+import { normalizeAccountId, resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import { resolveFeishuAccount } from "./accounts.js";
 import type { DynamicAgentCreationConfig } from "./types.js";
@@ -25,14 +25,18 @@ class DynamicAgentMutationSkipped extends Error {
   }
 }
 
-function hasDirectBinding(cfg: OpenClawConfig, accountId: string, senderOpenId: string): boolean {
-  const normalizedAccountId = normalizeAccountId(accountId);
-  return (cfg.bindings ?? []).some(
-    (binding) =>
-      binding.match?.channel === "feishu" &&
-      normalizeAccountId(binding.match?.accountId) === normalizedAccountId &&
-      binding.match?.peer?.kind === "direct" &&
-      binding.match?.peer?.id === senderOpenId,
+function hasDefaultDirectRoute(
+  cfg: OpenClawConfig,
+  accountId: string,
+  senderOpenId: string,
+): boolean {
+  return (
+    resolveAgentRoute({
+      cfg,
+      channel: "feishu",
+      accountId,
+      peer: { kind: "direct", id: senderOpenId },
+    }).matchedBy === "default"
   );
 }
 
@@ -73,12 +77,12 @@ export async function maybeCreateDynamicAgent(params: {
   const { cfg, runtime, senderOpenId, canCreateForConfig, log } = params;
   const accountId = normalizeAccountId(params.accountId);
 
-  if (hasDirectBinding(cfg, accountId, senderOpenId)) {
+  if (!hasDefaultDirectRoute(cfg, accountId, senderOpenId)) {
     return { created: false, updatedCfg: cfg };
   }
 
   const currentCfg = runtime.config.current() as OpenClawConfig;
-  if (hasDirectBinding(currentCfg, accountId, senderOpenId)) {
+  if (!hasDefaultDirectRoute(currentCfg, accountId, senderOpenId)) {
     return { created: false, updatedCfg: currentCfg };
   }
 
@@ -110,7 +114,7 @@ export async function maybeCreateDynamicAgent(params: {
       base: "runtime",
       afterWrite: { mode: "auto" },
       mutate: async (draft) => {
-        if (hasDirectBinding(draft, accountId, senderOpenId)) {
+        if (!hasDefaultDirectRoute(draft, accountId, senderOpenId)) {
           throw new DynamicAgentMutationSkipped(draft);
         }
 

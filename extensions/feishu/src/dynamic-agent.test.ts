@@ -16,7 +16,11 @@ afterEach(async () => {
   await fs.promises.rm(tempRoot, { recursive: true, force: true });
 });
 
-function createRuntime(currentCfg?: OpenClawConfig, persistedCfg?: OpenClawConfig) {
+function createRuntime(
+  currentCfg?: OpenClawConfig,
+  persistedCfg?: OpenClawConfig,
+  mutationCfg?: OpenClawConfig,
+) {
   let runtimeCfg = structuredClone(currentCfg ?? ({} as OpenClawConfig));
   const commitConfig = vi.fn();
   const mutateConfigFile = vi.fn(
@@ -26,7 +30,7 @@ function createRuntime(currentCfg?: OpenClawConfig, persistedCfg?: OpenClawConfi
         context: { snapshot: never; previousHash: null },
       ) => unknown | Promise<unknown>;
     }) => {
-      const draft = structuredClone(runtimeCfg);
+      const draft = structuredClone(mutationCfg ?? runtimeCfg);
       const result = await params.mutate(draft, { snapshot: {} as never, previousHash: null });
       runtimeCfg = draft;
       commitConfig();
@@ -192,6 +196,38 @@ describe("maybeCreateDynamicAgent", () => {
     expect(result.updatedCfg.bindings).toEqual([]);
     expect(await pathExists(path.join(tempRoot, "workspace-feishu-ou_sender"))).toBe(false);
     expect(await pathExists(path.join(tempRoot, "agent-feishu-ou_sender"))).toBe(false);
+  });
+
+  it("preserves a non-peer route added before the config mutation lock", async () => {
+    const cfg = {
+      channels: { feishu: { dynamicAgentCreation: createDynamicConfig() } },
+      agents: { list: [] },
+      bindings: [],
+    } as OpenClawConfig;
+    const mutationCfg = {
+      ...cfg,
+      bindings: [
+        {
+          agentId: "main",
+          match: { channel: "feishu", accountId: "default" },
+        },
+      ],
+    } as OpenClawConfig;
+    const { runtime, commitConfig, mutateConfigFile } = createRuntime(cfg, undefined, mutationCfg);
+
+    const result = await maybeCreateDynamicAgent({
+      cfg,
+      runtime,
+      accountId: "default",
+      senderOpenId: "ou_sender",
+      canCreateForConfig: async () => true,
+      log: vi.fn(),
+    });
+
+    expect(result.created).toBe(false);
+    expect(result.updatedCfg).toEqual(mutationCfg);
+    expect(mutateConfigFile).toHaveBeenCalledTimes(1);
+    expect(commitConfig).not.toHaveBeenCalled();
   });
 
   it("scopes bindings to the normalized account id", async () => {

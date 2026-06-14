@@ -145,8 +145,17 @@ export async function handleFeishuCommentEvent(
   }
 
   let effectiveCfg = params.cfg;
+  const currentCfg = core.config.current() as ClawdbotConfig;
+  if (currentCfg !== effectiveCfg) {
+    const currentAuthorization = await resolveCommentAuthorization(currentCfg, true);
+    if (currentAuthorization.ingress.ingress.admission !== "dispatch") {
+      await rejectCommentAuthorization(currentAuthorization);
+      return;
+    }
+    effectiveCfg = currentCfg;
+  }
   let route = core.channel.routing.resolveAgentRoute({
-    cfg: params.cfg,
+    cfg: effectiveCfg,
     channel: "feishu",
     accountId: account.accountId,
     peer: {
@@ -155,16 +164,32 @@ export async function handleFeishuCommentEvent(
     },
   });
   if (route.matchedBy === "default") {
-    const currentCfg = core.config.current() as ClawdbotConfig;
-    if (currentCfg !== effectiveCfg) {
-      const currentAuthorization = await resolveCommentAuthorization(currentCfg, true);
-      if (currentAuthorization.ingress.ingress.admission !== "dispatch") {
-        await rejectCommentAuthorization(currentAuthorization);
+    const dynamicResult = await maybeCreateDynamicAgent({
+      cfg: effectiveCfg,
+      runtime: core,
+      accountId: account.accountId,
+      senderOpenId: turn.senderId,
+      canCreateForConfig: async (candidateCfg) => {
+        const authorization = await resolveCommentAuthorization(candidateCfg, false);
+        return authorization.ingress.ingress.admission === "dispatch";
+      },
+      log: (message) => log(message),
+    });
+    if (dynamicResult.created || dynamicResult.updatedCfg !== effectiveCfg) {
+      const refreshedAuthorization = await resolveCommentAuthorization(
+        dynamicResult.updatedCfg,
+        false,
+      );
+      if (refreshedAuthorization.ingress.ingress.admission !== "dispatch") {
+        log(
+          `feishu[${account.accountId}]: current policy rejected stale comment sender ${turn.senderId} ` +
+            `before adopting refreshed dynamic route (dmPolicy=${refreshedAuthorization.dmPolicy}, comment=${turn.commentId})`,
+        );
         return;
       }
-      effectiveCfg = currentCfg;
+      effectiveCfg = dynamicResult.updatedCfg;
       route = core.channel.routing.resolveAgentRoute({
-        cfg: currentCfg,
+        cfg: dynamicResult.updatedCfg,
         channel: "feishu",
         accountId: account.accountId,
         peer: {
@@ -172,46 +197,10 @@ export async function handleFeishuCommentEvent(
           id: turn.senderId,
         },
       });
-    }
-    if (route.matchedBy === "default") {
-      const dynamicResult = await maybeCreateDynamicAgent({
-        cfg: effectiveCfg,
-        runtime: core,
-        accountId: account.accountId,
-        senderOpenId: turn.senderId,
-        canCreateForConfig: async (candidateCfg) => {
-          const authorization = await resolveCommentAuthorization(candidateCfg, false);
-          return authorization.ingress.ingress.admission === "dispatch";
-        },
-        log: (message) => log(message),
-      });
-      if (dynamicResult.created || dynamicResult.updatedCfg !== effectiveCfg) {
-        const refreshedAuthorization = await resolveCommentAuthorization(
-          dynamicResult.updatedCfg,
-          false,
+      if (dynamicResult.created) {
+        log(
+          `feishu[${account.accountId}]: dynamic agent created for comment flow, route=${route.sessionKey}`,
         );
-        if (refreshedAuthorization.ingress.ingress.admission !== "dispatch") {
-          log(
-            `feishu[${account.accountId}]: current policy rejected stale comment sender ${turn.senderId} ` +
-              `before adopting refreshed dynamic route (dmPolicy=${refreshedAuthorization.dmPolicy}, comment=${turn.commentId})`,
-          );
-          return;
-        }
-        effectiveCfg = dynamicResult.updatedCfg;
-        route = core.channel.routing.resolveAgentRoute({
-          cfg: dynamicResult.updatedCfg,
-          channel: "feishu",
-          accountId: account.accountId,
-          peer: {
-            kind: "direct",
-            id: turn.senderId,
-          },
-        });
-        if (dynamicResult.created) {
-          log(
-            `feishu[${account.accountId}]: dynamic agent created for comment flow, route=${route.sessionKey}`,
-          );
-        }
       }
     }
   }
