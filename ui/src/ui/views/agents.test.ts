@@ -568,3 +568,46 @@ describe("renderAgentFiles", () => {
     expect(previewExpandButton.getAttribute("aria-label")).toBe("Expand preview");
   });
 });
+
+describe("renderAgents agent navigation", () => {
+  it("renders a visible agent row per agent with default and active markers", () => {
+    const container = document.createElement("div");
+    render(renderAgents(createProps()), container);
+
+    const rows = container.querySelectorAll<HTMLButtonElement>(".agents-sidebar .agent-row");
+    expect(rows).toHaveLength(2);
+    expect(directText(rows[0]?.querySelector(".agent-title"))).toBe("Alpha");
+    // alpha is the default agent; beta is the selected agent.
+    expect(rows[0]?.querySelector(".agent-pill")).not.toBeNull();
+    expect(rows[1]?.querySelector(".agent-pill")).toBeNull();
+    expect(rows[0]?.classList.contains("active")).toBe(false);
+    expect(rows[1]?.classList.contains("active")).toBe(true);
+  });
+
+  it("selects an agent when its row is clicked", () => {
+    const container = document.createElement("div");
+    const onSelectAgent = vi.fn();
+    render(renderAgents(createProps({ onSelectAgent })), container);
+
+    const rows = container.querySelectorAll<HTMLButtonElement>(".agents-sidebar .agent-row");
+    rows[0]?.click();
+
+    expect(onSelectAgent).toHaveBeenCalledWith("alpha");
+  });
+
+  it("shows an empty hint and no rows when there are no agents", () => {
+    const container = document.createElement("div");
+    render(
+      renderAgents(
+        createProps({
+          agentsList: { defaultId: "", mainKey: "main", scope: "workspace", agents: [] },
+          selectedAgentId: null,
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".agents-sidebar .agent-row")).toBeNull();
+    expect(directText(container.querySelector(".agents-nav-empty"))).toBe(t("agents.noAgents"));
+  });
+});
