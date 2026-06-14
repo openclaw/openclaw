@@ -403,6 +403,7 @@ export type ChatState = {
   chatRunId: string | null;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
+  chatVerboseLevel: string | null;
   lastError: string | null;
   chatError?: string | null;
   agentsError?: string | null;
@@ -421,6 +422,7 @@ export type ChatHistoryResult = {
   messages?: Array<unknown>;
   sessionId?: string;
   thinkingLevel?: string;
+  verboseLevel?: string;
   defaults?: GatewaySessionsDefaults;
   sessionInfo?: GatewaySessionRow;
   agentsList?: AgentsListResult;
@@ -738,6 +740,7 @@ async function loadChatHistoryUncached(
           ? res.sessionId
           : null;
     state.chatThinkingLevel = res.sessionInfo?.thinkingLevel ?? res.thinkingLevel ?? null;
+    state.chatVerboseLevel = res.verboseLevel ?? null;
     const resetStream = !state.chatRunId || state.chatRunId === previousRunId;
     if (resetStream) {
       const streamReconciliation = {
@@ -834,6 +837,7 @@ async function loadChatHistoryUncached(
     if (isMissingOperatorReadScopeError(err)) {
       state.chatMessages = [];
       state.chatThinkingLevel = null;
+      state.chatVerboseLevel = null;
       setChatError(state, formatMissingOperatorReadScopeMessage("existing chat history"));
     } else {
       setChatError(state, String(err));

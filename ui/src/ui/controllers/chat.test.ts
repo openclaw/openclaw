@@ -29,6 +29,7 @@ function createState(overrides: Partial<ChatState> = {}): ChatState {
     chatStream: null,
     chatStreamStartedAt: null,
     chatThinkingLevel: null,
+    chatVerboseLevel: null,
     client: null,
     connected: true,
     lastError: null,
@@ -1485,7 +1486,7 @@ describe("loadChatHistory filtering", () => {
       { role: "assistant", text: "  NO_REPLY  " },
     ];
     const mockClient = {
-      request: vi.fn().mockResolvedValue({ messages, thinkingLevel: "low" }),
+      request: vi.fn().mockResolvedValue({ messages, thinkingLevel: "low", verboseLevel: "full" }),
     };
     const state = createState({
       client: mockClient as unknown as ChatState["client"],
@@ -1501,6 +1502,7 @@ describe("loadChatHistory filtering", () => {
     expect(state.chatMessages[3]).toEqual(messages[4]);
     expect(state.chatMessages[4]).toEqual(messages[5]);
     expect(state.chatThinkingLevel).toBe("low");
+    expect(state.chatVerboseLevel).toBe("full");
     expect(state.chatLoading).toBe(false);
   });
 
@@ -3126,12 +3128,14 @@ describe("loadChatHistory retry handling", () => {
       client: { request } as unknown as ChatState["client"],
       chatMessages: [{ role: "assistant", content: [{ type: "text", text: "old" }] }],
       chatThinkingLevel: "high",
+      chatVerboseLevel: "full",
     });
 
     await loadChatHistory(state);
 
     expect(state.chatMessages).toStrictEqual([]);
     expect(state.chatThinkingLevel).toBeNull();
+    expect(state.chatVerboseLevel).toBeNull();
     expect(state.lastError).toBe(
       "This connection is missing operator.read, so existing chat history cannot be loaded yet.",
     );
@@ -3304,8 +3308,16 @@ describe("loadChatHistory retry handling", () => {
   });
 
   it("ignores stale history responses after switching sessions", async () => {
-    const mainRequest = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
-    const otherRequest = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
+    const mainRequest = createDeferred<{
+      messages: Array<unknown>;
+      thinkingLevel?: string;
+      verboseLevel?: string;
+    }>();
+    const otherRequest = createDeferred<{
+      messages: Array<unknown>;
+      thinkingLevel?: string;
+      verboseLevel?: string;
+    }>();
     const request = vi.fn((_method: string, params?: { sessionKey?: string }) => {
       if (params?.sessionKey === "main") {
         return mainRequest.promise;
@@ -3328,6 +3340,7 @@ describe("loadChatHistory retry handling", () => {
     mainRequest.resolve({
       messages: [{ role: "assistant", content: [{ type: "text", text: "main history" }] }],
       thinkingLevel: "high",
+      verboseLevel: "full",
     });
     await firstLoad;
 
@@ -3336,10 +3349,12 @@ describe("loadChatHistory retry handling", () => {
       { role: "assistant", content: [{ type: "text", text: "visible old" }] },
     ]);
     expect(state.chatThinkingLevel).toBeNull();
+    expect(state.chatVerboseLevel).toBeNull();
 
     otherRequest.resolve({
       messages: [{ role: "assistant", content: [{ type: "text", text: "other history" }] }],
       thinkingLevel: "low",
+      verboseLevel: "full",
     });
     await secondLoad;
 
@@ -3348,6 +3363,7 @@ describe("loadChatHistory retry handling", () => {
       { role: "assistant", content: [{ type: "text", text: "other history" }] },
     ]);
     expect(state.chatThinkingLevel).toBe("low");
+    expect(state.chatVerboseLevel).toBe("full");
   });
 
   it("ignores stale global history responses after switching selected agents", async () => {

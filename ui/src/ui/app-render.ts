@@ -3557,7 +3557,7 @@ export function renderApp(state: AppViewState) {
                     onRefresh: refreshChatWorkspaceFiles,
                     onOpenFile: openChatWorkspaceFile,
                   },
-                  autoExpandToolCalls: false,
+                  autoExpandToolCalls: state.chatVerboseLevel === "full",
                   onRefresh: () => {
                     state.chatSideResult = null;
                     state.resetToolStream();
