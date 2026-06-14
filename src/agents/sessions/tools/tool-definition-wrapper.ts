@@ -7,6 +7,19 @@ import type { TSchema } from "typebox";
 import type { AgentTool } from "../../runtime/index.js";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.js";
 
+function defineForwardedParameters<TParams extends TSchema>(
+  target: { parameters?: TParams },
+  source: { parameters: TParams },
+): void {
+  Object.defineProperty(target, "parameters", {
+    enumerable: true,
+    configurable: true,
+    get() {
+      return source.parameters;
+    },
+  });
+}
+
 /** Wrap a ToolDefinition into an AgentTool for the core runtime. */
 export function wrapToolDefinition<
   TParams extends TSchema = TSchema,
@@ -16,16 +29,17 @@ export function wrapToolDefinition<
   definition: ToolDefinition<TParams, TDetails, TState>,
   ctxFactory?: () => ExtensionContext,
 ): AgentTool<TParams, TDetails> {
-  return {
+  const tool = {
     name: definition.name,
     label: definition.label,
     description: definition.description,
-    parameters: definition.parameters,
     prepareArguments: definition.prepareArguments,
     executionMode: definition.executionMode,
     execute: (toolCallId, params, signal, onUpdate) =>
       definition.execute(toolCallId, params, signal, onUpdate, ctxFactory?.() as ExtensionContext),
-  };
+  } as AgentTool<TParams, TDetails>;
+  defineForwardedParameters(tool, definition);
+  return tool;
 }
 
 /** Wrap multiple ToolDefinitions into AgentTools for the core runtime. */
@@ -43,14 +57,15 @@ export function wrapToolDefinitions(
  * provides plain AgentTool overrides that do not include prompt metadata or renderers.
  */
 export function createToolDefinitionFromAgentTool(tool: AgentTool): ToolDefinition {
-  return {
+  const definition = {
     name: tool.name,
     label: tool.label,
     description: tool.description,
-    parameters: tool.parameters,
     prepareArguments: tool.prepareArguments,
     executionMode: tool.executionMode,
     execute: async (toolCallId, params, signal, onUpdate) =>
       tool.execute(toolCallId, params, signal, onUpdate),
-  };
+  } as ToolDefinition;
+  defineForwardedParameters(definition, tool);
+  return definition;
 }
