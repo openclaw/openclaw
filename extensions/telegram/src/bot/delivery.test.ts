@@ -2,6 +2,7 @@
 import type { Bot } from "grammy";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { clearSentMessageCache, wasSentByBot } from "../sent-message-cache.js";
 const { loadWebMedia } = vi.hoisted(() => ({
   loadWebMedia: vi.fn(),
 }));
@@ -239,6 +240,7 @@ function createVoiceFailureHarness(params: {
 
 describe("deliverReplies", () => {
   beforeEach(() => {
+    clearSentMessageCache();
     loadWebMedia.mockClear();
     probeVideoDimensions.mockReset();
     probeVideoDimensions.mockResolvedValue(undefined);
@@ -447,6 +449,20 @@ describe("deliverReplies", () => {
       accountId: "work",
       conversationId: "123",
     });
+  });
+
+  it("records sent messages in the Telegram ledger for successful deliveries", async () => {
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 9, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [{ text: "hello" }],
+      runtime,
+      bot,
+    });
+
+    expect(wasSentByBot("123", 9)).toBe(true);
   });
 
   it("sets disable_notification when silent is true", async () => {
