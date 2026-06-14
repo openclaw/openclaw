@@ -538,6 +538,20 @@ describe.each([fileBackedAdapter, sqliteAdapter])(
       });
       expect(fs.existsSync(sqlitePath)).toBe(true);
       expect(fs.existsSync(legacyStorePath)).toBe(false);
+      expect(
+        listSqliteSessionEntries({
+          env: scope.env,
+          storePath: sqlitePath,
+        }),
+      ).toEqual([
+        expect.objectContaining({
+          entry: expect.objectContaining({ sessionId: "session-1" }),
+          sessionKey: "voice:123",
+        }),
+      ]);
+      expect(() =>
+        loadSqliteSessionEntry({ ...scope, agentId: "main", storePath: sqlitePath }),
+      ).toThrow("belongs to agent voice; requested agent main");
     });
 
     it("does not treat custom JSON store paths as SQLite database files", async () => {
