@@ -14,6 +14,7 @@ const SOURCE_CONFIG_PATH = path.join(SOURCE_DOCS_DIR, "docs.json");
 const INTERNAL_DOCS_DIRS = ["internal"];
 const DEFAULT_CLAWHUB_SOURCE_REPO = "openclaw/clawhub";
 const CLAWHUB_DOCS_TARGET_DIR = "clawhub";
+const CLAWHUB_NPM_RELEASE_TAG_TOKEN = "{{CLAWHUB_NPM_RELEASE_TAG}}";
 const CLAWHUB_REPO_ENV = "OPENCLAW_DOCS_SYNC_CLAWHUB_REPO";
 const DEFAULT_CLAWHUB_REPO_CANDIDATES = [
   path.resolve(ROOT, "..", "clawhub-docs-clawhub"),
@@ -288,6 +289,18 @@ function walkMarkdownFiles(entryPath, out = []) {
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
+}
+
+function resolveClawHubNpmReleaseTag(repoPath) {
+  const packageJsonPath = path.join(repoPath, "packages", "clawhub", "package.json");
+  const packageJson = readJson(packageJsonPath);
+  const version = String(packageJson.version ?? "").trim();
+  if (!/^\d+\.\d+\.\d+$/.test(version)) {
+    throw new Error(
+      `ClawHub package version must be stable semver in ${packageJsonPath}; found "${version || "<missing>"}"`,
+    );
+  }
+  return `v${version}`;
 }
 
 function writeJson(filePath, value) {
@@ -591,6 +604,10 @@ function rewriteClawHubMarkdownLinks(raw, relativeSourcePath, source) {
   });
 }
 
+function interpolateClawHubDocsVariables(raw, variables) {
+  return raw.replaceAll(CLAWHUB_NPM_RELEASE_TAG_TOKEN, variables.npmReleaseTag);
+}
+
 /**
  * Mirrors ClawHub docs into the target docs tree.
  */
@@ -613,6 +630,7 @@ export function syncClawHubDocsTree(targetDocsDir, options = {}) {
     repository: options.sourceRepo || DEFAULT_CLAWHUB_SOURCE_REPO,
     sha: options.sourceSha || getGitHeadSha(repoPath),
   };
+  const npmReleaseTag = resolveClawHubNpmReleaseTag(repoPath);
 
   fs.rmSync(targetDir, { recursive: true, force: true });
   ensureDir(targetDir);
@@ -633,9 +651,10 @@ export function syncClawHubDocsTree(targetDocsDir, options = {}) {
 
     if (/\.mdx?$/iu.test(sourcePath)) {
       const raw = fs.readFileSync(sourcePath, "utf8");
+      const interpolated = interpolateClawHubDocsVariables(raw, { npmReleaseTag });
       fs.writeFileSync(
         targetPath,
-        rewriteClawHubMarkdownLinks(raw, relativeSourcePath, source),
+        rewriteClawHubMarkdownLinks(interpolated, relativeSourcePath, source),
         "utf8",
       );
     } else {
@@ -649,6 +668,7 @@ export function syncClawHubDocsTree(targetDocsDir, options = {}) {
     ...source,
     path: repoPath,
     files: copied,
+    npmReleaseTag,
   };
 }
 
