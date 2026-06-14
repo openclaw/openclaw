@@ -173,6 +173,7 @@ plugins.
     | --- | --- |
     | `/new [model]` | Archive the current session and start a fresh one |
     | `/reset [soft [message]]` | Reset the current session in place. `soft` keeps the transcript, drops reused CLI backend session ids, and reruns startup |
+    | `/name [title]` | Name or rename the current session so parallel sessions stay easy to tell apart; the label shows up everywhere `sessions.list` is surfaced (TUI, web, CLI, MCP). Run with no argument to see the current name plus a locally derived suggestion. Only authorized senders can rename |
     | `/compact [instructions]` | Compact the session context. See [Compaction](/concepts/compaction) |
     | `/stop` | Abort the current run |
     | `/session idle <duration\|off>` | Manage thread-binding idle expiry |
@@ -186,6 +187,13 @@ plugins.
       and the current parent is the agent's main session — in that case `/new`
       resets the main session in place. Typed `/reset` still runs the Gateway's
       in-place reset.
+    </Note>
+
+    <Note>
+      Like other in-chat session commands (for example `/goal`), `/name` writes
+      the rename directly to the session store and emits `sessions.changed`, so
+      already-open Control UI/WebChat/TUI session lists can refresh the visible
+      label without a manual reload.
     </Note>
 
   </Accordion>
