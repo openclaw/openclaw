@@ -5,6 +5,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { escapeRegExp } from "../shared/regexp.js";
 import { isInterpreterLikeAllowlistPattern } from "./command-analysis/inline-eval.js";
 import { detectInlineEvalArgv } from "./command-analysis/risks.js";
 import {
@@ -907,10 +908,6 @@ export type AllowAlwaysPattern = {
   argPattern?: string;
 };
 
-function escapeRegExpLiteral(input: string): string {
-  return input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 function buildScriptArgPatternFromArgv(
   argv: string[],
   scriptPath: string,
@@ -935,7 +932,7 @@ function buildScriptArgPatternFromArgv(
   if (normalized.length === 0) {
     return "^\x00\x00$";
   }
-  return `^${normalized.map(escapeRegExpLiteral).join("\x00")}\x00$`;
+  return `^${normalized.map(escapeRegExp).join("\x00")}\x00$`;
 }
 
 function buildArgPatternFromArgv(argv: string[], platform?: string | null): string | undefined {
@@ -948,7 +945,7 @@ function buildArgPatternFromArgv(argv: string[], platform?: string | null): stri
     return "^\x00\x00$";
   }
   const joined = normalized.join("\x00");
-  return `^${escapeRegExpLiteral(joined)}\x00$`;
+  return `^${escapeRegExp(joined)}\x00$`;
 }
 
 function addAllowAlwaysPattern(
