@@ -15,12 +15,9 @@ import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../../../packages/gateway-prot
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
-import {
-  readSessionStoreForTest,
-  writeSessionStoreForTest,
-} from "../../config/sessions/test-helpers.js";
 import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
+import { getAgentRunContext } from "../../infra/agent-events.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { readSessionTranscriptIndex } from "../session-transcript-index.fs.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -1535,14 +1532,18 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         const updatedAt = Date.parse("2026-05-18T11:00:00.000Z");
         const rewrittenAt = Date.parse("2026-05-18T11:05:00.000Z");
         const storePath = path.join(path.dirname(mockState.transcriptPath), "sessions.json");
-        writeSessionStoreForTest(storePath, {
-          main: {
-            sessionId: mockState.sessionId,
-            sessionFile: mockState.transcriptPath,
-            updatedAt,
-            status: "done",
-          },
-        });
+        fs.writeFileSync(
+          storePath,
+          JSON.stringify({
+            main: {
+              sessionId: mockState.sessionId,
+              sessionFile: mockState.transcriptPath,
+              updatedAt,
+              status: "done",
+            },
+          }),
+          "utf-8",
+        );
         await appendSourceReplyMirrorEntry({
           idempotencyKey: mirrorIdempotencyKey,
           text: "Codex source reply with media",
@@ -1602,7 +1603,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           expect(assistantEntries[0]?.idempotencyKey).toBe(mirrorIdempotencyKey);
           expect(JSON.stringify(assistantEntries[0])).toContain("/api/chat/media/outgoing/");
           expect(JSON.stringify(assistantEntries[0])).not.toContain(mediaUrl);
-          const store = readSessionStoreForTest(storePath);
+          const store = JSON.parse(fs.readFileSync(storePath, "utf-8")) as Record<
+            string,
+            { updatedAt?: number; status?: string }
+          >;
           expect(store.main?.updatedAt).toBeGreaterThanOrEqual(rewrittenAt);
           expect(store.main?.updatedAt).toBeGreaterThan(updatedAt);
           expect(store.main?.status).toBe("done");
@@ -2526,14 +2530,18 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const updatedAt = Date.parse("2026-05-18T11:00:00.000Z");
     const appendedAt = Date.parse("2026-05-18T11:05:00.000Z");
     const storePath = path.join(path.dirname(mockState.transcriptPath), "sessions.json");
-    writeSessionStoreForTest(storePath, {
-      main: {
-        sessionId: mockState.sessionId,
-        sessionFile: mockState.transcriptPath,
-        updatedAt,
-        status: "done",
-      },
-    });
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        main: {
+          sessionId: mockState.sessionId,
+          sessionFile: mockState.transcriptPath,
+          updatedAt,
+          status: "done",
+        },
+      }),
+      "utf-8",
+    );
     const respond = vi.fn();
     const context = createChatContext();
     vi.useFakeTimers({ toFake: ["Date"] });
@@ -2553,7 +2561,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
       const response = lastRespondCall(respond);
       expect(response?.[0]).toBe(true);
-      const store = readSessionStoreForTest(storePath);
+      const store = JSON.parse(fs.readFileSync(storePath, "utf-8")) as Record<
+        string,
+        { updatedAt?: number; status?: string }
+      >;
       expect(store.main?.updatedAt).toBe(appendedAt);
       expect(store.main?.status).toBe("done");
     } finally {
@@ -4636,6 +4647,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(response?.[1]).toBeUndefined();
     expect(response?.[2]?.code).toBe(ErrorCodes.INVALID_REQUEST);
     expect(response?.[2]?.message).toContain("attachment broken.png: invalid base64 content");
+    expect(getAgentRunContext("idem-chat-send-attachment-parse-stack")).toBeUndefined();
     const parseLogCall = (context.logGateway.error as unknown as ReturnType<typeof vi.fn>).mock
       .calls[0] as [string, Record<string, string>] | undefined;
     expect(parseLogCall?.[0]).toBe("chat.send attachment parse/stage failed");

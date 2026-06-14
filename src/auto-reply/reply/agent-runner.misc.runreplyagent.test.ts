@@ -15,10 +15,6 @@ import * as sessionTypesModule from "../../config/sessions.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionStore, saveSessionStore } from "../../config/sessions.js";
 import {
-  readSessionStoreForTest,
-  writeSessionStoreForTestAsync,
-} from "../../config/sessions/test-helpers.js";
-import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
@@ -252,16 +248,6 @@ function firstMockCallArg(mock: MockCallSource, label: string): unknown {
   return call[0];
 }
 
-async function seedSessionStore(params: {
-  storePath: string;
-  sessionKey: string;
-  entry: Record<string, unknown>;
-}) {
-  await writeSessionStoreForTestAsync(params.storePath, {
-    [params.sessionKey]: params.entry as SessionEntry,
-  });
-}
-
 beforeEach(() => {
   vi.useRealTimers();
   registerCliBackendsForTest();
@@ -312,6 +298,19 @@ afterEach(() => {
 });
 
 describe("runReplyAgent auto-compaction token update", () => {
+  async function seedSessionStore(params: {
+    storePath: string;
+    sessionKey: string;
+    entry: Record<string, unknown>;
+  }) {
+    await fs.mkdir(path.dirname(params.storePath), { recursive: true });
+    await fs.writeFile(
+      params.storePath,
+      JSON.stringify({ [params.sessionKey]: params.entry }, null, 2),
+      "utf-8",
+    );
+  }
+
   function createBaseRun(params: {
     storePath: string;
     sessionEntry: Record<string, unknown>;
@@ -422,7 +421,7 @@ describe("runReplyAgent auto-compaction token update", () => {
       unsubscribe?.();
     }
 
-    const stored = readSessionStoreForTest(storePath);
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     const usageEvent = diagnostics.find((event) => event.type === "model.usage");
     return { sessionKey, stored, usageEvent };
   }
@@ -828,7 +827,17 @@ describe("runReplyAgent Active Memory inline debug", () => {
       verboseLevel: "on",
     };
 
-    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          [sessionKey]: sessionEntry,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
 
     runEmbeddedAgentMock.mockImplementationOnce(async () => {
       const latest = loadSessionStore(storePath, { skipCache: true });
@@ -930,7 +939,17 @@ describe("runReplyAgent Active Memory inline debug", () => {
       traceLevel: "on",
     };
 
-    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          [sessionKey]: sessionEntry,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
 
     runEmbeddedAgentMock.mockImplementationOnce(async () => {
       const latest = loadSessionStore(storePath, { skipCache: true });
@@ -1031,7 +1050,17 @@ describe("runReplyAgent Active Memory inline debug", () => {
       traceLevel: "on",
     };
 
-    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          [sessionKey]: sessionEntry,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
 
     runEmbeddedAgentMock.mockImplementationOnce(async () => {
       const latest = loadSessionStore(storePath, { skipCache: true });
@@ -1134,7 +1163,17 @@ describe("runReplyAgent Active Memory inline debug", () => {
       compactionCount: 3,
     };
 
-    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          [sessionKey]: sessionEntry,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
     await fs.writeFile(
       sessionFile,
       [
@@ -1370,7 +1409,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
       traceLevel: "raw",
     };
 
-    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+    await fs.writeFile(storePath, JSON.stringify({ [sessionKey]: sessionEntry }, null, 2), "utf-8");
     await fs.writeFile(sessionFile, "", "utf-8");
 
     runEmbeddedAgentMock.mockResolvedValueOnce({
@@ -1586,7 +1625,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
       traceLevel: "raw",
     };
 
-    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+    await fs.writeFile(storePath, JSON.stringify({ [sessionKey]: sessionEntry }, null, 2), "utf-8");
     await fs.writeFile(sessionFile, "", "utf-8");
 
     runEmbeddedAgentMock.mockResolvedValueOnce({
@@ -2603,7 +2642,7 @@ describe("runReplyAgent response usage footer", () => {
     });
   }
 
-  it("appends session key when responseUsage=full", async () => {
+  it("uses the built-in compact footer when responseUsage=full", async () => {
     runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "ok" }],
       meta: {
@@ -2619,9 +2658,11 @@ describe("runReplyAgent response usage footer", () => {
     const res = await createRun({ responseUsage: "full", sessionKey });
     const payload = Array.isArray(res) ? res[0] : res;
     const text = payload?.text ?? "";
-    expect(text).toContain("Usage:");
-    expect(text).toContain("cache 4 cached / 2 new");
-    expect(text).toContain(`· session \`${sessionKey}\``);
+    expect(text).toContain("anthropic🤖 claude 🌘 🐌");
+    expect(text).toContain("↕️ 12/3");
+    expect(text).toContain("🗄 22%");
+    expect(text).not.toContain("Usage:");
+    expect(text).not.toContain("· session ");
   });
 
   it("does not append session key when responseUsage=tokens", async () => {
@@ -2666,6 +2707,61 @@ describe("runReplyAgent response usage footer", () => {
     expect(text).not.toContain("· session ");
   });
 
+  it("keeps partial token counts in the built-in full footer", async () => {
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          provider: "anthropic",
+          model: "claude",
+          usage: { output: 125 },
+        },
+      },
+    });
+
+    const res = await createRun({
+      responseUsage: "full",
+      sessionKey: "agent:main:whatsapp:dm:+1000",
+    });
+    const payload = Array.isArray(res) ? res[0] : res;
+    const text = payload?.text ?? "";
+    expect(text).toContain("↕️ ?/125");
+    expect(text).not.toContain("Usage:");
+  });
+
+  it("shows aggregate-only token totals in the built-in full footer", async () => {
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          provider: "anthropic",
+          model: "claude",
+          usage: { total: 1250 },
+        },
+      },
+    });
+
+    const res = await createRun({
+      responseUsage: "full",
+      sessionKey: "agent:main:whatsapp:dm:+1000",
+      config: {
+        models: {
+          providers: {
+            anthropic: {
+              models: [{ id: "claude", cost: { input: 3, output: 15 } }],
+            },
+          },
+        },
+      },
+    });
+    const payload = Array.isArray(res) ? res[0] : res;
+    const text = payload?.text ?? "";
+    expect(text).toContain("↕️ 1.3k");
+    expect(text).not.toContain("↕️ ?/?");
+    expect(text).not.toContain("💰");
+    expect(text).not.toContain("Usage:");
+  });
+
   it("shows configured costs for aws-sdk providers when responseUsage=full", async () => {
     runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "ok" }],
@@ -2708,10 +2804,12 @@ describe("runReplyAgent response usage footer", () => {
     const payload = Array.isArray(res) ? res[0] : res;
     const text = payload?.text ?? "";
 
-    expect(text).toContain("Usage: 1.0k in / 2.0k out");
-    expect(text).toContain("cache 500 cached / 2.0k new");
-    expect(text).toContain("est $0.04");
-    expect(text).toContain(`· session \`${sessionKey}\``);
+    expect(text).toContain("amazon-bedrock🤖 us.anthropic.claude-sonnet-4-6 🌘 🐌");
+    expect(text).toContain("↕️ 1.0k/2.0k");
+    expect(text).toContain("🗄 14%");
+    expect(text).toContain("💰0.0406");
+    expect(text).not.toContain("Usage:");
+    expect(text).not.toContain("· session ");
   });
 });
 
@@ -2971,7 +3069,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     const storePath = path.join(tmp, "sessions.json");
     const sessionKey = "stranded";
     const sessionEntry = { sessionId: "session", updatedAt: Date.now(), totalTokens: 1_000 };
-    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+    await fs.writeFile(storePath, JSON.stringify({ [sessionKey]: sessionEntry }, null, 2), "utf-8");
 
     const finalAssistantText =
       params.finalAssistantText ??

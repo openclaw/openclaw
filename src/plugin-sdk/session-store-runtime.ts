@@ -34,10 +34,6 @@ export {
   upsertSessionEntry,
 } from "../config/sessions/store.js";
 export {
-  resolveAllAgentSessionStoreTargetsSync,
-  type SessionStoreTarget,
-} from "../config/sessions/targets.js";
-export {
   evaluateSessionFreshness,
   resolveChannelResetConfig,
   resolveSessionResetPolicy,

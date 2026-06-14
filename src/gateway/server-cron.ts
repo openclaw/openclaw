@@ -16,6 +16,7 @@ import { resolveStorePath } from "../config/sessions/paths.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runCronCommandJob } from "../cron/command-runner.js";
+import { resolveCronStoredDeliveryContext } from "../cron/delivery-context.js";
 import { resolveCronDeliveryPlan, sendCronAnnouncePayloadStrict } from "../cron/delivery.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { appendCronRunLog, resolveCronRunLogPruneOptions } from "../cron/run-log.js";
@@ -31,7 +32,10 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { resolveMainScopedEventSessionKey } from "../infra/event-session-routing.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
-import { enqueueSystemEvent } from "../infra/system-events.js";
+import {
+  consumeSelectedSystemEventEntries,
+  enqueueSystemEventEntry,
+} from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type {
@@ -322,11 +326,30 @@ export function buildGatewayCronService(params: {
       if (!sessionKey) {
         throw new Error("Cron system event target did not resolve a session key.");
       }
-      enqueueSystemEvent(text, {
+      const event = enqueueSystemEventEntry(text, {
         sessionKey,
         contextKey: opts?.contextKey,
         deliveryContext: opts?.deliveryContext,
       });
+      return event
+        ? {
+            accepted: true,
+            remove: () => consumeSelectedSystemEventEntries(sessionKey, [event]).length > 0,
+          }
+        : { accepted: false };
+    },
+    resolveOriginDeliveryContext: (opts) => {
+      // Resolve the wake target the same way the enqueue/heartbeat deps do,
+      // then read the channel-correct delivery context from that session's
+      // store entry (NOT by string-splitting the composite session key).
+      const { runtimeConfig, sessionKey } = resolveCronTarget({
+        ...opts,
+        preserveUntargeted: true,
+      });
+      if (!sessionKey) {
+        return undefined;
+      }
+      return resolveCronStoredDeliveryContext({ cfg: runtimeConfig, sessionKey });
     },
     requestHeartbeat: (opts) => {
       const { agentId, sessionKey } = resolveCronTarget({ ...opts, preserveUntargeted: true });

@@ -142,7 +142,11 @@ docker_e2e_docker_cmd() {
   if [ "${1:-}" = "run" ]; then
     shift
     docker_e2e_docker_run_resource_args "$@"
-    docker_e2e_timeout_cmd "$timeout_value" docker run "${DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" "$@"
+    if [ "${#DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" -gt 0 ]; then
+      docker_e2e_timeout_cmd "$timeout_value" docker run "${DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" "$@"
+    else
+      docker_e2e_timeout_cmd "$timeout_value" docker run "$@"
+    fi
     return
   fi
   docker_e2e_timeout_cmd "$timeout_value" docker "$@"
@@ -153,7 +157,11 @@ docker_e2e_docker_run_cmd() {
   if [ "${1:-}" = "run" ]; then
     shift
     docker_e2e_docker_run_resource_args "$@"
-    docker_e2e_timeout_cmd "$timeout_value" docker run "${DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" "$@"
+    if [ "${#DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" -gt 0 ]; then
+      docker_e2e_timeout_cmd "$timeout_value" docker run "${DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" "$@"
+    else
+      docker_e2e_timeout_cmd "$timeout_value" docker run "$@"
+    fi
     return
   fi
   docker_e2e_timeout_cmd "$timeout_value" docker "$@"
