@@ -161,6 +161,39 @@ describe("resolveImplicitProviders startup discovery scope", () => {
     expect(catalogOptions?.timeoutMs).toBe(1234);
   });
 
+  it("bounds runtime provider catalog discovery by default", async () => {
+    await resolveImplicitProviders({
+      agentDir: "/tmp/openclaw-agent",
+      config: {},
+      env: {} as NodeJS.ProcessEnv,
+      explicitProviders: {},
+    });
+
+    const catalogOptions = firstMockArg(mocks.runProviderCatalog, "provider catalog") as {
+      timeoutMs?: number;
+    };
+    expect(catalogOptions?.timeoutMs).toBe(15_000);
+  });
+
+  it("skips runtime provider catalog discovery after the default timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.runProviderCatalog.mockReturnValue(new Promise(() => {}));
+
+      const providers = resolveImplicitProviders({
+        agentDir: "/tmp/openclaw-agent",
+        config: {},
+        env: {} as NodeJS.ProcessEnv,
+        explicitProviders: {},
+      });
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      await expect(providers).resolves.toEqual({});
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("can keep startup discovery on provider discovery entries only", async () => {
     await resolveImplicitProviders({
       agentDir: "/tmp/openclaw-agent",
