@@ -376,21 +376,45 @@ function readSchemaRecord(schema: unknown): Record<string, unknown> | undefined 
   return isRecord(schema) ? schema : undefined;
 }
 
+function readRecordField(record: Record<string, unknown>, key: string): unknown {
+  try {
+    return record[key];
+  } catch {
+    return undefined;
+  }
+}
+
+function readRecordEntries(record: Record<string, unknown>): Array<[string, unknown]> {
+  let keys: string[];
+  try {
+    keys = Object.keys(record);
+  } catch {
+    return [];
+  }
+  const entries: Array<[string, unknown]> = [];
+  for (const key of keys) {
+    entries.push([key, readRecordField(record, key)]);
+  }
+  return entries;
+}
+
 function readSchemaProperties(schema: unknown): Record<string, unknown> {
   const record = readSchemaRecord(schema);
-  return isRecord(record?.properties) ? record.properties : {};
+  const properties = record ? readRecordField(record, "properties") : undefined;
+  return isRecord(properties) ? Object.fromEntries(readRecordEntries(properties)) : {};
 }
 
 function readSchemaString(schema: unknown, key: string): string | undefined {
   const record = readSchemaRecord(schema);
-  const value = record?.[key];
+  const value = record ? readRecordField(record, key) : undefined;
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function readRequiredKeys(schema: unknown): string[] {
   const record = readSchemaRecord(schema);
-  return Array.isArray(record?.required)
-    ? record.required.filter((entry): entry is string => typeof entry === "string")
+  const required = record ? readRecordField(record, "required") : undefined;
+  return Array.isArray(required)
+    ? required.filter((entry): entry is string => typeof entry === "string")
     : [];
 }
 

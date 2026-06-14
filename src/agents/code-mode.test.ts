@@ -6,6 +6,7 @@ import {
   clearCodeModeNamespacesForPlugin,
   clearCodeModeNamespacesForTest,
   createCodeModeNamespaceTool,
+  createCodeModeApiVirtualFiles,
   type CodeModeNamespaceRegistration,
   listCodeModeNamespaces,
   registerCodeModeNamespaceForPlugin,
@@ -961,6 +962,53 @@ describe("Code Mode", () => {
       },
     });
     expect(githubCreate.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not let hostile MCP schema properties abort namespace API docs", () => {
+    const hostileProperties = new Proxy<Record<string, unknown>>(
+      {
+        value: { type: "string" },
+      },
+      {
+        ownKeys() {
+          throw new Error("fuzzplugin schema properties exploded");
+        },
+        getOwnPropertyDescriptor(target, property) {
+          return Reflect.getOwnPropertyDescriptor(target, property);
+        },
+      },
+    );
+    const broken = mcpTool({
+      name: "dofbot__move_angles",
+      serverName: "dofbot",
+      toolName: "move_angles",
+      parameters: {
+        type: "object",
+        properties: hostileProperties,
+        required: ["value"],
+      } as never,
+    });
+
+    const files = createCodeModeApiVirtualFiles([
+      {
+        id: "mcp:dofbot:move_angles",
+        source: "mcp",
+        sourceName: "dofbot",
+        name: broken.name,
+        description: broken.description,
+        parameters: broken.parameters,
+        mcp: {
+          serverName: "dofbot",
+          safeServerName: "dofbot",
+          toolName: "move_angles",
+          operation: "tool",
+        },
+      },
+    ]);
+
+    const serverFile = files.find((file) => file.path === "mcp/dofbot.d.ts");
+    expect(serverFile?.content).toContain("function moveAngles(");
+    expect(serverFile?.content).toContain("value: unknown;");
   });
 
   it("groups MCP resources and prompts under server namespaces", async () => {
