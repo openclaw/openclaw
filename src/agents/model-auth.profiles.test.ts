@@ -109,6 +109,9 @@ vi.mock("./provider-auth-aliases.js", () => ({
     if (normalized === "bedrock" || normalized === "aws-bedrock") {
       return "amazon-bedrock";
     }
+    if (normalized === "codex-cli") {
+      return "openai-codex";
+    }
     return normalized;
   },
 }));
@@ -513,6 +516,52 @@ describe("getApiKeyForModel", () => {
     ).rejects.toThrow(/requires an OpenAI API key profile/);
   });
 
+  it("explains when stale config mode masks a stored Codex OAuth profile", async () => {
+    const store = {
+      version: 1 as const,
+      profiles: {
+        "openai-codex:default": {
+          type: "oauth" as const,
+          provider: "openai-codex",
+          ...oauthFixture,
+        },
+      },
+    };
+    const cfg: OpenClawConfig = {
+      auth: {
+        profiles: {
+          "openai-codex:default": {
+            provider: "openai-codex",
+            mode: "api_key",
+          },
+        },
+      },
+    };
+
+    let error: unknown = null;
+    try {
+      await resolveApiKeyForProvider({
+        provider: "openai-codex",
+        cfg,
+        store,
+      });
+    } catch (err) {
+      error = err;
+    }
+
+    const message = String(error);
+    expect(message).toContain('No API key found for provider "openai-codex".');
+    expect(message).toContain(
+      'Auth profile "openai-codex:default" for provider "openai-codex" exists as oauth',
+    );
+    expect(message).toContain(
+      'auth.profiles.openai-codex:default.mode is "api_key", so it is skipped',
+    );
+    expect(message).toContain('Update that config mode to "oauth"');
+    expect(message).not.toContain(oauthFixture.access);
+    expect(message).not.toContain(oauthFixture.refresh);
+  });
+
   it("uses the config default agent dir when resolving provider profiles", async () => {
     await withOpenClawTestState(
       {
@@ -599,6 +648,51 @@ describe("getApiKeyForModel", () => {
         );
       },
     );
+  });
+
+  it("uses provider auth aliases when explaining stale config mode mismatches", async () => {
+    const store = {
+      version: 1 as const,
+      profiles: {
+        "openai-codex:default": {
+          type: "oauth" as const,
+          provider: "openai-codex",
+          ...oauthFixture,
+        },
+      },
+    };
+    const cfg: OpenClawConfig = {
+      auth: {
+        profiles: {
+          "openai-codex:default": {
+            provider: "codex-cli",
+            mode: "api_key",
+          },
+        },
+      },
+    };
+
+    let error: unknown = null;
+    try {
+      await resolveApiKeyForProvider({
+        provider: "codex-cli",
+        cfg,
+        store,
+      });
+    } catch (err) {
+      error = err;
+    }
+
+    const message = String(error);
+    expect(message).toContain('No API key found for provider "codex-cli".');
+    expect(message).toContain(
+      'Auth profile "openai-codex:default" for provider "codex-cli" exists as oauth',
+    );
+    expect(message).toContain(
+      'auth.profiles.openai-codex:default.mode is "api_key", so it is skipped',
+    );
+    expect(message).not.toContain(oauthFixture.access);
+    expect(message).not.toContain(oauthFixture.refresh);
   });
 
   it("uses OpenAI OAuth when it is configured for the provider", async () => {
