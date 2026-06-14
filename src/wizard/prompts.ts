@@ -19,6 +19,14 @@ export type WizardMultiSelectParams<T = string> = {
   searchable?: boolean;
 };
 
+export type WizardStepAuth = {
+  url?: string;
+  userCode?: string;
+  verificationUrl?: string;
+  provider?: string;
+  kind?: "oauth-redirect" | "oauth-code" | "device-code";
+};
+
 export type WizardTextParams = {
   message: string;
   initialValue?: string;
@@ -27,6 +35,7 @@ export type WizardTextParams = {
   // Render as a masked input. The entered value is never echoed to the
   // terminal — keeps secrets out of scrollback, transcripts, and screenshots.
   sensitive?: boolean;
+  auth?: WizardStepAuth;
 };
 
 export type WizardConfirmParams = {
@@ -40,6 +49,7 @@ export type WizardProgress = {
 };
 
 export type WizardPrompter = {
+  presentsAuthChallenge?: boolean;
   intro: (title: string) => Promise<void>;
   outro: (message: string) => Promise<void>;
   note: (message: string, title?: string) => Promise<void>;

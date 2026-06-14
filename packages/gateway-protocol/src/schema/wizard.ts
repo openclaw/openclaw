@@ -61,6 +61,23 @@ export const WizardStepOptionSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const WizardStepAuthSchema = Type.Object(
+  {
+    url: Type.Optional(Type.String()),
+    userCode: Type.Optional(Type.String()),
+    verificationUrl: Type.Optional(Type.String()),
+    provider: Type.Optional(Type.String()),
+    kind: Type.Optional(
+      Type.Union([
+        Type.Literal("oauth-redirect"),
+        Type.Literal("oauth-code"),
+        Type.Literal("device-code"),
+      ]),
+    ),
+  },
+  { additionalProperties: false },
+);
+
 /** UI contract for one wizard step rendered by gateway clients. */
 export const WizardStepSchema = Type.Object(
   {
@@ -81,6 +98,7 @@ export const WizardStepSchema = Type.Object(
     initialValue: Type.Optional(Type.Unknown()),
     placeholder: Type.Optional(Type.String()),
     sensitive: Type.Optional(Type.Boolean()),
+    auth: Type.Optional(WizardStepAuthSchema),
     executor: Type.Optional(Type.Union([Type.Literal("gateway"), Type.Literal("client")])),
   },
   { additionalProperties: false },
