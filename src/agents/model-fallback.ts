@@ -38,7 +38,6 @@ import {
   describeFailoverError,
   isFailoverError,
   isNonProviderRuntimeCoordinationError,
-  isTimeoutError,
 } from "./failover-error.js";
 import {
   shouldAllowCooldownProbeForReason,
@@ -197,10 +196,6 @@ function isFallbackAbortError(err: unknown): boolean {
   return name === "AbortError";
 }
 
-function shouldRethrowAbort(err: unknown): boolean {
-  return isFallbackAbortError(err) && !isTimeoutError(err);
-}
-
 function isTerminalAbort(signal: AbortSignal | undefined): boolean {
   if (!signal?.aborted) {
     return false;
@@ -342,6 +337,23 @@ async function runFallbackCandidate<T>(params: {
     if (isTerminalAbort(params.abortSignal)) {
       throw err;
     }
+    if (isAgentRunRestartAbortReason(err)) {
+      throw err;
+    }
+    // User/gateway cancellation: if the caller passed an abort signal and it
+    // is already aborted, this is a user cancellation regardless of the reason
+    // (isTerminalAbort above only recognises TimeoutError/ClientDisconnectError
+    // reasons, but createUserAbortError uses AbortError).  Provider-side
+    // AbortErrors arrive with no external signal at all, so they fall through
+    // to retry with the next fallback candidate.
+    //
+    // This check MUST come before coerceToFailoverError because that function
+    // normalises AbortError("This operation was aborted") into a timeout
+    // FailoverError, which would make normalizedFailover non-null and defeat
+    // the guard's !normalizedFailover condition.
+    if (isFallbackAbortError(err) && params.abortSignal?.aborted) {
+      throw err;
+    }
     // Normalize abort-wrapped rate-limit errors (e.g. Google Vertex RESOURCE_EXHAUSTED)
     // so they become FailoverErrors and continue the fallback loop instead of aborting.
     const normalizedFailover = coerceToFailoverError(err, {
@@ -350,9 +362,6 @@ async function runFallbackCandidate<T>(params: {
       sessionId: params.attribution?.sessionId,
       lane: params.attribution?.lane,
     });
-    if (shouldRethrowAbort(err) && !normalizedFailover) {
-      throw err;
-    }
     return { ok: false, error: normalizedFailover ?? err };
   }
 }
