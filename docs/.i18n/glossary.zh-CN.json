@@ -488,6 +488,30 @@
     "target": "沙箱注意事项"
   },
   {
+    "source": "Docker Sandboxes (sbx)",
+    "target": "Docker Sandboxes (sbx)"
+  },
+  {
+    "source": "Sbx plugin",
+    "target": "Sbx plugin"
+  },
+  {
+    "source": "OpenShell",
+    "target": "OpenShell"
+  },
+  {
+    "source": "Sandbox CLI",
+    "target": "Sandbox CLI"
+  },
+  {
+    "source": "Sandbox vs Tool Policy vs Elevated",
+    "target": "Sandbox vs Tool Policy vs Elevated"
+  },
+  {
+    "source": "Multi-Agent Sandbox and Tools",
+    "target": "Multi-Agent Sandbox and Tools"
+  },
+  {
     "source": "Companion apps",
     "target": "配套应用"
   },

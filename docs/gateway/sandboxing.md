@@ -70,8 +70,9 @@ Not sandboxed:
 - `"docker"` (default when sandboxing is enabled): local Docker-backed sandbox runtime.
 - `"ssh"`: generic SSH-backed remote sandbox runtime.
 - `"openshell"`: OpenShell-backed sandbox runtime.
+- `"sbx"`: Docker Sandboxes (`sbx` CLI) backed sandbox runtime.
 
-SSH-specific config lives under `agents.defaults.sandbox.ssh`. OpenShell-specific config lives under `plugins.entries.openshell.config`.
+SSH-specific config lives under `agents.defaults.sandbox.ssh`. OpenShell-specific config lives under `plugins.entries.openshell.config`. sbx-specific config lives under `plugins.entries.sbx.config`.
 
 ### Choosing a backend
 
@@ -292,6 +293,35 @@ For `remote` mode, recreate is especially important:
 - the next use seeds a fresh remote workspace from the local workspace
 
 For `mirror` mode, recreate mainly resets the remote execution environment because the local workspace remains canonical anyway.
+
+### sbx backend
+
+Use `backend: "sbx"` when you want OpenClaw to sandbox tools with the Docker Sandboxes `sbx` CLI (equivalently `docker sandbox`) instead of driving Docker directly. For the full setup guide and configuration reference, see the dedicated [Docker Sandboxes page](/gateway/sbx).
+
+Like the built-in Docker backend, sbx bind-mounts the host workspace at the same path inside the sandbox, so writes are visible on the host immediately. OpenClaw creates the sandbox with `sbx create <agent> <workspace>` on first use and runs commands through `sbx exec`. sbx-specific config (CLI path, agent template, image, CPU/memory limits) lives under `plugins.entries.sbx.config`.
+
+```json5
+{
+  agents: {
+    defaults: {
+      sandbox: {
+        mode: "all",
+        backend: "sbx",
+      },
+    },
+  },
+  plugins: {
+    entries: {
+      sbx: {
+        enabled: true,
+        config: { agent: "shell" },
+      },
+    },
+  },
+}
+```
+
+The sbx backend does not support sandbox browsers or `sandbox.docker.binds`; the host workspace (and, when enabled, the agent and skills workspaces) are mounted automatically.
 
 ## Workspace access
 
@@ -541,6 +571,7 @@ Each agent can override sandbox + tools: `agents.list[].sandbox` and `agents.lis
 
 - [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) — per-agent overrides and precedence
 - [OpenShell](/gateway/openshell) — managed sandbox backend setup, workspace modes, and config reference
+- [Docker Sandboxes (sbx)](/gateway/sbx) — sbx CLI sandbox backend setup and config reference
 - [Sandbox configuration](/gateway/config-agents#agentsdefaultssandbox)
 - [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) — debugging "why is this blocked?"
 - [Security](/gateway/security)

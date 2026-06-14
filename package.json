@@ -104,6 +104,7 @@
     "!dist/extensions/qa-lab/**",
     "!dist/extensions/qa-matrix/**",
     "!dist/extensions/openshell/**",
+    "!dist/extensions/sbx/**",
     "!dist/extensions/slack/**",
     "!dist/extensions/synology-chat/**",
     "!dist/extensions/tokenjuice/**",

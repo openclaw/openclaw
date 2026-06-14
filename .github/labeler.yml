@@ -578,6 +578,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/openshell/**"
+"extensions: sbx":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/sbx/**"
 "extensions: parallel":
   - changed-files:
       - any-glob-to-any-file:

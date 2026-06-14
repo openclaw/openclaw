@@ -235,7 +235,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Official external packages
 
-35 plugins
+36 plugins
 
 - **[acpx](/plugins/reference/acpx)** (`@openclaw/acpx`) - npm; ClawHub. OpenClaw ACP runtime backend with plugin-owned session and transport management.
 
@@ -288,6 +288,8 @@ Each entry lists the package, distribution route, and description.
 - **[pixverse](/plugins/reference/pixverse)** (`@openclaw/pixverse-provider`) - npm; ClawHub: `clawhub:@openclaw/pixverse-provider`. OpenClaw PixVerse video generation provider plugin.
 
 - **[qqbot](/plugins/reference/qqbot)** (`@openclaw/qqbot`) - npm; ClawHub. OpenClaw QQ Bot channel plugin for group and direct-message workflows.
+
+- **[sbx](/plugins/reference/sbx)** (`@openclaw/sbx-sandbox`) - npm; ClawHub. OpenClaw sandbox backend for the Docker Sandboxes (sbx) CLI with bind-mounted workspaces and container command execution.
 
 - **[slack](/plugins/reference/slack)** (`@openclaw/slack`) - npm; ClawHub. OpenClaw Slack channel plugin for channels, DMs, commands, and app events.
 

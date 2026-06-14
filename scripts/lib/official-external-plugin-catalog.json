@@ -246,6 +246,23 @@
       }
     },
     {
+      "name": "@openclaw/sbx-sandbox",
+      "description": "OpenClaw Docker Sandboxes (sbx) sandbox backend",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "sbx",
+          "label": "Docker Sandboxes"
+        },
+        "install": {
+          "npmSpec": "@openclaw/sbx-sandbox",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.5.12-beta.1"
+        }
+      }
+    },
+    {
       "name": "@openclaw/tokenjuice",
       "description": "OpenClaw tokenjuice exec output compaction plugin",
       "source": "official",

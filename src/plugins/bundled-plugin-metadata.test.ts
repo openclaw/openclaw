@@ -49,6 +49,7 @@ const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
   "openshell",
   "phone-control",
   "policy",
+  "sbx",
   "talk-voice",
   "thread-ownership",
   "voice-call",
