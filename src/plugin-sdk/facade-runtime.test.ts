@@ -33,6 +33,53 @@ const trustedBundledFixturesRoot = path.resolve("dist-runtime", "extensions");
 const trustedBundledFixtureDirs: string[] = [];
 type SnapshotPluginRecord = PluginMetadataSnapshot["manifestRegistry"]["plugins"][number];
 
+function createPluginMetadataSnapshotFixture(
+  params: {
+    config?: OpenClawConfig;
+    plugins?: SnapshotPluginRecord[];
+  } = {},
+): PluginMetadataSnapshot {
+  const policyHash = resolveInstalledPluginIndexPolicyHash(params.config);
+  return {
+    policyHash,
+    index: {
+      version: 1,
+      hostContractVersion: "test",
+      compatRegistryVersion: "test",
+      migrationVersion: 1,
+      policyHash,
+      generatedAtMs: 1,
+      installRecords: {},
+      plugins: [],
+      diagnostics: [],
+    },
+    registryDiagnostics: [],
+    manifestRegistry: { plugins: params.plugins ?? [], diagnostics: [] },
+    plugins: [],
+    diagnostics: [],
+    byPluginId: new Map(),
+    normalizePluginId: (pluginId) => pluginId,
+    owners: {
+      channels: new Map(),
+      channelConfigs: new Map(),
+      providers: new Map(),
+      modelCatalogProviders: new Map(),
+      cliBackends: new Map(),
+      setupProviders: new Map(),
+      commandAliases: new Map(),
+      contracts: new Map(),
+    },
+    metrics: {
+      registrySnapshotMs: 0,
+      manifestRegistryMs: 0,
+      ownerMapsMs: 0,
+      totalMs: 0,
+      indexPluginCount: 0,
+      manifestPluginCount: 0,
+    },
+  };
+}
+
 function writeJsonFile(filePath: string, value: unknown): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
@@ -414,6 +461,39 @@ describe("plugin-sdk facade runtime", () => {
     });
   });
 
+  it("skips unreadable registry records while resolving plugin facade locations", () => {
+    const lineDir = createTempDirSync("openclaw-facade-poisoned-registry-");
+    fs.mkdirSync(lineDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(lineDir, "runtime-api.js"),
+      'export const marker = "poisoned-registry-ok";\n',
+      "utf8",
+    );
+    const poisonedRecord = Object.defineProperty({}, "id", {
+      get() {
+        throw new Error("facade registry plugin id exploded");
+      },
+    });
+
+    expect(
+      testing.resolveRegistryPluginModuleLocationFromRegistry({
+        registry: [
+          poisonedRecord as never,
+          {
+            id: "line",
+            rootDir: lineDir,
+            channels: ["line"],
+          },
+        ],
+        dirName: "line",
+        artifactBasename: "runtime-api.js",
+      }),
+    ).toEqual({
+      modulePath: path.join(lineDir, "runtime-api.js"),
+      boundaryRoot: lineDir,
+    });
+  });
+
   it("resolves a globally-installed plugin public surface from package dist", () => {
     const lineDir = createTempDirSync("openclaw-facade-global-line-dist-");
     fs.mkdirSync(path.join(lineDir, "dist"), { recursive: true });
@@ -579,6 +659,66 @@ describe("plugin-sdk facade runtime", () => {
     });
   });
 
+  it("skips unreadable registry records while resolving facade activation metadata", () => {
+    const dir = createTempDirSync("openclaw-facade-activation-poisoned-");
+    const pluginDir = path.join(dir, "demo");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    const runtimeApiPath = path.join(pluginDir, "runtime-api.js");
+    fs.writeFileSync(runtimeApiPath, 'export const marker = "activation-ok";\n', "utf8");
+    const config = {
+      plugins: {
+        entries: {
+          demo: {
+            enabled: true,
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const poisonedRecord = Object.defineProperty({}, "rootDir", {
+      get() {
+        throw new Error("facade activation manifest rootDir exploded");
+      },
+    });
+    setRuntimeConfigSnapshot(config, config);
+    setCurrentPluginMetadataSnapshot(
+      createPluginMetadataSnapshotFixture({
+        config,
+        plugins: [
+          poisonedRecord as never,
+          {
+            id: "demo",
+            rootDir: pluginDir,
+            source: runtimeApiPath,
+            manifestPath: path.join(pluginDir, "openclaw.plugin.json"),
+            channels: ["demo"],
+            providers: [],
+            cliBackends: [],
+            skills: [],
+            hooks: [],
+            origin: "bundled" as const,
+          },
+        ],
+      }),
+      { config },
+    );
+
+    expect(
+      resolveActivationCheckBundledPluginPublicSurfaceAccess({
+        dirName: "demo",
+        artifactBasename: "runtime-api.js",
+        location: {
+          modulePath: runtimeApiPath,
+          boundaryRoot: dir,
+        },
+        sourceExtensionsRoot: path.join(dir, "source-root"),
+        resolutionKey: "activation-poisoned-demo",
+      }),
+    ).toEqual({
+      allowed: true,
+      pluginId: "demo",
+    });
+  });
+
   it("validates current snapshot against facade boundary config and ignores on mismatch", () => {
     const dir = createTempDirSync("openclaw-facade-snapshot-validate-");
     fs.mkdirSync(path.join(dir, "demo"), { recursive: true });
@@ -590,53 +730,6 @@ describe("plugin-sdk facade runtime", () => {
     // Do NOT write openclaw.plugin.json on disk to force fallback to registry scan
     useBundledPluginDirOverrideForTest(dir);
 
-    function createTestSnapshot(
-      params: {
-        config?: OpenClawConfig;
-        plugins?: SnapshotPluginRecord[];
-      } = {},
-    ): PluginMetadataSnapshot {
-      const policyHash = resolveInstalledPluginIndexPolicyHash(params.config);
-      return {
-        policyHash,
-        index: {
-          version: 1,
-          hostContractVersion: "test",
-          compatRegistryVersion: "test",
-          migrationVersion: 1,
-          policyHash,
-          generatedAtMs: 1,
-          installRecords: {},
-          plugins: [],
-          diagnostics: [],
-        },
-        registryDiagnostics: [],
-        manifestRegistry: { plugins: params.plugins ?? [], diagnostics: [] },
-        plugins: [],
-        diagnostics: [],
-        byPluginId: new Map(),
-        normalizePluginId: (pluginId) => pluginId,
-        owners: {
-          channels: new Map(),
-          channelConfigs: new Map(),
-          providers: new Map(),
-          modelCatalogProviders: new Map(),
-          cliBackends: new Map(),
-          setupProviders: new Map(),
-          commandAliases: new Map(),
-          contracts: new Map(),
-        },
-        metrics: {
-          registrySnapshotMs: 0,
-          manifestRegistryMs: 0,
-          ownerMapsMs: 0,
-          totalMs: 0,
-          indexPluginCount: 0,
-          manifestPluginCount: 0,
-        },
-      };
-    }
-
     const configWithPaths = {
       plugins: {
         load: { paths: ["/path/one"] },
@@ -646,7 +739,7 @@ describe("plugin-sdk facade runtime", () => {
         },
       },
     } satisfies OpenClawConfig;
-    const matchedSnapshot = createTestSnapshot({
+    const matchedSnapshot = createPluginMetadataSnapshotFixture({
       config: configWithPaths,
       plugins: [
         {

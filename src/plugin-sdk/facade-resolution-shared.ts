@@ -17,10 +17,10 @@ export type FacadeModuleLocationLike = {
   boundaryRoot: string;
 };
 
-type FacadeRegistryRecordLike = {
+export type FacadeRegistryRecordLike = {
   id: string;
   rootDir: string;
-  channels: readonly string[];
+  channels: string[];
 };
 
 /** Builds the cache key for one facade lookup under the current bundled-plugin mode. */
@@ -106,6 +106,10 @@ export function resolveRegistryPluginModuleLocationFromRecords(params: {
   dirName: string;
   artifactBasename: string;
 }): FacadeModuleLocationLike | null {
+  const records = params.registry.flatMap((record) => {
+    const safeRecord = readFacadeRegistryRecord(record);
+    return safeRecord ? [safeRecord] : [];
+  });
   const tiers: Array<(plugin: FacadeRegistryRecordLike) => boolean> = [
     (plugin) => plugin.id === params.dirName,
     (plugin) => path.basename(plugin.rootDir) === params.dirName,
@@ -114,23 +118,76 @@ export function resolveRegistryPluginModuleLocationFromRecords(params: {
   const artifactBasename = normalizeBundledPluginArtifactSubpath(params.artifactBasename);
   const sourceBaseName = artifactBasename.replace(/\.js$/u, "");
   for (const matchFn of tiers) {
-    for (const record of params.registry.filter(matchFn)) {
-      const rootDir = path.resolve(record.rootDir);
-      for (const builtCandidate of [
-        path.join(rootDir, artifactBasename),
-        path.join(rootDir, "dist", artifactBasename),
-      ]) {
-        if (fs.existsSync(builtCandidate)) {
-          return { modulePath: builtCandidate, boundaryRoot: rootDir };
-        }
+    for (const record of records) {
+      if (!matchFn(record)) {
+        continue;
       }
-      for (const ext of PUBLIC_SURFACE_SOURCE_EXTENSIONS) {
-        const sourceCandidate = path.join(rootDir, `${sourceBaseName}${ext}`);
-        if (fs.existsSync(sourceCandidate)) {
-          return { modulePath: sourceCandidate, boundaryRoot: rootDir };
-        }
+      const location = resolveFacadeRegistryRecordLocation({
+        record,
+        artifactBasename,
+        sourceBaseName,
+      });
+      if (location) {
+        return location;
       }
     }
+  }
+  return null;
+}
+
+export function readFacadeRegistryRecord(record: unknown): FacadeRegistryRecordLike | null {
+  if (!record || typeof record !== "object") {
+    return null;
+  }
+
+  try {
+    const candidate = record as {
+      channels?: unknown;
+      id?: unknown;
+      rootDir?: unknown;
+    };
+    const { channels, id, rootDir } = candidate;
+    if (typeof id !== "string" || id.length === 0) {
+      return null;
+    }
+    if (typeof rootDir !== "string" || rootDir.length === 0) {
+      return null;
+    }
+    return {
+      id,
+      rootDir,
+      channels: Array.isArray(channels)
+        ? channels.filter((channel): channel is string => typeof channel === "string")
+        : [],
+    };
+  } catch {
+    return null;
+  }
+}
+
+function resolveFacadeRegistryRecordLocation(params: {
+  record: FacadeRegistryRecordLike;
+  artifactBasename: string;
+  sourceBaseName: string;
+}): FacadeModuleLocationLike | null {
+  try {
+    const rootDir = path.resolve(params.record.rootDir);
+    for (const builtCandidate of [
+      path.join(rootDir, params.artifactBasename),
+      path.join(rootDir, "dist", params.artifactBasename),
+    ]) {
+      if (fs.existsSync(builtCandidate)) {
+        return { modulePath: builtCandidate, boundaryRoot: rootDir };
+      }
+    }
+    for (const ext of PUBLIC_SURFACE_SOURCE_EXTENSIONS) {
+      const sourceCandidate = path.join(rootDir, `${params.sourceBaseName}${ext}`);
+      if (fs.existsSync(sourceCandidate)) {
+        return { modulePath: sourceCandidate, boundaryRoot: rootDir };
+      }
+    }
+  } catch {
+    return null;
   }
   return null;
 }
