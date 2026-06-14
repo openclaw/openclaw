@@ -203,7 +203,11 @@ export function resolveSlackDisableBlockStreaming(params: {
   useStreaming: boolean;
   shouldUseDraftStream: boolean;
   blockStreamingEnabled: boolean | undefined;
+  mode: "off" | "partial" | "block" | "progress";
 }): boolean | undefined {
+  if (params.mode === "off") {
+    return true;
+  }
   if (params.useStreaming || params.shouldUseDraftStream) {
     return true;
   }
@@ -709,6 +713,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         useStreaming,
         shouldUseDraftStream,
         blockStreamingEnabled,
+        mode: slackStreaming.mode,
       });
   let streamSession: SlackStreamSession | null = null;
   let nativeProgressStreamStartPromise: Promise<SlackStreamSession | null> | null = null;

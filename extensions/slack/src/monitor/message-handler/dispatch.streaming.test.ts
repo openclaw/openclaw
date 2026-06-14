@@ -303,6 +303,7 @@ describe("slack block streaming suppression", () => {
         useStreaming: true,
         shouldUseDraftStream: false,
         blockStreamingEnabled: true,
+        mode: "partial",
       }),
     ).toBe(true);
   });
@@ -313,6 +314,7 @@ describe("slack block streaming suppression", () => {
         useStreaming: false,
         shouldUseDraftStream: true,
         blockStreamingEnabled: true,
+        mode: "partial",
       }),
     ).toBe(true);
   });
@@ -323,6 +325,7 @@ describe("slack block streaming suppression", () => {
         useStreaming: false,
         shouldUseDraftStream: false,
         blockStreamingEnabled: true,
+        mode: "partial",
       }),
     ).toBe(false);
     expect(
@@ -330,6 +333,7 @@ describe("slack block streaming suppression", () => {
         useStreaming: false,
         shouldUseDraftStream: false,
         blockStreamingEnabled: false,
+        mode: "partial",
       }),
     ).toBe(true);
   });
@@ -340,7 +344,35 @@ describe("slack block streaming suppression", () => {
         useStreaming: false,
         shouldUseDraftStream: false,
         blockStreamingEnabled: undefined,
+        mode: "partial",
       }),
     ).toBeUndefined();
+  });
+
+  it("disables block streaming when mode is off regardless of block config", () => {
+    expect(
+      resolveSlackDisableBlockStreaming({
+        useStreaming: false,
+        shouldUseDraftStream: false,
+        blockStreamingEnabled: true,
+        mode: "off",
+      }),
+    ).toBe(true);
+    expect(
+      resolveSlackDisableBlockStreaming({
+        useStreaming: false,
+        shouldUseDraftStream: false,
+        blockStreamingEnabled: false,
+        mode: "off",
+      }),
+    ).toBe(true);
+    expect(
+      resolveSlackDisableBlockStreaming({
+        useStreaming: false,
+        shouldUseDraftStream: false,
+        blockStreamingEnabled: undefined,
+        mode: "off",
+      }),
+    ).toBe(true);
   });
 });
