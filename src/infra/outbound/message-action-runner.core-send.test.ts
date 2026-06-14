@@ -237,7 +237,7 @@ describe("runMessageAction core send routing", () => {
     expect(payload.dryRun).toBe(true);
   });
 
-  it("uses best-effort delivery for implicit message-tool-only source replies", async () => {
+  it("uses the internal source sink for implicit message-tool-only source replies", async () => {
     const sendText = registerSlackTextPlugin();
 
     const result = await runMessageAction({
@@ -257,7 +257,20 @@ describe("runMessageAction core send routing", () => {
     });
 
     expect(result.kind).toBe("send");
-    expect(sendText).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({
+      channel: "webchat",
+      to: "current-run",
+      handledBy: "internal-source",
+      payload: {
+        status: "ok",
+        sourceReplyDeliveryMode: "message_tool_only",
+        sourceReplySink: "internal-ui",
+        sourceReply: {
+          text: "visible source reply",
+        },
+      },
+    });
+    expect(sendText).not.toHaveBeenCalled();
   });
 
   it("uses best-effort delivery for explicit current-source message-tool-only replies", async () => {
