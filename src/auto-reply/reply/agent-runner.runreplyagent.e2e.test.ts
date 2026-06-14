@@ -1666,6 +1666,25 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
+  it("does not count empty or status-only direct block payloads as successful deliveries", async () => {
+    const { testing } = await import("./agent-runner.js");
+
+    expect(
+      testing.hasSuccessfulDirectBlockReplyDelivery([
+        { text: "   " },
+        { presentation: { blocks: [] } },
+        { interactive: { blocks: [] } },
+        { channelData: {} },
+        { text: "Checking status", isStatusNotice: true },
+      ]),
+    ).toBe(false);
+    expect(
+      testing.hasSuccessfulDirectBlockReplyDelivery([
+        { presentation: { title: "Deployment ready", blocks: [] } },
+      ]),
+    ).toBe(true);
+  });
+
   it.each([
     {
       name: "delivery flag",

@@ -251,8 +251,16 @@ function hasVisibleMessagingTargetDeliveryEvidence(value: unknown): boolean {
 }
 
 function hasSuccessfulDirectBlockReplyDelivery(payloads?: ReplyPayload[]): boolean {
-  return payloads?.some((payload) => !isReplyPayloadStatusNotice(payload)) ?? false;
+  return (
+    payloads?.some(
+      (payload) => !isReplyPayloadStatusNotice(payload) && hasVisibleReplyShape(payload),
+    ) ?? false
+  );
 }
+
+export const testing = {
+  hasSuccessfulDirectBlockReplyDelivery,
+};
 
 function hasSuccessfulSourceReplyDelivery(params: {
   blockReplyPipeline: { didStream: () => boolean; isAborted: () => boolean } | null;

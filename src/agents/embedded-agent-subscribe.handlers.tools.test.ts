@@ -2743,6 +2743,33 @@ describe("messaging tool media URL tracking", () => {
     expect(ctx.state.messagingToolSourceReplyPayloads).toEqual([{ text: "visible in tui" }]);
   });
 
+  it("commits internal-ui source replies when a sibling delivery partially fails", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-partial-source-reply",
+      args: { action: "send", message: "visible in tui" },
+    });
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-partial-source-reply",
+      isError: false,
+      result: {
+        details: {
+          status: "partial_failed",
+          results: [{ status: "failed" }, { status: "sent", messageId: "provider-message-1" }],
+          sourceReplySink: "internal-ui",
+          sourceReply: { text: "visible in tui" },
+        },
+      },
+    });
+
+    expect(ctx.state.messagingToolSourceReplyPayloads).toEqual([{ text: "visible in tui" }]);
+  });
+
   it("does not commit failed, dry-run, or external message sends as internal-ui source replies", async () => {
     const { ctx } = createTestContext();
 

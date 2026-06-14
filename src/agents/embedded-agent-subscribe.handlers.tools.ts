@@ -657,7 +657,6 @@ function extractMessagingToolSourceReplyPayload(
   }
   const sourceReply = readRecordField(details.sourceReply) ?? details;
   if (
-    hasMessagingToolNonDeliveryEvidence(details) ||
     hasMessagingToolNonDeliveryEvidence(sourceReply) ||
     !hasCommittedMessagingToolResultDetails(details)
   ) {
