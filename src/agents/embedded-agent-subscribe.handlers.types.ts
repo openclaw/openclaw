@@ -277,6 +277,7 @@ type ToolHandlerParams = Pick<
   | "sessionKey"
   | "currentChannelId"
   | "currentThreadId"
+  | "currentMessageId"
   | "replyToMode"
   | "hasRepliedRef"
   | "sessionId"

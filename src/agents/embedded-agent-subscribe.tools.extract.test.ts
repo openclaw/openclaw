@@ -125,7 +125,56 @@ describe("extractMessagingToolSend", () => {
           pluginId: "mattermost",
           plugin: {
             ...createChannelTestPluginBase({ id: "mattermost" }),
+            actions: {
+              extractToolSend: ({ args }: { args: Record<string, unknown> }) => {
+                if (args.action !== "send" || typeof args.to !== "string") {
+                  return null;
+                }
+                const threadId =
+                  typeof args.replyToId === "string"
+                    ? args.replyToId
+                    : typeof args.replyTo === "string"
+                      ? args.replyTo
+                      : undefined;
+                const threadSuppressed = args.topLevel === true || args.threadId === null;
+                return {
+                  to: args.to,
+                  threadId,
+                  threadImplicit: !threadId && !threadSuppressed,
+                  threadSuppressed,
+                };
+              },
+            },
             threading: {
+              resolveAutoThreadId: ({
+                to,
+                replyToId,
+                toolContext,
+              }: {
+                to: string;
+                replyToId?: string | null;
+                toolContext?: {
+                  currentChannelId?: string;
+                  currentThreadTs?: string;
+                  currentMessageId?: string | number;
+                  replyToMode?: "off" | "first" | "all" | "batched";
+                  hasRepliedRef?: { value: boolean };
+                };
+              }) => {
+                if (replyToId) {
+                  const currentMessageId =
+                    typeof toolContext?.currentMessageId === "number"
+                      ? String(toolContext.currentMessageId)
+                      : toolContext?.currentMessageId;
+                  if (replyToId !== currentMessageId) {
+                    return replyToId;
+                  }
+                }
+                if (to !== toolContext?.currentChannelId || !toolContext.currentThreadTs) {
+                  return undefined;
+                }
+                return toolContext.currentThreadTs;
+              },
               resolveReplyTransport: ({
                 threadId,
                 replyToId,
@@ -443,6 +492,31 @@ describe("extractMessagingToolSend", () => {
     });
 
     expect(result?.threadId).toBe("post-1");
+  });
+
+  it("captures the active Mattermost root for implicit sends", () => {
+    const result = extractMessagingToolSend(
+      "message",
+      {
+        action: "send",
+        provider: "mattermost",
+        to: "channel:123",
+        content: "done",
+      },
+      {
+        currentChannelId: "channel:123",
+        currentThreadId: "root-1",
+        currentMessageId: "child-1",
+        replyToMode: "off",
+      },
+    );
+
+    expect(result).toMatchObject({
+      provider: "mattermost",
+      to: "channel:123",
+      threadId: "root-1",
+      threadImplicit: true,
+    });
   });
 
   it("preserves numeric thread ids returned by provider transport resolution", () => {

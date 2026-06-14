@@ -101,6 +101,38 @@ describe("message action threading helpers", () => {
     expect(ensureOutboundSessionEntry).toHaveBeenCalledTimes(1);
   });
 
+  it("prepares the outbound route with a canonicalized reply root", async () => {
+    const actionParams: Record<string, unknown> = {
+      channel: "forum",
+      target: "forum:123",
+      message: "hi",
+      replyTo: "child-777",
+    };
+    resolveOutboundSessionRoute.mockResolvedValue(null);
+
+    await prepareOutboundMirrorRoute({
+      cfg: forumConfig,
+      channel: "forum",
+      to: "forum:123",
+      actionParams,
+      toolContext: defaultForumToolContext,
+      agentId: "main",
+      resolveAutoThreadId: () => "root-42",
+      resolveReplyTransport: ({ replyToId }) => ({
+        replyToId,
+        threadId: replyToId,
+      }),
+      resolveOutboundSessionRoute,
+      ensureOutboundSessionEntry,
+    });
+
+    expect(resolveOutboundSessionRoute).toHaveBeenCalledOnce();
+    expect(firstMockArg(resolveOutboundSessionRoute)).toMatchObject({
+      replyToId: "root-42",
+      threadId: "root-42",
+    });
+  });
+
   it.each([
     {
       name: "injects threadId for matching target",
@@ -136,23 +168,27 @@ describe("message action threading helpers", () => {
     expect(resolved).toBe(testCase.expectedThreadId);
   });
 
-  it("uses explicit forum threadId when provided", () => {
+  it("uses explicit forum threadId without rewriting replyTo", () => {
     const actionParams: Record<string, unknown> = {
       channel: "forum",
       target: "forum:123",
       message: "hi",
       threadId: "999",
+      replyTo: "777",
     };
 
+    const resolveAutoThreadId = vi.fn(() => "42");
     const resolved = resolveAndApplyOutboundThreadId(actionParams, {
       cfg: forumConfig,
       to: "forum:123",
       toolContext: defaultForumToolContext,
-      resolveAutoThreadId: () => "42",
+      resolveAutoThreadId,
     });
 
     expect(actionParams.threadId).toBe("999");
+    expect(actionParams.replyTo).toBe("777");
     expect(resolved).toBe("999");
+    expect(resolveAutoThreadId).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -178,7 +214,7 @@ describe("message action threading helpers", () => {
     expect(resolveAutoThreadId).not.toHaveBeenCalled();
   });
 
-  it("passes explicit replyTo into auto-thread resolution", () => {
+  it("preserves explicit replyTo when the provider keeps reply and thread distinct", () => {
     const resolveAutoThreadId = vi.fn((_params: { replyToId?: string | null }) => "thread-777");
     const actionParams: Record<string, unknown> = {
       channel: "forum",
@@ -198,6 +234,30 @@ describe("message action threading helpers", () => {
     expect(firstMockArg(resolveAutoThreadId).replyToId).toBe("777");
     expect(resolved).toBe("thread-777");
     expect(actionParams.threadId).toBe("thread-777");
+    expect(actionParams.replyTo).toBe("777");
+  });
+
+  it("canonicalizes replyTo when the provider maps reply and thread to one root", () => {
+    const actionParams: Record<string, unknown> = {
+      channel: "forum",
+      target: "forum:123",
+      message: "hi",
+      replyTo: "child-777",
+    };
+
+    resolveAndApplyOutboundThreadId(actionParams, {
+      cfg: forumConfig,
+      to: "forum:123",
+      toolContext: defaultForumToolContext,
+      resolveAutoThreadId: () => "root-42",
+      resolveReplyTransport: ({ replyToId }) => ({
+        replyToId,
+        threadId: replyToId,
+      }),
+    });
+
+    expect(actionParams.threadId).toBe("root-42");
+    expect(actionParams.replyTo).toBe("root-42");
   });
 
   it("inherits currentMessageId for same-target sends when replyToMode=all", () => {

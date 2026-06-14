@@ -50,6 +50,24 @@ function hasErrorToolResultStatus(result: AgentToolResult<unknown>): boolean {
   return status === "error" || status === "timeout";
 }
 
+function preserveToolSendReceipt(rawToolSend: unknown, transformedDetails: unknown): unknown {
+  if (rawToolSend === undefined) {
+    return transformedDetails;
+  }
+  return {
+    ...recordFromUnknown(transformedDetails),
+    // Delivery routing is control-plane evidence, not model-facing middleware output.
+    toolSend: rawToolSend,
+  };
+}
+
+function snapshotToolSendReceipt(details: unknown): unknown {
+  const toolSend = recordFromUnknown(details).toolSend;
+  return toolSend && typeof toolSend === "object" && !Array.isArray(toolSend)
+    ? { ...(toolSend as Record<string, unknown>) }
+    : toolSend;
+}
+
 function buildAgentToolResultMiddlewareFactory(): ExtensionFactory {
   const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" });
   return (agent) => {
@@ -67,6 +85,7 @@ function buildAgentToolResultMiddlewareFactory(): ExtensionFactory {
         content,
         details: event.details,
       } satisfies AgentToolResult<unknown>;
+      const rawToolSend = snapshotToolSendReceipt(current.details);
       const inputHadErrorStatus = hasErrorToolResultStatus(current);
       const result = await runner.applyToolResultMiddleware({
         threadId: event.threadId,
@@ -82,7 +101,7 @@ function buildAgentToolResultMiddlewareFactory(): ExtensionFactory {
         event.isError === true || inputHadErrorStatus || hasErrorToolResultStatus(result);
       return {
         content: result.content,
-        details: result.details,
+        details: preserveToolSendReceipt(rawToolSend, result.details),
         ...(isError ? { isError: true } : {}),
       };
     });

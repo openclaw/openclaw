@@ -652,6 +652,7 @@ function resolveMessagingToolThreadEvidence(params: {
     config?: OpenClawConfig;
     currentChannelId?: string;
     currentThreadId?: string;
+    currentMessageId?: string | number;
     replyToMode?: "off" | "first" | "all" | "batched";
     hasRepliedRef?: { value: boolean };
   };
@@ -688,6 +689,7 @@ function resolveMessagingToolThreadEvidence(params: {
           toolContext: {
             currentChannelId,
             currentThreadTs: currentThreadId,
+            currentMessageId: params.options?.currentMessageId,
             replyToMode,
             hasRepliedRef: params.options?.hasRepliedRef,
           },
@@ -714,6 +716,7 @@ export function extractMessagingToolSend(
     config?: OpenClawConfig;
     currentChannelId?: string;
     currentThreadId?: string;
+    currentMessageId?: string | number;
     replyToMode?: "off" | "first" | "all" | "batched";
     hasRepliedRef?: { value: boolean };
   },
@@ -776,6 +779,7 @@ export function extractMessagingToolSend(
         }
       : undefined;
   }
+
   const providerId = normalizeChannelId(toolName);
   if (!providerId) {
     return undefined;
@@ -812,4 +816,36 @@ export function extractMessagingToolSend(
         }),
       }
     : undefined;
+}
+
+/** Reconciles pending send evidence with the provider's successful action result. */
+export function extractMessagingToolSendResult(
+  pending: MessagingToolSend,
+  result: unknown,
+): MessagingToolSend {
+  const providerId = normalizeChannelId(pending.provider);
+  const extracted = providerId
+    ? getChannelPlugin(providerId)?.actions?.extractToolSendResult?.({
+        result,
+        send: {
+          to: pending.to ?? "",
+          accountId: pending.accountId,
+          threadId: pending.threadId,
+          threadImplicit: pending.threadImplicit,
+          threadSuppressed: pending.threadSuppressed,
+        },
+      })
+    : null;
+  if (!extracted?.to) {
+    return pending;
+  }
+  return {
+    ...pending,
+    ...extracted,
+    accountId: normalizeOptionalString(extracted.accountId) ?? pending.accountId,
+    to: normalizeTargetForProvider(providerId ?? pending.provider, extracted.to),
+    threadId: normalizeOptionalString(extracted.threadId),
+    threadImplicit: extracted.threadImplicit === true ? true : undefined,
+    threadSuppressed: extracted.threadSuppressed === true ? true : undefined,
+  };
 }

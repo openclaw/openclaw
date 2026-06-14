@@ -53,6 +53,7 @@ import {
   extractToolResultMediaArtifact,
   extractToolErrorCode,
   extractMessagingToolSend,
+  extractMessagingToolSendResult,
   extractToolErrorMessage,
   extractToolResultText,
   filterToolResultMediaUrls,
@@ -1038,6 +1039,7 @@ export function handleToolExecutionStart(
           currentThreadId:
             ctx.params.currentThreadId ??
             parseSessionThreadInfoFast(ctx.params.sessionKey).threadId,
+          currentMessageId: ctx.params.currentMessageId,
           replyToMode: ctx.params.replyToMode,
           hasRepliedRef: ctx.params.hasRepliedRef,
         });
@@ -1284,8 +1286,9 @@ export async function handleToolExecutionEnd(
   if (pendingTarget) {
     ctx.state.pendingMessagingTargets.delete(toolCallId);
     if (!isToolError) {
+      const confirmedTarget = extractMessagingToolSendResult(pendingTarget, result);
       ctx.state.messagingToolSentTargets.push({
-        ...pendingTarget,
+        ...confirmedTarget,
         ...(pendingText ? { text: pendingText } : {}),
         ...(committedMediaUrls.length > 0 ? { mediaUrls: committedMediaUrls.slice() } : {}),
       });

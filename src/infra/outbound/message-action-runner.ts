@@ -1100,7 +1100,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     agentId,
   });
 
-  const replyToId = resolveAndApplyOutboundReplyToId(params, {
+  resolveAndApplyOutboundReplyToId(params, {
     channel,
     toolContext: input.toolContext,
   });
@@ -1116,9 +1116,11 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     dryRun,
     resolvedTarget,
     resolveAutoThreadId: getChannelPlugin(channel)?.threading?.resolveAutoThreadId,
+    resolveReplyTransport: getChannelPlugin(channel)?.threading?.resolveReplyTransport,
     resolveOutboundSessionRoute,
     ensureOutboundSessionEntry,
   });
+  const resolvedReplyToId = readStringParam(params, "replyTo");
   throwIfAborted(abortSignal);
 
   const ttsPayload = await maybeApplyTtsToMessageActionSendPayload({
@@ -1221,7 +1223,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     gifPlayback: sendPayload.gifPlayback,
     forceDocument: sendPayload.forceDocument,
     bestEffort: sendPayload.bestEffort,
-    replyToId: replyToId ?? undefined,
+    replyToId: resolvedReplyToId ?? undefined,
     threadId: resolvedThreadId ?? undefined,
   });
 

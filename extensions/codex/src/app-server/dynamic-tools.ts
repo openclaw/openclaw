@@ -7,6 +7,7 @@ import {
   createAgentToolResultMiddlewareRunner,
   createCodexAppServerToolResultExtensionRunner,
   extractMessagingToolSend,
+  extractMessagingToolSendResult,
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
   HEARTBEAT_RESPONSE_TOOL_NAME,
@@ -232,6 +233,10 @@ export function createCodexDynamicToolBridge(params: {
         didStartExecution = true;
         const rawResult = await tool.execute(call.callId, preparedArgs, signal);
         const rawIsError = isCodexToolResultError(rawResult);
+        const confirmedMessagingTarget =
+          !rawIsError && messagingTarget
+            ? extractMessagingToolSendResult(messagingTarget, rawResult)
+            : messagingTarget;
         const middlewareResult = await middlewareRunner.applyToolResultMiddleware({
           threadId: call.threadId,
           turnId: call.turnId,
@@ -258,7 +263,7 @@ export function createCodexDynamicToolBridge(params: {
           mediaTrustResult: rawResult,
           telemetry,
           isError: resultIsError,
-          messagingTarget,
+          messagingTarget: confirmedMessagingTarget,
         });
         void runAgentHarnessAfterToolCallHook({
           toolName,

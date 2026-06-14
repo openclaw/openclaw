@@ -14,6 +14,7 @@ import type {
 import type { ResolvedMessagingTarget } from "./target-resolver.js";
 
 type ResolveAutoThreadId = NonNullable<ChannelThreadingAdapter["resolveAutoThreadId"]>;
+type ResolveReplyTransport = NonNullable<ChannelThreadingAdapter["resolveReplyTransport"]>;
 
 function suppressesImplicitThreading(actionParams: Record<string, unknown>): boolean {
   return actionParams.topLevel === true || actionParams.threadId === null;
@@ -28,6 +29,7 @@ export function resolveAndApplyOutboundThreadId(
     accountId?: string | null;
     toolContext?: ChannelThreadingToolContext;
     resolveAutoThreadId?: ResolveAutoThreadId;
+    resolveReplyTransport?: ResolveReplyTransport;
   },
 ): string | undefined {
   const threadId = readStringParam(actionParams, "threadId");
@@ -35,19 +37,32 @@ export function resolveAndApplyOutboundThreadId(
   if (!threadId && suppressesImplicitThreading(actionParams)) {
     return undefined;
   }
-  const resolved =
-    threadId ??
-    context.resolveAutoThreadId?.({
+  const replyToId = readStringParam(actionParams, "replyTo");
+  const autoResolvedThreadId = threadId
+    ? undefined
+    : context.resolveAutoThreadId?.({
+        cfg: context.cfg,
+        accountId: context.accountId,
+        to: context.to,
+        toolContext: context.toolContext,
+        replyToId,
+      });
+  const resolvedThreadId = threadId ?? autoResolvedThreadId;
+  if (autoResolvedThreadId && !actionParams.threadId) {
+    actionParams.threadId = autoResolvedThreadId;
+    const canonicalReplyToId = context.resolveReplyTransport?.({
       cfg: context.cfg,
       accountId: context.accountId,
-      to: context.to,
-      toolContext: context.toolContext,
-      replyToId: readStringParam(actionParams, "replyTo"),
-    });
-  if (resolved && !actionParams.threadId) {
-    actionParams.threadId = resolved;
+      threadId: autoResolvedThreadId,
+      replyToId: autoResolvedThreadId,
+    })?.replyToId;
+    // Providers that use one canonical root for reply and thread routing opt in
+    // through resolveReplyTransport. Other transports keep message replies intact.
+    if (replyToId && canonicalReplyToId && replyToId !== canonicalReplyToId) {
+      actionParams.replyTo = canonicalReplyToId;
+    }
   }
-  return resolved ?? undefined;
+  return resolvedThreadId ?? undefined;
 }
 
 function isSameConversationTarget(
@@ -141,6 +156,7 @@ export async function prepareOutboundMirrorRoute(params: {
   dryRun?: boolean;
   resolvedTarget?: ResolvedMessagingTarget;
   resolveAutoThreadId?: ResolveAutoThreadId;
+  resolveReplyTransport?: ResolveReplyTransport;
   resolveOutboundSessionRoute: (
     params: ResolveOutboundSessionRouteParams,
   ) => Promise<OutboundSessionRoute | null>;
@@ -154,14 +170,15 @@ export async function prepareOutboundMirrorRoute(params: {
   resolvedThreadId?: string;
   outboundRoute: OutboundSessionRoute | null;
 }> {
-  const replyToId = readStringParam(params.actionParams, "replyTo");
   const resolvedThreadId = resolveAndApplyOutboundThreadId(params.actionParams, {
     cfg: params.cfg,
     to: params.to,
     accountId: params.accountId,
     toolContext: params.toolContext,
     resolveAutoThreadId: params.resolveAutoThreadId,
+    resolveReplyTransport: params.resolveReplyTransport,
   });
+  const replyToId = readStringParam(params.actionParams, "replyTo");
   const outboundRoute =
     params.agentId && !params.dryRun
       ? await params.resolveOutboundSessionRoute({

@@ -1569,6 +1569,64 @@ describe("messaging tool media URL tracking", () => {
     });
   });
 
+  it("reconciles unresolved send targets from successful provider results", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "mattermost",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "mattermost" }),
+            actions: {
+              extractToolSend: ({ args }: { args: Record<string, unknown> }) =>
+                args.action === "send" && typeof args.to === "string"
+                  ? { to: args.to, threadImplicit: true }
+                  : null,
+              extractToolSendResult: ({ result }: { result: unknown }) => {
+                const details = (result as { details?: { toolSend?: unknown } })?.details;
+                return (details?.toolSend as { to: string; threadId?: string } | undefined) ?? null;
+              },
+            },
+          },
+          source: "test",
+        },
+      ]),
+    );
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-mattermost-name",
+      args: {
+        action: "send",
+        provider: "mattermost",
+        to: "town-square",
+        content: "hi",
+      },
+    });
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-mattermost-name",
+      isError: false,
+      result: {
+        details: {
+          toolSend: {
+            to: "channel:resolved-id",
+            threadId: "root-1",
+          },
+        },
+      },
+    });
+
+    expectRecordFields(requireSingleMessagingTarget(ctx), "messaging target", {
+      provider: "mattermost",
+      to: "channel:resolved-id",
+      threadId: "root-1",
+      text: "hi",
+    });
+  });
+
   it("tracks media arg from messaging tool as pending", async () => {
     const { ctx } = createTestContext();
 

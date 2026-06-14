@@ -757,6 +757,11 @@ export type ChannelMessageActionAdapter = {
     toolContext?: ChannelThreadingToolContext;
   }) => boolean;
   extractToolSend?: (params: { args: Record<string, unknown> }) => ChannelToolSend | null;
+  /** Recover the actual resolved send route from a successful action result. */
+  extractToolSendResult?: (params: {
+    result: unknown;
+    send: ChannelToolSend;
+  }) => ChannelToolSend | null;
   /**
    * Translate generic `message(action=send)` arguments into the payload core
    * should persist, retry, recover, and ack. Return null to keep the legacy

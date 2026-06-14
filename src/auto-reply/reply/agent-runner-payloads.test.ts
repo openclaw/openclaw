@@ -645,6 +645,33 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads).toHaveLength(1);
   });
 
+  it("dedupes an implicit Mattermost send in the active thread", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      config: {},
+      payloads: [{ text: "same reply" }],
+      replyToMode: "all",
+      replyToChannel: "mattermost",
+      currentMessageId: "child-post",
+      messageProvider: "mattermost",
+      originatingTo: "channel:C1",
+      originatingThreadId: "root-post",
+      messagingToolSentTexts: ["same reply"],
+      messagingToolSentTargets: [
+        {
+          tool: "mattermost",
+          provider: "mattermost",
+          to: "channel:C1",
+          threadId: "root-post",
+          threadImplicit: true,
+          text: "same reply",
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(0);
+  });
+
   it("keeps an explicit Slack reply when the tool send was top-level", async () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,

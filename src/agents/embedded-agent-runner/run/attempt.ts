@@ -3460,6 +3460,7 @@ export async function runEmbeddedAttempt(
           sessionKey: sandboxSessionKey,
           currentChannelId: params.currentChannelId,
           currentThreadId: params.currentThreadTs,
+          currentMessageId: params.currentMessageId,
           replyToMode: params.replyToMode,
           hasRepliedRef: params.hasRepliedRef,
           sessionId: params.sessionId,

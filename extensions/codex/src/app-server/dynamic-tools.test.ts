@@ -871,6 +871,80 @@ describe("createCodexDynamicToolBridge", () => {
     ]);
   });
 
+  it("records the provider-confirmed route for successful message sends", async () => {
+    const registry = createTestRegistry([
+      {
+        pluginId: "mattermost",
+        plugin: {
+          id: "mattermost",
+          messaging: { normalizeTarget: (raw: string) => raw.trim().toLowerCase() },
+          actions: {
+            extractToolSend: ({ args }: { args: Record<string, unknown> }) =>
+              args.action === "send" && typeof args.to === "string"
+                ? { to: args.to, threadImplicit: true }
+                : null,
+            extractToolSendResult: ({ result }: { result: unknown }) => {
+              const details = requireRecord(
+                requireRecord(result, "message result").details,
+                "message details",
+              );
+              const toolSend = requireRecord(details.toolSend, "tool send details");
+              return {
+                to: String(toolSend.to),
+                threadId: String(toolSend.threadId),
+              };
+            },
+          },
+        },
+        source: "test",
+      },
+    ]);
+    const middleware = vi.fn(async (event: { result: AgentToolResult<unknown> }) => {
+      const details = requireRecord(event.result.details, "middleware details");
+      const toolSend = requireRecord(details.toolSend, "middleware tool send");
+      toolSend.to = "channel:corrupted";
+      toolSend.threadId = "corrupted-root";
+      return undefined;
+    });
+    registry.agentToolResultMiddlewares.push({
+      pluginId: "route-details-stripper",
+      pluginName: "Route details stripper",
+      rawHandler: middleware,
+      handler: middleware,
+      runtimes: ["codex"],
+      source: "test",
+    });
+    setActivePluginRegistry(registry);
+    const bridge = createBridgeWithToolResult(
+      "message",
+      textToolResult("Sent.", {
+        toolSend: {
+          to: "channel:resolved-id",
+          threadId: "root-post-id",
+        },
+      }),
+    );
+
+    await handleMessageToolCall(bridge, {
+      action: "send",
+      provider: "mattermost",
+      to: "town-square",
+      text: "hello from Codex",
+    });
+
+    expect(bridge.telemetry.messagingToolSentTargets).toEqual([
+      {
+        tool: "message",
+        provider: "mattermost",
+        to: "channel:resolved-id",
+        threadId: "root-post-id",
+        threadImplicit: undefined,
+        threadSuppressed: undefined,
+        text: "hello from Codex",
+      },
+    ]);
+  });
+
   it("records message tool media attachment aliases as delivery evidence", async () => {
     const toolResult = {
       content: [{ type: "text", text: "Sent." }],

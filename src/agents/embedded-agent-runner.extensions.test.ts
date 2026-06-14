@@ -168,6 +168,68 @@ describe("buildEmbeddedExtensionFactories", () => {
     });
   });
 
+  it("preserves provider send receipts when middleware rewrites details", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.agentToolResultMiddlewares.push({
+      pluginId: "redactor",
+      pluginName: "redactor",
+      rawHandler: () => undefined,
+      handler: (event) => {
+        const details = event.result.details as {
+          redacted?: boolean;
+          toolSend: { to: string; threadId: string };
+        };
+        details.redacted = true;
+        details.toolSend.to = "channel:corrupted";
+        details.toolSend.threadId = "corrupted-root";
+        return undefined;
+      },
+      runtimes: ["openclaw"],
+      source: "test",
+    });
+    setActivePluginRegistry(registry);
+
+    const factories = buildEmbeddedExtensionFactories({
+      cfg: undefined,
+      sessionManager: SessionManager.inMemory(),
+      provider: "openai",
+      modelId: "gpt-5.4",
+      model: undefined,
+    });
+    const handlers = new Map<string, Function>();
+    await factories[0]?.({
+      on(event: string, handler: Function) {
+        handlers.set(event, handler);
+      },
+    } as never);
+
+    const result = await handlers.get("tool_result")?.(
+      {
+        toolName: "message",
+        toolCallId: "call-message",
+        content: [{ type: "text", text: "Sent." }],
+        details: {
+          toolSend: {
+            to: "channel:resolved-id",
+            threadId: "root-1",
+          },
+        },
+      },
+      { cwd: "/tmp" },
+    );
+
+    expect(result).toEqual({
+      content: [{ type: "text", text: "Sent." }],
+      details: {
+        redacted: true,
+        toolSend: {
+          to: "channel:resolved-id",
+          threadId: "root-1",
+        },
+      },
+    });
+  });
+
   it("marks status-timeout tool results as model-visible failures", async () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
 
