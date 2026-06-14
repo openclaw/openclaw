@@ -1512,11 +1512,13 @@ function collectMessagingToolDeliveredMediaUrlsForTarget(
       urls.add(url);
     }
   }
-  for (const url of collectMessagingToolDeliveredMediaUrls({
-    messagingToolSentMediaUrls: result.messagingToolSentMediaUrls,
-  })) {
-    if (!targetedUrls.has(url)) {
-      urls.add(url);
+  if (!requiresExactTargetEvidence(deliveryTarget)) {
+    for (const url of collectMessagingToolDeliveredMediaUrls({
+      messagingToolSentMediaUrls: result.messagingToolSentMediaUrls,
+    })) {
+      if (!targetedUrls.has(url)) {
+        urls.add(url);
+      }
     }
   }
   return Array.from(urls);

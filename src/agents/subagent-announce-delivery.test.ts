@@ -3678,6 +3678,65 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     );
   });
 
+  it("falls back for threaded requesters when message-tool media lacks target evidence", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [],
+        messagingToolSentMediaUrls: ["/tmp/generated-threadless-target.png"],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sendMessage,
+      sessionId: "requester-session-channel",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-channel-media-targetless-message-tool-thread",
+      requesterOrigin: {
+        channel: "slack",
+        accountId: "acct-1",
+        to: "channel:C123",
+        threadId: "target-thread",
+      },
+      sourceTool: "image_generate",
+      runtimeConfig: { messages: { groupChat: { visibleReplies: "message_tool" } } },
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "image_generation",
+          childSessionKey: "image_generate:task-123",
+          childSessionId: "task-123",
+          announceType: "image generation task",
+          taskLabel: "threaded proof image",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated 1 image.\nMEDIA:/tmp/generated-threadless-target.png",
+          mediaUrls: ["/tmp/generated-threadless-target.png"],
+          replyInstruction:
+            "Tell the user the image is ready and send it through the message tool.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        accountId: "acct-1",
+        to: "channel:C123",
+        threadId: "target-thread",
+        content: "The generated image is ready.",
+        mediaUrls: ["/tmp/generated-threadless-target.png"],
+        idempotencyKey:
+          "announce-channel-media-targetless-message-tool-thread:generated-media-direct",
+      }),
+    );
+  });
+
   it("accepts targetless current-chat message-tool media delivery", async () => {
     const callGateway = createGatewayMock({
       result: {
