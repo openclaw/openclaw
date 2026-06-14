@@ -58,6 +58,7 @@ export function ensureStandaloneMigrationProviderRegistryLoaded(
   const resolution = resolveManifestContractRuntimePluginResolution({
     cfg: params.cfg,
     contract: "migrationProviders",
+    preferPersisted: true,
   });
   if (resolution.pluginIds.length === 0) {
     return;
@@ -93,6 +94,7 @@ export function resolvePluginMigrationProvider(params: {
   const resolution = resolveManifestContractRuntimePluginResolution({
     cfg: params.cfg,
     contract: "migrationProviders",
+    preferPersisted: true,
     value: params.providerId,
   });
   const pluginIds = resolution.pluginIds;
@@ -115,6 +117,7 @@ export function resolvePluginMigrationProviders(
   const resolution = resolveManifestContractRuntimePluginResolution({
     cfg: params.cfg,
     contract: "migrationProviders",
+    preferPersisted: true,
   });
   const pluginIds = resolution.pluginIds;
   if (pluginIds.length === 0) {

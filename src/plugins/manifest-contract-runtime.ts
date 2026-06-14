@@ -20,12 +20,15 @@ const DEMAND_ONLY_CONTRACT_LOOKUP_OPTIONS = {
 export function resolveManifestContractRuntimePluginResolution(params: {
   cfg?: OpenClawConfig;
   contract: PluginManifestContractListKey;
+  preferPersisted?: boolean;
   value?: string;
 }): ManifestContractRuntimePluginResolution {
   const snapshot = loadPluginMetadataSnapshot({
     config: params.cfg ?? {},
     env: process.env,
-    ...DEMAND_ONLY_CONTRACT_LOOKUP_OPTIONS,
+    ...(params.preferPersisted !== undefined
+      ? { preferPersisted: params.preferPersisted }
+      : DEMAND_ONLY_CONTRACT_LOOKUP_OPTIONS),
   });
   const allContractPlugins = snapshot.plugins.filter((plugin) =>
     hasManifestContractValue({

@@ -226,7 +226,7 @@ describe("migration provider runtime", () => {
     expect(mocks.loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledWith({
       config: cfg,
       env: process.env,
-      preferPersisted: false,
+      preferPersisted: true,
     });
     const manifestParams = requireMockCallArg(
       mocks.loadPluginManifestRegistry,
@@ -247,6 +247,68 @@ describe("migration provider runtime", () => {
     expect(mocks.resolveRuntimePluginRegistry).toHaveBeenNthCalledWith(1);
     expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
       onlyPluginIds: ["external-migration"],
+    });
+  });
+
+  it("resolves persisted global migration-provider plugins from manifest contracts", () => {
+    const cfg = {
+      plugins: { entries: { codex: { enabled: true } } },
+    } as OpenClawConfig;
+    const provider = createMigrationProvider("codex");
+    const active = createEmptyPluginRegistry();
+    const loaded = createEmptyPluginRegistry();
+    loaded.migrationProviders.push({
+      pluginId: "codex",
+      pluginName: "Codex",
+      source: "test",
+      provider,
+    } as never);
+    mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
+      params === undefined ? active : loaded,
+    );
+    mocks.loadPluginRegistrySnapshotWithMetadata.mockImplementation(
+      (params?: { preferPersisted?: boolean; index?: MockPluginIndex }) => ({
+        source: params?.preferPersisted === false ? "derived" : "provided",
+        snapshot:
+          params?.preferPersisted === false
+            ? createMockPluginIndex([])
+            : createMockPluginIndex([
+                {
+                  pluginId: "codex",
+                  origin: "global",
+                  enabled: true,
+                },
+              ]),
+        diagnostics: [],
+      }),
+    );
+    mocks.loadPluginManifestRegistry.mockImplementation((params?: Record<string, unknown>) => {
+      const index = params?.index as MockPluginIndex | undefined;
+      const hasCodex = index?.plugins.some((plugin) => plugin.pluginId === "codex");
+      return {
+        diagnostics: [],
+        plugins: hasCodex
+          ? [
+              {
+                id: "codex",
+                origin: "global",
+                contracts: { migrationProviders: ["codex"] },
+              },
+            ]
+          : [],
+      };
+    });
+
+    const resolved = resolvePluginMigrationProvider({ providerId: "codex", cfg });
+
+    expect(resolved).toBe(provider);
+    expect(mocks.loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledWith({
+      config: cfg,
+      env: process.env,
+      preferPersisted: true,
+    });
+    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
+      onlyPluginIds: ["codex"],
     });
   });
 
@@ -289,7 +351,7 @@ describe("migration provider runtime", () => {
     expect(mocks.loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledWith({
       config: {},
       env: process.env,
-      preferPersisted: false,
+      preferPersisted: true,
       workspaceDir: undefined,
     });
     const manifestParams = requireMockCallArg(
