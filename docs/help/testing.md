@@ -223,6 +223,9 @@ inside every shard.
     `OPENCLAW_NPM_TELEGRAM_RTT_SAMPLES`,
     `OPENCLAW_NPM_TELEGRAM_RTT_TIMEOUT_MS`, or
     `OPENCLAW_NPM_TELEGRAM_RTT_MAX_FAILURES` to tune the RTT run.
+    `OPENCLAW_NPM_TELEGRAM_RTT_CHECKS` accepts a comma-separated list of
+    Telegram QA check IDs to sample; when unset, the default RTT-capable check
+    is `telegram-mentioned-message-reply`.
   - Uses the same Telegram env credentials or Convex credential source as
     `pnpm openclaw qa telegram`. For CI/release automation, set
     `OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE=convex` plus
