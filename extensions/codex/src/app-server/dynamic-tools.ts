@@ -12,6 +12,7 @@ import {
   embeddedAgentLog,
   type EmbeddedRunAttemptParams,
   isToolWrappedWithBeforeToolCallHook,
+  isToolResultError,
   isMessagingTool,
   isMessagingToolSendAction,
   normalizeHeartbeatToolResponse,
@@ -735,8 +736,14 @@ function readPositiveInteger(value: unknown): number | undefined {
 }
 
 function isCodexToolResultError(result: AgentToolResult<unknown>): boolean {
+  if (isToolResultError(result)) {
+    return true;
+  }
   const details = result.details;
   if (!isRecord(details)) {
+    return false;
+  }
+  if (details.ok === true || details.success === true) {
     return false;
   }
   if (details.timedOut === true) {

@@ -543,7 +543,11 @@ export function extractToolResultMediaPaths(result: unknown): string[] {
 export function isToolResultError(result: unknown): boolean {
   const details = readToolResultDetails(result);
   const normalized = readToolResultStatus(result);
-  if (
+  const explicitlySuccessful = details?.ok === true || details?.success === true;
+  if (details?.ok === false || details?.success === false) {
+    return true;
+  }
+  const hasFailureStatus =
     normalized === "error" ||
     normalized === "failed" ||
     normalized === "failure" ||
@@ -559,8 +563,8 @@ export function isToolResultError(result: unknown): boolean {
     normalized === "cancelled" ||
     normalized === "canceled" ||
     normalized === "killed" ||
-    normalized === "invalid"
-  ) {
+    normalized === "invalid";
+  if (hasFailureStatus && !explicitlySuccessful) {
     return true;
   }
   if (details?.timedOut === true || Boolean(details?.error)) {

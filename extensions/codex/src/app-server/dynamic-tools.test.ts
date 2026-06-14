@@ -1081,6 +1081,42 @@ describe("createCodexDynamicToolBridge", () => {
     });
   });
 
+  it("preserves explicitly successful cancellation outcomes", async () => {
+    const onAgentToolResult = vi.fn();
+    const cancelledResult = textToolResult("Approval rejected.", {
+      ok: true,
+      status: "cancelled",
+    });
+    const bridge = createCodexDynamicToolBridge({
+      tools: [
+        createTool({
+          name: "lobster",
+          execute: vi.fn(async () => cancelledResult),
+        }),
+      ],
+      signal: new AbortController().signal,
+    });
+
+    const result = await bridge.handleToolCall(
+      {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-1",
+        namespace: null,
+        tool: "lobster",
+        arguments: {},
+      },
+      { onAgentToolResult },
+    );
+
+    expect(result).toMatchObject({ success: true });
+    expect(onAgentToolResult).toHaveBeenCalledWith({
+      toolName: "lobster",
+      result: cancelledResult,
+      isError: false,
+    });
+  });
+
   it("reports sanitized dynamic tool results to the private result observer", async () => {
     const onAgentToolResult = vi.fn();
     const bridge = createCodexDynamicToolBridge({
