@@ -1576,6 +1576,7 @@ export async function runReplyAgent(params: {
         replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
         messageProvider: followupRun.run.messageProvider,
         originatingChannel: sessionCtx.OriginatingChannel,
+        originatingChatType: sessionCtx.ChatType,
         originatingTo: resolveOriginMessageTo({
           originatingTo: sessionCtx.OriginatingTo,
           to: sessionCtx.To,
@@ -2061,6 +2062,7 @@ export async function runReplyAgent(params: {
       messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
       messagingToolSentTargets: runResult.messagingToolSentTargets,
       originatingChannel: sessionCtx.OriginatingChannel,
+      originatingChatType: sessionCtx.ChatType,
       originatingTo: resolveOriginMessageTo({
         originatingTo: sessionCtx.OriginatingTo,
         to: sessionCtx.To,

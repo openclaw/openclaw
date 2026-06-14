@@ -263,6 +263,41 @@ describe("mattermostPlugin", () => {
       });
     });
 
+    it("matches final delivery routing for existing threads and direct messages", () => {
+      const resolveReplyTransport = mattermostPlugin.threading?.resolveReplyTransport;
+      if (!resolveReplyTransport) {
+        throw new Error("mattermost threading.resolveReplyTransport missing");
+      }
+
+      expect(
+        resolveReplyTransport({
+          cfg: {},
+          replyToId: "child-post",
+          threadId: "root-post",
+          replyDelivery: {
+            chatType: "channel",
+            replyToMode: "all",
+          },
+        }),
+      ).toEqual({
+        replyToId: "root-post",
+        threadId: "root-post",
+      });
+      expect(
+        resolveReplyTransport({
+          cfg: {},
+          replyToId: "dm-post",
+          replyDelivery: {
+            chatType: "direct",
+            replyToMode: "all",
+          },
+        }),
+      ).toEqual({
+        replyToId: undefined,
+        threadId: null,
+      });
+    });
+
     it("extracts explicit and implicit send thread evidence", () => {
       const extractToolSend = mattermostPlugin.actions?.extractToolSend;
       if (!extractToolSend) {

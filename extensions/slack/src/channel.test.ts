@@ -832,6 +832,28 @@ describe("slackPlugin outbound", () => {
     });
   });
 
+  it("ignores explicit reply targets for off-mode final delivery", () => {
+    const resolveReplyTransport = slackPlugin.threading?.resolveReplyTransport;
+    if (!resolveReplyTransport) {
+      throw new Error("slack threading.resolveReplyTransport unavailable");
+    }
+
+    expect(
+      resolveReplyTransport({
+        cfg,
+        replyToId: "9999999999.999999",
+        threadId: "1712345678.123456",
+        replyDelivery: {
+          chatType: "channel",
+          replyToMode: "off",
+        },
+      }),
+    ).toEqual({
+      replyToId: "1712345678.123456",
+      threadId: null,
+    });
+  });
+
   it("forwards mediaLocalRoots for sendMedia", async () => {
     const sendSlack = vi.fn().mockResolvedValue({ messageId: "m-media-local" });
     const sendMedia = requireSlackSendMedia();

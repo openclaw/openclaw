@@ -1,5 +1,6 @@
 // Tests reply payload construction and metadata propagation from agent runs.
 import { beforeEach, describe, expect, it } from "vitest";
+import type { ChannelThreadingAdapter } from "../../channels/plugins/types.public.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
@@ -20,6 +21,10 @@ const baseParams = {
   blockReplyPipeline: null,
   replyToMode: "off" as const,
 };
+
+type ResolveReplyTransportParams = Parameters<
+  NonNullable<ChannelThreadingAdapter["resolveReplyTransport"]>
+>[0];
 
 function expectFields(value: unknown, expected: Record<string, unknown>): void {
   if (!value || typeof value !== "object") {
@@ -59,11 +64,14 @@ describe("buildReplyPayloads media filter integration", () => {
               resolveReplyTransport: ({
                 threadId,
                 replyToId,
-              }: {
-                threadId?: string | number | null;
-                replyToId?: string | null;
-              }) => ({
-                replyToId: replyToId ?? (threadId != null ? String(threadId) : undefined),
+                replyDelivery,
+              }: ResolveReplyTransportParams) => ({
+                replyToId:
+                  replyDelivery?.replyToMode === "off"
+                    ? threadId != null
+                      ? String(threadId)
+                      : undefined
+                    : (replyToId ?? (threadId != null ? String(threadId) : undefined)),
                 threadId: null,
               }),
             },
@@ -78,15 +86,19 @@ describe("buildReplyPayloads media filter integration", () => {
               resolveReplyTransport: ({
                 threadId,
                 replyToId,
-              }: {
-                threadId?: string | number | null;
-                replyToId?: string | null;
-              }) => {
+                replyDelivery,
+              }: ResolveReplyTransportParams) => {
                 const resolvedThreadId =
-                  replyToId ?? (threadId != null ? String(threadId) : undefined);
+                  replyDelivery?.chatType === "direct"
+                    ? undefined
+                    : replyDelivery
+                      ? threadId != null
+                        ? String(threadId)
+                        : (replyToId ?? undefined)
+                      : (replyToId ?? (threadId != null ? String(threadId) : undefined));
                 return {
                   replyToId: resolvedThreadId,
-                  threadId: resolvedThreadId,
+                  threadId: resolvedThreadId ?? null,
                 };
               },
             },
@@ -622,7 +634,7 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads).toHaveLength(0);
   });
 
-  it("keeps an explicit Mattermost DM reply when the tool send was top-level", async () => {
+  it("dedupes an explicit Mattermost DM reply against its top-level delivery route", async () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
       config: {},
@@ -630,6 +642,7 @@ describe("buildReplyPayloads media filter integration", () => {
       replyToMode: "off",
       replyToChannel: "mattermost",
       messageProvider: "mattermost",
+      originatingChatType: "direct",
       originatingTo: "user:U1",
       messagingToolSentTexts: ["same reply"],
       messagingToolSentTargets: [
@@ -642,7 +655,7 @@ describe("buildReplyPayloads media filter integration", () => {
       ],
     });
 
-    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads).toHaveLength(0);
   });
 
   it("dedupes an implicit Mattermost send in the active thread", async () => {
@@ -672,7 +685,33 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads).toHaveLength(0);
   });
 
-  it("keeps an explicit Slack reply when the tool send was top-level", async () => {
+  it("dedupes an explicit Mattermost reply against the existing thread root", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      config: {},
+      payloads: [{ text: "same reply", replyToId: "child-post", replyToTag: true }],
+      replyToMode: "all",
+      replyToChannel: "mattermost",
+      messageProvider: "mattermost",
+      originatingChatType: "channel",
+      originatingTo: "channel:C1",
+      originatingThreadId: "root-post",
+      messagingToolSentTexts: ["same reply"],
+      messagingToolSentTargets: [
+        {
+          tool: "mattermost",
+          provider: "mattermost",
+          to: "channel:C1",
+          threadId: "root-post",
+          text: "same reply",
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(0);
+  });
+
+  it("dedupes an off-mode explicit Slack reply against its top-level delivery route", async () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
       config: {},
@@ -692,7 +731,32 @@ describe("buildReplyPayloads media filter integration", () => {
       ],
     });
 
-    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads).toHaveLength(0);
+  });
+
+  it("dedupes an off-mode explicit Slack reply against the ambient thread route", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      config: {},
+      payloads: [{ text: "same reply", replyToId: "999.000", replyToTag: true }],
+      replyToMode: "off",
+      replyToChannel: "slack",
+      messageProvider: "slack",
+      originatingTo: "channel:C1",
+      originatingThreadId: "111.000",
+      messagingToolSentTexts: ["same reply"],
+      messagingToolSentTargets: [
+        {
+          tool: "slack",
+          provider: "slack",
+          to: "channel:C1",
+          threadId: "111.000",
+          text: "same reply",
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(0);
   });
 
   it("does not dedupe short commentary that appears inside a longer same-target message", async () => {

@@ -180,6 +180,7 @@ export async function buildReplyPayloads(params: {
   messagingToolSentMediaUrls?: string[];
   messagingToolSentTargets?: MessagingToolSend[];
   originatingChannel?: OriginatingChannelType;
+  originatingChatType?: string | null;
   originatingTo?: string;
   originatingThreadId?: string | number;
   accountId?: string;
@@ -300,6 +301,8 @@ export async function buildReplyPayloads(params: {
           payload.replyToTag ||
           payload.replyToCurrent,
         ),
+        replyToMode: params.replyToMode,
+        originatingChatType: params.originatingChatType,
         accountId,
       });
       if (!decision.shouldDedupePayloads) {

@@ -91,6 +91,8 @@ export function resolveFollowupDeliveryPayloads(params: {
         payload.replyToTag ||
         payload.replyToCurrent,
       ),
+      replyToMode,
+      originatingChatType: params.originatingChatType,
       accountId,
     });
     if (!decision.shouldDedupePayloads) {
