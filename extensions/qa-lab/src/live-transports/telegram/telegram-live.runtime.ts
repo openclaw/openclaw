@@ -102,6 +102,7 @@ type TelegramQaScenarioDefinition = LiveTransportScenarioDefinition<TelegramQaSc
   buildRttRun?: (params: { rttIndex: number; sutUsername: string }) => TelegramQaScenarioRun;
   defaultEnabled?: boolean;
   defaultProviderModes?: readonly QaProviderMode[];
+  evidenceCoverageIds?: readonly string[];
   regressionRefs?: readonly string[];
   rationale: string;
 };
@@ -128,8 +129,11 @@ const DEFAULT_TELEGRAM_QA_CANARY_TIMEOUT_MS = 30_000;
 
 type TelegramQaScenarioResult = LiveTransportCheckResult;
 
-function telegramLiveTransportCoverageIds(standardScenarioId: string | undefined) {
-  return standardScenarioId ? [`channels.telegram.${standardScenarioId}`] : [];
+function telegramLiveTransportCoverageIds(scenario: TelegramQaScenarioDefinition) {
+  if (scenario.evidenceCoverageIds) {
+    return scenario.evidenceCoverageIds;
+  }
+  return scenario.standardId ? [`channels.telegram.${scenario.standardId}`] : [];
 }
 
 type TelegramQaRttOptions = LiveTransportRttOptions<TelegramQaScenarioId>;
@@ -407,6 +411,7 @@ const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
   {
     id: "telegram-mentioned-message-reply",
     title: "Telegram mentioned message gets a reply",
+    evidenceCoverageIds: ["channels.telegram.mention-gating"],
     rationale: "Bot-to-bot group mention routing must produce a threaded SUT reply.",
     timeoutMs: 45_000,
     buildRun: (sutUsername) =>
@@ -2031,7 +2036,7 @@ export async function runTelegramQaLive(params: {
             if (!lastMatched || !firstRequestStartedAt || lastSentMessageId === undefined) {
               const result = {
                 id: scenario.id,
-                coverageIds: telegramLiveTransportCoverageIds(scenario.standardId),
+                coverageIds: telegramLiveTransportCoverageIds(scenario),
                 title: scenario.title,
                 status: "pass",
                 details: "no reply",
@@ -2083,7 +2088,7 @@ export async function runTelegramQaLive(params: {
             }
             const result = {
               id: scenario.id,
-              coverageIds: telegramLiveTransportCoverageIds(scenario.standardId),
+              coverageIds: telegramLiveTransportCoverageIds(scenario),
               title: scenario.title,
               status: resultStatus,
               details,
@@ -2110,7 +2115,7 @@ export async function runTelegramQaLive(params: {
           } catch (error) {
             const result = {
               id: scenario.id,
-              coverageIds: telegramLiveTransportCoverageIds(scenario.standardId),
+              coverageIds: telegramLiveTransportCoverageIds(scenario),
               title: scenario.title,
               status: "fail",
               details: formatErrorMessage(error),
