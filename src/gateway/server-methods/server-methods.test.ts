@@ -3958,6 +3958,64 @@ describe("gateway healthHandlers.health cache freshness", () => {
     });
     expect(respond).toHaveBeenCalledWith(true, fresh, undefined);
   });
+
+  it("bypasses the non-sensitive cache for admin-scoped callers so runtime-config drift is always fresh", async () => {
+    // Regression for the ClawSweeper P1 finding on #89526: the non-sensitive
+    // `healthCache` is served from `getHealthCache()` to ALL callers, so an
+    // admin asking `openclaw health` after disk-config drift just appeared
+    // could see a 30-second-old "ok" while waiting for background refresh.
+    // Admin callers must always receive a fresh snapshot through
+    // `refreshHealthSnapshot({ includeSensitive: true })`.
+    const cached = {
+      ok: true,
+      ts: Date.now(),
+      durationMs: 1,
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+      heartbeatSeconds: 0,
+      defaultAgentId: "main",
+      agents: [],
+      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+      runtimeConfig: { state: "ok" as const },
+    };
+    const fresh = {
+      ...cached,
+      ts: Date.now() + 10,
+      runtimeConfig: {
+        state: "drift" as const,
+        driftPaths: ["gateway.auth"],
+        liveSourceFingerprint: "live-fp",
+        diskSourceFingerprint: "disk-fp",
+      },
+    };
+    const respond = vi.fn();
+    const refreshHealthSnapshot = vi.fn().mockResolvedValue(fresh);
+
+    await healthHandlers.health({
+      req: {} as never,
+      params: {} as never,
+      respond: respond as never,
+      context: {
+        getHealthCache: () => cached,
+        refreshHealthSnapshot,
+        getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+        logHealth: { error: vi.fn() },
+      } as never,
+      client: { connect: { role: "operator", scopes: ["operator.admin"] } } as never,
+      isWebchatConnect: () => false,
+    });
+
+    expect(refreshHealthSnapshot).toHaveBeenCalledWith({
+      probe: false,
+      includeSensitive: true,
+    });
+    expect(respond).toHaveBeenCalledWith(true, fresh, undefined);
+    // The cached payload would have been returned with a 4th `{ cached: true }`
+    // arg; sensitive callers must never see that flag because they bypass
+    // the cache path entirely.
+    expect(respond.mock.calls[0]?.[3]).toBeUndefined();
+  });
 });
 
 describe("logs.tail", () => {
