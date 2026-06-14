@@ -13,7 +13,7 @@ export type SessionAttentionClassification =
   | {
       eventType: "session.stalled";
       reason: string;
-      classification: "blocked_tool_call" | "stalled_agent_run";
+      classification: "blocked_tool_call" | "stalled_agent_run" | "terminal_progress_orphan";
       activeWorkKind?: DiagnosticSessionActiveWorkKind;
       recoveryEligible: false;
     }
@@ -76,6 +76,27 @@ export function classifySessionAttention(params: {
       };
     }
     if ((params.activity.lastProgressAgeMs ?? 0) > params.staleMs) {
+      // When the last codex app-server progress event was itself terminal-looking
+      // (`rawResponseItem/completed`, `response.completed`, `output_item.done`, …)
+      // and no further progress arrives, surface a distinct `terminal_progress_orphan`
+      // classification so operators can tell apart "no progress, may still be working"
+      // from "last progress was terminal-looking, lifecycle never closed". This is
+      // observability-only — `recoveryEligible: false` matches the existing
+      // `stalled_agent_run` path, so no recovery timing changes. The contract for
+      // whether item-level terminal events authorize earlier abort is still owned by
+      // the maintainers (https://github.com/openclaw/openclaw/issues/85532).
+      if (
+        params.activity.activeWorkKind === "embedded_run" &&
+        isTerminalDiagnosticProgressReason(params.activity.lastProgressReason)
+      ) {
+        return {
+          eventType: "session.stalled",
+          reason: "terminal_progress_orphan",
+          classification: "terminal_progress_orphan",
+          activeWorkKind: params.activity.activeWorkKind,
+          recoveryEligible: false,
+        };
+      }
       return {
         eventType: "session.stalled",
         reason: "active_work_without_progress",
