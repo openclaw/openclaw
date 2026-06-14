@@ -138,6 +138,7 @@ export type PluginHookMessageSentEvent = {
   messageId?: string;
   sessionKey?: string;
   runId?: string;
+  senderId?: string;
   trace?: DiagnosticTraceContext;
   traceId?: string;
   spanId?: string;
