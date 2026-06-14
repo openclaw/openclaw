@@ -96,6 +96,13 @@ export function resolveOpenClawCodingToolsSessionKeys(
   };
 }
 
+/** Returns the channel provider used when constructing the Codex message tool. */
+export function resolveCodexMessageToolProvider(
+  params: Pick<EmbeddedRunAttemptParams, "messageChannel" | "messageProvider">,
+): string | undefined {
+  return params.messageChannel ?? params.messageProvider;
+}
+
 /** Resolves the channel id that hook events should target for this Codex app-server turn. */
 export function resolveCodexAppServerHookChannelId(
   params: EmbeddedRunAttemptParams,
@@ -209,7 +216,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
       elevated: params.bashElevated,
     },
     sandbox: input.sandbox,
-    messageProvider: params.messageChannel ?? params.messageProvider,
+    messageProvider: resolveCodexMessageToolProvider(params),
     agentAccountId: params.agentAccountId,
     messageTo: params.messageTo,
     messageThreadId: params.messageThreadId,

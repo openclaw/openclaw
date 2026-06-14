@@ -673,6 +673,7 @@ async function createCodexSideToolBridge(input: {
       sessionId: input.params.sessionId,
       sessionKey: input.params.sessionKey,
       runId: input.params.opts?.runId ?? `codex-btw:${input.params.sessionId}`,
+      currentChannelProvider: input.params.messageProvider ?? input.params.messageChannel,
       ...hookChannelFields,
     },
   });

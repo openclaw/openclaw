@@ -15,6 +15,7 @@ import {
   includeForcedCodexDynamicToolAllow,
   resetOpenClawCodingToolsFactoryForTests,
   resolveOpenClawCodingToolsSessionKeys,
+  resolveCodexMessageToolProvider,
   setOpenClawCodingToolsFactoryForTests,
   shouldEnableCodexAppServerNativeToolSurface,
   shouldForceMessageTool,
@@ -130,6 +131,15 @@ describe("Codex app-server dynamic tool build", () => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("uses the message tool channel before a differing ingress provider", () => {
+    expect(
+      resolveCodexMessageToolProvider({
+        messageChannel: "discord",
+        messageProvider: "discord-voice",
+      }),
+    ).toBe("discord");
   });
 
   it("filters Codex-native dynamic tools from app-server tool exposure", () => {

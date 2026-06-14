@@ -293,6 +293,22 @@ function readToolResultDetailsRecord(result: unknown): Record<string, unknown> |
   return readRecordField(asOptionalObjectRecord(result)?.details);
 }
 
+function applyCurrentMessageProvider(
+  toolName: string,
+  args: Record<string, unknown>,
+  currentProvider: string | undefined,
+): Record<string, unknown> {
+  if (
+    toolName !== "message" ||
+    readStringValue(args.provider) ||
+    readStringValue(args.channel) ||
+    !currentProvider
+  ) {
+    return args;
+  }
+  return { ...args, provider: currentProvider };
+}
+
 function applyToolSendReceiptForExtraction(result: unknown, receiptResult: unknown): unknown {
   const toolSend = readToolResultDetailsRecord(receiptResult)?.toolSend;
   if (toolSend === undefined) {
@@ -1047,7 +1063,12 @@ export function handleToolExecutionStart(
       const argsRecord = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
       const isMessagingSend = isMessagingToolSendAction(toolName, argsRecord);
       if (isMessagingSend) {
-        const sendTarget = extractMessagingToolSend(toolName, argsRecord, {
+        const telemetryArgs = applyCurrentMessageProvider(
+          toolName,
+          argsRecord,
+          ctx.params.messageChannel,
+        );
+        const sendTarget = extractMessagingToolSend(toolName, telemetryArgs, {
           config: ctx.params.config,
           currentChannelId: ctx.params.currentChannelId,
           currentThreadId:

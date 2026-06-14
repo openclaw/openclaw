@@ -275,6 +275,7 @@ type ToolHandlerParams = Pick<
   | "onAgentToolResult"
   | "onToolResult"
   | "config"
+  | "messageChannel"
   | "sessionKey"
   | "currentChannelId"
   | "currentThreadId"

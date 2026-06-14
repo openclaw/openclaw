@@ -799,7 +799,7 @@ describe("createCodexDynamicToolBridge", () => {
     ]);
   });
 
-  it("records the current transport thread for implicit message sends", async () => {
+  it("records the current provider and transport thread for implicit message sends", async () => {
     const hasRepliedRef = { value: false };
     setActivePluginRegistry(
       createTestRegistry([
@@ -845,6 +845,7 @@ describe("createCodexDynamicToolBridge", () => {
       ],
       signal: new AbortController().signal,
       hookContext: {
+        currentChannelProvider: "slack",
         currentChannelId: "C1",
         currentThreadId: "171.222",
         replyToMode: "first",
@@ -854,7 +855,6 @@ describe("createCodexDynamicToolBridge", () => {
 
     await handleMessageToolCall(bridge, {
       action: "send",
-      provider: "slack",
       to: "channel:C1",
       text: "hello from Codex",
     });

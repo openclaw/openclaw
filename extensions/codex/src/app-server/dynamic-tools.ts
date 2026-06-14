@@ -53,6 +53,7 @@ type CodexDynamicToolHookContext = {
   sessionKey?: string;
   runId?: string;
   channelId?: string;
+  currentChannelProvider?: string;
   currentChannelId?: string;
   currentThreadId?: string;
   replyToMode?: "off" | "first" | "all" | "batched";
@@ -72,6 +73,22 @@ type CodexDynamicToolSchemaQuarantine = {
   tool: string;
   violations: readonly string[];
 };
+
+function applyCurrentMessageProvider(
+  toolName: string,
+  args: Record<string, unknown>,
+  currentProvider: string | undefined,
+): Record<string, unknown> {
+  const hasProvider =
+    typeof args.provider === "string" && args.provider.trim().length > 0
+      ? true
+      : typeof args.channel === "string" && args.channel.trim().length > 0;
+  const provider = currentProvider?.trim();
+  if (toolName !== "message" || hasProvider || !provider) {
+    return args;
+  }
+  return { ...args, provider };
+}
 
 /** Runtime bridge returned to Codex app-server attempt code. */
 export type CodexDynamicToolBridge = {
@@ -220,9 +237,14 @@ export function createCodexDynamicToolBridge(params: {
         // fail without the target tool actually starting.
         const preparedArgs = tool.prepareArguments ? tool.prepareArguments(args) : args;
         const telemetryArgs = isRecord(preparedArgs) ? preparedArgs : args;
+        const messagingTelemetryArgs = applyCurrentMessageProvider(
+          toolName,
+          telemetryArgs,
+          params.hookContext?.currentChannelProvider,
+        );
         const messagingTarget =
           isMessagingTool(toolName) && isMessagingToolSendAction(toolName, telemetryArgs)
-            ? extractMessagingToolSend(toolName, telemetryArgs, {
+            ? extractMessagingToolSend(toolName, messagingTelemetryArgs, {
                 config: params.hookContext?.config,
                 currentChannelId: params.hookContext?.currentChannelId,
                 currentThreadId: params.hookContext?.currentThreadId,

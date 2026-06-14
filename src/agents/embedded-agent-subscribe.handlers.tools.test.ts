@@ -1521,7 +1521,7 @@ describe("messaging tool media URL tracking", () => {
     setActivePluginRegistry(createTestRegistry());
   });
 
-  it("captures the current transport thread for implicit message sends", async () => {
+  it("uses the current provider and thread for implicit message sends", async () => {
     setActivePluginRegistry(
       createTestRegistry([
         {
@@ -1545,6 +1545,7 @@ describe("messaging tool media URL tracking", () => {
       ]),
     );
     const { ctx } = createTestContext();
+    ctx.params.messageChannel = "slack";
     ctx.params.currentChannelId = "C1";
     ctx.params.currentThreadId = "171.222";
     ctx.params.replyToMode = "all";
@@ -1555,7 +1556,6 @@ describe("messaging tool media URL tracking", () => {
       toolCallId: "tool-threaded-message",
       args: {
         action: "send",
-        provider: "slack",
         to: "channel:C1",
         content: "hi",
       },
