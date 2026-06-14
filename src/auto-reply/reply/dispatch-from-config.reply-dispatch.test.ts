@@ -20,6 +20,7 @@ import {
   sessionStoreMocks,
   setDiscordTestRegistry,
 } from "./dispatch-from-config.shared.test-harness.js";
+import { createReplyDispatcher } from "./reply-dispatcher.js";
 
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
@@ -288,9 +289,89 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       expect(result.queuedFinal).toBe(true);
       expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();
       expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "first reply" });
+      await vi.waitFor(() => {
+        expect(queuedOperation).toBeDefined();
+      });
       expect(deliveryOrder).toEqual(["final", "followup"]);
       expect(replyRunRegistry.get("agent:test:session")).toBe(queuedOperation);
     } finally {
+      queuedOperation?.complete();
+    }
+  });
+
+  it("clears the reply lane but defers follow-up admission until final delivery settles", async () => {
+    const deliveryOrder: string[] = [];
+    let startDelivery: () => void = () => {};
+    const deliveryStarted = new Promise<void>((resolve) => {
+      startDelivery = resolve;
+    });
+    let releaseDelivery: () => void = () => {};
+    const deliveryGate = new Promise<void>((resolve) => {
+      releaseDelivery = resolve;
+    });
+    const dispatcher = createReplyDispatcher({
+      deliver: async () => {
+        deliveryOrder.push("final-start");
+        startDelivery();
+        await deliveryGate;
+        deliveryOrder.push("final-end");
+      },
+    });
+    let queuedOperation: ReturnType<typeof createReplyOperation> | undefined;
+    const abortController = new AbortController();
+    hookMocks.runner.runReplyDispatch.mockImplementation(async (_event, contextValue) => {
+      const operation = replyRunRegistry.get("agent:test:session");
+      if (!operation) {
+        throw new Error("expected dispatch reply operation");
+      }
+      runAfterReplyOperationClear(operation, () => {
+        deliveryOrder.push("followup");
+        queuedOperation = createReplyOperation({
+          sessionKey: "agent:test:session",
+          sessionId: "queued-session",
+          resetTriggered: false,
+        });
+      });
+      const context = contextValue as { dispatcher: typeof dispatcher };
+      return {
+        handled: true,
+        queuedFinal: context.dispatcher.sendFinalReply({ text: "first reply" }),
+        counts: context.dispatcher.getQueuedCounts(),
+      };
+    });
+
+    try {
+      const dispatchPromise = dispatchReplyFromConfig({
+        ctx: createHookCtx(),
+        cfg: emptyConfig,
+        dispatcher,
+        replyOptions: { abortSignal: abortController.signal },
+      });
+
+      await deliveryStarted;
+      const result = await dispatchPromise;
+
+      expect(result.queuedFinal).toBe(true);
+      expect(replyRunRegistry.isActive("agent:test:session")).toBe(false);
+      expect(deliveryOrder).toEqual(["final-start"]);
+      expect(queuedOperation).toBeUndefined();
+
+      abortController.abort();
+      await Promise.resolve();
+      expect(queuedOperation).toBeUndefined();
+
+      releaseDelivery();
+      await dispatcher.waitForIdle();
+      await vi.waitFor(() => {
+        expect(queuedOperation).toBeDefined();
+      });
+
+      expect(deliveryOrder).toEqual(["final-start", "final-end", "followup"]);
+      expect(replyRunRegistry.get("agent:test:session")).toBe(queuedOperation);
+    } finally {
+      releaseDelivery();
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
       queuedOperation?.complete();
     }
   });

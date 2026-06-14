@@ -13,6 +13,7 @@ import {
   isReplyRunActiveForSessionId,
   isReplyRunAbortableForCompaction,
   queueReplyRunMessage,
+  REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
   replyRunRegistry,
   runAfterReplyOperationClear,
   resolveActiveReplyRunSessionId,
@@ -138,6 +139,103 @@ describe("reply run registry", () => {
 
     expect(operation.result).toEqual({ kind: "completed" });
     expect(afterClear).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears active state before a deferred after-clear barrier settles", async () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:main",
+      sessionId: "session-deferred",
+      resetTriggered: false,
+    });
+    let releaseBarrier: () => void = () => {};
+    const barrier = new Promise<void>((resolve) => {
+      releaseBarrier = resolve;
+    });
+    const afterClear = vi.fn();
+    runAfterReplyOperationClear(operation, afterClear);
+
+    operation.completeWithAfterClearBarrier(barrier);
+
+    expect(operation.result).toEqual({ kind: "completed" });
+    expect(replyRunRegistry.isActive("agent:main:main")).toBe(false);
+    expect(afterClear).not.toHaveBeenCalled();
+
+    releaseBarrier();
+    await barrier;
+    await vi.waitFor(() => {
+      expect(afterClear).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("keeps later after-clear work behind earlier delivery barriers", async () => {
+    const first = createReplyOperation({
+      sessionKey: "agent:main:main",
+      sessionId: "first-session",
+      resetTriggered: false,
+    });
+    let releaseFirst: () => void = () => {};
+    const firstBarrier = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const firstAfterClear = vi.fn();
+    runAfterReplyOperationClear(first, firstAfterClear);
+    first.completeWithAfterClearBarrier(firstBarrier);
+
+    const second = createReplyOperation({
+      sessionKey: "agent:main:main",
+      sessionId: "second-session",
+      resetTriggered: false,
+    });
+    let releaseSecond: () => void = () => {};
+    const secondBarrier = new Promise<void>((resolve) => {
+      releaseSecond = resolve;
+    });
+    const secondAfterClear = vi.fn();
+    runAfterReplyOperationClear(second, secondAfterClear);
+    second.completeWithAfterClearBarrier(secondBarrier);
+
+    releaseSecond();
+    await secondBarrier;
+    expect(secondAfterClear).not.toHaveBeenCalled();
+
+    releaseFirst();
+    await firstBarrier;
+    await vi.waitFor(() => {
+      expect(firstAfterClear).toHaveBeenCalledWith("first-session");
+      expect(secondAfterClear).toHaveBeenCalledWith("second-session");
+    });
+  });
+
+  it("releases a hung delivery barrier after the settle timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const operation = createReplyOperation({
+        sessionKey: "agent:main:main",
+        sessionId: "hung-session",
+        resetTriggered: false,
+      });
+      const afterClear = vi.fn();
+      runAfterReplyOperationClear(operation, afterClear);
+      operation.completeWithAfterClearBarrier(new Promise<void>(() => {}));
+
+      await vi.advanceTimersByTimeAsync(REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS - 1);
+      expect(afterClear).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.waitFor(() => {
+        expect(afterClear).toHaveBeenCalledWith("hung-session");
+      });
+      const next = createReplyOperation({
+        sessionKey: "agent:main:main",
+        sessionId: "next-session",
+        resetTriggered: false,
+        respectFollowupAdmissionBarrier: true,
+      });
+      next.complete();
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
   });
 
   it("retains failed operations until final delivery completes", () => {

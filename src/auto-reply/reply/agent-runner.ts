@@ -1440,8 +1440,18 @@ export async function runReplyAgent(params: {
     shouldDrainQueuedFollowupsAfterClear = true;
     return value;
   };
-  const drainQueuedFollowupsAfterClear = () => {
-    scheduleFollowupDrain(queueKey, runFollowupTurn);
+  const drainQueuedFollowupsAfterClear = (admissionSessionId: string) => {
+    const completedSessionId = replyOperation.sessionId;
+    const runFollowupAfterClear =
+      admissionSessionId === completedSessionId
+        ? runFollowupTurn
+        : (queued: FollowupRun) =>
+            runFollowupTurn(
+              queued.run.sessionId === completedSessionId
+                ? { ...queued, admissionSessionId }
+                : queued,
+            );
+    scheduleFollowupDrain(queueKey, runFollowupAfterClear);
   };
   const restartRecoveryDeliveryRunId = crypto.randomUUID();
   let trackedRestartRecoveryDeliveryContext = false;
@@ -2571,7 +2581,7 @@ export async function runReplyAgent(params: {
       if (providedReplyOperation) {
         runAfterReplyOperationClear(replyOperation, drainQueuedFollowupsAfterClear);
       } else {
-        replyOperation.completeThen(drainQueuedFollowupsAfterClear);
+        replyOperation.completeThen(() => drainQueuedFollowupsAfterClear(replyOperation.sessionId));
       }
     } else if (!providedReplyOperation) {
       replyOperation.complete();

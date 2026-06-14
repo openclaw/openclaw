@@ -1500,7 +1500,7 @@ export async function dispatchReplyFromConfig(
   };
   const completeDispatchReplyOperation = () => {
     if (dispatchReplyOperation) {
-      dispatchReplyOperation.complete();
+      dispatchReplyOperation.completeWithAfterClearBarrier(waitForReplyDispatcherIdle(dispatcher));
     }
   };
   const failDispatchReplyOperation = (error: unknown) => {
@@ -1510,7 +1510,7 @@ export async function dispatchReplyFromConfig(
     if (!dispatchReplyOperation.result) {
       dispatchReplyOperation.fail("run_failed", error);
     }
-    dispatchReplyOperation.complete();
+    dispatchReplyOperation.completeWithAfterClearBarrier(waitForReplyDispatcherIdle(dispatcher));
   };
   const isDispatchOperationAborted = () => getDispatchAbortSignal()?.aborted === true;
   const isPreDispatchOperationAborted = () => getPreDispatchAbortSignal()?.aborted === true;

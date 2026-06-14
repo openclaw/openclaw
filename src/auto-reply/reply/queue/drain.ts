@@ -363,6 +363,13 @@ export function scheduleFollowupDrain(
   key: string,
   runFollowup: (run: FollowupRun) => Promise<void>,
 ): void {
+  const existingQueue = FOLLOWUP_QUEUES.get(key);
+  if (existingQueue?.draining) {
+    // The active drain keeps its current callback, but deferred retries must
+    // use the latest session/runtime context supplied by the finishing run.
+    rememberFollowupDrainCallback(key, runFollowup);
+    return;
+  }
   const queue = beginQueueDrain(FOLLOWUP_QUEUES, key);
   if (!queue) {
     return;

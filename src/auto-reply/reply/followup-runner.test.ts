@@ -695,6 +695,45 @@ describe("createFollowupRunner reply-lane admission", () => {
     expect(call.sessionFile).toBe("/tmp/post-compact.jsonl");
   });
 
+  it("uses an admission session hint while refreshing the queued session file", async () => {
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: { agentMeta: { provider: "anthropic", model: "claude" } },
+    });
+    const sessionStore = {
+      main: {
+        sessionId: "rotated-session",
+        sessionFile: "/tmp/rotated.jsonl",
+        updatedAt: Date.now(),
+      },
+    };
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry: sessionStore.main,
+      sessionStore,
+      sessionKey: "main",
+      defaultModel: "anthropic/claude",
+    });
+
+    await runner(
+      createQueuedRun({
+        admissionSessionId: "rotated-session",
+        run: {
+          sessionId: "queued-stale-session",
+          sessionFile: "/tmp/stale.jsonl",
+          sessionKey: "main",
+          provider: "anthropic",
+          model: "claude",
+        },
+      }),
+    );
+
+    const call = requireLastMockCallArg(runEmbeddedAgentMock, "run embedded agent");
+    expect(call.sessionId).toBe("rotated-session");
+    expect(call.sessionFile).toBe("/tmp/rotated.jsonl");
+  });
+
   it("registers the admitted session id when the local session store is stale", async () => {
     const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
       "../../infra/agent-events.js",

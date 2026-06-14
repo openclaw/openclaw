@@ -57,6 +57,7 @@ function createReplyOperation(): TestReplyOperation {
     completeThen: vi.fn((afterClear: () => void) => {
       afterClear();
     }),
+    completeWithAfterClearBarrier: vi.fn(),
     fail: vi.fn(),
     abortByUser: vi.fn(),
     abortForRestart: vi.fn(),

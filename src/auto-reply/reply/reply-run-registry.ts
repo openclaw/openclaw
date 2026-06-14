@@ -72,6 +72,11 @@ export type ReplyOperation = {
    * Use when the follow-up can create another ReplyOperation for this session.
    */
   completeThen(afterClear: () => void): void;
+  /**
+   * Clear active-run state immediately, but delay registered after-clear work
+   * until delivery or another external barrier settles.
+   */
+  completeWithAfterClearBarrier(barrier: PromiseLike<unknown>): void;
   fail(code: Exclude<ReplyOperationFailureCode, "aborted_by_user">, cause?: unknown): void;
   abortByUser(): void;
   abortForRestart(): void;
@@ -102,12 +107,18 @@ type ReplyRunWaiter = {
   timer?: NodeJS.Timeout;
 };
 
+type ReplyRunFollowupAdmissionBarrier = {
+  settled: Promise<void>;
+  sessionId: string;
+};
+
 type ReplyRunState = {
   activeRunsByKey: Map<string, ReplyOperation>;
   activeSessionIdsByKey: Map<string, string>;
   activeKeysBySessionId: Map<string, string>;
   waitKeysBySessionId: Map<string, string>;
   waitersByKey: Map<string, Set<ReplyRunWaiter>>;
+  followupAdmissionBarriersByKey: Map<string, ReplyRunFollowupAdmissionBarrier>;
 };
 
 const REPLY_RUN_STATE_KEY = Symbol.for("openclaw.replyRunRegistry");
@@ -118,7 +129,9 @@ const replyRunState = resolveGlobalSingleton<ReplyRunState>(REPLY_RUN_STATE_KEY,
   activeKeysBySessionId: new Map<string, string>(),
   waitKeysBySessionId: new Map<string, string>(),
   waitersByKey: new Map<string, Set<ReplyRunWaiter>>(),
+  followupAdmissionBarriersByKey: new Map<string, ReplyRunFollowupAdmissionBarrier>(),
 }));
+replyRunState.followupAdmissionBarriersByKey ??= new Map();
 
 export const REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS = 15_000;
 
@@ -126,6 +139,13 @@ export class ReplyRunAlreadyActiveError extends Error {
   constructor(sessionKey: string) {
     super(`Reply run already active for ${sessionKey}`);
     this.name = "ReplyRunAlreadyActiveError";
+  }
+}
+
+export class ReplyRunFollowupAdmissionBlockedError extends Error {
+  constructor(sessionKey: string) {
+    super(`Reply follow-up admission is blocked for ${sessionKey}`);
+    this.name = "ReplyRunFollowupAdmissionBlockedError";
   }
 }
 
@@ -193,7 +213,10 @@ function isReplyRunCompacting(operation: ReplyOperation): boolean {
 }
 
 const attachedBackendByOperation = new WeakMap<ReplyOperation, ReplyBackendHandle>();
-const afterClearCallbacksByOperation = new WeakMap<ReplyOperation, Set<() => void>>();
+const afterClearCallbacksByOperation = new WeakMap<
+  ReplyOperation,
+  Set<(sessionId: string) => void>
+>();
 
 function getAttachedBackend(operation: ReplyOperation): ReplyBackendHandle | undefined {
   return attachedBackendByOperation.get(operation);
@@ -202,25 +225,66 @@ function getAttachedBackend(operation: ReplyOperation): ReplyBackendHandle | und
 /** Run work after an operation no longer owns its session lane. */
 export function runAfterReplyOperationClear(
   operation: ReplyOperation,
-  afterClear: () => void,
+  afterClear: (sessionId: string) => void,
 ): void {
   if (replyRunState.activeRunsByKey.get(operation.key) !== operation) {
-    afterClear();
+    afterClear(operation.sessionId);
     return;
   }
-  const callbacks = afterClearCallbacksByOperation.get(operation) ?? new Set<() => void>();
+  const callbacks =
+    afterClearCallbacksByOperation.get(operation) ?? new Set<(sessionId: string) => void>();
   callbacks.add(afterClear);
   afterClearCallbacksByOperation.set(operation, callbacks);
 }
 
-function flushReplyOperationAfterClear(operation: ReplyOperation): void {
+function flushReplyOperationAfterClear(operation: ReplyOperation, sessionId: string): void {
   const callbacks = afterClearCallbacksByOperation.get(operation);
   if (!callbacks) {
     return;
   }
   afterClearCallbacksByOperation.delete(operation);
   for (const callback of callbacks) {
-    callback();
+    callback(sessionId);
+  }
+}
+
+function registerFollowupAdmissionBarrier(
+  sessionKey: string,
+  sessionId: string,
+  barrier: PromiseLike<unknown>,
+): ReplyRunFollowupAdmissionBarrier {
+  const barriersByKey = replyRunState.followupAdmissionBarriersByKey;
+  const previous = barriersByKey.get(sessionKey)?.settled;
+  // A hung transport must not permanently poison follow-up admission.
+  const current = new Promise<void>((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(finish, REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS);
+    timer.unref?.();
+    void Promise.resolve(barrier).then(finish, finish);
+  });
+  const settled = previous ? Promise.all([previous, current]).then(() => undefined) : current;
+  const entry = { settled, sessionId };
+  barriersByKey.set(sessionKey, entry);
+  void settled.then(() => {
+    if (barriersByKey.get(sessionKey) === entry) {
+      barriersByKey.delete(sessionKey);
+    }
+  });
+  return entry;
+}
+
+function updateFollowupAdmissionSessionId(sessionKey: string, sessionId: string): void {
+  const barrier = replyRunState.followupAdmissionBarriersByKey.get(sessionKey);
+  if (barrier) {
+    barrier.sessionId = sessionId;
   }
 }
 
@@ -264,6 +328,7 @@ export function createReplyOperation(params: {
   resetTriggered: boolean;
   routeThreadId?: string | number;
   upstreamAbortSignal?: AbortSignal;
+  respectFollowupAdmissionBarrier?: boolean;
 }): ReplyOperation {
   const sessionKey = normalizeOptionalString(params.sessionKey);
   const sessionId = normalizeOptionalString(params.sessionId);
@@ -272,6 +337,12 @@ export function createReplyOperation(params: {
   }
   if (!sessionId) {
     throw new Error("Reply operations require a sessionId");
+  }
+  if (
+    params.respectFollowupAdmissionBarrier &&
+    replyRunState.followupAdmissionBarriersByKey.has(sessionKey)
+  ) {
+    throw new ReplyRunFollowupAdmissionBlockedError(sessionKey);
   }
   if (replyRunState.activeRunsByKey.has(sessionKey)) {
     throw new ReplyRunAlreadyActiveError(sessionKey);
@@ -284,17 +355,27 @@ export function createReplyOperation(params: {
   let stateCleared = false;
   let retainFailureUntilComplete = false;
 
-  const clearState = () => {
+  const clearState = (afterClearBarrier?: PromiseLike<unknown>) => {
     if (stateCleared) {
       return;
     }
     stateCleared = true;
+    const registeredBarrier = afterClearBarrier
+      ? registerFollowupAdmissionBarrier(sessionKey, currentSessionId, afterClearBarrier)
+      : undefined;
+    updateFollowupAdmissionSessionId(sessionKey, currentSessionId);
     markReplyRunDiagnosticWorkEnded({ sessionKey, sessionId: currentSessionId });
     clearReplyRunState({
       sessionKey,
       sessionId: currentSessionId,
     });
-    flushReplyOperationAfterClear(operation);
+    if (!registeredBarrier) {
+      flushReplyOperationAfterClear(operation, currentSessionId);
+      return;
+    }
+    void registeredBarrier.settled.then(() =>
+      flushReplyOperationAfterClear(operation, registeredBarrier.sessionId),
+    );
   };
 
   const abortInternally = (reason?: unknown) => {
@@ -377,6 +458,7 @@ export function createReplyOperation(params: {
       replyRunState.activeKeysBySessionId.delete(currentSessionId);
       registerWaitSessionId(sessionKey, currentSessionId);
       currentSessionId = normalizedNextSessionId;
+      updateFollowupAdmissionSessionId(sessionKey, currentSessionId);
       replyRunState.activeSessionIdsByKey.set(sessionKey, currentSessionId);
       replyRunState.activeKeysBySessionId.set(currentSessionId, sessionKey);
       registerWaitSessionId(sessionKey, currentSessionId);
@@ -416,6 +498,13 @@ export function createReplyOperation(params: {
     completeThen(afterClear) {
       runAfterReplyOperationClear(operation, afterClear);
       operation.complete();
+    },
+    completeWithAfterClearBarrier(barrier) {
+      if (!result) {
+        result = { kind: "completed" };
+        phase = "completed";
+      }
+      clearState(barrier);
     },
     fail(code, cause) {
       if (!result) {
@@ -613,6 +702,60 @@ export function waitForReplyRunEndBySessionId(
   return replyRunRegistry.waitForIdle(waitKey, timeoutMs);
 }
 
+export async function waitForReplyRunFollowupAdmission(
+  sessionKey: string,
+  timeoutMs: number,
+  opts?: { signal?: AbortSignal },
+): Promise<{ settled: boolean; sessionId?: string }> {
+  const normalizedSessionKey = normalizeOptionalString(sessionKey);
+  if (!normalizedSessionKey) {
+    return { settled: true };
+  }
+  const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 100, 100);
+  const deadline = Date.now() + resolvedTimeoutMs;
+  let sessionId: string | undefined;
+  while (true) {
+    if (opts?.signal?.aborted) {
+      return { settled: false };
+    }
+    const barrier = replyRunState.followupAdmissionBarriersByKey.get(normalizedSessionKey);
+    if (!barrier) {
+      return { settled: true, sessionId };
+    }
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      return { settled: false };
+    }
+    let timer: NodeJS.Timeout | undefined;
+    let abortHandler: (() => void) | undefined;
+    const outcome = await Promise.race([
+      barrier.settled.then(() => true),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), remainingMs);
+        timer.unref?.();
+      }),
+      ...(opts?.signal
+        ? [
+            new Promise<boolean>((resolve) => {
+              abortHandler = () => resolve(false);
+              opts.signal?.addEventListener("abort", abortHandler, { once: true });
+            }),
+          ]
+        : []),
+    ]);
+    if (timer) {
+      clearTimeout(timer);
+    }
+    if (abortHandler) {
+      opts?.signal?.removeEventListener("abort", abortHandler);
+    }
+    if (!outcome) {
+      return { settled: false };
+    }
+    sessionId = barrier.sessionId;
+  }
+}
+
 export function abortActiveReplyRuns(opts: { mode: "all" | "compacting" }): boolean {
   let aborted = false;
   for (const operation of replyRunState.activeRunsByKey.values()) {
@@ -652,6 +795,7 @@ export const testing = {
       }
     }
     replyRunState.waitersByKey.clear();
+    replyRunState.followupAdmissionBarriersByKey.clear();
   },
 };
 export { testing as __testing };

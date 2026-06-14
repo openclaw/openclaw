@@ -562,7 +562,7 @@ export function createFollowupRunner(params: {
         }
       };
       const admission = await admitReplyTurn({
-        sessionId: run.sessionId,
+        sessionId: effectiveQueued.admissionSessionId ?? run.sessionId,
         sessionKey: replySessionKey ?? "",
         kind: "queued_followup",
         resetTriggered: false,

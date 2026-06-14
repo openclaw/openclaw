@@ -390,6 +390,7 @@ function createMockReplyOperation(): {
       retainFailureUntilComplete: vi.fn(),
       complete: vi.fn(),
       completeThen: vi.fn((afterClear: () => void) => afterClear()),
+      completeWithAfterClearBarrier: vi.fn(),
       fail: failMock,
       abortByUser: vi.fn(),
       abortForRestart: vi.fn(),
