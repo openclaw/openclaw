@@ -575,7 +575,9 @@ What to do:
    ```
 
 3. If a legacy `ai.openclaw.node` LaunchAgent is still installed and your host
-   should only run the gateway service, boot it out and disable it:
+   should only run the gateway service, boot it out and disable it. **Skip this
+   step** if you actively rely on the node LaunchAgent for remote node features;
+   disabling it stops that service on the host:
 
    ```bash
    launchctl bootout gui/$UID/ai.openclaw.node
