@@ -692,7 +692,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
   async function invokeWrappedStream(
     baseFn: (...args: never[]) => unknown,
     allowedToolNames?: Set<string>,
-    guardOptions?: { unknownToolThreshold?: number },
+    guardOptions?: Parameters<typeof wrapStreamFnTrimToolCallNames>[2],
   ) {
     return await invokeWrappedTestStream(
       (innerBaseFn) =>
@@ -845,7 +845,8 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(result).toBe(finalMessage);
   });
 
-  it("rewrites repeated unavailable tool calls into plain assistant text after the threshold", async () => {
+  it("records unavailable-tool interventions when result resolves without a done event", async () => {
+    const onUnknownToolLoopIntervention = vi.fn();
     const baseFn = vi.fn(() =>
       createFakeStream({
         events: [],
@@ -857,6 +858,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     );
     const wrappedFn = wrapStreamFnTrimToolCallNames(baseFn as never, new Set(["read"]), {
       unknownToolThreshold: 10,
+      onUnknownToolLoopIntervention,
     });
 
     for (let i = 0; i < 10; i += 1) {
@@ -866,6 +868,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
       expect(message.role).toBe("assistant");
       expectSingleToolCallContent(message.content as unknown[], "exec");
     }
+    expect(onUnknownToolLoopIntervention).not.toHaveBeenCalled();
 
     const blockedStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
     const blockedResult = (await blockedStream.result()) as {
@@ -875,6 +878,128 @@ describe("wrapStreamFnTrimToolCallNames", () => {
 
     expect(blockedResult.role).toBe("assistant");
     expectSingleTextContent(blockedResult.content, '"exec"');
+    expect(onUnknownToolLoopIntervention).toHaveBeenCalledTimes(1);
+    expect(onUnknownToolLoopIntervention).toHaveBeenCalledWith({
+      toolName: "exec",
+      message: 'Tool "exec" was requested repeatedly but is not available in this run.',
+    });
+  });
+
+  it("clears a recorded unavailable-tool intervention when a later terminal message recovers", async () => {
+    const onUnknownToolLoopIntervention = vi.fn();
+    const blockedMessage = {
+      role: "assistant",
+      content: [{ type: "toolCall", name: " exec ", arguments: { command: "echo retry" } }],
+    };
+    const recoveredMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "Recovered final answer." }],
+    };
+    const baseFn = vi
+      .fn()
+      .mockImplementationOnce(() =>
+        createFakeStream({
+          events: [],
+          resultMessage: {
+            role: "assistant",
+            content: [{ type: "toolCall", name: " exec ", arguments: { command: "echo first" } }],
+          },
+        }),
+      )
+      .mockImplementationOnce(() =>
+        createFakeStream({
+          events: [{ type: "done", reason: "toolUse", message: blockedMessage }],
+          resultMessage: blockedMessage,
+        }),
+      )
+      .mockImplementationOnce(() =>
+        createFakeStream({
+          events: [{ type: "done", reason: "stop", message: recoveredMessage }],
+          resultMessage: recoveredMessage,
+        }),
+      );
+    const wrappedFn = wrapStreamFnTrimToolCallNames(baseFn as never, new Set(["read"]), {
+      unknownToolThreshold: 1,
+      onUnknownToolLoopIntervention,
+    });
+
+    const firstStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
+    await firstStream.result();
+
+    const blockedStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
+    for await (const ignoredItem of blockedStream) {
+      void ignoredItem;
+      // drain
+    }
+    const blockedResult = (await blockedStream.result()) as {
+      role: string;
+      content: Array<{ type: string; text?: string }>;
+    };
+    expectSingleTextContent(blockedResult.content, '"exec"');
+
+    const recoveredStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
+    for await (const ignoredItem of recoveredStream) {
+      void ignoredItem;
+      // drain
+    }
+    const recoveredResult = await recoveredStream.result();
+
+    expect(recoveredResult).toBe(recoveredMessage);
+    expect(onUnknownToolLoopIntervention).toHaveBeenNthCalledWith(1, {
+      toolName: "exec",
+      message: 'Tool "exec" was requested repeatedly but is not available in this run.',
+    });
+    expect(onUnknownToolLoopIntervention).toHaveBeenNthCalledWith(2, undefined);
+    expect(onUnknownToolLoopIntervention).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports unavailable-tool interventions from terminal done messages", async () => {
+    const onUnknownToolLoopIntervention = vi.fn();
+    const finalMessage = {
+      role: "assistant",
+      content: [{ type: "toolCall", name: " exec ", arguments: { command: "echo retry" } }],
+    };
+    const baseFn = vi
+      .fn()
+      .mockImplementationOnce(() =>
+        createFakeStream({
+          events: [],
+          resultMessage: {
+            role: "assistant",
+            content: [{ type: "toolCall", name: " exec ", arguments: { command: "echo first" } }],
+          },
+        }),
+      )
+      .mockImplementationOnce(() =>
+        createFakeStream({
+          events: [{ type: "done", reason: "toolUse", message: finalMessage }],
+          resultMessage: finalMessage,
+        }),
+      );
+    const wrappedFn = wrapStreamFnTrimToolCallNames(baseFn as never, new Set(["read"]), {
+      unknownToolThreshold: 1,
+      onUnknownToolLoopIntervention,
+    });
+
+    const firstStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
+    await firstStream.result();
+
+    const blockedStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
+    for await (const ignoredItem of blockedStream) {
+      void ignoredItem;
+      // drain
+    }
+    const blockedResult = (await blockedStream.result()) as {
+      role: string;
+      content: Array<{ type: string; text?: string }>;
+    };
+
+    expectSingleTextContent(blockedResult.content, '"exec"');
+    expect(onUnknownToolLoopIntervention).toHaveBeenCalledTimes(1);
+    expect(onUnknownToolLoopIntervention).toHaveBeenCalledWith({
+      toolName: "exec",
+      message: 'Tool "exec" was requested repeatedly but is not available in this run.',
+    });
   });
 
   it("leaves repeated unavailable tool calls alone when the unknown-tool guard is disabled", async () => {
@@ -924,6 +1049,58 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(partialToolCall.name).toBe("exec");
     expect(messageToolCall.name).toBe("exec");
     expectSingleToolCallContent(result.content, "exec");
+  });
+
+  it("does not report unavailable-tool interventions from non-terminal stream snapshots", async () => {
+    const onUnknownToolLoopIntervention = vi.fn();
+    const streamedMessageToolCall = { type: "toolCall", name: " exec " };
+    const streamedMessage = { role: "assistant", content: [streamedMessageToolCall] };
+    const baseFn = vi
+      .fn()
+      .mockImplementationOnce(() =>
+        createFakeStream({
+          events: [],
+          resultMessage: {
+            role: "assistant",
+            content: [{ type: "toolCall", name: " exec ", arguments: { command: "echo first" } }],
+          },
+        }),
+      )
+      .mockImplementationOnce(() =>
+        createFakeStream({
+          events: [
+            {
+              type: "toolcall_delta",
+              message: streamedMessage,
+            },
+          ],
+          resultMessage: {
+            role: "assistant",
+            content: [{ type: "text", text: "Recovered final answer." }],
+          },
+        }),
+      );
+    const wrappedFn = wrapStreamFnTrimToolCallNames(baseFn as never, new Set(["read"]), {
+      unknownToolThreshold: 1,
+      onUnknownToolLoopIntervention,
+    });
+
+    const firstStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
+    await firstStream.result();
+
+    const secondStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
+    for await (const ignoredItem of secondStream) {
+      void ignoredItem;
+      // drain
+    }
+    const secondResult = (await secondStream.result()) as {
+      role: string;
+      content: Array<{ type: string; text?: string; name?: string }>;
+    };
+
+    expectSingleTextContent(streamedMessage.content, '"exec"');
+    expect(secondResult.content).toEqual([{ type: "text", text: "Recovered final answer." }]);
+    expect(onUnknownToolLoopIntervention).not.toHaveBeenCalled();
   });
 
   it("does not reset the unavailable-tool streak on partial-only stream chunks", async () => {

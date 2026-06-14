@@ -409,6 +409,37 @@ describe("resolveCronPayloadOutcome", () => {
     expect(result.deliveryPayloadHasStructuredContent).toBe(false);
   });
 
+  it("keeps unavailable-tool failure signals fatal over final assistant text", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text: "Working on it..." }],
+      finalAssistantVisibleText:
+        "I can't use the tool \"process\" here because it isn't available.",
+      preferFinalAssistantVisibleText: true,
+      failureSignal: {
+        kind: "unavailable_tool_repeat",
+        source: "tool",
+        toolName: "process",
+        code: "UNAVAILABLE_TOOL_REPEAT",
+        message: 'Tool "process" was requested repeatedly but is not available in this run.',
+        fatalForCron: true,
+      },
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(true);
+    expect(result.embeddedRunError).toBe(
+      'cron classifier: unavailable_tool_repeat failure from process (UNAVAILABLE_TOOL_REPEAT): Tool "process" was requested repeatedly but is not available in this run.',
+    );
+    expect(result.outputText).toBe(
+      'Tool "process" was requested repeatedly but is not available in this run.',
+    );
+    expect(result.deliveryPayloads).toEqual([
+      {
+        text: 'Tool "process" was requested repeatedly but is not available in this run.',
+        isError: true,
+      },
+    ]);
+  });
+
   it("ignores non-fatal failure signal metadata", () => {
     const result = resolveCronPayloadOutcome({
       payloads: [{ text: "ordinary success" }],

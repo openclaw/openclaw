@@ -38,6 +38,25 @@ describe("resolveEmbeddedRunFailureSignal", () => {
     ).toBe("INVALID_REQUEST");
   });
 
+  it("classifies cron unavailable-tool loop interventions", () => {
+    expect(
+      resolveEmbeddedRunFailureSignal({
+        trigger: "cron",
+        unknownToolLoopIntervention: {
+          toolName: "process",
+          message: 'Tool "process" was requested repeatedly but is not available in this run.',
+        },
+      }),
+    ).toEqual({
+      kind: "unavailable_tool_repeat",
+      source: "tool",
+      toolName: "process",
+      code: "UNAVAILABLE_TOOL_REPEAT",
+      message: 'Tool "process" was requested repeatedly but is not available in this run.',
+      fatalForCron: true,
+    });
+  });
+
   it("does not mark non-cron runs", () => {
     expect(
       resolveEmbeddedRunFailureSignal({
@@ -46,6 +65,15 @@ describe("resolveEmbeddedRunFailureSignal", () => {
           toolName: "exec",
           errorCode: "SYSTEM_RUN_DENIED",
           error: "SYSTEM_RUN_DENIED: approval required",
+        },
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveEmbeddedRunFailureSignal({
+        trigger: "user",
+        unknownToolLoopIntervention: {
+          toolName: "process",
+          message: 'Tool "process" was requested repeatedly but is not available in this run.',
         },
       }),
     ).toBeUndefined();

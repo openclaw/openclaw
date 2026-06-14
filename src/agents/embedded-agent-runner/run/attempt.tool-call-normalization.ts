@@ -39,8 +39,24 @@ type UnknownToolLoopGuardState = {
   lastUnknownToolName?: string;
   count: number;
   countedMessages: WeakSet<object>;
+  reportedIntervention?: UnknownToolLoopIntervention;
+  onIntervention?: (intervention: UnknownToolLoopIntervention | undefined) => void;
 };
 type AssistantStream = Awaited<ReturnType<StreamFn>>;
+
+export type UnknownToolLoopIntervention = {
+  toolName: string;
+  message: string;
+};
+
+type UnknownToolLoopGuardOptions = {
+  unknownToolThreshold?: number;
+  onUnknownToolLoopIntervention?: (intervention: UnknownToolLoopIntervention | undefined) => void;
+};
+
+function formatUnknownToolLoopAssistantText(toolName: string): string {
+  return `I can't use the tool "${toolName}" here because it isn't available. I need to stop retrying it and answer without that tool.`;
+}
 
 function resolveCaseInsensitiveAllowedToolName(
   rawName: string,
@@ -780,9 +796,74 @@ function rewriteUnknownToolLoopMessage(message: unknown, toolName: string): void
   (message as { content?: unknown }).content = [
     {
       type: "text",
-      text: `I can't use the tool "${toolName}" here because it isn't available. I need to stop retrying it and answer without that tool.`,
+      text: formatUnknownToolLoopAssistantText(toolName),
     },
   ];
+}
+
+function recordUnknownToolLoopIntervention(
+  state: UnknownToolLoopGuardState,
+  toolName: string,
+): void {
+  const intervention = {
+    toolName,
+    message: `Tool "${toolName}" was requested repeatedly but is not available in this run.`,
+  };
+  state.reportedIntervention = intervention;
+  state.onIntervention?.(intervention);
+}
+
+function clearUnknownToolLoopIntervention(state: UnknownToolLoopGuardState): void {
+  if (!state.reportedIntervention) {
+    return;
+  }
+  delete state.reportedIntervention;
+  state.onIntervention?.(undefined);
+}
+
+function messageKeepsReportedUnknownToolLoopIntervention(
+  message: unknown,
+  state: UnknownToolLoopGuardState,
+): boolean {
+  // Terminal `done` rewrites the shared assistant message in place, then result()
+  // re-checks that already-rewritten text. The formatter-coupled exact match
+  // preserves the real intervention; clearing it would let cron deliver #92535 text.
+  const intervention = state.reportedIntervention;
+  if (!intervention || !message || typeof message !== "object") {
+    return false;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content) || content.length !== 1) {
+    return false;
+  }
+  const item = content[0];
+  return (
+    Boolean(item && typeof item === "object") &&
+    (item as { type?: unknown }).type === "text" &&
+    (item as { text?: unknown }).text === formatUnknownToolLoopAssistantText(intervention.toolName)
+  );
+}
+
+function clearUnknownToolLoopInterventionForMessage(
+  state: UnknownToolLoopGuardState,
+  message: unknown,
+): void {
+  if (messageKeepsReportedUnknownToolLoopIntervention(message, state)) {
+    return;
+  }
+  clearUnknownToolLoopIntervention(state);
+}
+
+function rewriteAndRecordUnknownToolLoopMessage(
+  message: unknown,
+  state: UnknownToolLoopGuardState,
+  toolName: string,
+  recordIntervention: boolean | undefined,
+): void {
+  rewriteUnknownToolLoopMessage(message, toolName);
+  if (recordIntervention === true) {
+    recordUnknownToolLoopIntervention(state, toolName);
+  }
 }
 
 function guardUnknownToolLoopInMessage(
@@ -795,6 +876,7 @@ function guardUnknownToolLoopInMessage(
     resetOnAllowedTool?: boolean;
     resetOnMissingUnknownTool?: boolean;
     rewriteMalformedBlankToolName?: boolean;
+    recordIntervention?: boolean;
   },
 ): boolean {
   const toolCallState = classifyToolCallMessage(message, params.allowedToolNames);
@@ -803,27 +885,42 @@ function guardUnknownToolLoopInMessage(
       state.lastUnknownToolName = undefined;
       state.count = 0;
     }
+    if (params.recordIntervention === true) {
+      clearUnknownToolLoopInterventionForMessage(state, message);
+    }
     return false;
   }
   if (toolCallState.kind === "malformed") {
     if (params.rewriteMalformedBlankToolName === true) {
       rewriteUnknownToolLoopMessage(message, toolCallState.toolName);
+      if (params.recordIntervention === true) {
+        clearUnknownToolLoopInterventionForMessage(state, message);
+      }
       return true;
     }
     if (params.countAttempt && params.resetOnMissingUnknownTool !== false) {
       state.lastUnknownToolName = undefined;
       state.count = 0;
     }
+    if (params.recordIntervention === true) {
+      clearUnknownToolLoopInterventionForMessage(state, message);
+    }
     return false;
   }
   const threshold = params.threshold;
   if (threshold === undefined || threshold <= 0) {
+    if (params.recordIntervention === true) {
+      clearUnknownToolLoopInterventionForMessage(state, message);
+    }
     return false;
   }
   if (toolCallState.kind !== "unknown") {
     if (params.countAttempt && params.resetOnMissingUnknownTool !== false) {
       state.lastUnknownToolName = undefined;
       state.count = 0;
+    }
+    if (params.recordIntervention === true) {
+      clearUnknownToolLoopInterventionForMessage(state, message);
     }
     return false;
   }
@@ -833,7 +930,14 @@ function guardUnknownToolLoopInMessage(
     // Partial stream events can rewrite after the threshold, but only final
     // messages advance the loop counter.
     if (state.lastUnknownToolName === unknownToolName && state.count > threshold) {
-      rewriteUnknownToolLoopMessage(message, unknownToolName);
+      rewriteAndRecordUnknownToolLoopMessage(
+        message,
+        state,
+        unknownToolName,
+        params.recordIntervention,
+      );
+    } else if (params.recordIntervention === true) {
+      clearUnknownToolLoopInterventionForMessage(state, message);
     }
     return false;
   }
@@ -841,7 +945,14 @@ function guardUnknownToolLoopInMessage(
   if (message && typeof message === "object") {
     if (state.countedMessages.has(message)) {
       if (state.lastUnknownToolName === unknownToolName && state.count > threshold) {
-        rewriteUnknownToolLoopMessage(message, unknownToolName);
+        rewriteAndRecordUnknownToolLoopMessage(
+          message,
+          state,
+          unknownToolName,
+          params.recordIntervention,
+        );
+      } else if (params.recordIntervention === true) {
+        clearUnknownToolLoopInterventionForMessage(state, message);
       }
       return true;
     }
@@ -856,7 +967,14 @@ function guardUnknownToolLoopInMessage(
   }
 
   if (state.count > threshold) {
-    rewriteUnknownToolLoopMessage(message, unknownToolName);
+    rewriteAndRecordUnknownToolLoopMessage(
+      message,
+      state,
+      unknownToolName,
+      params.recordIntervention,
+    );
+  } else if (params.recordIntervention === true) {
+    clearUnknownToolLoopInterventionForMessage(state, message);
   }
   return true;
 }
@@ -1080,6 +1198,7 @@ function wrapStreamTrimToolCallNames(
       countAttempt: !streamAttemptAlreadyCounted,
       resetOnAllowedTool: true,
       rewriteMalformedBlankToolName: true,
+      recordIntervention: true,
     });
     return message;
   };
@@ -1087,6 +1206,7 @@ function wrapStreamTrimToolCallNames(
   wrapStreamObjectEvents(stream, (event) => {
     trimWhitespaceFromToolCallNamesInMessage(event.partial, allowedToolNames);
     trimWhitespaceFromToolCallNamesInMessage(event.message, allowedToolNames);
+    const isTerminalDoneEvent = event.type === "done";
     if (event.message && typeof event.message === "object") {
       const countedStreamAttempt = guardUnknownToolLoopInMessage(
         event.message,
@@ -1097,6 +1217,10 @@ function wrapStreamTrimToolCallNames(
           countAttempt: !streamAttemptAlreadyCounted,
           resetOnAllowedTool: true,
           resetOnMissingUnknownTool: false,
+          // Only terminal done/result can own fatal intervention state. Partial
+          // snapshots may still recover, while done and result share the same
+          // formatter-coupled rewrite on the final-message path.
+          recordIntervention: isTerminalDoneEvent,
         },
       );
       streamAttemptAlreadyCounted ||= countedStreamAttempt;
@@ -1115,11 +1239,14 @@ function wrapStreamTrimToolCallNames(
 export function wrapStreamFnTrimToolCallNames(
   baseFn: StreamFn,
   allowedToolNames?: Set<string>,
-  guardOptions?: { unknownToolThreshold?: number },
+  guardOptions?: UnknownToolLoopGuardOptions,
 ): StreamFn {
   const unknownToolGuardState: UnknownToolLoopGuardState = {
     count: 0,
     countedMessages: new WeakSet<object>(),
+    ...(guardOptions?.onUnknownToolLoopIntervention
+      ? { onIntervention: guardOptions.onUnknownToolLoopIntervention }
+      : {}),
   };
   return (model, context, streamOptions) => {
     const maybeStream = baseFn(model, context, streamOptions);

@@ -129,14 +129,23 @@ export type ContextManagementTrace = {
 
 export type EmbeddedRunLivenessState = "working" | "paused" | "blocked" | "abandoned";
 
-export type EmbeddedRunFailureSignal = {
-  kind: "execution_denied";
-  source: "tool";
-  toolName?: string;
-  code: "SYSTEM_RUN_DENIED" | "INVALID_REQUEST";
-  message: string;
-  fatalForCron: true;
-};
+export type EmbeddedRunFailureSignal =
+  | {
+      kind: "execution_denied";
+      source: "tool";
+      toolName?: string;
+      code: "SYSTEM_RUN_DENIED" | "INVALID_REQUEST";
+      message: string;
+      fatalForCron: true;
+    }
+  | {
+      kind: "unavailable_tool_repeat";
+      source: "tool";
+      toolName: string;
+      code: "UNAVAILABLE_TOOL_REPEAT";
+      message: string;
+      fatalForCron: true;
+    };
 
 export type EmbeddedAgentRunMeta = {
   durationMs: number;

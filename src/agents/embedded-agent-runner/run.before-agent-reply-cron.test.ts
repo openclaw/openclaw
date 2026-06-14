@@ -123,19 +123,53 @@ describe("runEmbeddedAgent cron before_agent_reply seam", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
   });
 
+  it("exposes unavailable-tool loop interventions as cron fatal signals", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        unknownToolLoopIntervention: {
+          toolName: "process",
+          message: 'Tool "process" was requested repeatedly but is not available in this run.',
+        },
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      trigger: "cron",
+    });
+
+    expect(result.meta?.failureSignal).toEqual({
+      kind: "unavailable_tool_repeat",
+      source: "tool",
+      toolName: "process",
+      code: "UNAVAILABLE_TOOL_REPEAT",
+      message: 'Tool "process" was requested repeatedly but is not available in this run.',
+      fatalForCron: true,
+    });
+  });
+
   it("does not invoke before_agent_reply for non-cron embedded runs", async () => {
     mockedGlobalHookRunner.hasHooks.mockImplementation(
       (hookName: string) => hookName === "before_agent_reply",
     );
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        promptError: null,
+        unknownToolLoopIntervention: {
+          toolName: "process",
+          message: 'Tool "process" was requested repeatedly but is not available in this run.',
+        },
+      }),
+    );
 
-    await runEmbeddedAgent({
+    const result = await runEmbeddedAgent({
       ...overflowBaseRunParams,
       trigger: "user",
     });
 
     expect(mockedGlobalHookRunner.runBeforeAgentReply).not.toHaveBeenCalled();
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.meta?.failureSignal).toBeUndefined();
   });
 
   it("forwards one-shot model-run flags into the embedded attempt", async () => {

@@ -27,6 +27,7 @@ import type { ToolErrorSummary } from "../../tool-error-summary.js";
 import type { NormalizedUsage } from "../../usage.js";
 import type { EmbeddedRunReplayMetadata, EmbeddedRunReplayState } from "../replay-state.js";
 import type { EmbeddedRunLivenessState } from "../types.js";
+import type { UnknownToolLoopIntervention } from "./attempt.tool-call-normalization.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js";
 
@@ -194,6 +195,7 @@ export type EmbeddedRunAttemptResult = {
   contextBudgetStatus?: SessionContextBudgetStatus;
   compactionCount?: number;
   compactionTokensAfter?: number;
+  unknownToolLoopIntervention?: UnknownToolLoopIntervention;
   /**
    * Client tool calls detected during this attempt (OpenResponses hosted
    * tools), in the order the underlying LLM emitted them. Field is
