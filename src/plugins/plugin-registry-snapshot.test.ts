@@ -819,4 +819,45 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     expectDiagnosticsContainSource(result.snapshot.diagnostics, missingConfiguredPath);
     expect(result.diagnostics).toStrictEqual([]);
   });
+
+  // Regression: Persisted bundled plugins under the legacy source overlay root
+  // (extensions/) must not be treated as stale when the active bundled root matches.
+  // See openclaw#87828 — without this the registry rebuilds on every refresh.
+  it("allows persisted bundled plugins under the legacy extensions root when the active bundled root matches", () => {
+    const rootDir = makeTempDir();
+    const env = createHermeticEnv(rootDir);
+    const stateDir = path.join(rootDir, "state");
+
+    // Set up the active bundled dir
+    const bundledDir = path.join(rootDir, "bundled");
+    fs.mkdirSync(bundledDir, { recursive: true });
+    fs.writeFileSync(path.join(bundledDir, "package.json"), JSON.stringify({ name: "openclaw" }), "utf8");
+
+    // Set up the legacy extensions dir that would exist in source checkout
+    const legacyDir = path.join(rootDir, "extensions");
+    fs.mkdirSync(legacyDir, { recursive: true });
+
+    // Create a persisted plugin index with a bundled plugin under the legacy root
+    const index: InstalledPluginIndex = {
+      version: 1,
+      meta: { bundledPluginsDir: bundledDir, hostVersion: "2026.4.26", lastWrittenAtMs: Date.now() },
+      plugins: [
+        {
+          id: "example",
+          origin: "bundled" as const,
+          rootDir: path.join(legacyDir, "example"),
+          packageJson: null,
+          commitIsh: null,
+          lastInstalledAtMs: Date.now(),
+        },
+      ],
+    };
+    writePersistedInstalledPluginIndexSync(index, { stateDir });
+
+    const config: OpenClawConfig = {};
+    const result = loadPluginRegistrySnapshotWithMetadata({ config, env, stateDir });
+
+    // The registry must load from persisted snapshot (not rebuild)
+    expect(result.source).toBe("persisted");
+  });
 });
