@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createAsyncLock } from "@openclaw/fs-safe/advanced";
 import { configureFsSafePython, getFsSafePythonConfig } from "@openclaw/fs-safe/config";
 import { resolveStateDir } from "../config/paths.js";
 import { formatErrorMessage } from "./errors.js";
@@ -301,6 +302,7 @@ async function writeFileWithMode(
 }
 
 type LocalOverridePackageRoot = Awaited<ReturnType<typeof openFsRoot>>;
+const withRequiredFsSafePython = createAsyncLock();
 
 class LocalOverrideRollbackError extends Error {
   constructor(
@@ -334,13 +336,15 @@ async function moveLocalOverrideTargetNoReplace(params: {
   }
   // Executable override replay fails closed instead of using fs-safe's path-based
   // Node fallback for the final no-clobber publish.
-  const previousPythonConfig = getFsSafePythonConfig();
-  configureFsSafePython({ mode: "require" });
-  try {
-    await params.packageFs.move(params.sourcePath, params.relativePath, { overwrite: false });
-  } finally {
-    configureFsSafePython(previousPythonConfig);
-  }
+  await withRequiredFsSafePython(async () => {
+    const previousPythonConfig = getFsSafePythonConfig();
+    configureFsSafePython({ mode: "require" });
+    try {
+      await params.packageFs.move(params.sourcePath, params.relativePath, { overwrite: false });
+    } finally {
+      configureFsSafePython(previousPythonConfig);
+    }
+  });
 }
 
 async function writeRollbackBackup(params: {
@@ -737,6 +741,7 @@ async function collectReferencedAddedOverridePaths(params: {
 
 export async function captureLocalPackageOverrides(params: {
   packageRoot: string;
+  recordedPackageRoot?: string;
 }): Promise<LocalPackageOverridesPlan | null> {
   if (!(await packageRootExists(params.packageRoot))) {
     return null;
@@ -874,10 +879,19 @@ export async function captureLocalPackageOverrides(params: {
     };
     await fs.writeFile(
       path.join(finalRecoveryDir, "manifest.json"),
-      JSON.stringify({ packageRoot: params.packageRoot, changes }, null, 2) + "\n",
+      JSON.stringify(
+        { packageRoot: params.recordedPackageRoot ?? params.packageRoot, changes },
+        null,
+        2,
+      ) + "\n",
       "utf8",
     );
-    return { packageRoot: params.packageRoot, recoveryDir: finalRecoveryDir, changes, result };
+    return {
+      packageRoot: params.recordedPackageRoot ?? params.packageRoot,
+      recoveryDir: finalRecoveryDir,
+      changes,
+      result,
+    };
   } catch (error) {
     if (recoveryDir) {
       await fs.rm(recoveryDir, { recursive: true, force: true }).catch(() => undefined);

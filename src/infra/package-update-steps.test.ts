@@ -3,6 +3,7 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { configureFsSafePython, getFsSafePythonConfig } from "@openclaw/fs-safe/config";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
@@ -1169,6 +1170,75 @@ describe("runGlobalPackageUpdateSteps", () => {
       await expect(
         fs.readFile(path.join(packageRoot, "dist", "local-helper.js"), "utf8"),
       ).resolves.toBe("export const helper = true;\n");
+    });
+  });
+
+  it("preserves local dist overrides created at the staged swap boundary", async () => {
+    await withTempDir({ prefix: "openclaw-package-update-local-swap-boundary-" }, async (base) => {
+      const prefix = path.join(base, "prefix");
+      const globalRoot = path.join(prefix, "lib", "node_modules");
+      const packageRoot = path.join(globalRoot, "openclaw");
+      const lateOverridePath = path.join(packageRoot, "dist", "late-local.js");
+      await writePackageRoot(packageRoot, "1.0.0");
+
+      const realRename = fs.rename.bind(fs);
+      let lateOverrideCreated = false;
+      const renameSpy = vi
+        .spyOn(fs, "rename")
+        .mockImplementation(async (...args: Parameters<typeof fs.rename>) => {
+          if (!lateOverrideCreated && String(args[0]) === packageRoot) {
+            lateOverrideCreated = true;
+            await fs.writeFile(lateOverridePath, "export const late = true;\n", "utf8");
+          }
+          return await realRename(...args);
+        });
+
+      try {
+        const result = await runGlobalPackageUpdateSteps({
+          installTarget: createNpmTarget(globalRoot),
+          installSpec: "openclaw@2.0.0",
+          packageName: "openclaw",
+          packageRoot,
+          runCommand: createRootRunner(globalRoot),
+          runStep: async ({ name, argv, cwd }) => {
+            const stagePrefix = argv[argv.indexOf("--prefix") + 1];
+            if (!stagePrefix) {
+              throw new Error("missing staged prefix");
+            }
+            await writePackageRoot(
+              path.join(stagePrefix, "lib", "node_modules", "openclaw"),
+              "2.0.0",
+            );
+            return {
+              name,
+              command: argv.join(" "),
+              cwd: cwd ?? process.cwd(),
+              durationMs: 1,
+              exitCode: 0,
+            };
+          },
+          timeoutMs: 1000,
+        });
+
+        expect(lateOverrideCreated).toBe(true);
+        expect(result.failedStep).toBeNull();
+        expect(result.localOverrides?.status).toBe("preserved");
+        expect(result.localOverrides?.added).toBe(1);
+        await expectPathMissing(lateOverridePath);
+        await expect(
+          fs.readFile(
+            path.join(result.localOverrides?.recoveryDir ?? "", "files", "dist", "late-local.js"),
+            "utf8",
+          ),
+        ).resolves.toBe("export const late = true;\n");
+        await expect(
+          fs
+            .readFile(path.join(result.localOverrides?.recoveryDir ?? "", "manifest.json"), "utf8")
+            .then((contents) => JSON.parse(contents)),
+        ).resolves.toMatchObject({ packageRoot });
+      } finally {
+        renameSpy.mockRestore();
+      }
     });
   });
 
@@ -3896,6 +3966,43 @@ describe("runGlobalPackageUpdateSteps", () => {
           openSpy.mockRestore();
         }
       });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "restores fs-safe Python configuration after concurrent override applications",
+    async () => {
+      await withTempDir(
+        { prefix: "openclaw-package-update-local-concurrent-config-" },
+        async (base) => {
+          const previousPythonConfig = getFsSafePythonConfig();
+          configureFsSafePython({ mode: "off" });
+          try {
+            const prepared = await Promise.all(
+              ["first", "second"].map(async (name) => {
+                const packageRoot = path.join(base, name);
+                const indexPath = path.join(packageRoot, "dist", "index.js");
+                await writePackageRoot(packageRoot, "1.0.0");
+                await fs.writeFile(indexPath, `export const ${name} = true;\n`, "utf8");
+                const plan = await captureLocalPackageOverrides({ packageRoot });
+                await writePackageRoot(packageRoot, "2.0.0");
+                return { packageRoot, plan };
+              }),
+            );
+
+            const results = await Promise.all(
+              prepared.map(({ packageRoot, plan }) =>
+                applyLocalPackageOverrides({ packageRoot, plan, reapply: true }),
+              ),
+            );
+
+            expect(results.map((result) => result.status)).toEqual(["applied", "applied"]);
+            expect(getFsSafePythonConfig().mode).toBe("off");
+          } finally {
+            configureFsSafePython(previousPythonConfig);
+          }
+        },
+      );
     },
   );
 

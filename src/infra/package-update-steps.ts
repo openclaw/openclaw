@@ -444,19 +444,20 @@ function createLocalOverridesFailureStep(params: {
 
 async function captureLocalPackageOverridesForUpdate(
   packageRoot: string,
+  recordedPackageRoot = packageRoot,
 ): Promise<LocalPackageOverridesCaptureResult> {
   const startedAt = Date.now();
   try {
     return {
       status: "captured",
-      plan: await captureLocalPackageOverrides({ packageRoot }),
+      plan: await captureLocalPackageOverrides({ packageRoot, recordedPackageRoot }),
     };
   } catch (error) {
     return {
       status: "error",
       failedStep: createLocalOverridesFailureStep({
-        packageRoot,
-        command: `inspect local OpenClaw changes in ${packageRoot}`,
+        packageRoot: recordedPackageRoot,
+        command: `inspect local OpenClaw changes in ${recordedPackageRoot}`,
         durationMs: Date.now() - startedAt,
         message: `Local OpenClaw changes could not be inspected safely before update: ${formatError(error)}`,
       }),
@@ -552,21 +553,31 @@ async function swapStagedNpmInstall(params: {
   stage: StagedNpmInstall;
   installTarget: ResolvedGlobalInstallTarget;
   packageName: string;
-}): Promise<PackageUpdateStepResult> {
+}): Promise<{
+  step: PackageUpdateStepResult;
+  capturedLocalOverrides: LocalPackageOverridesCaptureResult;
+}> {
   const startedAt = Date.now();
+  let capturedLocalOverrides: LocalPackageOverridesCaptureResult = {
+    status: "captured",
+    plan: null,
+  };
   const targetLayout = resolveNpmGlobalPrefixLayoutFromGlobalRoot(params.installTarget.globalRoot, {
     allowDirectNodeModulesRoot: params.installTarget.directNodeModulesRoot === true,
   });
   const targetPackageRoot = params.installTarget.packageRoot;
   if (!targetLayout || !targetPackageRoot) {
     return {
-      name: "global install swap",
-      command: "swap staged npm install",
-      cwd: params.stage.prefix,
-      durationMs: Date.now() - startedAt,
-      exitCode: 1,
-      stdoutTail: null,
-      stderrTail: "cannot resolve npm global prefix layout",
+      step: {
+        name: "global install swap",
+        command: "swap staged npm install",
+        cwd: params.stage.prefix,
+        durationMs: Date.now() - startedAt,
+        exitCode: 1,
+        stdoutTail: null,
+        stderrTail: "cannot resolve npm global prefix layout",
+      },
+      capturedLocalOverrides,
     };
   }
 
@@ -574,6 +585,7 @@ async function swapStagedNpmInstall(params: {
   let movedExisting = false;
   let movedStaged = false;
   let removedBackup = true;
+  let captureFailedStep: PackageUpdateStepResult | null = null;
   try {
     await fs.mkdir(targetLayout.globalRoot, { recursive: true });
     if (await pathExists(targetPackageRoot)) {
@@ -583,6 +595,14 @@ async function swapStagedNpmInstall(params: {
         to: backupRoot,
       });
       movedExisting = true;
+      capturedLocalOverrides = await captureLocalPackageOverridesForUpdate(
+        backupRoot,
+        targetPackageRoot,
+      );
+      if (capturedLocalOverrides.status === "error") {
+        captureFailedStep = capturedLocalOverrides.failedStep;
+        throw new Error(captureFailedStep.stderrTail ?? "local override capture failed");
+      }
     }
     await movePathWithCopyFallback({
       from: params.stage.packageRoot,
@@ -601,17 +621,20 @@ async function swapStagedNpmInstall(params: {
       removedBackup = await removePathBestEffort(backupRoot);
     }
     return {
-      name: "global install swap",
-      command: `swap ${params.stage.packageRoot} -> ${targetPackageRoot}`,
-      cwd: targetLayout.globalRoot,
-      durationMs: Date.now() - startedAt,
-      exitCode: 0,
-      stdoutTail: movedExisting
-        ? removedBackup
-          ? `replaced ${params.packageName}`
-          : `replaced ${params.packageName}; preserved old package at ${backupRoot} for delayed cleanup`
-        : `installed ${params.packageName}`,
-      stderrTail: null,
+      step: {
+        name: "global install swap",
+        command: `swap ${params.stage.packageRoot} -> ${targetPackageRoot}`,
+        cwd: targetLayout.globalRoot,
+        durationMs: Date.now() - startedAt,
+        exitCode: 0,
+        stdoutTail: movedExisting
+          ? removedBackup
+            ? `replaced ${params.packageName}`
+            : `replaced ${params.packageName}; preserved old package at ${backupRoot} for delayed cleanup`
+          : `installed ${params.packageName}`,
+        stderrTail: null,
+      },
+      capturedLocalOverrides,
     };
   } catch (err) {
     if (movedStaged) {
@@ -625,13 +648,16 @@ async function swapStagedNpmInstall(params: {
       }).catch(() => undefined);
     }
     return {
-      name: "global install swap",
-      command: `swap ${params.stage.packageRoot} -> ${targetPackageRoot}`,
-      cwd: targetLayout.globalRoot,
-      durationMs: Date.now() - startedAt,
-      exitCode: 1,
-      stdoutTail: null,
-      stderrTail: formatError(err),
+      step: captureFailedStep ?? {
+        name: "global install swap",
+        command: `swap ${params.stage.packageRoot} -> ${targetPackageRoot}`,
+        cwd: targetLayout.globalRoot,
+        durationMs: Date.now() - startedAt,
+        exitCode: 1,
+        stdoutTail: null,
+        stderrTail: formatError(err),
+      },
+      capturedLocalOverrides,
     };
   }
 }
@@ -865,39 +891,33 @@ export async function runGlobalPackageUpdateSteps(params: {
       }
 
       if (stagedInstall && verificationErrors.length === 0) {
-        const capturedLocalOverrides = livePackageRoot
-          ? await captureLocalPackageOverridesForUpdate(livePackageRoot)
-          : ({ status: "captured", plan: null } satisfies LocalPackageOverridesCaptureResult);
-        if (capturedLocalOverrides.status === "error") {
-          steps.push(capturedLocalOverrides.failedStep);
+        const swapResult = await swapStagedNpmInstall({
+          stage: stagedInstall,
+          installTarget: params.installTarget,
+          packageName: params.packageName,
+        });
+        steps.push(swapResult.step);
+        if (swapResult.capturedLocalOverrides.status === "error") {
           afterVersion = await readPackageVersionIfPresent(livePackageRoot);
-        } else {
-          const swapStep = await swapStagedNpmInstall({
-            stage: stagedInstall,
-            installTarget: params.installTarget,
-            packageName: params.packageName,
-          });
-          steps.push(swapStep);
-          if (swapStep.exitCode === 0) {
-            const activePackageRoot = params.installTarget.packageRoot ?? verifiedPackageRoot;
-            verifiedPackageRoot = activePackageRoot;
-            afterVersion = candidateVersion;
-            if (activePackageRoot) {
-              localOverrides = await applyLocalPackageOverrides({
-                packageRoot: activePackageRoot,
-                plan: capturedLocalOverrides.plan,
-                reapply: params.reapplyLocalOverrides === true,
-              });
-              pushLocalOverridesStep({ steps, packageRoot: activePackageRoot, localOverrides });
-            }
-          } else if (livePackageRoot) {
+        } else if (swapResult.step.exitCode === 0) {
+          const activePackageRoot = params.installTarget.packageRoot ?? verifiedPackageRoot;
+          verifiedPackageRoot = activePackageRoot;
+          afterVersion = candidateVersion;
+          if (activePackageRoot) {
             localOverrides = await applyLocalPackageOverrides({
-              packageRoot: livePackageRoot,
-              plan: capturedLocalOverrides.plan,
-              reapply: false,
+              packageRoot: activePackageRoot,
+              plan: swapResult.capturedLocalOverrides.plan,
+              reapply: params.reapplyLocalOverrides === true,
             });
-            pushLocalOverridesStep({ steps, packageRoot: livePackageRoot, localOverrides });
+            pushLocalOverridesStep({ steps, packageRoot: activePackageRoot, localOverrides });
           }
+        } else if (livePackageRoot) {
+          localOverrides = await applyLocalPackageOverrides({
+            packageRoot: livePackageRoot,
+            plan: swapResult.capturedLocalOverrides.plan,
+            reapply: false,
+          });
+          pushLocalOverridesStep({ steps, packageRoot: livePackageRoot, localOverrides });
         }
       } else if (!stagedInstall && verificationErrors.length === 0 && livePackageRoot) {
         localOverrides = await applyLocalPackageOverrides({
