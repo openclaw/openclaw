@@ -160,6 +160,154 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).not.toContain("CRITICAL");
   });
 
+  it("treats configured trusted-proxy auth as authenticated for exposure warning level", async () => {
+    const cfg = {
+      gateway: {
+        bind: "lan",
+        trustedProxies: ["10.0.0.10"],
+        auth: {
+          mode: "trusted-proxy",
+          trustedProxy: {
+            userHeader: "x-forwarded-user",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    await noteSecurityWarnings(cfg);
+    const message = lastMessage();
+    expect(message).toContain("WARNING");
+    expect(message).toContain("trusted-proxy authentication");
+    expect(message).toContain("docs.openclaw.ai/gateway/trusted-proxy-auth");
+    expect(message).not.toContain("CRITICAL");
+    expect(message).not.toContain("without authentication");
+    expect(message).not.toContain("openclaw doctor --fix");
+  });
+
+  it.each([
+    {
+      name: "config token",
+      auth: {
+        mode: "trusted-proxy" as const,
+        token: "shared-secret",
+        trustedProxy: {
+          userHeader: "x-forwarded-user",
+        },
+      },
+      envToken: undefined,
+    },
+    {
+      name: "environment token",
+      auth: {
+        mode: "trusted-proxy" as const,
+        trustedProxy: {
+          userHeader: "x-forwarded-user",
+        },
+      },
+      envToken: "shared-secret",
+    },
+  ])("keeps trusted-proxy $name conflicts on the critical path", async ({ auth, envToken }) => {
+    if (envToken) {
+      process.env.OPENCLAW_GATEWAY_TOKEN = envToken;
+    }
+    const cfg = {
+      gateway: {
+        bind: "lan",
+        trustedProxies: ["10.0.0.10"],
+        auth,
+      },
+    } as OpenClawConfig;
+    await noteSecurityWarnings(cfg);
+    const message = lastMessage();
+    expect(message).toContain("CRITICAL");
+    expect(message).toContain("mutually exclusive");
+    expect(message).toContain("remove the shared token");
+    expect(message).not.toContain("with trusted-proxy authentication");
+  });
+
+  it("rejects broad trusted-proxy CIDRs as exposure auth proof", async () => {
+    const cfg = {
+      gateway: {
+        bind: "lan",
+        trustedProxies: ["0.0.0.0/0"],
+        auth: {
+          mode: "trusted-proxy",
+          trustedProxy: {
+            userHeader: "x-forwarded-user",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    await noteSecurityWarnings(cfg);
+    const message = lastMessage();
+    expect(message).toContain("CRITICAL");
+    expect(message).toContain("unsafe trusted-proxy authentication");
+    expect(message).toContain("broad CIDRs/default routes");
+    expect(message).not.toContain("with trusted-proxy authentication");
+  });
+
+  it("rejects mixed exact and broad trusted-proxy entries as exposure auth proof", async () => {
+    const cfg = {
+      gateway: {
+        bind: "lan",
+        trustedProxies: ["10.0.0.10", "0.0.0.0/0"],
+        auth: {
+          mode: "trusted-proxy",
+          trustedProxy: {
+            userHeader: "x-forwarded-user",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    await noteSecurityWarnings(cfg);
+    const message = lastMessage();
+    expect(message).toContain("CRITICAL");
+    expect(message).toContain("unsafe trusted-proxy authentication");
+    expect(message).toContain("broad CIDRs/default routes");
+    expect(message).not.toContain("with trusted-proxy authentication");
+  });
+
+  it("does not count loopback trusted proxies as auth proof unless allowLoopback is explicit", async () => {
+    const cfg = {
+      gateway: {
+        bind: "lan",
+        trustedProxies: ["127.0.0.1"],
+        auth: {
+          mode: "trusted-proxy",
+          trustedProxy: {
+            userHeader: "x-forwarded-user",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    await noteSecurityWarnings(cfg);
+    const message = lastMessage();
+    expect(message).toContain("CRITICAL");
+    expect(message).toContain("unsafe trusted-proxy authentication");
+    expect(message).toContain("enable allowLoopback only for a deliberate same-host proxy");
+    expect(message).not.toContain("with trusted-proxy authentication");
+  });
+
+  it("counts explicit same-host trusted proxies as auth proof when allowLoopback is enabled", async () => {
+    const cfg = {
+      gateway: {
+        bind: "lan",
+        trustedProxies: ["127.0.0.1"],
+        auth: {
+          mode: "trusted-proxy",
+          trustedProxy: {
+            userHeader: "x-forwarded-user",
+            allowLoopback: true,
+          },
+        },
+      },
+    } as OpenClawConfig;
+    await noteSecurityWarnings(cfg);
+    const message = lastMessage();
+    expect(message).toContain("WARNING");
+    expect(message).toContain("trusted-proxy authentication");
+    expect(message).not.toContain("CRITICAL");
+  });
+
   it("warns when OPENCLAW_GATEWAY_TOKEN env conflicts with gateway.auth.token config (#74271)", async () => {
     process.env.OPENCLAW_GATEWAY_TOKEN = "env-token-123";
     const cfg = {
