@@ -47,6 +47,7 @@ import {
   asFiniteNumber,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { buildGoogleExtensionFunctionDeclarations } from "./function-declarations.js";
 import { createGoogleGenAI } from "./google-genai-runtime.js";
 
 const GOOGLE_REALTIME_DEFAULT_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025";
@@ -339,17 +340,9 @@ function buildRealtimeInputConfig(
 }
 
 function buildFunctionDeclarations(tools: RealtimeVoiceTool[] | undefined): FunctionDeclaration[] {
-  return (tools ?? []).map((tool) => {
-    const declaration: FunctionDeclaration = {
-      name: tool.name,
-      description: tool.description,
-      parametersJsonSchema: tool.parameters,
-    };
-    if (tool.name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
-      declaration.behavior = "NON_BLOCKING" as Behavior;
-    }
-    return declaration;
-  });
+  return buildGoogleExtensionFunctionDeclarations(tools, (_tool, name) =>
+    name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME ? { behavior: "NON_BLOCKING" as Behavior } : {},
+  );
 }
 
 function buildGoogleLiveConnectConfig(config: GoogleRealtimeLiveConfig): LiveConnectConfig {

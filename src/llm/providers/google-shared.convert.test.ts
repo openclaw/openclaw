@@ -18,6 +18,77 @@ const convertMessagesForTest = convertMessages as unknown as (
   context: Context,
 ) => ReturnType<typeof convertMessages>;
 
+function makeUnreadableParameterTool(): Tool {
+  const tool = {
+    name: "broken_tool",
+    description: "Broken tool",
+    parameters: { type: "object", properties: {} },
+    async execute() {
+      return { content: [{ type: "text", text: "broken" }] };
+    },
+  };
+  Object.defineProperty(tool, "parameters", {
+    enumerable: true,
+    get() {
+      throw new Error("fuzzplugin parameters getter exploded");
+    },
+  });
+  return tool as unknown as Tool;
+}
+
+function makeHostileNestedParameterTool(): Tool {
+  const parameters: Record<string, unknown> = {
+    type: "object",
+    properties: {},
+  };
+  Object.defineProperty(parameters.properties, "query", {
+    enumerable: true,
+    get() {
+      throw new Error("nested parameter getter exploded");
+    },
+  });
+  return {
+    name: "hostile_nested_tool",
+    description: "Hostile nested tool",
+    parameters,
+    async execute() {
+      return { content: [{ type: "text", text: "hostile" }] };
+    },
+  } as unknown as Tool;
+}
+
+function makeCyclicParameterTool(): Tool {
+  const parameters: Record<string, unknown> = {
+    type: "object",
+    properties: {},
+  };
+  parameters.self = parameters;
+  return {
+    name: "cyclic_tool",
+    description: "Cyclic tool",
+    parameters,
+    async execute() {
+      return { content: [{ type: "text", text: "cycle" }] };
+    },
+  } as unknown as Tool;
+}
+
+function makeHealthyTool(): Tool {
+  return {
+    name: "healthy_tool",
+    description: "Healthy tool",
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string" },
+      },
+    },
+    async execute() {
+      return { content: [{ type: "text", text: "ok" }] };
+    },
+  } as unknown as Tool;
+}
+
 function requireRecordProperty(
   record: Record<string, unknown>,
   key: string,
@@ -30,6 +101,153 @@ function requireRecordProperty(
 }
 
 describe("google-shared convertTools", () => {
+  it("skips unreadable tool schemas while preserving healthy Gemini declarations", () => {
+    const converted = convertTools([makeUnreadableParameterTool(), makeHealthyTool()]);
+
+    expect(converted).toEqual([
+      {
+        functionDeclarations: [
+          {
+            name: "healthy_tool",
+            description: "Healthy tool",
+            parametersJsonSchema: {
+              type: "object",
+              properties: {
+                query: { type: "string" },
+              },
+            },
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("omits Google tool declarations when every schema is unreadable", () => {
+    expect(convertTools([makeUnreadableParameterTool()])).toBeUndefined();
+  });
+
+  it("skips nested hostile and cyclic schemas before Google payload creation", () => {
+    const converted = convertTools([
+      makeHostileNestedParameterTool(),
+      makeCyclicParameterTool(),
+      makeHealthyTool(),
+    ]);
+
+    expect(converted).toEqual([
+      {
+        functionDeclarations: [
+          {
+            name: "healthy_tool",
+            description: "Healthy tool",
+            parametersJsonSchema: {
+              type: "object",
+              properties: {
+                query: { type: "string" },
+              },
+            },
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("keeps valid schemas that reuse a shared subschema object", () => {
+    const sharedString = { type: "string" };
+    const tools = [
+      {
+        name: "shared_schema_tool",
+        description: "Shared schema tool",
+        parameters: {
+          type: "object",
+          properties: {
+            first: sharedString,
+            second: sharedString,
+          },
+        },
+        async execute() {
+          return { content: [{ type: "text", text: "ok" }] };
+        },
+      },
+    ] as unknown as Tool[];
+
+    expect(convertTools(tools)).toEqual([
+      {
+        functionDeclarations: [
+          {
+            name: "shared_schema_tool",
+            description: "Shared schema tool",
+            parametersJsonSchema: {
+              type: "object",
+              properties: {
+                first: { type: "string" },
+                second: { type: "string" },
+              },
+            },
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("snapshots schemas before returning Google declarations", () => {
+    let propertiesReads = 0;
+    const parameters: Record<string, unknown> = { type: "object" };
+    Object.defineProperty(parameters, "properties", {
+      enumerable: true,
+      get() {
+        propertiesReads += 1;
+        if (propertiesReads > 1) {
+          throw new Error("properties getter changed after snapshot");
+        }
+        return { q: { type: "string" } };
+      },
+    });
+
+    const converted = convertTools([
+      {
+        name: "snapshot_tool",
+        description: "Snapshot tool",
+        parameters,
+        async execute() {
+          return { content: [{ type: "text", text: "ok" }] };
+        },
+      },
+    ] as unknown as Tool[]);
+
+    expect(propertiesReads).toBe(1);
+    expect(() => JSON.stringify(converted)).not.toThrow();
+    expect(converted).toEqual([
+      {
+        functionDeclarations: [
+          {
+            name: "snapshot_tool",
+            description: "Snapshot tool",
+            parametersJsonSchema: {
+              type: "object",
+              properties: { q: { type: "string" } },
+            },
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("skips unreadable legacy OpenAPI parameter declarations", () => {
+    const converted = convertTools([makeUnreadableParameterTool(), makeHealthyTool()], true);
+
+    const declaration = converted?.[0]?.functionDeclarations[0];
+    expect(declaration).toEqual({
+      name: "healthy_tool",
+      description: "Healthy tool",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string" },
+        },
+      },
+    });
+  });
+
   it("preserves parameters when type is missing", () => {
     const tools = [
       {
