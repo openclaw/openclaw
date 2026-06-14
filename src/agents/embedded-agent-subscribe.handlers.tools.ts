@@ -1168,6 +1168,15 @@ export async function handleToolExecutionEnd(
   const result = evt.result;
   const isToolError = isError || isToolResultError(result);
   const sanitizedResult = sanitizeToolResult(result);
+  try {
+    ctx.params.onAgentToolResult?.({
+      toolName,
+      result: sanitizedResult,
+      isError: isToolError,
+    });
+  } catch (error) {
+    ctx.log.warn(`onAgentToolResult handler failed: tool=${toolName} error=${String(error)}`);
+  }
   const eventResult = isExecToolName(toolName)
     ? capLiveExecResult(sanitizedResult)
     : sanitizedResult;

@@ -3872,7 +3872,7 @@ describe("active-memory plugin", () => {
     await lateWriteDone;
   });
 
-  it("does not recover a timeout partial after a configured custom memory tool fails", async () => {
+  it("does not recover a timeout partial after an unmirrored custom memory tool fails", async () => {
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
     testing.setTimeoutPartialDataGraceMsForTests(100);
@@ -3889,7 +3889,23 @@ describe("active-memory plugin", () => {
       updatedAt: 0,
     };
     runEmbeddedAgent.mockImplementationOnce(
-      async (params: { sessionFile: string; abortSignal?: AbortSignal }) => {
+      async (params: {
+        sessionFile: string;
+        abortSignal?: AbortSignal;
+        onAgentToolResult?: (event: {
+          toolName: string;
+          result: unknown;
+          isError: boolean;
+        }) => void;
+      }) => {
+        params.onAgentToolResult?.({
+          toolName: "memory_lookup_custom",
+          isError: true,
+          result: {
+            content: [{ type: "text", text: "upstream unavailable" }],
+            details: { status: "failed", error: "upstream unavailable" },
+          },
+        });
         await new Promise<void>((resolve) => {
           if (params.abortSignal?.aborted) {
             resolve();
@@ -3898,24 +3914,6 @@ describe("active-memory plugin", () => {
           params.abortSignal?.addEventListener("abort", () => resolve(), { once: true });
         });
         await writeTranscriptJsonl(params.sessionFile, [
-          {
-            message: {
-              role: "toolResult",
-              toolName: "memory_lookup_custom",
-              details: {
-                persistedDetailsTruncated: true,
-                success: false,
-                error: "upstream unavailable",
-                originalDetailKeys: ["error", "payload"],
-              },
-              content: [
-                {
-                  type: "text",
-                  text: '{"payload":"failure details omitted after persistence cap"}',
-                },
-              ],
-            },
-          },
           {
             message: {
               role: "assistant",
@@ -3985,6 +3983,55 @@ describe("active-memory plugin", () => {
 
     const result = await hooks.before_prompt_build(
       { prompt: "what food do i usually order? custom evidence", messages: [] },
+      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+    );
+
+    expectPrependContextContains(result, "User usually orders ramen.");
+    expectLinesToContain(getActiveMemoryLines(sessionKey), "Active Memory: status=ok");
+  });
+
+  it("uses harness-native tool results when the runtime does not mirror them to the transcript", async () => {
+    testing.setMinimumTimeoutMsForTests(1);
+    testing.setSetupGraceTimeoutMsForTests(0);
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: 1_000,
+      toolsAllow: ["memory_search"],
+      logging: true,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    const sessionKey = "agent:main:harness-tool-evidence";
+    hoisted.sessionStore[sessionKey] = {
+      sessionId: "s-harness-tool-evidence",
+      updatedAt: 0,
+    };
+    runEmbeddedAgent.mockImplementationOnce(
+      async (params: {
+        onAgentToolResult?: (event: {
+          toolName: string;
+          result: unknown;
+          isError: boolean;
+        }) => void;
+      }) => {
+        params.onAgentToolResult?.({
+          toolName: "memory_search",
+          isError: false,
+          result: {
+            content: [
+              {
+                type: "text",
+                text: '{"results":[{"text":"User usually orders ramen."}]}',
+              },
+            ],
+            details: { results: [{ text: "User usually orders ramen." }] },
+          },
+        });
+        return { payloads: [{ text: "User usually orders ramen." }] };
+      },
+    );
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what food do i usually order? harness evidence", messages: [] },
       { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
     );
 

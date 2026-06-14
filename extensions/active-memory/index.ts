@@ -2116,6 +2116,42 @@ function readActiveMemorySessionFileFromRunResult(result: unknown): string | und
   );
 }
 
+function readMemoryToolResultEvidence(params: {
+  toolName: string;
+  result: unknown;
+  isError: boolean;
+  toolsAllow: readonly string[];
+}): {
+  hasUsableMemoryResult: boolean;
+  hasUnavailableMemorySearchResult: boolean;
+} {
+  const result = asRecord(params.result);
+  const rawContent = result?.content;
+  const textContent =
+    normalizeOptionalString(result?.detailedContent) ??
+    (typeof rawContent === "string" ? normalizeOptionalString(rawContent) : undefined);
+  const record = {
+    message: {
+      role: "toolResult",
+      toolName: params.toolName,
+      isError: params.isError,
+      content: Array.isArray(rawContent)
+        ? rawContent
+        : textContent
+          ? [{ type: "text", text: textContent }]
+          : [],
+      details: result?.details,
+    },
+  };
+  return {
+    hasUsableMemoryResult: hasUsableMemoryResultInSessionRecord(record, params.toolsAllow),
+    hasUnavailableMemorySearchResult: hasUnavailableMemoryResultInSessionRecord(
+      record,
+      params.toolsAllow,
+    ),
+  };
+}
+
 function extractAssistantTextFromSessionRecord(value: unknown): string {
   const record = asRecord(value);
   if (!record) {
@@ -2875,6 +2911,8 @@ async function runRecallSubagent(params: {
   });
 
   let activeSessionFile = sessionFile;
+  let harnessHasUsableMemoryResult = false;
+  let harnessHasUnavailableMemorySearchResult = false;
   try {
     const embeddedConfig = applyActiveMemoryRuntimeConfigSnapshot(params.api.config, params.config);
     const embeddedTimeoutMs = params.config.timeoutMs + params.config.setupGraceTimeoutMs;
@@ -2906,6 +2944,14 @@ async function runRecallSubagent(params: {
       authProfileFailurePolicy: "local",
       cleanupBundleMcpOnRunEnd: true,
       abortSignal: params.abortSignal,
+      onAgentToolResult: (event) => {
+        const evidence = readMemoryToolResultEvidence({
+          ...event,
+          toolsAllow: params.config.toolsAllow,
+        });
+        harnessHasUsableMemoryResult ||= evidence.hasUsableMemoryResult;
+        harnessHasUnavailableMemorySearchResult ||= evidence.hasUnavailableMemorySearchResult;
+      },
     });
     activeSessionFile = readActiveMemorySessionFileFromRunResult(result) ?? sessionFile;
     if (params.abortSignal?.aborted) {
@@ -2935,8 +2981,9 @@ async function runRecallSubagent(params: {
       rawReply: rawReply || "NONE",
       transcriptPath: params.config.persistTranscripts ? activeSessionFile : undefined,
       searchDebug,
-      hasUsableMemoryResult: transcriptState.hasUsableMemoryResult,
-      hasUnavailableMemorySearchResult: transcriptState.hasUnavailableMemorySearchResult,
+      hasUsableMemoryResult: transcriptState.hasUsableMemoryResult || harnessHasUsableMemoryResult,
+      hasUnavailableMemorySearchResult:
+        transcriptState.hasUnavailableMemorySearchResult || harnessHasUnavailableMemorySearchResult,
     };
   } catch (error) {
     if (params.abortSignal?.aborted) {
@@ -2950,7 +2997,7 @@ async function runRecallSubagent(params: {
         error,
         partialReply,
         transcriptState.searchDebug,
-        transcriptState.hasUnavailableMemorySearchResult,
+        transcriptState.hasUnavailableMemorySearchResult || harnessHasUnavailableMemorySearchResult,
       );
     }
     if (

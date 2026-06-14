@@ -541,11 +541,32 @@ export function extractToolResultMediaPaths(result: unknown): string[] {
 }
 
 export function isToolResultError(result: unknown): boolean {
+  const details = readToolResultDetails(result);
   const normalized = readToolResultStatus(result);
-  if (!normalized) {
-    return false;
+  if (
+    normalized === "error" ||
+    normalized === "failed" ||
+    normalized === "failure" ||
+    normalized === "timeout" ||
+    normalized === "timed_out" ||
+    normalized === "blocked" ||
+    normalized === "denied" ||
+    normalized === "forbidden" ||
+    normalized === "unavailable" ||
+    normalized === "disabled" ||
+    normalized === "aborted" ||
+    normalized === "cancelled" ||
+    normalized === "canceled" ||
+    normalized === "killed" ||
+    normalized === "invalid"
+  ) {
+    return true;
   }
-  return normalized === "error" || normalized === "timeout";
+  if (details?.timedOut === true || Boolean(details?.error)) {
+    return true;
+  }
+  const exitCode = details?.exitCode;
+  return typeof exitCode === "number" && Number.isFinite(exitCode) && exitCode !== 0;
 }
 
 export function extractToolErrorCode(result: unknown): string | undefined {

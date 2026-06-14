@@ -131,6 +131,8 @@ export { isMessagingTool, isMessagingToolSendAction } from "../agents/embedded-a
 export {
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
+  isToolResultError,
+  sanitizeToolResult,
 } from "../agents/embedded-agent-subscribe.tools.js";
 export { normalizeUsage } from "../agents/usage.js";
 export { resolveOpenClawAgentDir } from "./agent-dir-compat.js";
