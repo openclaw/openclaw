@@ -47,6 +47,44 @@ describe("embedded OpenClaw queued steering cancellation", () => {
     expect(settled).toBe(true);
   });
 
+  it("rejects when a queued completion is committed but the requester ends before consuming it", async () => {
+    vi.useFakeTimers();
+    let emit!: (event: unknown) => void;
+    const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
+      getSteeringMessages: () => [],
+      steer: async () => {},
+      subscribe: (listener) => {
+        emit = listener;
+        return () => {};
+      },
+    };
+
+    const wait = steerAndWaitForTranscriptCommit(activeSession, "queued completion", 10_000, {
+      waitForAssistantResponseAfterTranscriptCommit: true,
+    });
+
+    emit({
+      type: "message_end",
+      message: {
+        role: "user",
+        content: [{ type: "text", text: "queued completion" }],
+      },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    const rejection = expect(wait).rejects.toThrow(
+      "active session ended before queued steering message was consumed",
+    );
+    emit({ type: "agent_end", messages: [] });
+    await vi.advanceTimersByTimeAsync(0);
+
+    try {
+      await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("removes only the timed-out steering message and preserves unrelated payloads", async () => {
     // Timeout cleanup must surgically remove the queued text entry without
     // damaging rich unrelated queued content.

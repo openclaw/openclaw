@@ -60,6 +60,21 @@ function isTerminalActiveSessionEvent(event: unknown): boolean {
   );
 }
 
+function isAssistantMessageEvent(event: unknown): boolean {
+  if (!event || typeof event !== "object") {
+    return false;
+  }
+  const record = event as { message?: unknown; type?: unknown };
+  if (record.type !== "message_start" && record.type !== "message_end") {
+    return false;
+  }
+  return Boolean(
+    record.message &&
+    typeof record.message === "object" &&
+    (record.message as { role?: unknown }).role === "assistant",
+  );
+}
+
 function isAutoRetryStartEvent(event: unknown): boolean {
   return Boolean(
     event && typeof event === "object" && (event as { type?: unknown }).type === "auto_retry_start",
@@ -117,17 +132,18 @@ export async function cancelQueuedSteeringMessage(
 }
 
 /**
- * Sends a steering message and resolves only after the matching user
- * `message_end` event appears. If the run ends or times out first, the pending
- * queue entry is removed so an abandoned steer does not leak into a later turn.
+ * Sends a steering message and waits until the matching user `message_end` is
+ * durable. Completion handoffs can also require a following assistant response.
  */
 export async function steerAndWaitForTranscriptCommit(
   activeSession: EmbeddedAgentActiveSessionSteerTarget,
   text: string,
   timeoutMs: number,
+  options: { waitForAssistantResponseAfterTranscriptCommit?: boolean } = {},
 ): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     let settled = false;
+    let committed = false;
     let terminalTimer: ReturnType<typeof setTimeout> | undefined;
     const finish = (err?: unknown) => {
       if (settled) {
@@ -147,6 +163,9 @@ export async function steerAndWaitForTranscriptCommit(
       }
       resolve();
     };
+    const rejectWithoutCancellation = (message: string) => {
+      finish(new Error(message));
+    };
     const rejectAfterCancellation = (message: string) => {
       // Cancellation is best-effort but must finish before rejecting so callers
       // do not return while a stale queued message can leak into the next turn.
@@ -163,22 +182,31 @@ export async function steerAndWaitForTranscriptCommit(
           finish(new Error(message));
         });
     };
+    const rejectForCurrentState = (beforeCommit: string, afterCommit: string) => {
+      if (committed) {
+        rejectWithoutCancellation(afterCommit);
+        return;
+      }
+      rejectAfterCancellation(beforeCommit);
+    };
     const scheduleTerminalCancellation = () => {
       if (terminalTimer) {
         return;
       }
       terminalTimer = setTimeout(() => {
         terminalTimer = undefined;
-        rejectAfterCancellation(
+        rejectForCurrentState(
           "active session ended before queued steering message was committed to the transcript",
+          "active session ended before queued steering message was consumed",
         );
       }, 0);
       terminalTimer.unref?.();
     };
     const timer: ReturnType<typeof setTimeout> | undefined = setTimeout(
       () => {
-        rejectAfterCancellation(
+        rejectForCurrentState(
           "queued steering message was not committed to the transcript before timeout",
+          "queued steering message was committed to the transcript but not consumed before timeout",
         );
       },
       Math.max(1, timeoutMs),
@@ -194,8 +222,15 @@ export async function steerAndWaitForTranscriptCommit(
         }
         return;
       }
-      if (isQueuedUserMessageEnd(event, text)) {
+      if (committed && isAssistantMessageEvent(event)) {
         finish();
+        return;
+      }
+      if (isQueuedUserMessageEnd(event, text)) {
+        committed = true;
+        if (options.waitForAssistantResponseAfterTranscriptCommit !== true) {
+          finish();
+        }
         return;
       }
       if (isTerminalActiveSessionEvent(event)) {
@@ -218,7 +253,13 @@ export async function steerAndWaitForTranscriptCommit(
 export async function steerActiveSessionWithOptionalDeliveryWait(
   activeSession: EmbeddedAgentActiveSessionSteerTarget,
   text: string,
-  options: { deliveryTimeoutMs?: number; waitForTranscriptCommit?: boolean } | undefined,
+  options:
+    | {
+        deliveryTimeoutMs?: number;
+        waitForTranscriptCommit?: boolean;
+        waitForAssistantResponseAfterTranscriptCommit?: boolean;
+      }
+    | undefined,
 ): Promise<void> {
   if (options?.waitForTranscriptCommit !== true) {
     await activeSession.steer(text);
@@ -228,6 +269,10 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
     activeSession,
     text,
     options.deliveryTimeoutMs ?? DEFAULT_QUEUE_TRANSCRIPT_COMMIT_TIMEOUT_MS,
+    {
+      waitForAssistantResponseAfterTranscriptCommit:
+        options.waitForAssistantResponseAfterTranscriptCommit,
+    },
   );
 }
 

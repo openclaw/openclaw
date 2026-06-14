@@ -1084,6 +1084,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         steeringMode: "all",
         debounceMs: 500,
         waitForTranscriptCommit: true,
+        waitForAssistantResponseAfterTranscriptCommit: true,
         deliveryTimeoutMs: 120_000,
       },
     );
@@ -2092,6 +2093,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         deliveryTimeoutMs: 120_000,
         steeringMode: "all",
         waitForTranscriptCommit: true,
+        waitForAssistantResponseAfterTranscriptCommit: true,
       },
     );
     expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenNthCalledWith(
@@ -2330,6 +2332,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         steeringMode: "all",
         debounceMs: 500,
         waitForTranscriptCommit: true,
+        waitForAssistantResponseAfterTranscriptCommit: true,
         deliveryTimeoutMs: 10,
       },
     );
@@ -3938,6 +3941,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         steeringMode: "all",
         debounceMs: 500,
         waitForTranscriptCommit: true,
+        waitForAssistantResponseAfterTranscriptCommit: true,
         deliveryTimeoutMs: 120_000,
       },
     );

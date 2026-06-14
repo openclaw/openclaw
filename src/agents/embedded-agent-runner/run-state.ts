@@ -32,6 +32,7 @@ export type EmbeddedAgentQueueMessageOptions = {
   debounceMs?: number;
   deliveryTimeoutMs?: number;
   waitForTranscriptCommit?: boolean;
+  waitForAssistantResponseAfterTranscriptCommit?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
 };
 

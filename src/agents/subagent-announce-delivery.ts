@@ -281,6 +281,7 @@ async function resolveActiveWakeWithRetries(
     ) {
       const bestEffortOptions = { ...currentOptions };
       delete bestEffortOptions.waitForTranscriptCommit;
+      delete bestEffortOptions.waitForAssistantResponseAfterTranscriptCommit;
       currentOptions = bestEffortOptions;
       outcome = await resolveQueueEmbeddedAgentMessageOutcome(sessionId, message, currentOptions);
       continue;
@@ -1358,6 +1359,7 @@ async function sendSubagentAnnounceDirectly(params: {
           ? { debounceMs: requesterQueueSettings.debounceMs }
           : {}),
         waitForTranscriptCommit: true,
+        waitForAssistantResponseAfterTranscriptCommit: true,
       };
       // Reuse the shared active-wake retry helper so the generated-completion
       // wake also waits through compaction (and best-effort transcript retry)
