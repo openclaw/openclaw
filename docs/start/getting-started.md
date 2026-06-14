@@ -145,8 +145,22 @@ openclaw dashboard
 Full reference: [Environment variables](/help/environment).
 </Accordion>
 
+## Troubleshooting
+
+If you hit a problem during setup, try these quick fixes before asking for help:
+
+| Symptom                               | Fix                                                                                                                                                                                                                          |
+| ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `openclaw: command not found`         | Restart your terminal or run `source ~/.zshrc` (or `~/.bashrc`). If still missing, run the installer again.                                                                                                                  |
+| `ECONNREFUSED` or Gateway won't start | Run `openclaw gateway status` to check if the process is running. Try `openclaw gateway restart`.                                                                                                                            |
+| Model auth errors during onboarding   | Run `openclaw models auth add` to re-enter your API key, or `openclaw models auth login --provider <id>` for OAuth providers. Auth profiles are stored per-agent in `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`. |
+| "Node version too old"                | Update Node: see [Node setup](/install/node). OpenClaw requires Node 22.16+ (Node 24 recommended).                                                                                                                           |
+
+If you're still stuck, run `openclaw status && openclaw doctor` and share the output when asking for help. See [Troubleshooting](/help/troubleshooting) for the full guide.
+
 ## Related
 
 - [Install overview](/install)
 - [Channels overview](/channels)
 - [Setup](/start/setup)
+- [Troubleshooting](/help/troubleshooting)
