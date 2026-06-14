@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { CronDelivery, CronJob } from "../../cron/types.js";
+import type { CronDelivery, CronJob, CronPayload, CronSessionTarget } from "../../cron/types.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
@@ -282,6 +282,18 @@ function agentTurnCronParams(overrides: Record<string, unknown> = {}) {
     sessionTarget: "isolated",
     wakeMode: "next-heartbeat",
     payload: { kind: "agentTurn", message: "hello" },
+    ...overrides,
+  };
+}
+
+function commandCronParams(overrides: Record<string, unknown> = {}) {
+  return {
+    name: "command cron job",
+    enabled: true,
+    schedule: { kind: "every", everyMs: 60_000 },
+    sessionTarget: "isolated",
+    wakeMode: "next-heartbeat",
+    payload: { kind: "command", argv: ["echo", "hello"] },
     ...overrides,
   };
 }
@@ -1181,6 +1193,44 @@ describe("cron method validation", () => {
     expect(payload.delivery).toEqual({ mode: "announce" });
   });
 
+  it("accepts current-session implicit command delivery on add when current resolves to a stored session", async () => {
+    setRuntimeConfig(createMultiChannelConfig());
+    const sessionKey = "agent:main:slack:direct:U123";
+
+    const { context, respond } = await invokeCronAdd(
+      commandCronParams({
+        name: "current session implicit command delivery add",
+        sessionTarget: "current",
+        sessionKey,
+      }),
+    );
+
+    expect(context.cron.add).toHaveBeenCalled();
+    expectCronSuccess(respond);
+    const payload = requireCronAddPayload(context);
+    expect(payload.sessionTarget).toBe(`session:${sessionKey}`);
+    expect(payload.sessionKey).toBe(sessionKey);
+    expect(payload.delivery).toEqual({ mode: "announce" });
+  });
+
+  it("accepts stored-session implicit command delivery on add when multiple channels are configured", async () => {
+    setRuntimeConfig(createMultiChannelConfig());
+    const sessionKey = "agent:main:telegram:direct:direct-123";
+
+    const { context, respond } = await invokeCronAdd(
+      commandCronParams({
+        name: "stored session implicit command delivery add",
+        sessionTarget: `session:${sessionKey}`,
+      }),
+    );
+
+    expect(context.cron.add).toHaveBeenCalled();
+    expectCronSuccess(respond);
+    const payload = requireCronAddPayload(context);
+    expect(payload.sessionTarget).toBe(`session:${sessionKey}`);
+    expect(payload.delivery).toEqual({ mode: "announce" });
+  });
+
   it("accepts enabled=true patches for current-session implicit delivery", async () => {
     setRuntimeConfig(createMultiChannelConfig());
     const sessionKey = "agent:main:slack:direct:U123";
@@ -1221,6 +1271,36 @@ describe("cron method validation", () => {
     expect(context.cron.add).toHaveBeenCalled();
     expectCronSuccess(respond);
   });
+
+  it.each([
+    { payload: { kind: "agentTurn", message: "hello" } },
+    { payload: { kind: "command", argv: ["echo", "hello"] } },
+  ] satisfies Array<{ payload: CronPayload }>)(
+    "rejects clearing sessionKey when it would make current implicit $payload.kind delivery nondeterministic",
+    async ({ payload }) => {
+      setRuntimeConfig(createMultiChannelConfig());
+
+      const { context, respond } = await invokeCronUpdate(
+        {
+          id: "cron-1",
+          patch: {
+            sessionKey: null,
+          },
+        },
+        createCronJob({
+          sessionTarget: "current",
+          sessionKey: "agent:main:slack:direct:U123",
+          payload,
+          delivery: undefined,
+        }),
+      );
+
+      expect(context.cron.update).not.toHaveBeenCalled();
+      expectResponseError(respond, {
+        messageIncludes: "cannot use implicit last routing",
+      });
+    },
+  );
 
   it("accepts enabled=true patches for stored session implicit delivery", async () => {
     setRuntimeConfig(createMultiChannelConfig());
@@ -1348,27 +1428,49 @@ describe("cron method validation", () => {
     });
   });
 
-  it("rejects enabled=true patches that would activate implicit isolated agentTurn announce delivery", async () => {
-    setRuntimeConfig(createMultiChannelConfig());
+  it.each([
+    {
+      sessionTarget: "isolated",
+      payload: { kind: "agentTurn", message: "hello" },
+    },
+    {
+      sessionTarget: "current",
+      payload: { kind: "agentTurn", message: "hello" },
+    },
+    {
+      sessionTarget: "isolated",
+      payload: { kind: "command", argv: ["echo", "hello"] },
+    },
+    {
+      sessionTarget: "current",
+      payload: { kind: "command", argv: ["echo", "hello"] },
+    },
+  ] satisfies Array<{ sessionTarget: CronSessionTarget; payload: CronPayload }>)(
+    "rejects enabled=true patches that would activate implicit $sessionTarget $payload.kind announce delivery",
+    async ({ payload, sessionTarget }) => {
+      setRuntimeConfig(createMultiChannelConfig());
 
-    const { context, respond } = await invokeCronUpdate(
-      {
-        id: "cron-1",
-        patch: {
-          enabled: true,
+      const { context, respond } = await invokeCronUpdate(
+        {
+          id: "cron-1",
+          patch: {
+            enabled: true,
+          },
         },
-      },
-      createCronJob({
-        enabled: false,
-        delivery: undefined,
-      }),
-    );
+        createCronJob({
+          enabled: false,
+          delivery: undefined,
+          sessionTarget,
+          payload,
+        }),
+      );
 
-    expect(context.cron.update).not.toHaveBeenCalled();
-    expectResponseError(respond, {
-      messageIncludes: "cannot use implicit last routing",
-    });
-  });
+      expect(context.cron.update).not.toHaveBeenCalled();
+      expectResponseError(respond, {
+        messageIncludes: "cannot use implicit last routing",
+      });
+    },
+  );
 
   it("rejects failureDestination.channel=last without a provider-prefixed target on update", async () => {
     setRuntimeConfig(createMultiChannelConfig());
@@ -1397,47 +1499,86 @@ describe("cron method validation", () => {
     });
   });
 
-  it("rejects omitted isolated agentTurn delivery on add when multiple channels are configured", async () => {
-    setRuntimeConfig(createMultiChannelConfig());
-
-    const { context, respond } = await invokeCronAdd({
-      name: "implicit announce add",
-      enabled: true,
-      schedule: { kind: "every", everyMs: 60_000 },
+  it.each([
+    {
       sessionTarget: "isolated",
-      wakeMode: "next-heartbeat",
       payload: { kind: "agentTurn", message: "hello" },
-    });
+    },
+    {
+      sessionTarget: "current",
+      payload: { kind: "agentTurn", message: "hello" },
+    },
+    {
+      sessionTarget: "isolated",
+      payload: { kind: "command", argv: ["echo", "hello"] },
+    },
+    {
+      sessionTarget: "current",
+      payload: { kind: "command", argv: ["echo", "hello"] },
+    },
+  ] satisfies Array<{ sessionTarget: CronSessionTarget; payload: CronPayload }>)(
+    "rejects omitted $sessionTarget $payload.kind delivery on add when multiple channels are configured",
+    async ({ payload, sessionTarget }) => {
+      setRuntimeConfig(createMultiChannelConfig());
 
-    expect(context.cron.add).not.toHaveBeenCalled();
-    expectResponseError(respond, {
-      messageIncludes: "cannot use implicit last routing",
-    });
-  });
+      const { context, respond } = await invokeCronAdd(
+        agentTurnCronParams({
+          name: "implicit announce add",
+          sessionTarget,
+          payload,
+        }),
+      );
 
-  it("rejects update patches that would create implicit isolated agentTurn announce delivery", async () => {
-    setRuntimeConfig(createMultiChannelConfig());
+      expect(context.cron.add).not.toHaveBeenCalled();
+      expectResponseError(respond, {
+        messageIncludes: "cannot use implicit last routing",
+      });
+    },
+  );
 
-    const { context, respond } = await invokeCronUpdate(
-      {
-        id: "cron-1",
-        patch: {
-          sessionTarget: "isolated",
-          payload: { kind: "agentTurn", message: "hello" },
+  it.each([
+    {
+      sessionTarget: "isolated",
+      payload: { kind: "agentTurn", message: "hello" },
+    },
+    {
+      sessionTarget: "current",
+      payload: { kind: "agentTurn", message: "hello" },
+    },
+    {
+      sessionTarget: "isolated",
+      payload: { kind: "command", argv: ["echo", "hello"] },
+    },
+    {
+      sessionTarget: "current",
+      payload: { kind: "command", argv: ["echo", "hello"] },
+    },
+  ] satisfies Array<{ sessionTarget: CronSessionTarget; payload: CronPayload }>)(
+    "rejects update patches that would create implicit $sessionTarget $payload.kind announce delivery",
+    async ({ payload, sessionTarget }) => {
+      setRuntimeConfig(createMultiChannelConfig());
+
+      const { context, respond } = await invokeCronUpdate(
+        {
+          id: "cron-1",
+          patch: {
+            sessionTarget,
+            payload,
+          },
         },
-      },
-      createCronJob({
-        sessionTarget: "main",
-        payload: { kind: "systemEvent", text: "hello" },
-        delivery: undefined,
-      }),
-    );
+        createCronJob({
+          sessionTarget: "main",
+          payload: { kind: "systemEvent", text: "hello" },
+          delivery: undefined,
+        }),
+      );
 
-    expect(context.cron.update).not.toHaveBeenCalled();
-    expectResponseError(respond, {
-      messageIncludes: "cannot use implicit last routing",
-    });
-  });
+      expect(context.cron.update).not.toHaveBeenCalled();
+      expectResponseError(respond, {
+        messageIncludes: "cannot use implicit last routing",
+      });
+    },
+  );
 
   it("rejects target ids mistakenly supplied as delivery.channel providers", async () => {
     setRuntimeConfig(slackConfig({ includeMainSession: true }));

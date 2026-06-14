@@ -167,12 +167,12 @@ function assertCompatibleAnnounceTarget(params: {
   }
 }
 
-function isIsolatedLikeAgentTurn(params: {
+function isDetachedOutputJob(params: {
   sessionTarget?: string;
   payload?: CronPayload;
 }): boolean {
   return (
-    params.payload?.kind === "agentTurn" &&
+    (params.payload?.kind === "agentTurn" || params.payload?.kind === "command") &&
     typeof params.sessionTarget === "string" &&
     (params.sessionTarget === "isolated" ||
       params.sessionTarget === "current" ||
@@ -193,14 +193,14 @@ function assertValidCronAnnounceDelivery(params: {
       sessionKey: params.sessionKey,
     }),
   );
-  const implicitIsolatedAgentTurnDelivery =
+  const implicitDetachedOutputDelivery =
     !params.delivery &&
-    isIsolatedLikeAgentTurn({
+    isDetachedOutputJob({
       sessionTarget: params.sessionTarget,
       payload: params.payload,
     });
 
-  if (implicitIsolatedAgentTurnDelivery) {
+  if (implicitDetachedOutputDelivery) {
     assertNoImplicitLastAnnounceRoute({
       cfg: params.cfg,
       channel: "last",
@@ -293,6 +293,7 @@ function assertValidCronUpdatePatch(params: {
     "delivery" in params.patch ||
     "payload" in params.patch ||
     "sessionTarget" in params.patch ||
+    "sessionKey" in params.patch ||
     "enabled" in params.patch ||
     "schedule" in params.patch;
   if (!shouldValidateDeliveryOutcome) {
