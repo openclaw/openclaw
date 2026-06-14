@@ -13,6 +13,10 @@ Docs: https://docs.openclaw.ai
 - UI and mobile flows are steadier: workspace files can collapse and start collapsed, WebChat backscroll survives streaming, the sidebar session picker remains interactive above the desktop workbench, reset soft args survive UI dispatch, stale dashboard session parent lineage is preserved, and iOS reconnects stale foreground gateways. (#92779, #92622, #92705, #91353, #90658, #92552) Thanks @shakkernerd, @TurboTheTurtle, @NianJiuZst, @zhouhe-xydt, @luoyanglang, and @Solvely-Colin.
 - Memory, state, and diagnostics recover cleaner: oversized OpenAI embedding batches split before 431s, QMD memory search stays available in transient mode, SQLite avoids WAL on NFS state volumes, stuck-session recovery scheduling no longer resets warning backoff, and Infinity chunk limits stay genuinely unbounded. (#92650, #92618, #92639, #91247, #92752, #92735) Thanks @mushuiyu886, @TurboTheTurtle, @849261680, @gnanam1990, and @yhterrance.
 
+### Fixes
+
+- Feishu: fix topic session splitting for both native `topic_group` and normal groups using topic message format. Hydrate now queries the replied-to message (`rootId`) instead of the newly sent message, expands the hydrate condition to cover `chat_type="group"` groups with Feishu topic messaging, and suppresses stale `rootId` after successful hydration so the canonical `omt_*` topic ID is used consistently. Refs #78262. Thanks @joeyzenghuan.
+
 ### Changes
 
 - Providers/models: add GLM-5.2 support and Claude Haiku 4.5 catalog entries while keeping provider-qualified model IDs normalized across OpenRouter and Google Vertex paths. (#92796, #90116, #92627, #91218) Thanks @arkyu2077, @liuhao1024, and @bymle.
