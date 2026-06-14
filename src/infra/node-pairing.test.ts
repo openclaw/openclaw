@@ -412,7 +412,7 @@ describe("node pairing tokens", () => {
             platform: "darwin",
             commands: ["system.run", "canvas.snapshot"],
           },
-          snapshot.cleanupClaim!,
+          snapshot.cleanupClaim,
           baseDir,
         ),
       ).resolves.toMatchObject({
@@ -484,7 +484,7 @@ describe("node pairing tokens", () => {
           platform: "darwin",
           commands: ["system.run", "canvas.snapshot"],
         },
-        matchingReconnect.cleanupClaim!,
+        matchingReconnect.cleanupClaim,
         baseDir,
       );
 
