@@ -184,8 +184,11 @@ function primeConfiguredContextWindows(): OpenClawConfig | undefined {
   }
 }
 
-export function ensureContextWindowCacheLoaded(): Promise<void> {
+export function ensureContextWindowCacheLoaded(cfgOverride?: OpenClawConfig): Promise<void> {
   const generation = CONTEXT_WINDOW_RUNTIME_STATE.generation;
+  // NOTE: If a load is already in-flight (singleton match), cfgOverride is
+  // discarded — the in-flight promise uses whichever config started first.
+  // The sync path (config direct scan) handles caller-provided overrides.
   if (
     CONTEXT_WINDOW_RUNTIME_STATE.loadPromise &&
     CONTEXT_WINDOW_RUNTIME_STATE.loadGeneration === generation
@@ -193,7 +196,7 @@ export function ensureContextWindowCacheLoaded(): Promise<void> {
     return CONTEXT_WINDOW_RUNTIME_STATE.loadPromise;
   }
 
-  const cfg = primeConfiguredContextWindows();
+  const cfg = cfgOverride ?? primeConfiguredContextWindows();
   if (!cfg) {
     return Promise.resolve();
   }
@@ -254,8 +257,16 @@ export async function refreshContextWindowCache(cfg: OpenClawConfig): Promise<vo
 function prepareContextWindowCache(options?: {
   allowAsyncLoad?: boolean;
   skipRuntimeConfigLoad?: boolean;
+  cfg?: OpenClawConfig;
 }) {
   if (options?.skipRuntimeConfigLoad) {
+    // Callers that pass cfg already have the config struct, but discovery cache
+    // warming is still needed. Fire async loading if allowed (won't block caller).
+    // This is safe to call repeatedly — ensureContextWindowCacheLoaded()
+    // has an internal singleton guard that deduplicates concurrent loads.
+    if (options?.allowAsyncLoad !== false) {
+      void ensureContextWindowCacheLoaded(options.cfg);
+    }
     return;
   }
   if (options?.allowAsyncLoad === false) {
@@ -307,6 +318,7 @@ export function resolveContextTokensForModel(
   const lookupOptions = {
     allowAsyncLoad: params.allowAsyncLoad,
     skipRuntimeConfigLoad: Boolean(params.cfg),
+    cfg: params.cfg,
   };
   prepareContextWindowCache(lookupOptions);
   const sourceCfg =
