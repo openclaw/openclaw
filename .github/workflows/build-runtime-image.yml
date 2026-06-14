@@ -4,13 +4,13 @@ name: build-runtime-image
 # private registry.
 # Triggered on changes to anything that affects the image, and manually.
 #
-# Two jobs:
+# Jobs:
 #   1. build         — buildx + push to:
 #                      - ghcr.io/rockielab/rockielab-runtime-multitenant:{sha,latest}
 #                      - registry.fly.io/rockielab-runtime-multitenant:{sha,latest}
-#   2. dispatch-deploy — optional cross-repo trigger of deploy-hetzner.yml
-#                        (skipped silently if PLATFORM_CONTEXT_DISPATCH_TOKEN
-#                        isn't set on this repo).
+#   2. rollout-dev   — env-scoped rollout against the fixed dev API host.
+#   3. rollout-prod  — manual no-input full-fleet compatibility leg, gated by
+#                      the GitHub production environment.
 #
 # Dockerfile.multitenant uses `COPY --from=skills` which expects a
 # named build-context. We vendor Rockielab/platform-skills (a private
@@ -70,6 +70,16 @@ on:
       - ".github/workflows/build-runtime-image.yml"
   workflow_dispatch:
     inputs:
+      skills_ref:
+        description: "platform-skills branch/SHA for a dev preview build"
+        required: false
+        type: string
+      rollout_target:
+        description: "Rollout target. Manual default is full-fleet fan-out."
+        required: false
+        default: full-fleet
+        type: choice
+        options: [dev, full-fleet]
       rollout_tenant_id:
         description: "Optional single tenant id to roll after the image push"
         required: false
@@ -106,6 +116,7 @@ jobs:
     timeout-minutes: 60
     outputs:
       image_ref: ${{ steps.image.outputs.image_ref }}
+      platform_skills_sha: ${{ steps.skills_sha.outputs.platform_skills_sha }}
     permissions:
       contents: read
       packages: write
@@ -142,7 +153,13 @@ jobs:
           repository: Rockielab/platform-skills
           path: vendor/platform-skills
           token: ${{ secrets.PLATFORM_SKILLS_READ_TOKEN }}
+          ref: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.sha || (github.event_name == 'workflow_dispatch' && inputs.skills_ref) || 'main' }}
           fetch-depth: 1
+
+      - name: Record platform-skills SHA
+        id: skills_sha
+        run: |
+          echo "platform_skills_sha=$(git -C vendor/platform-skills rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Start setup timer
         id: setup_timer
@@ -199,6 +216,9 @@ jobs:
             ${{ env.GHCR_IMAGE }}:${{ github.sha }}
             ${{ env.FLY_IMAGE }}:latest
             ${{ env.FLY_IMAGE }}:${{ github.sha }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            rockielab.platform_skills_sha=${{ steps.skills_sha.outputs.platform_skills_sha }}
           cache-from: type=registry,ref=${{ env.GHCR_IMAGE }}:buildcache
           cache-to: type=registry,ref=${{ env.GHCR_IMAGE }}:buildcache,mode=max
 
@@ -314,42 +334,14 @@ jobs:
           echo "- GHCR audit image: \`${{ env.GHCR_IMAGE }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- Fly rollout image: \`${{ env.FLY_IMAGE }}:latest\`" >> $GITHUB_STEP_SUMMARY
           echo "- Fly rollout image: \`${{ env.FLY_IMAGE }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- platform-skills SHA: \`${{ steps.skills_sha.outputs.platform_skills_sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- setup duration: \`${setup_elapsed}s\`" >> $GITHUB_STEP_SUMMARY
           echo "- build+push duration: \`${build_elapsed}s\`" >> $GITHUB_STEP_SUMMARY
           echo "- queue metadata: run \`${{ github.run_id }}\` attempt \`${{ github.run_attempt }}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Set \`ROCKIELAB_RUNTIME_IMAGE=${{ env.FLY_IMAGE }}:${{ github.sha }}\` in platform-context's Hetzner .env to roll forward." >> $GITHUB_STEP_SUMMARY
 
-  dispatch-deploy:
-    needs: build
-    runs-on: [self-hosted, macOS, ARM64, rockie]
-    timeout-minutes: 5
-    # Map the secret to a job-level env var. We can't reference `secrets.*`
-    # in `if:` expressions (job- or step-level), but we CAN reference
-    # `env.*`. So we read the secret into env at job startup, then gate
-    # the step on env. If the secret is unset, env is empty and the
-    # step skips silently.
-    env:
-      DISPATCH_TOKEN: ${{ secrets.PLATFORM_CONTEXT_DISPATCH_TOKEN }}
-    steps:
-      - name: Trigger platform-context deploy-hetzner
-        if: env.DISPATCH_TOKEN != ''
-        run: |
-          curl -fsSL -X POST \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer $DISPATCH_TOKEN" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            https://api.github.com/repos/Rockielab/platform-context/actions/workflows/deploy-hetzner.yml/dispatches \
-            -d '{"ref":"main"}'
-
-      - name: Note when skipped
-        if: env.DISPATCH_TOKEN == ''
-        run: |
-          echo "## Cross-repo deploy NOT triggered" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "PLATFORM_CONTEXT_DISPATCH_TOKEN is not set on this repo, so the Hetzner deploy was not auto-triggered. Click 'Run workflow' manually on Rockielab/platform-context's deploy-hetzner.yml when ready." >> $GITHUB_STEP_SUMMARY
-
-  rollout-tenants:
+  rollout-dev:
     # Step 7 of #816: after the runtime image is pushed to GHCR, roll
     # every tenant's Fly machine forward to the new SHA so the freshly-
     # baked-in skills/hooks/overlay are live for users on the next chat
@@ -371,13 +363,15 @@ jobs:
     permissions:
       actions: read
       contents: read
+    if: ${{ github.event_name == 'repository_dispatch' && vars.DEPLOY_SPLIT_ACTIVATED == 'true' || github.event_name == 'workflow_dispatch' && (inputs.skills_ref != '' || inputs.rollout_target == 'dev' || inputs.rollout_target == '' || inputs.rollout_target == 'full-fleet') }}
     env:
-      API_URL: ${{ secrets.ROCKIELAB_API_URL }}
-      ADMIN_TOKEN: ${{ secrets.ROCKIELAB_ADMIN_TOKEN }}
+      API_URL: ${{ secrets.ROCKIELAB_DEV_API_URL }}
+      ADMIN_TOKEN: ${{ secrets.ROCKIELAB_DEV_ADMIN_TOKEN }}
       FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
       GHCR_PULL_USERNAME: ${{ secrets.GHCR_PULL_USERNAME }}
       GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
       IMAGE_TAG: ${{ needs.build.outputs.image_ref }}
+      ROLLOUT_ENV: dev
       ROLLOUT_TENANT_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.rollout_tenant_id || '' }}
       ROLLOUT_CANARY_COUNT: ${{ github.event_name == 'workflow_dispatch' && inputs.rollout_canary_count || '' }}
       ROLLOUT_CANARY_WAIT_SEC: ${{ github.event_name == 'workflow_dispatch' && inputs.rollout_canary_wait_sec || '' }}
@@ -387,6 +381,7 @@ jobs:
       ROLLOUT_MAX_ATTEMPTS: "5"
       ROLLOUT_CURL_MAX_TIME: "180"
       ROLLOUT_FALLBACK_AFTER_TRANSIENTS: "2"
+      DEPLOY_SPLIT_ACTIVATED: ${{ vars.DEPLOY_SPLIT_ACTIVATED }}
     steps:
       - name: Preflight — required secrets present
         id: preflight
@@ -397,7 +392,11 @@ jobs:
           [ -z "$ADMIN_TOKEN" ] && missing="$missing ROCKIELAB_ADMIN_TOKEN"
           [ -z "$FLY_API_TOKEN" ] && missing="$missing FLY_API_TOKEN"
           if [ -n "$missing" ]; then
-            echo "::warning::Skipping cross-tenant rollout. Missing secrets on Rockielab/platform-runtime:$missing"
+            if [ "$DEPLOY_SPLIT_ACTIVATED" = "true" ]; then
+              echo "::error::Activated dev rollout requires fixed dev secrets:$missing"
+              exit 1
+            fi
+            echo "::warning::Skipping dev rollout. Missing secrets on Rockielab/platform-runtime:$missing"
             echo "skipped=true" >> $GITHUB_OUTPUT
             {
               echo "## Cross-tenant rollout SKIPPED"
@@ -406,8 +405,8 @@ jobs:
               echo ""
               echo "Set them with \`gh secret set <NAME> --repo Rockielab/platform-runtime --body '<value>'\`."
               echo ""
-              echo "ROCKIELAB_API_URL: full https url of the api host (e.g. \`https://api.rockielab.com\`)"
-              echo "ROCKIELAB_ADMIN_TOKEN: sent as X-Admin-Token to the admin rollout route"
+              echo "ROCKIELAB_DEV_API_URL: full https url of the dev api host"
+              echo "ROCKIELAB_DEV_ADMIN_TOKEN: sent as X-Admin-Token to the admin rollout route"
               echo "FLY_API_TOKEN: used to enumerate tenant Fly apps for per-tenant fallback after Cloudflare 524s"
               echo "GHCR_PULL_TOKEN: optional preflight token for private runtime image pulls; required unless the GHCR package is public"
             } >> $GITHUB_STEP_SUMMARY
@@ -431,13 +430,45 @@ jobs:
             echo "skipped=false" >> $GITHUB_OUTPUT
           fi
 
+      - name: Sync dev catalog to bound platform-skills SHA
+        if: ${{ steps.preflight.outputs.skipped == 'false' && github.event_name == 'workflow_dispatch' }}
+        env:
+          GH_TOKEN: ${{ secrets.PLATFORM_CONTEXT_DISPATCH_TOKEN }}
+          SKILLS_SHA: ${{ needs.build.outputs.platform_skills_sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::PLATFORM_CONTEXT_DISPATCH_TOKEN is required to sync the dev context catalog before manual dev rollout."
+            exit 1
+          fi
+          before="$(gh run list --repo Rockielab/platform-context --workflow sync-skills-to-hetzner.yml --limit 20 --json databaseId --jq '[.[].databaseId]')"
+          request_id="runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-dev"
+          expected_title="sync platform-skills dev $SKILLS_SHA $request_id"
+          gh workflow run sync-skills-to-hetzner.yml \
+            --repo Rockielab/platform-context \
+            --ref main \
+            -f target_env=dev \
+            -f skills_sha="$SKILLS_SHA" \
+            -f dry_run=false \
+            -f request_id="$request_id"
+          run_id=""
+          for _ in $(seq 1 30); do
+            run_id="$(BEFORE="$before" EXPECTED_TITLE="$expected_title" gh run list --repo Rockielab/platform-context --workflow sync-skills-to-hetzner.yml --event workflow_dispatch --limit 50 --json databaseId,displayTitle --jq 'map(select(.displayTitle == env.EXPECTED_TITLE and ((env.BEFORE | fromjson | index(.databaseId)) | not))) | first | .databaseId // empty')"
+            [ -n "$run_id" ] && break
+            sleep 2
+          done
+          [ -n "$run_id" ] || { echo "::error::could not find dev catalog sync run"; exit 1; }
+          gh run view "$run_id" --repo Rockielab/platform-context --json displayTitle --jq '.displayTitle' | grep -Fx "$expected_title"
+          gh run watch "$run_id" --repo Rockielab/platform-context --exit-status
+          gh run view "$run_id" --repo Rockielab/platform-context --json conclusion --jq '.conclusion' | grep -qx success
+
       - name: Checkout rollout script
         uses: actions/checkout@v4
         if: steps.preflight.outputs.skipped == 'false'
         with:
           fetch-depth: 1
 
-      - name: Roll every tenant to the new image SHA
+      - name: Roll dev tenants to the new image SHA
         if: steps.preflight.outputs.skipped == 'false'
         run: |
           started_at="$(date +%s)"
@@ -460,6 +491,81 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: runtime-rollout-summary-${{ github.sha }}
+          name: runtime-rollout-dev-summary-${{ github.sha }}
+          path: ${{ env.ROLLOUT_ARTIFACT_DIR }}
+          if-no-files-found: ignore
+
+  rollout-prod:
+    needs: [build, rollout-dev]
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.skills_ref == '' && (inputs.rollout_target == '' || inputs.rollout_target == 'full-fleet') && inputs.rollout_tenant_id == '' && inputs.rollout_canary_count == '' && inputs.rollout_canary_wait_sec == '' && inputs.rollout_wave_delay_sec == '' && inputs.rollout_wave_size == '' }}
+    environment: production
+    runs-on: [self-hosted, macOS, ARM64, rockie]
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
+    env:
+      API_URL: ${{ secrets.ROCKIELAB_PROD_API_URL }}
+      ADMIN_TOKEN: ${{ secrets.ROCKIELAB_PROD_ADMIN_TOKEN }}
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      GHCR_PULL_USERNAME: ${{ secrets.GHCR_PULL_USERNAME }}
+      GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
+      IMAGE_TAG: ${{ needs.build.outputs.image_ref }}
+      ROLLOUT_ENV: prod
+      ROLLOUT_ARTIFACT_DIR: .artifacts/runtime-rollout-prod
+      ROLLOUT_MAX_ATTEMPTS: "5"
+      ROLLOUT_CURL_MAX_TIME: "180"
+      ROLLOUT_FALLBACK_AFTER_TRANSIENTS: "2"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Preflight prod API environment before catalog sync
+        run: |
+          set -euo pipefail
+          headers="$(mktemp)"
+          curl -fsS -D "$headers" -o /tmp/rockielab-prod-health "${API_URL%/}/health"
+          actual="$(grep -i '^X-Rockielab-Env:' "$headers" | tail -n1 | cut -d: -f2- | tr -d '[:space:]')"
+          if [ "$actual" != "prod" ]; then
+            echo "::error::Prod API health env mismatch before catalog sync: expected prod, got ${actual:-<missing>}"
+            exit 1
+          fi
+
+      - name: Sync prod catalog to bound platform-skills SHA
+        env:
+          GH_TOKEN: ${{ secrets.PLATFORM_CONTEXT_DISPATCH_TOKEN }}
+          SKILLS_SHA: ${{ needs.build.outputs.platform_skills_sha }}
+        run: |
+          before="$(gh run list --repo Rockielab/platform-context --workflow sync-skills-to-hetzner.yml --limit 20 --json databaseId --jq '[.[].databaseId]')"
+          request_id="runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-prod"
+          expected_title="sync platform-skills prod $SKILLS_SHA $request_id"
+          gh workflow run sync-skills-to-hetzner.yml \
+            --repo Rockielab/platform-context \
+            --ref main \
+            -f target_env=prod \
+            -f skills_sha="$SKILLS_SHA" \
+            -f dry_run=false \
+            -f request_id="$request_id"
+          run_id=""
+          for _ in $(seq 1 30); do
+            run_id="$(BEFORE="$before" EXPECTED_TITLE="$expected_title" gh run list --repo Rockielab/platform-context --workflow sync-skills-to-hetzner.yml --event workflow_dispatch --limit 50 --json databaseId,displayTitle --jq 'map(select(.displayTitle == env.EXPECTED_TITLE and ((env.BEFORE | fromjson | index(.databaseId)) | not))) | first | .databaseId // empty')"
+            [ -n "$run_id" ] && break
+            sleep 2
+          done
+          [ -n "$run_id" ] || { echo "::error::could not find prod catalog sync run"; exit 1; }
+          gh run view "$run_id" --repo Rockielab/platform-context --json displayTitle --jq '.displayTitle' | grep -Fx "$expected_title"
+          gh run watch "$run_id" --repo Rockielab/platform-context --exit-status
+          gh run view "$run_id" --repo Rockielab/platform-context --json conclusion --jq '.conclusion' | grep -qx success
+
+      - name: Roll prod tenants to the new image SHA
+        run: |
+          node scripts/runtime-rollout.mjs
+
+      - name: Upload prod rollout summary artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-rollout-prod-summary-${{ github.sha }}
           path: ${{ env.ROLLOUT_ARTIFACT_DIR }}
           if-no-files-found: ignore

@@ -9,6 +9,7 @@ const REMOVED_PASSWORD_ENV = ["API", "PASSWORD"].join("_");
 const REMOVED_PASSWORD_SECRET = ["ROCKIELAB", REMOVED_PASSWORD_ENV].join("_");
 
 type WorkflowStep = {
+  env?: Record<string, string>;
   if?: string;
   name?: string;
   run?: string;
@@ -37,8 +38,8 @@ function readWorkflow(): Workflow {
 }
 
 function rolloutJob(): WorkflowJob {
-  const job = readWorkflow().jobs?.["rollout-tenants"];
-  expect(job, "expected rollout-tenants job").toBeDefined();
+  const job = readWorkflow().jobs?.["rollout-dev"];
+  expect(job, "expected rollout-dev job").toBeDefined();
   return job!;
 }
 
@@ -79,6 +80,8 @@ describe("build-runtime-image rollout workflow", () => {
     const workflow = readWorkflow();
     expect(workflow.on?.workflow_dispatch?.inputs).toMatchObject({
       rollout_tenant_id: expect.any(Object),
+      skills_ref: expect.any(Object),
+      rollout_target: expect.objectContaining({ default: "full-fleet" }),
       rollout_canary_count: expect.any(Object),
       rollout_canary_wait_sec: expect.any(Object),
       rollout_wave_delay_sec: expect.any(Object),
@@ -87,6 +90,7 @@ describe("build-runtime-image rollout workflow", () => {
 
     const job = rolloutJob();
     expect(job.env).toMatchObject({
+      ROLLOUT_ENV: "dev",
       ROLLOUT_TENANT_ID:
         "${{ github.event_name == 'workflow_dispatch' && inputs.rollout_tenant_id || '' }}",
       ROLLOUT_CANARY_COUNT:
@@ -110,7 +114,7 @@ describe("build-runtime-image rollout workflow", () => {
     const checkout = workflowStep(job, "Checkout rollout script");
     expect(checkout.if).toBe("steps.preflight.outputs.skipped == 'false'");
 
-    const rollout = workflowStep(rolloutJob(), "Roll every tenant to the new image SHA");
+    const rollout = workflowStep(rolloutJob(), "Roll dev tenants to the new image SHA");
     const run = rollout.run ?? "";
 
     expect(run).toContain("node scripts/runtime-rollout.mjs");
@@ -193,7 +197,7 @@ describe("build-runtime-image rollout workflow", () => {
     expect(upload.if).toBe("always()");
     expect(upload.uses).toBe("actions/upload-artifact@v4");
     expect(upload.with).toMatchObject({
-      name: "runtime-rollout-summary-${{ github.sha }}",
+      name: "runtime-rollout-dev-summary-${{ github.sha }}",
       path: "${{ env.ROLLOUT_ARTIFACT_DIR }}",
       "if-no-files-found": "ignore",
     });
@@ -204,13 +208,106 @@ describe("build-runtime-image rollout workflow", () => {
 
     expect(workflow).not.toContain(REMOVED_PASSWORD_SECRET);
     expect(workflow).not.toContain(REMOVED_PASSWORD_ENV);
-    expect(workflow).toContain("ROCKIELAB_ADMIN_TOKEN: sent as X-Admin-Token");
+    expect(workflow).toContain("ROCKIELAB_DEV_ADMIN_TOKEN: sent as X-Admin-Token");
     expect(workflow).toContain(
       "FLY_API_TOKEN: used to enumerate tenant Fly apps for per-tenant fallback",
     );
     expect(workflow).toContain(
       "GHCR_PULL_TOKEN: optional preflight token for private runtime image pulls",
     );
+  });
+
+  it("uses dispatched or manual platform-skills refs and removes stale dispatch-deploy", () => {
+    const workflow = readWorkflow();
+    expect(workflow.jobs).not.toHaveProperty("dispatch-deploy");
+
+    const checkout = workflowStep(
+      workflow.jobs?.build ?? {},
+      "Checkout platform-skills (vendored at build time)",
+    );
+    expect(checkout.with?.ref).toContain("github.event.client_payload.sha");
+    expect(checkout.with?.ref).toContain("inputs.skills_ref");
+
+    const buildPush = workflowStep(workflow.jobs?.build ?? {}, "Build and push");
+    expect(buildPush.with?.labels).toContain("rockielab.platform_skills_sha");
+    expect(workflow.jobs?.["rollout-prod"]).toMatchObject({
+      environment: "production",
+    });
+  });
+
+  it("syncs the dev catalog before manual dev rollout and fails activated missing dev secrets", () => {
+    const job = rolloutJob();
+    expect(job.env).toMatchObject({
+      DEPLOY_SPLIT_ACTIVATED: "${{ vars.DEPLOY_SPLIT_ACTIVATED }}",
+    });
+
+    const preflight = workflowStep(job, "Preflight — required secrets present");
+    expect(preflight.run).toContain('[ "$DEPLOY_SPLIT_ACTIVATED" = "true" ]');
+    expect(preflight.run).toContain("Activated dev rollout requires fixed dev secrets");
+    expect(preflight.run).toContain("exit 1");
+
+    const sync = workflowStep(job, "Sync dev catalog to bound platform-skills SHA");
+    expect(sync.if).toBe(
+      "${{ steps.preflight.outputs.skipped == 'false' && github.event_name == 'workflow_dispatch' }}",
+    );
+    expect(sync.env).toMatchObject({
+      GH_TOKEN: "${{ secrets.PLATFORM_CONTEXT_DISPATCH_TOKEN }}",
+      SKILLS_SHA: "${{ needs.build.outputs.platform_skills_sha }}",
+    });
+    expect(sync.run).toContain("target_env=dev");
+    expect(sync.run).toContain('skills_sha="$SKILLS_SHA"');
+    expect(sync.run).toContain("dry_run=false");
+    expect(sync.run).toContain('request_id="runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-dev"');
+    expect(sync.run).toContain("displayTitle == env.EXPECTED_TITLE");
+    expect(sync.run).toContain('grep -Fx "$expected_title"');
+    expect(sync.run).toContain("gh run watch");
+
+    const checkoutIndex = job.steps!.findIndex((step) => step.name === "Checkout rollout script");
+    const syncIndex = job.steps!.findIndex(
+      (step) => step.name === "Sync dev catalog to bound platform-skills SHA",
+    );
+    expect(syncIndex).toBeGreaterThan(-1);
+    expect(syncIndex).toBeLessThan(checkoutIndex);
+  });
+
+  it("does not let scoped manual rollout inputs trigger prod full-fleet", () => {
+    const prod = readWorkflow().jobs?.["rollout-prod"];
+    expect(prod?.if).toContain("inputs.skills_ref == ''");
+    expect(prod?.if).toContain("inputs.rollout_target == 'full-fleet'");
+    expect(prod?.if).toContain("inputs.rollout_tenant_id == ''");
+    expect(prod?.if).toContain("inputs.rollout_canary_count == ''");
+    expect(prod?.if).toContain("inputs.rollout_canary_wait_sec == ''");
+    expect(prod?.if).toContain("inputs.rollout_wave_delay_sec == ''");
+    expect(prod?.if).toContain("inputs.rollout_wave_size == ''");
+  });
+
+  it("preflights prod API health before prod catalog mutation and verifies exact sync run", () => {
+    const prod = readWorkflow().jobs?.["rollout-prod"];
+    expect(prod, "expected rollout-prod job").toBeDefined();
+    const healthIndex = prod!.steps!.findIndex(
+      (step) => step.name === "Preflight prod API environment before catalog sync",
+    );
+    const syncIndex = prod!.steps!.findIndex(
+      (step) => step.name === "Sync prod catalog to bound platform-skills SHA",
+    );
+    const rolloutIndex = prod!.steps!.findIndex(
+      (step) => step.name === "Roll prod tenants to the new image SHA",
+    );
+
+    expect(healthIndex).toBeGreaterThan(-1);
+    expect(syncIndex).toBeGreaterThan(healthIndex);
+    expect(rolloutIndex).toBeGreaterThan(syncIndex);
+
+    const health = prod!.steps![healthIndex].run ?? "";
+    expect(health).toContain("${API_URL%/}/health");
+    expect(health).toContain("X-Rockielab-Env");
+    expect(health).toContain("expected prod");
+
+    const sync = prod!.steps![syncIndex].run ?? "";
+    expect(sync).toContain('request_id="runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-prod"');
+    expect(sync).toContain("displayTitle == env.EXPECTED_TITLE");
+    expect(sync).toContain('grep -Fx "$expected_title"');
+    expect(sync).toContain("dry_run=false");
   });
 
   it("pushes a Fly registry image for tenant rollout without making GHCR public", () => {

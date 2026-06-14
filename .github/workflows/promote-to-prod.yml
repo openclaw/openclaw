@@ -1,0 +1,158 @@
+name: promote-to-prod
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_sha:
+        description: "Runtime image SHA/tag to promote"
+        required: true
+        type: string
+      platform_skills_sha:
+        description: "platform-skills SHA bound into the runtime image"
+        required: true
+        type: string
+      dry_run:
+        description: "Read-only prod validation"
+        required: true
+        default: true
+        type: boolean
+
+jobs:
+  promote:
+    environment: production
+    runs-on: [self-hosted, macOS, ARM64, rockie]
+    timeout-minutes: 30
+    env:
+      API_URL: ${{ secrets.ROCKIELAB_PROD_API_URL }}
+      ADMIN_TOKEN: ${{ secrets.ROCKIELAB_PROD_ADMIN_TOKEN }}
+      IMAGE_SHA: ${{ inputs.image_sha }}
+      IMAGE_TAG: registry.fly.io/rockielab-runtime-multitenant:${{ inputs.image_sha }}
+      PLATFORM_SKILLS_SHA: ${{ inputs.platform_skills_sha }}
+      ROLLOUT_ENV: prod
+      ROLLOUT_CONFIRM: ${{ inputs.dry_run && 'false' || 'true' }}
+      ROLLOUT_ARTIFACT_DIR: .artifacts/promote-to-prod
+      ROLLOUT_MAX_ATTEMPTS: "1"
+      ROLLOUT_CURL_MAX_TIME: "180"
+      ROLLOUT_FALLBACK_AFTER_TRANSIENTS: "99"
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      GHCR_PULL_USERNAME: ${{ secrets.GHCR_PULL_USERNAME }}
+      GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Verify promoted image exists and is bound to platform-skills SHA
+        run: |
+          set -euo pipefail
+          echo "$FLY_API_TOKEN" | docker login registry.fly.io -u x --password-stdin
+          docker pull --platform linux/amd64 "$IMAGE_TAG"
+          bound_sha="$(docker image inspect "$IMAGE_TAG" --format '{{ index .Config.Labels "rockielab.platform_skills_sha" }}')"
+          if [ -z "$bound_sha" ] || [ "$bound_sha" = "<no value>" ]; then
+            echo "::error::Promoted image is missing rockielab.platform_skills_sha label: $IMAGE_TAG"
+            exit 1
+          fi
+          if [ "$bound_sha" != "$PLATFORM_SKILLS_SHA" ]; then
+            echo "::error::Promoted image platform-skills binding mismatch: image has $bound_sha, input has $PLATFORM_SKILLS_SHA"
+            exit 1
+          fi
+          echo "Verified $IMAGE_TAG is bound to platform-skills $PLATFORM_SKILLS_SHA."
+
+      - name: Preflight prod API environment before catalog actions
+        run: |
+          set -euo pipefail
+          headers="$(mktemp)"
+          curl -fsS -D "$headers" -o /tmp/rockielab-prod-health "${API_URL%/}/health"
+          actual="$(grep -i '^X-Rockielab-Env:' "$headers" | tail -n1 | cut -d: -f2- | tr -d '[:space:]')"
+          if [ "$actual" != "prod" ]; then
+            echo "::error::Prod API health env mismatch before catalog actions: expected prod, got ${actual:-<missing>}"
+            exit 1
+          fi
+
+      - name: Verify prod catalog availability for dry-run
+        if: inputs.dry_run
+        env:
+          GH_TOKEN: ${{ secrets.PLATFORM_CONTEXT_DISPATCH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::PLATFORM_CONTEXT_DISPATCH_TOKEN is required to verify prod catalog dry-run state."
+            exit 1
+          fi
+          before="$(gh run list --repo Rockielab/platform-context --workflow sync-skills-to-hetzner.yml --limit 20 --json databaseId --jq '[.[].databaseId]')"
+          request_id="promote-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-prod-dry-run"
+          expected_title="sync platform-skills prod $PLATFORM_SKILLS_SHA $request_id"
+          gh workflow run sync-skills-to-hetzner.yml \
+            --repo Rockielab/platform-context \
+            --ref main \
+            -f target_env=prod \
+            -f skills_sha="$PLATFORM_SKILLS_SHA" \
+            -f dry_run=true \
+            -f request_id="$request_id"
+          run_id=""
+          for _ in $(seq 1 30); do
+            run_id="$(BEFORE="$before" EXPECTED_TITLE="$expected_title" gh run list --repo Rockielab/platform-context --workflow sync-skills-to-hetzner.yml --event workflow_dispatch --limit 50 --json databaseId,displayTitle --jq 'map(select(.displayTitle == env.EXPECTED_TITLE and ((env.BEFORE | fromjson | index(.databaseId)) | not))) | first | .databaseId // empty')"
+            [ -n "$run_id" ] && break
+            sleep 2
+          done
+          [ -n "$run_id" ] || { echo "::error::could not find prod catalog dry-run verification run"; exit 1; }
+          gh run view "$run_id" --repo Rockielab/platform-context --json displayTitle --jq '.displayTitle' | grep -Fx "$expected_title"
+          gh run watch "$run_id" --repo Rockielab/platform-context --exit-status
+          gh run view "$run_id" --repo Rockielab/platform-context --json conclusion --jq '.conclusion' | grep -qx success
+
+      - name: Prod dry-run is read-only
+        if: inputs.dry_run
+        run: |
+          echo "Dry-run: verified prod catalog availability/current/proposed SHA without rsync, no confirm=true rollout, no tenant mutation." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Sync prod catalog for real promotion
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.PLATFORM_CONTEXT_DISPATCH_TOKEN }}
+        run: |
+          before="$(gh run list --repo Rockielab/platform-context --workflow sync-skills-to-hetzner.yml --limit 20 --json databaseId --jq '[.[].databaseId]')"
+          request_id="promote-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-prod"
+          expected_title="sync platform-skills prod $PLATFORM_SKILLS_SHA $request_id"
+          gh workflow run sync-skills-to-hetzner.yml \
+            --repo Rockielab/platform-context \
+            --ref main \
+            -f target_env=prod \
+            -f skills_sha="$PLATFORM_SKILLS_SHA" \
+            -f dry_run=false \
+            -f request_id="$request_id"
+          run_id=""
+          for _ in $(seq 1 30); do
+            run_id="$(BEFORE="$before" EXPECTED_TITLE="$expected_title" gh run list --repo Rockielab/platform-context --workflow sync-skills-to-hetzner.yml --event workflow_dispatch --limit 50 --json databaseId,displayTitle --jq 'map(select(.displayTitle == env.EXPECTED_TITLE and ((env.BEFORE | fromjson | index(.databaseId)) | not))) | first | .databaseId // empty')"
+            [ -n "$run_id" ] && break
+            sleep 2
+          done
+          [ -n "$run_id" ] || { echo "::error::could not find prod catalog sync run"; exit 1; }
+          gh run view "$run_id" --repo Rockielab/platform-context --json displayTitle --jq '.displayTitle' | grep -Fx "$expected_title"
+          gh run watch "$run_id" --repo Rockielab/platform-context --exit-status
+          gh run view "$run_id" --repo Rockielab/platform-context --json conclusion --jq '.conclusion' | grep -qx success
+
+      - name: Verify and promote prod tenants
+        run: |
+          node scripts/runtime-rollout.mjs
+
+      - name: Promotion summary
+        if: always()
+        run: |
+          host="$(printf '%s\n' "$API_URL" | sed -E 's#^https?://([^/]+)/?.*$#\1#')"
+          {
+            echo "## Prod promotion"
+            echo ""
+            echo "- image SHA: \`$IMAGE_SHA\`"
+            echo "- platform-skills SHA: \`$PLATFORM_SKILLS_SHA\`"
+            echo "- prod API host: \`$host\`"
+            echo "- dry-run: \`${{ inputs.dry_run }}\`"
+            echo "- rollout env: \`prod\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload promotion artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: promote-to-prod-${{ inputs.image_sha }}
+          path: ${{ env.ROLLOUT_ARTIFACT_DIR }}
+          if-no-files-found: ignore

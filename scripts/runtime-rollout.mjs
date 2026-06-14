@@ -312,6 +312,8 @@ async function appendAttempt(attempts, entry) {
 
 export function rolloutOptionsFromEnv() {
   return {
+    env: optionalEnv("ROLLOUT_ENV"),
+    confirm: optionalEnv("ROLLOUT_CONFIRM") || "true",
     tenantId: optionalEnv("ROLLOUT_TENANT_ID"),
     canaryCount: optionalEnv("ROLLOUT_CANARY_COUNT"),
     canaryWaitSec: optionalEnv("ROLLOUT_CANARY_WAIT_SEC"),
@@ -323,6 +325,8 @@ export function rolloutOptionsFromEnv() {
 export function hasScopedRolloutOptions(options) {
   return Boolean(
     options?.tenantId ||
+    options?.env ||
+    (options?.confirm && options.confirm !== "true") ||
     options?.canaryCount ||
     options?.canaryWaitSec ||
     options?.waveDelaySec ||
@@ -332,6 +336,9 @@ export function hasScopedRolloutOptions(options) {
 
 export function expectedAcknowledgedRolloutOptions(options) {
   const expected = {};
+  if (options.env) {
+    expected.env = options.env;
+  }
   if (options.tenantId) {
     expected.tenant_id = options.tenantId;
   }
@@ -353,7 +360,13 @@ export function expectedAcknowledgedRolloutOptions(options) {
 export function validateAcknowledgedRolloutOptions(options, responseJson) {
   const expected = expectedAcknowledgedRolloutOptions(options);
   const actual = responseJson?.rollout_options;
+  const filter = responseJson?.filter_applied;
   const mismatches = [];
+  if (options.env && filter?.env !== options.env) {
+    mismatches.push(
+      `filter_applied.env: expected ${options.env}, got ${filter?.env ?? "<missing>"}`,
+    );
+  }
   for (const [key, value] of Object.entries(expected)) {
     if (actual?.[key] !== value) {
       mismatches.push(`${key}: expected ${value}, got ${actual?.[key] ?? "<missing>"}`);
@@ -363,7 +376,10 @@ export function validateAcknowledgedRolloutOptions(options, responseJson) {
 }
 
 export function adminRolloutUrl(base, image, options = {}) {
-  const params = new URLSearchParams({ image, confirm: "true" });
+  const params = new URLSearchParams({ image, confirm: options.confirm || "true" });
+  if (options.env) {
+    params.set("env", options.env);
+  }
   if (options.tenantId) {
     params.set("tenant_id", options.tenantId);
   }
@@ -404,6 +420,38 @@ export function adminTenantFallbackUrl(base, image, tenantId) {
     waveDelaySec: "0",
     asyncMode: false,
   });
+}
+
+export async function preflightApiEnvironment({ base, expectedEnv, timeoutMs }) {
+  if (!expectedEnv) {
+    return { ok: true, skipped: true };
+  }
+  let response;
+  try {
+    response = await fetch(`${base}/health`, {
+      method: "GET",
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      expected: expectedEnv,
+      actual: "<request-failed>",
+      status: "000",
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+  const actual = response.headers.get("X-Rockielab-Env");
+  if (response.status !== 200 || actual !== expectedEnv) {
+    return {
+      ok: false,
+      expected: expectedEnv,
+      actual: actual || "<missing>",
+      status: response.status,
+      message: `API health env mismatch: expected ${expectedEnv}, got ${actual || "<missing>"}`,
+    };
+  }
+  return { ok: true, expected: expectedEnv, actual };
 }
 
 /**
@@ -754,15 +802,31 @@ export async function runRollout() {
   let failed = [];
   let errorDetails = {};
   let ghcrPullPreflight = null;
+  let apiEnvPreflight = null;
 
-  ghcrPullPreflight = await preflightGhcrImagePull({
-    image,
-    username: ghcrPullUsername,
-    token: ghcrPullToken,
+  apiEnvPreflight = await preflightApiEnvironment({
+    base,
+    expectedEnv: rolloutOptions.env,
     timeoutMs,
-    attempts,
   });
-  if (!ghcrPullPreflight.ok) {
+  if (!apiEnvPreflight.ok) {
+    finalResult = "failed-api-env-preflight";
+    finalCode = String(apiEnvPreflight.status || "000");
+    finalBody = apiEnvPreflight.message;
+    errorDetails = { api_env_preflight: apiEnvPreflight };
+  }
+
+  ghcrPullPreflight =
+    finalResult === "failed"
+      ? await preflightGhcrImagePull({
+          image,
+          username: ghcrPullUsername,
+          token: ghcrPullToken,
+          timeoutMs,
+          attempts,
+        })
+      : { ok: true, skipped: true };
+  if (finalResult === "failed" && !ghcrPullPreflight.ok) {
     finalResult = "failed-ghcr-pull-auth-preflight";
     finalCode = ghcrPullPreflight.code;
     finalBody = ghcrPullPreflight.message;
@@ -775,7 +839,11 @@ export async function runRollout() {
     console.log(`POST ${adminRolloutUrl(base, image, rolloutOptions)}`);
   }
 
-  for (let attempt = 1; ghcrPullPreflight.ok && attempt <= maxAttempts; attempt += 1) {
+  for (
+    let attempt = 1;
+    finalResult === "failed" && ghcrPullPreflight.ok && attempt <= maxAttempts;
+    attempt += 1
+  ) {
     const supersession = await detectSuperseded();
     if (supersession) {
       finalResult = "superseded-by-newer-build";
@@ -998,6 +1066,7 @@ export async function runRollout() {
     superseded_by: supersededBy,
     error_details: errorDetails,
     ghcr_pull_preflight: ghcrPullPreflight,
+    api_env_preflight: apiEnvPreflight,
     final_response_body: finalBody,
     final_response_json: finalJson,
   };

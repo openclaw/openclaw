@@ -13,6 +13,7 @@ import {
   hasScopedRolloutOptions,
   isTransientRolloutCode,
   outcomeFromTenantAdminRolloutResponse,
+  preflightApiEnvironment,
   preflightGhcrImagePull,
   runRollout,
   rolloutOptionsFromEnv,
@@ -33,6 +34,8 @@ const ROLLOUT_ENV_NAMES = [
   "ROLLOUT_CANARY_WAIT_SEC",
   "ROLLOUT_WAVE_DELAY_SEC",
   "ROLLOUT_WAVE_SIZE",
+  "ROLLOUT_ENV",
+  "ROLLOUT_CONFIRM",
   "FLY_API_TOKEN",
   "FLY_ORG_SLUG",
   "FLY_MACHINES_API",
@@ -502,6 +505,40 @@ describe("scripts/runtime-rollout", () => {
     ]);
   });
 
+  it("adds env and confirm to rollout URLs and validates filter acknowledgement", () => {
+    const options = { env: "dev", confirm: "false" };
+    expect(adminRolloutUrl("https://api.test", "img:sha", options)).toContain(
+      "confirm=false&env=dev",
+    );
+    expect(hasScopedRolloutOptions(options)).toBe(true);
+    expect(
+      validateAcknowledgedRolloutOptions(options, {
+        rollout_options: { env: "dev" },
+        filter_applied: { env: "dev" },
+      }),
+    ).toEqual([]);
+    expect(
+      validateAcknowledgedRolloutOptions(options, { rollout_options: { env: "dev" } }),
+    ).toEqual(["filter_applied.env: expected dev, got <missing>"]);
+  });
+
+  it("fails API environment preflight when health header is missing or mismatched", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () => new Response("ok", { status: 200, headers: { "X-Rockielab-Env": "prod" } }),
+      ),
+    );
+    await expect(
+      preflightApiEnvironment({
+        base: "https://api.test",
+        expectedEnv: "dev",
+        timeoutMs: 1000,
+      }),
+    ).resolves.toMatchObject({ ok: false, actual: "prod" });
+    vi.unstubAllGlobals();
+  });
+
   it("reads rollout options from env without requiring workflow_dispatch", () => {
     const names = [
       "ROLLOUT_TENANT_ID",
@@ -509,6 +546,8 @@ describe("scripts/runtime-rollout", () => {
       "ROLLOUT_CANARY_WAIT_SEC",
       "ROLLOUT_WAVE_DELAY_SEC",
       "ROLLOUT_WAVE_SIZE",
+      "ROLLOUT_ENV",
+      "ROLLOUT_CONFIRM",
     ];
     const previous = new Map(names.map((name) => [name, process.env[name]]));
     try {
@@ -517,8 +556,12 @@ describe("scripts/runtime-rollout", () => {
       process.env.ROLLOUT_CANARY_WAIT_SEC = "30";
       process.env.ROLLOUT_WAVE_DELAY_SEC = "45";
       process.env.ROLLOUT_WAVE_SIZE = "2";
+      process.env.ROLLOUT_ENV = "dev";
+      process.env.ROLLOUT_CONFIRM = "false";
 
       expect(rolloutOptionsFromEnv()).toEqual({
+        env: "dev",
+        confirm: "false",
         tenantId: "t-demo",
         canaryCount: "1",
         canaryWaitSec: "30",
