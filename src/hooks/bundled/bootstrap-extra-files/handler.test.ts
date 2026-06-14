@@ -50,13 +50,16 @@ async function createBootstrapContext(params: {
 }
 
 describe("bootstrap-extra-files hook", () => {
-  it("appends extra bootstrap files from configured patterns", async () => {
+  it("appends extra bootstrap files from configured patterns under full tier", async () => {
     const tempDir = await makeTempWorkspace("openclaw-bootstrap-extra-");
     const extraDir = path.join(tempDir, "packages", "core");
     await fs.mkdir(extraDir, { recursive: true });
     await fs.writeFile(path.join(extraDir, "AGENTS.md"), "extra agents", "utf-8");
 
-    const cfg = createBootstrapExtraConfig(["packages/*/AGENTS.md"]);
+    const cfg: OpenClawConfig = {
+      ...createBootstrapExtraConfig(["packages/*/AGENTS.md"]),
+      agents: { defaults: { bootstrapTier: "full" } },
+    };
     const context = await createBootstrapContext({
       workspaceDir: tempDir,
       cfg,
@@ -74,7 +77,72 @@ describe("bootstrap-extra-files hook", () => {
     );
   });
 
-  it("re-applies subagent bootstrap allowlist after extras are added", async () => {
+  it("excludes hook-loaded extras under standard tier even when basename matches root allowlist", async () => {
+    // Regression: previously the standard-tier filter matched only on basename,
+    // so a hook-loaded `packages/core/AGENTS.md` would pass through alongside
+    // the root AGENTS.md, making `standard` indistinguishable from `full` on the
+    // real hook path. Hook-sourced files must be excluded under `standard`.
+    const tempDir = await makeTempWorkspace("openclaw-bootstrap-extra-standard-");
+    const extraDir = path.join(tempDir, "packages", "core");
+    await fs.mkdir(extraDir, { recursive: true });
+    await fs.writeFile(path.join(extraDir, "AGENTS.md"), "extra agents", "utf-8");
+
+    const cfg: OpenClawConfig = {
+      ...createBootstrapExtraConfig(["packages/*/AGENTS.md"]),
+      agents: { defaults: { bootstrapTier: "standard" } },
+    };
+    const context = await createBootstrapContext({
+      workspaceDir: tempDir,
+      cfg,
+      sessionKey: "agent:main:main",
+      rootFiles: [{ name: "AGENTS.md", content: "root agents" }],
+    });
+
+    const event = createHookEvent("agent", "bootstrap", "agent:main:main", context);
+    await handler(event);
+
+    const agentsEntries = context.bootstrapFiles.filter((f) => f.name === "AGENTS.md");
+    expect(agentsEntries).toHaveLength(1);
+    expect(
+      agentsEntries.some((f) => f.path.endsWith(path.join("packages", "core", "AGENTS.md"))),
+    ).toBe(false);
+    expect(agentsEntries[0]?.path.endsWith(path.join(tempDir, "AGENTS.md"))).toBe(true);
+  });
+
+  it("includes hook-loaded extras under full tier", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-bootstrap-extra-full-");
+    const extraDir = path.join(tempDir, "packages", "core");
+    await fs.mkdir(extraDir, { recursive: true });
+    await fs.writeFile(path.join(extraDir, "AGENTS.md"), "extra agents", "utf-8");
+
+    const cfg: OpenClawConfig = {
+      ...createBootstrapExtraConfig(["packages/*/AGENTS.md"]),
+      agents: { defaults: { bootstrapTier: "full" } },
+    };
+    const context = await createBootstrapContext({
+      workspaceDir: tempDir,
+      cfg,
+      sessionKey: "agent:main:main",
+      rootFiles: [{ name: "AGENTS.md", content: "root agents" }],
+    });
+
+    const event = createHookEvent("agent", "bootstrap", "agent:main:main", context);
+    await handler(event);
+
+    const agentsEntries = context.bootstrapFiles.filter((f) => f.name === "AGENTS.md");
+    expect(agentsEntries).toHaveLength(2);
+    expect(
+      agentsEntries.some((f) => f.path.endsWith(path.join("packages", "core", "AGENTS.md"))),
+    ).toBe(true);
+  });
+
+  it("re-applies subagent minimal allowlist and excludes hook-loaded extras", async () => {
+    // Subagent sessions default to the `minimal` tier, which (like `standard`)
+    // intentionally drops hook-loaded extras. A `packages/persona/SOUL.md`
+    // configured by the bootstrap-extra-files hook must NOT slip into a
+    // subagent context just because its basename happens to be in the minimal
+    // allowlist — otherwise minimal would return files that standard would not,
+    // breaking the `minimal ⊂ standard ⊂ full` inclusion order.
     const tempDir = await makeTempWorkspace("openclaw-bootstrap-extra-subagent-");
     const extraDir = path.join(tempDir, "packages", "persona");
     await fs.mkdir(extraDir, { recursive: true });
@@ -93,6 +161,12 @@ describe("bootstrap-extra-files hook", () => {
 
     const event = createHookEvent("agent", "bootstrap", "agent:main:subagent:abc", context);
     await handler(event);
+    // Only the root files survive — the hook-loaded SOUL.md is filtered out.
     expect(context.bootstrapFiles.map((f) => f.name).toSorted()).toEqual(["AGENTS.md", "TOOLS.md"]);
+    expect(
+      context.bootstrapFiles.some((f) =>
+        f.path.endsWith(path.join("packages", "persona", "SOUL.md")),
+      ),
+    ).toBe(false);
   });
 });
