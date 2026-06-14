@@ -12,6 +12,14 @@ import {
   type LocalPackageOverridesResult,
 } from "./package-local-overrides.js";
 import { movePathWithCopyFallback } from "./replace-file.js";
+import { trimLogTail } from "./restart-sentinel.js";
+import {
+  PACKAGE_POST_INSTALL_DOCTOR_ADVISORY,
+  UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
+  type PackageUpdateStepAdvisory,
+  type UpdatePostInstallDoctorResult,
+} from "./update-doctor-result.js";
+export type { PackageUpdateStepAdvisory } from "./update-doctor-result.js";
 import {
   collectInstalledGlobalPackageErrors,
   globalInstallArgs,
@@ -40,6 +48,10 @@ export type PackageUpdateStepResult = {
   exitCode: number | null;
   stdoutTail?: string | null;
   stderrTail?: string | null;
+  signal?: NodeJS.Signals | null;
+  killed?: boolean;
+  termination?: "exit" | "timeout" | "no-output-timeout" | "signal";
+  advisory?: PackageUpdateStepAdvisory;
 };
 
 type PackageUpdateStepRunner = (params: {
@@ -70,6 +82,60 @@ const NPM_PACK_QUIET_FLAGS = ["--json", "--loglevel=error"] as const;
 
 function formatError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+function isBlockingPackageUpdateStep(step: PackageUpdateStepResult): boolean {
+  return step.exitCode !== 0 && step.advisory === undefined;
+}
+
+function isNormalProcessExit(step: {
+  signal?: NodeJS.Signals | null;
+  killed?: boolean;
+  termination?: "exit" | "timeout" | "no-output-timeout" | "signal";
+}): boolean {
+  return (
+    step.termination !== "timeout" &&
+    step.termination !== "no-output-timeout" &&
+    step.termination !== "signal" &&
+    step.killed !== true &&
+    (step.signal === undefined || step.signal === null)
+  );
+}
+
+export function markPackagePostInstallDoctorAdvisory<
+  T extends {
+    exitCode: number | null;
+    stderrTail?: string | null;
+    signal?: NodeJS.Signals | null;
+    killed?: boolean;
+    termination?: "exit" | "timeout" | "no-output-timeout" | "signal";
+    advisory?: PackageUpdateStepAdvisory;
+  },
+>(
+  step: T,
+  result: UpdatePostInstallDoctorResult | null,
+): T & {
+  advisory?: PackageUpdateStepAdvisory;
+} {
+  if (
+    step.exitCode !== UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE ||
+    result?.status !== "advisory" ||
+    !isNormalProcessExit(step)
+  ) {
+    return step;
+  }
+  const advisoryTail = [
+    step.stderrTail,
+    ...result.advisory.details,
+    PACKAGE_POST_INSTALL_DOCTOR_ADVISORY.message,
+  ]
+    .filter((line): line is string => Boolean(line?.trim()))
+    .join("\n");
+  return {
+    ...step,
+    advisory: PACKAGE_POST_INSTALL_DOCTOR_ADVISORY,
+    stderrTail: trimLogTail(advisoryTail) ?? step.stderrTail,
+  };
 }
 
 async function removePathBestEffort(targetPath: string): Promise<boolean> {
@@ -865,10 +931,9 @@ export async function runGlobalPackageUpdateSteps(params: {
       await preservePreUpdateLocalOverrides();
     }
 
-    const failedStep =
-      finalInstallStep.exitCode !== 0
-        ? finalInstallStep
-        : (steps.find((step) => step !== updateStep && step.exitCode !== 0) ?? null);
+    const failedStep = isBlockingPackageUpdateStep(finalInstallStep)
+      ? finalInstallStep
+      : (steps.find((step) => step !== updateStep && isBlockingPackageUpdateStep(step)) ?? null);
 
     return {
       steps,

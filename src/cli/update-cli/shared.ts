@@ -207,6 +207,9 @@ export async function runUpdateStep(params: {
     durationMs,
     exitCode: res.code,
     stderrTail,
+    signal: res.signal,
+    killed: res.killed,
+    termination: res.termination,
   });
 
   return {
@@ -217,6 +220,9 @@ export async function runUpdateStep(params: {
     exitCode: res.code,
     stdoutTail: trimLogTail(res.stdout, MAX_LOG_CHARS),
     stderrTail,
+    signal: res.signal,
+    killed: res.killed,
+    termination: res.termination,
   };
 }
 

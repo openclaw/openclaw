@@ -37,6 +37,23 @@ function hasRetiredTelegramAccountDmConfig(value: unknown): boolean {
   return Object.values(accounts).some((account) => hasRetiredTelegramDmConfig(account));
 }
 
+function hasRetiredTelegramNativeDraftConfig(value: unknown): boolean {
+  const entry = asObjectRecord(value);
+  const streaming = asObjectRecord(entry?.streaming);
+  const preview = asObjectRecord(streaming?.preview);
+  return (
+    preview?.nativeToolProgress !== undefined || preview?.nativeToolProgressAllowFrom !== undefined
+  );
+}
+
+function hasRetiredTelegramAccountNativeDraftConfig(value: unknown): boolean {
+  const accounts = asObjectRecord(value);
+  if (!accounts) {
+    return false;
+  }
+  return Object.values(accounts).some((account) => hasRetiredTelegramNativeDraftConfig(account));
+}
+
 function removeRetiredTelegramDmConfig(params: {
   entry: Record<string, unknown>;
   pathPrefix: string;
@@ -82,6 +99,41 @@ function removeRetiredTelegramDmConfig(params: {
   return { entry: updated, changed };
 }
 
+function removeRetiredTelegramNativeDraftConfig(params: {
+  entry: Record<string, unknown>;
+  pathPrefix: string;
+  changes: string[];
+}): { entry: Record<string, unknown>; changed: boolean } {
+  const streaming = asObjectRecord(params.entry.streaming);
+  const preview = asObjectRecord(streaming?.preview);
+  if (
+    !streaming ||
+    !preview ||
+    (preview.nativeToolProgress === undefined && preview.nativeToolProgressAllowFrom === undefined)
+  ) {
+    return { entry: params.entry, changed: false };
+  }
+
+  const nextPreview = { ...preview };
+  delete nextPreview.nativeToolProgress;
+  delete nextPreview.nativeToolProgressAllowFrom;
+  const nextStreaming = { ...streaming };
+  if (Object.keys(nextPreview).length > 0) {
+    nextStreaming.preview = nextPreview;
+  } else {
+    delete nextStreaming.preview;
+  }
+
+  const updated =
+    Object.keys(nextStreaming).length > 0
+      ? { ...params.entry, streaming: nextStreaming }
+      : Object.fromEntries(Object.entries(params.entry).filter(([key]) => key !== "streaming"));
+  params.changes.push(
+    `Removed ${params.pathPrefix}.streaming.preview native draft keys; Telegram previews now use rich send/edit messages.`,
+  );
+  return { entry: updated, changed: true };
+}
+
 function resolveCompatibleDefaultGroupEntry(section: Record<string, unknown>): {
   groups: Record<string, unknown>;
   entry: Record<string, unknown>;
@@ -121,6 +173,18 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   {
     path: ["channels", "telegram"],
     message:
+      'channels.telegram.streaming.preview.nativeToolProgress and nativeToolProgressAllowFrom were removed; Telegram previews now use rich send/edit messages. Run "openclaw doctor --fix".',
+    match: hasRetiredTelegramNativeDraftConfig,
+  },
+  {
+    path: ["channels", "telegram", "accounts"],
+    message:
+      'channels.telegram.accounts.<id>.streaming.preview.nativeToolProgress and nativeToolProgressAllowFrom were removed; Telegram previews now use rich send/edit messages. Run "openclaw doctor --fix".',
+    match: hasRetiredTelegramAccountNativeDraftConfig,
+  },
+  {
+    path: ["channels", "telegram"],
+    message:
       "channels.telegram.streamMode, channels.telegram.streaming (scalar), chunkMode, blockStreaming, draftChunk, and blockStreamingCoalesce are legacy; use channels.telegram.streaming.{mode,chunkMode,preview.chunk,block.enabled,block.coalesce}.",
     match: hasLegacyTelegramStreamingAliases,
   },
@@ -153,6 +217,14 @@ export function normalizeCompatibilityConfig({
   });
   updated = removedThreadReplies.entry;
   changed = changed || removedThreadReplies.changed;
+
+  const removedNativeDraft = removeRetiredTelegramNativeDraftConfig({
+    entry: updated,
+    pathPrefix: "channels.telegram",
+    changes,
+  });
+  updated = removedNativeDraft.entry;
+  changed = changed || removedNativeDraft.changed;
 
   if (updated.groupMentionsOnly !== undefined) {
     const defaultGroupEntry = resolveCompatibleDefaultGroupEntry(updated);
@@ -208,6 +280,15 @@ export function normalizeCompatibilityConfig({
       });
       if (accountRemovedThreadReplies.changed) {
         nextAccounts[accountId] = accountRemovedThreadReplies.entry;
+        accountsChanged = true;
+      }
+      const accountRemovedNativeDraft = removeRetiredTelegramNativeDraftConfig({
+        entry: nextAccounts[accountId] as Record<string, unknown>,
+        pathPrefix: `channels.telegram.accounts.${accountId}`,
+        changes,
+      });
+      if (accountRemovedNativeDraft.changed) {
+        nextAccounts[accountId] = accountRemovedNativeDraft.entry;
         accountsChanged = true;
       }
     }

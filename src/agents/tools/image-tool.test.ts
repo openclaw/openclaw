@@ -14,6 +14,7 @@ import type {
   ImagesDescriptionRequest,
   MediaUnderstandingProvider,
 } from "../../plugin-sdk/media-understanding.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import { createOpenClawCodingTools } from "../agent-tools.js";
 import { minimaxUnderstandImage } from "../minimax-vlm.js";
@@ -2474,9 +2475,10 @@ describe("image tool managed inbound media", () => {
     const mediaPath = path.join(inboundDir, mediaId);
     await fs.mkdir(inboundDir, { recursive: true });
     await fs.writeFile(mediaPath, Buffer.from(ONE_PIXEL_PNG_B64, "base64"));
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     try {
-      await run({ stateDir, mediaId, mediaPath });
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        await run({ stateDir, mediaId, mediaPath });
+      });
     } finally {
       await fs.rm(stateDir, { recursive: true, force: true });
     }

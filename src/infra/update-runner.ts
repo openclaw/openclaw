@@ -15,7 +15,10 @@ import {
 import { readPackageName, readPackageVersion } from "./package-json.js";
 import type { LocalPackageOverridesResult } from "./package-local-overrides.js";
 import { normalizePackageTagInput } from "./package-tag.js";
-import { runGlobalPackageUpdateSteps } from "./package-update-steps.js";
+import {
+  runGlobalPackageUpdateSteps,
+  type PackageUpdateStepAdvisory,
+} from "./package-update-steps.js";
 import { trimLogTail } from "./restart-sentinel.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
 import {
@@ -43,6 +46,8 @@ import {
   type UpdatePackageManagerFailureReason,
 } from "./update-package-manager.js";
 
+export type UpdateStepAdvisory = PackageUpdateStepAdvisory;
+
 export type UpdateStepResult = {
   name: string;
   command: string;
@@ -51,6 +56,10 @@ export type UpdateStepResult = {
   exitCode: number | null;
   stdoutTail?: string | null;
   stderrTail?: string | null;
+  signal?: NodeJS.Signals | null;
+  killed?: boolean;
+  termination?: "exit" | "timeout" | "no-output-timeout" | "signal";
+  advisory?: UpdateStepAdvisory;
 };
 
 export type UpdateRunResult = {
@@ -115,7 +124,14 @@ export type UpdateRunResult = {
 type CommandRunner = (
   argv: string[],
   options: CommandOptions,
-) => Promise<{ stdout: string; stderr: string; code: number | null }>;
+) => Promise<{
+  stdout: string;
+  stderr: string;
+  code: number | null;
+  signal?: NodeJS.Signals | null;
+  killed?: boolean;
+  termination?: "exit" | "timeout" | "no-output-timeout" | "signal";
+}>;
 
 export type UpdateStepInfo = {
   name: string;
@@ -128,6 +144,10 @@ export type UpdateStepCompletion = UpdateStepInfo & {
   durationMs: number;
   exitCode: number | null;
   stderrTail?: string | null;
+  signal?: NodeJS.Signals | null;
+  killed?: boolean;
+  termination?: "exit" | "timeout" | "no-output-timeout" | "signal";
+  advisory?: UpdateStepAdvisory;
 };
 
 export type UpdateStepProgress = {
@@ -430,6 +450,9 @@ async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
     durationMs,
     exitCode: result.code,
     stderrTail,
+    signal: result.signal,
+    killed: result.killed,
+    termination: result.termination,
   });
 
   return {
@@ -440,6 +463,9 @@ async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
     exitCode: result.code,
     stdoutTail: trimLogTail(result.stdout, MAX_LOG_CHARS),
     stderrTail: trimLogTail(result.stderr, MAX_LOG_CHARS),
+    signal: result.signal,
+    killed: result.killed,
+    termination: result.termination,
   };
 }
 
@@ -691,7 +717,7 @@ async function buildUpdateCommandRunner(
         ...options,
         env: mergeCommandEnvironments(defaultCommandEnv, options.env),
       });
-      return { stdout: res.stdout, stderr: res.stderr, code: res.code };
+      return res;
     },
   };
 }
