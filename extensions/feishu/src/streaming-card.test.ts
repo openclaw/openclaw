@@ -295,6 +295,82 @@ describe("FeishuStreamingSession", () => {
     });
   });
 
+  it("sends only appended content for streaming updates in append mode", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(3_700);
+    const updateBodies: string[] = [];
+    mockFetches(updateBodies);
+
+    const session = new FeishuStreamingSession(
+      {} as never,
+      {
+        appId: "app_append_mode_update",
+        appSecret: "secret",
+      },
+      undefined,
+      { contentUpdateMode: "append" },
+    );
+    setStreamingSessionInternals(session, {
+      state: {
+        cardId: "card_append_update",
+        messageId: "om_append_update",
+        sequence: 1,
+        currentText: "hello",
+        sentText: "hello",
+        hasNote: false,
+      },
+      lastUpdateTime: 3_000,
+    });
+
+    await session.update("hello world");
+
+    expect(updateBodies).toHaveLength(1);
+    expect(JSON.parse(updateBodies[0] ?? "{}")).toEqual({
+      content: " world",
+      sequence: 2,
+      uuid: "s_card_append_update_2",
+    });
+  });
+
+  it("sends only final appended content when closing a partially streamed card", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(3_800);
+    const updateBodies: string[] = [];
+    const replaceBodies: string[] = [];
+    mockFetches(updateBodies, new Set<number>(), replaceBodies);
+
+    const session = new FeishuStreamingSession(
+      {} as never,
+      {
+        appId: "app_final_append_only",
+        appSecret: "secret",
+      },
+      undefined,
+      { contentUpdateMode: "append" },
+    );
+    setStreamingSessionInternals(session, {
+      state: {
+        cardId: "card_final_append",
+        messageId: "om_final_append",
+        sequence: 1,
+        currentText: "hello",
+        sentText: "hello",
+        hasNote: false,
+      },
+      lastUpdateTime: 3_000,
+    });
+
+    await expect(session.close("hello world")).resolves.toBe(true);
+
+    expect(updateBodies).toHaveLength(1);
+    expect(replaceBodies).toHaveLength(0);
+    expect(JSON.parse(updateBodies[0] ?? "{}")).toEqual({
+      content: " world",
+      sequence: 2,
+      uuid: "s_card_final_append_2",
+    });
+  });
+
   it("replaces content when final text removes transient streamed status", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(4_000);
