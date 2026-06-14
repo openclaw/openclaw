@@ -1,3 +1,4 @@
+// Feishu tests cover reply dispatcher plugin behavior.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 type StreamingSessionStub = {
@@ -388,6 +389,27 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(addTypingIndicatorMock).toHaveBeenCalledTimes(1);
     expectMockArgFields(addTypingIndicatorMock, "typing indicator params", {
       messageId: "om_parent",
+    });
+  });
+
+  it("targets typing at the inbound message while replies stay on the thread root", async () => {
+    useNonStreamingAutoAccount();
+    const { options } = createDispatcherHarness({
+      replyToMessageId: "om_topic_root",
+      typingTargetMessageId: "om_topic_child",
+      replyInThread: true,
+      messageCreateTimeMs: Date.now() - 30_000,
+    });
+
+    await options.onReplyStart?.();
+    await options.deliver({ text: "plain text" }, { kind: "final" });
+
+    expectMockArgFields(addTypingIndicatorMock, "typing indicator params", {
+      messageId: "om_topic_child",
+    });
+    expectMockArgFields(sendMessageFeishuMock, "message send params", {
+      replyToMessageId: "om_topic_root",
+      replyInThread: true,
     });
   });
 

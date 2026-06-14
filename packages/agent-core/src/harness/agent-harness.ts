@@ -1,3 +1,4 @@
+// Agent Core module implements agent harness behavior.
 import type {
   AssistantMessage,
   ImageContent,
@@ -5,6 +6,7 @@ import type {
   UserMessage,
 } from "../../../llm-core/src/index.js";
 import { runAgentLoop } from "../agent-loop.js";
+import { resolveAgentReasoningOption } from "../reasoning.js";
 import { type AgentCoreRuntimeDeps, resolveAgentCoreStreamFn } from "../runtime-deps.js";
 import type {
   AgentContext,
@@ -488,7 +490,8 @@ export class CoreAgentHarness<
     const turnState = getTurnState();
     return {
       model: turnState.model,
-      reasoning: turnState.thinkingLevel === "off" ? undefined : turnState.thinkingLevel,
+      thinkingLevel: turnState.thinkingLevel,
+      reasoning: resolveAgentReasoningOption(turnState.model, turnState.thinkingLevel),
       convertToLlm,
       transformContext: async (messages) => {
         const result = await this.emitHook({ type: "context", messages: [...messages] });

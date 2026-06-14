@@ -15,7 +15,7 @@ import { analyzeShellCommand, type ExecCommandSegment } from "./exec-approvals-a
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 import { isShellWrapperInvocation } from "./exec-wrapper-resolution.js";
 import { assertNoSymlinkParentsSync } from "./fs-safe-advanced.js";
-import { expandHomePrefix, resolveRequiredHomeDir } from "./home-dir.js";
+import { expandHomePrefix, resolveHomeRelativePath, resolveRequiredHomeDir } from "./home-dir.js";
 import { requestJsonlSocket } from "./jsonl-socket.js";
 export * from "./exec-approvals-analysis.js";
 export * from "./exec-approvals-allowlist.js";
@@ -282,10 +282,11 @@ export const DEFAULT_EXEC_APPROVAL_TIMEOUT_MS = 1_800_000;
 
 const DEFAULT_SECURITY: ExecSecurity = "full";
 const DEFAULT_ASK: ExecAsk = "off";
-export const DEFAULT_EXEC_APPROVAL_ASK_FALLBACK: ExecSecurity = "full";
+export const DEFAULT_EXEC_APPROVAL_ASK_FALLBACK: ExecSecurity = "deny";
 const DEFAULT_AUTO_ALLOW_SKILLS = false;
-const DEFAULT_SOCKET = "~/.openclaw/exec-approvals.sock";
-const DEFAULT_FILE = "~/.openclaw/exec-approvals.json";
+const DEFAULT_EXEC_APPROVALS_STATE_DIR = "~/.openclaw";
+const EXEC_APPROVALS_FILE = "exec-approvals.json";
+const EXEC_APPROVALS_SOCKET = "exec-approvals.sock";
 
 function hashExecApprovalsRaw(raw: string | null): string {
   return crypto
@@ -294,12 +295,71 @@ function hashExecApprovalsRaw(raw: string | null): string {
     .digest("hex");
 }
 
+function resolveExecApprovalsStateDir(env: NodeJS.ProcessEnv = process.env): {
+  path: string;
+  displayPath: string;
+} {
+  const override = env.OPENCLAW_STATE_DIR?.trim();
+  if (override) {
+    const resolved = resolveHomeRelativePath(override, { env });
+    return {
+      path: resolved,
+      displayPath: resolved,
+    };
+  }
+  return {
+    path: expandHomePrefix(DEFAULT_EXEC_APPROVALS_STATE_DIR, { env }),
+    displayPath: DEFAULT_EXEC_APPROVALS_STATE_DIR,
+  };
+}
+
 export function resolveExecApprovalsPath(): string {
-  return expandHomePrefix(DEFAULT_FILE);
+  return path.join(resolveExecApprovalsStateDir().path, EXEC_APPROVALS_FILE);
 }
 
 export function resolveExecApprovalsSocketPath(): string {
-  return expandHomePrefix(DEFAULT_SOCKET);
+  return path.join(resolveExecApprovalsStateDir().path, EXEC_APPROVALS_SOCKET);
+}
+
+export function resolveExecApprovalsDisplayPath(): string {
+  const stateDir = resolveExecApprovalsStateDir().displayPath;
+  return stateDir === DEFAULT_EXEC_APPROVALS_STATE_DIR
+    ? `${stateDir}/${EXEC_APPROVALS_FILE}`
+    : path.join(stateDir, EXEC_APPROVALS_FILE);
+}
+
+export function resolveExecApprovalsTranscriptPath(): string {
+  return process.env.OPENCLAW_STATE_DIR?.trim()
+    ? `$OPENCLAW_STATE_DIR/${EXEC_APPROVALS_FILE}`
+    : `${DEFAULT_EXEC_APPROVALS_STATE_DIR}/${EXEC_APPROVALS_FILE}`;
+}
+
+function resolveLegacyExecApprovalsPath(): string {
+  return path.join(expandHomePrefix(DEFAULT_EXEC_APPROVALS_STATE_DIR), EXEC_APPROVALS_FILE);
+}
+
+function hasUnmigratedLegacyExecApprovals(filePath: string): boolean {
+  if (!process.env.OPENCLAW_STATE_DIR?.trim()) {
+    return false;
+  }
+  const legacyPath = resolveLegacyExecApprovalsPath();
+  return (
+    path.resolve(legacyPath) !== path.resolve(filePath) &&
+    !fs.existsSync(filePath) &&
+    fs.existsSync(legacyPath)
+  );
+}
+
+function createUnmigratedLegacyExecApprovalsFallback(): ExecApprovalsFile {
+  return normalizeExecApprovals({
+    version: 1,
+    defaults: {
+      security: "deny",
+      ask: "always",
+      askFallback: "deny",
+    },
+    agents: {},
+  });
 }
 
 function normalizeAllowlistPattern(value: string | undefined): string | null {
@@ -728,6 +788,16 @@ function generateToken(): string {
 
 export function readExecApprovalsSnapshot(): ExecApprovalsSnapshot {
   const filePath = resolveExecApprovalsPath();
+  if (hasUnmigratedLegacyExecApprovals(filePath)) {
+    const file = createUnmigratedLegacyExecApprovalsFallback();
+    return {
+      path: filePath,
+      exists: false,
+      raw: null,
+      file,
+      hash: hashExecApprovalsRaw(null),
+    };
+  }
   if (!fs.existsSync(filePath)) {
     const file = normalizeExecApprovals({ version: 1, agents: {} });
     return {
@@ -760,6 +830,9 @@ export function readExecApprovalsSnapshot(): ExecApprovalsSnapshot {
 
 export function loadExecApprovals(): ExecApprovalsFile {
   const filePath = resolveExecApprovalsPath();
+  if (hasUnmigratedLegacyExecApprovals(filePath)) {
+    return createUnmigratedLegacyExecApprovalsFallback();
+  }
   try {
     if (!fs.existsSync(filePath)) {
       return normalizeExecApprovals({ version: 1, agents: {} });
@@ -820,6 +893,9 @@ export function restoreExecApprovalsSnapshot(snapshot: ExecApprovalsSnapshot): v
 }
 
 export function ensureExecApprovals(): ExecApprovalsFile {
+  if (hasUnmigratedLegacyExecApprovals(resolveExecApprovalsPath())) {
+    return createUnmigratedLegacyExecApprovalsFallback();
+  }
   const loaded = loadExecApprovals();
   const next = normalizeExecApprovals(loaded);
   const socketPath = next.socket?.path?.trim();
@@ -836,6 +912,9 @@ export function ensureExecApprovals(): ExecApprovalsFile {
 }
 
 function readExecApprovalsForNoPersistence(filePath: string): ExecApprovalsFile {
+  if (hasUnmigratedLegacyExecApprovals(filePath)) {
+    return createUnmigratedLegacyExecApprovalsFallback();
+  }
   const dir = path.dirname(filePath);
   assertNoExecApprovalsSymlinkParents(dir, resolveRequiredHomeDir());
   assertSafeExecApprovalsDestination(filePath);
@@ -1000,6 +1079,16 @@ export function resolveExecApprovals(
   overrides?: ExecApprovalsDefaultOverrides,
 ): ExecApprovalsResolved {
   const filePath = resolveExecApprovalsPath();
+  if (hasUnmigratedLegacyExecApprovals(filePath)) {
+    return resolveExecApprovalsFromFile({
+      file: createUnmigratedLegacyExecApprovalsFallback(),
+      agentId,
+      overrides,
+      path: filePath,
+      socketPath: resolveExecApprovalsSocketPath(),
+      token: "",
+    });
+  }
   if (!overrides?.requireSocket) {
     const file = readExecApprovalsForNoPersistence(filePath);
     const resolved = resolveExecApprovalsFromFile({

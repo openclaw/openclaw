@@ -1,3 +1,5 @@
+// Gateway method registry aggregator wires core and plugin RPC descriptors to
+// lazy-loaded handler families, role checks, scopes, and control-plane budgets.
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import {
   gatewayStartupUnavailableDetails,
@@ -154,6 +156,10 @@ const loadRestartHandlers = lazyHandlerModule(
 const loadSendHandlers = lazyHandlerModule(
   () => import("./server-methods/send.js"),
   (module) => module.sendHandlers,
+);
+const loadSessionsFilesHandlers = lazyHandlerModule(
+  () => import("./server-methods/sessions-files.js"),
+  (module) => module.sessionsFilesHandlers,
 );
 const loadSessionsHandlers = lazyHandlerModule(
   () => import("./server-methods/sessions.js"),
@@ -572,6 +578,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: ["artifacts.list", "artifacts.get", "artifacts.download"],
     loadHandlers: loadArtifactsHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["sessions.files.list", "sessions.files.get"],
+    loadHandlers: loadSessionsFilesHandlers,
   }),
 };
 

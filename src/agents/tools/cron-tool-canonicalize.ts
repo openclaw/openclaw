@@ -1,3 +1,8 @@
+/**
+ * Cron tool argument canonicalization.
+ *
+ * Recovers flat or partial model/tool inputs into the structured cron job/patch shape.
+ */
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "../../utils.js";
 
@@ -219,6 +224,7 @@ function canonicalizeCronToolPayload(value: Record<string, unknown>): void {
     const hasAgentTurnSignal =
       isNonEmptyString(payload.message) ||
       isNonEmptyString(payload.model) ||
+      payload.model === null ||
       isNonEmptyString(payload.thinking) ||
       typeof payload.timeoutSeconds === "number" ||
       typeof payload.lightContext === "boolean" ||

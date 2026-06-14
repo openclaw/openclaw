@@ -1,7 +1,7 @@
+// Gateway auth rate-limit serialization.
+// Serializes limiter attempts per IP/scope so concurrent failures count correctly.
 import { AUTH_RATE_LIMIT_SCOPE_DEFAULT, normalizeRateLimitClientIp } from "./auth-rate-limit.js";
 
-// Rate-limit attempts for the same IP/scope are serialized so concurrent auth
-// failures cannot race the shared limiter state and undercount a burst.
 const pendingAttempts = new Map<string, Promise<void>>();
 
 function normalizeScope(scope: string | undefined): string {
@@ -12,13 +12,12 @@ function buildSerializationKey(ip: string | undefined, scope: string | undefined
   return `${normalizeScope(scope)}:${normalizeRateLimitClientIp(ip)}`;
 }
 
-/** Runs one rate-limit attempt after prior attempts for the same IP/scope finish. */
-export async function withSerializedRateLimitAttempt<T>(params: {
-  ip: string | undefined;
-  scope: string | undefined;
+/** Runs one attempt after prior work for the same stable key finishes. */
+export async function withSerializedKeyedAttempt<T>(params: {
+  key: string;
   run: () => Promise<T>;
 }): Promise<T> {
-  const key = buildSerializationKey(params.ip, params.scope);
+  const key = params.key;
   const previous = pendingAttempts.get(key) ?? Promise.resolve();
   let releaseCurrent!: () => void;
   const current = new Promise<void>((resolve) => {
@@ -36,4 +35,16 @@ export async function withSerializedRateLimitAttempt<T>(params: {
       pendingAttempts.delete(key);
     }
   }
+}
+
+/** Runs one rate-limit attempt after prior attempts for the same IP/scope finish. */
+export async function withSerializedRateLimitAttempt<T>(params: {
+  ip: string | undefined;
+  scope: string | undefined;
+  run: () => Promise<T>;
+}): Promise<T> {
+  return await withSerializedKeyedAttempt({
+    key: buildSerializationKey(params.ip, params.scope),
+    run: params.run,
+  });
 }

@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements monitor behavior.
 import type {
   AnyMessageContent,
   MiscMessageGenerationOptions,
@@ -20,7 +21,8 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { maybeResolveWhatsAppApprovalReaction } from "../approval-reactions.js";
 import { readWebSelfIdentityForDecision, WhatsAppAuthUnstableError } from "../auth-store.js";
-import { getPrimaryIdentityId, resolveComparableIdentity } from "../identity.js";
+import { getRegisteredWhatsAppConnectionController } from "../connection-controller-registry.js";
+import { getPrimaryIdentityId, identitiesOverlap, resolveComparableIdentity } from "../identity.js";
 import { addWhatsAppImagePreviewFields } from "../image-preview.js";
 import { cacheInboundMessageMeta } from "../quoted-message.js";
 import { DEFAULT_RECONNECT_POLICY, computeBackoff, sleepWithAbort } from "../reconnect.js";
@@ -58,6 +60,10 @@ import {
 import { attachEmitterListener, closeInboundMonitorSocket } from "./lifecycle.js";
 import { downloadInboundMedia, downloadQuotedInboundMedia } from "./media.js";
 import {
+  normalizeWebInboundMessage,
+  withDeprecatedWebInboundMessageFlatAliases,
+} from "./message-aliases.js";
+import {
   addWhatsAppOutboundMentionsToContent,
   mayContainWhatsAppOutboundMention,
   resolveWhatsAppOutboundMentions,
@@ -66,7 +72,7 @@ import {
 import { DisconnectReason, isJidGroup } from "./runtime-api.js";
 import { createWebSendApi } from "./send-api.js";
 import { normalizeWhatsAppSendResult } from "./send-result.js";
-import type { WebInboundMessage, WebListenerCloseReason } from "./types.js";
+import type { WebInboundMessageInput, WebInboundMessage, WebListenerCloseReason } from "./types.js";
 
 const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401;
 const RECONNECT_IN_PROGRESS_ERROR = "no active socket - reconnection in progress";
@@ -209,8 +215,16 @@ type MonitorWebInboxOptions = {
   groupMetadataCache?: WhatsAppGroupMetadataCache;
 };
 
+type AttachWebInboxToSocketOptions = Omit<
+  MonitorWebInboxOptions,
+  "onMessage" | "shouldDebounce"
+> & {
+  onMessage: (msg: WebInboundMessageInput) => Promise<void>;
+  shouldDebounce?: (msg: WebInboundMessageInput) => boolean;
+};
+
 export async function attachWebInboxToSocket(
-  options: MonitorWebInboxOptions & {
+  options: AttachWebInboxToSocketOptions & {
     sock: WASocket;
   },
 ) {
@@ -221,7 +235,6 @@ export async function attachWebInboxToSocket(
   if (options.socketRef) {
     options.socketRef.current = sock;
   }
-  const getCurrentSock = () => (options.socketRef ? options.socketRef.current : sock);
   const shouldRetryDisconnect = () => options.shouldRetryDisconnect?.() === true;
   const disconnectRetryPolicy = options.disconnectRetryPolicy ?? DEFAULT_RECONNECT_POLICY;
   const sendRetryMaxAttempts =
@@ -263,38 +276,62 @@ export async function attachWebInboxToSocket(
     );
   }
   const self = selfIdentity.identity;
-  type QueuedInboundMessage = WebInboundMessage & {
+  // If this monitor's controller is shutdown while a captured reply is still in
+  // flight, only hand off to a successor controller authenticated as the same
+  // WhatsApp identity. Missing or mismatched identity fails closed.
+  const getCurrentSock = (): WASocket | null => {
+    if (!options.socketRef) {
+      return sock;
+    }
+    if (options.socketRef.current) {
+      return options.socketRef.current;
+    }
+    if (!self.e164 && !self.jid && !self.lid) {
+      return null;
+    }
+    const successor = getRegisteredWhatsAppConnectionController(options.accountId);
+    if (!successor) {
+      return null;
+    }
+    const successorIdentity = successor.getSelfIdentity();
+    if (!successorIdentity || !identitiesOverlap(self, successorIdentity)) {
+      return null;
+    }
+    return successor.getCurrentSock();
+  };
+  type QueuedInboundMessageMetadata = {
     dedupeKey?: string;
     debounceKey?: string;
     durableId?: string;
     readReceipt?: WhatsAppReadReceiptTarget;
     receiveOrder?: number;
   };
+  type QueuedInboundMessage = WebInboundMessage & QueuedInboundMessageMetadata;
   const durableInboundJournal = createWhatsAppDurableInboundReceiveJournal(options.accountId);
   const inboundDebounceMs = Math.max(0, Math.trunc(options.debounceMs ?? 0));
   const pendingDebounceKeys = new Set<string>();
   const activeInboundFlushes = new Set<Promise<void>>();
   const buildInboundDebounceKey = (msg: WebInboundMessage): string | null => {
-    const sender = msg.sender;
+    const sender = msg.platform.sender;
     const senderKey =
       msg.chatType === "group"
         ? (getPrimaryIdentityId(sender ?? null) ??
-          msg.senderJid ??
-          msg.senderE164 ??
-          msg.senderName ??
+          msg.platform.senderJid ??
+          msg.platform.senderE164 ??
+          msg.platform.senderName ??
           msg.from)
         : msg.from;
     if (!senderKey) {
       return null;
     }
-    const conversationKey = msg.chatType === "group" ? msg.chatId : msg.from;
+    const conversationKey = msg.chatType === "group" ? msg.platform.chatJid : msg.from;
     return `${msg.accountId}:${conversationKey}:${senderKey}`;
   };
   const shouldDebounceInboundMessage = (msg: WebInboundMessage): boolean =>
     options.shouldDebounce?.(msg) ?? true;
   const orderDebouncedInboundEntries = (entries: QueuedInboundMessage[]) =>
     entries.toSorted((a, b) => {
-      const timestampDiff = (a.timestamp ?? 0) - (b.timestamp ?? 0);
+      const timestampDiff = (a.event.timestamp ?? 0) - (b.event.timestamp ?? 0);
       if (timestampDiff !== 0) {
         return timestampDiff;
       }
@@ -363,21 +400,40 @@ export async function attachWebInboxToSocket(
           }
           const mentioned = new Set<string>();
           for (const entry of orderedEntries) {
-            for (const jid of entry.mentions ?? entry.mentionedJids ?? []) {
+            for (const jid of entry.group?.mentions?.jids ?? []) {
               mentioned.add(jid);
             }
           }
           const combinedBody = orderedEntries
-            .map((entry) => entry.body)
+            .map((entry) => entry.payload.body)
             .filter(Boolean)
             .join("\n");
-          const combinedMessage: WebInboundMessage = {
+          const combinedMentions =
+            mentioned.size > 0
+              ? {
+                  ...last.group?.mentions,
+                  jids: Array.from(mentioned),
+                }
+              : last.group?.mentions;
+          const combinedGroup =
+            last.group || combinedMentions
+              ? {
+                  ...last.group,
+                  mentions: combinedMentions,
+                }
+              : undefined;
+          const combinedMessage: QueuedInboundMessage = withDeprecatedWebInboundMessageFlatAliases({
             ...last,
-            body: combinedBody,
-            mentions: mentioned.size > 0 ? Array.from(mentioned) : undefined,
-            mentionedJids: mentioned.size > 0 ? Array.from(mentioned) : undefined,
-            isBatched: true,
-          };
+            payload: {
+              ...last.payload,
+              body: combinedBody,
+            },
+            group: combinedGroup,
+            event: {
+              ...last.event,
+              isBatched: true,
+            },
+          });
           await options.onMessage(combinedMessage);
           await finalizeInboundDelivery(orderedEntries);
         } catch (error) {
@@ -1010,63 +1066,87 @@ export async function attachWebInboxToSocket(
       },
       "inbound message",
     );
-    const inboundMessage: QueuedInboundMessage = {
-      id: inbound.id,
+    const media =
+      enriched.mediaPath || enriched.mediaType || enriched.mediaFileName
+        ? {
+            path: enriched.mediaPath,
+            type: enriched.mediaType,
+            fileName: enriched.mediaFileName,
+          }
+        : undefined;
+    const groupMentions = mentionedJids ? { jids: mentionedJids } : undefined;
+    const group =
+      inbound.group && (inbound.groupSubject || inbound.groupParticipants?.length || groupMentions)
+        ? {
+            subject: inbound.groupSubject,
+            participants: inbound.groupParticipants,
+            mentions: groupMentions,
+          }
+        : undefined;
+    const inboundMessage: QueuedInboundMessage = withDeprecatedWebInboundMessageFlatAliases({
+      event: {
+        id: inbound.id,
+        timestamp,
+      },
+      payload: {
+        body: enriched.body,
+        location: enriched.location ?? undefined,
+        untrustedStructuredContext: enriched.contactContext
+          ? [
+              {
+                label: "WhatsApp contact",
+                source: "whatsapp",
+                type: enriched.contactContext.kind,
+                payload: enriched.contactContext,
+              },
+            ]
+          : undefined,
+        media,
+      },
+      platform: {
+        chatJid: inbound.remoteJid,
+        recipientJid: self.e164 ?? "me",
+        pushName: senderName,
+        sender: resolveComparableIdentity({
+          jid: inbound.participantJid,
+          e164: inbound.senderE164 ?? undefined,
+          name: senderName,
+        }),
+        senderJid: inbound.participantJid,
+        senderE164: inbound.senderE164 ?? undefined,
+        senderName,
+        self,
+        selfJid: self.jid ?? undefined,
+        selfLid: self.lid ?? undefined,
+        selfE164: self.e164 ?? undefined,
+        fromMe: Boolean(msg.key?.fromMe),
+        sendComposing,
+        reply,
+        sendMedia,
+      },
       from: inbound.from,
       conversationId: inbound.from,
-      to: self.e164 ?? "me",
       accountId: inbound.access.resolvedAccountId,
       accessControlPassed: true,
-      body: enriched.body,
-      pushName: senderName,
-      timestamp,
       chatType: inbound.group ? "group" : "direct",
-      chatId: inbound.remoteJid,
-      sender: resolveComparableIdentity({
-        jid: inbound.participantJid,
-        e164: inbound.senderE164 ?? undefined,
-        name: senderName,
-      }),
-      senderJid: inbound.participantJid,
-      senderE164: inbound.senderE164 ?? undefined,
-      senderName,
-      replyTo: enriched.replyContext ?? undefined,
-      replyToId: enriched.replyContext?.id,
-      replyToBody: enriched.replyContext?.body,
-      replyToSender: enriched.replyContext?.sender?.label ?? undefined,
-      replyToSenderJid: enriched.replyContext?.sender?.jid ?? undefined,
-      replyToSenderE164: enriched.replyContext?.sender?.e164 ?? undefined,
-      groupSubject: inbound.groupSubject,
-      groupParticipants: inbound.groupParticipants,
-      mentions: mentionedJids ?? undefined,
-      mentionedJids: mentionedJids ?? undefined,
-      self,
-      selfJid: self.jid ?? undefined,
-      selfLid: self.lid ?? undefined,
-      selfE164: self.e164 ?? undefined,
-      fromMe: Boolean(msg.key?.fromMe),
-      location: enriched.location ?? undefined,
-      untrustedStructuredContext: enriched.contactContext
-        ? [
-            {
-              label: "WhatsApp contact",
-              source: "whatsapp",
-              type: enriched.contactContext.kind,
-              payload: enriched.contactContext,
+      quote: enriched.replyContext
+        ? {
+            context: enriched.replyContext,
+            id: enriched.replyContext.id,
+            body: enriched.replyContext.body,
+            sender: {
+              displayName: enriched.replyContext.sender?.label ?? undefined,
+              jid: enriched.replyContext.sender?.jid ?? undefined,
+              e164: enriched.replyContext.sender?.e164 ?? undefined,
             },
-          ]
+          }
         : undefined,
-      sendComposing,
-      reply,
-      sendMedia,
-      mediaPath: enriched.mediaPath,
-      mediaType: enriched.mediaType,
-      mediaFileName: enriched.mediaFileName,
+      group,
       dedupeKey: inbound.id ? `${options.accountId}:${inbound.remoteJid}:${inbound.id}` : undefined,
       durableId: durable.durableId,
       readReceipt: durable.readReceipt,
       receiveOrder: durable.receiveOrder,
-    };
+    });
     const debounceKey = buildInboundDebounceKey(inboundMessage);
     if (debounceKey) {
       inboundMessage.debounceKey = debounceKey;
@@ -1074,14 +1154,19 @@ export async function attachWebInboxToSocket(
         pendingDebounceKeys.add(debounceKey);
       }
     }
-    if (inboundMessage.id) {
-      cacheInboundMessageMeta(inboundMessage.accountId, inboundMessage.chatId, inboundMessage.id, {
-        participant: inboundMessage.senderJid,
-        participantE164:
-          inboundMessage.chatType === "direct" ? inboundMessage.senderE164 : undefined,
-        body: inboundMessage.body,
-        fromMe: inboundMessage.fromMe,
-      });
+    if (inboundMessage.event.id) {
+      cacheInboundMessageMeta(
+        inboundMessage.accountId,
+        inboundMessage.platform.chatJid,
+        inboundMessage.event.id,
+        {
+          participant: inboundMessage.platform.senderJid,
+          participantE164:
+            inboundMessage.chatType === "direct" ? inboundMessage.platform.senderE164 : undefined,
+          body: inboundMessage.payload.body,
+          fromMe: inboundMessage.platform.fromMe,
+        },
+      );
     }
     try {
       const task = Promise.resolve(debouncer.enqueue(inboundMessage));
@@ -1288,19 +1373,34 @@ export async function attachWebInboxToSocket(
     signalClose: (reason?: WebListenerCloseReason) => {
       resolveClose(reason ?? { status: undefined, isLoggedOut: false, error: "closed" });
     },
-    // IPC surface (sendMessage/sendPoll/sendReaction/sendComposingTo)
-    ...sendApi,
+    sendComposingTo: sendApi.sendComposingTo,
+    sendMessage: sendApi.sendMessage,
+    sendPoll: sendApi.sendPoll,
+    sendReaction: sendApi.sendReaction,
   } as const;
 }
 
 export async function monitorWebInbox(options: MonitorWebInboxOptions) {
+  const socketTiming = resolveWhatsAppSocketTiming(options.cfg);
   const sock = await createWaSocket(false, options.verbose, {
     authDir: options.authDir,
-    ...resolveWhatsAppSocketTiming(options.cfg),
+    ...socketTiming,
   });
-  await waitForWaConnection(sock);
+  try {
+    await waitForWaConnection(sock, { timeoutMs: socketTiming.connectTimeoutMs });
+  } catch (err) {
+    closeInboundMonitorSocket(sock);
+    throw err;
+  }
+  const shouldDebounce = options.shouldDebounce;
   return attachWebInboxToSocket({
     ...options,
+    onMessage: async (msg) => {
+      await options.onMessage(normalizeWebInboundMessage(msg));
+    },
+    shouldDebounce: shouldDebounce
+      ? (msg) => shouldDebounce(normalizeWebInboundMessage(msg))
+      : undefined,
     sock,
   });
 }

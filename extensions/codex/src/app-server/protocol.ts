@@ -1,3 +1,4 @@
+// Codex plugin module implements protocol behavior.
 export type JsonValue = null | boolean | number | string | JsonValue[] | JsonObject;
 export type JsonObject = { [key: string]: JsonValue };
 export type CodexServiceTier = string;
@@ -89,6 +90,7 @@ export type CodexThreadStartParams = JsonObject & {
   developerInstructions?: string;
   experimentalRawEvents?: boolean;
   environments?: CodexTurnEnvironmentParams[] | null;
+  /** Retired by Codex 0.137, but still sent for supported custom app-server 0.125-0.136. */
   persistExtendedHistory?: boolean;
 };
 
@@ -103,6 +105,7 @@ export type CodexThreadResumeParams = JsonObject & {
   serviceTier?: CodexServiceTier | null;
   config?: JsonObject;
   developerInstructions?: string;
+  /** Retired by Codex 0.137, but still sent for supported custom app-server 0.125-0.136. */
   persistExtendedHistory?: boolean;
 };
 

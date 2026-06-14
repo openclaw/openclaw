@@ -1,3 +1,5 @@
+// Node pairing rate-limit tests protect repeated pairing attempts, pending
+// request cleanup, and protocol error details for node clients.
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
@@ -34,7 +36,11 @@ async function openWs(port: number) {
   return ws;
 }
 
-async function attemptNodePairing(port: number, identityPath: string) {
+async function attemptNodePairing(
+  port: number,
+  identityPath: string,
+  surface: { caps?: string[]; commands?: string[] } = {},
+) {
   const ws = await openWs(port);
   try {
     return await connectReq(ws, {
@@ -42,8 +48,9 @@ async function attemptNodePairing(port: number, identityPath: string) {
       role: "node",
       scopes: [],
       client: NODE_CLIENT,
-      commands: ["system.run"],
+      commands: surface.commands ?? ["system.run"],
       deviceIdentityPath: identityPath,
+      ...(surface.caps ? { caps: surface.caps } : {}),
     });
   } finally {
     ws.close();
@@ -108,7 +115,7 @@ describe("node pairing rate limit", () => {
     });
   });
 
-  test("keeps paired reconnects on the approved surface when upgrade pairing is limited", async () => {
+  test("records paired reconnect reapproval despite first-time pairing limits", async () => {
     testState.gatewayAuth = {
       mode: "token",
       token: "secret",
@@ -125,7 +132,10 @@ describe("node pairing rate limit", () => {
         `openclaw-node-pairing-upgrade-${randomUUID()}`,
       );
       const pairedIdentityPath = `${identityPrefix}-paired.json`;
-      await approveNodeIdentity({ identityPath: pairedIdentityPath, caps: ["camera"] });
+      const pairedIdentity = await approveNodeIdentity({
+        identityPath: pairedIdentityPath,
+        caps: ["camera"],
+      });
 
       const firstTimeResponses = await Promise.all(
         Array.from(
@@ -157,7 +167,70 @@ describe("node pairing rate limit", () => {
         });
       }
 
-      expect((await listNodePairing()).pending).toHaveLength(3);
+      const pending = (await listNodePairing()).pending;
+      expect(pending).toHaveLength(4);
+      expect(pending.find((entry) => entry.nodeId === pairedIdentity.deviceId)?.caps).toEqual([
+        "camera",
+        "screen",
+      ]);
+    });
+  });
+
+  test("reuses identical paired reapproval without rejecting the node", async () => {
+    testState.gatewayAuth = {
+      mode: "token",
+      token: "secret",
+      rateLimit: {
+        maxAttempts: 1,
+        windowMs: 60_000,
+        lockoutMs: 60_000,
+        exemptLoopback: true,
+      },
+    };
+    await withGatewayServer(async ({ port }) => {
+      const identityPath = path.join(os.tmpdir(), `openclaw-node-reapproval-${randomUUID()}.json`);
+      const identity = await approveNodeIdentity({ identityPath, caps: ["camera"] });
+
+      const responses = await Promise.all(
+        Array.from(
+          { length: 20 },
+          async () =>
+            await attemptNodePairing(port, identityPath, {
+              caps: ["camera", "screen"],
+              commands: [],
+            }),
+        ),
+      );
+      expect(responses.every((res) => res.ok)).toBe(true);
+      const pendingBeforeReuse = (await listNodePairing()).pending.find(
+        (entry) => entry.nodeId === identity.deviceId,
+      );
+      expect(pendingBeforeReuse).toBeDefined();
+
+      await expect(
+        attemptNodePairing(port, identityPath, {
+          caps: ["camera", "screen"],
+          commands: [],
+        }),
+      ).resolves.toMatchObject({ ok: true });
+      expect(
+        (await listNodePairing()).pending.find((entry) => entry.nodeId === identity.deviceId),
+      ).toMatchObject({
+        requestId: pendingBeforeReuse!.requestId,
+        ts: pendingBeforeReuse!.ts,
+      });
+
+      const changedSurface = await attemptNodePairing(port, identityPath, {
+        caps: ["camera", "microphone"],
+        commands: [],
+      });
+      expect(changedSurface.ok).toBe(true);
+      expect(
+        (await listNodePairing()).pending.find((entry) => entry.nodeId === identity.deviceId),
+      ).toMatchObject({
+        requestId: pendingBeforeReuse!.requestId,
+        caps: ["camera", "screen"],
+      });
     });
   });
 });

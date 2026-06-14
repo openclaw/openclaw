@@ -1,3 +1,4 @@
+// E2E Shell Tempfiles tests cover e2e shell tempfiles script behavior.
 import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -94,7 +95,7 @@ run_wizard_cmd failing-wizard fake-state "node fake-wizard" send_noop false
     );
   });
 
-  it("probes onboarding gateway readiness through the isolated scratch log", async () => {
+  it("probes onboarding gateway readiness through TCP", async () => {
     const tempRoot = await mkdtemp(path.join(tmpdir(), "openclaw-onboard-gateway-log-"));
     const fixturePath = path.join(tempRoot, "gateway-log.sh");
     await writeFile(
@@ -107,7 +108,7 @@ export OPENCLAW_ONBOARD_E2E_TMPDIR=${JSON.stringify(tempRoot)}
 OPENCLAW_ENTRY=node
 source scripts/e2e/lib/onboard/scenario.sh
 
-openclaw_e2e_probe_tcp() { return 1; }
+openclaw_e2e_probe_tcp() { return 0; }
 sleep 30 &
 GATEWAY_PID="$!"
 printf 'listening on ws://127.0.0.1:18789\\n' >"$GATEWAY_LOG_PATH"
@@ -128,6 +129,49 @@ test ! -e "$ONBOARD_TMP_DIR"
       });
 
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    } finally {
+      await rm(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects onboarding gateway readiness when the TCP probe fails", async () => {
+    const tempRoot = await mkdtemp(path.join(tmpdir(), "openclaw-onboard-gateway-tcp-"));
+    const fixturePath = path.join(tempRoot, "gateway-tcp.sh");
+    await writeFile(
+      fixturePath,
+      `#!/usr/bin/env bash
+set -euo pipefail
+
+export OPENCLAW_ONBOARD_SCENARIO_SOURCE_ONLY=1
+export OPENCLAW_ONBOARD_E2E_TMPDIR=${JSON.stringify(tempRoot)}
+export OPENCLAW_ONBOARD_GATEWAY_WAIT_ATTEMPTS=2
+export OPENCLAW_ONBOARD_GATEWAY_WAIT_INTERVAL_S=0.1
+OPENCLAW_ENTRY=node
+source scripts/e2e/lib/onboard/scenario.sh
+
+openclaw_e2e_probe_tcp() { return 1; }
+sleep 30 &
+GATEWAY_PID="$!"
+printf 'listening on ws://127.0.0.1:18789\\n' >"$GATEWAY_LOG_PATH"
+if wait_for_gateway; then
+  echo "gateway readiness passed without TCP reachability" >&2
+  cleanup_onboard_artifacts
+  exit 1
+fi
+cleanup_onboard_artifacts
+test ! -e "$ONBOARD_TMP_DIR"
+`,
+    );
+
+    try {
+      const result = spawnSync("bash", [fixturePath], {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      });
+
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+      expect(result.stdout).toContain("Gateway failed to start");
+      expect(result.stdout).toContain("TCP probe never succeeded");
     } finally {
       await rm(tempRoot, { force: true, recursive: true });
     }
@@ -162,9 +206,9 @@ exit 42
 
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(42);
       const scratchEntries = await readdir(scratchRoot);
-      expect(scratchEntries.filter((entry) => entry.startsWith("openclaw-skill-install-home."))).toEqual(
-        [],
-      );
+      expect(
+        scratchEntries.filter((entry) => entry.startsWith("openclaw-skill-install-home.")),
+      ).toEqual([]);
     } finally {
       await rm(tempRoot, { force: true, recursive: true });
     }

@@ -4,7 +4,7 @@
 id: runtime-tool-image-generate
 title: Runtime tool fixture — image_generate
 surface: runtime-tools
-runtimeParityTier: standard
+runtimeParityTier: optional
 coverage:
   primary:
     - tools.image-generate
@@ -13,7 +13,7 @@ successCriteria:
   - Effective tools expose image_generate after QA image-generation config is applied.
   - The mock provider plans exactly one happy-path image_generate call.
   - The mock provider plans one denied-input failure-path image_generate call.
-  - Runtime parity coverage hard-fails call/result drift in the standard direct-loading gate.
+  - Runtime parity coverage records async image start/result drift outside the standard direct-loading gate.
 docsRefs:
   - docs/tools/image-generation.md
 codeRefs:
@@ -31,11 +31,11 @@ execution:
       bucket: openclaw-dynamic-integration
       expectedLayer: openclaw-dynamic
       capabilityLayer: openclaw-dynamic-direct
-      required: true
+      required: false
       codexDefaultImpact: P4
       qaImpact: P1
-      action: hard gate in the standard direct-loading tier
-      reason: image_generate is an OpenClaw integration tool and must stay visible and callable under OpenClaw and Codex direct runtime parity.
+      action: optional runtime parity gate with async image completion coverage
+      reason: image_generate is an OpenClaw integration tool whose happy path yields for async completion, so standard direct call/result parity would compare different lifecycle phases.
     promptSnippet: "target=image_generate"
     failurePromptSnippet: "failure target=image_generate"
 ```

@@ -1,3 +1,4 @@
+// Happy path prompt snapshot helper reads expected prompt snapshot files.
 import fs from "node:fs";
 import path from "node:path";
 import type { Model } from "openclaw/plugin-sdk/llm";
@@ -14,6 +15,7 @@ import {
 import { buildReplyPromptBodies } from "../../../src/auto-reply/reply/prompt-prelude.js";
 import type { TemplateContext } from "../../../src/auto-reply/templating.js";
 import { SILENT_REPLY_TOKEN } from "../../../src/auto-reply/tokens.js";
+import { normalizeChatType } from "../../../src/channels/chat-type.js";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
 import type {
   AnyAgentTool,
@@ -366,6 +368,7 @@ function createAttempt(params: {
     trigger: params.scenario.trigger,
     messageProvider: params.scenario.ctx.Provider,
     messageChannel: params.scenario.ctx.OriginatingChannel,
+    chatType: normalizeChatType(params.scenario.ctx.ChatType),
     agentAccountId: params.scenario.ctx.AccountId,
     messageTo: params.scenario.ctx.OriginatingTo,
     messageThreadId: params.scenario.ctx.MessageThreadId,

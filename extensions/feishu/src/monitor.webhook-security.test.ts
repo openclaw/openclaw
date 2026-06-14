@@ -1,3 +1,4 @@
+// Feishu tests cover monitor.webhook security plugin behavior.
 import type { IncomingMessage } from "node:http";
 import { createConnection } from "node:net";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -163,9 +164,9 @@ function resolveTestClientIp(remoteAddress: string | undefined): string | undefi
   } as IncomingMessage);
 }
 
-afterEach(() => {
+afterEach(async () => {
   clearFeishuWebhookRateLimitStateForTest();
-  stopFeishuMonitor();
+  await stopFeishuMonitor();
 });
 
 afterAll(() => {

@@ -1,3 +1,6 @@
+/**
+ * Subscribes to embedded-agent sessions and streams formatted replies/events.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { InlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import {
@@ -26,6 +29,7 @@ import {
   createEmbeddedRunReplayState,
   mergeEmbeddedRunReplayState,
 } from "./embedded-agent-runner/replay-state.js";
+import { consumeEmbeddedToolSendReceipt } from "./embedded-agent-runner/tool-send-receipts.js";
 import type { EmbeddedRunLivenessState } from "./embedded-agent-runner/types.js";
 import { createEmbeddedAgentSessionEventHandler } from "./embedded-agent-subscribe.handlers.js";
 import {
@@ -220,6 +224,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     heartbeatToolResponse: undefined,
     messagingToolSentMediaUrls: [],
     messagingToolSourceReplyPayloads: [],
+    messageToolOnlySourceReplyDelivered: false,
     pendingMessagingTexts: new Map(),
     pendingMessagingTargets: new Map(),
     successfulCronAdds: 0,
@@ -956,6 +961,11 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     output += text.slice(lastIndex);
     return output;
   };
+  const hasMessageToolOnlySourceDelivery = () =>
+    params.sourceReplyDeliveryMode === "message_tool_only" &&
+    (state.messageToolOnlySourceReplyDelivered ||
+      params.hasDeliveredMessageToolOnlySourceReply?.() === true ||
+      messagingToolSourceReplyPayloads.length > 0);
 
   const emitBlockChunk = (
     text: string,
@@ -983,6 +993,10 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       state.lastDeliveredBlockReplyText = blockReplyText;
       state.toolExecutionSinceLastBlockReply = false;
     };
+    if (hasMessageToolOnlySourceDelivery()) {
+      markBlockReplyTextHandled();
+      return;
+    }
     let chunk = blockReplyText;
     let slicedPrefixReplay = false;
     const lastDeliveredBlockReplyText = state.lastDeliveredBlockReplyText;
@@ -1191,7 +1205,6 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     messagingToolSentTextsNormalized.length = 0;
     messagingToolSentTargets.length = 0;
     messagingToolSentMediaUrls.length = 0;
-    messagingToolSourceReplyPayloads.length = 0;
     pendingMessagingTexts.clear();
     pendingMessagingTargets.clear();
     state.successfulCronAdds = 0;
@@ -1250,6 +1263,8 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     resetForCompactionRetry,
     finalizeAssistantTexts,
     trimMessagingToolSent,
+    consumeToolSendReceipt: (toolCallId) =>
+      consumeEmbeddedToolSendReceipt(params.session.sessionManager, toolCallId),
     ensureCompactionPromise,
     noteCompactionRetry,
     resolveCompactionRetry,
@@ -1300,6 +1315,8 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
 
   return {
     assistantTexts,
+    getLastAssistantTextMessageIndex: () =>
+      state.lastAssistantTextMessageIndex >= 0 ? state.lastAssistantTextMessageIndex : undefined,
     toolMetas,
     getAcceptedSessionSpawns: () => state.acceptedSessionSpawns.slice(),
     runToolLifecycle: async <T>(toolParams: {
@@ -1343,6 +1360,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       yielded?: boolean;
       timeoutPhase?: AgentRunTimeoutPhase;
       providerStarted?: boolean;
+      aborted?: boolean;
     }) => {
       if (typeof meta.replayInvalid === "boolean") {
         state.replayState = { ...state.replayState, replayInvalid: meta.replayInvalid };
@@ -1361,6 +1379,9 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       }
       if (typeof meta.providerStarted === "boolean") {
         state.providerStarted = meta.providerStarted;
+      }
+      if (typeof meta.aborted === "boolean") {
+        state.terminalAborted = meta.aborted;
       }
     },
     isCompacting: () => state.compactionInFlight || state.pendingCompactionRetry > 0,

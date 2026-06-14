@@ -1,3 +1,5 @@
+// Outbound send service chooses plugin-handled message actions or the core
+// message/poll path while preserving media policy and transcript mirrors.
 import type { AgentToolResult } from "../../agents/runtime/index.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
@@ -73,6 +75,9 @@ async function sendCoreMessage(params: {
   message: string;
   mediaUrl?: string;
   mediaUrls?: string[];
+  buffer?: string;
+  filename?: string;
+  contentType?: string;
   asVoice?: boolean;
   gifPlayback?: boolean;
   forceDocument?: boolean;
@@ -96,6 +101,9 @@ async function sendCoreMessage(params: {
     requesterSenderE164: params.ctx.requesterSenderE164,
     mediaUrl: params.mediaUrl || undefined,
     mediaUrls: params.mediaUrls,
+    buffer: params.buffer,
+    filename: params.filename,
+    contentType: params.contentType,
     asVoice: params.asVoice,
     channel: params.ctx.channel || undefined,
     accountId: params.ctx.accountId ?? undefined,
@@ -123,6 +131,8 @@ async function tryHandleWithPluginAction(params: {
   if (params.ctx.dryRun) {
     return null;
   }
+  // Plugin actions receive media access scoped to the same requester/session
+  // policy as core delivery so custom handlers cannot widen file reads.
   const mediaAccess = resolveAgentScopedOutboundMediaAccess({
     cfg: params.ctx.cfg,
     agentId: params.ctx.agentId ?? params.ctx.mirror?.agentId,
@@ -236,6 +246,9 @@ export async function executeSendAction(params: {
   payload?: ReplyPayload;
   mediaUrl?: string;
   mediaUrls?: string[];
+  buffer?: string;
+  filename?: string;
+  contentType?: string;
   asVoice?: boolean;
   gifPlayback?: boolean;
   forceDocument?: boolean;

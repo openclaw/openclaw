@@ -1,8 +1,8 @@
-import fs from "node:fs";
+// Slack tests cover approval native plugin behavior.
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { clearSessionStoreCacheForTest } from "openclaw/plugin-sdk/session-store-runtime";
+import { saveSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it } from "vitest";
 import { slackApprovalCapability, slackNativeApprovalAdapter, testing } from "./approval-native.js";
 
@@ -27,9 +27,8 @@ function buildConfig(
 
 const STORE_PATH = path.join(os.tmpdir(), "openclaw-slack-approval-native-test.json");
 
-function writeStore(store: Record<string, unknown>) {
-  fs.writeFileSync(STORE_PATH, `${JSON.stringify(store, null, 2)}\n`, "utf8");
-  clearSessionStoreCacheForTest();
+async function writeStore(store: Parameters<typeof saveSessionStore>[1]) {
+  await saveSessionStore(STORE_PATH, store, { skipMaintenance: true });
 }
 
 function createExecApprovalRequest(
@@ -621,7 +620,7 @@ describe("slack native approval adapter", () => {
   });
 
   it("does not route plugin session fallback across Slack accounts", async () => {
-    writeStore({
+    await writeStore({
       "agent:main:slack:channel:c999": {
         sessionId: "sess",
         updatedAt: Date.now(),

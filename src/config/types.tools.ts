@@ -204,8 +204,8 @@ export type ToolSearchConfig =
   | {
       /** Enable compact search/call cataloging for large tool sets. */
       enabled?: boolean;
-      /** Exposed model surface. "code" exposes tool_search_code; "tools" exposes structured fallback tools. */
-      mode?: "code" | "tools";
+      /** Exposed model surface. "code" exposes tool_search_code; "tools" exposes structured fallback tools; "directory" keeps a bounded directory plus selected schemas visible while deferring the rest behind search/describe/call. */
+      mode?: "code" | "tools" | "directory";
       /** Timeout in milliseconds for one tool_search_code execution. Runtime clamps to 1s..60s. */
       codeTimeoutMs?: number;
       /** Default search result count when the model omits a limit. Runtime clamps to maxSearchLimit. */

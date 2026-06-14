@@ -1,3 +1,4 @@
+// Memory Core plugin module implements dreaming behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   DEFAULT_MEMORY_DREAMING_FREQUENCY as DEFAULT_MEMORY_DREAMING_CRON_EXPR,
@@ -555,7 +556,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
   const detachNarratives = params.trigger === "cron";
   const [
     { writeDeepDreamingReport },
-    { generateAndAppendDreamNarrative, runDetachedDreamNarrative },
+    { appendFallbackNarrativeEntry, generateAndAppendDreamNarrative, runDetachedDreamNarrative },
     { runDreamingSweepPhases },
     {
       applyShortTermPromotions,
@@ -651,13 +652,22 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
         storage: params.config.storage ?? { mode: "separate", separateReports: false },
       });
       // Generate dream diary narrative from promoted memories.
-      if (params.subagent && (candidates.length > 0 || applied.applied > 0)) {
+      if (candidates.length > 0 || applied.applied > 0) {
         const data: NarrativePhaseData = {
           phase: "deep",
           snippets: candidates.map((c) => c.snippet).filter(Boolean),
           promotions: applied.appliedCandidates.map((c) => c.snippet).filter(Boolean),
         };
-        if (detachNarratives) {
+        if (!params.subagent) {
+          await appendFallbackNarrativeEntry({
+            workspaceDir,
+            data,
+            nowMs: sweepNowMs,
+            timezone: params.config.timezone,
+            logger: params.logger,
+            reason: "subagent runtime is unavailable",
+          });
+        } else if (detachNarratives) {
           runDetachedDreamNarrative({
             subagent: params.subagent,
             workspaceDir,

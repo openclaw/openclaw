@@ -89,10 +89,6 @@ const ChannelStreamingPreviewSchema = z
     commandText: z.enum(["raw", "status"]).optional(),
   })
   .strict();
-const TelegramStreamingPreviewSchema = ChannelStreamingPreviewSchema.extend({
-  nativeToolProgress: z.boolean().optional(),
-  nativeToolProgressAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
-}).strict();
 const ChannelStreamingProgressSchema = z
   .object({
     label: z.union([z.string(), z.literal(false)]).optional(),
@@ -102,14 +98,19 @@ const ChannelStreamingProgressSchema = z
     render: z.enum(["text", "rich"]).optional(),
     toolProgress: z.boolean().optional(),
     commandText: z.enum(["raw", "status"]).optional(),
+    commentary: z.boolean().optional(),
   })
   .strict();
-const ChannelCommentaryStreamingProgressSchema = ChannelStreamingProgressSchema.extend({
-  commentary: z.boolean().optional(),
-}).strict();
 const SlackStreamingProgressSchema = ChannelStreamingProgressSchema.extend({
   nativeTaskCards: z.boolean().optional(),
 }).strict();
+const ChannelDeliveryStreamingConfigSchema = z
+  .object({
+    chunkMode: TextChunkModeSchema.optional(),
+    block: ChannelStreamingBlockSchema.optional(),
+  })
+  .strict();
+
 const ChannelPreviewStreamingConfigSchema = z
   .object({
     mode: UnifiedStreamingModeSchema.optional(),
@@ -120,11 +121,9 @@ const ChannelPreviewStreamingConfigSchema = z
   })
   .strict();
 const TelegramPreviewStreamingConfigSchema = ChannelPreviewStreamingConfigSchema.extend({
-  preview: TelegramStreamingPreviewSchema.optional(),
+  preview: ChannelStreamingPreviewSchema.optional(),
 }).strict();
-const DiscordPreviewStreamingConfigSchema = ChannelPreviewStreamingConfigSchema.extend({
-  progress: ChannelCommentaryStreamingProgressSchema.optional(),
-}).strict();
+const DiscordPreviewStreamingConfigSchema = ChannelPreviewStreamingConfigSchema;
 const SlackStreamingConfigSchema = ChannelPreviewStreamingConfigSchema.extend({
   nativeTransport: z.boolean().optional(),
   progress: SlackStreamingProgressSchema.optional(),
@@ -1393,6 +1392,7 @@ export const IMessageAccountSchemaBase = z
       .optional(),
     actions: IMessageActionSchema,
     service: z.union([z.literal("imessage"), z.literal("sms"), z.literal("auto")]).optional(),
+    sendTransport: z.enum(["auto", "bridge", "applescript"]).optional(),
     region: z.string().optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
@@ -1414,11 +1414,22 @@ export const IMessageAccountSchemaBase = z
     probeTimeoutMs: z.number().int().positive().optional(),
     textChunkLimit: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
+    streaming: ChannelDeliveryStreamingConfigSchema.optional(),
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     sendReadReceipts: z.boolean().optional(),
     reactionNotifications: z.enum(["off", "own", "all"]).optional(),
     coalesceSameSenderDms: z.boolean().optional(),
+    catchup: z
+      .object({
+        enabled: z.boolean().optional(),
+        maxAgeMinutes: z.number().int().min(1).max(720).optional(),
+        perRunLimit: z.number().int().min(1).max(500).optional(),
+        firstRunLookbackMinutes: z.number().int().min(1).max(720).optional(),
+        maxFailureRetries: z.number().int().min(1).max(1000).optional(),
+      })
+      .strict()
+      .optional(),
     groups: z
       .record(
         z.string(),
@@ -1432,16 +1443,6 @@ export const IMessageAccountSchemaBase = z
           .strict()
           .optional(),
       )
-      .optional(),
-    catchup: z
-      .object({
-        enabled: z.boolean().optional(),
-        maxAgeMinutes: z.number().int().min(1).max(720).optional(),
-        perRunLimit: z.number().int().min(1).max(500).optional(),
-        firstRunLookbackMinutes: z.number().int().min(1).max(720).optional(),
-        maxFailureRetries: z.number().int().min(1).max(1000).optional(),
-      })
-      .strict()
       .optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
     healthMonitor: ChannelHealthMonitorSchema,
@@ -1705,7 +1706,3 @@ export const MSTeamsConfigSchema = z
     // so we cannot require them in the config object itself.
     // Runtime validation happens in resolveMSTeamsCredentials().
   });
-
-// Keep this runtime-only widening out of exported schema declarations.
-TelegramPreviewStreamingConfigSchema.shape.progress =
-  ChannelCommentaryStreamingProgressSchema.optional();

@@ -1,3 +1,4 @@
+// Restart catchup tests cover cron jobs missed while the service was stopped.
 import { describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
@@ -70,6 +71,28 @@ describe("CronService restart catch-up", () => {
       wakeMode: "next-heartbeat",
       payload: { kind: "systemEvent", text: `tick-${id}` },
       state: { nextRunAtMs },
+    };
+  }
+
+  function createOverdueDisabledHeartbeatOneShotRetry(id: string, nextRunAtMs: number): CronJob {
+    return {
+      id,
+      name: `disabled-heartbeat-retry-${id}`,
+      enabled: true,
+      createdAtMs: nextRunAtMs - 60_000,
+      updatedAtMs: nextRunAtMs - 30_000,
+      deleteAfterRun: true,
+      schedule: { kind: "at", at: new Date(nextRunAtMs - 30_000).toISOString() },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: `retry-${id}` },
+      state: {
+        nextRunAtMs,
+        lastRunAtMs: nextRunAtMs - 30_000,
+        lastRunStatus: "skipped",
+        lastError: "disabled",
+        consecutiveSkipped: 1,
+      },
     };
   }
 
@@ -654,6 +677,45 @@ describe("CronService restart catch-up", () => {
     expect(deferredJobs).toHaveLength(2);
     expect(deferredJobs[0]?.state.nextRunAtMs).toBe(startNow + 5_000);
     expect(deferredJobs[1]?.state.nextRunAtMs).toBe(startNow + 10_000);
+
+    await store.cleanup();
+  });
+
+  it("stagger-limits overdue disabled-heartbeat one-shot retries after restart", async () => {
+    const store = await makeStorePath();
+    const startNow = Date.parse("2025-12-13T17:00:00.000Z");
+
+    await writeStoreJobs(store.storePath, [
+      createOverdueDisabledHeartbeatOneShotRetry("disabled-retry-0", startNow - 60_000),
+      createOverdueDisabledHeartbeatOneShotRetry("disabled-retry-1", startNow - 45_000),
+    ]);
+
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeat = vi.fn();
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => startNow,
+      enqueueSystemEvent,
+      requestHeartbeat,
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+      maxMissedJobsPerRestart: 1,
+      missedJobStaggerMs: 5_000,
+    });
+
+    await runMissedJobs(state);
+
+    expectQueuedSystemEvent(enqueueSystemEvent, "retry-disabled-retry-0");
+    expect(requestHeartbeat).toHaveBeenCalledTimes(1);
+
+    const listedJobs = state.store?.jobs ?? [];
+    expect(listedJobs.find((job) => job.id === "disabled-retry-0")).toBeUndefined();
+    const deferred = listedJobs.find((job) => job.id === "disabled-retry-1");
+    expect(deferred?.enabled).toBe(true);
+    expect(deferred?.state.lastRunStatus).toBe("skipped");
+    expect(deferred?.state.lastError).toBe("disabled");
+    expect(deferred?.state.nextRunAtMs).toBe(startNow + 5_000);
 
     await store.cleanup();
   });

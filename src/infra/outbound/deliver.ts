@@ -1,3 +1,5 @@
+// Outbound delivery core runs plugin hooks, queue durability, channel adapter
+// sends, commit hooks, diagnostics, transcript mirroring, and payload outcomes.
 import { resolveChunkMode, resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import { runReplyPayloadSendingHook } from "../../auto-reply/reply/reply-payload-sending-hook.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
@@ -126,6 +128,8 @@ let transcriptRuntimePromise:
   | undefined;
 
 async function loadTranscriptRuntime() {
+  // Transcript writes are optional side effects; keep this lazy for import-only
+  // delivery policy checks and tests.
   transcriptRuntimePromise ??= import("../../config/sessions/transcript.runtime.js");
   return await transcriptRuntimePromise;
 }
@@ -1420,7 +1424,7 @@ async function deliverOutboundPayloadsCore(
           agentId: params.session?.agentId ?? params.mirror?.agentId,
           mediaSources,
           mediaAccess: params.mediaAccess,
-          sessionKey: params.session?.key,
+          sessionKey: params.session?.policyKey ?? params.session?.key,
           messageProvider: params.session?.key ? undefined : channel,
           accountId: params.session?.requesterAccountId ?? accountId,
           requesterSenderId: params.session?.requesterSenderId,

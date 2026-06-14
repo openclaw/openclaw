@@ -1,3 +1,4 @@
+// Browser tests cover agent.act.existing session navigation guard plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createExistingSessionAgentSharedModule,
@@ -163,6 +164,41 @@ describe("existing-session interaction navigation guard", () => {
       "http://169.254.169.254/latest/meta-data/",
       "http://169.254.169.254/latest/meta-data/",
     ]);
+  });
+
+  it("normalizes statement-body evaluate sources before Chrome MCP execution", async () => {
+    chromeMcpMocks.evaluateChromeMcpScript.mockResolvedValueOnce(42 as never);
+
+    const response = await runAction(
+      { kind: "evaluate", fn: "const value = 41; return value + 1;" },
+      null,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledOnce();
+    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fn: "async () => {\nconst value = 41; return value + 1;\n}",
+      }),
+    );
+  });
+
+  it("normalizes ref-scoped statement-body evaluate sources before Chrome MCP execution", async () => {
+    chromeMcpMocks.evaluateChromeMcpScript.mockResolvedValueOnce("Ada" as never);
+
+    const response = await runAction(
+      { kind: "evaluate", ref: "7", fn: "const text = el.textContent; return text;" },
+      null,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledOnce();
+    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: ["7"],
+        fn: "async (el) => {\nconst text = el.textContent; return text;\n}",
+      }),
+    );
   });
 
   it("blocks evaluate before execution when the current tab URL is disallowed", async () => {

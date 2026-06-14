@@ -1,6 +1,11 @@
+/**
+ * Channel message action discovery.
+ *
+ * Builds agent tool schema contributions from loaded or bundled channel action hooks.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import type { TSchema } from "typebox";
+import { Type, type TSchema } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -356,9 +361,14 @@ function mergeToolSchemaProperties(
     return;
   }
   for (const [name, schema] of Object.entries(source)) {
-    if (!(name in target)) {
-      target[name] = schema;
+    if (name in target) {
+      continue;
     }
+    // Message-tool params dispatch on `action`; no contributed property may be
+    // object-level required. Type.Object treats schemas missing typebox's
+    // non-enumerable `~optional` marker (plain JSON or cloned/serialized plugin
+    // schemas) as required, which fails validation for every message call.
+    target[name] = Type.IsOptional(schema) ? schema : Type.Optional(schema);
   }
 }
 

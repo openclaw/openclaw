@@ -1,3 +1,8 @@
+/**
+ * Backend-neutral sandbox runtime handle contracts.
+ *
+ * Docker, SSH, and future sandbox providers implement these command, exec, and fs-bridge surfaces.
+ */
 import type { SandboxFsBridge } from "./fs-bridge.types.js";
 
 /**
@@ -33,6 +38,7 @@ export type SandboxBackendCommandResult = {
 export type SandboxFsBridgeContext = {
   workspaceDir: string;
   agentWorkspaceDir: string;
+  skillsWorkspaceDir?: string;
   workspaceAccess: "none" | "ro" | "rw";
   containerName: string;
   containerWorkdir: string;

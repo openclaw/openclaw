@@ -244,7 +244,9 @@ main model can read the screenshot directly.
 <Accordion title="Ports and reachability">
 
 - Control service binds to loopback on a port derived from `gateway.port` (default `18791` = gateway + 2). Overriding `gateway.port` or `OPENCLAW_GATEWAY_PORT` shifts the derived ports in the same family.
-- Local `openclaw` profiles auto-assign `cdpPort`/`cdpUrl`; set those only for remote CDP. `cdpUrl` defaults to the managed local CDP port when unset.
+- Local `openclaw` profiles auto-assign `cdpPort`/`cdpUrl`; set those only for
+  remote CDP profiles or existing-session endpoint attach. `cdpUrl` defaults to
+  the managed local CDP port when unset.
 - `remoteCdpTimeoutMs` applies to remote and `attachOnly` CDP HTTP reachability
   checks and tab-opening HTTP requests; `remoteCdpHandshakeTimeoutMs` applies to
   their CDP WebSocket handshakes.
@@ -298,7 +300,7 @@ main model can read the screenshot directly.
 - `color` (top-level and per-profile) tints the browser UI so you can see which profile is active.
 - Default profile is `openclaw` (managed standalone). Use `defaultProfile: "user"` to opt into the signed-in user browser.
 - Auto-detect order: system default browser if Chromium-based; otherwise Chrome → Brave → Edge → Chromium → Chrome Canary.
-- `driver: "existing-session"` uses Chrome DevTools MCP instead of raw CDP. Do not set `cdpUrl` for that driver.
+- `driver: "existing-session"` uses Chrome DevTools MCP instead of raw CDP. It can attach through Chrome MCP auto-connect, or through `cdpUrl` when you already have a DevTools endpoint for the running browser.
 - Set `browser.profiles.<name>.userDataDir` when an existing-session profile should attach to a non-default Chromium user profile (Brave, Edge, etc.). This path also accepts `~` for your OS home directory.
 
 </Accordion>
@@ -687,6 +689,9 @@ What to check if attach does not work:
 - the target Chromium-based browser is version `144+`
 - remote debugging is enabled in that browser's inspect page
 - the browser showed and you accepted the attach consent prompt
+- if Chrome was started with an explicit `--remote-debugging-port`, set
+  `browser.profiles.<name>.cdpUrl` to that DevTools endpoint instead of relying
+  on Chrome MCP auto-connect
 - `openclaw doctor` migrates old extension-based browser config and checks that
   Chrome is installed locally for default auto-connect profiles, but it cannot
   enable browser-side remote debugging for you

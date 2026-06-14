@@ -1,3 +1,4 @@
+// Run Additional Boundary Checks tests cover run additional boundary checks script behavior.
 import { describe, expect, it } from "vitest";
 import {
   BOUNDARY_CHECKS,
@@ -93,7 +94,7 @@ describe("run-additional-boundary-checks", () => {
   });
 
   it("keeps the raw HTTP/2 import guard in source boundary checks", () => {
-    expect(BOUNDARY_CHECKS[6]).toEqual({
+    expect(BOUNDARY_CHECKS).toContainEqual({
       label: "lint:tmp:no-raw-http2-imports",
       command: "pnpm",
       args: ["run", "lint:tmp:no-raw-http2-imports"],

@@ -1,3 +1,4 @@
+// Mattermost tests cover send plugin behavior.
 import { expectProvidedCfgSkipsRuntimeLoad } from "openclaw/plugin-sdk/channel-test-helpers";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -621,6 +622,25 @@ describe("sendMessageMattermost user-first resolution", () => {
     expect(mockState.fetchMattermostUser).not.toHaveBeenCalled();
     expect(mockState.createMattermostDirectChannelWithRetry).toHaveBeenCalledTimes(1);
     expect(res.channelId).toBe("dm-channel-id");
+  });
+
+  it("observes cache-miss DM resolution but not cached sends", async () => {
+    const userId = "iiiiii9999999999iiiiii9999"; // 26 chars
+    const onDmChannelResolution = vi.fn();
+    mockState.resolveMattermostAccount.mockReturnValue(makeAccount("token-dm-observer-t9"));
+
+    await sendMessageMattermost(`user:${userId}`, "first", {
+      cfg: TEST_CFG,
+      onDmChannelResolution,
+    });
+    await sendMessageMattermost(`user:${userId}`, "second", {
+      cfg: TEST_CFG,
+      onDmChannelResolution,
+    });
+
+    expect(onDmChannelResolution).toHaveBeenCalledTimes(1);
+    expect(onDmChannelResolution).toHaveBeenCalledWith(expect.any(Promise));
+    expect(mockState.createMattermostDirectChannelWithRetry).toHaveBeenCalledTimes(1);
   });
 
   it("does not apply user-first resolution for explicit channel: prefix", async () => {

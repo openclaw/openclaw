@@ -1,7 +1,6 @@
 // Defines Telegram channel configuration types.
 import type {
   ChannelPreviewStreamingConfig,
-  ChannelStreamingProgressConfig,
   ChannelStreamingPreviewConfig,
   ContextVisibilityMode,
   DmPolicy,
@@ -69,21 +68,8 @@ export type TelegramInlineButtonsScope = "off" | "dm" | "group" | "all" | "allow
 export type TelegramStreamingMode = "off" | "partial" | "block" | "progress";
 export type TelegramExecApprovalTarget = "dm" | "channel" | "both";
 
-export type TelegramStreamingPreviewConfig = ChannelStreamingPreviewConfig & {
-  /** Use Telegram-native ephemeral draft UI for DM preview tool progress. */
-  nativeToolProgress?: boolean;
-  /** Telegram sender/user IDs allowed to use native DM preview tool progress. */
-  nativeToolProgressAllowFrom?: Array<string | number>;
-};
-
 export type TelegramPreviewStreamingConfig = Omit<ChannelPreviewStreamingConfig, "preview"> & {
-  preview?: TelegramStreamingPreviewConfig;
-  progress?: TelegramStreamingProgressConfig;
-};
-
-export type TelegramStreamingProgressConfig = ChannelStreamingProgressConfig & {
-  /** Include assistant commentary/preamble text in the progress draft. Default: false. */
-  commentary?: boolean;
+  preview?: ChannelStreamingPreviewConfig;
 };
 
 export type TelegramExecApprovalConfig = {

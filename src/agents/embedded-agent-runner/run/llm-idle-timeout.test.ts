@@ -1,7 +1,14 @@
+// LLM idle-timeout tests cover timeout selection and stream wrapping for
+// embedded provider calls, including local-provider and cron exceptions.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import type { AssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
+import {
+  createAssistantMessageEventStream,
+  type AssistantMessageEventStream,
+} from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
+import { notifyLlmRequestActivity } from "../../../shared/llm-request-activity.js";
+import type { StreamFn } from "../../runtime/index.js";
 import {
   DEFAULT_LLM_IDLE_TIMEOUT_MS,
   resolveLlmIdleTimeoutMs,
@@ -175,6 +182,8 @@ describe("resolveLlmIdleTimeoutMs", () => {
     "http://[feab:cd::1]:11434",
     "http://[febf::1]:11434",
   ])("disables the default idle watchdog for local provider baseUrl %s", (baseUrl) => {
+    // Local/self-hosted providers can run much slower than hosted APIs, so the
+    // default idle watchdog is disabled unless an explicit timeout is present.
     expect(resolveLlmIdleTimeoutMs({ model: { baseUrl } })).toBe(0);
   });
 
@@ -291,8 +300,9 @@ describe("streamWithIdleTimeout", () => {
     vi.useRealTimers();
   });
 
-  // Helper to create a mock async iterable
   function createMockAsyncIterable<T>(chunks: T[]): AsyncIterable<T> {
+    // Keep the stream fixture deterministic so timer tests only cover wrapper
+    // behavior, not async generator scheduling.
     return {
       [Symbol.asyncIterator]() {
         let index = 0;
@@ -334,12 +344,12 @@ describe("streamWithIdleTimeout", () => {
 
     void wrapped(model, context, options);
 
-    expect(baseFn).toHaveBeenCalledWith({ api: "openai", requestTimeoutMs: 1000 }, context, {
+    expect(baseFn).toHaveBeenCalledWith(model, context, {
       signal: expect.any(AbortSignal),
     });
   });
 
-  it("keeps model request timeouts that are shorter than the idle watchdog", () => {
+  it("preserves explicit model request timeouts", () => {
     const mockStream = createMockAsyncIterable([]);
     const baseFn = vi.fn().mockReturnValue(mockStream);
     const wrapped = streamWithIdleTimeout(baseFn, 1000);
@@ -350,7 +360,7 @@ describe("streamWithIdleTimeout", () => {
 
     void wrapped(model, context, options);
 
-    expect(baseFn).toHaveBeenCalledWith({ requestTimeoutMs: 250 }, context, {
+    expect(baseFn).toHaveBeenCalledWith(model, context, {
       signal: expect.any(AbortSignal),
     });
   });
@@ -396,6 +406,8 @@ describe("streamWithIdleTimeout", () => {
     let streamSignal: AbortSignal | undefined;
     const baseFn = vi.fn((_model, _context, options) => {
       streamSignal = options?.signal;
+      // Simulate providers that hang during stream creation but honor abort
+      // once the idle watchdog fires.
       return new Promise<AssistantMessageEventStream>((_resolve, reject) => {
         streamSignal?.addEventListener("abort", () => {
           reject(toLintErrorObject(streamSignal?.reason, "Non-Error rejection"));
@@ -501,6 +513,37 @@ describe("streamWithIdleTimeout", () => {
     expect(results).toHaveLength(3);
   });
 
+  it("treats quarantined provider events as stream activity", async () => {
+    vi.useFakeTimers();
+    let requestSignal: AbortSignal | undefined;
+    const baseFn: StreamFn = vi.fn((_model, _context, options) => {
+      requestSignal = options?.signal;
+      const stream = createAssistantMessageEventStream();
+      setTimeout(() => {
+        stream.push({ type: "text_delta", contentIndex: 0, delta: "done" });
+      }, 120);
+      return stream;
+    });
+    const wrapped = streamWithIdleTimeout(baseFn, 50);
+    const stream = wrapped(
+      {} as Parameters<typeof baseFn>[0],
+      {} as Parameters<typeof baseFn>[1],
+      {} as Parameters<typeof baseFn>[2],
+    ) as AssistantMessageEventStream;
+    const iterator = stream[Symbol.asyncIterator]();
+    const next = iterator.next();
+
+    setTimeout(() => notifyLlmRequestActivity(requestSignal), 40);
+    setTimeout(() => notifyLlmRequestActivity(requestSignal), 80);
+    await vi.advanceTimersByTimeAsync(120);
+
+    await expect(next).resolves.toEqual({
+      done: false,
+      value: { type: "text_delta", contentIndex: 0, delta: "done" },
+    });
+    await iterator.return?.();
+  });
+
   it("calls timeout hook on idle timeout", async () => {
     vi.useFakeTimers();
     const slowStream = createNeverYieldingStream();
@@ -530,6 +573,8 @@ describe("streamWithIdleTimeout", () => {
 });
 
 function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  // Abort reasons can be arbitrary values; normalize them into Error objects
+  // so rejection assertions and provider wrappers see a stable shape.
   if (value instanceof Error) {
     return value;
   }

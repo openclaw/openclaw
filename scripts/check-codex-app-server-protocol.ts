@@ -1,7 +1,9 @@
+// Check Codex App Server Protocol script supports OpenClaw repository automation.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
   generateExperimentalCodexAppServerProtocolSource,
+  normalizeCodexAppServerProtocolJsonText,
   selectedCodexAppServerJsonSchemas,
 } from "./lib/codex-app-server-protocol-source.js";
 
@@ -46,8 +48,7 @@ const checks: Array<{ file: string; snippets: string[] }> = [
     snippets: [
       "permissions?: string | null",
       "dynamicTools?: Array<DynamicToolSpec> | null",
-      "experimentalRawEvents: boolean",
-      "persistExtendedHistory: boolean",
+      "experimentalRawEvents",
     ],
   },
   {
@@ -142,5 +143,5 @@ async function compareGeneratedProtocolMirror(sourceJsonRoot: string): Promise<v
 }
 
 function normalizeJsonSchema(sourceLocal: string): string {
-  return JSON.stringify(JSON.parse(sourceLocal));
+  return normalizeCodexAppServerProtocolJsonText(sourceLocal);
 }

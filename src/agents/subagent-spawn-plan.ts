@@ -1,14 +1,17 @@
+/**
+ * Subagent spawn planning helpers.
+ *
+ * Resolves model, thinking, and timeout choices before the sessions_spawn executor launches work.
+ */
 import { formatThinkingLevels } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveSubagentSpawnModelSelection } from "./model-selection.js";
+import {
+  resolveDefaultModelForAgent,
+  resolveSubagentConfiguredModelSelection,
+  resolveSubagentSpawnModelSelection,
+} from "./model-selection.js";
 import { resolveSubagentThinkingOverride } from "./subagent-spawn-thinking.js";
 
-/**
- * Builds the model, thinking, and timeout plan for sessions_spawn calls.
- *
- * This file keeps spawn argument normalization separate from the tool executor
- * so tests can cover policy/default resolution without launching sessions.
- */
 /** Splits a provider/model ref while preserving model-only refs. */
 export function splitModelRef(ref?: string) {
   if (!ref) {
@@ -81,6 +84,28 @@ export function resolveSubagentModelAndThinkingPlan(params: {
     };
   }
 
+  const modelOverrideSource = params.modelOverride?.trim() ? "user" : "auto";
+  const hasConfiguredAutoModel =
+    modelOverrideSource === "auto" &&
+    Boolean(
+      resolveSubagentConfiguredModelSelection({
+        cfg: params.cfg,
+        agentId: params.targetAgentId,
+      }),
+    );
+  const configuredModelRef = hasConfiguredAutoModel ? splitModelRef(resolvedModel) : undefined;
+  const modelOrigin = configuredModelRef?.model
+    ? {
+        provider:
+          configuredModelRef.provider ??
+          resolveDefaultModelForAgent({
+            cfg: params.cfg,
+            agentId: params.targetAgentId,
+          }).provider,
+        model: configuredModelRef.model,
+      }
+    : undefined;
+
   return {
     status: "ok" as const,
     resolvedModel,
@@ -90,7 +115,15 @@ export function resolveSubagentModelAndThinkingPlan(params: {
       ...(resolvedModel
         ? {
             model: resolvedModel,
-            modelOverrideSource: params.modelOverride?.trim() ? "user" : "auto",
+            modelOverrideSource,
+            ...(modelOrigin
+              ? {
+                  // Config-selected models are session overrides, not legacy fallback residue.
+                  // Self-origin metadata keeps cleanup from discarding them before first use.
+                  modelOverrideFallbackOriginProvider: modelOrigin.provider,
+                  modelOverrideFallbackOriginModel: modelOrigin.model,
+                }
+              : {}),
           }
         : {}),
       ...thinkingPlan.initialSessionPatch,

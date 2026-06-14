@@ -1,3 +1,6 @@
+/**
+ * Builds plugin hook context metadata for native agent harness events.
+ */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { DiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import type {
@@ -22,6 +25,9 @@ export type AgentHarnessHookContext = {
   modelProviderId?: string;
   modelId?: string;
   messageProvider?: string;
+  channel?: string;
+  chatId?: string;
+  senderId?: string;
   trigger?: string;
   channelId?: string;
   contextTokenBudget?: number;
@@ -43,6 +49,9 @@ export function buildAgentHookContext(params: AgentHarnessHookContext): PluginHo
     ...(params.modelProviderId ? { modelProviderId: params.modelProviderId } : {}),
     ...(params.modelId ? { modelId: params.modelId } : {}),
     ...(params.messageProvider ? { messageProvider: params.messageProvider } : {}),
+    ...(params.channel ? { channel: params.channel } : {}),
+    ...(params.chatId ? { chatId: params.chatId } : {}),
+    ...(params.senderId ? { senderId: params.senderId } : {}),
     ...(params.trigger ? { trigger: params.trigger } : {}),
     ...(params.channelId ? { channelId: params.channelId } : {}),
     ...(params.contextTokenBudget ? { contextTokenBudget: params.contextTokenBudget } : {}),

@@ -77,6 +77,7 @@ import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js
 import { createOpenClawTools } from "./openclaw-tools.js";
 import type { SandboxContext } from "./sandbox.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./sandbox/constants.js";
+import { resolveReadOnlyWorkspaceSkillMounts } from "./sandbox/workspace-mounts.js";
 import { resolveSenderToolPolicy } from "./sender-tool-policy.js";
 import { createCodingTools, createReadTool } from "./sessions/index.js";
 import {
@@ -122,22 +123,34 @@ type GuardContainerMount = {
   hostRoot: string;
 };
 
-function readOnlyAgentWorkspaceMount(
+function readOnlySandboxReadMounts(
   sandbox: SandboxContext | null | undefined,
 ): GuardContainerMount[] | undefined {
-  if (
-    !sandbox ||
-    sandbox.workspaceAccess !== "ro" ||
-    sandbox.agentWorkspaceDir === sandbox.workspaceDir
-  ) {
+  if (!sandbox) {
     return undefined;
   }
-  return [
-    {
+  const mounts: GuardContainerMount[] = [];
+  if (sandbox.workspaceAccess === "ro" && sandbox.agentWorkspaceDir !== sandbox.workspaceDir) {
+    mounts.push({
       containerRoot: SANDBOX_AGENT_WORKSPACE_MOUNT,
       hostRoot: sandbox.agentWorkspaceDir,
-    },
-  ];
+    });
+  }
+  if (sandbox.workspaceAccess === "rw") {
+    mounts.push(
+      ...resolveReadOnlyWorkspaceSkillMounts({
+        workspaceDir: sandbox.workspaceDir,
+        agentWorkspaceDir: sandbox.agentWorkspaceDir,
+        skillsWorkspaceDir: sandbox.skillsWorkspaceDir,
+        workdir: sandbox.containerWorkdir,
+        workspaceAccess: sandbox.workspaceAccess,
+      }).map((mount) => ({
+        containerRoot: mount.containerPath,
+        hostRoot: mount.hostPath,
+      })),
+    );
+  }
+  return mounts.length > 0 ? mounts : undefined;
 }
 
 function resolveSkillReadRoots(skillsSnapshot?: SkillSnapshot): string[] | undefined {
@@ -272,6 +285,9 @@ function applyModelProviderToolPolicy(
       config: params?.config,
       modelProvider: params?.modelProvider,
       modelApi: params?.modelApi,
+      modelId: params?.modelId,
+      agentId: params?.agentId,
+      sessionKey: params?.sessionKey,
       agentDir: params?.agentDir,
     })
   ) {
@@ -399,6 +415,8 @@ export function createOpenClawCodingTools(options?: {
   agentId?: string;
   exec?: ExecToolDefaults & ProcessToolDefaults;
   messageProvider?: string;
+  /** Specific ingress provider used only for transport tool availability. */
+  toolPolicyMessageProvider?: string;
   agentAccountId?: string;
   messageTo?: string;
   messageThreadId?: string | number;
@@ -412,6 +430,11 @@ export function createOpenClawCodingTools(options?: {
   runSessionKey?: string;
   /** Ephemeral session UUID — regenerated on /new and /reset. */
   sessionId?: string;
+  /**
+   * Explicit one-shot local CLI runs should not keep plugin-owned process
+   * resources alive after emitting their result.
+   */
+  oneShotCliRun?: boolean;
   /** Stable run identifier for this agent invocation. */
   runId?: string;
   /** Diagnostic trace context for hook/log correlation during this run. */
@@ -459,6 +482,8 @@ export function createOpenClawCodingTools(options?: {
   modelAuthMode?: ModelAuthMode;
   /** Current channel ID for auto-threading (Slack). */
   currentChannelId?: string;
+  /** Routable target for the current conversation when it differs from the native channel ID. */
+  currentMessagingTarget?: string;
   /** Normalized conversation id exposed to tool hooks. Defaults to currentChannelId. */
   hookChannelId?: string;
   /** Current thread timestamp for auto-threading (Slack). */
@@ -743,7 +768,7 @@ export function createOpenClawCodingTools(options?: {
           base.push(
             workspaceOnly
               ? wrapToolWorkspaceRootGuardWithOptions(sandboxed, sandboxRoot, {
-                  additionalContainerMounts: readOnlyAgentWorkspaceMount(sandbox),
+                  additionalContainerMounts: readOnlySandboxReadMounts(sandbox),
                   containerWorkdir: sandbox.containerWorkdir,
                 })
               : sandboxed,
@@ -811,6 +836,8 @@ export function createOpenClawCodingTools(options?: {
         allowBackground,
         scopeKey,
         sessionKey: options?.sessionKey,
+        sessionId: options?.sessionId,
+        sessionStore: options?.config?.session?.store,
         mainKey: options?.config?.session?.mainKey,
         sessionScope: options?.config?.session?.scope,
         eventRouting: resolveEventSessionRoutingPolicy({
@@ -921,12 +948,14 @@ export function createOpenClawCodingTools(options?: {
             fsPolicy,
             requesterSenderId: options?.senderId,
             sessionId: options?.sessionId,
+            oneShotCliRun: options?.oneShotCliRun,
             sandboxBrowserBridgeUrl: sandbox?.browser?.bridgeUrl,
             allowHostBrowserControl: sandbox ? sandbox.browserAllowHostControl : true,
             sandboxed: Boolean(sandbox),
             pluginToolAllowlist,
             pluginToolDenylist,
             currentChannelId: options?.currentChannelId,
+            currentMessagingTarget: options?.currentMessagingTarget,
             currentThreadTs: options?.currentThreadTs,
             currentMessageId: options?.currentMessageId,
             modelProvider: options?.modelProvider,
@@ -1013,6 +1042,7 @@ export function createOpenClawCodingTools(options?: {
           pluginToolAllowlist,
           pluginToolDenylist,
           currentChannelId: options?.currentChannelId,
+          currentMessagingTarget: options?.currentMessagingTarget,
           currentThreadTs: options?.currentThreadTs,
           currentMessageId: options?.currentMessageId,
           currentInboundAudio: options?.currentInboundAudio,
@@ -1034,6 +1064,7 @@ export function createOpenClawCodingTools(options?: {
           senderIsOwner: options?.senderIsOwner,
           authProfileStore: options?.authProfileStore,
           sessionId: options?.sessionId,
+          oneShotCliRun: options?.oneShotCliRun,
           inheritedToolAllowlist,
           inheritedToolDenylist,
           onYield: options?.onYield,
@@ -1073,7 +1104,7 @@ export function createOpenClawCodingTools(options?: {
       : undefined;
   const toolsForMessageProvider = filterToolsByMessageProvider(
     toolsForMemoryFlush,
-    options?.messageProvider,
+    options?.toolPolicyMessageProvider ?? options?.messageProvider,
   );
   options?.recordToolPrepStage?.("message-provider-policy");
   const toolsForModelProvider = applyModelProviderToolPolicy(toolsForMessageProvider, {

@@ -1,3 +1,4 @@
+// Memory Core tests cover manager embedding timeout plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -131,6 +132,31 @@ describe("memory embedding timeout abort", () => {
     await vi.advanceTimersByTimeAsync(1);
     await rejection;
 
+    expect(signalSeen?.aborted).toBe(true);
+  });
+
+  it("aborts the provider operation when the caller signal aborts before the watchdog", async () => {
+    const external = new AbortController();
+    let signalSeen: AbortSignal | undefined;
+
+    const resultPromise = runEmbeddingOperationWithTimeout({
+      timeoutMs: 60_000,
+      message: "memory embeddings query timed out after 60s",
+      signal: external.signal,
+      run: async (signal) => {
+        signalSeen = signal;
+        return await new Promise<number[]>((_resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => reject(toLintErrorObject(signal.reason, "Non-Error rejection")),
+            { once: true },
+          );
+        });
+      },
+    });
+
+    external.abort(new Error("memory_search timed out after 15s"));
+    await expect(resultPromise).rejects.toThrow("memory_search timed out after 15s");
     expect(signalSeen?.aborted).toBe(true);
   });
 

@@ -1,3 +1,4 @@
+// Telegram User Credential tests cover telegram user credential script behavior.
 import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
@@ -12,6 +13,7 @@ import {
 } from "../../scripts/e2e/telegram-user-credential-paths.ts";
 
 const tempDirs: string[] = [];
+const CHUNKED_PAYLOAD_MARKER = "__openclawQaCredentialPayloadChunksV1";
 
 function makeTempDir(prefix: string) {
   const dir = mkdtempSync(path.join(tmpdir(), prefix));
@@ -116,6 +118,29 @@ describe("telegram user credential path handling", () => {
 });
 
 describe("telegram user credential IO", () => {
+  it("rejects oversized chunked lease payload markers before hydration", async () => {
+    const credentialModule = (await import(
+      `${new URL("../../scripts/e2e/telegram-user-credential.ts", import.meta.url).href}?case=chunk-marker-${Date.now()}`
+    )) as {
+      parseChunkedPayloadMarker(payload: unknown): unknown;
+    };
+
+    expect(() =>
+      credentialModule.parseChunkedPayloadMarker({
+        [CHUNKED_PAYLOAD_MARKER]: true,
+        byteLength: 1,
+        chunkCount: 4097,
+      }),
+    ).toThrow("Chunked payload marker exceeds 4096 chunks.");
+    expect(() =>
+      credentialModule.parseChunkedPayloadMarker({
+        [CHUNKED_PAYLOAD_MARKER]: true,
+        byteLength: 64 * 1024 * 1024 + 1,
+        chunkCount: 1,
+      }),
+    ).toThrow("Chunked payload marker exceeds 67108864 bytes.");
+  });
+
   it("fails hung child processes instead of waiting for the outer proof timeout", async () => {
     await expect(
       runCommand(process.execPath, ["-e", "setInterval(() => {}, 1000)"], undefined, {
@@ -183,14 +208,15 @@ setInterval(() => {}, 1000);
 
       const runPromise = runCommand(process.execPath, ["-e", parentScript], dir, {
         timeoutKillGraceMs: 25,
-        timeoutMs: 100,
+        timeoutMs: 500,
       });
+      const runError = runPromise.catch((error: unknown) => error);
       await waitForFile(childPidPath, 2_000);
       childPid = Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
 
-      await expect(runPromise).rejects.toMatchObject({
+      await expect(runError).resolves.toMatchObject({
         code: "ETIMEDOUT",
-        message: expect.stringContaining("timed out after 100ms"),
+        message: expect.stringContaining("timed out after 500ms"),
       });
       await waitForDead(childPid, 2_000);
     } finally {

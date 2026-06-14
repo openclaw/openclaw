@@ -1,3 +1,6 @@
+/**
+ * Waits for completion-required async tasks before finalizing an attempt.
+ */
 import { isCronRunSessionKey } from "../../../sessions/session-key-utils.js";
 import { isTerminalTaskStatus } from "../../../tasks/task-executor-policy.js";
 import type { TaskRecord } from "../../../tasks/task-registry.types.js";
@@ -155,6 +158,23 @@ export function requiresCompletionRequiredAsyncTaskWait(params: {
       !isTerminalTaskStatus(task.status) &&
       Boolean(task.runId?.trim()),
   );
+}
+
+/** Returns whether the current attempt should synchronously wait for media tasks. */
+export function shouldWaitForCompletionRequiredAsyncTasks(params: {
+  sessionKey: string | undefined;
+  toolMetas: readonly AsyncStartedToolMeta[];
+  yieldDetected?: boolean;
+}): boolean {
+  if (params.yieldDetected === true) {
+    // sessions_yield pauses the turn so the completion event can wake it later;
+    // waiting here would reuse the internal abort signal and turn the pause into AbortError.
+    return false;
+  }
+  return requiresCompletionRequiredAsyncTaskWait({
+    sessionKey: params.sessionKey,
+    toolMetas: params.toolMetas,
+  });
 }
 
 /**

@@ -1,3 +1,6 @@
+/**
+ * Normalizes tool-call names, ids, and standalone text calls for providers.
+ */
 import { randomUUID } from "node:crypto";
 import { normalizeLowercaseStringOrEmpty } from "../../../../packages/normalization-core/src/string-coerce.js";
 import { normalizeStringEntries } from "../../../../packages/normalization-core/src/string-normalization.js";
@@ -1156,11 +1159,13 @@ export function sanitizeReplayToolCallIdsForStream(params: {
   mode: ToolCallIdMode;
   allowedToolNames?: Set<string>;
   preserveNativeAnthropicToolUseIds?: boolean;
+  duplicateToolCallIdStyle?: "openai";
   preserveReplaySafeThinkingToolCallIds?: boolean;
   repairToolUseResultPairing?: boolean;
 }): AgentMessage[] {
   const sanitized = sanitizeToolCallIdsForCloudCodeAssist(params.messages, params.mode, {
     preserveNativeAnthropicToolUseIds: params.preserveNativeAnthropicToolUseIds,
+    duplicateToolCallIdStyle: params.duplicateToolCallIdStyle,
     preserveReplaySafeThinkingToolCallIds: params.preserveReplaySafeThinkingToolCallIds,
     allowedToolNames: params.allowedToolNames,
   });

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Verifies publishable plugin packages can build their npm runtime outputs.
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -10,16 +11,20 @@ import {
   resolvePluginNpmRuntimeBuildPlan,
 } from "./lib/plugin-npm-runtime-build.mjs";
 
-function parseArgs(argv) {
+function readPackageArgValue(argv, index) {
+  const value = argv[index + 1];
+  if (value === undefined || value === "" || value.startsWith("--")) {
+    throw new Error("missing value for --package");
+  }
+  return value;
+}
+
+export function parseArgs(argv) {
   const packageDirs = [];
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--package") {
-      const packageDir = argv[index + 1];
-      if (!packageDir) {
-        throw new Error("missing value for --package");
-      }
-      packageDirs.push(packageDir);
+      packageDirs.push(readPackageArgValue(argv, index));
       index += 1;
       continue;
     }
@@ -30,6 +35,9 @@ function parseArgs(argv) {
   return { packageDirs };
 }
 
+/**
+ * Builds publishable plugin npm runtimes and verifies declared outputs exist.
+ */
 export async function checkPluginNpmRuntimeBuilds(params = {}) {
   const repoRoot = path.resolve(params.repoRoot ?? ".");
   const packageDirs =

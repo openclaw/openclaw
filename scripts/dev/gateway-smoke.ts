@@ -1,3 +1,4 @@
+// Gateway Smoke script supports OpenClaw repository automation.
 import { fileURLToPath } from "node:url";
 import {
   MIN_CLIENT_PROTOCOL_VERSION,
@@ -27,6 +28,64 @@ type GatewaySmokeDeps = {
   stderr?: (message: string) => void;
   stdout?: (message: string) => void;
 };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasHealthSummaryPayload(response: unknown): boolean {
+  if (!isRecord(response) || !isRecord(response.payload)) {
+    return false;
+  }
+  const { payload } = response;
+  return (
+    payload.ok === true &&
+    typeof payload.ts === "number" &&
+    typeof payload.durationMs === "number" &&
+    typeof payload.defaultAgentId === "string" &&
+    payload.defaultAgentId.trim() !== "" &&
+    Array.isArray(payload.agents) &&
+    isRecord(payload.channels) &&
+    Array.isArray(payload.channelOrder) &&
+    isRecord(payload.sessions)
+  );
+}
+
+function hasStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+function connectHelloScopes(response: unknown): string[] | null {
+  if (!isRecord(response) || !isRecord(response.payload)) {
+    return null;
+  }
+  const { payload } = response;
+  if (
+    payload.type !== "hello-ok" ||
+    typeof payload.protocol !== "number" ||
+    !isRecord(payload.features) ||
+    !hasStringArray(payload.features.methods) ||
+    !payload.features.methods.includes("health") ||
+    !isRecord(payload.auth) ||
+    payload.auth.role !== "operator" ||
+    !hasStringArray(payload.auth.scopes)
+  ) {
+    return null;
+  }
+  return payload.auth.scopes;
+}
+
+function hasConnectHelloPayload(response: unknown): boolean {
+  return connectHelloScopes(response) !== null;
+}
+
+function hasUnpairedOperatorScopes(response: unknown): boolean {
+  const scopes = connectHelloScopes(response);
+  if (!scopes) {
+    return false;
+  }
+  return scopes.length > 0;
+}
 
 export async function runGatewaySmoke(
   input: { token: string; urlRaw: string },
@@ -72,20 +131,26 @@ export async function runGatewaySmoke(
       stderr(`connect failed: ${String(connectRes.error)}`);
       return 2;
     }
+    if (!hasConnectHelloPayload(connectRes)) {
+      stderr("connect failed: missing hello-ok payload");
+      return 2;
+    }
+    if (hasUnpairedOperatorScopes(connectRes)) {
+      stderr("connect failed: unpaired iOS smoke unexpectedly received operator scopes");
+      return 2;
+    }
 
     const healthRes = await request("health");
     if (!healthRes.ok) {
       stderr(`health failed: ${String(healthRes.error)}`);
       return 3;
     }
-
-    const historyRes = await request("chat.history", { sessionKey: "main" }, 15000);
-    if (!historyRes.ok) {
-      stderr(`chat.history failed: ${String(historyRes.error)}`);
-      return 4;
+    if (!hasHealthSummaryPayload(healthRes)) {
+      stderr("health failed: missing health summary payload");
+      return 3;
     }
 
-    stdout("ok: connected + health + chat.history");
+    stdout("ok: connected + health");
     return 0;
   } finally {
     close();

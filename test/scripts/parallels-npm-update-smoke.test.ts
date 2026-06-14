@@ -1,3 +1,4 @@
+// Parallels Npm Update Smoke tests cover parallels npm update smoke script behavior.
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -5,15 +6,18 @@ import { afterEach, describe, expect, it } from "vitest";
 import { runWindowsBackgroundPowerShell } from "../../scripts/e2e/parallels/guest-transports.ts";
 import { run as hostCommandRun } from "../../scripts/e2e/parallels/host-command.ts";
 import {
+  linuxUpdateScript,
   macosUpdateScript,
   windowsUpdateScript,
 } from "../../scripts/e2e/parallels/npm-update-scripts.ts";
 import {
   freshLaneTimeoutMs,
   NpmUpdateSmoke,
+  parseArgs,
   spawnLoggedCommand,
 } from "../../scripts/e2e/parallels/npm-update-smoke.ts";
 import type { HostServer, Platform } from "../../scripts/e2e/parallels/types.ts";
+import { withEnv, withEnvAsync } from "../../src/test-utils/env.js";
 
 const SCRIPT_PATH = "scripts/e2e/parallels/npm-update-smoke.ts";
 const GUEST_TRANSPORTS_PATH = "scripts/e2e/parallels/guest-transports.ts";
@@ -67,6 +71,17 @@ afterEach(() => {
 });
 
 describe("parallels npm update smoke", () => {
+  it("accepts one prepared tarball target for update and fresh install", () => {
+    expect(parseArgs(["--target-tarball", "/tmp/openclaw-candidate.tgz"])).toMatchObject({
+      targetTarball: "/tmp/openclaw-candidate.tgz",
+      updateTarget: "",
+      freshTargetSpec: undefined,
+    });
+    expect(() =>
+      parseArgs(["--target-tarball", "/tmp/openclaw-candidate.tgz", "--update-target", "beta"]),
+    ).toThrow("--target-tarball cannot be combined");
+  });
+
   it("stops the host artifact server when the wrapper fails mid-run", async () => {
     let stopCalls = 0;
     const server: HostServer = {
@@ -77,8 +92,6 @@ describe("parallels npm update smoke", () => {
       },
       urlFor: (filePath) => `http://127.0.0.1:48123/${path.basename(filePath)}`,
     };
-    const previousOpenAiKey = process.env.OPENAI_API_KEY;
-    process.env.OPENAI_API_KEY = "test-key";
 
     class FailingNpmUpdateSmoke extends NpmUpdateSmoke {
       protected override async makeRunTempDir(prefix: string): Promise<string> {
@@ -92,7 +105,7 @@ describe("parallels npm update smoke", () => {
       }
     }
 
-    try {
+    await withEnvAsync({ OPENAI_API_KEY: "test-key" }, async () => {
       const smoke = new FailingNpmUpdateSmoke({
         ...TEST_AUTH,
         json: false,
@@ -103,13 +116,7 @@ describe("parallels npm update smoke", () => {
       });
 
       await expect(smoke.run()).rejects.toThrow("forced wrapper failure");
-    } finally {
-      if (previousOpenAiKey === undefined) {
-        delete process.env.OPENAI_API_KEY;
-      } else {
-        process.env.OPENAI_API_KEY = previousOpenAiKey;
-      }
-    }
+    });
 
     expect(stopCalls).toBe(1);
   });
@@ -123,6 +130,18 @@ describe("parallels npm update smoke", () => {
     expect(script).toContain("this.options.freshTargetSpec = `openclaw@${version}`");
     expect(script).toContain("runFreshTargetInstalls");
     expect(script).toContain("freshTargetStatus");
+  });
+
+  it("host-serves a prepared candidate tarball for both proof phases", () => {
+    const script = readFileSync(SCRIPT_PATH, "utf8");
+
+    expect(script).toContain("--target-tarball <path>");
+    expect(script).toContain('label: "prepared candidate tgz"');
+    expect(script).toContain("await copyFile(this.targetTarballPath, hostedTarballPath)");
+    expect(script).toContain("dir: this.tgzDir");
+    expect(script).toContain("this.updateTargetEffective = targetUrl");
+    expect(script).toContain("this.freshTargetSpec = targetUrl");
+    expect(script).toContain("this.updateExpectedNeedle = this.targetTarballVersion");
   });
 
   it("guards beta validation against cross-version harness checkouts", () => {
@@ -166,6 +185,29 @@ describe("parallels npm update smoke", () => {
     expect(updateBlock).not.toContain("log += text");
   });
 
+  it("bounds POSIX guest failure logs", () => {
+    const scripts = [
+      macosUpdateScript({
+        auth: TEST_AUTH,
+        expectedNeedle: "2026.5.3-beta.2",
+        updateTarget: "2026.5.3-beta.2",
+      }),
+      linuxUpdateScript({
+        auth: TEST_AUTH,
+        expectedNeedle: "2026.5.3-beta.2",
+        updateTarget: "2026.5.3-beta.2",
+      }),
+    ].join("\n");
+
+    expect(scripts).toContain("print_log_tail()");
+    expect(scripts).toContain("OPENCLAW_PARALLELS_NPM_UPDATE_LOG_TAIL_BYTES");
+    expect(scripts).toContain('print_log_tail "$output_file"');
+    expect(scripts).toContain("print_log_tail /tmp/openclaw-parallels-macos-gateway.log >&2");
+    expect(scripts).toContain("print_log_tail /tmp/openclaw-parallels-linux-gateway.log >&2");
+    expect(scripts).not.toContain('cat "$output_file"');
+    expect(scripts).not.toContain("cat /tmp/openclaw-parallels-");
+  });
+
   it("streams fresh lane logs instead of retaining them in memory", async () => {
     const root = makeTempDir();
     const logPath = path.join(root, "fresh.log");
@@ -189,22 +231,15 @@ describe("parallels npm update smoke", () => {
   });
 
   it("sets platform-aware fresh lane timeouts", () => {
-    const previous = process.env.OPENCLAW_PARALLELS_NPM_UPDATE_FRESH_TIMEOUT_S;
-    try {
-      delete process.env.OPENCLAW_PARALLELS_NPM_UPDATE_FRESH_TIMEOUT_S;
+    withEnv({ OPENCLAW_PARALLELS_NPM_UPDATE_FRESH_TIMEOUT_S: undefined }, () => {
       expect(freshLaneTimeoutMs("macos")).toBe(75 * 60 * 1000);
       expect(freshLaneTimeoutMs("linux")).toBe(75 * 60 * 1000);
       expect(freshLaneTimeoutMs("windows")).toBe(90 * 60 * 1000);
+    });
 
-      process.env.OPENCLAW_PARALLELS_NPM_UPDATE_FRESH_TIMEOUT_S = "3";
+    withEnv({ OPENCLAW_PARALLELS_NPM_UPDATE_FRESH_TIMEOUT_S: "3" }, () => {
       expect(freshLaneTimeoutMs("macos")).toBe(3000);
-    } finally {
-      if (previous === undefined) {
-        delete process.env.OPENCLAW_PARALLELS_NPM_UPDATE_FRESH_TIMEOUT_S;
-      } else {
-        process.env.OPENCLAW_PARALLELS_NPM_UPDATE_FRESH_TIMEOUT_S = previous;
-      }
-    }
+    });
   });
 
   it.runIf(process.platform !== "win32")("times out fresh lane process groups", async () => {

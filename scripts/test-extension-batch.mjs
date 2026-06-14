@@ -1,10 +1,16 @@
 #!/usr/bin/env node
 
+// Runs grouped Vitest plans for one or more bundled plugins.
 import path from "node:path";
 import {
   listTrackedTestFilesForRoots,
   resolveExtensionBatchPlan,
 } from "./lib/extension-test-plan.mjs";
+import {
+  normalizeRelativePath,
+  relativizeExtensionVitestArgs,
+  relativizeExtensionVitestPath,
+} from "./lib/extension-vitest-paths.mjs";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { isDirectScriptRun, runVitestBatch } from "./lib/vitest-batch-runner.mjs";
 
@@ -22,6 +28,9 @@ function printUsage() {
   );
 }
 
+/**
+ * Parses comma-separated plugin ids and separates Vitest passthrough args.
+ */
 export function parseExtensionIds(rawArgs) {
   const normalizedArgs = rawArgs[0] === "--" ? rawArgs.slice(1) : rawArgs;
   const separatorIndex = normalizedArgs.indexOf("--");
@@ -46,6 +55,9 @@ export function parseExtensionIds(rawArgs) {
   };
 }
 
+/**
+ * Resolves bounded parallelism for extension test config groups.
+ */
 export function resolveExtensionBatchParallelism(groupCount, env = process.env) {
   const raw = env[PARALLEL_ENV_KEY]?.trim();
   const override = raw ? parsePositiveInt(raw, PARALLEL_ENV_KEY) : 1;
@@ -93,17 +105,21 @@ function orderPlanGroups(planGroups, parallelism) {
   });
 }
 
-function normalizeRelativePath(inputPath) {
-  return path
-    .relative(process.cwd(), path.resolve(process.cwd(), inputPath))
-    .split(path.sep)
-    .join("/");
-}
-
 function isExactExcludePath(inputPath) {
   return !/[*!?[\]{}]/u.test(inputPath);
 }
 
+function addExactExcludePath(excludePaths, value) {
+  const normalized = normalizeRelativePath(value);
+  excludePaths.add(normalized);
+  if (!normalized.startsWith("extensions/")) {
+    excludePaths.add(`extensions/${normalized}`);
+  }
+}
+
+/**
+ * Collects exact --exclude paths so empty groups can be reported accurately.
+ */
 export function parseExactVitestExcludePaths(vitestArgs) {
   const excludePaths = new Set();
   for (let index = 0; index < vitestArgs.length; index += 1) {
@@ -111,7 +127,7 @@ export function parseExactVitestExcludePaths(vitestArgs) {
     if (arg === "--exclude") {
       const value = vitestArgs[index + 1];
       if (value && isExactExcludePath(value)) {
-        excludePaths.add(normalizeRelativePath(value));
+        addExactExcludePath(excludePaths, value);
       }
       index += 1;
       continue;
@@ -120,7 +136,7 @@ export function parseExactVitestExcludePaths(vitestArgs) {
     if (arg.startsWith(prefix)) {
       const value = arg.slice(prefix.length);
       if (value && isExactExcludePath(value)) {
-        excludePaths.add(normalizeRelativePath(value));
+        addExactExcludePath(excludePaths, value);
       }
     }
   }
@@ -151,7 +167,7 @@ async function runPlanGroup(group, params) {
     `[test-extension-batch] ${group.config}: ${group.extensionIds.join(", ")} (${targets.length} targets)`,
   );
   return await params.runGroup({
-    args: params.vitestArgs,
+    args: relativizeExtensionVitestArgs(params.vitestArgs),
     config: group.config,
     env: createGroupEnv({
       baseEnv: params.env,
@@ -159,10 +175,13 @@ async function runPlanGroup(group, params) {
       groupIndex: params.groupIndex,
       useDedicatedCache: params.useDedicatedCache,
     }),
-    targets,
+    targets: targets.map((target) => relativizeExtensionVitestPath(target)),
   });
 }
 
+/**
+ * Runs a resolved extension batch plan, optionally in parallel config groups.
+ */
 export async function runExtensionBatchPlan(batchPlan, params = {}) {
   const env = params.env ?? process.env;
   const vitestArgs = params.vitestArgs ?? [];

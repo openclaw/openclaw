@@ -1,3 +1,6 @@
+/**
+ * Public parameter types for subscribing to embedded-agent sessions.
+ */
 import type {
   PartialReplyPayload,
   SourceReplyDeliveryMode,
@@ -26,6 +29,8 @@ export type {
 export type SubscribeEmbeddedAgentSessionParams = {
   session: AgentSession;
   runId: string;
+  /** Immutable gateway lifecycle ownership for this execution. */
+  lifecycleGeneration?: string;
   /** Originating message channel used for subsystem log attribution. */
   messageChannel?: string;
   initialReplayState?: EmbeddedRunReplayState;
@@ -38,7 +43,10 @@ export type SubscribeEmbeddedAgentSessionParams = {
   shouldEmitToolResult?: () => boolean;
   shouldEmitToolOutput?: () => boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  /** Attempt-owned delivery proof for message-tool-only source replies. */
+  hasDeliveredMessageToolOnlySourceReply?: () => boolean;
   onToolResult?: (payload: ReplyPayload) => void | Promise<void>;
+  onAgentToolResult?: (event: { toolName: string; result: unknown; isError: boolean }) => void;
   onReasoningStream?: (payload: {
     text?: string;
     mediaUrls?: string[];
@@ -66,6 +74,10 @@ export type SubscribeEmbeddedAgentSessionParams = {
   }) => void | Promise<void>;
   onHeartbeatToolResponse?: (response: HeartbeatToolResponse) => void | Promise<void>;
   terminalLifecyclePhase?: "end" | "finishing";
+  /** Read immediately before terminal lifecycle emission. */
+  isTerminalAborted?: () => boolean | undefined;
+  /** Override the terminal stop reason from the current abort owner. */
+  resolveTerminalStopReason?: () => string | undefined;
   /** Gate final block delivery/lifecycle after the natural answer is known. */
   onBeforeTerminalDelivery?: (event: {
     messages: AgentMessage[];
@@ -83,6 +95,18 @@ export type SubscribeEmbeddedAgentSessionParams = {
   silentExpected?: boolean;
   config?: OpenClawConfig;
   sessionKey?: string;
+  /** Current transport channel resolved for this run. */
+  currentChannelId?: string;
+  /** Routable target for the current conversation when it differs from the native channel ID. */
+  currentMessagingTarget?: string;
+  /** Current transport thread resolved for this run. */
+  currentThreadId?: string;
+  /** Current inbound message id used to distinguish child replies from explicit roots. */
+  currentMessageId?: string | number;
+  /** Reply mode used by transport auto-threading. */
+  replyToMode?: "off" | "first" | "all" | "batched";
+  /** Shared one-shot reply state used by first/batched modes. */
+  hasRepliedRef?: { value: boolean };
   /** Ephemeral session UUID — regenerated on /new and /reset. */
   sessionId?: string;
   /** Agent identity for hook context — resolved from session config in attempt.ts. */

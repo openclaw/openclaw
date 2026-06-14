@@ -1,9 +1,12 @@
+// Sessions tool tests cover list/send helpers, transcript path reporting,
+// announce-target resolution, and assistant-visible text sanitization.
 import os from "node:os";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { extractAssistantText, sanitizeTextContent } from "./sessions-helpers.js";
 
 const callGatewayMock = vi.fn();
@@ -226,16 +229,12 @@ async function withStubbedStateDir<T>(
   run: (stateDir: string) => Promise<T>,
 ): Promise<T> {
   const stateDir = path.join(os.tmpdir(), name);
-  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-  try {
-    return await run(stateDir);
-  } finally {
-    vi.unstubAllEnvs();
-  }
+  return await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => await run(stateDir));
 }
 
 describe("sanitizeTextContent", () => {
   it("strips minimax tool call XML and downgraded markers", () => {
+    // Session recall should not replay provider/tool markup as assistant text.
     const input =
       'Hello <invoke name="tool">payload</invoke></minimax:tool_call> ' +
       "[Tool Call: foo (ID: 1)] world";
@@ -769,7 +768,7 @@ describe("sessions_list channel derivation", () => {
 
 describe("sessions_send gating", () => {
   beforeEach(() => {
-    callGatewayMock.mockClear();
+    callGatewayMock.mockReset();
   });
 
   it("returns an error when neither sessionKey nor label is provided", async () => {
@@ -816,6 +815,82 @@ describe("sessions_send gating", () => {
     );
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
     expect(requireGatewayRequest().method).toBe("sessions.resolve");
+  });
+
+  it("prefers sessionKey over a redundant label", async () => {
+    const tool = createMainSessionsSendTool();
+
+    const result = await tool.execute("call-session-key-label", {
+      sessionKey: MAIN_AGENT_SESSION_KEY,
+      label: "stale-label",
+      message: "hi",
+      timeoutSeconds: 0,
+    });
+
+    const details = requireDetails(result);
+    expect(details).toMatchObject({
+      status: "accepted",
+      sessionKey: MAIN_AGENT_SESSION_KEY,
+    });
+    expect(callGatewayMock.mock.calls[0]?.[0]).toMatchObject({ method: "sessions.list" });
+    expect(callGatewayMock.mock.calls).toContainEqual([
+      expect.objectContaining({
+        method: "agent",
+        params: expect.objectContaining({ sessionKey: MAIN_AGENT_SESSION_KEY }),
+      }),
+    ]);
+    expect(callGatewayMock.mock.calls).not.toContainEqual([
+      expect.objectContaining({
+        method: "sessions.resolve",
+        params: expect.objectContaining({ label: "stale-label" }),
+      }),
+    ]);
+  });
+
+  it("does not disclose a resolved session key when sessionId access is denied", async () => {
+    const tool = createSessionsSendTool({
+      agentSessionKey: MAIN_AGENT_SESSION_KEY,
+      callGateway: callGatewayMock,
+      config: {
+        session: { scope: "per-sender", mainKey: "main" },
+        tools: {
+          agentToAgent: { enabled: false },
+          sessions: { visibility: "tree" },
+        },
+      } as never,
+    });
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: Record<string, unknown> };
+      if (request.method === "sessions.resolve") {
+        if (request.params?.key === "session-id-only") {
+          throw new Error("not a session key");
+        }
+        return { key: "agent:other:main" };
+      }
+      if (request.method === "sessions.list") {
+        if (request.params?.spawnedBy === MAIN_AGENT_SESSION_KEY) {
+          return {
+            path: "/tmp/sessions.json",
+            sessions: [],
+          };
+        }
+        return {
+          path: "/tmp/sessions.json",
+          sessions: [{ key: "agent:other:main", kind: "direct" }],
+        };
+      }
+      return {};
+    });
+
+    const result = await tool.execute("call-denied-session-id", {
+      sessionKey: "session-id-only",
+      message: "hi",
+      timeoutSeconds: 0,
+    });
+
+    const details = requireDetails(result);
+    expect(details.status).toBe("forbidden");
+    expect(details.sessionKey).toBe("session-id-only");
   });
 
   it("blocks cross-agent sends when tools.agentToAgent.enabled is false", async () => {
@@ -879,6 +954,34 @@ describe("sessions_send gating", () => {
     const details = requireDetails(result);
     expect(details.status).toBe("error");
     expect(details.sessionKey).toBe(threadSessionKey);
+    expect((result.details as { error?: string } | undefined)?.error ?? "").toContain(
+      "cannot target a thread session",
+    );
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    expect(requireGatewayRequest().method).toBe("sessions.resolve");
+  });
+
+  it("does not disclose a resolved thread session key from a sessionId target", async () => {
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      tools: {
+        agentToAgent: { enabled: false },
+        sessions: { visibility: "all" },
+      },
+    });
+    const threadSessionKey = "agent:other:discord:channel:123456:thread:987654";
+    callGatewayMock.mockResolvedValueOnce({ key: threadSessionKey });
+    const tool = createMainSessionsSendTool();
+
+    const result = await tool.execute("call-thread-session-id", {
+      sessionKey: "thread-session-id",
+      message: "hi",
+      timeoutSeconds: 0,
+    });
+
+    const details = requireDetails(result);
+    expect(details.status).toBe("error");
+    expect(details.sessionKey).toBe("thread-session-id");
     expect((result.details as { error?: string } | undefined)?.error ?? "").toContain(
       "cannot target a thread session",
     );

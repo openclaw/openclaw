@@ -1,3 +1,6 @@
+/**
+ * Creates embedded-agent sessions with the runner resource loader installed.
+ */
 import type { CreateAgentSessionOptions } from "../../sessions/index.js";
 
 /**
@@ -15,6 +18,7 @@ export type EmbeddedAgentSessionOptions = {
   sessionManager: unknown;
   settingsManager: unknown;
   resourceLoader: unknown;
+  resolveDeferredTool?: CreateAgentSessionOptions["resolveDeferredTool"];
   withSessionWriteLock?: CreateAgentSessionOptions["withSessionWriteLock"];
 };
 

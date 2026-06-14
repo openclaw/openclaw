@@ -1,3 +1,6 @@
+/**
+ * Resolves configured provider secrets from env, profiles, and SecretRefs.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.js";
@@ -93,6 +96,18 @@ export function resolveAwsSdkApiKeyVarName(
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
   return resolveAwsSdkEnvVarName(env);
+}
+
+function resolveEnvAuthEvidenceApiKeyMarker(
+  provider: string,
+  env: NodeJS.ProcessEnv,
+): string | undefined {
+  const resolved = resolveEnvApiKey(provider, env);
+  const apiKey = resolved?.apiKey?.trim();
+  if (!apiKey || !isNonSecretApiKeyMarker(apiKey, { includeEnvVarName: false })) {
+    return undefined;
+  }
+  return apiKey;
 }
 
 /** Rewrites secret-backed provider headers to stable marker values. */
@@ -331,11 +346,14 @@ export function resolveMissingProviderApiKey(params: {
   }
 
   const fromEnv = resolveEnvApiKeyVarName(params.providerKey, params.env);
-  const apiKey = fromEnv ?? params.profileApiKey?.apiKey;
+  const fromAuthEvidence = fromEnv
+    ? undefined
+    : resolveEnvAuthEvidenceApiKeyMarker(params.providerKey, params.env);
+  const apiKey = fromEnv ?? fromAuthEvidence ?? params.profileApiKey?.apiKey;
   if (!apiKey?.trim()) {
     return params.provider;
   }
-  if (params.profileApiKey && params.profileApiKey.source !== "plaintext") {
+  if (fromAuthEvidence || (params.profileApiKey && params.profileApiKey.source !== "plaintext")) {
     params.secretRefManagedProviders?.add(params.providerKey);
   }
   return {

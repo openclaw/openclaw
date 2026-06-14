@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Routes UI package commands through the repo's Node/pnpm wrappers.
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
@@ -18,6 +19,9 @@ function usage() {
   process.stderr.write("Usage: node scripts/ui.js <install|dev|build|test> [...args]\n");
 }
 
+/**
+ * Returns whether Windows needs cmd.exe for a command shim.
+ */
 export function shouldUseCmdExeForCommand(cmd, platform = process.platform) {
   if (platform !== "win32") {
     return false;
@@ -26,6 +30,9 @@ export function shouldUseCmdExeForCommand(cmd, platform = process.platform) {
   return WINDOWS_CMD_EXE_EXTENSIONS.has(extension);
 }
 
+/**
+ * Builds the spawn call for a UI command, including Windows cmd.exe wrapping.
+ */
 export function resolveSpawnCall(cmd, args, envOverride, params = {}) {
   const platform = params.platform ?? process.platform;
   const comSpec = params.comSpec ?? process.env.ComSpec ?? "cmd.exe";
@@ -54,10 +61,16 @@ export function resolveSpawnCall(cmd, args, envOverride, params = {}) {
   };
 }
 
+/**
+ * Builds the pnpm-backed spawn call for UI package scripts.
+ */
 export function resolvePnpmSpawnCall(pnpmArgs, envOverride, params = {}) {
   const env = envOverride ?? process.env;
   const platform = params.platform ?? process.platform;
+  const cwd = params.cwd ?? uiDir;
   const runner = resolvePnpmRunner({
+    cwd,
+    env,
     pnpmArgs,
     nodeExecPath: params.nodeExecPath ?? process.execPath,
     npmExecPath: params.npmExecPath ?? env.npm_execpath,
@@ -68,7 +81,7 @@ export function resolvePnpmSpawnCall(pnpmArgs, envOverride, params = {}) {
     command: runner.command,
     args: runner.args,
     options: {
-      cwd: params.cwd ?? uiDir,
+      cwd,
       stdio: "inherit",
       env,
       shell: runner.shell,

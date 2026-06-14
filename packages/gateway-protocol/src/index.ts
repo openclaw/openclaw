@@ -321,6 +321,16 @@ import {
   SessionsCompactionListParamsSchema,
   type SessionsCompactionRestoreParams,
   SessionsCompactionRestoreParamsSchema,
+  type SessionFileBrowserEntry,
+  SessionFileBrowserEntrySchema,
+  type SessionFileBrowserResult,
+  SessionFileBrowserResultSchema,
+  type SessionFileEntry,
+  SessionFileEntrySchema,
+  type SessionFileKind,
+  SessionFileKindSchema,
+  type SessionFileRelevance,
+  SessionFileRelevanceSchema,
   type SessionOperationEvent,
   type SessionsCreateParams,
   SessionsCreateParamsSchema,
@@ -328,6 +338,14 @@ import {
   SessionsDeleteParamsSchema,
   type SessionsDescribeParams,
   SessionsDescribeParamsSchema,
+  type SessionsFilesGetParams,
+  SessionsFilesGetParamsSchema,
+  type SessionsFilesGetResult,
+  SessionsFilesGetResultSchema,
+  type SessionsFilesListParams,
+  SessionsFilesListParamsSchema,
+  type SessionsFilesListResult,
+  SessionsFilesListResultSchema,
   type SessionsListParams,
   SessionsListParamsSchema,
   type SessionsMessagesSubscribeParams,
@@ -462,11 +480,17 @@ import {
   WizardStepSchema,
 } from "./schema.js";
 
+/** Normalized validation error shape exposed by every protocol validator. */
 export type ValidationError = {
+  /** Failed schema keyword, when the validator can report one. */
   keyword?: string;
+  /** JSON-pointer path to the failing data location. */
   instancePath?: string;
+  /** JSON-pointer path to the failing schema location. */
   schemaPath?: string;
+  /** Validator-specific keyword parameters for richer diagnostics. */
   params?: Record<string, unknown>;
+  /** Human-readable validation message. */
   message?: string;
 };
 
@@ -623,6 +647,12 @@ export const validateSessionsDescribeParams = lazyCompile<SessionsDescribeParams
 );
 export const validateSessionsResolveParams = lazyCompile<SessionsResolveParams>(
   SessionsResolveParamsSchema,
+);
+export const validateSessionsFilesListParams = lazyCompile<SessionsFilesListParams>(
+  SessionsFilesListParamsSchema,
+);
+export const validateSessionsFilesGetParams = lazyCompile<SessionsFilesGetParams>(
+  SessionsFilesGetParamsSchema,
 );
 export const validateSessionsCreateParams = lazyCompile<SessionsCreateParams>(
   SessionsCreateParamsSchema,
@@ -999,6 +1029,15 @@ export {
   SessionsPreviewParamsSchema,
   SessionsDescribeParamsSchema,
   SessionsResolveParamsSchema,
+  SessionFileBrowserEntrySchema,
+  SessionFileBrowserResultSchema,
+  SessionFileEntrySchema,
+  SessionFileKindSchema,
+  SessionFileRelevanceSchema,
+  SessionsFilesGetParamsSchema,
+  SessionsFilesGetResultSchema,
+  SessionsFilesListParamsSchema,
+  SessionsFilesListResultSchema,
   SessionsCompactionListParamsSchema,
   SessionsCompactionGetParamsSchema,
   SessionsCompactionBranchParamsSchema,
@@ -1242,6 +1281,15 @@ export type {
   AgentsFilesGetResult,
   AgentsFilesSetParams,
   AgentsFilesSetResult,
+  SessionFileBrowserEntry,
+  SessionFileBrowserResult,
+  SessionFileEntry,
+  SessionFileKind,
+  SessionFileRelevance,
+  SessionsFilesListParams,
+  SessionsFilesListResult,
+  SessionsFilesGetParams,
+  SessionsFilesGetResult,
   ArtifactSummary,
   ArtifactsListParams,
   ArtifactsListResult,

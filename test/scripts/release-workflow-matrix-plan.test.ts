@@ -1,3 +1,4 @@
+// Release Workflow Matrix Plan tests cover release workflow matrix plan script behavior.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -66,6 +67,7 @@ const PROFILE_EXPECTATIONS = [
       "anthropic",
       "google",
       "minimax",
+      "moonshot",
       "openai",
       "opencode-go",
       "openrouter",
@@ -129,6 +131,7 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
       "openai",
     ]);
     expect(plan.liveModels.omitted.map((entry) => entry.id)).toEqual([
+      "moonshot",
       "opencode-go",
       "openrouter",
       "xai",
@@ -146,7 +149,7 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
     });
 
     expect(plan.liveModels.count).toBe(0);
-    expect(plan.liveModels.omitted).toHaveLength(9);
+    expect(plan.liveModels.omitted).toHaveLength(10);
     expect(plan.liveModels.omitted[0]?.reason).toBe(
       "Docker live model matrix disabled by input selection",
     );

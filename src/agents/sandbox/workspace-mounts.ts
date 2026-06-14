@@ -1,3 +1,8 @@
+/**
+ * Sandbox workspace mount argument builder.
+ *
+ * Creates Docker bind specs for writable workspaces and read-only skill source mounts.
+ */
 import fs from "node:fs";
 import path from "node:path";
 import { isPathInside } from "../../infra/path-guards.js";
@@ -5,10 +10,8 @@ import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
 import { resolveSandboxHostPathViaExistingAncestor } from "./host-paths.js";
 import type { SandboxWorkspaceAccess } from "./types.js";
 
-/**
- * Builds Docker volume arguments for workspace and read-only skill mounts.
- */
 export const SANDBOX_MOUNT_FORMAT_VERSION = 3;
+const MATERIALIZED_SANDBOX_SKILLS_WORKSPACE_PARTS = [".openclaw", "sandbox-skills"] as const;
 
 /** Read-only skill directory mounted from the agent workspace into the sandbox workspace. */
 export type ReadOnlyWorkspaceSkillMount = {
@@ -33,9 +36,18 @@ function containerJoin(root: string, ...parts: string[]): string {
   return suffix ? `${normalizedRoot}/${suffix}` : normalizedRoot;
 }
 
-/** Returns true when a skill mount source exists inside the canonical agent workspace. */
+/** Hidden workspace used to materialize non-workspace skills for rw sandboxes. */
+export function resolveMaterializedSandboxSkillsWorkspaceDir(rootDir: string): string {
+  return path.join(rootDir, ...MATERIALIZED_SANDBOX_SKILLS_WORKSPACE_PARTS);
+}
+
+export function resolveMaterializedSandboxSkillsRoot(rootDir: string): string {
+  return path.join(resolveMaterializedSandboxSkillsWorkspaceDir(rootDir), "skills");
+}
+
+/** Returns true when a skill mount source exists inside the canonical mount root. */
 export function isExistingWorkspaceSkillMountSource(params: {
-  agentWorkspaceDir: string;
+  rootDir: string;
   hostPath: string;
 }): boolean {
   try {
@@ -46,9 +58,7 @@ export function isExistingWorkspaceSkillMountSource(params: {
     return false;
   }
 
-  const agentRoot = resolveSandboxHostPathViaExistingAncestor(
-    path.resolve(params.agentWorkspaceDir),
-  );
+  const agentRoot = resolveSandboxHostPathViaExistingAncestor(path.resolve(params.rootDir));
   const canonicalSource = resolveSandboxHostPathViaExistingAncestor(path.resolve(params.hostPath));
   return isPathInside(agentRoot, canonicalSource);
 }
@@ -57,6 +67,7 @@ export function isExistingWorkspaceSkillMountSource(params: {
 export function resolveReadOnlyWorkspaceSkillMounts(params: {
   workspaceDir: string;
   agentWorkspaceDir: string;
+  skillsWorkspaceDir?: string;
   workdir: string;
   workspaceAccess: SandboxWorkspaceAccess;
 }): ReadOnlyWorkspaceSkillMount[] {
@@ -66,23 +77,38 @@ export function resolveReadOnlyWorkspaceSkillMounts(params: {
 
   // RW workspaces mount the project as writable, but skill sources remain read-only so agent
   // instructions are visible without letting sandbox commands mutate them.
+  const materializedSkillsWorkspaceDir =
+    params.skillsWorkspaceDir ?? resolveMaterializedSandboxSkillsWorkspaceDir(params.agentWorkspaceDir);
   const mounts = [
     {
       hostPath: path.join(params.agentWorkspaceDir, "skills"),
       containerPath: containerJoin(params.workdir, "skills"),
+      rootDir: params.agentWorkspaceDir,
     },
     {
       hostPath: path.join(params.agentWorkspaceDir, ".agents", "skills"),
       containerPath: containerJoin(params.workdir, ".agents", "skills"),
+      rootDir: params.agentWorkspaceDir,
+    },
+    {
+      hostPath: path.join(materializedSkillsWorkspaceDir, "skills"),
+      containerPath: containerJoin(
+        params.workdir,
+        ...MATERIALIZED_SANDBOX_SKILLS_WORKSPACE_PARTS,
+        "skills",
+      ),
+      rootDir: materializedSkillsWorkspaceDir,
     },
   ];
 
-  return mounts.filter((mount) =>
-    isExistingWorkspaceSkillMountSource({
-      agentWorkspaceDir: params.agentWorkspaceDir,
-      hostPath: mount.hostPath,
-    }),
-  );
+  return mounts
+    .filter((mount) =>
+      isExistingWorkspaceSkillMountSource({
+        rootDir: mount.rootDir,
+        hostPath: mount.hostPath,
+      }),
+    )
+    .map(({ hostPath, containerPath }) => ({ hostPath, containerPath }));
 }
 
 /** Returns stable mount state for sandbox config hashes. */
@@ -114,6 +140,7 @@ export function appendWorkspaceMountArgs(params: {
   args: string[];
   workspaceDir: string;
   agentWorkspaceDir: string;
+  skillsWorkspaceDir?: string;
   workdir: string;
   workspaceAccess: SandboxWorkspaceAccess;
   readOnlyWorkspaceSkillMounts?: readonly ReadOnlyWorkspaceSkillMount[];
@@ -149,6 +176,7 @@ export function appendWorkspaceMountArgs(params: {
         resolveReadOnlyWorkspaceSkillMounts({
           workspaceDir,
           agentWorkspaceDir,
+          skillsWorkspaceDir: params.skillsWorkspaceDir,
           workdir,
           workspaceAccess,
         }),
