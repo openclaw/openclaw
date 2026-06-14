@@ -3845,6 +3845,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     "Running normally.",
     "Working fine.",
     "Running 3 jobs.",
+    "Running version 2.0.",
     "Checking the scheduler returned 3 jobs.",
     "Running the query showed no errors.",
   ])("does not classify result-style progress text %s as planning-only", (assistantText) => {
@@ -4302,6 +4303,24 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     });
 
     expect(retryInstruction).toBeNull();
+  });
+
+  it.each([
+    "I'll inspect what requires updating.",
+    "I'll check whether the service is unavailable.",
+  ])("does not treat prospective blocker wording as completion: %s", (assistantText) => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      prompt: "Please inspect the service and report the result.",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [assistantText],
+      }),
+    });
+
+    expect(retryInstruction).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
   });
 
   it("does not treat present-progress blocker explanations as planning-only turns", () => {

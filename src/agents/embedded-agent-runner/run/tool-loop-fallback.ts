@@ -442,8 +442,14 @@ function selectLatestSafeResultBlocks(
 function buildCompletedWithoutSafeSummaryPayload(params: {
   toolName: string | undefined;
   successfulObservations: readonly ToolLoopObservation[];
+  preserveActionCoverage?: boolean;
 }): ReplyPayload {
-  const resultBlocks = selectLatestSafeResultBlocks(params.successfulObservations);
+  const resultBlocks = params.preserveActionCoverage
+    ? params.successfulObservations.flatMap((observation) => {
+        const payload = resolveToolOwnedPublicPayload({ successfulObservations: [observation] });
+        return payload?.text ? [{ toolName: observation.toolName, text: payload.text }] : [];
+      })
+    : selectLatestSafeResultBlocks(params.successfulObservations);
   const subject = params.toolName ? `${params.toolName} completed` : "Tool work completed";
   if (resultBlocks.length > 0) {
     return {
@@ -501,6 +507,26 @@ function selectLatestSuccessfulObservationPerTool(
     latestByToolName.set(observation.toolName, observation);
   }
   return [...latestByToolName.values()];
+}
+
+function selectLatestSuccessfulObservationPerAction(
+  observations: readonly ToolLoopObservation[],
+): ToolLoopObservation[] {
+  const latestByAction = new Map<string, ToolLoopObservation>();
+  for (const observation of observations) {
+    const actionIdentity = resolveToolActionIdentity(observation);
+    latestByAction.delete(actionIdentity);
+    latestByAction.set(actionIdentity, observation);
+  }
+  return [...latestByAction.values()];
+}
+
+function hasSuccessfulSideEffect(observation: ToolLoopObservation): boolean {
+  return (
+    observation.mutatingAction === true ||
+    observation.asyncStarted === true ||
+    observation.didSendViaMessagingTool === true
+  );
 }
 
 export function resolveToolLoopAbortFallback(params: {
@@ -567,7 +593,13 @@ export function resolveSuccessfulToolTerminalFallback(params: {
   ) {
     return undefined;
   }
-  const successfulObservations = selectLatestSuccessfulObservationPerTool(coverageObservations);
+  const preserveActionCoverage =
+    params.requireDeclaredPresentableFallback === true &&
+    coverageObservations.some(hasSuccessfulSideEffect) &&
+    new Set(coverageObservations.map(resolveToolActionIdentity)).size > 1;
+  const successfulObservations = preserveActionCoverage
+    ? selectLatestSuccessfulObservationPerAction(coverageObservations)
+    : selectLatestSuccessfulObservationPerTool(coverageObservations);
   const allSuccessfulToolNames = new Set(
     successfulObservations.map((observation) => observation.toolName),
   );
@@ -586,6 +618,16 @@ export function resolveSuccessfulToolTerminalFallback(params: {
       payload: buildCompletedWithoutSafeSummaryPayload({
         toolName: singleSuccessfulToolName,
         successfulObservations,
+      }),
+    };
+  }
+  if (preserveActionCoverage) {
+    return {
+      toolName: singleSuccessfulToolName ?? "multiple_tools",
+      payload: buildCompletedWithoutSafeSummaryPayload({
+        toolName: singleSuccessfulToolName,
+        successfulObservations,
+        preserveActionCoverage: true,
       }),
     };
   }

@@ -1192,6 +1192,44 @@ describe("tool-loop terminal fallback", () => {
     ).toBeUndefined();
   });
 
+  it("preserves same-tool fallback summaries for every covered action", () => {
+    expect(
+      resolveSuccessfulToolTerminalFallback({
+        requireDeclaredPresentableFallback: true,
+        observations: [
+          {
+            toolName: "cron",
+            argsHash: "add",
+            resultHash: "add-result",
+            mutatingAction: true,
+            terminalSummary: {
+              text: "Added the backup job.",
+              privacy: "public",
+            },
+          },
+          {
+            toolName: "cron",
+            argsHash: "status",
+            resultHash: "status-result",
+            terminalSummary: {
+              text: "Scheduler has 2 jobs.",
+              privacy: "public",
+            },
+          },
+        ],
+      }),
+    ).toEqual({
+      toolName: "cron",
+      payload: {
+        text: [
+          "cron completed, but the model did not provide a final answer.",
+          "Result from cron:\nAdded the backup job.",
+          "Result from cron:\nScheduler has 2 jobs.",
+        ].join("\n\n"),
+      },
+    });
+  });
+
   it.each([
     {
       name: "public summary",

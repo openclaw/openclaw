@@ -159,9 +159,9 @@ const PLANNING_ONLY_PROMISE_RE =
 const PLANNING_ONLY_PROGRESS_CLAIM_RE =
   /^(?:i(?:'m| am)\s+)?(?:checking|running|working(?:\s+on\s+it)?|on\s+it|taking\s+a\s+look|inspecting|reading|searching|looking(?:\s+into|\s+at)?|debugging|testing|verifying|investigating|reviewing|fetching|probing|starting|launching|sending(?:\s+(?:it|this|that|the\s+\w+))?\s+off|kicking\s+(?:it|this|that|the\s+\w+\s+)?off|monitoring\s+(?:it|this|that|now|for\b))\b/i;
 const PLANNING_ONLY_PROGRESS_RESULT_RE =
-  /^(?:i(?:'m| am)\s+)?(?:checking|running|working|inspecting|reading|searching|looking|debugging|testing|verifying|investigating|reviewing|fetching|probing|monitoring)\b(?:\s*:|\s+(?:normally|smoothly|well|fine|healthy|successfully|as expected|idle|ready|available|unavailable|complete|completed|finished|failed|blocked|\d+\b|no\b|none\b)|(?![^.!?\n]{0,160}\b(?:if|whether)\b)[^.!?\n]{1,160}\b(?:returned|showed|reported|revealed|produced|found)\b)/i;
+  /^(?:i(?:'m| am)\s+)?(?:checking|running|working|inspecting|reading|searching|looking|debugging|testing|verifying|investigating|reviewing|fetching|probing|monitoring)\b(?:\s*:|\s+(?:normally|smoothly|well|fine|healthy|successfully|as expected|idle|ready|available|unavailable|complete|completed|finished|failed|blocked|version\s+v?\d[\w.-]*\b|\d+\b|no\b|none\b)|(?![^.!?\n]{0,160}\b(?:if|whether)\b)[^.!?\n]{1,160}\b(?:returned|showed|reported|revealed|produced|found|requires?\b[^.!?\n]{0,100}\b(?:is|are)\s+unavailable)\b)/i;
 const PLANNING_ONLY_COMPLETION_RE =
-  /\b(?:done|finished|implemented|updated|fixed|changed|ran|verified|found|here(?:'s| is) what|blocked by|the blocker is|requires?|unavailable|not available|can't|cannot)\b/i;
+  /\b(?:done|finished|implemented|updated|fixed|changed|ran|verified|found|here(?:'s| is) what|blocked by|the blocker is|can't|cannot)\b/i;
 const PLANNING_ONLY_HEADING_RE = /^(?:plan|steps?|next steps?)\s*:/i;
 const PLANNING_ONLY_BULLET_RE = /^(?:[-*•]\s+|\d+[.)]\s+)/u;
 const PLANNING_ONLY_MAX_VISIBLE_TEXT = 700;
