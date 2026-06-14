@@ -281,12 +281,29 @@ function buildImageContext(
   };
 }
 
+function isDashScopeEndpoint(model: Model): boolean {
+  const provider = model.provider?.toLowerCase() ?? "";
+  const baseUrl = model.baseUrl?.toLowerCase() ?? "";
+  return (
+    provider.includes("dashscope") ||
+    provider === "qwen" ||
+    provider === "qwen-dashscope" ||
+    baseUrl.includes("dashscope.aliyuncs.com")
+  );
+}
+
 function shouldPlaceImagePromptInUserContent(model: Model): boolean {
   // GitHub Copilot models (including Gemini 3.1 Pro Preview) require the
   // prompt text to be in the user message alongside the image. Placing it
   // in a separate system message produces "Request must contain at least
   // one non-empty message" (400).
   if (model.provider === "github-copilot") {
+    return true;
+  }
+  // DashScope/Qwen vision models return 400 "Unexpected item type in content"
+  // when the user message contains only image blocks with no text. The prompt
+  // must be placed in the user content alongside the image.
+  if (isDashScopeEndpoint(model)) {
     return true;
   }
   const capabilities = resolveProviderRequestCapabilities({
