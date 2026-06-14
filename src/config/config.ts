@@ -12,6 +12,7 @@ export {
   projectConfigOntoRuntimeSourceSnapshot,
   loadConfig,
   readBestEffortConfig,
+  readBestEffortConfigSnapshot,
   readSourceConfigBestEffort,
   parseConfigJson5,
   promoteConfigSnapshotToLastKnownGood,
@@ -41,6 +42,7 @@ export type {
   RuntimeConfigSnapshotMetadata,
 } from "./runtime-snapshot.js";
 export type {
+  BestEffortConfigSnapshot,
   ConfigSnapshotReadOptions,
   ConfigWriteNotification,
   ConfigWriteResult,

@@ -19,6 +19,17 @@
   box-shadow: none !important;
 }
 
+.chat-workbench__main {
+  grid-column: 1;
+  grid-row: 1;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
 /* Chat header - fixed at top, transparent */
 .chat-header {
   display: flex;
