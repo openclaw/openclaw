@@ -4033,6 +4033,35 @@ describe("active-memory plugin", () => {
     expectLinesToContain(getActiveMemoryLines(sessionKey), "Active Memory: status=ok");
   });
 
+  it("matches configured memory tool names case-insensitively", async () => {
+    testing.setMinimumTimeoutMsForTests(1);
+    testing.setSetupGraceTimeoutMsForTests(0);
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: 1_000,
+      toolsAllow: [" MEMORY_SEARCH "],
+      logging: true,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    const sessionKey = "agent:main:case-insensitive-tool-evidence";
+    hoisted.sessionStore[sessionKey] = {
+      sessionId: "s-case-insensitive-tool-evidence",
+      updatedAt: 0,
+    };
+    runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
+      await writeUsableMemoryTranscript(params.sessionFile, "User usually orders ramen.");
+      return { payloads: [{ text: "User usually orders ramen." }] };
+    });
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what food do i usually order? case insensitive", messages: [] },
+      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+    );
+
+    expect(lastEmbeddedRunParams().toolsAllow).toEqual(["memory_search"]);
+    expectPrependContextContains(result, "User usually orders ramen.");
+  });
+
   it("allows a configured custom tool to succeed after a failed attempt", async () => {
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);

@@ -31,6 +31,7 @@ import { parseAgentSessionKey, parseThreadSessionSuffix } from "openclaw/plugin-
 import { isPathInside } from "openclaw/plugin-sdk/security-runtime";
 import {
   asOptionalRecord as asRecord,
+  normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   normalizeStringEntries,
   uniqueStrings,
@@ -457,12 +458,12 @@ function normalizeConfiguredToolsAllow(value: unknown): string[] | undefined {
     if (typeof entry !== "string") {
       continue;
     }
-    const trimmed = entry.trim();
-    if (!trimmed || isReservedActiveMemoryToolsAllowEntry(trimmed) || seen.has(trimmed)) {
+    const normalized = normalizeLowercaseStringOrEmpty(entry);
+    if (!normalized || isReservedActiveMemoryToolsAllowEntry(normalized) || seen.has(normalized)) {
       continue;
     }
-    seen.add(trimmed);
-    out.push(trimmed);
+    seen.add(normalized);
+    out.push(normalized);
     if (out.length >= MAX_ACTIVE_MEMORY_TOOLS_ALLOW) {
       break;
     }
@@ -1697,10 +1698,11 @@ function extractActiveMemorySearchDebugFromSessionRecord(
 ): ActiveMemorySearchDebug | undefined {
   const record = asRecord(value);
   const nestedMessage = asRecord(record?.message);
+  const recordToolName = normalizeLowercaseStringOrEmpty(record?.toolName);
   const topLevelMessage =
     record?.role === "toolResult" ||
-    record?.toolName === "memory_search" ||
-    record?.toolName === "memory_recall"
+    recordToolName === "memory_search" ||
+    recordToolName === "memory_recall"
       ? record
       : undefined;
   const message = nestedMessage ?? topLevelMessage;
@@ -1708,7 +1710,7 @@ function extractActiveMemorySearchDebugFromSessionRecord(
     return undefined;
   }
   const role = normalizeOptionalString(message.role);
-  const toolName = normalizeOptionalString(message.toolName);
+  const toolName = normalizeLowercaseStringOrEmpty(message.toolName);
   if (role !== "toolResult" || (toolName !== "memory_search" && toolName !== "memory_recall")) {
     return undefined;
   }
@@ -1745,8 +1747,8 @@ function extractToolResultNameFromSessionRecord(value: unknown): string | undefi
     return undefined;
   }
   const role = normalizeOptionalString(message.role);
-  const toolName = normalizeOptionalString(message.toolName);
-  return role === "toolResult" ? toolName : undefined;
+  const toolName = normalizeLowercaseStringOrEmpty(message.toolName);
+  return role === "toolResult" && toolName ? toolName : undefined;
 }
 
 function hasUnavailableMemoryResultInSessionRecord(
@@ -1763,7 +1765,7 @@ function hasUnavailableMemoryResultInSessionRecord(
   if (!message || normalizeOptionalString(message.role) !== "toolResult") {
     return false;
   }
-  const toolName = normalizeOptionalString(message.toolName);
+  const toolName = normalizeLowercaseStringOrEmpty(message.toolName);
   if (!toolName || !toolsAllow.includes(toolName)) {
     return false;
   }
@@ -1786,7 +1788,7 @@ function hasTerminalUnavailableMemoryResultInSessionRecord(
   if (!message || normalizeOptionalString(message.role) !== "toolResult") {
     return false;
   }
-  const toolName = normalizeOptionalString(message.toolName);
+  const toolName = normalizeLowercaseStringOrEmpty(message.toolName);
   if (!toolName || !toolsAllow.includes(toolName)) {
     return false;
   }
@@ -1840,17 +1842,18 @@ function hasUsableMemoryResultInSessionRecord(
 ): boolean {
   const record = asRecord(value);
   const nestedMessage = asRecord(record?.message);
+  const recordToolName = normalizeLowercaseStringOrEmpty(record?.toolName);
   const topLevelMessage =
     record?.role === "toolResult" ||
-    record?.toolName === "memory_search" ||
-    record?.toolName === "memory_recall"
+    recordToolName === "memory_search" ||
+    recordToolName === "memory_recall"
       ? record
       : undefined;
   const message = nestedMessage ?? topLevelMessage;
   if (!message || normalizeOptionalString(message.role) !== "toolResult") {
     return false;
   }
-  const toolName = normalizeOptionalString(message.toolName);
+  const toolName = normalizeLowercaseStringOrEmpty(message.toolName);
   if (!toolName || !toolsAllow.includes(toolName)) {
     return false;
   }
@@ -1990,7 +1993,11 @@ async function readTerminalMemorySearchResult(
 ): Promise<TerminalMemorySearchResult | undefined> {
   // memory_get consumes a path discovered by another tool; it is not an
   // independent fallback that should delay terminal unavailability.
-  const recallPathNames = new Set(toolsAllow?.filter((toolName) => toolName !== "memory_get"));
+  const recallPathNames = new Set(
+    toolsAllow
+      ?.map((toolName) => normalizeLowercaseStringOrEmpty(toolName))
+      .filter((toolName) => toolName && toolName !== "memory_get"),
+  );
   if (recallPathNames.size === 0) {
     return undefined;
   }
