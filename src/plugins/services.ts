@@ -10,7 +10,7 @@ import { withPluginHttpRouteRegistry } from "./http-registry.js";
 import type { PluginServiceRegistration } from "./registry-types.js";
 import type { PluginRegistry } from "./registry.js";
 import { encodeStartupTraceSegment } from "./startup-trace-segment.js";
-import type { OpenClawPluginServiceContext, PluginLogger } from "./types.js";
+import type { OpenClawPluginService, OpenClawPluginServiceContext, PluginLogger } from "./types.js";
 
 const log = createSubsystemLogger("plugins");
 function createPluginLogger(): PluginLogger {
@@ -26,15 +26,15 @@ function createServiceContext(params: {
   config: OpenClawConfig;
   startupTrace?: PluginServiceStartupTrace;
   workspaceDir?: string;
-  service: PluginServiceRegistration;
+  service: ReadablePluginServiceRegistration;
 }): OpenClawPluginServiceContext {
   const isDiagnosticsExporter =
-    params.service?.pluginId === params.service?.service.id &&
-    (params.service?.service.id === "diagnostics-otel" ||
-      params.service?.service.id === "diagnostics-prometheus");
+    params.service.pluginId === params.service.serviceId &&
+    (params.service.serviceId === "diagnostics-otel" ||
+      params.service.serviceId === "diagnostics-prometheus");
   const grantsInternalDiagnostics =
     isDiagnosticsExporter &&
-    (params.service?.origin === "bundled" || params.service?.trustedOfficialInstall === true);
+    (params.service.origin === "bundled" || params.service.trustedOfficialInstall === true);
 
   return {
     config: params.config,
@@ -60,8 +60,47 @@ function createServiceContext(params: {
   };
 }
 
-function createPluginServiceTraceName(entry: PluginServiceRegistration): string {
-  return `sidecars.plugin-services.${encodeStartupTraceSegment(entry.pluginId)}.${encodeStartupTraceSegment(entry.service.id)}`;
+type ReadablePluginServiceRegistration = {
+  readonly pluginId: string;
+  readonly serviceId: string;
+  readonly pluginService: OpenClawPluginService;
+  readonly start: OpenClawPluginService["start"];
+  readonly origin: PluginServiceRegistration["origin"];
+  readonly trustedOfficialInstall?: boolean;
+  readonly rootDir?: string;
+};
+
+type PluginServiceRegistrationReadResult =
+  | { readonly ok: true; readonly entry: ReadablePluginServiceRegistration }
+  | { readonly ok: false; readonly error: unknown };
+
+function createPluginServiceTraceName(entry: ReadablePluginServiceRegistration): string {
+  return `sidecars.plugin-services.${encodeStartupTraceSegment(entry.pluginId)}.${encodeStartupTraceSegment(entry.serviceId)}`;
+}
+
+function readPluginServiceRegistration(
+  entry: PluginServiceRegistration,
+): PluginServiceRegistrationReadResult {
+  try {
+    const pluginId = entry.pluginId;
+    const service = entry.service;
+    return {
+      ok: true,
+      entry: {
+        pluginId,
+        serviceId: service.id,
+        pluginService: service,
+        start: service.start,
+        origin: entry.origin,
+        ...(entry.trustedOfficialInstall === undefined
+          ? {}
+          : { trustedOfficialInstall: entry.trustedOfficialInstall }),
+        ...(entry.rootDir === undefined ? {} : { rootDir: entry.rootDir }),
+      },
+    };
+  } catch (error) {
+    return { ok: false, error };
+  }
 }
 
 function createScopedPluginServiceStartupTrace(
@@ -104,31 +143,42 @@ export async function startPluginServices(params: {
   }> = [];
   let failedCount = 0;
   for (const entry of params.registry.services) {
-    const service = entry.service;
-    const traceName = createPluginServiceTraceName(entry);
+    const readable = readPluginServiceRegistration(entry);
+    if (!readable.ok) {
+      failedCount += 1;
+      log.error(`plugin service registration unreadable: ${String(readable.error)}`);
+      continue;
+    }
+    const service = readable.entry;
+    const traceName = createPluginServiceTraceName(service);
     const serviceContext = createServiceContext({
       config: params.config,
       startupTrace: params.startupTrace,
       workspaceDir: params.workspaceDir,
-      service: entry,
+      service,
     });
     try {
       const startService = () =>
-        withPluginHttpRouteRegistry(params.registry, () => service.start(serviceContext));
+        withPluginHttpRouteRegistry(params.registry, () =>
+          service.start.call(service.pluginService, serviceContext),
+        );
       if (params.startupTrace) {
         await params.startupTrace.measure(traceName, startService);
       } else {
         await startService();
       }
+      const stopService = service.pluginService.stop;
       running.push({
-        id: service.id,
-        stop: service.stop ? () => service.stop?.(serviceContext) : undefined,
+        id: service.serviceId,
+        stop: stopService
+          ? () => stopService.call(service.pluginService, serviceContext)
+          : undefined,
       });
     } catch (err) {
       failedCount += 1;
       const error = err as Error;
       log.error(
-        `plugin service failed (${service.id}, plugin=${entry.pluginId}, root=${entry.rootDir ?? "unknown"}): ${error?.message ?? String(err)}`,
+        `plugin service failed (${service.serviceId}, plugin=${service.pluginId}, root=${service.rootDir ?? "unknown"}): ${error?.message ?? String(err)}`,
       );
     }
   }
