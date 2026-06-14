@@ -622,17 +622,19 @@ describe("getStatusSummary", () => {
       provider: "deepseek",
       model: "deepseek-v4-flash",
     });
-    statusSummaryMocks.readSessionStoreReadOnly.mockReturnValue({
-      "agent:main:main": {
-        sessionId: "session-1",
-        updatedAt: Date.now(),
-        providerOverride: "deepseek",
-        modelOverride: "deepseek-v4-flash",
-        modelOverrideSource: "user",
-        modelOverrideFallbackOriginProvider: "zhipu",
-        modelOverrideFallbackOriginModel: "glm-4.5-air",
-      },
-    });
+    statusSummaryMocks.listSessionEntries.mockReturnValue(
+      toSessionEntrySummaries({
+        "agent:main:main": {
+          sessionId: "session-1",
+          updatedAt: Date.now(),
+          providerOverride: "deepseek",
+          modelOverride: "deepseek-v4-flash",
+          modelOverrideSource: "user",
+          modelOverrideFallbackOriginProvider: "zhipu",
+          modelOverrideFallbackOriginModel: "glm-4.5-air",
+        },
+      }),
+    );
 
     const summary = await getStatusSummary();
 
