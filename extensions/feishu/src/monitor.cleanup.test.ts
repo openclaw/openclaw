@@ -6,6 +6,7 @@ import {
   botOpenIds,
   FEISHU_HTTP_SERVER_CLOSE_TIMEOUT_MS,
   httpServers,
+  setFeishuBotIdentityState,
   stopFeishuMonitorState,
   wsClients,
 } from "./monitor.state.js";
@@ -442,6 +443,53 @@ describe("feishu websocket cleanup", () => {
     expect(botNames.has("alpha")).toBe(false);
   });
 
+  it("preserves replacement HTTP state after delayed targeted cleanup", async () => {
+    const oldServer = createHttpServerMock();
+    const replacementServer = createHttpServerMock();
+
+    httpServers.set("alpha", oldServer.server);
+    setFeishuBotIdentityState("alpha", { botOpenId: "ou_old", botName: "Old" });
+
+    const stopPromise = stopFeishuMonitorState("alpha");
+    await Promise.resolve();
+
+    setFeishuBotIdentityState("alpha", { botOpenId: "ou_new", botName: "New" });
+    httpServers.set("alpha", replacementServer.server);
+
+    oldServer.finishClose();
+    await stopPromise;
+
+    expect(httpServers.get("alpha")).toBe(replacementServer.server);
+    expect(botOpenIds.get("alpha")).toBe("ou_new");
+    expect(botNames.get("alpha")).toBe("New");
+
+    const cleanupPromise = stopFeishuMonitorState("alpha");
+    await Promise.resolve();
+    replacementServer.finishClose();
+    await cleanupPromise;
+  });
+
+  it("preserves replacement identity written before the replacement HTTP server is tracked", async () => {
+    const oldServer = createHttpServerMock();
+
+    httpServers.set("alpha", oldServer.server);
+    setFeishuBotIdentityState("alpha", { botOpenId: "ou_old", botName: "Old" });
+
+    const stopPromise = stopFeishuMonitorState("alpha");
+    await Promise.resolve();
+
+    setFeishuBotIdentityState("alpha", { botOpenId: "ou_new", botName: "New" });
+
+    oldServer.finishClose();
+    await stopPromise;
+
+    expect(httpServers.has("alpha")).toBe(false);
+    expect(botOpenIds.get("alpha")).toBe("ou_new");
+    expect(botNames.get("alpha")).toBe("New");
+
+    await stopFeishuMonitorState("alpha");
+  });
+
   it("forces targeted HTTP server cleanup after the close timeout", async () => {
     vi.useFakeTimers();
     const { server, close, closeAllConnections } = createHttpServerMock();
@@ -467,5 +515,31 @@ describe("feishu websocket cleanup", () => {
     expect(httpServers.has("alpha")).toBe(false);
     expect(botOpenIds.has("alpha")).toBe(false);
     expect(botNames.has("alpha")).toBe(false);
+  });
+
+  it("preserves replacement HTTP state after delayed global cleanup", async () => {
+    const oldServer = createHttpServerMock();
+    const replacementServer = createHttpServerMock();
+
+    httpServers.set("alpha", oldServer.server);
+    setFeishuBotIdentityState("alpha", { botOpenId: "ou_old", botName: "Old" });
+
+    const stopPromise = stopFeishuMonitorState();
+    await Promise.resolve();
+
+    setFeishuBotIdentityState("alpha", { botOpenId: "ou_new", botName: "New" });
+    httpServers.set("alpha", replacementServer.server);
+
+    oldServer.finishClose();
+    await stopPromise;
+
+    expect(httpServers.get("alpha")).toBe(replacementServer.server);
+    expect(botOpenIds.get("alpha")).toBe("ou_new");
+    expect(botNames.get("alpha")).toBe("New");
+
+    const cleanupPromise = stopFeishuMonitorState("alpha");
+    await Promise.resolve();
+    replacementServer.finishClose();
+    await cleanupPromise;
   });
 });
