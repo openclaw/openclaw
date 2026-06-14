@@ -83,6 +83,7 @@ Native slash commands are opt-in. When enabled, OpenClaw registers `oc_*` slash 
   <Accordion title="Behavior notes">
     - `native: "auto"` defaults to disabled for Mattermost. Set `native: true` to enable.
     - If `callbackUrl` is omitted, OpenClaw derives one from gateway host/port + `callbackPath`.
+    - Native slash command callbacks must resolve to HTTPS before OpenClaw registers commands. Omitted values that derive to `http://...` and explicit `http://...` callback URLs fail closed at startup.
     - For multi-account setups, `commands` can be set at the top level or under `channels.mattermost.accounts.<id>.commands` (account values override top-level fields).
     - Command callbacks are validated with the per-command tokens returned by Mattermost when OpenClaw registers `oc_*` commands.
     - OpenClaw refreshes current Mattermost command registration before accepting each callback so stale tokens from deleted or regenerated slash commands stop being accepted without a gateway restart.
@@ -91,8 +92,9 @@ Native slash commands are opt-in. When enabled, OpenClaw registers `oc_*` slash 
 
   </Accordion>
   <Accordion title="Reachability requirement">
-    The callback endpoint must be reachable from the Mattermost server.
+    The callback endpoint must be HTTPS and reachable from the Mattermost server.
 
+    - Set `callbackUrl` to an `https://` URL that Mattermost can reach. Use a reverse proxy or tunnel with TLS termination for public or cross-host deployments.
     - Do not set `callbackUrl` to `localhost` unless Mattermost runs on the same host/network namespace as OpenClaw.
     - Do not set `callbackUrl` to your Mattermost base URL unless that URL reverse-proxies `/api/channels/mattermost/command` to OpenClaw.
     - A quick check is `curl https://<gateway-host>/api/channels/mattermost/command`; a GET should return `405 Method Not Allowed` from OpenClaw, not `404`.
@@ -517,8 +519,8 @@ Mattermost supports multiple accounts under `channels.mattermost.accounts`:
       - the callback is hitting the wrong gateway/account
       - Mattermost still has old commands pointing at a previous callback target
       - the gateway restarted without reactivating slash commands
-    - If native slash commands stop working, check logs for `mattermost: failed to register slash commands` or `mattermost: native slash commands enabled but no commands could be registered`.
-    - If `callbackUrl` is omitted and logs warn that the callback resolved to `http://127.0.0.1:18789/...`, that URL is probably only reachable when Mattermost runs on the same host/network namespace as OpenClaw. Set an explicit externally reachable `commands.callbackUrl` instead.
+    - If native slash commands stop working, check logs for `mattermost: failed to register slash commands`, `mattermost: native slash commands enabled but no commands could be registered`, or `mattermost: native slash commands require an HTTPS channels.mattermost.commands.callbackUrl`.
+    - If `callbackUrl` is omitted and the derived callback resolves to `http://127.0.0.1:18789/...` or another non-HTTPS URL, OpenClaw refuses registration. Set an explicit externally reachable HTTPS `commands.callbackUrl` instead.
 
   </Accordion>
   <Accordion title="Buttons issues">

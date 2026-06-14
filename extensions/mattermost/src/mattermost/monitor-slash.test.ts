@@ -191,15 +191,12 @@ describe("mattermost monitor slash", () => {
     );
   });
 
-  it("warns on loopback callback urls and reports partial team failures", async () => {
+  it("refuses insecure derived callback URLs before registration", async () => {
     resolveSlashCommandConfig.mockReturnValue({ enabled: true, nativeSkills: false });
     isSlashCommandsEnabled.mockReturnValue(true);
     parseTcpPort.mockReturnValue(null);
     fetchMattermostUserTeams.mockResolvedValue([{ id: "team-1" }, { id: "team-2" }]);
     resolveCallbackUrl.mockReturnValue("http://127.0.0.1:18789/slash");
-    registerSlashCommands
-      .mockResolvedValueOnce([{ token: "token-1", trigger: "ping" }])
-      .mockRejectedValueOnce(new Error("boom"));
     const runtime = {
       log: vi.fn(),
       error: vi.fn(),
@@ -215,13 +212,43 @@ describe("mattermost monitor slash", () => {
     });
 
     expect(runtime.error).toHaveBeenCalledWith(
-      "mattermost: slash commands callbackUrl resolved to http://127.0.0.1:18789/slash (loopback) while baseUrl is https://chat.example.com. This MAY be unreachable depending on your deployment. If native slash commands don't work, set channels.mattermost.commands.callbackUrl to a URL reachable from the Mattermost server (e.g. your public reverse proxy URL).",
+      "mattermost: native slash commands require an HTTPS channels.mattermost.commands.callbackUrl; refusing derived callback http://127.0.0.1:18789/slash",
     );
+    expect(registerSlashCommands).not.toHaveBeenCalled();
+    expect(activateSlashCommands).not.toHaveBeenCalled();
+  });
+
+  it("refuses insecure explicitly configured callback URLs", async () => {
+    resolveSlashCommandConfig.mockReturnValue({
+      enabled: true,
+      nativeSkills: false,
+      callbackUrl: "http://public-server.example.com/slash",
+    });
+    isSlashCommandsEnabled.mockReturnValue(true);
+    parseTcpPort.mockReturnValue(null);
+    fetchMattermostUserTeams.mockResolvedValue([{ id: "team-1" }]);
+    resolveCallbackUrl.mockReturnValue("http://public-server.example.com/slash");
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+    };
+
+    await registerMattermostMonitorSlashCommands({
+      client: {} as never,
+      cfg: { gateway: { customBindHost: "gateway.example.com" } } as never,
+      runtime: runtime as never,
+      account: {
+        config: { commands: { callbackUrl: "http://public-server.example.com/slash" } },
+        accountId: "default",
+      } as never,
+      baseUrl: "https://chat.example.com",
+      botUserId: "bot-user",
+    });
+
     expect(runtime.error).toHaveBeenCalledWith(
-      "mattermost: failed to register slash commands for team team-2: Error: boom",
+      "mattermost: native slash commands require an HTTPS channels.mattermost.commands.callbackUrl; refusing explicit callback http://public-server.example.com/slash",
     );
-    expect(runtime.error).toHaveBeenCalledWith(
-      "mattermost: slash command registration completed with 1 team error(s)",
-    );
+    expect(registerSlashCommands).not.toHaveBeenCalled();
+    expect(activateSlashCommands).not.toHaveBeenCalled();
   });
 });
