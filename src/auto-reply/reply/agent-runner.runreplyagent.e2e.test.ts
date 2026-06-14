@@ -6,6 +6,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { saveSessionStore, type SessionEntry } from "../../config/sessions.js";
 import { readSessionStoreForTest } from "../../config/sessions/test-helpers.js";
 import type { TypingMode } from "../../config/types.js";
+import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import {
@@ -164,6 +165,7 @@ function createMinimalRun(params?: {
   shouldSteer?: boolean;
   shouldFollowup?: boolean;
   resolvedQueueMode?: string;
+  originatingThreadId?: FollowupRun["originatingThreadId"];
   sessionCtx?: Partial<TemplateContext>;
   runOverrides?: Partial<FollowupRun["run"]>;
 }) {
@@ -182,6 +184,7 @@ function createMinimalRun(params?: {
     prompt: "hello",
     summaryLine: "hello",
     enqueuedAt: Date.now(),
+    originatingThreadId: params?.originatingThreadId,
     run: {
       sessionId: "session",
       sessionKey,
@@ -605,6 +608,48 @@ describe("runReplyAgent pending final delivery capture", () => {
     const stored = await readStoredMainSession(storePath);
     expect(stored.pendingFinalDelivery).toBe(true);
     expect(stored.pendingFinalDeliveryText).toBe("Sent daily summary to channel.");
+  });
+
+  it("does not persist heartbeat text already delivered by the message tool", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry);
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "message tool delivered" }],
+      messagingToolSentTexts: ["message tool delivered"],
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: "telegram",
+          to: "-100123",
+          text: "message tool delivered",
+        },
+      ],
+      meta: {},
+    });
+
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: true },
+      runOverrides: { messageProvider: "telegram" },
+      sessionCtx: {
+        Provider: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "-100123",
+      },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+
+    await run();
+
+    const stored = await readStoredMainSession(storePath);
+    expect(stored.pendingFinalDelivery).toBeUndefined();
+    expect(stored.pendingFinalDeliveryText).toBeUndefined();
   });
 
   it("persists heartbeat reply remainder as pending delivery when remainder exceeds ackMaxChars", async () => {
@@ -1594,6 +1639,501 @@ describe("runReplyAgent typing (heartbeat)", () => {
     } finally {
       fallbackSpy.mockRestore();
     }
+  });
+
+  it("marks heartbeat replies only when generic message-tool delivery matches the reply route", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "message tool delivered" }],
+      messagingToolSentTexts: ["message tool delivered"],
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: "telegram",
+          accountId: "primary",
+          to: "-100123",
+          text: "message tool delivered",
+        },
+      ],
+      meta: {},
+    });
+
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: true },
+      runOverrides: {
+        messageProvider: "telegram",
+      },
+      sessionCtx: {
+        Provider: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "-100123",
+        AccountId: "primary",
+      },
+    });
+
+    const res = await run();
+    const payload = requireRecord(res, "heartbeat reply payload");
+    const metadata = getReplyPayloadMetadata(payload) as
+      | { messageToolDeliveredForReplyRoute?: boolean }
+      | undefined;
+
+    expect(payload.text).toBe("message tool delivered");
+    expect(metadata?.messageToolDeliveredForReplyRoute).toBe(true);
+  });
+
+  it("keeps undelivered heartbeat text when a later payload was delivered by message tool", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [
+        { text: "fallback text still needs delivery" },
+        { text: "message tool delivered" },
+      ],
+      messagingToolSentTexts: ["message tool delivered"],
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: "telegram",
+          accountId: "primary",
+          to: "-100123",
+          text: "message tool delivered",
+        },
+      ],
+      meta: {},
+    });
+
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: true },
+      runOverrides: {
+        messageProvider: "telegram",
+      },
+      sessionCtx: {
+        Provider: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "-100123",
+        AccountId: "primary",
+      },
+    });
+
+    const res = await run();
+    const payload = requireRecord(res, "heartbeat reply payload");
+    const metadata = getReplyPayloadMetadata(payload) as
+      | { messageToolDeliveredForReplyRoute?: boolean }
+      | undefined;
+
+    expect(payload.text).toBe("fallback text still needs delivery");
+    expect(metadata?.messageToolDeliveredForReplyRoute).not.toBe(true);
+  });
+
+  it("marks heartbeat text replies when the same route delivered different text", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "fallback text still needs delivery after a route send" }],
+      messagingToolSentTexts: ["message tool delivered"],
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: "telegram",
+          accountId: "primary",
+          to: "-100123",
+          text: "message tool delivered",
+        },
+      ],
+      meta: {},
+    });
+
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: true },
+      runOverrides: {
+        messageProvider: "telegram",
+      },
+      sessionCtx: {
+        Provider: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "-100123",
+        AccountId: "primary",
+      },
+    });
+
+    const res = await run();
+    const payload = requireRecord(res, "heartbeat reply payload");
+    const metadata = getReplyPayloadMetadata(payload) as
+      | { messageToolDeliveredForReplyRoute?: boolean }
+      | undefined;
+
+    expect(payload.text).toBe("fallback text still needs delivery after a route send");
+    expect(metadata?.messageToolDeliveredForReplyRoute).toBe(true);
+  });
+
+  it("marks heartbeat replies when the message tool implicitly targets the current route", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "message tool delivered" }],
+      messagingToolSentTexts: ["message tool delivered"],
+      meta: {},
+    });
+
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: true, sourceReplyDeliveryMode: "message_tool_only" },
+      runOverrides: {
+        messageProvider: "telegram",
+      },
+      sessionCtx: {
+        Provider: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "-100123",
+        AccountId: "primary",
+      },
+    });
+
+    const res = await run();
+    const payload = requireRecord(res, "heartbeat reply payload");
+    const metadata = getReplyPayloadMetadata(payload) as
+      | { messageToolDeliveredForReplyRoute?: boolean }
+      | undefined;
+
+    expect(payload.text).toBe("message tool delivered");
+    expect(metadata?.messageToolDeliveredForReplyRoute).toBe(true);
+  });
+
+  it("does not mark implicit current-route heartbeat replies with different text", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "implicit fallback text still needs delivery" }],
+      messagingToolSentTexts: ["message tool delivered"],
+      meta: {},
+    });
+
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: true, sourceReplyDeliveryMode: "message_tool_only" },
+      runOverrides: {
+        messageProvider: "telegram",
+      },
+      sessionCtx: {
+        Provider: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "-100123",
+        AccountId: "primary",
+      },
+    });
+
+    const res = await run();
+    const payload = requireRecord(res, "heartbeat reply payload");
+    const metadata = getReplyPayloadMetadata(payload) as
+      | { messageToolDeliveredForReplyRoute?: boolean }
+      | undefined;
+
+    expect(payload.text).toBe("implicit fallback text still needs delivery");
+    expect(metadata?.messageToolDeliveredForReplyRoute).not.toBe(true);
+  });
+
+  it("does not mark heartbeat media replies as delivered by text-only message-tool evidence", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [
+        {
+          text: "fallback attachment still needs delivery",
+          mediaUrls: ["file:///tmp/heartbeat-proof.png"],
+        },
+      ],
+      messagingToolSentTexts: ["message tool delivered"],
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: "telegram",
+          accountId: "primary",
+          to: "-100123",
+          text: "message tool delivered",
+        },
+      ],
+      meta: {},
+    });
+
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: true },
+      runOverrides: {
+        messageProvider: "telegram",
+      },
+      sessionCtx: {
+        Provider: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "-100123",
+        AccountId: "primary",
+      },
+    });
+
+    const res = await run();
+    const payload = requireRecord(res, "heartbeat reply payload");
+    const metadata = getReplyPayloadMetadata(payload) as
+      | { messageToolDeliveredForReplyRoute?: boolean }
+      | undefined;
+
+    expect(payload.text).toContain("fallback attachment still needs delivery");
+    expect(metadata?.messageToolDeliveredForReplyRoute).not.toBe(true);
+  });
+
+  it("does not mark heartbeat text replies as delivered by media-only route evidence", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "fallback text still needs delivery after an attachment" }],
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: "telegram",
+          accountId: "primary",
+          to: "-100123",
+          mediaUrls: ["file:///tmp/heartbeat-proof.png"],
+        },
+      ],
+      meta: {},
+    });
+
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: true },
+      runOverrides: {
+        messageProvider: "telegram",
+      },
+      sessionCtx: {
+        Provider: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "-100123",
+        AccountId: "primary",
+      },
+    });
+
+    const res = await run();
+    const payload = requireRecord(res, "heartbeat reply payload");
+    const metadata = getReplyPayloadMetadata(payload) as
+      | { messageToolDeliveredForReplyRoute?: boolean }
+      | undefined;
+
+    expect(payload.text).toBe("fallback text still needs delivery after an attachment");
+    expect(metadata?.messageToolDeliveredForReplyRoute).not.toBe(true);
+  });
+
+  it("does not mark heartbeat rich replies as delivered by text-only message-tool evidence", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [
+        {
+          text: "fallback action still needs delivery",
+          channelData: { telegram: { replyMarkup: { inline_keyboard: [] } } },
+        },
+      ],
+      messagingToolSentTexts: ["message tool delivered"],
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: "telegram",
+          accountId: "primary",
+          to: "-100123",
+          text: "message tool delivered",
+        },
+      ],
+      meta: {},
+    });
+
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: true },
+      runOverrides: {
+        messageProvider: "telegram",
+      },
+      sessionCtx: {
+        Provider: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "-100123",
+        AccountId: "primary",
+      },
+    });
+
+    const res = await run();
+    const payload = requireRecord(res, "heartbeat reply payload");
+    const metadata = getReplyPayloadMetadata(payload) as
+      | { messageToolDeliveredForReplyRoute?: boolean }
+      | undefined;
+
+    expect(payload.text).toBe("fallback action still needs delivery");
+    expect(metadata?.messageToolDeliveredForReplyRoute).not.toBe(true);
+  });
+
+  it("marks heartbeat replies when generic message-tool delivery matches the reply thread", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "topic message tool delivered" }],
+      messagingToolSentTexts: ["topic message tool delivered"],
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: "telegram",
+          accountId: "primary",
+          to: "-100123",
+          threadId: "77",
+          text: "topic message tool delivered",
+        },
+      ],
+      meta: {},
+    });
+
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: true },
+      runOverrides: {
+        messageProvider: "telegram",
+      },
+      sessionCtx: {
+        Provider: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "-100123",
+        MessageThreadId: 77,
+        AccountId: "primary",
+      },
+    });
+
+    const res = await run();
+    const payload = requireRecord(res, "heartbeat reply payload");
+    const metadata = getReplyPayloadMetadata(payload) as
+      | { messageToolDeliveredForReplyRoute?: boolean }
+      | undefined;
+
+    expect(payload.text).toBe("topic message tool delivered");
+    expect(metadata?.messageToolDeliveredForReplyRoute).toBe(true);
+  });
+
+  it("marks heartbeat replies using the queued routed thread id", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "routed-thread message tool delivered" }],
+      messagingToolSentTexts: ["routed-thread message tool delivered"],
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: "slack",
+          accountId: "primary",
+          to: "C123",
+          threadId: "1739142736.000100",
+          text: "routed-thread message tool delivered",
+        },
+      ],
+      meta: {},
+    });
+
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: true },
+      originatingThreadId: "1739142736.000100",
+      runOverrides: {
+        messageProvider: "slack",
+      },
+      sessionCtx: {
+        Provider: "slack",
+        OriginatingChannel: "slack",
+        OriginatingTo: "C123",
+        AccountId: "primary",
+      },
+    });
+
+    const res = await run();
+    const payload = requireRecord(res, "heartbeat reply payload");
+    const metadata = getReplyPayloadMetadata(payload) as
+      | { messageToolDeliveredForReplyRoute?: boolean }
+      | undefined;
+
+    expect(payload.text).toBe("routed-thread message tool delivered");
+    expect(metadata?.messageToolDeliveredForReplyRoute).toBe(true);
+  });
+
+  it("marks heartbeat replies from matched target plus legacy global text evidence", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "legacy message tool delivered" }],
+      messagingToolSentTexts: ["legacy message tool delivered"],
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: "slack",
+          accountId: "primary",
+          to: "C123",
+        },
+      ],
+      meta: {},
+    });
+
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: true },
+      runOverrides: {
+        messageProvider: "slack",
+      },
+      sessionCtx: {
+        Provider: "slack",
+        OriginatingChannel: "slack",
+        OriginatingTo: "C123",
+        AccountId: "primary",
+      },
+    });
+
+    const res = await run();
+    const payload = requireRecord(res, "heartbeat reply payload");
+    const metadata = getReplyPayloadMetadata(payload) as
+      | { messageToolDeliveredForReplyRoute?: boolean }
+      | undefined;
+
+    expect(payload.text).toBe("legacy message tool delivered");
+    expect(metadata?.messageToolDeliveredForReplyRoute).toBe(true);
+  });
+
+  it("does not mark heartbeat replies when generic message-tool delivery targets another route", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "fallback text still needs delivery" }],
+      messagingToolSentTexts: ["message tool delivered elsewhere"],
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: "telegram",
+          accountId: "primary",
+          to: "-100999",
+          text: "message tool delivered elsewhere",
+        },
+      ],
+      meta: {},
+    });
+
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: true },
+      runOverrides: {
+        messageProvider: "telegram",
+      },
+      sessionCtx: {
+        Provider: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "-100123",
+        AccountId: "primary",
+      },
+    });
+
+    const res = await run();
+    const payload = requireRecord(res, "heartbeat reply payload");
+    const metadata = getReplyPayloadMetadata(payload) as
+      | { messageToolDeliveredForReplyRoute?: boolean }
+      | undefined;
+
+    expect(payload.text).toBe("fallback text still needs delivery");
+    expect(metadata?.messageToolDeliveredForReplyRoute).not.toBe(true);
+  });
+
+  it("does not mark heartbeat replies from global message-tool evidence without route targets", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "fallback text still needs delivery without route evidence" }],
+      messagingToolSentTexts: ["message tool delivered but route is unknown"],
+      meta: {},
+    });
+
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: true },
+      runOverrides: {
+        messageProvider: "telegram",
+      },
+      sessionCtx: {
+        Provider: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "-100123",
+        AccountId: "primary",
+      },
+    });
+
+    const res = await run();
+    const payload = requireRecord(res, "heartbeat reply payload");
+    const metadata = getReplyPayloadMetadata(payload) as
+      | { messageToolDeliveredForReplyRoute?: boolean }
+      | undefined;
+
+    expect(payload.text).toBe("fallback text still needs delivery without route evidence");
+    expect(metadata?.messageToolDeliveredForReplyRoute).not.toBe(true);
   });
 
   it("does not treat whitespace-only messaging evidence as fallback delivery", async () => {

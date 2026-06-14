@@ -18,6 +18,12 @@ const baseParams = {
   replyToMode: "off" as const,
 };
 
+const genericRoute = {
+  accountId: "primary",
+  provider: "unit-channel",
+  to: "room-123",
+};
+
 function expectFields(value: unknown, expected: Record<string, unknown>): void {
   if (!value || typeof value !== "object") {
     throw new Error("expected fields object");
@@ -28,13 +34,17 @@ function expectFields(value: unknown, expected: Record<string, unknown>): void {
   }
 }
 
-async function expectSameTargetRepliesDelivered(params: { provider: string; to: string }) {
+async function expectSameTargetRepliesDelivered(params: {
+  originatingChannel?: string;
+  provider: string;
+  to: string;
+}) {
   const { replyPayloads } = await buildReplyPayloads({
     ...baseParams,
     payloads: [{ text: "hello world!" }],
     messageProvider: "heartbeat",
-    originatingChannel: "feishu",
-    originatingTo: "ou_abc123",
+    originatingChannel: params.originatingChannel ?? genericRoute.provider,
+    originatingTo: params.to,
     messagingToolSentTexts: ["different message"],
     messagingToolSentTargets: [{ tool: "message", provider: params.provider, to: params.to }],
   });
@@ -66,6 +76,309 @@ describe("buildReplyPayloads media filter integration", () => {
 
     expect(replyPayloads).toHaveLength(1);
     expect(replyPayloads[0]?.text).toBe("Before\n\n\nAfter");
+  });
+
+  it("marks heartbeat text duplicates before message-tool dedupe removes them", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      isHeartbeat: true,
+      payloads: [{ text: "message tool delivered" }],
+      messageProvider: genericRoute.provider,
+      originatingChannel: genericRoute.provider,
+      originatingTo: genericRoute.to,
+      accountId: genericRoute.accountId,
+      messagingToolSentTexts: ["message tool delivered"],
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: genericRoute.provider,
+          accountId: genericRoute.accountId,
+          to: genericRoute.to,
+          text: "message tool delivered",
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]?.text).toBe("message tool delivered");
+    expect(getReplyPayloadMetadata(replyPayloads[0])?.messageToolDeliveredForReplyRoute).toBe(true);
+  });
+
+  it("removes delivered heartbeat duplicates when another payload still needs delivery", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      isHeartbeat: true,
+      payloads: [
+        { text: "fallback text still needs delivery" },
+        { text: "message tool delivered" },
+      ],
+      messageProvider: genericRoute.provider,
+      originatingChannel: genericRoute.provider,
+      originatingTo: genericRoute.to,
+      accountId: genericRoute.accountId,
+      messagingToolSentTexts: ["message tool delivered"],
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: genericRoute.provider,
+          accountId: genericRoute.accountId,
+          to: genericRoute.to,
+          text: "message tool delivered",
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]?.text).toBe("fallback text still needs delivery");
+    expect(getReplyPayloadMetadata(replyPayloads[0])?.messageToolDeliveredForReplyRoute).not.toBe(
+      true,
+    );
+  });
+
+  it("preserves heartbeat delivery evidence when other payloads were directly sent", async () => {
+    const { createBlockReplyContentKey } = await import("./block-reply-pipeline.js");
+    const directlySentBlockKeys = new Set<string>([
+      createBlockReplyContentKey({ text: "already streamed" }),
+    ]);
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      isHeartbeat: true,
+      directlySentBlockKeys,
+      payloads: [{ text: "already streamed" }, { text: "message tool delivered" }],
+      messageProvider: genericRoute.provider,
+      originatingChannel: genericRoute.provider,
+      originatingTo: genericRoute.to,
+      accountId: genericRoute.accountId,
+      messagingToolSentTexts: ["message tool delivered"],
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: genericRoute.provider,
+          accountId: genericRoute.accountId,
+          to: genericRoute.to,
+          text: "message tool delivered",
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]?.text).toBe("message tool delivered");
+    expect(getReplyPayloadMetadata(replyPayloads[0])?.messageToolDeliveredForReplyRoute).toBe(true);
+  });
+
+  it("preserves heartbeat delivery evidence when block streaming sent other payloads", async () => {
+    const pipeline: Parameters<typeof buildReplyPayloads>[0]["blockReplyPipeline"] = {
+      didStream: () => true,
+      isAborted: () => false,
+      hasSentPayload: () => false,
+      enqueue: () => {},
+      flush: async () => {},
+      stop: () => {},
+      hasBuffered: () => false,
+      getSentMediaUrls: () => [],
+    };
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      isHeartbeat: true,
+      blockStreamingEnabled: true,
+      blockReplyPipeline: pipeline,
+      payloads: [{ text: "already streamed" }, { text: "message tool delivered" }],
+      messageProvider: genericRoute.provider,
+      originatingChannel: genericRoute.provider,
+      originatingTo: genericRoute.to,
+      accountId: genericRoute.accountId,
+      messagingToolSentTexts: ["message tool delivered"],
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: genericRoute.provider,
+          accountId: genericRoute.accountId,
+          to: genericRoute.to,
+          text: "message tool delivered",
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]?.text).toBe("message tool delivered");
+    expect(getReplyPayloadMetadata(replyPayloads[0])?.messageToolDeliveredForReplyRoute).toBe(true);
+  });
+
+  it("marks heartbeat text duplicates after block media filtering", async () => {
+    const pipeline: Parameters<typeof buildReplyPayloads>[0]["blockReplyPipeline"] = {
+      didStream: () => false,
+      isAborted: () => false,
+      hasSentPayload: () => false,
+      enqueue: () => {},
+      flush: async () => {},
+      stop: () => {},
+      hasBuffered: () => false,
+      getSentMediaUrls: () => ["file:///tmp/generated.png"],
+    };
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      isHeartbeat: true,
+      blockStreamingEnabled: true,
+      blockReplyPipeline: pipeline,
+      payloads: [{ text: "message tool delivered", mediaUrl: "file:///tmp/generated.png" }],
+      messageProvider: genericRoute.provider,
+      originatingChannel: genericRoute.provider,
+      originatingTo: genericRoute.to,
+      accountId: genericRoute.accountId,
+      messagingToolSentTexts: ["message tool delivered"],
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: genericRoute.provider,
+          accountId: genericRoute.accountId,
+          to: genericRoute.to,
+          text: "message tool delivered",
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expectFields(replyPayloads[0], {
+      text: "message tool delivered",
+      mediaUrl: undefined,
+      mediaUrls: undefined,
+    });
+    expect(getReplyPayloadMetadata(replyPayloads[0])?.messageToolDeliveredForReplyRoute).toBe(true);
+  });
+
+  it("marks heartbeat text delivered when same-route message-tool delivery used different text", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      isHeartbeat: true,
+      payloads: [{ text: "fallback text still needs delivery" }],
+      messageProvider: genericRoute.provider,
+      originatingChannel: genericRoute.provider,
+      originatingTo: genericRoute.to,
+      accountId: genericRoute.accountId,
+      messagingToolSentTexts: ["message tool delivered"],
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: genericRoute.provider,
+          accountId: genericRoute.accountId,
+          to: genericRoute.to,
+          text: "message tool delivered",
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]?.text).toBe("fallback text still needs delivery");
+    expect(getReplyPayloadMetadata(replyPayloads[0])?.messageToolDeliveredForReplyRoute).toBe(true);
+  });
+
+  it("keeps heartbeat text when same-route message-tool delivery was media-only", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      isHeartbeat: true,
+      payloads: [{ text: "fallback text still needs delivery after an attachment" }],
+      messageProvider: genericRoute.provider,
+      originatingChannel: genericRoute.provider,
+      originatingTo: genericRoute.to,
+      accountId: genericRoute.accountId,
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: genericRoute.provider,
+          accountId: genericRoute.accountId,
+          to: genericRoute.to,
+          mediaUrls: ["file:///tmp/heartbeat-proof.png"],
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]?.text).toBe("fallback text still needs delivery after an attachment");
+    expect(getReplyPayloadMetadata(replyPayloads[0])?.messageToolDeliveredForReplyRoute).not.toBe(
+      true,
+    );
+  });
+
+  it("marks implicit current-route heartbeat text duplicates only without target records", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      isHeartbeat: true,
+      allowImplicitCurrentRouteMessageToolEvidence: true,
+      payloads: [{ text: "message tool delivered" }],
+      messageProvider: genericRoute.provider,
+      originatingChannel: genericRoute.provider,
+      originatingTo: genericRoute.to,
+      messagingToolSentTexts: ["message tool delivered"],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]?.text).toBe("message tool delivered");
+    expect(getReplyPayloadMetadata(replyPayloads[0])?.messageToolDeliveredForReplyRoute).toBe(true);
+  });
+
+  it("does not use implicit current-route evidence when a target record points elsewhere", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      isHeartbeat: true,
+      allowImplicitCurrentRouteMessageToolEvidence: true,
+      payloads: [{ text: "message tool delivered" }],
+      messageProvider: genericRoute.provider,
+      originatingChannel: genericRoute.provider,
+      originatingTo: genericRoute.to,
+      messagingToolSentTexts: ["message tool delivered"],
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: genericRoute.provider,
+          to: "room-999",
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]?.text).toBe("message tool delivered");
+    expect(getReplyPayloadMetadata(replyPayloads[0])?.messageToolDeliveredForReplyRoute).not.toBe(
+      true,
+    );
+  });
+
+  it("keeps heartbeat rich payloads even when their text matches message-tool delivery", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      isHeartbeat: true,
+      payloads: [
+        {
+          text: "message tool delivered",
+          channelData: { telegram: { replyMarkup: { inline_keyboard: [] } } },
+        },
+      ],
+      messageProvider: genericRoute.provider,
+      originatingChannel: genericRoute.provider,
+      originatingTo: genericRoute.to,
+      accountId: genericRoute.accountId,
+      messagingToolSentTexts: ["message tool delivered"],
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: genericRoute.provider,
+          accountId: genericRoute.accountId,
+          to: genericRoute.to,
+          text: "message tool delivered",
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]?.text).toBe("message tool delivered");
+    expect(replyPayloads[0]?.channelData).toEqual({
+      telegram: { replyMarkup: { inline_keyboard: [] } },
+    });
+    expect(getReplyPayloadMetadata(replyPayloads[0])?.messageToolDeliveredForReplyRoute).not.toBe(
+      true,
+    );
   });
 
   it("preserves internal delivery metadata through final payload normalization", async () => {
@@ -228,10 +541,10 @@ describe("buildReplyPayloads media filter integration", () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
       payloads: [{ text: "hello world!" }],
-      messageProvider: "telegram",
-      originatingTo: "telegram:123",
+      messageProvider: genericRoute.provider,
+      originatingTo: genericRoute.to,
       messagingToolSentTexts: ["hello world!"],
-      messagingToolSentTargets: [{ tool: "discord", provider: "discord", to: "channel:C1" }],
+      messagingToolSentTargets: [{ tool: "message", provider: "other-channel", to: "room-456" }],
     });
 
     expect(replyPayloads).toHaveLength(1);
@@ -242,10 +555,10 @@ describe("buildReplyPayloads media filter integration", () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
       payloads: [{ text: "photo", mediaUrl: "file:///tmp/photo.jpg" }],
-      messageProvider: "telegram",
-      originatingTo: "telegram:123",
+      messageProvider: genericRoute.provider,
+      originatingTo: genericRoute.to,
       messagingToolSentMediaUrls: ["file:///tmp/photo.jpg"],
-      messagingToolSentTargets: [{ tool: "slack", provider: "slack", to: "channel:C1" }],
+      messagingToolSentTargets: [{ tool: "message", provider: "other-channel", to: "room-456" }],
     });
 
     expect(replyPayloads).toHaveLength(1);
@@ -255,35 +568,40 @@ describe("buildReplyPayloads media filter integration", () => {
   it("dedupes final text only against message-tool text sent to the same route", async () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
-      payloads: [{ text: "discord-only text" }],
-      messageProvider: "slack",
-      originatingTo: "channel:C1",
-      messagingToolSentTexts: ["slack text", "discord-only text"],
+      payloads: [{ text: "other-channel-only text" }],
+      messageProvider: genericRoute.provider,
+      originatingTo: genericRoute.to,
+      messagingToolSentTexts: ["same-route text", "other-channel-only text"],
       messagingToolSentTargets: [
-        { tool: "slack", provider: "slack", to: "channel:C1", text: "slack text" },
         {
-          tool: "discord",
-          provider: "discord",
-          to: "channel:C2",
-          text: "discord-only text",
+          tool: "message",
+          provider: genericRoute.provider,
+          to: genericRoute.to,
+          text: "same-route text",
+        },
+        {
+          tool: "message",
+          provider: "other-channel",
+          to: "room-456",
+          text: "other-channel-only text",
         },
       ],
     });
 
     expect(replyPayloads).toHaveLength(1);
-    expect(replyPayloads[0]?.text).toBe("discord-only text");
+    expect(replyPayloads[0]?.text).toBe("other-channel-only text");
   });
 
   it("falls back to global text dedupe for legacy multi-target messaging telemetry", async () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
       payloads: [{ text: "hello world!" }],
-      messageProvider: "slack",
-      originatingTo: "channel:C1",
+      messageProvider: genericRoute.provider,
+      originatingTo: genericRoute.to,
       messagingToolSentTexts: ["hello world!"],
       messagingToolSentTargets: [
-        { tool: "slack", provider: "slack", to: "channel:C1" },
-        { tool: "discord", provider: "discord", to: "channel:C2" },
+        { tool: "message", provider: genericRoute.provider, to: genericRoute.to },
+        { tool: "message", provider: "other-channel", to: "room-456" },
       ],
     });
 
@@ -293,40 +611,43 @@ describe("buildReplyPayloads media filter integration", () => {
   it("dedupes final media only against message-tool media sent to the same route", async () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
-      payloads: [{ text: "photo", mediaUrl: "file:///tmp/discord-photo.jpg" }],
-      messageProvider: "slack",
-      originatingTo: "channel:C1",
-      messagingToolSentMediaUrls: ["file:///tmp/slack-photo.jpg", "file:///tmp/discord-photo.jpg"],
+      payloads: [{ text: "photo", mediaUrl: "file:///tmp/other-channel-photo.jpg" }],
+      messageProvider: genericRoute.provider,
+      originatingTo: genericRoute.to,
+      messagingToolSentMediaUrls: [
+        "file:///tmp/same-route-photo.jpg",
+        "file:///tmp/other-channel-photo.jpg",
+      ],
       messagingToolSentTargets: [
         {
-          tool: "slack",
-          provider: "slack",
-          to: "channel:C1",
-          mediaUrls: ["file:///tmp/slack-photo.jpg"],
+          tool: "message",
+          provider: genericRoute.provider,
+          to: genericRoute.to,
+          mediaUrls: ["file:///tmp/same-route-photo.jpg"],
         },
         {
-          tool: "discord",
-          provider: "discord",
-          to: "channel:C2",
-          mediaUrls: ["file:///tmp/discord-photo.jpg"],
+          tool: "message",
+          provider: "other-channel",
+          to: "room-456",
+          mediaUrls: ["file:///tmp/other-channel-photo.jpg"],
         },
       ],
     });
 
     expect(replyPayloads).toHaveLength(1);
-    expect(replyPayloads[0]?.mediaUrl).toBe("file:///tmp/discord-photo.jpg");
+    expect(replyPayloads[0]?.mediaUrl).toBe("file:///tmp/other-channel-photo.jpg");
   });
 
   it("falls back to global media dedupe for legacy multi-target messaging telemetry", async () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
       payloads: [{ text: "photo", mediaUrl: "file:///tmp/photo.jpg" }],
-      messageProvider: "slack",
-      originatingTo: "channel:C1",
+      messageProvider: genericRoute.provider,
+      originatingTo: genericRoute.to,
       messagingToolSentMediaUrls: ["file:///tmp/photo.jpg"],
       messagingToolSentTargets: [
-        { tool: "slack", provider: "slack", to: "channel:C1" },
-        { tool: "discord", provider: "discord", to: "channel:C2" },
+        { tool: "message", provider: genericRoute.provider, to: genericRoute.to },
+        { tool: "message", provider: "other-channel", to: "room-456" },
       ],
     });
 
@@ -343,10 +664,12 @@ describe("buildReplyPayloads media filter integration", () => {
       ...baseParams,
       payloads: [{ text: "hello world!" }],
       messageProvider: "heartbeat",
-      originatingChannel: "telegram",
-      originatingTo: "268300329",
+      originatingChannel: genericRoute.provider,
+      originatingTo: genericRoute.to,
       messagingToolSentTexts: ["different message"],
-      messagingToolSentTargets: [{ tool: "telegram", provider: "telegram", to: "268300329" }],
+      messagingToolSentTargets: [
+        { tool: "message", provider: genericRoute.provider, to: genericRoute.to },
+      ],
     });
 
     expect(replyPayloads).toHaveLength(1);
@@ -354,7 +677,7 @@ describe("buildReplyPayloads media filter integration", () => {
   });
 
   it("delivers distinct same-target replies when message tool target provider is generic", async () => {
-    await expectSameTargetRepliesDelivered({ provider: "message", to: "ou_abc123" });
+    await expectSameTargetRepliesDelivered({ provider: "message", to: genericRoute.to });
   });
 
   it("delivers distinct same-target replies when target provider is channel alias", async () => {
@@ -380,18 +703,27 @@ describe("buildReplyPayloads media filter integration", () => {
         },
       ]),
     );
-    await expectSameTargetRepliesDelivered({ provider: "lark", to: "ou_abc123" });
+    await expectSameTargetRepliesDelivered({
+      originatingChannel: "feishu",
+      provider: "lark",
+      to: "ou_abc123",
+    });
   });
 
   it("dedupes duplicate same-target reply text without suppressing unrelated finals", async () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
       payloads: [{ text: "hello world!" }],
-      messageProvider: "telegram",
-      originatingTo: "268300329",
+      messageProvider: genericRoute.provider,
+      originatingTo: genericRoute.to,
       messagingToolSentTexts: ["hello world!"],
       messagingToolSentTargets: [
-        { tool: "telegram", provider: "telegram", to: "268300329", text: "hello world!" },
+        {
+          tool: "message",
+          provider: genericRoute.provider,
+          to: genericRoute.to,
+          text: "hello world!",
+        },
       ],
     });
 
@@ -401,24 +733,24 @@ describe("buildReplyPayloads media filter integration", () => {
   it("does not dedupe short commentary that appears inside a longer same-target message", async () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
-      payloads: [{ text: "v2ex hot topics delivered to telegram" }],
-      messageProvider: "telegram",
-      originatingTo: "268300329",
+      payloads: [{ text: "v2ex hot topics delivered to the channel" }],
+      messageProvider: genericRoute.provider,
+      originatingTo: genericRoute.to,
       messagingToolSentTexts: [
-        "1. some article title\n2. another title\nv2ex hot topics delivered to telegram\n3. yet another",
+        "1. some article title\n2. another title\nv2ex hot topics delivered to the channel\n3. yet another",
       ],
       messagingToolSentTargets: [
         {
-          tool: "telegram",
-          provider: "telegram",
-          to: "268300329",
-          text: "1. some article title\n2. another title\nv2ex hot topics delivered to telegram\n3. yet another",
+          tool: "message",
+          provider: genericRoute.provider,
+          to: genericRoute.to,
+          text: "1. some article title\n2. another title\nv2ex hot topics delivered to the channel\n3. yet another",
         },
       ],
     });
 
     expect(replyPayloads).toHaveLength(1);
-    expect(replyPayloads[0]?.text).toBe("v2ex hot topics delivered to telegram");
+    expect(replyPayloads[0]?.text).toBe("v2ex hot topics delivered to the channel");
   });
 
   it("strips media already sent by the block pipeline after normalizing both paths", async () => {
@@ -996,15 +1328,15 @@ describe("buildReplyPayloads media filter integration", () => {
       ...baseParams,
       payloads: [{ text: "hello world!" }],
       messageProvider: "heartbeat",
-      originatingChannel: "telegram",
-      originatingTo: "268300329",
+      originatingChannel: genericRoute.provider,
+      originatingTo: genericRoute.to,
       accountId: "personal",
       messagingToolSentTexts: ["different message"],
       messagingToolSentTargets: [
         {
-          tool: "telegram",
-          provider: "telegram",
-          to: "268300329",
+          tool: "message",
+          provider: genericRoute.provider,
+          to: genericRoute.to,
           accountId: "work",
         },
       ],

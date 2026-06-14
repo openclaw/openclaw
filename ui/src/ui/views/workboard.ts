@@ -2049,7 +2049,9 @@ export function renderWorkboard(props: WorkboardProps) {
         ${state.error ? html`<div class="callout danger">${state.error}</div>` : nothing}
         ${renderDispatchSummary(state)}
         <div class="workboard-board workboard-board--${state.layout}">
-          ${visibleStatuses.map((status) => renderColumn(props, status, byStatus.get(status) ?? []))}
+          ${visibleStatuses.map((status) =>
+            renderColumn(props, status, byStatus.get(status) ?? []),
+          )}
         </div>
       </div>
       ${renderCardModal(props)} ${renderCardDetailsPanel(props)}

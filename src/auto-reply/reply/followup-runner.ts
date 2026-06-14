@@ -1258,6 +1258,7 @@ export function createFollowupRunner(params: {
         originatingChannel: queued.originatingChannel,
         originatingChatType: queued.originatingChatType,
         originatingTo: queued.originatingTo,
+        originatingThreadId: queued.originatingThreadId,
         sentMediaUrls: runResult.messagingToolSentMediaUrls,
         sentTargets: runResult.messagingToolSentTargets,
         sentTexts: runResult.messagingToolSentTexts,

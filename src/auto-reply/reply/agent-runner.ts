@@ -62,6 +62,7 @@ import {
 } from "../fallback-state.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
 import {
+  getReplyPayloadMetadata,
   isReplyPayloadStatusNotice,
   markReplyPayloadForSourceSuppressionDelivery,
   setReplyPayloadMetadata,
@@ -1022,7 +1023,11 @@ function joinCommitmentAssistantText(payloads: ReplyPayload[]): string {
 
 function buildPendingFinalDeliveryText(payloads: ReplyPayload[]): string {
   const text = payloads
-    .filter((payload) => payload.isReasoning !== true)
+    .filter(
+      (payload) =>
+        payload.isReasoning !== true &&
+        getReplyPayloadMetadata(payload)?.messageToolDeliveredForReplyRoute !== true,
+    )
     .map((payload) => payload.text)
     .filter((textLocal): textLocal is string => Boolean(textLocal))
     .join("\n\n");
@@ -1189,6 +1194,7 @@ export async function runReplyAgent(params: {
   const activeRunQueueMode = effectiveResetTriggered ? "interrupt" : resolvedQueue.mode;
 
   const isHeartbeat = opts?.isHeartbeat === true;
+  const originatingThreadId = followupRun.originatingThreadId ?? sessionCtx.MessageThreadId;
   const traceAttributes = {
     provider: followupRun.run.provider,
     hasSessionKey: Boolean(sessionKey ?? followupRun.run.sessionKey),
@@ -1575,6 +1581,7 @@ export async function runReplyAgent(params: {
           originatingTo: sessionCtx.OriginatingTo,
           to: sessionCtx.To,
         }),
+        originatingThreadId,
         accountId: sessionCtx.AccountId,
         normalizeMediaPaths: replyMediaContext.normalizePayload,
       });
@@ -2058,7 +2065,10 @@ export async function runReplyAgent(params: {
         originatingTo: sessionCtx.OriginatingTo,
         to: sessionCtx.To,
       }),
+      originatingThreadId,
       accountId: sessionCtx.AccountId,
+      allowImplicitCurrentRouteMessageToolEvidence:
+        opts?.sourceReplyDeliveryMode === "message_tool_only",
       normalizeMediaPaths: replyMediaContext.normalizePayload,
     });
     const { replyPayloads } = payloadResult;
@@ -2215,9 +2225,10 @@ export async function runReplyAgent(params: {
       });
     }
 
+    let finalPayloads = guardedReplyPayloads;
+
     // Prepend verbose operational notices. Model fallback notices are prepared
     // earlier so they pass through normal reply threading and stream-dedupe.
-    let finalPayloads = guardedReplyPayloads;
     const prefixNotices: ReplyPayload[] = [];
 
     if (verboseEnabled && activeIsNewSession) {
@@ -2418,7 +2429,6 @@ export async function runReplyAgent(params: {
     if (isHookBlockedRun) {
       finalPayloads = markBeforeAgentRunBlockedPayloads(finalPayloads);
     }
-
     // Capture only policy-visible final payloads in session store to support
     // durable delivery retries. Hidden reasoning, message-tool-only replies,
     // and sendPolicy-denied replies must not become heartbeat-replayable text.

@@ -1,9 +1,26 @@
 // Tests usage-line formatting for agent runner completion summaries.
 import { describe, expect, it } from "vitest";
-import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
+import {
+  getReplyPayloadMetadata,
+  markReplyPayloadForMessageToolDeliveryForReplyRoute,
+  setReplyPayloadMetadata,
+} from "../reply-payload.js";
+import type { ReplyPayload } from "../types.js";
 import { appendUsageLine } from "./agent-runner-usage-line.js";
 
 describe("appendUsageLine", () => {
+  it("preserves reply payload metadata when appending to an existing payload", () => {
+    const payload = markReplyPayloadForMessageToolDeliveryForReplyRoute<ReplyPayload>({
+      text: "fallback reply",
+    });
+
+    const [updated] = appendUsageLine([payload], "Usage: 1 in / 1 out");
+
+    expect(updated).toBeDefined();
+    expect(updated?.text).toBe("fallback reply\nUsage: 1 in / 1 out");
+    expect(getReplyPayloadMetadata(updated)?.messageToolDeliveredForReplyRoute).toBe(true);
+  });
+
   it("preserves reply payload metadata when appending usage text", () => {
     const payload = setReplyPayloadMetadata(
       { text: "message tool reply" },

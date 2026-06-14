@@ -141,6 +141,15 @@ describe("shouldDedupeMessagingToolRepliesForRoute", () => {
               deliveryMode: "direct",
               targetsMatchForReplySuppression: targetsMatchTelegramReplySuppression,
             },
+            messaging: {
+              parseExplicitTarget: ({ raw }) => {
+                const topic = raw.match(/^(.+?)(?::topic:(\d+)|:(\d+))$/u);
+                return {
+                  to: topic?.[1] ?? raw,
+                  threadId: topic?.[2] ?? topic?.[3],
+                };
+              },
+            },
           }),
         },
       ]),
@@ -212,6 +221,91 @@ describe("shouldDedupeMessagingToolRepliesForRoute", () => {
         ],
       }),
     ).toBe(true);
+  });
+
+  it("matches topic replies when the origin carries a separate thread id", () => {
+    expect(
+      shouldDedupeMessagingToolRepliesForRoute({
+        messageProvider: "telegram",
+        originatingTo: "-100123",
+        originatingThreadId: 77,
+        messagingToolSentTargets: [
+          { tool: "message", provider: "telegram", to: "-100123", threadId: "77" },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it("does not match topic replies when separate thread ids differ", () => {
+    expect(
+      shouldDedupeMessagingToolRepliesForRoute({
+        messageProvider: "telegram",
+        originatingTo: "-100123",
+        originatingThreadId: 77,
+        messagingToolSentTargets: [
+          { tool: "message", provider: "telegram", to: "-100123", threadId: "88" },
+        ],
+      }),
+    ).toBe(false);
+  });
+
+  it("matches topic replies when the target encodes the thread in to", () => {
+    installTelegramSuppressionRegistry();
+    expect(
+      shouldDedupeMessagingToolRepliesForRoute({
+        messageProvider: "telegram",
+        originatingTo: "-100123",
+        originatingThreadId: 77,
+        messagingToolSentTargets: [
+          { tool: "message", provider: "telegram", to: "-100123:topic:77" },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it("does not match top-level replies when the target encodes a thread in to", () => {
+    installTelegramSuppressionRegistry();
+    expect(
+      shouldDedupeMessagingToolRepliesForRoute({
+        messageProvider: "telegram",
+        originatingTo: "-100123",
+        messagingToolSentTargets: [
+          { tool: "message", provider: "telegram", to: "-100123:topic:77" },
+        ],
+      }),
+    ).toBe(false);
+  });
+
+  it("matches topic replies when the target inherits the current thread", () => {
+    expect(
+      shouldDedupeMessagingToolRepliesForRoute({
+        messageProvider: "telegram",
+        originatingTo: "-100123",
+        originatingThreadId: 77,
+        messagingToolSentTargets: [
+          { tool: "message", provider: "telegram", to: "-100123", threadImplicit: true },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it("does not match topic replies when inherited thread delivery was suppressed", () => {
+    expect(
+      shouldDedupeMessagingToolRepliesForRoute({
+        messageProvider: "telegram",
+        originatingTo: "-100123",
+        originatingThreadId: 77,
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "telegram",
+            to: "-100123",
+            threadImplicit: true,
+            threadSuppressed: true,
+          },
+        ],
+      }),
+    ).toBe(false);
   });
 
   it("preserves string thread ids before plugin reply-suppression matching", () => {

@@ -1,9 +1,18 @@
 /** Builds final reply payloads after sanitization, media normalization, and dedupe. */
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import {
+  hasOutboundReplyContent,
+  resolveSendableOutboundReplyParts,
+} from "openclaw/plugin-sdk/reply-payload";
+import { isMessagingToolDuplicate } from "../../agents/embedded-agent-helpers.js";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.types.js";
 import type { ReplyToMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
+import {
+  hasInteractiveReplyBlocks,
+  hasMessagePresentationBlocks,
+  hasReplyChannelData,
+} from "../../interactive/payload.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { stripLegacyBracketToolCallBlocks } from "../../shared/text/assistant-visible-text.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
@@ -11,6 +20,8 @@ import {
   appendReplyMediaFailureWarning,
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
+  markReplyPayloadForMessageToolDeliveryForReplyRoute,
+  REPLY_MEDIA_FAILURE_WARNING,
   setReplyPayloadMetadata,
 } from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
@@ -32,6 +43,106 @@ const replyPayloadsDedupeRuntimeLoader = createLazyImportLoader(
 
 function loadReplyPayloadsDedupeRuntime() {
   return replyPayloadsDedupeRuntimeLoader.load();
+}
+
+function hasNonEmptyStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.some((entry) => typeof entry === "string" && entry.trim());
+}
+
+function shouldMarkHeartbeatMessageToolDelivered(
+  payload: ReplyPayload,
+  options: { requireTextMatch: boolean; sentTexts: string[] },
+): boolean {
+  if (payload.isError || payload.isFallbackNotice) {
+    return false;
+  }
+  if (
+    hasInteractiveReplyBlocks(payload.interactive) ||
+    hasMessagePresentationBlocks(payload.presentation) ||
+    hasReplyChannelData(payload.channelData)
+  ) {
+    return false;
+  }
+  const sendable = resolveSendableOutboundReplyParts(payload);
+  if (sendable.text.includes(REPLY_MEDIA_FAILURE_WARNING)) {
+    return false;
+  }
+  if (!sendable.hasText || sendable.hasMedia) {
+    return false;
+  }
+  return !options.requireTextMatch || isMessagingToolDuplicate(sendable.text, options.sentTexts);
+}
+
+function requiresHeartbeatDelivery(payload: ReplyPayload): boolean {
+  return payload.isReasoning !== true && hasOutboundReplyContent(payload);
+}
+
+function markHeartbeatMessageToolDeliveredPayloads(params: {
+  payloads: ReplyPayload[];
+  sentTexts: readonly string[];
+  requireTextMatch: boolean;
+}): ReplyPayload[] {
+  if (params.requireTextMatch && params.sentTexts.length === 0) {
+    return params.payloads;
+  }
+  const sentTexts = [...params.sentTexts];
+  const requireTextMatch =
+    params.requireTextMatch ||
+    params.payloads.filter((payload) =>
+      shouldMarkHeartbeatMessageToolDelivered(payload, {
+        sentTexts,
+        requireTextMatch: false,
+      }),
+    ).length > 1;
+  let nextPayloads: ReplyPayload[] | undefined;
+  for (let index = 0; index < params.payloads.length; index++) {
+    const payload = params.payloads[index];
+    if (
+      !shouldMarkHeartbeatMessageToolDelivered(payload, {
+        sentTexts,
+        requireTextMatch,
+      })
+    ) {
+      if (nextPayloads) {
+        nextPayloads.push(payload);
+      }
+      continue;
+    }
+    if (!nextPayloads) {
+      nextPayloads = params.payloads.slice(0, index);
+    }
+    nextPayloads.push(markReplyPayloadForMessageToolDeliveryForReplyRoute(payload));
+  }
+  return nextPayloads ?? params.payloads;
+}
+
+function isHeartbeatMessageToolDeliveredPayload(payload: ReplyPayload): boolean {
+  return getReplyPayloadMetadata(payload)?.messageToolDeliveredForReplyRoute === true;
+}
+
+function finalizeHeartbeatMessageToolDeliveredPayloads(params: {
+  payloads: ReplyPayload[];
+  fallbackPayloads: ReplyPayload[];
+}): ReplyPayload[] {
+  let hasMessageToolDeliveredPayload = false;
+  let hasUndeliveredPayload = false;
+  for (const payload of params.payloads) {
+    const messageToolDelivered = isHeartbeatMessageToolDeliveredPayload(payload);
+    hasMessageToolDeliveredPayload ||= messageToolDelivered;
+    if (!messageToolDelivered && requiresHeartbeatDelivery(payload)) {
+      hasUndeliveredPayload = true;
+    }
+  }
+  if (!hasUndeliveredPayload && !hasMessageToolDeliveredPayload) {
+    const fallbackPayload = params.fallbackPayloads.find(isHeartbeatMessageToolDeliveredPayload);
+    if (fallbackPayload) {
+      return [...params.payloads, fallbackPayload];
+    }
+  }
+  if (!hasMessageToolDeliveredPayload || !hasUndeliveredPayload) {
+    return params.payloads;
+  }
+  return params.payloads.filter((payload) => !isHeartbeatMessageToolDeliveredPayload(payload));
 }
 
 async function normalizeReplyPayloadMedia(params: {
@@ -179,7 +290,9 @@ export async function buildReplyPayloads(params: {
   messagingToolSentTargets?: MessagingToolSend[];
   originatingChannel?: OriginatingChannelType;
   originatingTo?: string;
+  originatingThreadId?: string | number;
   accountId?: string;
+  allowImplicitCurrentRouteMessageToolEvidence?: boolean;
   extractMarkdownImages?: boolean;
   normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
 }): Promise<{ replyPayloads: ReplyPayload[]; didLogHeartbeatStrip: boolean }> {
@@ -281,6 +394,7 @@ export async function buildReplyPayloads(params: {
     originatingTo: resolveOriginMessageTo({
       originatingTo: params.originatingTo,
     }),
+    originatingThreadId: params.originatingThreadId,
     accountId: resolveOriginAccountId({
       originatingAccountId: params.accountId,
     }),
@@ -312,6 +426,27 @@ export async function buildReplyPayloads(params: {
       ? messagingToolSentTexts
       : messagingToolPayloadDedupe.routeSentTexts
     : messagingToolSentTexts;
+  const currentRouteHasImplicitMessageToolTextEvidence =
+    params.allowImplicitCurrentRouteMessageToolEvidence === true &&
+    messagingToolSentTargets.length === 0 &&
+    hasNonEmptyStringArray(messagingToolSentTexts) &&
+    Boolean(
+      resolveOriginMessageProvider({
+        originatingChannel: params.originatingChannel,
+        provider: params.messageProvider,
+      }) &&
+      resolveOriginMessageTo({
+        originatingTo: params.originatingTo,
+      }),
+    );
+  const currentRouteHasExplicitMessageToolTextEvidence =
+    messagingToolPayloadDedupe.matchingRoute && hasNonEmptyStringArray(sentTextsForDedupe);
+  const heartbeatMessageToolDeliveryEvidence =
+    params.isHeartbeat && currentRouteHasExplicitMessageToolTextEvidence
+      ? { sentTexts: sentTextsForDedupe, requireTextMatch: false }
+      : params.isHeartbeat && currentRouteHasImplicitMessageToolTextEvidence
+        ? { sentTexts: messagingToolSentTexts, requireTextMatch: true }
+        : null;
   const messagingToolSentMediaUrls = dedupeMessagingToolPayloads
     ? await normalizeSentMediaUrlsForDedupe({
         sentMediaUrls: sentMediaUrlsForDedupe,
@@ -326,12 +461,21 @@ export async function buildReplyPayloads(params: {
         sentMediaUrls: messagingToolSentMediaUrls,
       })
     : silentFilteredPayloads;
-  const dedupedPayloads = dedupeMessagingToolPayloads
-    ? (dedupeRuntime ?? (await loadReplyPayloadsDedupeRuntime())).filterMessagingToolDuplicates({
+  const dedupedPayloads = heartbeatMessageToolDeliveryEvidence
+    ? markHeartbeatMessageToolDeliveredPayloads({
         payloads: mediaFilteredPayloads,
-        sentTexts: sentTextsForDedupe,
+        ...heartbeatMessageToolDeliveryEvidence,
       })
-    : mediaFilteredPayloads;
+    : params.isHeartbeat
+      ? mediaFilteredPayloads
+      : dedupeMessagingToolPayloads
+        ? (dedupeRuntime ?? (await loadReplyPayloadsDedupeRuntime())).filterMessagingToolDuplicates(
+            {
+              payloads: mediaFilteredPayloads,
+              sentTexts: sentTextsForDedupe,
+            },
+          )
+        : mediaFilteredPayloads;
   const isDirectlySentBlockPayload = (payload: ReplyPayload) =>
     Boolean(params.directlySentBlockKeys?.has(createBlockReplyContentKey(payload)));
   const hasDirectlySentText = (payload: ReplyPayload): boolean => {
@@ -457,8 +601,20 @@ export async function buildReplyPayloads(params: {
           sentMediaUrls: blockSentMediaUrls,
         })
       : contentSuppressedPayloads;
+  const postMediaMarkedPayloads = heartbeatMessageToolDeliveryEvidence
+    ? markHeartbeatMessageToolDeliveredPayloads({
+        payloads: filteredPayloads,
+        ...heartbeatMessageToolDeliveryEvidence,
+      })
+    : filteredPayloads;
+  const deliveryFinalizedPayloads = heartbeatMessageToolDeliveryEvidence
+    ? finalizeHeartbeatMessageToolDeliveredPayloads({
+        payloads: postMediaMarkedPayloads,
+        fallbackPayloads: dedupedPayloads,
+      })
+    : postMediaMarkedPayloads;
   const replyPayloads: ReplyPayload[] = [];
-  for (const payload of filteredPayloads) {
+  for (const payload of deliveryFinalizedPayloads) {
     if (isRenderablePayload(payload)) {
       replyPayloads.push(payload);
     }

@@ -10,7 +10,10 @@ import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
 } from "../auto-reply/reply/agent-runner-failure-copy.js";
-import { markReplyPayloadForSourceSuppressionDelivery } from "../auto-reply/types.js";
+import {
+  markReplyPayloadForMessageToolDeliveryForReplyRoute,
+  markReplyPayloadForSourceSuppressionDelivery,
+} from "../auto-reply/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "./heartbeat-events.js";
 import { runHeartbeatOnce, type HeartbeatDeps } from "./heartbeat-runner.js";
@@ -39,12 +42,19 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
     modelRuntimeId?: string;
     model?: string;
     target?: "telegram" | "last";
+    includeReasoning?: boolean;
   }): OpenClawConfig {
     return {
       agents: {
         defaults: {
           workspace: params.tmpDir,
-          heartbeat: { every: "5m", target: params.target ?? "telegram" },
+          heartbeat: {
+            every: "5m",
+            target: params.target ?? "telegram",
+            ...(params.includeReasoning != null
+              ? { includeReasoning: params.includeReasoning }
+              : {}),
+          },
           ...(params.model ? { model: params.model } : {}),
           ...(params.model && params.modelRuntimeId
             ? { models: { [params.model]: { agentRuntime: { id: params.modelRuntimeId } } } }
@@ -251,6 +261,133 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
     });
 
     expectHeartbeatToolPrompt(result, ["notify=false"]);
+  });
+
+  it("suppresses fallback text only after route-scoped message-tool delivery evidence", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createConfig({ tmpDir, storePath, visibleReplies: "message_tool" });
+      await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+      });
+      replySpy.mockResolvedValue(
+        markReplyPayloadForMessageToolDeliveryForReplyRoute({
+          text: "Fallback narration that should not duplicate the message tool.",
+        }),
+      );
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: createDeps({ sendTelegram, getReplyFromConfig: replySpy }),
+      });
+
+      expect(result.status).toBe("ran");
+      expect(replyOptions(replySpy).sourceReplyDeliveryMode).toBe("message_tool_only");
+      expect(sendTelegram).not.toHaveBeenCalled();
+      expect(getLastHeartbeatEvent()).toMatchObject({
+        status: "sent",
+        preview: "Fallback narration that should not duplicate the message tool.",
+        channel: "telegram",
+      });
+    });
+  });
+
+  it("still delivers opt-in reasoning after route-scoped message-tool delivery evidence", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createConfig({
+        tmpDir,
+        storePath,
+        visibleReplies: "message_tool",
+        includeReasoning: true,
+      });
+      await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+      });
+      replySpy.mockResolvedValue([
+        { text: "Reasoning: checking the route", isReasoning: true },
+        markReplyPayloadForMessageToolDeliveryForReplyRoute({
+          text: "Fallback narration that should not duplicate the message tool.",
+        }),
+      ]);
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: createDeps({ sendTelegram, getReplyFromConfig: replySpy }),
+      });
+
+      expect(result.status).toBe("ran");
+      expect(replyOptions(replySpy).sourceReplyDeliveryMode).toBe("message_tool_only");
+      expectTelegramSend(sendTelegram, {
+        text: "Reasoning: checking the route",
+        cfg,
+      });
+      expect(getLastHeartbeatEvent()).toMatchObject({
+        status: "sent",
+        preview: "Reasoning: checking the route",
+        channel: "telegram",
+      });
+    });
+  });
+
+  it("keeps sending the selected fallback when only an earlier payload has message-tool evidence", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createConfig({ tmpDir, storePath, visibleReplies: "message_tool" });
+      await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+      });
+      replySpy.mockResolvedValue([
+        markReplyPayloadForMessageToolDeliveryForReplyRoute({
+          text: "Earlier fallback already handled by the message tool.",
+        }),
+        { text: "Second fallback still needs delivery." },
+      ]);
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: createDeps({ sendTelegram, getReplyFromConfig: replySpy }),
+      });
+
+      expect(result.status).toBe("ran");
+      expectTelegramSend(sendTelegram, {
+        text: "Second fallback still needs delivery.",
+        cfg,
+      });
+    });
+  });
+
+  it("keeps sending fallback text when message-tool delivery did not match the heartbeat route", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createConfig({ tmpDir, storePath, visibleReplies: "message_tool" });
+      await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+      });
+      replySpy.mockResolvedValue({
+        text: "Fallback text still needs delivery.",
+      });
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: createDeps({ sendTelegram, getReplyFromConfig: replySpy }),
+      });
+
+      expect(result.status).toBe("ran");
+      expect(replyOptions(replySpy).sourceReplyDeliveryMode).toBe("message_tool_only");
+      expectTelegramSend(sendTelegram, {
+        text: "Fallback text still needs delivery.",
+        cfg,
+      });
+    });
   });
 
   it("uses the heartbeat response tool prompt for Codex harness sessions by default", async () => {

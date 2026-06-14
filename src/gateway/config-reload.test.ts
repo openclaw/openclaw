@@ -1676,9 +1676,7 @@ describe("startGatewayConfigReloader watcher error recovery", () => {
       // Fourth native error triggers degradation to polling mode (not disabled).
       watchers[3]?.emit("error");
       expect(reloader.hotReloadStatus()).toBe("active");
-      expect(log.warn).toHaveBeenCalledWith(
-        expect.stringContaining("degrading to polling mode"),
-      );
+      expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("degrading to polling mode"));
       await vi.advanceTimersByTimeAsync(500);
       expect(watchSpy).toHaveBeenCalledTimes(5);
       expect(watchOptions(4)?.usePolling).toBe(true);
