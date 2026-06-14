@@ -1,19 +1,7 @@
 // Nextcloud Talk plugin module implements monitor fixtures behavior.
 import { generateNextcloudTalkSignature } from "./signature.js";
 
-export function createSignedCreateMessageRequest(params?: { backend?: string }) {
-  const payload = {
-    type: "Create",
-    actor: { type: "Person", id: "alice", name: "Alice" },
-    object: {
-      type: "Note",
-      id: "msg-1",
-      name: "hello",
-      content: "hello",
-      mediaType: "text/plain",
-    },
-    target: { type: "Collection", id: "room-1", name: "Room 1" },
-  };
+export function createSignedWebhookRequest(payload: unknown, params?: { backend?: string }) {
   const body = JSON.stringify(payload);
   const { random, signature } = generateNextcloudTalkSignature({
     body,
@@ -28,4 +16,20 @@ export function createSignedCreateMessageRequest(params?: { backend?: string }) 
       "x-nextcloud-talk-backend": params?.backend ?? "https://nextcloud.example",
     },
   };
+}
+
+export function createSignedCreateMessageRequest(params?: { backend?: string }) {
+  const payload = {
+    type: "Create",
+    actor: { type: "Person", id: "alice", name: "Alice" },
+    object: {
+      type: "Note",
+      id: "msg-1",
+      name: "hello",
+      content: "hello",
+      mediaType: "text/plain",
+    },
+    target: { type: "Collection", id: "room-1", name: "Room 1" },
+  };
+  return createSignedWebhookRequest(payload, params);
 }

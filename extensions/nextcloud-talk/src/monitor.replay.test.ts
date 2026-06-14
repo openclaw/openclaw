@@ -6,7 +6,10 @@ import {
   processNextcloudTalkReplayGuardedMessage,
   readNextcloudTalkWebhookBody,
 } from "./monitor.js";
-import { createSignedCreateMessageRequest } from "./monitor.test-fixtures.js";
+import {
+  createSignedCreateMessageRequest,
+  createSignedWebhookRequest,
+} from "./monitor.test-fixtures.js";
 import { startWebhookServer } from "./monitor.test-harness.js";
 import { createNextcloudTalkReplayGuard } from "./replay-guard.js";
 import { generateNextcloudTalkSignature } from "./signature.js";
@@ -218,6 +221,36 @@ describe("createNextcloudTalkWebhookServer payload validation", () => {
 
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ error: "Invalid payload format" });
+  });
+
+  it("acknowledges signed non-message activity payloads without dispatching", async () => {
+    const onMessage = vi.fn();
+    const payload = {
+      type: "Create",
+      actor: { type: "Person", id: "alice", name: "Alice" },
+      object: {
+        type: "Document",
+        id: "file-1",
+        name: "report.pdf",
+        mediaType: "application/pdf",
+      },
+      target: { type: "Collection", id: "room-1", name: "Room 1" },
+    };
+    const { body, headers } = createSignedWebhookRequest(payload);
+    const harness = await startWebhookServer({
+      path: "/nextcloud-non-message-payload",
+      onMessage,
+    });
+
+    const response = await fetch(harness.webhookUrl, {
+      method: "POST",
+      headers,
+      body,
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("");
+    expect(onMessage).not.toHaveBeenCalled();
   });
 });
 
