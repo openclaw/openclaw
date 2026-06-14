@@ -2727,8 +2727,10 @@ export async function dispatchReplyFromConfig(
     const shouldForwardProgressCallback = (options?: {
       forwardWhenSourceDeliverySuppressed?: boolean;
       requiresToolSummaryVisibility?: boolean;
+      bypassToolSummaryVisibility?: boolean;
     }) => {
       if (
+        !options?.bypassToolSummaryVisibility &&
         options?.requiresToolSummaryVisibility === true &&
         !shouldSendToolSummaries() &&
         !shouldAllowQuietChannelOwnedProgressCallbacks(options)
@@ -2747,6 +2749,7 @@ export async function dispatchReplyFromConfig(
       options?: {
         forwardWhenSourceDeliverySuppressed?: boolean;
         requiresToolSummaryVisibility?: boolean;
+        bypassToolSummaryVisibility?: boolean;
         onForward?: (...args: Args) => Promise<void> | void;
         waitForDirectBlockReplyDelivery?: boolean;
       },
@@ -2859,6 +2862,7 @@ export async function dispatchReplyFromConfig(
             onToolStart: wrapProgressCallback(params.replyOptions?.onToolStart, {
               forwardWhenSourceDeliverySuppressed: true,
               requiresToolSummaryVisibility: true,
+              bypassToolSummaryVisibility: true,
               waitForDirectBlockReplyDelivery: true,
               onForward: async () => {
                 // Commentary precedes the tool that follows it.
