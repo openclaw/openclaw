@@ -6,6 +6,7 @@ import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, info, success } from "openclaw/plugin-sdk/runtime-env";
 import { defaultRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { resolveWhatsAppAccount } from "./accounts.js";
+import { getActiveWebListener } from "./active-listener.js";
 import {
   closeWaSocket,
   waitForWhatsAppLoginResult,
@@ -333,7 +334,12 @@ export async function startWebLoginWithQr(
   }
   const shouldRelinkLoggedOutAuth =
     authState.exists && !opts.force && isWebAuthLoggedOut(account.accountId);
-  if (authState.exists && !opts.force && !shouldRelinkLoggedOutAuth) {
+  if (
+    authState.exists &&
+    !opts.force &&
+    !shouldRelinkLoggedOutAuth &&
+    getActiveWebListener(account.accountId)
+  ) {
     const selfId = readWebSelfId(account.authDir);
     const who = selfId.e164 ?? selfId.jid ?? "unknown";
     return {

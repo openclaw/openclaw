@@ -1,6 +1,7 @@
 // Whatsapp tests cover login qr plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getActiveWebListener } from "./active-listener.js";
 import { startWebLoginWithQr, waitForWebLogin } from "./login-qr.js";
 import { renderQrPngDataUrl } from "./qr-image.js";
 import {
@@ -46,12 +47,17 @@ vi.mock("./session.js", async () => {
   };
 });
 
+vi.mock("./active-listener.js", () => ({
+  getActiveWebListener: vi.fn(() => null),
+}));
+
 vi.mock("./qr-image.js", () => ({
   renderQrPngBase64: vi.fn(async () => "base64"),
   renderQrPngDataUrl: vi.fn(async (input: string) => `data:image/png;base64,encoded:${input}`),
 }));
 
 const createWaSocketMock = vi.mocked(createWaSocket);
+const getActiveWebListenerMock = vi.mocked(getActiveWebListener);
 const readWebAuthExistsForDecisionMock = vi.mocked(readWebAuthExistsForDecision);
 const readWebSelfIdMock = vi.mocked(readWebSelfId);
 const waitForWaConnectionMock = vi.mocked(waitForWaConnection);
@@ -104,6 +110,7 @@ describe("login-qr", () => {
       outcome: "stable",
       exists: false,
     });
+    getActiveWebListenerMock.mockReset().mockReturnValue(null);
     readWebSelfIdMock.mockReset().mockReturnValue({ e164: null, jid: null, lid: null });
     logoutWebMock.mockReset().mockResolvedValue(true);
     clearWebAuthLoggedOut(rotatingAccountId);
@@ -253,6 +260,57 @@ describe("login-qr", () => {
     expect(isWebAuthLoggedOut(terminalLoggedOutAccountId)).toBe(false);
   });
 
+  it("rederives logged-out auth after restart when preserved creds have no active listener", async () => {
+    const accountId = "restart-preserved-logged-out";
+    createWaSocketMock
+      .mockImplementationOnce(async () => ({ ws: { close: vi.fn() } }) as never)
+      .mockImplementationOnce(
+        async (
+          _printQr: boolean,
+          _verbose: boolean,
+          opts?: { authDir?: string; onQr?: (qr: string) => void },
+        ) => {
+          const sock = { ws: { close: vi.fn() } };
+          setImmediate(() => opts?.onQr?.("qr-after-restart-logout"));
+          return sock as never;
+        },
+      );
+    waitForWaConnectionMock
+      .mockRejectedValueOnce({ output: { statusCode: 401 } })
+      .mockImplementation(() => new Promise(() => {}));
+    readWebAuthExistsForDecisionMock.mockResolvedValueOnce({
+      outcome: "stable",
+      exists: true,
+    });
+
+    const result = await startWebLoginWithQr({ timeoutMs: 5000, accountId });
+
+    expect(result).toEqual({
+      qrDataUrl: "data:image/png;base64,encoded:qr-after-restart-logout",
+      message: "Scan this QR in WhatsApp → Linked Devices.",
+    });
+    expect(logoutWebMock).toHaveBeenCalledWith({
+      authDir: expect.stringContaining(accountId),
+      isLegacyAuthDir: false,
+      runtime: expect.anything(),
+    });
+    expect(createWaSocketMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the linked shortcut when existing auth has an active listener", async () => {
+    getActiveWebListenerMock.mockReturnValue({} as never);
+    readWebAuthExistsForDecisionMock.mockResolvedValueOnce({
+      outcome: "stable",
+      exists: true,
+    });
+    readWebSelfIdMock.mockReturnValueOnce({ e164: "+15551234567", jid: null, lid: null });
+
+    await expect(startWebLoginWithQr({ timeoutMs: 5000 })).resolves.toEqual({
+      message: "WhatsApp is already linked (+15551234567). Say “relink” if you want a fresh QR.",
+    });
+    expect(createWaSocketMock).not.toHaveBeenCalled();
+  });
+
   it("clears terminal logged-out state after successful QR relink", async () => {
     const accountId = "qr-success-clears-terminal-state";
     markWebAuthLoggedOut(accountId);
@@ -286,6 +344,7 @@ describe("login-qr", () => {
 
     expect(isWebAuthLoggedOut(accountId)).toBe(false);
     logoutWebMock.mockClear();
+    getActiveWebListenerMock.mockReturnValue({} as never);
     await expect(startWebLoginWithQr({ timeoutMs: 5000, accountId })).resolves.toEqual({
       message: "WhatsApp is already linked (+15551234567). Say “relink” if you want a fresh QR.",
     });
