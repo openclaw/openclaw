@@ -248,16 +248,51 @@ describe("maybeCreateDynamicAgent", () => {
     });
 
     expect(result.created).toBe(true);
-    expect(result.agentId).toBe("feishu-ops-team-ou_sender");
+    expect(result.agentId).toMatch(/^feishu-ops-team-[a-f0-9]{32}$/);
     expect(result.updatedCfg.bindings).toEqual([
       {
-        agentId: "feishu-ops-team-ou_sender",
+        agentId: result.agentId,
         match: {
           channel: "feishu",
           accountId: "ops-team",
           peer: { kind: "direct", id: "ou_sender" },
         },
       },
+    ]);
+  });
+
+  it("keeps named-account dynamic agent ids bounded and sender-unique", async () => {
+    const accountId = "a".repeat(64);
+    const cfg = {
+      channels: { feishu: { dynamicAgentCreation: createDynamicConfig() } },
+      agents: { list: [] },
+      bindings: [],
+    } as OpenClawConfig;
+    const { runtime } = createRuntime(cfg);
+
+    const first = await maybeCreateDynamicAgent({
+      cfg,
+      runtime,
+      accountId,
+      senderOpenId: "ou_sender_one_with_a_shared_long_prefix",
+      canCreateForConfig: async () => true,
+      log: vi.fn(),
+    });
+    const second = await maybeCreateDynamicAgent({
+      cfg: first.updatedCfg,
+      runtime,
+      accountId,
+      senderOpenId: "ou_sender_two_with_a_shared_long_prefix",
+      canCreateForConfig: async () => true,
+      log: vi.fn(),
+    });
+
+    expect(first.agentId).toHaveLength(52);
+    expect(second.agentId).toHaveLength(52);
+    expect(first.agentId).not.toBe(second.agentId);
+    expect(second.updatedCfg.agents?.list?.map((agent) => agent.id)).toEqual([
+      first.agentId,
+      second.agentId,
     ]);
   });
 

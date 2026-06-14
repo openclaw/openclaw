@@ -447,7 +447,7 @@ Dynamic bindings include the normalized Feishu `accountId`, so default and named
 
 When a new user sends their first DM:
 
-1. The channel generates a unique `agentId`: `feishu-{user_open_id}` for the default account, or `feishu-{account_id}-{user_open_id}` for a named account
+1. The channel generates a unique `agentId`: `feishu-{user_open_id}` for the default account, or a bounded account-prefixed identity digest for a named account
 2. Creates a new workspace at `workspaceTemplate` path
 3. Registers the agent and creates a binding for this user
 4. The workspace helper ensures bootstrap files (`AGENTS.md`, `SOUL.md`, `USER.md`, etc.) on first access
@@ -464,7 +464,7 @@ When a new user sends their first DM:
 
 Template variables:
 
-- `{agentId}` - the generated agent ID (e.g., `feishu-ou_xxxxxx` or `feishu-support-ou_xxxxxx`)
+- `{agentId}` - the generated agent ID (e.g., `feishu-ou_xxxxxx` or `feishu-support-<identity_digest>`)
 - `{userId}` - the sender's Feishu open_id (e.g., `ou_xxxxxx`)
 
 ### Session scope

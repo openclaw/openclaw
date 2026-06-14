@@ -1,4 +1,5 @@
 // Feishu plugin module implements dynamic agent behavior.
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -62,6 +63,19 @@ function isAtDynamicAgentLimit(
   return feishuAgentCount >= dynamicCfg.maxAgents;
 }
 
+function resolveDynamicAgentId(accountId: string, senderOpenId: string): string {
+  if (accountId === "default") {
+    return `feishu-${senderOpenId}`;
+  }
+  const identityDigest = createHash("sha256")
+    .update(accountId)
+    .update("\0")
+    .update(senderOpenId)
+    .digest("hex")
+    .slice(0, 32);
+  return `feishu-${accountId.slice(0, 12)}-${identityDigest}`;
+}
+
 /**
  * Refresh an existing DM binding or create its dynamic agent when current
  * account policy permits config writes.
@@ -94,8 +108,7 @@ export async function maybeCreateDynamicAgent(params: {
     log(`feishu: config writes disabled, not creating agent for ${senderOpenId}`);
     return { created: false, updatedCfg: currentCfg };
   }
-  const agentId =
-    accountId === "default" ? `feishu-${senderOpenId}` : `feishu-${accountId}-${senderOpenId}`;
+  const agentId = resolveDynamicAgentId(accountId, senderOpenId);
   const currentAgentExists = (currentCfg.agents?.list ?? []).some((agent) => agent.id === agentId);
   if (!currentAgentExists && isAtDynamicAgentLimit(currentCfg, currentDynamicCfg)) {
     log(
