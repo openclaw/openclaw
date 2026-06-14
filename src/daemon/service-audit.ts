@@ -226,7 +226,14 @@ async function auditLaunchdPlist(
   }
 
   const hasRunAtLoad = /<key>RunAtLoad<\/key>\s*<true\s*\/>/i.test(content);
-  const hasKeepAlive = /<key>KeepAlive<\/key>\s*<true\s*\/>/i.test(content);
+  // Accept both the bare boolean form and the dict form. The dict form
+  // (e.g. <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>)
+  // is a valid, commonly-recommended keep-alive policy: restart on crash but
+  // not after a clean exit, so the service can be stopped for maintenance.
+  // See #82250.
+  const hasKeepAlive =
+    /<key>KeepAlive<\/key>\s*<true\s*\/>/i.test(content) ||
+    /<key>KeepAlive<\/key>\s*<dict>[\s\S]*?<key>(SuccessfulExit|Crashed)<\/key>/i.test(content);
   if (!hasRunAtLoad) {
     issues.push({
       code: SERVICE_AUDIT_CODES.launchdRunAtLoad,
