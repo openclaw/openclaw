@@ -11,6 +11,20 @@ export function elide(text?: string, limit = 400) {
   return `${text.slice(0, limit)}… (truncated ${text.length - limit} chars)`;
 }
 
+export function markWhatsAppVisibleDeliveryError(error: unknown): unknown {
+  if (typeof error === "object" && error !== null && !Array.isArray(error)) {
+    try {
+      Object.assign(error, { sentBeforeError: true, visibleReplySent: true });
+      return error;
+    } catch {
+      // Fall back to a wrapper when a platform error object is non-extensible.
+    }
+  }
+  const visibleError = new Error("visible WhatsApp reply delivery failed", { cause: error });
+  Object.assign(visibleError, { sentBeforeError: true, visibleReplySent: true });
+  return visibleError;
+}
+
 export function isLikelyWhatsAppCryptoError(reason: unknown) {
   const formatReason = (value: unknown): string => {
     if (value == null) {

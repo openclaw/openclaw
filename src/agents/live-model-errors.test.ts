@@ -33,6 +33,12 @@ describe("live model error helpers", () => {
     ).toBe(true);
     expect(
       isModelNotFoundErrorMessage(
+        '{"error":{"code":"400","message":"Param Incorrect","param":"Not supported model some-model-id"}}',
+      ),
+    ).toBe(true);
+    expect(isModelNotFoundErrorMessage("Not supported model some-model-id")).toBe(true);
+    expect(
+      isModelNotFoundErrorMessage(
         "404 The free model has been deprecated. Transition to qwen/qwen3.6-plus for continued paid access.",
       ),
     ).toBe(true);
@@ -45,6 +51,13 @@ describe("live model error helpers", () => {
       isModelNotFoundErrorMessage("The deployment does not exist or you do not have access."),
     ).toBe(false);
     expect(isModelNotFoundErrorMessage('{"error":{"message":"Resource missing","code":404}}')).toBe(
+      false,
+    );
+    expect(isModelNotFoundErrorMessage("This model is not supported for tool calling.")).toBe(
+      false,
+    );
+    expect(isModelNotFoundErrorMessage("This model does not support image inputs.")).toBe(false);
+    expect(isModelNotFoundErrorMessage("Reasoning effort is not supported for this model.")).toBe(
       false,
     );
     expect(isModelNotFoundErrorMessage("request ended without sending any chunks")).toBe(false);

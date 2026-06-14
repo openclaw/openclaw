@@ -30,13 +30,15 @@ export function buildSlackThreadingToolContext(params: {
     (replyToThreadTs != null && currentMessageTs != null && replyToThreadTs !== currentMessageTs);
   const effectiveReplyToMode = hasExplicitThreadTarget ? "all" : configuredReplyToMode;
   // For channel messages, To is "channel:C…" — extract the bare ID.
-  // For DMs, To is "user:U…" which can't be used for reactions; fall back
-  // to NativeChannelId (the raw Slack channel id, e.g. "D…").
-  const currentChannelId = params.context.To?.startsWith("channel:")
-    ? params.context.To.slice("channel:".length)
-    : normalizeOptionalString(params.context.NativeChannelId);
+  // For DMs, prefer NativeChannelId for channel-scoped actions, but keep the
+  // user target as a valid implicit send destination when no D… id is known.
+  const currentMessagingTarget = normalizeOptionalString(params.context.To);
+  const currentChannelId = currentMessagingTarget?.startsWith("channel:")
+    ? currentMessagingTarget.slice("channel:".length)
+    : (normalizeOptionalString(params.context.NativeChannelId) ?? currentMessagingTarget);
   return {
     currentChannelId,
+    currentMessagingTarget,
     currentThreadTs,
     replyToMode: effectiveReplyToMode,
     hasRepliedRef: params.hasRepliedRef,

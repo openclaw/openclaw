@@ -183,6 +183,7 @@ describe("dynamic tool execution helpers", () => {
     vi.useFakeTimers();
     let capturedSignal: AbortSignal | undefined;
     const onTimeout = vi.fn();
+    const onAgentToolResult = vi.fn();
     const response = handleDynamicToolCallWithTimeout({
       call: {
         threadId: "thread-1",
@@ -200,6 +201,7 @@ describe("dynamic tool execution helpers", () => {
       },
       signal: new AbortController().signal,
       timeoutMs: 1,
+      onAgentToolResult,
       onTimeout,
     });
 
@@ -216,6 +218,64 @@ describe("dynamic tool execution helpers", () => {
     });
     expect(capturedSignal?.aborted).toBe(true);
     expect(onTimeout).toHaveBeenCalledTimes(1);
+    expect(onAgentToolResult).toHaveBeenCalledWith({
+      toolName: "message",
+      result: {
+        content: [
+          {
+            type: "text",
+            text: "OpenClaw dynamic tool call timed out after 1ms while running tool message.",
+          },
+        ],
+        details: {
+          status: "failed",
+          error: "OpenClaw dynamic tool call timed out after 1ms while running tool message.",
+        },
+      },
+      isError: true,
+    });
+  });
+
+  it("reports pre-execution aborts to the private result observer", async () => {
+    const controller = new AbortController();
+    controller.abort(new Error("run cancelled"));
+    const onAgentToolResult = vi.fn();
+    const handleToolCall = vi.fn();
+
+    const result = await handleDynamicToolCallWithTimeout({
+      call: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-aborted",
+        namespace: null,
+        tool: "memory_search",
+        arguments: {},
+      },
+      toolBridge: { handleToolCall },
+      signal: controller.signal,
+      timeoutMs: 1_000,
+      onAgentToolResult,
+    });
+
+    expect(result).toEqual({
+      success: false,
+      contentItems: [
+        { type: "inputText", text: "OpenClaw dynamic tool call aborted before execution." },
+      ],
+    });
+    expect(handleToolCall).not.toHaveBeenCalled();
+    expect(onAgentToolResult).toHaveBeenCalledOnce();
+    expect(onAgentToolResult).toHaveBeenCalledWith({
+      toolName: "memory_search",
+      result: {
+        content: [{ type: "text", text: "OpenClaw dynamic tool call aborted before execution." }],
+        details: {
+          status: "failed",
+          error: "OpenClaw dynamic tool call aborted before execution.",
+        },
+      },
+      isError: true,
+    });
   });
 
   it("logs process poll timeout context separately from session idle", async () => {

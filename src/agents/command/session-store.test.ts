@@ -368,6 +368,55 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
+  it("caps configured context override by the resolved runtime model window", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {
+        models: {
+          providers: {
+            openai: {
+              models: [{ id: "gpt-5.5", contextWindow: 272_000 }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-capped-context-override";
+      const sessionId = "test-capped-context-override-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      const result: EmbeddedAgentRunResult = {
+        meta: {
+          durationMs: 1,
+          agentMeta: {
+            sessionId,
+            provider: "openai",
+            model: "gpt-5.5",
+          },
+        },
+      };
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        contextTokensOverride: 1_000_000,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.5",
+        result,
+      });
+
+      expect(sessionStore[sessionKey]?.contextTokens).toBe(272_000);
+      expect(loadSessionStore(storePath)[sessionKey]?.contextTokens).toBe(272_000);
+    });
+  });
+
   it("clears the embedded harness pin after a CLI run", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {

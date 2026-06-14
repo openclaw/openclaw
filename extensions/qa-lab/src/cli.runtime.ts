@@ -28,6 +28,7 @@ import {
 } from "./coverage-report.js";
 import { buildQaDockerHarnessImage, writeQaDockerHarnessFiles } from "./docker-harness.js";
 import { runQaDockerUp } from "./docker-up.runtime.js";
+import { QaSuiteArtifactError, QaSuiteInfraError } from "./errors.js";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
 import {
   createMockJsonlReplayCellRunner,
@@ -67,8 +68,8 @@ import {
   type QaRuntimeParityTier,
 } from "./scenario-catalog.js";
 import { resolveQaScenarioPackScenarioIds } from "./scenario-packs.js";
-import { runQaSuiteFromRuntime } from "./suite-launch.runtime.js";
-import { readQaSuiteFailedScenarioCountFromSummary } from "./suite-summary.js";
+import { runQaFlowSuiteFromRuntime, runQaSuite } from "./suite-launch.runtime.js";
+import { readQaSuiteFailedOrSkippedScenarioCountFromFile } from "./suite-summary.js";
 import {
   buildTokenEfficiencyReport,
   renderTokenEfficiencyMarkdownReport,
@@ -81,6 +82,13 @@ import {
 } from "./tool-coverage-report.js";
 
 const QA_SUITE_INFRA_RETRY_LIMIT = 1;
+const QA_SUITE_INFRA_RETRY_NETWORK_ERROR_CODES = new Set([
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "EPIPE",
+  "ETIMEDOUT",
+  "UND_ERR_SOCKET",
+]);
 
 type InterruptibleServer = {
   baseUrl: string;
@@ -243,74 +251,58 @@ function resolveQaRuntimeParityTierScenarioIds(params: {
   return uniqueStrings([...params.scenarioIds, ...matchingScenarioIds]);
 }
 
-async function readQaFailedScenarioCountFromSummary(summaryPath: string) {
-  let summaryText: string;
-  try {
-    summaryText = await fs.readFile(summaryPath, "utf8");
-  } catch (error) {
-    throw new Error(
-      `Could not read QA summary JSON at ${summaryPath}: ${formatErrorMessage(error)}`,
-      { cause: error },
-    );
+function rejectNonFlowScenarioIdsForMultipass(scenarioIds: readonly string[]) {
+  if (scenarioIds.length === 0) {
+    return;
   }
-  let payload: unknown;
-  try {
-    payload = JSON.parse(summaryText) as unknown;
-  } catch (error) {
-    throw new Error(
-      `Could not parse QA summary JSON at ${summaryPath}: ${formatErrorMessage(error)}`,
-      { cause: error },
-    );
-  }
-  const failedScenarioCount = readQaSuiteFailedScenarioCountFromSummary(payload);
-  if (failedScenarioCount !== null) {
-    return failedScenarioCount;
-  }
-  throw new Error(
-    `QA summary at ${summaryPath} did not include counts.failed or scenarios[].status.`,
+  const scenarioById = new Map(
+    readQaScenarioPack().scenarios.map((scenario) => [scenario.id, scenario]),
   );
+  const nonFlowScenarios = scenarioIds.flatMap((scenarioId) => {
+    const scenario = scenarioById.get(scenarioId);
+    return scenario && scenario.execution.kind !== "flow"
+      ? [`${scenario.id} (${scenario.execution.kind})`]
+      : [];
+  });
+  if (nonFlowScenarios.length > 0) {
+    throw new Error(
+      `--runner multipass requires execution.kind: flow scenarios; unsupported scenario(s): ${nonFlowScenarios.join(", ")}`,
+    );
+  }
 }
 
 function isQaSuiteInfraRetryableError(error: unknown) {
-  const message = formatErrorMessage(error).toLowerCase();
-  return (
-    message.includes("agent.wait timeout") ||
-    message.includes("qa cli timed out") ||
-    message.includes("readyz") ||
-    message.includes("gateway healthy") ||
-    message.includes("transport ready") ||
-    message.includes("waiting for qa-channel ready") ||
-    message.includes("econnreset") ||
-    message.includes("econnrefused") ||
-    message.includes("socket hang up") ||
-    message.includes("could not read qa summary json") ||
-    message.includes("could not parse qa summary json") ||
-    message.includes("did not include counts.failed or scenarios[].status") ||
-    message.includes("did not produce report artifact")
-  );
-}
-
-async function assertQaSuiteArtifacts(result: { reportPath: string; summaryPath: string }) {
-  try {
-    await fs.access(result.reportPath);
-  } catch (error) {
-    throw new Error(
-      `QA suite did not produce report artifact at ${result.reportPath}: ${formatErrorMessage(error)}`,
-      { cause: error },
-    );
+  if (error instanceof QaSuiteArtifactError || error instanceof QaSuiteInfraError) {
+    return true;
   }
-  await readQaFailedScenarioCountFromSummary(result.summaryPath);
+  return hasQaSuiteRetryableNetworkCode(error);
 }
 
-async function runQaSuiteFromRuntimeWithInfraRetry(
-  params: Parameters<typeof runQaSuiteFromRuntime>[0],
+function hasQaSuiteRetryableNetworkCode(error: unknown) {
+  let current: unknown = error;
+  for (let depth = 0; depth < 4 && current; depth += 1) {
+    if (typeof current !== "object") {
+      return false;
+    }
+    const record = current as { cause?: unknown; code?: unknown };
+    if (
+      typeof record.code === "string" &&
+      QA_SUITE_INFRA_RETRY_NETWORK_ERROR_CODES.has(record.code.toUpperCase())
+    ) {
+      return true;
+    }
+    current = record.cause;
+  }
+  return false;
+}
+
+async function runQaSuiteWithInfraRetry<Result>(
+  run: () => Promise<Result>,
   maxRetries = QA_SUITE_INFRA_RETRY_LIMIT,
 ) {
   for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
     try {
-      const result = await runQaSuiteFromRuntime(params);
-      await assertQaSuiteArtifacts(result);
-      return result;
+      return await run();
     } catch (error) {
       const retryable = isQaSuiteInfraRetryableError(error);
       if (!retryable || attempt >= maxRetries) {
@@ -339,26 +331,30 @@ async function runQaParityPreflight(params: {
     "preflight",
     `suite-${Date.now().toString(36)}`,
   );
-  const result = await runQaSuiteFromRuntimeWithInfraRetry({
-    repoRoot: params.repoRoot,
-    outputDir,
-    transportId: params.transportId,
-    providerMode: params.providerMode,
-    primaryModel: params.primaryModel,
-    alternateModel: params.alternateModel,
-    scenarioIds: ["approval-turn-tool-followthrough"],
-    concurrency: 1,
-  });
+  const result = await runQaSuiteWithInfraRetry(() =>
+    runQaFlowSuiteFromRuntime({
+      repoRoot: params.repoRoot,
+      outputDir,
+      transportId: params.transportId,
+      providerMode: params.providerMode,
+      primaryModel: params.primaryModel,
+      alternateModel: params.alternateModel,
+      scenarioIds: ["approval-turn-tool-followthrough"],
+      concurrency: 1,
+    }),
+  );
   process.stdout.write(`QA parity preflight watch: ${result.watchUrl}\n`);
   process.stdout.write(`QA parity preflight report: ${result.reportPath}\n`);
   process.stdout.write(`QA parity preflight summary: ${result.summaryPath}\n`);
-  const failedScenarioCount = await readQaFailedScenarioCountFromSummary(result.summaryPath);
-  if (failedScenarioCount > 0) {
+  const blockingScenarioCount = await readQaSuiteFailedOrSkippedScenarioCountFromFile(
+    result.summaryPath,
+  );
+  if (blockingScenarioCount > 0) {
     if (params.allowFailures === true) {
       return;
     }
     throw new Error(
-      `QA parity preflight failed with ${failedScenarioCount} failing scenario${failedScenarioCount === 1 ? "" : "s"}.`,
+      `QA parity preflight failed with ${blockingScenarioCount} failing or skipped scenario${blockingScenarioCount === 1 ? "" : "s"}.`,
     );
   }
 }
@@ -616,14 +612,14 @@ export async function runQaSuiteCommand(opts: {
     runtimeParityTiers,
   });
   const allowFailures = opts.allowFailures === true;
-  if (runner !== "host" && runner !== "multipass") {
-    throw new Error(`--runner must be one of host or multipass, got "${opts.runner}".`);
-  }
   const providerMode = normalizeQaProviderMode(opts.providerMode);
   const runtimePair = parseQaRuntimePair(opts.runtimePair);
   const claudeCliAuthMode = parseQaCliBackendAuthMode(opts.cliAuthMode);
   const primaryModel = normalizeQaOptionalModelRef(opts.primaryModel);
   const alternateModel = normalizeQaOptionalModelRef(opts.alternateModel);
+  if (runner !== "host" && runner !== "multipass") {
+    throw new Error(`--runner must be one of host or multipass, got "${opts.runner}".`);
+  }
   if (opts.preflight === true && runner !== "host") {
     throw new Error("--preflight requires --runner host.");
   }
@@ -640,12 +636,13 @@ export async function runQaSuiteCommand(opts: {
     throw new Error("--cli-auth-mode requires --runner host.");
   }
   if (runner === "multipass") {
+    rejectNonFlowScenarioIdsForMultipass(scenarioIds);
     const thinkingDefault = parseQaThinkingLevel("--thinking", opts.thinking);
     const result = await runQaMultipass({
       repoRoot,
       outputDir: resolveRepoRelativeOutputDir(repoRoot, opts.outputDir),
       transportId,
-      providerMode,
+      ...(opts.providerMode !== undefined ? { providerMode } : {}),
       primaryModel,
       alternateModel,
       fastMode: opts.fastMode,
@@ -667,8 +664,10 @@ export async function runQaSuiteCommand(opts: {
     process.stdout.write(`QA Multipass host log: ${result.hostLogPath}\n`);
     process.stdout.write(`QA Multipass bootstrap log: ${result.bootstrapLogPath}\n`);
     if (!allowFailures) {
-      const failedScenarioCount = await readQaFailedScenarioCountFromSummary(result.summaryPath);
-      if (failedScenarioCount > 0) {
+      const blockingScenarioCount = await readQaSuiteFailedOrSkippedScenarioCountFromFile(
+        result.summaryPath,
+      );
+      if (blockingScenarioCount > 0) {
         process.exitCode = 1;
       }
     }
@@ -686,29 +685,49 @@ export async function runQaSuiteCommand(opts: {
     return;
   }
   const thinkingDefault = parseQaThinkingLevel("--thinking", opts.thinking);
-  const result = await runQaSuiteFromRuntimeWithInfraRetry({
-    repoRoot,
-    outputDir: resolveRepoRelativeOutputDir(repoRoot, opts.outputDir),
-    transportId,
-    providerMode,
-    primaryModel,
-    alternateModel,
-    fastMode: opts.fastMode,
-    ...(thinkingDefault ? { thinkingDefault } : {}),
-    ...(claudeCliAuthMode ? { claudeCliAuthMode } : {}),
-    scenarioIds,
-    ...(opts.enabledPluginIds !== undefined ? { enabledPluginIds: opts.enabledPluginIds } : {}),
-    ...(opts.concurrency !== undefined
-      ? { concurrency: parseQaPositiveIntegerOption("--concurrency", opts.concurrency) }
-      : {}),
-    ...(runtimePair ? { runtimePair } : {}),
-  });
-  process.stdout.write(`QA suite watch: ${result.watchUrl}\n`);
-  process.stdout.write(`QA suite report: ${result.reportPath}\n`);
-  process.stdout.write(`QA suite summary: ${result.summaryPath}\n`);
-  const failedScenarioCount = readQaSuiteFailedScenarioCountFromSummary(result);
-  if (!allowFailures && failedScenarioCount !== null && failedScenarioCount > 0) {
-    process.exitCode = 1;
+  const runtimeResult = await runQaSuiteWithInfraRetry(() =>
+    runQaSuite({
+      repoRoot,
+      outputDir: resolveRepoRelativeOutputDir(repoRoot, opts.outputDir),
+      transportId,
+      ...(opts.providerMode !== undefined ? { providerMode } : {}),
+      primaryModel,
+      alternateModel,
+      fastMode: opts.fastMode,
+      ...(thinkingDefault ? { thinkingDefault } : {}),
+      ...(claudeCliAuthMode ? { claudeCliAuthMode } : {}),
+      scenarioIds,
+      ...(opts.enabledPluginIds !== undefined ? { enabledPluginIds: opts.enabledPluginIds } : {}),
+      ...(opts.concurrency !== undefined
+        ? { concurrency: parseQaPositiveIntegerOption("--concurrency", opts.concurrency) }
+        : {}),
+      ...(runtimePair ? { runtimePair } : {}),
+    }),
+  );
+  switch (runtimeResult.executionKind) {
+    case "vitest":
+    case "playwright": {
+      const result = runtimeResult.result;
+      process.stdout.write(`QA suite report: ${result.reportPath}\n`);
+      process.stdout.write(`QA suite evidence: ${result.evidencePath}\n`);
+      if (!allowFailures && result.results.some((scenario) => scenario.status !== "pass")) {
+        process.exitCode = 1;
+      }
+      return;
+    }
+    case "flow": {
+      const result = runtimeResult.result;
+      process.stdout.write(`QA suite watch: ${result.watchUrl}\n`);
+      process.stdout.write(`QA suite report: ${result.reportPath}\n`);
+      process.stdout.write(`QA suite evidence: ${result.evidencePath}\n`);
+      process.stdout.write(`QA suite summary: ${result.summaryPath}\n`);
+      const blockingScenarioCount = await readQaSuiteFailedOrSkippedScenarioCountFromFile(
+        result.summaryPath,
+      );
+      if (!allowFailures && blockingScenarioCount > 0) {
+        process.exitCode = 1;
+      }
+    }
   }
 }
 

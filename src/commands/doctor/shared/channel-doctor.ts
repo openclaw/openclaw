@@ -13,8 +13,10 @@ import type {
   ChannelDoctorSequenceResult,
 } from "../../../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { isUnresolvedSecretInputError } from "../../../config/types.secrets.js";
 
 type ChannelDoctorEntry = {
+  id: string;
   doctor: ChannelDoctorAdapter;
 };
 
@@ -227,7 +229,7 @@ function listChannelDoctorEntries(
     if (!doctor) {
       continue;
     }
-    entries.push({ doctor });
+    entries.push({ id, doctor });
   }
   return entries;
 }
@@ -366,7 +368,18 @@ export async function collectChannelDoctorPreviewWarnings(params: {
     cfg: params.cfg,
     env: params.env,
   })) {
-    const lines = await entry.doctor.collectPreviewWarnings?.(params);
+    let lines: string[] | undefined;
+    try {
+      lines = await entry.doctor.collectPreviewWarnings?.(params);
+    } catch (error) {
+      if (!isUnresolvedSecretInputError(error)) {
+        throw error;
+      }
+      warnings.push(
+        `- channels.${entry.id}: configured SecretRef at ${error.path} is unavailable in doctor preview; skipping secret-backed channel preview checks.`,
+      );
+      continue;
+    }
     if (lines?.length) {
       warnings.push(...lines);
     }
@@ -407,6 +420,7 @@ export async function collectChannelDoctorRepairMutations(params: {
     const mutation = await entry.doctor.repairConfig?.({
       cfg: nextCfg,
       doctorFixCommand: params.doctorFixCommand,
+      ...(params.env ? { env: params.env } : {}),
     });
     if (!mutation || mutation.changes.length === 0) {
       if (mutation?.warnings?.length) {

@@ -26,12 +26,23 @@ import {
 } from "./onboard.js";
 import {
   buildFoundryAuthResult,
+  formatFoundryApiLabel,
   type FoundryProviderApi,
+  isFoundryMaiImageModel,
   listConfiguredFoundryProfileIds,
   PROVIDER_ID,
   resolveConfiguredModelNameHint,
   resolveFoundryApi,
 } from "./shared.js";
+
+export function shouldTestFoundryTextConnection(params: {
+  modelId: string;
+  modelNameHint?: string | null;
+}): boolean {
+  return !isFoundryMaiImageModel(
+    resolveConfiguredModelNameHint(params.modelId, params.modelNameHint),
+  );
+}
 
 export const entraIdAuthMethod: ProviderAuthMethod = {
   id: "entra-id",
@@ -42,6 +53,7 @@ export const entraIdAuthMethod: ProviderAuthMethod = {
     choiceId: "microsoft-foundry-entra",
     choiceLabel: "Microsoft Foundry (Entra ID / az login)",
     choiceHint: "Use your Azure login — no API key needed",
+    onboardingScopes: ["text-inference", "image-generation"],
     groupId: "microsoft-foundry",
     groupLabel: "Microsoft Foundry",
     groupHint: "Entra ID + API key",
@@ -113,7 +125,7 @@ export const entraIdAuthMethod: ProviderAuthMethod = {
       | Array<{
           name: string;
           modelName?: string;
-          api?: "openai-completions" | "openai-responses";
+          api?: FoundryProviderApi;
         }>
       | undefined;
     if (selectedSub) {
@@ -124,12 +136,9 @@ export const entraIdAuthMethod: ProviderAuthMethod = {
       if (useDiscoveredResource) {
         const selectedResource = await selectFoundryResource(ctx, selectedSub);
         const resourceDeployments = listResourceDeployments(selectedResource, selectedSub.id);
-        const selectedDeployment = await selectFoundryDeployment(
-          ctx,
-          selectedResource,
-          resourceDeployments,
-        );
-        discoveredDeployments = resourceDeployments.map((deployment) =>
+        const { selected: selectedDeployment, supported: supportedDeployments } =
+          await selectFoundryDeployment(ctx, selectedResource, resourceDeployments);
+        discoveredDeployments = supportedDeployments.map((deployment) =>
           Object.assign(
             { name: deployment.name },
             deployment.modelName ? { modelName: deployment.modelName } : {},
@@ -146,7 +155,7 @@ export const entraIdAuthMethod: ProviderAuthMethod = {
             `Endpoint: ${endpoint}`,
             `Deployment: ${modelId}`,
             selectedDeployment.modelName ? `Model: ${selectedDeployment.modelName}` : undefined,
-            `API: ${api === "openai-responses" ? "Responses" : "Chat Completions"}`,
+            `API: ${formatFoundryApiLabel(api)}`,
           ]
             .filter(Boolean)
             .join("\n"),
@@ -159,15 +168,17 @@ export const entraIdAuthMethod: ProviderAuthMethod = {
       ({ endpoint, modelId, modelNameHint, api } = await promptEndpointAndModelManually(ctx));
     }
 
-    await testFoundryConnection({
-      ctx,
-      endpoint,
-      modelId,
-      modelNameHint,
-      api,
-      subscriptionId: selectedSub?.id,
-      tenantId,
-    });
+    if (shouldTestFoundryTextConnection({ modelId, modelNameHint })) {
+      await testFoundryConnection({
+        ctx,
+        endpoint,
+        modelId,
+        modelNameHint,
+        api,
+        subscriptionId: selectedSub?.id,
+        tenantId,
+      });
+    }
 
     return buildFoundryAuthResult({
       profileId: `${PROVIDER_ID}:entra`,
@@ -202,6 +213,7 @@ export const apiKeyAuthMethod: ProviderAuthMethod = {
   wizard: {
     choiceId: "microsoft-foundry-apikey",
     choiceLabel: "Microsoft Foundry (API key)",
+    onboardingScopes: ["text-inference", "image-generation"],
     groupId: "microsoft-foundry",
     groupLabel: "Microsoft Foundry",
     groupHint: "Entra ID + API key",
@@ -240,14 +252,17 @@ export const apiKeyAuthMethod: ProviderAuthMethod = {
       throw new Error("Missing Azure OpenAI API key.");
     }
     const selection = await promptApiKeyEndpointAndModel(ctx);
+    const existingModelNameHint =
+      existingMetadata?.modelId === selection.modelId
+        ? (existingMetadata.modelName ?? existingMetadata.modelId)
+        : undefined;
     return buildFoundryAuthResult({
       profileId: `${PROVIDER_ID}:default`,
       apiKey: capturedSecretInput ?? "",
       ...(capturedMode ? { secretInputMode: capturedMode } : {}),
       endpoint: selection.endpoint,
       modelId: selection.modelId,
-      modelNameHint:
-        selection.modelNameHint ?? existingMetadata?.modelName ?? existingMetadata?.modelId,
+      modelNameHint: selection.modelNameHint ?? existingModelNameHint,
       api: selection.api,
       authMethod: "api-key",
       currentProviderProfileIds: listConfiguredFoundryProfileIds(ctx.config),

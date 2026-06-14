@@ -114,6 +114,9 @@ describe("login-qr", () => {
       // Baileys v7 wraps the error: { error: BoomError(515) }
       .mockRejectedValueOnce({ error: { output: { statusCode: 515 } } })
       .mockResolvedValueOnce(undefined);
+    readWebAuthExistsForDecisionMock
+      .mockResolvedValueOnce({ outcome: "stable", exists: false })
+      .mockResolvedValue({ outcome: "stable", exists: true });
 
     const start = await startWebLoginWithQr({
       timeoutMs: 5000,
@@ -242,6 +245,34 @@ describe("login-qr", () => {
     expect(createWaSocketMock).not.toHaveBeenCalled();
   });
 
+  it("does not report linked success when the socket opens before creds persistence stabilizes", async () => {
+    const accountId = "socket-open-before-persistence";
+    waitForWaConnectionMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          setTimeout(() => resolve(undefined), 20);
+        }),
+    );
+    readWebAuthExistsForDecisionMock
+      .mockResolvedValueOnce({ outcome: "stable", exists: false })
+      .mockResolvedValue({ outcome: "unstable" });
+
+    const start = await startWebLoginWithQr({
+      timeoutMs: 5000,
+      accountId,
+    });
+    expect(start.qrDataUrl).toBe("data:image/png;base64,encoded:qr-data");
+
+    const result = await waitForWebLogin({
+      timeoutMs: 5000,
+      currentQrDataUrl: start.qrDataUrl,
+      accountId,
+    });
+
+    expect(result.connected).toBe(false);
+    expect(result.message).toMatch(/retry/i);
+  });
+
   it("reports a recovered linked session when socket bootstrap restores auth without a QR", async () => {
     createWaSocketMock.mockImplementationOnce(
       async (
@@ -255,6 +286,9 @@ describe("login-qr", () => {
     );
     waitForWaConnectionMock.mockResolvedValueOnce(undefined);
     readWebSelfIdMock.mockReturnValueOnce({ e164: "+5511977000000", jid: null, lid: null });
+    readWebAuthExistsForDecisionMock
+      .mockResolvedValueOnce({ outcome: "stable", exists: false })
+      .mockResolvedValue({ outcome: "stable", exists: true });
 
     const result = await startWebLoginWithQr({ timeoutMs: 5000 });
 
@@ -310,6 +344,9 @@ describe("login-qr", () => {
           setTimeout(() => resolve(undefined), 20);
         }),
     );
+    readWebAuthExistsForDecisionMock
+      .mockResolvedValueOnce({ outcome: "stable", exists: false })
+      .mockResolvedValue({ outcome: "stable", exists: true });
 
     const start = await startWebLoginWithQr({
       timeoutMs: 5000,
@@ -351,6 +388,9 @@ describe("login-qr", () => {
           resolveLogin = resolve;
         }),
     );
+    readWebAuthExistsForDecisionMock
+      .mockResolvedValueOnce({ outcome: "stable", exists: false })
+      .mockResolvedValue({ outcome: "stable", exists: true });
 
     const start = await startWebLoginWithQr({
       timeoutMs: 5000,

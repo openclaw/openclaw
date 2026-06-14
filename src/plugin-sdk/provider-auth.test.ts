@@ -101,6 +101,89 @@ describe("provider auth profile helpers", () => {
     ]);
   });
 
+  it("filters auth profile API-key resolution by credential type", async () => {
+    vi.resetModules();
+
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:oauth": {
+          type: "oauth",
+          provider: "openai",
+          access: "oauth-access",
+          refresh: "oauth-refresh",
+          expires: Date.now() + 60_000,
+        },
+        "openai:key": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-profile",
+        },
+      },
+    };
+    const resolveApiKeyForProfile = vi.fn(
+      async (params: { store: AuthProfileStore; profileId: string }) => {
+        const profile = params.store.profiles[params.profileId];
+        if (profile?.type === "oauth") {
+          return {
+            apiKey: profile.access,
+            provider: profile.provider,
+            profileId: params.profileId,
+            profileType: profile.type,
+          };
+        }
+        if (profile?.type === "api_key" && profile.key) {
+          return {
+            apiKey: profile.key,
+            provider: profile.provider,
+            profileId: params.profileId,
+            profileType: profile.type,
+          };
+        }
+        return null;
+      },
+    );
+
+    vi.doMock("../agents/agent-scope-config.js", () => ({
+      resolveDefaultAgentDir: () => "/tmp/openclaw-agent",
+    }));
+    vi.doMock("../agents/auth-profiles/oauth.js", () => ({
+      resolveApiKeyForProfile,
+    }));
+    vi.doMock("../agents/auth-profiles/order.js", () => ({
+      resolveAuthProfileOrder: ({
+        provider,
+        store: profileStore,
+      }: {
+        provider: string;
+        store: AuthProfileStore;
+      }) =>
+        Object.entries(profileStore.profiles)
+          .filter(([, profile]) => profile.provider === provider)
+          .map(([profileId]) => profileId),
+    }));
+    vi.doMock("../agents/auth-profiles/store.js", () => ({
+      ensureAuthProfileStore: vi.fn(() => store),
+      ensureAuthProfileStoreForLocalUpdate: vi.fn(() => store),
+      loadAuthProfileStoreForSecretsRuntime: vi.fn(() => store),
+      loadAuthProfileStoreWithoutExternalProfiles: vi.fn(() => ({ version: 1, profiles: {} })),
+      updateAuthProfileStoreWithLock: vi.fn(),
+    }));
+
+    const { resolveProviderAuthProfileApiKey } = await import("./provider-auth.js");
+
+    await expect(
+      resolveProviderAuthProfileApiKey({
+        provider: "openai",
+        profileTypes: ["api_key"],
+      }),
+    ).resolves.toBe("sk-profile");
+    expect(resolveApiKeyForProfile).toHaveBeenCalledTimes(1);
+    expect(resolveApiKeyForProfile).toHaveBeenCalledWith(
+      expect.objectContaining({ profileId: "openai:key" }),
+    );
+  });
+
   it("only discovers external CLI auth when provider resolution opts in", async () => {
     vi.resetModules();
 

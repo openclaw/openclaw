@@ -30,7 +30,11 @@ const manifest = JSON.parse(
   setup?: {
     providers?: Array<{ id: string }>;
   };
-  providerEndpoints?: Array<{ endpointClass?: string; hosts?: string[] }>;
+  providerEndpoints?: Array<{
+    endpointClass?: string;
+    hosts?: string[];
+    hostSuffixes?: string[];
+  }>;
   providerAuthAliases?: Record<string, string>;
   legacyPluginIds?: string[];
 };
@@ -117,6 +121,14 @@ describe("OpenAI plugin manifest", () => {
       endpoint.hosts?.includes("chatgpt.com"),
     );
     expect(chatGptEndpoint?.endpointClass).toBe("openai");
+  });
+
+  it("classifies regional API hosts as public OpenAI endpoints", () => {
+    const publicEndpoint = manifest.providerEndpoints?.find((endpoint) =>
+      endpoint.hosts?.includes("api.openai.com"),
+    );
+    expect(publicEndpoint?.endpointClass).toBe("openai-public");
+    expect(publicEndpoint?.hostSuffixes).toContain(".api.openai.com");
   });
 
   it("keeps OpenAI media-understanding manifest metadata aligned with runtime audio support", () => {

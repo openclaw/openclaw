@@ -26,6 +26,7 @@ const callGatewayStatusProbe = vi.fn<
   error: null,
   server: { version: "2026.5.6", connId: "conn-1" },
 }));
+const resolveGatewayProbeAuthSafeWithSecretInputsCalls = vi.fn<(opts?: unknown) => void>();
 const loadGatewayTlsRuntime = vi.fn(async (_cfg?: unknown) => ({
   enabled: true,
   required: true,
@@ -60,7 +61,9 @@ const readGatewayRestartHandoffSync = vi.fn<
 >(() => null);
 const auditGatewayServiceConfig = vi.fn(async (_opts?: unknown) => undefined);
 const serviceIsLoaded = vi.fn(async (_opts?: unknown) => true);
-const serviceReadRuntime = vi.fn(async (_env?: NodeJS.ProcessEnv) => ({ status: "running" }));
+const serviceReadRuntime = vi.fn<
+  (_env?: NodeJS.ProcessEnv) => Promise<{ status: string; detail?: string }>
+>(async (_env?: NodeJS.ProcessEnv) => ({ status: "running" }));
 const inspectGatewayRestart = vi.fn<(opts?: unknown) => Promise<GatewayRestartSnapshot>>(
   async (_opts?: unknown) => ({
     runtime: { status: "running", pid: 1234 },
@@ -73,7 +76,7 @@ const serviceReadCommand = vi.fn<
   (env?: NodeJS.ProcessEnv) => Promise<{
     programArguments: string[];
     environment?: Record<string, string>;
-  }>
+  } | null>
 >(async (_env?: NodeJS.ProcessEnv) => ({
   programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
   environment: {
@@ -182,6 +185,19 @@ vi.mock("../../gateway/net.js", () => ({
     resolveGatewayBindHost(bindMode, customBindHost),
 }));
 
+vi.mock("../../gateway/probe-auth.js", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    resolveGatewayProbeAuthSafeWithSecretInputs: async (opts: unknown) => {
+      resolveGatewayProbeAuthSafeWithSecretInputsCalls(opts);
+      return await (
+        actual.resolveGatewayProbeAuthSafeWithSecretInputs as (opts: unknown) => Promise<unknown>
+      )(opts);
+    },
+  };
+});
+
 vi.mock("../../infra/ports.js", () => ({
   inspectPortConnections: (port: number) => inspectPortConnections(port),
   inspectPortUsage: (port: number) => inspectPortUsage(port),
@@ -243,6 +259,7 @@ describe("gatherDaemonStatus", () => {
     delete process.env.DAEMON_GATEWAY_TOKEN;
     delete process.env.DAEMON_GATEWAY_PASSWORD;
     callGatewayStatusProbe.mockClear();
+    resolveGatewayProbeAuthSafeWithSecretInputsCalls.mockClear();
     createConfigIOCalls.mockClear();
     findStaleOpenClawUpdateLaunchdJobs.mockReset();
     findStaleOpenClawUpdateLaunchdJobs.mockResolvedValue([]);
@@ -471,6 +488,29 @@ describe("gatherDaemonStatus", () => {
     ).toBe(true);
     expect(status.service.runtime?.status).toBe("running");
     expect((status.service.runtime as { detail?: string }).detail).toBe("19001");
+  });
+
+  it("keeps gateway status read-only when service management is unsupported", async () => {
+    serviceReadCommand.mockResolvedValueOnce(null);
+    serviceIsLoaded.mockResolvedValueOnce(false);
+    serviceReadRuntime.mockResolvedValueOnce({
+      status: "unknown",
+      detail: "Gateway service install not supported on aix",
+    });
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: false,
+      deep: false,
+    });
+
+    expect(status.service.command).toBeNull();
+    expect(status.service.loaded).toBe(false);
+    expect(status.service.runtime).toEqual({
+      status: "unknown",
+      detail: "Gateway service install not supported on aix",
+    });
+    expect(inspectGatewayRestart).not.toHaveBeenCalled();
   });
 
   it("surfaces recent service restart handoffs only during deep status", async () => {
@@ -756,6 +796,109 @@ describe("gatherDaemonStatus", () => {
     expect((callArg(callGatewayStatusProbe) as { token?: string }).token).toBe(
       "daemon-secretref-token",
     );
+  });
+
+  it("skips daemon exec SecretRef probe auth when exec refs are disabled", async () => {
+    daemonLoadedConfig = {
+      gateway: {
+        bind: "lan",
+        tls: { enabled: true },
+        auth: {
+          mode: "token",
+          token: { source: "exec", provider: "vault", id: "gateway/token" },
+        },
+      },
+      secrets: {
+        providers: {
+          vault: { source: "exec", command: "/bin/false" },
+        },
+      },
+    };
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: true,
+      deep: false,
+      allowExecSecretRefs: false,
+    });
+
+    expect(resolveGatewayProbeAuthSafeWithSecretInputsCalls).not.toHaveBeenCalled();
+    const probeInput = callArg(callGatewayStatusProbe) as {
+      token?: string;
+      password?: string;
+      allowRpcConfigCredentials?: boolean;
+    };
+    expect(probeInput.token).toBeUndefined();
+    expect(probeInput.password).toBeUndefined();
+    expect(probeInput.allowRpcConfigCredentials).toBe(false);
+    expect(status.rpc?.authWarning).toContain(
+      "gateway credentials use an exec SecretRef and exec SecretRefs are disabled",
+    );
+  });
+
+  it("ignores remote exec SecretRefs for local probes when exec refs are disabled", async () => {
+    daemonLoadedConfig = {
+      gateway: {
+        mode: "local",
+        bind: "lan",
+        tls: { enabled: true },
+        auth: { token: "daemon-token" },
+        remote: {
+          url: "wss://gateway.example",
+          token: { source: "exec", provider: "vault", id: "gateway/remote-token" },
+        },
+      },
+      secrets: {
+        providers: {
+          vault: { source: "exec", command: "/bin/false" },
+        },
+      },
+    };
+
+    await gatherDaemonStatus({
+      rpc: {},
+      probe: true,
+      deep: false,
+      allowExecSecretRefs: false,
+    });
+
+    expect(resolveGatewayProbeAuthSafeWithSecretInputsCalls).toHaveBeenCalledTimes(1);
+    const probeInput = callArg(callGatewayStatusProbe) as { token?: string; password?: string };
+    expect(probeInput.token).toBe("daemon-token");
+    expect(probeInput.password).toBeUndefined();
+  });
+
+  it("ignores local exec SecretRefs for remote probes when exec refs are disabled", async () => {
+    daemonLoadedConfig = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "wss://gateway.example",
+        },
+        auth: {
+          mode: "token",
+          token: { source: "exec", provider: "vault", id: "gateway/token" },
+        },
+      },
+      secrets: {
+        providers: {
+          vault: { source: "exec", command: "/bin/false" },
+        },
+      },
+    };
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: true,
+      deep: false,
+      allowExecSecretRefs: false,
+    });
+
+    expect(status.rpc?.authWarning).toBeUndefined();
+    expect(resolveGatewayProbeAuthSafeWithSecretInputsCalls).toHaveBeenCalledTimes(1);
+    const probeInput = callArg(callGatewayStatusProbe) as { token?: string; password?: string };
+    expect(probeInput.token).toBeUndefined();
+    expect(probeInput.password).toBeUndefined();
   });
 
   it("does not resolve daemon password SecretRef when token auth is configured", async () => {

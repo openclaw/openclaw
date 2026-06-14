@@ -215,23 +215,36 @@ export function normalizePersistedBinding(
     }
   }
 
-  return {
+  const record: ThreadBindingRecord = {
     accountId,
     channelId,
     threadId,
     targetKind,
     targetSessionKey,
     agentId,
-    label,
-    webhookId,
-    webhookToken,
     boundBy,
     boundAt,
     lastActivityAt,
-    idleTimeoutMs: migratedIdleTimeoutMs,
-    maxAgeMs: migratedMaxAgeMs,
-    metadata,
   };
+  if (label !== undefined) {
+    record.label = label;
+  }
+  if (webhookId !== undefined) {
+    record.webhookId = webhookId;
+  }
+  if (webhookToken !== undefined) {
+    record.webhookToken = webhookToken;
+  }
+  if (migratedIdleTimeoutMs !== undefined) {
+    record.idleTimeoutMs = migratedIdleTimeoutMs;
+  }
+  if (migratedMaxAgeMs !== undefined) {
+    record.maxAgeMs = migratedMaxAgeMs;
+  }
+  if (metadata !== undefined) {
+    record.metadata = metadata;
+  }
+  return record;
 }
 
 export function normalizeThreadBindingDurationMs(raw: unknown, defaultsTo: number): number {

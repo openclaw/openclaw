@@ -218,17 +218,27 @@ inside every shard.
     `OPENCLAW_NPM_TELEGRAM_PACKAGE_TGZ=/path/to/openclaw-current.tgz` or
     `OPENCLAW_CURRENT_PACKAGE_TGZ` to test a resolved local tarball instead of
     installing from the registry.
+  - Emits repeated RTT timing in `qa-evidence.json` by default with
+    `OPENCLAW_NPM_TELEGRAM_RTT_SAMPLES=20`. Override
+    `OPENCLAW_NPM_TELEGRAM_RTT_SAMPLES`,
+    `OPENCLAW_NPM_TELEGRAM_RTT_TIMEOUT_MS`, or
+    `OPENCLAW_NPM_TELEGRAM_RTT_MAX_FAILURES` to tune the RTT run.
+    `OPENCLAW_NPM_TELEGRAM_RTT_CHECKS` accepts a comma-separated list of
+    Telegram QA check IDs to sample; when unset, the default RTT-capable check
+    is `telegram-mentioned-message-reply`.
   - Uses the same Telegram env credentials or Convex credential source as
     `pnpm openclaw qa telegram`. For CI/release automation, set
     `OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE=convex` plus
-    `OPENCLAW_QA_CONVEX_SITE_URL` and the role secret. If
+    `OPENCLAW_QA_CONVEX_SITE_URL` and a role secret. If
     `OPENCLAW_QA_CONVEX_SITE_URL` and a Convex role secret are present in CI,
     the Docker wrapper selects Convex automatically.
   - The wrapper validates Telegram or Convex credential env on the host before
     Docker build/install work. Set `OPENCLAW_NPM_TELEGRAM_SKIP_CREDENTIAL_PREFLIGHT=1`
     only when deliberately debugging pre-credential setup.
   - `OPENCLAW_NPM_TELEGRAM_CREDENTIAL_ROLE=ci|maintainer` overrides the shared
-    `OPENCLAW_QA_CREDENTIAL_ROLE` for this lane only.
+    `OPENCLAW_QA_CREDENTIAL_ROLE` for this lane only. When Convex credentials
+    are selected and no role is set, the wrapper uses `ci` in CI and
+    `maintainer` outside CI.
   - GitHub Actions exposes this lane as the manual maintainer workflow
     `NPM Telegram Beta E2E`. It does not run on merge. The workflow uses the
     `qa-live-shared` environment and Convex CI credential leases.
@@ -344,11 +354,11 @@ gh workflow run package-acceptance.yml --ref main \
     want artifacts without a failing exit code.
   - Requires two distinct bots in the same private group, with the SUT bot exposing a Telegram username.
   - For stable bot-to-bot observation, enable Bot-to-Bot Communication Mode in `@BotFather` for both bots and ensure the driver bot can observe group bot traffic.
-  - Writes a Telegram QA report, summary, and observed-messages artifact under `.artifacts/qa-e2e/...`. Replying scenarios include RTT from driver send request to observed SUT reply.
+  - Writes a Telegram QA report, summary, and `qa-evidence.json` under `.artifacts/qa-e2e/...`. Replying scenarios include RTT from driver send request to observed SUT reply.
 
 `Mantis Telegram Live` is the PR-evidence wrapper around this lane. It runs the
-candidate ref with Convex-leased Telegram credentials, renders the redacted
-observed-message transcript in a Crabbox desktop browser, records MP4 evidence,
+candidate ref with Convex-leased Telegram credentials, renders the redacted QA
+report/evidence bundle in a Crabbox desktop browser, records MP4 evidence,
 generates a motion-trimmed GIF, uploads the artifact bundle, and posts inline PR
 evidence through the Mantis GitHub App when `pr_number` is set. Maintainers can
 start it from the Actions UI through `Mantis Scenario` (`scenario_id:

@@ -424,6 +424,7 @@ export type PluginManifest = {
 export type PluginManifestContracts = {
   embeddedExtensionFactories?: string[];
   agentToolResultMiddleware?: string[];
+  trustedToolPolicies?: string[];
   /**
    * Provider ids whose external auth profile hook can contribute runtime-only
    * credentials. Declaring this lets auth-store overlays load only the owning
@@ -862,6 +863,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
 
   const embeddedExtensionFactories = normalizeTrimmedStringList(value.embeddedExtensionFactories);
   const agentToolResultMiddleware = normalizeTrimmedStringList(value.agentToolResultMiddleware);
+  const trustedToolPolicies = normalizeTrimmedStringList(value.trustedToolPolicies);
   const externalAuthProviders = normalizeTrimmedStringList(value.externalAuthProviders);
   const embeddingProviders = normalizeTrimmedStringList(value.embeddingProviders);
   const memoryEmbeddingProviders = normalizeTrimmedStringList(value.memoryEmbeddingProviders);
@@ -885,6 +887,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
   const contracts = {
     ...(embeddedExtensionFactories.length > 0 ? { embeddedExtensionFactories } : {}),
     ...(agentToolResultMiddleware.length > 0 ? { agentToolResultMiddleware } : {}),
+    ...(trustedToolPolicies.length > 0 ? { trustedToolPolicies } : {}),
     ...(externalAuthProviders.length > 0 ? { externalAuthProviders } : {}),
     ...(embeddingProviders.length > 0 ? { embeddingProviders } : {}),
     ...(memoryEmbeddingProviders.length > 0 ? { memoryEmbeddingProviders } : {}),

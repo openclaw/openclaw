@@ -2,6 +2,7 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
+import type { ReplyPayload } from "../types.js";
 import { createBlockReplyContentKey } from "./block-reply-pipeline.js";
 import {
   createBlockReplyDeliveryHandler,
@@ -33,6 +34,7 @@ describe("createBlockReplyDeliveryHandler", () => {
       blockStreamingEnabled: false,
       blockReplyPipeline: null,
       directlySentBlockKeys,
+      directlySentBlockPayloads: [],
     });
 
     await handler({
@@ -70,6 +72,7 @@ describe("createBlockReplyDeliveryHandler", () => {
       blockStreamingEnabled: false,
       blockReplyPipeline: null,
       directlySentBlockKeys,
+      directlySentBlockPayloads: [],
     });
 
     await handler({
@@ -106,6 +109,7 @@ describe("createBlockReplyDeliveryHandler", () => {
       blockStreamingEnabled: false,
       blockReplyPipeline: null,
       directlySentBlockKeys,
+      directlySentBlockPayloads: [],
     });
 
     await handler({
@@ -149,6 +153,7 @@ describe("createBlockReplyDeliveryHandler", () => {
       blockStreamingEnabled: false,
       blockReplyPipeline: null,
       directlySentBlockKeys,
+      directlySentBlockPayloads: [],
     });
 
     await handler({ presentation });
@@ -180,6 +185,7 @@ describe("createBlockReplyDeliveryHandler", () => {
       blockStreamingEnabled: false,
       blockReplyPipeline: null,
       directlySentBlockKeys: new Set(),
+      directlySentBlockPayloads: [],
     });
 
     await handler({ text: "text only" });
@@ -202,6 +208,7 @@ describe("createBlockReplyDeliveryHandler", () => {
       blockStreamingEnabled: true,
       blockReplyPipeline,
       directlySentBlockKeys: new Set(),
+      directlySentBlockPayloads: [],
     });
 
     await handler({ text: "\n\n  Hello from stream" });
@@ -234,6 +241,7 @@ describe("createBlockReplyDeliveryHandler", () => {
       blockStreamingEnabled: true,
       blockReplyPipeline,
       directlySentBlockKeys: new Set(),
+      directlySentBlockPayloads: [],
     });
 
     await handler({ text: "reset intro" });
@@ -317,6 +325,7 @@ describe("createBlockReplyDeliveryHandler", () => {
       blockStreamingEnabled: true,
       blockReplyPipeline,
       directlySentBlockKeys: new Set(),
+      directlySentBlockPayloads: [],
     });
 
     await handler({ text: "Result", mediaUrl: "./image.png" });
@@ -354,6 +363,7 @@ describe("createBlockReplyDeliveryHandler", () => {
       blockStreamingEnabled: true,
       blockReplyPipeline,
       directlySentBlockKeys: new Set(),
+      directlySentBlockPayloads: [],
     });
 
     await handler({ text: "NO_REPLY", mediaUrls: ["./missing.png", "./survived.png"] });
@@ -385,6 +395,7 @@ describe("createBlockReplyDeliveryHandler", () => {
       blockStreamingEnabled: true,
       blockReplyPipeline,
       directlySentBlockKeys: new Set(),
+      directlySentBlockPayloads: [],
     });
 
     const payload = setReplyPayloadMetadata({ text: "Alpha" }, { assistantMessageIndex: 7 });
@@ -412,5 +423,34 @@ describe("createBlockReplyDeliveryHandler", () => {
     expect(getReplyPayloadMetadata(enqueuedPayload)).toEqual({
       assistantMessageIndex: 7,
     });
+  });
+
+  it("records concurrent direct block deliveries in emission order", async () => {
+    const resolvers: Array<() => void> = [];
+    const directlySentBlockPayloads: Array<ReplyPayload | undefined> = [];
+    const handler = createBlockReplyDeliveryHandler({
+      onBlockReply: () =>
+        new Promise<void>((resolve) => {
+          resolvers.push(resolve);
+        }),
+      normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
+      applyReplyToMode: (payload) => payload,
+      typingSignals: {
+        signalTextDelta: vi.fn(async () => {}),
+      } as unknown as TypingSignaler,
+      blockStreamingEnabled: true,
+      blockReplyPipeline: null,
+      directlySentBlockKeys: new Set(),
+      directlySentBlockPayloads,
+    });
+
+    const first = handler({ text: "first" });
+    const second = handler({ text: "second" });
+    resolvers[1]?.();
+    await second;
+    resolvers[0]?.();
+    await first;
+
+    expect(directlySentBlockPayloads.map((payload) => payload?.text)).toEqual(["first", "second"]);
   });
 });

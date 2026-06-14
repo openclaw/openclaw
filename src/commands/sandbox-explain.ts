@@ -16,11 +16,11 @@ import { resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.
 import { normalizeAnyChannelId } from "../channels/registry.js";
 import { getRuntimeConfig } from "../config/config.js";
 import {
-  loadSessionStore,
   resolveAgentMainSessionKey,
   resolveMainSessionKey,
   resolveStorePath,
 } from "../config/sessions.js";
+import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildAgentMainSessionKey,
@@ -106,8 +106,11 @@ function resolveActiveChannel(params: {
   const storePath = resolveStorePath(params.cfg.session?.store, {
     agentId: params.agentId,
   });
-  const store = loadSessionStore(storePath);
-  const entry = store[params.sessionKey] as
+  const entry = loadSessionEntry({
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    storePath,
+  }) as
     | {
         lastChannel?: string;
         channel?: string;
