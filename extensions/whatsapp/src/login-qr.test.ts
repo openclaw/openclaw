@@ -11,6 +11,11 @@ import {
   WHATSAPP_AUTH_UNSTABLE_CODE,
   waitForWaConnection,
 } from "./session.js";
+import {
+  clearWebAuthLoggedOut,
+  isWebAuthLoggedOut,
+  markWebAuthLoggedOut,
+} from "./web-auth-terminal-state.js";
 
 vi.mock("./session.js", async () => {
   const actual = await vi.importActual<typeof import("./session.js")>("./session.js");
@@ -75,6 +80,7 @@ async function waitForQrRenderCallCount(count: number) {
 describe("login-qr", () => {
   const rotatingAccountId = "rotating-qr";
   const concurrentAccountId = "concurrent-qr";
+  const terminalLoggedOutAccountId = "terminal-logged-out-qr";
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -100,6 +106,9 @@ describe("login-qr", () => {
     });
     readWebSelfIdMock.mockReset().mockReturnValue({ e164: null, jid: null, lid: null });
     logoutWebMock.mockReset().mockResolvedValue(true);
+    clearWebAuthLoggedOut(rotatingAccountId);
+    clearWebAuthLoggedOut(concurrentAccountId);
+    clearWebAuthLoggedOut(terminalLoggedOutAccountId);
     renderQrPngDataUrlMock
       .mockReset()
       .mockImplementation(async (input) => `data:image/png;base64,encoded:${input}`);
@@ -171,25 +180,77 @@ describe("login-qr", () => {
     expect(createWaSocketMock).toHaveBeenCalledTimes(2);
   });
 
-  it("clears auth and reports a relink message when WhatsApp is logged out", async () => {
-    waitForWaConnectionMock.mockRejectedValueOnce({
-      output: { statusCode: 401 },
-    });
+  it("clears auth and returns a replacement QR when WhatsApp is logged out", async () => {
+    const accountId = "logged-out-replacement-qr";
+    createWaSocketMock
+      .mockImplementationOnce(
+        async (
+          _printQr: boolean,
+          _verbose: boolean,
+          opts?: { authDir?: string; onQr?: (qr: string) => void },
+        ) => {
+          const sock = { ws: { close: vi.fn() } };
+          setImmediate(() => opts?.onQr?.("qr-data"));
+          return sock as never;
+        },
+      )
+      .mockImplementationOnce(
+        async (
+          _printQr: boolean,
+          _verbose: boolean,
+          opts?: { authDir?: string; onQr?: (qr: string) => void },
+        ) => {
+          const sock = { ws: { close: vi.fn() } };
+          setImmediate(() => opts?.onQr?.("qr-after-logout"));
+          return sock as never;
+        },
+      );
+    waitForWaConnectionMock
+      .mockRejectedValueOnce({
+        output: { statusCode: 401 },
+      })
+      .mockImplementation(() => new Promise(() => {}));
 
-    const start = await startWebLoginWithQr({ timeoutMs: 5000 });
+    const start = await startWebLoginWithQr({ timeoutMs: 5000, accountId });
     expect(start.qrDataUrl).toBe("data:image/png;base64,encoded:qr-data");
 
     const result = await waitForWebLogin({
       timeoutMs: 5000,
       currentQrDataUrl: start.qrDataUrl,
+      accountId,
     });
 
     expect(result).toEqual({
       connected: false,
-      message:
-        "WhatsApp reported the session is logged out. Cleared cached web session; please scan a new QR.",
+      message: "QR refreshed. Scan the latest code in WhatsApp → Linked Devices.",
+      qrDataUrl: "data:image/png;base64,encoded:qr-after-logout",
     });
     expect(logoutWebMock).toHaveBeenCalledOnce();
+  });
+
+  it("uses terminal logged-out state to relink existing auth without force", async () => {
+    markWebAuthLoggedOut(terminalLoggedOutAccountId);
+    waitForWaConnectionMock.mockImplementation(() => new Promise(() => {}));
+    readWebAuthExistsForDecisionMock.mockResolvedValueOnce({
+      outcome: "stable",
+      exists: true,
+    });
+
+    const result = await startWebLoginWithQr({
+      timeoutMs: 5000,
+      accountId: terminalLoggedOutAccountId,
+    });
+
+    expect(result).toEqual({
+      qrDataUrl: "data:image/png;base64,encoded:qr-data",
+      message: "Scan this QR in WhatsApp → Linked Devices.",
+    });
+    expect(logoutWebMock).toHaveBeenCalledWith({
+      authDir: expect.stringContaining(terminalLoggedOutAccountId),
+      isLegacyAuthDir: false,
+      runtime: expect.anything(),
+    });
+    expect(isWebAuthLoggedOut(terminalLoggedOutAccountId)).toBe(false);
   });
 
   it("caps oversized wait timeouts to a timer-safe delay", async () => {

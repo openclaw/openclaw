@@ -14,11 +14,14 @@ import {
 import { renderQrPngDataUrl } from "./qr-image.js";
 import {
   createWaSocket,
+  formatError,
+  logoutWeb,
   readWebAuthExistsForDecision,
   readWebSelfId,
   WHATSAPP_AUTH_UNSTABLE_CODE,
 } from "./session.js";
 import { resolveWhatsAppSocketTiming, type WhatsAppSocketTimingOptions } from "./socket-timing.js";
+import { clearWebAuthLoggedOut, isWebAuthLoggedOut } from "./web-auth-terminal-state.js";
 
 type WaSocket = Awaited<ReturnType<typeof createWaSocket>>;
 export type StartWebLoginWithQrResult = {
@@ -327,12 +330,30 @@ export async function startWebLoginWithQr(
       message: "WhatsApp auth state is still stabilizing. Retry login in a moment.",
     };
   }
-  if (authState.exists && !opts.force) {
+  const shouldRelinkLoggedOutAuth =
+    authState.exists && !opts.force && isWebAuthLoggedOut(account.accountId);
+  if (authState.exists && !opts.force && !shouldRelinkLoggedOutAuth) {
     const selfId = readWebSelfId(account.authDir);
     const who = selfId.e164 ?? selfId.jid ?? "unknown";
     return {
       message: `WhatsApp is already linked (${who}). Say “relink” if you want a fresh QR.`,
     };
+  }
+  if (shouldRelinkLoggedOutAuth) {
+    try {
+      await logoutWeb({
+        authDir: account.authDir,
+        isLegacyAuthDir: account.isLegacyAuthDir,
+        runtime,
+      });
+      clearWebAuthLoggedOut(account.accountId);
+    } catch (err) {
+      return {
+        message: `WhatsApp login failed: ${formatError(err)}`,
+      };
+    }
+  } else if (opts.force) {
+    clearWebAuthLoggedOut(account.accountId);
   }
 
   const existing = activeLogins.get(account.accountId);

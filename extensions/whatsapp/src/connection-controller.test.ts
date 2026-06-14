@@ -13,7 +13,12 @@ import {
 } from "./connection-controller.js";
 import { enqueueCredsSave, writeCredsJsonAtomically } from "./creds-persistence.js";
 import { createAcceptedWhatsAppSendResult } from "./inbound/send-result.test-helper.js";
-import { createWaSocket, readWebAuthExistsForDecision, waitForWaConnection } from "./session.js";
+import {
+  createWaSocket,
+  logoutWeb,
+  readWebAuthExistsForDecision,
+  waitForWaConnection,
+} from "./session.js";
 import { DEFAULT_WHATSAPP_SOCKET_TIMING } from "./socket-timing.js";
 
 vi.mock("./session.js", async () => {
@@ -22,12 +27,14 @@ vi.mock("./session.js", async () => {
     ...actual,
     createWaSocket: vi.fn(),
     waitForWaConnection: vi.fn(),
+    logoutWeb: vi.fn(async () => true),
     readWebAuthExistsForDecision: vi.fn(async () => ({ outcome: "stable" as const, exists: true })),
   };
 });
 
 const createWaSocketMock = vi.mocked(createWaSocket);
 const waitForWaConnectionMock = vi.mocked(waitForWaConnection);
+const logoutWebMock = vi.mocked(logoutWeb);
 const readWebAuthExistsForDecisionMock = vi.mocked(readWebAuthExistsForDecision);
 
 function createListenerStub(messageId = "ok") {
@@ -53,6 +60,7 @@ describe("WhatsAppConnectionController", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    logoutWebMock.mockResolvedValue(true);
     readWebAuthExistsForDecisionMock
       .mockReset()
       .mockResolvedValue({ outcome: "stable", exists: true });
@@ -227,6 +235,57 @@ describe("WhatsAppConnectionController", () => {
     });
     expect(initialSock.end).toHaveBeenCalledOnce();
     expect(afterTimeoutSock.end).toHaveBeenCalledOnce();
+  });
+
+  it("clears stale logged-out auth once and continues login with a fresh socket", async () => {
+    const initialSock = createSocketWithTransportEmitter();
+    const replacementSock = createSocketWithTransportEmitter();
+    const loggedOutError = { output: { statusCode: DisconnectReason.loggedOut } };
+    const waitForConnection = vi
+      .fn()
+      .mockRejectedValueOnce(loggedOutError)
+      .mockResolvedValueOnce(undefined);
+    const onQr = vi.fn();
+    const onSocketReplaced = vi.fn();
+    const createSocket = vi.fn(
+      async (_printQr: boolean, _verbose: boolean, opts?: { onQr?: (qr: string) => void }) => {
+        opts?.onQr?.("qr-after-logout");
+        return replacementSock;
+      },
+    );
+    const runtime = { log: vi.fn() } as never;
+
+    const result = await waitForWhatsAppLoginResult({
+      sock: initialSock as never,
+      authDir: "/tmp/wa-auth",
+      isLegacyAuthDir: false,
+      verbose: true,
+      runtime,
+      waitForConnection: waitForConnection as never,
+      createSocket: createSocket as never,
+      onQr,
+      onSocketReplaced,
+    });
+
+    expect(result).toEqual({
+      outcome: "connected",
+      restarted: true,
+      sock: replacementSock,
+    });
+    expect(logoutWebMock).toHaveBeenCalledWith({
+      authDir: "/tmp/wa-auth",
+      isLegacyAuthDir: false,
+      runtime,
+    });
+    expect(initialSock.end).toHaveBeenCalledOnce();
+    expect(createSocket).toHaveBeenCalledWith(false, true, {
+      authDir: "/tmp/wa-auth",
+      onQr,
+    });
+    expect(onQr).toHaveBeenCalledWith("qr-after-logout");
+    expect(onSocketReplaced).toHaveBeenCalledWith(replacementSock);
+    expect(waitForConnection).toHaveBeenNthCalledWith(1, initialSock, { timeout: "none" });
+    expect(waitForConnection).toHaveBeenNthCalledWith(2, replacementSock, { timeout: "none" });
   });
 
   it("does not keep recreating sockets when login status 408 persists", async () => {

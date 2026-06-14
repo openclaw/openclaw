@@ -236,6 +236,7 @@ export async function waitForWhatsAppLoginResult(params: {
   let currentSock = params.sock;
   let postPairingRestarted = false;
   let timeoutRestarted = false;
+  let loggedOutRestarted = false;
 
   while (true) {
     try {
@@ -258,7 +259,7 @@ export async function waitForWhatsAppLoginResult(params: {
       }
       return {
         outcome: "connected",
-        restarted: postPairingRestarted || timeoutRestarted,
+        restarted: postPairingRestarted || timeoutRestarted || loggedOutRestarted,
         sock: currentSock,
       };
     } catch (err) {
@@ -299,6 +300,26 @@ export async function waitForWhatsAppLoginResult(params: {
           isLegacyAuthDir: params.isLegacyAuthDir,
           runtime: params.runtime,
         });
+        if (!loggedOutRestarted) {
+          loggedOutRestarted = true;
+          closeWaSocket(currentSock);
+          try {
+            currentSock = await createSocket(false, params.verbose, {
+              authDir: params.authDir,
+              ...params.socketTiming,
+              onQr: params.onQr,
+            });
+            params.onSocketReplaced?.(currentSock);
+            continue;
+          } catch (createErr) {
+            return {
+              outcome: "failed",
+              message: formatError(createErr),
+              statusCode: getStatusCode(createErr),
+              error: createErr,
+            };
+          }
+        }
         return {
           outcome: "logged-out",
           message: WHATSAPP_LOGGED_OUT_RELINK_MESSAGE,
