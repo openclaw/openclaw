@@ -45,4 +45,41 @@ describe("createOpenClawCodingTools deferred follow-up guidance", () => {
       "Manage running exec sessions for commands already started: list, poll, log, write, send-keys, submit, paste, kill. Use poll/log when you need status, logs, quiet-success confirmation, or completion confirmation when automatic completion wake is unavailable. Use poll/log also for input-wait hints. Use write/send-keys/submit/paste/kill for input or intervention.",
     );
   });
+
+  it("ignores unreadable tool names while describing healthy siblings", () => {
+    const badNameTool = {
+      get name(): string {
+        throw new Error("deferred follow-up tool name getter exploded");
+      },
+      description: "bad name",
+    } as AnyAgentTool;
+
+    const tools = applyDeferredFollowupToolDescriptions([
+      { name: "exec", description: "exec base" },
+      badNameTool,
+      { name: "process", description: "process base" },
+      { name: "cron", description: "cron base" },
+    ] as AnyAgentTool[]);
+
+    expect(tools[1]).toBe(badNameTool);
+    expect(tools[0]?.description).toContain("use cron instead");
+    expect(tools[2]?.description).toContain("scheduled follow-ups");
+  });
+
+  it("does not enumerate descriptors while adding deferred guidance", () => {
+    const execTool = Object.defineProperty({ name: "exec", description: "exec base" }, "poison", {
+      enumerable: true,
+      get() {
+        throw new Error("deferred follow-up descriptor getter exploded");
+      },
+    }) as AnyAgentTool;
+
+    const [updatedExec] = applyDeferredFollowupToolDescriptions([
+      execTool,
+      { name: "process", description: "process base" },
+    ] as AnyAgentTool[]);
+
+    expect(Object.is(updatedExec, execTool)).toBe(false);
+    expect(updatedExec?.description).toContain("otherwise use process to confirm completion");
+  });
 });

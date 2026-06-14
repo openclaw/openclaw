@@ -11,20 +11,36 @@ export function applyDeferredFollowupToolDescriptions(
   tools: AnyAgentTool[],
   params?: { agentId?: string },
 ): AnyAgentTool[] {
-  const hasCronTool = tools.some((tool) => tool.name === "cron");
-  return tools.map((tool) => {
-    if (tool.name === "exec") {
-      return {
-        ...tool,
-        description: describeExecTool({ agentId: params?.agentId, hasCronTool }),
-      };
+  const toolNames = tools.map(readToolName);
+  const hasCronTool = toolNames.some((name) => name === "cron");
+  return tools.map((tool, index) => {
+    const name = toolNames[index];
+    if (name === "exec") {
+      return withToolDescription(tool, describeExecTool({ agentId: params?.agentId, hasCronTool }));
     }
-    if (tool.name === "process") {
-      return {
-        ...tool,
-        description: describeProcessTool({ hasCronTool }),
-      };
+    if (name === "process") {
+      return withToolDescription(tool, describeProcessTool({ hasCronTool }));
     }
     return tool;
   });
+}
+
+function readToolName(tool: AnyAgentTool): string | undefined {
+  try {
+    return typeof tool.name === "string" ? tool.name : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function withToolDescription(tool: AnyAgentTool, description: string): AnyAgentTool {
+  const clone = Object.create(Object.getPrototypeOf(tool)) as AnyAgentTool;
+  Object.defineProperties(clone, Object.getOwnPropertyDescriptors(tool));
+  Object.defineProperty(clone, "description", {
+    configurable: true,
+    enumerable: true,
+    writable: true,
+    value: description,
+  });
+  return clone;
 }
