@@ -13,6 +13,7 @@ import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.GatewayTlsProbeFailure
 import ai.openclaw.app.gateway.GatewayTlsProbeResult
 import ai.openclaw.app.gateway.GatewayUpdateAvailableSummary
+import ai.openclaw.app.gateway.SshTunnelManager
 import ai.openclaw.app.gateway.normalizeGatewayTlsFingerprint
 import ai.openclaw.app.gateway.probeGatewayTlsFingerprint
 import ai.openclaw.app.node.A2UIHandler
@@ -70,6 +71,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import java.util.UUID
@@ -123,6 +125,9 @@ class NodeRuntime(
   private val externalAudioCaptureActive = MutableStateFlow(false)
   private val _voiceCaptureMode = MutableStateFlow(VoiceCaptureMode.Off)
   val voiceCaptureMode: StateFlow<VoiceCaptureMode> = _voiceCaptureMode.asStateFlow()
+
+  /** SSH tunnel manager – starts a local port-forward before each gateway connection attempt. */
+  private val sshTunnelManager = SshTunnelManager(scope, prefs)
 
   private val discovery = GatewayDiscovery(appContext, scope = scope)
   val gateways: StateFlow<List<GatewayEndpoint>> = discovery.gateways
@@ -1477,6 +1482,16 @@ class NodeRuntime(
   ) {
     activeGatewayAuth = auth
     val tls = connectionManager.resolveTlsParams(endpoint)
+    
+    val tunnelConfig = prefs.loadSshTunnelConfig()
+    sshTunnelManager.start(tunnelConfig)
+    
+    val effectiveEndpoint = if (tunnelConfig.enabled) {
+      endpoint.copy(host = "127.0.0.1", port = tunnelConfig.localPort)
+    } else {
+      endpoint
+    }
+
     val operatorAuth =
       resolveOperatorSessionConnectAuth(
         auth = auth,
@@ -1489,7 +1504,7 @@ class NodeRuntime(
       updateStatus()
     } else {
       operatorSession.connect(
-        endpoint,
+        effectiveEndpoint,
         operatorAuth.token,
         operatorAuth.bootstrapToken,
         operatorAuth.password,
@@ -1498,7 +1513,7 @@ class NodeRuntime(
       )
     }
     nodeSession.connect(
-      endpoint,
+      effectiveEndpoint,
       auth.token,
       auth.bootstrapToken,
       auth.password,
@@ -1520,14 +1535,40 @@ class NodeRuntime(
     val connectAttemptId = connectAttemptSeq.incrementAndGet()
     _pendingGatewayTrust.value = null
     val tls = connectionManager.resolveTlsParams(endpoint)
+    
+    val tunnelConfig = prefs.loadSshTunnelConfig()
+    if (tunnelConfig.enabled) {
+      _statusText.value = "Starting SSH tunnel…"
+      sshTunnelManager.start(tunnelConfig)
+    } else if (tls?.required == true) {
+      _statusText.value = "Verify gateway TLS fingerprint…"
+    }
+
     if (tls?.required == true) {
       val expectedFingerprint =
         tls.expectedFingerprint
           ?.let(::normalizeGatewayTlsFingerprint)
           ?.takeIf { it.isNotBlank() }
-      _statusText.value = "Verify gateway TLS fingerprint…"
+      
       scope.launch {
-        val tlsProbe = tlsFingerprintProbe(endpoint.host, endpoint.port)
+        if (tunnelConfig.enabled) {
+          var waited = 0
+          while (!sshTunnelManager.isConnected && waited < 15000) {
+            if (!isCurrentConnectAttempt(connectAttemptId)) return@launch
+            delay(250)
+            waited += 250
+          }
+          if (!sshTunnelManager.isConnected) {
+            _statusText.value = "SSH tunnel timeout"
+            return@launch
+          }
+          _statusText.value = "Verify gateway TLS fingerprint…"
+        }
+        
+        val probeHost = if (tunnelConfig.enabled) "127.0.0.1" else endpoint.host
+        val probePort = if (tunnelConfig.enabled) tunnelConfig.localPort else endpoint.port
+        val tlsProbe = tlsFingerprintProbe(probeHost, probePort)
+        
         if (!isCurrentConnectAttempt(connectAttemptId)) return@launch
         val fp =
           tlsProbe.fingerprintSha256 ?: run {
@@ -1558,7 +1599,22 @@ class NodeRuntime(
       return
     }
 
-    connectAfterTlsCheck(endpoint = endpoint, auth = auth, connectAttemptId = connectAttemptId)
+    scope.launch {
+      val tunnelConfig = prefs.loadSshTunnelConfig()
+      if (tunnelConfig.enabled) {
+        var waited = 0
+        while (!sshTunnelManager.isConnected && waited < 15000) {
+          if (!isCurrentConnectAttempt(connectAttemptId)) return@launch
+          delay(250)
+          waited += 250
+        }
+        if (!sshTunnelManager.isConnected) {
+          _statusText.value = "SSH tunnel timeout"
+          return@launch
+        }
+      }
+      connectAfterTlsCheck(endpoint = endpoint, auth = auth, connectAttemptId = connectAttemptId)
+    }
   }
 
   private fun isCurrentConnectAttempt(connectAttemptId: Long): Boolean = connectAttemptSeq.get() == connectAttemptId
@@ -1670,6 +1726,8 @@ class NodeRuntime(
     _pendingGatewayTrust.value = null
     operatorSession.disconnect()
     nodeSession.disconnect()
+    // Stop the SSH tunnel when the user explicitly disconnects.
+    sshTunnelManager.stop()
   }
 
   fun handleCanvasA2UIActionFromWebView(payloadJson: String) {
@@ -2709,7 +2767,7 @@ internal fun resolveOperatorSessionConnectAuth(
   val storedToken = storedOperatorToken?.trim()?.takeIf { it.isNotEmpty() }
   if (storedToken != null) {
     return NodeRuntime.GatewayConnectAuth(
-      token = null,
+      token = storedToken,
       bootstrapToken = null,
       password = null,
     )
@@ -3008,3 +3066,4 @@ private data class HomeCanvasAgentCard(
   val caption: String,
   val isActive: Boolean,
 )
+
