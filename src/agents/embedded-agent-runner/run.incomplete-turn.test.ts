@@ -2078,6 +2078,122 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
   });
 
+  it.each(["search", "web_search", "memory_search", "x_search", "tool_describe"])(
+    "retries post-tool empty final turns after known read-only %s calls",
+    (toolName) => {
+      const finalAssistant = {
+        role: "assistant",
+        stopReason: "stop",
+        provider: "ollama",
+        model: "gemma4:31b",
+        content: [],
+      } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
+      const retryInstruction = resolveEmptyResponseRetryInstruction({
+        provider: "ollama",
+        modelId: "gemma4:31b",
+        payloadCount: 1,
+        aborted: false,
+        timedOut: false,
+        attempt: makeAttemptResult({
+          assistantTexts: ["Checking the scheduler now."],
+          toolMetas: [{ toolName }],
+          currentAttemptAssistant: finalAssistant,
+          lastAssistant: finalAssistant,
+        }),
+      });
+
+      expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
+    },
+  );
+
+  it("does not retry post-tool empty final turns after unclassified tools", () => {
+    const finalAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "custom",
+      model: "composer-2.5",
+      content: [],
+    } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
+    const attempt = makeAttemptResult({
+      assistantTexts: ["Checking the scheduler now."],
+      toolMetas: [{ toolName: "search" }, { toolName: "vendor_widget" }],
+      currentAttemptAssistant: finalAssistant,
+      lastAssistant: finalAssistant,
+    });
+    const retryInstruction = resolveEmptyResponseRetryInstruction({
+      provider: "custom",
+      modelId: "composer-2.5",
+      modelApi: "custom-api",
+      payloadCount: 1,
+      aborted: false,
+      timedOut: false,
+      attempt,
+    });
+
+    expect(attempt.replayMetadata).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
+    expect(retryInstruction).toBeNull();
+  });
+
+  it("does not retry post-tool turns with a visible final assistant answer", () => {
+    const finalAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "custom",
+      model: "composer-2.5",
+      content: [{ type: "text", text: "There are zero matches." }],
+    } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
+    const retryInstruction = resolveEmptyResponseRetryInstruction({
+      provider: "custom",
+      modelId: "composer-2.5",
+      modelApi: "custom-api",
+      payloadCount: 2,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["Checking the scheduler now.", "There are zero matches."],
+        toolMetas: [{ toolName: "search" }],
+        currentAttemptAssistant: finalAssistant,
+        lastAssistant: finalAssistant,
+      }),
+    });
+
+    expect(retryInstruction).toBeNull();
+  });
+
+  it("surfaces exhausted post-tool empty final turns without replacing terminal output", () => {
+    const finalAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "custom",
+      model: "composer-2.5",
+      content: [],
+    } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
+    const attempt = makeAttemptResult({
+      assistantTexts: ["Checking the scheduler now."],
+      toolMetas: [{ toolName: "search" }],
+      currentAttemptAssistant: finalAssistant,
+      lastAssistant: finalAssistant,
+    });
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: 1,
+      aborted: false,
+      timedOut: false,
+      attempt,
+    });
+
+    expect(incompleteTurnText).toContain("couldn't generate a response");
+    expect(
+      resolveEmptyResponseRetryInstruction({
+        provider: "openai",
+        modelId: "gpt-5.4",
+        payloadCount: 1,
+        aborted: false,
+        timedOut: false,
+        attempt: { ...attempt, toolMediaUrls: ["file:///tmp/render.png"] },
+      }),
+    ).toBeNull();
+  });
+
   it("does not retry clean zero-token Ollama stop turns", () => {
     const retryInstruction = resolveEmptyResponseRetryInstruction({
       provider: "ollama",
@@ -2383,6 +2499,17 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(
       buildAttemptReplayMetadata({
         toolMetas: [{ toolName: "image_generate", asyncStarted: true }],
+        didSendViaMessagingTool: false,
+        messagingToolSentTexts: [],
+        messagingToolSentMediaUrls: [],
+      }),
+    ).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
+  });
+
+  it("treats unclassified tools as replay-invalid potential side effects", () => {
+    expect(
+      buildAttemptReplayMetadata({
+        toolMetas: [{ toolName: "vendor_widget" }],
         didSendViaMessagingTool: false,
         messagingToolSentTexts: [],
         messagingToolSentMediaUrls: [],
@@ -3239,7 +3366,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(result.meta.livenessState).toBe("working");
   });
 
-  it("retries post-tool openai-compatible empty stop turns even when empty silence is allowed", async () => {
+  it("retries post-tool empty final turns after pre-tool narration even when silence is allowed", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedResolveModelAsync.mockResolvedValue({
       model: {
@@ -3254,18 +3381,20 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       },
       modelRegistry: {},
     });
+    const finalAssistant = {
+      role: "assistant",
+      api: "openai-completions",
+      stopReason: "stop",
+      provider: "stepfun",
+      model: "step-router-v1",
+      content: [],
+    } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
-        assistantTexts: [],
-        toolMetas: [{ toolName: "process.poll", meta: "pid=123" }],
-        lastAssistant: {
-          role: "assistant",
-          api: "openai-completions",
-          stopReason: "stop",
-          provider: "stepfun",
-          model: "step-router-v1",
-          content: [],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        assistantTexts: ["Checking the scheduler now."],
+        toolMetas: [{ toolName: "search", meta: "query=scheduler" }],
+        currentAttemptAssistant: finalAssistant,
+        lastAssistant: finalAssistant,
       }),
     );
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
@@ -3296,6 +3425,57 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(result.meta.terminalReplyKind).toBeUndefined();
     expect(result.meta.finalAssistantVisibleText).toBe("Visible StepFun answer.");
     expectWarnMessageWith("empty response detected");
+  });
+
+  it("does not retry post-tool empty final turns after unclassified tools", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedResolveModelAsync.mockResolvedValue({
+      model: {
+        id: "step-router-v1",
+        provider: "stepfun",
+        contextWindow: 200000,
+        api: "openai-completions",
+      },
+      error: null,
+      authStorage: {
+        setRuntimeApiKey: vi.fn(),
+      },
+      modelRegistry: {},
+    });
+    const finalAssistant = {
+      role: "assistant",
+      api: "openai-completions",
+      stopReason: "stop",
+      provider: "stepfun",
+      model: "step-router-v1",
+      content: [],
+    } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        assistantTexts: ["Checking the scheduler now."],
+        toolMetas: [{ toolName: "vendor_widget" }],
+        currentAttemptAssistant: finalAssistant,
+        lastAssistant: finalAssistant,
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      allowEmptyAssistantReplyAsSilent: true,
+      provider: "stepfun",
+      model: "step-router-v1",
+      runId: "run-post-tool-unclassified-empty-stop",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expectNoWarnMessageWith("empty response detected");
+    expect(result.payloads).toEqual([
+      {
+        text: "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed — please verify before retrying.",
+        isError: true,
+      },
+    ]);
+    expect(result.meta.livenessState).toBe("abandoned");
   });
 
   it("returns NO_REPLY without retrying post-tool exact silent assistant replies", async () => {

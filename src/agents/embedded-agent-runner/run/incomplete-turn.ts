@@ -12,13 +12,13 @@ import {
 import type { EmbeddedAgentExecutionContract } from "../../../config/types.agent-defaults.js";
 import { hasAcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import { collectTextContentBlocks } from "../../content-blocks.js";
+import { extractAssistantVisibleText } from "../../embedded-agent-utils.js";
 import {
   isStrictAgenticSupportedProviderModel,
   stripProviderPrefix,
 } from "../../execution-contract.js";
 import { hasOnlyAssistantReasoningContent } from "../../replay-turn-classification.js";
 import type { AgentMessage } from "../../runtime/index.js";
-import { isLikelyMutatingToolName } from "../../tool-mutation.js";
 import {
   hasCommittedMessagingToolDeliveryEvidence,
   hasMessagingToolDeliveryEvidence,
@@ -149,6 +149,25 @@ const SINGLE_ACTION_RETRY_SAFE_TOOL_NAMES = new Set([
   "glob",
   "ls",
 ]);
+// Blind attempt retries may repeat completed tools. Admit only names with an
+// unconditional read-only or idempotent contract; action-dependent and unknown tools fail closed.
+const REPLAY_SAFE_TOOL_NAMES = new Set([
+  ...SINGLE_ACTION_RETRY_SAFE_TOOL_NAMES,
+  "web_search",
+  "web_fetch",
+  "x_search",
+  "memory_search",
+  "memory_get",
+  "sessions_list",
+  "sessions_history",
+  "agents_list",
+  "get_goal",
+  "update_plan",
+  "tool_search",
+  "tool_describe",
+  "image",
+  "process.poll",
+]);
 const GEMINI_INCOMPLETE_TURN_PROVIDER_IDS = new Set([
   "google",
   "google-vertex",
@@ -248,10 +267,12 @@ export type PlanningOnlyPlanDetails = {
 export function buildAttemptReplayMetadata(
   params: ReplayMetadataAttempt,
 ): EmbeddedRunAttemptResult["replayMetadata"] {
-  const hadMutatingTools = params.toolMetas.some((t) => isLikelyMutatingToolName(t.toolName));
+  const hadUnsafeTools = params.toolMetas.some(
+    (entry) => !REPLAY_SAFE_TOOL_NAMES.has(normalizeLowercaseStringOrEmpty(entry.toolName)),
+  );
   const hadAsyncStartedTool = params.toolMetas.some((t) => t.asyncStarted === true);
   const hadPotentialSideEffects =
-    hadMutatingTools ||
+    hadUnsafeTools ||
     hadAsyncStartedTool ||
     hasMessagingToolDeliveryEvidence(params) ||
     hasAcceptedSessionSpawn(params.acceptedSessionSpawns) ||
@@ -355,9 +376,17 @@ export function resolveIncompleteTurnPayloadText(params: {
     !joinAssistantTexts(params.attempt.assistantTexts).length &&
     !hasTerminalOutput &&
     Boolean(assistant && hasOnlyAssistantReasoningContent(assistant));
+  const emptyResponseAssistant = isEmptyResponseAssistantTurn({
+    payloadCount: params.payloadCount,
+    attempt: params.attempt,
+  });
 
   if (
-    (params.payloadCount !== 0 && !toolUseTerminal && !lengthTerminal && !thinkingOnlyTerminal) ||
+    (params.payloadCount !== 0 &&
+      !toolUseTerminal &&
+      !lengthTerminal &&
+      !thinkingOnlyTerminal &&
+      !emptyResponseAssistant) ||
     (params.aborted && params.externalAbort) ||
     params.timedOut ||
     params.attempt.clientToolCalls ||
@@ -391,10 +420,6 @@ export function resolveIncompleteTurnPayloadText(params: {
     lastAssistant: params.attempt.lastAssistant,
   });
   const reasoningOnlyAssistant = isReasoningOnlyAssistantTurn(assistant);
-  const emptyResponseAssistant = isEmptyResponseAssistantTurn({
-    payloadCount: params.payloadCount,
-    attempt: params.attempt,
-  });
   if (
     !incompleteTerminalAssistant &&
     !lengthTerminal &&
@@ -610,6 +635,17 @@ function isReasoningOnlyAssistantTurn(message: unknown): boolean {
   return assessLastAssistantMessage(message as AgentMessage) === "incomplete-text";
 }
 
+function hasEmptyPostToolFinalAssistantTurn(attempt: IncompleteTurnAttempt): boolean {
+  // assistantTexts aggregates earlier narration. After tools, the latest typed
+  // assistant message is the final-delivery contract and must carry the answer.
+  return Boolean(
+    attempt.toolMetas.length > 0 &&
+    !hasAttemptTerminalState(attempt) &&
+    attempt.currentAttemptAssistant &&
+    extractAssistantVisibleText(attempt.currentAttemptAssistant).trim().length === 0,
+  );
+}
+
 // Unsigned thinking blocks have no cryptographic signature; assessLastAssistantMessage
 // returns "incomplete-thinking" for them. Empty content also returns "incomplete-thinking",
 // so the content.length > 0 guard is required to distinguish the two cases.
@@ -670,15 +706,16 @@ export function shouldRetrySilentErrorAssistantTurn(params: {
 
 function isEmptyResponseAssistantTurn(params: {
   payloadCount: number;
-  attempt: Pick<
-    IncompleteTurnAttempt,
-    "assistantTexts" | "currentAttemptAssistant" | "lastAssistant"
-  >;
+  attempt: IncompleteTurnAttempt;
 }): boolean {
-  if (params.payloadCount !== 0) {
+  const emptyPostToolFinalAssistant = hasEmptyPostToolFinalAssistantTurn(params.attempt);
+  if (params.payloadCount !== 0 && !emptyPostToolFinalAssistant) {
     return false;
   }
-  if (joinAssistantTexts(params.attempt.assistantTexts).length > 0) {
+  if (
+    joinAssistantTexts(params.attempt.assistantTexts).length > 0 &&
+    !emptyPostToolFinalAssistant
+  ) {
     return false;
   }
   const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
@@ -702,10 +739,7 @@ function isEmptyResponseAssistantTurn(params: {
 
 function isNonVisibleAssistantTurnEligibleForSilentReply(params: {
   payloadCount: number;
-  attempt: Pick<
-    IncompleteTurnAttempt,
-    "assistantTexts" | "currentAttemptAssistant" | "lastAssistant"
-  >;
+  attempt: IncompleteTurnAttempt;
 }): boolean {
   if (isEmptyResponseAssistantTurn(params)) {
     return true;
@@ -857,12 +891,14 @@ export function resolveEmptyResponseRetryInstruction(params: {
   }
 
   const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant ?? null;
+  const emptyPostToolFinalAssistant = hasEmptyPostToolFinalAssistantTurn(params.attempt);
   if (
     assistant?.stopReason === "stop" &&
     OLLAMA_INCOMPLETE_TURN_PROVIDER_ID_PATTERN.test(
       normalizeLowercaseStringOrEmpty(params.provider ?? ""),
     ) &&
-    !hasPositiveOutputTokenUsage(assistant)
+    !hasPositiveOutputTokenUsage(assistant) &&
+    !emptyPostToolFinalAssistant
   ) {
     return null;
   }
@@ -874,6 +910,7 @@ export function resolveEmptyResponseRetryInstruction(params: {
       modelApi: params.modelApi,
       executionContract: params.executionContract,
     }) ||
+    emptyPostToolFinalAssistant ||
     // Keep the generic zero-usage stop retry for providers that expose a
     // provider-neutral "nothing was generated" signal, even outside the
     // provider allowlist above.
