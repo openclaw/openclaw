@@ -81,7 +81,7 @@ export function projectSourceOntoRuntimeShape(source: unknown, runtime: unknown)
 }
 
 function hasOwnIncludeKey(value: unknown): value is Record<string, unknown> {
-  return isRecord(value) && Object.hasOwn(value, "$include");
+  return isRecord(value) && (Object.hasOwn(value, "$include") || Object.hasOwn(value, "$includeText"));
 }
 
 function collectIncludeOwnedPaths(value: unknown, path: string[] = []): string[][] {
