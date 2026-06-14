@@ -565,7 +565,7 @@ describeLive("gateway live trajectory export", () => {
         "events.jsonl",
         "manifest.json",
         "prompts.json",
-        "session.jsonl",
+        "session-branch.json",
         "tools.json",
       ]) {
         expect(bundleNames).toContain(expectedName);
