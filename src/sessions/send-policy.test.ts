@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { buildAgentPeerSessionKey } from "../routing/session-key.js";
 import { resolveSendPolicy } from "./send-policy.js";
 
 describe("resolveSendPolicy", () => {
@@ -72,6 +73,31 @@ describe("resolveSendPolicy", () => {
       cfg: cfgWithRules([{ action: "deny", match: { channel: "demo-channel" } }]),
       sessionKey: "demo-channel:direct:user-1",
       expected: "deny",
+    },
+    {
+      name: "channel-scoped deny fires for per-account-channel-peer DM key without explicit channel field",
+      cfg: cfgWithRules([{ action: "deny", match: { channel: "demo-channel" } }]),
+      sessionKey: buildAgentPeerSessionKey({
+        agentId: "main",
+        channel: "demo-channel",
+        accountId: "acct-1",
+        peerKind: "direct",
+        peerId: "user-1",
+        dmScope: "per-account-channel-peer",
+      }),
+      expected: "deny",
+    },
+    {
+      name: "channel-scoped deny ignores later peer-kind-looking tokens in non-channel keys",
+      cfg: cfgWithRules([{ action: "deny", match: { channel: "demo-channel" } }]),
+      sessionKey: "demo-channel:not-a-peer-kind:user-1:direct",
+      expected: "allow",
+    },
+    {
+      name: "channel-scoped deny ignores incomplete account-scoped keys",
+      cfg: cfgWithRules([{ action: "deny", match: { channel: "demo-channel" } }]),
+      sessionKey: "demo-channel:acct-1:direct",
+      expected: "allow",
     },
   ])("$name", ({ cfg, entry, sessionKey, expected }) => {
     expect(resolveSendPolicy({ cfg, entry, sessionKey })).toBe(expected);

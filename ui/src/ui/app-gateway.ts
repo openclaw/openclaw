@@ -1176,6 +1176,12 @@ function handleSessionMessageGatewayEvent(
   // chatStream, which delays the user message card from appearing until the
   // first LLM delta arrives.
   if (host.chatRunId) {
+    // Gateway confirms the run is still active (plugin hook window, etc.).
+    // Skip reload — the pending chat terminal owns history reconciliation.
+    if ((payload as Record<string, unknown> | null)?.hasActiveRun === true) {
+      deferredReloadHost.pendingSessionMessageReloadSessionKey = sessionKey;
+      return;
+    }
     deferredReloadHost.pendingSessionMessageReloadSessionKey = sessionKey;
     const refreshStartedAt = Date.now();
     const runIdBeforeRefresh = host.chatRunId;

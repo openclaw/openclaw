@@ -319,6 +319,40 @@ content and identifiers.
   </Tab>
 </Tabs>
 
+## Configured ACP bindings
+
+WhatsApp supports persistent ACP bindings with top-level `bindings[]` entries:
+
+```json5
+{
+  bindings: [
+    {
+      type: "acp",
+      agentId: "codex",
+      match: {
+        channel: "whatsapp",
+        accountId: "work",
+        peer: { kind: "direct", id: "+15555550123" },
+      },
+    },
+    {
+      type: "acp",
+      agentId: "codex",
+      match: {
+        channel: "whatsapp",
+        accountId: "work",
+        peer: { kind: "group", id: "120363424282127706@g.us" },
+      },
+    },
+  ],
+}
+```
+
+- Direct chats match E.164 numbers such as `+15555550123`.
+- Groups match WhatsApp group JIDs such as `120363424282127706@g.us`.
+- Group allowlists, sender policy, and mention or activation gating run before OpenClaw ensures the configured ACP session exists.
+- A matched configured ACP binding owns the route. WhatsApp broadcast groups do not fan out that turn to ordinary WhatsApp sessions.
+
 ## Personal-number and self-chat behavior
 
 When the linked self number is also present in `allowFrom`, WhatsApp self-chat safeguards activate:

@@ -455,7 +455,7 @@ export type AgentDefaultsConfig = {
      */
     includeReasoning?: boolean;
   };
-  /** Max concurrent agent runs across all conversations. Default: 1 (sequential). */
+  /** Max concurrent agent runs across all conversations. Default: 4. */
   maxConcurrent?: number;
   /** Sub-agent defaults (spawned via sessions_spawn). */
   subagents?: {
@@ -463,7 +463,7 @@ export type AgentDefaultsConfig = {
     delegationMode?: SubagentDelegationMode;
     /** Default allowlist of target agent ids for sessions_spawn. Use "*" to allow any configured target. */
     allowAgents?: string[];
-    /** Max concurrent sub-agent runs (global lane: "subagent"). Default: 1. */
+    /** Max concurrent sub-agent runs (global lane: "subagent"). Default: 8. */
     maxConcurrent?: number;
     /** Maximum depth allowed for sessions_spawn chains. Default behavior: 1 (no nested spawns). */
     maxSpawnDepth?: number;

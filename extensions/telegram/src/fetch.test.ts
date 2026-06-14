@@ -680,6 +680,38 @@ describe("resolveTelegramFetch", () => {
     expect(typeof pinnedPolicy?.connect?.lookup).toBe("function");
   });
 
+  it("skips sticky IPv4 fallback when user explicitly configures network settings", async () => {
+    undiciFetch.mockResolvedValueOnce({ ok: true } as Response);
+    const transport = resolveTelegramTransport(undefined, {
+      network: {
+        autoSelectFamily: true,
+        dnsResultOrder: "verbatim",
+      },
+    });
+
+    await expect(
+      transport.sourceFetch("https://api.telegram.org/botTOKEN/getFile"),
+    ).resolves.toEqual({ ok: true });
+    // Only the default dispatcher — no IPv4 fallback or pinned IP attempts
+    expect(transport.dispatcherAttempts).toHaveLength(1);
+    const [defaultAttempt] = transport.dispatcherAttempts as Array<{
+      dispatcherPolicy?: DirectTelegramDispatcherPolicy;
+    }>;
+    expect(defaultAttempt.dispatcherPolicy?.mode).toBe("direct");
+    expect(defaultAttempt.dispatcherPolicy?.connect?.autoSelectFamily).toBe(true);
+  });
+
+  it("skips sticky IPv4 fallback when the DNS result order env override is verbatim", async () => {
+    vi.stubEnv("OPENCLAW_TELEGRAM_DNS_RESULT_ORDER", "verbatim");
+    undiciFetch.mockResolvedValueOnce({ ok: true } as Response);
+    const transport = resolveTelegramTransport();
+
+    await expect(
+      transport.sourceFetch("https://api.telegram.org/botTOKEN/getFile"),
+    ).resolves.toEqual({ ok: true });
+    expect(transport.dispatcherAttempts).toHaveLength(1);
+  });
+
   it("does not blind-retry when sticky IPv4 fallback is disallowed for explicit proxy paths", async () => {
     const { makeProxyFetch } = await import("./proxy.js");
     const proxyFetch = makeProxyFetch("http://127.0.0.1:7890");

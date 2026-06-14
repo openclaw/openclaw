@@ -368,9 +368,13 @@ export async function maybeRepairLegacyCronStore(params: {
     return;
   }
 
+  const noteHeading = legacyStoreDetected
+    ? `Legacy cron job storage detected at ${shortenHomePath(storePath)}.`
+    : `Cron store issues detected at ${shortenHomePath(storePath)}.`;
+
   note(
     [
-      `Legacy cron job storage detected at ${shortenHomePath(storePath)}.`,
+      noteHeading,
       ...previewLines,
       `Repair with ${formatCliCommand("openclaw doctor --fix")} to normalize the store before the next scheduler run.`,
     ].join("\n"),

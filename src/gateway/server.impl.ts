@@ -74,6 +74,7 @@ import {
   type GatewayMethodRegistry,
 } from "./methods/registry.js";
 import { isLoopbackHost } from "./net.js";
+import { createNodeReapprovalCoordinator } from "./node-reapproval-coordinator.js";
 import {
   listChannelPluginConfigTargetIds,
   pluginConfigTargetsChanged,
@@ -819,6 +820,7 @@ export async function startGatewayServer(
   const rateLimitConfig = cfgAtStart.gateway?.auth?.rateLimit;
   const { rateLimiter: authRateLimiter, browserRateLimiter: browserAuthRateLimiter } =
     createGatewayAuthRateLimiters(rateLimitConfig);
+  const nodeReapprovalCoordinator = createNodeReapprovalCoordinator(rateLimitConfig);
 
   const controlUiRootState = await startupTrace.measure("control-ui.root", () =>
     resolveGatewayControlUiRootState({
@@ -990,7 +992,10 @@ export async function startGatewayServer(
         runtimeState.skillsRefreshTimer = null;
       },
       skillsChangeUnsub: runtimeState.skillsChangeUnsub,
-      disposeAuthRateLimiter: () => authRateLimiter.dispose(),
+      disposeAuthRateLimiter: () => {
+        authRateLimiter.dispose();
+        nodeReapprovalCoordinator.dispose();
+      },
       disposeBrowserAuthRateLimiter: () => browserAuthRateLimiter.dispose(),
       stopModelPricingRefresh: runtimeState.stopModelPricingRefresh,
       stopChannelHealthMonitor: () => runtimeState?.channelHealthMonitor?.stop(),
@@ -1531,6 +1536,7 @@ export async function startGatewayServer(
           getRequiredSharedGatewaySessionGeneration(sharedGatewaySessionGenerationState),
         rateLimiter: authRateLimiter,
         browserRateLimiter: browserAuthRateLimiter,
+        nodeReapprovalCoordinator,
         preauthHandshakeTimeoutMs,
         isStartupPending: isGatewayStartupPending,
         gatewayMethods: runtimeState.gatewayMethods,

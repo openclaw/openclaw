@@ -39,6 +39,7 @@ import { resolveAssistantStreamDeltaText } from "./agent-event-assistant-text.js
 import {
   buildAgentMessageFromConversationEntries,
   type ConversationEntry,
+  IMAGE_ONLY_USER_MESSAGE,
 } from "./agent-prompt.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -105,7 +106,6 @@ type OpenAiChatCompletionRequest = {
 };
 
 const DEFAULT_OPENAI_CHAT_COMPLETIONS_BODY_BYTES = 20 * 1024 * 1024;
-const IMAGE_ONLY_USER_MESSAGE = "User sent image(s) with no text.";
 const DEFAULT_OPENAI_MAX_IMAGE_PARTS = 8;
 const DEFAULT_OPENAI_MAX_TOTAL_IMAGE_BYTES = 20 * 1024 * 1024;
 const DEFAULT_OPENAI_IMAGE_LIMITS: InputImageLimits = {

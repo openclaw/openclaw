@@ -94,6 +94,7 @@ let startCalls = 0;
 let closeCode = 1006;
 let closeReason = "";
 let helloMethods: string[] | undefined = ["health", "secrets.resolve"];
+let connectError: Error | null = null;
 
 vi.mock("./client.js", () => ({
   describeGatewayCloseCode: (code: number) => {
@@ -147,7 +148,7 @@ vi.mock("./client.js", () => ({
         });
       } else if (startMode === "connect-error") {
         lastClientOptions?.onConnectError?.(
-          connectAssemblyErrorState.create("device private key invalid"),
+          connectError ?? connectAssemblyErrorState.create("device private key invalid"),
         );
       } else if (startMode === "close") {
         lastClientOptions?.onClose?.(closeCode, closeReason);
@@ -223,7 +224,7 @@ class StubGatewayClient {
       });
     } else if (startMode === "connect-error") {
       lastClientOptions?.onConnectError?.(
-        connectAssemblyErrorState.create("device private key invalid"),
+        connectError ?? connectAssemblyErrorState.create("device private key invalid"),
       );
     } else if (startMode === "close") {
       lastClientOptions?.onClose?.(closeCode, closeReason);
@@ -254,6 +255,7 @@ function resetGatewayCallMocks() {
   closeCode = 1006;
   closeReason = "";
   helloMethods = ["health", "secrets.resolve"];
+  connectError = null;
   const loadConfigForTests = getRuntimeConfig as unknown as () => OpenClawConfig;
   const resolveGatewayPortForTests = resolveGatewayPort as unknown as (
     cfg?: OpenClawConfig,
@@ -746,6 +748,210 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.scopes).toStrictEqual([]);
   });
 
+  it("reuses stored device auth without requesting stronger scopes", async () => {
+    setLocalLoopbackGatewayConfig();
+    loadDeviceAuthTokenMock.mockReturnValue({
+      token: "paired-device-token",
+      role: "operator",
+      scopes: ["operator.read", "operator.pairing"],
+      updatedAtMs: 123,
+    });
+
+    await callGatewayCli({ method: "node.list", useStoredDeviceAuth: true });
+
+    expect(lastClientOptions?.token).toBeUndefined();
+    expect(lastClientOptions?.password).toBeUndefined();
+    expect(lastClientOptions?.scopes).toBeUndefined();
+    expect(lastClientOptions?.deviceIdentity).toEqual(deviceIdentityState.value);
+  });
+
+  it("does not replace explicit credentials with stored device auth", async () => {
+    setLocalLoopbackGatewayConfig();
+
+    await expect(
+      callGatewayCli({
+        method: "node.list",
+        token: "explicit-token",
+        useStoredDeviceAuth: true,
+      }),
+    ).rejects.toMatchObject({ name: "GatewayStoredDeviceAuthUnavailableError" });
+
+    expect(lastClientOptions).toBeNull();
+  });
+
+  it("prefers stored device auth over configured local credentials", async () => {
+    getRuntimeConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        bind: "loopback",
+        auth: { mode: "token", token: "configured-token" },
+      },
+    });
+    setGatewayNetworkDefaults();
+
+    await callGatewayCli({ method: "node.list", useStoredDeviceAuth: true });
+
+    expect(lastClientOptions?.token).toBeUndefined();
+    expect(lastClientOptions?.scopes).toBeUndefined();
+  });
+
+  it("does not resolve configured local SecretRefs when using stored device auth", async () => {
+    getRuntimeConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        bind: "loopback",
+        auth: {
+          mode: "password",
+          password: { source: "env", provider: "default", id: "MISSING_LOCAL_PASSWORD" },
+        },
+      },
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+    } as unknown as OpenClawConfig);
+    setGatewayNetworkDefaults();
+
+    await callGatewayCli({ method: "node.list", useStoredDeviceAuth: true });
+
+    expect(lastClientOptions?.password).toBeUndefined();
+    expect(lastClientOptions?.deviceIdentity).toEqual(deviceIdentityState.value);
+  });
+
+  it("rejects stored device auth that lacks caller-required scopes", async () => {
+    setLocalLoopbackGatewayConfig();
+    loadDeviceAuthTokenMock.mockReturnValue({
+      token: "paired-device-token",
+      role: "operator",
+      scopes: ["operator.read"],
+      updatedAtMs: 123,
+    });
+
+    await expect(
+      callGatewayCli({
+        method: "node.list",
+        useStoredDeviceAuth: true,
+        requiredStoredDeviceAuthScopes: ["operator.read", "operator.pairing"],
+      }),
+    ).rejects.toMatchObject({ name: "GatewayStoredDeviceAuthUnavailableError" });
+
+    expect(lastClientOptions).toBeNull();
+  });
+
+  it("does not send stored device auth to configured remote gateways", async () => {
+    getRuntimeConfig.mockReturnValue(makeRemotePasswordGatewayConfig("remote-password"));
+    setGatewayNetworkDefaults();
+
+    await expect(
+      callGatewayCli({ method: "node.list", useStoredDeviceAuth: true }),
+    ).rejects.toMatchObject({ name: "GatewayStoredDeviceAuthUnavailableError" });
+
+    expect(lastClientOptions).toBeNull();
+  });
+
+  it("fails before connecting when stored device auth is unavailable", async () => {
+    getRuntimeConfig.mockReturnValue({
+      gateway: { mode: "local", bind: "loopback", auth: { mode: "none" } },
+    });
+    setGatewayNetworkDefaults();
+    loadDeviceAuthTokenMock.mockReturnValue(null);
+
+    await expect(
+      callGatewayCli({ method: "node.list", useStoredDeviceAuth: true }),
+    ).rejects.toThrow("requires credentials before opening a websocket");
+
+    expect(lastClientOptions).toBeNull();
+    expect(startCalls).toBe(0);
+  });
+
+  it("uses local backend shared auth without a device identity when required", async () => {
+    setLocalLoopbackGatewayConfig();
+
+    await callGateway({
+      method: "node.list",
+      token: "explicit-token",
+      scopes: ["operator.read", "operator.pairing"],
+      requireLocalBackendSharedAuth: true,
+    });
+
+    expect(lastClientOptions?.clientName).toBe(GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT);
+    expect(lastClientOptions?.mode).toBe(GATEWAY_CLIENT_MODES.BACKEND);
+    expect(lastClientOptions?.scopes).toEqual(["operator.read", "operator.pairing"]);
+    expect(lastClientOptions?.deviceIdentity).toBeNull();
+  });
+
+  it("uses local backend auth-none without a device identity when required", async () => {
+    getRuntimeConfig.mockReturnValue({
+      gateway: { mode: "local", bind: "loopback", auth: { mode: "none" } },
+    });
+    setGatewayNetworkDefaults();
+
+    await callGateway({
+      method: "node.list",
+      scopes: ["operator.read", "operator.pairing"],
+      requireLocalBackendSharedAuth: true,
+    });
+
+    expect(lastClientOptions?.clientName).toBe(GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT);
+    expect(lastClientOptions?.mode).toBe(GATEWAY_CLIENT_MODES.BACKEND);
+    expect(lastClientOptions?.scopes).toEqual(["operator.read", "operator.pairing"]);
+    expect(lastClientOptions?.token).toBeUndefined();
+    expect(lastClientOptions?.password).toBeUndefined();
+    expect(lastClientOptions?.deviceIdentity).toBeNull();
+  });
+
+  it("rejects required local backend shared auth for remote targets", async () => {
+    await expect(
+      callGateway({
+        method: "node.list",
+        url: "wss://remote.example.test",
+        token: "explicit-token",
+        scopes: ["operator.read", "operator.pairing"],
+        requireLocalBackendSharedAuth: true,
+      }),
+    ).rejects.toMatchObject({ name: "GatewayLocalBackendSharedAuthUnavailableError" });
+
+    expect(lastClientOptions).toBeNull();
+  });
+
+  it("rejects required local backend shared auth for loopback URL overrides", async () => {
+    await expect(
+      callGateway({
+        method: "node.list",
+        url: "ws://127.0.0.1:18789",
+        token: "explicit-token",
+        scopes: ["operator.read", "operator.pairing"],
+        requireLocalBackendSharedAuth: true,
+      }),
+    ).rejects.toMatchObject({ name: "GatewayLocalBackendSharedAuthUnavailableError" });
+
+    expect(lastClientOptions).toBeNull();
+  });
+
+  it("rejects required local backend shared auth for remote-mode loopback tunnels", async () => {
+    getRuntimeConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "ws://127.0.0.1:18789",
+          token: "remote-token",
+        },
+      },
+    });
+    setGatewayNetworkDefaults();
+
+    await expect(
+      callGateway({
+        method: "node.list",
+        scopes: ["operator.read", "operator.pairing"],
+        requireLocalBackendSharedAuth: true,
+      }),
+    ).rejects.toMatchObject({ name: "GatewayLocalBackendSharedAuthUnavailableError" });
+
+    expect(lastClientOptions).toBeNull();
+  });
+
   it("uses backend client metadata for explicit scoped default calls", async () => {
     setLocalLoopbackGatewayConfig();
 
@@ -1167,6 +1373,30 @@ describe("callGateway error details", () => {
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message).toBe("device private key invalid");
     expect(lastRequestOptions).toBeNull();
+  });
+
+  it("surfaces stored device auth handshake failures for credential fallback", async () => {
+    startMode = "connect-error";
+    connectError = Object.assign(new Error("unauthorized: device token mismatch"), {
+      name: "GatewayClientRequestError",
+      gatewayCode: "INVALID_REQUEST",
+      details: { code: "AUTH_DEVICE_TOKEN_MISMATCH" },
+    });
+    setLocalLoopbackGatewayConfig();
+
+    vi.useFakeTimers();
+    const promise = callGatewayCli({
+      method: "node.list",
+      timeoutMs: 5,
+      useStoredDeviceAuth: true,
+    });
+    const rejection = expect(promise).rejects.toMatchObject({
+      name: "GatewayClientRequestError",
+      details: { code: "AUTH_DEVICE_TOKEN_MISMATCH" },
+    });
+    await vi.advanceTimersByTimeAsync(5);
+
+    await rejection;
   });
 
   it("includes connection details on timeout", async () => {

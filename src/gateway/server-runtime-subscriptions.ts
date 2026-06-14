@@ -156,6 +156,7 @@ export function startGatewayEventSubscriptions(params: {
           broadcastToConnIds: params.broadcastToConnIds,
           sessionEventSubscribers: params.sessionEventSubscribers,
           sessionMessageSubscribers: params.sessionMessageSubscribers,
+          chatAbortControllers: params.chatAbortControllers,
         }),
     );
     return transcriptUpdateHandlerPromise;
