@@ -6,9 +6,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const thinkingMocks = vi.hoisted(() => ({
   resolveThinkingDefaultForModel: vi.fn(() => "medium"),
 }));
+const streamMocks = vi.hoisted(() => ({
+  streamSimple: vi.fn(() => "stream"),
+}));
 
 vi.mock("../../auto-reply/thinking.js", () => ({
   resolveThinkingDefaultForModel: thinkingMocks.resolveThinkingDefaultForModel,
+}));
+vi.mock("../../llm/stream.js", () => ({
+  streamSimple: streamMocks.streamSimple,
 }));
 import type { Model } from "../../llm/types.js";
 import { AuthStorage } from "./auth-storage.js";
@@ -33,6 +39,11 @@ const testModel: Model = {
   contextWindow: 1000,
   maxTokens: 1000,
 };
+
+function createModelWithoutBaseUrl(overrides: Partial<Model>): Model {
+  const { baseUrl: _baseUrl, ...model } = { ...testModel, ...overrides };
+  return model as unknown as Model;
+}
 
 function createEmptyResourceLoader(): ResourceLoader {
   return createResourceLoaderWithHandlers(new Map());
@@ -73,6 +84,84 @@ function createResourceLoaderWithHandlers(
     reload: async () => {},
   };
 }
+
+async function createSessionAndStreamModel(model: Model): Promise<Record<string, unknown>> {
+  streamMocks.streamSimple.mockClear();
+  const { session } = await createAgentSession({
+    model,
+    resourceLoader: createEmptyResourceLoader(),
+    sessionManager: SessionManager.inMemory(),
+    settingsManager: SettingsManager.inMemory(),
+    modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
+  });
+
+  await session.agent.streamFn?.(
+    model,
+    {
+      messages: [],
+      systemPrompt: "",
+      tools: [],
+    },
+    {},
+  );
+
+  return streamMocks.streamSimple.mock.calls.at(-1)?.[2] as Record<string, unknown>;
+}
+
+describe("createAgentSession attribution headers", () => {
+  it("tolerates Bedrock models that do not expose baseUrl", async () => {
+    const options = await createSessionAndStreamModel(
+      createModelWithoutBaseUrl({
+        id: "global.anthropic.claude-sonnet-4-6",
+        provider: "amazon-bedrock",
+        api: "bedrock-converse-stream",
+      }),
+    );
+
+    expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
+    expect(options.headers).toBeUndefined();
+  });
+
+  it("keeps OpenRouter attribution headers for provider and endpoint matches", async () => {
+    const providerOptions = await createSessionAndStreamModel({
+      ...testModel,
+      provider: "openrouter",
+      baseUrl: "https://example.test",
+    });
+    const endpointOptions = await createSessionAndStreamModel({
+      ...testModel,
+      provider: "custom-openai",
+      baseUrl: "https://openrouter.ai/api/v1",
+    });
+
+    expect(providerOptions.headers).toMatchObject({
+      "HTTP-Referer": "https://openclaw.ai",
+      "X-OpenRouter-Title": "OpenClaw",
+      "X-OpenRouter-Categories": "cli-agent",
+    });
+    expect(endpointOptions.headers).toMatchObject({
+      "HTTP-Referer": "https://openclaw.ai",
+      "X-OpenRouter-Title": "OpenClaw",
+      "X-OpenRouter-Categories": "cli-agent",
+    });
+  });
+
+  it("keeps Cloudflare attribution headers for provider and endpoint matches", async () => {
+    const providerOptions = await createSessionAndStreamModel({
+      ...testModel,
+      provider: "cloudflare-workers-ai",
+      baseUrl: "https://example.test",
+    });
+    const endpointOptions = await createSessionAndStreamModel({
+      ...testModel,
+      provider: "custom-openai",
+      baseUrl: "https://gateway.ai.cloudflare.com/v1/account/gateway/openai",
+    });
+
+    expect(providerOptions.headers).toMatchObject({ "User-Agent": "openclaw" });
+    expect(endpointOptions.headers).toMatchObject({ "User-Agent": "openclaw" });
+  });
+});
 
 describe("createAgentSession tool defaults", () => {
   it("forwards max thinking budgets from settings to the agent", async () => {
