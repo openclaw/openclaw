@@ -24,6 +24,7 @@ import {
   acquireEmbeddedAttemptSessionFileOwner,
   createEmbeddedAttemptSessionLockController,
   EmbeddedAttemptSessionTakeoverError,
+  installEmbeddedPromptRetryDefault,
   installPromptSubmissionLockRelease,
   resetEmbeddedAttemptSessionFileOwnersForTest,
 } from "./attempt.session-lock.js";
@@ -66,6 +67,23 @@ function cloneBigIntStatWith(
 }
 
 describe("embedded attempt session lock lifecycle", () => {
+  it("keeps takeover error construction backward compatible while recording phase", () => {
+    const legacyError = new EmbeddedAttemptSessionTakeoverError("/tmp/session.jsonl");
+    expect(legacyError.message).toBe(
+      "session file changed while embedded prompt lock was released: /tmp/session.jsonl",
+    );
+    expect(legacyError.sessionFile).toBe("/tmp/session.jsonl");
+    expect(legacyError.phase).toBeUndefined();
+
+    const phasedError = new EmbeddedAttemptSessionTakeoverError(
+      "/tmp/session.jsonl",
+      "prompt_reacquire",
+    );
+    expect(phasedError.message).toContain("(phase: prompt_reacquire)");
+    expect(phasedError.sessionFile).toBe("/tmp/session.jsonl");
+    expect(phasedError.phase).toBe("prompt_reacquire");
+  });
+
   it("serializes embedded attempts that share a session file owner", async () => {
     const sessionFile = await createTempSessionFile();
     const firstOwner = await acquireEmbeddedAttemptSessionFileOwner({ sessionFile });
@@ -678,6 +696,57 @@ describe("embedded attempt session lock lifecycle", () => {
     await cleanupLock.release();
 
     expect(release).toHaveBeenCalledTimes(2);
+  });
+
+  it("detects session takeover when prompt reacquire sees another owner advance the session file", async () => {
+    const sessionFile = await createTempSessionFile();
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLockLocal = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockLocal,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+    await fs.appendFile(sessionFile, '{"type":"message","id":"prompt-takeover"}\n', "utf8");
+
+    await expect(controller.reacquireAfterPrompt()).rejects.toMatchObject({
+      name: "EmbeddedAttemptSessionTakeoverError",
+      phase: "prompt_reacquire",
+      sessionFile,
+    });
+    expect(controller.hasSessionTakeover()).toBe(true);
+  });
+
+  it("allows owned steering writes before the prompt stream lock is reacquired", async () => {
+    const sessionFile = await createTempSessionFile();
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLockLocal = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockLocal,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+    await withOwnedSessionTranscriptWrites(
+      {
+        sessionFile,
+        withSessionWriteLock: (run, options) => controller.withSessionWriteLock(run, options),
+      },
+      async () => {
+        await appendSessionTranscriptMessage({
+          transcriptPath: sessionFile,
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "queued steering input" }],
+          },
+        });
+      },
+    );
+
+    await expect(controller.reacquireAfterPrompt()).resolves.toBeUndefined();
+    expect(controller.hasSessionTakeover()).toBe(false);
+    await expect(fs.readFile(sessionFile, "utf8")).resolves.toContain("queued steering input");
   });
 
   it("allows delivery mirror appends while the prompt lock is released", async () => {
@@ -1827,6 +1896,109 @@ describe("embedded attempt session lock lifecycle", () => {
       "drain",
       "release",
       "second-stream",
+      "drain",
+      "reacquire",
+    ]);
+  });
+
+  it("defaults embedded prompt streamFn to maxRetries:0 when caller sets nothing", async () => {
+    const streamFn = vi.fn(async (..._args: unknown[]) => {});
+    const session = { agent: { streamFn } };
+
+    installEmbeddedPromptRetryDefault(session);
+    await session.agent.streamFn("model", "context");
+
+    expect(streamFn).toHaveBeenCalledWith("model", "context", { maxRetries: 0 });
+  });
+
+  it("preserves an explicit maxRetries over the embedded prompt default", async () => {
+    const streamFn = vi.fn(async (..._args: unknown[]) => {});
+    const session = { agent: { streamFn } };
+
+    installEmbeddedPromptRetryDefault(session);
+    await session.agent.streamFn("model", "context", { maxRetries: 3, temperature: 0.2 });
+
+    expect(streamFn).toHaveBeenCalledWith("model", "context", {
+      maxRetries: 3,
+      temperature: 0.2,
+    });
+  });
+
+  it("injects the configured provider retry as the embedded prompt default", async () => {
+    const streamFn = vi.fn(async (..._args: unknown[]) => {});
+    const session = { agent: { streamFn } };
+
+    installEmbeddedPromptRetryDefault(session, { maxRetries: 3 });
+    await session.agent.streamFn("model", "context");
+
+    expect(streamFn).toHaveBeenCalledWith("model", "context", { maxRetries: 3 });
+  });
+
+  it("lets an explicit caller maxRetries override the configured provider default", async () => {
+    const streamFn = vi.fn(async (..._args: unknown[]) => {});
+    const session = { agent: { streamFn } };
+
+    installEmbeddedPromptRetryDefault(session, { maxRetries: 3 });
+    await session.agent.streamFn("model", "context", { maxRetries: 1 });
+
+    expect(streamFn).toHaveBeenCalledWith("model", "context", { maxRetries: 1 });
+  });
+
+  it("does not stack retry-default and lock-release wrappers across repeated installs", async () => {
+    const events: string[] = [];
+    const streamFn = vi.fn(async (..._args: unknown[]) => {
+      events.push("stream");
+    });
+    const waitForSessionEvents = vi.fn(async () => {
+      events.push("drain");
+    });
+    const releaseForPrompt = vi.fn(async () => {
+      events.push("release");
+    });
+    const reacquireAfterPrompt = vi.fn(async () => {
+      events.push("reacquire");
+    });
+    const session = { agent: { streamFn } };
+
+    const installBoth = () => {
+      installEmbeddedPromptRetryDefault(session);
+      installPromptSubmissionLockRelease({
+        session,
+        waitForSessionEvents,
+        releaseForPrompt,
+        reacquireAfterPrompt,
+      });
+    };
+
+    // Each embedded turn re-runs both installers; repeated installs must be no-ops
+    // so a single model call is not surrounded by stacked retry/release wrappers.
+    installBoth();
+    installBoth();
+
+    await session.agent.streamFn("model", "context");
+    await session.agent.streamFn("model", "context", { maxRetries: 3, temperature: 0.2 });
+
+    // Inner provider streamFn runs once per turn, not once per stacked wrapper.
+    expect(streamFn).toHaveBeenCalledTimes(2);
+    expect(streamFn).toHaveBeenNthCalledWith(1, "model", "context", { maxRetries: 0 });
+    expect(streamFn).toHaveBeenNthCalledWith(2, "model", "context", {
+      maxRetries: 3,
+      temperature: 0.2,
+    });
+
+    // Two drains per turn (before + after), one release/reacquire per turn — not doubled.
+    expect(waitForSessionEvents).toHaveBeenCalledTimes(4);
+    expect(releaseForPrompt).toHaveBeenCalledTimes(2);
+    expect(reacquireAfterPrompt).toHaveBeenCalledTimes(2);
+    expect(events).toEqual([
+      "drain",
+      "release",
+      "stream",
+      "drain",
+      "reacquire",
+      "drain",
+      "release",
+      "stream",
       "drain",
       "reacquire",
     ]);

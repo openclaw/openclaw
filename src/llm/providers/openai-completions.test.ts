@@ -16,13 +16,15 @@ type OpenAICompatibleChatCompletionChunk = Omit<DeepPartial<ChatCompletionChunk>
 };
 
 const mockChunksRef: { chunks: OpenAICompatibleChatCompletionChunk[] } = { chunks: [] };
+const mockRequestOptionsRef: { options: unknown[] } = { options: [] };
 
 vi.mock("openai", () => {
   class MockOpenAI {
     chat = {
       completions: {
-        create: () => ({
+        create: (_params: unknown, options: unknown) => ({
           withResponse: async () => {
+            mockRequestOptionsRef.options.push(options);
             async function* generate() {
               for (const chunk of mockChunksRef.chunks) {
                 yield chunk;
@@ -270,6 +272,35 @@ describe("OpenAI-compatible completions params", () => {
 
     expect(result.stopReason).toBe("error");
     expect(capturedPayload).not.toHaveProperty("tools");
+  });
+
+  it("does not include maxRetries in request options by default", async () => {
+    mockChunksRef.chunks = [makeTextChunk("Hello"), makeFinishChunk("stop")];
+    mockRequestOptionsRef.options = [];
+
+    const stream = streamOpenAICompletions(model, context, {
+      apiKey: "sk-test",
+    });
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("stop");
+    expect(mockRequestOptionsRef.options).toHaveLength(1);
+    expect(mockRequestOptionsRef.options[0]).not.toHaveProperty("maxRetries");
+  });
+
+  it("forwards explicit maxRetries to request options", async () => {
+    mockChunksRef.chunks = [makeTextChunk("Hello"), makeFinishChunk("stop")];
+    mockRequestOptionsRef.options = [];
+
+    const stream = streamOpenAICompletions(model, context, {
+      apiKey: "sk-test",
+      maxRetries: 0,
+    });
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("stop");
+    expect(mockRequestOptionsRef.options).toHaveLength(1);
+    expect(mockRequestOptionsRef.options[0]).toMatchObject({ maxRetries: 0 });
   });
 
   it("clamps requested max tokens to the model output cap", async () => {

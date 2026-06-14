@@ -40,6 +40,7 @@ type SessionWithAgentPrompt = {
 
 type PromptReleaseStreamFn = ((...args: unknown[]) => unknown) & {
   __openclawSessionLockPromptReleaseInstalled?: boolean;
+  __openclawEmbeddedPromptRetryDefaultInstalled?: boolean;
 };
 
 type SessionFileFingerprint =
@@ -648,9 +649,21 @@ function readSessionFileFingerprintSync(sessionFile: string): SessionFileFingerp
 async function waitForSessionEventQueue(_session: unknown): Promise<void> {}
 
 export class EmbeddedAttemptSessionTakeoverError extends Error {
-  constructor(sessionFile: string) {
-    super(`session file changed while embedded prompt lock was released: ${sessionFile}`);
+  readonly sessionFile: string;
+  readonly phase?: "prompt_reacquire" | "cleanup" | "write" | "fence_check";
+
+  constructor(
+    sessionFile: string,
+    phase?: "prompt_reacquire" | "cleanup" | "write" | "fence_check",
+  ) {
+    super(
+      `session file changed while embedded prompt lock was released: ${sessionFile}${
+        phase ? ` (phase: ${phase})` : ""
+      }`,
+    );
     this.name = "EmbeddedAttemptSessionTakeoverError";
+    this.sessionFile = sessionFile;
+    this.phase = phase;
   }
 }
 
@@ -791,7 +804,9 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     }
   }
 
-  async function assertSessionFileFence(): Promise<void> {
+  async function assertSessionFileFence(
+    phase: "prompt_reacquire" | "cleanup" | "write" | "fence_check" = "fence_check",
+  ): Promise<void> {
     if (!fenceActive) {
       return;
     }
@@ -844,7 +859,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     }
 
     takeoverDetected = true;
-    throw new EmbeddedAttemptSessionTakeoverError(params.lockOptions.sessionFile);
+    throw new EmbeddedAttemptSessionTakeoverError(params.lockOptions.sessionFile, phase);
   }
 
   async function publishOwnedSessionFileWriteIfChanged(
@@ -1074,7 +1089,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       const lock = await acquireLock();
       try {
         heldLock = lock;
-        await assertSessionFileFence();
+        await assertSessionFileFence("prompt_reacquire");
       } catch (err) {
         heldLock = undefined;
         await lock.release();
@@ -1087,7 +1102,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       options?: SessionWriteLockRunOptions,
     ): Promise<T> {
       if (takeoverDetected) {
-        throw new EmbeddedAttemptSessionTakeoverError(params.lockOptions.sessionFile);
+        throw new EmbeddedAttemptSessionTakeoverError(params.lockOptions.sessionFile, "write");
       }
       if (activeWriteLock.getStore()?.active === true) {
         if (options?.publishOwnedWrite !== true) {
@@ -1103,7 +1118,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       const { lock, owned, releaseRetainedUse } = await acquireWriteLock();
       try {
         const runLockedOperation = async () => {
-          await assertSessionFileFence();
+          await assertSessionFileFence("write");
           const beforeWrite = await readSessionFileFingerprint(params.lockOptions.sessionFile);
           const runWithLock = async () => {
             try {
@@ -1145,7 +1160,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
         return noopLock;
       }
       try {
-        await assertSessionFileFence();
+        await assertSessionFileFence("cleanup");
       } catch (err) {
         await cleanupLock.release();
         if (err instanceof EmbeddedAttemptSessionTakeoverError) {
@@ -1206,6 +1221,46 @@ export function installPromptSubmissionLockRelease(params: {
     }
   };
   wrappedStreamFn["__openclawSessionLockPromptReleaseInstalled"] = true;
+  // Both installers wrap agent.streamFn and each is idempotent via its own marker.
+  // The outermost wrapper hides inner markers, so carry the retry-default marker
+  // forward; otherwise a later install pass would re-wrap an already-wrapped fn.
+  if (currentStreamFn["__openclawEmbeddedPromptRetryDefaultInstalled"] === true) {
+    wrappedStreamFn["__openclawEmbeddedPromptRetryDefaultInstalled"] = true;
+  }
+  agent.streamFn = wrappedStreamFn;
+}
+
+// Inject the provider retry default for SDK calls inside the embedded prompt lock
+// window. The injected default is the configured settings.retry.provider.maxRetries
+// (passed in by the caller); when unset it falls back to 0 so SDK retries stay out of
+// the prompt-lock release window where model-fallback owns retries and SDK retries
+// race with session takeover. Explicit per-call options.maxRetries still wins because
+// the caller-provided options spread last over the injected default.
+export function installEmbeddedPromptRetryDefault(
+  session: unknown,
+  options?: { maxRetries?: number },
+): void {
+  const agent = (session as SessionWithAgentPrompt).agent;
+  if (typeof agent?.streamFn !== "function") {
+    return;
+  }
+  const currentStreamFn = agent.streamFn;
+  if (currentStreamFn["__openclawEmbeddedPromptRetryDefaultInstalled"] === true) {
+    return;
+  }
+  const defaultMaxRetries = options?.maxRetries ?? 0;
+  const innerStreamFn = currentStreamFn;
+  const wrappedStreamFn: PromptReleaseStreamFn = (...args: unknown[]) => {
+    const [model, context, callOptions] = args;
+    const requestOptions = callOptions as { maxRetries?: number } | undefined;
+    return innerStreamFn(model, context, { maxRetries: defaultMaxRetries, ...requestOptions });
+  };
+  wrappedStreamFn["__openclawEmbeddedPromptRetryDefaultInstalled"] = true;
+  // The outermost wrapper hides inner markers, so carry the lock-release marker
+  // forward; otherwise a later install pass would re-wrap an already-wrapped fn.
+  if (currentStreamFn["__openclawSessionLockPromptReleaseInstalled"] === true) {
+    wrappedStreamFn["__openclawSessionLockPromptReleaseInstalled"] = true;
+  }
   agent.streamFn = wrappedStreamFn;
 }
 

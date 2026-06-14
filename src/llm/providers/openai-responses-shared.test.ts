@@ -1,14 +1,16 @@
 // OpenAI Responses shared tests cover tool conversion and response item mapping.
 import type { Tool as OpenAIResponsesTool } from "openai/resources/responses/responses.js";
+import type { ResponseStreamEvent } from "openai/resources/responses/responses.js";
 import { describe, expect, it } from "vitest";
-import type { AssistantMessage, AssistantMessageEvent, Context, Model, Tool } from "../types.js";
+import type { AssistantMessageEvent, Context, Model, Tool } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import {
   applyCommonResponsesParams,
-  createResponsesAssistantOutput,
   convertResponsesMessages,
+  createResponsesAssistantOutput,
   type OpenAIResponsesStreamEvent,
   processResponsesStream,
+  runResponsesStreamLifecycle,
 } from "./openai-responses-shared.js";
 import { convertResponsesTools } from "./openai-responses-tools.js";
 
@@ -61,31 +63,50 @@ const proxyOpenAIModel = {
   baseUrl: "https://proxy.example.com/v1",
 } satisfies Model<"openai-responses">;
 
-function createAssistantOutput(): AssistantMessage {
-  return {
-    role: "assistant",
-    api: nativeOpenAIModel.api,
-    provider: nativeOpenAIModel.provider,
-    model: nativeOpenAIModel.id,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
-    stopReason: "stop",
-    timestamp: 0,
-    content: [],
-  };
-}
-
 async function* responseEvents(events: Array<Record<string, unknown>>) {
   for (const event of events) {
     yield event as never;
   }
 }
+
+describe("runResponsesStreamLifecycle", () => {
+  it("does not include maxRetries in request options by default", async () => {
+    const capturedOptions: unknown[] = [];
+    async function* emptyStream(): AsyncIterable<ResponseStreamEvent> {}
+    const stream = new AssistantMessageEventStream();
+    const output = createResponsesAssistantOutput(nativeOpenAIModel);
+
+    await runResponsesStreamLifecycle({
+      stream,
+      model: nativeOpenAIModel,
+      output,
+      createClient: () => ({
+        responses: {
+          create: (_params, options) => {
+            capturedOptions.push(options);
+            return {
+              withResponse: async () => ({
+                data: emptyStream(),
+                response: new Response(null, { status: 200 }),
+              }),
+            };
+          },
+        },
+      }),
+      buildParams: () => ({
+        model: nativeOpenAIModel.id,
+        input: "hello",
+        stream: true,
+      }),
+      formatError: (error) => (error instanceof Error ? error.message : String(error)),
+    });
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("stop");
+    expect(capturedOptions).toHaveLength(1);
+    expect(capturedOptions[0]).not.toHaveProperty("maxRetries");
+  });
+});
 
 describe("convertResponsesTools", () => {
   it("enables native strict OpenAI Responses tools and normalizes schemas", () => {
@@ -515,7 +536,7 @@ describe("processResponsesStream", () => {
     ["omits arguments", undefined],
     ["sends empty arguments", ""],
   ])("preserves streamed tool-call arguments when done %s", async (_label, doneArguments) => {
-    const output = createAssistantOutput();
+    const output = createResponsesAssistantOutput(nativeOpenAIModel);
     const stream = new AssistantMessageEventStream();
     const events: Array<Record<string, unknown>> = [];
     const collect = (async () => {

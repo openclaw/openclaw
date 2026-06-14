@@ -401,6 +401,7 @@ import {
   EmbeddedAttemptSessionTakeoverError,
   type EmbeddedAttemptSessionFileOwner,
   createEmbeddedAttemptSessionLockController,
+  installEmbeddedPromptRetryDefault,
   installPromptSubmissionLockRelease,
 } from "./attempt.session-lock.js";
 import {
@@ -3560,7 +3561,9 @@ export async function runEmbeddedAttempt(
           if (options?.steeringMode) {
             activeSession.agent.steeringMode = options.steeringMode;
           }
-          await steerActiveSessionWithOptionalDeliveryWait(activeSession, text, options);
+          await withOwnedSessionTranscriptWrites(ownedTranscriptWriteContext, async () => {
+            await steerActiveSessionWithOptionalDeliveryWait(activeSession, text, options);
+          });
         },
         isStreaming: () => activeSession.isStreaming,
         isCompacting: () => subscription.isCompacting(),
@@ -4218,6 +4221,13 @@ export async function runEmbeddedAttempt(
             if (googlePromptCacheStreamFn) {
               activeSession.agent.streamFn = googlePromptCacheStreamFn;
             }
+            // Inject the configured provider retry as the default for SDK calls in the
+            // embedded prompt lock window; explicit per-call options still override it, and
+            // an unset config falls back to 0 to keep SDK retries out of the lock-release
+            // window (see helper comment).
+            installEmbeddedPromptRetryDefault(activeSession, {
+              maxRetries: settingsManager.getProviderRetrySettings().maxRetries,
+            });
             installPromptSubmissionLockRelease({
               session: activeSession,
               waitForSessionEvents: (sessionToDrain) =>
@@ -5520,7 +5530,7 @@ export async function runEmbeddedAttempt(
       }
       const synthesizedCleanupTakeoverError =
         !cleanupError && promptError && sessionLockController.hasSessionTakeover()
-          ? new EmbeddedAttemptSessionTakeoverError(params.sessionFile)
+          ? new EmbeddedAttemptSessionTakeoverError(params.sessionFile, "prompt_reacquire")
           : undefined;
       const cleanupFailure = cleanupError ?? synthesizedCleanupTakeoverError;
       const shouldPreservePromptError = shouldPreservePromptErrorAfterCleanupError({
