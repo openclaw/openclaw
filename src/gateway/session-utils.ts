@@ -1793,6 +1793,18 @@ export async function resolveGatewayModelSupportsImages(params: {
       ) {
         return true;
       }
+      if (
+        normalizedProvider === "google-gemini-cli" &&
+        normalizedCandidates.some(
+          (candidate) =>
+            candidate === "pro" ||
+            candidate === "flash" ||
+            candidate === "flash-lite" ||
+            candidate.startsWith("gemini-"),
+        )
+      ) {
+        return true;
+      }
       return false;
     }
     if (
@@ -1803,6 +1815,18 @@ export async function resolveGatewayModelSupportsImages(params: {
           candidate === "sonnet" ||
           candidate === "haiku" ||
           candidate.startsWith("claude-"),
+      )
+    ) {
+      return true;
+    }
+    if (
+      normalizedProvider === "google-gemini-cli" &&
+      normalizedCandidates.some(
+        (candidate) =>
+          candidate === "pro" ||
+          candidate === "flash" ||
+          candidate === "flash-lite" ||
+          candidate.startsWith("gemini-"),
       )
     ) {
       return true;
