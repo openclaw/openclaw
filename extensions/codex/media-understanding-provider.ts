@@ -102,6 +102,7 @@ async function describeCodexImages(
     profile: req.profile,
     timeoutMs: req.timeoutMs,
     agentDir: req.agentDir,
+    authStore: req.authStore,
     cfg: req.cfg,
     options,
     taskLabel: "image understanding",
@@ -124,6 +125,7 @@ type BoundedCodexVisionTurnParams = {
   profile?: string;
   timeoutMs: number;
   agentDir?: string;
+  authStore?: ImagesDescriptionRequest["authStore"];
   cfg: ImagesDescriptionRequest["cfg"];
   options: CodexMediaUnderstandingProviderOptions;
   taskLabel: string;
@@ -151,6 +153,7 @@ async function runBoundedCodexVisionTurn(params: BoundedCodexVisionTurnParams): 
             timeoutMs,
             authProfileId: params.profile,
             agentDir,
+            authProfileStore: params.authStore,
             config: params.cfg,
           }),
       );
@@ -248,6 +251,7 @@ async function extractCodexStructured(
     profile: req.profile,
     timeoutMs: req.timeoutMs,
     agentDir: req.agentDir,
+    authStore: req.authStore,
     cfg: req.cfg,
     options,
     taskLabel: "structured extraction",

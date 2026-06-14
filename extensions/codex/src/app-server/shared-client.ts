@@ -2,10 +2,11 @@
  * Owns shared and isolated Codex app-server client startup, auth application,
  * lease tracking, and teardown.
  */
-import { resolveDefaultAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveDefaultAgentDir, type AuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
 import {
   applyCodexAppServerAuthProfile,
   bridgeCodexAppServerStartOptions,
+  refreshCodexAppServerAuthTokens,
   resolveCodexAppServerAuthProfileIdForAgent,
   resolveCodexAppServerFallbackApiKeyCacheKey,
 } from "./auth-bridge.js";
@@ -113,6 +114,10 @@ type CodexAppServerClientOptions = {
   abandonSignal?: AbortSignal;
 };
 
+type IsolatedCodexAppServerClientOptions = CodexAppServerClientOptions & {
+  authProfileStore?: AuthProfileStore;
+};
+
 type ResolvedCodexAppServerClientStartContext = {
   agentDir: string;
   usesNativeAuth: boolean;
@@ -121,7 +126,7 @@ type ResolvedCodexAppServerClientStartContext = {
 };
 
 async function resolveCodexAppServerClientStartContext(
-  options?: CodexAppServerClientOptions,
+  options?: IsolatedCodexAppServerClientOptions,
 ): Promise<ResolvedCodexAppServerClientStartContext> {
   const agentDir = options?.agentDir ?? resolveDefaultAgentDir(options?.config ?? {});
   const usesNativeAuth = options?.authProfileId === null;
@@ -133,6 +138,7 @@ async function resolveCodexAppServerClientStartContext(
         authProfileId: requestedAuthProfileId,
         agentDir,
         config: options?.config,
+        ...(options?.authProfileStore ? { authProfileStore: options.authProfileStore } : {}),
       });
   const requestedStartOptions =
     options?.startOptions ?? resolveCodexAppServerRuntimeOptions().start;
@@ -142,6 +148,7 @@ async function resolveCodexAppServerClientStartContext(
     agentDir,
     authProfileId: usesNativeAuth ? null : authProfileId,
     config: options?.config,
+    ...(options?.authProfileStore ? { authProfileStore: options.authProfileStore } : {}),
   });
   return { agentDir, usesNativeAuth, authProfileId, startOptions };
 }
@@ -269,11 +276,24 @@ async function acquireSharedCodexAppServerClient(
 
 /** Starts a non-shared Codex app-server client owned entirely by the caller. */
 export async function createIsolatedCodexAppServerClient(
-  options?: CodexAppServerClientOptions,
+  options?: IsolatedCodexAppServerClientOptions,
 ): Promise<CodexAppServerClient> {
   const { agentDir, usesNativeAuth, authProfileId, startOptions } =
     await resolveCodexAppServerClientStartContext(options);
   const client = CodexAppServerClient.start(startOptions);
+  if (options?.authProfileStore) {
+    client.addRequestHandler(async (request) => {
+      if (request.method !== "account/chatgptAuthTokens/refresh") {
+        return undefined;
+      }
+      return await refreshCodexAppServerAuthTokens({
+        agentDir,
+        authProfileId,
+        authProfileStore: options.authProfileStore,
+        config: options.config,
+      });
+    });
+  }
   const initialize = client.initialize();
   try {
     await withTimeout(initialize, options?.timeoutMs ?? 0, "codex app-server initialize timed out");
@@ -283,6 +303,7 @@ export async function createIsolatedCodexAppServerClient(
       authProfileId: usesNativeAuth ? null : authProfileId,
       startOptions,
       config: options?.config,
+      ...(options?.authProfileStore ? { authProfileStore: options.authProfileStore } : {}),
     });
     return client;
   } catch (error) {

@@ -636,6 +636,7 @@ type ImageSandboxConfig = {
 async function runImagePrompt(params: {
   cfg?: OpenClawConfig;
   agentDir: string;
+  authStore?: AuthProfileStore;
   imageModelConfig: ImageModelConfig;
   modelOverride?: string;
   prompt: string;
@@ -684,6 +685,7 @@ async function runImagePrompt(params: {
           timeoutMs,
           cfg: providerCfg,
           agentDir: params.agentDir,
+          authStore: params.authStore,
           ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
         });
         return { text: described.text, provider, model: described.model ?? modelId };
@@ -703,6 +705,7 @@ async function runImagePrompt(params: {
           timeoutMs,
           cfg: providerCfg,
           agentDir: params.agentDir,
+          authStore: params.authStore,
           ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
         });
         return { text: described.text, provider, model: described.model ?? modelId };
@@ -721,6 +724,7 @@ async function runImagePrompt(params: {
           timeoutMs,
           cfg: providerCfg,
           agentDir: params.agentDir,
+          authStore: params.authStore,
           ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
         });
         parts.push(`Image ${index + 1}:\n${described.text.trim()}`);
@@ -1052,6 +1056,7 @@ export function createImageTool(options?: {
       const result = await runImagePrompt({
         cfg: options?.config,
         agentDir,
+        authStore: options?.authProfileStore,
         imageModelConfig,
         modelOverride,
         prompt: promptRaw,

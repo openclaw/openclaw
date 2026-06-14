@@ -5,6 +5,14 @@ import { buildCodexMediaUnderstandingProvider } from "./media-understanding-prov
 import type { CodexAppServerClient } from "./src/app-server/client.js";
 import type { CodexServerNotification, JsonValue } from "./src/app-server/protocol.js";
 
+const sharedClientMocks = vi.hoisted(() => ({
+  createIsolatedCodexAppServerClient: vi.fn(),
+}));
+
+vi.mock("./src/app-server/shared-client.js", () => ({
+  createIsolatedCodexAppServerClient: sharedClientMocks.createIsolatedCodexAppServerClient,
+}));
+
 function codexModel(inputModalities: string[] = ["text", "image"]) {
   return {
     id: "gpt-5.4",
@@ -169,6 +177,7 @@ function createFakeClient(options?: {
       requestHandlers.add(handler);
       return () => requestHandlers.delete(handler);
     },
+    close: vi.fn(),
   } as unknown as CodexAppServerClient;
 
   return { client, requests, approvalResponses };
@@ -178,6 +187,7 @@ describe("codex media understanding provider", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+    sharedClientMocks.createIsolatedCodexAppServerClient.mockReset();
   });
 
   it("runs image understanding through a bounded Codex app-server turn", async () => {
@@ -272,6 +282,39 @@ describe("codex media understanding provider", () => {
     expect(clientFactory).toHaveBeenCalledWith(expect.any(Object), undefined, undefined, cfg);
     expect(requests[1]?.params).toEqual(expect.objectContaining({ cwd: process.cwd() }));
     expect(requests[2]?.params).toEqual(expect.objectContaining({ cwd: process.cwd() }));
+  });
+
+  it("passes the scoped auth store into isolated app-server startup", async () => {
+    const { client } = createFakeClient();
+    sharedClientMocks.createIsolatedCodexAppServerClient.mockResolvedValue(client);
+    const provider = buildCodexMediaUnderstandingProvider();
+    const authStore = {
+      version: 1,
+      profiles: {
+        "openai:scoped": {
+          type: "oauth" as const,
+          provider: "openai",
+          access: "scoped-access",
+          refresh: "scoped-refresh",
+          expires: Date.now() + 60_000,
+        },
+      },
+    };
+
+    await provider.describeImage?.({
+      buffer: Buffer.from("image-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      provider: "codex",
+      model: "gpt-5.4",
+      timeoutMs: 30_000,
+      authStore,
+      agentDir: "/tmp/openclaw-agent",
+    });
+
+    expect(sharedClientMocks.createIsolatedCodexAppServerClient).toHaveBeenCalledWith(
+      expect.objectContaining({ authProfileStore: authStore }),
+    );
   });
 
   it("clamps oversized image understanding turn timeouts", async () => {

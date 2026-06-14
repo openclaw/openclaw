@@ -1250,6 +1250,35 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
+  it("carries the scoped auth store into image provider execution", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const describeImage = vi.fn(async (params: ImageDescriptionRequest) => ({
+        text: "ok",
+        model: params.model,
+      }));
+      installImageUnderstandingProviderStubs({
+        id: "codex",
+        capabilities: ["image"],
+        describeImage,
+      });
+      const authProfileStore = makeAuthStore({
+        "openai:scoped": openAiOAuthProfile(),
+      });
+      const tool = createRequiredImageTool({
+        config: { agents: { defaults: { imageModel: { primary: "codex/gpt-5.5" } } } },
+        agentDir,
+        authProfileStore,
+      });
+
+      await tool.execute("t1", {
+        prompt: "Describe this image.",
+        image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+      });
+
+      expect(firstImageRequest(describeImage).authStore).toBe(authProfileStore);
+    });
+  });
+
   it("pairs minimax primary with MiniMax-VL-01 (and fallbacks) when auth exists", async () => {
     await withTempAgentDir(async (agentDir) => {
       vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
