@@ -4,9 +4,11 @@ import {
   type ChannelOutboundAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
 import {
+  getReplyPayloadTtsSupplement,
   resolvePayloadMediaUrls,
   sendPayloadMediaSequenceOrFallback,
   sendTextMediaPayload,
+  type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeDiscordApprovalPayload } from "./outbound-approval.js";
@@ -22,6 +24,7 @@ type DiscordOutboundPayloadContext = Parameters<
   NonNullable<ChannelOutboundAdapter["sendPayload"]>
 >[0];
 type DiscordPayloadSendContext = Awaited<ReturnType<typeof createDiscordPayloadSendContext>>;
+type DiscordPayloadSendResult = Awaited<ReturnType<DiscordPayloadSendContext["send"]>>;
 
 function createDiscordUnknownPayloadResult(target: string) {
   return {
@@ -38,9 +41,10 @@ function createDiscordUnknownPayloadResult(target: string) {
 function resolveDiscordDeliveryOptions(
   ctx: DiscordOutboundPayloadContext,
   sendContext: DiscordPayloadSendContext,
+  options?: { replyTo?: string },
 ) {
   return {
-    replyTo: sendContext.resolveReplyTo(),
+    replyTo: options?.replyTo ?? sendContext.resolveReplyTo(),
     accountId: ctx.accountId ?? undefined,
     silent: ctx.silent ?? undefined,
     cfg: ctx.cfg,
@@ -50,9 +54,10 @@ function resolveDiscordDeliveryOptions(
 function resolveDiscordFormattedDeliveryOptions(
   ctx: DiscordOutboundPayloadContext,
   sendContext: DiscordPayloadSendContext,
+  options?: { replyTo?: string },
 ) {
   return {
-    ...resolveDiscordDeliveryOptions(ctx, sendContext),
+    ...resolveDiscordDeliveryOptions(ctx, sendContext, options),
     ...sendContext.formatting,
   };
 }
@@ -71,6 +76,92 @@ function resolveDiscordMediaDeliveryOptions(
   };
 }
 
+function resolveAudioAsVoiceFallbackText(
+  payload: Pick<ReplyPayload, "text" | "ttsSupplement" | "mediaUrl" | "mediaUrls">,
+): { text?: string; suppressVoiceFailure?: boolean } {
+  const text = payload.text?.trim();
+  if (text) {
+    return { text };
+  }
+  const ttsSupplement = getReplyPayloadTtsSupplement(payload);
+  if (!ttsSupplement) {
+    return {};
+  }
+  if (ttsSupplement.visibleTextAlreadyDelivered) {
+    return { suppressVoiceFailure: true };
+  }
+  return { text: ttsSupplement.spokenText };
+}
+
+async function sendDiscordPayloadText(params: {
+  ctx: DiscordOutboundPayloadContext;
+  sendContext: DiscordPayloadSendContext;
+  text: string;
+  replyTo?: string;
+}): Promise<DiscordPayloadSendResult> {
+  return await params.sendContext.withRetry(
+    async () =>
+      await params.sendContext.send(params.sendContext.target, params.text, {
+        verbose: false,
+        ...resolveDiscordFormattedDeliveryOptions(params.ctx, params.sendContext, {
+          replyTo: params.replyTo,
+        }),
+      }),
+  );
+}
+
+async function sendDiscordPayloadMedia(params: {
+  ctx: DiscordOutboundPayloadContext;
+  sendContext: DiscordPayloadSendContext;
+  mediaUrl: string;
+}): Promise<DiscordPayloadSendResult> {
+  return await params.sendContext.withRetry(
+    async () =>
+      await params.sendContext.send(params.sendContext.target, "", {
+        verbose: false,
+        ...resolveDiscordMediaDeliveryOptions(params.ctx, params.sendContext, params.mediaUrl),
+      }),
+  );
+}
+
+async function sendDiscordVoiceOrTextFallback(params: {
+  ctx: DiscordOutboundPayloadContext;
+  sendContext: DiscordPayloadSendContext;
+  mediaUrl: string;
+  fallbackText?: string;
+  suppressVoiceFailure?: boolean;
+}): Promise<{ result: DiscordPayloadSendResult; deliveredVoice: boolean }> {
+  const replyTo = params.sendContext.resolveReplyTo();
+  try {
+    const result = await params.sendContext.withRetry(
+      async () =>
+        await params.sendContext.sendVoice(
+          params.sendContext.target,
+          params.mediaUrl,
+          resolveDiscordDeliveryOptions(params.ctx, params.sendContext, { replyTo }),
+        ),
+    );
+    return { result, deliveredVoice: true };
+  } catch (err) {
+    if (!params.fallbackText) {
+      if (params.suppressVoiceFailure) {
+        return {
+          result: createDiscordUnknownPayloadResult(params.sendContext.target),
+          deliveredVoice: false,
+        };
+      }
+      throw err;
+    }
+    const result = await sendDiscordPayloadText({
+      ctx: params.ctx,
+      sendContext: params.sendContext,
+      text: params.fallbackText,
+      replyTo,
+    });
+    return { result, deliveredVoice: false };
+  }
+}
+
 export async function sendDiscordOutboundPayload(params: {
   ctx: DiscordOutboundPayloadContext;
   fallbackAdapter: ChannelOutboundAdapter;
@@ -84,31 +175,24 @@ export async function sendDiscordOutboundPayload(params: {
   const sendContext = await createDiscordPayloadSendContext(ctx);
 
   if (payload.audioAsVoice && mediaUrls.length > 0) {
-    let lastResult = await sendContext.withRetry(
-      async () =>
-        await sendContext.sendVoice(
-          sendContext.target,
-          mediaUrls[0],
-          resolveDiscordDeliveryOptions(ctx, sendContext),
-        ),
-    );
-    if (payload.text?.trim()) {
-      lastResult = await sendContext.withRetry(
-        async () =>
-          await sendContext.send(sendContext.target, payload.text, {
-            verbose: false,
-            ...resolveDiscordFormattedDeliveryOptions(ctx, sendContext),
-          }),
-      );
+    const fallback = resolveAudioAsVoiceFallbackText(payload);
+    const firstDelivery = await sendDiscordVoiceOrTextFallback({
+      ctx,
+      sendContext,
+      mediaUrl: mediaUrls[0],
+      fallbackText: fallback.text,
+      suppressVoiceFailure: fallback.suppressVoiceFailure,
+    });
+    let lastResult = firstDelivery.result;
+    if (firstDelivery.deliveredVoice && payload.text?.trim()) {
+      lastResult = await sendDiscordPayloadText({
+        ctx,
+        sendContext,
+        text: payload.text,
+      });
     }
     for (const mediaUrl of mediaUrls.slice(1)) {
-      lastResult = await sendContext.withRetry(
-        async () =>
-          await sendContext.send(sendContext.target, "", {
-            verbose: false,
-            ...resolveDiscordMediaDeliveryOptions(ctx, sendContext, mediaUrl),
-          }),
-      );
+      lastResult = await sendDiscordPayloadMedia({ ctx, sendContext, mediaUrl });
     }
     return attachChannelToResult("discord", lastResult);
   }
