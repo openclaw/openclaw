@@ -301,6 +301,7 @@ export function resolveSessionAgentIds(params: {
   sessionKey?: string;
   config?: OpenClawConfig;
   agentId?: string;
+  fallbackAgentId?: string;
 }): {
   defaultAgentId: string;
   sessionAgentId: string;
@@ -311,8 +312,14 @@ export function resolveSessionAgentIds(params: {
   const sessionKey = params.sessionKey?.trim();
   const normalizedSessionKey = sessionKey ? normalizeLowercaseStringOrEmpty(sessionKey) : undefined;
   const parsed = normalizedSessionKey ? parseAgentSessionKey(normalizedSessionKey) : null;
+  const fallbackAgentIdRaw = normalizeLowercaseStringOrEmpty(params.fallbackAgentId);
+  const fallbackAgentId = fallbackAgentIdRaw ? normalizeAgentId(fallbackAgentIdRaw) : null;
+  // Session-key agent wins so command-turn cross-agent targeting still resolves the
+  // target; the bound route agent only fills in when the key carries no agent (e.g.
+  // an unscoped binding session key) before falling back to the default.
   const sessionAgentId =
-    explicitAgentId ?? (parsed?.agentId ? normalizeAgentId(parsed.agentId) : defaultAgentId);
+    explicitAgentId ??
+    (parsed?.agentId ? normalizeAgentId(parsed.agentId) : (fallbackAgentId ?? defaultAgentId));
   return { defaultAgentId, sessionAgentId };
 }
 
@@ -320,6 +327,7 @@ export function resolveSessionAgentId(params: {
   sessionKey?: string;
   config?: OpenClawConfig;
   agentId?: string;
+  fallbackAgentId?: string;
 }): string {
   return resolveSessionAgentIds(params).sessionAgentId;
 }

@@ -133,6 +133,7 @@ describe("buildChannelInboundEventContext", () => {
       From: "test:user:u1",
       To: "test:room:room-1",
       SessionKey: "agent:main:test:group:room-1",
+      AgentId: "main",
       AccountId: "acct",
       ParentSessionKey: "agent:main:test:group",
       ModelParentSessionKey: "agent:main:test:model",
@@ -182,6 +183,22 @@ describe("buildChannelInboundEventContext", () => {
     for (const [key, value] of Object.entries(expectedFields)) {
       expect(ctx[key as keyof typeof ctx]).toEqual(value);
     }
+  });
+
+  it("carries the routed bound agent so an unscoped session key still resolves its workspace", () => {
+    // Regression for #92903: a bound (non-default) agent whose route session key
+    // is unscoped must still surface AgentId so the run loads the agent's own
+    // bootstrap/workspace instead of the default agent's.
+    const ctx = buildChannelInboundEventContext(
+      createBaseContextParams({
+        route: {
+          agentId: "support",
+          routeSessionKey: "test:group:room-1",
+        },
+      }),
+    );
+    expect(ctx.AgentId).toBe("support");
+    expect(ctx.SessionKey).toBe("test:group:room-1");
   });
 
   it("uses resolved command authorization instead of recomputing authorizers", async () => {

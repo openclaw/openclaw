@@ -272,6 +272,9 @@ export async function initSessionState(params: {
   const agentId = resolveSessionAgentId({
     sessionKey: sessionCtxForState.SessionKey,
     config: cfg,
+    // Keep the store/transcript under the routed bound agent when the session key
+    // is unscoped, so persistence matches the workspace the run actually uses.
+    fallbackAgentId: sessionCtxForState.AgentId,
   });
   const groupResolution = resolveGroupSessionKey(sessionCtxForState) ?? undefined;
   const resetTriggers = sessionCfg?.resetTriggers?.length

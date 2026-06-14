@@ -388,7 +388,7 @@ const resolveSessionStoreLookup = (
   if (!sessionKey) {
     return {};
   }
-  const agentId = resolveSessionAgentId({ sessionKey, config: cfg, agentId: ctx.AgentId });
+  const agentId = resolveSessionAgentId({ sessionKey, config: cfg, fallbackAgentId: ctx.AgentId });
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
   try {
     const store = loadSessionStore(storePath);
@@ -1260,7 +1260,7 @@ export async function dispatchReplyFromConfig(
   const sessionAgentId = resolveSessionAgentId({
     sessionKey: acpDispatchSessionKey,
     config: cfg,
-    agentId: ctx.AgentId,
+    fallbackAgentId: ctx.AgentId,
   });
   const sessionAgentCfg = resolveAgentConfig(cfg, sessionAgentId);
   const verboseProgress = createShouldEmitVerboseProgress({

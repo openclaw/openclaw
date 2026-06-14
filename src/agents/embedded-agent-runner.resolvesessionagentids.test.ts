@@ -68,4 +68,35 @@ describe("resolveSessionAgentIds", () => {
     });
     expect(sessionAgentId).toBe("main");
   });
+
+  it("uses fallbackAgentId when the session key carries no agent", () => {
+    // Channel routes keep the bound agent on the route even when the resolved
+    // session key is unscoped; without this fallback the run defaults away from it.
+    const { sessionAgentId } = resolveSessionAgentIds({
+      sessionKey: "quietchat:slash:123",
+      fallbackAgentId: "main",
+      config: cfg,
+    });
+    expect(sessionAgentId).toBe("main");
+  });
+
+  it("prefers the session-key agent over fallbackAgentId", () => {
+    // Command-turn cross-agent targeting encodes the target in the key; the bound
+    // route agent must not override it.
+    const { sessionAgentId } = resolveSessionAgentIds({
+      sessionKey: "agent:beta:quietchat:channel:c1",
+      fallbackAgentId: "main",
+      config: cfg,
+    });
+    expect(sessionAgentId).toBe("beta");
+  });
+
+  it("prefers explicit agentId over fallbackAgentId", () => {
+    const { sessionAgentId } = resolveSessionAgentIds({
+      agentId: "beta",
+      fallbackAgentId: "main",
+      config: cfg,
+    });
+    expect(sessionAgentId).toBe("beta");
+  });
 });

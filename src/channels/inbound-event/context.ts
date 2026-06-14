@@ -483,6 +483,9 @@ export function buildChannelInboundEventContext(
     From: params.from,
     To: params.reply.to,
     SessionKey: params.route.dispatchSessionKey ?? params.route.routeSessionKey,
+    // Carry the routed (bound) agent so the run resolves its workspace/bootstrap even
+    // when the session key is unscoped; downstream resolvers treat it as a fallback.
+    AgentId: params.route.agentId,
     AccountId: params.route.accountId ?? params.accountId,
     ParentSessionKey: params.route.parentSessionKey,
     ModelParentSessionKey: params.route.modelParentSessionKey,
