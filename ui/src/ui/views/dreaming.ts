@@ -8,7 +8,7 @@ import type {
   WikiImportInsights,
   WikiMemoryPalace,
 } from "../controllers/dreaming.ts";
-import { toSanitizedMarkdownHtml } from "../markdown.ts";
+import { OPENCLAW_MISSION_CONTROL_MARKDOWN_OPTIONS, toSanitizedMarkdownHtml } from "../markdown.ts";
 
 // ── Diary entry parser ─────────────────────────────────────────────────
 
@@ -1435,7 +1435,9 @@ function renderDreamDiaryEntries(props: DreamingProps) {
         ${flattenDiaryBody(entry.body).map(
           (para, i) =>
             html`<p class="dreams-diary__para" style="animation-delay: ${0.3 + i * 0.15}s;">
-              ${unsafeHTML(toSanitizedMarkdownHtml(para))}
+              ${unsafeHTML(
+                toSanitizedMarkdownHtml(para, OPENCLAW_MISSION_CONTROL_MARKDOWN_OPTIONS),
+              )}
             </p>`,
         )}
       </div>

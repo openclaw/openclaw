@@ -89,6 +89,13 @@ const INLINE_DATA_IMAGE_RE = /^data:image\/[a-z0-9.+-]+;base64,/i;
 const HOST_LOCAL_FILE_HREF_RE =
   /^(?:~\/|\/(?:Users|home|tmp|private\/tmp|var\/folders|private\/var\/folders)\/|\/[A-Za-z]:\/|[A-Za-z]:[\\/])/;
 const DOCS_ORIGIN = "https://docs.openclaw.ai";
+export const OPENCLAW_DOCS_MARKDOWN_OPTIONS = {
+  rootRelativeLinkBaseUrl: DOCS_ORIGIN,
+} as const satisfies MarkdownRenderOptions;
+export const OPENCLAW_MISSION_CONTROL_MARKDOWN_OPTIONS = {
+  preserveControlUiRoutes: true,
+  rootRelativeLinkBaseUrl: DOCS_ORIGIN,
+} as const satisfies MarkdownRenderOptions;
 const DOCS_ROOT_SEGMENTS = new Set([
   "agent-runtime-architecture",
   "announcements",
@@ -317,6 +324,8 @@ type WindowWithControlUiBasePath = Window &
     [key: string]: unknown;
   };
 const markdownCache = new Map<string, string>();
+let activeRootRelativeLinkBaseUrl: string | null = null;
+let activePreserveControlUiRoutes = false;
 const TAIL_LINK_BLUR_CLASS = "chat-link-tail-blur";
 const FENCE_OPEN_RE = /^[ \t]{0,3}(`{3,}|~{3,})/;
 const FENCE_CONTAINER_PREFIX_RE = /^[ \t]{0,3}(?:(?:>\s?)|(?:(?:[-+*]|\d{1,9}[.)])[ \t]+))/;
@@ -325,10 +334,14 @@ export type MarkdownCodeBlockChrome = "copy" | "none";
 
 export type MarkdownRenderOptions = {
   codeBlockChrome?: MarkdownCodeBlockChrome;
+  preserveControlUiRoutes?: boolean;
+  rootRelativeLinkBaseUrl?: string | null;
 };
 
 type MarkdownRenderEnv = {
   codeBlockChrome: MarkdownCodeBlockChrome;
+  preserveControlUiRoutes: boolean;
+  rootRelativeLinkBaseUrl: string | null;
 };
 
 // CJK character ranges for URL boundary detection (RFC 3986: CJK is not valid in raw URLs).
@@ -362,6 +375,8 @@ function setCachedMarkdown(key: string, value: string) {
 function normalizeMarkdownRenderOptions(options: MarkdownRenderOptions = {}): MarkdownRenderEnv {
   return {
     codeBlockChrome: options.codeBlockChrome ?? "copy",
+    preserveControlUiRoutes: options.preserveControlUiRoutes === true,
+    rootRelativeLinkBaseUrl: normalizeRootRelativeLinkBaseUrl(options.rootRelativeLinkBaseUrl),
   };
 }
 
@@ -371,6 +386,22 @@ function shouldRenderCodeBlockCopy(env: unknown): boolean {
 
 function isHostLocalFileHref(href: string): boolean {
   return HOST_LOCAL_FILE_HREF_RE.test(href.trim());
+}
+
+function normalizeRootRelativeLinkBaseUrl(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  try {
+    const url = new URL(trimmed);
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      return null;
+    }
+    return url.origin;
+  } catch {
+    return null;
+  }
 }
 
 function isControlUiRoutePath(pathname: string): boolean {
@@ -437,18 +468,25 @@ function isDocsRootPath(normalizedPath: string, segments: string[]): boolean {
   return segment ? DOCS_ROOT_SEGMENTS.has(segment) : false;
 }
 
-function normalizeDocsRootHref(href: string): string {
+function normalizeDocsRootHref(
+  href: string,
+  baseUrl: string | null,
+  preserveControlUiRoutes: boolean,
+): string {
+  if (!baseUrl) {
+    return href;
+  }
   const trimmed = href.trim();
   if (!trimmed.startsWith("/") || trimmed.startsWith("//")) {
     return href;
   }
   try {
-    const url = new URL(trimmed, DOCS_ORIGIN);
-    if (url.origin !== DOCS_ORIGIN) {
+    const url = new URL(trimmed, baseUrl);
+    if (url.origin !== baseUrl) {
       return href;
     }
     const normalizedPath = url.pathname.replace(/\/+$/, "") || "/";
-    if (isControlUiRoutePath(normalizedPath)) {
+    if (preserveControlUiRoutes && isControlUiRoutePath(normalizedPath)) {
       return href;
     }
     const segments = pathSegments(normalizedPath);
@@ -462,6 +500,23 @@ function normalizeDocsRootHref(href: string): string {
     return href;
   } catch {
     return href;
+  }
+}
+
+function sanitizeMarkdownHtml(
+  html: string,
+  rootRelativeLinkBaseUrl: string | null,
+  preserveControlUiRoutes: boolean,
+): string {
+  const previousRootRelativeLinkBaseUrl = activeRootRelativeLinkBaseUrl;
+  const previousPreserveControlUiRoutes = activePreserveControlUiRoutes;
+  activeRootRelativeLinkBaseUrl = rootRelativeLinkBaseUrl;
+  activePreserveControlUiRoutes = preserveControlUiRoutes;
+  try {
+    return DOMPurify.sanitize(html, sanitizeOptions);
+  } finally {
+    activeRootRelativeLinkBaseUrl = previousRootRelativeLinkBaseUrl;
+    activePreserveControlUiRoutes = previousPreserveControlUiRoutes;
   }
 }
 
@@ -485,7 +540,11 @@ function installHooks() {
       return;
     }
 
-    const normalizedHref = normalizeDocsRootHref(href);
+    const normalizedHref = normalizeDocsRootHref(
+      href,
+      activeRootRelativeLinkBaseUrl,
+      activePreserveControlUiRoutes,
+    );
     if (normalizedHref !== href) {
       node.setAttribute("href", normalizedHref);
     }
@@ -1030,7 +1089,7 @@ export function toSanitizedMarkdownHtml(
     return "";
   }
   installHooks();
-  const cacheKey = `${i18n.getLocale()}\0${renderOptions.codeBlockChrome}\0${input}`;
+  const cacheKey = `${i18n.getLocale()}\0${renderOptions.codeBlockChrome}\0${renderOptions.rootRelativeLinkBaseUrl ?? ""}\0${renderOptions.preserveControlUiRoutes ? "preserve-control-ui" : ""}\0${input}`;
   if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
     const cached = getCachedMarkdown(cacheKey);
     if (cached !== null) {
@@ -1046,7 +1105,11 @@ export function toSanitizedMarkdownHtml(
     // capped code-block chrome, while still preserving whitespace for logs
     // and other structured text that commonly trips the parse guard.
     const html = toEscapedPlainTextHtml(`${truncated.text}${suffix}`);
-    const sanitized = DOMPurify.sanitize(html, sanitizeOptions);
+    const sanitized = sanitizeMarkdownHtml(
+      html,
+      renderOptions.rootRelativeLinkBaseUrl,
+      renderOptions.preserveControlUiRoutes,
+    );
     if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
       setCachedMarkdown(cacheKey, sanitized);
     }
@@ -1061,7 +1124,11 @@ export function toSanitizedMarkdownHtml(
     const escaped = escapeHtml(`${truncated.text}${suffix}`);
     rendered = `<pre class="code-block">${escaped}</pre>`;
   }
-  const sanitized = DOMPurify.sanitize(rendered, sanitizeOptions);
+  const sanitized = sanitizeMarkdownHtml(
+    rendered,
+    renderOptions.rootRelativeLinkBaseUrl,
+    renderOptions.preserveControlUiRoutes,
+  );
   if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
     setCachedMarkdown(cacheKey, sanitized);
   }

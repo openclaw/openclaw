@@ -5,7 +5,7 @@ import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { resolveCanvasIframeUrl } from "../canvas-url.ts";
 import { resolveEmbedSandbox, type EmbedSandboxMode } from "../embed-sandbox.ts";
 import { icons } from "../icons.ts";
-import { toSanitizedMarkdownHtml } from "../markdown.ts";
+import { OPENCLAW_MISSION_CONTROL_MARKDOWN_OPTIONS, toSanitizedMarkdownHtml } from "../markdown.ts";
 import type { SidebarContent } from "../sidebar-content.ts";
 
 function resolveSidebarCanvasSandbox(
@@ -29,7 +29,10 @@ export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
   const content = props.content;
   const markdownHtml =
     content?.kind === "markdown" && content.content.trim()
-      ? toSanitizedMarkdownHtml(content.content)
+      ? toSanitizedMarkdownHtml(
+          content.content,
+          content.rewriteOpenClawDocsLinks ? OPENCLAW_MISSION_CONTROL_MARKDOWN_OPTIONS : undefined,
+        )
       : "";
   const canvasSandbox =
     content?.kind === "canvas"

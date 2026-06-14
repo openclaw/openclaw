@@ -2,7 +2,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { icons } from "../icons.ts";
-import { toSanitizedMarkdownHtml } from "../markdown.ts";
+import { OPENCLAW_MISSION_CONTROL_MARKDOWN_OPTIONS, toSanitizedMarkdownHtml } from "../markdown.ts";
 import { detectTextDirection } from "../text-direction.ts";
 import type { ChatSideResult } from "./side-result.ts";
 
@@ -37,7 +37,9 @@ export function renderSideResult(
       </div>
       <div class="chat-side-result__question">${sideResult.question}</div>
       <div class="chat-side-result__body" dir=${detectTextDirection(sideResult.text)}>
-        ${unsafeHTML(toSanitizedMarkdownHtml(sideResult.text))}
+        ${unsafeHTML(
+          toSanitizedMarkdownHtml(sideResult.text, OPENCLAW_MISSION_CONTROL_MARKDOWN_OPTIONS),
+        )}
       </div>
     </section>
   `;
