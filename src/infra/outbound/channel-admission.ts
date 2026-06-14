@@ -6,6 +6,7 @@
 // channel registers an admission predicate so echo deliveries honor the live
 // enablement of the destination too.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isChannelMirrorCapable } from "./channel-mirror-capability.js";
 
 export type EchoAdmissionTarget = {
   to: string;
@@ -91,7 +92,12 @@ export async function isEchoTargetAdmissible(
 ): Promise<boolean> {
   const byAccount = admissions.get(channel);
   if (!byAccount || byAccount.size === 0) {
-    return true;
+    // No predicate registered for this channel. A mirror-capable channel
+    // (telegram) must FAIL CLOSED here: an account stop/reload unregisters its
+    // admission predicate (and mirror dispatcher) together, and admitting during
+    // that window would let the raw echo leak to a now-revoked destination.
+    // Channels that never register a mirror dispatcher admit echoes as before.
+    return !isChannelMirrorCapable(channel);
   }
   const admission = resolveChannelEchoAdmission(channel, target.accountId);
   if (!admission) {

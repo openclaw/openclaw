@@ -3,6 +3,7 @@ import type { SessionEchoTarget, SessionEntry } from "../../config/sessions/type
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { formatErrorMessage } from "../errors.js";
+import { markChannelMirrorCapable } from "./channel-mirror-capability.js";
 import { createMirrorReplyResolver } from "./echo-mirror-resolver.js";
 import { normalizeEchoTargetId, resolveEchoTargets } from "./echo.js";
 
@@ -145,6 +146,10 @@ export function registerChannelMirrorDispatcher(
     );
   }
   byAccount.set(key, dispatcher);
+  // Sticky: once a channel is mirror-capable, the echo-admission gate must keep
+  // failing closed for it even while its admission predicate is briefly absent
+  // (stop/reload unregisters the dispatcher AND the predicate together).
+  markChannelMirrorCapable(channel);
 }
 
 /**

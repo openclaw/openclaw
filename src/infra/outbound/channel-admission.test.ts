@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   isEchoTargetAdmissible,
@@ -6,17 +6,36 @@ import {
   resetChannelEchoAdmissionForTest,
   unregisterChannelEchoAdmission,
 } from "./channel-admission.js";
+import {
+  markChannelMirrorCapable,
+  resetChannelMirrorCapabilityForTest,
+} from "./channel-mirror-capability.js";
 
 const cfg = {} as OpenClawConfig;
 
 describe("channel-admission", () => {
-  it("admits a target when no channel predicate is registered (unchanged behavior)", async () => {
+  beforeEach(() => {
     resetChannelEchoAdmissionForTest();
+    resetChannelMirrorCapabilityForTest();
+  });
+
+  it("admits a target when no channel predicate is registered (unchanged behavior)", async () => {
+    expect(await isEchoTargetAdmissible(cfg, "discord", { to: "123" })).toBe(true);
+  });
+
+  it("fails closed for a mirror-capable channel with no predicate (stop/reload window)", async () => {
+    // The channel has been mirror-capable (registered a dispatcher) but its
+    // admission predicate is currently absent (account stopped/reloading). Deny
+    // the echo rather than fall back to a raw send to a possibly-revoked target.
+    markChannelMirrorCapable("telegram");
+    expect(
+      await isEchoTargetAdmissible(cfg, "telegram", { to: "telegram:-100", accountId: "default" }),
+    ).toBe(false);
+    // A channel that never mirrors still admits when no predicate is registered.
     expect(await isEchoTargetAdmissible(cfg, "discord", { to: "123" })).toBe(true);
   });
 
   it("delegates to the registered predicate (enabled -> admit, disabled -> deny)", async () => {
-    resetChannelEchoAdmissionForTest();
     const enabled = vi.fn(() => true);
     registerChannelEchoAdmission("telegram", "default", enabled);
     expect(
@@ -32,7 +51,6 @@ describe("channel-admission", () => {
   });
 
   it("awaits an async predicate (telegram DM access is resolved asynchronously)", async () => {
-    resetChannelEchoAdmissionForTest();
     registerChannelEchoAdmission("telegram", "default", async () => false);
     expect(
       await isEchoTargetAdmissible(cfg, "telegram", { to: "telegram:123", accountId: "default" }),
@@ -40,7 +58,6 @@ describe("channel-admission", () => {
   });
 
   it("uses the sole predicate for a wildcard target but fails closed on an explicit account mismatch", async () => {
-    resetChannelEchoAdmissionForTest();
     const a = vi.fn(() => true);
     registerChannelEchoAdmission("telegram", "default", a);
     // Wildcard (no pinned account) may use the only registered predicate.
@@ -52,7 +69,6 @@ describe("channel-admission", () => {
   });
 
   it("keys predicates by account and fails closed on an unknown account when >1 registered", async () => {
-    resetChannelEchoAdmissionForTest();
     registerChannelEchoAdmission("telegram", "acc-a", () => true);
     registerChannelEchoAdmission("telegram", "acc-b", () => false);
     expect(await isEchoTargetAdmissible(cfg, "telegram", { to: "x", accountId: "acc-a" })).toBe(true);
@@ -66,7 +82,6 @@ describe("channel-admission", () => {
   });
 
   it("unregister removes a stopped account's predicate (channel reverts to admit-all)", async () => {
-    resetChannelEchoAdmissionForTest();
     registerChannelEchoAdmission("telegram", "default", () => false);
     expect(await isEchoTargetAdmissible(cfg, "telegram", { to: "x", accountId: "default" })).toBe(
       false,
