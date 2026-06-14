@@ -11,6 +11,10 @@ import {
 import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
 import { normalizeDeviceMetadataForPolicy } from "./device-metadata-normalization.js";
 import type { NodeSession } from "./node-registry.js";
+import {
+  readPluginNodeHostCommandRegistration,
+  readPluginNodeInvokePolicyRegistration,
+} from "./plugin-node-command-policy-registrations.js";
 
 const CAMERA_COMMANDS = ["camera.list"];
 const CAMERA_DANGEROUS_COMMANDS = ["camera.snap", "camera.clip"];
@@ -226,12 +230,14 @@ export function listDangerousPluginNodeCommands(): string[] {
     return [];
   }
   const commands = [
-    ...(registry.nodeHostCommands ?? [])
-      .filter((entry) => entry.command.dangerous === true)
-      .map((entry) => entry.command.command),
-    ...(registry.nodeInvokePolicies ?? [])
-      .filter((entry) => entry.policy.dangerous === true)
-      .flatMap((entry) => entry.policy.commands),
+    ...(registry.nodeHostCommands ?? []).flatMap((entry) => {
+      const readable = readPluginNodeHostCommandRegistration(entry);
+      return readable?.dangerous === true ? [readable.command] : [];
+    }),
+    ...(registry.nodeInvokePolicies ?? []).flatMap((entry) => {
+      const readable = readPluginNodeInvokePolicyRegistration(entry);
+      return readable?.dangerous === true ? readable.commands : [];
+    }),
   ];
   return normalizeUniqueStringEntries(commands);
 }
@@ -241,12 +247,28 @@ function listDefaultPluginNodeCommands(platformId: PlatformId): string[] {
   if (!registry) {
     return [];
   }
+  const commands = (registry.nodeInvokePolicies ?? [])
+    .map(readPluginNodeInvokePolicyRegistration)
+    .flatMap((entry) => {
+      if (!entry || entry.dangerous === true) {
+        return [];
+      }
+      return entry.defaultPlatforms.includes(platformId) ? entry.commands : [];
+    });
+  return normalizeUniqueStringEntries(commands);
+}
+
+function listForegroundRestrictedPluginNodeCommands(): string[] {
+  const registry = getActiveRuntimePluginRegistry();
+  if (!registry) {
+    return [];
+  }
   const commands = (registry.nodeInvokePolicies ?? []).flatMap((entry) => {
-    if (entry.policy.dangerous === true) {
+    const readable = readPluginNodeInvokePolicyRegistration(entry);
+    if (!readable?.foregroundRestrictedOnIos) {
       return [];
     }
-    const defaults = entry.policy.defaultPlatforms ?? [];
-    return defaults.includes(platformId) ? entry.policy.commands : [];
+    return readable.commands;
   });
   return normalizeUniqueStringEntries(commands);
 }
@@ -260,10 +282,8 @@ export function isForegroundRestrictedPluginNodeCommand(command: string): boolea
   if (!normalized) {
     return false;
   }
-  return (registry.nodeInvokePolicies ?? []).some(
-    (entry) =>
-      entry.policy.foregroundRestrictedOnIos === true &&
-      entry.policy.commands.some((policyCommand) => policyCommand.trim() === normalized),
+  return listForegroundRestrictedPluginNodeCommands().some(
+    (policyCommand) => policyCommand.trim() === normalized,
   );
 }
 
