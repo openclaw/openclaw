@@ -32,6 +32,7 @@ import { getTextOutput, invalidArgText, replaceTabs, shortenPath, str } from "./
 import type { ReadToolDetails } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateHead } from "./truncate.js";
+import { decodeFileBuffer } from "./encoding.js";
 
 const readSchema = Type.Object({
   path: Type.String({ description: "Path to the file to read (relative or absolute)" }),
@@ -339,7 +340,7 @@ export function createReadToolDefinition(
             } else {
               // Read text content.
               const buffer = await ops.readFile(absolutePath);
-              const textContent = buffer.toString("utf-8");
+              const textContent = decodeFileBuffer(buffer);
               const allLines = textContent.split("\n");
               const totalFileLines = allLines.length;
               // Apply offset if specified. Convert from 1-indexed input to 0-indexed array access.
@@ -367,7 +368,7 @@ export function createReadToolDefinition(
               let outputText: string;
               if (truncation.firstLineExceedsLimit) {
                 // First line alone exceeds the byte limit. Point the model at a bash fallback.
-                const firstLineSize = formatSize(Buffer.byteLength(allLines[startLine], "utf-8"));
+                const firstLineSize = formatSize(Buffer.byteLength(allLines[startLine]));
                 outputText = `[Line ${startLineDisplay} is ${firstLineSize}, exceeds ${formatSize(DEFAULT_MAX_BYTES)} limit. Use bash: sed -n '${startLineDisplay}p' ${quotePosixShellArg(path)} | head -c ${DEFAULT_MAX_BYTES}]`;
                 details = { truncation };
               } else if (truncation.truncated) {
