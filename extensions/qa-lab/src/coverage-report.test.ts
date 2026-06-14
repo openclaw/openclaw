@@ -228,33 +228,48 @@ describe("qa coverage report", () => {
   });
 
   it("splits qa suite targets when matches mix execution kinds", () => {
+    const flowScenario = scenarioWithCoverage({
+      primary: [TEST_EXECUTABLE_COVERAGE_ID],
+    });
+    const playwrightScenario = scenarioWithCoverage({
+      primary: [TEST_BROWSER_COVERAGE_ID],
+      executionKind: "playwright",
+      executionPath: "ui/src/ui/e2e/chat-flow.e2e.test.ts",
+      sourcePath: "qa/scenarios/ui/control-ui-chat-flow-playwright.md",
+    });
     const report = renderQaScenarioMatchesMarkdownReport({
       query: "mixed",
       matches: [
-        scenarioWithCoverage({
-          primary: [TEST_EXECUTABLE_COVERAGE_ID],
-        }),
-        scenarioWithCoverage({
-          primary: [TEST_BROWSER_COVERAGE_ID],
-          executionKind: "playwright",
-          executionPath: "ui/src/ui/e2e/chat-flow.e2e.test.ts",
-          sourcePath: "qa/scenarios/ui/control-ui-chat-flow-playwright.md",
-        }),
-      ].map((scenario, index) => ({
-        ...scenario,
-        id: index === 0 ? "flow-proof" : "playwright-proof",
-        theme: "test",
-        surfaces: [scenario.surface],
-        risk: "unassigned",
-        coverageIds: [
-          ...(scenario.coverage?.primary ?? []),
-          ...(scenario.coverage?.secondary ?? []),
-        ],
-        docsRefs: [],
-        codeRefs: [],
-        executionKind: scenario.execution.kind,
-        ...(scenario.execution.kind === "flow" ? {} : { executionPath: scenario.execution.path }),
-      })),
+        {
+          ...flowScenario,
+          id: "flow-proof",
+          theme: "test",
+          surfaces: [flowScenario.surface],
+          risk: "unassigned",
+          coverageIds: [
+            ...(flowScenario.coverage?.primary ?? []),
+            ...(flowScenario.coverage?.secondary ?? []),
+          ],
+          docsRefs: [],
+          codeRefs: [],
+          executionKind: flowScenario.execution.kind,
+        },
+        {
+          ...playwrightScenario,
+          id: "playwright-proof",
+          theme: "test",
+          surfaces: [playwrightScenario.surface],
+          risk: "unassigned",
+          coverageIds: [
+            ...(playwrightScenario.coverage?.primary ?? []),
+            ...(playwrightScenario.coverage?.secondary ?? []),
+          ],
+          docsRefs: [],
+          codeRefs: [],
+          executionKind: playwrightScenario.execution.kind,
+          executionPath: playwrightScenario.execution.path,
+        },
+      ],
     });
 
     expect(report).toContain("- Suite commands:");
