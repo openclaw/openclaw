@@ -7,6 +7,7 @@
 
 import crypto from "node:crypto";
 import path from "node:path";
+import { resolveLocalPathFromRootsSync } from "openclaw/plugin-sdk/security-runtime";
 import { MediaFileType, type GatewayAccount } from "../types.js";
 import { formatFileSize, getImageMimeType, getMaxUploadSize } from "../utils/file-utils.js";
 import { formatErrorMessage } from "../utils/format.js";
@@ -21,6 +22,7 @@ import { normalizePath, resolveQQBotPayloadLocalFilePath } from "../utils/platfo
 import { normalizeLowercaseStringOrEmpty } from "../utils/string-normalize.js";
 import { sanitizeFileName } from "../utils/string-normalize.js";
 import { openLocalFile } from "./media-source.js";
+import type { OutboundMediaAccessContext } from "./outbound-types.js";
 import {
   sendText as senderSendText,
   sendMedia as senderSendMedia,
@@ -66,7 +68,7 @@ interface MessageTarget {
   groupOpenid?: string;
 }
 
-interface ReplyContext {
+interface ReplyContext extends OutboundMediaAccessContext {
   target: MessageTarget;
   account: GatewayAccount;
   cfg: unknown;
@@ -202,14 +204,44 @@ function formatMediaTypeLabel(mediaType: StructuredPayloadMediaType): string {
   return mediaType[0].toUpperCase() + mediaType.slice(1);
 }
 
+function resolveStructuredPayloadLocalRoots(ctx: ReplyContext): string[] | undefined {
+  const roots = [
+    ...(ctx.mediaAccess?.localRoots ?? []),
+    ...(ctx.mediaLocalRoots ?? []),
+    ...(ctx.mediaAccess?.workspaceDir ? [ctx.mediaAccess.workspaceDir] : []),
+  ].filter((root) => root.trim());
+  return roots.length > 0 ? Array.from(new Set(roots)) : undefined;
+}
+
+function resolveStructuredPayloadCandidate(ctx: ReplyContext, payloadPath: string): string {
+  const normalizedPath = normalizePath(payloadPath);
+  if (!ctx.mediaAccess?.workspaceDir || path.isAbsolute(normalizedPath)) {
+    return normalizedPath;
+  }
+  return path.resolve(ctx.mediaAccess.workspaceDir, normalizedPath);
+}
+
 function validateStructuredPayloadLocalPath(
   ctx: ReplyContext,
   payloadPath: string,
   mediaType: StructuredPayloadMediaType,
 ): string | null {
-  const allowedPath = resolveQQBotPayloadLocalFilePath(payloadPath);
+  const candidatePath = resolveStructuredPayloadCandidate(ctx, payloadPath);
+  const allowedPath = resolveQQBotPayloadLocalFilePath(candidatePath);
   if (allowedPath) {
     return allowedPath;
+  }
+
+  const localRoots = resolveStructuredPayloadLocalRoots(ctx);
+  if (localRoots) {
+    const scopedPath = resolveLocalPathFromRootsSync({
+      filePath: candidatePath,
+      roots: localRoots,
+      label: "QQ Bot local roots",
+    })?.path;
+    if (scopedPath) {
+      return scopedPath;
+    }
   }
 
   ctx.log?.error(`Blocked ${mediaType} payload local path outside QQ Bot media storage`);

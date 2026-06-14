@@ -10,7 +10,10 @@
  * Separated from gateway.ts for testability and to keep handleMessage thin.
  */
 
+import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "openclaw/plugin-sdk/reply-chunking";
 import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import {
@@ -130,6 +133,18 @@ export async function dispatchOutbound(
   const { runtime, cfg, account, log } = deps;
   const { event, qualifiedTarget } = inbound;
 
+  const routeAgentId = inbound.route.agentId;
+  const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg as OpenClawConfig, routeAgentId);
+  const workspaceDir = routeAgentId
+    ? resolveAgentWorkspaceDir(cfg as OpenClawConfig, routeAgentId)
+    : undefined;
+  const gatewayMediaContext =
+    mediaLocalRoots.length > 0 || workspaceDir
+      ? {
+          ...(mediaLocalRoots.length > 0 ? { mediaLocalRoots } : {}),
+          ...(workspaceDir ? { mediaAccess: { workspaceDir } } : {}),
+        }
+      : {};
   const replyTarget = {
     type: event.type,
     senderId: event.senderId,
@@ -138,7 +153,7 @@ export async function dispatchOutbound(
     guildId: event.guildId,
     groupOpenid: event.groupOpenid,
   };
-  const replyCtx = { target: replyTarget, account, cfg, log };
+  const replyCtx = { target: replyTarget, account, cfg, log, ...gatewayMediaContext };
 
   const sendWithRetry = <T>(sendFn: (token: string) => Promise<T>) =>
     sendWithTokenRetry(account.appId, account.clientSecret, sendFn, log, account.accountId);
@@ -190,6 +205,7 @@ export async function dispatchOutbound(
           accountId: account.accountId,
           replyToId: event.messageId,
           account,
+          ...gatewayMediaContext,
         }).then((r) => {
           if (ac.signal.aborted) {
             return { channel: "qqbot", error: "suppressed" } as OutboundResult;
@@ -322,7 +338,7 @@ export async function dispatchOutbound(
             groupOpenid: event.groupOpenid,
             msgIdx: event.msgIdx,
           },
-          { account, qualifiedTarget, log },
+          { account, qualifiedTarget, log, ...gatewayMediaContext },
           sendWithRetry,
           () => undefined,
           deliverDeps,
@@ -374,6 +390,7 @@ export async function dispatchOutbound(
           channelId: event.channelId,
         },
         log,
+        ...gatewayMediaContext,
       },
     });
   }
@@ -437,7 +454,7 @@ export async function dispatchOutbound(
                         groupOpenid: event.groupOpenid,
                         msgIdx: event.msgIdx,
                       },
-                      { account, qualifiedTarget, log },
+                      { account, qualifiedTarget, log, ...gatewayMediaContext },
                       sendWithRetry,
                       () => undefined,
                       deliverDeps,
@@ -467,6 +484,7 @@ export async function dispatchOutbound(
                           accountId: account.accountId,
                           replyToId: event.messageId,
                           account,
+                          ...gatewayMediaContext,
                         });
                       } catch {}
                     }
@@ -539,7 +557,7 @@ export async function dispatchOutbound(
                   groupOpenid: event.groupOpenid,
                   msgIdx: event.msgIdx,
                 };
-                const deliverActx = { account, qualifiedTarget, log };
+                const deliverActx = { account, qualifiedTarget, log, ...gatewayMediaContext };
 
                 // 1. Media tags
                 const mediaResult = await parseAndSendMediaTags(

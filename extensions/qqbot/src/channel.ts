@@ -26,6 +26,7 @@ import { qqbotChannelConfigSchema } from "./config-schema.js";
 import { qqbotDoctor } from "./doctor.js";
 import { loadCredentialBackup, saveCredentialBackup } from "./engine/config/credential-backup.js";
 import { clearAccountCredentials } from "./engine/config/credentials.js";
+import type { OutboundMediaAccessContext } from "./engine/messaging/outbound-types.js";
 import {
   normalizeTarget as coreNormalizeTarget,
   looksLikeQQBotTarget,
@@ -70,13 +71,15 @@ function createQQBotSendReceipt(params: {
   });
 }
 
-async function sendQQBotText(params: {
-  cfg: OpenClawConfig;
-  to: string;
-  text: string;
-  accountId?: string | null;
-  replyToId?: string | null;
-}) {
+async function sendQQBotText(
+  params: {
+    cfg: OpenClawConfig;
+    to: string;
+    text: string;
+    accountId?: string | null;
+    replyToId?: string | null;
+  } & OutboundMediaAccessContext,
+) {
   // Ensure bridge/gateway.ts module-level registrations (audio adapter factory,
   // platform adapter, etc.) have executed before engine code runs.
   await loadGatewayModule();
@@ -88,6 +91,9 @@ async function sendQQBotText(params: {
     accountId: params.accountId,
     replyToId: params.replyToId,
     account: toGatewayAccount(account),
+    mediaAccess: params.mediaAccess,
+    mediaLocalRoots: params.mediaLocalRoots,
+    mediaReadFile: params.mediaReadFile,
   });
   return {
     channel: "qqbot" as const,
@@ -101,14 +107,16 @@ async function sendQQBotText(params: {
   };
 }
 
-async function sendQQBotMedia(params: {
-  cfg: OpenClawConfig;
-  to: string;
-  text?: string | null;
-  mediaUrl?: string | null;
-  accountId?: string | null;
-  replyToId?: string | null;
-}) {
+async function sendQQBotMedia(
+  params: {
+    cfg: OpenClawConfig;
+    to: string;
+    text?: string | null;
+    mediaUrl?: string | null;
+    accountId?: string | null;
+    replyToId?: string | null;
+  } & OutboundMediaAccessContext,
+) {
   // Same guard as sendText — ensure adapters are registered.
   await loadGatewayModule();
   const account = resolveQQBotAccount(params.cfg, params.accountId);
@@ -120,6 +128,9 @@ async function sendQQBotMedia(params: {
     accountId: params.accountId,
     replyToId: params.replyToId,
     account: toGatewayAccount(account),
+    mediaAccess: params.mediaAccess,
+    mediaLocalRoots: params.mediaLocalRoots,
+    mediaReadFile: params.mediaReadFile,
   });
   return {
     channel: "qqbot" as const,
@@ -130,6 +141,15 @@ async function sendQQBotMedia(params: {
       kind: "media",
     }),
     meta: result.error ? { error: result.error } : undefined,
+  };
+}
+
+function resolveQQBotOutboundMediaAccessContext(ctx: unknown): OutboundMediaAccessContext {
+  const record = ctx && typeof ctx === "object" ? (ctx as OutboundMediaAccessContext) : undefined;
+  return {
+    ...(record?.mediaAccess ? { mediaAccess: record.mediaAccess } : {}),
+    ...(record?.mediaLocalRoots ? { mediaLocalRoots: record.mediaLocalRoots } : {}),
+    ...(record?.mediaReadFile ? { mediaReadFile: record.mediaReadFile } : {}),
   };
 }
 
@@ -164,6 +184,7 @@ const qqbotMessageAdapter = defineChannelMessageAdapter({
           text: ctx.text,
           accountId: ctx.accountId,
           replyToId: ctx.replyToId,
+          ...resolveQQBotOutboundMediaAccessContext(ctx),
         }),
       ),
     media: async (ctx) =>
@@ -175,6 +196,7 @@ const qqbotMessageAdapter = defineChannelMessageAdapter({
           mediaUrl: ctx.mediaUrl,
           accountId: ctx.accountId,
           replyToId: ctx.replyToId,
+          ...resolveQQBotOutboundMediaAccessContext(ctx),
         }),
       ),
   },
@@ -275,22 +297,24 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
         payload,
         hint,
       }),
-    sendText: async ({ to, text, accountId, replyToId, cfg }) =>
+    sendText: async (ctx) =>
       await sendQQBotText({
-        cfg,
-        to,
-        text,
-        accountId,
-        replyToId,
+        cfg: ctx.cfg,
+        to: ctx.to,
+        text: ctx.text,
+        accountId: ctx.accountId,
+        replyToId: ctx.replyToId,
+        ...resolveQQBotOutboundMediaAccessContext(ctx),
       }),
-    sendMedia: async ({ to, text, mediaUrl, accountId, replyToId, cfg }) =>
+    sendMedia: async (ctx) =>
       await sendQQBotMedia({
-        cfg,
-        to,
-        text,
-        mediaUrl,
-        accountId,
-        replyToId,
+        cfg: ctx.cfg,
+        to: ctx.to,
+        text: ctx.text,
+        mediaUrl: ctx.mediaUrl,
+        accountId: ctx.accountId,
+        replyToId: ctx.replyToId,
+        ...resolveQQBotOutboundMediaAccessContext(ctx),
       }),
   },
   gateway: {
