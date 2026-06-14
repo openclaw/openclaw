@@ -1,5 +1,6 @@
 // TTS core tests cover provider selection, synthesis, and error handling.
 import { describe, expect, it, vi } from "vitest";
+import type { PreparedSimpleCompletionModel } from "../agents/simple-completion-runtime.js";
 import type { AssistantMessage, Model, Usage } from "../llm/types.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import type { SpeechModelOverridePolicy } from "./provider-types.js";
@@ -143,15 +144,18 @@ describe("TTS core", () => {
       },
       {
         completeSimple: vi.fn(async () => assistant),
-        prepareSimpleCompletionModel: vi.fn(async () => ({
-          model: {
-            id: "gpt-5.5",
-            api: "openai-completions",
-            provider: "openai",
-            baseUrl: "https://api.openai.com/v1",
-          },
-          auth,
-        })),
+        prepareSimpleCompletionModel: vi.fn(
+          async () =>
+            ({
+              model: {
+                id: "gpt-5.5",
+                api: "openai-completions",
+                provider: "openai",
+                baseUrl: "https://api.openai.com/v1",
+              },
+              auth,
+            }) as unknown as PreparedSimpleCompletionModel,
+        ),
         requireApiKey: vi.fn(() => "key"),
       },
     );
