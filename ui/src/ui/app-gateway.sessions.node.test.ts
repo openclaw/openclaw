@@ -221,7 +221,7 @@ describe("handleGatewayEvent sessions.changed", () => {
     handleChatEventMock.mockReset().mockReturnValue("final");
     const host = createHost() as ReturnType<typeof createHost> & {
       chatMessages: unknown[];
-      chatSideResult?: unknown | null;
+      chatSideResult?: { runId: string } | null;
       chatSideResultTerminalRuns?: Set<string>;
     };
     host.sessionKey = "agent:ops:main";

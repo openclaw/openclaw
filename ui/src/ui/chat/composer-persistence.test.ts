@@ -97,6 +97,26 @@ describe("chat composer persistence", () => {
     ]);
   });
 
+  it("preserves hard reset clear markers on waiting reconnect sends", () => {
+    const queueItem: ChatQueueItem = {
+      id: "hard-reset-queued",
+      text: "/reset",
+      createdAt: 1,
+      refreshSessions: true,
+      resetChatAfterCompletion: true,
+      sendState: "waiting-reconnect",
+      sessionKey: "agent:lily:main",
+      agentId: "lily",
+    };
+
+    persistChatComposerState(createState({ chatQueue: [queueItem] }));
+
+    const restored = createState();
+    expect(restoreChatComposerState(restored)).toBe(true);
+
+    expect(restored.chatQueue).toEqual([queueItem]);
+  });
+
   it("scopes persisted composers by gateway and session key", () => {
     persistChatComposerState(createState({ chatMessage: "main draft" }));
 

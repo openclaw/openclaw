@@ -264,7 +264,7 @@ function isSoftResetArgs(args: string) {
 
 function shouldClearChatAfterResetCommand(text: string) {
   const parsed = parseSlashCommand(text);
-  return Boolean(parsed?.command.key === "reset" && !isSoftResetArgs(parsed.args));
+  return parsed?.command.key === "reset" && !isSoftResetArgs(parsed.args);
 }
 
 function confirmChatResetCommand(text: string) {
@@ -1917,7 +1917,7 @@ async function dispatchSlashCommand(
       }
       await host.onSlashAction("new-session");
       return;
-    case "reset":
+    case "reset": {
       const message = args ? `/reset ${args}` : "/reset";
       await sendChatMessageNow(host, message, {
         refreshSessions: true,
@@ -1926,6 +1926,7 @@ async function dispatchSlashCommand(
         restoreDraft: sendOpts?.restoreDraft,
       });
       return;
+    }
     case "clear":
       await clearChatHistory(host);
       return;
