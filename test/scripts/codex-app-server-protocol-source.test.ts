@@ -6,6 +6,7 @@ import {
   buildCodexProtocolExportArgs,
   canonicalizeCodexAppServerProtocolJson,
   formatCodexAppServerProtocolJsonText,
+  readCargoWorkspacePackageVersion,
   resolveCodexAppServerProtocolSource,
   resolveCodexProtocolCargoTargetDir,
   resolveCodexProtocolMinFreeBytes,
@@ -26,6 +27,25 @@ afterEach(() => {
 });
 
 describe("codex app-server protocol source resolver", () => {
+  it("reads the Codex workspace package version", () => {
+    expect(
+      readCargoWorkspacePackageVersion(`
+[workspace]
+members = []
+
+[workspace.package]
+version = "0.139.0"
+edition = "2024"
+
+[workspace.dependencies]
+serde = "1"
+`),
+    ).toBe("0.139.0");
+    expect(readCargoWorkspacePackageVersion('[workspace.package]\nversion = "0.140.0"\n')).toBe(
+      "0.140.0",
+    );
+  });
+
   it("uses the app-server protocol export binary instead of compiling the full codex cli", () => {
     expect(buildCodexProtocolExportArgs("/codex/codex-rs/Cargo.toml", "/tmp/protocol")).toEqual([
       "run",

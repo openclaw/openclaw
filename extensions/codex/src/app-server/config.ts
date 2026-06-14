@@ -59,8 +59,8 @@ export type CodexAppServerEffectiveApprovalPolicy =
         mcp_elicitations: boolean;
         rules: boolean;
         sandbox_approval: boolean;
-        request_permissions?: boolean;
-        skill_approval?: boolean;
+        request_permissions: boolean;
+        skill_approval: boolean;
       };
     };
 export type CodexAppServerSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
@@ -814,6 +814,8 @@ export function withMcpElicitationsApprovalPolicy(
         mcp_elicitations: true,
         rules: false,
         sandbox_approval: false,
+        request_permissions: false,
+        skill_approval: false,
       },
     };
   }
@@ -822,6 +824,8 @@ export function withMcpElicitationsApprovalPolicy(
       mcp_elicitations: true,
       rules: true,
       sandbox_approval: true,
+      request_permissions: true,
+      skill_approval: true,
     },
   };
 }
