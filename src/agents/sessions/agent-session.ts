@@ -327,6 +327,10 @@ type CompactionWorkOutcome =
 /** Standard thinking levels */
 const THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high"];
 
+function isCompactionTimeoutAbortReason(reason: unknown): boolean {
+  return reason instanceof Error && reason.name === "CompactionTimeoutError";
+}
+
 // ============================================================================
 // AgentSession Class
 // ============================================================================
@@ -1868,9 +1872,9 @@ export class AgentSession {
   /**
    * Cancel in-progress compaction (manual or auto).
    */
-  abortCompaction(): void {
-    this.compactionAbortController?.abort();
-    this.autoCompactionAbortController?.abort();
+  abortCompaction(reason?: unknown): void {
+    this.compactionAbortController?.abort(reason);
+    this.autoCompactionAbortController?.abort(reason);
   }
 
   /**
@@ -1967,7 +1971,7 @@ export class AgentSession {
       ),
     );
 
-    if (options.signal.aborted) {
+    if (options.signal.aborted && !isCompactionTimeoutAbortReason(options.signal.reason)) {
       return { status: "aborted" };
     }
 

@@ -1483,8 +1483,8 @@ async function compactEmbeddedAgentSessionDirectOnce(
             compactionTimeoutMs,
             {
               abortSignal: params.abortSignal,
-              onCancel: () => {
-                activeSession.abortCompaction();
+              onCancel: (reason) => {
+                activeSession.abortCompaction(reason);
               },
             },
           );

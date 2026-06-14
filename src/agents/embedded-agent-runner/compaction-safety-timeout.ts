@@ -71,17 +71,17 @@ export async function compactWithSafetyTimeout<T>(
   timeoutMs: number = EMBEDDED_COMPACTION_TIMEOUT_MS,
   opts?: {
     abortSignal?: AbortSignal;
-    onCancel?: () => void;
+    onCancel?: (reason?: unknown) => void;
   },
 ): Promise<T> {
   let canceled = false;
-  const cancel = () => {
+  const cancel = (reason?: unknown) => {
     if (canceled) {
       return;
     }
     canceled = true;
     try {
-      opts?.onCancel?.();
+      opts?.onCancel?.(reason);
     } catch {
       // Best-effort cancellation hook. Keep the timeout/abort path intact even
       // if the underlying compaction cancel operation throws.
@@ -97,8 +97,9 @@ export async function compactWithSafetyTimeout<T>(
 
   try {
     if (abortSignal?.aborted) {
-      cancel();
-      throw createAbortError(abortSignal);
+      const abortError = createAbortError(abortSignal);
+      cancel(abortError);
+      throw abortError;
     }
 
     const compactPromise = compact(composedAbortSignal.signal);
@@ -106,11 +107,12 @@ export async function compactWithSafetyTimeout<T>(
 
     if (resolvedTimeoutMs && timeoutController) {
       const timeoutError = new Error("Compaction timed out");
+      timeoutError.name = "CompactionTimeoutError";
       contenders.push(
         new Promise<never>((_, reject) => {
           timeout = setTimeout(() => {
             timeoutController.abort(timeoutError);
-            cancel();
+            cancel(timeoutError);
             queueMicrotask(() => reject(timeoutError));
           }, resolvedTimeoutMs);
           timeout.unref?.();
@@ -122,8 +124,9 @@ export async function compactWithSafetyTimeout<T>(
       contenders.push(
         new Promise<never>((_, reject) => {
           externalAbortListener = () => {
-            cancel();
-            reject(createAbortError(abortSignal));
+            const abortError = createAbortError(abortSignal);
+            cancel(abortError);
+            reject(abortError);
           };
           abortSignal.addEventListener("abort", externalAbortListener, { once: true });
         }),
