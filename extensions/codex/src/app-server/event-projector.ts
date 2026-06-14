@@ -211,6 +211,13 @@ export class CodexAppServerEventProjector {
     return this.completedTurn?.status;
   }
 
+  hasUnresolvedNativeToolResults(): boolean {
+    return (
+      [...this.toolTranscriptCallIds].some((id) => !this.toolTranscriptResultIds.has(id)) ||
+      [...this.toolTrajectoryCallIds].some((id) => !this.toolTrajectoryResultIds.has(id))
+    );
+  }
+
   hasCompletedTerminalAssistantText(): boolean {
     const finalItem = this.resolveFinalAssistantTextItem();
     return finalItem !== undefined && this.completedItemIds.has(finalItem.itemId);
