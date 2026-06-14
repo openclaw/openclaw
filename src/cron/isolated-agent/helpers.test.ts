@@ -6,6 +6,7 @@ import {
   pickLastDeliverablePayload,
   pickLastNonEmptyTextFromPayloads,
   pickSummaryFromPayloads,
+  resolveCronPayloadOutcome,
 } from "./helpers.js";
 
 type TextPayload = { text?: string | undefined; isError?: boolean | undefined };
@@ -148,6 +149,59 @@ describe("pickDeliverablePayloads", () => {
     ];
 
     expect(pickDeliverablePayloads(payloads)).toEqual([{ text: "last error", isError: true }]);
+  });
+});
+
+describe("resolveCronPayloadOutcome", () => {
+  it("treats a trailing optional search miss as nonfatal after scanner output", () => {
+    const outcome = resolveCronPayloadOutcome({
+      payloads: [
+        { text: "Seattle United uniforms are due today." },
+        {
+          text: '⚠️ 🛠️ search "uniform ordering|FIRST Robotics Competition survey" (agent) failed',
+          isError: true,
+        },
+      ],
+    });
+
+    expect(outcome.hasFatalErrorPayload).toBe(false);
+    expect(outcome.embeddedRunError).toBeUndefined();
+    expect(outcome.outputText).toBe("Seattle United uniforms are due today.");
+    expect(outcome.deliveryPayloads).toEqual([{ text: "Seattle United uniforms are due today." }]);
+  });
+
+  it("keeps a trailing optional search miss fatal when no scanner output exists", () => {
+    const outcome = resolveCronPayloadOutcome({
+      payloads: [
+        {
+          text: 'search "FIRST Research and Evaluation" in ] → run then echo → run then exit (agent) failed',
+          isError: true,
+        },
+      ],
+    });
+
+    expect(outcome.hasFatalErrorPayload).toBe(true);
+    expect(outcome.embeddedRunError).toBe(
+      'search "FIRST Research and Evaluation" in ] → run then echo → run then exit (agent) failed',
+    );
+    expect(outcome.deliveryPayloads).toEqual([
+      {
+        text: 'search "FIRST Research and Evaluation" in ] → run then echo → run then exit (agent) failed',
+        isError: true,
+      },
+    ]);
+  });
+
+  it("keeps non-search tool errors fatal after scanner output", () => {
+    const outcome = resolveCronPayloadOutcome({
+      payloads: [
+        { text: "Seattle United uniforms are due today." },
+        { text: "Write failed: permission denied", isError: true },
+      ],
+    });
+
+    expect(outcome.hasFatalErrorPayload).toBe(true);
+    expect(outcome.embeddedRunError).toBe("Write failed: permission denied");
   });
 });
 
