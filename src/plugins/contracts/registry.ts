@@ -392,11 +392,7 @@ function loadProviderContractRegistry(): ProviderContractEntry[] {
 }
 
 function loadUniqueProviderContractProviders(): ProviderPlugin[] {
-  return [
-    ...new Map(
-      loadProviderContractRegistry().map((entry) => [entry.provider.id, entry.provider]),
-    ).values(),
-  ];
+  return uniqueProviderContractProvidersFromEntries(loadProviderContractRegistry());
 }
 
 function loadProviderContractPluginIds(): string[] {
@@ -667,14 +663,49 @@ export const providerContractCompatPluginIds: string[] = createLazyArrayView(
   loadProviderContractCompatPluginIds,
 );
 
+function readProviderContractId(provider: ProviderPlugin): string | undefined {
+  try {
+    return typeof provider.id === "string" ? provider.id : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readProviderContractAliases(
+  provider: ProviderPlugin,
+  key: "aliases" | "hookAliases",
+): string[] {
+  try {
+    const aliases = provider[key];
+    return Array.isArray(aliases)
+      ? aliases.filter((alias): alias is string => typeof alias === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function uniqueProviderContractProvidersFromEntries(
+  entries: readonly ProviderContractEntry[],
+): ProviderPlugin[] {
+  const providers = new Map<string, ProviderPlugin>();
+  for (const entry of entries) {
+    const providerId = readProviderContractId(entry.provider);
+    if (providerId) {
+      providers.set(providerId, entry.provider);
+    }
+  }
+  return [...providers.values()];
+}
+
 export function requireProviderContractProvider(providerId: string): ProviderPlugin {
   const pluginIds = resolveBundledProviderContractPluginIdsByProviderId().get(providerId) ?? [];
   const entries = loadProviderContractEntriesForPluginIds(pluginIds);
-  const provider = entries.find((entry) => entry.provider.id === providerId)?.provider;
+  const provider = entries.find(
+    (entry) => readProviderContractId(entry.provider) === providerId,
+  )?.provider;
   if (!provider) {
-    const pluginScopedProviders = [
-      ...new Map(entries.map((entry) => [entry.provider.id, entry.provider])).values(),
-    ];
+    const pluginScopedProviders = uniqueProviderContractProvidersFromEntries(entries);
     if (pluginIds.length === 1 && pluginScopedProviders.length === 1) {
       return pluginScopedProviders[0];
     }
@@ -706,10 +737,10 @@ export function resolveProviderContractPluginIdsForProviderAlias(
     loadProviderContractEntriesForPluginIds(resolveBundledProviderContractPluginIds())
       .filter((entry) => {
         const providerIds = [
-          entry.provider.id,
-          ...(entry.provider.aliases ?? []),
-          ...(entry.provider.hookAliases ?? []),
-        ];
+          readProviderContractId(entry.provider),
+          ...readProviderContractAliases(entry.provider, "aliases"),
+          ...readProviderContractAliases(entry.provider, "hookAliases"),
+        ].filter((candidate): candidate is string => typeof candidate === "string");
         return providerIds.some(
           (candidate) => normalizeProviderId(candidate) === normalizedProvider,
         );
@@ -723,13 +754,11 @@ export function resolveProviderContractProvidersForPluginIds(
   pluginIds: readonly string[],
 ): ProviderPlugin[] {
   const allowed = new Set(pluginIds);
-  return [
-    ...new Map(
-      loadProviderContractEntriesForPluginIds([...allowed])
-        .filter((entry) => allowed.has(entry.pluginId))
-        .map((entry) => [entry.provider.id, entry.provider]),
-    ).values(),
-  ];
+  return uniqueProviderContractProvidersFromEntries(
+    loadProviderContractEntriesForPluginIds([...allowed]).filter((entry) =>
+      allowed.has(entry.pluginId),
+    ),
+  );
 }
 
 export const webSearchProviderContractRegistry: WebSearchProviderContractEntry[] =

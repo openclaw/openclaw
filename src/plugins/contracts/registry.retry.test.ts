@@ -36,6 +36,30 @@ function createMockRuntimeRegistry(params: {
   };
 }
 
+function createMockContractSnapshot(pluginId: string, providerIds: string[]) {
+  return {
+    pluginId,
+    cliBackendIds: [],
+    providerIds,
+    providerEnvVars: {},
+    embeddingProviderIds: [],
+    speechProviderIds: [],
+    realtimeTranscriptionProviderIds: [],
+    realtimeVoiceProviderIds: [],
+    mediaUnderstandingProviderIds: [],
+    transcriptSourceProviderIds: [],
+    documentExtractorIds: [],
+    imageGenerationProviderIds: [],
+    videoGenerationProviderIds: [],
+    musicGenerationProviderIds: [],
+    webContentExtractorIds: [],
+    webFetchProviderIds: [],
+    webSearchProviderIds: [],
+    migrationProviderIds: [],
+    toolNames: [],
+  };
+}
+
 afterEach(() => {
   vi.resetModules();
   vi.restoreAllMocks();
@@ -258,6 +282,68 @@ describe("plugin contract registry scoped retries", () => {
     ).toEqual(["openai"]);
     expect(resolveBundledExplicitProviderContractsFromPublicArtifacts).toHaveBeenCalledTimes(1);
     expect(loadBundledCapabilityRuntimeRegistry).not.toHaveBeenCalled();
+  });
+
+  it("ignores poisoned provider metadata while resolving provider aliases", async () => {
+    const poisonedProvider = Object.defineProperties(
+      {
+        label: "Poisoned",
+        docsPath: "/providers/poisoned",
+        auth: [],
+      },
+      {
+        id: {
+          enumerable: true,
+          get() {
+            throw new Error("provider contract alias metadata exploded");
+          },
+        },
+        aliases: {
+          enumerable: true,
+          get() {
+            throw new Error("provider contract aliases exploded");
+          },
+        },
+        hookAliases: {
+          enumerable: true,
+          get() {
+            throw new Error("provider contract hook aliases exploded");
+          },
+        },
+      },
+    ) as ProviderPlugin;
+    const healthyProvider = {
+      id: "healthy-provider",
+      label: "Healthy",
+      docsPath: "/providers/healthy",
+      aliases: ["healthy-alias"],
+      auth: [],
+    } as ProviderPlugin;
+    const resolveBundledExplicitProviderContractsFromPublicArtifacts = vi.fn(
+      ({ onlyPluginIds }: { onlyPluginIds: readonly string[] }) =>
+        onlyPluginIds[0] === "poisoned"
+          ? [{ pluginId: "poisoned", provider: poisonedProvider }]
+          : [{ pluginId: "healthy", provider: healthyProvider }],
+    );
+
+    vi.doMock("./inventory/bundled-capability-metadata.js", () => ({
+      BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS: [
+        createMockContractSnapshot("poisoned", ["poisoned"]),
+        createMockContractSnapshot("healthy", ["healthy-provider"]),
+      ],
+    }));
+    vi.doMock("../bundled-capability-runtime.js", () => ({
+      loadBundledCapabilityRuntimeRegistry: vi.fn(() => {
+        throw new Error("provider public artifacts should be enough");
+      }),
+    }));
+    vi.doMock("../provider-contract-public-artifacts.js", () => ({
+      resolveBundledExplicitProviderContractsFromPublicArtifacts,
+    }));
+
+    const { resolveProviderContractPluginIdsForProviderAlias } = await import("./registry.js");
+
+    expect(resolveProviderContractPluginIdsForProviderAlias("healthy-alias")).toEqual(["healthy"]);
   });
 
   it("uses web search public artifacts before falling back to the bundled runtime registry", async () => {
