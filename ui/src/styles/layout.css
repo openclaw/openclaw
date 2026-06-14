@@ -32,15 +32,7 @@
 }
 
 .shell--chat {
-  min-height: 100vh;
-  height: 100vh;
   overflow: hidden;
-}
-
-@supports (height: 100dvh) {
-  .shell--chat {
-    height: 100dvh;
-  }
 }
 
 .shell--nav-collapsed {
