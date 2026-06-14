@@ -2,6 +2,7 @@
 import type { ChannelDoctorEmptyAllowlistAccountContext } from "../../../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { DoctorAccountRecord, DoctorAllowFromList } from "../types.js";
+import { hasAllowFromEntries } from "./allowlist.js";
 import { collectEmptyAllowlistPolicyWarningsForAccount } from "./empty-allowlist-policy.js";
 import { asObjectRecord } from "./object.js";
 
@@ -88,9 +89,38 @@ export function scanEmptyAllowlistPolicyWarnings(
     if (isDisabledRecord(channelConfig)) {
       continue;
     }
-    checkAccount(channelConfig, `channels.${channelName}`, channelName);
 
-    const accounts = asObjectRecord(channelConfig.accounts);
+    // When every active sub-account supplies its own groupAllowFrom, the
+    // top-level empty groupAllowFrom is never consulted at runtime
+    // (account.groupAllowFrom ?? parent.groupAllowFrom). Suppress the
+    // default group-allowlist warning for the top-level record so doctor
+    // doesn't over-warn about a fallback that no account ever reads.
+    // (#92684)
+    const channelAccounts = asObjectRecord(channelConfig.accounts);
+    const activeSubAccounts = channelAccounts
+      ? Object.values(channelAccounts).filter((a): a is DoctorAccountRecord =>
+          Boolean(a && typeof a === "object" && !Array.isArray(a) && !isDisabledRecord(a)),
+        )
+      : [];
+    const allSubAccountsHaveGroupAllowFrom =
+      activeSubAccounts.length > 0 &&
+      activeSubAccounts.every((a) =>
+        hasAllowFromEntries(a.groupAllowFrom as DoctorAllowFromList | undefined),
+      );
+
+    const origSkipDefault = params.shouldSkipDefaultEmptyGroupAllowlistWarning;
+    const origExtraWarnings = params.extraWarningsForAccount;
+    if (allSubAccountsHaveGroupAllowFrom) {
+      params.shouldSkipDefaultEmptyGroupAllowlistWarning = (ctx) =>
+        ctx.parent === undefined ? true : (origSkipDefault?.(ctx) ?? false);
+      params.extraWarningsForAccount = (ctx) =>
+        ctx.parent === undefined ? [] : (origExtraWarnings?.(ctx) ?? []);
+    }
+    checkAccount(channelConfig, `channels.${channelName}`, channelName);
+    params.shouldSkipDefaultEmptyGroupAllowlistWarning = origSkipDefault;
+    params.extraWarningsForAccount = origExtraWarnings;
+
+    const accounts = channelAccounts;
     if (!accounts) {
       continue;
     }
