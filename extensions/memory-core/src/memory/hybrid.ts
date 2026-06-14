@@ -54,6 +54,7 @@ export async function mergeHybridResults(params: {
   keyword: HybridKeywordResult[];
   vectorWeight: number;
   textWeight: number;
+  isNonTextMediaPath?: (path: string) => boolean;
   workspaceDir?: string;
   /** MMR configuration for diversity-aware re-ranking */
   mmr?: Partial<MMRConfig>;
@@ -84,6 +85,7 @@ export async function mergeHybridResults(params: {
       snippet: string;
       vectorScore: number;
       textScore: number;
+      hasVector: boolean;
     }
   >();
 
@@ -97,6 +99,7 @@ export async function mergeHybridResults(params: {
       snippet: r.snippet,
       vectorScore: r.vectorScore,
       textScore: 0,
+      hasVector: true,
     });
   }
 
@@ -117,12 +120,21 @@ export async function mergeHybridResults(params: {
         snippet: r.snippet,
         vectorScore: 0,
         textScore: r.textScore,
+        hasVector: false,
       });
     }
   }
 
   const merged = Array.from(byId.values()).map((entry) => {
-    const score = params.vectorWeight * entry.vectorScore + params.textWeight * entry.textScore;
+    const dropMediaTextSignal =
+      entry.hasVector &&
+      params.vectorWeight > 0 &&
+      params.isNonTextMediaPath?.(entry.path) === true;
+    const effectiveTextWeight = dropMediaTextSignal ? 0 : params.textWeight;
+    const weightSum = params.vectorWeight + effectiveTextWeight;
+    const weighted =
+      params.vectorWeight * entry.vectorScore + effectiveTextWeight * entry.textScore;
+    const score = weightSum > 0 ? weighted / weightSum : 0;
     return {
       path: entry.path,
       startLine: entry.startLine,
