@@ -834,7 +834,7 @@ describe("post-compaction delegate dispatch extraction", () => {
     });
   });
 
-  it("does not charge chain count when queued spawn fails", async () => {
+  it("charges chain count even when the spawn fails (cmt451: persist-then-spawn over-counts conservatively)", async () => {
     await withTempDir({ prefix: "openclaw-post-compaction-delivery-" }, async (tempDir) => {
       const storePath = path.join(tempDir, "sessions.json");
       await seedSessionStore(storePath, { main: { sessionId: "session", updatedAt: Date.now() } });
@@ -847,10 +847,15 @@ describe("post-compaction delegate dispatch extraction", () => {
         deliverQueuedPostCompactionDelegate({ entry: createQueuedEntry() }, deps),
       ).rejects.toThrow("spawn unavailable");
 
+      // With persist-then-spawn (cmt451), the chain count is advanced BEFORE the
+      // spawn. A spawn failure therefore leaves the count charged for a delegate
+      // that did not start. This is the deliberate, SAFE direction: an over-count
+      // only makes `maxChainLength` more protective (chain terminates earlier),
+      // never overruns it. The alternative ordering (persist-after-spawn) would
+      // avoid this over-count but re-introduce the duplicate-spawn bug on a
+      // post-spawn persist failure.
       const stored = readSessionStore(storePath);
-      expect(Object.values(stored).some((entry) => entry.continuationChainCount != null)).toBe(
-        false,
-      );
+      expect(Object.values(stored).some((entry) => entry.continuationChainCount === 1)).toBe(true);
     });
   });
 
@@ -1033,15 +1038,19 @@ describe("post-compaction delegate dispatch extraction", () => {
     expect(callArg).toMatchObject({ sessionKey: "main" });
   });
 
-  it("propagates chain-state persist failures so the queue entry retries", async () => {
+  it("persists chain-state BEFORE spawning, so a persist failure does not spawn (cmt451: no duplicate on retry)", async () => {
     await withTempDir({ prefix: "openclaw-post-compaction-persist-fail-" }, async (tempDir) => {
       const storePath = path.join(tempDir, "sessions.json");
       await seedSessionStore(storePath, { main: { sessionId: "session", updatedAt: 1 } });
       const { deps, log, spawnSubagentDirect } = createDeliveryDeps({ storePath });
 
-      // Force the post-spawn chain-state persist to throw by spying on
-      // updateSessionStore. The first call (from `persistPostCompactionDelegateChainState`)
-      // rejects; this is the path the test asserts the queue entry retries on.
+      // Force the chain-state persist to throw by spying on updateSessionStore.
+      // With the persist-then-spawn ordering (cmt451), the persist runs BEFORE
+      // the subagent spawn, so a persist failure must reject WITHOUT having
+      // spawned a child. That is the fix: when the retry re-drains this entry,
+      // there is no already-accepted spawn to duplicate. (Pre-fix, the spawn ran
+      // first and a post-spawn persist failure left the entry pending -> the next
+      // drain re-spawned the same delegate = duplicated work.)
       const persistSpy = vi
         .spyOn(sessionStoreModule, "updateSessionStore")
         .mockRejectedValueOnce(new Error("persist failed"));
@@ -1053,7 +1062,9 @@ describe("post-compaction delegate dispatch extraction", () => {
         persistSpy.mockRestore();
       }
 
-      expect(spawnSubagentDirect).toHaveBeenCalledTimes(1);
+      // The load-bearing assertion: NO spawn happened, so the retry cannot
+      // duplicate it. (This is what fails on the old spawn-then-persist order.)
+      expect(spawnSubagentDirect).not.toHaveBeenCalled();
       expect(log).toHaveBeenCalledWith(
         expect.stringContaining("Failed to persist post-compaction delegate chain state for main"),
       );
