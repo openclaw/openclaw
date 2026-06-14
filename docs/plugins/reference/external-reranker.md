@@ -38,6 +38,11 @@ Configure the plugin under `plugins.entries.memory-external-reranker.config`:
 }
 ```
 
+Runtime URL join behavior: OpenClaw sends requests to
+`models.providers.<provider>.baseUrl + endpointPath`. If a provider `baseUrl`
+already ends with `/v1`, set `endpointPath` to `/rerank` (or remove `/v1` from
+the provider `baseUrl`) to avoid `/v1/v1/rerank`.
+
 ### Private or localhost endpoints
 
 If `models.providers.<provider>.baseUrl` points to localhost or a private IP

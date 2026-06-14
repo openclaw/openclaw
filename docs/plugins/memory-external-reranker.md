@@ -92,6 +92,10 @@ Example: `["rerank-english-v2.0", "rerank-multilingual-v2.0"]`
   HTTP path for the rerank endpoint. Default: `/v1/rerank`
 
 Change this if your provider uses a different path (e.g., `/rerank`, `/api/v1/rerank`).
+
+The runtime builds the final URL as `models.providers.<provider>.baseUrl + endpointPath`.
+If your provider `baseUrl` already ends in `/v1`, set `endpointPath: "/rerank"` (or remove
+`/v1` from `baseUrl`) so requests do not end up at `/v1/v1/rerank`.
 </ParamField>
 
 <ParamField path="plugins.entries.memory-external-reranker.config.topN" type="number">
@@ -139,7 +143,7 @@ Endpoint URLs go in `models.providers` in your `openclaw.json`. The key you choo
   models: {
     providers: {
       cohere: {
-        baseUrl: "https://api.cohere.ai/v1",
+        baseUrl: "https://api.cohere.ai",
         apiKey: { source: "env", provider: "default", id: "COHERE_API_KEY" },
         models: [
           { id: "rerank-english-v3.0", name: "Cohere Rerank English v3.0", input: ["text"] },
@@ -206,7 +210,7 @@ Endpoint URLs go in `models.providers` in your `openclaw.json`. The key you choo
   models: {
     providers: {
       voyage: {
-        baseUrl: "https://api.voyageai.com/v1",
+        baseUrl: "https://api.voyageai.com",
         apiKey: { source: "env", provider: "default", id: "VOYAGE_API_KEY" },
         models: [
           { id: "rerank-2", name: "Voyage Rerank 2", input: ["text"] },
@@ -249,6 +253,7 @@ Endpoint URLs go in `models.providers` in your `openclaw.json`. The key you choo
         config: {
           provider: "llamacpp-local",
           model: "my-reranker-model",
+          allowPrivateNetwork: true,
         },
       },
     },
@@ -276,6 +281,7 @@ Endpoint URLs go in `models.providers` in your `openclaw.json`. The key you choo
         config: {
           provider: "vllm-local",
           model: "my-reranker-model",
+          allowPrivateNetwork: true,
         },
       },
     },
@@ -317,7 +323,7 @@ After enabling the external reranker plugin, configure memory search to use it:
   models: {
     providers: {
       cohere: {
-        baseUrl: "https://api.cohere.ai/v1",
+        baseUrl: "https://api.cohere.ai",
         apiKey: { source: "env", provider: "default", id: "COHERE_API_KEY" },
         models: [
           { id: "rerank-english-v3.0", name: "Cohere Rerank English v3.0", input: ["text"] },
@@ -473,7 +479,7 @@ API keys are stored in `models.providers.<id>.apiKey` using OpenClaw's `SecretIn
   models: {
     providers: {
       cohere: {
-        baseUrl: "https://api.cohere.ai/v1",
+        baseUrl: "https://api.cohere.ai",
         apiKey: { source: "env", provider: "default", id: "COHERE_API_KEY" },
       },
     },
@@ -494,7 +500,7 @@ export COHERE_API_KEY="your-cohere-api-key"
   models: {
     providers: {
       cohere: {
-        baseUrl: "https://api.cohere.ai/v1",
+        baseUrl: "https://api.cohere.ai",
         apiKey: { source: "file", provider: "default", id: "/run/secrets/cohere_api_key" },
       },
     },
@@ -528,9 +534,11 @@ If you see connection errors to the reranking endpoint:
 
 1. Verify the `baseUrl` in `models.providers.<providerId>` is correct and accessible
 2. Check that the endpoint supports the `/v1/rerank` path (or matches your `endpointPath`)
-3. Ensure the `providerId` prefix in your `model` string matches the key in `models.providers`
-4. Ensure any required API keys are configured in `models.providers.<providerId>.apiKey`
-5. Test the endpoint directly with `curl`:
+3. Ensure `plugins.entries.memory-external-reranker.config.provider` matches your key in `models.providers`
+4. Ensure `plugins.entries.memory-external-reranker.config.model` is the provider model ID (without a `provider/` prefix)
+5. For localhost/private provider hosts, set `plugins.entries.memory-external-reranker.config.allowPrivateNetwork: true`
+6. Ensure any required API keys are configured in `models.providers.<providerId>.apiKey`
+7. Test the endpoint directly with `curl`:
 
    ```bash
    curl -X POST https://api.cohere.ai/v1/rerank \
