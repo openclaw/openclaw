@@ -938,6 +938,10 @@ describe("feishuOutbound comment-thread routing", () => {
 
     expect(status).toBe("done");
     expect(deliverCommentThreadTextMock).toHaveBeenCalled();
+    expect(commentThreadParams()?.auto_reply_context).toEqual({
+      refer_reply_id: "reply_ambient_1",
+      ai_reply_source_type: 2,
+    });
     const cleanupCall = cleanupReactionCall();
     if (!cleanupCall?.client) {
       throw new Error("Expected cleanup reaction client");

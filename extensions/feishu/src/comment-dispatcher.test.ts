@@ -159,6 +159,10 @@ describe("createFeishuCommentReplyDispatcher", () => {
       comment_id: "comment_1",
       content: "hello world",
       is_whole_comment: false,
+      auto_reply_context: {
+        refer_reply_id: "reply_1",
+        ai_reply_source_type: 2,
+      },
     });
     expect(cleanup).not.toHaveBeenCalled();
 
