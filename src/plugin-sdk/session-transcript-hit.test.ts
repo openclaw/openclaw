@@ -172,6 +172,16 @@ describe("extractTranscriptIdentityFromSessionsMemoryHit", () => {
       archived: false,
     });
   });
+
+  it("extracts owner metadata from agent-scoped live session paths", () => {
+    expect(extractTranscriptIdentityFromSessionsMemoryHit("sessions/main/live-uuid.jsonl")).toEqual(
+      {
+        stem: "live-uuid",
+        ownerAgentId: "main",
+        archived: false,
+      },
+    );
+  });
 });
 
 describe("resolveTranscriptStemToSessionKeys", () => {
@@ -202,6 +212,16 @@ describe("resolveTranscriptStemToSessionKeys", () => {
     });
 
     expect(keys).toEqual(["agent:main:deleted-stem"]);
+  });
+
+  it("falls back to owner metadata when agent-scoped live transcripts are missing from the store", () => {
+    const keys = resolveTranscriptStemToSessionKeys({
+      store: {},
+      stem: "live-stem",
+      ownerAgentId: "main",
+    });
+
+    expect(keys).toEqual(["agent:main:live-stem"]);
   });
 
   it("matches QMD-slugified stems to unique session ids with safe punctuation", () => {

@@ -1311,15 +1311,17 @@ async function createSessionMemoryPathVisibilityChecker(params: {
     ) {
       return false;
     }
-    const archivedOwnerMatchesScope = Boolean(
-      identity.archived &&
-      ((identity.ownerAgentId &&
-        (!normalizedScopedAgentId || normalizedOwnerAgentId === normalizedScopedAgentId)) ||
-        (isQmdSessionPath && scopedAgentId)),
+    const ownerMatchesScope = Boolean(
+      identity.ownerAgentId &&
+      (!normalizedScopedAgentId || normalizedOwnerAgentId === normalizedScopedAgentId),
     );
-    const archivedOwnerAgentId = archivedOwnerMatchesScope
-      ? (identity.ownerAgentId ?? scopedAgentId)
-      : undefined;
+    const qmdArchivedOwnerMatchesScope = Boolean(
+      identity.archived && isQmdSessionPath && scopedAgentId,
+    );
+    const fallbackOwnerAgentId =
+      ownerMatchesScope || qmdArchivedOwnerMatchesScope
+        ? (identity.ownerAgentId ?? scopedAgentId)
+        : undefined;
     const liveKeys = identity.liveStem
       ? resolveTranscriptStemToSessionKeys({
           store: combinedSessionStore,
@@ -1337,7 +1339,7 @@ async function createSessionMemoryPathVisibilityChecker(params: {
               store: combinedSessionStore,
               stem: identity.stem,
               allowQmdSlugFallback: isQmdSessionPath && !identity.archived,
-              ...(archivedOwnerAgentId ? { archivedOwnerAgentId } : {}),
+              ...(fallbackOwnerAgentId ? { ownerAgentId: fallbackOwnerAgentId } : {}),
             }),
     });
     if (!guard) {
