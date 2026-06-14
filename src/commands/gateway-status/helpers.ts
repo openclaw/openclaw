@@ -223,7 +223,7 @@ export async function resolveAuthForTarget(
     // interactive failure-reason here when that path can still succeed,
     // otherwise `openclaw gateway status` reports a missing token before
     // `probeGateway` ever attempts the cached pairing. Mirrors the shared
-    // probe-auth resolver. ClawSweeper P1 finding on #68280 re-review.
+    // probe-auth resolver.
     !(await hasCachedPairedDeviceToken())
   ) {
     const interactive = await resolveGatewayInteractiveSurfaceAuth({
