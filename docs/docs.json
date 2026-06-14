@@ -1444,6 +1444,7 @@
                   "providers/opencode",
                   "providers/opencode-go",
                   "providers/openrouter",
+                  "providers/trustedrouter",
                   "providers/perplexity-provider",
                   "providers/pixverse",
                   "providers/qianfan",
