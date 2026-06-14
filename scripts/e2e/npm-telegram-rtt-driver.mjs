@@ -331,12 +331,12 @@ function buildPackageSourceEvidence() {
   };
 }
 
-function standardIdForScenario(scenarioId) {
+function coverageIdForScenario(scenarioId) {
   if (scenarioId === "telegram-canary") {
-    return "canary";
+    return "channels.telegram.canary";
   }
   if (scenarioId === "telegram-mentioned-message-reply") {
-    return "mention-gating";
+    return "channels.telegram.mention-gating";
   }
   return undefined;
 }
@@ -378,15 +378,15 @@ function buildScenarioCoverage(scenarioId) {
     surfaceIds: ["channels.telegram"],
     categoryIds: ["channels.telegram.live"],
   };
-  const standardId = standardIdForScenario(scenarioId);
-  if (!standardId) {
+  const coverageId = coverageIdForScenario(scenarioId);
+  if (!coverageId) {
     return [liveCoverage];
   }
   return [
     liveCoverage,
     {
-      id: `channels.telegram.${standardId}`,
-      role: "live-transport-standard",
+      id: coverageId,
+      role: "live-transport-coverage",
       surfaceIds: ["channels.telegram"],
       categoryIds: ["channels.telegram.live"],
     },
