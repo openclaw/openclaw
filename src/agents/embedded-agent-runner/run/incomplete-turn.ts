@@ -319,6 +319,9 @@ const NON_ACTIONABLE_CONTEXT_UPDATE_RE =
 const QUOTED_USER_PROMPT_SEGMENT_RE =
   /`[^`\n]*(?:`|(?=\n|$))|"[^"\n]*(?:"|(?=\n|$))|“[^”\n]*(?:”|(?=\n|$))|‘[^’\n]*(?:’|(?=\n|$))/gu;
 const QUOTED_USER_PROMPT_LINE_RE = /^[ \t]*>.*$/gmu;
+const QUOTED_USER_PROMPT_FENCED_BLOCK_RE =
+  /(?:^|\n)[ \t]*(?:`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:\n[ \t]*(?:`{3,}|~{3,})[ \t]*(?=\n|$)|$)/gu;
+const QUOTED_USER_PROMPT_INDENTED_LINE_RE = /^(?: {4,}|\t).+$/gmu;
 const NON_ACTIONABLE_PROMPT_NORMALIZED_SET = new Set([
   "cool",
   "great",
@@ -1075,8 +1078,12 @@ function normalizeAckPrompt(text: string): string {
   return normalizeLowercaseStringOrEmpty(normalized);
 }
 
-function stripQuotedUserPromptSegments(text: string): string {
-  return text.replace(QUOTED_USER_PROMPT_SEGMENT_RE, " ").replace(QUOTED_USER_PROMPT_LINE_RE, " ");
+function stripNonAuthorizingUserPromptExcerpts(text: string): string {
+  return text
+    .replace(QUOTED_USER_PROMPT_FENCED_BLOCK_RE, " ")
+    .replace(QUOTED_USER_PROMPT_INDENTED_LINE_RE, " ")
+    .replace(QUOTED_USER_PROMPT_SEGMENT_RE, " ")
+    .replace(QUOTED_USER_PROMPT_LINE_RE, " ");
 }
 
 export function isLikelyExecutionAckPrompt(text: string): boolean {
@@ -1103,15 +1110,15 @@ function isLikelyNonActionableUserPrompt(text: string): boolean {
 
 function isExplicitPlanningOnlyUserPrompt(text: string): boolean {
   const trimmed = text.trim();
-  const actionableText = stripQuotedUserPromptSegments(trimmed);
+  const actionableText = stripNonAuthorizingUserPromptExcerpts(trimmed);
   return (
     trimmed.length > 0 &&
     !EXPLICIT_PLAN_AND_EXECUTE_REQUEST_RE.test(actionableText) &&
     !hasExplicitAdvisoryFollowUpAction(actionableText) &&
-    (EXPLICIT_PLANNING_REQUEST_RE.test(trimmed) ||
-      EXPLICIT_PLAN_DESCRIPTION_REQUEST_RE.test(trimmed) ||
-      EXPLICIT_PLAN_CREATION_REQUEST_RE.test(trimmed) ||
-      EXPLICIT_DIRECT_PLANNING_REQUEST_RE.test(trimmed))
+    (EXPLICIT_PLANNING_REQUEST_RE.test(actionableText) ||
+      EXPLICIT_PLAN_DESCRIPTION_REQUEST_RE.test(actionableText) ||
+      EXPLICIT_PLAN_CREATION_REQUEST_RE.test(actionableText) ||
+      EXPLICIT_DIRECT_PLANNING_REQUEST_RE.test(actionableText))
   );
 }
 
@@ -1122,7 +1129,7 @@ function isExplicitAcknowledgementRequestPrompt(text: string): boolean {
 
 function isDirectAnswerQuestionPrompt(text: string): boolean {
   const trimmed = text.trim();
-  const actionableText = stripQuotedUserPromptSegments(trimmed);
+  const actionableText = stripNonAuthorizingUserPromptExcerpts(trimmed);
   const hasActionRequest =
     SECOND_PERSON_REQUEST_PROMPT_RE.test(actionableText) &&
     (PLANNING_ONLY_ACTION_VERB_RE.test(actionableText) ||
@@ -1135,7 +1142,7 @@ function isPlanningOnlyProgressClaim(text: string): boolean {
 }
 
 function hasExplicitAdvisoryFollowUpAction(text: string): boolean {
-  const actionableText = stripQuotedUserPromptSegments(text);
+  const actionableText = stripNonAuthorizingUserPromptExcerpts(text);
   if (EXPLICIT_ADVISORY_FOLLOW_UP_ACTION_RE.test(actionableText)) {
     return true;
   }
@@ -1157,7 +1164,7 @@ function isLikelyActionableUserPrompt(text: string): boolean {
   if (!trimmed) {
     return false;
   }
-  const actionableText = stripQuotedUserPromptSegments(trimmed);
+  const actionableText = stripNonAuthorizingUserPromptExcerpts(trimmed);
   if (
     isLikelyNonActionableUserPrompt(trimmed) ||
     isExplicitPlanningOnlyUserPrompt(trimmed) ||

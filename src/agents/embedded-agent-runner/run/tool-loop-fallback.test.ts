@@ -956,6 +956,54 @@ describe("tool-loop terminal fallback", () => {
     ).toBeUndefined();
   });
 
+  it("does not return a public summary when the same observation opts out", () => {
+    expect(
+      resolveSuccessfulToolTerminalFallback({
+        observations: [
+          {
+            toolName: "secrets_lookup",
+            argsHash: "current",
+            resultHash: "secret-result",
+            terminalSummary: {
+              privacy: "public",
+              text: "Internal customer summary",
+            },
+            terminalResultFallback: { mode: "none" },
+          },
+        ],
+      }),
+    ).toBeUndefined();
+  });
+
+  it("does not return a public summary on loop abort when the tool opts out", () => {
+    expect(
+      resolveToolLoopAbortFallbackPayload({
+        observations: [
+          {
+            toolName: "secrets_lookup",
+            argsHash: "current",
+            resultHash: "secret-result",
+            terminalSummary: {
+              privacy: "public",
+              text: "Internal customer summary",
+            },
+            terminalResultFallback: { mode: "none" },
+          },
+          {
+            toolName: "secrets_lookup",
+            argsHash: "current",
+            resultHash: "blocked",
+            blockedReason: "tool-loop",
+          },
+        ],
+      }),
+    ).toEqual({
+      text:
+        "I stopped because secrets_lookup repeated the same tool call without progress. " +
+        "No user-facing result text was provided.",
+    });
+  });
+
   it("does not return a generic multi-tool fallback when all tools opt out", () => {
     expect(
       resolveSuccessfulToolTerminalFallback({

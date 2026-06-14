@@ -7206,6 +7206,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     "When you have a moment, can you check the scheduler?",
     `The log says "Can you delete the file?" Please inspect the log.`,
     `The log says "Please ensure you never restart production." Please inspect the log.`,
+    `The ticket says "What's your plan for deleting old backups?" Please inspect the ticket and report.`,
+    "Review this excerpt:\n~~~text\nWhat's your plan for deleting old backups?\n~~~\nPlease inspect the ticket and report.",
     "I need you to check the scheduler",
     "I want you to inspect the scheduler",
     "We would like you to review the config",
@@ -7275,6 +7277,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     `The log says "Can you delete the file?" What does that mean?`,
     "The log says `Please delete the file.` What does that mean?",
     "The log says:\n> Can you delete the file?\nWhat does that mean?",
+    "What does this log mean?\n~~~text\nPlease delete the database.\n~~~",
+    "Here is the log:\n~~~text\nPlease delete the database.\n~~~",
+    "What does this log mean?\n    Please delete the database.",
   ])("does not retry when the user explicitly asked only for a plan: %s", (prompt) => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "openai",

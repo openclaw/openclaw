@@ -364,6 +364,9 @@ function resolveDeclaredFallbackPayload(params: {
 function resolvePublicTerminalSummaryPayload(
   observation: ToolLoopObservation,
 ): ReplyPayload | undefined {
+  if (observation.terminalResultFallback?.mode === "none") {
+    return undefined;
+  }
   const summary =
     observation.terminalSummary?.privacy === "public" ? observation.terminalSummary : undefined;
   if (!summary) {
@@ -374,10 +377,11 @@ function resolvePublicTerminalSummaryPayload(
 }
 
 function hasDeclaredPresentableFallback(observation: ToolLoopObservation): boolean {
+  if (observation.terminalResultFallback?.mode === "none") {
+    return false;
+  }
   return (
-    observation.terminalSummary?.privacy === "public" ||
-    (Boolean(observation.terminalResultFallback) &&
-      observation.terminalResultFallback?.mode !== "none")
+    observation.terminalSummary?.privacy === "public" || Boolean(observation.terminalResultFallback)
   );
 }
 
