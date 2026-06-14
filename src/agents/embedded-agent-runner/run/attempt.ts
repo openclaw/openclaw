@@ -152,7 +152,7 @@ import {
 } from "../../embedded-agent-helpers.js";
 import { countActiveToolExecutions } from "../../embedded-agent-subscribe.handlers.tools.js";
 import { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
-import { isTimeoutError } from "../../failover-error.js";
+import { isSignalTimeoutReason } from "../../failover-error.js";
 import { runAgentEndSideEffects } from "../../harness/agent-end-side-effects.js";
 import { runAgentHarnessBeforeAgentFinalizeHook } from "../../harness/lifecycle-hook-helpers.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
@@ -1002,7 +1002,7 @@ export async function runEmbeddedAttempt(
     }
     externalAbort = true;
     const reason = getAbortReason(signal);
-    const timeout = reason ? isTimeoutError(reason) : false;
+    const timeout = reason ? isSignalTimeoutReason(reason) : false;
     if (
       shouldFlagCompactionTimeout({
         isTimeout: timeout,
@@ -3642,7 +3642,7 @@ export async function runEmbeddedAttempt(
       const onAbort = () => {
         externalAbort = true;
         const reason = params.abortSignal ? getAbortReason(params.abortSignal) : undefined;
-        const timeout = reason ? isTimeoutError(reason) : false;
+        const timeout = reason ? isSignalTimeoutReason(reason) : false;
         if (
           shouldFlagCompactionTimeout({
             isTimeout: timeout,
