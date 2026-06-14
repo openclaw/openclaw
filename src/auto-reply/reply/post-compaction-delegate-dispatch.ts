@@ -417,9 +417,12 @@ async function persistPostCompactionDelegateChainState(params: {
       );
       // Rethrow so `deliverQueuedPostCompactionDelegate` rejects, the queue
       // entry stays in `pending/` with a bumped retryCount, and the next
-      // unfiltered drain re-considers it once backoff has elapsed. Without
-      // this, the queue ack-removes the entry while the on-disk chain count
-      // is stale, allowing the next compaction-delegate to overrun
+      // unfiltered drain re-considers it once backoff has elapsed. With the
+      // persist-then-spawn ordering this is doubly safe: the persist runs
+      // BEFORE the subagent spawn, so a persist failure means no child was
+      // spawned and the retry re-attempts cleanly (no duplicate). It also keeps
+      // the on-disk chain count from going stale relative to the queue, which
+      // would otherwise let the next compaction-delegate overrun
       // `maxChainLength`.
       throw err;
     }
@@ -533,6 +536,34 @@ export async function deliverQueuedPostCompactionDelegate(
   );
   const delegateWakeOnReturn = params.entry.silentWake ?? true;
   const delegateSilentAnnounce = params.entry.silent ?? delegateWakeOnReturn;
+
+  // Persist the advanced chain-count BEFORE spawning (persist-then-spawn), so the
+  // chain-count update and the spawn fail safe in the only direction that protects
+  // `maxChainLength`:
+  //   - persist throws (disk/SQLite) -> we throw before spawning, the queue entry
+  //     stays pending, and the next drain retries cleanly with NO child spawned
+  //     yet. This is the fix for the duplicate-delegate bug: there is no accepted
+  //     spawn to duplicate when the persist fails.
+  //   - spawn fails after a successful persist -> the count was advanced for a
+  //     delegate that did not start. That is the SAFE direction: an over-count only
+  //     makes `maxChainLength` *more* protective (the chain terminates earlier),
+  //     never overruns it. (A retry re-reads the advanced count and may bump again
+  //     on repeated spawn failures; that compounds conservatively, never past the
+  //     guard, and repeated spawn failures are anomalous.)
+  // The previous spawn-then-persist order had the opposite, unsafe failure: an
+  // accepted spawn whose persist then threw left the queue entry pending, so the
+  // next drain re-spawned the SAME delegate (duplicated work). See cmt451.
+  await persistPostCompactionDelegateChainState({
+    count: nextCompactionChainCount,
+    log: (message) => deps.log(message),
+    sessionEntry,
+    sessionKey: params.entry.sessionKey,
+    sessionStore,
+    startedAt: sessionEntry?.continuationChainStartedAt ?? deps.now(),
+    storePath,
+    tokens: compactionChainTokens,
+  });
+
   const spawnResult = await deps.spawnSubagentDirect(
     {
       task:
@@ -570,16 +601,6 @@ export async function deliverQueuedPostCompactionDelegate(
       ...(params.entry.traceparent ? { traceparent: params.entry.traceparent } : {}),
     },
   );
-  await persistPostCompactionDelegateChainState({
-    count: nextCompactionChainCount,
-    log: (message) => deps.log(message),
-    sessionEntry,
-    sessionKey: params.entry.sessionKey,
-    sessionStore,
-    startedAt: sessionEntry?.continuationChainStartedAt ?? deps.now(),
-    storePath,
-    tokens: compactionChainTokens,
-  });
 }
 
 export async function drainPostCompactionDelegateDeliveries(params: {
