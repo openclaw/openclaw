@@ -355,10 +355,25 @@ to them directly without OTLP export.
 
 **Model usage**
 
-- `model.usage` - tokens, cost, duration, context, provider/model/channel,
-  session ids. `usage` is provider/turn accounting for cost and telemetry;
-  `context.used` is the current prompt/context snapshot and can be lower than
-  provider `usage.total` when cached input or tool-loop calls are involved.
+- `model.usage` — emitted after each agent turn when diagnostics are enabled and usage is nonzero. Fields:
+  - `type`: `"model.usage"`
+  - `sessionKey`: session identifier string
+  - `sessionId`: session identifier string
+  - `channel`: originating channel (e.g. `"telegram"`, `"discord"`, `"web"`)
+  - `agentId`: active agent id
+  - `provider`: model provider name (e.g. `"openai"`, `"anthropic"`)
+  - `model`: model identifier (e.g. `"gpt-4o"`, `"claude-sonnet-4-20250514"`)
+  - `usage.input`: input token count
+  - `usage.output`: output token count
+  - `usage.cacheRead`: cached input tokens read from provider prompt cache
+  - `usage.cacheWrite`: cached input tokens written to provider prompt cache
+  - `usage.promptTokens`: prompt tokens (may differ from `input` when caching is involved)
+  - `usage.total`: total token count
+  - `context.limit`: context window token limit for the model
+  - `context.used`: actual context tokens used (optional; can be lower than `usage.total` when cached input or tool-loop calls are involved)
+  - `costUsd`: estimated cost in USD (omitted when cost config is unavailable)
+  - `durationMs`: total turn duration in milliseconds
+  - `lastCallUsage`: per-call usage breakdown from the last individual API call (optional)
 
 **Message flow**
 
