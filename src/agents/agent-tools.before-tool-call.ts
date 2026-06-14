@@ -107,6 +107,11 @@ export type HookContext = {
   runId?: string;
   trace?: DiagnosticTraceContext;
   channelId?: string;
+  /** Originating user-turn route for approval delivery. */
+  turnSourceChannel?: string;
+  turnSourceTo?: string;
+  turnSourceAccountId?: string;
+  turnSourceThreadId?: string | number;
   loopDetection?: ToolLoopDetectionConfig;
   onToolOutcome?: ToolOutcomeObserver;
   skillsSnapshot?: SkillSnapshot;
@@ -466,6 +471,10 @@ async function requestPluginToolApproval(params: {
         toolCallId: params.toolCallId,
         agentId: params.ctx?.agentId,
         sessionKey: params.ctx?.sessionKey,
+        turnSourceChannel: params.ctx?.turnSourceChannel,
+        turnSourceTo: params.ctx?.turnSourceTo,
+        turnSourceAccountId: params.ctx?.turnSourceAccountId,
+        turnSourceThreadId: params.ctx?.turnSourceThreadId,
         timeoutMs,
         twoPhase: true,
       },
@@ -487,6 +496,14 @@ async function requestPluginToolApproval(params: {
     if (hasImmediateDecision) {
       decision = requestResult?.decision;
       if (decision === null) {
+        // No approval route is available. ClawSweeper P1 finding on #89590:
+        // a plugin-supplied `unavailableBehavior: "allow"` would weaken the
+        // operator approval boundary by turning a missing route into an
+        // ALLOW_ONCE. The hook-types contract narrows `unavailableBehavior`
+        // to "deny" only; the runtime always fails closed here. Operators
+        // who need a tool to run without a route should configure approval
+        // routing (Telegram/Discord approvers, etc.) rather than rely on
+        // plugin-side allow.
         notifyPluginApprovalResolution(approval, PluginApprovalResolutions.CANCELLED);
         return {
           blocked: true,

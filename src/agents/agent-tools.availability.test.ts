@@ -51,4 +51,46 @@ describe("tool availability", () => {
     expect(toolNames).not.toContain("sessions_send");
     expect(toolNames).not.toContain("subagents");
   });
+
+  it("threads the explicit transport channel into approval routing when tool-policy provider differs", () => {
+    // Split-channel embedded runs: tool policy can come from a derived provider
+    // (for example `discord-voice` for tool restrictions) while the actual
+    // transport routing back to the chat must use the canonical transport
+    // channel (`discord`). The gateway approval-route check keys off
+    // `turnSourceChannel`, so a split run that only carried `messageProvider`
+    // would target the wrong approval surface or hit no-approval-route.
+    const tools = createOpenClawCodingTools({
+      messageProvider: "discord-voice",
+      messageChannel: "discord",
+      currentChannelId: "discord:#general",
+      agentAccountId: "default",
+    });
+    // exec/process tools are re-spread by applyDeferredFollowupToolDescriptions
+    // which drops non-enumerable symbol properties; pick a tool that survives
+    // the spread (cron is a control-plane tool kept verbatim).
+    const cronTool = tools.find((tool) => tool.name === "cron");
+    expect(cronTool).toBeDefined();
+    const hookContextSymbol = Object.getOwnPropertySymbols(cronTool!).find(
+      (s) => s.description === "beforeToolCallHookContext",
+    );
+    expect(hookContextSymbol).toBeDefined();
+    const ctx = (cronTool as unknown as Record<symbol, { turnSourceChannel?: string }>)[
+      hookContextSymbol as symbol
+    ];
+    expect(ctx?.turnSourceChannel).toBe("discord");
+  });
+
+  it("falls back to messageProvider for turnSourceChannel when no explicit transport channel is supplied", () => {
+    const tools = createOpenClawCodingTools({ messageProvider: "telegram" });
+    const cronTool = tools.find((tool) => tool.name === "cron");
+    expect(cronTool).toBeDefined();
+    const hookContextSymbol = Object.getOwnPropertySymbols(cronTool!).find(
+      (s) => s.description === "beforeToolCallHookContext",
+    );
+    expect(hookContextSymbol).toBeDefined();
+    const ctx = (cronTool as unknown as Record<symbol, { turnSourceChannel?: string }>)[
+      hookContextSymbol as symbol
+    ];
+    expect(ctx?.turnSourceChannel).toBe("telegram");
+  });
 });

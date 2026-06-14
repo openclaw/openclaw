@@ -331,6 +331,10 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
       ctx: {
         agentId: "main",
         sessionKey: "main",
+        turnSourceChannel: "telegram",
+        turnSourceTo: "telegram:-100123",
+        turnSourceAccountId: "default",
+        turnSourceThreadId: 42,
         config: {
           skills: {
             workshop: {
@@ -356,6 +360,10 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     expect(approvalCall.request.allowedDecisions).toEqual(["allow-once", "deny"]);
     expect(approvalCall.request.toolName).toBe("skill_workshop");
     expect(approvalCall.request.toolCallId).toBe("call-skill-apply");
+    expect(approvalCall.request.turnSourceChannel).toBe("telegram");
+    expect(approvalCall.request.turnSourceTo).toBe("telegram:-100123");
+    expect(approvalCall.request.turnSourceAccountId).toBe("default");
+    expect(approvalCall.request.turnSourceThreadId).toBe(42);
     expect(runBeforeToolCallMock).toHaveBeenCalledTimes(1);
 
     {
@@ -397,6 +405,44 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
       expect(adjustedApprovalCall.request.toolCallId).toBe("call-skill-hook-apply");
       expect(runBeforeToolCallMock).toHaveBeenCalledTimes(1);
     }
+  });
+
+  it("blocks skill_workshop lifecycle actions when no approval route is available", async () => {
+    // ClawSweeper P1 pushback on #89590: apply/reject/quarantine all mutate
+    // the live skill set, so falling back to ALLOW_ONCE on no-route would
+    // bypass the operator-intended pending-approval default. The default
+    // (block with "Plugin approval unavailable" reason) is the safer
+    // contract; the model sees the block immediately rather than a
+    // synthesized success.
+    mockCallGatewayTool.mockResolvedValueOnce({
+      id: "skill-workshop-approval",
+      decision: null,
+    });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "skill_workshop",
+      params: { action: "apply", proposal_id: "weather-20260530-a1b2c3d4e5" },
+      toolCallId: "call-skill-apply-no-route",
+      ctx: {
+        config: {
+          skills: {
+            workshop: {
+              approvalPolicy: "pending",
+            },
+          },
+        },
+      },
+    });
+
+    if (!result.blocked) {
+      throw new Error(
+        "expected skill_workshop no-route approval to fall through to the default fail-closed contract",
+      );
+    }
+    expect(result.kind).toBe("failure");
+    expect(result.deniedReason).toBe("plugin-approval");
+    const approvalCall = requireApprovalRequestCall("skill_workshop no-route approval request");
+    expect(approvalCall.request.toolName).toBe("skill_workshop");
   });
 
   it("runs trusted policies before skill_workshop lifecycle approval", async () => {

@@ -415,6 +415,16 @@ export function createOpenClawCodingTools(options?: {
   agentId?: string;
   exec?: ExecToolDefaults & ProcessToolDefaults;
   messageProvider?: string;
+  /**
+   * Transport channel for plugin approval delivery. Distinct from
+   * `messageProvider`, which can be a tool-policy provider that differs from
+   * the actual transport (e.g. `discord-voice` vs `discord`). When omitted,
+   * approvals fall back to `messageProvider` for routing, matching the prior
+   * single-channel default. Callers that split tool policy from transport must
+   * supply this explicitly so the gateway routes the approval prompt to the
+   * originating chat.
+   */
+  messageChannel?: string;
   agentAccountId?: string;
   messageTo?: string;
   messageThreadId?: string | number;
@@ -1183,6 +1193,23 @@ export function createOpenClawCodingTools(options?: {
         sessionId: options?.sessionId,
         runId: options?.runId,
         channelId: options?.hookChannelId ?? options?.currentChannelId,
+        // Carry turn-source so plugin before_tool_call requireApproval can be
+        // delivered back to the originating chat (parity with bash exec
+        // approval). Without these, embedded-runner plugin approvals reach
+        // requestPluginToolApproval without a delivery route and resolve as
+        // `decision: null` (no-approval-route), blocking the tool. Mirrors
+        // openclaw/openclaw#84205.
+        //
+        // `messageChannel` is the canonical transport channel for approval
+        // routing; `messageProvider` is the tool-policy provider that the
+        // embedded runner can intentionally diverge from the transport (for
+        // example `discord-voice` policy on a `discord` transport). Falling
+        // back to `messageProvider` preserves the prior single-channel
+        // behavior for callers that have not split the two.
+        turnSourceChannel: options?.messageChannel ?? options?.messageProvider,
+        turnSourceTo: options?.currentChannelId,
+        turnSourceAccountId: options?.agentAccountId,
+        turnSourceThreadId: options?.currentThreadTs,
         ...(options?.trace ? { trace: options.trace } : {}),
         loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
         onToolOutcome: options?.onToolOutcome,
