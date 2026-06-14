@@ -57,7 +57,11 @@ export function resolveSkillWorkshopToolApproval(params: {
     return undefined;
   }
   const config = resolveSkillWorkshopConfig(params.config);
-  if (config.approvalPolicy === "auto") {
+  // When approval policy is "auto", skip the approval request entirely.
+  // Also skip when we lack a config reference (e.g. certain agent session
+  // contexts where the hook context doesn't carry the full config) —
+  // unrouteable approvals return "no approval route" (#92080).
+  if (config.approvalPolicy === "auto" || !params.config) {
     return undefined;
   }
   const text = lifecycleApprovalText(action);
