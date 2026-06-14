@@ -185,6 +185,10 @@ describe("canvas host", () => {
   it("injects live reload script", () => {
     const out = injectCanvasLiveReload("<html><body>Hello</body></html>");
     expect(out).toContain(CANVAS_WS_PATH);
+    expect(out).toContain("/__openclaw__/cap/");
+    expect(out).toContain("location.pathname.startsWith(prefix)");
+    expect(out).not.toContain("location.pathname.indexOf(prefix)");
+    expect(out).toContain("const cap = pathCap || new URLSearchParams(location.search).get");
     expect(out).toContain("location.reload");
     expect(out).toContain("openclawCanvasA2UIAction");
     expect(out).toContain("openclawSendUserAction");
