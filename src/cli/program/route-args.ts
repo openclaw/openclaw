@@ -67,8 +67,15 @@ function parseSinglePositional(
 
 /** Parse `openclaw health` flags for the route-first status family. */
 export function parseHealthRouteArgs(argv: string[]) {
+  // A present-but-invalid --timeout (0, negative, non-numeric) must defer to
+  // Commander so it surfaces the same validation error as the full command
+  // path, instead of the fast path silently falling back to the default.
+  const rawTimeout = getFlagValue(argv, "--timeout");
+  if (rawTimeout === null) {
+    return null;
+  }
   const timeoutMs = getPositiveIntFlagValue(argv, "--timeout");
-  if (timeoutMs === null) {
+  if (rawTimeout !== undefined && timeoutMs === undefined) {
     return null;
   }
   return {
@@ -80,8 +87,15 @@ export function parseHealthRouteArgs(argv: string[]) {
 
 /** Parse `openclaw status` flags without registering the full command tree. */
 export function parseStatusRouteArgs(argv: string[]) {
+  // A present-but-invalid --timeout (0, negative, non-numeric) must defer to
+  // Commander so it surfaces the same validation error as the full command
+  // path, instead of the fast path silently falling back to the default.
+  const rawTimeout = getFlagValue(argv, "--timeout");
+  if (rawTimeout === null) {
+    return null;
+  }
   const timeoutMs = getPositiveIntFlagValue(argv, "--timeout");
-  if (timeoutMs === null) {
+  if (rawTimeout !== undefined && timeoutMs === undefined) {
     return null;
   }
   return {
