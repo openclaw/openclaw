@@ -2468,6 +2468,8 @@ export async function runEmbeddedAttempt(
           sessionManager,
           settingsManager,
           resourceLoader,
+          storePath: params.sessionFile,
+          sessionKey: params.sessionKey,
           resolveDeferredTool: deferredDirectoryToolsCallable
             ? ({ toolCall }) => {
                 const tool = resolveToolSearchCatalogTool(
