@@ -64,6 +64,17 @@ describe("gateway config mutation guard coverage", () => {
     // operator-owned config surfaces.
     expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).not.toContain("agents.defaults.promptOverlays");
     expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).not.toContain("agents.defaults.model");
+    expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).not.toContain("agents.defaults.imageModel");
+    expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).not.toContain(
+      "agents.defaults.imageGenerationModel",
+    );
+    expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).not.toContain(
+      "agents.defaults.videoGenerationModel",
+    );
+    expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).not.toContain(
+      "agents.defaults.musicGenerationModel",
+    );
+    expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).not.toContain("agents.defaults.pdfModel");
     expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain("agents.defaults.subagents.thinking");
     expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain("agents.list[].id");
     expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain("agents.list[].model");
@@ -87,6 +98,23 @@ describe("gateway config mutation guard coverage", () => {
     expectBlocked(
       { agents: { defaults: { model: { primary: "openai/gpt-5.4" } } } },
       { agents: { defaults: { model: { primary: "openai/gpt-5.5" } } } },
+    );
+  });
+
+  it("blocks defaults-level media model routing via config.patch", () => {
+    expectBlocked(
+      {},
+      {
+        agents: {
+          defaults: {
+            imageModel: { primary: "custom/mimo-v2-omni" },
+            imageGenerationModel: { primary: "openai/gpt-image-2" },
+            videoGenerationModel: { primary: "openai/sora-2" },
+            musicGenerationModel: { primary: "google/lyria-3" },
+            pdfModel: { primary: "anthropic/claude-sonnet-4-6" },
+          },
+        },
+      },
     );
   });
 
