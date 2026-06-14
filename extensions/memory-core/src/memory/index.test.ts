@@ -76,6 +76,7 @@ vi.mock("./embeddings.js", () => {
     createEmbeddingProvider: async (options: {
       provider?: string;
       model?: string;
+      local?: { modelPath?: string };
       outputDimensionality?: number;
     }) => {
       providerCalls.push({
@@ -96,10 +97,16 @@ vi.mock("./embeddings.js", () => {
         options.provider === "fallback-provider" ||
         options.provider === "batch-test" ||
         options.provider === "batch-wide-test" ||
-        options.provider === "ollama"
+        options.provider === "ollama" ||
+        options.provider === "local"
           ? options.provider
           : "mock";
-      const model = options.model ?? "mock-embed";
+      // Mirror the llama.cpp adapter: the local provider takes its model
+      // identity from local.modelPath and ignores the configured model.
+      const model =
+        options.provider === "local"
+          ? options.local?.modelPath?.trim() || options.model || "mock-embed"
+          : (options.model ?? "mock-embed");
       return {
         requestedProvider: options.provider ?? "openai",
         provider: {
@@ -308,6 +315,7 @@ describe("memory index", () => {
     providerAliases?: NonNullable<NonNullable<TestCfg["models"]>["providers"]>;
     batchEnabled?: boolean;
     model?: string;
+    local?: { modelPath?: string };
     outputDimensionality?: number;
     multimodal?: {
       enabled?: boolean;
@@ -327,6 +335,7 @@ describe("memory index", () => {
           memorySearch: {
             ...(params.provider !== undefined ? { provider: params.provider } : {}),
             model: params.model ?? "mock-embed",
+            ...(params.local !== undefined ? { local: params.local } : {}),
             fallback: params.fallback,
             outputDimensionality: params.outputDimensionality,
             store: { path: params.storePath, vector: { enabled: params.vectorEnabled ?? false } },
@@ -1562,6 +1571,38 @@ describe("memory index", () => {
       expect(status.custom?.indexIdentity).toEqual({ status: "valid" });
     } finally {
       await manager.close?.();
+    }
+  });
+
+  it("keeps local llama.cpp indexes clean when only local.modelPath is configured", async () => {
+    const dbPath = path.join(workspaceDir, "index-local-modelpath-identity.sqlite");
+    const modelPath = "/models/embeddinggemma-300M-Q8_0.gguf";
+    const cfg = createCfg({
+      storePath: dbPath,
+      provider: "local",
+      model: "",
+      local: { modelPath },
+    });
+
+    const buildManager = await getFreshManager(cfg);
+    await buildManager.sync({ reason: "test", force: true });
+    const builtMeta = (
+      buildManager as unknown as { readMeta(): MemoryIndexMeta | null }
+    ).readMeta();
+    // The live local provider derives its model identity from local.modelPath.
+    expect(builtMeta?.model).toBe(modelPath);
+    await buildManager.close?.();
+
+    // Status-only managers compare identity before provider init. The configured
+    // model must mirror the local adapter's modelPath-based identity, otherwise
+    // the index looks mismatched against the adapter default and stays Dirty.
+    const statusManager = await getFreshManager(cfg, "status");
+    try {
+      const status = statusManager.status();
+      expect(status.custom?.indexIdentity).toEqual({ status: "valid" });
+      expect(status.dirty).toBe(false);
+    } finally {
+      await statusManager.close?.();
     }
   });
 
