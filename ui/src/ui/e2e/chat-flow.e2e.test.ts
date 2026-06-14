@@ -977,4 +977,70 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await context.close();
     }
   });
+
+  it("restores the in-flight streaming assistant reply on reconnect (#90755)", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    // Reconnect snapshot: the committed history holds only the user turn, while
+    // the gateway reports the still-streaming assistant run via inFlightRun
+    // (the existing chat.history/chat.startup contract). Before this fix the
+    // Control UI ignored inFlightRun and the partial reply was lost on reload.
+    const userTurn = {
+      content: [{ text: "Summarize the design doc.", type: "text" }],
+      role: "user",
+      timestamp: Date.now(),
+    };
+    const inFlightRun = { runId: "run-in-flight-90755", text: "Streaming the summary so" };
+    const gateway = await installMockGateway(page, {
+      historyMessages: [userTurn],
+      methodResponses: {
+        "chat.startup": {
+          agentsList: {
+            agents: [{ id: "main", identity: { name: "OpenClaw" }, name: "OpenClaw" }],
+            defaultId: "main",
+            mainKey: "main",
+            scope: "agent",
+          },
+          inFlightRun,
+          messages: [userTurn],
+          metadata: { models: [{ id: "gpt-5.5", name: "gpt-5.5", provider: "openai" }] },
+          sessionId: "control-ui-e2e-session",
+          thinkingLevel: null,
+        },
+        "chat.history": {
+          inFlightRun,
+          messages: [userTurn],
+          sessionId: "control-ui-e2e-session",
+          thinkingLevel: null,
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      // The committed user turn is present (baseline reconnect behavior).
+      await page.locator(".chat-thread").getByText("Summarize the design doc.").waitFor({
+        timeout: 10_000,
+      });
+      // The in-flight assistant partial is restored from inFlightRun — the bug fix.
+      await page.locator(".chat-thread").getByText("Streaming the summary so").waitFor({
+        timeout: 10_000,
+      });
+
+      // The adopted run still owns subsequent live deltas/final after reconnect.
+      await gateway.emitChatFinal({
+        runId: inFlightRun.runId,
+        text: "Streaming the summary so the reconnect keeps it.",
+      });
+      await page.getByText("Streaming the summary so the reconnect keeps it.").waitFor({
+        timeout: 10_000,
+      });
+    } finally {
+      await context.close();
+    }
+  });
 });

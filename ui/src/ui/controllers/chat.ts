@@ -425,6 +425,13 @@ export type ChatHistoryResult = {
   sessionInfo?: GatewaySessionRow;
   agentsList?: AgentsListResult;
   metadata?: ChatMetadataResult;
+  // A run still streaming for this session+agent that the gateway reports as
+  // in-flight (already bounded; `text` may be empty when no partial is buffered
+  // or for runtimes that only deliver assistant text at completion). A client
+  // that switched away stopped receiving this run's per-agent-delivered deltas,
+  // so the persisted `messages` above do not include it; the loader re-adopts
+  // the run on switch-back so the partial renders and further deltas continue.
+  inFlightRun?: { runId?: string; text?: string };
 };
 
 export type ChatMetadataResult = CommandsListResult & {
@@ -568,7 +575,7 @@ const inFlightChatHistoryRequests = new WeakMap<ChatState, InFlightChatHistoryRe
 
 function recordChatHistoryTiming(
   state: ChatState,
-  phase: "start" | "applied" | "stream-reset" | "stale" | "error",
+  phase: "start" | "applied" | "stream-reset" | "in-flight-run-adopted" | "stale" | "error",
   startedAtMs: number,
   extra: Record<string, unknown> = {},
 ) {
@@ -805,6 +812,33 @@ async function loadChatHistoryUncached(
           state.chatStreamStartedAt = null;
         }
         prunePersistedToolStreamMessages(state, persistedToolStreamIds);
+      }
+    }
+    // Restore a run still streaming for this session+agent that the gateway
+    // reports as in-flight. Its live deltas were delivered to a per-agent key
+    // this client stopped watching after switching away, so the persisted
+    // history above does not contain it; re-adopt the run so its partial renders
+    // and further deltas (now that this session is active again) continue it.
+    // Mirrors the TUI history loader (src/tui/tui-session-actions.ts). Only adopt
+    // when no run survived stream reconciliation above, so a fresher live stream
+    // is never clobbered by a slightly stale history snapshot.
+    if (resetStream && !state.chatRunId) {
+      const inFlightRunId =
+        typeof res.inFlightRun?.runId === "string" ? res.inFlightRun.runId.trim() : "";
+      if (inFlightRunId) {
+        const inFlightText = typeof res.inFlightRun?.text === "string" ? res.inFlightRun.text : "";
+        // Adopt the run so its status shows `streaming` (not idle) and its
+        // completion is owned here. Render any buffered partial; an empty string
+        // (Codex-style runtimes, or text dropped by the history budget) still
+        // shows a reading indicator instead of an idle thread.
+        state.chatRunId = inFlightRunId;
+        state.chatStream = inFlightText;
+        state.chatStreamStartedAt = Date.now();
+        recordChatHistoryTiming(state, "in-flight-run-adopted", startedAtMs, {
+          requestSessionKey: sessionKey,
+          requestAgentId,
+          previousRunId,
+        });
       }
     }
     recordChatHistoryTiming(state, "applied", startedAtMs, {
