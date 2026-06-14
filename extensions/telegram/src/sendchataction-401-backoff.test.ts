@@ -206,9 +206,12 @@ describe("createTelegramSendChatActionHandler", () => {
     expect(fn).toHaveBeenCalledTimes(2);
   });
 
-  it("rejects transient cooldown starts before same-chat coalescing", async () => {
-    let now = 1000;
-    const fn = vi.fn().mockRejectedValueOnce(makeTelegramError("Bad Gateway", 502));
+  it("rejects transient keepalive ticks until same-chat coalescing expires", async () => {
+    let now = 0;
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce(makeTelegramError("Bad Gateway", 502))
+      .mockResolvedValue(true);
     const logger = vi.fn();
     const handler = createTelegramSendChatActionHandler({
       sendChatActionFn: fn,
@@ -218,12 +221,19 @@ describe("createTelegramSendChatActionHandler", () => {
     });
 
     await expect(handler.sendChatAction(-100, "typing")).rejects.toThrow("Bad Gateway");
+    expect(logger.mock.calls.at(-1)).toEqual([
+      "sendChatAction transient error (1). Cooling down 4000ms before retry.",
+    ]);
 
-    now = 1500;
+    now = 3000;
     await expect(handler.sendChatAction(-100, "typing")).rejects.toThrow(
       "transient cooldown active",
     );
     expect(fn).toHaveBeenCalledTimes(1);
+
+    now = 4000;
+    await handler.sendChatAction(-100, "typing");
+    expect(fn).toHaveBeenCalledTimes(2);
   });
 
   it("resets transient counters on non-transient errors", async () => {

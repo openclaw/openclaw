@@ -196,10 +196,15 @@ export function createTelegramSendChatActionHandler({
       } else if (isTransientSendChatActionError(error)) {
         consecutiveTransientFailures++;
         const cooldownMs = resolveTransientCooldownMs(error, consecutiveTransientFailures);
-        transientCooldownUntilMs = now() + cooldownMs;
+        const cooldownStartedAt = now();
+        // Keep transient failures rejected through the same-chat coalesce window;
+        // otherwise the next typing keepalive can look successful and reset its guard.
+        const coalescingUntilMs = key ? attemptedAt + minIntervalMs : 0;
+        transientCooldownUntilMs = Math.max(cooldownStartedAt + cooldownMs, coalescingUntilMs);
+        const effectiveCooldownMs = Math.max(0, transientCooldownUntilMs - cooldownStartedAt);
         logger(
           `sendChatAction transient error (${consecutiveTransientFailures}). ` +
-            `Cooling down ${cooldownMs}ms before retry.`,
+            `Cooling down ${effectiveCooldownMs}ms before retry.`,
         );
       } else {
         clearTransientCooldown();
