@@ -25,7 +25,8 @@ contracts: memoryRerankers, tools
 Configure the plugin in `plugins.entries.memory-external-reranker.config`.
 
 - `provider`: provider key in `models.providers`
-- `model`: reranker model ID sent to `/v1/rerank`
+- `model`: reranker model ID sent to the configured rerank endpoint
+- `endpointPath`: rerank HTTP path appended to provider `baseUrl` (default `/v1/rerank`)
 - `allowPrivateNetwork`: required when the provider base URL is localhost or a private IP
 
 See [External reranker](/plugins/reference/external-reranker#private-or-localhost-endpoints) for examples.

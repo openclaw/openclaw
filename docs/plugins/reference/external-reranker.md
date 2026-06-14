@@ -12,7 +12,7 @@ Adds external reranker provider support for any Cohere-compatible `/v1/rerank` e
 ## Distribution
 
 - Package: `@openclaw/memory-external-reranker`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub
 
 ## Surface
 
@@ -27,6 +27,7 @@ Configure the plugin under `plugins.entries.memory-external-reranker.config`:
   "plugins": {
     "entries": {
       "memory-external-reranker": {
+        "enabled": true,
         "config": {
           "provider": "llamacpp",
           "model": "qwen3-reranker",
@@ -37,6 +38,8 @@ Configure the plugin under `plugins.entries.memory-external-reranker.config`:
   }
 }
 ```
+
+`endpointPath` defaults to `/v1/rerank` when omitted.
 
 Runtime URL join behavior: OpenClaw sends requests to
 `models.providers.<provider>.baseUrl + endpointPath`. If a provider `baseUrl`

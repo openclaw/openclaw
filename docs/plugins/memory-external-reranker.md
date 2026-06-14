@@ -14,6 +14,8 @@ The external reranker plugin lets you replace mmr in memorySearch:hybrid and pro
 - **Local servers**: llama.cpp with `--reranking`, vLLM, Ollama (with reranking support)
 - **Self-hosted**: Any custom reranking service that implements the Cohere API
 
+Install route: npm; ClawHub (`@openclaw/memory-external-reranker`).
+
 <CardGroup cols={2}>
   <Card title="Memory rerankers" href="/concepts/memory-rerankers">
     Conceptual overview of reranking in OpenClaw memory search.
