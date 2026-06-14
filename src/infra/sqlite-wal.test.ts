@@ -159,7 +159,7 @@ describe("sqlite WAL maintenance", () => {
     }
   });
 
-  it("runs periodic TRUNCATE checkpoints and stops them on close", () => {
+  it("runs lightweight periodic PASSIVE checkpoints and TRUNCATE on close", () => {
     vi.useFakeTimers();
     const db = createMockDb();
 
@@ -167,10 +167,11 @@ describe("sqlite WAL maintenance", () => {
     expect(db["exec"]).toHaveBeenCalledTimes(2);
 
     vi.advanceTimersByTime(100);
-    expect(db["exec"]).toHaveBeenLastCalledWith("PRAGMA wal_checkpoint(TRUNCATE);");
+    expect(db["exec"]).toHaveBeenLastCalledWith("PRAGMA wal_checkpoint(PASSIVE);");
     expect(db["exec"]).toHaveBeenCalledTimes(3);
 
     expect(maintenance.close()).toBe(true);
+    expect(db["exec"]).toHaveBeenLastCalledWith("PRAGMA wal_checkpoint(TRUNCATE);");
     expect(db["exec"]).toHaveBeenCalledTimes(4);
 
     vi.advanceTimersByTime(200);
@@ -188,6 +189,22 @@ describe("sqlite WAL maintenance", () => {
 
     expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
     maintenance.close();
+  });
+
+  it("honors explicit checkpoint mode overrides for periodic and close checkpoints", () => {
+    vi.useFakeTimers();
+    const db = createMockDb();
+
+    const maintenance = configureSqliteWalMaintenance(db, {
+      checkpointIntervalMs: 100,
+      checkpointMode: "FULL",
+    });
+
+    vi.advanceTimersByTime(100);
+    expect(db["exec"]).toHaveBeenLastCalledWith("PRAGMA wal_checkpoint(FULL);");
+
+    expect(maintenance.close()).toBe(true);
+    expect(db["exec"]).toHaveBeenLastCalledWith("PRAGMA wal_checkpoint(FULL);");
   });
 
   it("reports checkpoint errors without throwing from background maintenance", () => {

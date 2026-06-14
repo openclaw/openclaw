@@ -1688,13 +1688,17 @@ export async function runCodexAppServerAttempt(
     return notificationQueue;
   };
 
+  const nativeSubagentCodexHome =
+    appServer.start.transport === "stdio"
+      ? (appServer.start.env?.CODEX_HOME ?? resolveCodexAppServerHomeDir(agentDir))
+      : undefined;
   registerCodexNativeSubagentMonitor({
     client,
     parentThreadId: thread.threadId,
     requesterSessionKey: params.sessionKey,
     taskRuntimeScope: params.agentHarnessTaskRuntimeScope,
     agentId: params.agentId,
-    codexHome: appServer.start.env?.CODEX_HOME ?? resolveCodexAppServerHomeDir(agentDir),
+    codexHome: nativeSubagentCodexHome,
   });
   const notificationCleanup = client.addNotificationHandler(enqueueNotification);
   const requestCleanup = client.addRequestHandler(async (request) => {

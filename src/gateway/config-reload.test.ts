@@ -574,9 +574,11 @@ describe("resolveGatewayReloadSettings", () => {
 type WatcherHandler = () => void;
 type WatcherEvent = "add" | "change" | "unlink" | "error";
 
-function createWatcherMock() {
+function createWatcherMock(effectiveUsePolling?: boolean) {
   const handlers = new Map<WatcherEvent, WatcherHandler[]>();
   return {
+    effectiveUsePolling,
+    options: { usePolling: false },
     on(event: WatcherEvent, handler: WatcherHandler) {
       const existing = handlers.get(event) ?? [];
       existing.push(handler);
@@ -1602,9 +1604,15 @@ describe("startGatewayConfigReloader watcher error recovery", () => {
 
   function startReloaderWithWatchers(watchers: ReturnType<typeof createWatcherMock>[]) {
     const watchSpy = vi.spyOn(chokidar, "watch");
-    for (const watcher of watchers) {
-      watchSpy.mockReturnValueOnce(watcher as unknown as never);
-    }
+    let watcherIndex = 0;
+    watchSpy.mockImplementation((_path, options) => {
+      const watcher = watchers[watcherIndex++];
+      if (!watcher) {
+        throw new Error("missing watcher mock");
+      }
+      watcher.options.usePolling = watcher.effectiveUsePolling ?? Boolean(options?.usePolling);
+      return watcher as unknown as never;
+    });
     const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const reloader = startGatewayConfigReloader({
       initialConfig: { gateway: { reload: { debounceMs: 0 } } },
@@ -1676,9 +1684,7 @@ describe("startGatewayConfigReloader watcher error recovery", () => {
       // Fourth native error triggers degradation to polling mode (not disabled).
       watchers[3]?.emit("error");
       expect(reloader.hotReloadStatus()).toBe("active");
-      expect(log.warn).toHaveBeenCalledWith(
-        expect.stringContaining("degrading to polling mode"),
-      );
+      expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("degrading to polling mode"));
       await vi.advanceTimersByTimeAsync(500);
       expect(watchSpy).toHaveBeenCalledTimes(5);
       expect(watchOptions(4)?.usePolling).toBe(true);
@@ -1757,6 +1763,45 @@ describe("startGatewayConfigReloader watcher error recovery", () => {
           "config hot-reload disabled: watcher failed after 3 re-create attempts in polling mode",
         ),
       );
+    } finally {
+      if (originalVitest === undefined) {
+        delete process.env.VITEST;
+      } else {
+        process.env.VITEST = originalVitest;
+      }
+      if (originalChokidarPolling === undefined) {
+        delete process.env.CHOKIDAR_USEPOLLING;
+      } else {
+        process.env.CHOKIDAR_USEPOLLING = originalChokidarPolling;
+      }
+      await reloader?.stop();
+    }
+  });
+
+  it("uses chokidar's effective polling mode when the platform forces it on", async () => {
+    const originalVitest = process.env.VITEST;
+    const originalChokidarPolling = process.env.CHOKIDAR_USEPOLLING;
+    delete process.env.VITEST;
+    delete process.env.CHOKIDAR_USEPOLLING;
+    let reloader: { stop: () => Promise<void>; hotReloadStatus: () => string } | undefined;
+    try {
+      const watchers = Array.from({ length: 4 }, () => createWatcherMock(true));
+      const started = startReloaderWithWatchers(watchers);
+      const { log } = started;
+      reloader = started.reloader;
+      const backoffs = [500, 2000, 5000] as const;
+
+      for (let index = 0; index < watchers.length - 1; index += 1) {
+        watchers[index]?.emit("error");
+        await vi.advanceTimersByTimeAsync(backoffs[index] ?? 0);
+      }
+      watchers.at(-1)?.emit("error");
+
+      expect(reloader.hotReloadStatus()).toBe("disabled");
+      expect(log.warn).not.toHaveBeenCalledWith(
+        expect.stringContaining("degrading to polling mode"),
+      );
+      expect(log.error).toHaveBeenCalledWith(expect.stringContaining("in polling mode"));
     } finally {
       if (originalVitest === undefined) {
         delete process.env.VITEST;
