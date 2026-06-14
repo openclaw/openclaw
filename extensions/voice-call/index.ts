@@ -177,7 +177,12 @@ const voiceCallConfigSchema = {
 const VoiceCallToolSchema = Type.Union([
   Type.Object({
     action: Type.Literal("initiate_call"),
-    to: Type.Optional(Type.String({ description: "Call target" })),
+    to: Type.Optional(
+      Type.String({
+        description:
+          "Call target. Telephony providers: an E.164 phone number. The Microsoft Teams (msteams) provider: the target user's Azure AD object id, optionally prefixed \"user:\" (e.g. the inbound chat sender's MsteamsAadObjectId — use this to call a Teams chat user back).",
+      }),
+    ),
     message: Type.String({ description: "Intro message" }),
     mode: Type.Optional(Type.Union([Type.Literal("notify"), Type.Literal("conversation")])),
     sessionKey: Type.Optional(Type.String({ description: "OpenClaw session key for the call" })),
@@ -675,7 +680,12 @@ export default definePluginEntry({
     api.registerTool({
       name: "voice_call",
       label: "Voice Call",
-      description: "Make phone calls and have voice conversations via the voice-call plugin.",
+      description:
+        "Make phone calls and have voice conversations via the voice-call plugin. " +
+        'To CALL A USER BACK with a result (e.g. a user asks you to "call me when you find the ' +
+        'answer"): first complete the task, then use action "initiate_call" with mode "notify" and ' +
+        'message set to the final answer. Set "to" using the per-provider format documented on the ' +
+        '"to" parameter.',
       parameters: VoiceCallToolSchema,
       async execute(_toolCallId, params) {
         const rawParams = asParamRecord(params);

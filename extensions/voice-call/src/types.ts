@@ -6,7 +6,7 @@ import type { CallMode } from "./config.js";
 // Provider Identifiers
 // -----------------------------------------------------------------------------
 
-const ProviderNameSchema = z.enum(["telnyx", "twilio", "plivo", "mock"]);
+const ProviderNameSchema = z.enum(["telnyx", "twilio", "plivo", "mock", "msteams"]);
 export type ProviderName = z.infer<typeof ProviderNameSchema>;
 
 // -----------------------------------------------------------------------------
@@ -225,6 +225,11 @@ export type InitiateCallInput = {
   streamUrl?: string;
   /** Per-call auth token the carrier echoes back on the WS upgrade. */
   streamAuthToken?: string;
+  /**
+   * Initial message to deliver on connect. Carriers use TwiML/webhook flows for
+   * this; the msteams realtime outbound path speaks it as the opening greeting.
+   */
+  message?: string;
 };
 
 export type InitiateCallResult = {

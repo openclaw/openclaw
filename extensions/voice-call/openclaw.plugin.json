@@ -1,7 +1,7 @@
 {
   "id": "voice-call",
   "name": "Voice Call",
-  "description": "OpenClaw voice-call plugin for Twilio, Telnyx, and Plivo phone calls.",
+  "description": "OpenClaw voice-call plugin for Twilio, Telnyx, and Plivo phone calls, and Microsoft Teams voice.",
   "commandAliases": [{ "name": "voicecall" }],
   "activation": {
     "onStartup": true,
@@ -259,7 +259,7 @@
       },
       "provider": {
         "type": "string",
-        "enum": ["telnyx", "twilio", "plivo", "mock"]
+        "enum": ["telnyx", "twilio", "plivo", "mock", "msteams"]
       },
       "telnyx": {
         "type": "object",
@@ -300,6 +300,52 @@
           }
         }
       },
+      "msteams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "port": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535
+          },
+          "bindAddress": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "sharedSecret": {
+            "type": ["string", "object"]
+          },
+          "requireRecordingStatus": {
+            "type": "boolean"
+          },
+          "outbound": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": { "type": "boolean" },
+              "workerBaseUrl": { "type": "string" },
+              "tenantId": { "type": "string" },
+              "answerTimeoutMs": { "type": "integer", "minimum": 1 }
+            }
+          },
+          "groupCall": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "requireAddress": { "type": "boolean" },
+              "wakePhrases": {
+                "type": "array",
+                "items": { "type": "string", "minLength": 1 }
+              },
+              "followUpWindowMs": { "type": "integer", "minimum": 0 }
+            }
+          },
+          "maxVisionPerMinute": { "type": "integer", "minimum": 0 }
+        }
+      },
       "fromNumber": {
         "type": "string",
         "pattern": "^\\+[1-9]\\d{1,14}$"
@@ -316,7 +362,7 @@
         "type": "array",
         "items": {
           "type": "string",
-          "pattern": "^\\+[1-9]\\d{1,14}$"
+          "pattern": "^(\\+[1-9]\\d{1,14}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$"
         }
       },
       "inboundGreeting": {
@@ -528,6 +574,9 @@
             "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"]
           },
           "consultFastMode": {
+            "type": "boolean"
+          },
+          "suppressInputDuringPlayback": {
             "type": "boolean"
           },
           "tools": {
@@ -904,6 +953,7 @@
     "secretInputs": {
       "paths": [
         { "path": "twilio.authToken", "expected": "string" },
+        { "path": "msteams.sharedSecret", "expected": "string" },
         { "path": "realtime.providers.*.apiKey", "expected": "string" },
         { "path": "streaming.providers.*.apiKey", "expected": "string" },
         { "path": "tts.providers.*.apiKey", "expected": "string" }

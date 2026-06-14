@@ -5,6 +5,7 @@ import type {
   RealtimeVoiceBridge,
   RealtimeVoiceAudioFormat,
   RealtimeVoiceBargeInOptions,
+  RealtimeVoiceImageInput,
   RealtimeVoiceCloseReason,
   RealtimeVoiceBridgeEvent,
   RealtimeVoiceProviderConfig,
@@ -39,6 +40,8 @@ export type RealtimeVoiceBridgeSession = {
   connect(): Promise<void>;
   sendAudio(audio: Buffer): void;
   sendUserMessage(text: string): void;
+  /** Push an image as ambient visual context (no forced response); no-op if the provider lacks it. */
+  sendImage(image: RealtimeVoiceImageInput): void;
   handleBargeIn(options?: RealtimeVoiceBargeInOptions): void;
   setMediaTimestamp(ts: number): void;
   submitToolResult(callId: string, result: unknown, options?: RealtimeVoiceToolResultOptions): void;
@@ -93,6 +96,7 @@ export function createRealtimeVoiceBridgeSession(
     connect: () => requireBridge().connect(),
     sendAudio: (audio) => requireBridge().sendAudio(audio),
     sendUserMessage: (text) => requireBridge().sendUserMessage?.(text),
+    sendImage: (image) => requireBridge().sendImage?.(image),
     handleBargeIn: (options) => requireBridge().handleBargeIn?.(options),
     setMediaTimestamp: (ts) => requireBridge().setMediaTimestamp(ts),
     submitToolResult: (callId, result, options) =>

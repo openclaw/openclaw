@@ -30,6 +30,49 @@ function requireElevenLabsTtsConfig(config: Pick<VoiceCallConfig, "tts">) {
   return { tts, elevenlabs };
 }
 
+describe("VoiceCallConfigSchema allowFrom", () => {
+  const aad = "9a783a59-bf32-4d17-8b42-459e8383e8bb";
+
+  it("accepts E.164 phone numbers and Teams AAD object ids (either case)", () => {
+    const config = VoiceCallConfigSchema.parse({
+      enabled: true,
+      provider: "msteams",
+      inboundPolicy: "allowlist",
+      allowFrom: ["+15550001234", aad, aad.toUpperCase()],
+    });
+
+    expect(config.allowFrom).toEqual(["+15550001234", aad, aad.toUpperCase()]);
+  });
+
+  it("rejects allowFrom entries that are neither E.164 nor a GUID", () => {
+    expect(() =>
+      VoiceCallConfigSchema.parse({
+        enabled: true,
+        provider: "msteams",
+        inboundPolicy: "allowlist",
+        allowFrom: ["not-a-number"],
+      }),
+    ).toThrow();
+  });
+});
+
+describe("msteams inbound default", () => {
+  it("defaults msteams inboundPolicy to a safe allowlist (never open)", () => {
+    const config = resolveVoiceCallConfig({ enabled: true, provider: "msteams" });
+
+    expect(config.inboundPolicy).toBe("allowlist");
+  });
+
+  it("honors an explicit msteams inboundPolicy", () => {
+    const open = resolveVoiceCallConfig({
+      enabled: true,
+      provider: "msteams",
+      inboundPolicy: "open",
+    });
+    expect(open.inboundPolicy).toBe("open");
+  });
+});
+
 describe("validateProviderConfig", () => {
   const originalEnv = { ...process.env };
   const clearProviderEnv = () => {
@@ -260,7 +303,7 @@ describe("validateProviderConfig", () => {
       const result = validateProviderConfig(config);
 
       expect(result.errors).not.toContain(
-        'plugins.entries.voice-call.config.provider must be "twilio" or "telnyx" when realtime.enabled is true',
+        'plugins.entries.voice-call.config.provider must be "twilio", "telnyx", or "msteams" when realtime.enabled is true',
       );
     });
 
@@ -273,7 +316,7 @@ describe("validateProviderConfig", () => {
 
       expect(result.valid).toBe(false);
       expect(result.errors).toContain(
-        'plugins.entries.voice-call.config.provider must be "twilio" or "telnyx" when realtime.enabled is true',
+        'plugins.entries.voice-call.config.provider must be "twilio", "telnyx", or "msteams" when realtime.enabled is true',
       );
     });
   });
