@@ -5,6 +5,7 @@ import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ModelProviderConfig } from "../config/types.models.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
 import { resolveBundledProviderPolicySurface } from "./provider-public-artifacts.js";
 
 describe("provider public artifacts", () => {
@@ -27,6 +28,36 @@ describe("provider public artifacts", () => {
     vi.doUnmock("./public-surface-loader.js");
     vi.resetModules();
   });
+
+  function createManifestRecord(
+    fields: Partial<PluginManifestRecord> & Pick<PluginManifestRecord, "id">,
+  ): PluginManifestRecord {
+    return {
+      channels: [],
+      cliBackends: [],
+      hooks: [],
+      manifestPath: `/tmp/${fields.id}/openclaw.plugin.json`,
+      origin: "bundled",
+      providers: [],
+      rootDir: `/tmp/${fields.id}`,
+      skills: [],
+      source: `/tmp/${fields.id}/index.js`,
+      ...fields,
+    };
+  }
+
+  function createPoisonedProviderPolicyRecord(
+    id: string,
+    field: "providers" | "providerAuthAliases",
+  ): PluginManifestRecord {
+    const record = createManifestRecord({ id, providers: ["other"] });
+    Object.defineProperty(record, field, {
+      get() {
+        throw new Error(`provider policy ${field} metadata exploded`);
+      },
+    });
+    return record;
+  }
 
   it("loads a lightweight bundled provider policy artifact smoke", () => {
     const surface = resolveBundledProviderPolicySurface("openai");
@@ -202,6 +233,57 @@ describe("provider public artifacts", () => {
     });
     expect(loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledWith({
       dirName: "openai",
+      artifactBasename: "provider-policy-api.js",
+    });
+    expect(loadPluginManifestRegistry).not.toHaveBeenCalled();
+  });
+
+  it("skips unreadable provider policy ownership metadata", async () => {
+    const loadPluginManifestRegistry = vi.fn(() => {
+      throw new Error("unexpected manifest registry scan");
+    });
+    const loadBundledPluginPublicArtifactModuleSync = vi.fn(({ dirName }: { dirName: string }) => {
+      if (dirName !== "owner") {
+        throw new Error(`Unable to resolve bundled plugin public surface ${dirName}`);
+      }
+      return {
+        resolveThinkingProfile: () => ({ levels: [{ id: dirName }] }),
+      };
+    });
+
+    vi.doMock("./manifest-registry.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("./manifest-registry.js")>();
+      return {
+        ...actual,
+        loadPluginManifestRegistry,
+      };
+    });
+    vi.doMock("./public-surface-loader.js", () => ({
+      loadBundledPluginPublicArtifactModuleSync,
+    }));
+
+    const { resolveBundledProviderPolicySurface: resolvePolicySurface } = await importFreshModule<
+      typeof import("./provider-public-artifacts.js")
+    >(import.meta.url, "./provider-public-artifacts.js?scope=poisoned-policy-owner");
+
+    const surface = resolvePolicySurface("fixture-provider", {
+      manifestRegistry: {
+        plugins: [
+          createPoisonedProviderPolicyRecord("bad-aliases", "providerAuthAliases"),
+          createPoisonedProviderPolicyRecord("bad-providers", "providers"),
+          createManifestRecord({
+            id: "owner",
+            providers: ["fixture-provider"],
+          }),
+        ],
+      },
+    });
+
+    expect(
+      surface?.resolveThinkingProfile?.({ provider: "fixture-provider", modelId: "demo" }),
+    ).toEqual({ levels: [{ id: "owner" }] });
+    expect(loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledWith({
+      dirName: "owner",
       artifactBasename: "provider-policy-api.js",
     });
     expect(loadPluginManifestRegistry).not.toHaveBeenCalled();
