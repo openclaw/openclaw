@@ -32,10 +32,7 @@ export function classifySessionAttention(params: {
   staleMs: number;
 }): SessionAttentionClassification {
   if (params.activity.activeWorkKind) {
-    // Idle session with queued work and stale orphaned activity (no active
-    // embedded owner) should be classified as recoverable stuck state, not as
-    // stalled active work. This prevents orphaned model_call or tool_call
-    // activity from blocking the queue indefinitely.
+    // Orphaned activity must not keep an idle queued session unrecoverable.
     if (
       params.state === "idle" &&
       params.queueDepth > 0 &&

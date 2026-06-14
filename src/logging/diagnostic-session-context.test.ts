@@ -46,6 +46,28 @@ describe("diagnostic session context", () => {
     });
   });
 
+  it("resolves app-agent transcript context from the active session id", () => {
+    const stateDir = tempDir!;
+    writeJsonl(path.join(stateDir, "agents", "oauth-agent", "sessions", "oauth-session-1.jsonl"), [
+      { message: { role: "user", content: "run OAuth agent" } },
+      {
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "OAuth agent listed 3 pending approvals." }],
+        },
+      },
+    ]);
+
+    const context = resolveCronSessionDiagnosticContext({
+      sessionKey: "agent:oauth-agent:main",
+      activeSessionId: "oauth-session-1",
+    });
+
+    expect(formatCronSessionDiagnosticFields(context)).toBe(
+      'lastAssistant="OAuth agent listed 3 pending approvals."',
+    );
+  });
+
   it("formats cron job and last assistant context for stalled session logs", async () => {
     const stateDir = tempDir!;
     await saveCronStore(path.join(stateDir, "cron", "jobs.json"), {
@@ -101,6 +123,25 @@ describe("diagnostic session context", () => {
     ]);
 
     expect(readLastAssistantFromSessionFile(filePath)).toBe("newer");
+  });
+
+  it("reads assistant messages only after the transcript cursor", () => {
+    const filePath = path.join(tempDir!, "session.jsonl");
+    const older = `${JSON.stringify({ message: { role: "assistant", content: "older" } })}\n`;
+    const laterUser = `${JSON.stringify({ message: { role: "user", content: "later user" } })}\n`;
+    const cursor = Buffer.byteLength(older + laterUser);
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(
+      filePath,
+      older +
+        laterUser +
+        `${JSON.stringify({ message: { role: "assistant", content: "newer" } })}\n`,
+    );
+
+    expect(readLastAssistantFromSessionFile(filePath, { afterByteOffset: cursor })).toBe("newer");
+    expect(
+      readLastAssistantFromSessionFile(filePath, { afterByteOffset: cursor + 1000 }),
+    ).toBeUndefined();
   });
 
   it("ignores missing transcript tail files", () => {

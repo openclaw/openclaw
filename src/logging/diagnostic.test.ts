@@ -1,5 +1,6 @@
 // Diagnostic logger tests cover event emission, metrics, and support output.
 import fs from "node:fs";
+import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -42,6 +43,7 @@ import {
 import {
   diagnosticLogger,
   logMessageQueued,
+  logSessionAttention,
   logSessionStateChange,
   markDiagnosticSessionProgress,
   resetDiagnosticStateForTest,
@@ -353,6 +355,150 @@ describe("stuck session diagnostics threshold", () => {
     expectRecoveryCall(
       recoverStuckSession,
       { sessionId: "s1", sessionKey: "main", queueDepth: 0 },
+      ["ageMs", "stateGeneration"],
+    );
+  });
+
+  it("keeps reused app-agent transcript context recoverable for a new stuck turn", () => {
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const tempStateDir = fs.mkdtempSync("/tmp/openclaw-app-agent-diagnostic-");
+    const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
+    let classification: SessionAttentionClassification | undefined;
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+    setDiagnosticsEnabledForProcess(true);
+
+    try {
+      fs.mkdirSync(path.join(tempStateDir, "agents", "oauth-agent", "sessions"), {
+        recursive: true,
+      });
+      fs.writeFileSync(
+        path.join(tempStateDir, "agents", "oauth-agent", "sessions", "oauth-session-1.jsonl"),
+        `${JSON.stringify({ message: { role: "user", content: "run OAuth agent" } })}\n${JSON.stringify(
+          {
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "OAuth agent listed 3 pending approvals." }],
+            },
+          },
+        )}\n`,
+      );
+
+      logSessionStateChange({
+        sessionId: "oauth-session-1",
+        sessionKey: "agent:oauth-agent:main",
+        state: "processing",
+      });
+
+      classification = logSessionAttention({
+        sessionId: "oauth-session-1",
+        sessionKey: "agent:oauth-agent:main",
+        state: "processing",
+        ageMs: 61_000,
+        thresholdMs: 30_000,
+      });
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      setDiagnosticsEnabledForProcess(false);
+      fs.rmSync(tempStateDir, { recursive: true, force: true });
+    }
+
+    expect(classification).toEqual({
+      eventType: "session.stuck",
+      reason: "stale_session_state",
+      classification: "stale_session_state",
+      recoveryEligible: true,
+    });
+    expectLoggerMessageContaining(warnSpy, "stuck session:");
+    expectLoggerMessageContaining(
+      warnSpy,
+      'lastAssistant="OAuth agent listed 3 pending approvals."',
+    );
+    expectLoggerMessageContaining(warnSpy, "classification=stale_session_state");
+    expectLoggerMessageContaining(warnSpy, "recovery=checking");
+    expectNoLoggerMessageContaining(warnSpy, "classification=stalled_agent_run");
+    expectNoLoggerMessageContaining(warnSpy, "recovery=none");
+  });
+
+  it("keeps transcript-only current-turn app-agent sessions recoverable after they go stale", () => {
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const tempStateDir = fs.mkdtempSync("/tmp/openclaw-app-agent-diagnostic-");
+    const events: DiagnosticEventPayload[] = [];
+    const recoverStuckSession = vi.fn();
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+
+    try {
+      fs.mkdirSync(path.join(tempStateDir, "agents", "oauth-agent", "sessions"), {
+        recursive: true,
+      });
+      const sessionFile = path.join(
+        tempStateDir,
+        "agents",
+        "oauth-agent",
+        "sessions",
+        "oauth-session-1.jsonl",
+      );
+      fs.writeFileSync(
+        sessionFile,
+        `${JSON.stringify({ message: { role: "user", content: "run OAuth agent" } })}\n`,
+      );
+      startDiagnosticHeartbeat(
+        {
+          diagnostics: {
+            enabled: true,
+            stuckSessionWarnMs: 30_000,
+          },
+        },
+        { recoverStuckSession },
+      );
+      logSessionStateChange({
+        sessionId: "oauth-session-1",
+        sessionKey: "agent:oauth-agent:main",
+        state: "processing",
+      });
+      fs.appendFileSync(
+        sessionFile,
+        `${JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "OAuth agent listed 3 pending approvals." }],
+          },
+        })}\n`,
+      );
+
+      vi.advanceTimersByTime(61_000);
+    } finally {
+      unsubscribe();
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      fs.rmSync(tempStateDir, { recursive: true, force: true });
+    }
+
+    expectRecordFields(
+      requireRecord(
+        events.findLast((event) => event.type === "session.stuck"),
+        "app-agent stuck transcript event",
+      ),
+      {
+        type: "session.stuck",
+        state: "processing",
+        classification: "stale_session_state",
+        reason: "stale_session_state",
+        queueDepth: 0,
+      },
+    );
+    expectRecoveryCall(
+      recoverStuckSession,
+      { sessionId: "oauth-session-1", sessionKey: "agent:oauth-agent:main", queueDepth: 0 },
       ["ageMs", "stateGeneration"],
     );
   });

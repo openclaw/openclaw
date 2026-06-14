@@ -27,6 +27,28 @@ describe("classifySessionAttention", () => {
       },
     },
     {
+      name: "old transcript assistant context without current progress",
+      queueDepth: 0,
+      activity: {},
+      expected: {
+        eventType: "session.stuck",
+        reason: "stale_session_state",
+        classification: "stale_session_state",
+        recoveryEligible: true,
+      },
+    },
+    {
+      name: "current-turn transcript assistant context without active work",
+      queueDepth: 0,
+      activity: {},
+      expected: {
+        eventType: "session.stuck",
+        reason: "stale_session_state",
+        classification: "stale_session_state",
+        recoveryEligible: true,
+      },
+    },
+    {
       name: "active embedded run making progress",
       queueDepth: 0,
       activity: {

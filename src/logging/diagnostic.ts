@@ -34,7 +34,9 @@ import {
 } from "./diagnostic-session-attention.js";
 import {
   formatCronSessionDiagnosticFields,
+  readSessionTranscriptSize,
   resolveCronSessionDiagnosticContext,
+  resolveCronSessionTranscriptFileForContext,
 } from "./diagnostic-session-context.js";
 import {
   requestStuckSessionRecovery,
@@ -874,6 +876,16 @@ export function logSessionTurnCreated(params: {
   markActivity();
 }
 
+function readSessionTranscriptCursor(params: SessionRef): number | undefined {
+  const sessionFile =
+    params.sessionFile ??
+    resolveCronSessionTranscriptFileForContext({
+      sessionKey: params.sessionKey,
+      activeSessionId: params.sessionId,
+    });
+  return readSessionTranscriptSize(sessionFile);
+}
+
 export function logSessionStateChange(
   params: SessionRef & {
     state: SessionStateValue;
@@ -891,12 +903,20 @@ export function logSessionStateChange(
   state.generation = (state.generation ?? 0) + 1;
   state.lastStuckWarnAgeMs = undefined;
   state.lastLongRunningWarnAgeMs = undefined;
-  if (params.state === "processing" && prevState !== "processing") {
-    state.activeQueuedTurn = state.queueDepth > 0;
+  if (params.state === "processing") {
+    state.transcriptCursorBytes = readSessionTranscriptCursor({
+      sessionId: state.sessionId,
+      sessionKey: state.sessionKey,
+      sessionFile: state.sessionFile,
+    });
+    if (prevState !== "processing") {
+      state.activeQueuedTurn = state.queueDepth > 0;
+    }
   }
   if (params.state === "idle") {
     state.queueDepth = Math.max(0, state.queueDepth - 1);
     state.activeQueuedTurn = false;
+    state.transcriptCursorBytes = undefined;
   }
   if (!isProbeSession && diag.isEnabled("debug")) {
     diag.debug(
@@ -1007,6 +1027,11 @@ export function logSessionAttention(
     { sessionId: state.sessionId, sessionKey: state.sessionKey },
     Date.now(),
   );
+  const sessionContext = resolveCronSessionDiagnosticContext({
+    sessionKey: state.sessionKey,
+    activeSessionId: state.sessionId,
+    assistantAfterByteOffset: state.transcriptCursorBytes,
+  });
   const classification = classifySessionAttention({
     state: state.state as "idle" | "processing" | "waiting" | undefined,
     queueDepth: state.queueDepth,
@@ -1069,9 +1094,7 @@ export function logSessionAttention(
         ? "stalled session"
         : "long-running session";
   const activityFields = formatSessionActivityLogFields(activity);
-  const cronFields = formatCronSessionDiagnosticFields(
-    resolveCronSessionDiagnosticContext({ sessionKey: state.sessionKey }),
-  );
+  const cronFields = formatCronSessionDiagnosticFields(sessionContext);
   const detailFields = [activityFields, cronFields].filter(Boolean).join(" ");
   const message = `${label}: sessionId=${state.sessionId ?? "unknown"} sessionKey=${
     state.sessionKey ?? "unknown"
