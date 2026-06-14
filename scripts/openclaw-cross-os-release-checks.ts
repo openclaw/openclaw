@@ -3,12 +3,14 @@
 // Executed directly via Node.js + tsx in the release workflow.
 
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   appendFileSync,
   chmodSync,
   createReadStream,
   createWriteStream,
   existsSync,
+  lstatSync,
   mkdirSync,
   closeSync,
   openSync,
@@ -153,6 +155,7 @@ function buildReleaseProviderConfigOverride(providerMeta) {
 }
 
 const PACKAGE_DIST_INVENTORY_RELATIVE_PATH = "dist/postinstall-inventory.json";
+const PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH = "dist/postinstall-content-inventory.json";
 const INSTALL_STAGE_DEBRIS_DIR_PATTERN = /^\.openclaw-install-stage(?:-[^/]+)?$/iu;
 const OMITTED_QA_EXTENSION_PREFIXES = [
   "dist/extensions/qa-channel/",
@@ -752,6 +755,36 @@ function collectLegacyPluginDependencyStagingDebrisPaths(packageRoot) {
   return debris.toSorted((left, right) => left.localeCompare(right));
 }
 
+function collectPackagedDistSymlinkPaths(packageRoot, inventory) {
+  const symlinks = [];
+  const seen = new Set();
+  for (const relativePath of inventory) {
+    const parts = normalizeRelativePath(relativePath).split("/");
+    let current = packageRoot;
+    for (const part of parts) {
+      current = join(current, part);
+      const symlinkPath = normalizeRelativePath(relative(packageRoot, current));
+      if (seen.has(symlinkPath)) {
+        continue;
+      }
+      seen.add(symlinkPath);
+      try {
+        const stats = lstatSync(current);
+        if (stats.isSymbolicLink()) {
+          symlinks.push(symlinkPath);
+          break;
+        }
+      } catch (error) {
+        if (isNotFoundError(error)) {
+          break;
+        }
+        throw error;
+      }
+    }
+  }
+  return symlinks.toSorted((left, right) => left.localeCompare(right));
+}
+
 function assertNoLegacyPluginDependencyStagingDebris(packageRoot) {
   const debris = collectLegacyPluginDependencyStagingDebrisPaths(packageRoot);
   if (debris.length === 0) {
@@ -762,11 +795,41 @@ function assertNoLegacyPluginDependencyStagingDebris(packageRoot) {
   );
 }
 
+function assertNoPackagedDistSymlinks(packageRoot, inventory) {
+  const symlinks = collectPackagedDistSymlinkPaths(packageRoot, inventory);
+  if (symlinks.length === 0) {
+    return;
+  }
+  throw new Error(`unsafe package dist symlink: ${symlinks.join(", ")}`);
+}
+
+function assertSafePackageDistInventoryWriteRoots(packageRoot) {
+  // npm can omit a symlinked dist root from its dry-run inventory. Recheck the
+  // write roots so generated inventories cannot follow it outside sourceDir.
+  const packageRootStats = lstatSync(packageRoot);
+  if (packageRootStats.isSymbolicLink() || !packageRootStats.isDirectory()) {
+    throw new Error("unsafe package inventory write root");
+  }
+  try {
+    const distRootStats = lstatSync(join(packageRoot, "dist"));
+    if (distRootStats.isSymbolicLink() || !distRootStats.isDirectory()) {
+      throw new Error("unsafe package dist inventory write root");
+    }
+  } catch (error) {
+    if (!isNotFoundError(error)) {
+      throw error;
+    }
+  }
+}
+
 function isPackagedDistPath(relativePath) {
   if (!relativePath.startsWith("dist/")) {
     return false;
   }
   if (relativePath === PACKAGE_DIST_INVENTORY_RELATIVE_PATH) {
+    return false;
+  }
+  if (relativePath === PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH) {
     return false;
   }
   if (isLocalBuildMetadataDistPath(relativePath)) {
@@ -784,7 +847,26 @@ function isPackagedDistPath(relativePath) {
   return true;
 }
 
+function buildPackageDistContentInventory(packageRoot, inventory) {
+  return inventory
+    .map((relativePath) => {
+      const filePath = join(packageRoot, relativePath);
+      const stats = lstatSync(filePath);
+      if (!stats.isFile() || stats.isSymbolicLink()) {
+        throw new Error(`unsafe package dist path: ${relativePath}`);
+      }
+      return {
+        path: relativePath,
+        sha256: createHash("sha256").update(readFileSync(filePath)).digest("hex"),
+        mode: stats.mode & 0o777,
+        size: stats.size,
+      };
+    })
+    .toSorted((left, right) => left.path.localeCompare(right.path));
+}
+
 export async function writePackageDistInventoryForCandidate(params) {
+  assertSafePackageDistInventoryWriteRoots(params.sourceDir);
   assertNoLegacyPluginDependencyStagingDebris(params.sourceDir);
   const dryRun = await runCommand(
     npmCommand(),
@@ -809,9 +891,19 @@ export async function writePackageDistInventoryForCandidate(params) {
       return isPackagedDistPath(relativePath) ? [relativePath] : [];
     })
     .toSorted((left, right) => left.localeCompare(right));
+  assertNoPackagedDistSymlinks(params.sourceDir, inventory);
   const inventoryPath = join(params.sourceDir, PACKAGE_DIST_INVENTORY_RELATIVE_PATH);
+  assertSafePackageDistInventoryWriteRoots(params.sourceDir);
   mkdirSync(dirname(inventoryPath), { recursive: true });
+  assertSafePackageDistInventoryWriteRoots(params.sourceDir);
   writeFileSync(inventoryPath, `${JSON.stringify(inventory, null, 2)}\n`, "utf8");
+  const contentInventoryPath = join(params.sourceDir, PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH);
+  assertSafePackageDistInventoryWriteRoots(params.sourceDir);
+  writeFileSync(
+    contentInventoryPath,
+    `${JSON.stringify(buildPackageDistContentInventory(params.sourceDir, inventory), null, 2)}\n`,
+    "utf8",
+  );
 }
 
 function readProvidedCandidate(params) {
