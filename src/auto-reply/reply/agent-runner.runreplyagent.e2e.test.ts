@@ -24,7 +24,7 @@ type AgentRunParams = {
   onPartialReply?: (payload: { text?: string }) => Promise<void> | void;
   onAssistantMessageStart?: () => Promise<void> | void;
   onReasoningStream?: (payload: { text?: string }) => Promise<void> | void;
-  onBlockReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
+  onBlockReply?: (payload: ReplyPayload) => Promise<void> | void;
   onToolResult?: (payload: ReplyPayload) => Promise<void> | void;
   onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void;
   silentExpected?: boolean;
@@ -1755,6 +1755,45 @@ describe("runReplyAgent typing (heartbeat)", () => {
       );
     },
   );
+
+  it("surfaces side-effect progress after a directly delivered status-only reply", async () => {
+    const onBlockReply = vi.fn();
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      await params.onBlockReply?.({
+        text: "Checking status",
+        isStatusNotice: true,
+        presentation: { title: "Checking status", blocks: [] },
+      });
+      return {
+        payloads: [],
+        successfulCronAdds: 1,
+        meta: {},
+      };
+    });
+
+    const { run } = createMinimalRun({
+      blockStreamingEnabled: false,
+      opts: { onBlockReply },
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        MessageSid: "1503645939964055592",
+      },
+    });
+    const res = await run();
+    const payload = Array.isArray(res) ? res[0] : res;
+
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Checking status",
+        isStatusNotice: true,
+        presentation: { title: "Checking status", blocks: [] },
+      }),
+    );
+    expect(payload?.text).toBe(
+      "A scheduled task was created, but the agent did not provide a final response.",
+    );
+  });
 
   it("surfaces generic side-effect progress when a non-cron runtime returns no payloads", async () => {
     state.runEmbeddedAgentMock.mockResolvedValueOnce({

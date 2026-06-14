@@ -250,16 +250,20 @@ function hasVisibleMessagingTargetDeliveryEvidence(value: unknown): boolean {
   return value.some(hasVisibleReplyShape);
 }
 
+function hasSuccessfulDirectBlockReplyDelivery(payloads?: ReplyPayload[]): boolean {
+  return payloads?.some((payload) => !isReplyPayloadStatusNotice(payload)) ?? false;
+}
+
 function hasSuccessfulSourceReplyDelivery(params: {
   blockReplyPipeline: { didStream: () => boolean; isAborted: () => boolean } | null;
-  directlySentBlockKeys?: Set<string>;
+  directlySentBlockPayloads?: ReplyPayload[];
   messagingToolSentTexts?: string[];
   messagingToolSentMediaUrls?: string[];
   messagingToolSentTargets?: unknown[];
 }): boolean {
   return (
     (params.blockReplyPipeline?.didStream() && !params.blockReplyPipeline.isAborted()) ||
-    (params.directlySentBlockKeys?.size ?? 0) > 0 ||
+    hasSuccessfulDirectBlockReplyDelivery(params.directlySentBlockPayloads) ||
     hasNonEmptyStringArray(params.messagingToolSentTexts) ||
     hasNonEmptyStringArray(params.messagingToolSentMediaUrls) ||
     hasCommittedMessagingTargetDeliveryEvidence(params.messagingToolSentTargets)
@@ -1965,7 +1969,7 @@ export async function runReplyAgent(params: {
 
     const sourceReplyWasDelivered = hasSuccessfulSourceReplyDelivery({
       blockReplyPipeline,
-      directlySentBlockKeys,
+      directlySentBlockPayloads,
       messagingToolSentTexts: runResult.messagingToolSentTexts,
       messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
       messagingToolSentTargets: runResult.messagingToolSentTargets,
@@ -1984,7 +1988,7 @@ export async function runReplyAgent(params: {
     });
     const successfulDirectSourceReplyDelivery =
       Boolean(blockReplyPipeline?.didStream() && !blockReplyPipeline.isAborted()) ||
-      (directlySentBlockKeys?.size ?? 0) > 0 ||
+      hasSuccessfulDirectBlockReplyDelivery(directlySentBlockPayloads) ||
       committedMessagingToolSourceReplyDelivery;
     if (
       opts?.sourceReplyDeliveryMode === "message_tool_only" &&

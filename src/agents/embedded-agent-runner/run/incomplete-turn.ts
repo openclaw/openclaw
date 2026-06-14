@@ -183,6 +183,8 @@ const NON_AUTHORIZING_DIRECT_SAFETY_CONSTRAINT_RE =
   /\b(?:please\s+)?(?:ensure|make\s+sure)\b[^?\n]{0,80}(?:\b(?:not|never)\b|\bdo\s+not\b|\bdon['’]t\b)/i;
 const NON_AUTHORIZING_ADVISORY_PROMPT_RE =
   /^(?:(?:hey|hi|hello)\b[\s,!:-]*)?(?:please[\s,]+)?(?:(?:(?:what|which|how|why|where|who|whom|whose)\b[^?\n]{0,200}\b|when\s+)(?:can|could|would|will|should|do|does|did|are|is)\s+you\b|(?:(?:can|could|would|will)\s+you\s+)?(?:please\s+)?(?:(?:explain|describe|walk\s+me\s+through|help\s+me\s+understand)\b|(?:tell\s+me|show\s+me)\b[^?\n]{0,200}\b(?:how|why|what|which|when|where|whether|steps?|procedure|instructions?)\b)|(?:(?:can|could|would|will|should|do)\s+you\s+)?(?:please\s+)?(?:advise|recommend)\b)/i;
+const NON_AUTHORIZING_INFORMATION_QUESTION_RE =
+  /^(?:what|which|how|why|where|who|whom|whose|when)\b[^?\n]{0,400}\?\s*$/i;
 const EXPLICIT_ADVISORY_FOLLOW_UP_ACTION_RE =
   /[.!?]\s*(?:(?:and\s+)?(?:then|next|after(?:ward|wards| that))\s+)?(?:please\s+)?(?:go\s+ahead(?:\s+and)?\s+)?(?:check|inspect|look(?:\s+into|\s+at)?|read|write|edit|update|fix|investigate|debug|run|search|find|implement|add|remove|delete|create|move|rename|copy|install|uninstall|enable|disable|configure|reset|archive|cancel|stop|test|verify|start|launch|send|deploy|ship|migrate|restart|set|load|hit|ask|wire|channel)\b/i;
 const ACTIONABLE_PROMPT_TERSE_REQUEST_RE =
@@ -323,8 +325,6 @@ const QUOTED_USER_PROMPT_FENCED_BLOCK_RE =
   /(?:^|\n)[ \t]*(?:`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:\n[ \t]*(?:`{3,}|~{3,})[ \t]*(?=\n|$)|$)/gu;
 const QUOTED_USER_PROMPT_INDENTED_LINE_RE = /^(?: {4,}|\t).+$/gmu;
 const QUOTED_USER_PROMPT_MARKDOWN_LINK_RE = /!?\[[^\]\n]*\]\([^)\n]*\)/gu;
-const QUOTED_USER_PROMPT_MARKDOWN_EMPHASIS_RE =
-  /(?:\*{1,3}(?=\S)[^*\n]*?\S\*{1,3}|_{1,3}(?=\S)[^_\n]*?\S_{1,3})/gu;
 const NON_ACTIONABLE_PROMPT_NORMALIZED_SET = new Set([
   "cool",
   "great",
@@ -1086,7 +1086,6 @@ function stripNonAuthorizingUserPromptExcerpts(text: string): string {
     .replace(QUOTED_USER_PROMPT_FENCED_BLOCK_RE, " ")
     .replace(QUOTED_USER_PROMPT_INDENTED_LINE_RE, " ")
     .replace(QUOTED_USER_PROMPT_MARKDOWN_LINK_RE, " ")
-    .replace(QUOTED_USER_PROMPT_MARKDOWN_EMPHASIS_RE, " ")
     .replace(QUOTED_USER_PROMPT_SEGMENT_RE, " ")
     .replace(QUOTED_USER_PROMPT_LINE_RE, " ");
 }
@@ -1175,7 +1174,10 @@ function isLikelyActionableUserPrompt(text: string): boolean {
     isExplicitPlanningOnlyUserPrompt(trimmed) ||
     NON_AUTHORIZING_NEGATED_ACTION_REQUEST_RE.test(actionableText) ||
     NON_AUTHORIZING_DIRECT_SAFETY_CONSTRAINT_RE.test(actionableText) ||
-    (NON_AUTHORIZING_ADVISORY_PROMPT_RE.test(trimmed) &&
+    ((NON_AUTHORIZING_ADVISORY_PROMPT_RE.test(trimmed) ||
+      (NON_AUTHORIZING_INFORMATION_QUESTION_RE.test(trimmed) &&
+        !ACTIONABLE_PROMPT_REQUEST_RE.test(actionableText) &&
+        !ACTIONABLE_PROMPT_FIRST_PERSON_REQUEST_RE.test(actionableText))) &&
       !hasExplicitAdvisoryFollowUpAction(trimmed))
   ) {
     return false;

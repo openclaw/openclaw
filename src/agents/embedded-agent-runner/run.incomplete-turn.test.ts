@@ -7238,6 +7238,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     "Would you report the result?",
     "Will you answer the question?",
     "Can you share the findings?",
+    "Can you **delete** the old backup?",
     `The log says "Can you delete the file?" Please inspect the log.`,
     `The log says "Please ensure you never restart production." Please inspect the log.`,
     `The ticket says "What's your plan for deleting old backups?" Please inspect the ticket and report.`,
