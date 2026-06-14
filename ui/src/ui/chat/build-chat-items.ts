@@ -89,6 +89,97 @@ function safeNormalizeMessage(message: unknown): NormalizedMessage | null {
   }
 }
 
+/**
+ * Extract the sent message text from an assistant turn that used the `message` tool
+ * with `action="send"`. Returns all non-empty message texts found across all such tool
+ * call content blocks in a single assistant message, paired with the toolCallId so
+ * callers can skip turns that already have a delivery-mirror in the transcript.
+ */
+function extractMessageSendTexts(
+  message: unknown,
+): Array<{ text: string; toolCallId: string }> {
+  const m = asRecord(message);
+  if (!m) {
+    return [];
+  }
+  const role = typeof m.role === "string" ? m.role.toLowerCase() : "";
+  if (role !== "assistant") {
+    return [];
+  }
+  const contentItems = Array.isArray(m.content) ? m.content : null;
+  if (!contentItems) {
+    return [];
+  }
+  const results: Array<{ text: string; toolCallId: string }> = [];
+  for (const item of contentItems) {
+    const block = asRecord(item);
+    if (!block) {
+      continue;
+    }
+    const kind = typeof block.type === "string" ? block.type.toLowerCase() : "";
+    const isToolCall =
+      kind === "toolcall" ||
+      kind === "tool_call" ||
+      kind === "tooluse" ||
+      kind === "tool_use" ||
+      (typeof block.name === "string" &&
+        (block.arguments != null || block.args != null || block.input != null));
+    if (!isToolCall) {
+      continue;
+    }
+    const toolName = typeof block.name === "string" ? block.name : "";
+    if (toolName !== "message") {
+      continue;
+    }
+    // Resolve args from various shapes (arguments / args / input).
+    const rawArgs = block.arguments ?? block.args ?? block.input;
+    const args =
+      typeof rawArgs === "string"
+        ? (() => {
+            try {
+              return JSON.parse(rawArgs) as Record<string, unknown>;
+            } catch {
+              return null;
+            }
+          })()
+        : asRecord(rawArgs);
+    if (!args) {
+      continue;
+    }
+    const action = typeof args.action === "string" ? args.action.toLowerCase() : "";
+    if (action !== "send") {
+      continue;
+    }
+    const text = typeof args.message === "string" ? args.message.trim() : "";
+    if (!text) {
+      continue;
+    }
+    const toolCallId =
+      typeof block.id === "string"
+        ? block.id
+        : typeof block.toolCallId === "string"
+          ? block.toolCallId
+          : typeof block.tool_call_id === "string"
+            ? block.tool_call_id
+            : "";
+    results.push({ text, toolCallId });
+  }
+  return results;
+}
+
+/**
+ * Returns true if the message is an OpenClaw `delivery-mirror` assistant message.
+ * These are injected when the message tool send is mirrored into the transcript and
+ * should not be duplicated by the Control UI projection.
+ */
+function isDeliveryMirrorMessage(message: unknown): boolean {
+  const m = asRecord(message);
+  if (!m) {
+    return false;
+  }
+  return m.provider === "openclaw" && m.model === "delivery-mirror";
+}
+
 function extractChatMessagePreview(toolMessage: unknown): {
   preview: Extract<NonNullable<ToolCard["preview"]>, { kind: "canvas" }>;
   text: string | null;
@@ -553,6 +644,20 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       },
     });
   }
+  // Collect delivery-mirror tool call ids already in history so we can skip duplicate
+  // synthetic bubble injection for message(action=send) turns.
+  const mirroredToolCallIds = new Set<string>();
+  for (const msg of history) {
+    if (!isDeliveryMirrorMessage(msg)) {
+      continue;
+    }
+    const m = asRecord(msg);
+    const idempotencyKey = m && typeof m.idempotencyKey === "string" ? m.idempotencyKey : "";
+    if (idempotencyKey) {
+      mirroredToolCallIds.add(idempotencyKey);
+    }
+  }
+
   for (let i = historyStart; i < history.length; i++) {
     const msg = history[i];
     const normalized = safeNormalizeMessage(msg);
@@ -582,6 +687,61 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
 
     if (!props.showToolCalls && normalized.role.toLowerCase() === "toolresult") {
       continue;
+    }
+
+    // Project message(action=send) tool calls as readable assistant bubbles.
+    // The runtime may suppress the final assistant reply when message tool already sent,
+    // and delivery-mirror may not always be written. Detect tool call content blocks
+    // for the message tool and inject synthetic assistant bubbles for the sent text.
+    // Note: use the raw role here — assistant messages with only toolcall content blocks
+    // are reclassified to "toolResult" by normalizeMessage, so normalized.role would
+    // miss them. extractMessageSendTexts() guards that the raw role is "assistant".
+    const rawRole =
+      typeof (asRecord(msg) ?? {}).role === "string"
+        ? ((asRecord(msg) ?? {}).role as string).toLowerCase()
+        : "";
+    if (rawRole === "assistant") {
+      const sends = extractMessageSendTexts(msg);
+      for (const send of sends) {
+        if (mirroredToolCallIds.has(send.toolCallId)) {
+          // Already mirrored into transcript — skip to avoid duplicate bubble.
+          continue;
+        }
+        // Check if the history already has a delivery-mirror that matches this text
+        // (idempotencyKey may not always be the toolCallId, fall back to text match).
+        const alreadyMirrored = history.some((m) => {
+          if (!isDeliveryMirrorMessage(m)) {
+            return false;
+          }
+          const mr = asRecord(m);
+          const mc = Array.isArray(mr?.content) ? mr.content : null;
+          if (!mc) {
+            return false;
+          }
+          return mc.some((block) => {
+            const b = asRecord(block);
+            return (
+              b?.type === "text" &&
+              typeof b.text === "string" &&
+              b.text.trim() === send.text
+            );
+          });
+        });
+        if (alreadyMirrored) {
+          continue;
+        }
+        items.push({
+          kind: "message",
+          key: `message-send-bubble:${props.sessionKey}:${send.toolCallId || i}`,
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: send.text }],
+            provider: "openclaw",
+            model: "message-send-projection",
+            timestamp: normalized.timestamp ?? Date.now(),
+          },
+        });
+      }
     }
 
     const searchQuery = props.searchQuery ?? "";

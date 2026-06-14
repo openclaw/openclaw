@@ -840,6 +840,165 @@ describe("buildChatItems", () => {
     expect(action.kind).toBe("session-checkpoints");
     expect(action.label).toBe("Open checkpoints");
   });
+
+  describe("message(action=send) visible-reply projection", () => {
+    it("injects a synthetic assistant bubble for a message tool send turn", () => {
+      const groups = messageGroups({
+        messages: [
+          {
+            id: "assistant-message-send-turn",
+            role: "assistant",
+            content: [
+              {
+                type: "toolcall",
+                id: "call-msg-1",
+                name: "message",
+                arguments: { action: "send", to: "+1555", message: "Hello from the agent!" },
+              },
+            ],
+            timestamp: 1_000,
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call-msg-1",
+            toolName: "message",
+            content: JSON.stringify({ ok: true, messageId: "tg-123" }),
+            timestamp: 1_001,
+          },
+        ],
+      });
+
+      // Should have: synthetic assistant bubble + tool result (showToolCalls=true)
+      const assistantGroups = groups.filter((g) => g.role === "assistant");
+      expect(assistantGroups.length).toBeGreaterThanOrEqual(1);
+      const projectedGroup = assistantGroups.find((g) =>
+        g.messages.some((m) => {
+          const msg = m.message as { content?: unknown };
+          if (!Array.isArray(msg.content)) {
+            return false;
+          }
+          return msg.content.some(
+            (block) =>
+              (block as { type?: unknown; text?: unknown }).type === "text" &&
+              (block as { text?: unknown }).text === "Hello from the agent!",
+          );
+        }),
+      );
+      expect(projectedGroup).toBeDefined();
+    });
+
+    it("does not inject a synthetic bubble when a delivery-mirror already covers the same text", () => {
+      const groups = messageGroups({
+        messages: [
+          {
+            id: "assistant-message-send-turn",
+            role: "assistant",
+            content: [
+              {
+                type: "toolcall",
+                id: "call-msg-2",
+                name: "message",
+                arguments: { action: "send", to: "+1555", message: "Mirrored reply." },
+              },
+            ],
+            timestamp: 1_000,
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call-msg-2",
+            toolName: "message",
+            content: JSON.stringify({ ok: true, messageId: "tg-456" }),
+            timestamp: 1_001,
+          },
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "Mirrored reply." }],
+            provider: "openclaw",
+            model: "delivery-mirror",
+            timestamp: 1_002,
+          },
+        ],
+      });
+
+      // Should have exactly one assistant group with this text (from delivery-mirror, not duplicated)
+      const allAssistantMessages = groups
+        .filter((g) => g.role === "assistant")
+        .flatMap((g) => g.messages)
+        .filter((m) => {
+          const msg = m.message as { content?: unknown };
+          if (!Array.isArray(msg.content)) {
+            return false;
+          }
+          return msg.content.some(
+            (block) =>
+              (block as { type?: unknown; text?: unknown }).type === "text" &&
+              (block as { text?: unknown }).text === "Mirrored reply.",
+          );
+        });
+      // Exactly one bubble, not two
+      expect(allAssistantMessages).toHaveLength(1);
+    });
+
+    it("does not inject a bubble for message tool calls with non-send actions", () => {
+      const groups = messageGroups({
+        messages: [
+          {
+            id: "assistant-poll-turn",
+            role: "assistant",
+            content: [
+              {
+                type: "toolcall",
+                id: "call-msg-poll",
+                name: "message",
+                arguments: { action: "poll", channel: "discord" },
+              },
+            ],
+            timestamp: 1_000,
+          },
+        ],
+      });
+
+      const assistantGroups = groups.filter((g) => g.role === "assistant");
+      // The poll call has no message text, so no bubble should be projected
+      const projectedBubble = assistantGroups.find((g) =>
+        g.messages.some((m) => {
+          const rec = m.message as { model?: unknown };
+          return rec.model === "message-send-projection";
+        }),
+      );
+      expect(projectedBubble).toBeUndefined();
+    });
+
+    it("does not inject a bubble for message tool send with empty text", () => {
+      const groups = messageGroups({
+        messages: [
+          {
+            id: "assistant-media-send-turn",
+            role: "assistant",
+            content: [
+              {
+                type: "toolcall",
+                id: "call-msg-media",
+                name: "message",
+                arguments: { action: "send", to: "+1555", message: "", media: "file:///tmp/x.mp4" },
+              },
+            ],
+            timestamp: 1_000,
+          },
+        ],
+      });
+
+      const projectedBubble = groups
+        .filter((g) => g.role === "assistant")
+        .find((g) =>
+          g.messages.some((m) => {
+            const rec = m.message as { model?: unknown };
+            return rec.model === "message-send-projection";
+          }),
+        );
+      expect(projectedBubble).toBeUndefined();
+    });
+  });
 });
 
 function canvasBlocksIn(group: MessageGroup): unknown[] {
