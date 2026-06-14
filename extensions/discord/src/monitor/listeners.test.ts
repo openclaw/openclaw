@@ -2,16 +2,24 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 let DiscordMessageListener: typeof import("./listeners.js").DiscordMessageListener;
+let DiscordMessageUpdateListener: typeof import("./listeners.js").DiscordMessageUpdateListener;
+let DiscordMessageDeleteListener: typeof import("./listeners.js").DiscordMessageDeleteListener;
 let DiscordInteractionListener: typeof import("./listeners.js").DiscordInteractionListener;
 
 beforeAll(async () => {
-  ({ DiscordMessageListener, DiscordInteractionListener } = await import("./listeners.js"));
+  ({
+    DiscordMessageListener,
+    DiscordMessageUpdateListener,
+    DiscordMessageDeleteListener,
+    DiscordInteractionListener,
+  } = await import("./listeners.js"));
 });
 
 function createLogger() {
   return {
     error: vi.fn(),
     warn: vi.fn(),
+    info: vi.fn(),
   };
 }
 
@@ -158,6 +166,116 @@ describe("DiscordMessageListener", () => {
     await listener.handle(fakeEvent("ch-2"), {} as never);
 
     expect(onEvent).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("DiscordMessageUpdateListener", () => {
+  function editEvent(overrides: Record<string, unknown> = {}) {
+    return {
+      channel_id: "ch-1",
+      content: "edited text",
+      edited_timestamp: "2026-06-10T01:02:03.000Z",
+      message: { id: "m-1", channel_id: "ch-1" },
+      ...overrides,
+    } as never;
+  }
+
+  it("dispatches user edits to the handler with edit metadata", async () => {
+    const handler = vi.fn(async () => {});
+    const onEvent = vi.fn();
+    const listener = new DiscordMessageUpdateListener(handler as never, undefined, onEvent);
+
+    await listener.handle(editEvent(), {} as never);
+    await flushAsyncWork();
+
+    expect(onEvent).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledTimes(1);
+    const options = handler.mock.calls[0]?.[2] as { edit?: { editedTimestamp?: string } };
+    expect(options?.edit?.editedTimestamp).toBe("2026-06-10T01:02:03.000Z");
+  });
+
+  it("ignores updates without edited_timestamp (embed unfurls, pins)", async () => {
+    const handler = vi.fn(async () => {});
+    const onEvent = vi.fn();
+    const listener = new DiscordMessageUpdateListener(handler as never, undefined, onEvent);
+
+    await listener.handle(editEvent({ edited_timestamp: undefined }), {} as never);
+    await listener.handle(editEvent({ edited_timestamp: null }), {} as never);
+    await flushAsyncWork();
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(onEvent).not.toHaveBeenCalled();
+  });
+
+  it("ignores partial updates without hydrated content", async () => {
+    const handler = vi.fn(async () => {});
+    const listener = new DiscordMessageUpdateListener(handler as never);
+
+    await listener.handle(editEvent({ content: undefined }), {} as never);
+    await flushAsyncWork();
+
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("logs async handler failures", async () => {
+    const handler = vi.fn(async () => {
+      throw new Error("edit boom");
+    });
+    const logger = createLogger();
+    const listener = new DiscordMessageUpdateListener(handler as never, logger as never);
+
+    await listener.handle(editEvent(), {} as never);
+    await flushAsyncWork();
+
+    expect(logger.error).toHaveBeenCalledTimes(1);
+    expect(firstErrorMessage(logger)).toContain(
+      "discord message-update handler failed: Error: edit boom",
+    );
+  });
+});
+
+describe("DiscordMessageDeleteListener", () => {
+  it("cancels the run triggered by the deleted message", async () => {
+    const cancelRun = vi.fn(() => true);
+    const logger = createLogger();
+    const onEvent = vi.fn();
+    const listener = new DiscordMessageDeleteListener(cancelRun, logger as never, onEvent);
+
+    await listener.handle({ id: "m-1", channel_id: "ch-1" });
+
+    expect(onEvent).toHaveBeenCalledTimes(1);
+    expect(cancelRun).toHaveBeenCalledWith({
+      channelId: "ch-1",
+      messageId: "m-1",
+      reason: "discord source message deleted",
+    });
+    expect(logger.info).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays quiet when no active run matches the deleted message", async () => {
+    const cancelRun = vi.fn(() => false);
+    const logger = createLogger();
+    const listener = new DiscordMessageDeleteListener(cancelRun, logger as never);
+
+    await listener.handle({ id: "m-2", channel_id: "ch-1" });
+
+    expect(logger.info).not.toHaveBeenCalled();
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it("logs cancel hook failures", async () => {
+    const cancelRun = vi.fn(() => {
+      throw new Error("cancel boom");
+    });
+    const logger = createLogger();
+    const listener = new DiscordMessageDeleteListener(cancelRun, logger as never);
+
+    await listener.handle({ id: "m-3", channel_id: "ch-1" });
+
+    expect(logger.error).toHaveBeenCalledTimes(1);
+    expect(firstErrorMessage(logger)).toContain(
+      "discord message-delete handler failed: Error: cancel boom",
+    );
   });
 });
 

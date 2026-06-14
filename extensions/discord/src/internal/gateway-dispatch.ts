@@ -29,9 +29,12 @@ export function dispatchVoiceGatewayEvent(client: Client, type: string, data: un
 
 export function mapGatewayDispatchData(client: Client, type: string, data: unknown): unknown {
   const messageCreate: string = GatewayDispatchEvents.MessageCreate;
+  const messageUpdate: string = GatewayDispatchEvents.MessageUpdate;
   const reactionAdd: string = GatewayDispatchEvents.MessageReactionAdd;
   const reactionRemove: string = GatewayDispatchEvents.MessageReactionRemove;
-  if (type === messageCreate) {
+  // MESSAGE_UPDATE payloads are partial for non-edit patches (embed unfurls,
+  // pins); they still carry id/channel_id, and edit gating happens downstream.
+  if (type === messageCreate || type === messageUpdate) {
     return createMessageDispatchData(client, data as MessageCreatePayload);
   }
   if (type === reactionAdd || type === reactionRemove) {

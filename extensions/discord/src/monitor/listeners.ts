@@ -3,8 +3,11 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import {
   type Client,
+  type DiscordMessageDeleteDispatchData,
   InteractionCreateListener,
   MessageCreateListener,
+  MessageDeleteListener,
+  MessageUpdateListener,
   PresenceUpdateListener,
   ThreadUpdateListener,
 } from "../internal/discord.js";
@@ -22,8 +25,14 @@ export type DiscordInteractionEvent = Parameters<InteractionCreateListener["hand
 export type DiscordMessageHandler = (
   data: DiscordMessageEvent,
   client: Client,
-  options?: { abortSignal?: AbortSignal },
+  options?: { abortSignal?: AbortSignal; edit?: { editedTimestamp: string } },
 ) => Promise<void>;
+
+export type DiscordMessageRunCancel = (params: {
+  channelId: string;
+  messageId: string;
+  reason: string;
+}) => boolean;
 
 export function registerDiscordListener(listeners: Array<object>, listener: object) {
   if (listeners.some((existing) => existing.constructor === listener.constructor)) {
@@ -52,6 +61,67 @@ export class DiscordMessageListener extends MessageCreateListener {
         const logger = this.logger ?? discordEventQueueLog;
         logger.error(danger(`discord handler failed: ${String(err)}`));
       });
+  }
+}
+
+export class DiscordMessageUpdateListener extends MessageUpdateListener {
+  constructor(
+    private handler: DiscordMessageHandler,
+    private logger?: Logger,
+    private onEvent?: () => void,
+  ) {
+    super();
+  }
+
+  async handle(data: DiscordMessageEvent, client: Client) {
+    // Discord also fires MESSAGE_UPDATE for embed unfurls, pins, and other
+    // partial patches; only real user edits carry edited_timestamp, and only
+    // payloads with hydrated content can be reprocessed as a new revision.
+    const raw = data as { edited_timestamp?: string | null; content?: unknown };
+    const editedTimestamp =
+      typeof raw.edited_timestamp === "string" ? raw.edited_timestamp.trim() : "";
+    if (!editedTimestamp || typeof raw.content !== "string") {
+      return;
+    }
+    this.onEvent?.();
+    // Fire-and-forget like message creates; the handler owns supersede/replay.
+    void Promise.resolve()
+      .then(() => this.handler(data, client, { edit: { editedTimestamp } }))
+      .catch((err: unknown) => {
+        const logger = this.logger ?? discordEventQueueLog;
+        logger.error(danger(`discord message-update handler failed: ${String(err)}`));
+      });
+  }
+}
+
+export class DiscordMessageDeleteListener extends MessageDeleteListener {
+  constructor(
+    private cancelRun: DiscordMessageRunCancel,
+    private logger?: Logger,
+    private onEvent?: () => void,
+  ) {
+    super();
+  }
+
+  async handle(data: DiscordMessageDeleteDispatchData) {
+    this.onEvent?.();
+    try {
+      const cancelled = this.cancelRun({
+        channelId: data.channel_id,
+        messageId: data.id,
+        reason: "discord source message deleted",
+      });
+      if (cancelled) {
+        const logger = this.logger ?? discordEventQueueLog;
+        logger.info("Discord message deleted — cancelled triggered run", {
+          channelId: data.channel_id,
+          messageId: data.id,
+        });
+      }
+    } catch (err) {
+      const logger = this.logger ?? discordEventQueueLog;
+      logger.error(danger(`discord message-delete handler failed: ${String(err)}`));
+    }
   }
 }
 
