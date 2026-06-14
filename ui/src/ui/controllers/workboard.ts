@@ -3030,11 +3030,13 @@ async function refreshWorkboardLifecycleTasks(
         return null;
       }
       resetWorkboardLifecycleTaskConfirmations(state);
-      const recoveredFromTaskRefresh =
-        state.lifecycleTaskRefreshFailed || state.lifecycleTaskRefreshError !== null;
+      const recoveredTaskRefreshError = state.lifecycleTaskRefreshError;
       setWorkboardLifecycleTaskRefreshFailed(state, false, { host: params.host });
       state.lifecycleTaskRefreshError = null;
-      if (recoveredFromTaskRefresh) {
+      if (
+        recoveredTaskRefreshError !== null &&
+        state.lastRefreshError === recoveredTaskRefreshError
+      ) {
         state.lastRefreshError = null;
       }
       params.requestUpdate?.();

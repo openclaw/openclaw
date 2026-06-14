@@ -5283,12 +5283,13 @@ describe("workboard controller", () => {
     expect(requestUpdate).toHaveBeenCalledOnce();
     vi.clearAllMocks();
     state.error = "unrelated write error";
+    state.lastRefreshError = "newer cards refresh failure";
     await syncWorkboardLifecycle({ host, client: client as never, sessions: [], requestUpdate });
 
     expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
     expect(state.lifecycleTaskRefreshFailed).toBe(false);
     expect(state.lifecycleTaskRefreshError).toBeNull();
-    expect(state.lastRefreshError).toBeNull();
+    expect(state.lastRefreshError).toBe("newer cards refresh failure");
     expect(state.error).toBe("unrelated write error");
     expect(requestUpdate).toHaveBeenCalledOnce();
   });
