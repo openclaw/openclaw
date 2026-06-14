@@ -61,6 +61,104 @@ describe("plugin registry provider-like registrations", () => {
     expect(catalogRegistration?.provider.kinds).toEqual(["text", "video_generation"]);
   });
 
+  it("snapshots model catalog provider descriptors during registration", async () => {
+    const pluginRegistry = createTestRegistry();
+    const record = createPluginRecord({
+      id: "catalog-owner",
+      name: "Catalog Owner",
+      source: "/tmp/catalog-owner/index.js",
+      origin: "global",
+      enabled: true,
+      configSchema: false,
+    });
+    let providerReads = 0;
+    let kindsReads = 0;
+    let staticCatalogReads = 0;
+
+    pluginRegistry.registerModelCatalogProvider(record, {
+      get provider() {
+        providerReads += 1;
+        if (providerReads > 1) {
+          throw new Error("provider id getter exploded");
+        }
+        return "catalog-provider";
+      },
+      get kinds() {
+        kindsReads += 1;
+        if (kindsReads > 1) {
+          throw new Error("provider kinds getter exploded");
+        }
+        return ["text"];
+      },
+      get staticCatalog() {
+        staticCatalogReads += 1;
+        if (staticCatalogReads > 1) {
+          throw new Error("static catalog getter exploded");
+        }
+        return () => [
+          {
+            kind: "text",
+            provider: "catalog-provider",
+            model: "catalog-model",
+            source: "static",
+          },
+        ];
+      },
+    });
+
+    expect(pluginRegistry.registry.modelCatalogProviders).toHaveLength(1);
+    const catalogProvider = pluginRegistry.registry.modelCatalogProviders[0]?.provider;
+    expect(catalogProvider?.provider).toBe("catalog-provider");
+    expect(catalogProvider?.kinds).toEqual(["text"]);
+    expect(catalogProvider?.staticCatalog?.({} as never)).toEqual([
+      {
+        kind: "text",
+        provider: "catalog-provider",
+        model: "catalog-model",
+        source: "static",
+      },
+    ]);
+    expect(providerReads).toBe(1);
+    expect(kindsReads).toBe(1);
+    expect(staticCatalogReads).toBe(1);
+  });
+
+  it("keeps healthy model catalog providers after unreadable registration metadata", () => {
+    const pluginRegistry = createTestRegistry();
+    const record = createPluginRecord({
+      id: "catalog-owner",
+      name: "Catalog Owner",
+      source: "/tmp/catalog-owner/index.js",
+      origin: "global",
+      enabled: true,
+      configSchema: false,
+    });
+
+    pluginRegistry.registerModelCatalogProvider(record, {
+      get provider() {
+        throw new Error("provider id getter exploded");
+      },
+      kinds: ["text"],
+    });
+    pluginRegistry.registerModelCatalogProvider(record, {
+      provider: "catalog-provider",
+      kinds: ["text"],
+    });
+
+    expect(pluginRegistry.registry.modelCatalogProviders).toHaveLength(1);
+    expect(pluginRegistry.registry.modelCatalogProviders[0]?.provider.provider).toBe(
+      "catalog-provider",
+    );
+    expect(pluginRegistry.registry.diagnostics).toEqual([
+      {
+        level: "error",
+        pluginId: "catalog-owner",
+        source: "/tmp/catalog-owner/index.js",
+        message: "model catalog provider registration metadata unreadable",
+      },
+    ]);
+  });
+
   it("combines same-plugin overlapping model catalog hooks", async () => {
     const pluginRegistry = createTestRegistry();
     const record = createPluginRecord({
