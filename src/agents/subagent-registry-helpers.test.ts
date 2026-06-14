@@ -2,7 +2,11 @@
 // for announce delivery give-up paths.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { defaultRuntime } from "../runtime.js";
-import { logAnnounceGiveUp, reconcileOrphanedRun } from "./subagent-registry-helpers.js";
+import {
+  capFrozenResultText,
+  logAnnounceGiveUp,
+  reconcileOrphanedRun,
+} from "./subagent-registry-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 function createRunEntry(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
@@ -19,6 +23,29 @@ function createRunEntry(overrides: Partial<SubagentRunRecord> = {}): SubagentRun
     ...overrides,
   };
 }
+
+describe("capFrozenResultText", () => {
+  const MAX_BYTES = 100 * 1024;
+
+  it("truncates oversized multibyte text on a character boundary without U+FFFD or exceeding the cap", () => {
+    for (const char of ["😀", "中"]) {
+      const charBytes = Buffer.byteLength(char, "utf8");
+      const oversized = char.repeat(Math.ceil((MAX_BYTES + 4096) / charBytes));
+      const capped = capFrozenResultText(oversized);
+      // A mid-character cut would append a 3-byte U+FFFD and spill 1+ byte over
+      // the documented cap; a boundary-safe cut keeps the payload within it.
+      expect(Buffer.byteLength(capped, "utf8")).toBeLessThanOrEqual(MAX_BYTES);
+      // No replacement character from a split multibyte sequence.
+      expect(capped.includes("�")).toBe(false);
+      expect(capped).toContain("[truncated:");
+    }
+  });
+
+  it("returns trimmed text unchanged when within the cap", () => {
+    expect(capFrozenResultText("  hello world  ")).toBe("hello world");
+    expect(capFrozenResultText("   ")).toBe("");
+  });
+});
 
 describe("reconcileOrphanedRun", () => {
   afterEach(() => {
