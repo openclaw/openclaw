@@ -121,6 +121,7 @@ export function scanEmptyAllowlistPolicyWarnings(
           k !== "allowFrom" &&
           k !== "groups" &&
           k !== "channels" &&
+          k !== "defaultAccount" &&
           !k.startsWith("_") &&
           typeof (channelConfig as Record<string, unknown>)[k] === "string",
       );
