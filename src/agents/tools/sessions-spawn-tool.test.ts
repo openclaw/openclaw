@@ -132,7 +132,19 @@ describe("sessions_spawn tool", () => {
   it("advertises ACP runtime affordances when an ACP backend is loaded", () => {
     registerAcpBackendForTest();
 
-    const tool = createSessionsSpawnTool();
+    const tool = createSessionsSpawnTool({
+      agentChannel: "discord",
+      agentAccountId: "default",
+      config: {
+        channels: {
+          discord: {
+            threadBindings: {
+              spawnSessions: true,
+            },
+          },
+        },
+      },
+    });
     const schema = tool.parameters as {
       properties?: {
         runtime?: { enum?: string[] };
@@ -143,6 +155,7 @@ describe("sessions_spawn tool", () => {
 
     expect(tool.displaySummary).toBe("Spawn subagent or ACP session.");
     expect(tool.description).toContain('runtime="acp"');
+    expect(tool.description).toContain('unless ACP uses `streamTo="parent"`');
     expect(schema.properties?.runtime?.enum).toEqual(["subagent", "acp"]);
     const resumeSessionId = requireSchemaProperty(schema.properties, "resumeSessionId");
     const streamTo = requireSchemaProperty(schema.properties, "streamTo");
@@ -259,6 +272,7 @@ describe("sessions_spawn tool", () => {
     expect(schema.properties?.thread).toBeUndefined();
     expect(schema.properties?.mode?.enum).toEqual(["run"]);
     expect(tool.description).not.toContain("thread-bound");
+    expect(tool.description).not.toContain("session-mode output stays in thread");
   });
 
   it("shows thread-bound spawn fields when current channel allows spawnSessions", () => {

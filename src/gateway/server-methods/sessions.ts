@@ -51,7 +51,6 @@ import { compactEmbeddedAgentSession } from "../../agents/embedded-agent.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import { normalizeReasoningLevel, normalizeThinkLevel } from "../../auto-reply/thinking.js";
 import {
-  loadSessionStore,
   runSessionsCleanup,
   serializeSessionCleanupResult,
   resolveMainSessionKey,
@@ -62,6 +61,7 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
+import { listSessionEntries } from "../../config/sessions/session-accessor.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -261,6 +261,22 @@ function resolveGatewaySessionTargetFromKey(
     ...(opts?.agentId ? { agentId: opts.agentId } : {}),
   });
   return { cfg, target, storePath: target.storePath };
+}
+
+function loadSessionEntriesForTarget(params: {
+  key: string;
+  cfg: OpenClawConfig;
+  agentId?: string;
+}) {
+  const target = resolveGatewaySessionStoreTargetWithStore({
+    cfg: params.cfg,
+    key: params.key,
+    clone: false,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+  });
+  const store = target.store;
+  const entry = resolveFreshestSessionEntryFromStoreKeys(store, target.storeKeys);
+  return { target, storePath: target.storePath, store, entry };
 }
 
 function resolveOptionalInitialSessionMessage(params: {
@@ -1217,9 +1233,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const cfg = context.getRuntimeConfig();
-    const { target, storePath } = resolveGatewaySessionTargetFromKey(key, cfg);
-    const store = loadSessionStore(storePath);
-    const entry = resolveFreshestSessionEntryFromStoreKeys(store, target.storeKeys);
+    const { target, storePath, store, entry } = loadSessionEntriesForTarget({ key, cfg });
     if (!entry) {
       respond(true, { session: null }, undefined);
       return;
@@ -2122,7 +2136,11 @@ export const sessionsHandlers: GatewayRequestHandlers = {
                 continue;
               }
               const conflictingKey = findHubDelegatedLabelConflictInStore({
-                store: loadSessionStore(candidate.storePath),
+                store: Object.fromEntries(
+                  listSessionEntries({ storePath: candidate.storePath }).map(
+                    ({ sessionKey, entry }) => [sessionKey, entry],
+                  ),
+                ),
                 storeKey: "",
                 ownerSessionKey,
                 label,
@@ -2444,11 +2462,11 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       respond(false, undefined, requestedAgent.error);
       return;
     }
-    const { target, storePath } = resolveGatewaySessionTargetFromKey(key, cfg, {
+    const { storePath, entry } = loadSessionEntriesForTarget({
+      key,
+      cfg,
       agentId: requestedAgent.agentId,
     });
-    const store = loadSessionStore(storePath);
-    const entry = resolveFreshestSessionEntryFromStoreKeys(store, target.storeKeys);
     if (!entry?.sessionId) {
       respond(true, { messages: [] }, undefined);
       return;
@@ -2460,6 +2478,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       {
         maxMessages: limit,
         maxLines: limit * 20 + 20,
+        allowResetArchiveFallback: true,
       },
     );
     respond(true, { messages }, undefined);

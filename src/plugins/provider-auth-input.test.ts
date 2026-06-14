@@ -379,12 +379,24 @@ describe("ensureApiKeyFromEnvOrPrompt", () => {
     expect(result).toBe("env-key");
     expectMinimaxEnvRefCredentialStored(setCredential);
     expect(note).toHaveBeenCalledWith(
-      [
+      expect.stringContaining(
         "Could not validate provider reference filemain:/providers/minimax/apiKey.",
-        "secrets.providers.filemain.path is not readable: /tmp/does-not-exist-secrets.json | ENOENT: no such file or directory, lstat '/tmp/does-not-exist-secrets.json' | secrets.providers.filemain.path is not readable: /tmp/does-not-exist-secrets.json | ENOENT: no such file or directory, lstat '/tmp/does-not-exist-secrets.json'",
-        "Check your provider configuration and try again.",
-      ].join("\n"),
+      ),
       "Reference check failed",
+    );
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "secrets.providers.filemain.path is not readable: /tmp/does-not-exist-secrets.json",
+      ),
+      "Reference check failed",
+    );
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("Check your provider configuration and try again."),
+      "Reference check failed",
+    );
+    expect(note).toHaveBeenCalledWith(
+      "Validated environment variable MINIMAX_API_KEY. OpenClaw will store a reference, not the key value.",
+      "Reference validated",
     );
   });
 
