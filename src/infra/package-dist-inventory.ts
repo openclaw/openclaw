@@ -623,7 +623,8 @@ export async function readPackageDistContentInventoryIfPresent(
 }
 
 function formatContentInventoryEntry(entry: PackageDistContentInventoryEntry): string {
-  return `${entry.path}:${entry.sha256}:${entry.size}`;
+  const executable = process.platform === "win32" ? "" : Boolean(entry.mode & 0o111);
+  return `${entry.path}:${entry.sha256}:${entry.size}:${executable}`;
 }
 
 export async function collectPackageDistContentInventoryErrors(
@@ -643,7 +644,7 @@ export async function collectPackageDistContentInventoryErrors(
     return [];
   }
   return [
-    `Invalid package dist content inventory at ${PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH}: expected packaged file hashes to match current dist files.`,
+    `Invalid package dist content inventory at ${PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH}: expected packaged file hashes and executable bits to match current dist files.`,
   ];
 }
 

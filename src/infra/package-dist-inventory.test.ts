@@ -175,6 +175,75 @@ describe("package dist inventory", () => {
     });
   });
 
+  it.runIf(process.platform !== "win32")(
+    "reports executable-bit content inventory differences",
+    async () => {
+      await withTempDir(
+        { prefix: "openclaw-dist-content-inventory-executable-" },
+        async (packageRoot) => {
+          const currentFile = path.join(packageRoot, "dist", "current.js");
+          await fs.mkdir(path.dirname(currentFile), { recursive: true });
+          await fs.writeFile(currentFile, "export const value = 1;\n", "utf8");
+
+          await writePackageDistInventory(packageRoot);
+          const contentInventory = await readPackageDistContentInventoryIfPresent(packageRoot);
+          expect(contentInventory).toHaveLength(1);
+          const contentInventoryPath = path.join(
+            packageRoot,
+            "dist",
+            "postinstall-content-inventory.json",
+          );
+          await fs.writeFile(
+            contentInventoryPath,
+            `${JSON.stringify([{ ...contentInventory?.[0], mode: 0o755 }], null, 2)}\n`,
+            "utf8",
+          );
+
+          await expect(collectPackageDistContentInventoryErrors(packageRoot)).resolves.toEqual([
+            expect.stringContaining("executable bits"),
+          ]);
+        },
+      );
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "ignores executable-bit content inventory differences on Windows",
+    async () => {
+      await withTempDir(
+        { prefix: "openclaw-dist-content-inventory-windows-mode-" },
+        async (packageRoot) => {
+          const currentFile = path.join(packageRoot, "dist", "current.js");
+          await fs.mkdir(path.dirname(currentFile), { recursive: true });
+          await fs.writeFile(currentFile, "export const value = 1;\n", "utf8");
+
+          await writePackageDistInventory(packageRoot);
+          const contentInventory = await readPackageDistContentInventoryIfPresent(packageRoot);
+          expect(contentInventory).toHaveLength(1);
+          const contentInventoryPath = path.join(
+            packageRoot,
+            "dist",
+            "postinstall-content-inventory.json",
+          );
+          await fs.writeFile(
+            contentInventoryPath,
+            `${JSON.stringify([{ ...contentInventory?.[0], mode: 0o755 }], null, 2)}\n`,
+            "utf8",
+          );
+
+          const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+          try {
+            await expect(
+              collectPackageDistContentInventoryErrors(packageRoot),
+            ).resolves.toStrictEqual([]);
+          } finally {
+            platformSpy.mockRestore();
+          }
+        },
+      );
+    },
+  );
+
   it.each(["2026.6.7", "2026.6.10-alpha.3"])(
     "requires content inventory for post-cutover package version %s",
     async (version) => {
