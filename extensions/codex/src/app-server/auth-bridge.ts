@@ -4,9 +4,10 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import {
   ensureAuthProfileStore,
-  ensureAuthProfileStoreWithoutExternalProfiles,
+  findPersistedAuthProfileCredential,
   loadAuthProfileStoreForSecretsRuntime,
   refreshOAuthCredentialForRuntime,
   resolveAuthProfileOrder,
@@ -592,19 +593,28 @@ async function resolveOAuthCredentialForCodexAppServer(
     agentDir: params.agentDir,
     profileId,
   });
-  const store = params.preferStoreCredential
+  const persistedCredential = findPersistedAuthProfileCredential({
+    agentDir: ownerAgentDir,
+    profileId,
+  });
+  const useScopedCredential =
+    params.preferStoreCredential &&
+    shouldUseScopedOAuthCredential({
+      store: params.store,
+      profileId,
+      persistedCredential,
+      suppliedCredential: credential,
+      config: params.config,
+    });
+  const store = useScopedCredential
     ? params.store
     : ensureCodexAppServerAuthProfileStore({
         agentDir: ownerAgentDir,
         authProfileId: profileId,
         config: params.config,
       });
-  const persistedStore = ensureAuthProfileStoreWithoutExternalProfiles(ownerAgentDir, {
-    allowKeychainPrompt: false,
-  });
-  const persistedCredential = persistedStore.profiles[profileId];
   const persistedOAuthCredential =
-    !params.preferStoreCredential &&
+    !useScopedCredential &&
     persistedCredential?.type === "oauth" &&
     isCodexAppServerAuthProvider(persistedCredential.provider, params.config)
       ? persistedCredential
@@ -615,7 +625,7 @@ async function resolveOAuthCredentialForCodexAppServer(
     isCodexAppServerAuthProvider(ownerCredential.provider, params.config)
       ? ownerCredential
       : undefined;
-  if (params.preferStoreCredential && overlaidOAuthCredential) {
+  if (useScopedCredential && overlaidOAuthCredential) {
     return await resolveScopedOAuthCredential({
       store,
       profileId,
@@ -639,7 +649,7 @@ async function resolveOAuthCredentialForCodexAppServer(
     agentDir: ownerAgentDir,
     forceRefresh: params.forceRefresh && Boolean(persistedOAuthCredential),
   });
-  const refreshed = params.preferStoreCredential
+  const refreshed = useScopedCredential
     ? undefined
     : loadAuthProfileStoreForSecretsRuntime(ownerAgentDir).profiles[profileId];
   const storedCredential = store.profiles[profileId];
@@ -651,6 +661,43 @@ async function resolveOAuthCredentialForCodexAppServer(
         ? storedCredential
         : credential;
   return resolved?.apiKey ? { ...candidate, access: resolved.apiKey } : candidate;
+}
+
+function shouldUseScopedOAuthCredential(params: {
+  store: AuthProfileStore;
+  profileId: string;
+  persistedCredential: AuthProfileCredential | undefined;
+  suppliedCredential: OAuthCredential;
+  config?: AuthProfileOrderConfig;
+}): boolean {
+  if (!params.store.runtimePersistedProfileIds?.includes(params.profileId)) {
+    return true;
+  }
+  const persisted = params.persistedCredential;
+  if (persisted?.type !== "oauth") {
+    return true;
+  }
+  if (
+    resolveProviderIdForAuth(persisted.provider, { config: params.config }) !==
+    resolveProviderIdForAuth(params.suppliedCredential.provider, { config: params.config })
+  ) {
+    return true;
+  }
+  return (
+    !isDeepStrictEqual(persisted, params.suppliedCredential) &&
+    !hasMatchingOAuthIdentity(persisted, params.suppliedCredential)
+  );
+}
+
+function hasMatchingOAuthIdentity(persisted: OAuthCredential, supplied: OAuthCredential): boolean {
+  const persistedAccountId = persisted.accountId?.trim();
+  const suppliedAccountId = supplied.accountId?.trim();
+  if (persistedAccountId && suppliedAccountId) {
+    return persistedAccountId === suppliedAccountId;
+  }
+  const persistedEmail = persisted.email?.trim().toLowerCase();
+  const suppliedEmail = supplied.email?.trim().toLowerCase();
+  return Boolean(persistedEmail && suppliedEmail && persistedEmail === suppliedEmail);
 }
 
 async function resolveScopedOAuthCredential(params: {

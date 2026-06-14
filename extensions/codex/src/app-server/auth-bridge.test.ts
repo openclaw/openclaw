@@ -5,6 +5,7 @@ import path from "node:path";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   loadAuthProfileStoreForSecretsRuntime,
+  replaceRuntimeAuthProfileStoreSnapshots,
 } from "openclaw/plugin-sdk/agent-runtime";
 import { upsertAuthProfile } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -683,6 +684,303 @@ describe("bridgeCodexAppServerStartOptions", () => {
         access: "scoped-refreshed-access",
         accountId: "scoped-refreshed-account",
       });
+      if (persistSameId) {
+        expect(
+          loadAuthProfileStoreForSecretsRuntime(agentDir).profiles["openai:work"],
+        ).toMatchObject({
+          access: "persisted-access",
+          accountId: "persisted-account",
+        });
+      }
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("routes a supplied persisted OAuth clone through canonical refresh", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const request = vi.fn(async () => ({ type: "chatgptAuthTokens" }));
+    oauthMocks.refreshOpenAICodexToken.mockResolvedValueOnce({
+      access: "persisted-refreshed-access",
+      refresh: "persisted-refreshed-refresh",
+      expires: Date.now() + 60_000,
+      accountId: "persisted-account",
+    });
+    try {
+      upsertAuthProfile({
+        agentDir,
+        profileId: "openai:work",
+        credential: {
+          type: "oauth",
+          provider: "openai",
+          access: "persisted-expired-access",
+          refresh: "persisted-refresh",
+          expires: Date.now() - 60_000,
+          accountId: "persisted-account",
+        },
+      });
+      const authProfileStore = loadAuthProfileStoreForSecretsRuntime(agentDir);
+      expect(authProfileStore.runtimePersistedProfileIds).toContain("openai:work");
+
+      await applyCodexAppServerAuthProfile({
+        client: { request } as never,
+        agentDir,
+        authProfileId: "openai:work",
+        authProfileStore,
+      });
+
+      expect(oauthMocks.refreshOpenAICodexToken).toHaveBeenCalledWith("persisted-refresh");
+      expect(request).toHaveBeenCalledWith("account/login/start", {
+        type: "chatgptAuthTokens",
+        accessToken: "persisted-refreshed-access",
+        chatgptAccountId: "persisted-account",
+        chatgptPlanType: null,
+      });
+      expect(loadAuthProfileStoreForSecretsRuntime(agentDir).profiles["openai:work"]).toMatchObject(
+        {
+          access: "persisted-refreshed-access",
+          refresh: "persisted-refreshed-refresh",
+          accountId: "persisted-account",
+        },
+      );
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a runtime-external same-account OAuth profile scoped", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const request = vi.fn(async () => ({ type: "chatgptAuthTokens" }));
+    oauthMocks.refreshOpenAICodexToken.mockResolvedValueOnce({
+      access: "scoped-refreshed-access",
+      refresh: "scoped-refreshed-refresh",
+      expires: Date.now() + 60_000,
+      accountId: "shared-account",
+    });
+    try {
+      upsertAuthProfile({
+        agentDir,
+        profileId: "openai:work",
+        credential: {
+          type: "oauth",
+          provider: "openai",
+          access: "persisted-access",
+          refresh: "persisted-refresh",
+          expires: Date.now() + 24 * 60 * 60_000,
+          accountId: "shared-account",
+        },
+      });
+      const authProfileStore: AuthProfileStore = {
+        version: 1,
+        runtimeExternalProfileIds: ["openai:work"],
+        runtimeExternalProfileIdsAuthoritative: true,
+        profiles: {
+          "openai:work": {
+            type: "oauth",
+            provider: "openai",
+            access: "scoped-expired-access",
+            refresh: "scoped-refresh",
+            expires: Date.now() - 60_000,
+            accountId: "shared-account",
+          },
+        },
+      };
+
+      await applyCodexAppServerAuthProfile({
+        client: { request } as never,
+        agentDir,
+        authProfileId: "openai:work",
+        authProfileStore,
+      });
+
+      expect(oauthMocks.refreshOpenAICodexToken).toHaveBeenCalledWith("scoped-refresh");
+      expect(request).toHaveBeenCalledWith("account/login/start", {
+        type: "chatgptAuthTokens",
+        accessToken: "scoped-refreshed-access",
+        chatgptAccountId: "shared-account",
+        chatgptPlanType: null,
+      });
+      expect(loadAuthProfileStoreForSecretsRuntime(agentDir).profiles["openai:work"]).toMatchObject(
+        {
+          access: "persisted-access",
+          refresh: "persisted-refresh",
+          accountId: "shared-account",
+        },
+      );
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps an ambiguous supplied OAuth identity scoped", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const request = vi.fn(async () => ({ type: "chatgptAuthTokens" }));
+    oauthMocks.refreshOpenAICodexToken.mockResolvedValueOnce({
+      access: "scoped-refreshed-access",
+      refresh: "scoped-refreshed-refresh",
+      expires: Date.now() + 60_000,
+    });
+    try {
+      upsertAuthProfile({
+        agentDir,
+        profileId: "openai:work",
+        credential: {
+          type: "oauth",
+          provider: "openai",
+          access: "persisted-access",
+          refresh: "persisted-refresh",
+          expires: Date.now() + 24 * 60 * 60_000,
+          accountId: "persisted-account",
+        },
+      });
+      const authProfileStore: AuthProfileStore = {
+        version: 1,
+        profiles: {
+          "openai:work": {
+            type: "oauth",
+            provider: "openai",
+            access: "scoped-expired-access",
+            refresh: "scoped-refresh",
+            expires: Date.now() - 60_000,
+          },
+        },
+      };
+
+      await applyCodexAppServerAuthProfile({
+        client: { request } as never,
+        agentDir,
+        authProfileId: "openai:work",
+        authProfileStore,
+      });
+
+      expect(oauthMocks.refreshOpenAICodexToken).toHaveBeenCalledWith("scoped-refresh");
+      expect(request).toHaveBeenCalledWith("account/login/start", {
+        type: "chatgptAuthTokens",
+        accessToken: "scoped-refreshed-access",
+        chatgptAccountId: "openai:work",
+        chatgptPlanType: null,
+      });
+      expect(loadAuthProfileStoreForSecretsRuntime(agentDir).profiles["openai:work"]).toMatchObject(
+        {
+          access: "persisted-access",
+          refresh: "persisted-refresh",
+          accountId: "persisted-account",
+        },
+      );
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("routes a same-identity stale persisted clone through canonical persisted auth", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const request = vi.fn(async () => ({ type: "chatgptAuthTokens" }));
+    try {
+      upsertAuthProfile({
+        agentDir,
+        profileId: "openai:work",
+        credential: {
+          type: "oauth",
+          provider: "openai",
+          access: "stale-access",
+          refresh: "stale-refresh",
+          expires: Date.now() - 60_000,
+          accountId: "persisted-account",
+        },
+      });
+      const authProfileStore = loadAuthProfileStoreForSecretsRuntime(agentDir);
+      expect(authProfileStore.runtimePersistedProfileIds).toContain("openai:work");
+      upsertAuthProfile({
+        agentDir,
+        profileId: "openai:work",
+        credential: {
+          type: "oauth",
+          provider: "openai",
+          access: "current-access",
+          refresh: "current-refresh",
+          expires: Date.now() + 24 * 60 * 60_000,
+          accountId: "persisted-account",
+        },
+      });
+
+      await applyCodexAppServerAuthProfile({
+        client: { request } as never,
+        agentDir,
+        authProfileId: "openai:work",
+        authProfileStore,
+      });
+
+      expect(oauthMocks.refreshOpenAICodexToken).not.toHaveBeenCalled();
+      expect(request).toHaveBeenCalledWith("account/login/start", {
+        type: "chatgptAuthTokens",
+        accessToken: "current-access",
+        chatgptAccountId: "persisted-account",
+        chatgptPlanType: null,
+      });
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a changed-identity persisted clone scoped", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const request = vi.fn(async () => ({ type: "chatgptAuthTokens" }));
+    oauthMocks.refreshOpenAICodexToken.mockResolvedValueOnce({
+      access: "account-a-refreshed-access",
+      refresh: "account-a-refreshed-refresh",
+      expires: Date.now() + 60_000,
+      accountId: "account-a",
+    });
+    try {
+      upsertAuthProfile({
+        agentDir,
+        profileId: "openai:work",
+        credential: {
+          type: "oauth",
+          provider: "openai",
+          access: "account-a-expired-access",
+          refresh: "account-a-refresh",
+          expires: Date.now() - 60_000,
+          accountId: "account-a",
+        },
+      });
+      const authProfileStore = loadAuthProfileStoreForSecretsRuntime(agentDir);
+      expect(authProfileStore.runtimePersistedProfileIds).toContain("openai:work");
+      upsertAuthProfile({
+        agentDir,
+        profileId: "openai:work",
+        credential: {
+          type: "oauth",
+          provider: "openai",
+          access: "account-b-access",
+          refresh: "account-b-refresh",
+          expires: Date.now() + 24 * 60 * 60_000,
+          accountId: "account-b",
+        },
+      });
+      replaceRuntimeAuthProfileStoreSnapshots([{ agentDir, store: authProfileStore }]);
+
+      await applyCodexAppServerAuthProfile({
+        client: { request } as never,
+        agentDir,
+        authProfileId: "openai:work",
+        authProfileStore,
+      });
+
+      expect(oauthMocks.refreshOpenAICodexToken).toHaveBeenCalledWith("account-a-refresh");
+      expect(request).toHaveBeenCalledWith("account/login/start", {
+        type: "chatgptAuthTokens",
+        accessToken: "account-a-refreshed-access",
+        chatgptAccountId: "account-a",
+        chatgptPlanType: null,
+      });
+      expect(loadAuthProfileStoreForSecretsRuntime(agentDir).profiles["openai:work"]).toMatchObject(
+        {
+          access: "account-b-access",
+          refresh: "account-b-refresh",
+          accountId: "account-b",
+        },
+      );
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }
