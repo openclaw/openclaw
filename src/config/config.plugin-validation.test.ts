@@ -1758,4 +1758,24 @@ describe("config plugin validation", () => {
       ).toBe(true);
     }
   });
+  it("accepts wildcard * as a valid channel id in channels config", () => {
+    const res = validateInSuite({
+      channels: {
+        "*": { ackReaction: "🎯" },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("still rejects unknown non-wildcard channel ids", () => {
+    const res = validateInSuite({
+      channels: {
+        "not-a-real-channel": { ackReaction: "🎯" },
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues.some((issue) => issue.path === "channels.not-a-real-channel")).toBe(true);
+    }
+  });
 });
