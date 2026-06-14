@@ -327,6 +327,72 @@ describe("Codex native web-search payload helpers", () => {
     });
   });
 
+  it("lets request-scoped native web search options override config defaults", () => {
+    expect(
+      buildCodexNativeWebSearchTool(
+        {
+          tools: {
+            web: {
+              search: {
+                openaiCodex: {
+                  enabled: true,
+                  mode: "live",
+                  contextSize: "low",
+                  userLocation: { country: "US" },
+                },
+              },
+            },
+          },
+        },
+        {
+          searchContextSize: "high",
+          userLocation: {
+            type: "approximate",
+            country: "GB",
+            city: "London",
+          },
+        },
+      ),
+    ).toEqual({
+      type: "web_search",
+      external_web_access: true,
+      search_context_size: "high",
+      user_location: {
+        type: "approximate",
+        country: "GB",
+        city: "London",
+      },
+    });
+  });
+
+  it("lets request-scoped null user location clear config defaults", () => {
+    expect(
+      buildCodexNativeWebSearchTool(
+        {
+          tools: {
+            web: {
+              search: {
+                openaiCodex: {
+                  enabled: true,
+                  mode: "live",
+                  contextSize: "low",
+                  userLocation: { country: "US", city: "San Francisco" },
+                },
+              },
+            },
+          },
+        },
+        {
+          userLocation: null,
+        },
+      ),
+    ).toEqual({
+      type: "web_search",
+      external_web_access: true,
+      search_context_size: "low",
+    });
+  });
+
   it("injects native web_search into provider payloads", () => {
     const payload: Record<string, unknown> = { tools: [{ type: "function", name: "read" }] };
     // Payload patching mutates the provider request in place because callers

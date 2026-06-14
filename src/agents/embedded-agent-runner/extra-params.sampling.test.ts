@@ -360,6 +360,46 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
     expect(first.temperature).toBe(0.4);
   });
 
+  it("keeps request-scoped native web search out of prepared extra params cache", () => {
+    const prepareProviderExtraParams = vi.fn((params) => ({
+      ...params.context.extraParams,
+      prepared: true,
+    }));
+    extraParamsTesting.setProviderRuntimeDepsForTest({
+      prepareProviderExtraParams,
+      resolveProviderExtraParamsForTransport: () => undefined,
+      wrapProviderStreamFn: () => undefined,
+    });
+
+    const cfg = { agents: { defaults: {} } } as never;
+    const first = resolvePreparedExtraParams({
+      cfg,
+      provider: "openai",
+      modelId: "gpt-5.4",
+      extraParamsOverride: {
+        temperature: 0.4,
+        nativeWebSearch: { searchContextSize: "low" },
+      },
+    });
+    const second = resolvePreparedExtraParams({
+      cfg,
+      provider: "openai",
+      modelId: "gpt-5.4",
+      extraParamsOverride: {
+        temperature: 0.4,
+        nativeWebSearch: {
+          searchContextSize: "high",
+          userLocation: { type: "approximate", country: "US" },
+        },
+      },
+    });
+
+    expect(prepareProviderExtraParams).toHaveBeenCalledTimes(1);
+    expect(first).toBe(second);
+    expect(first).not.toHaveProperty("nativeWebSearch");
+    expect(first.temperature).toBe(0.4);
+  });
+
   it("forwards frequency_penalty, presence_penalty, and seed from override into stream options", () => {
     const underlying = vi.fn(() => ({
       push: vi.fn(),
