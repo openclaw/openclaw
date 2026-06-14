@@ -189,7 +189,10 @@ export async function applyInlineDirectiveOverrides(params: {
 
   let directiveAck: ReplyPayload | undefined;
 
-  if (modelState.resetModelOverride) {
+  if (
+    modelState.resetModelOverride &&
+    modelState.resetModelOverrideReason !== "stale-auto-fallback-origin"
+  ) {
     enqueueSystemEvent(
       formatModelOverrideResetEvent({
         rejectedRef: modelState.resetModelOverrideRef,

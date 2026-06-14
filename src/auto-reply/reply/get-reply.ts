@@ -874,6 +874,7 @@ export async function getReplyFromConfig(
   directives = inlineActionResult.directives;
   cleanedBody = inlineActionResult.cleanedBody;
   abortedLastRun = inlineActionResult.abortedLastRun ?? abortedLastRun;
+  await modelState.persistModelOverrideReset();
   const runAutoFallbackPrimaryProbe = directives.hasModelDirective
     ? undefined
     : autoFallbackPrimaryProbe;
