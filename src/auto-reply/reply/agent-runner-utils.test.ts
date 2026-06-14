@@ -311,9 +311,10 @@ describe("agent-runner-utils", () => {
           context,
         }: {
           accountId?: string | null;
-          context: { ChatType?: string; To?: string };
+          context: { ChatType?: string; NativeChannelId?: string; To?: string };
         }) => ({
-          currentChannelId: context.To,
+          currentChannelId: context.NativeChannelId ?? context.To,
+          currentMessagingTarget: context.To,
           replyToMode: accountId === "work" && context.ChatType === "direct" ? "off" : "all",
         }),
       },
@@ -324,6 +325,7 @@ describe("agent-runner-utils", () => {
       run,
       sessionCtx: {
         Provider: "cron-event",
+        NativeChannelId: "D1",
       },
       replyRoute: {
         originatingChannel: "slack",
@@ -337,7 +339,8 @@ describe("agent-runner-utils", () => {
 
     expect(resolved.embeddedContext.messageProvider).toBe("slack");
     expect(resolved.embeddedContext.messageTo).toBe("user:U1");
-    expect(resolved.embeddedContext.currentChannelId).toBe("user:U1");
+    expect(resolved.embeddedContext.currentChannelId).toBe("D1");
+    expect(resolved.embeddedContext.currentMessagingTarget).toBe("user:U1");
     expect(resolved.embeddedContext.agentAccountId).toBe("work");
     expect(resolved.embeddedContext.chatType).toBe("direct");
     expect(resolved.embeddedContext.replyToMode).toBe("off");

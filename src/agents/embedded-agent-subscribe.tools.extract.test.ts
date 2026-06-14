@@ -92,6 +92,7 @@ describe("extractMessagingToolSend", () => {
                 replyToId?: string | null;
                 toolContext?: {
                   currentChannelId?: string;
+                  currentMessagingTarget?: string;
                   currentThreadTs?: string;
                   replyToMode?: "off" | "first" | "all" | "batched";
                   hasRepliedRef?: { value: boolean };
@@ -99,7 +100,8 @@ describe("extractMessagingToolSend", () => {
               }) => {
                 if (
                   replyToId ||
-                  to !== toolContext?.currentChannelId ||
+                  (to !== toolContext?.currentMessagingTarget &&
+                    to !== toolContext?.currentChannelId) ||
                   toolContext.replyToMode === "off" ||
                   ((toolContext.replyToMode === "first" || toolContext.replyToMode === "batched") &&
                     toolContext.hasRepliedRef?.value)
@@ -333,6 +335,31 @@ describe("extractMessagingToolSend", () => {
 
     expect(result?.threadImplicit).toBe(true);
     expect(result?.threadId).toBe("456");
+  });
+
+  it("captures the active Slack DM thread through its routable target", () => {
+    const result = extractMessagingToolSend(
+      "message",
+      {
+        action: "send",
+        provider: "slack",
+        to: "user:U123",
+        content: "done",
+      },
+      {
+        currentChannelId: "D123",
+        currentMessagingTarget: "user:u123",
+        currentThreadId: "171.222",
+        replyToMode: "all",
+      },
+    );
+
+    expect(result).toMatchObject({
+      provider: "slack",
+      to: "user:u123",
+      threadId: "171.222",
+      threadImplicit: true,
+    });
   });
 
   it("does not attach the ambient thread to an explicit topic target", () => {

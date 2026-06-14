@@ -71,7 +71,8 @@ function isSameConversationTarget(
   toolContext?: ChannelThreadingToolContext,
 ): boolean {
   const currentChannelId = toolContext?.currentChannelId?.trim();
-  if (!currentChannelId) {
+  const currentMessagingTarget = toolContext?.currentMessagingTarget?.trim();
+  if (!currentChannelId && !currentMessagingTarget) {
     return false;
   }
   const currentChannelProvider = toolContext?.currentChannelProvider?.trim();
@@ -85,7 +86,8 @@ function isSameConversationTarget(
   if (!explicitTarget) {
     return true;
   }
-  return explicitTarget.trim() === currentChannelId;
+  const target = explicitTarget.trim();
+  return target === currentMessagingTarget || target === currentChannelId;
 }
 
 /** Resolves and writes reply-to metadata for same-conversation message-action sends. */

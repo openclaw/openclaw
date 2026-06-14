@@ -1531,13 +1531,21 @@ describe("messaging tool media URL tracking", () => {
             messaging: { normalizeTarget: (raw: string) => raw.trim().toLowerCase() },
             threading: {
               resolveAutoThreadId: ({
+                to,
                 toolContext,
               }: {
+                to: string;
                 toolContext?: {
+                  currentChannelId?: string;
+                  currentMessagingTarget?: string;
                   currentThreadTs?: string;
                   replyToMode?: "off" | "first" | "all" | "batched";
                 };
-              }) => (toolContext?.replyToMode === "all" ? toolContext.currentThreadTs : undefined),
+              }) =>
+                toolContext?.replyToMode === "all" &&
+                (to === toolContext.currentMessagingTarget || to === toolContext.currentChannelId)
+                  ? toolContext.currentThreadTs
+                  : undefined,
             },
           },
           source: "test",
@@ -1546,7 +1554,8 @@ describe("messaging tool media URL tracking", () => {
     );
     const { ctx } = createTestContext();
     ctx.params.messageChannel = "slack";
-    ctx.params.currentChannelId = "C1";
+    ctx.params.currentChannelId = "D1";
+    ctx.params.currentMessagingTarget = "user:u1";
     ctx.params.currentThreadId = "171.222";
     ctx.params.replyToMode = "all";
 
@@ -1556,14 +1565,14 @@ describe("messaging tool media URL tracking", () => {
       toolCallId: "tool-threaded-message",
       args: {
         action: "send",
-        to: "channel:C1",
+        to: "user:U1",
         content: "hi",
       },
     });
 
     expect(ctx.state.pendingMessagingTargets.get("tool-threaded-message")).toMatchObject({
       provider: "slack",
-      to: "channel:c1",
+      to: "user:u1",
       threadId: "171.222",
       threadImplicit: true,
     });

@@ -1071,6 +1071,7 @@ export function handleToolExecutionStart(
         const sendTarget = extractMessagingToolSend(toolName, telemetryArgs, {
           config: ctx.params.config,
           currentChannelId: ctx.params.currentChannelId,
+          currentMessagingTarget: ctx.params.currentMessagingTarget,
           currentThreadId:
             ctx.params.currentThreadId ??
             parseSessionThreadInfoFast(ctx.params.sessionKey).threadId,

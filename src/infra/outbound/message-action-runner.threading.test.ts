@@ -280,6 +280,24 @@ describe("message action threading helpers", () => {
     expect(actionParams.replyTo).toBe("msg-42");
   });
 
+  it("inherits currentMessageId for a routable alias of the native channel", () => {
+    const actionParams: Record<string, unknown> = {
+      to: "user:U123",
+    };
+
+    resolveAndApplyOutboundReplyToId(actionParams, {
+      channel: "slack",
+      toolContext: {
+        currentChannelId: "D123",
+        currentMessagingTarget: "user:U123",
+        currentMessageId: "msg-42",
+        replyToMode: "all",
+      },
+    });
+
+    expect(actionParams.replyTo).toBe("msg-42");
+  });
+
   it("skips inherited reply ids for explicit top-level sends", () => {
     const actionParams: Record<string, unknown> = {
       channel: "workspace",

@@ -17,7 +17,7 @@ import {
   type OpenClawConfig,
   withNormalizedTimestamp,
 } from "./runtime-api.js";
-import { resolveSlackChannelId, slackTargetsMatch } from "./targets.js";
+import { resolveSlackChannelId, slackContextTargetsMatch, slackTargetsMatch } from "./targets.js";
 
 const messagingActions = new Set([
   "sendMessage",
@@ -80,6 +80,8 @@ export const slackActionRuntime = {
 export type SlackActionContext = {
   /** Current channel ID for auto-threading. */
   currentChannelId?: string;
+  /** Routable target for the current conversation when it differs from the channel ID. */
+  currentMessagingTarget?: string;
   /** Current thread timestamp for auto-threading. */
   currentThreadTs?: string;
   /** Reply-to mode for auto-threading. */
@@ -112,12 +114,12 @@ function resolveThreadTsFromContext(
   if (opts?.suppressImplicitThread) {
     return undefined;
   }
-  if (!context?.currentChannelId) {
+  if (!context?.currentChannelId && !context?.currentMessagingTarget) {
     return undefined;
   }
 
   // Different channel - don't inject
-  if (!sameSlackTarget(targetChannel, context.currentChannelId)) {
+  if (!slackContextTargetsMatch(targetChannel, context)) {
     return undefined;
   }
   if (!context.currentThreadTs) {
@@ -328,10 +330,8 @@ export async function handleSlackAction(
         // Keep "first" mode consistent even when the agent explicitly provided
         // threadTs: once we send a message to the current channel, consider the
         // first reply "used" so later tool calls don't auto-thread again.
-        if (context?.hasRepliedRef && context.currentChannelId) {
-          if (sameSlackTarget(to, context.currentChannelId)) {
-            context.hasRepliedRef.value = true;
-          }
+        if (context?.hasRepliedRef && slackContextTargetsMatch(to, context)) {
+          context.hasRepliedRef.value = true;
         }
 
         return jsonResult({ ok: true, result });
@@ -371,10 +371,8 @@ export async function handleSlackAction(
           ...(title ? { uploadTitle: title } : {}),
         });
 
-        if (context?.hasRepliedRef && context.currentChannelId) {
-          if (sameSlackTarget(to, context.currentChannelId)) {
-            context.hasRepliedRef.value = true;
-          }
+        if (context?.hasRepliedRef && slackContextTargetsMatch(to, context)) {
+          context.hasRepliedRef.value = true;
         }
 
         return jsonResult({ ok: true, result });

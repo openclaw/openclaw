@@ -106,17 +106,20 @@ function isCurrentSourceConversation(
   if (!currentChannel || currentChannel !== normalizeOptionalLowercaseString(params.channel)) {
     return false;
   }
-  const currentTarget = normalizeOptionalString(params.toolContext?.currentChannelId);
-  if (!currentTarget) {
+  const currentTargets = [
+    normalizeOptionalString(params.toolContext?.currentMessagingTarget),
+    normalizeOptionalString(params.toolContext?.currentChannelId),
+  ].filter((target): target is string => Boolean(target));
+  if (currentTargets.length === 0) {
     return false;
   }
   const requestedTarget = resolveSourceReplyTarget(params.actionParams);
   if (!requestedTarget) {
     return false;
   }
-  return (
-    requestedTarget === currentTarget ||
-    resolveThreadedSourceTarget(params, requestedTarget) === currentTarget
+  const threadedTarget = resolveThreadedSourceTarget(params, requestedTarget);
+  return currentTargets.some(
+    (currentTarget) => requestedTarget === currentTarget || threadedTarget === currentTarget,
   );
 }
 

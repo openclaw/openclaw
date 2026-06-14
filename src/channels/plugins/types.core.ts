@@ -396,6 +396,10 @@ export type ChannelOutboundSessionRoute = {
 };
 
 export type ChannelThreadingAdapter = {
+  matchesToolContextTarget?: (params: {
+    target: string;
+    toolContext: ChannelThreadingToolContext;
+  }) => boolean;
   resolveReplyToMode?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
@@ -462,6 +466,8 @@ export type ChannelThreadingContext = {
 
 export type ChannelThreadingToolContext = {
   currentChannelId?: string;
+  /** Routable messaging target when it differs from the platform-native channel id. */
+  currentMessagingTarget?: string;
   currentGraphChannelId?: string;
   currentChannelProvider?: ChannelId;
   currentThreadTs?: string;

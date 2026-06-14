@@ -180,6 +180,28 @@ describe("resolveFollowupDeliveryPayloads", () => {
     ).toStrictEqual([]);
   });
 
+  it("dedupes a Slack DM tool send recorded through its routable target", () => {
+    expect(
+      resolveFollowupDeliveryPayloads({
+        cfg: baseConfig,
+        payloads: [{ text: "thread reply" }],
+        messageProvider: "slack",
+        originatingTo: "user:U123",
+        originatingThreadId: "171.222",
+        sentTexts: ["thread reply"],
+        sentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            to: "user:U123",
+            threadId: "171.222",
+            text: "thread reply",
+          },
+        ],
+      }),
+    ).toStrictEqual([]);
+  });
+
   it("falls back to global text dedupe for legacy multi-target messaging telemetry", () => {
     expect(
       resolveFollowupDeliveryPayloads({

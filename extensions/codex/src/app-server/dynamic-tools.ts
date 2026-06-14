@@ -55,6 +55,7 @@ type CodexDynamicToolHookContext = {
   channelId?: string;
   currentChannelProvider?: string;
   currentChannelId?: string;
+  currentMessagingTarget?: string;
   currentThreadId?: string;
   replyToMode?: "off" | "first" | "all" | "batched";
   hasRepliedRef?: { value: boolean };
@@ -247,6 +248,7 @@ export function createCodexDynamicToolBridge(params: {
             ? extractMessagingToolSend(toolName, messagingTelemetryArgs, {
                 config: params.hookContext?.config,
                 currentChannelId: params.hookContext?.currentChannelId,
+                currentMessagingTarget: params.hookContext?.currentMessagingTarget,
                 currentThreadId: params.hookContext?.currentThreadId,
                 replyToMode: params.hookContext?.replyToMode,
                 hasRepliedRef: params.hookContext?.hasRepliedRef,

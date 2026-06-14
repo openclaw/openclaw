@@ -265,6 +265,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     ),
     suppressManagedWebSearch: false,
     currentChannelId: params.currentChannelId,
+    currentMessagingTarget: params.currentMessagingTarget,
     hookChannelId: resolveCodexAppServerHookChannelId(params, input.sandboxSessionKey),
     currentThreadTs: params.currentThreadTs,
     currentMessageId: params.currentMessageId,

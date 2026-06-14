@@ -97,6 +97,8 @@ export type SubscribeEmbeddedAgentSessionParams = {
   sessionKey?: string;
   /** Current transport channel resolved for this run. */
   currentChannelId?: string;
+  /** Routable target for the current conversation when it differs from the native channel ID. */
+  currentMessagingTarget?: string;
   /** Current transport thread resolved for this run. */
   currentThreadId?: string;
   /** Current inbound message id used to distinguish child replies from explicit roots. */

@@ -810,14 +810,24 @@ describe("createCodexDynamicToolBridge", () => {
             messaging: { normalizeTarget: (raw: string) => raw.trim().toLowerCase() },
             threading: {
               resolveAutoThreadId: ({
+                to,
                 toolContext,
               }: {
+                to: string;
                 toolContext?: {
+                  currentChannelId?: string;
+                  currentMessagingTarget?: string;
                   currentThreadTs?: string;
                   replyToMode?: "off" | "first" | "all" | "batched";
                   hasRepliedRef?: { value: boolean };
                 };
               }) => {
+                if (
+                  to !== toolContext?.currentMessagingTarget &&
+                  to !== toolContext?.currentChannelId
+                ) {
+                  return undefined;
+                }
                 if (
                   (toolContext?.replyToMode === "first" ||
                     toolContext?.replyToMode === "batched") &&
@@ -846,7 +856,8 @@ describe("createCodexDynamicToolBridge", () => {
       signal: new AbortController().signal,
       hookContext: {
         currentChannelProvider: "slack",
-        currentChannelId: "C1",
+        currentChannelId: "D1",
+        currentMessagingTarget: "user:u1",
         currentThreadId: "171.222",
         replyToMode: "first",
         hasRepliedRef,
@@ -855,7 +866,7 @@ describe("createCodexDynamicToolBridge", () => {
 
     await handleMessageToolCall(bridge, {
       action: "send",
-      to: "channel:C1",
+      to: "user:U1",
       text: "hello from Codex",
     });
 
@@ -863,7 +874,7 @@ describe("createCodexDynamicToolBridge", () => {
       {
         tool: "message",
         provider: "slack",
-        to: "channel:c1",
+        to: "user:u1",
         threadId: "171.222",
         threadImplicit: true,
         text: "hello from Codex",

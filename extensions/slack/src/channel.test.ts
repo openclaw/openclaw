@@ -777,6 +777,35 @@ describe("slackPlugin outbound", () => {
     expect(threadId).toBe("1712345678.123456");
   });
 
+  it("auto-threads a DM target after target resolution strips its user prefix", async () => {
+    const resolveTarget = slackPlugin.messaging?.targetResolver?.resolveTarget;
+    const resolveAutoThreadId = slackPlugin.threading?.resolveAutoThreadId;
+    if (!resolveTarget || !resolveAutoThreadId) {
+      throw new Error("slack target resolution or auto-threading unavailable");
+    }
+
+    const resolved = await resolveTarget({
+      cfg,
+      accountId: "default",
+      input: "user:U123",
+      normalized: "user:u123",
+    });
+
+    expect(resolved).toMatchObject({ to: "U123", kind: "user" });
+    expect(
+      resolveAutoThreadId({
+        cfg,
+        to: resolved?.to ?? "",
+        toolContext: {
+          currentChannelId: "D123",
+          currentMessagingTarget: "user:U123",
+          currentThreadTs: "1712345678.123456",
+          replyToMode: "all",
+        },
+      }),
+    ).toBe("1712345678.123456");
+  });
+
   it("does not recover invalid Slack auto-thread anchors", () => {
     const resolveAutoThreadId = slackPlugin.threading?.resolveAutoThreadId;
     if (!resolveAutoThreadId) {

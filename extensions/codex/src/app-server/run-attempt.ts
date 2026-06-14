@@ -727,6 +727,7 @@ export async function runCodexAppServerAttempt(
       channelId: hookChannelId,
       currentChannelProvider: resolveCodexMessageToolProvider(params),
       currentChannelId: params.currentChannelId,
+      currentMessagingTarget: params.currentMessagingTarget,
       currentThreadId: params.currentThreadTs,
       replyToMode: params.replyToMode,
       hasRepliedRef: params.hasRepliedRef,

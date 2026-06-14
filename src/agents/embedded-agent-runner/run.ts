@@ -1763,6 +1763,7 @@ async function runEmbeddedAgentInternal(
             senderUsername: params.senderUsername,
             senderE164: params.senderE164,
             currentChannelId: params.currentChannelId,
+            currentMessagingTarget: params.currentMessagingTarget,
             currentThreadTs: params.currentThreadTs,
             currentMessageId: params.currentMessageId,
             currentInboundAudio: params.currentInboundAudio,
