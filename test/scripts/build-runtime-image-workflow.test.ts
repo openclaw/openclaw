@@ -332,6 +332,10 @@ describe("build-runtime-image rollout workflow", () => {
   it("preflights prod API health before prod catalog mutation and verifies exact sync run", () => {
     const prod = readWorkflow().jobs?.["rollout-prod"];
     expect(prod, "expected rollout-prod job").toBeDefined();
+    expect(prod!.env).toMatchObject({
+      API_URL: "${{ secrets.ROCKIELAB_PROD_API_URL || secrets.ROCKIELAB_API_URL }}",
+      ADMIN_TOKEN: "${{ secrets.ROCKIELAB_PROD_ADMIN_TOKEN || secrets.ROCKIELAB_ADMIN_TOKEN }}",
+    });
     const healthIndex = prod!.steps!.findIndex(
       (step) => step.name === "Preflight prod API environment before catalog sync",
     );

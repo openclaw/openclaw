@@ -505,8 +505,8 @@ jobs:
       actions: read
       contents: read
     env:
-      API_URL: ${{ secrets.ROCKIELAB_PROD_API_URL }}
-      ADMIN_TOKEN: ${{ secrets.ROCKIELAB_PROD_ADMIN_TOKEN }}
+      API_URL: ${{ secrets.ROCKIELAB_PROD_API_URL || secrets.ROCKIELAB_API_URL }}
+      ADMIN_TOKEN: ${{ secrets.ROCKIELAB_PROD_ADMIN_TOKEN || secrets.ROCKIELAB_ADMIN_TOKEN }}
       FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
       GHCR_PULL_USERNAME: ${{ secrets.GHCR_PULL_USERNAME }}
       GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
