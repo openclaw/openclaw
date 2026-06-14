@@ -31,6 +31,37 @@ describe("resolveCronExecutionRetryHint", () => {
     }
   });
 
+  it("classifies timeout phrasings as timeout, including the spaced 'timed out' form", () => {
+    for (const message of [
+      "timeout",
+      "request timeout after 30s",
+      "RequestTimeoutError: deadline exceeded",
+      "ETIMEDOUT",
+      "connect ETIMEDOUT 10.0.0.1:443",
+      "time out waiting for response",
+      "the request timed out",
+      "isolated agent setup timed out before runner start",
+      "job timed_out before completion",
+      "operation timed-out",
+    ]) {
+      expect(resolveCronExecutionRetryHint(message, ["timeout"])).toEqual({
+        retryable: true,
+        category: "timeout",
+      });
+    }
+  });
+
+  it("does not treat incidental 'time out' substrings as a timeout", () => {
+    for (const message of [
+      "runtime out of memory",
+      "lifetime outage report",
+    ]) {
+      expect(resolveCronExecutionRetryHint(message, ["timeout"])).toEqual({
+        retryable: false,
+      });
+    }
+  });
+
   it("does not retry permanent errors", () => {
     expect(resolveCronExecutionRetryHint("invalid API key", ["network"])).toEqual({
       retryable: false,

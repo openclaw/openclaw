@@ -25,7 +25,12 @@ const TRANSIENT_PATTERNS: Record<CronRetryOn, RegExp> = {
     /\b529\b|\boverloaded(?:_error)?\b|high demand|temporar(?:ily|y) overloaded|capacity exceeded/i,
   network:
     /(network|fetch failed|socket|econnreset|econnrefused|eai_again|enetdown|ehostunreach|ehostdown|enetreset|enetunreach|epipe)/i,
-  timeout: /(timeout|etimedout)/i,
+  // Match the solid "timeout"/"timedout" (incl. compounds like "RequestTimeoutError"
+  // and the ETIMEDOUT errno) anywhere, plus the spaced/hyphenated "timed out" /
+  // "time out" forms that real cron failures use ("agent setup timed out"). The
+  // separated form requires a leading word boundary so incidental substrings like
+  // "runtime out of memory" are not misread as a timeout.
+  timeout: /(timed?out|etimedout|\btimed?[ _-]out)/i,
   server_error: SERVER_ERROR_PATTERN,
 };
 
