@@ -8,6 +8,7 @@ const createCommentTypingReactionLifecycleMock = vi.hoisted(() => vi.fn());
 const deliverCommentThreadTextMock = vi.hoisted(() => vi.fn());
 const createReplyDispatcherWithTypingMock = vi.hoisted(() => vi.fn());
 const getFeishuRuntimeMock = vi.hoisted(() => vi.fn());
+const getOptionalFeishuRuntimeMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./accounts.js", () => ({
   resolveFeishuRuntimeAccount: resolveFeishuRuntimeAccountMock,
@@ -31,6 +32,7 @@ vi.mock("./drive.js", () => ({
 
 vi.mock("./runtime.js", () => ({
   getFeishuRuntime: getFeishuRuntimeMock,
+  getOptionalFeishuRuntime: getOptionalFeishuRuntimeMock,
 }));
 
 import { createFeishuCommentReplyDispatcher } from "./comment-dispatcher.js";
@@ -112,7 +114,7 @@ describe("createFeishuCommentReplyDispatcher", () => {
       markDispatchIdle: vi.fn(),
       markRunComplete: vi.fn(),
     }));
-    getFeishuRuntimeMock.mockReturnValue({
+    const mockRuntime = {
       channel: {
         text: {
           resolveTextChunkLimit: vi.fn(() => 4000),
@@ -124,7 +126,9 @@ describe("createFeishuCommentReplyDispatcher", () => {
           resolveHumanDelayConfig: vi.fn(() => undefined),
         },
       },
-    });
+    };
+    getFeishuRuntimeMock.mockReturnValue(mockRuntime);
+    getOptionalFeishuRuntimeMock.mockReturnValue(mockRuntime);
   });
 
   it("sends final comment text without waiting for typing cleanup", async () => {

@@ -11,7 +11,7 @@ import {
 import { createCommentTypingReactionLifecycle } from "./comment-reaction.js";
 import type { CommentFileType } from "./comment-target.js";
 import { deliverCommentThreadText } from "./drive.js";
-import { getFeishuRuntime } from "./runtime.js";
+import { getOptionalFeishuRuntime } from "./runtime.js";
 
 type CreateFeishuCommentReplyDispatcherParams = {
   cfg: ClawdbotConfig;
@@ -28,7 +28,10 @@ type CreateFeishuCommentReplyDispatcherParams = {
 export function createFeishuCommentReplyDispatcher(
   params: CreateFeishuCommentReplyDispatcherParams,
 ) {
-  const core = getFeishuRuntime();
+  const core = getOptionalFeishuRuntime();
+  if (!core) {
+    throw new Error("Feishu runtime not initialized — cannot create comment reply dispatcher");
+  }
   const prefixContext = createReplyPrefixContext({
     cfg: params.cfg,
     agentId: params.agentId,

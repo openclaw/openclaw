@@ -12,6 +12,20 @@ type StreamingSessionStub = {
 
 const resolveFeishuAccountMock = vi.hoisted(() => vi.fn());
 const getFeishuRuntimeMock = vi.hoisted(() => vi.fn());
+const mockChannel = vi.hoisted(() => ({
+  text: {
+    resolveTextChunkLimit: vi.fn(),
+    resolveChunkMode: vi.fn(),
+    resolveMarkdownTableMode: vi.fn(),
+    convertMarkdownTables: vi.fn(),
+    chunkTextWithMode: vi.fn(),
+    chunkMarkdownTextWithMode: vi.fn(),
+  },
+  reply: {
+    createReplyDispatcherWithTyping: vi.fn(),
+    resolveHumanDelayConfig: vi.fn(),
+  },
+}));
 const sendMessageFeishuMock = vi.hoisted(() => vi.fn());
 const sendMarkdownCardFeishuMock = vi.hoisted(() => vi.fn());
 const sendStructuredCardFeishuMock = vi.hoisted(() => vi.fn());
@@ -155,22 +169,16 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       _opts: opts,
     }));
 
-    getFeishuRuntimeMock.mockReturnValue({
-      channel: {
-        text: {
-          resolveTextChunkLimit: vi.fn(() => 4000),
-          resolveChunkMode: vi.fn(() => "line"),
-          resolveMarkdownTableMode: vi.fn(() => "preserve"),
-          convertMarkdownTables: vi.fn((text) => text),
-          chunkTextWithMode: vi.fn((text) => [text]),
-          chunkMarkdownTextWithMode: vi.fn((text) => [text]),
-        },
-        reply: {
-          createReplyDispatcherWithTyping: createReplyDispatcherWithTypingMock,
-          resolveHumanDelayConfig: vi.fn(() => undefined),
-        },
-      },
-    });
+    mockChannel.text.resolveTextChunkLimit.mockReturnValue(4000);
+    mockChannel.text.resolveChunkMode.mockReturnValue("line");
+    mockChannel.text.resolveMarkdownTableMode.mockReturnValue("preserve");
+    mockChannel.text.convertMarkdownTables.mockImplementation((text) => text);
+    mockChannel.text.chunkTextWithMode.mockImplementation((text) => [text]);
+    mockChannel.text.chunkMarkdownTextWithMode.mockImplementation((text) => [text]);
+    mockChannel.reply.createReplyDispatcherWithTyping.mockImplementation(
+      createReplyDispatcherWithTypingMock,
+    );
+    mockChannel.reply.resolveHumanDelayConfig.mockReturnValue(undefined);
   });
 
   function useNonStreamingAutoAccount() {
@@ -193,6 +201,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       cfg: {} as never,
       agentId: "agent",
       runtime: { log: vi.fn(), error: vi.fn() } as never,
+      channel: mockChannel,
       chatId: "oc_chat",
     });
 
@@ -208,6 +217,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       cfg: {} as never,
       agentId: "agent",
       runtime: {} as never,
+      channel: mockChannel,
       chatId: "oc_chat",
       ...overrides,
     });
@@ -331,6 +341,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       cfg: {} as never,
       agentId: "agent",
       runtime: {} as never,
+      channel: mockChannel,
       chatId: "oc_chat",
       replyToMessageId: "om_parent",
     });
@@ -346,6 +357,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       cfg: {} as never,
       agentId: "agent",
       runtime: {} as never,
+      channel: mockChannel,
       chatId: "oc_chat",
       replyToMessageId: "om_parent",
       messageCreateTimeMs: Date.now() - 3 * 60_000,
@@ -362,6 +374,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       cfg: {} as never,
       agentId: "agent",
       runtime: {} as never,
+      channel: mockChannel,
       chatId: "oc_chat",
       replyToMessageId: "om_parent",
       messageCreateTimeMs: Math.floor((Date.now() - 3 * 60_000) / 1000),
@@ -378,6 +391,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       cfg: {} as never,
       agentId: "agent",
       runtime: {} as never,
+      channel: mockChannel,
       chatId: "oc_chat",
       replyToMessageId: "om_parent",
       messageCreateTimeMs: Date.now() - 30_000,
@@ -427,9 +441,8 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   });
 
   it("keeps oversized auto mode plain final text on the chunked message path", async () => {
-    const runtime = getFeishuRuntimeMock();
-    runtime.channel.text.resolveTextChunkLimit.mockReturnValue(10);
-    runtime.channel.text.chunkTextWithMode.mockReturnValue(["0123456789", "abcdefghij"]);
+    mockChannel.text.resolveTextChunkLimit.mockReturnValue(10);
+    mockChannel.text.chunkTextWithMode.mockReturnValue(["0123456789", "abcdefghij"]);
 
     const { options } = createDispatcherHarness();
     await options.deliver({ text: "0123456789abcdefghij" }, { kind: "final" });
@@ -452,17 +465,16 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   });
 
   it("keeps oversized auto mode markdown final text on the chunked card path", async () => {
-    const runtime = getFeishuRuntimeMock();
-    runtime.channel.text.resolveTextChunkLimit.mockReturnValue(10);
-    runtime.channel.text.chunkMarkdownTextWithMode.mockReturnValue(["```ts\nx\n```", "tail"]);
+    mockChannel.text.resolveTextChunkLimit.mockReturnValue(10);
+    mockChannel.text.chunkMarkdownTextWithMode.mockReturnValue(["```ts\nx\n```", "tail"]);
 
     const { options } = createDispatcherHarness({ runtime: createRuntimeLogger() });
     await options.deliver({ text: "```ts\nconst x = 1\n```\ntail" }, { kind: "final" });
     await options.onIdle?.();
 
     expect(streamingInstances).toHaveLength(0);
-    expect(runtime.channel.text.chunkMarkdownTextWithMode).toHaveBeenCalledTimes(1);
-    expect(runtime.channel.text.chunkTextWithMode).not.toHaveBeenCalled();
+    expect(mockChannel.text.chunkMarkdownTextWithMode).toHaveBeenCalledTimes(1);
+    expect(mockChannel.text.chunkTextWithMode).not.toHaveBeenCalled();
     expect(sendStructuredCardFeishuMock).toHaveBeenCalledTimes(2);
     expectMockArgFields(sendStructuredCardFeishuMock, "first card send params", {
       text: "```ts\nx\n```",
@@ -479,9 +491,8 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   });
 
   it("discards partial streaming preview before oversized final text fallback", async () => {
-    const runtime = getFeishuRuntimeMock();
-    runtime.channel.text.resolveTextChunkLimit.mockReturnValue(10);
-    runtime.channel.text.chunkTextWithMode.mockReturnValue(["final text", " overflow"]);
+    mockChannel.text.resolveTextChunkLimit.mockReturnValue(10);
+    mockChannel.text.chunkTextWithMode.mockReturnValue(["final text", " overflow"]);
 
     const { result, options } = createDispatcherHarness({ runtime: createRuntimeLogger() });
     result.replyOptions.onPartialReply?.({ text: "partial" });
@@ -601,6 +612,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       cfg: {} as never,
       agentId: "agent",
       runtime: {} as never,
+      channel: mockChannel,
       chatId: "oc_chat",
     });
 
@@ -664,6 +676,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       cfg: {} as never,
       agentId: "agent",
       runtime: {} as never,
+      channel: mockChannel,
       chatId: "oc_chat",
     });
 
@@ -863,9 +876,8 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   });
 
   it("skips oversized late final text after streaming card close", async () => {
-    const runtime = getFeishuRuntimeMock();
-    runtime.channel.text.resolveTextChunkLimit.mockReturnValue(10);
-    runtime.channel.text.chunkTextWithMode.mockReturnValue(["oversized ", "late final"]);
+    mockChannel.text.resolveTextChunkLimit.mockReturnValue(10);
+    mockChannel.text.chunkTextWithMode.mockReturnValue(["oversized ", "late final"]);
 
     const { options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
@@ -1989,6 +2001,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
         cfg: {} as never,
         agentId: "agent",
         runtime: { log: vi.fn(), error: errorMock } as never,
+        channel: mockChannel,
         chatId: "oc_chat",
       });
 
