@@ -18,13 +18,9 @@ vi.mock("../../config/sessions/store-load.js", () => ({
 }));
 
 import type { Model } from "../../llm/types.js";
-import { Agent, type AgentMessage, type ThinkingLevel } from "../runtime/index.js";
-import { AgentSession, type AgentSessionConfig } from "./agent-session.js";
-import type { ExtensionRunner, LoadExtensionsResult, ToolDefinition } from "./extensions/index.js";
+import type { LoadExtensionsResult } from "./extensions/index.js";
 import { createExtensionRuntime } from "./extensions/loader.js";
-import type { ModelRegistry } from "./model-registry.js";
 import type { ResourceLoader } from "./resource-loader.js";
-import type { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 
 const testModel: Model = {
@@ -56,100 +52,20 @@ const switchedModel: Model = {
 function createMockResourceLoader(): ResourceLoader {
   const extensionsResult: LoadExtensionsResult = {
     extensions: [],
-    runtime: createExtensionRuntime([]),
+    errors: [],
+    runtime: createExtensionRuntime(),
   };
   return {
     reload: vi.fn().mockResolvedValue(undefined),
     getExtensions: () => extensionsResult,
-    getSkills: () => ({ skills: [], entries: [] }),
-    getPrompts: () => ({ prompts: [] }),
+    getSkills: () => ({ skills: [], diagnostics: [] }),
+    getPrompts: () => ({ prompts: [], diagnostics: [] }),
     getSystemPrompt: () => undefined,
     getAppendSystemPrompt: () => [],
-    getThemes: () => [],
+    getThemes: () => ({ themes: [], diagnostics: [] }),
     getAgentsFiles: () => ({ agentsFiles: [] }),
     extendResources: vi.fn(),
   };
-}
-
-function createMockSessionManager(): SessionManager {
-  return {
-    getSessionFile: vi.fn().mockReturnValue(undefined),
-    getSessionId: vi.fn().mockReturnValue("test-session"),
-    getSessionName: vi.fn().mockReturnValue(undefined),
-    getCwd: vi.fn().mockReturnValue("/tmp"),
-    getBranch: vi.fn().mockReturnValue([]),
-    getEntries: vi.fn().mockReturnValue([]),
-    getEntry: vi.fn().mockReturnValue(undefined),
-    getLeafId: vi.fn().mockReturnValue(null),
-    buildSessionContext: vi.fn().mockReturnValue({ messages: [], model: undefined }),
-    appendMessage: vi.fn(),
-    appendModelChange: vi.fn(),
-    appendThinkingLevelChange: vi.fn(),
-    appendCompaction: vi.fn(),
-    appendCustomEntry: vi.fn(),
-    appendCustomMessageEntry: vi.fn(),
-    appendSessionInfo: vi.fn(),
-    appendLabelChange: vi.fn(),
-    branch: vi.fn(),
-    branchWithSummary: vi.fn(),
-    resetLeaf: vi.fn(),
-  } as unknown as SessionManager;
-}
-
-function createMockSettingsManager(): SettingsManager {
-  return {
-    getCompactionSettings: vi.fn().mockReturnValue({ enabled: false }),
-    getRetrySettings: vi.fn().mockReturnValue({ enabled: false }),
-    getSteeringMode: vi.fn().mockReturnValue("all"),
-    getFollowUpMode: vi.fn().mockReturnValue("all"),
-    getBlockImages: vi.fn().mockReturnValue(false),
-    getDefaultProvider: vi.fn().mockReturnValue("test-provider"),
-    getDefaultModel: vi.fn().mockReturnValue("test-model"),
-    getDefaultThinkingLevel: vi.fn().mockReturnValue("medium" as ThinkingLevel),
-    getProviderRetrySettings: vi
-      .fn()
-      .mockReturnValue({ timeoutMs: 60000, maxRetries: 0, maxRetryDelayMs: 0 }),
-    getThinkingBudgets: vi.fn().mockReturnValue(undefined),
-    getTransport: vi.fn().mockReturnValue(undefined),
-    reload: vi.fn(),
-    setDefaultModelAndProvider: vi.fn(),
-    setDefaultThinkingLevel: vi.fn(),
-    getShellCommandPrefix: vi.fn().mockReturnValue(""),
-    getShellPath: vi.fn().mockReturnValue(undefined),
-    getImageAutoResize: vi.fn().mockReturnValue(false),
-    getCompactionEnabled: vi.fn().mockReturnValue(false),
-    setCompactionEnabled: vi.fn(),
-    getRetryEnabled: vi.fn().mockReturnValue(false),
-    setRetryEnabled: vi.fn(),
-    getBranchSummarySettings: vi.fn().mockReturnValue({ reserveTokens: 1000 }),
-    setSteeringMode: vi.fn(),
-    setFollowUpMode: vi.fn(),
-  } as unknown as SettingsManager;
-}
-
-function makeFindableRegistry(): ModelRegistry {
-  const { AuthStorage } = await_import_auth_storage();
-  // We need to dynamically require to avoid circular dependencies
-  const { ModelRegistry: MR } = vi.importActual("./model-registry.js") as Promise<
-    typeof import("./model-registry.js")
-  >;
-  // This won't work in vitest with async. Let me use a different approach
-  throw new Error("Use session.sessionModelRegistry instead");
-}
-
-function makeAgent(model: Model | undefined, registry: ModelRegistry): Agent {
-  const convertToLlm = vi.fn().mockReturnValue([]);
-  const streamFn = vi.fn();
-  return new Agent({
-    initialState: {
-      systemPrompt: "",
-      model,
-      thinkingLevel: "medium",
-      tools: [],
-    },
-    convertToLlm,
-    streamFn,
-  });
 }
 
 describe("syncModelFromStoreEntry", () => {
@@ -171,8 +87,8 @@ describe("syncModelFromStoreEntry", () => {
     const { SessionManager } = await import("./session-manager.js");
 
     const authStorage = AuthStorage.inMemory();
-    authStorage.set("test-provider", { apiKey: "test-key" });
-    authStorage.set("switched-provider", { apiKey: "switch-key" });
+    authStorage.set("test-provider", { type: "api_key", key: "test-key" });
+    authStorage.set("switched-provider", { type: "api_key", key: "switch-key" });
 
     const modelRegistry = ModelRegistry.inMemory(authStorage);
     // Add models by directly accessing the internal list (inMemory creates empty)
@@ -180,8 +96,12 @@ describe("syncModelFromStoreEntry", () => {
     // We need to use refresh or push to internal array.
     // For test purposes, we'll mock modelRegistry.find and hasConfiguredAuth.
     const findSpy = vi.spyOn(modelRegistry, "find").mockImplementation((provider, id) => {
-      if (provider === "test-provider" && id === "test-model") return testModel;
-      if (provider === "switched-provider" && id === "switched-model") return switchedModel;
+      if (provider === "test-provider" && id === "test-model") {
+        return testModel;
+      }
+      if (provider === "switched-provider" && id === "switched-model") {
+        return switchedModel;
+      }
       return undefined;
     });
     const authSpy = vi.spyOn(modelRegistry, "hasConfiguredAuth").mockImplementation((m) => {
@@ -245,7 +165,7 @@ describe("syncModelFromStoreEntry", () => {
     const { SessionManager } = await import("./session-manager.js");
 
     const authStorage = AuthStorage.inMemory();
-    authStorage.set("test-provider", { apiKey: "test-key" });
+    authStorage.set("test-provider", { type: "api_key", key: "test-key" });
 
     const modelRegistry = ModelRegistry.inMemory(authStorage);
     const findSpy = vi.spyOn(modelRegistry, "find").mockReturnValue(testModel);
@@ -296,7 +216,7 @@ describe("syncModelFromStoreEntry", () => {
     const { SessionManager } = await import("./session-manager.js");
 
     const authStorage = AuthStorage.inMemory();
-    authStorage.set("test-provider", { apiKey: "test-key" });
+    authStorage.set("test-provider", { type: "api_key", key: "test-key" });
 
     const modelRegistry = ModelRegistry.inMemory(authStorage);
     const findSpy = vi.spyOn(modelRegistry, "find").mockReturnValue(undefined);
@@ -341,7 +261,7 @@ describe("syncModelFromStoreEntry", () => {
     const { SessionManager } = await import("./session-manager.js");
 
     const authStorage = AuthStorage.inMemory();
-    authStorage.set("test-provider", { apiKey: "test-key" });
+    authStorage.set("test-provider", { type: "api_key", key: "test-key" });
 
     const modelRegistry = ModelRegistry.inMemory(authStorage);
     const findSpy = vi.spyOn(modelRegistry, "find").mockReturnValue(testModel);
@@ -383,12 +303,16 @@ describe("syncModelFromStoreEntry", () => {
     const { SessionManager } = await import("./session-manager.js");
 
     const authStorage = AuthStorage.inMemory();
-    authStorage.set("test-provider", { apiKey: "test-key" });
+    authStorage.set("test-provider", { type: "api_key", key: "test-key" });
 
     const modelRegistry = ModelRegistry.inMemory(authStorage);
     const findSpy = vi.spyOn(modelRegistry, "find").mockImplementation((provider, id) => {
-      if (provider === "switched-provider" && id === "switched-model") return switchedModel;
-      if (provider === "test-provider" && id === "test-model") return testModel;
+      if (provider === "switched-provider" && id === "switched-model") {
+        return switchedModel;
+      }
+      if (provider === "test-provider" && id === "test-model") {
+        return testModel;
+      }
       return undefined;
     });
     const authSpy = vi
@@ -432,7 +356,7 @@ describe("syncModelFromStoreEntry", () => {
     const { SessionManager } = await import("./session-manager.js");
 
     const authStorage = AuthStorage.inMemory();
-    authStorage.set("test-provider", { apiKey: "test-key" });
+    authStorage.set("test-provider", { type: "api_key", key: "test-key" });
 
     const modelRegistry = ModelRegistry.inMemory(authStorage);
     const findSpy = vi.spyOn(modelRegistry, "find").mockReturnValue(testModel);
@@ -478,7 +402,7 @@ describe("syncModelFromStoreEntry", () => {
     const { SessionManager } = await import("./session-manager.js");
 
     const authStorage = AuthStorage.inMemory();
-    authStorage.set("test-provider", { apiKey: "test-key" });
+    authStorage.set("test-provider", { type: "api_key", key: "test-key" });
 
     const modelRegistry = ModelRegistry.inMemory(authStorage);
     const findSpy = vi.spyOn(modelRegistry, "find").mockReturnValue(testModel);
