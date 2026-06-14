@@ -17,6 +17,7 @@ vi.mock("../config/runtime-snapshot.js", () => ({
 
 import {
   buildPluginToolDescriptorCacheKey,
+  capturePluginToolDescriptor,
   createPluginToolDescriptorConfigCacheKeyMemo,
   resetPluginToolDescriptorCache,
 } from "./tool-descriptor-cache.js";
@@ -168,5 +169,59 @@ describe("plugin tool descriptor cache keys", () => {
     });
 
     expect(firstKey).toBe(secondKey);
+  });
+
+  it("captures inert descriptor metadata when tool getters throw", () => {
+    const tool = Object.defineProperties(
+      {
+        async execute() {
+          return { content: [{ type: "text", text: "bad" }] };
+        },
+      },
+      {
+        name: {
+          get() {
+            throw new Error("name getter exploded");
+          },
+        },
+        description: {
+          get() {
+            throw new Error("description getter exploded");
+          },
+        },
+        label: {
+          get() {
+            throw new Error("label getter exploded");
+          },
+        },
+        displaySummary: {
+          get() {
+            throw new Error("summary getter exploded");
+          },
+        },
+        parameters: {
+          get() {
+            throw new Error("parameters getter exploded");
+          },
+        },
+      },
+    );
+
+    expect(
+      capturePluginToolDescriptor({
+        pluginId: "schema-bug",
+        tool: tool as never,
+        optional: false,
+      }),
+    ).toEqual({
+      optional: false,
+      descriptor: {
+        name: "tool",
+        description: "",
+        inputSchema: {},
+        owner: { kind: "plugin", pluginId: "schema-bug" },
+        executor: { kind: "plugin", pluginId: "schema-bug", toolName: "tool" },
+      },
+    });
   });
 });
