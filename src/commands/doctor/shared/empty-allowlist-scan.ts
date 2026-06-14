@@ -37,6 +37,7 @@ export function scanEmptyAllowlistPolicyWarnings(
     prefix: string,
     channelName: string,
     parent?: DoctorAccountRecord,
+    suppressGroupWarning?: boolean,
   ) => {
     const accountDm = asObjectRecord(account.dm);
     const parentDm = asObjectRecord(parent?.dm);
@@ -62,7 +63,9 @@ export function scanEmptyAllowlistPolicyWarnings(
         parent,
         prefix,
         shouldSkipDefaultEmptyGroupAllowlistWarning:
-          params.shouldSkipDefaultEmptyGroupAllowlistWarning,
+          suppressGroupWarning
+            ? () => true
+            : params.shouldSkipDefaultEmptyGroupAllowlistWarning,
       }),
     );
     if (params.extraWarningsForAccount) {
@@ -88,9 +91,23 @@ export function scanEmptyAllowlistPolicyWarnings(
     if (isDisabledRecord(channelConfig)) {
       continue;
     }
-    checkAccount(channelConfig, `channels.${channelName}`, channelName);
 
     const accounts = asObjectRecord(channelConfig.accounts);
+    const hasActiveAccounts =
+      accounts &&
+      Object.values(accounts).some((a) => a && typeof a === "object" && !isDisabledRecord(a));
+
+    // When the channel has per-account configs, the top-level record only
+    // serves as a parent fallback.  Suppress the default empty-group-allowlist
+    // warning so an empty top-level groupAllowFrom does not produce a false
+    // positive when every account supplies its own populated allowlist.
+    checkAccount(
+      channelConfig,
+      `channels.${channelName}`,
+      channelName,
+      /* parent */ undefined,
+      /* suppressGroupWarning */ hasActiveAccounts,
+    );
     if (!accounts) {
       continue;
     }
