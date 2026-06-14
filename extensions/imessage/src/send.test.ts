@@ -1165,4 +1165,116 @@ describe("sendMessageIMessage receipts", () => {
 
     expect(runCliJson).not.toHaveBeenCalled();
   });
+
+  describe("actions.reply gating", () => {
+    const BASE_CFG = {
+      channels: {
+        imessage: {
+          accounts: { default: {} },
+        },
+      },
+    };
+    const REPLY_CFG = {
+      channels: {
+        imessage: {
+          accounts: {
+            default: { actions: { reply: true } },
+          },
+        },
+      },
+    };
+    const NO_REPLY_CFG = {
+      channels: {
+        imessage: {
+          accounts: {
+            default: { actions: { reply: false } },
+          },
+        },
+      },
+    };
+
+    it("includes reply_to when actions.reply is true", async () => {
+      const client = createClient({ guid: "p:0/GUID", status: "sent" });
+
+      await sendMessageIMessage("+15551234567", "hello", {
+        config: REPLY_CFG,
+        client,
+        replyToId: "reply-guid",
+      });
+
+      const params = (client.request as ReturnType<typeof vi.fn>).mock.calls[0][1];
+      expect(params.reply_to).toBe("reply-guid");
+    });
+
+    it("includes reply_to when actions.reply is not set (default-enabled)", async () => {
+      const client = createClient({ guid: "p:0/GUID", status: "sent" });
+
+      await sendMessageIMessage("+15551234567", "hello", {
+        config: BASE_CFG,
+        client,
+        replyToId: "reply-guid",
+      });
+
+      const params = (client.request as ReturnType<typeof vi.fn>).mock.calls[0][1];
+      expect(params.reply_to).toBe("reply-guid");
+    });
+
+    it("strips reply_to when actions.reply is false", async () => {
+      const client = createClient({ guid: "p:0/GUID", status: "sent" });
+
+      await sendMessageIMessage("+15551234567", "hello", {
+        config: NO_REPLY_CFG,
+        client,
+        replyToId: "reply-guid",
+      });
+
+      const params = (client.request as ReturnType<typeof vi.fn>).mock.calls[0][1];
+      expect(params.reply_to).toBeUndefined();
+    });
+
+    it("strips reply_to from media sends when actions.reply is false", async () => {
+      const client = createClient({ guid: "p:0/GUID", status: "sent" });
+      // send-attachment hits the imsg CLI which is unavailable in tests;
+      // provide a mock runCliJson to bypass the external binary.
+      const runCliJson = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("unknown command send-attachment"));
+
+      await sendMessageIMessage("+15551234567", "", {
+        config: NO_REPLY_CFG,
+        client,
+        replyToId: "reply-guid",
+        mediaUrl: "https://example.com/test.png",
+        resolveAttachmentImpl: async () => ({ path: "/tmp/image.png", contentType: "image/png" }),
+        runCliJson,
+      });
+
+      // send-attachment failed → falls back to rpc send; reply_to must be absent.
+      const sendCalls = (client.request as ReturnType<typeof vi.fn>).mock.calls.filter(
+        ([method]: [string]) => method === "send",
+      );
+      for (const [, params] of sendCalls) {
+        expect(params.reply_to).toBeUndefined();
+      }
+    });
+
+    it("strips reply_to from attachment send-attachment when actions.reply is false and audioAsVoice", async () => {
+      // AudioAsVoice goes through send-attachment in spawn (needs mock runCliJson).
+      const runCliJson = vi.fn().mockResolvedValueOnce({ guid: "p:0/GUID", status: "sent" });
+
+      const result = await sendMessageIMessage("+15551234567", "", {
+        config: NO_REPLY_CFG,
+        replyToId: "reply-guid",
+        mediaUrl: "https://example.com/test.caf",
+        audioAsVoice: true,
+        resolveAttachmentImpl: async () => ({ path: "/tmp/voice.caf", contentType: "audio/x-caf" }),
+        runCliJson,
+      });
+
+      expect(result.messageId).toBe("p:0/GUID");
+      // runCliJson should have been called without --reply-to
+      const attachArgs = runCliJson.mock.calls[0][0];
+      expect(attachArgs).not.toContain("--reply-to");
+    });
+  });
 });
