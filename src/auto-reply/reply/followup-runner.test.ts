@@ -1483,7 +1483,12 @@ describe("createFollowupRunner runtime config", () => {
       }),
     );
 
-    expect(onToolStart).not.toHaveBeenCalled();
+    expect(onToolStart).toHaveBeenCalledWith({
+      name: "web_search",
+      phase: "start",
+      args: { query: "hidden" },
+      detailMode: undefined,
+    });
   });
 
   it("bridges queued CLI inter-tool commentary into onItemEvent for live preview", async () => {
@@ -1555,6 +1560,69 @@ describe("createFollowupRunner runtime config", () => {
         itemId: "commentary-1",
       }),
     );
+  });
+
+  it("forwards tool-start events for status reactions when verbose progress is off", async () => {
+    const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+      "../../infra/agent-events.js",
+    );
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": { command: "claude" },
+          },
+          models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    };
+    const onToolStart = vi.fn(async () => {});
+    // A separate mock for draft progress that should stay quiet.
+    const onItemEvent = vi.fn(async () => {});
+    runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
+      realAgentEvents.emitAgentEvent({
+        runId: params.runId,
+        stream: "tool",
+        data: { phase: "start", name: "exec", args: { command: "echo hi" } },
+      });
+      return {
+        payloads: [{ text: "done" }],
+        meta: { agentMeta: { provider: "claude-cli", model: "claude-opus-4-7" } },
+      };
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onToolStart, onItemEvent },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-7",
+    });
+
+    await runner(
+      createQueuedRun({
+        originatingChannel: "discord",
+        run: {
+          config: runtimeConfig,
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+          messageProvider: "discord",
+          sourceReplyDeliveryMode: "message_tool_only",
+          verboseLevel: "off",
+        },
+      }),
+    );
+
+    // Status reactions must still receive tool-start events even with verbose off.
+    expect(onToolStart).toHaveBeenCalledWith({
+      name: "exec",
+      phase: "start",
+      args: { command: "echo hi" },
+      detailMode: undefined,
+    });
+    // But verbose item progress should remain suppressed.
+    expect(onItemEvent).not.toHaveBeenCalled();
   });
 
   it("defers queued CLI attempt terminal lifecycle events until fallback settles", async () => {
@@ -2326,7 +2394,12 @@ describe("createFollowupRunner progress forwarding", () => {
       }),
     );
 
-    expect(onToolStart).not.toHaveBeenCalled();
+    expect(onToolStart).toHaveBeenCalledWith({
+      name: "exec",
+      phase: "start",
+      args: { command: "echo hidden" },
+      detailMode: undefined,
+    });
     expect(onItemEvent).not.toHaveBeenCalled();
     expect(onCommandOutput).not.toHaveBeenCalled();
     expect(onCompactionStart).not.toHaveBeenCalled();
@@ -2377,7 +2450,12 @@ describe("createFollowupRunner progress forwarding", () => {
       }),
     );
 
-    expect(onToolStart).not.toHaveBeenCalled();
+    expect(onToolStart).toHaveBeenCalledWith({
+      name: "exec",
+      phase: "start",
+      args: { command: "echo hidden" },
+      detailMode: undefined,
+    });
     expect(onCommandOutput).not.toHaveBeenCalled();
     expect(routeReplyMock).not.toHaveBeenCalled();
   });
@@ -2570,7 +2648,12 @@ describe("createFollowupRunner progress forwarding", () => {
       }),
     );
 
-    expect(onToolStart).not.toHaveBeenCalled();
+    expect(onToolStart).toHaveBeenCalledWith({
+      name: "exec",
+      phase: "start",
+      args: { command: "echo hidden" },
+      detailMode: undefined,
+    });
   });
 });
 

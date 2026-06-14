@@ -143,7 +143,11 @@ async function forwardFollowupProgressEvent(params: {
   const { evt, opts } = params;
   const emitChannelProgress = params.emitChannelProgress !== false;
   if (!emitChannelProgress && evt.stream !== "compaction") {
-    return;
+    // When verbose progress is off, still forward tool-start events so
+    // status reactions (👀🔧🛠️🧠) can update even without verbose output.
+    if (evt.stream !== "tool" || !Boolean(opts?.onToolStart)) {
+      return;
+    }
   }
 
   if (evt.stream === "tool") {
