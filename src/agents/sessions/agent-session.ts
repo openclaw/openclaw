@@ -1988,6 +1988,12 @@ export class AgentSession {
       return false;
     }
 
+    // Refresh stale in-memory model snapshot before reading contextWindow.
+    // The session's this.model may lag behind the registry when a model switch
+    // (e.g. Telegram /model picker) updates the session store without calling
+    // setModel(), causing auto-compaction to use the wrong threshold.
+    this.refreshCurrentModelFromRegistry();
+
     const contextWindow = this.model?.contextWindow ?? 0;
 
     // Skip overflow check if the message came from a different model.
