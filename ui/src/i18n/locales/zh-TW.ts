@@ -1598,8 +1598,6 @@ export const zh_TW: TranslationMap = {
       prompt: "提示",
       delivery: "傳送",
       agent: "代理",
-      command: "Command",
-      cwd: "CWD",
     },
     jobState: {
       status: "狀態",

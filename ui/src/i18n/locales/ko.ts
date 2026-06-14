@@ -1624,8 +1624,6 @@ export const ko: TranslationMap = {
       prompt: "프롬프트",
       delivery: "전달",
       agent: "에이전트",
-      command: "Command",
-      cwd: "CWD",
     },
     jobState: {
       status: "상태",

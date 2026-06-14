@@ -1644,8 +1644,6 @@ export const tr: TranslationMap = {
       prompt: "İstem",
       delivery: "Teslimat",
       agent: "Aracı",
-      command: "Command",
-      cwd: "CWD",
     },
     jobState: {
       status: "Durum",

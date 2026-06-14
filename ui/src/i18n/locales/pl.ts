@@ -1647,8 +1647,6 @@ export const pl: TranslationMap = {
       prompt: "Prompt",
       delivery: "Dostarczanie",
       agent: "Agent",
-      command: "Command",
-      cwd: "CWD",
     },
     jobState: {
       status: "Status",

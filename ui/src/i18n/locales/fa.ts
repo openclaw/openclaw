@@ -1635,8 +1635,6 @@ export const fa: TranslationMap = {
       prompt: "پرامپت",
       delivery: "تحویل",
       agent: "عامل",
-      command: "Command",
-      cwd: "CWD",
     },
     jobState: {
       status: "وضعیت",

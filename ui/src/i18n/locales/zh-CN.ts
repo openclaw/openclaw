@@ -1596,8 +1596,6 @@ export const zh_CN: TranslationMap = {
       prompt: "提示",
       delivery: "投递",
       agent: "代理",
-      command: "Command",
-      cwd: "CWD",
     },
     jobState: {
       status: "状态",

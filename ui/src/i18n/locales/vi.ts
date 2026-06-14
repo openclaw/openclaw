@@ -1627,8 +1627,6 @@ export const vi: TranslationMap = {
       prompt: "Prompt",
       delivery: "Gửi",
       agent: "Agent",
-      command: "Command",
-      cwd: "CWD",
     },
     jobState: {
       status: "Trạng thái",

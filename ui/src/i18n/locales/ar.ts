@@ -1617,8 +1617,6 @@ export const ar: TranslationMap = {
       prompt: "المطالبة",
       delivery: "التسليم",
       agent: "الوكيل",
-      command: "Command",
-      cwd: "CWD",
     },
     jobState: {
       status: "الحالة",
