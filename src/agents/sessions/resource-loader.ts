@@ -61,7 +61,7 @@ function resolvePromptInput(input: string | undefined, description: string): str
     try {
       return readFileSync(input, "utf-8");
     } catch (error) {
-      console.error(
+      console.warn(
         chalk.yellow(`Warning: Could not read ${description} file ${input}: ${String(error)}`),
       );
       return input;
@@ -82,7 +82,7 @@ function loadContextFileFromDir(dir: string): { path: string; content: string } 
           content: readFileSync(filePath, "utf-8"),
         };
       } catch (error) {
-        console.error(chalk.yellow(`Warning: Could not read ${filePath}: ${String(error)}`));
+        console.warn(chalk.yellow(`Warning: Could not read ${filePath}: ${String(error)}`));
       }
     }
   }
