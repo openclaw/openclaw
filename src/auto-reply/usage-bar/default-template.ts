@@ -24,43 +24,38 @@ export const DEFAULT_USAGE_BAR_TEMPLATE: UsageBarTemplate = {
   },
   output: {
     sep: "",
+    // Telegram (and any surface without its own list) falls through to `default`,
+    // so the default is built to read well on a narrow phone screen:
+    // - Tight badges: no separators between model/flags/reasoning/fast.
+    // - NBSP (\u00A0) before "|" and before 💰 keeps those joins non-breaking.
+    // - 📚 is glued hard to the meter so it can't wrap between books and bars.
+    // - The single regular space after "|" is the only sanctioned wrap point.
+    // - Leading \n drops the footer onto its own line, below the message body.
     default: [
-      { text: "{model.provider}{identity.emoji|🤖} {model.display_name|alias:models}" },
-      { map: "model.is_fallback", cases: { true: " 🔄" } },
-      { map: "model.is_override", cases: { true: " 📌" } },
-      { when: "model.reasoning", text: " {model.reasoning|alias:reasoning}" },
-      { map: "state.fast_mode", cases: { true: " ⚡", false: " 🐌" } },
+      { text: "\n{model.provider}{identity.emoji|🤖}{model.display_name|alias:models}" },
+      { map: "model.is_fallback", cases: { true: "🔄" } },
+      { map: "model.is_override", cases: { true: "📌" } },
+      { when: "model.reasoning", text: "{model.reasoning|alias:reasoning}" },
+      { map: "state.fast_mode", cases: { true: "⚡️", false: "🐌" } },
       {
         when: "context.max_tokens",
-        text: " | 📚 [{context.pct_used|meter:5:braille}]{context.max_tokens|num}",
+        text: "\u00A0| 📚[{context.pct_used|meter:5:braille}]{context.max_tokens|num}",
       },
-      {
-        when: "usage.has_split_tokens",
-        text: " ↕️ {usage.input_tokens|num|?}/{usage.output_tokens|num|?}",
-      },
-      { when: "usage.has_total_only_tokens", text: " ↕️ {usage.total_tokens|num}" },
-      { when: "usage.cache_hit_pct", text: " 🗄 {usage.cache_hit_pct|pct}" },
-      { when: "cost.turn_usd", text: " 💰{cost.turn_usd|fixed:4}" },
+      { when: "cost.turn_usd", text: "\u00A0💰{cost.turn_usd|fixed:4}" },
     ],
     surfaces: {
       discord: [
         { text: "-# -\n" },
-        { text: "-# {model.provider}{identity.emoji|🤖} {model.display_name|alias:models}" },
+        { text: "-# {model.provider}{identity.emoji|🤖}{model.display_name|alias:models}" },
         { map: "model.is_fallback", cases: { true: "🔄" } },
         { map: "model.is_override", cases: { true: "📌" } },
-        { when: "model.reasoning", text: " {model.reasoning|alias:reasoning}" },
-        { map: "state.fast_mode", cases: { true: " ⚡️", false: " 🐌" } },
+        { when: "model.reasoning", text: "{model.reasoning|alias:reasoning}" },
+        { map: "state.fast_mode", cases: { true: "⚡️", false: "🐌" } },
         {
           when: "context.max_tokens",
-          text: " | 📚 [{context.pct_used|meter:5:braille}]{context.max_tokens|num}",
+          text: "\u00A0| 📚[{context.pct_used|meter:5:braille}]{context.max_tokens|num}",
         },
-        {
-          when: "usage.has_split_tokens",
-          text: " ↕️ {usage.input_tokens|num|?}/{usage.output_tokens|num|?}",
-        },
-        { when: "usage.has_total_only_tokens", text: " ↕️ {usage.total_tokens|num}" },
-        { when: "usage.cache_hit_pct", text: " 🗄 {usage.cache_hit_pct|pct}" },
-        { when: "cost.turn_usd", text: " 💰{cost.turn_usd|fixed:4}" },
+        { when: "cost.turn_usd", text: "\u00A0💰{cost.turn_usd|fixed:4}" },
       ],
     },
   },
