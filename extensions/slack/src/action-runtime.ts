@@ -3,7 +3,6 @@ import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ResolvedSlackAccount } from "./accounts.js";
 import { parseSlackBlocksInput } from "./blocks-input.js";
 import { resolveSlackChannelConfig } from "./monitor/channel-config.js";
@@ -18,7 +17,7 @@ import {
   type OpenClawConfig,
   withNormalizedTimestamp,
 } from "./runtime-api.js";
-import { parseSlackTarget, resolveSlackChannelId } from "./targets.js";
+import { resolveSlackChannelId, slackTargetsMatch } from "./targets.js";
 
 const messagingActions = new Set([
   "sendMessage",
@@ -32,18 +31,7 @@ const messagingActions = new Set([
 const reactionsActions = new Set(["react", "reactions"]);
 const pinActions = new Set(["pinMessage", "unpinMessage", "listPins"]);
 
-function sameSlackChannelTarget(targetChannel: string, currentChannelId: string): boolean {
-  const parsedTarget = parseSlackTarget(targetChannel, {
-    defaultKind: "channel",
-  });
-  if (!parsedTarget || parsedTarget.kind !== "channel") {
-    return false;
-  }
-  return (
-    normalizeLowercaseStringOrEmpty(parsedTarget.id) ===
-    normalizeLowercaseStringOrEmpty(currentChannelId)
-  );
-}
+const sameSlackTarget = slackTargetsMatch;
 
 type SlackActionsRuntimeModule = typeof import("./actions.runtime.js");
 type SlackAccountsRuntimeModule = typeof import("./accounts.runtime.js");
@@ -129,7 +117,7 @@ function resolveThreadTsFromContext(
   }
 
   // Different channel - don't inject
-  if (!sameSlackChannelTarget(targetChannel, context.currentChannelId)) {
+  if (!sameSlackTarget(targetChannel, context.currentChannelId)) {
     return undefined;
   }
   if (!context.currentThreadTs) {
@@ -341,7 +329,7 @@ export async function handleSlackAction(
         // threadTs: once we send a message to the current channel, consider the
         // first reply "used" so later tool calls don't auto-thread again.
         if (context?.hasRepliedRef && context.currentChannelId) {
-          if (sameSlackChannelTarget(to, context.currentChannelId)) {
+          if (sameSlackTarget(to, context.currentChannelId)) {
             context.hasRepliedRef.value = true;
           }
         }
@@ -384,7 +372,7 @@ export async function handleSlackAction(
         });
 
         if (context?.hasRepliedRef && context.currentChannelId) {
-          if (sameSlackChannelTarget(to, context.currentChannelId)) {
+          if (sameSlackTarget(to, context.currentChannelId)) {
             context.hasRepliedRef.value = true;
           }
         }

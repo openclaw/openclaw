@@ -58,6 +58,17 @@ describe("resolveSlackAutoThreadId", () => {
     expect(hasRepliedRef.value).toBe(false);
   });
 
+  it("uses the active thread for matching user targets", () => {
+    expect(
+      resolveSlackAutoThreadId({
+        to: "user:U123",
+        toolContext: createToolContext({
+          currentChannelId: "slack:U123",
+        }),
+      }),
+    ).toBe("thread-1");
+  });
+
   it("skips auto-threading when reply mode or thread context blocks it", () => {
     expect(
       resolveSlackAutoThreadId({

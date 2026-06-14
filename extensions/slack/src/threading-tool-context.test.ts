@@ -261,12 +261,12 @@ describe("buildSlackThreadingToolContext", () => {
     expect(result.currentChannelId).toBe("D8SRXRDNF");
   });
 
-  it("returns undefined currentChannelId when neither channel: To nor NativeChannelId is set", () => {
+  it("uses the user target for implicit DM sends when NativeChannelId is missing", () => {
     const result = buildSlackThreadingToolContext({
       cfg: emptyCfg,
       accountId: null,
       context: { ChatType: "direct", To: "user:U8SUVSVGS" },
     });
-    expect(result.currentChannelId).toBeUndefined();
+    expect(result.currentChannelId).toBe("user:U8SUVSVGS");
   });
 });

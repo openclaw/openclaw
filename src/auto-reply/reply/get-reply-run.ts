@@ -1307,8 +1307,8 @@ export async function runPreparedReply(
       sessionKey,
       runtimePolicySessionKey,
       messageProvider,
-      chatType: normalizeChatType(promptSessionCtx.ChatType),
-      agentAccountId: sessionCtx.AccountId,
+      chatType: replyRoute.chatType,
+      agentAccountId: replyRoute.accountId,
       groupId: resolveGroupSessionKey(sessionCtx)?.id ?? undefined,
       groupChannel:
         normalizeOptionalString(sessionCtx.GroupChannel) ??

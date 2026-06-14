@@ -4,6 +4,7 @@ import {
   normalizeSlackMessagingTarget,
   parseSlackTarget,
   resolveSlackChannelId,
+  slackTargetsMatch,
 } from "./targets.js";
 
 describe("parseSlackTarget", () => {
@@ -65,5 +66,16 @@ describe("resolveSlackChannelId", () => {
 describe("normalizeSlackMessagingTarget", () => {
   it("defaults raw ids to channels", () => {
     expect(normalizeSlackMessagingTarget("C123")).toBe("channel:c123");
+  });
+});
+
+describe("slackTargetsMatch", () => {
+  it("matches equivalent channel and user targets", () => {
+    expect(slackTargetsMatch("channel:C123", "C123")).toBe(true);
+    expect(slackTargetsMatch("user:U123", "slack:U123")).toBe(true);
+  });
+
+  it("does not match different target kinds", () => {
+    expect(slackTargetsMatch("user:U123", "channel:U123")).toBe(false);
   });
 });

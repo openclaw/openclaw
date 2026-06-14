@@ -2735,6 +2735,8 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.originatingChatType).toBe("direct");
     expect(call?.followupRun.originatingReplyToMode).toBe("off");
     expect(call?.followupRun.run.messageProvider).toBe("slack");
+    expect(call?.followupRun.run.agentAccountId).toBe("work");
+    expect(call?.followupRun.run.chatType).toBe("direct");
   });
 
   it("uses transport thread metadata for followup originatingThreadId", async () => {

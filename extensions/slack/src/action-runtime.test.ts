@@ -688,6 +688,29 @@ describe("handleSlackAction", () => {
     expectLastSlackSend("Threaded reply", cfg, "1111111111.111111");
   });
 
+  it("auto-injects threadTs for matching DM user targets", async () => {
+    const cfg = slackConfig();
+    await handleSlackAction(
+      {
+        action: "sendMessage",
+        to: "user:U123",
+        content: "Threaded DM reply",
+      },
+      cfg,
+      {
+        currentChannelId: "slack:U123",
+        currentThreadTs: "1111111111.111111",
+        replyToMode: "all",
+      },
+    );
+    expectSlackSendCall(0, "user:U123", "Threaded DM reply", {
+      cfg,
+      mediaUrl: undefined,
+      threadTs: "1111111111.111111",
+      blocks: undefined,
+    });
+  });
+
   it.each([
     { name: "topLevel true", patch: { topLevel: true } },
     { name: "threadTs null", patch: { threadTs: null } },
