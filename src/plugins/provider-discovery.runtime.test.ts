@@ -171,6 +171,19 @@ function createManifestPluginWithoutDiscovery(params: {
   };
 }
 
+function createPoisonedCredentialMetadataPlugin(params: {
+  id: string;
+  poison: "setup" | "providerAuthEnvVars";
+}): PluginManifestRecord {
+  const plugin = createManifestPluginWithoutDiscovery({ id: params.id });
+  return Object.defineProperty(plugin, params.poison, {
+    configurable: true,
+    get() {
+      throw new Error(`provider discovery ${params.poison} metadata exploded`);
+    },
+  });
+}
+
 function createProvider(params: { id: string; mode: "static" | "catalog" }): ProviderPlugin {
   const hook = {
     run: async () => ({
@@ -547,6 +560,45 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
     expect(mocks.resolvePluginProviders).toHaveBeenCalledTimes(1);
     const params = requireResolvePluginProvidersParams();
     expect(params.onlyPluginIds).toEqual(["kilocode"]);
+  });
+
+  it("skips unreadable credential metadata while selecting full-load fallbacks", () => {
+    const codexEntryProvider = createProvider({ id: "codex", mode: "catalog" });
+    const fullProviders = [createProvider({ id: "kilocode", mode: "catalog" })];
+    mocks.resolveDiscoveredProviderPluginIds.mockReturnValue([
+      "codex",
+      "broken-setup",
+      "broken-auth-vars",
+      "kilocode",
+    ]);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      index: { plugins: [] },
+      manifestRegistry: {
+        plugins: [
+          createManifestPlugin("codex"),
+          createPoisonedCredentialMetadataPlugin({ id: "broken-setup", poison: "setup" }),
+          createPoisonedCredentialMetadataPlugin({
+            id: "broken-auth-vars",
+            poison: "providerAuthEnvVars",
+          }),
+          createManifestPluginWithoutDiscovery({
+            id: "kilocode",
+            setupProviders: [{ id: "kilocode", envVars: ["KILOCODE_API_KEY"] }],
+          }),
+        ],
+        diagnostics: [],
+      },
+    });
+    mocks.loadSource.mockReturnValue(codexEntryProvider);
+    mocks.resolvePluginProviders.mockReturnValue(fullProviders);
+
+    expect(
+      resolvePluginDiscoveryProvidersRuntime({
+        env: { KILOCODE_API_KEY: "sk-test" } as NodeJS.ProcessEnv,
+      }),
+    ).toEqual([{ ...codexEntryProvider, pluginId: "codex" }, ...fullProviders]);
+    expect(mocks.resolvePluginProviders).toHaveBeenCalledTimes(1);
+    expect(requireResolvePluginProvidersParams().onlyPluginIds).toEqual(["kilocode"]);
   });
 
   it("enables bundled provider Vitest compat when falling back from discovery entries", () => {
