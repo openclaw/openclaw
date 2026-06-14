@@ -6,11 +6,15 @@
 import http from "node:http";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
+import { streamAnthropic } from "../llm/providers/anthropic.js";
 import { createAnthropicMessagesTransportStreamFn } from "./anthropic-transport-stream.js";
 import { isLiveTestEnabled } from "./live-test-helpers.js";
 
 const LIVE = isLiveTestEnabled(["ANTHROPIC_TRANSPORT_LIVE_TEST"]);
 const describeLive = LIVE ? describe : describe.skip;
+const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY ?? "";
+const PROVIDER_LIVE = isLiveTestEnabled(["ANTHROPIC_LIVE_TEST"]) && Boolean(ANTHROPIC_KEY);
+const describeProviderLive = PROVIDER_LIVE ? describe : describe.skip;
 
 type AnthropicMessagesModel = Model<"anthropic-messages">;
 type AnthropicStreamFn = ReturnType<typeof createAnthropicMessagesTransportStreamFn>;
@@ -143,4 +147,125 @@ describeLive("anthropic transport stream live", () => {
       await closeServer(server);
     }
   }, 10_000);
+});
+
+describeProviderLive("anthropic transport stream provider live", () => {
+  it("keeps a healthy forced tool when a sibling descriptor is unreadable", async () => {
+    const modelId = process.env.OPENCLAW_LIVE_ANTHROPIC_TOOL_MODEL || "claude-haiku-4-5-20251001";
+    const model: AnthropicMessagesModel = {
+      id: modelId,
+      name: modelId,
+      api: "anthropic-messages",
+      provider: "anthropic",
+      baseUrl: "https://api.anthropic.com",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200_000,
+      maxTokens: 512,
+    };
+    const streamFn = createAnthropicMessagesTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        model,
+        {
+          messages: [{ role: "user", content: "Call healthy_probe with value LIVE_OK." }],
+          tools: [
+            {
+              name: "unreadable_probe",
+              description: "Unreadable probe",
+              get parameters() {
+                throw new Error("live unreadable parameters getter");
+              },
+            },
+            {
+              name: "healthy_probe",
+              description: "Return the requested probe value.",
+              parameters: {
+                type: "object",
+                properties: { value: { type: "string" } },
+                required: ["value"],
+              },
+            },
+          ],
+        } as unknown as AnthropicStreamContext,
+        {
+          apiKey: ANTHROPIC_KEY,
+          maxTokens: 128,
+          toolChoice: { type: "tool", name: "healthy_probe" },
+        } as AnthropicStreamOptions,
+      ),
+    );
+
+    const result = await stream.result();
+    const toolCall = result.content.find(
+      (block) => block.type === "toolCall" && block.name === "healthy_probe",
+    );
+
+    expect(result.stopReason).toBe("toolUse");
+    expect(toolCall).toMatchObject({
+      type: "toolCall",
+      name: "healthy_probe",
+      arguments: { value: "LIVE_OK" },
+    });
+  }, 45_000);
+
+  it("keeps a healthy forced tool through the Anthropic SDK provider", async () => {
+    const modelId = process.env.OPENCLAW_LIVE_ANTHROPIC_TOOL_MODEL || "claude-haiku-4-5-20251001";
+    const model: AnthropicMessagesModel = {
+      id: modelId,
+      name: modelId,
+      api: "anthropic-messages",
+      provider: "anthropic",
+      baseUrl: "https://api.anthropic.com",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200_000,
+      maxTokens: 512,
+    };
+    const stream = streamAnthropic(
+      model,
+      {
+        messages: [
+          { role: "user", content: "Call healthy_probe with value SDK_OK.", timestamp: Date.now() },
+        ],
+        tools: [
+          {
+            name: "unreadable_probe",
+            description: "Unreadable probe",
+            get parameters() {
+              throw new Error("live unreadable parameters getter");
+            },
+          },
+          {
+            name: "healthy_probe",
+            description: "Return the requested probe value.",
+            parameters: {
+              type: "object",
+              properties: { value: { type: "string" } },
+              required: ["value"],
+            },
+          },
+        ],
+      } as unknown as Parameters<typeof streamAnthropic>[1],
+      {
+        apiKey: ANTHROPIC_KEY,
+        maxTokens: 128,
+        toolChoice: { type: "tool", name: "healthy_probe" },
+      },
+    );
+
+    const result = await stream.result();
+    const toolCall = result.content.find(
+      (block) => block.type === "toolCall" && block.name === "healthy_probe",
+    );
+
+    expect(result.stopReason).toBe("toolUse");
+    expect(toolCall).toMatchObject({
+      type: "toolCall",
+      name: "healthy_probe",
+      arguments: { value: "SDK_OK" },
+    });
+  }, 45_000);
 });

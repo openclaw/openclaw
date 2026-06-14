@@ -1,7 +1,7 @@
 // Anthropic provider tests cover stream events, tools, and message mapping.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../agents/system-prompt-cache-boundary.js";
-import type { Context, Model } from "../types.js";
+import type { Context, Model, Tool } from "../types.js";
 
 const anthropicMockState = vi.hoisted(() => ({
   configs: [] as unknown[],
@@ -1002,6 +1002,101 @@ describe("Anthropic provider", () => {
 
     expect(result.stopReason).toBe("error");
     expect((capturedPayload as { stop_sequences?: unknown }).stop_sequences).toEqual(["STOP"]);
+  });
+
+  it("skips unreadable Anthropic provider tools while preserving healthy siblings", async () => {
+    let capturedPayload: unknown;
+    const unreadableTool = {
+      name: "unreadable_plugin_tool",
+      description: "unreadable schema",
+      get parameters(): Tool["parameters"] {
+        throw new Error("fuzz parameters getter exploded");
+      },
+    } as Tool;
+    const stream = streamAnthropic(
+      makeAnthropicModel(),
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        tools: [
+          unreadableTool,
+          {
+            name: "invalid_required_tool",
+            description: "invalid required",
+            parameters: {
+              type: "object",
+              properties: { query: { type: "string" } },
+              required: "query",
+            },
+          } as unknown as Tool,
+          {
+            name: "healthy_tool",
+            description: "healthy schema",
+            parameters: {
+              type: "object",
+              properties: { query: { type: "string" } },
+              required: ["query"],
+            },
+          } as Tool,
+        ],
+      },
+      {
+        apiKey: "sk-ant-provider",
+        onPayload: (payload) => {
+          capturedPayload = payload;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+    const payload = capturedPayload as {
+      tools?: Array<{ name?: string; input_schema?: unknown }>;
+    };
+
+    expect(result.stopReason).toBe("error");
+    expect(payload.tools?.map((tool) => tool.name)).toEqual(["healthy_tool"]);
+    expect(payload.tools?.[0]?.input_schema).toMatchObject({
+      properties: { query: { type: "string" } },
+      required: ["query"],
+    });
+  });
+
+  it("fails locally when a pinned Anthropic provider tool is skipped", async () => {
+    const unreadableTool = {
+      name: "unreadable_plugin_tool",
+      description: "unreadable schema",
+      get parameters(): Tool["parameters"] {
+        throw new Error("fuzz parameters getter exploded");
+      },
+    } as Tool;
+    const onPayload = vi.fn();
+    const stream = streamAnthropic(
+      makeAnthropicModel(),
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        tools: [
+          unreadableTool,
+          {
+            name: "healthy_tool",
+            description: "healthy schema",
+            parameters: { type: "object", properties: {} },
+          } as Tool,
+        ],
+      },
+      {
+        apiKey: "sk-ant-provider",
+        toolChoice: { type: "tool", name: "unreadable_plugin_tool" },
+        onPayload,
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toContain(
+      'Anthropic tool_choice requested unavailable tool "unreadable_plugin_tool"',
+    );
+    expect(onPayload).not.toHaveBeenCalled();
   });
 
   it("splits the system prompt cache boundary into cached and uncached Anthropic blocks", async () => {
