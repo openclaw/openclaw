@@ -178,6 +178,44 @@ describe("method scope resolution", () => {
     ).toEqual({ allowed: false, missingScope: "operator.approvals" });
   });
 
+  it("skips unreadable plugin session action siblings while preserving registered scopes", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.sessionActions = [
+      {
+        pluginId: "scope-plugin",
+        pluginName: "Scope Plugin",
+        source: "test",
+        get action() {
+          throw new Error("session action getter exploded");
+        },
+      } as NonNullable<typeof registry.sessionActions>[number],
+      {
+        pluginId: "scope-plugin",
+        pluginName: "Scope Plugin",
+        source: "test",
+        action: {
+          id: "approve",
+          requiredScopes: ["operator.approvals"],
+          handler: () => ({ result: { ok: true } }),
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("plugins.sessionAction", {
+        pluginId: "scope-plugin",
+        actionId: "approve",
+      }),
+    ).toEqual(["operator.approvals"]);
+    expect(
+      authorizeOperatorScopesForMethod("plugins.sessionAction", ["operator.write"], {
+        pluginId: "scope-plugin",
+        actionId: "approve",
+      }),
+    ).toEqual({ allowed: false, missingScope: "operator.approvals" });
+  });
+
   it("falls back to broad operator scopes when a dynamic session action is not locally registered", () => {
     expect(
       resolveLeastPrivilegeOperatorScopesForMethod("plugins.sessionAction", {
@@ -204,6 +242,30 @@ describe("method scope resolution", () => {
     const registry = createEmptyPluginRegistry();
     registry.gatewayHandlers["browser.request"] = pluginHandler;
     registry.gatewayMethodDescriptors.push(
+      createPluginGatewayMethodDescriptor({
+        pluginId: "browser",
+        name: "browser.request",
+        handler: pluginHandler,
+        scope: "operator.admin",
+      }),
+    );
+    setActivePluginRegistry(registry);
+
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("browser.request")).toEqual([
+      "operator.admin",
+    ]);
+  });
+
+  it("skips unreadable plugin gateway method descriptor siblings", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.gatewayHandlers["browser.request"] = pluginHandler;
+    registry.gatewayMethodDescriptors.push(
+      {
+        get name() {
+          throw new Error("gateway method descriptor getter exploded");
+        },
+        scope: "operator.read",
+      } as ReturnType<typeof createPluginGatewayMethodDescriptor>,
       createPluginGatewayMethodDescriptor({
         pluginId: "browser",
         name: "browser.request",
