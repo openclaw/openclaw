@@ -36,6 +36,35 @@ describe("tool name allowlists", () => {
     expect([...names]).toEqual(["read", "memory_search", "image_generate"]);
   });
 
+  it("skips unreadable local and client tool names", () => {
+    const unreadableTool = Object.defineProperty({}, "name", {
+      get() {
+        throw new Error("allowlist tool name getter exploded");
+      },
+    });
+    const unreadableClientTool = Object.defineProperty({ type: "function" }, "function", {
+      get() {
+        throw new Error("allowlist client function getter exploded");
+      },
+    }) as ClientToolDefinition;
+
+    const names = collectAllowedToolNames({
+      tools: [unreadableTool, createStubTool("read")] as never,
+      clientTools: [
+        unreadableClientTool,
+        {
+          type: "function",
+          function: {
+            name: "client_pick_file",
+            parameters: { type: "object", properties: {} },
+          },
+        },
+      ],
+    });
+
+    expect([...names]).toEqual(["read", "client_pick_file"]);
+  });
+
   it("builds a stable agent session allowlist from custom tool names", () => {
     const allowlist = toSessionToolAllowlist(new Set(["write", "read", "read", "edit"]));
 
@@ -117,6 +146,30 @@ describe("tool name allowlists", () => {
     );
 
     expect(allowlist).toEqual(["exec", "image_generate", "read"]);
+  });
+
+  it("skips unreadable registered and core tool names", () => {
+    const unreadableTool = Object.defineProperty({}, "name", {
+      get() {
+        throw new Error("registered tool name getter exploded");
+      },
+    });
+    const registered = toSessionToolAllowlist(
+      collectRegisteredToolNames([unreadableTool, { name: "exec" }] as never),
+    );
+    const core = toSessionToolAllowlist(
+      collectCoreBuiltinToolNames([unreadableTool, { name: "read" }] as never, {
+        isPluginTool: (tool) => {
+          if (tool === unreadableTool) {
+            throw new Error("plugin classifier exploded");
+          }
+          return false;
+        },
+      }),
+    );
+
+    expect(registered).toEqual(["exec"]);
+    expect(core).toEqual(["read"]);
   });
 
   it("excludes client tool names when Tool Search compacts them into the catalog", () => {
