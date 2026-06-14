@@ -21,8 +21,6 @@ export function resetPdfToolAuthEnv(): void {
   vi.stubEnv("GEMINI_API_KEY", "");
   vi.stubEnv("GOOGLE_API_KEY", "");
   vi.stubEnv("MINIMAX_API_KEY", "");
-  vi.stubEnv("OPENCLAW_TEST_CODEX_OAUTH", "");
-  vi.stubEnv("OPENCLAW_TEST_CODEX_ROUTE", "");
   vi.stubEnv("ZAI_API_KEY", "");
   vi.stubEnv("Z_AI_API_KEY", "");
   vi.stubEnv("COPILOT_GITHUB_TOKEN", "");

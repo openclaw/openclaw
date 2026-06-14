@@ -3,7 +3,6 @@
  *
  * Selects explicit PDF, image-model, native PDF, vision, or text-extraction fallback models.
  */
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   providerSupportsNativePdfDocument,
@@ -19,11 +18,7 @@ import {
   resolveConfiguredImageModelRefs,
   resolveProviderVisionModelFromConfig,
 } from "./image-tool.helpers.js";
-import {
-  hasDirectProviderApiKeyAuthForTool,
-  hasProviderAuthForTool,
-  resolveDefaultModelRef,
-} from "./model-config.helpers.js";
+import { hasProviderAuthForTool, resolveDefaultModelRef } from "./model-config.helpers.js";
 import { coercePdfModelConfig } from "./pdf-tool.helpers.js";
 
 function formatProviderModelRef(providerId: string, modelId: string): string {
@@ -117,7 +112,6 @@ function resolveTextExtractionCandidateRefs(params: {
   agentDir: string;
   workspaceDir?: string;
   authStore?: AuthProfileStore;
-  filter?: (providerId: string) => boolean;
 }): string[] {
   const candidates: string[] = [];
   const addCandidate = (providerId: string, modelId: string) => {
@@ -143,7 +137,6 @@ function resolveTextExtractionCandidateRefs(params: {
   for (const providerId of providerIds) {
     if (
       !providerId ||
-      (params.filter && !params.filter(providerId)) ||
       !hasProviderAuthForTool({
         provider: providerId,
         cfg: params.cfg,
@@ -240,26 +233,13 @@ export function resolvePdfModelConfigForTool(params: {
 
   let preferred: string | null = null;
 
-  const allowImplicitOpenAiPdfCandidate = hasDirectProviderApiKeyAuthForTool({
-    provider: "openai",
+  const providerOk = hasProviderAuthForTool({
+    provider: primary.provider,
     cfg: params.cfg,
     workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     authStore: params.authStore,
-    modelApi: "openai-responses",
   });
-  const allowImplicitPdfProvider = (providerId: string) =>
-    normalizeLowercaseStringOrEmpty(providerId) !== "openai" || allowImplicitOpenAiPdfCandidate;
-
-  const providerOk =
-    allowImplicitPdfProvider(primary.provider) &&
-    hasProviderAuthForTool({
-      provider: primary.provider,
-      cfg: params.cfg,
-      workspaceDir: params.workspaceDir,
-      agentDir: params.agentDir,
-      authStore: params.authStore,
-    });
   const providerVision = resolveProviderVisionModelFromConfig({
     cfg: params.cfg,
     provider: primary.provider,
@@ -283,7 +263,6 @@ export function resolvePdfModelConfigForTool(params: {
     workspaceDir: params.workspaceDir,
     authStore: params.authStore,
     filter: (providerId) =>
-      allowImplicitPdfProvider(providerId) &&
       providerSupportsNativePdfDocument({
         cfg: params.cfg,
         workspaceDir: params.workspaceDir,
@@ -295,7 +274,6 @@ export function resolvePdfModelConfigForTool(params: {
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
     authStore: params.authStore,
-    filter: allowImplicitPdfProvider,
   });
   const textExtractionCandidates = resolveTextExtractionCandidateRefs({
     cfg: params.cfg,
@@ -303,7 +281,6 @@ export function resolvePdfModelConfigForTool(params: {
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
     authStore: params.authStore,
-    filter: allowImplicitPdfProvider,
   });
   const preferPrimaryTextExtraction =
     providerOk && textExtractionCandidates.some((ref) => ref.startsWith(`${primary.provider}/`));
@@ -311,10 +288,7 @@ export function resolvePdfModelConfigForTool(params: {
   if (params.cfg?.models?.providers && typeof params.cfg.models.providers === "object") {
     // Configured provider vision models are added even when not present in static media defaults.
     for (const [providerKey, providerCfg] of Object.entries(params.cfg.models.providers)) {
-      const providerId = normalizeLowercaseStringOrEmpty(providerKey);
-      if (!allowImplicitPdfProvider(providerId)) {
-        continue;
-      }
+      const providerId = providerKey.trim();
       const documentImageModel = providerId
         ? resolveDocumentMediaModel({
             cfg: params.cfg,

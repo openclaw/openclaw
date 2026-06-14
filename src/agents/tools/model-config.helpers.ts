@@ -11,7 +11,6 @@ import {
 } from "../../config/model-input.js";
 import type { AgentToolModelConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { MediaUnderstandingCapability } from "../../media-understanding/types.js";
 import {
   externalCliDiscoveryForProviderAuth,
   ensureAuthProfileStore,
@@ -35,7 +34,7 @@ const OPENAI_PROVIDER_ID = "openai";
 const CODEX_MEDIA_PROVIDER_ID = "codex";
 const OPENAI_RESPONSES_MODEL_API = "openai-responses";
 
-export type OpenAiFamilyMediaCandidateDecision =
+export type OpenAiImageMediaCandidateDecision =
   | { kind: "keep"; ref: string }
   | { kind: "substitute"; ref: string; provider: string }
   | { kind: "drop" };
@@ -263,16 +262,15 @@ function hasCodexSyntheticMediaRoute(params: {
   });
 }
 
-/** Resolves the implicit OpenAI media slot without letting OAuth-only auth pick direct OpenAI. */
-export function resolveOpenAiFamilyMediaCandidate(params: {
+/** Resolves the implicit OpenAI image slot without letting OAuth-only auth pick direct OpenAI. */
+export function resolveOpenAiImageMediaCandidate(params: {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
   agentDir: string;
   authStore?: AuthProfileStore;
-  capability: MediaUnderstandingCapability;
   openAiModel: string;
   codexModel?: string;
-}): OpenAiFamilyMediaCandidateDecision {
+}): OpenAiImageMediaCandidateDecision {
   const openAiModel = params.openAiModel.trim();
   if (!openAiModel) {
     return { kind: "drop" };
@@ -298,7 +296,6 @@ export function resolveOpenAiFamilyMediaCandidate(params: {
   // Require canonical OpenAI subscription-style auth too so fresh installs do
   // not route to Codex media just because the bundled plugin is present.
   if (
-    params.capability === "image" &&
     codexModel &&
     hasCanonicalOpenAiCodexAuthSignal(params) &&
     hasCodexSyntheticMediaRoute(params)

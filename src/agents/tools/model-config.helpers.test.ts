@@ -6,7 +6,7 @@ import type { AuthProfileStore } from "../auth-profiles/types.js";
 import {
   hasDirectProviderApiKeyAuthForTool,
   hasProviderAuthForTool,
-  resolveOpenAiFamilyMediaCandidate,
+  resolveOpenAiImageMediaCandidate,
 } from "./model-config.helpers.js";
 
 describe("hasProviderAuthForTool", () => {
@@ -55,7 +55,7 @@ describe("hasProviderAuthForTool", () => {
   });
 });
 
-describe("resolveOpenAiFamilyMediaCandidate", () => {
+describe("resolveOpenAiImageMediaCandidate", () => {
   const agentDir = "/tmp/openclaw-model-config-helper";
 
   afterEach(() => {
@@ -77,10 +77,9 @@ describe("resolveOpenAiFamilyMediaCandidate", () => {
     };
 
     expect(
-      resolveOpenAiFamilyMediaCandidate({
+      resolveOpenAiImageMediaCandidate({
         agentDir,
         authStore,
-        capability: "image",
         openAiModel: "gpt-5.5",
         codexModel: "gpt-5.5",
       }),
@@ -100,10 +99,9 @@ describe("resolveOpenAiFamilyMediaCandidate", () => {
     };
 
     expect(
-      resolveOpenAiFamilyMediaCandidate({
+      resolveOpenAiImageMediaCandidate({
         agentDir,
         authStore,
-        capability: "image",
         openAiModel: "gpt-5.5",
         codexModel: "gpt-5.5",
       }),
@@ -131,10 +129,9 @@ describe("resolveOpenAiFamilyMediaCandidate", () => {
       }),
     ).toBe(true);
     expect(
-      resolveOpenAiFamilyMediaCandidate({
+      resolveOpenAiImageMediaCandidate({
         agentDir,
         authStore,
-        capability: "image",
         openAiModel: "gpt-5.5",
         codexModel: "gpt-5.5",
       }),
@@ -168,11 +165,10 @@ describe("resolveOpenAiFamilyMediaCandidate", () => {
       }),
     ).toBe(false);
     expect(
-      resolveOpenAiFamilyMediaCandidate({
+      resolveOpenAiImageMediaCandidate({
         cfg,
         agentDir,
         authStore,
-        capability: "image",
         openAiModel: "gpt-5.5",
         codexModel: "gpt-5.5",
       }),
@@ -204,11 +200,10 @@ describe("resolveOpenAiFamilyMediaCandidate", () => {
       }),
     ).toBe(true);
     expect(
-      resolveOpenAiFamilyMediaCandidate({
+      resolveOpenAiImageMediaCandidate({
         cfg,
         agentDir,
         authStore,
-        capability: "image",
         openAiModel: "gpt-5.5",
         codexModel: "gpt-5.5",
       }),
@@ -230,10 +225,9 @@ describe("resolveOpenAiFamilyMediaCandidate", () => {
     };
 
     expect(
-      resolveOpenAiFamilyMediaCandidate({
+      resolveOpenAiImageMediaCandidate({
         agentDir,
         authStore,
-        capability: "image",
         openAiModel: "gpt-5.5",
         codexModel: "gpt-5.5",
       }),
@@ -253,10 +247,9 @@ describe("resolveOpenAiFamilyMediaCandidate", () => {
     };
 
     expect(
-      resolveOpenAiFamilyMediaCandidate({
+      resolveOpenAiImageMediaCandidate({
         agentDir,
         authStore,
-        capability: "image",
         openAiModel: "gpt-5.5",
         codexModel: "gpt-5.5",
       }),
@@ -265,10 +258,9 @@ describe("resolveOpenAiFamilyMediaCandidate", () => {
 
   it("drops OpenAI media when neither direct auth nor verified Codex route is available", () => {
     expect(
-      resolveOpenAiFamilyMediaCandidate({
+      resolveOpenAiImageMediaCandidate({
         agentDir,
         authStore: { version: 1, profiles: {} },
-        capability: "image",
         openAiModel: "gpt-5.5",
         codexModel: "gpt-5.5",
       }),

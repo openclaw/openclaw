@@ -74,7 +74,7 @@ import {
   buildToolModelConfigFromCandidates,
   hasToolModelConfig,
   resolveDefaultModelRef,
-  resolveOpenAiFamilyMediaCandidate,
+  resolveOpenAiImageMediaCandidate,
 } from "./model-config.helpers.js";
 import {
   createSandboxBridgeReadFile,
@@ -257,12 +257,11 @@ export function resolveImageModelConfigForTool(params: {
       includeConfiguredImageModels: false,
     });
   const resolveImplicitOpenAiImageCandidate = (openAiModel: string): string | null => {
-    const decision = resolveOpenAiFamilyMediaCandidate({
+    const decision = resolveOpenAiImageMediaCandidate({
       cfg: params.cfg,
       workspaceDir: params.workspaceDir,
       agentDir: params.agentDir,
       authStore: params.authStore,
-      capability: "image",
       openAiModel,
       codexModel: resolveCodexImageModel(),
     });

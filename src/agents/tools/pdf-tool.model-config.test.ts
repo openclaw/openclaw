@@ -29,10 +29,7 @@ vi.mock("./model-config.helpers.js", () => ({
       return Boolean(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_OAUTH_TOKEN);
     }
     if (provider === "openai") {
-      return Boolean(process.env.OPENAI_API_KEY || process.env.OPENCLAW_TEST_CODEX_OAUTH);
-    }
-    if (provider === "codex") {
-      return Boolean(process.env.OPENCLAW_TEST_CODEX_ROUTE);
+      return Boolean(process.env.OPENAI_API_KEY);
     }
     if (provider === "google") {
       return Boolean(process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY);
@@ -47,8 +44,6 @@ vi.mock("./model-config.helpers.js", () => ({
     }
     return false;
   },
-  hasDirectProviderApiKeyAuthForTool: ({ provider }: { provider: string }) =>
-    provider === "openai" ? Boolean(process.env.OPENAI_API_KEY) : false,
   resolveDefaultModelRef: (cfg?: OpenClawConfig) => {
     const modelCfg = cfg?.agents?.defaults?.model;
     const primary =
@@ -78,102 +73,6 @@ describe("resolvePdfModelConfigForTool", () => {
   it("returns null without any auth", () => {
     const cfg = withDefaultModel("openai/gpt-5.4");
     expect(resolvePdfModelConfigForTool({ cfg, agentDir: TEST_AGENT_DIR })).toBeNull();
-  });
-
-  it("does not substitute Codex for implicit OpenAI PDF defaults on canonical OAuth-only auth", () => {
-    vi.stubEnv("OPENCLAW_TEST_CODEX_OAUTH", "1");
-    vi.stubEnv("OPENCLAW_TEST_CODEX_ROUTE", "1");
-    const cfg = withDefaultModel("openai/gpt-5.4");
-    expect(resolvePdfModelConfigForTool({ cfg, agentDir: TEST_AGENT_DIR })).toBeNull();
-  });
-
-  it("drops implicit OpenAI PDF candidates when direct auth and Codex route are absent", () => {
-    vi.stubEnv("OPENCLAW_TEST_CODEX_OAUTH", "1");
-    const cfg = withDefaultModel("openai/gpt-5.4");
-    expect(resolvePdfModelConfigForTool({ cfg, agentDir: TEST_AGENT_DIR })).toBeNull();
-  });
-
-  it("does not re-add configured OpenAI vision metadata after dropping OAuth-only PDF candidates", () => {
-    vi.stubEnv("OPENCLAW_TEST_CODEX_OAUTH", "1");
-    const cfg = {
-      ...withDefaultModel("openai/gpt-5.4"),
-      models: {
-        providers: {
-          openai: {
-            models: [{ id: "gpt-5.5", input: ["text", "image"] }],
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(resolvePdfModelConfigForTool({ cfg, agentDir: TEST_AGENT_DIR })).toBeNull();
-  });
-
-  it("does not re-add normalized OpenAI provider keys after dropping OAuth-only PDF candidates", () => {
-    vi.stubEnv("OPENCLAW_TEST_CODEX_OAUTH", "1");
-    const cfg = {
-      ...withDefaultModel("openai/gpt-5.4"),
-      models: {
-        providers: {
-          OpenAI: {
-            models: [{ id: "gpt-5.5", input: ["text", "image"] }],
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(resolvePdfModelConfigForTool({ cfg, agentDir: TEST_AGENT_DIR })).toBeNull();
-  });
-
-  it("keeps native PDF providers ahead of dropped OAuth-only OpenAI candidates", () => {
-    vi.stubEnv("ANTHROPIC_API_KEY", "anthropic-test");
-    vi.stubEnv("OPENCLAW_TEST_CODEX_OAUTH", "1");
-    vi.stubEnv("OPENCLAW_TEST_CODEX_ROUTE", "1");
-    const cfg = withDefaultModel("openai/gpt-5.4");
-    expect(resolvePdfModelConfigForTool({ cfg, agentDir: TEST_AGENT_DIR })?.primary).toBe(
-      ANTHROPIC_PDF_MODEL,
-    );
-  });
-
-  it("drops implicit OpenAI PDF candidates for non-OpenAI primaries on OAuth-only auth", () => {
-    vi.stubEnv("OPENCLAW_TEST_CODEX_OAUTH", "1");
-    vi.stubEnv("OPENCLAW_TEST_CODEX_ROUTE", "1");
-    const cfg = withDefaultModel("google/gemini-3-flash-preview");
-    expect(resolvePdfModelConfigForTool({ cfg, agentDir: TEST_AGENT_DIR })).toBeNull();
-  });
-
-  it("omits implicit OpenAI PDF fallbacks for non-OpenAI primaries on OAuth-only auth", () => {
-    vi.stubEnv("ANTHROPIC_API_KEY", "anthropic-test");
-    vi.stubEnv("OPENCLAW_TEST_CODEX_OAUTH", "1");
-    vi.stubEnv("OPENCLAW_TEST_CODEX_ROUTE", "1");
-    const cfg = withDefaultModel("google/gemini-3-flash-preview");
-    const resolved = resolvePdfModelConfigForTool({ cfg, agentDir: TEST_AGENT_DIR });
-    expect(resolved?.primary).toBe(ANTHROPIC_PDF_MODEL);
-    expect([resolved?.primary, ...(resolved?.fallbacks ?? [])]).not.toContain("openai/gpt-5.5");
-  });
-
-  it("does not re-add configured OpenAI vision metadata for non-OpenAI primaries", () => {
-    vi.stubEnv("OPENCLAW_TEST_CODEX_OAUTH", "1");
-    const cfg = {
-      ...withDefaultModel("google/gemini-3-flash-preview"),
-      models: {
-        providers: {
-          OpenAI: {
-            models: [{ id: "gpt-5.5", input: ["text", "image"] }],
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(resolvePdfModelConfigForTool({ cfg, agentDir: TEST_AGENT_DIR })).toBeNull();
-  });
-
-  it("keeps implicit OpenAI PDF candidates for non-OpenAI primaries with direct auth", () => {
-    vi.stubEnv("OPENAI_API_KEY", "openai-test");
-    const cfg = withDefaultModel("google/gemini-3-flash-preview");
-    expect(resolvePdfModelConfigForTool({ cfg, agentDir: TEST_AGENT_DIR })?.primary).toBe(
-      "openai/gpt-5.5",
-    );
   });
 
   it("prefers explicit pdfModel config", () => {
