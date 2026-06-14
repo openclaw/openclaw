@@ -9,6 +9,11 @@ import {
   NODE_SYSTEM_RUN_COMMANDS,
 } from "../infra/node-commands.js";
 import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
+import type {
+  PluginNodeHostCommandRegistration,
+  PluginNodeInvokePolicyRegistration,
+  PluginRegistry,
+} from "../plugins/registry-types.js";
 import { normalizeDeviceMetadataForPolicy } from "./device-metadata-normalization.js";
 import type { NodeSession } from "./node-registry.js";
 
@@ -149,6 +154,159 @@ const DEVICE_FAMILY_TOKEN_RULES: ReadonlyArray<{
   { id: "linux", tokens: ["linux"] },
 ] as const;
 
+type ReadResult<T> = { ok: true; value: T } | { ok: false };
+
+type PluginNodePolicySnapshot = {
+  commands: string[];
+  defaultPlatforms: string[] | null;
+  dangerous: boolean;
+  foregroundRestrictedOnIos: boolean;
+};
+
+type PluginNodeHostCommandSnapshot = {
+  command: string;
+  dangerous: boolean;
+};
+
+function readField<T>(read: () => T): ReadResult<T> {
+  try {
+    return { ok: true, value: read() };
+  } catch {
+    return { ok: false };
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function readArrayLength(value: readonly unknown[]): number | null {
+  const length = readField(() => value.length);
+  return length.ok && Number.isInteger(length.value) && length.value >= 0 ? length.value : null;
+}
+
+function readRegistryArray(
+  registry: PluginRegistry | null,
+  read: (registry: PluginRegistry) => unknown,
+): readonly unknown[] {
+  if (!registry) {
+    return [];
+  }
+  const value = readField(() => read(registry));
+  return value.ok && Array.isArray(value.value) ? value.value : [];
+}
+
+function readStringArray(value: unknown): string[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const length = readArrayLength(value);
+  if (length === null) {
+    return null;
+  }
+  const out: string[] = [];
+  let index = 0;
+  while (index < length) {
+    const entry = readField(() => value[index]);
+    if (!entry.ok || typeof entry.value !== "string") {
+      return null;
+    }
+    out.push(entry.value);
+    index += 1;
+  }
+  return out;
+}
+
+function readPluginNodePolicy(entry: unknown): PluginNodePolicySnapshot | null {
+  if (!isRecord(entry)) {
+    return null;
+  }
+  const registration = entry as PluginNodeInvokePolicyRegistration;
+  const policy = readField(() => registration.policy);
+  if (!policy.ok || !isRecord(policy.value)) {
+    return null;
+  }
+  const commands = readField(() => policy.value.commands);
+  const commandList = commands.ok ? readStringArray(commands.value) : null;
+  if (!commandList) {
+    return null;
+  }
+  const defaultPlatforms = readField(() => policy.value.defaultPlatforms);
+  const defaultPlatformList =
+    defaultPlatforms.ok && defaultPlatforms.value !== undefined
+      ? readStringArray(defaultPlatforms.value)
+      : [];
+  const dangerous = readField(() => policy.value.dangerous);
+  const foregroundRestrictedOnIos = readField(() => policy.value.foregroundRestrictedOnIos);
+  return {
+    commands: commandList,
+    defaultPlatforms: defaultPlatformList,
+    dangerous: !dangerous.ok || dangerous.value === true,
+    foregroundRestrictedOnIos:
+      foregroundRestrictedOnIos.ok && foregroundRestrictedOnIos.value === true,
+  };
+}
+
+function readPluginNodeHostCommand(entry: unknown): PluginNodeHostCommandSnapshot | null {
+  if (!isRecord(entry)) {
+    return null;
+  }
+  const registration = entry as PluginNodeHostCommandRegistration;
+  const command = readField(() => registration.command);
+  if (!command.ok || !isRecord(command.value)) {
+    return null;
+  }
+  const commandValue = readField(() => command.value.command);
+  if (!commandValue.ok || typeof commandValue.value !== "string") {
+    return null;
+  }
+  const dangerous = readField(() => command.value.dangerous);
+  return {
+    command: commandValue.value,
+    dangerous: !dangerous.ok || dangerous.value === true,
+  };
+}
+
+function listPluginNodePolicies(registry: PluginRegistry | null): PluginNodePolicySnapshot[] {
+  const entries = readRegistryArray(registry, (value) => value.nodeInvokePolicies);
+  const length = readArrayLength(entries);
+  if (length === null) {
+    return [];
+  }
+  const policies: PluginNodePolicySnapshot[] = [];
+  let index = 0;
+  while (index < length) {
+    const entry = readField(() => entries[index]);
+    const policy = entry.ok ? readPluginNodePolicy(entry.value) : null;
+    if (policy) {
+      policies.push(policy);
+    }
+    index += 1;
+  }
+  return policies;
+}
+
+function listPluginNodeHostCommands(
+  registry: PluginRegistry | null,
+): PluginNodeHostCommandSnapshot[] {
+  const entries = readRegistryArray(registry, (value) => value.nodeHostCommands);
+  const length = readArrayLength(entries);
+  if (length === null) {
+    return [];
+  }
+  const commands: PluginNodeHostCommandSnapshot[] = [];
+  let index = 0;
+  while (index < length) {
+    const entry = readField(() => entries[index]);
+    const command = entry.ok ? readPluginNodeHostCommand(entry.value) : null;
+    if (command) {
+      commands.push(command);
+    }
+    index += 1;
+  }
+  return commands;
+}
+
 function resolvePlatformIdByExactMatch(value: string): Exclude<PlatformId, "unknown"> | undefined {
   if (CANONICAL_PLATFORM_IDS.has(value as Exclude<PlatformId, "unknown">)) {
     return value as Exclude<PlatformId, "unknown">;
@@ -226,12 +384,12 @@ export function listDangerousPluginNodeCommands(): string[] {
     return [];
   }
   const commands = [
-    ...(registry.nodeHostCommands ?? [])
-      .filter((entry) => entry.command.dangerous === true)
-      .map((entry) => entry.command.command),
-    ...(registry.nodeInvokePolicies ?? [])
-      .filter((entry) => entry.policy.dangerous === true)
-      .flatMap((entry) => entry.policy.commands),
+    ...listPluginNodeHostCommands(registry)
+      .filter((entry) => entry.dangerous)
+      .map((entry) => entry.command),
+    ...listPluginNodePolicies(registry)
+      .filter((entry) => entry.dangerous)
+      .flatMap((entry) => entry.commands),
   ];
   return normalizeUniqueStringEntries(commands);
 }
@@ -241,12 +399,11 @@ function listDefaultPluginNodeCommands(platformId: PlatformId): string[] {
   if (!registry) {
     return [];
   }
-  const commands = (registry.nodeInvokePolicies ?? []).flatMap((entry) => {
-    if (entry.policy.dangerous === true) {
+  const commands = listPluginNodePolicies(registry).flatMap((entry) => {
+    if (entry.dangerous) {
       return [];
     }
-    const defaults = entry.policy.defaultPlatforms ?? [];
-    return defaults.includes(platformId) ? entry.policy.commands : [];
+    return entry.defaultPlatforms?.includes(platformId) ? entry.commands : [];
   });
   return normalizeUniqueStringEntries(commands);
 }
@@ -260,10 +417,10 @@ export function isForegroundRestrictedPluginNodeCommand(command: string): boolea
   if (!normalized) {
     return false;
   }
-  return (registry.nodeInvokePolicies ?? []).some(
+  return listPluginNodePolicies(registry).some(
     (entry) =>
-      entry.policy.foregroundRestrictedOnIos === true &&
-      entry.policy.commands.some((policyCommand) => policyCommand.trim() === normalized),
+      entry.foregroundRestrictedOnIos &&
+      entry.commands.some((policyCommand) => policyCommand.trim() === normalized),
   );
 }
 
