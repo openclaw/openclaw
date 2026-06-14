@@ -31,9 +31,15 @@ export async function getRecentSessionContent(
     const lines = content.trim().split("\n");
 
     const allMessages: string[] = [];
+    const messageIndex = new Map<string, { role: "user" | "assistant"; text?: string }>();
     for (const line of lines) {
       try {
-        const entry = JSON.parse(line);
+        const entry = JSON.parse(line) as {
+          type?: unknown;
+          id?: unknown;
+          parentId?: unknown;
+          message?: unknown;
+        };
         if (entry.type === "message" && entry.message) {
           const msg = entry.message as {
             role?: unknown;
@@ -41,14 +47,37 @@ export async function getRecentSessionContent(
             provenance?: unknown;
           };
           const role = msg.role;
-          if ((role === "user" || role === "assistant") && "content" in msg && msg.content) {
-            if (role === "user" && hasInterSessionUserProvenance(msg)) {
-              continue;
+          if (role !== "user" && role !== "assistant") {
+            continue;
+          }
+          if (!("content" in msg) || !msg.content) {
+            continue;
+          }
+          if (role === "user" && hasInterSessionUserProvenance(msg)) {
+            continue;
+          }
+
+          const text = extractTextMessageContent(msg.content);
+          const entryId = typeof entry.id === "string" ? entry.id : undefined;
+          const parentMessage =
+            typeof entry.parentId === "string" ? messageIndex.get(entry.parentId) : undefined;
+          if (
+            role === "assistant" &&
+            text &&
+            parentMessage?.role === "assistant" &&
+            parentMessage.text === text
+          ) {
+            if (entryId) {
+              messageIndex.set(entryId, { role, text });
             }
-            const text = extractTextMessageContent(msg.content);
-            if (text && !text.startsWith("/")) {
-              allMessages.push(`${role}: ${text}`);
-            }
+            continue;
+          }
+
+          if (entryId) {
+            messageIndex.set(entryId, { role, ...(text ? { text } : {}) });
+          }
+          if (text && !text.startsWith("/")) {
+            allMessages.push(`${role}: ${text}`);
           }
         }
       } catch {
