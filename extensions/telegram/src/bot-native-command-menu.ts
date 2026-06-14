@@ -505,8 +505,22 @@ export function syncTelegramMenuCommands(params: {
     const currentHash = hashCommandList(commandsToRegister);
     const cachedHash = readCachedCommandHash(accountId, botIdentity);
     if (cachedHash === currentHash) {
-      logVerbose("telegram: command menu unchanged; skipping sync");
-      return;
+      // The local hash matches, but the remote Telegram state may have been
+      // cleared (e.g. after an interrupted sync or gateway restart).  Verify
+      // with getMyCommands before skipping — if remote is empty we must
+      // re-register.  See #92944.
+      try {
+        const remoteCommands = await bot.api.getMyCommands();
+        if (remoteCommands && remoteCommands.length > 0) {
+          logVerbose("telegram: command menu unchanged; skipping sync");
+          return;
+        }
+        logVerbose("telegram: command menu hash matches but remote is empty; re-syncing");
+      } catch {
+        // If getMyCommands fails (network, rate limit, etc.), fall through to
+        // re-sync rather than trusting the stale hash.
+        logVerbose("telegram: getMyCommands failed; re-syncing command menu");
+      }
     }
 
     // Keep delete -> set ordering to avoid stale deletions racing after fresh registrations.
