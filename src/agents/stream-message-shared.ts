@@ -94,15 +94,29 @@ export function buildAssistantMessageWithZeroUsage(params: {
 // to a live stream-error turn (and the repair pass remains idempotent).
 export const STREAM_ERROR_FALLBACK_TEXT = "[assistant turn failed before producing content]";
 
+// Separate sentinel for model initialization failures, distinct from assistant
+// code execution failures. This allows heartbeat and other autonomous functions
+// to distinguish between provider-side initialization errors (timeout, rate
+// limit, transient cloud error) and actual assistant code crashes. The raw
+// provider error stays in `errorMessage`; this content text is replay-safe.
+export const MODEL_INIT_ERROR_FALLBACK_TEXT = "[model initialization failed]";
+
 export function buildStreamErrorAssistantMessage(params: {
   model: StreamModelDescriptor;
   errorMessage: string;
   timestamp?: number;
+  isModelInitError?: boolean;
 }): AssistantMessage & { stopReason: "error"; errorMessage: string } {
+  const isModelInit = params.isModelInitError === true;
   return {
     ...buildAssistantMessageWithZeroUsage({
       model: params.model,
-      content: [{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }],
+      content: [
+        {
+          type: "text",
+          text: isModelInit ? MODEL_INIT_ERROR_FALLBACK_TEXT : STREAM_ERROR_FALLBACK_TEXT,
+        },
+      ],
       stopReason: "error",
       timestamp: params.timestamp,
     }),
