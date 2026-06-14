@@ -177,13 +177,14 @@ describe("capturePluginToolDescriptor", () => {
   it("preserves availability expressions attached to plugin tools", () => {
     const tool = {
       name: "cron",
+      label: "cron",
       description: "cron tool",
       parameters: { type: "object", properties: {} },
       availability: { anyOf: [] },
       async execute() {
         return { content: [{ type: "text", text: "ok" }] };
       },
-    } as AnyAgentTool & { availability: { anyOf: [] } };
+    } as unknown as AnyAgentTool & { availability: { anyOf: [] } };
 
     const captured = capturePluginToolDescriptor({
       pluginId: "demo",
