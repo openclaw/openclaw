@@ -268,6 +268,36 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
     expect(result.meta.finalAssistantVisibleText).toBe(finalText);
   });
 
+  it("recovers an observed completed source reply after an external send races the completion timeout", async () => {
+    const finalText = "The external notification was sent, and the source-channel summary is done.";
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      codexTurnCompletionIdleTimeoutAttempt({
+        assistantTexts: [finalText],
+        didSendViaMessagingTool: true,
+        didDeliverSourceReplyViaMessageTool: false,
+        messagingToolSentTexts: ["External notification"],
+        messagingToolSentTargets: [{ tool: "message", provider: "discord", to: "channel-2" }],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "codex",
+          model: "gpt-5.5",
+          content: [{ type: "text", text: finalText }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "codex",
+      model: "gpt-5.5",
+      runId: "run-codex-timeout-observed-external-message-final-assistant-recovered",
+    });
+
+    expect(result.payloads).toEqual([{ text: finalText }]);
+    expect(result.meta.finalAssistantVisibleText).toBe(finalText);
+  });
+
   it("surfaces non-stdio turn/completed idle timeouts instead of throwing", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       codexTurnCompletionIdleTimeoutAttempt({

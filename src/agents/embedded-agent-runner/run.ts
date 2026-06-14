@@ -140,7 +140,10 @@ import {
   PostCompactionLoopPersistedError,
 } from "./post-compaction-loop-guard.js";
 import { createEmbeddedRunReplayState, observeReplayMetadata } from "./replay-state.js";
-import { handleAssistantFailover, isShortWindowRateLimitMessage } from "./run/assistant-failover.js";
+import {
+  handleAssistantFailover,
+  isShortWindowRateLimitMessage,
+} from "./run/assistant-failover.js";
 import {
   createEmbeddedRunStageTracker,
   EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE,
@@ -3220,8 +3223,7 @@ async function runEmbeddedAgentInternal(
               {
                 providerStarted: promptErrorSource === "prompt",
                 transientRateLimit:
-                  promptFailoverReason === "rate_limit" &&
-                  isShortWindowRateLimitMessage(errorText),
+                  promptFailoverReason === "rate_limit" && isShortWindowRateLimitMessage(errorText),
               },
             );
             const promptFailoverFailure =
@@ -3645,10 +3647,13 @@ async function runEmbeddedAgentInternal(
             (attempt.assistantTexts ?? []).some(
               (text) => text.trim() === finalAssistantCandidateAfterPromptTimeout,
             );
+          const hasUncommittedMessagingToolSideEffect =
+            hasMessagingToolSideEffectEvidence(attempt) &&
+            !hasMessagingToolDeliveryEvidence(attempt);
           const recoveredFinalAssistantCandidateAfterPromptTimeout =
             timedOutDuringPrompt &&
             attempt.didDeliverSourceReplyViaMessageTool !== true &&
-            (!hasMessagingToolSideEffectEvidence(attempt) ||
+            (!hasUncommittedMessagingToolSideEffect ||
               !finalAssistantMatchesObservedAssistantText) &&
             ["completed", "end_turn", "stop"].includes(finalAssistantStopReason)
               ? finalAssistantCandidateAfterPromptTimeout

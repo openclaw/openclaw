@@ -198,8 +198,12 @@ function hasMessageIdEvidence(details: Record<string, unknown>): boolean {
 
 function isKnownNonSentDeliveryStatus(status: string): boolean {
   return (
+    status === "error" ||
     status === "failed" ||
     status === "partial_failed" ||
+    status === "timeout" ||
+    status === "timed_out" ||
+    status === "blocked" ||
     status === "suppressed" ||
     status === "dry_run" ||
     status === "cancelled" ||

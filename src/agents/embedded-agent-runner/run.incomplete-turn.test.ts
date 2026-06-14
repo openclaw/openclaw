@@ -5935,6 +5935,18 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     ).toBe(true);
   });
 
+  it.each(["error", "timeout", "timed_out", "blocked"])(
+    "does not treat a messaging result with %s status and a message id as committed",
+    (status) => {
+      expect(
+        hasCommittedMessagingToolResultDetails({
+          status,
+          messageId: "request-id",
+        }),
+      ).toBe(false);
+    },
+  );
+
   it("does not treat metadata-only messaging targets as delivery evidence", () => {
     expect(
       hasCommittedMessagingToolDeliveryEvidence({
