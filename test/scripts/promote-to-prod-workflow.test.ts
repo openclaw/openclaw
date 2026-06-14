@@ -17,8 +17,8 @@ describe("promote-to-prod workflow", () => {
     });
     expect(job.environment).toBe("production");
     expect(job.env).toMatchObject({
-      API_URL: "${{ secrets.ROCKIELAB_PROD_API_URL }}",
-      ADMIN_TOKEN: "${{ secrets.ROCKIELAB_PROD_ADMIN_TOKEN }}",
+      API_URL: "${{ secrets.ROCKIELAB_PROD_API_URL || secrets.ROCKIELAB_API_URL }}",
+      ADMIN_TOKEN: "${{ secrets.ROCKIELAB_PROD_ADMIN_TOKEN || secrets.ROCKIELAB_ADMIN_TOKEN }}",
       IMAGE_SHA: "${{ inputs.image_sha }}",
       ROLLOUT_ENV: "prod",
     });

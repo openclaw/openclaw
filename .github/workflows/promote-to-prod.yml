@@ -23,8 +23,8 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64, rockie]
     timeout-minutes: 30
     env:
-      API_URL: ${{ secrets.ROCKIELAB_PROD_API_URL }}
-      ADMIN_TOKEN: ${{ secrets.ROCKIELAB_PROD_ADMIN_TOKEN }}
+      API_URL: ${{ secrets.ROCKIELAB_PROD_API_URL || secrets.ROCKIELAB_API_URL }}
+      ADMIN_TOKEN: ${{ secrets.ROCKIELAB_PROD_ADMIN_TOKEN || secrets.ROCKIELAB_ADMIN_TOKEN }}
       IMAGE_SHA: ${{ inputs.image_sha }}
       IMAGE_TAG: registry.fly.io/rockielab-runtime-multitenant:${{ inputs.image_sha }}
       PLATFORM_SKILLS_SHA: ${{ inputs.platform_skills_sha }}
