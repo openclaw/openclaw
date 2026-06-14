@@ -71,6 +71,10 @@ type PluginToolFactoryTiming = {
 };
 
 type PluginToolFactoryResult = AnyAgentTool | AnyAgentTool[] | null | undefined;
+type PluginToolCandidate = {
+  tool: unknown;
+  name: string;
+};
 
 const log = createSubsystemLogger("plugins/tools");
 const PLUGIN_TOOL_FACTORY_WARN_TOTAL_MS = 5_000;
@@ -79,6 +83,7 @@ const PLUGIN_TOOL_FACTORY_SUMMARY_LIMIT = 20;
 
 const pluginToolMeta = new WeakMap<AnyAgentTool, PluginToolMeta>();
 const scopedPluginTools = new WeakMap<AnyAgentTool, Map<string, AnyAgentTool>>();
+const unreadablePluginToolProperties = new WeakMap<object, Set<PropertyKey>>();
 
 /** Attaches plugin ownership metadata to a concrete agent tool instance. */
 export function setPluginToolMeta(tool: AnyAgentTool, meta: PluginToolMeta): void {
@@ -317,12 +322,90 @@ function isOptionalToolEntryPotentiallyAllowed(params: {
   return params.names.some((name) => params.allowlist.has(normalizeToolName(name)));
 }
 
-function readPluginToolName(tool: unknown): string {
+function markPluginToolPropertyUnreadable(tool: object, property: PropertyKey): void {
+  const existing = unreadablePluginToolProperties.get(tool);
+  if (existing) {
+    existing.add(property);
+    return;
+  }
+  unreadablePluginToolProperties.set(tool, new Set([property]));
+}
+
+function wasPluginToolPropertyUnreadable(tool: unknown, property: PropertyKey): boolean {
+  return (
+    typeof tool === "object" &&
+    tool !== null &&
+    unreadablePluginToolProperties.get(tool)?.has(property) === true
+  );
+}
+
+function readPluginToolProperty(tool: unknown, property: keyof AnyAgentTool): unknown {
   if (!isRecord(tool)) {
+    return undefined;
+  }
+  try {
+    return Reflect.get(tool, property, tool);
+  } catch {
+    markPluginToolPropertyUnreadable(tool, property);
+    return undefined;
+  }
+}
+
+function readPluginToolName(tool: unknown): string {
+  const name = readPluginToolProperty(tool, "name");
+  if (typeof name !== "string") {
     return "";
   }
   // Optional-tool allowlists need a best-effort name before full shape validation.
-  return typeof tool.name === "string" ? tool.name.trim() : "";
+  return name.trim();
+}
+
+function preparePluginToolWithStableName(
+  tool: AnyAgentTool,
+  name: string,
+): AnyAgentTool | undefined {
+  const currentName = readPluginToolName(tool);
+  if (currentName !== name || wasPluginToolPropertyUnreadable(tool, "name")) {
+    return undefined;
+  }
+  let nameDescriptor: PropertyDescriptor | undefined;
+  let extensible: boolean;
+  try {
+    nameDescriptor = Reflect.getOwnPropertyDescriptor(tool, "name");
+    extensible = Reflect.isExtensible(tool);
+  } catch {
+    return undefined;
+  }
+  if (nameDescriptor && !nameDescriptor.configurable) {
+    return "value" in nameDescriptor && nameDescriptor.value === name && !nameDescriptor.writable
+      ? tool
+      : undefined;
+  }
+  if (!extensible && !nameDescriptor) {
+    return undefined;
+  }
+  return new Proxy<AnyAgentTool>(tool, {
+    get(target, prop, receiver) {
+      if (prop === "name") {
+        return name;
+      }
+      return Reflect.get(target, prop, receiver);
+    },
+    getOwnPropertyDescriptor(target, prop) {
+      if (prop === "name") {
+        if (!extensible && !nameDescriptor) {
+          return undefined;
+        }
+        return {
+          configurable: true,
+          enumerable: nameDescriptor?.enumerable ?? true,
+          value: name,
+          writable: false,
+        };
+      }
+      return Reflect.getOwnPropertyDescriptor(target, prop);
+    },
+  });
 }
 
 function toElapsedMs(value: number): number {
@@ -450,18 +533,32 @@ function shouldWarnPluginToolFactoryTimings(params: {
   );
 }
 
-function describeMalformedPluginTool(tool: unknown): string | undefined {
+function describeMalformedPluginTool(
+  tool: unknown,
+  name = readPluginToolName(tool),
+): string | undefined {
   if (!isRecord(tool)) {
     return "tool must be an object";
   }
-  const name = readPluginToolName(tool);
-  if (!name) {
+  if (!name || wasPluginToolPropertyUnreadable(tool, "name")) {
     return "missing non-empty name";
   }
-  if (typeof tool.execute !== "function") {
+  if (
+    typeof readPluginToolProperty(tool, "description") !== "string" ||
+    wasPluginToolPropertyUnreadable(tool, "description")
+  ) {
+    return `${name} missing description string`;
+  }
+  if (
+    typeof readPluginToolProperty(tool, "execute") !== "function" ||
+    wasPluginToolPropertyUnreadable(tool, "execute")
+  ) {
     return `${name} missing execute function`;
   }
-  if (!isRecord(tool.parameters)) {
+  if (
+    !isRecord(readPluginToolProperty(tool, "parameters")) ||
+    wasPluginToolPropertyUnreadable(tool, "parameters")
+  ) {
     return `${name} missing parameters object`;
   }
   return undefined;
@@ -696,12 +793,22 @@ function createCachedDescriptorPluginTool(params: {
         const resolved = resolvePluginToolFactory(candidate, params.ctx);
         const listRaw: unknown[] = Array.isArray(resolved) ? resolved : resolved ? [resolved] : [];
         for (const toolRaw of listRaw) {
-          const malformedReason = describeMalformedPluginTool(toolRaw);
+          if (!isRecord(toolRaw)) {
+            continue;
+          }
+          const candidateName = readPluginToolName(toolRaw);
+          if (!candidateName || wasPluginToolPropertyUnreadable(toolRaw, "name")) {
+            continue;
+          }
+          const malformedReason = describeMalformedPluginTool(toolRaw, candidateName);
           if (malformedReason) {
             continue;
           }
-          const runtimeTool = toolRaw as AnyAgentTool;
-          if (normalizeToolName(readPluginToolName(runtimeTool)) === requestedToolName) {
+          const runtimeTool = preparePluginToolWithStableName(
+            toolRaw as AnyAgentTool,
+            candidateName,
+          );
+          if (runtimeTool && normalizeToolName(candidateName) === requestedToolName) {
             return runtimeTool;
           }
         }
@@ -1215,6 +1322,29 @@ export function resolvePluginTools(params: {
       continue;
     }
     const listRaw: unknown[] = Array.isArray(resolved) ? resolved : [resolved];
+    const recordMalformedTool = (reason: string) => {
+      const message = `plugin tool is malformed (${entry.pluginId}): ${reason}`;
+      context.logger.error(message);
+      registry.diagnostics.push({
+        level: "error",
+        pluginId: entry.pluginId,
+        source: entry.source,
+        message,
+      });
+    };
+    const namedListRaw: PluginToolCandidate[] = [];
+    for (const tool of listRaw) {
+      if (!isRecord(tool)) {
+        namedListRaw.push({ tool, name: "" });
+        continue;
+      }
+      const name = readPluginToolName(tool);
+      if (!name || wasPluginToolPropertyUnreadable(tool, "name")) {
+        recordMalformedTool("missing non-empty name");
+        continue;
+      }
+      namedListRaw.push({ tool, name });
+    }
     const selectedManifestToolNames =
       manifestPlugin && availabilityNames.length > 0
         ? new Set(allowlistNames.map((name) => normalizeToolName(name)))
@@ -1224,13 +1354,12 @@ export function resolvePluginTools(params: {
         ? new Set(availabilityNames.map((name) => normalizeToolName(name)))
         : undefined;
     const availableList = manifestPlugin
-      ? listRaw.filter((tool) => {
-          const toolName = readPluginToolName(tool);
-          const normalizedToolName = normalizeToolName(toolName);
+      ? namedListRaw.filter((candidate) => {
+          const normalizedToolName = normalizeToolName(candidate.name);
           if (
-            isManifestToolOptional(manifestPlugin, toolName) &&
+            isManifestToolOptional(manifestPlugin, candidate.name) &&
             !isOptionalToolAllowed({
-              toolName,
+              toolName: candidate.name,
               pluginId: entry.pluginId,
               allowlist,
             })
@@ -1246,25 +1375,25 @@ export function resolvePluginTools(params: {
           }
           return isManifestToolNameAvailable({
             plugin: manifestPlugin,
-            toolName,
+            toolName: candidate.name,
             config: params.context.runtimeConfig ?? context.config,
             env,
             hasAuthForProvider: params.hasAuthForProvider,
           });
         })
-      : listRaw;
+      : namedListRaw;
     const policyAvailableList = availableList.filter(
-      (tool) =>
+      (candidate) =>
         !denylistBlocksPluginTool({
           pluginId: entry.pluginId,
-          toolName: readPluginToolName(tool),
+          toolName: candidate.name,
           denylist,
         }),
     );
     const list = entry.optional
-      ? policyAvailableList.filter((tool) =>
+      ? policyAvailableList.filter((candidate) =>
           isOptionalToolAllowed({
-            toolName: readPluginToolName(tool),
+            toolName: candidate.name,
             pluginId: entry.pluginId,
             allowlist,
           }),
@@ -1274,26 +1403,34 @@ export function resolvePluginTools(params: {
       continue;
     }
     const normalizedNameSet = new Set<string>();
-    for (const toolRaw of list) {
+    for (const candidate of list) {
       // Plugin factories run at request time and can return arbitrary values; isolate
       // malformed tools here so one bad plugin tool cannot poison every provider.
-      const malformedReason = describeMalformedPluginTool(toolRaw);
+      const malformedReason = describeMalformedPluginTool(candidate.tool, candidate.name);
       if (malformedReason) {
-        const message = `plugin tool is malformed (${entry.pluginId}): ${malformedReason}`;
-        context.logger.error(message);
-        registry.diagnostics.push({
-          level: "error",
-          pluginId: entry.pluginId,
-          source: entry.source,
-          message,
-        });
+        recordMalformedTool(malformedReason);
         continue;
       }
-      const tool = toolRaw as AnyAgentTool;
+      const tool = preparePluginToolWithStableName(candidate.tool as AnyAgentTool, candidate.name);
+      if (!tool) {
+        recordMalformedTool(`${candidate.name} unstable name`);
+        continue;
+      }
+      const toolName = candidate.name;
+      const description = readPluginToolProperty(tool, "description");
+      if (typeof description !== "string" || wasPluginToolPropertyUnreadable(tool, "description")) {
+        recordMalformedTool(`${toolName} missing description string`);
+        continue;
+      }
+      const parameters = readPluginToolProperty(tool, "parameters");
+      if (!isRecord(parameters) || wasPluginToolPropertyUnreadable(tool, "parameters")) {
+        recordMalformedTool(`${toolName} missing parameters object`);
+        continue;
+      }
       const undeclared = entry.declaredNames
         ? findUndeclaredPluginToolNames({
             declaredNames: entry.declaredNames,
-            toolNames: [tool.name],
+            toolNames: [toolName],
           })
         : [];
       if (undeclared.length > 0) {
@@ -1307,9 +1444,9 @@ export function resolvePluginTools(params: {
         });
         continue;
       }
-      const normalizedToolName = normalizeToolName(tool.name);
+      const normalizedToolName = normalizeToolName(toolName);
       if (normalizedNameSet.has(normalizedToolName) || existingNormalized.has(normalizedToolName)) {
-        const message = `plugin tool name conflict (${entry.pluginId}): ${tool.name}`;
+        const message = `plugin tool name conflict (${entry.pluginId}): ${toolName}`;
         if (!params.suppressNameConflicts) {
           context.logger.error(message);
           registry.diagnostics.push({
@@ -1322,19 +1459,19 @@ export function resolvePluginTools(params: {
         continue;
       }
       normalizedNameSet.add(normalizedToolName);
-      existing.add(tool.name);
+      existing.add(toolName);
       existingNormalized.add(normalizedToolName);
       const optional = isPluginToolOptional({
         entry,
         manifestPlugin,
-        toolName: tool.name,
+        toolName,
       });
       pluginToolMeta.set(tool, {
         pluginId: entry.pluginId,
         optional,
         trustedLocalMedia: isTrustedManifestLocalMediaTool({
           manifestPlugin,
-          toolName: tool.name,
+          toolName,
         }),
       });
       if (manifestPlugin) {
@@ -1343,6 +1480,9 @@ export function resolvePluginTools(params: {
           capturePluginToolDescriptor({
             pluginId: entry.pluginId,
             tool,
+            toolName,
+            description,
+            parameters,
             optional,
           }),
         );

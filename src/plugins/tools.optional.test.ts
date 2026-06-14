@@ -164,6 +164,146 @@ function createMalformedTool(name: string) {
   };
 }
 
+function createToolWithUnreadableParameters(name: string) {
+  return {
+    name,
+    description: `${name} tool`,
+    get parameters() {
+      throw new Error(`${name} parameters exploded`);
+    },
+    async execute() {
+      return { content: [{ type: "text", text: "bad" }] };
+    },
+  };
+}
+
+function createToolWithUnstableParameters(name: string) {
+  let readCount = 0;
+  return {
+    name,
+    description: `${name} tool`,
+    get parameters() {
+      readCount += 1;
+      if (readCount > 1) {
+        throw new Error(`${name} parameters exploded`);
+      }
+      return { type: "object", properties: {} };
+    },
+    async execute() {
+      return { content: [{ type: "text", text: "bad" }] };
+    },
+  };
+}
+
+function createToolWithUnreadableDescription(name: string) {
+  return {
+    name,
+    get description() {
+      throw new Error(`${name} description exploded`);
+    },
+    parameters: { type: "object", properties: {} },
+    async execute() {
+      return { content: [{ type: "text", text: "bad" }] };
+    },
+  };
+}
+
+function createToolWithUnreadableOptionalMetadata(name: string) {
+  return {
+    name,
+    description: `${name} tool`,
+    get label() {
+      throw new Error(`${name} label exploded`);
+    },
+    get displaySummary() {
+      throw new Error(`${name} display summary exploded`);
+    },
+    parameters: { type: "object", properties: {} },
+    async execute() {
+      return { content: [{ type: "text", text: "ok" }] };
+    },
+  };
+}
+
+function createToolWithInitiallyUnreadableName(name: string) {
+  let readCount = 0;
+  return {
+    get name() {
+      readCount += 1;
+      if (readCount === 1) {
+        throw new Error(`${name} name exploded`);
+      }
+      return name;
+    },
+    description: `${name} tool`,
+    parameters: { type: "object", properties: {} },
+    async execute() {
+      return { content: [{ type: "text", text: "bad" }] };
+    },
+  };
+}
+
+function createToolWithChangingName(firstName: string, nextName: string) {
+  let readCount = 0;
+  return {
+    get name() {
+      readCount += 1;
+      return readCount === 1 ? firstName : nextName;
+    },
+    description: `${firstName} tool`,
+    parameters: { type: "object", properties: {} },
+    async execute() {
+      return { content: [{ type: "text", text: "ok" }] };
+    },
+  };
+}
+
+function createToolWithNonConfigurableChangingName(firstName: string, nextName: string) {
+  let readCount = 0;
+  const tool = {
+    description: `${firstName} tool`,
+    parameters: { type: "object", properties: {} },
+    async execute() {
+      return { content: [{ type: "text", text: "ok" }] };
+    },
+  };
+  Object.defineProperty(tool, "name", {
+    configurable: false,
+    enumerable: true,
+    get() {
+      readCount += 1;
+      return readCount <= 2 ? firstName : nextName;
+    },
+  });
+  return tool;
+}
+
+function createToolWithThrowingNameDescriptor(name: string) {
+  return new Proxy(
+    {
+      description: `${name} tool`,
+      parameters: { type: "object", properties: {} },
+      async execute() {
+        return { content: [{ type: "text", text: "ok" }] };
+      },
+    },
+    {
+      get(target, property, receiver) {
+        if (property === "name") {
+          return name;
+        }
+        return Reflect.get(target, property, receiver);
+      },
+      getOwnPropertyDescriptor(target, property) {
+        if (property === "name") {
+          throw new Error(`${name} descriptor exploded`);
+        }
+        return Reflect.getOwnPropertyDescriptor(target, property);
+      },
+    },
+  );
+}
+
 function installConsoleMethodSpy(method: "log" | "warn") {
   const spy = vi.fn();
   loggingState.rawConsole = {
@@ -1936,6 +2076,236 @@ describe("resolvePluginTools optional tools", () => {
     expectSingleDiagnosticMessage(
       registry.diagnostics,
       "plugin tool is malformed (schema-bug): broken_tool missing parameters object",
+    );
+  });
+
+  it("skips tools with unreadable parameters while keeping valid sibling tools", () => {
+    const registry = setRegistry([
+      {
+        pluginId: "schema-bug",
+        optional: false,
+        source: "/tmp/schema-bug.js",
+        names: ["broken_tool", "valid_tool"],
+        factory: () => [createToolWithUnreadableParameters("broken_tool"), makeTool("valid_tool")],
+      },
+    ]);
+
+    const tools = resolvePluginTools(createResolveToolsParams());
+
+    expectResolvedToolNames(tools, ["valid_tool"]);
+    expectSingleDiagnosticMessage(
+      registry.diagnostics,
+      "plugin tool is malformed (schema-bug): broken_tool missing parameters object",
+    );
+  });
+
+  it("skips tools whose parameters become unreadable before descriptor caching", () => {
+    const registry = setRegistry([
+      {
+        pluginId: "schema-bug",
+        optional: false,
+        source: "/tmp/schema-bug.js",
+        names: ["broken_tool", "valid_tool"],
+        factory: () => [createToolWithUnstableParameters("broken_tool"), makeTool("valid_tool")],
+      },
+    ]);
+
+    const tools = resolvePluginTools(createResolveToolsParams());
+
+    expectResolvedToolNames(tools, ["valid_tool"]);
+    expectSingleDiagnosticMessage(
+      registry.diagnostics,
+      "plugin tool is malformed (schema-bug): broken_tool missing parameters object",
+    );
+  });
+
+  it("skips tools with unreadable descriptions while keeping valid sibling tools", () => {
+    const registry = setRegistry([
+      {
+        pluginId: "schema-bug",
+        optional: false,
+        source: "/tmp/schema-bug.js",
+        names: ["broken_tool", "valid_tool"],
+        factory: () => [createToolWithUnreadableDescription("broken_tool"), makeTool("valid_tool")],
+      },
+    ]);
+
+    const tools = resolvePluginTools(createResolveToolsParams());
+
+    expectResolvedToolNames(tools, ["valid_tool"]);
+    expectSingleDiagnosticMessage(
+      registry.diagnostics,
+      "plugin tool is malformed (schema-bug): broken_tool missing description string",
+    );
+  });
+
+  it("caches tool descriptors without forcing optional metadata getters", () => {
+    const factory = vi.fn(() => createToolWithUnreadableOptionalMetadata("noisy_tool"));
+    setRegistry([
+      {
+        pluginId: "schema-bug",
+        optional: false,
+        source: "/tmp/schema-bug.js",
+        names: ["noisy_tool"],
+        factory,
+      },
+    ]);
+
+    const first = resolvePluginTools(createResolveToolsParams());
+    const second = resolvePluginTools(createResolveToolsParams());
+
+    expectResolvedToolNames(first, ["noisy_tool"]);
+    expectResolvedToolNames(second, ["noisy_tool"]);
+    expect(second[0]?.description).toBe("noisy_tool tool");
+    expect(second[0]?.label).toBe("noisy_tool");
+    expect(second[0]?.displaySummary).toBeUndefined();
+    expect(factory).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not let unreadable names bypass tool deny policy", () => {
+    const registry = setRegistry([
+      {
+        pluginId: "schema-bug",
+        optional: false,
+        source: "/tmp/schema-bug.js",
+        names: ["blocked_tool", "valid_tool"],
+        factory: () => [
+          createToolWithInitiallyUnreadableName("blocked_tool"),
+          makeTool("valid_tool"),
+        ],
+      },
+    ]);
+
+    const tools = resolvePluginTools(createResolveToolsParams({ toolDenylist: ["blocked_tool"] }));
+
+    expectResolvedToolNames(tools, ["valid_tool"]);
+    expectSingleDiagnosticMessage(registry.diagnostics, "plugin tool is malformed (schema-bug):");
+  });
+
+  it("skips tools whose names change between policy and registration", () => {
+    const registry = setRegistry([
+      {
+        pluginId: "schema-bug",
+        optional: false,
+        source: "/tmp/schema-bug.js",
+        names: ["safe_tool", "valid_tool"],
+        factory: () => [
+          createToolWithChangingName("safe_tool", "blocked_tool"),
+          makeTool("valid_tool"),
+        ],
+      },
+    ]);
+
+    const tools = resolvePluginTools(createResolveToolsParams({ toolDenylist: ["blocked_tool"] }));
+
+    expectResolvedToolNames(tools, ["valid_tool"]);
+    expectSingleDiagnosticMessage(
+      registry.diagnostics,
+      "plugin tool is malformed (schema-bug): safe_tool unstable name",
+    );
+  });
+
+  it("rejects non-configurable accessor tool names that cannot be pinned", () => {
+    const registry = setRegistry([
+      {
+        pluginId: "schema-bug",
+        optional: false,
+        source: "/tmp/schema-bug.js",
+        names: ["safe_tool", "valid_tool"],
+        factory: () => [
+          createToolWithNonConfigurableChangingName("safe_tool", "blocked_tool"),
+          makeTool("valid_tool"),
+        ],
+      },
+    ]);
+
+    const tools = resolvePluginTools(createResolveToolsParams({ toolDenylist: ["blocked_tool"] }));
+
+    expectResolvedToolNames(tools, ["valid_tool"]);
+    expectSingleDiagnosticMessage(
+      registry.diagnostics,
+      "plugin tool is malformed (schema-bug): safe_tool unstable name",
+    );
+  });
+
+  it("skips tools whose name descriptor cannot be inspected", () => {
+    const registry = setRegistry([
+      {
+        pluginId: "schema-bug",
+        optional: false,
+        source: "/tmp/schema-bug.js",
+        names: ["broken_tool", "valid_tool"],
+        factory: () => [
+          createToolWithThrowingNameDescriptor("broken_tool"),
+          makeTool("valid_tool"),
+        ],
+      },
+    ]);
+
+    const tools = resolvePluginTools(createResolveToolsParams());
+
+    expectResolvedToolNames(tools, ["valid_tool"]);
+    expectSingleDiagnosticMessage(registry.diagnostics, "plugin tool is malformed (schema-bug):");
+  });
+
+  it("keeps tools with non-configurable stable names usable", async () => {
+    const nonConfigurableNameTool = {
+      ...makeTool("frozen_tool"),
+      async execute() {
+        return { content: [{ type: "text", text: "frozen-ok" }] };
+      },
+    };
+    Object.defineProperty(nonConfigurableNameTool, "name", {
+      configurable: false,
+      enumerable: true,
+      value: "frozen_tool",
+      writable: false,
+    });
+    setRegistry([
+      {
+        pluginId: "schema-bug",
+        optional: false,
+        source: "/tmp/schema-bug.js",
+        names: ["frozen_tool"],
+        factory: () => nonConfigurableNameTool,
+      },
+    ]);
+
+    const tools = resolvePluginTools(createResolveToolsParams());
+
+    expectResolvedToolNames(tools, ["frozen_tool"]);
+    expect(() => ({ ...tools[0] })).not.toThrow();
+    await expect(tools[0]?.execute("call", {}, undefined)).resolves.toEqual({
+      content: [{ type: "text", text: "frozen-ok" }],
+    });
+  });
+
+  it("rejects non-configurable writable tool names that cannot be pinned", () => {
+    const registry = setRegistry([
+      {
+        pluginId: "schema-bug",
+        optional: false,
+        source: "/tmp/schema-bug.js",
+        names: ["safe_tool", "valid_tool"],
+        factory: () => {
+          const tool = makeTool("safe_tool");
+          Object.defineProperty(tool, "name", {
+            configurable: false,
+            enumerable: true,
+            value: "safe_tool",
+            writable: true,
+          });
+          return [tool, makeTool("valid_tool")];
+        },
+      },
+    ]);
+
+    const tools = resolvePluginTools(createResolveToolsParams());
+
+    expectResolvedToolNames(tools, ["valid_tool"]);
+    expectSingleDiagnosticMessage(
+      registry.diagnostics,
+      "plugin tool is malformed (schema-bug): safe_tool unstable name",
     );
   });
 
