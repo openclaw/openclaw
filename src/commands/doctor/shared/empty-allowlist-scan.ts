@@ -37,6 +37,7 @@ export function scanEmptyAllowlistPolicyWarnings(
     prefix: string,
     channelName: string,
     parent?: DoctorAccountRecord,
+    skipGroupAllowFromWarning?: boolean,
   ) => {
     const accountDm = asObjectRecord(account.dm);
     const parentDm = asObjectRecord(parent?.dm);
@@ -63,6 +64,7 @@ export function scanEmptyAllowlistPolicyWarnings(
         prefix,
         shouldSkipDefaultEmptyGroupAllowlistWarning:
           params.shouldSkipDefaultEmptyGroupAllowlistWarning,
+        skipGroupAllowFromWarning,
       }),
     );
     if (params.extraWarningsForAccount) {
@@ -88,9 +90,57 @@ export function scanEmptyAllowlistPolicyWarnings(
     if (isDisabledRecord(channelConfig)) {
       continue;
     }
-    checkAccount(channelConfig, `channels.${channelName}`, channelName);
 
     const accounts = asObjectRecord(channelConfig.accounts);
+    const hasAccounts = accounts && Object.keys(accounts).length > 0;
+
+    // When accounts exist, check the top-level config but skip the groupAllowFrom
+    // warning if every enabled account has its own populated allowlist.
+    // This preserves DM warnings and channel extra-warning hooks.
+    if (hasAccounts) {
+      // Check if every enabled account has its own groupAllowFrom or allowFrom
+      const allAccountsCovered = Object.values(accounts).every((account) => {
+        if (!account || typeof account !== "object") {
+          return false;
+        }
+        if (isDisabledRecord(account)) {
+          return true; // Skip disabled accounts
+        }
+        const acc = account as DoctorAccountRecord;
+        const groupAllowFrom = acc.groupAllowFrom as DoctorAllowFromList | undefined;
+        const allowFrom = acc.allowFrom as DoctorAllowFromList | undefined;
+        const hasGroupAllowFrom =
+          groupAllowFrom && Array.isArray(groupAllowFrom) && groupAllowFrom.length > 0;
+        const hasAllowFrom = allowFrom && Array.isArray(allowFrom) && allowFrom.length > 0;
+        return hasGroupAllowFrom || hasAllowFrom;
+      });
+
+      // Check if there's an implicit default account (e.g. Telegram with botToken/tokenFile)
+      // that is not explicitly listed in accounts
+      const hasImplicitDefaultAccount =
+        channelName === "telegram" &&
+        (channelConfig.botToken || channelConfig.tokenFile || channelConfig.token);
+      const hasExplicitDefaultAccount = accounts.default !== undefined;
+
+      // Only skip the groupAllowFrom warning if:
+      // 1. All explicit accounts are covered, AND
+      // 2. There's no implicit default account that isn't covered
+      const shouldSkipGroupWarning =
+        allAccountsCovered && !(hasImplicitDefaultAccount && !hasExplicitDefaultAccount);
+
+      // Always check the top-level config (preserves DM warnings and hooks)
+      // but pass a flag to skip the groupAllowFrom warning if covered
+      checkAccount(
+        channelConfig,
+        `channels.${channelName}`,
+        channelName,
+        undefined,
+        shouldSkipGroupWarning,
+      );
+    } else {
+      checkAccount(channelConfig, `channels.${channelName}`, channelName);
+    }
+
     if (!accounts) {
       continue;
     }

@@ -87,4 +87,111 @@ describe("doctor empty allowlist policy scan", () => {
     const [warningOptions] = extraWarningsForAccount.mock.calls[0] ?? [];
     expect(warningOptions?.prefix).toBe("channels.signal");
   });
+
+  it("does not warn on top-level groupAllowFrom when every account has its own allowlist (regression #92684)", () => {
+    const warnings = scanEmptyAllowlistPolicyWarnings(
+      {
+        channels: {
+          telegram: {
+            groupPolicy: "allowlist",
+            groupAllowFrom: [],
+            accounts: {
+              default: { groupAllowFrom: ["user-123"] },
+              work: { groupAllowFrom: ["user-456"] },
+            },
+          },
+        },
+      },
+      { doctorFixCommand: "openclaw doctor --fix" },
+    );
+
+    // No warnings should be emitted because every account has its own populated groupAllowFrom.
+    expect(warnings).toEqual([]);
+  });
+
+  it("does not warn on top-level groupAllowFrom when every account has allowFrom fallback", () => {
+    const warnings = scanEmptyAllowlistPolicyWarnings(
+      {
+        channels: {
+          telegram: {
+            groupPolicy: "allowlist",
+            groupAllowFrom: [],
+            accounts: {
+              default: { allowFrom: ["user-123"] },
+              work: { allowFrom: ["user-456"] },
+            },
+          },
+        },
+      },
+      { doctorFixCommand: "openclaw doctor --fix" },
+    );
+
+    // No warnings should be emitted because every account has its own populated allowFrom.
+    expect(warnings).toEqual([]);
+  });
+
+  it("does not warn when top-level has credentials and accounts have allowlists", () => {
+    const warnings = scanEmptyAllowlistPolicyWarnings(
+      {
+        channels: {
+          telegram: {
+            groupPolicy: "allowlist",
+            groupAllowFrom: [],
+            botToken: "bot-token",
+            accounts: {
+              default: { groupAllowFrom: ["user-123"] },
+              work: { groupAllowFrom: ["user-456"] },
+            },
+          },
+        },
+      },
+      { doctorFixCommand: "openclaw doctor --fix" },
+    );
+
+    // No warnings because every enabled account covers the policy.
+    expect(warnings).toEqual([]);
+  });
+
+  it("skips disabled accounts when checking coverage", () => {
+    const warnings = scanEmptyAllowlistPolicyWarnings(
+      {
+        channels: {
+          telegram: {
+            groupPolicy: "allowlist",
+            groupAllowFrom: [],
+            accounts: {
+              default: { groupAllowFrom: ["user-123"] },
+              disabled: { enabled: false, groupAllowFrom: [] },
+            },
+          },
+        },
+      },
+      { doctorFixCommand: "openclaw doctor --fix" },
+    );
+
+    // No warnings because the disabled account is skipped and the enabled one covers the policy.
+    expect(warnings).toEqual([]);
+  });
+
+  it("warns when Telegram has botToken but no default account allowlist", () => {
+    const warnings = scanEmptyAllowlistPolicyWarnings(
+      {
+        channels: {
+          telegram: {
+            groupPolicy: "allowlist",
+            groupAllowFrom: [],
+            botToken: "bot-token",
+            accounts: {
+              work: { groupAllowFrom: ["user-456"] },
+            },
+          },
+        },
+      },
+      { doctorFixCommand: "openclaw doctor --fix" },
+    );
+
+    // Should warn because the implicit default account (from botToken) has no allowlist.
+    expect(warnings.length).toBeGreaterThan(0);
+    expect(warnings[0]).toContain("groupAllowFrom");
+  });
 });
