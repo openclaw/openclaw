@@ -43,6 +43,29 @@ describe("createSequentialQueue", () => {
     expect(order).toEqual(["first:start", "first:end", "second:start", "second:end"]);
   });
 
+  it("reports queued keys separately from running keys", async () => {
+    const enqueue = createSequentialQueue();
+    const gate = createDeferred();
+
+    const first = enqueue("feishu:default:chat-1", async () => {
+      await gate.promise;
+    });
+
+    expect(enqueue.has("feishu:default:chat-1")).toBe(true);
+    expect(enqueue.isRunning("feishu:default:chat-1")).toBe(false);
+
+    await Promise.resolve();
+    expect(enqueue.has("feishu:default:chat-1")).toBe(true);
+    expect(enqueue.isRunning("feishu:default:chat-1")).toBe(true);
+    expect(enqueue.has("feishu:default:chat-2")).toBe(false);
+    expect(enqueue.isRunning("feishu:default:chat-2")).toBe(false);
+
+    gate.resolve();
+    await first;
+    expect(enqueue.has("feishu:default:chat-1")).toBe(false);
+    expect(enqueue.isRunning("feishu:default:chat-1")).toBe(false);
+  });
+
   it("allows different keys to run concurrently", async () => {
     const enqueue = createSequentialQueue();
     const gateA = createDeferred();

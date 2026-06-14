@@ -154,6 +154,10 @@ function resolveFeishuDebounceMentions(params: {
   return botMentions.length > 0 ? botMentions : undefined;
 }
 
+function canBypassActiveSequentialQueue(sequentialKey: string): boolean {
+  return !sequentialKey.endsWith(":control") && !sequentialKey.endsWith(":btw");
+}
+
 export function createFeishuMessageReceiveHandler({
   cfg,
   channelRuntime,
@@ -203,6 +207,13 @@ export function createFeishuMessageReceiveHandler({
         accountId,
         processingClaimHeld: true,
       });
+    if (canBypassActiveSequentialQueue(sequentialKey) && enqueue.isRunning(sequentialKey)) {
+      void task().catch((err: unknown) => {
+        releaseFeishuMessageProcessing(resolveFeishuMessageDedupeKey(event), accountId);
+        error(`feishu[${accountId}]: concurrent follow-up dispatch failed: ${String(err)}`);
+      });
+      return;
+    }
     await enqueue(sequentialKey, task);
   };
 
