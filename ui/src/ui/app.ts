@@ -116,6 +116,12 @@ import type {
   SkillMessage,
 } from "./controllers/skills.ts";
 import { importCustomThemeFromUrl } from "./custom-theme.ts";
+import {
+  clearActiveFloatingTooltips,
+  promoteNativeTitleTooltip,
+  refreshActiveFloatingTooltip,
+  restoreNativeTitleTooltip,
+} from "./dom-tooltips.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
 import { resolveAgentIdFromSessionKey } from "./session-key.ts";
@@ -796,6 +802,18 @@ export class OpenClawApp extends LitElement {
     }
     this.setChatMobileControlsOpen(false);
   };
+  private nativeTitleTooltipPointerOverHandler = (event: PointerEvent) => {
+    promoteNativeTitleTooltip(event.target, this, "pointer");
+  };
+  private nativeTitleTooltipPointerOutHandler = (event: PointerEvent) => {
+    restoreNativeTitleTooltip(event.target, this, "pointer", event.relatedTarget);
+  };
+  private nativeTitleTooltipFocusInHandler = (event: FocusEvent) => {
+    promoteNativeTitleTooltip(event.target, this, "focus");
+  };
+  private nativeTitleTooltipFocusOutHandler = (event: FocusEvent) => {
+    restoreNativeTitleTooltip(event.target, this, "focus", event.relatedTarget);
+  };
 
   override createRenderRoot() {
     return this;
@@ -820,6 +838,10 @@ export class OpenClawApp extends LitElement {
     document.addEventListener("keydown", this.globalKeydownHandler);
     document.addEventListener("keydown", this.chatMobileControlsKeydownHandler);
     document.addEventListener("pointerdown", this.chatMobileControlsPointerdownHandler);
+    this.addEventListener("pointerover", this.nativeTitleTooltipPointerOverHandler);
+    this.addEventListener("pointerout", this.nativeTitleTooltipPointerOutHandler);
+    this.addEventListener("focusin", this.nativeTitleTooltipFocusInHandler);
+    this.addEventListener("focusout", this.nativeTitleTooltipFocusOutHandler);
     handleConnected(this as unknown as Parameters<typeof handleConnected>[0]);
     this.nativeBridgeCleanup = initNativeBridge(this);
     void this.initWebPushState();
@@ -835,6 +857,11 @@ export class OpenClawApp extends LitElement {
     this.nativeBridgeCleanup = null;
     document.removeEventListener("keydown", this.chatMobileControlsKeydownHandler);
     document.removeEventListener("pointerdown", this.chatMobileControlsPointerdownHandler);
+    this.removeEventListener("pointerover", this.nativeTitleTooltipPointerOverHandler);
+    this.removeEventListener("pointerout", this.nativeTitleTooltipPointerOutHandler);
+    this.removeEventListener("focusin", this.nativeTitleTooltipFocusInHandler);
+    this.removeEventListener("focusout", this.nativeTitleTooltipFocusOutHandler);
+    clearActiveFloatingTooltips(this);
     if (this.sessionSwitchNoticeTimer !== null) {
       window.clearTimeout(this.sessionSwitchNoticeTimer);
       this.sessionSwitchNoticeTimer = null;
@@ -850,6 +877,7 @@ export class OpenClawApp extends LitElement {
 
   protected override updated(changed: Map<PropertyKey, unknown>) {
     handleUpdated(this as unknown as Parameters<typeof handleUpdated>[0], changed);
+    refreshActiveFloatingTooltip(this);
     // Some render callbacks assign tab directly while preparing nested panel state.
     if (changed.has("tab") && this.tab !== "chat" && this.chatMobileControlsOpen) {
       this.setChatMobileControlsOpen(false);

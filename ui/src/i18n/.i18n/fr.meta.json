@@ -64,12 +64,12 @@
     "workboard.unknownStatus",
     "workboard.viewDetails"
   ],
-  "generatedAt": "2026-06-14T04:03:18.227Z",
+  "generatedAt": "2026-06-14T17:24:42.220Z",
   "locale": "fr",
   "model": "claude-opus-4-8",
   "provider": "anthropic",
-  "sourceHash": "cea79b090b14fca4ad1e3e07dc5dcd7f964b1f199fd028938e41054dc5167457",
-  "totalKeys": 1377,
-  "translatedKeys": 1314,
+  "sourceHash": "f617b33a7d4fbdea75a5f53cca7f4f58c8a1c616a580ff1b1d07dd8bbf0e3812",
+  "totalKeys": 1412,
+  "translatedKeys": 1349,
   "workflow": 1
 }
