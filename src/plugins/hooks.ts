@@ -269,6 +269,81 @@ type SyncHookEvent<K extends SyncHookName> = Parameters<SyncHookHandler<K>>[0];
 type SyncHookContext<K extends SyncHookName> = Parameters<SyncHookHandler<K>>[1];
 type SyncHookResult<K extends SyncHookName> = ReturnType<SyncHookHandler<K>>;
 
+function normalizeOptionalNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function readTypedHookRegistration<K extends PluginHookName>(
+  registration: PluginHookRegistration,
+  hookName: K,
+): PluginHookRegistration<K> | undefined {
+  try {
+    if (registration.hookName !== hookName) {
+      return undefined;
+    }
+  } catch {
+    return undefined;
+  }
+
+  let handler: unknown;
+  try {
+    handler = registration.handler;
+  } catch (error) {
+    handler = () => {
+      throw error;
+    };
+  }
+  if (typeof handler !== "function") {
+    handler = () => {
+      throw new Error("plugin hook handler is not a function");
+    };
+  }
+
+  let pluginId = "unknown-plugin";
+  try {
+    const rawPluginId = registration.pluginId;
+    if (typeof rawPluginId === "string" && rawPluginId.trim()) {
+      pluginId = rawPluginId.trim();
+    }
+  } catch {
+    // Keep a stable owner label for error reporting while skipping only fields
+    // needed to select and invoke a hook.
+  }
+
+  let source = "runtime";
+  try {
+    const rawSource = registration.source;
+    if (typeof rawSource === "string" && rawSource.trim()) {
+      source = rawSource;
+    }
+  } catch {
+    // Source is diagnostic metadata only.
+  }
+
+  let priority: number | undefined;
+  try {
+    priority = normalizeOptionalNumber(registration.priority);
+  } catch {
+    // Bad priority metadata should not block the hook itself.
+  }
+
+  let timeoutMs: number | undefined;
+  try {
+    timeoutMs = normalizeOptionalNumber(registration.timeoutMs);
+  } catch {
+    // Bad timeout metadata falls back to the runner default.
+  }
+
+  return {
+    pluginId,
+    hookName,
+    handler: handler as PluginHookRegistration<K>["handler"],
+    ...(priority !== undefined ? { priority } : {}),
+    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+    source,
+  };
+}
+
 /**
  * Get hooks for a specific hook name, sorted by priority (higher first).
  */
@@ -276,8 +351,9 @@ function getHooksForName<K extends PluginHookName>(
   registry: HookRunnerRegistry,
   hookName: K,
 ): PluginHookRegistration<K>[] {
-  return (registry.typedHooks as PluginHookRegistration<K>[])
-    .filter((h) => h.hookName === hookName)
+  return registry.typedHooks
+    .map((hook) => readTypedHookRegistration(hook, hookName))
+    .filter((hook): hook is PluginHookRegistration<K> => hook !== undefined)
     .toSorted((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
 }
 
@@ -1611,14 +1687,14 @@ export function createHookRunner(
   // =========================================================================
 
   function hasHooks(hookName: PluginHookName): boolean {
-    return registry.typedHooks.some((h) => h.hookName === hookName);
+    return getHooksForName(registry, hookName).length > 0;
   }
 
   /**
    * Get count of registered hooks for a given hook name.
    */
   function getHookCount(hookName: PluginHookName): number {
-    return registry.typedHooks.filter((h) => h.hookName === hookName).length;
+    return getHooksForName(registry, hookName).length;
   }
 
   return {
