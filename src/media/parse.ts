@@ -30,6 +30,14 @@ type ParsedMediaOutputSegment =
 export type SplitMediaFromOutputOptions = {
   extractMarkdownImages?: boolean;
   extractMediaDirectives?: boolean;
+  /**
+   * Invoked when a `MEDIA:` token is skipped because it sits inside a fenced
+   * code block (see #41966). Callers running in a Node context can pass a
+   * logger here to surface the otherwise-silent skip. Left undefined by
+   * default so this module stays free of Node-only logger imports and remains
+   * safe to bundle into the browser UI.
+   */
+  onFencedMediaTokenSkipped?: (line: string) => void;
 };
 
 /** Converts file URLs into plain local paths before downstream media validation. */
@@ -498,6 +506,7 @@ export function splitMediaFromOutput(
   }
   const extractMarkdownImages = options.extractMarkdownImages === true;
   const extractMediaDirectives = options.extractMediaDirectives !== false;
+  const onFencedMediaTokenSkipped = options.onFencedMediaTokenSkipped;
   const mayContainMediaToken = extractMediaDirectives && /media:/i.test(trimmedRaw);
   const mayContainMarkdownImage = extractMarkdownImages && /!\[[^\]]*]\(/.test(trimmedRaw);
   const mayContainAudioTag = trimmedRaw.includes("[[");
@@ -532,7 +541,12 @@ export function splitMediaFromOutput(
   let lineOffset = 0; // Track character offset for fence checking
   for (const line of lines) {
     // Fenced examples must remain text; extracting their MEDIA tokens would mutate transcripts.
+    // Notify the caller so the silent-failure mode is at least observable
+    // (fixes #41966 — MEDIA tokens in code fences are otherwise silently ignored).
     if (hasFenceMarkers && isInsideFence(fenceSpans, lineOffset)) {
+      if (onFencedMediaTokenSkipped && line.trimStart().toUpperCase().startsWith("MEDIA:")) {
+        onFencedMediaTokenSkipped(line);
+      }
       keptLines.push(line);
       pushTextSegment(line);
       lineOffset += line.length + 1; // +1 for newline
