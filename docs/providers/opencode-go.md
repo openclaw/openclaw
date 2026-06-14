@@ -33,7 +33,10 @@ The provider includes:
 | `opencode-go/kimi-k2.7-code`    | Kimi K2.7 Code        |
 | `opencode-go/deepseek-v4-pro`   | DeepSeek V4 Pro       |
 | `opencode-go/deepseek-v4-flash` | DeepSeek V4 Flash     |
+| `opencode-go/hy3-preview`       | HY3 Preview           |
 | `opencode-go/mimo-v2-omni`      | MiMo V2 Omni          |
+| `opencode-go/mimo-v2.5`         | MiMo V2.5             |
+| `opencode-go/mimo-v2.5-pro`     | MiMo V2.5 Pro         |
 | `opencode-go/mimo-v2-pro`       | MiMo V2 Pro           |
 | `opencode-go/minimax-m2.5`      | MiniMax M2.5          |
 | `opencode-go/minimax-m2.7`      | MiniMax M2.7          |
