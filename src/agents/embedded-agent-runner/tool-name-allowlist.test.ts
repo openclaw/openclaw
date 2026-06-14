@@ -12,6 +12,7 @@ import type { ClientToolDefinition } from "./run/params.js";
 import {
   collectAllowedToolNames,
   collectCoreBuiltinToolNames,
+  collectReadableToolNames,
   collectRegisteredToolNames,
   AGENT_RESERVED_TOOL_NAMES,
   toSessionToolAllowlist,
@@ -53,6 +54,23 @@ describe("tool name allowlists", () => {
     );
 
     expect(allowlist).toEqual(["exec", "image_generate", "read"]);
+  });
+
+  it("collects readable tool names without aborting on a poisoned sibling", () => {
+    const unreadableTool = {
+      get name(): string {
+        throw new Error("tool name getter exploded");
+      },
+    };
+
+    expect(
+      collectReadableToolNames([
+        { name: "exec" },
+        unreadableTool,
+        { name: "read" },
+        { name: undefined },
+      ]),
+    ).toEqual(["exec", "read"]);
   });
 
   it("keeps hidden core names available for client conflict admission", () => {

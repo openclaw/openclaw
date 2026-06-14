@@ -173,6 +173,7 @@ import {
 import { applySystemPromptToSession, buildEmbeddedSystemPrompt } from "./system-prompt.js";
 import {
   collectAllowedToolNames,
+  collectReadableToolNames,
   collectRegisteredToolNames,
   toSessionToolAllowlist,
 } from "./tool-name-allowlist.js";
@@ -898,21 +899,22 @@ async function compactEmbeddedAgentSessionDirectOnce(
       [...normalizableToolProjection.tools],
       runtimePlanModelContext,
     );
+    const coreReservedToolNames = collectReadableToolNames(tools);
     const bundleMcpRuntime = toolsEnabled
       ? await createBundleMcpToolRuntime({
           workspaceDir: effectiveWorkspace,
           cfg: params.config,
-          reservedToolNames: tools.map((tool) => tool.name),
+          reservedToolNames: coreReservedToolNames,
         })
       : undefined;
+    const bundleMcpReservedToolNames = bundleMcpRuntime
+      ? collectReadableToolNames(bundleMcpRuntime.tools)
+      : [];
     const bundleLspRuntime = toolsEnabled
       ? await createBundleLspToolRuntime({
           workspaceDir: effectiveWorkspace,
           cfg: params.config,
-          reservedToolNames: [
-            ...tools.map((tool) => tool.name),
-            ...(bundleMcpRuntime?.tools.map((tool) => tool.name) ?? []),
-          ],
+          reservedToolNames: [...coreReservedToolNames, ...bundleMcpReservedToolNames],
         })
       : undefined;
     const filteredBundledTools = applyFinalEffectiveToolPolicy({
