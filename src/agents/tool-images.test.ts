@@ -181,7 +181,6 @@ describe("tool image sanitizing", () => {
   it("screenshot-shaped tool result with malformed image produces text fallback", async () => {
     const result = {
       content: [
-        { type: "text" as const, text: "screenshot metadata" },
         {
           type: "image" as const,
           data: undefined as unknown as string,
