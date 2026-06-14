@@ -18,6 +18,7 @@ import {
   resolveFinalAssistantText,
   resolveGatewayDisconnectState,
   resolveInitialTuiAgentId,
+  resolveTuiToolsToggleActivityStatus,
   isTuiBusyActivityStatus,
   resolveLocalAuthCliInvocation,
   resolveLocalAuthSpawnCwd,
@@ -188,6 +189,28 @@ describe("canSubmitTuiChatMessage", () => {
 describe("isTuiBusyActivityStatus", () => {
   it("treats finishing context as a visible busy status", () => {
     expect(isTuiBusyActivityStatus("finishing context")).toBe(true);
+  });
+});
+
+describe("resolveTuiToolsToggleActivityStatus", () => {
+  it("preserves busy status while an active run exists", () => {
+    expect(
+      resolveTuiToolsToggleActivityStatus({
+        currentStatus: "streaming",
+        toolsExpanded: true,
+        hasActiveOrPendingRun: true,
+      }),
+    ).toBe("streaming");
+  });
+
+  it("uses the tool toggle status when no run is active", () => {
+    expect(
+      resolveTuiToolsToggleActivityStatus({
+        currentStatus: "idle",
+        toolsExpanded: false,
+        hasActiveOrPendingRun: false,
+      }),
+    ).toBe("tools collapsed");
   });
 });
 
