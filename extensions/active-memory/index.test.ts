@@ -2912,7 +2912,7 @@ describe("active-memory plugin", () => {
     testing.setSetupGraceTimeoutMsForTests(0);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 1,
+      timeoutMs: 100,
       logging: true,
     };
     plugin.register(api as unknown as OpenClawPluginApi);
