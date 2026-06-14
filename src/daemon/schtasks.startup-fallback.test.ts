@@ -73,7 +73,7 @@ const {
   uninstallScheduledTask,
 } = await import("./schtasks.js");
 
-function resolveStartupEntryPath(env: Record<string, string>, extension = "cmd") {
+function resolveStartupEntryPath(env: Record<string, string>, extension = "vbs") {
   const taskName = env.OPENCLAW_WINDOWS_TASK_NAME ?? "OpenClaw Gateway";
   return path.join(
     env.APPDATA,
