@@ -4,10 +4,21 @@ import { Buffer } from "node:buffer";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { createReadToolDefinition } from "./read.js";
 import { DEFAULT_MAX_BYTES } from "./truncate.js";
+
+vi.mock("../../../infra/windows-encoding.js", () => ({
+  decodeWindowsOutputBuffer: vi.fn((params: { buffer: Buffer }) => {
+    try {
+      new TextDecoder("utf-8", { fatal: true }).decode(params.buffer);
+      return params.buffer.toString("utf-8");
+    } catch {
+      return new TextDecoder("gbk").decode(params.buffer);
+    }
+  }),
+}));
 
 const ONE_PIXEL_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
@@ -99,5 +110,38 @@ describe("read tool", () => {
     );
 
     expect(textContent(result)).toBe("alpha\n\n[2 more lines in file. Use offset=2 to continue.]");
+  });
+
+  it("decodes GBK-encoded text via the codepage fallback when strict UTF-8 fails", async () => {
+    // GBK bytes for "GBK 编码测试" (codepage 936). Under plain UTF-8 these
+    // produce mojibake; the patched call site uses decodeWindowsOutputBuffer
+    // which falls back when strict UTF-8 rejects the invalid bytes.
+    const gbkBytes = Buffer.from([
+      0x47, 0x42, 0x4b, 0x20, 0xb1, 0xe0, 0xc2, 0xeb, 0xb2, 0xe2, 0xca, 0xd4,
+    ]);
+
+    const tool = createReadToolDefinition("/workspace", {
+      operations: {
+        access: async () => {},
+        detectImageMimeType: async () => null,
+        readFile: async () => gbkBytes,
+      },
+    });
+
+    const result = await tool.execute(
+      "call-1",
+      { path: "gbk-test.txt" },
+      undefined,
+      undefined,
+      {} as never,
+    );
+
+    // The mock (vi.mock hoisted) emulates the Windows GBK fallback path:
+    // strict UTF-8 rejects the GBK bytes, then the codepage decoder produces
+    // readable Chinese. Verify the output contains the expected CJK text,
+    // not the UTF-8 replacement character.
+    const text = textContent(result);
+    expect(text).toContain("编码");
+    expect(text).not.toContain("�");
   });
 });
