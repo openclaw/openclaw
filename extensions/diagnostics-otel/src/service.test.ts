@@ -4590,7 +4590,7 @@ describe("diagnostics-otel service", () => {
 
     const harnessCall = startedSpanCall("openclaw.harness.run");
     expect(harnessCall).toBeDefined();
-    const attrs = harnessCall?.[1]?.attributes as Record<string, unknown> | undefined;
+    const attrs = harnessCall?.[1]?.attributes;
     expect(attrs?.["langfuse.session.id"]).toBe(
       crypto.createHash("sha256").update("test-session-key-123").digest("hex"),
     );
