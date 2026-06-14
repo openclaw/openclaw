@@ -162,6 +162,15 @@ export function buildBuiltinChatCommands(
   };
   const commands: ChatCommandDefinition[] = [
     defineChatCommand({
+      key: "new",
+      nativeName: "new",
+      description: "Start a new session.",
+      textAlias: "/new",
+      acceptsArgs: true,
+      category: "session",
+      tier: "essential",
+    }),
+    defineChatCommand({
       key: "help",
       nativeName: "help",
       description: "Show available commands.",
@@ -727,15 +736,6 @@ export function buildBuiltinChatCommands(
       nativeName: "reset",
       description: "Reset the current session.",
       textAlias: "/reset",
-      acceptsArgs: true,
-      category: "session",
-      tier: "essential",
-    }),
-    defineChatCommand({
-      key: "new",
-      nativeName: "new",
-      description: "Start a new session.",
-      textAlias: "/new",
       acceptsArgs: true,
       category: "session",
       tier: "essential",
