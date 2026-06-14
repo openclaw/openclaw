@@ -5,6 +5,7 @@ import { resetAcpManagerTaskStateForTests } from "../../../test/helpers/acp-mana
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AcpSessionRuntimeOptions, SessionAcpMeta } from "../../config/sessions/types.js";
 import { resetHeartbeatWakeStateForTests } from "../../infra/heartbeat-wake.js";
+import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { resetAcpActiveTurnsForTests } from "./active-turns.js";
 
 export type { AcpRuntime, OpenClawConfig, SessionAcpMeta };
@@ -304,9 +305,9 @@ export function installAcpSessionManagerTestLifecycle(): void {
 
   afterEach(() => {
     if (ORIGINAL_STATE_DIR === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
+      deleteTestEnvValue("OPENCLAW_STATE_DIR");
     } else {
-      process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
+      setTestEnvValue("OPENCLAW_STATE_DIR", ORIGINAL_STATE_DIR);
     }
     resetHeartbeatWakeStateForTests();
     resetAcpManagerTaskStateForTests();
