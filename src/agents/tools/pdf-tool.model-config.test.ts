@@ -49,25 +49,6 @@ vi.mock("./model-config.helpers.js", () => ({
   },
   hasDirectProviderApiKeyAuthForTool: ({ provider }: { provider: string }) =>
     provider === "openai" ? Boolean(process.env.OPENAI_API_KEY) : false,
-  resolveOpenAiFamilyMediaCandidate: ({
-    openAiModel,
-    codexModel,
-  }: {
-    openAiModel: string;
-    codexModel?: string;
-  }) => {
-    if (process.env.OPENAI_API_KEY) {
-      return { kind: "keep", ref: `openai/${openAiModel}` };
-    }
-    if (
-      process.env.OPENCLAW_TEST_CODEX_OAUTH &&
-      process.env.OPENCLAW_TEST_CODEX_ROUTE &&
-      codexModel
-    ) {
-      return { kind: "substitute", provider: "codex", ref: `codex/${codexModel}` };
-    }
-    return { kind: "drop" };
-  },
   resolveDefaultModelRef: (cfg?: OpenClawConfig) => {
     const modelCfg = cfg?.agents?.defaults?.model;
     const primary =
