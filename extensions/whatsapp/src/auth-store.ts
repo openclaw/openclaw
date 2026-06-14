@@ -338,6 +338,11 @@ export async function logoutWeb(params: {
     runtime.log(info("No WhatsApp Web session found; nothing to delete."));
     return false;
   }
+  // Back up credentials before clearing so sessions can be recovered after
+  // unintended logout (e.g. plugin update restart with changed Baileys version).
+  const timestamp = new Date().toISOString().replace(/[:.Z]/g, "-");
+  const backupRoot = path.join(path.dirname(resolvedAuthDir), ".backups");
+
   if (params.isLegacyAuthDir) {
     if (!(await isLegacyWebAuthDir(resolvedAuthDir))) {
       runtime.log(
@@ -345,10 +350,28 @@ export async function logoutWeb(params: {
       );
       return false;
     }
+    const backupDir = path.join(backupRoot, `pre-logout-${timestamp}`);
+    await fs.mkdir(backupDir, { recursive: true }).catch(() => {});
+    const entries = await fs.readdir(resolvedAuthDir, { withFileTypes: true });
+    await Promise.all(
+      entries.map(async (entry) => {
+        if (!entry.isFile() || !isBaileysAuthFileName(entry.name)) return;
+        await fs
+          .cp(path.join(resolvedAuthDir, entry.name), path.join(backupDir, entry.name), {
+            force: false,
+            errorOnExist: false,
+          })
+          .catch(() => {});
+      }),
+    );
+    runtime.log(info(`Backed up WhatsApp Web credentials to ${backupDir}.`));
     await clearBaileysAuthFiles(resolvedAuthDir);
   } else {
     const ownership = await classifyWebAuthDirOwnership(resolvedAuthDir);
     if (ownership.kind === "owned") {
+      const backupDir = path.join(backupRoot, `pre-logout-${timestamp}`);
+      await fs.cp(ownership.authDir, backupDir, { recursive: true, force: false }).catch(() => {});
+      runtime.log(info(`Backed up WhatsApp Web credentials to ${backupDir}.`));
       await fs.rm(ownership.authDir, { recursive: true, force: true });
     } else if (ownership.kind === "unsafe-owned") {
       runtime.log(
