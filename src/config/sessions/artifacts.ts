@@ -56,6 +56,8 @@ function sessionStoreTempPattern(storeBasename: string): RegExp {
 // never the live store, so a stale one is safe to reclaim. `storeBasename` is the
 // store filename (the atomic write's temp prefix, e.g. `sessions.json`), so a
 // custom-named `session.store` is matched too.
+export const SESSION_STORE_TEMP_STALE_MS = 5 * 60 * 1000;
+
 export function isSessionStoreTempArtifactName(fileName: string, storeBasename: string): boolean {
   if (!storeBasename) {
     return false;
