@@ -873,6 +873,34 @@ describe("sanitizeAssistantVisibleText", () => {
     );
   });
 
+  it("uses final tags as the visible boundary for unclosed reasoning", () => {
+    const input = ["<thinking>", "private chain of thought", "<final>", "Visible answer"].join(
+      "\n",
+    );
+
+    expect(sanitizeAssistantVisibleText(input)).toBe("Visible answer");
+  });
+
+  it("uses self-closing final tags as the visible boundary for unclosed reasoning", () => {
+    const input = ["<thinking>", "private chain of thought", "<final/>", "Visible answer"].join(
+      "\n",
+    );
+
+    expect(sanitizeAssistantVisibleText(input)).toBe("Visible answer");
+  });
+
+  it("continues to sanitize reasoning tags after a recovered final boundary", () => {
+    const input = [
+      "<thinking>",
+      "private chain of thought",
+      "<final>",
+      "Visible answer",
+      "<think>second private note</think>",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe("Visible answer");
+  });
+
   it("keeps unclosed trailing reasoning hidden when visible text already exists", () => {
     expect(sanitizeAssistantVisibleText("Visible prefix <think>private reasoning tail")).toBe(
       "Visible prefix",
@@ -894,6 +922,34 @@ describe("sanitizeAssistantVisibleTextWithProfile", () => {
         "history",
       ),
     ).toBe(" Visible answer");
+  });
+
+  it("uses the history profile to preserve visible-answer whitespace after unclosed reasoning", () => {
+    const input = ["<thinking>", "private chain of thought", "<final>", "  Visible answer"].join(
+      "\n",
+    );
+
+    expect(sanitizeAssistantVisibleTextWithProfile(input, "history")).toBe("\n  Visible answer");
+  });
+
+  it("uses the history profile to recover after self-closing final tags", () => {
+    const input = ["<thinking>", "private chain of thought", "<final/>", "  Visible answer"].join(
+      "\n",
+    );
+
+    expect(sanitizeAssistantVisibleTextWithProfile(input, "history")).toBe("\n  Visible answer");
+  });
+
+  it("uses the history profile to sanitize reasoning after a recovered final boundary", () => {
+    const input = [
+      "<thinking>",
+      "private chain of thought",
+      "<final>",
+      "  Visible answer",
+      "<think>second private note</think>",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleTextWithProfile(input, "history")).toBe("\n  Visible answer\n");
   });
 
   it("uses the internal-scaffolding profile to preserve downgraded tool text behavior", () => {

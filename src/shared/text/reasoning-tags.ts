@@ -45,6 +45,7 @@ export function stripReasoningTagsFromText(
   const trimMode = options?.trim ?? "both";
 
   let cleaned = text;
+  const originalCleaned = cleaned;
   const matches = findFinalTagMatches(cleaned);
   THINKING_TAG_RE.lastIndex = 0;
   const hasThinkingTag = THINKING_TAG_RE.test(cleaned);
@@ -130,6 +131,20 @@ export function stripReasoningTagsFromText(
     firstUnclosedContentIndex !== undefined &&
     cleaned.trim()
   ) {
+    const originalCodeRegions = findCodeRegions(originalCleaned);
+    const finalBoundary = matches.find(
+      (match) =>
+        !match.isClose &&
+        match.index >= firstUnclosedContentIndex &&
+        !isInsideCode(match.index, originalCodeRegions),
+    );
+    if (finalBoundary) {
+      const visibleTail = stripReasoningTagsFromText(
+        originalCleaned.slice(finalBoundary.index + finalBoundary.text.length),
+        { mode, trim: "none" },
+      );
+      return applyTrim(visibleTail, trimMode);
+    }
     return applyTrim(cleaned.slice(firstUnclosedContentIndex), trimMode);
   }
 
