@@ -2674,6 +2674,69 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.originatingReplyToMode).toBe("off");
   });
 
+  it("captures queued reply policy from hydrated system-event session context", async () => {
+    await runPreparedReply(
+      baseParams({
+        cfg: {
+          session: {},
+          channels: {
+            slack: {
+              replyToMode: "all",
+              replyToModeByChatType: { direct: "off" },
+            },
+          },
+          agents: { defaults: {} },
+        },
+        opts: { isHeartbeat: true },
+        ctx: {
+          Body: "scheduled wake",
+          RawBody: "scheduled wake",
+          CommandBody: "scheduled wake",
+          Provider: "cron-event",
+          SessionKey: "agent:main:slack:direct:U1",
+          OriginatingChannel: "slack",
+          OriginatingTo: "user:U1",
+        },
+        sessionCtx: {
+          Body: "scheduled wake",
+          BodyStripped: "scheduled wake",
+          Provider: "cron-event",
+          OriginatingChannel: "slack",
+          OriginatingTo: "user:U1",
+        },
+        sessionEntry: {
+          sessionId: "session-1",
+          updatedAt: 1,
+          chatType: "direct",
+          channel: "matrix",
+          lastChannel: "slack",
+          lastTo: "user:U1",
+          lastAccountId: "work",
+          deliveryContext: {
+            channel: "slack",
+            to: "user:U1",
+            accountId: "work",
+          },
+          origin: {
+            provider: "matrix",
+            surface: "matrix",
+            chatType: "direct",
+            to: "room:origin",
+            accountId: "origin",
+          },
+        } as SessionEntry,
+      }),
+    );
+
+    const call = requireRunReplyAgentCall();
+    expect(call?.followupRun.originatingChannel).toBe("slack");
+    expect(call?.followupRun.originatingTo).toBe("user:U1");
+    expect(call?.followupRun.originatingAccountId).toBe("work");
+    expect(call?.followupRun.originatingChatType).toBe("direct");
+    expect(call?.followupRun.originatingReplyToMode).toBe("off");
+    expect(call?.followupRun.run.messageProvider).toBe("slack");
+  });
+
   it("uses transport thread metadata for followup originatingThreadId", async () => {
     await runPreparedReply(
       baseParams({

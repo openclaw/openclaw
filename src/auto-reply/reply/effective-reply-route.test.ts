@@ -349,7 +349,7 @@ describe("resolveEffectiveReplyRoute", () => {
     });
   });
 
-  it("fills partial exec-event route from persisted context", () => {
+  it("does not inherit an account from a different persisted channel", () => {
     expect(
       resolveEffectiveReplyRoute({
         ctx: ctx({
@@ -368,7 +368,32 @@ describe("resolveEffectiveReplyRoute", () => {
     ).toEqual({
       channel: "telegram",
       to: "chat:live",
+      accountId: undefined,
+    });
+  });
+
+  it("fills a partial exec-event route from the same persisted channel", () => {
+    expect(
+      resolveEffectiveReplyRoute({
+        ctx: ctx({
+          Provider: "exec-event",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "chat:live",
+        }),
+        entry: entry({
+          chatType: "direct",
+          deliveryContext: {
+            channel: "telegram",
+            to: "chat:persisted",
+            accountId: "persisted-account",
+          },
+        }),
+      }),
+    ).toEqual({
+      channel: "telegram",
+      to: "chat:live",
       accountId: "persisted-account",
+      chatType: "direct",
     });
   });
 });

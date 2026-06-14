@@ -66,7 +66,7 @@ import { applySessionHints } from "./body.js";
 import type { buildCommandContext } from "./commands.js";
 import { resolveCurrentTurnImages } from "./current-turn-images.js";
 import type { InlineDirectives } from "./directive-handling.js";
-import { isSystemEventProvider } from "./effective-reply-route.js";
+import { isSystemEventProvider, resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import { shouldUseReplyFastTestRuntime } from "./get-reply-fast-path.js";
 import { resolvePreparedReplyQueueState } from "./get-reply-run-queue.js";
 import type { ReplySessionBinding } from "./get-reply.types.js";
@@ -1251,14 +1251,27 @@ export async function runPreparedReply(
           beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
         })
       : undefined);
+  const replyRoute = resolveEffectiveReplyRoute({
+    ctx: {
+      Provider: ctx.Provider ?? sessionCtx.Provider,
+      Surface: ctx.Surface ?? sessionCtx.Surface,
+      OriginatingChannel: ctx.OriginatingChannel ?? sessionCtx.OriginatingChannel,
+      OriginatingTo: ctx.OriginatingTo ?? sessionCtx.OriginatingTo,
+      AccountId: ctx.AccountId ?? sessionCtx.AccountId,
+      InputProvenance: ctx.InputProvenance ?? sessionCtx.InputProvenance,
+      ChatType: ctx.ChatType ?? sessionCtx.ChatType,
+    },
+    entry: preparedSessionState.sessionEntry,
+  });
   const messageProvider = resolveOriginMessageProvider({
-    originatingChannel: ctx.OriginatingChannel ?? sessionCtx.OriginatingChannel,
+    originatingChannel: replyRoute.channel,
     // Prefer Provider over Surface for fallback channel identity.
     // Surface can carry relayed metadata while Provider owns reply routing.
-    provider: ctx.Provider ?? ctx.Surface ?? sessionCtx.Provider,
+    provider: ctx.Provider ?? ctx.Surface ?? promptSessionCtx.Provider,
   });
   const replyPolicyChannel =
-    ctx.OriginatingChannel ?? (messageProvider as OriginatingChannelType | undefined);
+    (replyRoute.channel as OriginatingChannelType | undefined) ??
+    (messageProvider as OriginatingChannelType | undefined);
   const followupRun = {
     prompt: queuedBody,
     transcriptPrompt: transcriptCommandBody,
@@ -1275,18 +1288,18 @@ export async function runPreparedReply(
     images: currentTurnImages.images,
     imageOrder: currentTurnImages.imageOrder,
     // Originating channel for reply routing.
-    originatingChannel: ctx.OriginatingChannel,
-    originatingTo: ctx.OriginatingTo,
-    originatingAccountId: sessionCtx.AccountId,
-    originatingThreadId,
-    originatingReplyToId: sessionCtx.ReplyToId,
+    originatingChannel: replyRoute.channel,
+    originatingTo: replyRoute.to,
+    originatingAccountId: replyRoute.accountId,
+    originatingThreadId: replyRoute.threadId ?? originatingThreadId,
+    originatingReplyToId: promptSessionCtx.ReplyToId,
     originatingReplyToMode: resolveReplyToMode(
       cfg,
       replyPolicyChannel,
-      sessionCtx.AccountId,
-      ctx.ChatType,
+      replyRoute.accountId,
+      replyRoute.chatType,
     ),
-    originatingChatType: ctx.ChatType,
+    originatingChatType: replyRoute.chatType,
     run: {
       agentId,
       agentDir,
