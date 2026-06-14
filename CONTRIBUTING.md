@@ -11,83 +11,72 @@ Welcome to the lobster tank! 🦞
 
 ## Maintainers
 
-- **Peter Steinberger** - Benevolent Dictator
-  - GitHub: [@steipete](https://github.com/steipete) · X: [@steipete](https://x.com/steipete)
+The public maintainer roster mirrors the GitHub org's Maintainer team.
+Maintainers keep human-readable profile context in the private Discord
+`#maintainer-whois` channel, but GitHub team membership is the source of truth
+for this public list.
 
-- **Frank Yang** - PR triage, Agents, Gateway, Channels
-  - GitHub: [@frankekn](https://github.com/frankekn) · X: [@frankekn](https://x.com/frankekn)
-
-- **Shadow** - Discord subsystem, Discord admin, Clawhub, all community moderation
-  - GitHub: [@thewilloftheshadow](https://github.com/thewilloftheshadow) · X: [@4shadowed](https://x.com/4shadowed)
-
-- **Vignesh** - Memory (QMD), formal modeling, TUI, IRC, and Lobster
-  - GitHub: [@vignesh07](https://github.com/vignesh07) · X: [@\_vgnsh](https://x.com/_vgnsh)
-
-- **Jos** - Telegram, API, Nix mode
-  - GitHub: [@joshp123](https://github.com/joshp123) · X: [@jjpcodes](https://x.com/jjpcodes)
-
-- **Ayaan Zaidi** - Telegram subsystem, Android app
-  - GitHub: [@obviyus](https://github.com/obviyus) · X: [@obviyus](https://x.com/obviyus)
-
-- **Tyler Yust** - Agents/subagents, cron, iMessage, macOS app
-  - GitHub: [@tyler6204](https://github.com/tyler6204) · X: [@tyleryust](https://x.com/tyleryust)
-
-- **Mariano Belinky** - iOS app, Security
-  - GitHub: [@mbelinky](https://github.com/mbelinky) · X: [@belimad](https://x.com/belimad)
-
-- **Nimrod Gutman** - iOS app, macOS app and crustacean features
-  - GitHub: [@ngutman](https://github.com/ngutman) · X: [@theguti](https://x.com/theguti)
-
-- **Vincent Koc** - Agents, Telemetry, Hooks, Security
-  - GitHub: [@vincentkoc](https://github.com/vincentkoc) · X: [@vincent_koc](https://x.com/vincent_koc)
-
-- **Val Alexander** - UI/UX, Docs, SDK, and Agent DevX
-  - GitHub: [@BunsDev](https://github.com/BunsDev) · X: [@BunsDev](https://x.com/BunsDev)
-
-- **Seb Slight** - Docs, Agent Reliability, Runtime Hardening
-  - GitHub: [@sebslight](https://github.com/sebslight) · X: [@sebslig](https://x.com/sebslig)
-
-- **Christoph Nakazawa** - JS Infra
-  - GitHub: [@cpojer](https://github.com/cpojer) · X: [@cnakazawa](https://x.com/cnakazawa)
-
-- **Gustavo Madeira Santana** - Multi-agents, CLI, Performance, Plugins, Matrix
-  - GitHub: [@gumadeiras](https://github.com/gumadeiras) · X: [@gumadeiras](https://x.com/gumadeiras)
-
-- **Onur Solmaz** - Agents, dev workflows, ACP integrations, MS Teams
-  - GitHub: [@onutc](https://github.com/onutc), [@osolmaz](https://github.com/osolmaz) · X: [@onusoz](https://x.com/onusoz)
-
-- **Josh Avant** - Core, CLI, Gateway, Security, Agents
-  - GitHub: [@joshavant](https://github.com/joshavant) · X: [@joshavant](https://x.com/joshavant)
-
-- **Jonathan Taylor** - ACP subsystem, Gateway features/bugs, Gog/Mog/Sog CLI's, SEDMAT
-  - GitHub [@visionik](https://github.com/visionik) · X: [@visionik](https://x.com/visionik)
-
-- **Josh Lehman** - Compaction, Context Engine
-  - GitHub [@jalehman](https://github.com/jalehman) · X: [@jlehman\_](https://x.com/jlehman_)
-
-- **Radek Sienkiewicz** - Docs, Control UI
-  - GitHub [@velvet-shark](https://github.com/velvet-shark) · X: [@velvet_shark](https://twitter.com/velvet_shark)
-
-- **Muhammed Mukhthar** - Mattermost, CLI
-  - GitHub [@mukhtharcm](https://github.com/mukhtharcm) · X: [@mukhtharcm](https://x.com/mukhtharcm)
-
-- **Altay** - Agents, CLI, error handling
-  - GitHub [@altaywtf](https://github.com/altaywtf) · X: [@altaywtf](https://x.com/altaywtf)
-
-- **Robin Waslander** - Security, PR triage, bug fixes
-  - GitHub: [@hydro13](https://github.com/hydro13) · X: [@Robin_waslander](https://x.com/Robin_waslander)
-
-- **Tengji (George) Zhang** - Chinese model APIs, cloud, pi
-  - GitHub: [@odysseus0](https://github.com/odysseus0) · X: [@odysseus0z](https://x.com/odysseus0z)
-
-- **Sliverp** - Chinese Channel: QQ, WeChat, Wecom, Yuanbao, Dingtalk, Feishu
-  - GitHub: [@sliverp](https://github.com/sliverp) · X: [@sliver01234](https://x.com/sliver01234)
-
-- **Mason Huang** - Stability, Security, Speed
-  - GitHub: [@hxy91819](https://github.com/hxy91819) · X: [@chenjingtalk](https://x.com/chenjingtalk)
-
-- **Maurice Niu** - ClawHub, Security, Stability, Data integrity
-  - GitHub: [@momothemage](https://github.com/momothemage) · X: [@MomoPsicasso](https://x.com/MomoPsicasso)
+- [@BradGroux](https://github.com/BradGroux)
+- [@BunsDev](https://github.com/BunsDev)
+- [@CyberAlkemist](https://github.com/CyberAlkemist)
+- [@Evizero](https://github.com/Evizero)
+- [@ImLukeF](https://github.com/ImLukeF)
+- [@Patrick-Erichsen](https://github.com/Patrick-Erichsen)
+- [@RomneyDa](https://github.com/RomneyDa)
+- [@SidU](https://github.com/SidU)
+- [@Takhoffman](https://github.com/Takhoffman)
+- [@altaywtf](https://github.com/altaywtf)
+- [@amknight](https://github.com/amknight)
+- [@badlogic](https://github.com/badlogic)
+- [@bek91](https://github.com/bek91)
+- [@cpojer](https://github.com/cpojer)
+- [@darkamenosa](https://github.com/darkamenosa)
+- [@davemorin](https://github.com/davemorin)
+- [@drobison00](https://github.com/drobison00)
+- [@eleqtrizit](https://github.com/eleqtrizit)
+- [@frankekn](https://github.com/frankekn)
+- [@galiniliev](https://github.com/galiniliev)
+- [@giodl73-repo](https://github.com/giodl73-repo)
+- [@gumadeiras](https://github.com/gumadeiras)
+- [@huntharo](https://github.com/huntharo)
+- [@hxy91819](https://github.com/hxy91819)
+- [@jacobtomlinson](https://github.com/jacobtomlinson)
+- [@jalehman](https://github.com/jalehman)
+- [@jesse-merhi](https://github.com/jesse-merhi)
+- [@johnlindquist](https://github.com/johnlindquist)
+- [@joshavant](https://github.com/joshavant)
+- [@joshp123](https://github.com/joshp123)
+- [@kevinlin-openai](https://github.com/kevinlin-openai)
+- [@kevinslin](https://github.com/kevinslin)
+- [@mbelinky](https://github.com/mbelinky)
+- [@mcaxtr](https://github.com/mcaxtr)
+- [@momothemage](https://github.com/momothemage)
+- [@ngutman](https://github.com/ngutman)
+- [@obviyus](https://github.com/obviyus)
+- [@odysseus0](https://github.com/odysseus0)
+- [@omarshahine](https://github.com/omarshahine)
+- [@onutc](https://github.com/onutc)
+- [@openperf](https://github.com/openperf)
+- [@osolmaz](https://github.com/osolmaz)
+- [@pash-openai](https://github.com/pash-openai)
+- [@pashpashpash](https://github.com/pashpashpash)
+- [@pgondhi987](https://github.com/pgondhi987)
+- [@sallyom](https://github.com/sallyom)
+- [@samuelranai](https://github.com/samuelranai)
+- [@scoootscooob](https://github.com/scoootscooob)
+- [@sebslight](https://github.com/sebslight)
+- [@shakkernerd](https://github.com/shakkernerd)
+- [@shanselman](https://github.com/shanselman)
+- [@sjf](https://github.com/sjf)
+- [@sjf-oa](https://github.com/sjf-oa)
+- [@sliverp](https://github.com/sliverp)
+- [@spencerd-nv](https://github.com/spencerd-nv)
+- [@steipete](https://github.com/steipete)
+- [@thewilloftheshadow](https://github.com/thewilloftheshadow)
+- [@velvet-shark](https://github.com/velvet-shark)
+- [@vignesh07](https://github.com/vignesh07)
+- [@vincentkoc](https://github.com/vincentkoc)
+- [@visionik](https://github.com/visionik)
 
 ## How to Contribute
 
@@ -191,7 +180,7 @@ Check the [GitHub Issues](https://github.com/openclaw/openclaw/issues) for
 labels. If none are open, pick a small docs or bug issue and leave a quick comment saying
 you'd like to work on it.
 
-## Maintainers
+## Becoming a Maintainer
 
 We're selectively expanding the maintainer team.
 If you're an experienced contributor who wants to help shape OpenClaw's direction — whether through code, docs, or community — we'd like to hear from you.
