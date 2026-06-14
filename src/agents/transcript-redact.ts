@@ -287,7 +287,9 @@ function shouldPreserveOpaqueProviderPayload(
   return (
     (type === "text" && key === "textSignature" && isReplayableTextSignature(item)) ||
     (type === "thinking" &&
-      (key === "thinkingSignature" || key === "signature" || key === "thought_signature")) ||
+      ((key === "thinkingSignature" && !item.trimStart().startsWith("{")) ||
+        key === "signature" ||
+        key === "thought_signature")) ||
     (type === "redacted_thinking" &&
       (key === "data" ||
         key === "signature" ||

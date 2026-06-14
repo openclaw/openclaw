@@ -95,6 +95,16 @@ describe("redactTranscriptMessage", () => {
             secret: "sk-abcdef1234567890xyz",
           },
         },
+        {
+          type: "thinking",
+          thinking: "visible",
+          thinkingSignature: JSON.stringify({
+            type: "reasoning",
+            status: "future",
+            encrypted_content: CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES,
+            summary: [{ type: "summary_text", text: "secret sk-abcdef1234567890xyz" }],
+          }),
+        },
       ],
     } as unknown as AgentMessage;
 
@@ -113,6 +123,8 @@ describe("redactTranscriptMessage", () => {
     };
     const blockMetadata = (block as unknown as { openclawReasoningReplay: Record<string, unknown> })
       .openclawReasoningReplay;
+    const rejectedSignature = (msgContent(result) as Array<{ thinkingSignature: string }>)[1]
+      .thinkingSignature;
     expect(block.thinking).not.toContain("sk-abcdef1234567890xyz");
     expect(replayItem.id).toBe("rs_secret_identifier");
     expect(replayItem.type).toBe("reasoning");
@@ -123,6 +135,7 @@ describe("redactTranscriptMessage", () => {
     expect(blockMetadata).toEqual(OPENAI_REASONING_REPLAY_METADATA);
     expect(block.thinkingSignature).not.toContain("sk-abcdef1234567890xyz");
     expect(JSON.stringify(blockMetadata)).not.toContain("sk-abcdef1234567890xyz");
+    expect(rejectedSignature).not.toContain("sk-abcdef1234567890xyz");
   });
 
   it("preserves Google tool-call thought signatures while redacting arguments", () => {
