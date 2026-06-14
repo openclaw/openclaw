@@ -11,7 +11,13 @@ import {
 vi.mock("../schtasks-exec.js", () => ({
   execSchtasks: async (argv: string[]) => {
     schtasksCalls.push(argv);
-    return schtasksResponses.shift() ?? { code: 0, stdout: "", stderr: "" };
+    return schtasksResponses.shift() ?? {
+      code: 0,
+      // Default to "running" so shouldFallbackScheduledTaskLaunch exits
+      // immediately instead of entering its 15-second poll loop.
+      stdout: "Status: Running\r\nLast Run Result: 0x41301",
+      stderr: "",
+    };
   },
 }));
 

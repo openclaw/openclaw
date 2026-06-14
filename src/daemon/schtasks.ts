@@ -1110,15 +1110,20 @@ async function shouldFallbackScheduledTaskLaunch(params: {
   };
 
   const initial = await readLaunchObservation();
-  if (initial.state !== "not-yet-run") {
+  if (initial.state === "running") {
     return false;
   }
 
+  // When schtasks /Run is silently dropped (e.g. Session 0 on Windows), the
+  // task's lastRunResult does NOT reset to 0x41303 (not-yet-run) — it stays
+  // at the previous exit code. So the state is "other" instead of
+  // "not-yet-run", but the launch was still silently dropped. Treat both
+  // "not-yet-run" and "other" states as candidates for fallback detection.
   const deadline = Date.now() + SCHEDULED_TASK_FALLBACK_TIMEOUT_MS;
   while (Date.now() < deadline) {
     await sleep(SCHEDULED_TASK_FALLBACK_POLL_MS);
     const current = await readLaunchObservation();
-    if (current.state !== "not-yet-run") {
+    if (current.state === "running") {
       return false;
     }
     if (current.signature !== initial.signature) {
