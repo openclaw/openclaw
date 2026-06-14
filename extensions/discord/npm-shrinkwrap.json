@@ -45,13 +45,13 @@
       }
     },
     "node_modules/@napi-rs/wasm-runtime": {
-      "version": "1.1.4",
-      "resolved": "https://registry.npmjs.org/@napi-rs/wasm-runtime/-/wasm-runtime-1.1.4.tgz",
-      "integrity": "sha512-3NQNNgA1YSlJb/kMH1ildASP9HW7/7kYnRI2szWJaofaS1hWmbGI4H+d3+22aGzXXN9IJ+n+GiFVcGipJP18ow==",
+      "version": "1.1.5",
+      "resolved": "https://registry.npmjs.org/@napi-rs/wasm-runtime/-/wasm-runtime-1.1.5.tgz",
+      "integrity": "sha512-AWPoBRJ9tsnVhor4sjO7rkni+7p+2IAEFj6cx06UgP10jkQHqay/36uRV/bFkgrh18D9vb4cr8Q0Pthskgzy+Q==",
       "license": "MIT",
       "optional": true,
       "dependencies": {
-        "@tybys/wasm-util": "^0.10.1"
+        "@tybys/wasm-util": "^0.10.2"
       },
       "funding": {
         "type": "github",
