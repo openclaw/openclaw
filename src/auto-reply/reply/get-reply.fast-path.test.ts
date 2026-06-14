@@ -250,6 +250,194 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     });
   });
 
+  it("keeps explicit default model selections ahead of channel overrides", async () => {
+    vi.stubEnv("OPENCLAW_ALLOW_SLOW_REPLY_TESTS", "1");
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-default-pin-channel-"));
+    const cfg = {
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.5",
+          workspace: home,
+        },
+      },
+      channels: {
+        telegram: { allowFrom: ["*"] },
+        modelByChannel: {
+          telegram: {
+            "*": "openai/gpt-5.4",
+          },
+        },
+      },
+      session: { store: path.join(home, "sessions.json") },
+    } satisfies OpenClawConfig;
+    vi.mocked(loadConfigMock).mockReturnValue(cfg);
+    vi.mocked(resolveDefaultModelMock).mockReturnValueOnce({
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+      aliasIndex: emptyAliasIndex(),
+    });
+    vi.mocked(resolveModelRefFromStringMock).mockReturnValueOnce({
+      ref: { provider: "openai", model: "gpt-5.4" },
+    });
+    mocks.initSessionState.mockResolvedValueOnce(
+      createGetReplySessionState({
+        sessionEntry: {
+          sessionId: "session-1",
+          updatedAt: 1,
+          channel: "telegram",
+          providerOverride: "openai",
+          modelOverride: "gpt-5.5",
+          modelOverrideSource: "user",
+        },
+      }),
+    );
+    mocks.resolveReplyDirectives.mockResolvedValueOnce(
+      createGetReplyContinueDirectivesResult({
+        body: "hello",
+        abortKey: "agent:main:telegram:123",
+        from: "telegram:user:42",
+        to: "telegram:123",
+        senderId: "telegram:user:42",
+        commandSource: "message",
+        senderIsOwner: false,
+        resetHookTriggered: false,
+      }),
+    );
+
+    await expect(
+      getReplyFromConfig(buildGetReplyCtx(), undefined, {} as OpenClawConfig),
+    ).resolves.toEqual({
+      text: "ok",
+    });
+
+    const directiveParams = requireDirectiveParams();
+    expect(directiveParams.provider).toBe("openai");
+    expect(directiveParams.model).toBe("gpt-5.5");
+  });
+
+  it.each([
+    [
+      "API planning",
+      "What kind of data do you need to pull from the API based on your current goals?",
+    ],
+    ["UI title edit", "Make the web page component title clickable."],
+  ])("keeps explicit GPT-5.5 pins for %s prompts", async (_label, prompt) => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-default-pin-prompt-"));
+    const storePath = path.join(home, "sessions.json");
+    const sessionKey = "agent:main:telegram:123";
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "session-1",
+          updatedAt: 1,
+          channel: "telegram",
+          providerOverride: "openai",
+          modelOverride: "gpt-5.5",
+          modelOverrideSource: "user",
+          modelProvider: "openai",
+          model: "gpt-5.4",
+        },
+      }),
+      "utf8",
+    );
+    const cfg = markCompleteReplyConfig({
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.5",
+          workspace: home,
+        },
+      },
+      channels: {
+        telegram: { allowFrom: ["*"] },
+        modelByChannel: {
+          telegram: {
+            "*": "openai/gpt-5.4",
+          },
+        },
+      },
+      session: { store: storePath },
+    } as OpenClawConfig);
+    vi.mocked(resolveDefaultModelMock).mockReturnValueOnce({
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+      aliasIndex: emptyAliasIndex(),
+    });
+    vi.mocked(resolveModelRefFromStringMock).mockImplementationOnce(({ raw }) =>
+      raw === "openai/gpt-5.4" ? { ref: { provider: "openai", model: "gpt-5.4" } } : null,
+    );
+
+    await expect(
+      getReplyFromConfig(
+        buildGetReplyCtx({
+          Body: prompt,
+          BodyForAgent: prompt,
+          RawBody: prompt,
+          CommandBody: prompt,
+        }),
+        undefined,
+        cfg,
+      ),
+    ).resolves.toEqual({ text: "ok" });
+
+    const preparedReplyParams = requirePreparedReplyParams();
+    expect(preparedReplyParams.provider).toBe("openai");
+    expect(preparedReplyParams.model).toBe("gpt-5.5");
+  });
+
+  it("keeps explicit GPT-5.4 Mini pins after session-store rehydration", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mini-pin-rehydrate-"));
+    const storePath = path.join(home, "sessions.json");
+    const sessionKey = "agent:main:telegram:123";
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "session-1",
+          updatedAt: 1,
+          channel: "telegram",
+          providerOverride: "openai",
+          modelOverride: "gpt-5.4-mini",
+          modelOverrideSource: "user",
+          modelProvider: "openai",
+          model: "gpt-5.4",
+        },
+      }),
+      "utf8",
+    );
+    const cfg = markCompleteReplyConfig({
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.5",
+          workspace: home,
+        },
+      },
+      session: { store: storePath },
+    } as OpenClawConfig);
+    vi.mocked(resolveDefaultModelMock).mockReturnValueOnce({
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+      aliasIndex: emptyAliasIndex(),
+    });
+
+    await expect(
+      getReplyFromConfig(
+        buildGetReplyCtx({
+          Body: "resume",
+          BodyForAgent: "resume",
+          RawBody: "resume",
+          CommandBody: "resume",
+        }),
+        undefined,
+        cfg,
+      ),
+    ).resolves.toEqual({ text: "ok" });
+
+    const preparedReplyParams = requirePreparedReplyParams();
+    expect(preparedReplyParams.provider).toBe("openai");
+    expect(preparedReplyParams.model).toBe("gpt-5.4-mini");
+  });
+
   it("marks configs through withFastReplyConfig()", async () => {
     const cfg = withFastReplyConfig({ session: { store: "/tmp/sessions.json" } } as OpenClawConfig);
 
@@ -515,6 +703,62 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(mocks.initSessionState).not.toHaveBeenCalled();
     expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
     expect(vi.mocked(runPreparedReplyMock)).not.toHaveBeenCalled();
+  });
+
+  it("uses the target session model override for native /status", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-native-status-model-"));
+    const storePath = path.join(home, "sessions.json");
+    const targetSessionKey = "agent:main:telegram:123";
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [targetSessionKey]: {
+          sessionId: "existing-telegram-session",
+          providerOverride: "deepseek",
+          modelOverride: "deepseek-v4-flash",
+          modelOverrideSource: "user",
+          updatedAt: 1,
+        },
+      }),
+      "utf8",
+    );
+    const cfg = markCompleteReplyConfig({
+      agents: {
+        defaults: {
+          model: "zhipu/glm-4.5-air",
+          workspace: path.join(home, "workspace"),
+        },
+      },
+      session: { store: storePath },
+    } as OpenClawConfig);
+    vi.mocked(resolveDefaultModelMock).mockReturnValueOnce({
+      defaultProvider: "zhipu",
+      defaultModel: "glm-4.5-air",
+      aliasIndex: emptyAliasIndex(),
+    });
+
+    const reply = await getReplyFromConfig(
+      buildGetReplyCtx({
+        Body: "/status",
+        BodyForAgent: "/status",
+        RawBody: "/status",
+        CommandBody: "/status",
+        CommandSource: "native",
+        CommandAuthorized: true,
+        SessionKey: "telegram:slash:123",
+        CommandTargetSessionKey: targetSessionKey,
+      }),
+      undefined,
+      cfg,
+    );
+
+    expect(Array.isArray(reply)).toBe(false);
+    if (!reply || Array.isArray(reply)) {
+      throw new Error("expected single reply payload");
+    }
+    expect(reply.text).toContain("Configured default: zhipu/glm-4.5-air");
+    expect(reply.text).toContain("Session selected: deepseek/deepseek-v4-flash");
+    expect(reply.text).toContain("Clear with: /model default");
   });
 
   it("handles native slash directives before workspace bootstrap", async () => {

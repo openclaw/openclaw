@@ -36,12 +36,12 @@ export function resolveResetPreservedSelection(params: {
     entry.modelOverrideSource === undefined && hasSessionAutoModelFallbackProvenance(entry);
   // Missing source on older entries means "user" unless fallback provenance proves the runtime
   // created the override automatically.
+  const hasModelOverride = Boolean(entry.modelOverride);
   const preserveLegacyUserModelOverride =
-    entry.modelOverrideSource === "user" ||
-    (entry.modelOverrideSource === undefined &&
-      Boolean(entry.modelOverride) &&
-      !recoveredAutoFallbackOverride);
-  if (preserveLegacyUserModelOverride && entry.modelOverride) {
+    hasModelOverride &&
+    (entry.modelOverrideSource === "user" ||
+      (entry.modelOverrideSource === undefined && !recoveredAutoFallbackOverride));
+  if (preserveLegacyUserModelOverride) {
     preserved.providerOverride = entry.providerOverride;
     preserved.modelOverride = entry.modelOverride;
     preserved.modelOverrideSource = "user";

@@ -1,3 +1,4 @@
+import { resolvePersistedOverrideModelRef } from "../../agents/model-selection.js";
 // Applies parsed directives to session state, config overrides, and run options.
 import type { SessionEntry, SessionScope } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -12,6 +13,7 @@ import { resolveModelSelectionFromDirective } from "./directive-handling.model-s
 import type { ApplyInlineDirectivesFastLaneParams } from "./directive-handling.params.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
+import type { ModelDirectiveSelection } from "./model-selection-directive.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import type { TypingController } from "./typing.js";
 
@@ -73,6 +75,16 @@ export function formatModelOverrideResetEvent(params: {
     return `Model override ${params.rejectedRef} is not allowed for this agent; reverted to ${params.initialModelLabel}. Add ${params.rejectedRef} to agents.defaults.models or pick an allowed model with /model list.`;
   }
   return `Model override not allowed for this agent; reverted to ${params.initialModelLabel}.`;
+}
+
+export function formatModelDirectiveSelectionEvent(params: {
+  modelSelection: ModelDirectiveSelection;
+  labelWithAlias: string;
+}): string {
+  return params.modelSelection.isDefault &&
+    params.modelSelection.preserveDefaultSelectionSource === false
+    ? `Model reset to default (${params.labelWithAlias}).`
+    : `Model set to ${params.labelWithAlias} for this session.`;
 }
 
 export type ApplyDirectiveResult =
@@ -304,9 +316,10 @@ export async function applyInlineDirectiveOverrides(params: {
           persisted.thinkingRemap
             ? `Thinking level set to ${persisted.thinkingRemap.to} (${persisted.thinkingRemap.from} not supported for ${persisted.thinkingRemap.provider}/${persisted.thinkingRemap.model}).`
             : undefined,
-          modelSelection.isDefault
-            ? `Model reset to default (${labelWithAlias}).`
-            : `Model set to ${labelWithAlias} for this session.`,
+          formatModelDirectiveSelectionEvent({
+            modelSelection,
+            labelWithAlias,
+          }),
           modelResolution.profileOverride
             ? `Auth profile set to ${modelResolution.profileOverride}.`
             : undefined,
@@ -353,6 +366,15 @@ export async function applyInlineDirectiveOverrides(params: {
     if (directives.hasStatusDirective && allowTextCommands && command.isAuthorizedSender) {
       const { buildStatusReply } = await loadCommandsStatus();
       const targetSessionEntry = sessionStore[sessionKey] ?? sessionEntry;
+      const statusStoredModel = resolvePersistedOverrideModelRef({
+        defaultProvider,
+        overrideProvider: targetSessionEntry?.providerOverride,
+        overrideModel: targetSessionEntry?.modelOverride,
+      });
+      const statusFallbackProvider = directives.hasModelDirective ? defaultProvider : provider;
+      const statusFallbackModel = directives.hasModelDirective ? defaultModel : model;
+      const statusProvider = statusStoredModel?.provider ?? statusFallbackProvider;
+      const statusModel = statusStoredModel?.model ?? statusFallbackModel;
       statusReply = await buildStatusReply({
         cfg,
         command,
@@ -361,8 +383,10 @@ export async function applyInlineDirectiveOverrides(params: {
         parentSessionKey: targetSessionEntry?.parentSessionKey ?? ctx.ParentSessionKey,
         sessionScope,
         storePath,
-        provider,
-        model,
+        provider: statusProvider,
+        model: statusModel,
+        activeModelProvider: statusProvider,
+        activeModel: statusModel,
         contextTokens,
         workspaceDir,
         resolvedThinkLevel: resolvedDefaultThinkLevel,

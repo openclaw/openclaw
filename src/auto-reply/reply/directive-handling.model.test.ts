@@ -1103,7 +1103,7 @@ describe("/model chat UX", () => {
     expect(resolved.errorText).toContain("openclaw plugins enable codex");
   });
 
-  it("treats explicit default /model selection as resettable default", () => {
+  it("treats explicit default /model selection as a strict default pin", () => {
     const resolved = resolveModelSelectionForCommand({
       command: "/model anthropic/claude-opus-4-6",
       allowedModelKeys: new Set(["anthropic/claude-opus-4-6", "openai/gpt-4o"]),
@@ -1130,6 +1130,7 @@ describe("/model chat UX", () => {
       provider: "anthropic",
       model: "claude-opus-4-6",
       isDefault: true,
+      preserveDefaultSelectionSource: false,
     });
   });
 
@@ -1532,6 +1533,62 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(otherEntry.providerOverride).toBeUndefined();
     expect(otherEntry.modelOverride).toBeUndefined();
     expect(otherEntry.modelOverrideSource).toBeUndefined();
+  });
+
+  it("marks explicit default /model selections as exact user selections", async () => {
+    const sessionEntry = createSessionEntry({
+      providerOverride: "openai",
+      modelOverride: "gpt-5.4",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "anthropic",
+      modelOverrideFallbackOriginModel: "claude-opus-4-6",
+      modelProvider: "openai",
+      model: "gpt-5.4",
+      contextTokens: 128_000,
+    });
+
+    await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/model anthropic/claude-opus-4-6"),
+        sessionEntry,
+      }),
+    );
+
+    expect(sessionEntry.providerOverride).toBe("anthropic");
+    expect(sessionEntry.modelOverride).toBe("claude-opus-4-6");
+    expect(sessionEntry.modelOverrideSource).toBe("user");
+    expect(sessionEntry.modelOverrideFallbackOriginProvider).toBeUndefined();
+    expect(sessionEntry.modelOverrideFallbackOriginModel).toBeUndefined();
+    expect(sessionEntry.modelProvider).toBeUndefined();
+    expect(sessionEntry.model).toBeUndefined();
+    expect(sessionEntry.contextTokens).toBeUndefined();
+    expect(sessionEntry.liveModelSwitchPending).toBe(true);
+  });
+
+  it("clears the session model selection for /model default", async () => {
+    const sessionEntry = createSessionEntry({
+      providerOverride: "openai",
+      modelOverride: "gpt-4o",
+      modelOverrideSource: "user",
+      modelProvider: "openai",
+      model: "gpt-4o",
+      contextTokens: 128_000,
+    });
+
+    await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/model default"),
+        sessionEntry,
+      }),
+    );
+
+    expect(sessionEntry.providerOverride).toBeUndefined();
+    expect(sessionEntry.modelOverride).toBeUndefined();
+    expect(sessionEntry.modelOverrideSource).toBeUndefined();
+    expect(sessionEntry.modelProvider).toBeUndefined();
+    expect(sessionEntry.model).toBeUndefined();
+    expect(sessionEntry.contextTokens).toBeUndefined();
+    expect(sessionEntry.liveModelSwitchPending).toBe(true);
   });
 
   it("remaps unsupported stored thinking levels when persisting a model switch", async () => {

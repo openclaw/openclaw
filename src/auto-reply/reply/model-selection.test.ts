@@ -832,6 +832,31 @@ describe("createModelSelectionState parent inheritance", () => {
     expect(state.model).toBe("claude-opus-4-6");
   });
 
+  it("lets a child explicit default selection opt out of parent overrides", async () => {
+    const cfg = {} as OpenClawConfig;
+    const parentKey = "agent:main:telegram:group:123";
+    const sessionKey = "agent:main:telegram:group:123:topic:99";
+    const parentEntry = makeEntry({
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-6",
+    });
+    const sessionEntry = makeEntry({
+      providerOverride: defaultProvider,
+      modelOverride: defaultModel,
+      modelOverrideSource: "user",
+    });
+    const state = await resolveStateWithParent({
+      cfg,
+      parentKey,
+      parentEntry,
+      sessionEntry,
+      sessionKey,
+    });
+
+    expect(state.provider).toBe(defaultProvider);
+    expect(state.model).toBe(defaultModel);
+  });
+
   it("ignores parent override when disallowed", async () => {
     const cfg = {
       agents: {

@@ -1785,11 +1785,14 @@ export async function runAgentTurnWithFallback(params: {
     // entry with a `modelOverride` but missing `modelOverrideSource` as legacy
     // user state, matching the backward-compat treatment in
     // session-reset-service.
+    const hasActiveModelOverride = Boolean(
+      normalizeOptionalString(activeSessionEntry.modelOverride),
+    );
     const isUserModelOverride =
-      activeSessionEntry.modelOverrideSource === "user" ||
-      (activeSessionEntry.modelOverrideSource === undefined &&
-        Boolean(normalizeOptionalString(activeSessionEntry.modelOverride)) &&
-        !hasSessionAutoModelFallbackProvenance(activeSessionEntry));
+      hasActiveModelOverride &&
+      (activeSessionEntry.modelOverrideSource === "user" ||
+        (activeSessionEntry.modelOverrideSource === undefined &&
+          !hasSessionAutoModelFallbackProvenance(activeSessionEntry)));
     if (isUserModelOverride) {
       return undefined;
     }

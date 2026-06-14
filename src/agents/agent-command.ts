@@ -1269,7 +1269,7 @@ async function agentCommandInternal(
     let storedModelOverrideSource = hasStoredOverride
       ? sessionEntry?.modelOverrideSource
       : undefined;
-    const hasStoredAutoFallbackProvenance =
+    let hasStoredAutoFallbackProvenance =
       hasStoredOverride && hasSessionAutoModelFallbackProvenance(sessionEntry);
     const hasLegacyAutoFallbackOverrideWithoutOrigin =
       hasStoredOverride && hasLegacyAutoFallbackWithoutOrigin(sessionEntry);
@@ -1422,6 +1422,11 @@ async function agentCommandInternal(
     if (normalizedChannelOverride && !hasEffectiveStoredOverride) {
       provider = normalizedChannelOverride.provider;
       model = normalizedChannelOverride.model;
+    }
+    let hasStoredModelSelection = Boolean(storedProviderOverride || storedModelOverride);
+    if (!hasStoredModelSelection) {
+      storedModelOverrideSource = undefined;
+      hasStoredAutoFallbackProvenance = false;
     }
     if (storedModelOverride) {
       const candidateProvider = storedProviderOverride || defaultProvider;
@@ -1753,8 +1758,7 @@ async function agentCommandInternal(
           cfg,
           agentId: sessionAgentId,
           sessionKey,
-          hasSessionModelOverride:
-            hasExplicitRunOverride || Boolean(storedProviderOverride || storedModelOverride),
+          hasSessionModelOverride: hasExplicitRunOverride || hasStoredModelSelection,
           modelOverrideSource: hasExplicitRunOverride ? "user" : storedModelOverrideSource,
           hasAutoFallbackProvenance: hasExplicitRunOverride
             ? false
@@ -2023,6 +2027,7 @@ async function agentCommandInternal(
             err.provider !== previousProvider
           ) {
             storedModelOverride = err.model;
+            hasStoredModelSelection = true;
             storedModelOverrideSource = "user";
           }
           attemptLifecycleState.lifecycleEnded = false;

@@ -134,6 +134,8 @@ export async function resolveDirectStatusReplyForSession(
     storePath: statusLoaded.storePath,
     provider: selectedProvider,
     model: selectedModel,
+    activeModelProvider: selectedProvider,
+    activeModel: selectedModel,
     contextTokens: statusEntry?.contextTokens ?? 0,
     resolvedThinkLevel: currentThinkLevel,
     resolvedFastMode: currentFastMode,

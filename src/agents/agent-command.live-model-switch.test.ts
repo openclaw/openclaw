@@ -328,7 +328,36 @@ vi.mock("../routing/session-key.js", async () => {
   );
   return {
     ...actual,
+    classifySessionKeyShape: (key?: string | null) => {
+      const raw = key?.trim() ?? "";
+      if (!raw) {
+        return "missing";
+      }
+      return raw.startsWith("agent:") ? "agent" : "legacy_or_alias";
+    },
+    isUnscopedSessionKeySentinel: (key?: string | null) => {
+      const lowered = key?.trim().toLowerCase();
+      return lowered === "global" || lowered === "unknown";
+    },
+    isSubagentSessionKey: (key?: string | null) => {
+      const raw = key?.trim() ?? "";
+      return raw.includes(":subagent:");
+    },
     normalizeAgentId: (id: string) => id,
+    resolveAgentIdFromSessionKey: () => "default",
+    scopeLegacySessionKeyToAgent: ({
+      agentId,
+      sessionKey,
+    }: {
+      agentId?: string;
+      sessionKey?: string;
+    }) => {
+      const raw = sessionKey?.trim();
+      if (!raw || raw.startsWith("agent:") || !agentId) {
+        return raw;
+      }
+      return `agent:${agentId}:${raw.toLowerCase()}`;
+    },
     normalizeMainKey: (key?: string | null) => key?.trim() || "main",
   };
 });
@@ -3066,6 +3095,28 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     await runBasicAgentCommand();
 
     expectFallbackOverrideCalls(false, true);
+  });
+
+  it("treats explicit default selections as session model selections for fallback policy", async () => {
+    setupSingleAttemptFallback();
+    state.sessionEntryMock = {
+      sessionId: "session-1",
+      updatedAt: 1,
+      providerOverride: "openai",
+      modelOverride: "gpt-5.5",
+      modelOverrideSource: "user",
+    } satisfies Partial<SessionEntry>;
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("anthropic", "claude"));
+    state.resolveEffectiveModelFallbacksMock.mockClear();
+
+    await runBasicAgentCommand();
+
+    expect(state.resolveEffectiveModelFallbacksMock).toHaveBeenCalledTimes(1);
+    expectRecordFields(mockCallArg(state.resolveEffectiveModelFallbacksMock), {
+      hasSessionModelOverride: true,
+      modelOverrideSource: "user",
+      hasAutoFallbackProvenance: false,
+    });
   });
 
   it("does not flip hasSessionModelOverride on auth-only switch with same model", async () => {

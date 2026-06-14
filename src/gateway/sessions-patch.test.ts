@@ -500,6 +500,34 @@ describe("gateway sessions patch", () => {
     expect(entry.liveModelSwitchPending).toBeUndefined();
   });
 
+  test("treats an explicit configured-default sessions.patch model as a clear alias", async () => {
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: {
+        sessionId: "sess-default-alias-clear",
+        updatedAt: 1,
+        providerOverride: "anthropic",
+        modelOverride: "claude-sonnet-4-6",
+        modelOverrideSource: "user",
+      } as SessionEntry,
+    };
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        cfg: createAllowlistedAnthropicModelCfg(),
+        patch: { key: MAIN_SESSION_KEY, model: "openai/gpt-5.4" },
+        loadGatewayModelCatalog: async () => [
+          { provider: "openai", id: "gpt-5.4", name: "gpt-5.4" },
+          { provider: "anthropic", id: "claude-sonnet-4-6", name: "claude-sonnet-4-6" },
+        ],
+      }),
+    );
+
+    expect(entry.providerOverride).toBeUndefined();
+    expect(entry.modelOverride).toBeUndefined();
+    expect(entry.modelOverrideSource).toBeUndefined();
+    expect(entry.liveModelSwitchPending).toBe(true);
+  });
+
   test.each([
     {
       name: "accepts explicit allowlisted provider/model refs from sessions.patch",
@@ -815,9 +843,10 @@ describe("gateway sessions patch", () => {
     });
 
     const entry = await applySubagentModelPatch(cfg);
-    // Selected model matches the target agent default, so no override is stored.
-    expect(entry.providerOverride).toBeUndefined();
-    expect(entry.modelOverride).toBeUndefined();
+    // Explicit patch selections stay exact even when they match the target agent default.
+    expect(entry.providerOverride).toBe("synthetic");
+    expect(entry.modelOverride).toBe("hf:moonshotai/Kimi-K2.5");
+    expect(entry.modelOverrideSource).toBe("user");
   });
 
   test("allows target agent subagents.model for subagent session even when missing from global allowlist", async () => {

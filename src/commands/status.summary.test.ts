@@ -613,6 +613,36 @@ describe("getStatusSummary", () => {
     expect(summary.sessions.recent[0]?.modelSelectionReason).toBeNull();
   });
 
+  it("keeps explicit user pins even when stale fallback provenance remains", async () => {
+    vi.mocked(statusSummaryRuntime.resolveConfiguredStatusModelRef).mockReturnValue({
+      provider: "zhipu",
+      model: "glm-4.5-air",
+    });
+    vi.mocked(statusSummaryRuntime.resolveSessionModelRef).mockReturnValue({
+      provider: "deepseek",
+      model: "deepseek-v4-flash",
+    });
+    statusSummaryMocks.listSessionEntries.mockReturnValue(
+      toSessionEntrySummaries({
+        "agent:main:main": {
+          sessionId: "session-1",
+          updatedAt: Date.now(),
+          providerOverride: "deepseek",
+          modelOverride: "deepseek-v4-flash",
+          modelOverrideSource: "user",
+          modelOverrideFallbackOriginProvider: "zhipu",
+          modelOverrideFallbackOriginModel: "glm-4.5-air",
+        },
+      }),
+    );
+
+    const summary = await getStatusSummary();
+
+    expect(summary.sessions.recent[0]?.configuredModel).toBe("zhipu/glm-4.5-air");
+    expect(summary.sessions.recent[0]?.selectedModel).toBe("deepseek/deepseek-v4-flash");
+    expect(summary.sessions.recent[0]?.modelSelectionReason).toBe("session override");
+  });
+
   it("does not mark runtime-equivalent provider aliases as pinned mismatches", async () => {
     vi.mocked(statusSummaryRuntime.resolveConfiguredStatusModelRef).mockReturnValue({
       provider: "openai",

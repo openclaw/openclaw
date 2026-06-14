@@ -604,6 +604,163 @@ describe("buildStatusReply subagent summary", () => {
     });
   });
 
+  it("reports the live run model in /status even when the stored session has an old pin", async () => {
+    const text = await buildStatusText({
+      cfg: baseCfg,
+      sessionEntry: {
+        sessionId: "sess-status-live-model",
+        updatedAt: 0,
+        providerOverride: "anthropic",
+        modelOverride: "claude-opus-4-6",
+        modelOverrideSource: "user",
+      },
+      sessionKey: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      statusChannel: "mobilechat",
+      provider: "openai-codex",
+      model: "gpt-5.2",
+      activeModelProvider: "openai-codex",
+      activeModel: "gpt-5.2",
+      resolvedFastMode: false,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      modelAuthOverride: "api-key",
+      activeModelAuthOverride: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Model: openai-codex/gpt-5.2");
+    expect(normalized).not.toContain("Session selected: anthropic/claude-opus-4-6");
+  });
+
+  it("keeps the session-selected warning when the live /status model is the stored pin", async () => {
+    const text = await buildStatusText({
+      cfg: {
+        ...baseCfg,
+        agents: {
+          defaults: {
+            model: "zhipu/glm-4.5-air",
+          },
+        },
+      },
+      sessionEntry: {
+        sessionId: "sess-status-live-pinned-model",
+        updatedAt: 0,
+        providerOverride: "deepseek",
+        modelOverride: "deepseek-v4-flash",
+        modelOverrideSource: "user",
+      },
+      sessionKey: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      statusChannel: "mobilechat",
+      provider: "deepseek",
+      model: "deepseek-v4-flash",
+      activeModelProvider: "deepseek",
+      activeModel: "deepseek-v4-flash",
+      resolvedFastMode: false,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      modelAuthOverride: "api-key",
+      activeModelAuthOverride: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Configured default: zhipu/glm-4.5-air");
+    expect(normalized).toContain("Session selected: deepseek/deepseek-v4-flash");
+    expect(normalized).toContain("Clear with: /model default");
+  });
+
+  it("keeps the session-selected warning for legacy provider-qualified model pins", async () => {
+    const text = await buildStatusText({
+      cfg: {
+        ...baseCfg,
+        agents: {
+          defaults: {
+            model: "zhipu/glm-4.5-air",
+          },
+        },
+      },
+      sessionEntry: {
+        sessionId: "sess-status-live-legacy-pinned-model",
+        updatedAt: 0,
+        modelOverride: "ollama-beelink2/qwen2.5-coder:7b",
+        modelOverrideSource: "user",
+      },
+      sessionKey: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      statusChannel: "mobilechat",
+      provider: "ollama-beelink2",
+      model: "qwen2.5-coder:7b",
+      activeModelProvider: "ollama-beelink2",
+      activeModel: "qwen2.5-coder:7b",
+      resolvedFastMode: false,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      modelAuthOverride: "api-key",
+      activeModelAuthOverride: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Configured default: zhipu/glm-4.5-air");
+    expect(normalized).toContain("Session selected: ollama-beelink2/qwen2.5-coder:7b");
+    expect(normalized).toContain("Clear with: /model default");
+  });
+
+  it("preserves stored runtime fallback state for unpinned /status sessions", async () => {
+    const text = await buildStatusText({
+      cfg: {
+        ...baseCfg,
+        agents: {
+          defaults: {
+            model: "zhipu/glm-4.5-air",
+          },
+        },
+      },
+      sessionEntry: {
+        sessionId: "sess-status-live-unpinned-fallback",
+        updatedAt: 0,
+        modelProvider: "minimax-portal",
+        model: "MiniMax-M2.7",
+        fallbackNoticeSelectedModel: "zhipu/glm-4.5-air",
+        fallbackNoticeActiveModel: "minimax-portal/MiniMax-M2.7",
+        fallbackNoticeReason: "selected model unavailable",
+      },
+      sessionKey: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      statusChannel: "mobilechat",
+      provider: "zhipu",
+      model: "glm-4.5-air",
+      activeModelProvider: "zhipu",
+      activeModel: "glm-4.5-air",
+      resolvedFastMode: false,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      modelAuthOverride: "api-key",
+      activeModelAuthOverride: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Model: zhipu/glm-4.5-air");
+    expect(normalized).toContain("Fallback: minimax-portal/MiniMax-M2.7");
+    expect(normalized).not.toContain("Session selected:");
+  });
+
   it("shows gateway and system uptime in /status output", async () => {
     vi.spyOn(process, "uptime").mockReturnValue(2 * 60 * 60 + 5 * 60);
     vi.spyOn(os, "uptime").mockReturnValue(4 * 24 * 60 * 60 + 3 * 60 * 60);
