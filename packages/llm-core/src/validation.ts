@@ -64,6 +64,73 @@ function isValidatorSchema(value: unknown): value is Tool["parameters"] {
   return isRecord(value);
 }
 
+function unsupportedSchemaError(toolName: string, path: string): Error {
+  return new Error(`Unsupported tool schema for "${toolName}": unreadable schema at ${path}`);
+}
+
+function isUnsupportedSchemaError(error: unknown): boolean {
+  return error instanceof Error && error.message.startsWith("Unsupported tool schema for ");
+}
+
+function schemaPath(parent: string, key: string): string {
+  if (/^[A-Za-z_$][\w$]*$/u.test(key)) {
+    return `${parent}.${key}`;
+  }
+  return `${parent}[${JSON.stringify(key)}]`;
+}
+
+function assertReadableSchema(
+  schema: unknown,
+  toolName: string,
+  path: string,
+  seen = new WeakSet<object>(),
+): void {
+  if (!isRecord(schema)) {
+    return;
+  }
+  if (seen.has(schema)) {
+    return;
+  }
+  seen.add(schema);
+
+  let keys: string[];
+  try {
+    keys = Object.keys(schema);
+  } catch {
+    throw unsupportedSchemaError(toolName, path);
+  }
+
+  for (const key of keys) {
+    const childPath = Array.isArray(schema) ? `${path}[${key}]` : schemaPath(path, key);
+    let child: unknown;
+    try {
+      child = Reflect.get(schema, key);
+    } catch {
+      throw unsupportedSchemaError(toolName, childPath);
+    }
+    assertReadableSchema(child, toolName, childPath, seen);
+  }
+}
+
+function readToolParameters(tool: Tool): Tool["parameters"] {
+  try {
+    return Reflect.get(tool, "parameters") as Tool["parameters"];
+  } catch {
+    throw unsupportedSchemaError(tool.name, "parameters");
+  }
+}
+
+function guardSchemaOperation<T>(toolName: string, path: string, operation: () => T): T {
+  try {
+    return operation();
+  } catch (error) {
+    if (isUnsupportedSchemaError(error)) {
+      throw error;
+    }
+    throw unsupportedSchemaError(toolName, path);
+  }
+}
+
 const JSON_NUMBER_TOKEN_RE = /^[+-]?(?:(?:\d+\.?\d*)|(?:\.\d+))(?:e[+-]?\d+)?$/iu;
 
 function parseJsonNumberString(value: string): number | undefined {
@@ -294,13 +361,20 @@ export function validateToolCall(tools: Tool[], toolCall: ToolCall): unknown {
 /** Validates tool arguments against TypeBox or plain JSON-schema parameters. */
 export function validateToolArguments(tool: Tool, toolCall: ToolCall): unknown {
   const args = structuredClone(toolCall.arguments);
-  Value.Convert(tool.parameters, args);
+  const parameters = readToolParameters(tool);
+  assertReadableSchema(parameters, tool.name, "parameters");
+  guardSchemaOperation(tool.name, "parameters", () => Value.Convert(parameters, args));
 
-  const validator = getValidator(tool.parameters);
-  if (!hasTypeBoxMetadata(tool.parameters) && isJsonSchemaObject(tool.parameters)) {
+  const validator = guardSchemaOperation(tool.name, "parameters", () => getValidator(parameters));
+  if (
+    guardSchemaOperation(tool.name, "parameters", () => !hasTypeBoxMetadata(parameters)) &&
+    isJsonSchemaObject(parameters)
+  ) {
     // TypeBox Value.Convert is intentionally conservative for plain JSON schemas;
     // mirror the provider-facing coercions so model-emitted string numbers validate.
-    const coerced = coerceWithJsonSchema(args, tool.parameters);
+    const coerced = guardSchemaOperation(tool.name, "parameters", () =>
+      coerceWithJsonSchema(args, parameters),
+    );
     if (coerced !== args) {
       if (isRecord(args) && isRecord(coerced)) {
         for (const key of Object.keys(args)) {
@@ -308,20 +382,26 @@ export function validateToolArguments(tool: Tool, toolCall: ToolCall): unknown {
         }
         Object.assign(args, coerced);
       } else {
-        return validator.Check(coerced) ? coerced : args;
+        return guardSchemaOperation(tool.name, "parameters", () => validator.Check(coerced))
+          ? coerced
+          : args;
       }
     }
   }
 
-  if (validator.Check(args)) {
+  if (guardSchemaOperation(tool.name, "parameters", () => validator.Check(args))) {
     return args;
   }
 
-  const errors =
-    validator
-      .Errors(args)
-      .map((error) => `  - ${formatValidationPath(error)}: ${error.message}`)
-      .join("\n") || "Unknown validation error";
+  const errors = guardSchemaOperation(
+    tool.name,
+    "parameters",
+    () =>
+      validator
+        .Errors(args)
+        .map((error) => `  - ${formatValidationPath(error)}: ${error.message}`)
+        .join("\n") || "Unknown validation error",
+  );
 
   throw new Error(
     `Validation failed for tool "${toolCall.name}":\n${errors}\n\nReceived arguments:\n${JSON.stringify(toolCall.arguments, null, 2)}`,
