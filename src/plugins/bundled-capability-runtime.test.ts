@@ -1,6 +1,9 @@
 // Verifies bundled capability runtime registration from plugin metadata.
 import { describe, expect, it } from "vitest";
-import { buildVitestCapabilityShimAliasMap } from "./bundled-capability-runtime.js";
+import {
+  buildVitestCapabilityShimAliasMap,
+  loadBundledCapabilityRuntimeRegistry,
+} from "./bundled-capability-runtime.js";
 
 describe("buildVitestCapabilityShimAliasMap", () => {
   it("keeps scoped and unscoped capability shim aliases aligned", () => {
@@ -18,5 +21,22 @@ describe("buildVitestCapabilityShimAliasMap", () => {
     expect(aliasMap["openclaw/plugin-sdk/speech-core"]).toBe(
       aliasMap["@openclaw/plugin-sdk/speech-core"],
     );
+  });
+});
+
+describe("loadBundledCapabilityRuntimeRegistry", () => {
+  it("preserves manifest contracts for bundled capability plugins", () => {
+    const registry = loadBundledCapabilityRuntimeRegistry({
+      pluginIds: ["memory-core"],
+      env: { ...process.env, VITEST: "1" },
+      pluginSdkResolution: "dist",
+    });
+
+    const plugin = registry.plugins.find((entry) => entry.id === "memory-core");
+    expect(plugin?.contracts).toEqual({
+      memoryEmbeddingProviders: ["local"],
+      tools: ["memory_get", "memory_search"],
+    });
+    expect(plugin?.memoryEmbeddingProviderIds).toEqual(["local"]);
   });
 });
