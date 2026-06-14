@@ -19,6 +19,7 @@ function createRecentSessionRow(): SessionStatus {
     selectedModel: "openai/gpt-5",
     modelSelectionReason: null,
     contextTokens: 200_000,
+    estimatedCostUsd: null,
     flags: ["id:sess-1"],
   };
 }
