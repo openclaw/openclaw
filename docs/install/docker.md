@@ -46,6 +46,27 @@ Docker is **optional**. Use it only if you want a containerized gateway or to va
 
   </Step>
 
+  <Step title="Airgapped rerun">
+    On offline hosts, transfer and load the image first:
+
+    ```bash
+    docker load -i openclaw-image.tar
+    export OPENCLAW_IMAGE="ghcr.io/openclaw/openclaw:latest"
+    ./scripts/docker/setup.sh --offline
+    ```
+
+    `--offline` verifies that `OPENCLAW_IMAGE` already exists locally, skips
+    Docker build and pull, then runs the normal setup flow such as `.env`
+    synchronization, permission fixes, onboarding, gateway config sync, and
+    Compose startup.
+
+    If `OPENCLAW_SANDBOX=1`, offline setup also checks for
+    `openclaw-sandbox:bookworm-slim`. A missing sandbox image is a warning
+    because some deployments use sandbox config without preloading that
+    optional image.
+
+  </Step>
+
   <Step title="Complete onboarding">
     The setup script runs onboarding automatically. It will:
 
