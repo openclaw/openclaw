@@ -39,6 +39,7 @@ import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-event
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isAbortError } from "../../infra/unhandled-rejections.js";
 import { resolveMemoryFlushPlan } from "../../plugins/memory-state.js";
+import { resolveTokenThreshold } from "../../config/token-threshold.js";
 import { CommandLane } from "../../process/lanes.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { TemplateContext } from "../templating.js";
@@ -765,11 +766,17 @@ export async function runPreflightCompactionIfNeeded(params: {
     agentCfgContextTokens: params.agentCfgContextTokens,
   });
   const memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg });
-  const reserveTokensFloor =
+  const reserveTokensFloor = resolveTokenThreshold(
     memoryFlushPlan?.reserveTokensFloor ??
-    params.cfg.agents?.defaults?.compaction?.reserveTokensFloor ??
-    20_000;
-  const softThresholdTokens = memoryFlushPlan?.softThresholdTokens ?? 4_000;
+      params.cfg.agents?.defaults?.compaction?.reserveTokensFloor,
+    contextWindowTokens,
+    20_000,
+  );
+  const softThresholdTokens = resolveTokenThreshold(
+    memoryFlushPlan?.softThresholdTokens,
+    contextWindowTokens,
+    4_000,
+  );
   const freshPersistedTokens = resolveFreshSessionTotalTokens(entry);
   const persistedTotalTokens = entry.totalTokens;
   const hasPersistedTotalTokens =
@@ -1082,8 +1089,10 @@ export async function runMemoryFlushIfNeeded(params: {
   const hasFreshPersistedPromptTokens =
     typeof persistedPromptTokens === "number" && entry?.totalTokensFresh === true;
 
+  const flushReserveTokensFloor = resolveTokenThreshold(memoryFlushPlan.reserveTokensFloor, contextWindowTokens, 20_000);
+  const flushSoftThresholdTokens = resolveTokenThreshold(memoryFlushPlan.softThresholdTokens, contextWindowTokens, 4_000);
   const flushThreshold =
-    contextWindowTokens - memoryFlushPlan.reserveTokensFloor - memoryFlushPlan.softThresholdTokens;
+    contextWindowTokens - flushReserveTokensFloor - flushSoftThresholdTokens;
 
   // When totals are stale/unknown, derive prompt + last output from transcript so memory
   // flush can still be evaluated against projected next-input size.
@@ -1212,8 +1221,8 @@ export async function runMemoryFlushIfNeeded(params: {
         entry,
         tokenCount: tokenCountForFlush,
         contextWindowTokens,
-        reserveTokensFloor: memoryFlushPlan.reserveTokensFloor,
-        softThresholdTokens: memoryFlushPlan.softThresholdTokens,
+        reserveTokensFloor: flushReserveTokensFloor,
+        softThresholdTokens: flushSoftThresholdTokens,
       })) ||
     (shouldForceFlushByTranscriptSize &&
       entry != null &&
