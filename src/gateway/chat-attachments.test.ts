@@ -26,11 +26,13 @@ vi.mock("../media/store.js", async (importOriginal) => {
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  DEFAULT_CHAT_ATTACHMENT_MAX_MB,
+  resolveChatAttachmentMaxBytes,
+} from "../media/configured-max-bytes.js";
+import {
   buildMessageWithAttachments,
   type ChatAttachment,
-  DEFAULT_CHAT_ATTACHMENT_MAX_MB,
   parseMessageWithAttachments,
-  resolveChatAttachmentMaxBytes,
   UnsupportedAttachmentError,
 } from "./chat-attachments.js";
 
@@ -156,6 +158,38 @@ describe("parseMessageWithAttachments", () => {
     );
     expectSingleInlinePng(parsed);
     expect(parsed.images[0]?.data).toBe(PNG_1x1);
+  });
+
+  it("strips large data URL prefixes without full-string regex capture", async () => {
+    // Pins index-based parsing; the replaced full-string regex capture could
+    // exhaust the regex stack on multi-megabyte payloads.
+    const content = "A".repeat(64 * 1024);
+    const { parsed } = await parseWithWarnings("read this", [
+      pdfAttachment({ content: `data:application/pdf;base64,${content}` }),
+    ]);
+
+    expect(parsed.offloadedRefs).toHaveLength(1);
+    expect(saveMediaBufferMock.mock.calls[0]?.[0]).toHaveLength((content.length / 4) * 3);
+  });
+
+  it("rejects large invalid base64 payloads without full-string regex matching", async () => {
+    const content = `${"A".repeat(64 * 1024 - 1)}!`;
+
+    await expect(
+      parseMessageWithAttachments(
+        "read this",
+        [pdfAttachment({ content: `data:application/pdf;base64,${content}` })],
+        { log: { warn: () => {} } },
+      ),
+    ).rejects.toThrow(/invalid base64 content/);
+  });
+
+  it("rejects base64 with characters after padding", async () => {
+    await expect(
+      parseMessageWithAttachments("read this", [pdfAttachment({ content: "QUJD=A==" })], {
+        log: { warn: () => {} },
+      }),
+    ).rejects.toThrow(/invalid base64 content/);
   });
 
   it("sniffs mime when missing", async () => {

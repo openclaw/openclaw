@@ -92,6 +92,7 @@ import {
   loadVoiceWakeRoutingConfig,
   resolveVoiceWakeRouteByTrigger,
 } from "../../infra/voicewake-routing.js";
+import { resolveChatAttachmentMaxBytes } from "../../media/configured-max-bytes.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { PluginHookSessionEndReason } from "../../plugins/hook-types.js";
 import {
@@ -134,11 +135,7 @@ import {
   resolveAgentRunExpiresAtMs,
   updateChatRunProvider,
 } from "../chat-abort.js";
-import {
-  MediaOffloadError,
-  parseMessageWithAttachments,
-  resolveChatAttachmentMaxBytes,
-} from "../chat-attachments.js";
+import { MediaOffloadError, parseMessageWithAttachments } from "../chat-attachments.js";
 import { resolveAssistantAvatarUrl } from "../control-ui-shared.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import {

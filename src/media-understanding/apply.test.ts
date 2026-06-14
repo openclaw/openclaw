@@ -31,6 +31,7 @@ const readRemoteMediaBufferMock = vi.hoisted(() => vi.fn());
 const runFfmpegMock = vi.hoisted(() => vi.fn());
 const convertHeicToJpegMock = vi.hoisted(() => vi.fn());
 const runExecMock = vi.hoisted(() => vi.fn());
+const extractDocumentContentMock = vi.hoisted(() => vi.fn());
 
 let applyMediaUnderstanding: typeof import("./apply.js").applyMediaUnderstanding;
 let clearMediaUnderstandingBinaryCacheForTests: typeof import("./runner.js").clearMediaUnderstandingBinaryCacheForTests;
@@ -301,6 +302,9 @@ describe("applyMediaUnderstanding", () => {
     vi.doMock("../process/exec.js", () => ({
       runExec: runExecMock,
     }));
+    vi.doMock("../media/document-extractors.runtime.js", () => ({
+      extractDocumentContent: extractDocumentContentMock,
+    }));
     vi.doMock("./provider-registry.js", async () => {
       const actual =
         await vi.importActual<typeof import("./provider-registry.js")>("./provider-registry.js");
@@ -352,6 +356,8 @@ describe("applyMediaUnderstanding", () => {
     mockedConvertHeicToJpeg.mockReset();
     mockedConvertHeicToJpeg.mockResolvedValue(Buffer.from("jpeg-normalized"));
     mockedRunExec.mockReset();
+    extractDocumentContentMock.mockReset();
+    extractDocumentContentMock.mockResolvedValue(null);
     mockedReadRemoteMediaBuffer.mockResolvedValue({
       buffer: createSafeAudioFixtureBuffer(2048),
       contentType: "audio/ogg",
@@ -1718,6 +1724,90 @@ describe("applyMediaUnderstanding", () => {
     });
 
     expectFileNotApplied({ ctx, result, body: "<media:file>" });
+  });
+
+  it("extracts PDF attachments above the legacy 5MB input-file cap (#90098)", async () => {
+    const pdfBuffer = Buffer.concat([
+      Buffer.from("%PDF-1.7\n", "utf8"),
+      Buffer.alloc(6 * 1024 * 1024, 0x61),
+    ]);
+    const filePath = await createTempMediaFile({
+      fileName: "big-report.pdf",
+      content: pdfBuffer,
+    });
+    extractDocumentContentMock.mockResolvedValue({
+      text: "big pdf text body",
+      images: [],
+      extractor: "pdf",
+    });
+
+    const { ctx, result } = await applyWithDisabledMedia({
+      body: "<media:file>",
+      mediaPath: filePath,
+      mediaType: "application/pdf",
+    });
+
+    expect(result.appliedFile).toBe(true);
+    expect(ctx.Body).toContain("big pdf text body");
+    // The inbound page cap follows the agents.defaults.pdfMaxPages default,
+    // not the OpenResponses 4-page default.
+    expect(extractDocumentContentMock).toHaveBeenCalledWith(
+      expect.objectContaining({ maxPages: 20 }),
+    );
+  });
+
+  it("skips PDF attachments above the configured inbound media cap", async () => {
+    const pdfBuffer = Buffer.concat([
+      Buffer.from("%PDF-1.7\n", "utf8"),
+      Buffer.alloc(Math.floor(1.5 * 1024 * 1024), 0x61),
+    ]);
+    const filePath = await createTempMediaFile({
+      fileName: "over-cap-report.pdf",
+      content: pdfBuffer,
+    });
+    const cfg: OpenClawConfig = {
+      ...createMediaDisabledConfig(),
+      agents: { defaults: { mediaMaxMb: 1 } },
+    };
+
+    const { ctx, result } = await applyWithDisabledMedia({
+      body: "<media:file>",
+      mediaPath: filePath,
+      mediaType: "application/pdf",
+      cfg,
+    });
+
+    expectFileNotApplied({ ctx, result, body: "<media:file>" });
+    expect(extractDocumentContentMock).not.toHaveBeenCalled();
+  });
+
+  it("routes agents.defaults.pdfMaxPages to inbound PDF extraction", async () => {
+    const filePath = await createTempMediaFile({
+      fileName: "paged-report.pdf",
+      content: Buffer.from("%PDF-1.7\nsmall", "utf8"),
+    });
+    extractDocumentContentMock.mockResolvedValue({
+      text: "paged pdf text",
+      images: [],
+      extractor: "pdf",
+    });
+    const cfg: OpenClawConfig = {
+      ...createMediaDisabledConfig(),
+      agents: { defaults: { pdfMaxPages: 8 } },
+    };
+
+    const { ctx, result } = await applyWithDisabledMedia({
+      body: "<media:file>",
+      mediaPath: filePath,
+      mediaType: "application/pdf",
+      cfg,
+    });
+
+    expect(result.appliedFile).toBe(true);
+    expect(ctx.Body).toContain("paged pdf text");
+    expect(extractDocumentContentMock).toHaveBeenCalledWith(
+      expect.objectContaining({ maxPages: 8 }),
+    );
   });
 
   it("respects configured allowedMimes for text-like attachments", async () => {

@@ -824,15 +824,51 @@ function chatAttachmentFromFile(file: File, dataUrl: string): ChatAttachment {
 }
 
 function dataImageClipboardFile(dataUrl: string): { file: File; dataUrl: string } | null {
-  const match = /^\s*data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/=\s]+)\s*$/i.exec(dataUrl);
-  if (!match) {
+  // Parse by index: a full-string regex capture over a multi-megabyte pasted
+  // data URL can exhaust the engine's regex stack (RangeError: Maximum call
+  // stack size exceeded) before paste handling completes.
+  const trimmed = dataUrl.trim();
+  const marker = ";base64,";
+  const markerIndex = trimmed.indexOf(";");
+  // Real image MIME types are short; the bound keeps the head regex off
+  // attacker-sized strings.
+  if (markerIndex <= "data:".length || markerIndex > 256) {
     return null;
   }
-  const mimeType = match[1].toLowerCase();
+  if (trimmed.slice(markerIndex, markerIndex + marker.length).toLowerCase() !== marker) {
+    return null;
+  }
+  const head = trimmed.slice(0, markerIndex).toLowerCase();
+  if (!/^data:image\/[a-z0-9.+-]+$/.test(head)) {
+    return null;
+  }
+  const mimeType = head.slice("data:".length);
   if (!isSupportedChatAttachmentFile({ name: "pasted-image", type: mimeType })) {
     return null;
   }
-  const base64 = match[2].replace(/\s+/g, "");
+  let base64 = "";
+  for (let i = markerIndex + marker.length; i < trimmed.length; i += 1) {
+    const code = trimmed.charCodeAt(i);
+    const isBase64Char =
+      (code >= 65 && code <= 90) ||
+      (code >= 97 && code <= 122) ||
+      (code >= 48 && code <= 57) ||
+      code === 43 ||
+      code === 47 ||
+      code === 61;
+    if (isBase64Char) {
+      base64 += trimmed[i];
+      continue;
+    }
+    // Pasted data URLs may wrap the base64 body in whitespace; anything else
+    // means this is not a data URL paste.
+    if (trimmed[i].trim() !== "") {
+      return null;
+    }
+  }
+  if (!base64) {
+    return null;
+  }
   try {
     const binary = atob(base64);
     const bytes = new Uint8Array(binary.length);

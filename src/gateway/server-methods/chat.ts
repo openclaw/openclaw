@@ -74,6 +74,7 @@ import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { normalizeReplyPayloadsForDelivery } from "../../infra/outbound/payloads.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { logLargePayload } from "../../logging/diagnostic-payload.js";
+import { resolveChatAttachmentMaxBytes } from "../../media/configured-max-bytes.js";
 import {
   appendLocalMediaParentRoots,
   getAgentScopedMediaLocalRoots,
@@ -126,7 +127,6 @@ import {
   MediaOffloadError,
   type OffloadedRef,
   parseMessageWithAttachments,
-  resolveChatAttachmentMaxBytes,
   UnsupportedAttachmentError,
 } from "../chat-attachments.js";
 import {
