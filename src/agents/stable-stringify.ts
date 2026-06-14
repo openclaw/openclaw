@@ -1,5 +1,11 @@
+/**
+ * Stable stringify helper.
+ * Serializes arbitrary values with deterministic key ordering and explicit
+ * handling for errors, binary data, bigint, non-finite numbers, and cycles.
+ */
 import { Buffer } from "node:buffer";
 
+/** Deterministically stringifies unknown values for cache keys and diagnostics. */
 export function stableStringify(value: unknown): string {
   return stringifyStableValue(value, new WeakSet());
 }

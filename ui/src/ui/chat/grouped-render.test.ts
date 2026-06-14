@@ -934,6 +934,37 @@ describe("grouped chat rendering", () => {
     expect(avatar?.tagName).toBe("DIV");
   });
 
+  it("uses assistant senderLabel for forwarded assistant-side groups", () => {
+    const container = document.createElement("div");
+    const group: MessageGroup = {
+      kind: "group",
+      key: "forwarded-group",
+      role: "assistant",
+      senderLabel: "Forwarded from main",
+      messages: [
+        {
+          key: "forwarded-message",
+          message: { role: "assistant", content: "forwarded report", timestamp: 1000 },
+        },
+      ],
+      timestamp: 1000,
+      isStreaming: false,
+    };
+
+    render(
+      renderMessageGroup(group, {
+        showReasoning: true,
+        showToolCalls: true,
+        assistantName: "OpenClaw",
+        assistantAvatar: null,
+      }),
+      container,
+    );
+
+    const sender = container.querySelector<HTMLElement>(".chat-group.assistant .chat-sender-name");
+    expect(sender?.textContent).toBe("Forwarded from main");
+  });
+
   it("collapses consecutive tool results into an activity group", () => {
     const container = document.createElement("div");
     const group: MessageGroup = {
@@ -2193,6 +2224,20 @@ describe("grouped chat rendering", () => {
     );
   });
 
+  it("reserves layout space for assistant message actions", () => {
+    const container = document.createElement("div");
+    renderAssistantMessage(container, {
+      id: "assistant-action-space",
+      role: "assistant",
+      content: "Copyable assistant text.",
+      timestamp: Date.now(),
+    });
+
+    const bubble = container.querySelector(".chat-group.assistant .chat-bubble");
+    expect(bubble?.classList.contains("chat-bubble--has-actions")).toBe(true);
+    expect(bubble?.querySelector(".chat-bubble-actions")).not.toBeNull();
+  });
+
   it("renders hidden assistant_message canvas results with the configured sandbox", () => {
     const container = document.createElement("div");
     const renderCanvas = (params: { embedSandboxMode?: "trusted"; suffix: string }) =>
@@ -2237,6 +2282,46 @@ describe("grouped chat rendering", () => {
     renderCanvas({ embedSandboxMode: "trusted", suffix: "trusted" });
     iframe = expectElement(container, ".chat-tool-card__preview-frame", HTMLIFrameElement);
     expect(iframe.getAttribute("sandbox")).toBe("allow-scripts allow-same-origin");
+  });
+
+  it("recreates canvas preview iframes when the sandbox policy changes", () => {
+    const container = document.createElement("div");
+    const renderCanvas = (embedSandboxMode: "strict" | "scripts") =>
+      renderMessageGroups(
+        container,
+        [
+          createMessageGroup(
+            {
+              id: "assistant-canvas-inline-sandbox-change",
+              role: "assistant",
+              content: [
+                { type: "text", text: "Inline canvas result." },
+                createAssistantCanvasBlock({ suffix: "sandbox-change" }),
+              ],
+              timestamp: Date.now(),
+            },
+            "assistant",
+          ),
+        ],
+        { embedSandboxMode },
+      );
+
+    renderCanvas("strict");
+    const strictIframe = expectElement(
+      container,
+      ".chat-tool-card__preview-frame",
+      HTMLIFrameElement,
+    );
+    expect(strictIframe.getAttribute("sandbox")).toBe("");
+
+    renderCanvas("scripts");
+    const scriptsIframe = expectElement(
+      container,
+      ".chat-tool-card__preview-frame",
+      HTMLIFrameElement,
+    );
+    expect(scriptsIframe).not.toBe(strictIframe);
+    expect(scriptsIframe.getAttribute("sandbox")).toBe("allow-scripts");
   });
 
   it("renders assistant_message canvas results in the assistant bubble even when tool rows are visible", () => {

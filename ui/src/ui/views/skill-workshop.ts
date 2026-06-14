@@ -1,3 +1,4 @@
+// Control UI view renders skill workshop screen content.
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { styleMap } from "lit/directives/style-map.js";
@@ -77,7 +78,6 @@ export type SkillWorkshopProps = {
   onQueryChange: (query: string) => void;
   onFilePreviewQueryChange: (query: string) => void;
   onQueueWidthChange: (width: number) => void;
-  onQueueWidthCommit: (width: number) => void;
   onModeChange: (mode: SkillWorkshopMode) => void;
   onSelect: (key: string) => void;
   onPrev: () => void;
@@ -273,7 +273,6 @@ function startQueueResize(event: PointerEvent, props: SkillWorkshopProps): void 
 
   const startX = event.clientX;
   const startWidth = props.queueWidth;
-  let currentWidth = startWidth;
   const body = document.body;
   const previousCursor = body.style.cursor;
   const previousUserSelect = body.style.userSelect;
@@ -289,13 +288,11 @@ function startQueueResize(event: PointerEvent, props: SkillWorkshopProps): void 
   };
 
   const onMove = (moveEvent: PointerEvent) => {
-    currentWidth = startWidth + moveEvent.clientX - startX;
-    props.onQueueWidthChange(currentWidth);
+    props.onQueueWidthChange(startWidth + moveEvent.clientX - startX);
   };
 
   const onUp = () => {
     cleanup();
-    props.onQueueWidthCommit(currentWidth);
   };
 
   window.addEventListener("pointermove", onMove);
@@ -309,7 +306,7 @@ function resizeQueueWithKeyboard(event: KeyboardEvent, props: SkillWorkshopProps
   }
   event.preventDefault();
   const delta = event.key === "ArrowLeft" ? -24 : 24;
-  props.onQueueWidthCommit(props.queueWidth + delta);
+  props.onQueueWidthChange(props.queueWidth + delta);
 }
 
 function renderLifecycleTabs(props: SkillWorkshopProps) {

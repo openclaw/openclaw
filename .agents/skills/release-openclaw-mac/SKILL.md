@@ -36,8 +36,8 @@ Do not update these from mixed sources. All three ASC fields must come from the 
 ## Workflow Shape
 
 - Public release branch may carry mac-only packaging fixes after the stable tag/npm are already live.
-- Use `source_ref=release/YYYY.M.D` for private mac preflight/validation when building that branch variation.
-- Keep `tag=vYYYY.M.D` pointing at the original stable release commit.
+- Use `source_ref=release/YYYY.M.PATCH` for private mac preflight/validation when building that branch variation.
+- Keep `tag=vYYYY.M.PATCH` pointing at the original stable release commit.
 - Real mac publish must reuse:
   - a successful private mac preflight run for the same tag/source SHA
   - a successful private mac validation run for the same tag/source SHA
@@ -56,37 +56,37 @@ Private preflight:
 
 ```bash
 gh workflow run openclaw-macos-publish.yml --repo openclaw/releases-private --ref main \
-  -f tag=vYYYY.M.D \
-  -f source_ref=release/YYYY.M.D \
+  -f tag=vYYYY.M.PATCH \
+  -f source_ref=release/YYYY.M.PATCH \
   -f preflight_only=true \
   -f smoke_test_only=false \
   -f allow_late_calver_recovery=false \
-  -f public_release_branch=release/YYYY.M.D
+  -f public_release_branch=release/YYYY.M.PATCH
 ```
 
 Private validation for a branch-variation preflight:
 
 ```bash
 gh workflow run openclaw-macos-validate.yml --repo openclaw/releases-private --ref main \
-  -f tag=vYYYY.M.D \
-  -f source_ref=release/YYYY.M.D
+  -f tag=vYYYY.M.PATCH \
+  -f source_ref=release/YYYY.M.PATCH
 ```
 
 Real publish:
 
 ```bash
 gh workflow run openclaw-macos-publish.yml --repo openclaw/releases-private --ref main \
-  -f tag=vYYYY.M.D \
+  -f tag=vYYYY.M.PATCH \
   -f preflight_only=false \
   -f smoke_test_only=false \
   -f preflight_run_id=<successful-preflight-run> \
   -f validate_run_id=<successful-validation-run> \
   -f allow_late_calver_recovery=false \
-  -f public_release_branch=release/YYYY.M.D
+  -f public_release_branch=release/YYYY.M.PATCH
 ```
 
 ## Verify
 
-- `gh release view vYYYY.M.D --repo openclaw/openclaw` shows zip, dmg, dSYM zip, not draft, not prerelease.
-- Public `main` `appcast.xml` points at `OpenClaw-YYYY.M.D.zip`.
+- `gh release view vYYYY.M.PATCH --repo openclaw/openclaw` shows zip, dmg, dSYM zip, not draft, not prerelease.
+- Public `main` `appcast.xml` points at `OpenClaw-YYYY.M.PATCH.zip`.
 - Appcast entry has `sparkle:version`, `sparkle:shortVersionString`, length, and `sparkle:edSignature`.

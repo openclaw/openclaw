@@ -1,3 +1,4 @@
+// Ios Pin Version tests cover ios pin version script behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -10,10 +11,10 @@ installIosFixtureCleanup();
 describe("parseArgs", () => {
   it("requires exactly one pin source", () => {
     expect(() => parseArgs([])).toThrow(
-      "Choose exactly one of --from-gateway or --version <YYYY.M.D>",
+      "Choose exactly one of --from-gateway or --version <YYYY.M.PATCH>",
     );
     expect(() => parseArgs(["--from-gateway", "--version", "2026.4.7"])).toThrow(
-      "Choose exactly one of --from-gateway or --version <YYYY.M.D>",
+      "Choose exactly one of --from-gateway or --version <YYYY.M.PATCH>",
     );
   });
 });

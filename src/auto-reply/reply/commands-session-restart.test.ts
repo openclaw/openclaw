@@ -1,3 +1,4 @@
+// Tests session restart command behavior and runtime reset handoff.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
 import type { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
@@ -174,6 +175,18 @@ describe("handleRestartCommand", () => {
       expect(sentinelPayload?.status).toBe("ok");
       expect(sentinelPayload?.sessionKey).toBe("agent:main:telegram:direct:123:thread:thread-1");
       expect(sentinelPayload?.continuation).toBeNull();
+    } finally {
+      process.removeListener("SIGUSR1", handler);
+    }
+  });
+
+  it("threads sessionKey into scheduleGatewaySigusr1Restart so cross-session coalescing is rejected (#86742)", async () => {
+    const handler = () => {};
+    process.on("SIGUSR1", handler);
+    try {
+      await handleRestartCommand(restartCommandParams(), true);
+      const scheduledArgs = mocks.scheduleGatewaySigusr1Restart.mock.calls.at(-1)?.[0];
+      expect(scheduledArgs?.sessionKey).toBe("agent:main:telegram:direct:123:thread:thread-1");
     } finally {
       process.removeListener("SIGUSR1", handler);
     }

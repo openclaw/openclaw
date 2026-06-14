@@ -1,3 +1,4 @@
+// Browser tests cover register.navigation plugin behavior.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as browserCliResizeModule from "../browser-cli-resize.js";
@@ -59,5 +60,19 @@ describe("browser navigation commands", () => {
     const capture = getBrowserCliRuntimeCapture();
     expect(capture.runtimeErrors.join("\n")).toContain("Invalid width: maximum is 8192");
     expect(mocks.runBrowserResizeWithOutput).not.toHaveBeenCalled();
+  });
+
+  it("navigate and resize commands are registered after removing dead import (#83878)", async () => {
+    const program = createNavigationProgram();
+    const browserCmd = program.commands.find((c) => c.name() === "browser");
+    expect(browserCmd).toBeDefined();
+
+    const cmds = browserCmd!.commands.map((c) => c.name());
+    expect(cmds).toContain("resize");
+    expect(cmds).toContain("navigate");
+
+    // Verify the shared module still exports requireRef (used by other modules)
+    const shared = await import("./shared.js");
+    expect(typeof shared.requireRef).toBe("function");
   });
 });

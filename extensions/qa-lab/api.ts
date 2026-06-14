@@ -1,3 +1,4 @@
+// Qa Lab API module exposes the plugin public contract.
 export {
   buildQaBusSnapshot,
   cloneEvent,
@@ -105,5 +106,6 @@ export {
   type QaSuiteStartLabFn,
   type QaSuiteSummaryJson,
   type QaSuiteSummaryJsonParams,
-  runQaSuite,
+  runQaFlowSuite,
 } from "./src/suite.js";
+export { runQaSuite, type QaSuiteRuntimeResult } from "./src/suite-launch.runtime.js";

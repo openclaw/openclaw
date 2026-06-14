@@ -1,3 +1,4 @@
+// Create Dmg tests cover create dmg script behavior.
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -62,13 +63,19 @@ describe("create-dmg plist validation", () => {
     expect(readBlock).not.toContain("|| echo");
   });
 
+  it("keeps temporary DMG artifacts scoped to one run", () => {
+    const script = readFileSync(scriptPath, "utf8");
+
+    expect(script).toContain('DMG_TEMP="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-dmg.XXXXXX")"');
+    expect(script).toContain('DMG_LIMITS_PATH="$DMG_TEMP/resize-limits.txt"');
+    expect(script).toContain('hdiutil resize -limits "$DMG_RW_PATH" >"$DMG_LIMITS_PATH"');
+    expect(script).not.toContain("/tmp/openclaw-dmg-limits.txt");
+  });
+
   it.runIf(process.platform === "darwin")(
     "fails before hdiutil when required plist keys are missing",
     () => {
-      const app = makeApp([
-        "<key>CFBundleName</key>",
-        "<string>OpenClaw</string>",
-      ]);
+      const app = makeApp(["<key>CFBundleName</key>", "<string>OpenClaw</string>"]);
       const result = runScript([app, path.join(path.dirname(app), "out.dmg")]);
 
       expect(result.status).toBe(1);

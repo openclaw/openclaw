@@ -1,3 +1,4 @@
+// Feishu plugin module implements monitor behavior.
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import { listEnabledFeishuAccounts, resolveFeishuRuntimeAccount } from "./accounts.js";
 import { fetchBotIdentityForMonitor } from "./monitor.startup.js";
@@ -98,6 +99,6 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
   await Promise.all(monitorPromises);
 }
 
-export function stopFeishuMonitor(accountId?: string): void {
-  stopFeishuMonitorState(accountId);
+export async function stopFeishuMonitor(accountId?: string): Promise<void> {
+  await stopFeishuMonitorState(accountId);
 }

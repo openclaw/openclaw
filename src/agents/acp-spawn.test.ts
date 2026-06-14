@@ -1,3 +1,4 @@
+/** Tests ACP spawn planning, policy gates, bindings, cleanup, and parent stream setup. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -114,6 +115,12 @@ vi.mock("../acp/runtime/session-meta.js", () => ({
 }));
 
 vi.mock("../channels/plugins/index.js", () => ({
+  getChannelPlugin: hoisted.getChannelPluginMock,
+  getLoadedChannelPlugin: hoisted.getLoadedChannelPluginMock,
+  normalizeChannelId: hoisted.normalizeChannelIdMock,
+}));
+
+vi.mock("../channels/plugins/registry.js", () => ({
   getChannelPlugin: hoisted.getChannelPluginMock,
   getLoadedChannelPlugin: hoisted.getLoadedChannelPluginMock,
   normalizeChannelId: hoisted.normalizeChannelIdMock,
@@ -446,19 +453,19 @@ function resolveMatrixRoomTargetForTest(value: string | undefined): string | und
 }
 
 function enableMatrixAcpThreadBindings(): void {
-  replaceSpawnConfig({
-    ...hoisted.state.cfg,
-    channels: {
-      ...hoisted.state.cfg.channels,
-      matrix: {
-        threadBindings: {
-          enabled: true,
-          spawnSessions: true,
-        },
+  hoisted.state.cfg.channels = {
+    ...hoisted.state.cfg.channels,
+    matrix: {
+      threadBindings: {
+        enabled: true,
+        spawnSessions: true,
       },
     },
-  });
+  };
   const matrixPlugin = {
+    conversationBindings: {
+      defaultTopLevelPlacement: "child",
+    },
     messaging: {
       resolveDeliveryTarget: ({
         conversationId,
@@ -1033,7 +1040,7 @@ describe("spawnAcpDirect", () => {
     });
   });
 
-  it("does not treat a configured runtime=acp agent primary model as an ACP startup model", async () => {
+  it("uses configured runtime=acp agent primary model as an ACP startup model", async () => {
     replaceSpawnConfig({
       ...createDefaultSpawnConfig(),
       agents: {
@@ -1067,8 +1074,13 @@ describe("spawnAcpDirect", () => {
     );
 
     expectAcceptedSpawn(result);
-    const initInput = expectInitializeSessionFields({ agent: "codex" });
-    expect(initInput.runtimeOptions).toBeUndefined();
+    expectInitializeSessionFields({
+      agent: "codex",
+      runtimeOptions: {
+        model: "anthropic/claude-sonnet-4-6",
+        thinking: "adaptive",
+      },
+    });
   });
 
   it("applies ACP spawn run timeout to runtime options and dispatch", async () => {
@@ -1084,6 +1096,7 @@ describe("spawnAcpDirect", () => {
     );
 
     expectAcceptedSpawn(result);
+    expect(result).toHaveProperty("runTimeoutSeconds", 45);
     const initInput = expectInitializeSessionFields({
       agent: "codex",
       runtimeOptions: {
@@ -1094,6 +1107,98 @@ describe("spawnAcpDirect", () => {
     const agentCall = findAgentGatewayCall();
     expect(agentCall?.params?.lane).toBe("subagent");
     expect(agentCall?.params?.timeout).toBe(45);
+  });
+
+  it("passes zero timeout through to the gateway no-timeout path", async () => {
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        runTimeoutSeconds: 0,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expectAcceptedSpawn(result);
+    expect(result).toHaveProperty("runTimeoutSeconds", 0);
+    const initInput = expectInitializeSessionFields({ agent: "codex" });
+    expect(initInput.runtimeOptions).toBeUndefined();
+    const agentCall = findAgentGatewayCall();
+    expect(agentCall?.params?.timeout).toBe(0);
+  });
+
+  it("uses configured subagent timeout for ACP spawns", async () => {
+    replaceSpawnConfig({
+      ...createDefaultSpawnConfig(),
+      agents: {
+        defaults: {
+          subagents: {
+            allowAgents: ["codex"],
+            maxSpawnDepth: 2,
+            runTimeoutSeconds: 120,
+          },
+        },
+      },
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expectAcceptedSpawn(result);
+    expect(result).toHaveProperty("runTimeoutSeconds", 120);
+    expectInitializeSessionFields({
+      agent: "codex",
+      runtimeOptions: {
+        timeoutSeconds: 120,
+      },
+    });
+    const agentCall = findAgentGatewayCall();
+    expect(agentCall?.params?.timeout).toBe(120);
+  });
+
+  it("caps configured ACP runtime timeout without shortening spawn tracking", async () => {
+    replaceSpawnConfig({
+      ...createDefaultSpawnConfig(),
+      agents: {
+        defaults: {
+          subagents: {
+            allowAgents: ["codex"],
+            maxSpawnDepth: 2,
+            runTimeoutSeconds: 172_800,
+          },
+        },
+      },
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expectAcceptedSpawn(result);
+    expect(result).toHaveProperty("runTimeoutSeconds", 172_800);
+    expectInitializeSessionFields({
+      agent: "codex",
+      runtimeOptions: {
+        timeoutSeconds: 86_400,
+      },
+    });
+    const agentCall = findAgentGatewayCall();
+    expect(agentCall?.params?.timeout).toBe(172_800);
   });
 
   it("rejects OpenClaw config agent ids when runtime=acp targets a native agent", async () => {
@@ -1568,7 +1673,7 @@ describe("spawnAcpDirect", () => {
             channel: "matrix",
             accountId: input.conversation.accountId,
             conversationId: "child-thread",
-            parentConversationId: input.conversation.parentConversationId ?? "!room:example",
+            parentConversationId: input.conversation.parentConversationId ?? "!room:example.org",
           },
           metadata: {
             boundBy:
@@ -1585,12 +1690,14 @@ describe("spawnAcpDirect", () => {
         agentId: "codex",
         mode: "session",
         thread: true,
+        cwd: os.tmpdir(),
       },
       {
-        agentSessionKey: "agent:main:matrix:channel:!room:example",
+        agentSessionKey: "agent:main:matrix:channel:!room:example.org",
         agentChannel: "matrix",
         agentAccountId: "default",
-        agentTo: "channel:!room:example",
+        agentTo: "room:!room:example.org",
+        agentGroupId: "!room:example.org",
       },
     );
     expect(result.status, JSON.stringify(result)).toBe("accepted");
@@ -1599,13 +1706,13 @@ describe("spawnAcpDirect", () => {
       conversation: {
         channel: "matrix",
         accountId: "default",
-        conversationId: "!room:example",
+        conversationId: "!room:example.org",
       },
     });
     expectAgentGatewayCall({
       deliver: true,
       channel: "matrix",
-      to: "room:!room:example",
+      to: "room:!room:example.org",
       threadId: "child-thread",
     });
   });

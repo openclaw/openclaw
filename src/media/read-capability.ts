@@ -1,12 +1,12 @@
+// Media read capability helpers gate file reads by configured media access rules.
 import path from "node:path";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveGroupToolPolicy } from "../agents/agent-tools.policy.js";
 import { resolvePathFromInput } from "../agents/path-policy.js";
 import { resolveEffectiveToolFsRootExpansionAllowed } from "../agents/tool-fs-policy.js";
 import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import { resolveWorkspaceRoot } from "../agents/workspace-dir.js";
-import type { OpenClawConfig } from "../config/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readLocalFileSafely } from "../infra/fs-safe.js";
 import type { OutboundMediaAccess, OutboundMediaReadFile } from "./load-options.js";
 import {
@@ -49,10 +49,10 @@ function isAgentScopedHostMediaReadAllowed(
     groupChannel: params.groupChannel,
     groupSpace: params.groupSpace,
     accountId: params.accountId,
-    senderId: normalizeOptionalString(params.requesterSenderId),
-    senderName: normalizeOptionalString(params.requesterSenderName),
-    senderUsername: normalizeOptionalString(params.requesterSenderUsername),
-    senderE164: normalizeOptionalString(params.requesterSenderE164),
+    senderId: params.requesterSenderId,
+    senderName: params.requesterSenderName,
+    senderUsername: params.requesterSenderUsername,
+    senderE164: params.requesterSenderE164,
   });
   // Sender/group policy only applies when a concrete group override exists.
   if (groupPolicy && !isToolAllowedByPolicies("read", [groupPolicy])) {
@@ -61,6 +61,7 @@ function isAgentScopedHostMediaReadAllowed(
   return true;
 }
 
+/** Creates a host reader bound to the agent workspace and configured local-file safety checks. */
 export function createAgentScopedHostMediaReadFile(
   params: {
     cfg: OpenClawConfig;
@@ -98,6 +99,7 @@ function appendWorkspaceDirToLocalRoots(
   return [...roots, resolvedWorkspaceDir];
 }
 
+/** Resolves roots and optional host read capability for outbound media in an agent context. */
 export function resolveAgentScopedOutboundMediaAccess(
   params: {
     cfg: OpenClawConfig;
@@ -113,6 +115,7 @@ export function resolveAgentScopedOutboundMediaAccess(
     params.mediaAccess?.workspaceDir ??
     (params.agentId ? resolveAgentWorkspaceDir(params.cfg, params.agentId) : undefined);
   const hostMediaReadAllowed = isAgentScopedHostMediaReadAllowed(params);
+  // Even when host reads are denied, keep base roots so generated media remains addressable.
   const baseLocalRoots =
     params.mediaAccess?.localRoots ??
     (hostMediaReadAllowed

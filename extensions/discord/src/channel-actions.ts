@@ -1,3 +1,4 @@
+// Discord plugin module implements channel actions behavior.
 import { createUnionActionGate } from "openclaw/plugin-sdk/channel-actions";
 import type {
   ChannelMessageActionAdapter,
@@ -25,6 +26,9 @@ const trustedRequesterGuildAdminActions = new Set<ChannelMessageActionName>([
   "category-edit",
   "category-delete",
   "event-create",
+  "timeout",
+  "kick",
+  "ban",
 ]);
 
 const localExecutionActions = new Set<ChannelMessageActionName>([

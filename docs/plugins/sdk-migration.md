@@ -318,8 +318,10 @@ releases.
     }
     ```
 
-    External plugins cannot register tool-result middleware because it can
-    rewrite high-trust tool output before the model sees it.
+    Installed plugins can also register tool-result middleware when they are
+    explicitly enabled and declare every targeted runtime in
+    `contracts.agentToolResultMiddleware`. Undeclared installed middleware
+    registrations are rejected.
 
   </Step>
 

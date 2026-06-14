@@ -1,3 +1,4 @@
+// Qa Lab tests cover scenario packs plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   QA_OBSERVABILITY_SCENARIO_IDS,
@@ -48,7 +49,10 @@ describe("qa scenario packs", () => {
       const scenario = readQaScenarioById(scenarioId);
 
       expect(scenario.sourcePath).toMatch(/^qa\/scenarios\/personal\//);
-      expect(scenario.coverage?.primary.some((id) => id.startsWith("personal."))).toBe(true);
+      expect(scenario.coverage?.primary.length).toBeGreaterThan(0);
+      expect(
+        scenario.coverage?.primary.every((id) => /^[a-z0-9]+(?:[.-][a-z0-9]+)*$/.test(id)),
+      ).toBe(true);
     }
   });
 

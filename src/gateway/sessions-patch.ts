@@ -1,3 +1,4 @@
+// Session patch applier for gateway session metadata and model/runtime overrides.
 import { randomUUID } from "node:crypto";
 import {
   normalizeOptionalLowercaseString,
@@ -129,6 +130,7 @@ function normalizeSubagentControlScope(raw: string): "children" | "none" | undef
   return undefined;
 }
 
+/** Apply a validated gateway session patch to an in-memory session store entry. */
 export async function applySessionsPatchToStore(params: {
   cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;
@@ -161,6 +163,7 @@ export async function applySessionsPatchToStore(params: {
   };
 
   const existing = store[storeKey];
+  // Existing entries without session ids are placeholder aliases; assigning an id makes them real.
   const next: SessionEntry = existing?.sessionId
     ? {
         ...existing,
@@ -530,8 +533,8 @@ export async function applySessionsPatchToStore(params: {
           entry: next,
           provider: resolvedDefault.provider,
         }),
-        markLiveSwitchPending: true,
       });
+      delete next.liveModelSwitchPending;
     } else if (raw !== undefined) {
       const trimmed = normalizeOptionalString(raw) ?? "";
       if (!trimmed) {

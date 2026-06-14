@@ -1,4 +1,5 @@
 #!/usr/bin/env -S node --import tsx
+// Telegram User Crabbox Proof script supports OpenClaw repository automation.
 
 import { type ChildProcess, spawn, type SpawnOptionsWithoutStdio } from "node:child_process";
 import fs from "node:fs";
@@ -1522,22 +1523,27 @@ TELEGRAM_USER_DRIVER_STATE_DIR="$root/user-driver" python3 "$root/user-driver.py
 `;
 }
 
-function renderLaunchDesktop() {
+export function renderLaunchDesktop() {
   return `#!/usr/bin/env bash
 set -euo pipefail
 root=${REMOTE_ROOT}
 export DISPLAY="\${DISPLAY:-:99}"
+print_desktop_log_tail() {
+  local log_file="$root/telegram-desktop.log"
+  [ -f "$log_file" ] || return 0
+  tail -c 262144 "$log_file" >&2 || true
+}
 pkill -f "$root/Telegram/Telegram" >/dev/null 2>&1 || true
 rm -rf "$root/desktop/tdata"
 nohup "$root/Telegram/Telegram" -workdir "$root/desktop" >"$root/telegram-desktop.log" 2>&1 &
 pid=$!
 sleep 8
 if ! kill -0 "$pid" >/dev/null 2>&1; then
-  cat "$root/telegram-desktop.log" >&2
+  print_desktop_log_tail
   exit 1
 fi
 if ! wmctrl -l | grep -i telegram >/dev/null 2>&1; then
-  cat "$root/telegram-desktop.log" >&2
+  print_desktop_log_tail
   exit 1
 fi
 `;

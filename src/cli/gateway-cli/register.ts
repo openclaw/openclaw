@@ -1,3 +1,4 @@
+// Commander registration for gateway status, health, diagnostics, discovery, and run commands.
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
@@ -107,6 +108,7 @@ async function runGatewayCommand(
   label?: string,
   opts?: { json?: boolean },
 ) {
+  // JSON mode preserves structured gateway transport errors for automation callers.
   try {
     await action();
   } catch (err) {
@@ -128,6 +130,19 @@ async function runGatewayCommand(
 function parseDaysOption(raw: unknown, fallback = 30): number {
   if (typeof raw === "number" && Number.isFinite(raw)) {
     return Math.max(1, Math.floor(raw));
+  }
+  if (typeof raw === "string" && raw.trim() !== "") {
+    const parsed = parseStrictPositiveInteger(raw);
+    if (parsed !== undefined) {
+      return parsed;
+    }
+  }
+  return fallback;
+}
+
+function parseGatewayRpcTimeoutOption(raw: unknown, fallback = 10_000): number {
+  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
+    return Math.floor(raw);
   }
   if (typeof raw === "string" && raw.trim() !== "") {
     const parsed = parseStrictPositiveInteger(raw);
@@ -532,17 +547,36 @@ export function registerGatewayCli(program: Command) {
         await runGatewayCommand(
           async () => {
             const rpcOpts = resolveGatewayRpcOptions(opts, command);
-            const [{ formatHealthChannelLines }, { styleHealthChannelLine }] = await Promise.all([
-              loadGatewayHealthModule(),
-              loadHealthStyleModule(),
-            ]);
-            const result = await callGatewayCli("health", rpcOpts);
+            const [
+              { emitReachableGatewayAuthDiagnostic, formatHealthChannelLines },
+              { styleHealthChannelLine },
+            ] = await Promise.all([loadGatewayHealthModule(), loadHealthStyleModule()]);
+            let result: unknown;
+            try {
+              result = await callGatewayCli("health", rpcOpts);
+            } catch (error) {
+              const { readBestEffortConfig } = await loadConfigModule();
+              const handled = await emitReachableGatewayAuthDiagnostic({
+                error,
+                config: await readBestEffortConfig(),
+                runtime: defaultRuntime,
+                timeoutMs: parseGatewayRpcTimeoutOption(rpcOpts.timeout),
+                token: rpcOpts.token,
+                password: rpcOpts.password,
+                json: Boolean(rpcOpts.json),
+              });
+              if (handled) {
+                return;
+              }
+              throw error;
+            }
             if (rpcOpts.json) {
               defaultRuntime.writeJson(result);
               return;
             }
             const rich = isRich();
-            const obj: Record<string, unknown> = result && typeof result === "object" ? result : {};
+            const obj: Record<string, unknown> =
+              result && typeof result === "object" ? (result as Record<string, unknown>) : {};
             const durationMs = typeof obj.durationMs === "number" ? obj.durationMs : null;
             defaultRuntime.log(colorize(rich, theme.heading, "Gateway Health"));
             defaultRuntime.log(

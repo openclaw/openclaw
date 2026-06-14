@@ -1,3 +1,4 @@
+// Inventory of doctor compatibility migrations that outlive deprecated runtime/config paths.
 export type DoctorDeprecationCompatStatus = "active" | "deprecated" | "removal-pending" | "removed";
 
 export type DoctorDeprecationCompatOwner =
@@ -13,9 +14,13 @@ export type DoctorDeprecationCompatOwner =
   | "tts";
 
 export type DoctorDeprecationCompatRecord<Code extends string = string> = {
+  /** Stable inventory code for a doctor compatibility surface. */
   code: Code;
+  /** Current lifecycle state for the compatibility surface. */
   status: DoctorDeprecationCompatStatus;
+  /** Area that owns the deprecated input or migration. */
   owner: DoctorDeprecationCompatOwner;
+  /** Date or release window when the compatibility surface first shipped. */
   introduced: string;
   deprecated?: string;
   warningStarts?: string;
@@ -226,10 +231,10 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     owner: "tts",
     introduced: "2026-04-29",
     source:
-      "messages.tts.enabled, agents.*.tts.enabled, channels.*.tts.enabled, and voice-call plugin tts.enabled",
+      "messages.tts.enabled, agents.list[].tts.enabled, supported channel TTS enabled fields, and voice-call plugin tts.enabled",
     migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.tts.ts",
     replacement:
-      'messages/agents/channels/plugins TTS auto mode, for example auto: "always" or auto: "off"',
+      'supported messages/agents/channels/plugins TTS auto mode, for example auto: "always" or auto: "off"',
     docsPath: "/tools/tts",
     tests: ["src/commands/doctor/shared/legacy-config-migrate.provider-shapes.test.ts"],
   }),
@@ -344,20 +349,24 @@ const doctorDeprecationCompatRecordByCode = new Map<
   KnownDoctorDeprecationCompatRecord
 >(DOCTOR_DEPRECATION_COMPAT_RECORDS.map((record) => [record.code, record]));
 
+/** List every doctor compatibility record, including removed or still-active entries. */
 export function listDoctorDeprecationCompatRecords(): readonly KnownDoctorDeprecationCompatRecord[] {
   return DOCTOR_DEPRECATION_COMPAT_RECORDS;
 }
 
+/** List compatibility records currently in a deprecated/removal-pending lifecycle. */
 export function listDeprecatedDoctorDeprecationCompatRecords(): readonly KnownDoctorDeprecationCompatRecord[] {
   return DOCTOR_DEPRECATION_COMPAT_RECORDS.filter((record) =>
     (["deprecated", "removal-pending"] as readonly string[]).includes(record.status),
   );
 }
 
+/** Return true when a string is a known doctor compatibility inventory code. */
 export function isDoctorDeprecationCompatCode(code: string): code is DoctorDeprecationCompatCode {
   return doctorDeprecationCompatRecordByCode.has(code);
 }
 
+/** Return a doctor compatibility record by code, throwing for impossible stale callers. */
 export function getDoctorDeprecationCompatRecord(
   code: DoctorDeprecationCompatCode,
 ): KnownDoctorDeprecationCompatRecord {

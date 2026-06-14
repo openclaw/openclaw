@@ -1,3 +1,4 @@
+// Core gateway method descriptors keep handler names, auth scopes, startup availability, and write policy in one table.
 import type { OperatorScope } from "../operator-scopes.js";
 import {
   DYNAMIC_GATEWAY_METHOD_SCOPE,
@@ -105,6 +106,8 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "agents.files.list", scope: "operator.read" },
   { name: "agents.files.get", scope: "operator.read" },
   { name: "agents.files.set", scope: "operator.admin" },
+  { name: "sessions.files.list", scope: "operator.read" },
+  { name: "sessions.files.get", scope: "operator.read" },
   { name: "artifacts.list", scope: "operator.read" },
   { name: "artifacts.get", scope: "operator.read" },
   { name: "artifacts.download", scope: "operator.read" },
@@ -124,6 +127,7 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "skills.proposals.create", scope: "operator.admin" },
   { name: "skills.proposals.update", scope: "operator.admin" },
   { name: "skills.proposals.revise", scope: "operator.admin" },
+  { name: "skills.proposals.requestRevision", scope: "operator.admin" },
   { name: "skills.proposals.apply", scope: "operator.admin" },
   { name: "skills.proposals.reject", scope: "operator.admin" },
   { name: "skills.proposals.quarantine", scope: "operator.admin" },
@@ -201,6 +205,7 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "agent.wait", scope: "operator.write", startup: true },
   { name: "chat.history", scope: "operator.read", startup: true },
   { name: "chat.startup", scope: "operator.read", startup: true },
+  { name: "chat.metadata", scope: "operator.read", startup: true },
   { name: "chat.message.get", scope: "operator.read", startup: true },
   { name: "chat.abort", scope: "operator.write" },
   { name: "chat.send", scope: "operator.write" },

@@ -1,9 +1,12 @@
+// Shared queue type contracts for admission, drain, and fallback handling.
 import type { AutoFallbackPrimaryProbe } from "../../../agents/agent-scope.js";
 import type { ExecToolDefaults } from "../../../agents/bash-tools.js";
 import type { CurrentInboundPromptContext } from "../../../agents/embedded-agent-runner/run/params.js";
 import type { SilentReplyPromptMode } from "../../../agents/system-prompt.types.js";
+import type { ChatType } from "../../../channels/chat-type.js";
 import type { InboundEventKind } from "../../../channels/inbound-event/kind.js";
 import type { SessionEntry } from "../../../config/sessions.js";
+import type { ReplyToMode } from "../../../config/types.base.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
@@ -43,11 +46,15 @@ export function isFollowupRunDeferredError(error: unknown): error is FollowupRun
 
 export type FollowupRun = {
   prompt: string;
+  /** Latest session to claim without rewriting the queued run before store refresh. */
+  admissionSessionId?: string;
   /** User-visible prompt body persisted to transcript; excludes runtime-only prompt context. */
   transcriptPrompt?: string;
   /** Shared lifecycle owner for the current user-turn transcript append. */
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
   currentInboundEventKind?: InboundEventKind;
+  /** Whether the current inbound message contained audio for inbound-only TTS policy. */
+  currentInboundAudio?: boolean;
   /** Explicit current-turn context that should be visible for this run but not persisted as user text. */
   currentInboundContext?: CurrentInboundPromptContext;
   /** Abort signal for turns that are canceled by their source-channel admission fence. */
@@ -77,6 +84,8 @@ export type FollowupRun = {
   originatingThreadId?: string | number;
   /** Provider reply target for transports that model threads as message replies. */
   originatingReplyToId?: string;
+  /** Effective reply policy for deciding whether the reply target affects queued delivery. */
+  originatingReplyToMode?: ReplyToMode;
   /** Chat type for context-aware threading (e.g., DM vs channel). */
   originatingChatType?: string;
   run: {
@@ -86,6 +95,7 @@ export type FollowupRun = {
     sessionKey?: string;
     runtimePolicySessionKey?: string;
     messageProvider?: string;
+    chatType?: ChatType;
     agentAccountId?: string;
     groupId?: string;
     groupChannel?: string;
@@ -121,6 +131,7 @@ export type FollowupRun = {
       defaultLevel: ElevatedLevel;
     };
     timeoutMs: number;
+    runTimeoutOverrideMs?: number;
     blockReplyBreak: "text_end" | "message_end";
     ownerNumbers?: string[];
     inputProvenance?: InputProvenance;

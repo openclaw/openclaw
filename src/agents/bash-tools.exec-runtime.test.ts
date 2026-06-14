@@ -1,3 +1,8 @@
+/**
+ * Exec runtime tests.
+ * Covers target resolution, cursor mode tracking, exit outcome classification,
+ * system events, and process lifecycle behavior.
+ */
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../utils/timer-delay.js";
 
@@ -29,6 +34,7 @@ let formatExecFailureReason: typeof import("./bash-tools.exec-runtime.js").forma
 let renderExecUpdateText: typeof import("./bash-tools.exec-runtime.js").renderExecUpdateText;
 let resolveExecTarget: typeof import("./bash-tools.exec-runtime.js").resolveExecTarget;
 let runExecProcess: typeof import("./bash-tools.exec-runtime.js").runExecProcess;
+let sanitizeHostBaseEnv: typeof import("./bash-tools.exec-runtime.js").sanitizeHostBaseEnv;
 
 beforeAll(async () => {
   ({ markBackgrounded } = await import("./bash-process-registry.js"));
@@ -40,6 +46,7 @@ beforeAll(async () => {
     renderExecUpdateText,
     resolveExecTarget,
     runExecProcess,
+    sanitizeHostBaseEnv,
   } = await import("./bash-tools.exec-runtime.js"));
 });
 
@@ -105,6 +112,33 @@ describe("detectCursorKeyMode", () => {
     expect(detectCursorKeyMode("\x1b[?1l\x1b[?1h")).toBe("application");
     // Multiple toggles - last one wins
     expect(detectCursorKeyMode("\x1b[?1h\x1b[?1l\x1b[?1h")).toBe("application");
+  });
+});
+
+describe("sanitizeHostBaseEnv", () => {
+  it("uses value-aware Git protocol inherited env sanitization", () => {
+    expect(
+      sanitizeHostBaseEnv({
+        PATH: "/usr/bin:/bin",
+        GIT_ALLOW_PROTOCOL: "https:ext:ssh",
+        GIT_PROTOCOL_FROM_USER: "1",
+        GIT_SSH_COMMAND: "touch /tmp/pwned",
+        SAFE: "ok",
+      }),
+    ).toEqual({
+      PATH: "/usr/bin:/bin",
+      GIT_ALLOW_PROTOCOL: "https:ssh",
+      GIT_PROTOCOL_FROM_USER: "0",
+      SAFE: "ok",
+    });
+
+    expect(
+      sanitizeHostBaseEnv({
+        GIT_PROTOCOL_FROM_USER: "false",
+      }),
+    ).toEqual({
+      GIT_PROTOCOL_FROM_USER: "false",
+    });
   });
 });
 

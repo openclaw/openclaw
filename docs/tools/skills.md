@@ -204,16 +204,18 @@ publish and sync.
     Workspace, project-agent, and extra-dir skill discovery only accepts skill
     roots whose resolved realpath stays inside the configured root, unless
     `skills.load.allowSymlinkTargets` explicitly trusts a target root.
+    Skill Workshop writes through those trusted targets only when
+    `skills.workshop.allowSymlinkTargetWrites` is enabled.
     Managed `~/.openclaw/skills` and personal `~/.agents/skills` may contain
     symlinked skill folders, but every `SKILL.md` realpath must still stay
     inside its resolved skill directory.
   </Accordion>
-  <Accordion title="Scan and scan overrides">
-    Gateway-backed skill installs (onboarding, Skills settings UI) run the
-    built-in dangerous-code scanner before executing installer metadata.
-    `critical` findings block by default; `suspicious` findings warn only.
-    `openclaw skills install <slug>` downloads a ClawHub skill folder directly
-    and does not use the installer-metadata scanner.
+  <Accordion title="Operator install policy">
+    Configure `security.installPolicy` to run a trusted local policy command
+    before skill installs continue. The policy receives metadata and the staged
+    source path, applies to ClawHub, uploaded, Git, local, update, and
+    dependency-installer paths, and fails closed when the command cannot return
+    a valid decision.
   </Accordion>
   <Accordion title="Secret injection scope">
     `skills.entries.*.env` and `skills.entries.*.apiKey` inject secrets into the
@@ -533,6 +535,8 @@ aligned.
     Use `allowSymlinkTargets` for intentional symlinked layouts where a skill
     root symlink points outside the configured root, for example
     `<workspace>/skills/manager -> ~/Projects/manager/skills`.
+    Enable `skills.workshop.allowSymlinkTargetWrites` only when Skill Workshop
+    should also apply proposals through those trusted symlinked paths.
 
   </Accordion>
   <Accordion title="Remote macOS nodes (Linux gateway)">

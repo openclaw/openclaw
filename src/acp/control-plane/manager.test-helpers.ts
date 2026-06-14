@@ -1,9 +1,11 @@
+/** Shared ACP manager test harness, mocks, fixtures, and assertion helpers. */
 import type { AcpRuntime, AcpRuntimeCapabilities } from "@openclaw/acp-core/runtime/types";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { resetAcpManagerTaskStateForTests } from "../../../test/helpers/acp-manager-task-state.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AcpSessionRuntimeOptions, SessionAcpMeta } from "../../config/sessions/types.js";
 import { resetHeartbeatWakeStateForTests } from "../../infra/heartbeat-wake.js";
+import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { resetAcpActiveTurnsForTests } from "./active-turns.js";
 
 export type { AcpRuntime, OpenClawConfig, SessionAcpMeta };
@@ -37,6 +39,7 @@ vi.mock("../runtime/registry.js", () => ({
 
 export const hoisted = hoistedMocks;
 
+// Shared ACP manager test harness with hoisted runtime/session-meta mocks.
 const managerModule = await import("./manager.js");
 export const AcpSessionManager = managerModule.AcpSessionManager;
 export const resetAcpSessionManagerForTests = () =>
@@ -302,9 +305,9 @@ export function installAcpSessionManagerTestLifecycle(): void {
 
   afterEach(() => {
     if (ORIGINAL_STATE_DIR === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
+      deleteTestEnvValue("OPENCLAW_STATE_DIR");
     } else {
-      process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
+      setTestEnvValue("OPENCLAW_STATE_DIR", ORIGINAL_STATE_DIR);
     }
     resetHeartbeatWakeStateForTests();
     resetAcpManagerTaskStateForTests();

@@ -1,8 +1,13 @@
+// Channel turn kernel for normalized inbound event dispatch, history, and delivery.
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import {
   clearHistoryEntriesIfEnabled,
   recordPendingHistoryEntryWithMedia,
 } from "../../auto-reply/reply/history.js";
+import {
+  createDiagnosticTraceContextFromActiveScope,
+  runWithDiagnosticTraceContext,
+} from "../../infra/diagnostic-trace-context.js";
 import { toHistoryMediaEntries } from "../inbound-event/media.js";
 import { createChannelReplyPipeline } from "../message/reply-pipeline.js";
 import type { CreateChannelReplyPipelineParams } from "../message/reply-pipeline.js";
@@ -143,6 +148,7 @@ function emit(params: {
 }
 
 export function createNoopChannelEventDeliveryAdapter(): ChannelEventDeliveryAdapter {
+  // Observe-only channels still need an adapter shape for shared turn plumbing.
   return {
     deliver: async () => ({
       visibleReplySent: false,
@@ -419,6 +425,7 @@ export async function dispatchAssembledChannelTurn(
             },
             onError: params.delivery.onError,
           },
+          toolsAllow: params.toolsAllow,
           replyOptions: replyPipeline.replyOptions,
           replyResolver: params.replyResolver,
         }),
@@ -451,6 +458,18 @@ async function dispatchResolvedChannelTurn<TDispatchResult>(
 }
 
 async function runPreparedChannelTurnCore<
+  TDispatchResult = DispatchedChannelTurnResult["dispatchResult"],
+>(
+  params: PreparedChannelTurn<TDispatchResult>,
+  options: { suppressObserveOnlyDispatch: boolean },
+): Promise<ChannelTurnResult<TDispatchResult>> {
+  const trace = createDiagnosticTraceContextFromActiveScope();
+  return await runWithDiagnosticTraceContext(trace, () =>
+    runPreparedChannelTurnCoreInTrace(params, options),
+  );
+}
+
+async function runPreparedChannelTurnCoreInTrace<
   TDispatchResult = DispatchedChannelTurnResult["dispatchResult"],
 >(
   params: PreparedChannelTurn<TDispatchResult>,

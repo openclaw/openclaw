@@ -1,3 +1,4 @@
+/** Tests secret target registry matching and docs coverage. */
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -35,6 +36,19 @@ describe("secret target registry", () => {
 
     expect(target?.entry?.id).toBe("channels.googlechat.serviceAccount");
     expect(target?.refPathSegments).toEqual(["channels", "googlechat", "serviceAccountRef"]);
+  });
+
+  it("resolves talk realtime provider api key targets", () => {
+    const target = resolveConfigSecretTargetByPath([
+      "talk",
+      "realtime",
+      "providers",
+      "openai",
+      "apiKey",
+    ]);
+
+    expect(target?.entry?.id).toBe("talk.realtime.providers.*.apiKey");
+    expect(target?.providerId).toBe("openai");
   });
 
   it("returns null when no config target path matches", () => {

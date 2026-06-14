@@ -1,3 +1,4 @@
+// Cron store tests cover persisted scheduled job state and run metadata.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -518,6 +519,35 @@ describe("cron store", () => {
       kind: "agentTurn",
       message: "Summarize hook payload",
       externalContentSource: "webhook",
+    });
+  });
+
+  it("round-trips command payloads through SQLite", async () => {
+    const store = await makeStorePath();
+    const payload = makeStore("command-job", true);
+    payload.jobs[0].sessionTarget = "isolated";
+    payload.jobs[0].payload = {
+      kind: "command",
+      argv: ["sh", "-lc", 'printf %s "$1"', "  "],
+      cwd: "/srv/example",
+      env: { FOO: "bar" },
+      input: "stdin",
+      timeoutSeconds: 45,
+      noOutputTimeoutSeconds: 10,
+      outputMaxBytes: 4096,
+    };
+
+    await saveCronStore(store.storePath, payload);
+
+    expect((await loadCronStore(store.storePath)).jobs[0]?.payload).toEqual({
+      kind: "command",
+      argv: ["sh", "-lc", 'printf %s "$1"', "  "],
+      cwd: "/srv/example",
+      env: { FOO: "bar" },
+      input: "stdin",
+      timeoutSeconds: 45,
+      noOutputTimeoutSeconds: 10,
+      outputMaxBytes: 4096,
     });
   });
 

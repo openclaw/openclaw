@@ -1,6 +1,7 @@
+/** Normalizes reply directives and delivers block replies through streaming or direct paths. */
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "../../globals.js";
-import { copyReplyPayloadMetadata } from "../reply-payload.js";
+import { copyReplyPayloadMetadata, isReplyPayloadStatusNotice } from "../reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { BlockReplyContext, ReplyPayload, ReplyThreadingPolicy } from "../types.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
@@ -11,6 +12,7 @@ import type { TypingSignaler } from "./typing-mode.js";
 
 export type ReplyDirectiveParseMode = "always" | "auto" | "never";
 
+/** Parses inline reply directives into payload fields and silent-reply state. */
 export function normalizeReplyPayloadDirectives(params: {
   payload: ReplyPayload;
   currentMessageId?: string;
@@ -67,13 +69,20 @@ export function normalizeReplyPayloadDirectives(params: {
 async function sendDirectBlockReply(params: {
   onBlockReply: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
   directlySentBlockKeys: Set<string>;
+  directlySentBlockPayloads: Array<ReplyPayload | undefined>;
   trackingPayload: ReplyPayload;
   payload: ReplyPayload;
 }) {
-  params.directlySentBlockKeys.add(createBlockReplyContentKey(params.trackingPayload));
+  const deliveryIndex = params.directlySentBlockPayloads.length;
+  params.directlySentBlockPayloads.push(undefined);
   await params.onBlockReply(params.payload);
+  params.directlySentBlockKeys.add(createBlockReplyContentKey(params.trackingPayload));
+  if (!isReplyPayloadStatusNotice(params.trackingPayload)) {
+    params.directlySentBlockPayloads[deliveryIndex] = params.trackingPayload;
+  }
 }
 
+/** Creates the handler used for assistant block replies during streaming/tool phases. */
 export function createBlockReplyDeliveryHandler(params: {
   onBlockReply: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
   currentMessageId?: string;
@@ -85,6 +94,7 @@ export function createBlockReplyDeliveryHandler(params: {
   blockStreamingEnabled: boolean;
   blockReplyPipeline: BlockReplyPipeline | null;
   directlySentBlockKeys: Set<string>;
+  directlySentBlockPayloads: Array<ReplyPayload | undefined>;
 }): (payload: ReplyPayload) => Promise<void> {
   return async (payload) => {
     const { text, skip } = params.normalizeStreamingText(payload);
@@ -98,6 +108,7 @@ export function createBlockReplyDeliveryHandler(params: {
         : payload.replyToCurrent === false
           ? false
           : params.replyThreading?.implicitCurrentMessage !== "deny";
+    // Reply-to-current is implicit for block replies unless per-turn threading disables it.
 
     const taggedPayload = applyReplyTagsToPayload(
       {
@@ -160,6 +171,7 @@ export function createBlockReplyDeliveryHandler(params: {
       await sendDirectBlockReply({
         onBlockReply: params.onBlockReply,
         directlySentBlockKeys: params.directlySentBlockKeys,
+        directlySentBlockPayloads: params.directlySentBlockPayloads,
         trackingPayload: blockPayload,
         payload: blockPayload,
       });
@@ -167,6 +179,7 @@ export function createBlockReplyDeliveryHandler(params: {
       await sendDirectBlockReply({
         onBlockReply: params.onBlockReply,
         directlySentBlockKeys: params.directlySentBlockKeys,
+        directlySentBlockPayloads: params.directlySentBlockPayloads,
         trackingPayload: blockPayload,
         payload: blockPayload,
       });

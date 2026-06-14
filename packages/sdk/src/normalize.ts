@@ -1,5 +1,7 @@
+// OpenClaw SDK helper module supports normalize behavior.
 import type { GatewayEvent, JsonObject, OpenClawEvent, OpenClawEventType } from "./types.js";
 
+// Normalize raw Gateway events into stable SDK event types and common metadata.
 function asRecord(value: unknown): JsonObject {
   return typeof value === "object" && value !== null ? (value as JsonObject) : {};
 }
@@ -26,15 +28,10 @@ function hasHardTimeoutMetadata(data: JsonObject, statusAlreadyTimeoutAttributed
   );
 }
 
-function normalizeLifecycleEndEventType(data: JsonObject): OpenClawEventType {
+function isLifecycleCancellation(data: JsonObject): boolean {
   const status = readLowerString(data.status);
   const stopReason = readLowerString(data.stopReason);
-  const statusAlreadyTimeoutAttributed =
-    status === "timeout" || status === "timed_out" || data.aborted === true;
-  if (hasHardTimeoutMetadata(data, statusAlreadyTimeoutAttributed)) {
-    return "run.timed_out";
-  }
-  if (
+  return (
     status === "aborted" ||
     status === "cancelled" ||
     status === "canceled" ||
@@ -44,10 +41,23 @@ function normalizeLifecycleEndEventType(data: JsonObject): OpenClawEventType {
     stopReason === "canceled" ||
     stopReason === "killed" ||
     stopReason === "auth-revoked" ||
+    stopReason === "restart" ||
     stopReason === "rpc" ||
     stopReason === "user" ||
     (data.aborted === true && stopReason === "stop")
-  ) {
+  );
+}
+
+function normalizeLifecycleEndEventType(data: JsonObject): OpenClawEventType {
+  const status = readLowerString(data.status);
+  const stopReason = readLowerString(data.stopReason);
+  const statusAlreadyTimeoutAttributed =
+    stopReason !== "restart" &&
+    (status === "timeout" || status === "timed_out" || data.aborted === true);
+  if (hasHardTimeoutMetadata(data, statusAlreadyTimeoutAttributed)) {
+    return "run.timed_out";
+  }
+  if (isLifecycleCancellation(data)) {
     return "run.cancelled";
   }
   if (
@@ -88,6 +98,9 @@ function normalizeAgentEventType(payload: JsonObject): OpenClawEventType {
     if (phase === "error") {
       if (hasHardTimeoutMetadata(data, false)) {
         return "run.timed_out";
+      }
+      if (isLifecycleCancellation(data)) {
+        return "run.cancelled";
       }
       return "run.failed";
     }
@@ -152,6 +165,7 @@ function normalizeNamedEventType(event: GatewayEvent): OpenClawEventType {
   }
 }
 
+/** Normalize a raw Gateway event into the public SDK event shape. */
 export function normalizeGatewayEvent(event: GatewayEvent): OpenClawEvent {
   const payload = asRecord(event.payload);
   const runId = readString(payload.runId);

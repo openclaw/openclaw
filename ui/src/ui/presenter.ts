@@ -1,3 +1,4 @@
+// Control UI module implements presenter behavior.
 import { t } from "../i18n/index.ts";
 import { resolveCronJobLastRunStatus } from "./cron-status.ts";
 import {
@@ -77,6 +78,9 @@ export function formatCronPayload(job: CronJob) {
   const p = job.payload;
   if (p.kind === "systemEvent") {
     return `System: ${p.text}`;
+  }
+  if (p.kind === "command") {
+    return `Command: ${p.argv.join(" ")}`;
   }
   const base = `Agent: ${p.message}`;
   const delivery = job.delivery;

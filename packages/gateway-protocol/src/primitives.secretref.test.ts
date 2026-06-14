@@ -1,3 +1,4 @@
+// Gateway Protocol tests cover primitives.secretref behavior.
 import { Compile } from "typebox/compile";
 import { describe, expect, it } from "vitest";
 import {
@@ -6,6 +7,11 @@ import {
 } from "../../../src/test-utils/secret-ref-test-vectors.js";
 import { SecretInputSchema, SecretRefSchema } from "./schema/primitives.js";
 
+/**
+ * SecretRef schema regressions shared with core secret-ref test vectors.
+ * Exec-backed ids have stricter character rules than env/file refs, so these
+ * checks keep provider config payloads aligned with runtime secret resolution.
+ */
 describe("gateway protocol SecretRef schema", () => {
   const validateSecretRef = Compile(SecretRefSchema);
   const validateSecretInput = Compile(SecretInputSchema);

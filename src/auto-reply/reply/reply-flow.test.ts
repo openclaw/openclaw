@@ -1,3 +1,4 @@
+// Tests high-level reply flow decisions across commands and agent dispatch.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -166,6 +167,51 @@ describe("createReplyDispatcher", () => {
     dispatcher.markComplete();
     await Promise.resolve();
     expect(onIdle).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves an owner-declared follow-up admission barrier policy from queued deliveries", async () => {
+    vi.useFakeTimers();
+    try {
+      const dispatcher = createReplyDispatcher({
+        deliver: async () => {},
+        resolveFollowupAdmissionBarrierTimeoutPolicy: ({ queuedCounts, humanDelayBudgetMs }) => ({
+          maxTimeoutMs:
+            Object.values(queuedCounts).reduce((sum, count) => sum + count, 0) * 35 * 60_000 +
+            humanDelayBudgetMs,
+          shouldExtend: () => true,
+        }),
+        humanDelay: { mode: "custom", minMs: 10_000, maxMs: 20_000 },
+      });
+      dispatcher.sendToolResult({ text: "tool" });
+      dispatcher.sendBlockReply({ text: "block one" });
+      dispatcher.sendBlockReply({ text: "block two" });
+      dispatcher.sendFinalReply({ text: "final" });
+      dispatcher.markComplete();
+
+      const policy = dispatcher.resolveFollowupAdmissionBarrierTimeoutPolicy?.();
+      expect(policy?.maxTimeoutMs).toBe(140 * 60_000 + 20_000);
+      expect(policy?.shouldExtend()).toBe(true);
+      await vi.runAllTimersAsync();
+      await dispatcher.waitForIdle();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports each queued delivery settlement", async () => {
+    const onDeliverySettled = vi.fn();
+    const dispatcher = createReplyDispatcher({
+      deliver: vi.fn().mockRejectedValueOnce(new Error("send failed")).mockResolvedValue(undefined),
+      onDeliverySettled,
+    });
+    dispatcher.sendToolResult({ text: "tool" });
+    dispatcher.sendFinalReply({ text: "final" });
+    dispatcher.markComplete();
+
+    await dispatcher.waitForIdle();
+    expect(onDeliverySettled).toHaveBeenCalledTimes(2);
+    expect(onDeliverySettled).toHaveBeenNthCalledWith(1, { kind: "tool" });
+    expect(onDeliverySettled).toHaveBeenNthCalledWith(2, { kind: "final" });
   });
 
   it("delays block replies after the first when humanDelay is natural", async () => {
