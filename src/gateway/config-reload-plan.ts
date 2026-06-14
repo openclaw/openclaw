@@ -115,6 +115,9 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
   { prefix: "mcp", kind: "hot", actions: ["dispose-mcp-runtimes"] },
   { prefix: "plugins.load", kind: "restart" },
   { prefix: "plugins.installs", kind: "restart" },
+  // Browser profile fields (cdpUrl, driver, headless, etc.) are read on-demand
+  // by the browser tool on each invocation and do not require a gateway restart.
+  { prefix: "browser.profiles", kind: "none" },
 ];
 
 const BASE_RELOAD_RULES_TAIL: ReloadRule[] = [
