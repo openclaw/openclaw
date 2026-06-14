@@ -1048,6 +1048,18 @@ async function runImageGenerate(params: {
   } satisfies CapabilityEnvelope;
 }
 
+async function resolveImageDescribeMime(filePath: string): Promise<string> {
+  const buffer = await fs.readFile(filePath).catch(() => undefined);
+  return (
+    normalizeMimeType(
+      await detectMime({
+        buffer,
+        filePath,
+      }),
+    ) ?? "image/png"
+  );
+}
+
 async function runImageDescribe(params: {
   capability: "image.describe" | "image.describe-many";
   files: string[];
@@ -1066,12 +1078,14 @@ async function runImageDescribe(params: {
     params.files.map(async (filePath) => {
       const resolvedPath = resolveImageDescribeInput(filePath);
       const isRemoteUrl = /^https?:\/\//i.test(resolvedPath);
+      const mime = isRemoteUrl ? undefined : await resolveImageDescribeMime(resolvedPath);
       const result = activeModel
         ? await describeImageFileWithModel({
             filePath: resolvedPath,
             ...(isRemoteUrl ? { mediaUrl: resolvedPath } : {}),
             cfg,
             agentDir,
+            ...(mime ? { mime } : {}),
             provider: activeModel.provider,
             model: activeModel.model,
             prompt: prompt ?? "Describe the image.",
@@ -1082,6 +1096,7 @@ async function runImageDescribe(params: {
             ...(isRemoteUrl ? { mediaUrl: resolvedPath } : {}),
             cfg,
             agentDir,
+            ...(mime ? { mime } : {}),
             prompt,
             timeoutMs: params.timeoutMs,
           });
