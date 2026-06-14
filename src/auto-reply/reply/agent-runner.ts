@@ -1302,7 +1302,7 @@ export async function runReplyAgent(params: {
       queuedRunFollowupTurn,
       false,
     );
-    if (enqueued === false) {
+    if (!enqueued) {
       typing.cleanup();
       return undefined;
     }

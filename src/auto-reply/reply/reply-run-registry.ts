@@ -290,7 +290,7 @@ function registerFollowupAdmissionBarrier(
           finish();
           return;
         }
-        let shouldExtend = false;
+        let shouldExtend: boolean;
         try {
           shouldExtend = timeout.shouldExtend();
         } catch {
