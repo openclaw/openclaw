@@ -309,7 +309,7 @@ const EXPLICIT_PLANNING_REQUEST_RE =
 const EXPLICIT_PLAN_DESCRIPTION_REQUEST_RE =
   /^(?:please\s+)?(?:(?:can|could|would|will)\s+you\s+)?(?:please\s+)?(?:(?:tell|show)\s+me\s+|(?:describe|explain)\s+)(?:(?:the|your|our|my|a)\s+)?(?:plan|approach|outline|steps|strategy)\b/i;
 const EXPLICIT_PLAN_CREATION_REQUEST_RE =
-  /^(?:please\s+)?(?:(?:can|could|would|will)\s+you\s+)?(?:please\s+)?(?:make|create|prepare|draft|write|send)\s+(?:me\s+)?(?:(?:a|an|the)\s+)?(?:plan|approach|outline|strategy)\b/i;
+  /^(?:please\s+)?(?:(?:can|could|would|will)\s+you\s+)?(?:please\s+)?(?:make|create|prepare|draft|write|send|provide|generate|produce|develop|formulate|design|build|suggest|put\s+together|come\s+up\s+with)\s+(?:me\s+)?(?:(?:a|an|the)\s+)?(?:plan|approach|outline|strategy)\b/i;
 const EXPLICIT_DIRECT_PLANNING_REQUEST_RE =
   /^(?:please\s+)?(?:(?:can|could|would|will)\s+you\s+)?(?:please\s+)?(?:plan\b(?![\s,;:-]+(?:and|then)\b)|outline\s+(?:a\s+)?plan\b)/i;
 const EXPLICIT_PLAN_AND_EXECUTE_REQUEST_RE =
