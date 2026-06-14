@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { validateExecApprovalRequestParams } from "../../../packages/gateway-protocol/src/index.js";
+import { STREAM_ERROR_FALLBACK_TEXT } from "../../agents/stream-message-shared.js";
 import { HEARTBEAT_PROMPT } from "../../auto-reply/heartbeat.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerLegacyContextEngine } from "../../context-engine/legacy.registration.js";
@@ -840,6 +841,59 @@ describe("sanitizeChatHistoryMessages", () => {
           completion_tokens: 1,
           total_tokens: 12,
         },
+        timestamp: 1,
+      },
+    ]);
+  });
+
+  it("drops stream-error fallback sentinels from chat history display", () => {
+    const result = sanitizeChatHistoryMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "hello" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }],
+        stopReason: "error",
+        errorMessage: "provider failed before content",
+        timestamp: 2,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "actual fallback response" }],
+        timestamp: 3,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "hello" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "actual fallback response" }],
+        timestamp: 3,
+      },
+    ]);
+  });
+
+  it("preserves ordinary assistant messages matching the stream-error sentinel text", () => {
+    const result = sanitizeChatHistoryMessages([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }],
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }],
         timestamp: 1,
       },
     ]);

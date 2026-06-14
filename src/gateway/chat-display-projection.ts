@@ -5,6 +5,7 @@ import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../agents/internal-runtime-context.js";
+import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import { extractCanvasFromText } from "../chat/canvas-render.js";
@@ -1069,6 +1070,14 @@ function mirrorMessageToolVisibleReplies(messages: unknown[]): unknown[] {
   return changed ? next : messages;
 }
 
+function isStreamErrorFallbackAssistantMessage(message: unknown, text: string): boolean {
+  if (text.trim() !== STREAM_ERROR_FALLBACK_TEXT) {
+    return false;
+  }
+  const entry = message as { internalStreamError?: unknown; stopReason?: unknown };
+  return entry.stopReason === "error" || entry.internalStreamError === true;
+}
+
 function shouldDropAssistantHistoryMessage(message: unknown): boolean {
   if (!message || typeof message !== "object") {
     return false;
@@ -1084,7 +1093,13 @@ function shouldDropAssistantHistoryMessage(message: unknown): boolean {
     return !hasAssistantMixedToolVisibleText(message);
   }
   const text = extractAssistantTextForSilentCheck(message);
-  if (text === undefined || !isSuppressedControlReplyText(text)) {
+  if (text === undefined) {
+    return false;
+  }
+  if (isStreamErrorFallbackAssistantMessage(message, text)) {
+    return !hasAssistantNonTextContent(message);
+  }
+  if (!isSuppressedControlReplyText(text)) {
     return false;
   }
   return !hasAssistantNonTextContent(message);
