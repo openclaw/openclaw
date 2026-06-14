@@ -97,4 +97,52 @@ describe("TTS core", () => {
       setTimeoutSpy.mockRestore();
     }
   });
+
+  it("strips reasoning content from summarization output (regression #90364)", async () => {
+    const config = {
+      provider: "openai",
+      model: {
+        id: "gpt-5.5",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+      },
+    };
+    const usage = { promptTokens: 10, completionTokens: 20, totalTokens: 30 };
+    const auth = { kind: "api-key" as const, apiKey: "test-key" };
+    const assistant = {
+      role: "assistant" as const,
+      content: [
+        {
+          type: "text",
+          text: "<thinking>Internal reasoning that should not be spoken.</thinking>The weather today is sunny with a high of 75°F.",
+        },
+      ],
+      api: config.model.api,
+      provider: config.model.provider,
+      model: config.model.id,
+      stopReason: "stop",
+      usage,
+      timestamp: Date.now(),
+    } satisfies AssistantMessage;
+
+    const result = await summarizeText(
+      {
+        text: "Long text about the weather that should be summarized for speech.",
+        targetLength: 120,
+        cfg: {},
+        config,
+        timeoutMs: MAX_TIMER_TIMEOUT_MS + 1,
+      },
+      {
+        completeSimple: vi.fn(async () => assistant),
+        prepareSimpleCompletionModel: vi.fn(async () => ({ model: config.model, auth })),
+        requireApiKey: vi.fn(() => "key"),
+      },
+    );
+
+    expect(result.summary).toBe("The weather today is sunny with a high of 75°F.");
+    expect(result.summary).not.toContain("<thinking>");
+    expect(result.summary).not.toContain("Internal reasoning");
+  });
 });
