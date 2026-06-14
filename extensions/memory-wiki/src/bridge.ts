@@ -115,7 +115,13 @@ function resolveBridgePagePath(params: { workspaceDir: string; relativePath: str
   const artifactBaseSlug = slugifyWikiSegment(
     params.relativePath.replace(/\.md$/i, "").replace(/\//g, "-"),
   );
-  const artifactHash = createHash("sha1").update(params.relativePath).digest("hex");
+  // Include workspaceDir in the hash to prevent collisions when multiple
+  // workspaces produce artifacts with the same relative path (e.g.
+  // memory/.dreams/events.jsonl from different agents).
+  const artifactHash = createHash("sha1")
+    .update(params.workspaceDir)
+    .update(params.relativePath)
+    .digest("hex");
   const workspaceSlug = `${workspaceBaseSlug}-${workspaceHash.slice(0, 8)}`;
   const artifactSlug = `${artifactBaseSlug}-${artifactHash.slice(0, 8)}`;
   const fileName = createWikiPageFilename(`bridge-${workspaceSlug}-${artifactSlug}`);
