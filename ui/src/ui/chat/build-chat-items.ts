@@ -28,6 +28,8 @@ export type BuildChatItemsProps = {
   historyRenderLimit?: number;
 };
 
+type ChatMessageItem = Extract<ChatItem, { kind: "message" }>;
+
 function appendCanvasBlockToAssistantMessage(
   message: unknown,
   preview: Extract<NonNullable<ToolCard["preview"]>, { kind: "canvas" }>,
@@ -264,24 +266,87 @@ function collapseDuplicateDisplaySignature(message: unknown): string | null {
   return `${role}:${senderLabel}:${text}`;
 }
 
+function collapseDuplicateTranscriptKey(message: unknown): string | null {
+  const marker = asRecord(message)?.["__openclaw"];
+  const markerRecord = asRecord(marker);
+  if (markerRecord?.kind === "pending-send") {
+    return null;
+  }
+  const raw = asRecord(message);
+  if (!raw) {
+    return null;
+  }
+  const normalized = safeNormalizeMessage(message);
+  if (!normalized) {
+    return null;
+  }
+  const role = normalizeRoleForGrouping(normalized.role).toLowerCase();
+  if (role !== "assistant" && role !== "user") {
+    return null;
+  }
+  const id =
+    typeof raw.id === "string" && raw.id.trim()
+      ? raw.id.trim()
+      : typeof raw.messageId === "string" && raw.messageId.trim()
+        ? raw.messageId.trim()
+        : typeof markerRecord?.id === "string" && markerRecord.id.trim()
+          ? markerRecord.id.trim()
+          : "";
+  return id ? `${role}:${id}` : null;
+}
+
+function prefersNativeChatSurface(message: unknown): boolean {
+  const normalized = safeNormalizeMessage(message);
+  if (!normalized) {
+    return false;
+  }
+  const role = normalizeRoleForGrouping(normalized.role).toLowerCase();
+  return (role === "assistant" || role === "user") && !normalized.senderLabel?.trim();
+}
+
+function preferTranscriptDuplicate(
+  existing: ChatMessageItem,
+  candidate: ChatMessageItem,
+): ChatMessageItem {
+  if (!prefersNativeChatSurface(existing.message) && prefersNativeChatSurface(candidate.message)) {
+    return candidate;
+  }
+  return existing;
+}
+
 function collapseSequentialDuplicateMessages(items: ChatItem[]): ChatItem[] {
   const collapsed: ChatItem[] = [];
   let previousSignature: string | null = null;
+  let previousTranscriptKey: string | null = null;
 
   for (const item of items) {
     if (item.kind !== "message") {
       collapsed.push(item);
       previousSignature = null;
+      previousTranscriptKey = null;
       continue;
     }
     const signature = collapseDuplicateDisplaySignature(item.message);
+    const transcriptKey = collapseDuplicateTranscriptKey(item.message);
     const previous = collapsed[collapsed.length - 1];
+    // dmScope=main can project the same transcript row through native chat and relay paths;
+    // collapse by transcript id before display-signature counting so relay labels do not double-paint.
+    if (transcriptKey && previousTranscriptKey === transcriptKey && previous?.kind === "message") {
+      const preferred = preferTranscriptDuplicate(previous, item);
+      if (preferred !== previous) {
+        collapsed[collapsed.length - 1] = preferred;
+        previousSignature = collapseDuplicateDisplaySignature(preferred.message);
+      }
+      previousTranscriptKey = transcriptKey;
+      continue;
+    }
     if (signature && previousSignature === signature && previous?.kind === "message") {
       previous.duplicateCount = (previous.duplicateCount ?? 1) + 1;
       continue;
     }
     collapsed.push(item);
     previousSignature = signature;
+    previousTranscriptKey = transcriptKey;
   }
 
   return collapsed;

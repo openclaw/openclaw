@@ -403,6 +403,109 @@ describe("buildChatItems", () => {
     expect(groups[2].messages[0].duplicateCount).toBeUndefined();
   });
 
+  it("deduplicates adjacent relay copies by transcript message id", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          id: "msg-agent-1",
+          role: "assistant",
+          content: [{ type: "text", text: "There it is..." }],
+          timestamp: 1,
+        },
+        {
+          messageId: "msg-agent-1",
+          role: "assistant",
+          senderLabel: "Parzival",
+          content: [{ type: "text", text: "There it is..." }],
+          timestamp: 2,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].senderLabel).toBeNull();
+    expect(groups[0].messages).toHaveLength(1);
+    expect(messageRecord(groups[0]).content).toStrictEqual([
+      { type: "text", text: "There it is..." },
+    ]);
+  });
+
+  it("prefers the native chat copy when a relay copy arrives first", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          messageId: "msg-agent-2",
+          role: "assistant",
+          senderLabel: "Parzival",
+          content: [{ type: "text", text: "Parzival There it is..." }],
+          timestamp: 1,
+        },
+        {
+          id: "msg-agent-2",
+          role: "assistant",
+          content: [{ type: "text", text: "There it is..." }],
+          timestamp: 2,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].senderLabel).toBeNull();
+    expect(messageRecord(groups[0]).content).toStrictEqual([
+      { type: "text", text: "There it is..." },
+    ]);
+  });
+
+  it("deduplicates adjacent relay copies by transcript metadata id", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "assistant",
+          senderLabel: "Parzival",
+          content: [{ type: "text", text: "Parzival There it is..." }],
+          timestamp: 1,
+          __openclaw: { id: "msg-agent-meta-1", seq: 7 },
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "There it is..." }],
+          timestamp: 2,
+          __openclaw: { id: "msg-agent-meta-1", seq: 7 },
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].senderLabel).toBeNull();
+    expect(groups[0].messages).toHaveLength(1);
+    expect(messageRecord(groups[0]).content).toStrictEqual([
+      { type: "text", text: "There it is..." },
+    ]);
+  });
+
+  it("keeps relay-labeled assistant messages with different ids separate", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          id: "msg-agent-3",
+          role: "assistant",
+          content: [{ type: "text", text: "There it is..." }],
+          timestamp: 1,
+        },
+        {
+          messageId: "msg-agent-4",
+          role: "assistant",
+          senderLabel: "Parzival",
+          content: [{ type: "text", text: "There it is..." }],
+          timestamp: 2,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(2);
+    expect(groups.map((group) => group.senderLabel)).toEqual([null, "Parzival"]);
+  });
+
   it("does not collapse messages that carry canvas previews", () => {
     const canvasBlock = createAssistantCanvasBlock({ suffix: "duplicate_guard" });
     const groups = messageGroups({
