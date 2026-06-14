@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 const listChannelPluginsMock = vi.hoisted(() =>
   vi.fn(() => [
     { id: "mattermost", messaging: { defaultMarkdownTableMode: "off" as const } },
+    { id: "msteams", messaging: {} },
     { id: "signal", messaging: { defaultMarkdownTableMode: "bullets" as const } },
     { id: "whatsapp", messaging: { defaultMarkdownTableMode: "bullets" as const } },
   ]),
@@ -46,6 +47,10 @@ describe("DEFAULT_TABLE_MODES", () => {
 
   it("slack has no special default in this seam-only slice", () => {
     expect(DEFAULT_TABLE_MODES.get("slack")).toBeUndefined();
+  });
+
+  it("msteams has no adaptive default", () => {
+    expect(DEFAULT_TABLE_MODES.get("msteams")).toBeUndefined();
   });
 });
 

@@ -5,8 +5,13 @@ import {
   type MessageReceiptPartKind,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
-import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
+import {
+  convertMarkdownTables,
+  markdownToIRWithMeta,
+  type MarkdownTableMeta,
+} from "openclaw/plugin-sdk/text-chunking";
 import { loadOutboundMediaFromUrl, type OpenClawConfig } from "../runtime-api.js";
+import { buildAdaptiveCardTable, splitTextAndTables } from "./adaptive-card-table.js";
 import {
   classifyMSTeamsSendError,
   formatMSTeamsSendErrorHint,
@@ -376,8 +381,67 @@ export async function sendMessageMSTeams(
     }
   }
 
-  // No media: send text only
+  // No media: send text only (with adaptive card table rendering if applicable)
+  if (tableMode === "adaptive" && messageText) {
+    const { tables } = markdownToIRWithMeta(messageText, {
+      linkify: false,
+      autolink: false,
+      headingStyle: "none",
+      blockquotePrefix: "",
+      tableMode: "block",
+    });
+    if (tables.length > 0) {
+      return sendAdaptiveTableSegments(ctx, messageText, tables);
+    }
+  }
   return sendTextWithMedia(ctx, messageText, undefined);
+}
+
+async function sendAdaptiveTableSegments(
+  ctx: MSTeamsProactiveContext,
+  rawText: string,
+  tables: MarkdownTableMeta[],
+): Promise<SendMSTeamsMessageResult> {
+  const { app, appId, conversationId, ref, log, tokenProvider, sharePointSiteId, replyStyle } = ctx;
+  const { ir } = markdownToIRWithMeta(rawText, {
+    linkify: false,
+    autolink: false,
+    headingStyle: "none",
+    blockquotePrefix: "",
+    tableMode: "block",
+  });
+
+  const segments = splitTextAndTables(ir.text, tables);
+  const messages = segments.map((seg) =>
+    seg.kind === "text"
+      ? { text: seg.text }
+      : { adaptiveCard: buildAdaptiveCardTable(seg.table) as Record<string, unknown> },
+  );
+
+  const platformMessageIds = await sendMSTeamsMessages({
+    replyStyle,
+    app,
+    appId,
+    conversationRef: ref,
+    messages,
+    retry: {},
+    onRetry: (event) => {
+      log.debug?.("retrying adaptive table send", { conversationId, ...event });
+    },
+    tokenProvider,
+    sharePointSiteId,
+    mediaMaxBytes: ctx.mediaMaxBytes,
+    serviceUrlBoundary: ctx.sdkCloudOptions,
+  });
+
+  log.info("sent adaptive table messages", { conversationId, count: platformMessageIds.length });
+
+  return createMSTeamsSendResult({
+    messageId: platformMessageIds[0] ?? "unknown",
+    platformMessageIds,
+    conversationId,
+    kind: "text",
+  });
 }
 
 /**

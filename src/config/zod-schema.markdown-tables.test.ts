@@ -7,6 +7,10 @@ describe("MarkdownTableModeSchema", () => {
     expect(MarkdownTableModeSchema.parse("block")).toBe("block");
   });
 
+  it("accepts adaptive mode", () => {
+    expect(MarkdownTableModeSchema.parse("adaptive")).toBe("adaptive");
+  });
+
   it("rejects unsupported values", () => {
     const result = MarkdownTableModeSchema.safeParse("plain");
 
