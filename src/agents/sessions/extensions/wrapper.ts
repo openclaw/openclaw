@@ -6,7 +6,11 @@
  */
 
 import type { AgentTool } from "../../runtime/index.js";
-import { wrapToolDefinition, wrapToolDefinitions } from "../tools/tool-definition-wrapper.js";
+import {
+  snapshotReadableToolDefinition,
+  wrapToolDefinition,
+  wrapToolDefinitions,
+} from "../tools/tool-definition-wrapper.js";
 import type { ExtensionRunner } from "./runner.js";
 import type { RegisteredTool } from "./types.js";
 
@@ -30,7 +34,10 @@ export function wrapRegisteredTools(
   runner: ExtensionRunner,
 ): AgentTool[] {
   return wrapToolDefinitions(
-    registeredTools.map((registeredTool) => registeredTool.definition),
+    registeredTools.flatMap((registeredTool) => {
+      const definition = snapshotReadableToolDefinition(registeredTool.definition);
+      return definition ? [definition] : [];
+    }),
     () => runner.createContext(),
   );
 }

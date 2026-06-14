@@ -74,6 +74,13 @@ export {
   type WriteOperations,
   type WriteToolOptions,
 } from "./write.js";
+export {
+  createToolDefinitionFromAgentTool,
+  readToolDefinitionName,
+  snapshotReadableToolDefinition,
+  wrapToolDefinition,
+  wrapToolDefinitions,
+} from "./tool-definition-wrapper.js";
 
 import type { AgentTool } from "../../runtime/index.js";
 import type { ToolDefinition } from "../extensions/types.js";

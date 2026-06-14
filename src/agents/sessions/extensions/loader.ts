@@ -29,6 +29,7 @@ import type { ExecOptions } from "../exec.js";
 import { execCommand } from "../exec.js";
 import * as bundledAgentSessions from "../extension-sdk.js";
 import { createSyntheticSourceInfo } from "../source-info.js";
+import { readToolDefinitionName } from "../tools/tool-definition-wrapper.js";
 import type {
   Extension,
   ExtensionAPI,
@@ -226,7 +227,11 @@ function createExtensionAPI(
 
     registerTool(tool: ToolDefinition): void {
       runtime.assertActive();
-      extension.tools.set(tool.name, {
+      const name = readToolDefinitionName(tool);
+      if (name === undefined) {
+        return;
+      }
+      extension.tools.set(name, {
         definition: tool,
         sourceInfo: extension.sourceInfo,
       });

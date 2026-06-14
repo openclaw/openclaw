@@ -93,7 +93,10 @@ import { type BuildSystemPromptOptions, buildSystemPrompt } from "./system-promp
 import type { BashOperations } from "./tools/bash-operations.js";
 import { createLocalBashOperations } from "./tools/bash.js";
 import { createAllToolDefinitions } from "./tools/index.js";
-import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.js";
+import {
+  createToolDefinitionFromAgentTool,
+  snapshotReadableToolDefinition,
+} from "./tools/tool-definition-wrapper.js";
 
 function unwrapCoreResult<T>(result: { ok: true; value: T } | { ok: false; error: Error }): T {
   if (result.ok) {
@@ -281,6 +284,10 @@ export interface SessionStats {
 interface ToolDefinitionEntry {
   definition: ToolDefinition;
   sourceInfo: SourceInfo;
+}
+
+function createSyntheticToolSourcePath(kind: "builtin" | "sdk", toolName: string): string {
+  return `<${kind}:${toolName.replace(/[\r\n]/g, " ")}>`;
 }
 
 type ActiveToolPromptMetadata = {
@@ -2389,13 +2396,26 @@ export class AgentSession {
     const isAllowedTool = (name: string): boolean =>
       !isDisabledBuiltInToolName(name) && (!allowedToolNames || allowedToolNames.has(name));
 
-    const registeredTools = this.currentExtensionRunner.getAllRegisteredTools();
+    const registeredTools = this.currentExtensionRunner.getAllRegisteredTools().flatMap((tool) => {
+      const definition = snapshotReadableToolDefinition(tool.definition);
+      return definition ? [{ definition, sourceInfo: tool.sourceInfo }] : [];
+    });
     const allCustomTools = [
       ...registeredTools,
-      ...this.customTools.map((definition) => ({
-        definition,
-        sourceInfo: createSyntheticSourceInfo(`<sdk:${definition.name}>`, { source: "sdk" }),
-      })),
+      ...this.customTools.flatMap((toolDefinition) => {
+        const definition = snapshotReadableToolDefinition(toolDefinition);
+        return definition
+          ? [
+              {
+                definition,
+                sourceInfo: createSyntheticSourceInfo(
+                  createSyntheticToolSourcePath("sdk", definition.name),
+                  { source: "sdk" },
+                ),
+              },
+            ]
+          : [];
+      }),
     ].filter((tool) => isAllowedTool(tool.definition.name));
     const definitionRegistry = new Map<string, ToolDefinitionEntry>(
       Array.from(this.baseToolDefinitions.entries())
@@ -2404,7 +2424,9 @@ export class AgentSession {
           name,
           {
             definition,
-            sourceInfo: createSyntheticSourceInfo(`<builtin:${name}>`, { source: "builtin" }),
+            sourceInfo: createSyntheticSourceInfo(createSyntheticToolSourcePath("builtin", name), {
+              source: "builtin",
+            }),
           },
         ]),
     );
@@ -2438,9 +2460,12 @@ export class AgentSession {
         .filter((definition) => isAllowedTool(definition.name))
         .map((definition) => ({
           definition,
-          sourceInfo: createSyntheticSourceInfo(`<builtin:${definition.name}>`, {
-            source: "builtin",
-          }),
+          sourceInfo: createSyntheticSourceInfo(
+            createSyntheticToolSourcePath("builtin", definition.name),
+            {
+              source: "builtin",
+            },
+          ),
         })),
       runner,
     );

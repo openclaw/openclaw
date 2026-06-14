@@ -11,6 +11,7 @@ import type { KeybindingsConfig } from "../keybindings.js";
 import type { ModelRegistry } from "../model-registry.js";
 import type { SessionManager } from "../session-manager.js";
 import type { BuildSystemPromptOptions } from "../system-prompt.js";
+import { readToolDefinitionName } from "../tools/tool-definition-wrapper.js";
 import type {
   BeforeAgentStartEvent,
   BeforeAgentStartEventResult,
@@ -400,8 +401,9 @@ export class ExtensionRunner {
     const toolsByName = new Map<string, RegisteredTool>();
     for (const ext of this.extensions) {
       for (const tool of ext.tools.values()) {
-        if (!toolsByName.has(tool.definition.name)) {
-          toolsByName.set(tool.definition.name, tool);
+        const name = readToolDefinitionName(tool.definition);
+        if (name !== undefined && !toolsByName.has(name)) {
+          toolsByName.set(name, tool);
         }
       }
     }

@@ -7,6 +7,68 @@ import type { TSchema } from "typebox";
 import type { AgentTool } from "../../runtime/index.js";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.js";
 
+export function readToolDefinitionName(definition: ToolDefinition): string | undefined {
+  try {
+    const name = definition.name as unknown;
+    return typeof name === "string" ? name : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function snapshotReadableToolDefinition<
+  TParams extends TSchema = TSchema,
+  TDetails = unknown,
+  TState = unknown,
+>(
+  definition: ToolDefinition<TParams, TDetails, TState>,
+): ToolDefinition<TParams, TDetails, TState> | undefined {
+  try {
+    const name = definition.name as unknown;
+    const label = definition.label as unknown;
+    const description = definition.description as unknown;
+    const parameters = definition.parameters;
+    const execute = Reflect.get(definition, "execute") as unknown;
+
+    if (
+      typeof name !== "string" ||
+      typeof label !== "string" ||
+      typeof description !== "string" ||
+      parameters === undefined ||
+      typeof execute !== "function"
+    ) {
+      return undefined;
+    }
+
+    const executeTool = execute as ToolDefinition<TParams, TDetails, TState>["execute"];
+    const promptSnippet = definition.promptSnippet;
+    const promptGuidelines = definition.promptGuidelines;
+    const renderShell = definition.renderShell;
+    const prepareArguments = definition.prepareArguments;
+    const executionMode = definition.executionMode;
+    const renderCall = definition.renderCall;
+    const renderResult = definition.renderResult;
+
+    return {
+      name,
+      label,
+      description,
+      promptSnippet,
+      promptGuidelines,
+      parameters,
+      renderShell,
+      prepareArguments,
+      executionMode,
+      execute: (toolCallId, params, signal, onUpdate, ctx) =>
+        executeTool.call(definition, toolCallId, params, signal, onUpdate, ctx),
+      renderCall,
+      renderResult,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 /** Wrap a ToolDefinition into an AgentTool for the core runtime. */
 export function wrapToolDefinition<
   TParams extends TSchema = TSchema,
@@ -16,15 +78,20 @@ export function wrapToolDefinition<
   definition: ToolDefinition<TParams, TDetails, TState>,
   ctxFactory?: () => ExtensionContext,
 ): AgentTool<TParams, TDetails> {
+  const snapshot = snapshotReadableToolDefinition(definition);
+  if (!snapshot) {
+    throw new Error("Cannot wrap unreadable tool definition");
+  }
+
   return {
-    name: definition.name,
-    label: definition.label,
-    description: definition.description,
-    parameters: definition.parameters,
-    prepareArguments: definition.prepareArguments,
-    executionMode: definition.executionMode,
+    name: snapshot.name,
+    label: snapshot.label,
+    description: snapshot.description,
+    parameters: snapshot.parameters,
+    prepareArguments: snapshot.prepareArguments,
+    executionMode: snapshot.executionMode,
     execute: (toolCallId, params, signal, onUpdate) =>
-      definition.execute(toolCallId, params, signal, onUpdate, ctxFactory?.() as ExtensionContext),
+      snapshot.execute(toolCallId, params, signal, onUpdate, ctxFactory?.() as ExtensionContext),
   };
 }
 

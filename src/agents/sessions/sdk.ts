@@ -46,6 +46,7 @@ import {
   createReadOnlyTools,
   createReadTool,
   createWriteTool,
+  readToolDefinitionName,
   type ToolName,
   withFileMutationQueue,
 } from "./tools/index.js";
@@ -346,7 +347,11 @@ export async function createAgentSession(
   }
 
   const defaultActiveToolNames: ToolName[] = ["read", "bash", "edit", "write"];
-  const customToolNames = options.customTools?.map((tool) => tool.name) ?? [];
+  const customToolNames =
+    options.customTools?.flatMap((tool) => {
+      const name = readToolDefinitionName(tool);
+      return name === undefined ? [] : [name];
+    }) ?? [];
   const allowedToolNames = options.tools ?? (options.noTools === "all" ? [] : undefined);
   const disableBuiltInTools = !options.tools && options.noTools === "builtin";
   const initialActiveToolNames: string[] = options.tools

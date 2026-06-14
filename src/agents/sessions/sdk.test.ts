@@ -13,7 +13,7 @@ vi.mock("../../auto-reply/thinking.js", () => ({
 import type { Model } from "../../llm/types.js";
 import { AuthStorage } from "./auth-storage.js";
 import { createExtensionRuntime } from "./extensions/loader.js";
-import type { LoadExtensionsResult, ToolDefinition } from "./extensions/types.js";
+import type { LoadExtensionsResult, RegisteredTool, ToolDefinition } from "./extensions/types.js";
 import { ModelRegistry } from "./model-registry.js";
 import type { ResourceLoader } from "./resource-loader.js";
 import { createAgentSession } from "./sdk.js";
@@ -40,17 +40,18 @@ function createEmptyResourceLoader(): ResourceLoader {
 
 function createResourceLoaderWithHandlers(
   handlers: Map<string, Array<(...args: unknown[]) => Promise<unknown>>>,
+  tools: Map<string, RegisteredTool> = new Map(),
 ): ResourceLoader {
   const extensionsResult: LoadExtensionsResult = {
     extensions:
-      handlers.size > 0
+      handlers.size > 0 || tools.size > 0
         ? [
             {
               path: "<test-extension>",
               resolvedPath: "<test-extension>",
               sourceInfo: createSyntheticSourceInfo("<test-extension>", { source: "temporary" }),
               handlers,
-              tools: new Map(),
+              tools,
               messageRenderers: new Map(),
               commands: new Map(),
               flags: new Map(),
@@ -72,6 +73,52 @@ function createResourceLoaderWithHandlers(
     extendResources: () => {},
     reload: async () => {},
   };
+}
+
+function createTextTool(name: string): ToolDefinition {
+  return {
+    name,
+    label: "Test Tool",
+    description: "Looks up a test value.",
+    parameters: Type.Object({}),
+    execute: async () => ({
+      content: [{ type: "text", text: "ok" }],
+      details: {},
+    }),
+  };
+}
+
+function createUnreadableNameTool(): ToolDefinition {
+  const tool = {
+    label: "Broken Name",
+    description: "Should be ignored.",
+    parameters: Type.Object({}),
+    execute: async () => ({
+      content: [{ type: "text", text: "bad" }],
+      details: {},
+    }),
+  } as unknown as ToolDefinition;
+  Object.defineProperty(tool, "name", {
+    get() {
+      throw new Error("bad\nname");
+    },
+  });
+  return tool;
+}
+
+function createUnreadableParametersTool(): ToolDefinition {
+  return {
+    name: "broken_params",
+    label: "Broken Params",
+    description: "Should be ignored.",
+    get parameters() {
+      throw new Error("bad\nparameters");
+    },
+    execute: async () => ({
+      content: [{ type: "text", text: "bad" }],
+      details: {},
+    }),
+  } as unknown as ToolDefinition;
 }
 
 describe("createAgentSession tool defaults", () => {
@@ -127,6 +174,46 @@ describe("createAgentSession tool defaults", () => {
     session.setActiveToolsByName(["bash", "custom_lookup"]);
 
     expect(session.getActiveToolNames()).toEqual(["custom_lookup"]);
+  });
+
+  it("ignores custom tools with unreadable registry metadata", async () => {
+    const { session } = await createAgentSession({
+      model: testModel,
+      noTools: "builtin",
+      customTools: [
+        createUnreadableNameTool(),
+        createUnreadableParametersTool(),
+        createTextTool("custom_lookup"),
+      ],
+      resourceLoader: createEmptyResourceLoader(),
+      sessionManager: SessionManager.inMemory(),
+      settingsManager: SettingsManager.inMemory(),
+      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
+    });
+
+    expect(session.getActiveToolNames()).toEqual(["custom_lookup"]);
+    expect(session.getAllTools().map((tool) => tool.name)).toEqual(["custom_lookup"]);
+  });
+
+  it("ignores extension tools with unreadable registry metadata", async () => {
+    const sourceInfo = createSyntheticSourceInfo("<test-extension>", { source: "temporary" });
+    const tools = new Map<string, RegisteredTool>([
+      ["unreadable_name", { definition: createUnreadableNameTool(), sourceInfo }],
+      ["broken_params", { definition: createUnreadableParametersTool(), sourceInfo }],
+      ["extension_lookup", { definition: createTextTool("extension_lookup"), sourceInfo }],
+    ]);
+
+    const { session } = await createAgentSession({
+      model: testModel,
+      noTools: "builtin",
+      resourceLoader: createResourceLoaderWithHandlers(new Map(), tools),
+      sessionManager: SessionManager.inMemory(),
+      settingsManager: SettingsManager.inMemory(),
+      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
+    });
+
+    expect(session.getActiveToolNames()).toEqual(["extension_lookup"]);
+    expect(session.getAllTools().map((tool) => tool.name)).toEqual(["extension_lookup"]);
   });
 
   it("preserves an exact base system prompt when active tools change", async () => {
