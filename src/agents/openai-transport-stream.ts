@@ -2556,6 +2556,9 @@ function isAzureOpenAICompatibleHost(hostname: string): boolean {
 }
 
 function isKnownOpenAICompletionsEndpoint(model: Pick<Model, "baseUrl">): boolean {
+  if (!model.baseUrl.trim()) {
+    return true;
+  }
   const endpointClass = resolveProviderEndpoint(model.baseUrl).endpointClass;
   if (endpointClass === "openai-public" || endpointClass === "azure-openai") {
     return true;

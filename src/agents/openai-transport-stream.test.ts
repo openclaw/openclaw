@@ -5961,39 +5961,45 @@ describe("openai transport stream", () => {
     expect(params).not.toHaveProperty("reasoning_effort");
   });
 
-  it("omits reasoning_effort for OpenAI gpt-5.5 Chat Completions tool payloads", () => {
-    const params = buildOpenAICompletionsParams(
-      {
-        id: "gpt-5.5",
-        name: "GPT-5.5",
-        api: "openai-completions",
-        provider: "openai",
-        baseUrl: "https://api.openai.com/v1",
-        reasoning: true,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 1000000,
-        maxTokens: 128000,
-      } satisfies Model<"openai-completions">,
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [
-          {
-            name: "lookup_weather",
-            description: "Get forecast",
-            parameters: { type: "object", properties: {}, additionalProperties: false },
-          },
-        ],
-      } as never,
-      {
-        reasoning: "medium",
-      } as never,
-    ) as { reasoning_effort?: unknown; tools?: unknown };
+  it.each([
+    ["implicit default", ""],
+    ["default", "https://api.openai.com/v1"],
+  ])(
+    "omits reasoning_effort for OpenAI %s gpt-5.5 Chat Completions tool payloads",
+    (_label, baseUrl) => {
+      const params = buildOpenAICompletionsParams(
+        {
+          id: "gpt-5.5",
+          name: "GPT-5.5",
+          api: "openai-completions",
+          provider: "openai",
+          baseUrl,
+          reasoning: true,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 1000000,
+          maxTokens: 128000,
+        } satisfies Model<"openai-completions">,
+        {
+          systemPrompt: "system",
+          messages: [],
+          tools: [
+            {
+              name: "lookup_weather",
+              description: "Get forecast",
+              parameters: { type: "object", properties: {}, additionalProperties: false },
+            },
+          ],
+        } as never,
+        {
+          reasoning: "medium",
+        } as never,
+      ) as { reasoning_effort?: unknown; tools?: unknown };
 
-    expect(params.tools).toHaveLength(1);
-    expect(params).not.toHaveProperty("reasoning_effort");
-  });
+      expect(params.tools).toHaveLength(1);
+      expect(params).not.toHaveProperty("reasoning_effort");
+    },
+  );
 
   it.each([
     ["Azure OpenAI", "https://example.openai.azure.com/openai/v1"],
