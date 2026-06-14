@@ -35,6 +35,7 @@ import {
   type PluginToolDescriptorConfigCacheKeyMemo,
   writeCachedPluginToolDescriptors,
 } from "./tool-descriptor-cache.js";
+import { auditPluginToolDescriptors } from "./tool-descriptor-plan-audit.js";
 import type { OpenClawPluginToolContext } from "./types.js";
 
 export {
@@ -1386,6 +1387,19 @@ export function resolvePluginTools(params: {
         descriptors,
       });
     }
+  }
+
+  const toolAvailabilityContext = {
+    env,
+    enabledPluginIds: new Set(registry.plugins.map((entry) => entry.id)),
+  };
+  for (const [pluginId, descriptors] of capturedDescriptorsByPluginId) {
+    auditPluginToolDescriptors({
+      pluginId,
+      descriptors: descriptors.map((entry) => entry.descriptor),
+      availability: toolAvailabilityContext,
+      logger: context.logger,
+    });
   }
 
   if (factoryTimings.length > 0) {

@@ -72,6 +72,14 @@ function hasAvailabilityExpressionShape(value: ToolAvailabilityExpression): bool
   return "kind" in value || "allOf" in value || "anyOf" in value;
 }
 
+/** Narrow unknown values to planner availability expressions before descriptor capture. */
+export function isToolAvailabilityExpression(value: unknown): value is ToolAvailabilityExpression {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  return hasAvailabilityExpressionShape(value as ToolAvailabilityExpression);
+}
+
 function diagnostic(
   reason: ToolAvailabilityDiagnostic["reason"],
   signal: ToolAvailabilitySignal,

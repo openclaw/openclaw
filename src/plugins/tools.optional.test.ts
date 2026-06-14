@@ -1939,6 +1939,29 @@ describe("resolvePluginTools optional tools", () => {
     );
   });
 
+  it("warns when a plugin tool carries an empty availability group at registration", () => {
+    const warnSpy = installConsoleMethodSpy("warn");
+    setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+    setRegistry([
+      {
+        pluginId: "optional-demo",
+        names: ["optional_tool"],
+        optional: true,
+        source: "/tmp/optional-demo.js",
+        factory: () => ({
+          ...makeTool("optional_tool"),
+          availability: { anyOf: [] },
+        }),
+      },
+    ]);
+
+    resolveOptionalDemoTools(["optional_tool"]);
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      "[plugins] tool descriptor authoring error (optional-demo/optional_tool): Empty availability anyOf group",
+    );
+  });
+
   it("warns with plugin factory timing details when a factory is slow", () => {
     vi.useFakeTimers({ now: 0 });
     const warnSpy = installConsoleMethodSpy("warn");

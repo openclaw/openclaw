@@ -43,6 +43,8 @@ export type {
   AgentPromptSurfaceKind,
   AgentHarness,
   AnyAgentTool,
+  ToolAvailabilityExpression,
+  ToolAvailabilitySignal,
   MediaUnderstandingProviderPlugin,
   OpenClawPluginApi,
   OpenClawPluginCommandDefinition,

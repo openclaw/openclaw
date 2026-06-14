@@ -55,6 +55,7 @@ export type {
   UnifiedModelCatalogProviderContext,
   UnifiedModelCatalogProviderPlugin,
 } from "../plugins/types.js";
+export type { ToolAvailabilityExpression, ToolAvailabilitySignal } from "../tools/types.js";
 export type {
   UnifiedModelCatalogEntry,
   UnifiedModelCatalogKind,

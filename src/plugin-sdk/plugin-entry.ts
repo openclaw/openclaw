@@ -4,6 +4,8 @@ import { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 import { createCachedLazyValueGetter } from "./lazy-value.js";
 
 export type AnyAgentTool = import("../plugins/types.js").AnyAgentTool;
+export type ToolAvailabilityExpression = import("../tools/types.js").ToolAvailabilityExpression;
+export type ToolAvailabilitySignal = import("../tools/types.js").ToolAvailabilitySignal;
 export type AgentHarness = import("../plugins/types.js").AgentHarness;
 export type AgentPromptGuidance = import("../plugins/types.js").AgentPromptGuidance;
 export type AgentPromptGuidanceEntry = import("../plugins/types.js").AgentPromptGuidanceEntry;

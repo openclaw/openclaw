@@ -15,8 +15,10 @@ vi.mock("../config/runtime-snapshot.js", () => ({
   resolveRuntimeConfigCacheKey: hoisted.resolveRuntimeConfigCacheKey,
 }));
 
+import type { AnyAgentTool } from "../agents/tools/common.js";
 import {
   buildPluginToolDescriptorCacheKey,
+  capturePluginToolDescriptor,
   createPluginToolDescriptorConfigCacheKeyMemo,
   resetPluginToolDescriptorCache,
 } from "./tool-descriptor-cache.js";
@@ -168,5 +170,48 @@ describe("plugin tool descriptor cache keys", () => {
     });
 
     expect(firstKey).toBe(secondKey);
+  });
+});
+
+describe("capturePluginToolDescriptor", () => {
+  it("preserves availability expressions attached to plugin tools", () => {
+    const tool = {
+      name: "cron",
+      label: "cron",
+      description: "cron tool",
+      parameters: { type: "object", properties: {} },
+      availability: { anyOf: [] },
+      async execute() {
+        return { content: [{ type: "text", text: "ok" }] };
+      },
+    } as unknown as AnyAgentTool & { availability: { anyOf: [] } };
+
+    const captured = capturePluginToolDescriptor({
+      pluginId: "demo",
+      tool,
+      optional: false,
+    });
+
+    expect(captured.descriptor.availability).toEqual({ anyOf: [] });
+  });
+
+  it("ignores availability metadata that is not a planner expression shape", () => {
+    const tool = {
+      name: "cron",
+      description: "cron tool",
+      parameters: { type: "object", properties: {} },
+      availability: { privateMetadata: true, version: 2 },
+      async execute() {
+        return { content: [{ type: "text", text: "ok" }] };
+      },
+    } as unknown as AnyAgentTool;
+
+    const captured = capturePluginToolDescriptor({
+      pluginId: "demo",
+      tool,
+      optional: false,
+    });
+
+    expect(captured.descriptor.availability).toBeUndefined();
   });
 });

@@ -13,6 +13,7 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import type { TSchema } from "typebox";
 import { readLocalFileSafely } from "../../infra/fs-safe.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
+import type { ToolAvailabilityExpression } from "../../tools/types.js";
 import type { ImageSanitizationLimits } from "../image-sanitization.js";
 import type {
   AgentTool,
@@ -46,6 +47,8 @@ type ErasedAgentToolExecute = {
 
 export type AnyAgentTool = Omit<AgentTool, "execute"> &
   ErasedAgentToolExecute & {
+    /** Optional planner availability expression for descriptor-backed tool registration. */
+    availability?: ToolAvailabilityExpression;
     displaySummary?: string;
     prepareBeforeToolCallParams?: AgentToolWithMeta<
       TSchema,
