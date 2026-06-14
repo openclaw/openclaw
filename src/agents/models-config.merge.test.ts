@@ -4,6 +4,8 @@ import type { ExistingProviderConfig } from "./models-config.merge.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 
 let NON_ENV_SECRETREF_MARKER: typeof import("./model-auth-markers.js").NON_ENV_SECRETREF_MARKER;
+let CUSTOM_LOCAL_AUTH_MARKER: typeof import("./model-auth-markers.js").CUSTOM_LOCAL_AUTH_MARKER;
+let OLLAMA_LOCAL_AUTH_MARKER: typeof import("./model-auth-markers.js").OLLAMA_LOCAL_AUTH_MARKER;
 let mergeProviderModels: typeof import("./models-config.merge.js").mergeProviderModels;
 let mergeProviders: typeof import("./models-config.merge.js").mergeProviders;
 let mergeWithExistingProviderSecrets: typeof import("./models-config.merge.js").mergeWithExistingProviderSecrets;
@@ -12,7 +14,8 @@ async function loadMergeModules() {
   // Merge helpers depend on real manifest registry behavior; undo previous
   // mocks before importing the module under test.
   vi.doUnmock("../plugins/manifest-registry.js");
-  ({ NON_ENV_SECRETREF_MARKER } = await import("./model-auth-markers.js"));
+  ({ CUSTOM_LOCAL_AUTH_MARKER, NON_ENV_SECRETREF_MARKER, OLLAMA_LOCAL_AUTH_MARKER } =
+    await import("./model-auth-markers.js"));
   ({ mergeProviderModels, mergeProviders, mergeWithExistingProviderSecrets } =
     await import("./models-config.merge.js"));
 }
@@ -205,12 +208,123 @@ describe("models-config merge helpers", () => {
           apiKey: preservedApiKey,
           models: [],
         } as ExistingProviderConfig,
+        "amazon-bedrock": {
+          baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+          api: "bedrock-converse-stream",
+          auth: "aws-sdk",
+          models: [
+            createModel({
+              id: "anthropic.claude-sonnet-4-6",
+              name: "Claude Sonnet",
+            }),
+          ],
+        } as ExistingProviderConfig,
+        "stale-oauth": {
+          baseUrl: "https://oauth.example/v1",
+          api: "openai-responses",
+          auth: "oauth",
+          models: [
+            createModel({
+              id: "oauth-model",
+              name: "OAuth model",
+            }),
+          ],
+        } as ExistingProviderConfig,
+        "stale-oauth-marker": {
+          baseUrl: "https://oauth-marker.example/v1",
+          api: "openai-responses",
+          auth: "oauth",
+          apiKey: "oauth:stale",
+          models: [
+            createModel({
+              id: "oauth-marker-model",
+              name: "OAuth marker model",
+            }),
+          ],
+        } as ExistingProviderConfig,
+        "ollama-local": {
+          baseUrl: "http://192.168.0.222:11434",
+          api: "ollama",
+          apiKey: OLLAMA_LOCAL_AUTH_MARKER,
+          models: [
+            createModel({
+              id: "qwen3.5:27b",
+              name: "Qwen 3.5 27B",
+            }),
+          ],
+        } as ExistingProviderConfig,
+        "ollama-docker": {
+          baseUrl: "http://ollama:11434",
+          api: "ollama",
+          apiKey: OLLAMA_LOCAL_AUTH_MARKER,
+          models: [
+            createModel({
+              id: "qwen3.5:14b",
+              name: "Qwen 3.5 14B",
+            }),
+          ],
+        } as ExistingProviderConfig,
+        "ollama-sidecar": {
+          baseUrl: "http://ollama-sidecar:11434",
+          api: "ollama",
+          apiKey: OLLAMA_LOCAL_AUTH_MARKER,
+          models: [
+            createModel({
+              id: "qwen3.5:8b",
+              name: "Qwen 3.5 8B",
+            }),
+          ],
+        } as ExistingProviderConfig,
+        "lmstudio-local": {
+          baseUrl: "http://localhost:1234/v1",
+          api: "openai-completions",
+          apiKey: "lmstudio-local",
+          models: [
+            createModel({
+              id: "qwen3.5:4b",
+              name: "Qwen 3.5 4B",
+            }),
+          ],
+        } as ExistingProviderConfig,
+        "custom-local": {
+          baseUrl: "http://localhost:8080/v1",
+          api: "openai-responses",
+          apiKey: CUSTOM_LOCAL_AUTH_MARKER,
+          models: [
+            createModel({
+              id: "qwen3.5:9b",
+              name: "Qwen 3.5 9B",
+            }),
+          ],
+        } as ExistingProviderConfig,
+        "remote-local-marker": {
+          baseUrl: "https://remote.example/v1",
+          api: "openai-completions",
+          apiKey: OLLAMA_LOCAL_AUTH_MARKER,
+          models: [
+            createModel({
+              id: "remote-model",
+              name: "Remote model",
+            }),
+          ],
+        } as ExistingProviderConfig,
       },
       secretRefManagedProviders: new Set<string>(),
     });
 
     expect(merged["claude-cli"]).toBeUndefined();
     expect(merged["auth-only"]?.apiKey).toBe(preservedApiKey);
+    expect(merged["amazon-bedrock"]?.apiKey).toBeUndefined();
+    expect(merged["amazon-bedrock"]?.models?.[0]?.id).toBe("anthropic.claude-sonnet-4-6");
+    expect(merged["stale-oauth"]?.auth).toBe("oauth");
+    expect(merged["stale-oauth"]?.apiKey).toBeUndefined();
+    expect(merged["stale-oauth-marker"]).toBeUndefined();
+    expect(merged["ollama-local"]?.apiKey).toBe(OLLAMA_LOCAL_AUTH_MARKER);
+    expect(merged["ollama-docker"]?.apiKey).toBe(OLLAMA_LOCAL_AUTH_MARKER);
+    expect(merged["ollama-sidecar"]?.apiKey).toBe(OLLAMA_LOCAL_AUTH_MARKER);
+    expect(merged["lmstudio-local"]?.apiKey).toBe("lmstudio-local");
+    expect(merged["custom-local"]?.apiKey).toBe(CUSTOM_LOCAL_AUTH_MARKER);
+    expect(merged["remote-local-marker"]).toBeUndefined();
     expect(merged.openai).toBeDefined();
   });
 
@@ -222,13 +336,153 @@ describe("models-config merge helpers", () => {
         custom: createConfigProvider(),
       },
       existingProviders: {
-        custom: createExistingProvider(),
+        custom: createExistingProvider({
+          apiKey: `  ${preservedApiKey}  `,
+          baseUrl: "  https://agent.example/v1  ",
+        }),
       },
       secretRefManagedProviders: new Set<string>(),
     });
 
     expect(merged.custom?.apiKey).toBe(preservedApiKey);
     expect(merged.custom?.baseUrl).toBe("https://agent.example/v1");
+  });
+
+  it("preserves existing local marker auth when local provider metadata refreshes", () => {
+    const merged = mergeWithExistingProviderSecrets({
+      nextProviders: {
+        "responses-local": createConfigProvider({
+          baseUrl: "http://localhost:8080/v1",
+          api: "openai-responses",
+          apiKey: undefined,
+        }),
+      },
+      existingProviders: {
+        "responses-local": createExistingProvider({
+          baseUrl: "http://localhost:8080/v1",
+          api: "openai-responses",
+          apiKey: CUSTOM_LOCAL_AUTH_MARKER,
+        }),
+      },
+      secretRefManagedProviders: new Set<string>(),
+    });
+
+    expect(merged["responses-local"]?.apiKey).toBe(CUSTOM_LOCAL_AUTH_MARKER);
+  });
+
+  it("uses refreshed real apiKey over existing local marker auth", () => {
+    const merged = mergeWithExistingProviderSecrets({
+      nextProviders: {
+        "responses-local": createConfigProvider({
+          baseUrl: "http://localhost:8080/v1",
+          api: "openai-responses",
+          apiKey: "LOCAL_PROXY_KEY", // pragma: allowlist secret
+        }),
+      },
+      existingProviders: {
+        "responses-local": createExistingProvider({
+          baseUrl: "http://localhost:8080/v1",
+          api: "openai-responses",
+          apiKey: CUSTOM_LOCAL_AUTH_MARKER,
+        }),
+      },
+      secretRefManagedProviders: new Set<string>(),
+    });
+
+    expect(merged["responses-local"]?.apiKey).toBe("LOCAL_PROXY_KEY"); // pragma: allowlist secret
+  });
+
+  it("preserves Ollama service-alias baseUrl with local marker auth", () => {
+    const merged = mergeWithExistingProviderSecrets({
+      nextProviders: {
+        "ollama-sidecar": createConfigProvider({
+          baseUrl: "http://localhost:11434",
+          api: "ollama",
+          apiKey: undefined,
+        }),
+      },
+      existingProviders: {
+        "ollama-sidecar": createExistingProvider({
+          baseUrl: "http://ollama-sidecar:11434",
+          api: "ollama",
+          apiKey: OLLAMA_LOCAL_AUTH_MARKER,
+        }),
+      },
+      secretRefManagedProviders: new Set<string>(),
+    });
+
+    expect(merged["ollama-sidecar"]?.apiKey).toBe(OLLAMA_LOCAL_AUTH_MARKER);
+    expect(merged["ollama-sidecar"]?.baseUrl).toBe("http://ollama-sidecar:11434");
+  });
+
+  it("does not preserve existing local marker auth when refreshed provider is remote", () => {
+    const merged = mergeWithExistingProviderSecrets({
+      nextProviders: {
+        "responses-local": createConfigProvider({
+          baseUrl: "https://remote.example/v1",
+          api: "openai-responses",
+          apiKey: undefined,
+        }),
+      },
+      existingProviders: {
+        "responses-local": createExistingProvider({
+          baseUrl: "http://localhost:8080/v1",
+          api: "openai-responses",
+          apiKey: CUSTOM_LOCAL_AUTH_MARKER,
+        }),
+      },
+      secretRefManagedProviders: new Set<string>(),
+    });
+
+    expect(merged["responses-local"]?.apiKey).toBeUndefined();
+    expect(merged["responses-local"]?.baseUrl).toBe("https://remote.example/v1");
+  });
+
+  it("ignores blank existing apiKey and baseUrl when current config is usable", () => {
+    const merged = mergeWithExistingProviderSecrets({
+      nextProviders: {
+        custom: createConfigProvider(),
+      },
+      existingProviders: {
+        custom: createExistingProvider({
+          apiKey: "  ",
+          baseUrl: "  ",
+        }),
+      },
+      secretRefManagedProviders: new Set<string>(),
+    });
+
+    expect(merged.custom?.apiKey).toBe(configApiKey);
+    expect(merged.custom?.baseUrl).toBe("https://config.example/v1");
+  });
+
+  it("does not preserve stale apiKey when current auth mode omits apiKey", () => {
+    const merged = mergeWithExistingProviderSecrets({
+      nextProviders: {
+        oauth: createConfigProvider({
+          auth: "oauth",
+          apiKey: undefined,
+        }),
+        "amazon-bedrock": createConfigProvider({
+          auth: "aws-sdk",
+          api: "bedrock-converse-stream",
+          apiKey: undefined,
+        }),
+      },
+      existingProviders: {
+        oauth: createExistingProvider({
+          apiKey: preservedApiKey,
+        }),
+        "amazon-bedrock": createExistingProvider({
+          apiKey: preservedApiKey,
+          api: "bedrock-converse-stream",
+        }),
+      },
+      secretRefManagedProviders: new Set<string>(),
+    });
+
+    expect(merged.oauth?.apiKey).toBeUndefined();
+    expect(merged["amazon-bedrock"]?.apiKey).toBeUndefined();
   });
 
   it("preserves existing baseUrl after explicit provider key normalization", () => {

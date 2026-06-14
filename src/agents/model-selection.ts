@@ -42,6 +42,7 @@ import {
   buildConfiguredModelCatalog,
   buildModelAliasIndex,
   getModelRefStatusWithFallbackModels,
+  formatModelNotAllowedMessage,
   inferUniqueProviderFromCatalog,
   inferUniqueProviderFromConfiguredModels,
   normalizeModelSelection,
@@ -514,7 +515,7 @@ export function resolveAllowedModelRef(
   if (openrouterCompatRef) {
     const status = getModelRefStatusForResolve(params, openrouterCompatRef);
     if (!status.allowed) {
-      return { error: `model not allowed: ${status.key}` };
+      return { error: formatModelNotAllowedMessage(status) };
     }
     return { ref: openrouterCompatRef, key: status.key };
   }

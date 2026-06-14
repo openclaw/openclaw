@@ -1601,6 +1601,30 @@ describe("model-selection", () => {
         ref: { provider: "openai", model: "xiaomi/mimo-v2-pro-mit" },
       });
     });
+
+    it("explains when a catalog-visible model is not admitted by the allowlist", () => {
+      const result = resolveAllowedModelRef({
+        cfg: {
+          agents: {
+            defaults: {
+              model: { primary: "anthropic/claude-sonnet-4-6" },
+              models: {
+                "anthropic/claude-sonnet-4-6": {},
+              },
+            },
+          },
+        },
+        catalog: [{ provider: "openai", id: "gpt-4o", name: "GPT-4o" }],
+        raw: "openai/gpt-4o",
+        defaultProvider: "anthropic",
+        defaultModel: "claude-sonnet-4-6",
+      });
+
+      expect(result).toEqual({
+        error:
+          'model not allowed: openai/gpt-4o (model is listed in the catalog, but not allowed by agents.defaults.models; add "openai/gpt-4o" or "openai/*" to agents.defaults.models)',
+      });
+    });
   });
 
   describe("resolveModelRefFromString", () => {

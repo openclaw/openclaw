@@ -53,6 +53,20 @@ function formatAllowedModelRefs(params: { cfg: OpenClawConfig }): string {
   return "(none configured)";
 }
 
+function splitModelNotAllowedDetail(error: string): { modelRef: string; detail?: string } {
+  const raw = error.slice("model not allowed:".length).trim();
+  const detailStart = raw.indexOf(" (");
+  if (detailStart < 0) {
+    return { modelRef: raw };
+  }
+  const modelRef = raw.slice(0, detailStart).trim();
+  const detail = raw
+    .slice(detailStart + 2)
+    .replace(/\)$/u, "")
+    .trim();
+  return detail ? { modelRef, detail } : { modelRef };
+}
+
 function formatCronPayloadModelRejection(params: {
   cfg: OpenClawConfig;
   modelOverride: string;
@@ -60,8 +74,9 @@ function formatCronPayloadModelRejection(params: {
 }): string {
   const { modelOverride, error } = params;
   if (error.startsWith("model not allowed:")) {
-    const modelRef = error.slice("model not allowed:".length).trim();
-    return `cron payload.model '${modelOverride}' rejected by agents.defaults.models allowlist: ${modelRef} is not in [${formatAllowedModelRefs({ cfg: params.cfg })}]`;
+    const { modelRef, detail } = splitModelNotAllowedDetail(error);
+    const suffix = detail ? ` (${detail})` : "";
+    return `cron payload.model '${modelOverride}' rejected by agents.defaults.models allowlist: ${modelRef} is not in [${formatAllowedModelRefs({ cfg: params.cfg })}]${suffix}`;
   }
   return `cron payload.model '${modelOverride}' rejected: ${error}`;
 }
