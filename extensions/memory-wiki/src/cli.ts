@@ -16,7 +16,7 @@ import {
   type ChatGptImportResult,
   type ChatGptRollbackResult,
 } from "./chatgpt-import.js";
-import { compileMemoryWikiVault } from "./compile.js";
+import { compileMemoryWikiVault, refreshMemoryWikiIndexesAfterImport } from "./compile.js";
 import {
   resolveMemoryWikiConfig,
   WIKI_SEARCH_BACKENDS,
@@ -26,6 +26,7 @@ import {
 } from "./config.js";
 import { ingestMemoryWikiSource } from "./ingest.js";
 import { lintMemoryWikiVault } from "./lint.js";
+import { syncMemoryWikiLocalImportSources } from "./local-import.js";
 import {
   probeObsidianCli,
   runObsidianCommand,
@@ -138,6 +139,10 @@ type WikiUnsafeLocalImportCommandOptions = {
   json?: boolean;
 };
 
+type WikiLocalImportCommandOptions = {
+  json?: boolean;
+};
+
 type WikiChatGptImportCommandOptions = {
   json?: boolean;
   dryRun?: boolean;
@@ -173,7 +178,8 @@ function isResolvedMemoryWikiConfig(
     "vault" in config &&
     "bridge" in config &&
     "obsidian" in config &&
-    "unsafeLocal" in config,
+    "unsafeLocal" in config &&
+    "localImports" in config,
   );
 }
 
@@ -804,6 +810,33 @@ export async function runWikiUnsafeLocalImport(params: {
   });
 }
 
+export async function runWikiLocalImport(params: {
+  config: ResolvedMemoryWikiConfig;
+  appConfig?: OpenClawConfig;
+  json?: boolean;
+  stdout?: Pick<NodeJS.WriteStream, "write">;
+}) {
+  return runWikiCommandWithSummary({
+    json: params.json,
+    stdout: params.stdout,
+    run: async () => {
+      const syncResult = await syncMemoryWikiLocalImportSources(params.config);
+      const refreshResult = await refreshMemoryWikiIndexesAfterImport({
+        config: params.config,
+        syncResult,
+      });
+      return {
+        ...syncResult,
+        indexesRefreshed: refreshResult.refreshed,
+        indexUpdatedFiles: refreshResult.compile?.updatedFiles ?? [],
+        indexRefreshReason: refreshResult.reason,
+      };
+    },
+    render: (value) =>
+      `Local import synced ${value.artifactCount} artifacts (${value.importedCount} new, ${value.updatedCount} updated, ${value.skippedCount} unchanged, ${value.removedCount} removed). Indexes ${value.indexesRefreshed ? `refreshed (${value.indexUpdatedFiles.length} files)` : `not refreshed (${value.indexRefreshReason})`}.`,
+  });
+}
+
 export async function runWikiObsidianStatus(params: {
   config: ResolvedMemoryWikiConfig;
   json?: boolean;
@@ -1116,6 +1149,17 @@ export function registerWikiCli(
     .option("--json", "Print JSON")
     .action(async (opts: WikiUnsafeLocalImportCommandOptions) => {
       await runWikiUnsafeLocalImport({ config, appConfig, json: opts.json });
+    });
+
+  const localImport = wiki
+    .command("local-import")
+    .description("Import explicitly configured local files into wiki source pages");
+  localImport
+    .command("import")
+    .description("Sync configured local import paths into wiki source pages")
+    .option("--json", "Print JSON")
+    .action(async (opts: WikiLocalImportCommandOptions) => {
+      await runWikiLocalImport({ config, appConfig, json: opts.json });
     });
 
   const chatgpt = wiki

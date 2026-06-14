@@ -8,7 +8,7 @@ import type {
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 
-export type MemoryWikiImportedSourceGroup = "bridge" | "unsafe-local";
+export type MemoryWikiImportedSourceGroup = "bridge" | "unsafe-local" | "local-import";
 
 export type MemoryWikiImportedSourceStateEntry = {
   group: MemoryWikiImportedSourceGroup;

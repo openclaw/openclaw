@@ -38,6 +38,10 @@
       "label": "Allow Private Memory Access",
       "help": "Experimental same-repo escape hatch for reading memory-core private paths."
     },
+    "localImports.enabled": {
+      "label": "Enable Local Imports",
+      "help": "Import explicitly configured local files and directories into wiki source pages."
+    },
     "context.includeCompiledDigestPrompt": {
       "label": "Include Compiled Digest In Prompt",
       "help": "Append a compact compiled wiki digest snapshot to memory prompt sections for context engines and legacy prompt assembly."
@@ -111,6 +115,21 @@
         "additionalProperties": false,
         "properties": {
           "allowPrivateMemoryCoreAccess": {
+            "type": "boolean"
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "localImports": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
             "type": "boolean"
           },
           "paths": {
