@@ -724,22 +724,11 @@ describe("subagent registry persistence", () => {
     expect(listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
   });
 
-  it("keeps stale unended restored runs with abortedLastRun for restart recovery", async () => {
-    vi.mocked(callGateway).mockImplementationOnce(async (request) => {
-      expectFields(request, {
-        method: "agent.wait",
-      });
-      expectFields((request as { params?: unknown }).params, {
-        runId: "run-stale-aborted-restore",
-      });
-      return {
-        status: "pending",
-      };
-    });
+  it("reconciles stale unended restored runs even when restart-aborted (#90766)", async () => {
     const now = Date.now();
     const runId = "run-stale-aborted-restore";
     const childSessionKey = "agent:main:subagent:stale-aborted-restore";
-    await writePersistedRegistry(
+    const registryPath = await writePersistedRegistry(
       {
         version: 2,
         runs: {
@@ -748,7 +737,7 @@ describe("subagent registry persistence", () => {
             childSessionKey,
             requesterSessionKey: "agent:main:main",
             requesterDisplayKey: "main",
-            task: "stale restart-recoverable work",
+            task: "stale restart-aborted work",
             cleanup: "keep",
             createdAt: now - 3 * 60 * 60 * 1_000,
             startedAt: now - 3 * 60 * 60 * 1_000,
@@ -760,6 +749,59 @@ describe("subagent registry persistence", () => {
     await writeChildSessionEntry({
       sessionKey: childSessionKey,
       sessionId: "sess-stale-aborted-restore",
+      updatedAt: now,
+      abortedLastRun: true,
+    });
+
+    restartRegistry();
+    await waitForRegistryWork(async () => {
+      const after = JSON.parse(await fs.readFile(registryPath, "utf8")) as {
+        runs?: Record<string, unknown>;
+      };
+      return after.runs?.[runId] === undefined;
+    });
+
+    // Long-downtime aborted run is reconciled, not auto-resumed.
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
+  });
+
+  it("recovers fresh restart-aborted runs that are not yet stale (#90766)", async () => {
+    vi.mocked(callGateway).mockImplementationOnce(async (request) => {
+      expectFields(request, {
+        method: "agent.wait",
+      });
+      expectFields((request as { params?: unknown }).params, {
+        runId: "run-fresh-aborted-restore",
+      });
+      return {
+        status: "pending",
+      };
+    });
+    const now = Date.now();
+    const runId = "run-fresh-aborted-restore";
+    const childSessionKey = "agent:main:subagent:fresh-aborted-restore";
+    await writePersistedRegistry(
+      {
+        version: 2,
+        runs: {
+          [runId]: {
+            runId,
+            childSessionKey,
+            requesterSessionKey: "agent:main:main",
+            requesterDisplayKey: "main",
+            task: "fresh restart-recoverable work",
+            cleanup: "keep",
+            createdAt: now - 60_000,
+            startedAt: now - 60_000,
+          },
+        },
+      },
+      { seedChildSessions: false },
+    );
+    await writeChildSessionEntry({
+      sessionKey: childSessionKey,
+      sessionId: "sess-fresh-aborted-restore",
       updatedAt: now,
       abortedLastRun: true,
     });

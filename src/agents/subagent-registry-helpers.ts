@@ -190,9 +190,11 @@ export function resolveSubagentRunOrphanReason(params: {
     }
     if (
       params.includeStaleUnended === true &&
-      sessionEntry.abortedLastRun !== true &&
       isStaleUnendedSubagentRun(params.entry, params.now)
     ) {
+      // Stale-unended pruning also covers restart-aborted runs: the shared liveness window
+      // keeps fresh restart recovery (recent aborts are not yet stale) while a long-downtime
+      // aborted run is reconciled instead of auto-resurrected after the gateway comes back (#90766).
       return "stale-unended-run";
     }
     return null;
