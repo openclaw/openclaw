@@ -15,6 +15,7 @@ import type { ResolvedMessagingTarget } from "./target-resolver.js";
 
 type ResolveAutoThreadId = NonNullable<ChannelThreadingAdapter["resolveAutoThreadId"]>;
 type ResolveReplyTransport = NonNullable<ChannelThreadingAdapter["resolveReplyTransport"]>;
+type MatchesToolContextTarget = NonNullable<ChannelThreadingAdapter["matchesToolContextTarget"]>;
 
 function suppressesImplicitThreading(actionParams: Record<string, unknown>): boolean {
   return actionParams.topLevel === true || actionParams.threadId === null;
@@ -69,6 +70,7 @@ function isSameConversationTarget(
   actionParams: Record<string, unknown>,
   channel: ChannelId,
   toolContext?: ChannelThreadingToolContext,
+  matchesToolContextTarget?: MatchesToolContextTarget,
 ): boolean {
   const currentChannelId = toolContext?.currentChannelId?.trim();
   const currentMessagingTarget = toolContext?.currentMessagingTarget?.trim();
@@ -87,6 +89,9 @@ function isSameConversationTarget(
     return true;
   }
   const target = explicitTarget.trim();
+  if (toolContext && matchesToolContextTarget?.({ target, toolContext })) {
+    return true;
+  }
   return target === currentMessagingTarget || target === currentChannelId;
 }
 
@@ -96,6 +101,7 @@ export function resolveAndApplyOutboundReplyToId(
   context: {
     channel: ChannelId;
     toolContext?: ChannelThreadingToolContext;
+    matchesToolContextTarget?: MatchesToolContextTarget;
   },
 ): string | undefined {
   const explicitReplyToId = readStringParam(actionParams, "replyTo");
@@ -111,7 +117,14 @@ export function resolveAndApplyOutboundReplyToId(
   if (suppressesImplicitThreading(actionParams)) {
     return undefined;
   }
-  if (!isSameConversationTarget(actionParams, context.channel, context.toolContext)) {
+  if (
+    !isSameConversationTarget(
+      actionParams,
+      context.channel,
+      context.toolContext,
+      context.matchesToolContextTarget,
+    )
+  ) {
     return undefined;
   }
 

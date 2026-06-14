@@ -379,6 +379,48 @@ describe("message action threading helpers", () => {
     expect(hasRepliedRef.value).toBe(true);
   });
 
+  it("consumes first-mode threading once for a channel-normalized target alias", () => {
+    const hasRepliedRef = { value: false };
+    const toolContext = {
+      currentChannelId: "D123",
+      currentMessagingTarget: "user:U123",
+      currentMessageId: "msg-42",
+      replyToMode: "first" as const,
+      hasRepliedRef,
+    };
+    const matchesToolContextTarget = vi.fn(({ target }: { target: string }) => target === "U123");
+
+    const firstResolved = resolveAndApplyOutboundReplyToId(
+      {
+        channel: "slack",
+        target: "U123",
+        message: "first",
+      },
+      {
+        channel: "slack",
+        toolContext,
+        matchesToolContextTarget,
+      },
+    );
+    const secondResolved = resolveAndApplyOutboundReplyToId(
+      {
+        channel: "slack",
+        target: "U123",
+        message: "followup",
+      },
+      {
+        channel: "slack",
+        toolContext,
+        matchesToolContextTarget,
+      },
+    );
+
+    expect(firstResolved).toBe("msg-42");
+    expect(secondResolved).toBeUndefined();
+    expect(hasRepliedRef.value).toBe(true);
+    expect(matchesToolContextTarget).toHaveBeenCalledTimes(2);
+  });
+
   it("consumes first-mode when the first send uses an explicit replyTo", () => {
     const hasRepliedRef = { value: false };
     const explicitResolved = resolveAndApplyOutboundReplyToId(

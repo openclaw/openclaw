@@ -1113,6 +1113,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   resolveAndApplyOutboundReplyToId(params, {
     channel,
     toolContext: input.toolContext,
+    matchesToolContextTarget: getChannelPlugin(channel)?.threading?.matchesToolContextTarget,
   });
   const { resolvedThreadId, outboundRoute } = await prepareOutboundMirrorRoute({
     cfg,
