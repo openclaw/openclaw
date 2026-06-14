@@ -43,6 +43,7 @@ data class ChatSessionEntry(
   val totalTokens: Long? = null,
   val totalTokensFresh: Boolean? = null,
   val contextTokens: Long? = null,
+  val hasContextUsageMetadata: Boolean = totalTokens != null || totalTokensFresh != null || contextTokens != null,
 )
 
 /**
