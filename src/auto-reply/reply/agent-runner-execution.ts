@@ -441,7 +441,11 @@ function buildFallbackSelectionState(params: {
   };
 }
 
-function resolveFallbackSelectionOrigin(params: { entry: SessionEntry; run: FollowupRun["run"] }): {
+function resolveFallbackSelectionOrigin(params: {
+  entry: SessionEntry;
+  run: FollowupRun["run"];
+  primary?: { provider: string; model: string };
+}): {
   provider: string;
   model: string;
 } {
@@ -460,6 +464,13 @@ function resolveFallbackSelectionOrigin(params: { entry: SessionEntry; run: Foll
       return { provider: persistedOriginProvider, model: persistedOriginModel };
     }
   }
+  // When a primary reference is available, use it as the origin instead of
+  // params.run — params.run may already be a fallback candidate, which would
+  // record the wrong origin and prevent the snap-back probe from ever matching
+  // the configured primary.  See #92776.
+  if (params.primary) {
+    return { provider: params.primary.provider, model: params.primary.model };
+  }
   return { provider: params.run.provider, model: params.run.model };
 }
 
@@ -470,6 +481,7 @@ export function applyFallbackCandidateSelectionToEntry(params: {
   provider: string;
   model: string;
   origin?: { provider: string; model: string };
+  primary?: { provider: string; model: string };
   force?: boolean;
   now?: number;
 }): { updated: boolean; nextState?: FallbackSelectionState } {
@@ -482,7 +494,7 @@ export function applyFallbackCandidateSelectionToEntry(params: {
   }
   const scopedAuthProfile = resolveRunAuthProfile(params.run, params.provider);
   const origin =
-    params.origin ?? resolveFallbackSelectionOrigin({ entry: params.entry, run: params.run });
+    params.origin ?? resolveFallbackSelectionOrigin({ entry: params.entry, run: params.run, primary: params.primary });
   const nextState = buildFallbackSelectionState({
     provider: params.provider,
     model: params.model,
@@ -1814,6 +1826,15 @@ export async function runAgentTurnWithFallback(params: {
       provider: persistedProvider,
       model,
       force: candidateRun !== effectiveRun && Boolean(effectiveRun.autoFallbackPrimaryProbe),
+      // Always pass the configured primary so the origin is recorded correctly
+      // even on the first fallback (before autoFallbackPrimaryProbe exists).
+      // Without this, resolveFallbackSelectionOrigin falls back to selectionRun
+      // which may already be a fallback candidate — recording the wrong origin
+      // and preventing the snap-back probe from ever matching.  See #92776.
+      primary: {
+        provider: params.followupRun.run.provider,
+        model: params.followupRun.run.model,
+      },
       ...(effectiveRun.autoFallbackPrimaryProbe
         ? {
             origin: {
