@@ -7,6 +7,7 @@ export type SenderLabelParams = {
   tag?: string;
   e164?: string;
   id?: string;
+  isBot?: boolean;
 };
 
 function normalizeSenderLabelParams(params: SenderLabelParams) {
