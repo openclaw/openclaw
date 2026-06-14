@@ -8,6 +8,7 @@ import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveMemorySearchConfig,
+  resolveUserPath,
   type OpenClawConfig,
   type ResolvedMemorySearchConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
@@ -35,6 +36,7 @@ import {
 } from "./embeddings.js";
 import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js";
 import { awaitPendingManagerWork, startAsyncSearchSync } from "./manager-async-state.js";
+import { sweepOrphanedReindexTempFiles } from "./manager-atomic-reindex.js";
 import { MEMORY_BATCH_FAILURE_LIMIT } from "./manager-batch-state.js";
 import {
   closeManagedCacheEntries,
@@ -346,8 +348,23 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       pending: INDEX_CACHE_PENDING,
       key,
       bypassCache: transient,
-      create: async () =>
-        new MemoryIndexManager({
+      create: async () => {
+        if (!transient) {
+          // Reclaim `${dbPath}.tmp-<uuid>` reindex triplets orphaned by a hard
+          // kill during a prior reindex, before the live DB is opened/cached.
+          // Best-effort and aged-guarded; never blocks manager creation.
+          try {
+            const removed = await sweepOrphanedReindexTempFiles(
+              resolveUserPath(settings.store.path),
+            );
+            if (removed.length > 0) {
+              log.info(`Removed ${removed.length} orphaned memory reindex temp file(s) on startup`);
+            }
+          } catch (err) {
+            log.debug(`Memory reindex temp sweep skipped: ${formatErrorMessage(err)}`);
+          }
+        }
+        return new MemoryIndexManager({
           cacheKey: key,
           cfg,
           agentId,
@@ -355,7 +372,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
           settings,
           providerRequirement,
           purpose: params.purpose,
-        }),
+        });
+      },
     });
   }
 

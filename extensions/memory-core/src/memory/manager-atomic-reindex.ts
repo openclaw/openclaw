@@ -1,6 +1,7 @@
 // Memory Core plugin module implements manager atomic reindex behavior.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
 type MemoryIndexFileOps = {
@@ -225,4 +226,83 @@ export async function runMemoryAtomicReindex<T>(params: {
     }
     throw err;
   }
+}
+
+// A hard kill (SIGKILL, or a SIGTERM that does not unwind) during
+// `runSafeReindex()` bypasses both the success swap and the catch-cleanup, so
+// the `${dbPath}.tmp-<uuid>` triplet built for the atomic swap is orphaned on
+// disk and never reclaimed (each is a full copy of the index). These orphans
+// are crash-safe to delete by construction: either the swap already completed
+// (the live base DB is authoritative) or it never happened (the temp is a
+// partial build). The only hazard is a *concurrent* reindex's still-live temp,
+// which we avoid with an age grace window.
+const defaultReindexTempGraceMs = 60_000;
+
+type SweepOrphanedReindexTempFilesOptions = {
+  // Only remove temp triplets whose main file has not been modified within this
+  // window. Guards against deleting a temp still owned by an in-flight reindex.
+  graceMs?: number;
+  fileOptions?: MemoryIndexFileOptions;
+  io?: {
+    readdir?: (dir: string) => Promise<string[]>;
+    stat?: (filePath: string) => Promise<{ mtimeMs: number }>;
+    now?: () => number;
+  };
+};
+
+function isReindexTempSibling(basename: string, prefix: string): boolean {
+  // Match `<db>.tmp-<uuid>` main files only; the `-wal`/`-shm` sidecars are
+  // removed together with their main file via removeMemoryIndexFiles().
+  return basename.startsWith(prefix) && !basename.endsWith("-wal") && !basename.endsWith("-shm");
+}
+
+/**
+ * Sweep aged orphaned `${dbPath}.tmp-<uuid>` reindex triplets left by a hard
+ * kill during a prior atomic reindex. Intended to run once at memory store init,
+ * before the live DB is opened/cached. Best-effort: missing directories and
+ * per-file removal errors are swallowed so startup never fails on cleanup.
+ *
+ * @returns the base paths of the temp triplets that were removed.
+ */
+export async function sweepOrphanedReindexTempFiles(
+  dbPath: string,
+  options: SweepOrphanedReindexTempFilesOptions = {},
+): Promise<string[]> {
+  const graceMs = Math.max(0, options.graceMs ?? defaultReindexTempGraceMs);
+  const readdir = options.io?.readdir ?? fs.readdir;
+  const stat = options.io?.stat ?? ((filePath: string) => fs.stat(filePath));
+  const now = options.io?.now ?? Date.now;
+
+  const dir = path.dirname(dbPath);
+  const prefix = `${path.basename(dbPath)}.tmp-`;
+
+  let entries: string[];
+  try {
+    entries = await readdir(dir);
+  } catch {
+    // Store directory does not exist yet (fresh install) or is unreadable.
+    return [];
+  }
+
+  const cutoff = now() - graceMs;
+  const removed: string[] = [];
+  for (const entry of entries) {
+    if (!isReindexTempSibling(entry, prefix)) {
+      continue;
+    }
+    const tempBasePath = path.join(dir, entry);
+    try {
+      const info = await stat(tempBasePath);
+      if (info.mtimeMs > cutoff) {
+        // Recently touched: may belong to a concurrent in-flight reindex.
+        continue;
+      }
+      await removeMemoryIndexFiles(tempBasePath, options.fileOptions);
+      removed.push(tempBasePath);
+    } catch {
+      // A racing reindex may swap/remove this file between readdir and stat,
+      // or removal may transiently fail; skip and let a later run retry.
+    }
+  }
+  return removed;
 }
