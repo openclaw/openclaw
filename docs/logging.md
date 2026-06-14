@@ -118,6 +118,11 @@ available:
 OpenClaw preserves the original structured log arguments alongside these fields
 so existing parsers that read numbered tslog argument keys keep working.
 
+Diagnostic events (such as `model.usage`, `session.state`, or `message.delivery`)
+are also written to the file log. See
+[Diagnostic event catalog](/gateway/opentelemetry#diagnostic-event-catalog) for
+the exact field names and structure of each event type.
+
 Talk, realtime voice, and managed-room activity emits bounded lifecycle log
 records through this same file-log pipeline. These records include event type,
 mode, transport, provider, and size/timing measurements when available, but omit
