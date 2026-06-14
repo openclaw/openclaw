@@ -825,7 +825,7 @@ describe("skill workshop proposals", () => {
       proposeCreateSkill({
         workspaceDir,
         name: "Oversized Description",
-        description: "x".repeat(161),
+        description: "x".repeat(501),
         content: "# Oversized Description\n",
       }),
     ).rejects.toThrow("proposal description is too large");
@@ -841,7 +841,7 @@ describe("skill workshop proposals", () => {
       reviseSkillProposal({
         workspaceDir,
         proposalId: proposal.record.id,
-        description: "x".repeat(161),
+        description: "x".repeat(501),
         content: "# Description Revision\n",
       }),
     ).rejects.toThrow("proposal description is too large");
@@ -866,7 +866,7 @@ describe("skill workshop proposals", () => {
     });
     expect(
       Buffer.byteLength(updateWithDerivedDescription.record.description, "utf8"),
-    ).toBeLessThanOrEqual(160);
+    ).toBeLessThanOrEqual(500);
 
     const updateWithSuppliedDescription = await proposeUpdateSkill({
       workspaceDir: longDescriptionWorkspace,
@@ -879,7 +879,7 @@ describe("skill workshop proposals", () => {
       proposeUpdateSkill({
         workspaceDir: longDescriptionWorkspace,
         skillName: "long-description-skill",
-        description: "x".repeat(161),
+        description: "x".repeat(501),
         content: "# Long Description Skill\n\nThird updated body.\n",
       }),
     ).rejects.toThrow("proposal description is too large");
