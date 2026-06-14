@@ -134,6 +134,24 @@ restrictions, sandbox rules, channel/runtime policy, or plugin availability.
 - [Per-agent sandbox and tool restrictions](/tools/multi-agent-sandbox-tools)
   documents agent-specific restrictions for delegated runs.
 
+## Tool groups
+
+| Group              | Tools                                                                                                     |
+| ------------------ | --------------------------------------------------------------------------------------------------------- |
+| `group:core`       | All built-in core tools (excludes plugin tools)                                                           |
+| `group:runtime`    | exec, process, code_execution (`bash` is accepted as an alias for `exec`)                                 |
+| `group:fs`         | read, write, edit, apply_patch                                                                            |
+| `group:sessions`   | sessions_list, sessions_history, sessions_send, sessions_spawn, sessions_yield, subagents, session_status |
+| `group:memory`     | memory_search, memory_get                                                                                 |
+| `group:web`        | web_search, x_search, web_fetch                                                                           |
+| `group:ui`         | browser, canvas when the bundled Canvas plugin is enabled                                                 |
+| `group:automation` | heartbeat_respond, cron, gateway                                                                          |
+| `group:messaging`  | message                                                                                                   |
+| `group:nodes`      | nodes                                                                                                     |
+| `group:agents`     | agents_list, update_plan                                                                                  |
+| `group:media`      | image, image_generate, music_generate, video_generate, tts                                                |
+| `group:openclaw`   | Curated OpenClaw integration tools (excludes filesystem, shell runtime, and plugin tools)                 |
+
 ## Extend capabilities
 
 Choose the extension path by the job you need OpenClaw to do:
