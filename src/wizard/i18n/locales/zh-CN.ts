@@ -189,6 +189,7 @@ export const zh_CN = {
       defaultModelBlankToKeep: "默认模型（留空则保留）",
       defaultSet: "默认模型已设置为 {model}",
       defaultSetForAgent: 'agent "{agent}" 的默认模型已设置为 {model}。',
+      deterministicGateway: "dummy/dummy - 无 AI - 仅确定性 Gateway",
       enterManually: "手动输入模型",
       filterByProvider: "按 provider 筛选模型",
       keepCurrent: "保留当前值（{value}）",
