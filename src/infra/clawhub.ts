@@ -375,6 +375,10 @@ export type ClawHubSkillSecurityVerdictItem = {
   skillUrl?: string | null;
   securityAuditUrl?: string | null;
   security?: unknown;
+  revocation?: {
+    revoked: boolean;
+    revokedAt?: number | null;
+  } | null;
   error?: {
     code?: string;
     message?: string;

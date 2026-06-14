@@ -195,6 +195,7 @@ Docs: https://docs.openclaw.ai
 - Providers: add MiniMax M3 model support. (#88860)
 - Tools/media: allow validated host-local text document media sends while keeping unsafe plain-text media sends blocked. (#79658) Thanks @simplyclever914.
 - Doctor: add disk space health checks and stabilize post-upgrade JSON probes.
+- Doctor/skills: detect exact installed ClawHub versions reported as revoked and let `doctor --fix` safely quarantine only lock/origin/path-verified matches. Thanks @vyctorbrzezowski.
 - Channels: store inbound queues in SQLite and migrate iMessage monitor state to SQLite-backed tracking. (#88797)
 - Skills: add the core skills index and centralize skills runtime loading, status, filtering, and prompt formatting.
 

@@ -137,6 +137,7 @@ describe("skills gateway handlers (clawhub)", () => {
           version: "1.2.3",
           securityAuditUrl: "https://clawhub.ai/openclaw/agentreceipt/security-audit?version=1.2.3",
           security: { status: "clean", passed: true },
+          revocation: { revoked: false, revokedAt: null },
           scannerPayload: { ignored: true },
         },
       ],
@@ -163,6 +164,7 @@ describe("skills gateway handlers (clawhub)", () => {
           requestedVersion: "1.2.3",
           securityStatus: "clean",
           securityPassed: true,
+          revocation: { revoked: false, revokedAt: null },
         }),
       ],
     });
