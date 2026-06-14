@@ -805,6 +805,7 @@ function compareTasksNewestFirst(
 
 function findExistingTaskForCreate(params: {
   runtime: TaskRuntime;
+  taskKind?: string;
   ownerKey: string;
   scopeKind: TaskScopeKind;
   childSessionKey?: string;
@@ -827,6 +828,16 @@ function findExistingTaskForCreate(params: {
             (normalizeOptionalString(params.parentFlowId) ?? ""),
       )
     : [];
+  const taskKind = normalizeOptionalString(params.taskKind);
+  const taskKindMatch = taskKind
+    ? runScopeMatches.find((task) => (normalizeOptionalString(task.taskKind) ?? "") === taskKind)
+    : undefined;
+  if (taskKindMatch) {
+    return taskKindMatch;
+  }
+  if (taskKind) {
+    return undefined;
+  }
   const exact = runId
     ? runScopeMatches.find(
         (task) =>
@@ -1727,6 +1738,7 @@ export function createTaskRecord(params: {
   });
   const existing = findExistingTaskForCreate({
     runtime: params.runtime,
+    taskKind: params.taskKind,
     ownerKey,
     scopeKind,
     childSessionKey: params.childSessionKey,
@@ -1905,6 +1917,87 @@ function updateTaskStateByRunId(params: {
   return updated;
 }
 
+function updateTaskStateById(params: {
+  taskId: string;
+  status?: TaskStatus;
+  startedAt?: number;
+  endedAt?: number;
+  lastEventAt?: number;
+  error?: string;
+  progressSummary?: string | null;
+  terminalSummary?: string | null;
+  terminalOutcome?: TaskTerminalOutcome | null;
+  eventSummary?: string | null;
+}): TaskRecord | null {
+  ensureTaskRegistryReady();
+  const current = tasks.get(params.taskId.trim());
+  if (!current) {
+    return null;
+  }
+  const patch: Partial<TaskRecord> = {};
+  const nextStatus = params.status ? normalizeTaskStatus(params.status) : current.status;
+  if (
+    params.status &&
+    !shouldApplyRunScopedStatusUpdate({
+      currentStatus: current.status,
+      nextStatus,
+    })
+  ) {
+    return cloneTaskRecord(current);
+  }
+  const eventAt = params.lastEventAt ?? params.endedAt ?? Date.now();
+  if (params.status) {
+    patch.status = nextStatus;
+  }
+  if (params.startedAt != null) {
+    patch.startedAt = params.startedAt;
+  }
+  if (params.endedAt != null) {
+    patch.endedAt = params.endedAt;
+  }
+  if (params.lastEventAt != null) {
+    patch.lastEventAt = params.lastEventAt;
+  }
+  if (params.error !== undefined) {
+    patch.error = params.error;
+  }
+  if (params.progressSummary !== undefined) {
+    patch.progressSummary = normalizeTaskSummary(params.progressSummary);
+  }
+  if (params.terminalSummary !== undefined) {
+    patch.terminalSummary = normalizeTaskSummary(params.terminalSummary);
+  }
+  if (params.terminalOutcome !== undefined) {
+    patch.terminalOutcome = resolveTaskTerminalOutcome({
+      status: nextStatus,
+      terminalOutcome: params.terminalOutcome,
+    });
+  }
+  const eventSummary =
+    normalizeTaskSummary(params.eventSummary) ??
+    (nextStatus === "failed"
+      ? normalizeTaskSummary(params.error ?? current.error)
+      : nextStatus === "succeeded"
+        ? normalizeTaskSummary(params.terminalSummary ?? current.terminalSummary)
+        : undefined);
+  const shouldAppendEvent =
+    (params.status && nextStatus !== current.status) ||
+    Boolean(normalizeTaskSummary(params.eventSummary));
+  const nextEvent = shouldAppendEvent
+    ? appendTaskEvent({
+        at: eventAt,
+        kind: params.status && nextStatus !== current.status ? nextStatus : "progress",
+        summary: eventSummary,
+      })
+    : undefined;
+  const task = updateTask(current.taskId, patch);
+  if (task) {
+    void maybeDeliverTaskStateChangeUpdate(task.taskId, nextEvent);
+    void maybeDeliverTaskTerminalUpdate(task.taskId);
+  }
+  return task;
+}
+
 function updateTaskDeliveryByRunId(params: {
   runId: string;
   runtime?: TaskRuntime;
@@ -1966,6 +2059,37 @@ export function recordTaskProgressByRunId(params: {
   });
 }
 
+export function markTaskRunningById(params: {
+  taskId: string;
+  startedAt?: number;
+  lastEventAt?: number;
+  progressSummary?: string | null;
+  eventSummary?: string | null;
+}) {
+  return updateTaskStateById({
+    taskId: params.taskId,
+    status: "running",
+    startedAt: params.startedAt,
+    lastEventAt: params.lastEventAt,
+    progressSummary: params.progressSummary,
+    eventSummary: params.eventSummary,
+  });
+}
+
+export function recordTaskProgressById(params: {
+  taskId: string;
+  lastEventAt?: number;
+  progressSummary?: string | null;
+  eventSummary?: string | null;
+}) {
+  return updateTaskStateById({
+    taskId: params.taskId,
+    lastEventAt: params.lastEventAt,
+    progressSummary: params.progressSummary,
+    eventSummary: params.eventSummary,
+  });
+}
+
 export function markTaskTerminalByRunId(params: {
   runId: string;
   runtime?: TaskRuntime;
@@ -2008,6 +2132,20 @@ export function finalizeTaskRunByRunId(params: {
     terminalSummary: params.terminalSummary,
     terminalOutcome: params.terminalOutcome,
   });
+}
+
+export function finalizeTaskRunById(params: {
+  taskId: string;
+  status: Extract<TaskStatus, "succeeded" | "failed" | "timed_out" | "cancelled">;
+  startedAt?: number;
+  endedAt: number;
+  lastEventAt?: number;
+  error?: string;
+  progressSummary?: string | null;
+  terminalSummary?: string | null;
+  terminalOutcome?: TaskTerminalOutcome | null;
+}) {
+  return updateTaskStateById(params);
 }
 
 export function setTaskRunDeliveryStatusByRunId(params: {

@@ -26,6 +26,7 @@ export function mapTaskRunView(task: TaskRecord): TaskRunView {
   return {
     id: task.taskId,
     runtime: task.runtime,
+    ...(task.taskKind ? { taskKind: task.taskKind } : {}),
     ...(task.sourceId ? { sourceId: task.sourceId } : {}),
     sessionKey: task.requesterSessionKey,
     ownerKey: task.ownerKey,

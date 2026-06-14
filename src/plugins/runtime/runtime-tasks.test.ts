@@ -4,6 +4,11 @@ import {
   getDetachedTaskLifecycleRuntime,
   setDetachedTaskLifecycleRuntime,
 } from "../../tasks/detached-task-runtime.js";
+import { configureTaskRegistryRuntime } from "../../tasks/task-registry.store.js";
+import type {
+  TaskDeliveryState,
+  TaskRecord,
+} from "../../tasks/task-registry.types.js";
 import {
   getRuntimeTaskMocks,
   installRuntimeTaskDeliveryMock,
@@ -236,6 +241,248 @@ describe("runtime tasks", () => {
     expect(cancelDetachedTaskRunByIdSpy).toHaveBeenCalledWith({
       cfg: {} as never,
       taskId: child.task.taskId,
+    });
+  });
+
+  it("creates, progresses, and finalizes plugin-owned lifecycle tasks", () => {
+    const taskRuns = createRuntimeTaskRuns().bindSession({
+      sessionKey: "agent:main:telegram:group:123",
+      requesterOrigin: {
+        channel: "telegram",
+        to: "telegram:123",
+        threadId: 456,
+      },
+    });
+
+    const created = taskRuns.lifecycle.create({
+      taskKind: "openclaw-code-agent.session",
+      sourceId: "openclaw-code-agent",
+      runId: "code-session-1",
+      title: "Fix auth race",
+      label: "auth-race",
+      status: "running",
+      startedAt: 100,
+      lastEventAt: 101,
+      progressSummary: "Launching",
+      notifyPolicy: "state_changes",
+    });
+
+    expect(created).toMatchObject({
+      runtime: "cli",
+      taskKind: "openclaw-code-agent.session",
+      sourceId: "openclaw-code-agent",
+      sessionKey: "agent:main:telegram:group:123",
+      ownerKey: "agent:main:telegram:group:123",
+      scope: "session",
+      runId: "code-session-1",
+      title: "Fix auth race",
+      label: "auth-race",
+      status: "running",
+      progressSummary: "Launching",
+      notifyPolicy: "state_changes",
+    });
+
+    expect(taskRuns.get(created.id)).toMatchObject({
+      id: created.id,
+      taskKind: "openclaw-code-agent.session",
+    });
+    expect(taskRuns.resolve("code-session-1")?.id).toBe(created.id);
+
+    const progressed = taskRuns.lifecycle.progress({
+      taskKind: "openclaw-code-agent.session",
+      runId: "code-session-1",
+      lastEventAt: 150,
+      progressSummary: "Waiting for plan approval",
+      eventSummary: "Waiting for plan approval",
+    });
+    expect(progressed).toMatchObject({
+      id: created.id,
+      status: "running",
+      lastEventAt: 150,
+      progressSummary: "Waiting for plan approval",
+    });
+
+    const finalized = taskRuns.lifecycle.finalize({
+      taskKind: "openclaw-code-agent.session",
+      runId: "code-session-1",
+      status: "succeeded",
+      endedAt: 200,
+      terminalSummary: "Completed",
+    });
+    expect(finalized).toMatchObject({
+      id: created.id,
+      status: "succeeded",
+      endedAt: 200,
+      terminalSummary: "Completed",
+    });
+  });
+
+  it("makes plugin lifecycle create idempotent by owner, taskKind, and runId", () => {
+    const taskRuns = createRuntimeTaskRuns().bindSession({
+      sessionKey: "agent:main:main",
+    });
+
+    const first = taskRuns.lifecycle.create({
+      taskKind: "openclaw-code-agent.session",
+      runId: "code-session-idempotent",
+      title: "Initial title",
+      status: "queued",
+      progressSummary: "Queued",
+    });
+    const second = taskRuns.lifecycle.create({
+      taskKind: "openclaw-code-agent.session",
+      runId: "code-session-idempotent",
+      title: "Updated title",
+      label: "updated",
+      status: "running",
+      startedAt: 300,
+      progressSummary: "Running",
+    });
+
+    expect(second).toMatchObject({
+      id: first.id,
+      title: "Updated title",
+      label: "updated",
+      status: "running",
+      progressSummary: "Running",
+    });
+    expect(
+      taskRuns
+        .list()
+        .filter(
+          (task) =>
+            task.taskKind === "openclaw-code-agent.session" &&
+            task.runId === "code-session-idempotent",
+        ),
+    ).toHaveLength(1);
+  });
+
+  it("throws a controlled error when plugin lifecycle creation cannot persist", () => {
+    const upsertTaskWithDeliveryState = vi.fn(
+      (_params: { task: TaskRecord; deliveryState?: TaskDeliveryState }) => {
+        throw new Error("SQLITE_FULL: database or disk is full");
+      },
+    );
+    configureTaskRegistryRuntime({
+      store: {
+        loadSnapshot: () => ({
+          tasks: new Map(),
+          deliveryStates: new Map(),
+        }),
+        saveSnapshot: () => {},
+        upsertTaskWithDeliveryState,
+      },
+    });
+    const taskRuns = createRuntimeTaskRuns().bindSession({
+      sessionKey: "agent:main:main",
+    });
+
+    expect(() =>
+      taskRuns.lifecycle.create({
+        taskKind: "openclaw-code-agent.session",
+        runId: "create-persist-fail",
+        title: "Create while persistence fails",
+        status: "running",
+      }),
+    ).toThrow("Task lifecycle persistence failed.");
+
+    const attempted = upsertTaskWithDeliveryState.mock.calls[0]?.[0]?.task;
+    expect(attempted?.taskId).toEqual(expect.any(String));
+    expect(taskRuns.get(attempted?.taskId ?? "")).toBeUndefined();
+  });
+
+  it("scopes plugin lifecycle mutation by owner and taskKind", () => {
+    const ownerRuns = createRuntimeTaskRuns().bindSession({
+      sessionKey: "agent:main:main",
+    });
+    const otherRuns = createRuntimeTaskRuns().bindSession({
+      sessionKey: "agent:main:other",
+    });
+
+    const sessionTask = ownerRuns.lifecycle.create({
+      taskKind: "openclaw-code-agent.session",
+      runId: "shared-run-id",
+      title: "Coding session",
+      status: "running",
+      progressSummary: "Coding",
+    });
+    const monitorTask = ownerRuns.lifecycle.create({
+      taskKind: "openclaw-code-agent.monitor",
+      runId: "shared-run-id",
+      title: "Monitor session",
+      status: "running",
+      progressSummary: "Monitoring",
+    });
+
+    expect(
+      otherRuns.lifecycle.progress({
+        taskKind: "openclaw-code-agent.session",
+        runId: "shared-run-id",
+        progressSummary: "Cross-owner mutation",
+      }),
+    ).toBeUndefined();
+    expect(
+      otherRuns.lifecycle.finalize({
+        taskKind: "openclaw-code-agent.session",
+        runId: "shared-run-id",
+        status: "failed",
+        endedAt: 400,
+        error: "Cross-owner mutation",
+      }),
+    ).toBeUndefined();
+
+    const progressed = ownerRuns.lifecycle.progress({
+      taskKind: "openclaw-code-agent.session",
+      runId: "shared-run-id",
+      progressSummary: "Plan approved",
+    });
+    expect(progressed).toMatchObject({
+      id: sessionTask.id,
+      progressSummary: "Plan approved",
+    });
+    expect(ownerRuns.get(monitorTask.id)).toMatchObject({
+      id: monitorTask.id,
+      progressSummary: "Monitoring",
+      status: "running",
+    });
+    expect(otherRuns.get(sessionTask.id)).toBeUndefined();
+  });
+
+  it("does not downgrade stronger terminal plugin lifecycle states", async () => {
+    const taskRuns = createRuntimeTaskRuns().bindSession({
+      sessionKey: "agent:main:main",
+    });
+    const created = taskRuns.lifecycle.create({
+      taskKind: "openclaw-code-agent.session",
+      runId: "terminal-strength",
+      title: "Terminal strength",
+      status: "running",
+    });
+
+    const cancelled = await taskRuns.cancel({
+      taskId: created.id,
+      cfg: {} as never,
+    });
+    expect(cancelled).toMatchObject({
+      found: true,
+      cancelled: true,
+      task: {
+        id: created.id,
+        status: "cancelled",
+      },
+    });
+
+    expect(
+      taskRuns.lifecycle.finalize({
+        taskKind: "openclaw-code-agent.session",
+        runId: "terminal-strength",
+        status: "succeeded",
+        endedAt: 500,
+        terminalSummary: "Late success",
+      }),
+    ).toMatchObject({
+      id: created.id,
+      status: "cancelled",
     });
   });
 
