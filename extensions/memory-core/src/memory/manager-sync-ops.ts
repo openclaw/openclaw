@@ -45,8 +45,13 @@ import {
   type EmbeddingProviderId,
   type EmbeddingProviderRuntime,
 } from "./embeddings.js";
-import { runMemoryAtomicReindex } from "./manager-atomic-reindex.js";
-import { closeMemoryDatabase, openMemoryDatabaseAtPath } from "./manager-db.js";
+import { removeMemoryIndexFiles, runMemoryAtomicReindex } from "./manager-atomic-reindex.js";
+import {
+  cleanupAgedMemoryReindexTempFiles,
+  closeMemoryDatabase,
+  openMemoryDatabaseAtPath,
+  openMemoryReindexTempDatabaseAtPath,
+} from "./manager-db.js";
 import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import {
   applyMemoryFallbackProviderState,
@@ -54,6 +59,7 @@ import {
   resolveFallbackCurrentProviderId,
   type MemoryProviderLifecycleState,
 } from "./manager-provider-state.js";
+import { acquireMemoryReindexLock, type MemoryReindexLockHandle } from "./manager-reindex-lock.js";
 import {
   resolveConfiguredScopeHash,
   resolveConfiguredSourcesForMeta,
@@ -2381,9 +2387,10 @@ export abstract class MemoryManagerSyncOps {
 
     const dbPath = resolveUserPath(this.settings.store.path);
     const tempDbPath = `${dbPath}.tmp-${randomUUID()}`;
-    const tempDb = openMemoryDatabaseAtPath(tempDbPath, this.settings.store.vector.enabled);
 
     const originalDb = this.db;
+    let reindexLock: MemoryReindexLockHandle | undefined;
+    let tempDb: DatabaseSync | undefined;
     let tempDbClosed = false;
     let originalDbClosed = false;
     const originalRetryState = this.snapshotReindexRetryState();
@@ -2417,24 +2424,27 @@ export abstract class MemoryManagerSyncOps {
       this.vectorReady = originalDbClosed ? null : originalState.vectorReady;
     };
 
-    this.db = tempDb;
-    this.embeddingCacheMirrorDb = originalDb;
-    this.lastMetaSerialized = null;
-    this.resetVectorState();
-    this.fts.available = false;
-    this.fts.loadError = undefined;
-    this.ensureSchema();
-
-    let nextMeta: MemoryIndexMeta | null;
     let publishedIndex = false;
 
     try {
-      nextMeta = await runMemoryAtomicReindex({
+      cleanupAgedMemoryReindexTempFiles(dbPath);
+      reindexLock = acquireMemoryReindexLock(dbPath);
+      tempDb = openMemoryReindexTempDatabaseAtPath(tempDbPath, this.settings.store.vector.enabled);
+      const openedTempDb = tempDb;
+      this.db = openedTempDb;
+      this.embeddingCacheMirrorDb = originalDb;
+      this.lastMetaSerialized = null;
+      this.resetVectorState();
+      this.fts.available = false;
+      this.fts.loadError = undefined;
+      this.ensureSchema();
+
+      const nextMeta = await runMemoryAtomicReindex({
         targetPath: dbPath,
         tempPath: tempDbPath,
         beforeTempCleanup: () => {
           if (!tempDbClosed) {
-            closeMemoryDatabase(tempDb);
+            closeMemoryDatabase(openedTempDb);
             tempDbClosed = true;
           }
         },
@@ -2504,7 +2514,7 @@ export abstract class MemoryManagerSyncOps {
           this.writeMeta(meta);
           this.pruneEmbeddingCacheIfNeeded?.();
 
-          closeMemoryDatabase(tempDb);
+          closeMemoryDatabase(openedTempDb);
           tempDbClosed = true;
           closeMemoryDatabase(originalDb);
           originalDbClosed = true;
@@ -2520,7 +2530,7 @@ export abstract class MemoryManagerSyncOps {
     } catch (err) {
       this.embeddingCacheMirrorDb = null;
       try {
-        if (!tempDbClosed && this.db === tempDb) {
+        if (tempDb && !tempDbClosed && this.db === tempDb) {
           closeMemoryDatabase(tempDb);
           tempDbClosed = true;
         }
@@ -2532,6 +2542,9 @@ export abstract class MemoryManagerSyncOps {
         this.vector.dims = this.readMeta()?.vectorDims;
         throw err;
       }
+      try {
+        await removeMemoryIndexFiles(tempDbPath);
+      } catch {}
       restoreOriginalState();
       this.restoreReindexRetryState(originalRetryState);
       this.markFailedFullReindexRetry({
@@ -2539,6 +2552,12 @@ export abstract class MemoryManagerSyncOps {
         sessions: shouldRetrySessionsOnFailure,
       });
       throw err;
+    } finally {
+      try {
+        reindexLock?.release();
+      } catch (err) {
+        log.warn(`failed to release memory reindex lock for ${dbPath}: ${formatErrorMessage(err)}`);
+      }
     }
   }
 
