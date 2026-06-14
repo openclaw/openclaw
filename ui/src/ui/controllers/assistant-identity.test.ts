@@ -96,4 +96,33 @@ describe("setAssistantAvatarOverride", () => {
     expect(state.assistantAvatarReason).toBeNull();
     expect(loadLocalAssistantIdentity().avatar).toBeNull();
   });
+
+  it("scopes avatar storage per agent ID (regression #90890)", () => {
+    const mainState: Parameters<typeof setAssistantAvatarOverride>[0] = {
+      assistantAgentId: "main",
+    };
+    const workerState: Parameters<typeof setAssistantAvatarOverride>[0] = {
+      assistantAgentId: "worker",
+    };
+
+    setAssistantAvatarOverride(mainState, "data:image/png;base64,bWFpbg==");
+    setAssistantAvatarOverride(workerState, "data:image/png;base64,d29ya2Vy");
+
+    // Each agent should have its own avatar.
+    expect(loadLocalAssistantIdentity("main").avatar).toBe("data:image/png;base64,bWFpbg==");
+    expect(loadLocalAssistantIdentity("worker").avatar).toBe("data:image/png;base64,d29ya2Vy");
+
+    // Clearing one agent should not affect the other.
+    setAssistantAvatarOverride(mainState, null);
+    expect(loadLocalAssistantIdentity("main").avatar).toBeNull();
+    expect(loadLocalAssistantIdentity("worker").avatar).toBe("data:image/png;base64,d29ya2Vy");
+  });
+
+  it("falls back to global key when agent-specific key is not set", () => {
+    // Set a global avatar (no agent ID).
+    setAssistantAvatarOverride({}, "data:image/png;base64,Z2xvYmFs");
+
+    // An agent with no specific avatar should fall back to the global key.
+    expect(loadLocalAssistantIdentity("new-agent").avatar).toBe("data:image/png;base64,Z2xvYmFs");
+  });
 });
