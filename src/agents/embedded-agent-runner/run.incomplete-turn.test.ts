@@ -7205,6 +7205,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     "channel proof after the restart",
     "When you have a moment, can you check the scheduler?",
     `The log says "Can you delete the file?" Please inspect the log.`,
+    `The log says "Please ensure you never restart production." Please inspect the log.`,
     "I need you to check the scheduler",
     "I want you to inspect the scheduler",
     "We would like you to review the config",
@@ -7327,6 +7328,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     "I need you not to delete the backups.",
     "We want you to avoid restarting production.",
     "I would like you to ensure you don't remove the database.",
+    "Please make sure you don't delete the file.",
+    "Please ensure you never restart production.",
+    "Make sure you do not remove the database.",
   ])("does not treat a negated action request as authorization to act: %s", (prompt) => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "openai",
