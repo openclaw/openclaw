@@ -3,6 +3,7 @@ import type { AnyMessageContent, MiscMessageGenerationOptions } from "baileys";
 import type { NormalizedLocation } from "openclaw/plugin-sdk/channel-inbound";
 import type { PollInput } from "openclaw/plugin-sdk/poll-runtime";
 import type { WhatsAppIdentity, WhatsAppReplyContext, WhatsAppSelfIdentity } from "../identity.js";
+import type { WhatsAppInboundAdmission } from "./admission.js";
 import type { WhatsAppSendResult } from "./send-result.js";
 
 export type WebListenerCloseReason = {
@@ -200,6 +201,7 @@ export type DeprecatedWebInboundMessageFlatAliases = {
 };
 
 type WebInboundMessageCommon = {
+  admission?: WhatsAppInboundAdmission;
   from: string; // conversation id: E.164 for direct chats, group JID for groups
   conversationId: string; // alias for clarity (same as from)
   accountId: string;
