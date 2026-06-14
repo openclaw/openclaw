@@ -4,7 +4,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { isCronJobActive, resetCronActiveJobsForTests } from "./active-jobs.js";
 import { CronService } from "./service.js";
-import { createCronServiceState } from "./service/state.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "./service.test-harness.js";
 import type { CronJob } from "./types.js";
 
@@ -51,7 +50,10 @@ function createDeferred(): {
 
 async function createStartupCatchupHarness(jobId: string) {
   const store = await makeStorePath();
-  await writeCronStoreSnapshot({ storePath: store.storePath, jobs: [createMissedCommandJob(jobId)] });
+  await writeCronStoreSnapshot({
+    storePath: store.storePath,
+    jobs: [createMissedCommandJob(jobId)],
+  });
 
   const entered = createDeferred();
   const release = createDeferred();
