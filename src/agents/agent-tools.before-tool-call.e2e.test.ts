@@ -626,6 +626,28 @@ describe("before_tool_call loop detection behavior", () => {
     expect(onToolOutcome.mock.calls.at(-1)?.[0]).not.toHaveProperty("didSendViaMessagingTool");
   });
 
+  it("does not mark failed content receipts with generic success details as delivered", async () => {
+    const onToolOutcome = vi.fn();
+    const execute = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: '{"ok":false,"status":"failed"}' }],
+      details: { status: "ok" },
+    });
+    const tool = createWrappedTool("message", execute, {
+      ...enabledLoopDetectionContext,
+      runId: "run-failed-content-receipt-message-outcome",
+      onToolOutcome,
+    });
+
+    await expectUnblockedToolExecution(tool, "message-failed-content-receipt", {
+      action: "send",
+      to: "channel:123",
+      content: "not delivered",
+    });
+
+    expect(onToolOutcome).toHaveBeenCalledWith(expect.objectContaining({ toolName: "message" }));
+    expect(onToolOutcome.mock.calls.at(-1)?.[0]).not.toHaveProperty("didSendViaMessagingTool");
+  });
+
   it.each([
     ["plugin success status", { success: true, status: "success" }],
     ["nested plugin completion status", { ok: true, result: { status: "completed" } }],

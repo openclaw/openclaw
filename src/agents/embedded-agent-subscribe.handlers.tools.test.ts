@@ -2119,6 +2119,13 @@ describe("messaging tool media URL tracking", () => {
           details: { result: { dryRun: true } },
         },
       ],
+      [
+        "tool-content-receipt-failed-details-ok",
+        {
+          content: [{ type: "text", text: '{"ok":false,"status":"failed"}' }],
+          details: { status: "ok" },
+        },
+      ],
       ["tool-nested-failed-ok", { details: { status: "ok", result: { status: "failed" } } }],
     ] satisfies Array<[string, ToolExecutionEndEvent["result"]]>) {
       const { ctx } = createTestContext();

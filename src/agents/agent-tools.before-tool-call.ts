@@ -70,7 +70,7 @@ import {
 import { isMessagingTool, isMessagingToolSendAction } from "./embedded-agent-messaging.js";
 import type { MessagingToolSend } from "./embedded-agent-messaging.types.js";
 import {
-  hasCommittedMessagingToolResultContent,
+  getMessagingToolResultContentDeliveryState,
   hasCommittedMessagingToolResultDetails,
 } from "./embedded-agent-runner/delivery-evidence.js";
 import type { AgentToolTerminalResultFallback, AgentToolTerminalSummary } from "./runtime/index.js";
@@ -1094,7 +1094,11 @@ function hasCommittedMessagingToolSendOutcome(params: {
     return false;
   }
   const details = readResultDetailsRecord(params.result);
-  const contentReceipt = hasCommittedMessagingToolResultContent(params.result);
+  const contentDeliveryState = getMessagingToolResultContentDeliveryState(params.result);
+  if (contentDeliveryState === "non_delivery") {
+    return false;
+  }
+  const contentReceipt = contentDeliveryState === "committed";
   if (!details) {
     return contentReceipt;
   }

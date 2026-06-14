@@ -152,7 +152,7 @@ const PLANNING_ONLY_PROMISE_RE =
 const PLANNING_ONLY_PROGRESS_CLAIM_RE =
   /^(?:i(?:'m| am)\s+)?(?:checking|running|working(?:\s+on\s+it)?|on\s+it|taking\s+a\s+look|inspecting|reading|searching|looking(?:\s+into|\s+at)?|debugging|testing|verifying|investigating|reviewing|fetching|probing|starting|launching|sending(?:\s+(?:it|this|that|the\s+\w+))?\s+off|kicking\s+(?:it|this|that|the\s+\w+\s+)?off|monitoring\s+(?:it|this|that|now|for\b))\b/i;
 const PLANNING_ONLY_PROGRESS_RESULT_RE =
-  /^(?:i(?:'m| am)\s+)?(?:checking|running|working|inspecting|reading|searching|looking|debugging|testing|verifying|investigating|reviewing|fetching|probing|monitoring)\b(?:\s*:|\s+(?:normally|smoothly|well|fine|healthy|successfully|as expected|idle|ready|available|unavailable|complete|completed|finished|failed|blocked|\d+\b|no\b|none\b))/i;
+  /^(?:i(?:'m| am)\s+)?(?:checking|running|working|inspecting|reading|searching|looking|debugging|testing|verifying|investigating|reviewing|fetching|probing|monitoring)\b(?:\s*:|\s+(?:normally|smoothly|well|fine|healthy|successfully|as expected|idle|ready|available|unavailable|complete|completed|finished|failed|blocked|\d+\b|no\b|none\b)|(?![^.!?\n]{0,160}\b(?:if|whether)\b)[^.!?\n]{1,160}\b(?:returned|showed|reported|revealed|produced|found)\b)/i;
 const PLANNING_ONLY_COMPLETION_RE =
   /\b(?:done|finished|implemented|updated|fixed|changed|ran|verified|found|here(?:'s| is) what|blocked by|the blocker is|requires?|unavailable|not available|can't|cannot)\b/i;
 const PLANNING_ONLY_HEADING_RE = /^(?:plan|steps?|next steps?)\s*:/i;
@@ -302,7 +302,7 @@ const EXPLICIT_PLAN_CREATION_REQUEST_RE =
 const EXPLICIT_DIRECT_PLANNING_REQUEST_RE =
   /^(?:please\s+)?(?:(?:can|could|would|will)\s+you\s+)?(?:please\s+)?(?:plan\b(?![\s,;:-]+(?:and|then)\b)|outline\s+(?:a\s+)?plan\b)/i;
 const EXPLICIT_PLAN_AND_EXECUTE_REQUEST_RE =
-  /\b(?:plan|approach|outline|steps|strategy)\b(?:[\s,;:-]+(?:and|then)\b|[,;]\s*(?:execute|implement|apply|perform|run|fix|update|change|edit|write|add|remove|delete|create|move|rename|install|uninstall|enable|disable|configure|reset|archive|cancel|stop|test|verify|start|launch|send|deploy|ship|migrate)\b)/i;
+  /\b(?:plan|approach|outline|steps|strategy)\b[^.!?\n]{0,200}(?:[,;]\s*(?:(?:and(?:\s+then)?|then)\s+)?|\s+(?:and(?:\s+then)?|then)\s+)(?:execute|implement|apply|perform|run|fix|update|change|edit|write|add|remove|delete|create|move|rename|install|uninstall|enable|disable|configure|reset|archive|cancel|stop|test|verify|start|launch|send|deploy|ship|migrate)\b/i;
 const NON_ACTIONABLE_CONTEXT_UPDATE_RE =
   /^\s*(?:i|we)\b(?!.{0,120}\b(?:need|want|would like)\s+you\b).{0,180}\b(?:haven't|have not|am not|ain't|haven’t)\b.{0,120}\b(?:yet|though|fyi|heads up)\b/i;
 const NON_ACTIONABLE_PROMPT_NORMALIZED_SET = new Set([

@@ -3677,6 +3677,21 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(retryInstruction).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
   });
 
+  it("keeps an unresolved result check classified as progress-only", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      prompt: "Please check the scheduler and tell me the result.",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["Checking whether the scheduler returned any jobs."],
+      }),
+    });
+
+    expect(retryInstruction).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
+  });
+
   it.each(["Working on it.", "Taking a look now.", "On it."])(
     "detects short progress placeholder %s as planning-only for actionable prompts",
     (assistantText) => {
@@ -3701,11 +3716,13 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     "Running normally.",
     "Working fine.",
     "Running 3 jobs.",
+    "Checking the scheduler returned 3 jobs.",
+    "Running the query showed no errors.",
   ])("does not classify result-style progress text %s as planning-only", (assistantText) => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "openai",
       modelId: "gpt-5.4",
-      prompt: "What is the current jobs status?",
+      prompt: "Please check the scheduler and report the current jobs status.",
       aborted: false,
       timedOut: false,
       attempt: makeAttemptResult({
@@ -7079,6 +7096,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     "Can you outline a plan and then delete old backups?",
     "Please plan, execute, and report the migration.",
     "Please plan, fix, and verify the failing shard.",
+    "Plan the migration, then execute it.",
+    "Outline a rollout plan for the release, then deploy it.",
   ])("keeps plan-and-execute request actionable: %s", (prompt) => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "openai",

@@ -39,8 +39,8 @@ import { isDeliveredMessageToolOnlySourceReplyResult } from "./embedded-agent-me
 import { isMessagingTool, isMessagingToolSendAction } from "./embedded-agent-messaging.js";
 import type { MessagingToolSourceReplyPayload } from "./embedded-agent-messaging.types.js";
 import {
+  getMessagingToolResultContentDeliveryState,
   hasCommittedMessagingToolDeliveryEvidence,
-  hasCommittedMessagingToolResultContent,
   hasCommittedMessagingToolResultDetails,
 } from "./embedded-agent-runner/delivery-evidence.js";
 import { mergeEmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
@@ -710,7 +710,11 @@ function extractMessagingToolSourceReplyPayload(
 
 function hasCommittedMessagingToolSendResult(result: unknown): boolean {
   const details = readToolResultDetailsRecord(result);
-  const contentReceipt = hasCommittedMessagingToolResultContent(result);
+  const contentDeliveryState = getMessagingToolResultContentDeliveryState(result);
+  if (contentDeliveryState === "non_delivery") {
+    return false;
+  }
+  const contentReceipt = contentDeliveryState === "committed";
   if (!details) {
     return contentReceipt;
   }
