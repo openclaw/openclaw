@@ -1429,6 +1429,7 @@
     "android:assemble": "node scripts/run-android-gradle.mjs :app:assemblePlayDebug",
     "android:assemble:third-party": "node scripts/run-android-gradle.mjs :app:assembleThirdPartyDebug",
     "android:bundle:release": "bun apps/android/scripts/build-release-aab.ts",
+    "android:export-upload-cert": "bash apps/android/scripts/export-upload-cert.sh",
     "android:format": "cd apps/android && ./gradlew :app:ktlintFormat :benchmark:ktlintFormat",
     "android:install": "node scripts/run-android-gradle.mjs :app:installPlayDebug",
     "android:install:third-party": "node scripts/run-android-gradle.mjs :app:installThirdPartyDebug",
