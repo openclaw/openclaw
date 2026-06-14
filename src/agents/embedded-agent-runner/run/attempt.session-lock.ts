@@ -683,6 +683,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       timeoutMs: params.lockOptions.timeoutMs,
       staleMs: params.lockOptions.staleMs,
       maxHoldMs: params.lockOptions.maxHoldMs,
+      allowReentrant: true,
     });
 
   let heldLock: SessionLock | undefined = await acquireLock();
