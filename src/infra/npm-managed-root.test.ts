@@ -138,6 +138,38 @@ describe("managed npm root", () => {
     });
   });
 
+  it("writes the requested release-managed dependency spec", async () => {
+    const npmRoot = await makeTempRoot();
+    await fs.writeFile(
+      path.join(npmRoot, "package.json"),
+      `${JSON.stringify(
+        {
+          private: true,
+          dependencies: {
+            "@martian-engineering/lossless-claw": "0.11.2",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    await upsertManagedNpmRootDependency({
+      npmRoot,
+      packageName: "@martian-engineering/lossless-claw",
+      dependencySpec: "0.10.0",
+    });
+
+    await expect(
+      fs.readFile(path.join(npmRoot, "package.json"), "utf8").then((raw) => JSON.parse(raw)),
+    ).resolves.toEqual({
+      private: true,
+      dependencies: {
+        "@martian-engineering/lossless-claw": "0.10.0",
+      },
+    });
+  });
+
   it("syncs OpenClaw-owned overrides without dropping unrelated local overrides", async () => {
     const npmRoot = await makeTempRoot();
     await fs.writeFile(
