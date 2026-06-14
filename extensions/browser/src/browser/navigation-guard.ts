@@ -12,6 +12,11 @@ import {
   type SsrFPolicy,
 } from "../infra/net/ssrf.js";
 import { matchesHostnameAllowlist, normalizeHostname } from "../sdk-security-runtime.js";
+import {
+  BROWSER_NAVIGATION_USERINFO_BLOCKED_MESSAGE,
+  hasBrowserNavigationUrlUserInfo,
+  redactBrowserNavigationUrlForDiagnostics,
+} from "./navigation-url-userinfo.js";
 
 const NETWORK_NAVIGATION_PROTOCOLS = new Set(["http:", "https:"]);
 const SAFE_NON_NETWORK_URLS = new Set(["about:blank"]);
@@ -116,7 +121,9 @@ export async function assertBrowserNavigationAllowed(
   try {
     parsed = new URL(rawUrl);
   } catch {
-    throw new InvalidBrowserNavigationUrlError(`Invalid URL: ${rawUrl}`);
+    throw new InvalidBrowserNavigationUrlError(
+      `Invalid URL: ${redactBrowserNavigationUrlForDiagnostics(rawUrl)}`,
+    );
   }
 
   if (!NETWORK_NAVIGATION_PROTOCOLS.has(parsed.protocol)) {
@@ -126,6 +133,10 @@ export async function assertBrowserNavigationAllowed(
     throw new InvalidBrowserNavigationUrlError(
       `Navigation blocked: unsupported protocol "${parsed.protocol}"`,
     );
+  }
+
+  if (hasBrowserNavigationUrlUserInfo(parsed)) {
+    throw new InvalidBrowserNavigationUrlError(BROWSER_NAVIGATION_USERINFO_BLOCKED_MESSAGE);
   }
 
   // Browser proxy routing hides the final connect target from this process.
