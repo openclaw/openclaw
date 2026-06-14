@@ -229,7 +229,7 @@ describe("evidence summary", () => {
       checks: [
         {
           id: "telegram-mentioned-message-reply",
-          standardId: "mention-gating",
+          coverageIds: ["channels.telegram.mention-gating"],
           title: "Telegram mentioned message gets a reply",
           status: "pass",
           details: "5 samples collected.",

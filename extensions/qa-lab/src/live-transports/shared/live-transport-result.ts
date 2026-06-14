@@ -10,10 +10,10 @@ export type LiveTransportRttMeasurement = {
 
 export type LiveTransportCheckResult = {
   id: string;
-  standardId?: string;
   title: string;
   status: "pass" | "fail";
   details: string;
+  coverageIds?: readonly string[];
   timing?: QaEvidenceTiming;
   rttMs?: number;
   requestStartedAt?: string;

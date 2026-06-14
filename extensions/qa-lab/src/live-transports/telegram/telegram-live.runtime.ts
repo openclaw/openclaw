@@ -37,7 +37,6 @@ import { startQaLiveLaneGateway } from "../shared/live-gateway.runtime.js";
 import type { LiveTransportCheckResult } from "../shared/live-transport-result.js";
 import {
   normalizeLiveTransportRttOptions,
-  pauseLiveTransportRttLoop,
   summarizeLiveTransportRttSamples,
   type LiveTransportRttOptions,
   type LiveTransportRttSample,
@@ -128,6 +127,10 @@ type TelegramObservedMessage = {
 const DEFAULT_TELEGRAM_QA_CANARY_TIMEOUT_MS = 30_000;
 
 type TelegramQaScenarioResult = LiveTransportCheckResult;
+
+function telegramLiveTransportCoverageIds(standardScenarioId: string | undefined) {
+  return standardScenarioId ? [`channels.telegram.${standardScenarioId}`] : [];
+}
 
 type TelegramQaRttOptions = LiveTransportRttOptions<TelegramQaScenarioId>;
 
@@ -1576,9 +1579,6 @@ async function runTelegramQaRttChecks(params: {
     if (failures >= params.rttOptions.maxFailures) {
       break;
     }
-    if (passed < params.rttOptions.count) {
-      await pauseLiveTransportRttLoop();
-    }
   }
 
   const summary = summarizeLiveTransportRttSamples(samples);
@@ -1903,7 +1903,7 @@ export async function runTelegramQaLive(params: {
         latestSutMessageId = canaryTiming.responseMessageId;
         scenarioResults.push({
           id: "telegram-canary",
-          standardId: "canary",
+          coverageIds: ["channels.telegram.canary"],
           title: "Telegram canary",
           status: "pass",
           details: redactPublicMetadata
@@ -1934,7 +1934,7 @@ export async function runTelegramQaLive(params: {
         });
         scenarioResults.push({
           id: "telegram-canary",
-          standardId: "canary",
+          coverageIds: ["channels.telegram.canary"],
           title: "Telegram canary",
           status: "fail",
           details: canaryFailure,
@@ -2031,7 +2031,7 @@ export async function runTelegramQaLive(params: {
             if (!lastMatched || !firstRequestStartedAt || lastSentMessageId === undefined) {
               const result = {
                 id: scenario.id,
-                standardId: scenario.standardId,
+                coverageIds: telegramLiveTransportCoverageIds(scenario.standardId),
                 title: scenario.title,
                 status: "pass",
                 details: "no reply",
@@ -2083,7 +2083,7 @@ export async function runTelegramQaLive(params: {
             }
             const result = {
               id: scenario.id,
-              standardId: scenario.standardId,
+              coverageIds: telegramLiveTransportCoverageIds(scenario.standardId),
               title: scenario.title,
               status: resultStatus,
               details,
@@ -2110,7 +2110,7 @@ export async function runTelegramQaLive(params: {
           } catch (error) {
             const result = {
               id: scenario.id,
-              standardId: scenario.standardId,
+              coverageIds: telegramLiveTransportCoverageIds(scenario.standardId),
               title: scenario.title,
               status: "fail",
               details: formatErrorMessage(error),
@@ -2170,10 +2170,7 @@ export async function runTelegramQaLive(params: {
     generatedAt: finishedAt,
     primaryModel,
     providerMode,
-    checks: scenarioResults.map(({ standardId, ...check }) => ({
-      ...check,
-      coverageIds: standardId ? [`channels.telegram.${standardId}`] : undefined,
-    })),
+    checks: scenarioResults,
     transportId: "telegram",
   });
   await fs.writeFile(

@@ -81,9 +81,3 @@ export function summarizeLiveTransportRttSamples(samples: readonly LiveTransport
   };
   return { passed: passed.length, failed: samples.length - passed.length, timing };
 }
-
-export async function pauseLiveTransportRttLoop() {
-  await new Promise((resolve) => {
-    setTimeout(resolve, 500);
-  });
-}
