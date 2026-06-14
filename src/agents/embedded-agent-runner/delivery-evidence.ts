@@ -196,21 +196,17 @@ function hasMessageIdEvidence(details: Record<string, unknown>): boolean {
   return Boolean(message && readNonEmptyStringField(message, "id"));
 }
 
-function isKnownNonSentDeliveryStatus(status: string): boolean {
-  return (
-    status === "error" ||
-    status === "failed" ||
-    status === "partial_failed" ||
-    status === "timeout" ||
-    status === "timed_out" ||
-    status === "blocked" ||
-    status === "suppressed" ||
-    status === "dry_run" ||
-    status === "cancelled" ||
-    status === "canceled" ||
-    status === "cancelled_by_message_sending_hook" ||
-    status === "cancelled-by-message-sending-hook"
-  );
+const COMMITTED_DELIVERY_STATUSES = new Set([
+  "sent",
+  "delivered",
+  "success",
+  "succeeded",
+  "completed",
+  "ok",
+]);
+
+function isExplicitNonSuccessDeliveryStatus(status: string): boolean {
+  return !COMMITTED_DELIVERY_STATUSES.has(status);
 }
 
 function hasExplicitNonDeliveryFlag(outcome: Record<string, unknown>): boolean {
@@ -219,7 +215,7 @@ function hasExplicitNonDeliveryFlag(outcome: Record<string, unknown>): boolean {
   }
   return [outcome.deliveryStatus, outcome.delivery_status, outcome.status].some((value) => {
     const status = readLowercaseString(value);
-    return status ? isKnownNonSentDeliveryStatus(status) : false;
+    return status ? isExplicitNonSuccessDeliveryStatus(status) : false;
   });
 }
 
@@ -315,21 +311,25 @@ function hasCommittedMessagingToolResultDetailsAtDepth(details: unknown, depth: 
   const deliveryStatus =
     readLowercaseString(record.deliveryStatus) ?? readLowercaseString(record.delivery_status);
   const status = readLowercaseString(record.status);
-  const hasCommittedPartialChild =
+  const hasCommittedPartialEvidence =
     (deliveryStatus === "partial_failed" || status === "partial_failed") &&
-    (hasResultArrayEvidence(record.results, depth) ||
-      hasSentPayloadOutcomeEvidence(record.payloadOutcomes, depth));
-  if ((record.ok === false || record.success === false) && !hasCommittedPartialChild) {
+    (hasMessageIdEvidence(record) ||
+      hasPositiveNumber(record.resultCount) ||
+      hasResultArrayEvidence(record.results, depth) ||
+      hasSentPayloadOutcomeEvidence(record.payloadOutcomes, depth) ||
+      hasInternalSourceReplyEvidence(record) ||
+      (depth < 3 && hasCommittedMessagingToolResultDetailsAtDepth(record.result, depth + 1)));
+  if ((record.ok === false || record.success === false) && !hasCommittedPartialEvidence) {
     return false;
   }
   if (
     deliveryStatus &&
     deliveryStatus !== "partial_failed" &&
-    isKnownNonSentDeliveryStatus(deliveryStatus)
+    isExplicitNonSuccessDeliveryStatus(deliveryStatus)
   ) {
     return false;
   }
-  if (status && status !== "partial_failed" && isKnownNonSentDeliveryStatus(status)) {
+  if (status && status !== "partial_failed" && isExplicitNonSuccessDeliveryStatus(status)) {
     return false;
   }
   const hasNestedNonDeliveryEvidence = hasNestedExplicitNonDeliveryEvidence(record, depth);

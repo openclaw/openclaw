@@ -6267,8 +6267,22 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(
       hasCommittedMessagingToolResultDetails({
         ok: false,
+        status: "partial_failed",
+        receipt: { primaryPlatformMessageId: "message-7" },
+      }),
+    ).toBe(true);
+    expect(
+      hasCommittedMessagingToolResultDetails({
+        success: false,
+        deliveryStatus: "partial_failed",
+        result: { status: "sent", messageId: "message-8" },
+      }),
+    ).toBe(true);
+    expect(
+      hasCommittedMessagingToolResultDetails({
+        ok: false,
         status: "failed",
-        results: [{ status: "sent", messageId: "message-7" }],
+        results: [{ status: "sent", messageId: "message-9" }],
       }),
     ).toBe(false);
   });
@@ -6281,7 +6295,16 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     ).toBe("committed");
   });
 
-  it.each(["error", "timeout", "timed_out", "blocked"])(
+  it.each([
+    "error",
+    "timeout",
+    "timed_out",
+    "blocked",
+    "rejected",
+    "denied",
+    "not_sent",
+    "unknown",
+  ])(
     "does not treat a JSON content receipt with %s status and a message id as committed",
     (status) => {
       expect(
@@ -6292,17 +6315,23 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     },
   );
 
-  it.each(["error", "timeout", "timed_out", "blocked"])(
-    "does not treat a messaging result with %s status and a message id as committed",
-    (status) => {
-      expect(
-        hasCommittedMessagingToolResultDetails({
-          status,
-          messageId: "request-id",
-        }),
-      ).toBe(false);
-    },
-  );
+  it.each([
+    "error",
+    "timeout",
+    "timed_out",
+    "blocked",
+    "rejected",
+    "denied",
+    "not_sent",
+    "unknown",
+  ])("does not treat a messaging result with %s status and a message id as committed", (status) => {
+    expect(
+      hasCommittedMessagingToolResultDetails({
+        status,
+        messageId: "request-id",
+      }),
+    ).toBe(false);
+  });
 
   it.each([
     { deliveryStatus: "delivered", messageId: "message-delivered" },
@@ -7560,6 +7589,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     "Can you explain the issue and how to fix it?",
     "Explain how to remove the database and then delete old backups",
     "How would you remove the database, then delete old backups?",
+    `Can you tell me ${"relevant context ".repeat(20)}whether I should delete the production backups?`,
   ])("does not treat an advisory question as authorization to act: %s", (prompt) => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "openai",
@@ -7583,6 +7613,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     "Can you advise whether to delete backups? Then delete them.",
     "Can you explain the issue and fix it?",
     "Could you describe the failure and then update the config?",
+    `Can you tell me ${"relevant context ".repeat(20)}whether I should delete the production backups? Then delete them.`,
   ])("keeps advisory prompts with a separate execution request actionable: %s", (prompt) => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "openai",
