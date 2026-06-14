@@ -92,6 +92,10 @@ const MCP_RUNTIME_RELOAD_DISPOSE_TIMEOUT_MS = 5_000;
 const CHANNEL_RELOAD_DEFERRAL_POLL_MS = 500;
 const CHANNEL_RELOAD_STILL_PENDING_WARN_MS = 30_000;
 
+function isChannelAccountIndexReloadPath(path: string, channel: ChannelKind): boolean {
+  return path === `channels.${channel}.channelConfigUpdatedAt`;
+}
+
 function resetPreparedModelRuntimeStateForHotReload(): void {
   resetModelCatalogCache();
   clearCurrentProviderAuthState();
@@ -479,11 +483,15 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           if (plan.reloadPlugins && activePluginChannelsAfterReload?.has(name) === false) {
             return;
           }
+          const includeKnownAccounts =
+            (plan.reloadPlugins && channelsStoppedBeforePluginReload.has(name)) ||
+            (!plan.reloadPlugins &&
+              plan.changedPaths.some((path) => isChannelAccountIndexReloadPath(path, name)));
           params.logChannels.info(`restarting ${name} channel`);
           if (!channelsStoppedBeforePluginReload.has(name)) {
             await params.stopChannel(name, undefined, { manual: false });
           }
-          if (plan.reloadPlugins && channelsStoppedBeforePluginReload.has(name)) {
+          if (includeKnownAccounts) {
             await params.startChannel(name, undefined, { includeKnownAccounts: true });
           } else {
             await params.startChannel(name);
