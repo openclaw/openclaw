@@ -256,6 +256,115 @@ describe("google prompt cache", () => {
     ]);
   });
 
+  it("quarantines invalid tools before creating cached content", async () => {
+    const now = 1_500_000;
+    const expireTime = new Date(now + 3_600_000).toISOString();
+    const entries: SessionCustomEntry[] = [];
+    const sessionManager = makeSessionManager(entries);
+    const fetchMock = createCacheFetchMock({
+      name: "cachedContents/system-cache-filtered-tools",
+      expireTime,
+    });
+    const { streamFn: innerStreamFn } = createCapturingStreamFn();
+    const unreadable = { name: "bad_parameters", description: "bad" };
+    Object.defineProperty(unreadable, "parameters", {
+      enumerable: true,
+      get() {
+        throw new Error("parameters getter exploded");
+      },
+    });
+
+    const wrapped = await preparePromptCacheStream({
+      fetchMock,
+      now,
+      sessionManager,
+      streamFn: innerStreamFn,
+    });
+
+    await Promise.resolve(
+      wrapped?.(
+        makeGoogleModel(),
+        {
+          systemPrompt: "Follow policy.",
+          messages: [],
+          tools: [
+            unreadable,
+            {
+              name: "lookup",
+              description: "Look up a value",
+              parameters: { type: "object" },
+            },
+          ],
+        } as never,
+        { toolChoice: "auto" } as never,
+      ),
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const createBody = JSON.parse(fetchInit(fetchMock).body as string) as Record<string, unknown>;
+    expect(createBody.tools).toEqual([
+      {
+        functionDeclarations: [
+          {
+            name: "lookup",
+            description: "Look up a value",
+            parametersJsonSchema: { type: "object" },
+          },
+        ],
+      },
+    ]);
+    expect(createBody.toolConfig).toEqual({
+      functionCallingConfig: {
+        mode: "AUTO",
+      },
+    });
+  });
+
+  it("drops unreadable tool lists before creating cached content", async () => {
+    const now = 1_600_000;
+    const expireTime = new Date(now + 3_600_000).toISOString();
+    const entries: SessionCustomEntry[] = [];
+    const sessionManager = makeSessionManager(entries);
+    const fetchMock = createCacheFetchMock({
+      name: "cachedContents/system-cache-no-tools",
+      expireTime,
+    });
+    const { streamFn: innerStreamFn } = createCapturingStreamFn();
+    const tools = new Proxy([] as unknown[], {
+      get(target, property, receiver) {
+        if (property === "length") {
+          throw new Error("length getter exploded");
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+
+    const wrapped = await preparePromptCacheStream({
+      fetchMock,
+      now,
+      sessionManager,
+      streamFn: innerStreamFn,
+    });
+
+    await Promise.resolve(
+      wrapped?.(
+        makeGoogleModel(),
+        {
+          systemPrompt: "Follow policy.",
+          messages: [],
+          tools,
+        } as never,
+        { toolChoice: "auto" } as never,
+      ),
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const createBody = JSON.parse(fetchInit(fetchMock).body as string) as Record<string, unknown>;
+    expect(createBody).not.toHaveProperty("tools");
+    expect(createBody).not.toHaveProperty("toolConfig");
+    expect(streamContext(innerStreamFn).tools).toBeUndefined();
+  });
+
   it("reuses a persisted cache entry without creating a second cache", async () => {
     const now = 2_000_000;
     const entries: SessionCustomEntry[] = [];

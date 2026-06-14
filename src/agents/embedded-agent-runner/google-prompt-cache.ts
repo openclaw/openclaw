@@ -10,6 +10,7 @@ import {
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parseGeminiAuth } from "../../infra/gemini-auth.js";
 import { normalizeGoogleApiBaseUrl } from "../../infra/google-api-base-url.js";
+import { convertTools as convertGoogleTools } from "../../llm/providers/google-shared.js";
 import { streamWithPayloadPatch } from "../../llm/providers/stream-wrappers/stream-payload-utils.js";
 import type { Model } from "../../llm/types.js";
 import { buildGuardedModelFetch } from "../provider-transport-fetch.js";
@@ -196,21 +197,6 @@ function parseExpireTimeMs(expireTime: string | undefined): number | null {
   return asDateTimestampMs(Date.parse(expireTime)) ?? null;
 }
 
-function convertManagedGoogleTools(tools: NonNullable<GooglePromptCacheContext["tools"]>) {
-  if (tools.length === 0) {
-    return undefined;
-  }
-  return [
-    {
-      functionDeclarations: tools.map((tool) => ({
-        name: tool.name,
-        description: tool.description,
-        parametersJsonSchema: tool.parameters,
-      })),
-    },
-  ];
-}
-
 function mapManagedGoogleToolChoice(
   choice: unknown,
 ): { mode: "AUTO" | "NONE" | "ANY"; allowedFunctionNames?: string[] } | undefined {
@@ -242,7 +228,7 @@ function buildManagedGooglePromptCacheConfig(
   context: GooglePromptCacheContext,
   options: GooglePromptCacheOptions,
 ) {
-  const tools = context.tools?.length ? convertManagedGoogleTools(context.tools) : undefined;
+  const tools = convertGoogleTools((context.tools ?? []) as never);
   const toolChoice = tools
     ? mapManagedGoogleToolChoice((options as { toolChoice?: unknown } | undefined)?.toolChoice)
     : undefined;
@@ -262,7 +248,7 @@ function buildManagedGooglePromptCacheConfig(
 }
 
 function buildManagedContextForCachedContent(context: GooglePromptCacheContext) {
-  if (!context.systemPrompt && !context.tools?.length) {
+  if (!context.systemPrompt && context.tools === undefined) {
     return context;
   }
   return {

@@ -12,6 +12,7 @@ import {
   type Part,
   type ThinkingConfig,
 } from "@google/genai";
+import { projectRuntimeToolInputSchema } from "../../agents/tool-schema-projection.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import type {
   Api,
@@ -338,6 +339,80 @@ const JSON_SCHEMA_META_DECLARATIONS = new Set([
   "definitions", // pre-draft-2019-09 equivalent of $defs
 ]);
 
+type GoogleProjectedTool = {
+  readonly name: string;
+  readonly description?: string;
+  readonly parameters: Record<string, unknown>;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function readToolField(
+  tool: object,
+  field: "name" | "description" | "parameters",
+): { ok: true; value: unknown } | { ok: false } {
+  try {
+    return { ok: true, value: Reflect.get(tool, field) };
+  } catch {
+    return { ok: false };
+  }
+}
+
+function readToolEntry(
+  tools: readonly Tool[],
+  toolIndex: number,
+): { ok: true; tool: unknown } | { ok: false } {
+  try {
+    return { ok: true, tool: Reflect.get(tools, String(toolIndex)) };
+  } catch {
+    return { ok: false };
+  }
+}
+
+function snapshotGoogleTools(tools: readonly Tool[]): GoogleProjectedTool[] {
+  let length: number;
+  try {
+    length = tools.length;
+  } catch {
+    return [];
+  }
+
+  const projectedTools: GoogleProjectedTool[] = [];
+  for (let toolIndex = 0; toolIndex < length; toolIndex += 1) {
+    const entry = readToolEntry(tools, toolIndex);
+    if (!entry.ok || !isRecord(entry.tool)) {
+      continue;
+    }
+
+    const name = readToolField(entry.tool, "name");
+    if (!name.ok || typeof name.value !== "string" || !name.value) {
+      continue;
+    }
+
+    const parameters = readToolField(entry.tool, "parameters");
+    if (!parameters.ok) {
+      continue;
+    }
+
+    const projection = projectRuntimeToolInputSchema(parameters.value, `${name.value}.parameters`);
+    if (projection.violations.length > 0 || !isRecord(projection.schema)) {
+      continue;
+    }
+
+    const description = readToolField(entry.tool, "description");
+    projectedTools.push({
+      name: name.value,
+      ...(description.ok && typeof description.value === "string"
+        ? { description: description.value }
+        : {}),
+      parameters: projection.schema,
+    });
+  }
+  return projectedTools;
+}
+
 /**
  * Strip meta-declarations from a schema obj
  */
@@ -368,18 +443,24 @@ export function convertTools(
   tools: Tool[],
   useParameters = false,
 ): { functionDeclarations: Record<string, unknown>[] }[] | undefined {
-  if (tools.length === 0) {
+  const projectedTools = snapshotGoogleTools(tools);
+  if (projectedTools.length === 0) {
     return undefined;
   }
   return [
     {
-      functionDeclarations: tools.map((tool) => ({
-        name: tool.name,
-        description: tool.description,
-        ...(useParameters
-          ? { parameters: sanitizeForOpenApi(tool.parameters as unknown) }
-          : { parametersJsonSchema: tool.parameters }),
-      })),
+      functionDeclarations: projectedTools.map((tool) => {
+        const declaration: Record<string, unknown> = {
+          name: tool.name,
+          description: tool.description,
+        };
+        if (useParameters) {
+          declaration.parameters = sanitizeForOpenApi(tool.parameters);
+        } else {
+          declaration.parametersJsonSchema = tool.parameters;
+        }
+        return declaration;
+      }),
     },
   ];
 }
@@ -473,6 +554,7 @@ export function buildGoogleGenerateContentParams<T extends GoogleApiType>(
   },
 ): GenerateContentParameters {
   const contents = convertMessages(model, context);
+  const tools = convertTools(context.tools ?? []);
 
   const generationConfig: GenerateContentConfig = {};
   if (options.temperature !== undefined) {
@@ -488,17 +570,15 @@ export function buildGoogleGenerateContentParams<T extends GoogleApiType>(
   const config: GenerateContentConfig = {
     ...(Object.keys(generationConfig).length > 0 && generationConfig),
     ...(context.systemPrompt && { systemInstruction: sanitizeSurrogates(context.systemPrompt) }),
-    ...(context.tools && context.tools.length > 0 && { tools: convertTools(context.tools) }),
+    ...(tools && { tools }),
   };
 
-  if (context.tools && context.tools.length > 0 && options.toolChoice) {
+  if (tools && options.toolChoice) {
     config.toolConfig = {
       functionCallingConfig: {
         mode: mapToolChoice(options.toolChoice),
       },
     };
-  } else {
-    config.toolConfig = undefined;
   }
 
   if (options.thinking?.enabled && model.reasoning) {
