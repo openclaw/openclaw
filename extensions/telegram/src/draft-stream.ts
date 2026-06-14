@@ -12,6 +12,7 @@ import {
   isTelegramClientRejection,
   isTelegramMessageNotModifiedError,
   isTelegramRateLimitError,
+  isTelegramRichMethodUnavailableError,
   readTelegramRetryAfterMs,
 } from "./network-errors.js";
 import { normalizeTelegramReplyToMessageId } from "./outbound-params.js";
@@ -56,6 +57,17 @@ type TelegramDraftPreview = {
   text: string;
   richMessage: TelegramInputRichMessage;
 };
+
+function buildLegacyTelegramPreviewParams(
+  preview: TelegramDraftPreview,
+  params: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  const nextParams = { ...params };
+  if (preview.richMessage.html !== undefined) {
+    nextParams.parse_mode = "HTML";
+  }
+  return Object.keys(nextParams).length > 0 ? nextParams : undefined;
+}
 
 type SupersededTelegramPreview = {
   messageId: number;
@@ -147,17 +159,40 @@ export function createTelegramDraftStream(params: {
   let previewRevision = 0;
   let generation = 0;
   let deliveredTextOffset = 0;
+  let richPreviewUnavailable = false;
   type PreviewSendParams = {
     preview: TelegramDraftPreview;
     sendGeneration: number;
   };
+  const sendLegacyRenderedMessage = async (preview: TelegramDraftPreview) =>
+    await params.api.sendMessage(
+      chatId,
+      preview.text,
+      buildLegacyTelegramPreviewParams(preview, richReplyParams),
+    );
   const sendRenderedMessage = async (preview: TelegramDraftPreview) => {
-    const richRawApi = getTelegramRichRawApi(params.api);
-    return await richRawApi.sendRichMessage({
-      chat_id: chatId,
-      rich_message: preview.richMessage,
-      ...richReplyParams,
-    });
+    if (richPreviewUnavailable) {
+      return await sendLegacyRenderedMessage(preview);
+    }
+    try {
+      const richRawApi = getTelegramRichRawApi(params.api);
+      return await richRawApi.sendRichMessage({
+        chat_id: chatId,
+        rich_message: preview.richMessage,
+        ...richReplyParams,
+      });
+    } catch (err) {
+      if (!isTelegramRichMethodUnavailableError(err)) {
+        throw err;
+      }
+      richPreviewUnavailable = true;
+      params.warn?.(
+        `telegram rich stream preview unavailable; retrying with message preview: ${formatErrorMessage(
+          err,
+        )}`,
+      );
+      return await sendLegacyRenderedMessage(preview);
+    }
   };
   const sendMessageTransportPreview = async ({
     preview,
@@ -165,12 +200,39 @@ export function createTelegramDraftStream(params: {
   }: PreviewSendParams): Promise<boolean> => {
     if (typeof streamMessageId === "number") {
       streamVisibleSinceMs ??= Date.now();
-      const richRawApi = getTelegramRichRawApi(params.api);
-      await richRawApi.editMessageText({
-        chat_id: chatId,
-        message_id: streamMessageId,
-        rich_message: preview.richMessage,
-      });
+      if (richPreviewUnavailable) {
+        await params.api.editMessageText(
+          chatId,
+          streamMessageId,
+          preview.text,
+          buildLegacyTelegramPreviewParams(preview, undefined),
+        );
+        return true;
+      }
+      try {
+        const richRawApi = getTelegramRichRawApi(params.api);
+        await richRawApi.editMessageText({
+          chat_id: chatId,
+          message_id: streamMessageId,
+          rich_message: preview.richMessage,
+        });
+      } catch (err) {
+        if (!isTelegramRichMethodUnavailableError(err)) {
+          throw err;
+        }
+        richPreviewUnavailable = true;
+        params.warn?.(
+          `telegram rich stream preview edit unavailable; retrying with message preview: ${formatErrorMessage(
+            err,
+          )}`,
+        );
+        await params.api.editMessageText(
+          chatId,
+          streamMessageId,
+          preview.text,
+          buildLegacyTelegramPreviewParams(preview, undefined),
+        );
+      }
       return true;
     }
     messageSendAttempted = true;

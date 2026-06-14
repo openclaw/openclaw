@@ -833,6 +833,29 @@ describe("deliverReplies", () => {
     expectRecordFields(mockCallArg(sendMessage, 0, 2), { skip_entity_detection: true });
   });
 
+  it("falls back to sendMessage when rich final delivery is unsupported", async () => {
+    const { runtime, sendMessage, bot } = createSendMessageHarness();
+    const raw = (bot.api as unknown as { raw: { sendRichMessage: ReturnType<typeof vi.fn> } }).raw;
+    raw.sendRichMessage.mockRejectedValueOnce(
+      Object.assign(new Error("Call to 'sendRichMessage' failed! (404: Not Found)"), {
+        error_code: 404,
+      }),
+    );
+
+    await deliverWith({
+      replies: [{ text: "hi **boss**" }],
+      runtime,
+      bot,
+      linkPreview: false,
+    });
+
+    expect(raw.sendRichMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith("123", "hi <b>boss</b>", {
+      link_preview_options: { is_disabled: true },
+      parse_mode: "HTML",
+    });
+  });
+
   it("includes message_thread_id for DM topics", async () => {
     const { runtime, sendMessage, bot } = createSendMessageHarness();
 

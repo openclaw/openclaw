@@ -7,6 +7,7 @@ import {
   isSafeToRetrySendError,
   isTelegramClientRejection,
   isTelegramPollingNetworkError,
+  isTelegramRichMethodUnavailableError,
   isTelegramServerError,
   tagTelegramNetworkError,
 } from "./network-errors.js";
@@ -283,6 +284,34 @@ describe("isSafeToRetrySendError", () => {
     expect(
       isSafeToRetrySendError(
         Object.assign(new Error("Misdirected Request"), { statusCode: "421abc" }),
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("isTelegramRichMethodUnavailableError", () => {
+  it.each([
+    "Telegram rich messages require grammY api.raw",
+    "Call to 'sendRichMessage' failed! (404: Not Found)",
+    "sendRichMessage method not found",
+    "sendRichMessage is unsupported by this Bot API root",
+  ])("detects rich Bot API method gaps: %s", (message) => {
+    expect(isTelegramRichMethodUnavailableError(new Error(message))).toBe(true);
+  });
+
+  it("detects nested rich method gaps", () => {
+    const inner = new Error(
+      "Call to 'sendRichMessage' failed! (400: Bad Request: method not found)",
+    );
+    const outer = Object.assign(new Error("wrapped"), { cause: inner });
+
+    expect(isTelegramRichMethodUnavailableError(outer)).toBe(true);
+  });
+
+  it("does not treat ambiguous send network failures as method gaps", () => {
+    expect(
+      isTelegramRichMethodUnavailableError(
+        new Error("Network request for 'sendRichMessage' failed!"),
       ),
     ).toBe(false);
   });
