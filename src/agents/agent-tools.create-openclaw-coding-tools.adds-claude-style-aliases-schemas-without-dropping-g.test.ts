@@ -118,6 +118,190 @@ describe("createOpenClawCodingTools read behavior", () => {
     }
   });
 
+  it("uses a smaller default read cap for small context windows", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-read-small-context-"));
+    const filePath = path.join(tmpDir, "huge.txt");
+    const lines = Array.from(
+      { length: 8000 },
+      (_unused, i) => `line-${String(i + 1).padStart(4, "0")}-abcdefghijklmnopqrstuvwxyz`,
+    );
+    await fs.writeFile(filePath, lines.join("\n"), "utf8");
+    try {
+      const readTool = createSandboxedReadTool({
+        root: tmpDir,
+        bridge: createHostSandboxFsBridge(tmpDir),
+        modelContextWindowTokens: 16_000,
+      });
+      const result = await readTool.execute("read-small-context-cap", { path: "huge.txt" });
+      const text = extractToolText(result);
+      expect(text).toContain("line-0001");
+      expect(text).toContain("line-0129");
+      expect(text).toContain("Use offset=");
+      expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(8 * 1024);
+      expect(text).not.toContain("line-8000");
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves explicit non-positive read limits with small context windows", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-read-small-context-limit-"));
+    await fs.writeFile(path.join(tmpDir, "notes.txt"), "alpha\nbeta\ngamma", "utf8");
+    try {
+      const readTool = createSandboxedReadTool({
+        root: tmpDir,
+        bridge: createHostSandboxFsBridge(tmpDir),
+        modelContextWindowTokens: 16_000,
+      });
+      const result = await readTool.execute("read-small-context-explicit-limit", {
+        path: "notes.txt",
+        limit: -1,
+      });
+
+      expect(extractToolText(result)).toBe(
+        "alpha\n\n[2 more lines in file. Use offset=2 to continue.]",
+      );
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("enforces the small-context read byte cap for long lines", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-read-small-context-long-"));
+    const filePath = path.join(tmpDir, "huge.txt");
+    const lines = Array.from(
+      { length: 8000 },
+      (_unused, i) => `line-${String(i + 1).padStart(4, "0")}-${"x".repeat(220)}`,
+    );
+    await fs.writeFile(filePath, lines.join("\n"), "utf8");
+    try {
+      const readTool = createSandboxedReadTool({
+        root: tmpDir,
+        bridge: createHostSandboxFsBridge(tmpDir),
+        modelContextWindowTokens: 16_000,
+      });
+      const result = await readTool.execute("read-small-context-long-line-cap", {
+        path: "huge.txt",
+      });
+      const text = extractToolText(result);
+      expect(text).toContain("line-0001");
+      expect(text).toContain("[Read output capped at 8KB for this call. Use offset=");
+      expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(8 * 1024);
+      expect(text).not.toContain("line-0128");
+      expect(text).not.toContain("line-8000");
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves whitespace-only lines before capped continuation guidance", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-read-small-context-space-"));
+    const filePath = path.join(tmpDir, "huge.txt");
+    const whitespaceLines = Array.from({ length: 5000 }, () => "   ");
+    await fs.writeFile(filePath, `${whitespaceLines.join("\n")}\nvisible`, "utf8");
+    try {
+      const readTool = createSandboxedReadTool({
+        root: tmpDir,
+        bridge: createHostSandboxFsBridge(tmpDir),
+        modelContextWindowTokens: 16_000,
+      });
+      const result = await readTool.execute("read-small-context-space-cap", {
+        path: "huge.txt",
+      });
+      const text = extractToolText(result);
+      const noticeIndex = text.indexOf("[Read output capped at 8KB");
+      const emittedBeforeNotice = text.slice(0, noticeIndex);
+
+      expect(noticeIndex).toBeGreaterThan(0);
+      expect(emittedBeforeNotice).toMatch(/^ {3}\n/);
+      expect(emittedBeforeNotice).toContain("\n   \n");
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not advertise a later offset after capping an over-budget first line", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-read-small-context-line-"));
+    await fs.writeFile(path.join(tmpDir, "huge.txt"), `line-0001-${"x".repeat(20_000)}`, "utf8");
+    try {
+      const readTool = createSandboxedReadTool({
+        root: tmpDir,
+        bridge: createHostSandboxFsBridge(tmpDir),
+        modelContextWindowTokens: 16_000,
+      });
+      const result = await readTool.execute("read-small-context-first-line-cap", {
+        path: "huge.txt",
+      });
+      const text = extractToolText(result);
+      expect(text).toContain("before line 1 because that line exceeds the budget");
+      expect(text).toContain("Use offset=1 and limit=1 to read it explicitly.");
+      expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(8 * 1024);
+      expect(text).not.toContain("offset=2");
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not loop on the same offset when a first line needs the full cap", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-read-small-context-full-"));
+    await fs.writeFile(
+      path.join(tmpDir, "huge.txt"),
+      `${"x".repeat(8 * 1024 - 20)}\n${"y".repeat(200)}`,
+      "utf8",
+    );
+    try {
+      const readTool = createSandboxedReadTool({
+        root: tmpDir,
+        bridge: createHostSandboxFsBridge(tmpDir),
+        modelContextWindowTokens: 16_000,
+      });
+      const result = await readTool.execute("read-small-context-full-line-cap", {
+        path: "huge.txt",
+      });
+      const text = extractToolText(result);
+      expect(text).toContain("before line 1 because that line leaves no room");
+      expect(text).toContain("Use offset=1 and limit=1 to read it explicitly.");
+      expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(8 * 1024);
+      expect(text).not.toContain("Use offset=1 to continue.");
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not treat continuation text in file content as pagination metadata", async () => {
+    const content = "this is file content\n\n[1 more lines in file. Use offset=129 to continue.]";
+    const execute = vi.fn(async (): Promise<AgentToolResult<unknown>> => {
+      return {
+        content: [
+          {
+            type: "text",
+            text: content,
+          },
+        ],
+        details: {},
+      };
+    });
+    const readTool = createOpenClawReadTool(
+      {
+        name: "read",
+        label: "read",
+        description: "test read",
+        parameters: Type.Object({
+          path: Type.String(),
+          offset: Type.Optional(Type.Number()),
+          limit: Type.Optional(Type.Number()),
+        }),
+        execute,
+      },
+      { modelContextWindowTokens: 16_000 },
+    );
+
+    const result = await readTool.execute("read-content-offset-phrase", { path: "notes.txt" });
+
+    expect(extractToolText(result)).toBe(content);
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
   it("returns empty content for explicit offsets beyond EOF", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-read-offset-eof-"));
     await fs.writeFile(path.join(tmpDir, "notes.txt"), "one\ntwo\nthree", "utf8");

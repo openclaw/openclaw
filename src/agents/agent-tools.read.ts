@@ -52,6 +52,7 @@ type ImageContentBlock = Extract<ToolContentBlock, { type: "image" }>;
 type TextContentBlock = Extract<ToolContentBlock, { type: "text" }>;
 
 const DEFAULT_READ_PAGE_MAX_BYTES = 32 * 1024;
+const MIN_CONTEXT_AWARE_READ_PAGE_MAX_BYTES = 8 * 1024;
 const MAX_ADAPTIVE_READ_MAX_BYTES = 128 * 1024;
 const ADAPTIVE_READ_CONTEXT_SHARE = 0.1;
 const CHARS_PER_TOKEN_ESTIMATE = 4;
@@ -89,7 +90,14 @@ function resolveAdaptiveReadMaxBytes(options?: OpenClawReadToolOptions): number 
   const fromContext = Math.floor(
     contextWindowTokens * CHARS_PER_TOKEN_ESTIMATE * ADAPTIVE_READ_CONTEXT_SHARE,
   );
-  return clamp(fromContext, DEFAULT_READ_PAGE_MAX_BYTES, MAX_ADAPTIVE_READ_MAX_BYTES);
+  return clamp(fromContext, MIN_CONTEXT_AWARE_READ_PAGE_MAX_BYTES, MAX_ADAPTIVE_READ_MAX_BYTES);
+}
+
+function resolveAdaptiveReadLineLimit(maxBytes: number): number | undefined {
+  if (maxBytes >= DEFAULT_READ_PAGE_MAX_BYTES) {
+    return undefined;
+  }
+  return maxBytes;
 }
 
 function malformedXmlArgValuePathError(key: string): Error {
@@ -104,6 +112,95 @@ function formatBytes(bytes: number): string {
     return `${Math.round(bytes / 1024)}KB`;
   }
   return `${bytes}B`;
+}
+
+function readOutputCapNotice(maxBytes: number, continuationOffset: number): string {
+  return `[Read output capped at ${formatBytes(maxBytes)} for this call. Use offset=${continuationOffset} to continue.]`;
+}
+
+function readOutputLineExceedsCapNotice(maxBytes: number, offset: number): string {
+  return `[Read output capped at ${formatBytes(maxBytes)} for this call before line ${offset} because that line exceeds the budget. Use offset=${offset} and limit=1 to read it explicitly.]`;
+}
+
+function readOutputLineNeedsFullBudgetNotice(maxBytes: number, offset: number): string {
+  return `[Read output capped at ${formatBytes(maxBytes)} for this call before line ${offset} because that line leaves no room for continuation guidance. Use offset=${offset} and limit=1 to read it explicitly.]`;
+}
+
+function maxReadOutputCapNoticeBytes(maxBytes: number, continuationOffset: number): number {
+  return Math.max(
+    Buffer.byteLength(readOutputCapNotice(maxBytes, continuationOffset), "utf-8"),
+    Buffer.byteLength(readOutputLineExceedsCapNotice(maxBytes, continuationOffset), "utf-8"),
+    Buffer.byteLength(readOutputLineNeedsFullBudgetNotice(maxBytes, continuationOffset), "utf-8"),
+  );
+}
+
+function splitLinesPreservingBreaks(text: string): string[] {
+  return text.match(/[^\n]*(?:\n|$)/gu)?.filter((part) => part.length > 0) ?? [];
+}
+
+function firstLineExceedsByteBudget(text: string, maxBytes: number): boolean {
+  const firstLine = splitLinesPreservingBreaks(text)[0];
+  return firstLine ? Buffer.byteLength(firstLine, "utf-8") > maxBytes : false;
+}
+
+function truncateReadTextToByteBudget(
+  text: string,
+  maxBytes: number,
+): { text: string; outputLines: number; firstLineExceedsBudget: boolean } {
+  if (Buffer.byteLength(text, "utf-8") <= maxBytes) {
+    return {
+      text,
+      outputLines: text ? splitLinesPreservingBreaks(text).length : 0,
+      firstLineExceedsBudget: false,
+    };
+  }
+
+  let output = "";
+  let outputBytes = 0;
+  let outputLines = 0;
+  for (const line of splitLinesPreservingBreaks(text)) {
+    const lineBytes = Buffer.byteLength(line, "utf-8");
+    if (outputBytes + lineBytes > maxBytes) {
+      break;
+    }
+    output += line;
+    outputBytes += lineBytes;
+    outputLines += 1;
+  }
+
+  if (output) {
+    return { text: output, outputLines, firstLineExceedsBudget: false };
+  }
+
+  return { text: "", outputLines: 0, firstLineExceedsBudget: true };
+}
+
+function capReadTextForContinuation(params: {
+  availableBytes?: number;
+  maxBytes: number;
+  startOffset: number;
+  text: string;
+}): { text: string; notice: string } {
+  const budgetBytes = params.availableBytes ?? params.maxBytes;
+  const firstPass = truncateReadTextToByteBudget(params.text, budgetBytes);
+  const firstOffset =
+    firstPass.outputLines > 0 ? params.startOffset + firstPass.outputLines : params.startOffset;
+  const firstLineExceedsMaxBytes = firstLineExceedsByteBudget(params.text, params.maxBytes);
+  const separatorBytes = firstPass.text ? Buffer.byteLength("\n\n", "utf-8") : 0;
+  const noticeBudgetBytes = maxReadOutputCapNoticeBytes(params.maxBytes, firstOffset);
+  const textBudget = Math.max(0, budgetBytes - separatorBytes - noticeBudgetBytes);
+  const finalPass = truncateReadTextToByteBudget(params.text, textBudget);
+  const finalOffset =
+    finalPass.outputLines > 0 ? params.startOffset + finalPass.outputLines : params.startOffset;
+  const notice = finalPass.firstLineExceedsBudget
+    ? firstLineExceedsMaxBytes
+      ? readOutputLineExceedsCapNotice(params.maxBytes, finalOffset)
+      : readOutputLineNeedsFullBudgetNotice(params.maxBytes, finalOffset)
+    : readOutputCapNotice(params.maxBytes, finalOffset);
+  return {
+    text: finalPass.text,
+    notice,
+  };
 }
 
 function getToolResultText(result: AgentToolResult<unknown>): string | undefined {
@@ -299,8 +396,7 @@ async function executeReadWithAdaptivePaging(params: {
   maxBytes: number;
 }): Promise<AgentToolResult<unknown>> {
   const userLimit = params.args.limit;
-  const hasExplicitLimit =
-    typeof userLimit === "number" && Number.isFinite(userLimit) && userLimit > 0;
+  const hasExplicitLimit = typeof userLimit === "number" && Number.isFinite(userLimit);
   if (hasExplicitLimit) {
     return await executeReadPage(params);
   }
@@ -315,9 +411,14 @@ async function executeReadWithAdaptivePaging(params: {
   let aggregatedBytes = 0;
   let capped = false;
   let continuationOffset: number | undefined;
+  let capNotice: string | undefined;
+  const internalPageLineLimit = resolveAdaptiveReadLineLimit(params.maxBytes);
 
   for (let page = 0; page < MAX_ADAPTIVE_READ_PAGES; page += 1) {
-    const pageArgs = { ...params.args, offset: nextOffset };
+    const pageArgs =
+      internalPageLineLimit === undefined
+        ? { ...params.args, offset: nextOffset }
+        : { ...params.args, offset: nextOffset, limit: internalPageLineLimit };
     const pageResult = await executeReadPage({
       base: params.base,
       toolCallId: params.toolCallId,
@@ -332,29 +433,61 @@ async function executeReadWithAdaptivePaging(params: {
     }
 
     const truncation = extractReadTruncationDetails(pageResult);
-    const canContinue =
+    const canContinueFromTruncation =
       Boolean(truncation?.truncated) &&
       !truncation?.firstLineExceedsLimit &&
       (truncation?.outputLines ?? 0) > 0 &&
       page < MAX_ADAPTIVE_READ_PAGES - 1;
+    const nextContinuationOffset = canContinueFromTruncation
+      ? nextOffset + (truncation?.outputLines ?? 0)
+      : undefined;
+    const canContinue = nextContinuationOffset !== undefined;
     const pageText = canContinue ? stripReadContinuationNotice(rawText) : rawText;
     const delimiter = aggregatedText && pageText ? "\n\n" : "";
     const nextBytes = Buffer.byteLength(`${delimiter}${pageText}`, "utf-8");
+    const continuationNoticeBytes = canContinue
+      ? Buffer.byteLength(aggregatedText || pageText ? "\n\n" : "", "utf-8") +
+        maxReadOutputCapNoticeBytes(params.maxBytes, nextContinuationOffset)
+      : 0;
 
-    if (aggregatedText && aggregatedBytes + nextBytes > params.maxBytes) {
+    if (aggregatedBytes + nextBytes + continuationNoticeBytes > params.maxBytes) {
       capped = true;
-      continuationOffset = nextOffset;
+      if (!aggregatedText) {
+        const cappedPage = capReadTextForContinuation({
+          maxBytes: params.maxBytes,
+          startOffset: nextOffset,
+          text: pageText,
+        });
+        aggregatedText = cappedPage.text;
+        aggregatedBytes = Buffer.byteLength(aggregatedText, "utf-8");
+        capNotice = cappedPage.notice;
+      } else {
+        const cappedPage = capReadTextForContinuation({
+          availableBytes: Math.max(
+            0,
+            params.maxBytes - aggregatedBytes - Buffer.byteLength(delimiter, "utf-8"),
+          ),
+          maxBytes: params.maxBytes,
+          startOffset: nextOffset,
+          text: pageText,
+        });
+        if (cappedPage.text) {
+          aggregatedText += `${delimiter}${cappedPage.text}`;
+          aggregatedBytes = Buffer.byteLength(aggregatedText, "utf-8");
+        }
+        capNotice = cappedPage.notice;
+      }
       break;
     }
 
     aggregatedText += `${delimiter}${pageText}`;
     aggregatedBytes += nextBytes;
 
-    if (!canContinue || !truncation) {
+    if (!canContinue || nextContinuationOffset === undefined) {
       return withToolResultText(pageResult, aggregatedText);
     }
 
-    nextOffset += truncation.outputLines;
+    nextOffset = nextContinuationOffset;
     continuationOffset = nextOffset;
 
     if (aggregatedBytes >= params.maxBytes) {
@@ -369,7 +502,11 @@ async function executeReadWithAdaptivePaging(params: {
 
   let finalText = aggregatedText;
   if (capped && continuationOffset) {
-    finalText += `\n\n[Read output capped at ${formatBytes(params.maxBytes)} for this call. Use offset=${continuationOffset} to continue.]`;
+    capNotice ??= readOutputCapNotice(params.maxBytes, continuationOffset);
+  }
+  if (capNotice) {
+    const separator = finalText ? "\n\n" : "";
+    finalText = `${finalText}${separator}${capNotice}`;
   }
   return withToolResultText(firstResult, finalText);
 }
