@@ -164,6 +164,66 @@ function createMalformedTool(name: string) {
   };
 }
 
+function createPoisonedToolDescriptors() {
+  return [
+    {
+      get name() {
+        throw new Error("plugin tool name getter exploded");
+      },
+      description: "poisoned name",
+      parameters: { type: "object", properties: {} },
+      async execute() {
+        return { content: [{ type: "text", text: "bad" }] };
+      },
+    },
+    {
+      name: "poisoned_execute",
+      description: "poisoned execute",
+      parameters: { type: "object", properties: {} },
+      get execute() {
+        throw new Error("plugin tool execute getter exploded");
+      },
+    },
+    {
+      name: "poisoned_parameters",
+      description: "poisoned parameters",
+      get parameters() {
+        throw new Error("plugin tool parameters getter exploded");
+      },
+      async execute() {
+        return { content: [{ type: "text", text: "bad" }] };
+      },
+    },
+    {
+      name: "poisoned_description",
+      get description() {
+        throw new Error("plugin tool description getter exploded");
+      },
+      parameters: { type: "object", properties: {} },
+      async execute() {
+        return { content: [{ type: "text", text: "bad" }] };
+      },
+    },
+  ];
+}
+
+function createToolWithPoisonedOptionalDescriptorFields(name: string) {
+  return {
+    name,
+    description: `${name} tool`,
+    parameters: { type: "object", properties: {} },
+    get displaySummary() {
+      throw new Error("plugin tool displaySummary getter exploded");
+    },
+    get label() {
+      throw new Error("plugin tool label getter exploded");
+    },
+    async execute() {
+      return { content: [{ type: "text", text: "ok" }] };
+    },
+  };
+}
+
 function installConsoleMethodSpy(method: "log" | "warn") {
   const spy = vi.fn();
   loggingState.rawConsole = {
@@ -1937,6 +1997,35 @@ describe("resolvePluginTools optional tools", () => {
       registry.diagnostics,
       "plugin tool is malformed (schema-bug): broken_tool missing parameters object",
     );
+  });
+
+  it("skips plugin tools with poisoned descriptor fields while keeping valid sibling tools", () => {
+    const registry = setRegistry([
+      {
+        pluginId: "multi",
+        optional: false,
+        source: "/tmp/multi.js",
+        names: ["message"],
+        factory: () => [
+          ...createPoisonedToolDescriptors(),
+          createToolWithPoisonedOptionalDescriptorFields("message"),
+        ],
+      },
+    ]);
+
+    const tools = resolvePluginTools(
+      createResolveToolsParams({ toolAllowlist: ["group:plugins"] }),
+    );
+
+    expectResolvedToolNames(tools, ["message"]);
+    expect(tools[0]?.displaySummary).toBeUndefined();
+    expect(tools[0]?.label).toBeUndefined();
+    expect(registry.diagnostics.map((entry) => entry.message)).toEqual([
+      "plugin tool is malformed (multi): missing non-empty name",
+      "plugin tool is malformed (multi): poisoned_execute missing execute function",
+      "plugin tool is malformed (multi): poisoned_parameters missing parameters object",
+      "plugin tool is malformed (multi): poisoned_description missing description string",
+    ]);
   });
 
   it("warns with plugin factory timing details when a factory is slow", () => {
