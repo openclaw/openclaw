@@ -45,7 +45,7 @@ import {
   type EmbeddingProviderId,
   type EmbeddingProviderRuntime,
 } from "./embeddings.js";
-import { runMemoryAtomicReindex } from "./manager-atomic-reindex.js";
+import { removeMemoryIndexFiles, runMemoryAtomicReindex } from "./manager-atomic-reindex.js";
 import { closeMemoryDatabase, openMemoryDatabaseAtPath } from "./manager-db.js";
 import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import {
@@ -2382,11 +2382,9 @@ export abstract class MemoryManagerSyncOps {
     const dbPath = resolveUserPath(this.settings.store.path);
     const tempDbPath = `${dbPath}.tmp-${randomUUID()}`;
     const tempLockPath = `${tempDbPath}.lock`;
-    fsSync.mkdirSync(path.dirname(tempLockPath), { recursive: true });
-    fsSync.writeFileSync(tempLockPath, JSON.stringify({ pid: process.pid, createdAt: Date.now() }));
-    const tempDb = openMemoryDatabaseAtPath(tempDbPath, this.settings.store.vector.enabled);
 
     const originalDb = this.db;
+    let tempDb: DatabaseSync | undefined;
     let tempDbClosed = false;
     let originalDbClosed = false;
     const originalRetryState = this.snapshotReindexRetryState();
@@ -2420,24 +2418,30 @@ export abstract class MemoryManagerSyncOps {
       this.vectorReady = originalDbClosed ? null : originalState.vectorReady;
     };
 
-    this.db = tempDb;
-    this.embeddingCacheMirrorDb = originalDb;
-    this.lastMetaSerialized = null;
-    this.resetVectorState();
-    this.fts.available = false;
-    this.fts.loadError = undefined;
-    this.ensureSchema();
-
-    let nextMeta: MemoryIndexMeta | null;
     let publishedIndex = false;
 
     try {
-      nextMeta = await runMemoryAtomicReindex({
+      fsSync.mkdirSync(path.dirname(tempLockPath), { recursive: true });
+      fsSync.writeFileSync(
+        tempLockPath,
+        JSON.stringify({ pid: process.pid, createdAt: Date.now() }),
+      );
+      tempDb = openMemoryDatabaseAtPath(tempDbPath, this.settings.store.vector.enabled);
+      const openedTempDb = tempDb;
+      this.db = openedTempDb;
+      this.embeddingCacheMirrorDb = originalDb;
+      this.lastMetaSerialized = null;
+      this.resetVectorState();
+      this.fts.available = false;
+      this.fts.loadError = undefined;
+      this.ensureSchema();
+
+      const nextMeta = await runMemoryAtomicReindex({
         targetPath: dbPath,
         tempPath: tempDbPath,
         beforeTempCleanup: () => {
           if (!tempDbClosed) {
-            closeMemoryDatabase(tempDb);
+            closeMemoryDatabase(openedTempDb);
             tempDbClosed = true;
           }
         },
@@ -2507,7 +2511,7 @@ export abstract class MemoryManagerSyncOps {
           this.writeMeta(meta);
           this.pruneEmbeddingCacheIfNeeded?.();
 
-          closeMemoryDatabase(tempDb);
+          closeMemoryDatabase(openedTempDb);
           tempDbClosed = true;
           closeMemoryDatabase(originalDb);
           originalDbClosed = true;
@@ -2523,7 +2527,7 @@ export abstract class MemoryManagerSyncOps {
     } catch (err) {
       this.embeddingCacheMirrorDb = null;
       try {
-        if (!tempDbClosed && this.db === tempDb) {
+        if (tempDb && !tempDbClosed && this.db === tempDb) {
           closeMemoryDatabase(tempDb);
           tempDbClosed = true;
         }
@@ -2535,6 +2539,9 @@ export abstract class MemoryManagerSyncOps {
         this.vector.dims = this.readMeta()?.vectorDims;
         throw err;
       }
+      try {
+        await removeMemoryIndexFiles(tempDbPath);
+      } catch {}
       restoreOriginalState();
       this.restoreReindexRetryState(originalRetryState);
       this.markFailedFullReindexRetry({
@@ -2543,7 +2550,9 @@ export abstract class MemoryManagerSyncOps {
       });
       throw err;
     } finally {
-      await fs.rm(tempLockPath, { force: true });
+      try {
+        await fs.rm(tempLockPath, { force: true });
+      } catch {}
     }
   }
 

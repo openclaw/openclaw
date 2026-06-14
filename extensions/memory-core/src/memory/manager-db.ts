@@ -16,9 +16,10 @@ const reindexTempFileMinAgeMs = 10 * 60_000;
 const reindexTempFileWithoutLockMinAgeMs = 24 * 60 * 60_000;
 const reindexTempUuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const memoryIndexFileSuffixes = ["", "-wal", "-shm"] as const;
+const reindexTempEntrySuffixes = [".lock", "-wal", "-shm", ""] as const;
 
 function resolveReindexTempBaseName(dbBaseName: string, entryName: string): string | undefined {
-  for (const suffix of memoryIndexFileSuffixes) {
+  for (const suffix of reindexTempEntrySuffixes) {
     if (!entryName.endsWith(suffix)) {
       continue;
     }
@@ -48,20 +49,39 @@ function readReindexTempLockPid(lockPath: string): number | undefined {
   }
 }
 
-function isProcessRunning(pid: number): boolean {
+function isProcessDefinitelyDead(pid: number): boolean {
   try {
     process.kill(pid, 0);
-    return true;
+    return false;
   } catch (err) {
-    return (err as NodeJS.ErrnoException).code === "EPERM";
+    return (err as NodeJS.ErrnoException).code === "ESRCH";
+  }
+}
+
+function isRegularFile(filePath: string): boolean {
+  try {
+    return fs.statSync(filePath).isFile();
+  } catch {
+    return false;
   }
 }
 
 function cleanupAgedReindexTempFiles(dbPath: string, nowMs = Date.now()): void {
+  // A missing live database can be the brief Windows swap window. Never delete
+  // the only complete temp candidate while the canonical path is absent.
+  if (!isRegularFile(dbPath)) {
+    return;
+  }
   const dir = path.dirname(dbPath);
   const dbBaseName = path.basename(dbPath);
   const tempBaseNames = new Set<string>();
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
     if (!entry.isFile()) {
       continue;
     }
@@ -72,24 +92,34 @@ function cleanupAgedReindexTempFiles(dbPath: string, nowMs = Date.now()): void {
   }
 
   for (const tempBaseName of tempBaseNames) {
+    if (!isRegularFile(dbPath)) {
+      return;
+    }
     const lockPath = path.join(dir, `${tempBaseName}.lock`);
     const lockPid = readReindexTempLockPid(lockPath);
-    if (lockPid && isProcessRunning(lockPid)) {
+    // Cleanup is destructive, so an uncertain owner state is treated as live.
+    if (lockPid && !isProcessDefinitelyDead(lockPid)) {
       continue;
     }
     const filePaths = [
       ...memoryIndexFileSuffixes.map((suffix) => path.join(dir, `${tempBaseName}${suffix}`)),
       lockPath,
     ];
-    const stats = filePaths
-      .map((filePath) => {
-        try {
-          return fs.statSync(filePath);
-        } catch {
-          return undefined;
+    const stats: fs.Stats[] = [];
+    let hasUnknownFileState = false;
+    for (const filePath of filePaths) {
+      try {
+        stats.push(fs.statSync(filePath));
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+          hasUnknownFileState = true;
+          break;
         }
-      })
-      .filter((stat): stat is fs.Stats => stat !== undefined);
+      }
+    }
+    if (hasUnknownFileState) {
+      continue;
+    }
     if (stats.length === 0) {
       continue;
     }

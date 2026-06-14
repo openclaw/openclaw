@@ -1,8 +1,9 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { openMemoryDatabaseAtPath } from "./manager-db.js";
 
 async function expectPathMissing(targetPath: string): Promise<void> {
@@ -19,6 +20,10 @@ describe("openMemoryDatabaseAtPath readOnly probe", () => {
 
   afterAll(async () => {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it("allows opening when the database file exists", async () => {
@@ -163,5 +168,74 @@ describe("openMemoryDatabaseAtPath readOnly probe", () => {
     await expectPathMissing(`${orphanBase}-wal`);
     await expectPathMissing(`${orphanBase}-shm`);
     await expectPathMissing(`${orphanBase}.lock`);
+  });
+
+  it("removes an aged lock-only reindex orphan", async () => {
+    const dbPath = path.join(fixtureRoot, `case-${caseId++}`, "index.sqlite");
+    const dir = path.dirname(dbPath);
+    await fs.mkdir(dir, { recursive: true });
+    const seed = new DatabaseSync(dbPath);
+    seed.close();
+
+    const orphanLock = `${dbPath}.tmp-87654321-aaaa-bbbb-cccc-123456789abc.lock`;
+    await fs.writeFile(orphanLock, '{"pid":999999999}');
+    const old = new Date(Date.now() - 60 * 60_000);
+    await fs.utimes(orphanLock, old, old);
+
+    const db = openMemoryDatabaseAtPath(dbPath, false);
+    db.close();
+
+    await expectPathMissing(orphanLock);
+  });
+
+  it("keeps aged reindex temp files while the live database is absent", async () => {
+    const dbPath = path.join(fixtureRoot, `case-${caseId++}`, "index.sqlite");
+    await fs.mkdir(path.dirname(dbPath), { recursive: true });
+    const orphanBase = `${dbPath}.tmp-abcdef12-aaaa-bbbb-cccc-123456789abc`;
+    await fs.writeFile(orphanBase, "recovery candidate");
+    const old = new Date(Date.now() - 48 * 60 * 60_000);
+    await fs.utimes(orphanBase, old, old);
+
+    const db = openMemoryDatabaseAtPath(dbPath, false, true);
+    db.close();
+
+    await expect(fs.access(orphanBase)).resolves.toBeUndefined();
+  });
+
+  it("keeps aged reindex temp files when owner liveness is uncertain", async () => {
+    const dbPath = path.join(fixtureRoot, `case-${caseId++}`, "index.sqlite");
+    const dir = path.dirname(dbPath);
+    await fs.mkdir(dir, { recursive: true });
+    const seed = new DatabaseSync(dbPath);
+    seed.close();
+
+    const activeBase = `${dbPath}.tmp-fedcba98-aaaa-bbbb-cccc-123456789abc`;
+    await fs.writeFile(activeBase, "active");
+    await fs.writeFile(`${activeBase}.lock`, '{"pid":12345}');
+    const old = new Date(Date.now() - 60 * 60_000);
+    await fs.utimes(activeBase, old, old);
+    await fs.utimes(`${activeBase}.lock`, old, old);
+    vi.spyOn(process, "kill").mockImplementation(() => {
+      throw Object.assign(new Error("unknown process state"), { code: "EACCES" });
+    });
+
+    const db = openMemoryDatabaseAtPath(dbPath, false);
+    db.close();
+
+    await expect(fs.access(activeBase)).resolves.toBeUndefined();
+    await expect(fs.access(`${activeBase}.lock`)).resolves.toBeUndefined();
+  });
+
+  it("does not block database startup when orphan discovery fails", async () => {
+    const dbPath = path.join(fixtureRoot, `case-${caseId++}`, "index.sqlite");
+    await fs.mkdir(path.dirname(dbPath), { recursive: true });
+    const seed = new DatabaseSync(dbPath);
+    seed.close();
+    vi.spyOn(fsSync, "readdirSync").mockImplementationOnce(() => {
+      throw Object.assign(new Error("scan failed"), { code: "EACCES" });
+    });
+
+    const db = openMemoryDatabaseAtPath(dbPath, false);
+    db.close();
   });
 });
