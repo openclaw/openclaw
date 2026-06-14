@@ -226,6 +226,8 @@ describe("sessions.files RPC handlers", () => {
   it("prefers the spawned workspace root over a nested spawned cwd", async () => {
     const nestedCwd = path.join(workspaceRoot, "packages/app");
     fs.mkdirSync(nestedCwd, { recursive: true });
+    writeWorkspaceFile(workspaceRoot, "packages/app/src/readme.md", "# Nested read me\n");
+    writeWorkspaceFile(workspaceRoot, "packages/shared/config.ts", "export const shared = true;\n");
     hoisted.loadSessionEntry.mockReturnValue({
       canonicalKey: "agent:main:main",
       cfg: {},
@@ -240,7 +242,8 @@ describe("sessions.files RPC handlers", () => {
     hoisted.visitSessionMessagesAsync.mockImplementation(
       async (_sessionId, _storePath, _sessionFile, visit) => {
         visit(assistantToolCall("read", { path: "src/readme.md" }), 1);
-        return 1;
+        visit(assistantToolCall("read", { path: "../shared/config.ts" }), 2);
+        return 2;
       },
     );
 
@@ -254,9 +257,57 @@ describe("sessions.files RPC handlers", () => {
     expect(payload.files).toEqual([
       expect.objectContaining({
         missing: false,
+        path: "../shared/config.ts",
+      }),
+      expect.objectContaining({
+        missing: false,
         path: "src/readme.md",
       }),
     ]);
+    expect(
+      payload.browser.entries.map((entry: Record<string, unknown>) => [
+        entry.path,
+        entry.kind,
+        entry.sessionKind,
+      ]),
+    ).toEqual([
+      ["packages", "directory", "read"],
+      ["src", "directory", undefined],
+      ["ui", "directory", undefined],
+      ["package.json", "file", undefined],
+    ]);
+
+    const preview = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.get", {
+        sessionKey: "agent:main:main",
+        path: "src/readme.md",
+      }),
+    );
+    expect(preview.file.content).toBe("# Nested read me\n");
+
+    const browserPreview = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.get", {
+        sessionKey: "agent:main:main",
+        path: "packages/app/src/readme.md",
+      }),
+    );
+    expect(browserPreview.file.content).toBe("# Nested read me\n");
+
+    const parentRelativePreview = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.get", {
+        sessionKey: "agent:main:main",
+        path: "../shared/config.ts",
+      }),
+    );
+    expect(parentRelativePreview.file.content).toBe("export const shared = true;\n");
+
+    const parentRelativeBrowserPreview = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.get", {
+        sessionKey: "agent:main:main",
+        path: "packages/shared/config.ts",
+      }),
+    );
+    expect(parentRelativeBrowserPreview.file.content).toBe("export const shared = true;\n");
   });
 
   it("falls back to the configured agent workspace for sessions without spawned metadata", async () => {

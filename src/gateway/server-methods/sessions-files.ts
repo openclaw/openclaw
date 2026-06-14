@@ -30,6 +30,11 @@ type TouchedFile = {
 type WorkspaceRoot = Awaited<ReturnType<typeof fsSafeRoot>>;
 type WorkspacePathStat = Awaited<ReturnType<WorkspaceRoot["stat"]>>;
 type WorkspaceDirEntry = WorkspacePathStat & { name: string };
+type LoadedSessionFiles = {
+  root?: string;
+  fileRoot?: string;
+  files: TouchedFile[];
+};
 
 const MAX_PREVIEW_BYTES = 256 * 1024;
 const MAX_BROWSER_ENTRIES = 250;
@@ -192,6 +197,44 @@ function resolveWorkspacePath(root: string | undefined, filePath: string): strin
   return resolved;
 }
 
+function isInsideRoot(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return !relative.startsWith("..") && !path.isAbsolute(relative);
+}
+
+function resolveTouchedFilePath(params: {
+  root: string | undefined;
+  fileRoot: string | undefined;
+  filePath: string;
+}): string | undefined {
+  if (!params.root) {
+    return undefined;
+  }
+  const base = params.fileRoot ?? params.root;
+  const resolved = path.isAbsolute(params.filePath)
+    ? path.resolve(params.filePath)
+    : path.resolve(base, params.filePath);
+  if (!isInsideRoot(params.root, resolved)) {
+    return undefined;
+  }
+  return resolved;
+}
+
+function resolveFileRoot(params: {
+  root: string | undefined;
+  spawnedCwd: string | undefined;
+}): string | undefined {
+  if (!params.root) {
+    return undefined;
+  }
+  if (!params.spawnedCwd) {
+    return params.root;
+  }
+  const resolvedCwd = path.resolve(params.spawnedCwd);
+  const resolvedRoot = path.resolve(params.root);
+  return isInsideRoot(resolvedRoot, resolvedCwd) ? params.spawnedCwd : params.root;
+}
+
 async function openSessionWorkspaceRoot(rootDir: string): Promise<WorkspaceRoot | undefined> {
   try {
     return await fsSafeRoot(rootDir, {
@@ -278,6 +321,7 @@ function mergeRelevance(
 function buildSessionRelevanceMap(
   files: readonly TouchedFile[],
   root: string | undefined,
+  fileRoot: string | undefined,
 ): Map<string, SessionFileRelevance> {
   const relevance = new Map<string, SessionFileRelevance>();
   if (!root) {
@@ -287,7 +331,7 @@ function buildSessionRelevanceMap(
     return relevance;
   }
   for (const file of files) {
-    const resolved = resolveWorkspacePath(root, file.path);
+    const resolved = resolveTouchedFilePath({ root, fileRoot, filePath: file.path });
     if (!resolved) {
       continue;
     }
@@ -352,9 +396,10 @@ function workspaceStatKind(stat: WorkspacePathStat): "file" | "directory" | "sym
 async function toSessionFileEntry(
   touched: TouchedFile,
   root: string | undefined,
+  fileRoot: string | undefined,
   opts: { includeContent?: boolean } = {},
 ): Promise<SessionFileEntry> {
-  const resolved = resolveWorkspacePath(root, touched.path);
+  const resolved = resolveTouchedFilePath({ root, fileRoot, filePath: touched.path });
   const base = {
     path: touched.path,
     name: displayNameForPath(touched.path),
@@ -478,6 +523,7 @@ async function searchBrowserEntries(params: {
 
 async function buildBrowserResult(params: {
   root: string | undefined;
+  fileRoot: string | undefined;
   path?: string;
   search?: string;
   files: readonly TouchedFile[];
@@ -486,7 +532,7 @@ async function buildBrowserResult(params: {
     return undefined;
   }
   const search = normalizePathValue(params.search);
-  const relevance = buildSessionRelevanceMap(params.files, params.root);
+  const relevance = buildSessionRelevanceMap(params.files, params.root, params.fileRoot);
   if (search) {
     const result = await searchBrowserEntries({
       root: params.root,
@@ -535,7 +581,7 @@ async function buildBrowserResult(params: {
 async function loadSessionFiles(params: {
   sessionKey: string;
   agentId?: string;
-}): Promise<{ root?: string; files: TouchedFile[] }> {
+}): Promise<LoadedSessionFiles> {
   const { cfg, storePath, entry, canonicalKey } = loadSessionEntry(params.sessionKey, {
     agentId: params.agentId,
   });
@@ -548,10 +594,12 @@ async function loadSessionFiles(params: {
       parseAgentSessionKey(params.sessionKey)?.agentId ??
       resolveDefaultAgentId(cfg),
   );
+  const spawnedCwd = normalizePathValue(entry.spawnedCwd);
   const root =
     normalizePathValue(entry.spawnedWorkspaceDir) ??
-    normalizePathValue(entry.spawnedCwd) ??
+    spawnedCwd ??
     normalizePathValue(resolveAgentWorkspaceDir(cfg, agentId));
+  const fileRoot = resolveFileRoot({ root, spawnedCwd });
   const files = new Map<string, TouchedFile>();
   await visitSessionMessagesAsync(
     entry.sessionId,
@@ -566,6 +614,7 @@ async function loadSessionFiles(params: {
   );
   return {
     root,
+    fileRoot,
     files: [...files.values()].sort((a, b) => {
       if (a.kind !== b.kind) {
         return a.kind === "modified" ? -1 : 1;
@@ -583,10 +632,11 @@ async function buildListResult(params: {
 }): Promise<{ root?: string; files: SessionFileEntry[]; browser?: SessionFileBrowserResult }> {
   const loaded = await loadSessionFiles(params);
   const files = await Promise.all(
-    loaded.files.map((file) => toSessionFileEntry(file, loaded.root)),
+    loaded.files.map((file) => toSessionFileEntry(file, loaded.root, loaded.fileRoot)),
   );
   const browser = await buildBrowserResult({
     root: loaded.root,
+    fileRoot: loaded.fileRoot,
     path: params.path,
     search: params.search,
     files: loaded.files,
@@ -602,26 +652,34 @@ async function findSessionFile(
   params: SessionsFilesGetParams,
 ): Promise<{ root?: string; file?: SessionFileEntry }> {
   const loaded = await loadSessionFiles(params);
+  const exactTouched = loaded.files.find((file) => file.path === params.path);
+  if (exactTouched) {
+    return {
+      ...(loaded.root ? { root: loaded.root } : {}),
+      file: await toSessionFileEntry(exactTouched, loaded.root, loaded.fileRoot, {
+        includeContent: true,
+      }),
+    };
+  }
   const resolved = resolveWorkspacePath(loaded.root, params.path);
-  if (!resolved) {
+  if (!resolved || !loaded.root) {
     return { ...(loaded.root ? { root: loaded.root } : {}) };
   }
-  const relevance = buildSessionRelevanceMap(loaded.files, loaded.root);
-  const browserPath = loaded.root ? toDisplayPath(loaded.root, resolved) : params.path;
-  const touched =
-    loaded.files.find((file) => file.path === params.path) ??
-    (relevance.get(browserPath)
-      ? {
-          path: browserPath,
-          kind: relevance.get(browserPath) === "modified" ? "modified" : "read",
-        }
-      : undefined);
-  if (!touched) {
+  const relevance = buildSessionRelevanceMap(loaded.files, loaded.root, loaded.fileRoot);
+  const browserPath = toDisplayPath(loaded.root, resolved);
+  const sessionKind = relevance.get(browserPath);
+  if (!sessionKind) {
     return { ...(loaded.root ? { root: loaded.root } : {}) };
   }
+  const touched: TouchedFile = {
+    path: browserPath,
+    kind: sessionKind === "modified" ? "modified" : "read",
+  };
   return {
     ...(loaded.root ? { root: loaded.root } : {}),
-    file: await toSessionFileEntry(touched, loaded.root, { includeContent: true }),
+    file: await toSessionFileEntry(touched, loaded.root, loaded.root, {
+      includeContent: true,
+    }),
   };
 }
 
