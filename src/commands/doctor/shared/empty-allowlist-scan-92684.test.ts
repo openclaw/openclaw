@@ -25,8 +25,8 @@ describe("#92684 false positive group allowlist warning", () => {
             groupPolicy: "allowlist",
             groupAllowFrom: [], // empty top-level
             accounts: {
-              work: { groupAllowFrom: [{ sender: "@friend1" }] },
-              personal: { groupAllowFrom: [{ sender: "@friend2" }] },
+              work: { groupAllowFrom: ["@friend1"] },
+              personal: { groupAllowFrom: ["@friend2"] },
             },
           },
         },
@@ -69,7 +69,7 @@ describe("#92684 false positive group allowlist warning", () => {
             groupPolicy: "allowlist",
             groupAllowFrom: [],
             accounts: {
-              work: { groupAllowFrom: [{ sender: "@friend1" }] },
+              work: { groupAllowFrom: ["@friend1"] },
               personal: {}, // no groupAllowFrom — falls back to empty top-level
             },
           },

@@ -98,9 +98,9 @@ export function scanEmptyAllowlistPolicyWarnings(
     // (#92684)
     const channelAccounts = asObjectRecord(channelConfig.accounts);
     const activeSubAccounts = channelAccounts
-      ? (Object.values(channelAccounts).filter((a): a is DoctorAccountRecord =>
+      ? Object.values(channelAccounts).filter((a): a is DoctorAccountRecord =>
           Boolean(a && typeof a === "object" && !Array.isArray(a) && !isDisabledRecord(a)),
-        ) as DoctorAccountRecord[])
+        )
       : [];
     const allSubAccountsHaveGroupAllowFrom =
       activeSubAccounts.length > 0 &&
