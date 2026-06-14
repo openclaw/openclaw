@@ -98,6 +98,7 @@ import {
   collectExplicitAllowlist,
   collectExplicitDenylist,
   expandToolGroups,
+  filterRuntimeMaterializationAllowlistEntries,
   hasRestrictiveAllowPolicy,
   mergeAlsoAllowPolicy,
   normalizeToolName,
@@ -897,6 +898,23 @@ export function createOpenClawCodingTools(options?: {
     inheritedToolPolicy,
     options?.runtimeToolAllowlist ? { allow: options.runtimeToolAllowlist } : undefined,
   ]);
+  const inheritedRuntimeToolAllowlist = filterRuntimeMaterializationAllowlistEntries({
+    entries: pluginToolAllowlist,
+    policies: [
+      profilePolicyWithAlsoAllow,
+      providerProfilePolicyWithAlsoAllow,
+      globalPolicyWithToolSearchControls,
+      globalProviderPolicyWithToolSearchControls,
+      agentPolicyWithToolSearchControls,
+      agentProviderPolicyWithToolSearchControls,
+      groupPolicyWithToolSearchControls,
+      senderPolicyWithToolSearchControls,
+      sandboxToolPolicyWithToolSearchControls,
+      subagentPolicyWithToolSearchControls,
+      inheritedToolPolicy,
+      options?.runtimeToolAllowlist ? { allow: options.runtimeToolAllowlist } : undefined,
+    ],
+  });
   const pluginToolDenylist = collectExplicitDenylist([
     profilePolicy,
     providerProfilePolicy,
@@ -1153,7 +1171,9 @@ export function createOpenClawCodingTools(options?: {
     auditLogLevel: options?.toolPolicyAuditLogLevel,
   });
   if (shouldInheritEffectiveToolAllowlist) {
-    replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, subagentFiltered);
+    replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, subagentFiltered, {
+      preserveRuntimeToolAllowlistEntries: inheritedRuntimeToolAllowlist,
+    });
   }
   options?.recordToolPrepStage?.("authorization-policy");
   // Always normalize tool JSON Schemas before handing them to OpenClaw model runtime.
