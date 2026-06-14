@@ -12,6 +12,7 @@ import {
   resolveStorePath,
 } from "./paths.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
+import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import {
   getSessionEntry,
   cleanupSessionLifecycleArtifacts as cleanupFileSessionLifecycleArtifacts,
@@ -157,6 +158,8 @@ export type SessionEntryUpdateOptions = {
 export type SessionEntryPatchOptions = {
   /** Entry to synthesize when a patch operation is allowed to create. */
   fallbackEntry?: SessionEntry;
+  /** Fully resolved maintenance settings when the caller already has config loaded. */
+  maintenanceConfig?: ResolvedSessionMaintenanceConfig;
   /** Keep the previous updatedAt value when the patch should not count as activity. */
   preserveActivity?: boolean;
   /** Replace the whole entry instead of merging the returned patch. */
@@ -267,6 +270,7 @@ export async function patchSessionEntry(
   return await patchFileSessionEntry({
     ...scope,
     fallbackEntry: options.fallbackEntry,
+    maintenanceConfig: options.maintenanceConfig,
     preserveActivity: options.preserveActivity,
     replaceEntry: options.replaceEntry,
     update,

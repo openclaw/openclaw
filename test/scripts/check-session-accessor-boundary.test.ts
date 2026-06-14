@@ -12,9 +12,15 @@ describe("session accessor boundary guard", () => {
     expect(migratedSessionAccessorFiles).toEqual(
       new Set([
         "src/agents/embedded-agent-runner/compaction-successor-transcript.ts",
+        "src/agents/embedded-agent-runner/run/attempt.ts",
         "src/agents/embedded-agent-runner/tool-result-truncation.ts",
         "src/agents/embedded-agent-runner/transcript-rewrite.ts",
         "src/agents/embedded-agent-runner/transcript-runtime-state.ts",
+        "src/auto-reply/reply/agent-runner-helpers.ts",
+        "src/auto-reply/reply/agent-runner.ts",
+        "src/auto-reply/reply/commands-subagents/action-info.ts",
+        "src/auto-reply/reply/followup-runner.ts",
+        "src/auto-reply/reply/queue/drain.ts",
         "src/commands/export-trajectory.ts",
         "src/commands/health.ts",
         "src/commands/sandbox-explain.ts",
@@ -48,6 +54,7 @@ describe("session accessor boundary guard", () => {
     expect(migratedSessionAccessorWriteFiles).toEqual(
       new Set([
         "src/agents/command/attempt-execution.shared.ts",
+        "src/agents/command/session-store.ts",
         "src/agents/embedded-agent-runner/run.ts",
         "src/agents/embedded-agent-runner/run/attempt.ts",
         "src/auto-reply/reply/abort-cutoff.runtime.ts",

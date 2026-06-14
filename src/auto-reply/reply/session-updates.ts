@@ -11,7 +11,7 @@ import {
   rewriteSessionFileForNewSessionId,
   type SessionEntry,
 } from "../../config/sessions.js";
-import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
+import { patchSessionEntry, upsertSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   forgetActiveSessionForShutdown,
@@ -310,12 +310,15 @@ export async function incrementCompactionCount(params: {
   } else if (incrementBy > 0) {
     updates.totalTokensFresh = false;
   }
-  sessionStore[sessionKey] = {
+  const nextEntry = {
     ...entry,
     ...updates,
   };
+  sessionStore[sessionKey] = nextEntry;
   if (storePath) {
-    const persistedEntry = await upsertSessionEntry({ storePath, sessionKey }, updates);
+    const persistedEntry = await patchSessionEntry({ storePath, sessionKey }, () => updates, {
+      fallbackEntry: nextEntry,
+    });
     if (persistedEntry) {
       sessionStore[sessionKey] = persistedEntry;
     }

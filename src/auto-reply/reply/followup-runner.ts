@@ -26,8 +26,7 @@ import {
   buildAgentRuntimeOutcomePlan,
 } from "../../agents/runtime-plan/build.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
-import { readSessionEntry } from "../../config/sessions/store-load.js";
+import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import {
@@ -530,7 +529,10 @@ export function createFollowupRunner(params: {
       const resolveCurrentVerboseLevel = () => {
         if (replySessionKey && storePath) {
           try {
-            const level = readSessionEntry(storePath, replySessionKey)?.verboseLevel;
+            const level = loadSessionEntry({
+              storePath,
+              sessionKey: replySessionKey,
+            })?.verboseLevel;
             if (typeof level === "string" && level.trim()) {
               return level;
             }
@@ -606,7 +608,10 @@ export function createFollowupRunner(params: {
         const admittedSessionEntry = replySessionKey
           ? (sessionStore?.[replySessionKey] ??
             (storePath
-              ? (readSessionEntry(storePath, replySessionKey) as SessionEntry | undefined)
+              ? loadSessionEntry({
+                  storePath,
+                  sessionKey: replySessionKey,
+                })
               : undefined))
           : undefined;
         if (admittedSessionEntry?.sessionId === replyOperation.sessionId) {

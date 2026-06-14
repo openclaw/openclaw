@@ -31,9 +31,15 @@ const legacyWriterNames = new Set([
 
 export const migratedSessionAccessorFiles = new Set([
   "src/agents/embedded-agent-runner/compaction-successor-transcript.ts",
+  "src/agents/embedded-agent-runner/run/attempt.ts",
   "src/agents/embedded-agent-runner/tool-result-truncation.ts",
   "src/agents/embedded-agent-runner/transcript-rewrite.ts",
   "src/agents/embedded-agent-runner/transcript-runtime-state.ts",
+  "src/auto-reply/reply/agent-runner-helpers.ts",
+  "src/auto-reply/reply/agent-runner.ts",
+  "src/auto-reply/reply/commands-subagents/action-info.ts",
+  "src/auto-reply/reply/followup-runner.ts",
+  "src/auto-reply/reply/queue/drain.ts",
   "src/commands/export-trajectory.ts",
   "src/commands/health.ts",
   "src/commands/sandbox-explain.ts",
@@ -59,6 +65,7 @@ export const migratedBundledPluginSessionAccessorFiles = new Set([
 
 export const migratedSessionAccessorWriteFiles = new Set([
   "src/agents/command/attempt-execution.shared.ts",
+  "src/agents/command/session-store.ts",
   "src/agents/embedded-agent-runner/run.ts",
   "src/agents/embedded-agent-runner/run/attempt.ts",
   "src/auto-reply/reply/abort-cutoff.runtime.ts",
@@ -203,7 +210,8 @@ export async function main() {
   const readSourceRoots = resolveSourceRoots(repoRoot, [
     "extensions/discord/src/monitor",
     "extensions/telegram/src",
-    "src/agents/embedded-agent-runner",
+    "src/agents",
+    "src/auto-reply",
     "src/commands",
     "src/config/sessions",
     "src/cron",

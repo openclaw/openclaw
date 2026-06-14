@@ -29,21 +29,23 @@ export async function applySessionHints(params: {
     prefixedBodyBase = `${abortedHint}\n\n${prefixedBodyBase}`;
     // The abort hint is one-shot; clear durable state once it is added.
     if (params.sessionEntry && params.sessionStore && params.sessionKey) {
+      const updatedAt = Date.now();
       params.sessionEntry.abortedLastRun = false;
-      params.sessionEntry.updatedAt = Date.now();
+      params.sessionEntry.updatedAt = updatedAt;
       params.sessionStore[params.sessionKey] = params.sessionEntry;
       if (params.storePath) {
         const sessionKey = params.sessionKey;
-        const { updateSessionEntry } = await loadSessionAccessorRuntime();
-        await updateSessionEntry(
+        const { patchSessionEntry } = await loadSessionAccessorRuntime();
+        await patchSessionEntry(
           {
             storePath: params.storePath,
             sessionKey,
           },
           () => ({
             abortedLastRun: false,
-            updatedAt: Date.now(),
+            updatedAt,
           }),
+          { fallbackEntry: params.sessionEntry },
         );
       }
     } else if (params.abortKey) {

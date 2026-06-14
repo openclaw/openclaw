@@ -5,15 +5,13 @@ import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   canonicalizeAbsoluteSessionFilePath,
-  mergeSessionEntry,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   setSessionRuntimeModel,
   type SessionEntry,
-  updateSessionStore,
   rewriteSessionFileForNewSessionId,
 } from "../../config/sessions.js";
-import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import { patchSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
@@ -295,21 +293,20 @@ export async function updateSessionStoreAfterAgentRun(params: {
       }
     : removeLifecycleStateFromMetadataPatch(next);
   const maintenanceConfig = resolveMaintenanceConfigFromInput(cfg.session?.maintenance);
-  const persisted = await updateSessionStore(
-    storePath,
-    (store) => {
-      if (preserveUserFacingRunState && !store[sessionKey]) {
-        return undefined;
+  const persisted = await patchSessionEntry(
+    {
+      storePath,
+      sessionKey,
+    },
+    (_currentEntry, context) => {
+      if (preserveUserFacingRunState && !context.existingEntry) {
+        return null;
       }
-      const merged = mergeSessionEntry(store[sessionKey], metadataPatch);
-      store[sessionKey] = merged;
-      return merged;
+      return metadataPatch;
     },
     {
-      takeCacheOwnership: true,
+      ...(preserveUserFacingRunState ? {} : { fallbackEntry: entry }),
       maintenanceConfig,
-      resolveSingleEntryPersistence: (entryLocal) =>
-        entryLocal ? { sessionKey, entry: entryLocal } : undefined,
     },
   );
   if (persisted) {
@@ -334,7 +331,14 @@ export async function clearCliSessionInStore(params: {
   clearCliSession(next, provider);
   next.updatedAt = Date.now();
 
-  const persisted = await updateSessionEntry({ storePath, sessionKey }, () => next);
+  const persisted = await patchSessionEntry(
+    {
+      storePath,
+      sessionKey,
+    },
+    () => next,
+    { fallbackEntry: entry },
+  );
   if (persisted) {
     sessionStore[sessionKey] = persisted;
   }
@@ -401,7 +405,14 @@ export async function recordCliCompactionInStore(params: {
     next.cacheWrite = undefined;
   }
 
-  const persisted = await updateSessionEntry({ storePath, sessionKey }, () => next);
+  const persisted = await patchSessionEntry(
+    {
+      storePath,
+      sessionKey,
+    },
+    () => next,
+    { fallbackEntry: entry },
+  );
   if (persisted) {
     sessionStore[sessionKey] = persisted;
   }
