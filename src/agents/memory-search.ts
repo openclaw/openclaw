@@ -100,6 +100,8 @@ export type ResolvedMemorySearchConfig = {
       mmr: {
         enabled: boolean;
         lambda: number;
+        provider: string;
+        fallback: string;
       };
       temporalDecay: {
         enabled: boolean;
@@ -128,6 +130,8 @@ const DEFAULT_HYBRID_TEXT_WEIGHT = 0.3;
 const DEFAULT_HYBRID_CANDIDATE_MULTIPLIER = 4;
 const DEFAULT_MMR_ENABLED = false;
 const DEFAULT_MMR_LAMBDA = 0.7;
+const DEFAULT_MMR_PROVIDER = "memory-mmr";
+const DEFAULT_MMR_FALLBACK = "none";
 const DEFAULT_TEMPORAL_DECAY_ENABLED = false;
 const DEFAULT_TEMPORAL_DECAY_HALF_LIFE_DAYS = 30;
 const DEFAULT_CACHE_ENABLED = true;
@@ -343,6 +347,18 @@ function mergeConfig(
         overrides?.query?.hybrid?.mmr?.lambda ??
         defaults?.query?.hybrid?.mmr?.lambda ??
         DEFAULT_MMR_LAMBDA,
+      provider:
+        overrides?.query?.hybrid?.mmr?.provider ??
+        defaults?.query?.hybrid?.mmr?.provider ??
+        ((overrides?.query?.hybrid?.mmr?.enabled ??
+        defaults?.query?.hybrid?.mmr?.enabled ??
+        DEFAULT_MMR_ENABLED)
+          ? DEFAULT_MMR_PROVIDER
+          : DEFAULT_MMR_FALLBACK),
+      fallback:
+        overrides?.query?.hybrid?.mmr?.fallback ??
+        defaults?.query?.hybrid?.mmr?.fallback ??
+        DEFAULT_MMR_FALLBACK,
     },
     temporalDecay: {
       enabled:
@@ -419,6 +435,8 @@ function mergeConfig(
           lambda: Number.isFinite(hybrid.mmr.lambda)
             ? Math.max(0, Math.min(1, hybrid.mmr.lambda))
             : DEFAULT_MMR_LAMBDA,
+          provider: hybrid.mmr.provider,
+          fallback: hybrid.mmr.fallback,
         },
         temporalDecay: {
           enabled: hybrid.temporalDecay.enabled,

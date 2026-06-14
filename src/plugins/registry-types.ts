@@ -4,6 +4,7 @@ import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { GatewayMethodDescriptor } from "../gateway/methods/descriptor.js";
 import type { GatewayRequestHandlers } from "../gateway/server-methods/types.js";
 import type { HookEntry } from "../hooks/types.js";
+import type { MemoryRerankerPlugin } from "../plugin-sdk/memory-core-host-engine-reranker.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import type {
   AgentToolResultMiddleware,
@@ -202,6 +203,8 @@ export type PluginMigrationProviderRegistration =
   PluginOwnedProviderRegistration<MigrationProviderPlugin>;
 export type PluginMemoryEmbeddingProviderRegistration =
   PluginOwnedProviderRegistration<MemoryEmbeddingProviderAdapter>;
+export type PluginMemoryRerankerRegistration =
+  PluginOwnedProviderRegistration<MemoryRerankerPlugin>;
 export type PluginCodexAppServerExtensionFactoryRegistration = {
   pluginId: string;
   pluginName?: string;
@@ -456,6 +459,7 @@ export type PluginRegistry = {
   codexAppServerExtensionFactories: PluginCodexAppServerExtensionFactoryRegistration[];
   agentToolResultMiddlewares: PluginAgentToolResultMiddlewareRegistration[];
   memoryEmbeddingProviders: PluginMemoryEmbeddingProviderRegistration[];
+  memoryRerankers: PluginMemoryRerankerRegistration[];
   agentHarnesses: PluginAgentHarnessRegistration[];
   gatewayHandlers: GatewayRequestHandlers;
   gatewayMethodDescriptors: GatewayMethodDescriptor[];

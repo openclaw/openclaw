@@ -1,5 +1,5 @@
 // Memory Core tests cover hybrid plugin behavior.
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js";
 
 describe("memory hybrid helpers", () => {
@@ -101,5 +101,374 @@ describe("memory hybrid helpers", () => {
     expect(merged[0]?.score).toBeCloseTo(0.5 * 0.2 + 0.5 * 1);
     expect(merged[0]?.vectorScore).toBeCloseTo(0.2);
     expect(merged[0]?.textScore).toBeCloseTo(1);
+  });
+
+  describe("mergeHybridResults with injected reranker", () => {
+    const mockReranker = vi.fn(
+      async (items: Array<{ id: string; score: number; content: string }>, _lambda: number) => {
+        // Sort by score descending (highest first)
+        const sorted = [...items].toSorted((a, b) => b.score - a.score);
+        return sorted;
+      },
+    );
+
+    beforeEach(() => {
+      mockReranker.mockClear();
+    });
+
+    it("provider present → reranker function called; result order matches mock return", async () => {
+      const merged = await mergeHybridResults({
+        vectorWeight: 0.7,
+        textWeight: 0.3,
+        vector: [
+          {
+            id: "a",
+            path: "memory/a.md",
+            startLine: 1,
+            endLine: 2,
+            source: "memory",
+            snippet: "vec-a",
+            vectorScore: 0.9,
+          },
+          {
+            id: "b",
+            path: "memory/b.md",
+            startLine: 3,
+            endLine: 4,
+            source: "memory",
+            snippet: "vec-b",
+            vectorScore: 0.8,
+          },
+        ],
+        keyword: [],
+        mmr: { enabled: true, lambda: 0.7, provider: "memory-mmr", fallback: "none" },
+        reranker: mockReranker,
+      });
+
+      expect(mockReranker).toHaveBeenCalledTimes(1);
+      expect(merged).toHaveLength(2);
+      // Mock returns sorted by score, so a (0.9) comes before b (0.8)
+      expect(merged[0]?.path).toBe("memory/a.md");
+      expect(merged[1]?.path).toBe("memory/b.md");
+    });
+
+    it('provider "none" → reranker function not called; score order preserved', async () => {
+      const merged = await mergeHybridResults({
+        vectorWeight: 0.7,
+        textWeight: 0.3,
+        vector: [
+          {
+            id: "a",
+            path: "memory/a.md",
+            startLine: 1,
+            endLine: 2,
+            source: "memory",
+            snippet: "vec-a",
+            vectorScore: 0.9,
+          },
+          {
+            id: "b",
+            path: "memory/b.md",
+            startLine: 3,
+            endLine: 4,
+            source: "memory",
+            snippet: "vec-b",
+            vectorScore: 0.8,
+          },
+        ],
+        keyword: [],
+        mmr: { enabled: true, lambda: 0.7, provider: "none", fallback: "none" },
+        // No reranker adapter passed: simulates manager resolving provider "none" to undefined
+      });
+
+      expect(mockReranker).not.toHaveBeenCalled();
+      expect(merged).toHaveLength(2);
+      // Score order preserved (0.9 > 0.8)
+      expect(merged[0]?.path).toBe("memory/a.md");
+      expect(merged[1]?.path).toBe("memory/b.md");
+    });
+
+    it("reranker throws + fallbackReranker → fallback called; primary error swallowed", async () => {
+      const errorReranker = vi.fn(async () => {
+        throw new Error("Primary reranker failed");
+      });
+
+      const fallbackReranker = vi.fn(
+        async (items: Array<{ id: string; score: number; content: string }>, _lambda: number) => {
+          // Sort by score descending
+          const sorted = [...items].toSorted((a, b) => b.score - a.score);
+          return sorted;
+        },
+      );
+
+      const merged = await mergeHybridResults({
+        vectorWeight: 0.7,
+        textWeight: 0.3,
+        vector: [
+          {
+            id: "a",
+            path: "memory/a.md",
+            startLine: 1,
+            endLine: 2,
+            source: "memory",
+            snippet: "vec-a",
+            vectorScore: 0.9,
+          },
+        ],
+        keyword: [],
+        mmr: { enabled: true, lambda: 0.7, provider: "memory-mmr", fallback: "none" },
+        reranker: errorReranker,
+        fallbackReranker,
+      });
+
+      expect(errorReranker).toHaveBeenCalledTimes(1);
+      expect(fallbackReranker).toHaveBeenCalledTimes(1);
+      expect(merged).toHaveLength(1);
+      expect(merged[0]?.path).toBe("memory/a.md");
+    });
+
+    it("primary provider absent + fallbackReranker → fallback called; score order from fallback", async () => {
+      const fallbackReranker = vi.fn(
+        async (items: Array<{ id: string; score: number; content: string }>, _lambda: number) => {
+          const sorted = [...items].toSorted((a, b) => b.score - a.score);
+          return sorted;
+        },
+      );
+
+      const merged = await mergeHybridResults({
+        vectorWeight: 0.7,
+        textWeight: 0.3,
+        vector: [
+          {
+            id: "a",
+            path: "memory/a.md",
+            startLine: 1,
+            endLine: 2,
+            source: "memory",
+            snippet: "vec-a",
+            vectorScore: 0.9,
+          },
+          {
+            id: "b",
+            path: "memory/b.md",
+            startLine: 3,
+            endLine: 4,
+            source: "memory",
+            snippet: "vec-b",
+            vectorScore: 0.8,
+          },
+        ],
+        keyword: [],
+        mmr: { enabled: true, lambda: 0.7, provider: "memory-mmr", fallback: "memory-mmr" },
+        // No primary reranker adapter: simulates primary provider not registered
+        fallbackReranker,
+      });
+
+      expect(mockReranker).not.toHaveBeenCalled();
+      expect(fallbackReranker).toHaveBeenCalledTimes(1);
+      expect(merged).toHaveLength(2);
+      expect(merged[0]?.path).toBe("memory/a.md");
+      expect(merged[1]?.path).toBe("memory/b.md");
+    });
+
+    it("reranker throws + no fallback → fail-open; returns score-ordered results (no throw)", async () => {
+      const errorReranker = vi.fn(async () => {
+        throw new Error("Primary reranker failed");
+      });
+
+      const merged = await mergeHybridResults({
+        vectorWeight: 0.7,
+        textWeight: 0.3,
+        vector: [
+          {
+            id: "a",
+            path: "memory/a.md",
+            startLine: 1,
+            endLine: 2,
+            source: "memory",
+            snippet: "vec-a",
+            vectorScore: 0.9,
+          },
+          {
+            id: "b",
+            path: "memory/b.md",
+            startLine: 3,
+            endLine: 4,
+            source: "memory",
+            snippet: "vec-b",
+            vectorScore: 0.8,
+          },
+        ],
+        keyword: [],
+        mmr: { enabled: true, lambda: 0.7, provider: "memory-mmr", fallback: "none" },
+        reranker: errorReranker,
+      });
+
+      expect(errorReranker).toHaveBeenCalledTimes(1);
+      // Fail-open: returns score-ordered results
+      expect(merged).toHaveLength(2);
+      expect(merged[0]?.path).toBe("memory/a.md");
+      expect(merged[1]?.path).toBe("memory/b.md");
+    });
+
+    it("mmr.enabled=true, named provider but plugin not installed → fail-open; score-sorted results returned", async () => {
+      // Simulates the upgrade case: user has mmr.enabled=true in config but the
+      // memory-mmr plugin is not installed (createReranker returns undefined for
+      // an unregistered id, so no adapter is passed).
+      const merged = await mergeHybridResults({
+        vectorWeight: 0.7,
+        textWeight: 0.3,
+        vector: [
+          {
+            id: "a",
+            path: "memory/a.md",
+            startLine: 1,
+            endLine: 2,
+            source: "memory",
+            snippet: "vec-a",
+            vectorScore: 0.9,
+          },
+          {
+            id: "b",
+            path: "memory/b.md",
+            startLine: 3,
+            endLine: 4,
+            source: "memory",
+            snippet: "vec-b",
+            vectorScore: 0.8,
+          },
+        ],
+        keyword: [],
+        mmr: { enabled: true, lambda: 0.7, provider: "memory-mmr", fallback: "none" },
+        // No reranker adapter: createReranker returns undefined when plugin is not registered.
+      });
+
+      expect(mockReranker).not.toHaveBeenCalled();
+      expect(merged).toHaveLength(2);
+      // Fail-open: score-ordered results, no error thrown
+      expect(merged[0]?.path).toBe("memory/a.md");
+      expect(merged[1]?.path).toBe("memory/b.md");
+    });
+
+    it("mmr.enabled=true, provider and fallback configured but neither plugin installed → fail-open; score-sorted results returned", async () => {
+      // Simulates: user has both a primary and fallback reranker configured but
+      // neither plugin is installed (e.g. after an incomplete upgrade or reload).
+      const merged = await mergeHybridResults({
+        vectorWeight: 0.7,
+        textWeight: 0.3,
+        vector: [
+          {
+            id: "a",
+            path: "memory/a.md",
+            startLine: 1,
+            endLine: 2,
+            source: "memory",
+            snippet: "vec-a",
+            vectorScore: 0.9,
+          },
+          {
+            id: "b",
+            path: "memory/b.md",
+            startLine: 3,
+            endLine: 4,
+            source: "memory",
+            snippet: "vec-b",
+            vectorScore: 0.8,
+          },
+        ],
+        keyword: [],
+        mmr: {
+          enabled: true,
+          lambda: 0.7,
+          provider: "memory-mmr",
+          fallback: "memory-mmr-fallback",
+        },
+        // Neither adapter passed: both plugins absent after upgrade/reload.
+      });
+
+      expect(mockReranker).not.toHaveBeenCalled();
+      expect(merged).toHaveLength(2);
+      // Fail-open: score-ordered results, no error thrown
+      expect(merged[0]?.path).toBe("memory/a.md");
+      expect(merged[1]?.path).toBe("memory/b.md");
+    });
+
+    it("reranker returning empty or invalid rerank results falls back to score order", async () => {
+      const emptyReranker = vi.fn(
+        async () => [] as Array<{ id: string; score: number; content: string }>,
+      );
+      const invalidIdReranker = vi.fn(
+        async () =>
+          [
+            { id: "missing-a", score: 1, content: "missing-a" },
+            { id: "missing-b", score: 0.5, content: "missing-b" },
+          ] as Array<{ id: string; score: number; content: string }>,
+      );
+
+      const emptyFallback = await mergeHybridResults({
+        vectorWeight: 0.7,
+        textWeight: 0.3,
+        vector: [
+          {
+            id: "a",
+            path: "memory/a.md",
+            startLine: 1,
+            endLine: 2,
+            source: "memory",
+            snippet: "vec-a",
+            vectorScore: 0.9,
+          },
+          {
+            id: "b",
+            path: "memory/b.md",
+            startLine: 3,
+            endLine: 4,
+            source: "memory",
+            snippet: "vec-b",
+            vectorScore: 0.8,
+          },
+        ],
+        keyword: [],
+        mmr: { enabled: true, lambda: 0.7, provider: "memory-mmr", fallback: "none" },
+        reranker: emptyReranker,
+      });
+
+      const invalidFallback = await mergeHybridResults({
+        vectorWeight: 0.7,
+        textWeight: 0.3,
+        vector: [
+          {
+            id: "a",
+            path: "memory/a.md",
+            startLine: 1,
+            endLine: 2,
+            source: "memory",
+            snippet: "vec-a",
+            vectorScore: 0.9,
+          },
+          {
+            id: "b",
+            path: "memory/b.md",
+            startLine: 3,
+            endLine: 4,
+            source: "memory",
+            snippet: "vec-b",
+            vectorScore: 0.8,
+          },
+        ],
+        keyword: [],
+        mmr: { enabled: true, lambda: 0.7, provider: "memory-mmr", fallback: "none" },
+        reranker: invalidIdReranker,
+      });
+
+      expect(emptyReranker).toHaveBeenCalledTimes(1);
+      expect(invalidIdReranker).toHaveBeenCalledTimes(1);
+      expect(emptyFallback).toHaveLength(2);
+      expect(invalidFallback).toHaveLength(2);
+      expect(emptyFallback[0]?.path).toBe("memory/a.md");
+      expect(emptyFallback[1]?.path).toBe("memory/b.md");
+      expect(invalidFallback[0]?.path).toBe("memory/a.md");
+      expect(invalidFallback[1]?.path).toBe("memory/b.md");
+    });
   });
 });

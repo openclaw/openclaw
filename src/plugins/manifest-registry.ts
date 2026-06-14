@@ -176,6 +176,7 @@ export type PluginManifestContractListKey =
   | "videoGenerationProviders"
   | "musicGenerationProviders"
   | "memoryEmbeddingProviders"
+  | "memoryRerankers"
   | "webContentExtractors"
   | "webFetchProviders"
   | "webSearchProviders"
@@ -387,6 +388,7 @@ function mergeManifestContracts(
     "externalAuthProviders",
     "embeddingProviders",
     "memoryEmbeddingProviders",
+    "memoryRerankers",
     "speechProviders",
     "realtimeTranscriptionProviders",
     "realtimeVoiceProviders",
