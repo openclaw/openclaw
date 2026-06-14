@@ -137,7 +137,7 @@ describe("doctor empty allowlist policy scan", () => {
           telegram: {
             groupPolicy: "allowlist",
             groupAllowFrom: [],
-            token: "bot-token",
+            botToken: "bot-token",
             accounts: {
               default: { groupAllowFrom: ["user-123"] },
               work: { groupAllowFrom: ["user-456"] },
