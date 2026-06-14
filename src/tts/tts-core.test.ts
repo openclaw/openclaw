@@ -108,7 +108,7 @@ describe("TTS core", () => {
         baseUrl: "https://api.openai.com/v1",
       },
     };
-    const usage = { promptTokens: 10, completionTokens: 20, totalTokens: 30 };
+    const testUsage = { promptTokens: 10, completionTokens: 20, totalTokens: 30 };
     const auth = { kind: "api-key" as const, apiKey: "test-key" };
     const assistant = {
       role: "assistant" as const,
@@ -122,7 +122,7 @@ describe("TTS core", () => {
       provider: config.model.provider,
       model: config.model.id,
       stopReason: "stop",
-      usage,
+      usage: testUsage,
       timestamp: Date.now(),
     } satisfies AssistantMessage;
 
