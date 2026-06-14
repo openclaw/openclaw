@@ -71,6 +71,7 @@ export const AgentEventSchema = Type.Object(
 export const MessageActionToolContextSchema = Type.Object(
   {
     currentChannelId: Type.Optional(Type.String()),
+    currentMessagingTarget: Type.Optional(Type.String()),
     currentGraphChannelId: Type.Optional(Type.String()),
     currentChannelProvider: Type.Optional(Type.String()),
     currentThreadTs: Type.Optional(Type.String()),
@@ -91,6 +92,7 @@ export const MessageActionToolContextSchema = Type.Object(
         { additionalProperties: false },
       ),
     ),
+    sameChannelThreadRequired: Type.Optional(Type.Boolean()),
     skipCrossContextDecoration: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },

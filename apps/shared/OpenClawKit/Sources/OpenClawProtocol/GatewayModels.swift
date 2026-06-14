@@ -2074,6 +2074,204 @@ public struct SessionsCompactionRestoreResult: Codable, Sendable {
     }
 }
 
+public struct SessionFileBrowserEntry: Codable, Sendable {
+    public let path: String
+    public let name: String
+    public let kind: AnyCodable
+    public let sessionkind: SessionFileRelevance?
+    public let size: Int?
+    public let updatedatms: Int?
+
+    public init(
+        path: String,
+        name: String,
+        kind: AnyCodable,
+        sessionkind: SessionFileRelevance?,
+        size: Int?,
+        updatedatms: Int?)
+    {
+        self.path = path
+        self.name = name
+        self.kind = kind
+        self.sessionkind = sessionkind
+        self.size = size
+        self.updatedatms = updatedatms
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case path
+        case name
+        case kind
+        case sessionkind = "sessionKind"
+        case size
+        case updatedatms = "updatedAtMs"
+    }
+}
+
+public struct SessionFileBrowserResult: Codable, Sendable {
+    public let path: String
+    public let parentpath: String?
+    public let search: String?
+    public let entries: [SessionFileBrowserEntry]
+    public let truncated: Bool?
+
+    public init(
+        path: String,
+        parentpath: String?,
+        search: String?,
+        entries: [SessionFileBrowserEntry],
+        truncated: Bool?)
+    {
+        self.path = path
+        self.parentpath = parentpath
+        self.search = search
+        self.entries = entries
+        self.truncated = truncated
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case path
+        case parentpath = "parentPath"
+        case search
+        case entries
+        case truncated
+    }
+}
+
+public struct SessionFileEntry: Codable, Sendable {
+    public let path: String
+    public let name: String
+    public let kind: SessionFileKind
+    public let missing: Bool
+    public let size: Int?
+    public let updatedatms: Int?
+    public let content: String?
+
+    public init(
+        path: String,
+        name: String,
+        kind: SessionFileKind,
+        missing: Bool,
+        size: Int?,
+        updatedatms: Int?,
+        content: String?)
+    {
+        self.path = path
+        self.name = name
+        self.kind = kind
+        self.missing = missing
+        self.size = size
+        self.updatedatms = updatedatms
+        self.content = content
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case path
+        case name
+        case kind
+        case missing
+        case size
+        case updatedatms = "updatedAtMs"
+        case content
+    }
+}
+
+public struct SessionsFilesListParams: Codable, Sendable {
+    public let sessionkey: String
+    public let agentid: String?
+    public let path: String?
+    public let search: String?
+
+    public init(
+        sessionkey: String,
+        agentid: String? = nil,
+        path: String?,
+        search: String?)
+    {
+        self.sessionkey = sessionkey
+        self.agentid = agentid
+        self.path = path
+        self.search = search
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case agentid = "agentId"
+        case path
+        case search
+    }
+}
+
+public struct SessionsFilesListResult: Codable, Sendable {
+    public let sessionkey: String
+    public let root: String?
+    public let files: [SessionFileEntry]
+    public let browser: SessionFileBrowserResult?
+
+    public init(
+        sessionkey: String,
+        root: String?,
+        files: [SessionFileEntry],
+        browser: SessionFileBrowserResult?)
+    {
+        self.sessionkey = sessionkey
+        self.root = root
+        self.files = files
+        self.browser = browser
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case root
+        case files
+        case browser
+    }
+}
+
+public struct SessionsFilesGetParams: Codable, Sendable {
+    public let sessionkey: String
+    public let path: String
+    public let agentid: String?
+
+    public init(
+        sessionkey: String,
+        path: String,
+        agentid: String? = nil)
+    {
+        self.sessionkey = sessionkey
+        self.path = path
+        self.agentid = agentid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case path
+        case agentid = "agentId"
+    }
+}
+
+public struct SessionsFilesGetResult: Codable, Sendable {
+    public let sessionkey: String
+    public let root: String?
+    public let file: SessionFileEntry
+
+    public init(
+        sessionkey: String,
+        root: String?,
+        file: SessionFileEntry)
+    {
+        self.sessionkey = sessionkey
+        self.root = root
+        self.file = file
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case root
+        case file
+    }
+}
+
 public struct SessionsCreateParams: Codable, Sendable {
     public let key: String?
     public let agentid: String?

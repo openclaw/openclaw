@@ -2,10 +2,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import type { GatewayService } from "../daemon/service.js";
+import { resolveGatewayService, type GatewayService } from "../daemon/service.js";
 import type { GatewayServiceEnvArgs } from "../daemon/service.js";
 import { createMockGatewayService } from "../daemon/service.test-helpers.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { readServiceStatusSummary } from "./status.service-summary.js";
 
 function createService(overrides: Partial<GatewayService>): GatewayService {
@@ -63,6 +64,23 @@ describe("readServiceStatusSummary", () => {
     expect(summary.managedByOpenClaw).toBe(false);
     expect(summary.externallyManaged).toBe(false);
     expect(summary.loadedText).toBe("disabled");
+  });
+
+  it("keeps unsupported service adapters readable", async () => {
+    await withMockedPlatform("aix", async () => {
+      const summary = await readServiceStatusSummary(resolveGatewayService(), "Daemon");
+
+      expect(summary.label).toBe("Gateway service");
+      expect(summary.installed).toBe(false);
+      expect(summary.loaded).toBe(false);
+      expect(summary.managedByOpenClaw).toBe(false);
+      expect(summary.externallyManaged).toBe(false);
+      expect(summary.loadedText).toBe("not installed");
+      expect(summary.runtime).toEqual({
+        status: "unknown",
+        detail: "Gateway service install not supported on aix",
+      });
+    });
   });
 
   it("passes command environment to runtime and loaded checks", async () => {

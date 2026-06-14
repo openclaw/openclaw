@@ -48,6 +48,7 @@ import {
 import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { maybeResolveNativeSlashCommandFastReply } from "./get-reply-native-slash-fast-path.js";
 import { runPreparedReply } from "./get-reply-run.js";
+import type { ReplySessionBinding } from "./get-reply.types.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import { hasInboundMedia } from "./inbound-media.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
@@ -62,6 +63,10 @@ import {
 import { createTypingController } from "./typing.js";
 
 type ResetCommandAction = "new" | "reset";
+
+type InternalGetReplyOptions = GetReplyOptions & {
+  onSessionPrepared?: (binding: ReplySessionBinding) => void;
+};
 
 function classifyHeartbeatPendingFinalDelivery(text: string, ackMaxChars: number) {
   const stripped = stripHeartbeatToken(text, {
@@ -502,6 +507,11 @@ export async function getReplyFromConfig(
   } = sessionState;
   let { abortedLastRun } = sessionState;
   resolverTimingSessionKey = sessionKey ?? resolverTimingSessionKey;
+  (resolvedOpts as InternalGetReplyOptions | undefined)?.onSessionPrepared?.({
+    sessionKey,
+    sessionId,
+    storePath,
+  });
 
   if (sessionEntry?.pendingFinalDelivery && sessionEntry.pendingFinalDeliveryText) {
     const text = sanitizePendingFinalDeliveryText(sessionEntry.pendingFinalDeliveryText);

@@ -39,6 +39,15 @@ import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-r
 import type { FollowupRun } from "./queue.js";
 
 const BUN_FETCH_SOCKET_ERROR_RE = /socket connection was closed unexpectedly/i;
+type EmbeddedReplyRoute = Pick<
+  FollowupRun,
+  | "originatingChannel"
+  | "originatingTo"
+  | "originatingAccountId"
+  | "originatingChatType"
+  | "originatingThreadId"
+  | "originatingReplyToId"
+>;
 
 /** Selects the freshest runtime config usable by queued reply execution. */
 export function resolveQueuedReplyRuntimeConfig(config: OpenClawConfig): OpenClawConfig {
@@ -210,35 +219,51 @@ export function buildEmbeddedRunBaseParams(
 
 function buildEmbeddedContextFromTemplate(params: {
   run: FollowupRun["run"];
+  replyRoute?: EmbeddedReplyRoute;
   sessionCtx: TemplateContext;
   hasRepliedRef: { value: boolean } | undefined;
 }) {
   const config = params.run.config;
-  const chatType = normalizeChatType(params.sessionCtx.ChatType) ?? params.run.chatType;
+  const sessionCtx = {
+    ...params.sessionCtx,
+    OriginatingChannel:
+      params.replyRoute?.originatingChannel ?? params.sessionCtx.OriginatingChannel,
+    OriginatingTo: params.replyRoute?.originatingTo ?? params.sessionCtx.OriginatingTo,
+    AccountId:
+      params.replyRoute?.originatingAccountId ??
+      params.sessionCtx.AccountId ??
+      params.run.agentAccountId,
+    ChatType:
+      normalizeChatType(params.replyRoute?.originatingChatType) ??
+      normalizeChatType(params.sessionCtx.ChatType) ??
+      params.run.chatType,
+    MessageThreadId: params.replyRoute?.originatingThreadId ?? params.sessionCtx.MessageThreadId,
+    ReplyToId: params.replyRoute?.originatingReplyToId ?? params.sessionCtx.ReplyToId,
+  };
   return {
     sessionId: params.run.sessionId,
     sessionKey: params.run.sessionKey,
     sandboxSessionKey: params.run.runtimePolicySessionKey,
     agentId: params.run.agentId,
     messageProvider: resolveOriginMessageProvider({
-      originatingChannel: params.sessionCtx.OriginatingChannel,
-      provider: params.sessionCtx.Provider,
+      originatingChannel: sessionCtx.OriginatingChannel,
+      provider: sessionCtx.Provider,
     }),
-    ...(chatType ? { chatType } : {}),
-    agentAccountId: params.sessionCtx.AccountId,
+    ...(sessionCtx.ChatType ? { chatType: sessionCtx.ChatType } : {}),
+    agentAccountId: sessionCtx.AccountId,
     messageTo: resolveOriginMessageTo({
-      originatingTo: params.sessionCtx.OriginatingTo,
-      to: params.sessionCtx.To,
+      originatingTo: sessionCtx.OriginatingTo,
+      to: sessionCtx.To,
     }),
-    messageThreadId: params.sessionCtx.MessageThreadId ?? undefined,
-    memberRoleIds: normalizeMemberRoleIds(params.sessionCtx.MemberRoleIds),
+    messageThreadId: sessionCtx.MessageThreadId ?? undefined,
+    memberRoleIds: normalizeMemberRoleIds(sessionCtx.MemberRoleIds),
     // Provider threading context for tool auto-injection
     ...buildThreadingToolContext({
-      sessionCtx: params.sessionCtx,
+      sessionCtx,
       config,
       hasRepliedRef: params.hasRepliedRef,
     }),
-    currentInboundAudio: hasInboundAudio(params.sessionCtx),
+    currentInboundAudio: hasInboundAudio(sessionCtx),
   };
 }
 
@@ -263,6 +288,7 @@ function buildTemplateSenderContext(sessionCtx: TemplateContext) {
 /** Builds extra context payloads for embedded run execution. */
 export function buildEmbeddedRunContexts(params: {
   run: FollowupRun["run"];
+  replyRoute?: EmbeddedReplyRoute;
   sessionCtx: TemplateContext;
   hasRepliedRef: { value: boolean } | undefined;
   provider: string;
@@ -271,6 +297,7 @@ export function buildEmbeddedRunContexts(params: {
     authProfile: resolveRunAuthProfile(params.run, params.provider),
     embeddedContext: buildEmbeddedContextFromTemplate({
       run: params.run,
+      replyRoute: params.replyRoute,
       sessionCtx: params.sessionCtx,
       hasRepliedRef: params.hasRepliedRef,
     }),
@@ -281,6 +308,7 @@ export function buildEmbeddedRunContexts(params: {
 /** Builds execution-specific embedded run params for queued reply dispatch. */
 export function buildEmbeddedRunExecutionParams(params: {
   run: FollowupRun["run"];
+  replyRoute?: EmbeddedReplyRoute;
   sessionCtx: TemplateContext;
   hasRepliedRef: { value: boolean } | undefined;
   provider: string;

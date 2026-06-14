@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { AssistantMessage, AssistantMessageEvent, Context, Model, Tool } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import {
+  applyCommonResponsesParams,
   createResponsesAssistantOutput,
   convertResponsesMessages,
   type OpenAIResponsesStreamEvent,
@@ -176,6 +177,63 @@ describe("convertResponsesTools", () => {
     expect(
       convertResponsesTools([zeta, alpha]).map((tool) => expectResponsesFunctionTool(tool).name),
     ).toEqual(["alpha", "zeta"]);
+  });
+
+  it("skips unreadable schemas and preserves healthy native strict tools", () => {
+    const converted = convertResponsesTools(
+      [
+        {
+          name: "broken",
+          description: "Broken",
+          parameters: {
+            type: "object",
+            get properties(): never {
+              throw new Error("properties exploded");
+            },
+          },
+        },
+        {
+          name: "lookup",
+          description: "Lookup",
+          parameters: {},
+        },
+      ],
+      { model: nativeOpenAIModel },
+    );
+
+    expect(converted).toEqual([
+      {
+        type: "function",
+        name: "lookup",
+        description: "Lookup",
+        strict: true,
+        parameters: {
+          type: "object",
+          properties: {},
+          required: [],
+          additionalProperties: false,
+        },
+      },
+    ]);
+  });
+
+  it("does not reread an unreadable tool inventory length", () => {
+    const tools = new Proxy([], {
+      get(target, property, receiver) {
+        if (property === "length") {
+          throw new Error("length exploded");
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    const params = {} as never;
+
+    applyCommonResponsesParams(params, nativeOpenAIModel, {
+      messages: [{ role: "user", content: "hello", timestamp: 1 }],
+      tools,
+    } as never);
+
+    expect(params).not.toHaveProperty("tools");
   });
 });
 
