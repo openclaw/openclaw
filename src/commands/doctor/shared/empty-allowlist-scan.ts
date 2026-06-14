@@ -92,10 +92,25 @@ export function scanEmptyAllowlistPolicyWarnings(
     const accounts = asObjectRecord(channelConfig.accounts);
     const hasAccounts = accounts && Object.keys(accounts).length > 0;
 
-    // Only check the top-level channel config if it has no accounts.
     // When accounts exist, the top-level config is a fallback parent, not a
-    // real account — each account is checked individually below.
-    if (!hasAccounts) {
+    // real account. Check the top-level config but skip the groupAllowFrom
+    // warning if every account has its own populated groupAllowFrom.
+    if (hasAccounts) {
+      // Check if every account has its own groupAllowFrom
+      const allAccountsHaveGroupAllowFrom = Object.values(accounts).every((account) => {
+        if (!account || typeof account !== "object") return false;
+        const acc = account as DoctorAccountRecord;
+        const groupAllowFrom = acc.groupAllowFrom as DoctorAllowFromList | undefined;
+        return groupAllowFrom && Array.isArray(groupAllowFrom) && groupAllowFrom.length > 0;
+      });
+
+      if (allAccountsHaveGroupAllowFrom) {
+        // Skip the top-level check entirely — every account covers the policy
+        // Skip to accounts below
+      } else {
+        checkAccount(channelConfig, `channels.${channelName}`, channelName);
+      }
+    } else {
       checkAccount(channelConfig, `channels.${channelName}`, channelName);
     }
 
