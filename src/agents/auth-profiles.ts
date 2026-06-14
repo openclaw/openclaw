@@ -86,6 +86,7 @@ export type {
 export {
   calculateAuthProfileCooldownMs,
   clearAuthProfileCooldown,
+  clearProviderAuthProfileCooldowns,
   clearExpiredCooldowns,
   getSoonestCooldownExpiry,
   isProfileInCooldown,
