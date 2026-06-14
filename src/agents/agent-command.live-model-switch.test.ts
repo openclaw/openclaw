@@ -975,7 +975,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       | undefined;
     expect(deliveryArg?.payloads?.[0]?.text).toContain("truth gate blocked");
     expect(deliveryArg?.payloads?.[0]?.text).toContain(
-      "Missing evidence: successful GitHub run evidence for the implementation SHA",
+      "Missing evidence: successful GitHub run evidence",
     );
     expect(deliveryArg?.payloads?.[0]?.text).toContain("Status: blocked");
     expect(sessionStore["agent:main"]?.controlDirectorTruthAudit).toEqual([
