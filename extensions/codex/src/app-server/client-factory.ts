@@ -18,6 +18,8 @@ export type CodexAppServerClientFactory = (
   options?: {
     onStartedClient?: (client: CodexAppServerClient) => void;
     abandonSignal?: AbortSignal;
+    timeoutMs?: number;
+    initializeTimeoutDeadlineMs?: number;
   },
 ) => Promise<CodexAppServerClient>;
 
@@ -44,6 +46,8 @@ export const defaultCodexAppServerClientFactory: CodexAppServerClientFactory = (
       config,
       onStartedClient: options?.onStartedClient,
       abandonSignal: options?.abandonSignal,
+      timeoutMs: options?.timeoutMs,
+      initializeTimeoutDeadlineMs: options?.initializeTimeoutDeadlineMs,
     }),
   );
 
@@ -63,5 +67,7 @@ export const defaultLeasedCodexAppServerClientFactory: CodexAppServerClientFacto
       config,
       onStartedClient: options?.onStartedClient,
       abandonSignal: options?.abandonSignal,
+      timeoutMs: options?.timeoutMs,
+      initializeTimeoutDeadlineMs: options?.initializeTimeoutDeadlineMs,
     }),
   );
