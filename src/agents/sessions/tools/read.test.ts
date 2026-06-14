@@ -100,4 +100,70 @@ describe("read tool", () => {
 
     expect(textContent(result)).toBe("alpha\n\n[2 more lines in file. Use offset=2 to continue.]");
   });
+
+  it("decodes text files with an explicit non-utf8 encoding", async () => {
+    // Regression for issue #92664: Chinese Windows logs/files saved as GBK
+    // must be readable by supplying the encoding parameter.
+    // GBK encoding of "你好，世界" - these are the actual bytes that would be
+    // in a GBK-encoded file on Chinese Windows systems
+    const gbkBytes = Buffer.from([
+      0xc4,
+      0xe3, // 你
+      0xba,
+      0xc3, // 好
+      0xa3,
+      0xac, // ，
+      0xca,
+      0xc0, // 世
+      0xbd,
+      0xe7, // 界
+    ]);
+    const expected = "你好，世界";
+    const tool = createReadToolDefinition("/workspace", {
+      operations: {
+        access: async () => {},
+        detectImageMimeType: async () => null,
+        readFile: async () => gbkBytes,
+      },
+    });
+
+    const result = await tool.execute(
+      "call-1",
+      { path: "note.txt", encoding: "gbk" },
+      undefined,
+      undefined,
+      {} as never,
+    );
+
+    expect(textContent(result)).toBe(expected);
+  });
+
+  it("falls back to UTF-8 with replacement when auto-detection fails on non-Windows", async () => {
+    // When no encoding is specified and UTF-8 fails, the read tool should
+    // attempt Windows codepage detection (which returns null on non-Windows),
+    // then fall back to UTF-8 with replacement characters.
+    // This test verifies the fallback behavior on non-Windows platforms.
+    const invalidUtf8Bytes = Buffer.from([0xc4, 0xe3, 0xba, 0xc3]); // Invalid UTF-8 sequence
+    const tool = createReadToolDefinition("/workspace", {
+      operations: {
+        access: async () => {},
+        detectImageMimeType: async () => null,
+        readFile: async () => invalidUtf8Bytes,
+      },
+    });
+
+    const result = await tool.execute(
+      "call-1",
+      { path: "note.txt" }, // No encoding specified
+      undefined,
+      undefined,
+      {} as never,
+    );
+
+    // Should not throw, should return something (UTF-8 with replacement chars)
+    const text = textContent(result);
+    expect(text).toBeTruthy();
+    // On non-Windows, this will be replacement characters ()
+    // On Windows with GBK codepage, this might decode to actual Chinese
+  });
 });

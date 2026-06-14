@@ -8,6 +8,7 @@ import { access as fsAccess, readFile as fsReadFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { resolveWindowsConsoleEncoding } from "../../../infra/windows-encoding.js";
 import type { ImageContent, Model, TextContent } from "../../../llm/types.js";
 import {
   classifyMediaReferenceSource,
@@ -39,6 +40,12 @@ const readSchema = Type.Object({
     Type.Number({ description: "Line number to start reading from (1-indexed)" }),
   ),
   limit: Type.Optional(Type.Number({ description: "Maximum number of lines to read" })),
+  encoding: Type.Optional(
+    Type.String({
+      description:
+        "File encoding to use when decoding text (e.g. utf-8, gbk, latin1). Defaults to utf-8.",
+    }),
+  ),
 });
 export type { ReadToolDetails, ReadToolInput } from "./tool-contracts.js";
 
@@ -248,6 +255,52 @@ function formatReadResult(
   return text;
 }
 
+function decodeReadBuffer(buffer: Buffer, encoding?: string): string {
+  // If explicit encoding is provided, use it directly
+  if (encoding) {
+    const normalized = encoding.toLowerCase().replace(/[^a-z0-9-]/g, "");
+    if (normalized === "utf8" || normalized === "utf-8") {
+      return buffer.toString("utf-8");
+    }
+    try {
+      // Use TextDecoder for legacy encodings (GBK, Latin-1, etc.)
+      // Node.js 24+ supports these encodings natively via TextDecoder
+      return new TextDecoder(normalized).decode(buffer);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Unsupported encoding "${encoding}": ${message}`, { cause: error });
+    }
+  }
+
+  // No explicit encoding: try UTF-8 first, then fallback to Windows codepage detection
+  // This matches the behavior of decodeWindowsOutputBuffer for cross-platform consistency
+  const utf8 = decodeStrictUtf8(buffer);
+  if (utf8 !== null) {
+    return utf8;
+  }
+
+  // UTF-8 failed, try Windows codepage detection (works on Windows, returns null on other platforms)
+  const windowsEncoding = resolveWindowsConsoleEncoding();
+  if (windowsEncoding && windowsEncoding !== "utf-8") {
+    try {
+      return new TextDecoder(windowsEncoding).decode(buffer);
+    } catch {
+      // Fallback to UTF-8 with replacement characters if codepage detection fails
+    }
+  }
+
+  // Final fallback: UTF-8 with replacement characters
+  return buffer.toString("utf-8");
+}
+
+function decodeStrictUtf8(buffer: Buffer): string | null {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(buffer);
+  } catch {
+    return null;
+  }
+}
+
 export function createReadToolDefinition(
   cwd: string,
   options?: ReadToolOptions,
@@ -263,7 +316,12 @@ export function createReadToolDefinition(
     parameters: readSchema,
     async execute(
       toolCallId,
-      { path, offset, limit }: { path: string; offset?: number; limit?: number },
+      {
+        path,
+        offset,
+        limit,
+        encoding,
+      }: { path: string; offset?: number; limit?: number; encoding?: string },
       signal?: AbortSignal,
       onUpdate?,
       ctx?,
@@ -339,7 +397,7 @@ export function createReadToolDefinition(
             } else {
               // Read text content.
               const buffer = await ops.readFile(absolutePath);
-              const textContent = buffer.toString("utf-8");
+              const textContent = decodeReadBuffer(buffer, encoding);
               const allLines = textContent.split("\n");
               const totalFileLines = allLines.length;
               // Apply offset if specified. Convert from 1-indexed input to 0-indexed array access.
