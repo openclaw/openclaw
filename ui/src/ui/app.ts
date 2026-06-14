@@ -78,21 +78,22 @@ import { normalizeAssistantIdentity } from "./assistant-identity.ts";
 import { restoreChatComposerState } from "./chat/composer-persistence.ts";
 import { exportChatMarkdown } from "./chat/export.ts";
 import {
+  reconcileRealtimeTalkCatalogSelection,
+  type RealtimeTalkCatalogProvider,
+} from "./chat/realtime-talk-catalog.ts";
+import {
   createRealtimeTalkConversationState,
   updateRealtimeTalkConversation,
   type RealtimeTalkConversationEntry,
   type RealtimeTalkConversationState,
 } from "./chat/realtime-talk-conversation.ts";
 import {
-  reconcileRealtimeTalkCatalogSelection,
-  type RealtimeTalkCatalogProvider,
-} from "./chat/realtime-talk-catalog.ts";
-import {
   RealtimeTalkSession,
   type RealtimeTalkLaunchOptions,
   type RealtimeTalkStatus,
 } from "./chat/realtime-talk.ts";
 import type { ChatRunUiStatus } from "./chat/run-lifecycle.ts";
+import { closeChatSessionPicker, forceCloseChatSessionPicker } from "./chat/session-controls.ts";
 import type { ChatMessageCache } from "./chat/session-message-cache.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
 import {
@@ -306,6 +307,9 @@ export class OpenClawApp extends LitElement {
   @state() chatSessionPickerLoading = false;
   @state() chatSessionPickerError: string | null = null;
   @state() chatSessionPickerResult: SessionsListResult | null = null;
+  @state() chatSessionPickerEditingKey: string | null = null;
+  @state() chatSessionPickerEditingValue = "";
+  @state() chatSessionPickerSavingKey: string | null = null;
   private sessionSwitchNoticeSeq = 0;
   private sessionSwitchNoticeTimer: number | null = null;
   private sessionSwitchFlashTimer: number | null = null;
@@ -753,8 +757,7 @@ export class OpenClawApp extends LitElement {
     }
     if (this.chatSessionPickerOpen) {
       e.preventDefault();
-      this.chatSessionPickerOpen = false;
-      this.chatSessionPickerSurface = null;
+      closeChatSessionPicker(this as unknown as AppViewState);
       return;
     }
     const openComposerDetails = this.querySelectorAll<HTMLDetailsElement>(
@@ -802,8 +805,7 @@ export class OpenClawApp extends LitElement {
         (node) => path.includes(node),
       );
       if (!insidePicker) {
-        this.chatSessionPickerOpen = false;
-        this.chatSessionPickerSurface = null;
+        closeChatSessionPicker(this as unknown as AppViewState);
       }
     }
     if (!this.chatMobileControlsOpen) {
@@ -995,6 +997,9 @@ export class OpenClawApp extends LitElement {
   }
 
   setTab(next: Tab) {
+    if (next !== "chat") {
+      forceCloseChatSessionPicker(this as unknown as AppViewState);
+    }
     setTabInternal(this as unknown as Parameters<typeof setTabInternal>[0], next);
     if (next !== "chat") {
       this.setChatMobileControlsOpen(false);
@@ -1015,8 +1020,7 @@ export class OpenClawApp extends LitElement {
     const focusTarget = options?.restoreFocus ? this.chatMobileControlsTrigger : null;
     this.chatMobileControlsOpen = false;
     if (this.chatSessionPickerSurface === "mobile") {
-      this.chatSessionPickerOpen = false;
-      this.chatSessionPickerSurface = null;
+      forceCloseChatSessionPicker(this as unknown as AppViewState);
     }
     this.chatMobileControlsTrigger = null;
     if (!(focusTarget instanceof HTMLElement) || !focusTarget.isConnected) {

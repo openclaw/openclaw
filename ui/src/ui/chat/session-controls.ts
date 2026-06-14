@@ -241,6 +241,156 @@ function focusChatSessionPickerSearch(state: AppViewState) {
   setTimeout(focus, 0);
 }
 
+function focusChatSessionPickerRenameInput(state: AppViewState, sessionKey: string) {
+  const updateComplete = (state as AppViewState & { updateComplete?: Promise<unknown> })
+    .updateComplete;
+  const focus = () => {
+    const input = Array.from(
+      document.querySelectorAll<HTMLInputElement>("[data-chat-session-rename-input]"),
+    ).find((node) => node.dataset.chatSessionRenameInput === sessionKey);
+    input?.focus();
+    input?.select();
+  };
+  if (updateComplete) {
+    void updateComplete.then(focus);
+    return;
+  }
+  setTimeout(focus, 0);
+}
+
+function resetChatSessionPickerRenameState(
+  state: AppViewState,
+  options: { preserveSavingKey?: boolean } = {},
+) {
+  state.chatSessionPickerEditingKey = null;
+  state.chatSessionPickerEditingValue = "";
+  if (!options.preserveSavingKey) {
+    state.chatSessionPickerSavingKey = null;
+  }
+}
+
+function beginChatSessionPickerRename(
+  state: AppViewState,
+  row: SessionsListResult["sessions"][number],
+) {
+  if (state.chatSessionPickerSavingKey) {
+    return;
+  }
+  clearChatSessionPickerSearchTimer(state);
+  state.chatSessionPickerError = null;
+  state.chatSessionPickerEditingKey = row.key;
+  state.chatSessionPickerEditingValue = row.label ?? "";
+  requestHostUpdate(state);
+  focusChatSessionPickerRenameInput(state, row.key);
+}
+
+function cancelChatSessionPickerRename(state: AppViewState) {
+  resetChatSessionPickerRenameState(state);
+  requestHostUpdate(state);
+}
+
+function patchChatSessionPickerRowLabel(
+  result: SessionsListResult | null,
+  sessionKey: string,
+  label: string | null,
+): SessionsListResult | null {
+  if (!result) {
+    return result;
+  }
+  return {
+    ...result,
+    sessions: result.sessions.map((row) =>
+      row.key === sessionKey ? Object.assign({}, row, { label: label ?? undefined }) : row,
+    ),
+  };
+}
+
+function patchChatSessionLabel(state: AppViewState, sessionKey: string, label: string | null) {
+  state.sessionsResult = patchChatSessionPickerRowLabel(state.sessionsResult, sessionKey, label);
+  state.chatSessionPickerResult = patchChatSessionPickerRowLabel(
+    state.chatSessionPickerResult,
+    sessionKey,
+    label,
+  );
+}
+
+async function refreshChatSessionPickerAfterRename(state: AppViewState) {
+  const result = state.chatSessionPickerResult;
+  if (!state.client || !state.connected || !state.chatSessionPickerOpen || !result) {
+    return;
+  }
+  const query = normalizeOptionalString(state.chatSessionPickerAppliedQuery) ?? "";
+  const limit =
+    typeof result.nextOffset === "number" && Number.isFinite(result.nextOffset)
+      ? Math.max(1, Math.floor(result.nextOffset))
+      : typeof result.totalCount === "number" && Number.isFinite(result.totalCount)
+        ? Math.max(1, Math.floor(result.totalCount))
+        : typeof result.limitApplied === "number" && Number.isFinite(result.limitApplied)
+          ? Math.max(1, Math.floor(result.limitApplied))
+          : Math.max(1, result.sessions.length);
+  const page = projectChatSessionPickerResult(
+    state,
+    await state.client.request<SessionsListResult>(
+      "sessions.list",
+      createChatSessionPickerRequestParams(state, {
+        query,
+        limit,
+      }),
+    ),
+  );
+  state.chatSessionPickerResult = page;
+}
+
+async function saveChatSessionPickerRename(
+  state: AppViewState,
+  row: SessionsListResult["sessions"][number],
+) {
+  if (!state.client || !state.connected || state.chatSessionPickerSavingKey) {
+    return;
+  }
+  const nextLabel = normalizeOptionalString(state.chatSessionPickerEditingValue) ?? null;
+  const previousLabel = normalizeOptionalString(row.label) ?? null;
+  if (nextLabel === previousLabel) {
+    cancelChatSessionPickerRename(state);
+    return;
+  }
+  state.chatSessionPickerError = null;
+  state.chatSessionPickerSavingKey = row.key;
+  clearChatSessionPickerSearchTimer(state);
+  state.chatSessionPickerLoading = false;
+  invalidateChatSessionPickerSearchRequests(state);
+  patchChatSessionLabel(state, row.key, nextLabel);
+  requestHostUpdate(state);
+  try {
+    await state.client.request("sessions.patch", {
+      key: row.key,
+      ...scopedAgentParamsForSession(state, row.key),
+      label: nextLabel,
+    });
+    resetChatSessionPickerRenameState(state);
+    void refreshSessionOptions(state).catch((err: unknown) => {
+      state.chatSessionPickerError = t("chat.selectors.renameRefreshFailed", {
+        error: String(err),
+      });
+      requestHostUpdate(state);
+    });
+    void refreshChatSessionPickerAfterRename(state).catch((err: unknown) => {
+      state.chatSessionPickerError = t("chat.selectors.renamePickerRefreshFailed", {
+        error: String(err),
+      });
+      requestHostUpdate(state);
+    });
+  } catch (err) {
+    patchChatSessionLabel(state, row.key, previousLabel);
+    state.chatSessionPickerSavingKey = null;
+    state.chatSessionPickerError = t("chat.selectors.renameFailed", {
+      error: String(err),
+    });
+  } finally {
+    requestHostUpdate(state);
+  }
+}
+
 function openChatSessionPicker(state: AppViewState, surface: ChatSessionSelectSurface) {
   state.chatSessionPickerOpen = true;
   state.chatSessionPickerSurface = surface;
@@ -252,11 +402,21 @@ function openChatSessionPicker(state: AppViewState, surface: ChatSessionSelectSu
   focusChatSessionPickerSearch(state);
 }
 
-function closeChatSessionPicker(state: AppViewState) {
+export function forceCloseChatSessionPicker(state: AppViewState) {
   clearChatSessionPickerSearchTimer(state);
   state.chatSessionPickerOpen = false;
   state.chatSessionPickerSurface = null;
+  resetChatSessionPickerRenameState(state, {
+    preserveSavingKey: Boolean(state.chatSessionPickerSavingKey),
+  });
   requestHostUpdate(state);
+}
+
+export function closeChatSessionPicker(state: AppViewState) {
+  if (state.chatSessionPickerSavingKey) {
+    return;
+  }
+  forceCloseChatSessionPicker(state);
 }
 
 export function resetChatSessionPickerState(state: AppViewState) {
@@ -269,6 +429,7 @@ export function resetChatSessionPickerState(state: AppViewState) {
   state.chatSessionPickerLoading = false;
   state.chatSessionPickerError = null;
   state.chatSessionPickerResult = null;
+  resetChatSessionPickerRenameState(state);
 }
 
 function toggleChatSessionPicker(state: AppViewState, surface: ChatSessionSelectSurface) {
@@ -281,17 +442,21 @@ function toggleChatSessionPicker(state: AppViewState, surface: ChatSessionSelect
 
 function createChatSessionPickerRequestParams(
   state: AppViewState,
-  options: { query?: string; offset?: number } = {},
+  options: { query?: string; offset?: number; limit?: number } = {},
 ): Record<string, unknown> {
   const overrides = createChatSessionsLoadOverrides(state, {
     search: options.query,
     offset: options.offset,
   });
+  const limit =
+    typeof options.limit === "number" && Number.isFinite(options.limit)
+      ? Math.max(1, Math.floor(options.limit))
+      : overrides.limit;
   const params: Record<string, unknown> = {
     includeGlobal: overrides.includeGlobal,
     includeUnknown: overrides.includeUnknown,
     configuredAgentsOnly: overrides.configuredAgentsOnly,
-    limit: overrides.limit,
+    limit,
   };
   const activeAgentSession = parseAgentSessionKey(state.sessionKey);
   const activeSessionRow = state.sessionsResult?.sessions.find(
@@ -708,34 +873,131 @@ function renderChatSessionPickerPopover(
             const { row, label } = entry;
             const meta = formatChatSessionPickerMeta(row);
             const selected = row.key === state.sessionKey;
+            const editing = state.chatSessionPickerEditingKey === row.key;
+            const saving = state.chatSessionPickerSavingKey === row.key;
+            const switchDisabled = controlsDisabled || Boolean(state.chatSessionPickerSavingKey);
+            const editDisabled =
+              controlsDisabled ||
+              state.chatSessionPickerLoading ||
+              searchPending ||
+              Boolean(state.chatSessionPickerSavingKey);
             return html`
-              <button
+              <div
                 class="chat-session-picker__option ${selected
                   ? "chat-session-picker__option--selected"
-                  : ""}"
-                data-chat-session-picker-option="true"
-                data-session-key=${row.key}
-                role="option"
-                aria-selected=${selected ? "true" : "false"}
-                title=${label}
-                type="button"
-                @click=${() => {
-                  closeChatSessionPicker(state);
-                  if (row.key !== state.sessionKey) {
-                    onSwitchSession(state, row.key);
-                  }
-                }}
+                  : ""} ${editing ? "chat-session-picker__option--editing" : ""}"
+                role="none"
               >
-                <span class="chat-session-picker__option-main">
-                  <span class="chat-session-picker__option-label">${label}</span>
-                  ${meta ? html`<span class="chat-session-picker__option-meta">${meta}</span>` : ""}
-                </span>
-                ${selected
-                  ? html`<span class="chat-session-picker__option-check" aria-hidden="true">
-                      ${icons.check}
-                    </span>`
-                  : ""}
-              </button>
+                ${editing
+                  ? html`
+                      <label class="chat-session-picker__rename-field">
+                        <input
+                          data-chat-session-rename-input=${row.key}
+                          type="text"
+                          .value=${state.chatSessionPickerEditingValue}
+                          placeholder=${label}
+                          ?disabled=${saving}
+                          aria-label=${t("chat.selectors.session")}
+                          @click=${(event: MouseEvent) => event.stopPropagation()}
+                          @input=${(event: Event) => {
+                            state.chatSessionPickerEditingValue = (
+                              event.target as HTMLInputElement
+                            ).value;
+                            requestHostUpdate(state);
+                          }}
+                          @keydown=${(event: KeyboardEvent) => {
+                            if (event.key === "Enter") {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              void saveChatSessionPickerRename(state, row);
+                            }
+                            if (event.key === "Escape") {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              cancelChatSessionPickerRename(state);
+                            }
+                          }}
+                        />
+                      </label>
+                      <div class="chat-session-picker__option-actions">
+                        <button
+                          class="btn btn--ghost btn--icon chat-session-picker__icon-button"
+                          data-chat-session-rename-save=${row.key}
+                          type="button"
+                          title=${t("common.save")}
+                          aria-label=${t("common.save")}
+                          ?disabled=${saving}
+                          @click=${(event: MouseEvent) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            void saveChatSessionPickerRename(state, row);
+                          }}
+                        >
+                          ${icons.check}
+                        </button>
+                        <button
+                          class="btn btn--ghost btn--icon chat-session-picker__icon-button"
+                          data-chat-session-rename-cancel=${row.key}
+                          type="button"
+                          title=${t("common.cancel")}
+                          aria-label=${t("common.cancel")}
+                          ?disabled=${saving}
+                          @click=${(event: MouseEvent) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            cancelChatSessionPickerRename(state);
+                          }}
+                        >
+                          ${icons.x}
+                        </button>
+                      </div>
+                    `
+                  : html`
+                      <button
+                        class="chat-session-picker__option-button"
+                        data-chat-session-picker-option="true"
+                        data-session-key=${row.key}
+                        role="option"
+                        aria-selected=${selected ? "true" : "false"}
+                        title=${label}
+                        type="button"
+                        ?disabled=${switchDisabled}
+                        @click=${() => {
+                          closeChatSessionPicker(state);
+                          if (row.key !== state.sessionKey) {
+                            onSwitchSession(state, row.key);
+                          }
+                        }}
+                      >
+                        <span class="chat-session-picker__option-main">
+                          <span class="chat-session-picker__option-label">${label}</span>
+                          ${meta
+                            ? html`<span class="chat-session-picker__option-meta">${meta}</span>`
+                            : ""}
+                        </span>
+                        ${selected
+                          ? html`<span class="chat-session-picker__option-check" aria-hidden="true">
+                              ${icons.check}
+                            </span>`
+                          : ""}
+                      </button>
+                      <button
+                        class="btn btn--ghost btn--icon chat-session-picker__icon-button"
+                        data-chat-session-rename-edit=${row.key}
+                        type="button"
+                        title=${t("cron.jobList.edit")}
+                        aria-label=${t("cron.jobList.edit")}
+                        ?disabled=${editDisabled}
+                        @click=${(event: MouseEvent) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          beginChatSessionPickerRename(state, row);
+                        }}
+                      >
+                        ${icons.edit}
+                      </button>
+                    `}
+              </div>
             `;
           },
         )}
