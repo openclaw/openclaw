@@ -34,7 +34,12 @@ import { isTimeoutError } from "../failover-error.js";
 import { stripRuntimeContextCustomMessages } from "../internal-runtime-context.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { repairToolUseResultPairing } from "../session-transcript-repair.js";
-import type { ExtensionAPI, ExtensionContext, FileOperations } from "../sessions/index.js";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+  FileOperations,
+  ResolvedRequestAuth,
+} from "../sessions/index.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
 import {
   composeSplitTurnInstructions,
@@ -292,17 +297,6 @@ type ModelRegistryWithRequestAuthLookup = {
   ) => Promise<ResolvedRequestAuth>;
 };
 
-type ResolvedRequestAuth =
-  | {
-      ok: true;
-      apiKey?: string;
-      headers?: Record<string, string>;
-    }
-  | {
-      ok: false;
-      error: string;
-    };
-
 /**
  * Resolve model credentials. Returns auth details on success or a cancel reason on failure.
  * Extracted to keep the main handler readable when model/auth is conditional.
@@ -339,7 +333,7 @@ async function resolveModelAuth(
       reason: `Compaction safeguard could not resolve request credentials for ${model.provider}/${model.id}: ${requestAuth.error}`,
     };
   }
-  if (!requestAuth.apiKey && !requestAuth.headers) {
+  if (!requestAuth.apiKey && !requestAuth.headers && requestAuth.authMode !== "aws-sdk") {
     log.warn(
       "Compaction safeguard: no request credentials available; cancelling compaction to preserve history.",
     );

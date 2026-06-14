@@ -122,6 +122,7 @@ describe("ModelRegistry models.json auth", () => {
       ok: true,
       apiKey: undefined,
       headers: undefined,
+      authMode: "aws-sdk",
     });
     expect(registry.getProviderAuthStatus("amazon-bedrock")).toEqual({
       configured: true,

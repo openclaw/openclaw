@@ -163,14 +163,18 @@ async function runCompactionScenario(params: {
   sessionManager: ExtensionContext["sessionManager"];
   event: unknown;
   apiKey: string | null;
+  requestAuth?:
+    | { ok: true; apiKey?: string; headers?: Record<string, string>; authMode?: "aws-sdk" }
+    | { ok: false; error: string };
 }) {
   const compactionHandler = createCompactionHandler();
   const getApiKeyAndHeadersMock = vi
     .fn()
     .mockResolvedValue(
-      params.apiKey !== null
-        ? { ok: true, apiKey: params.apiKey }
-        : { ok: false, error: "missing auth" },
+      params.requestAuth ??
+        (params.apiKey !== null
+          ? { ok: true, apiKey: params.apiKey }
+          : { ok: false, error: "missing auth" }),
     );
   const mockContext = createCompactionContext({
     sessionManager: params.sessionManager,
@@ -1970,6 +1974,42 @@ describe("compaction-safeguard extension model fallback", () => {
     // Verify runtime.model is still available (for completeness)
     const retrieved = getCompactionSafeguardRuntime(sessionManager);
     expect(retrieved?.model).toEqual(model);
+  });
+
+  it("accepts aws-sdk request auth without static request credentials", async () => {
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue("bedrock summary");
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture({
+      id: "eu.anthropic.claude-sonnet-4-6",
+      name: "Claude Sonnet 4.6",
+      provider: "amazon-bedrock",
+      api: "bedrock-converse-stream" as const,
+      baseUrl: "https://bedrock-runtime.eu-west-1.amazonaws.com",
+    });
+    setCompactionSafeguardRuntime(sessionManager, { model, recentTurnsPreserve: 0 });
+
+    const mockEvent = createCompactionEvent({
+      messageText: "older context",
+      tokensBefore: 1000,
+    });
+    (mockEvent.preparation as { settings?: { reserveTokens: number } }).settings = {
+      reserveTokens: 4000,
+    };
+    const { result, getApiKeyAndHeadersMock } = await runCompactionScenario({
+      sessionManager,
+      event: mockEvent,
+      apiKey: null,
+      requestAuth: { ok: true, authMode: "aws-sdk" },
+    });
+
+    const compaction = expectCompactionResult(result);
+    expect(compaction.summary).toContain("bedrock summary");
+    expect(getApiKeyAndHeadersMock).toHaveBeenCalledWith(model);
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
+    const summarizeCall = requireRecord(mockCallArg(mockSummarizeInStages));
+    expect(summarizeCall.apiKey).toBe("");
   });
 
   it("cancels compaction when both ctx.model and runtime.model are undefined", async () => {
