@@ -1,0 +1,138 @@
+.shortcut-legend__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: color-mix(in srgb, #000 55%, transparent);
+  backdrop-filter: blur(6px);
+}
+
+.shortcut-legend__dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(720px, calc(100vw - 32px));
+  max-height: min(80vh, 640px);
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel) 96%, var(--bg) 4%);
+  box-shadow: var(--shadow-xl);
+}
+
+.shortcut-legend__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  flex: 0 0 auto;
+}
+
+.shortcut-legend__title {
+  margin: 0;
+  font-size: 0.96rem;
+  font-weight: 650;
+  color: var(--text-strong);
+}
+
+.shortcut-legend__close {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.shortcut-legend__body {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0;
+  overflow-y: auto;
+  padding: 14px 16px;
+  gap: 16px;
+}
+
+.shortcut-legend__group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.shortcut-legend__group-label {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding-bottom: 4px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+
+.shortcut-legend__list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+}
+
+.shortcut-legend__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.shortcut-legend__keys {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+}
+
+.shortcut-legend__plus {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.shortcut-legend__key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 80%, transparent);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--bg-elevated) 80%, transparent);
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--border-strong) 60%, transparent);
+  color: var(--text);
+  font-family: var(--mono, monospace);
+  font-size: 0.72rem;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.shortcut-legend__desc {
+  color: color-mix(in srgb, var(--text) 80%, var(--muted) 20%);
+  font-size: 0.82rem;
+  line-height: 1.3;
+  text-align: right;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin: 0;
+}
+
+@media (max-width: 600px) {
+  .shortcut-legend__body {
+    grid-template-columns: 1fr;
+  }
+
+  .shortcut-legend__dialog {
+    max-height: 85vh;
+  }
+}

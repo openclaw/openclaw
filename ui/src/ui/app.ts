@@ -601,6 +601,7 @@ export class OpenClawApp extends LitElement {
   @state() paletteOpen = false;
   @state() paletteQuery = "";
   @state() paletteActiveIndex = 0;
+  @state() shortcutLegendOpen = false;
   @state() overviewShowGatewayToken = false;
   @state() overviewShowGatewayPassword = false;
   @state() overviewLogLines: string[] = [];
@@ -724,6 +725,23 @@ export class OpenClawApp extends LitElement {
         this.paletteQuery = "";
         this.paletteActiveIndex = 0;
       }
+    }
+    if (e.key === "?" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      const target = e.target instanceof HTMLElement ? e.target : null;
+      const isTextEntry =
+        target !== null &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.tagName === "SELECT" ||
+          target.isContentEditable);
+      if (!isTextEntry) {
+        e.preventDefault();
+        this.shortcutLegendOpen = !this.shortcutLegendOpen;
+      }
+    }
+    if (e.key === "Escape" && this.shortcutLegendOpen) {
+      e.preventDefault();
+      this.shortcutLegendOpen = false;
     }
   };
   private chatMobileControlsKeydownHandler = (e: KeyboardEvent) => {

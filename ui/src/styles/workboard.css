@@ -328,6 +328,13 @@
   outline-offset: -4px;
 }
 
+.workboard-card--dragging {
+  opacity: 0.4;
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--accent) 60%, transparent),
+    0 8px 22px color-mix(in srgb, #000 18%, transparent) !important;
+}
+
 .workboard-column__header {
   display: flex;
   align-items: center;
