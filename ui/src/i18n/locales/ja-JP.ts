@@ -459,6 +459,11 @@ export const ja_JP: TranslationMap = {
       useCurrentChatAria: "修正リクエストに現在のチャットを使用",
       useCurrentChatTooltip:
         "修正リクエストを提案のワークショップセッションではなく現在のチャットセッションに送信します。",
+      scopeAria: "Proposal visibility scope",
+      scopeGlobal: "Global",
+      scopeGlobalTooltip: "Show proposals from every agent workspace.",
+      scopeAgent: "Selected agent",
+      scopeAgentTooltip: "Show only proposals for the selected agent.",
     },
   },
   activity: {

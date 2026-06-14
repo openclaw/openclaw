@@ -457,6 +457,11 @@ export const fa: TranslationMap = {
       useCurrentChatAria: "استفاده از گفتگوی فعلی برای درخواست‌های بازبینی",
       useCurrentChatTooltip:
         "درخواست‌های بازبینی را به جای جلسه کارگاهی پیشنهاد، به جلسه گفتگوی فعلی ارسال کنید.",
+      scopeAria: "Proposal visibility scope",
+      scopeGlobal: "Global",
+      scopeGlobalTooltip: "Show proposals from every agent workspace.",
+      scopeAgent: "Selected agent",
+      scopeAgentTooltip: "Show only proposals for the selected agent.",
     },
   },
   activity: {

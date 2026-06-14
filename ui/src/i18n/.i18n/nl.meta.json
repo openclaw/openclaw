@@ -1,11 +1,17 @@
 {
-  "fallbackKeys": [],
-  "generatedAt": "2026-06-16T14:18:26.232Z",
+  "fallbackKeys": [
+    "skillWorkshop.header.scopeAgent",
+    "skillWorkshop.header.scopeAgentTooltip",
+    "skillWorkshop.header.scopeAria",
+    "skillWorkshop.header.scopeGlobal",
+    "skillWorkshop.header.scopeGlobalTooltip"
+  ],
+  "generatedAt": "2026-06-16T17:24:38.909Z",
   "locale": "nl",
   "model": "claude-opus-4-8",
   "provider": "anthropic",
-  "sourceHash": "bfdd6339c3aba583ed162882d2b8b63ad910e66c5a66737c1b5dcfce89190597",
-  "totalKeys": 1378,
+  "sourceHash": "0d3231bb31f3b858ba8df81872e9a74ba7d040e68c1fff7a65e1756aac3fea22",
+  "totalKeys": 1383,
   "translatedKeys": 1378,
   "workflow": 1
 }

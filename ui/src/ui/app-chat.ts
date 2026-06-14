@@ -1051,13 +1051,22 @@ async function sendQueuedChatMessage(
   }
 
   try {
+    const skillWorkshopRevisionTargetAgentId =
+      prepared.skillWorkshopRevision && prepared.skillWorkshopRevision.scope !== "global"
+        ? prepared.agentId
+        : undefined;
     const ack = prepared.skillWorkshopRevision
       ? await requestSkillWorkshopRevisionChatSend(host as unknown as ChatState, {
           proposalId: prepared.skillWorkshopRevision.proposalId,
           ...(prepared.skillWorkshopRevision.agentId
             ? { agentId: prepared.skillWorkshopRevision.agentId }
             : {}),
-          ...(prepared.agentId ? { targetAgentId: prepared.agentId } : {}),
+          ...(prepared.skillWorkshopRevision.scope
+            ? { scope: prepared.skillWorkshopRevision.scope }
+            : {}),
+          ...(skillWorkshopRevisionTargetAgentId
+            ? { targetAgentId: skillWorkshopRevisionTargetAgentId }
+            : {}),
           instructions: message,
           runId,
           sessionKey,
@@ -1256,6 +1265,7 @@ function chatSubmitKey(
     message.trim(),
     skillWorkshopRevision?.proposalId ?? "",
     skillWorkshopRevision?.agentId ?? "",
+    skillWorkshopRevision?.scope ?? "",
     attachments.map(attachmentSubmitSignature),
   ]);
 }

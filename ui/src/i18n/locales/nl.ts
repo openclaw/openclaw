@@ -458,6 +458,11 @@ export const nl: TranslationMap = {
       useCurrentChatAria: "Huidige chat gebruiken voor revisieverzoeken",
       useCurrentChatTooltip:
         "Stuur revisieverzoeken naar de huidige chatsessie in plaats van de workshopsessie van het voorstel.",
+      scopeAria: "Proposal visibility scope",
+      scopeGlobal: "Global",
+      scopeGlobalTooltip: "Show proposals from every agent workspace.",
+      scopeAgent: "Selected agent",
+      scopeAgentTooltip: "Show only proposals for the selected agent.",
     },
   },
   activity: {

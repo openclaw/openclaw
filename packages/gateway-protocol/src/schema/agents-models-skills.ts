@@ -690,10 +690,18 @@ const SkillProposalManifestEntrySchema = Type.Object(
   { additionalProperties: false },
 );
 
+/**
+ * Visibility scope for skill-workshop proposal reads and actions.
+ * "agent" keeps the legacy per-workspace filter; "global" spans every
+ * agent workspace so the Control UI can show all proposals at once.
+ */
+export const SkillProposalScopeSchema = Type.Union([Type.Literal("agent"), Type.Literal("global")]);
+
 /** Lists skill-workshop proposals for the selected agent scope. */
 export const SkillsProposalsListParamsSchema = Type.Object(
   {
     agentId: Type.Optional(NonEmptyString),
+    scope: Type.Optional(SkillProposalScopeSchema),
   },
   { additionalProperties: false },
 );
@@ -712,6 +720,7 @@ export const SkillsProposalsListResultSchema = Type.Object(
 export const SkillsProposalInspectParamsSchema = Type.Object(
   {
     agentId: Type.Optional(NonEmptyString),
+    scope: Type.Optional(SkillProposalScopeSchema),
     proposalId: NonEmptyString,
   },
   { additionalProperties: false },
@@ -773,6 +782,7 @@ export const SkillsProposalReviseParamsSchema = Type.Object(
 export const SkillsProposalRequestRevisionParamsSchema = Type.Object(
   {
     agentId: Type.Optional(NonEmptyString),
+    scope: Type.Optional(SkillProposalScopeSchema),
     targetAgentId: Type.Optional(NonEmptyString),
     proposalId: NonEmptyString,
     instructions: Type.String({ minLength: 1, maxLength: 32_768 }),
@@ -796,6 +806,7 @@ export const SkillsProposalRequestRevisionResultSchema = Type.Object(
 export const SkillsProposalActionParamsSchema = Type.Object(
   {
     agentId: Type.Optional(NonEmptyString),
+    scope: Type.Optional(SkillProposalScopeSchema),
     proposalId: NonEmptyString,
     reason: Type.Optional(Type.String()),
   },

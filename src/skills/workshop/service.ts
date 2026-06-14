@@ -95,6 +95,28 @@ export async function listSkillProposals(
   return { ...manifest, proposals };
 }
 
+/**
+ * Resolves the agent workspace that owns a proposal by matching its target
+ * paths against candidate workspace directories. Used by global-scope reads
+ * and actions so writes still land in the proposal's own agent workspace
+ * rather than a UI-selected default.
+ */
+export async function resolveSkillProposalWorkspaceDir(
+  proposalId: string,
+  candidateWorkspaceDirs: readonly string[],
+): Promise<string | undefined> {
+  const read = await readSkillProposal(proposalId);
+  if (!read) {
+    return undefined;
+  }
+  for (const workspaceDir of candidateWorkspaceDirs) {
+    if (isProposalInWorkspace(read.record, workspaceDir)) {
+      return workspaceDir;
+    }
+  }
+  return undefined;
+}
+
 export async function readSkillProposalDraftFile(filePath: string): Promise<string> {
   const read = await readLocalFileSafely({
     filePath,

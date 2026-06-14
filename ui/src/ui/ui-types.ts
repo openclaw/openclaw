@@ -11,6 +11,7 @@ export type ChatAttachment = {
 export type ChatQueueSkillWorkshopRevision = {
   proposalId: string;
   agentId?: string;
+  scope?: "global";
 };
 
 export type ChatQueueItem = {

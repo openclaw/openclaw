@@ -21,6 +21,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
   listAgentIds,
+  resolveAgentIdByWorkspacePath,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
@@ -52,6 +53,7 @@ import {
   inspectSkillProposal,
   listSkillProposals,
   proposeCreateSkill,
+  resolveSkillProposalWorkspaceDir,
   proposeUpdateSkill,
   quarantineSkillProposal,
   rejectSkillProposal,
@@ -72,6 +74,13 @@ function resolveSkillsAgentWorkspace(params: unknown, context: GatewayRequestCon
     params && typeof params === "object" && "agentId" in params
       ? normalizeOptionalString((params as { agentId?: unknown }).agentId)
       : undefined;
+  const scopeRaw =
+    params && typeof params === "object" && "scope" in params
+      ? normalizeOptionalString((params as { scope?: unknown }).scope)
+      : undefined;
+  // Global scope spans every agent workspace. An explicit agentId always wins
+  // so callers can still pin a single workspace even when scope is supplied.
+  const global = scopeRaw === "global" && !agentIdRaw;
   const agentId = agentIdRaw ? normalizeAgentId(agentIdRaw) : resolveDefaultAgentId(cfg);
   if (agentIdRaw) {
     // Explicit agent routing must name a configured agent; otherwise a typo
@@ -88,8 +97,49 @@ function resolveSkillsAgentWorkspace(params: unknown, context: GatewayRequestCon
     ok: true as const,
     cfg,
     agentId,
+    global,
     workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
   };
+}
+
+/**
+ * Resolves the workspace directory and owning agent a proposal action should
+ * target. In global scope both are derived from the proposal itself so the
+ * write (and any revision hand-off) lands on the workspace where the skill
+ * actually lives; otherwise the resolved agent-scoped values are used unchanged.
+ */
+async function resolveProposalActionTarget(
+  resolved: ResolvedSkillsWorkspace,
+  proposalId: string,
+): Promise<{ workspaceDir: string; agentId: string }> {
+  if (!resolved.global) {
+    return { workspaceDir: resolved.workspaceDir, agentId: resolved.agentId };
+  }
+  const owning = await resolveSkillProposalWorkspaceDir(
+    proposalId,
+    listAgentWorkspaceDirs(resolved.cfg),
+  );
+  if (!owning) {
+    // Fail fast rather than silently falling back to the resolved (default)
+    // agent workspace: a global-scope action that cannot find the proposal's
+    // owning workspace must not write into an unintended one.
+    throw new Error(
+      `Unable to resolve an owning agent workspace for proposal ${proposalId} in global scope`,
+    );
+  }
+  // Map the owning workspace back to its agent so revision hand-offs reach the
+  // proposal's real owner instead of the default workspace's agent.
+  return {
+    workspaceDir: owning,
+    agentId: resolveAgentIdByWorkspacePath(resolved.cfg, owning) ?? resolved.agentId,
+  };
+}
+
+async function resolveProposalActionWorkspaceDir(
+  resolved: ResolvedSkillsWorkspace,
+  proposalId: string,
+): Promise<string> {
+  return (await resolveProposalActionTarget(resolved, proposalId)).workspaceDir;
 }
 
 type ResolvedSkillsWorkspace = Extract<
@@ -333,7 +383,8 @@ export const skillsHandlers: GatewayRequestHandlers = {
       respond,
       context,
       validate: validateSkillsProposalsListParams,
-      run: (_parsedParams, resolved) => listSkillProposals({ workspaceDir: resolved.workspaceDir }),
+      run: (_parsedParams, resolved) =>
+        listSkillProposals(resolved.global ? {} : { workspaceDir: resolved.workspaceDir }),
     });
   },
   "skills.proposals.inspect": async ({ params, respond, context }) => {
@@ -344,9 +395,10 @@ export const skillsHandlers: GatewayRequestHandlers = {
       context,
       validate: validateSkillsProposalInspectParams,
       run: async (parsedParams, resolved) => {
-        const proposal = await inspectSkillProposal(parsedParams.proposalId, {
-          workspaceDir: resolved.workspaceDir,
-        });
+        const proposal = await inspectSkillProposal(
+          parsedParams.proposalId,
+          resolved.global ? {} : { workspaceDir: resolved.workspaceDir },
+        );
         if (!proposal) {
           respond(
             false,
@@ -434,8 +486,9 @@ export const skillsHandlers: GatewayRequestHandlers = {
       context,
       validate: validateSkillsProposalRequestRevisionParams,
       run: async (parsedParams, resolved) => {
+        const target = await resolveProposalActionTarget(resolved, parsedParams.proposalId);
         const proposal = await inspectSkillProposal(parsedParams.proposalId, {
-          workspaceDir: resolved.workspaceDir,
+          workspaceDir: target.workspaceDir,
         });
         if (!proposal) {
           respond(
@@ -460,15 +513,16 @@ export const skillsHandlers: GatewayRequestHandlers = {
           return SKILL_PROPOSAL_RESPONSE_HANDLED;
         }
         await forwardSkillWorkshopRevisionToChatSend(opts, {
-          agentId: resolved.agentId,
+          agentId: target.agentId,
           idempotencyKey: parsedParams.idempotencyKey,
           instructions: parsedParams.instructions,
           proposal,
           sessionId: parsedParams.sessionId,
           sessionKey: parsedParams.sessionKey,
-          targetAgentId: parsedParams.targetAgentId
-            ? normalizeAgentId(parsedParams.targetAgentId)
-            : undefined,
+          targetAgentId:
+            parsedParams.scope !== "global" && parsedParams.targetAgentId
+              ? normalizeAgentId(parsedParams.targetAgentId)
+              : undefined,
         });
         return SKILL_PROPOSAL_RESPONSE_HANDLED;
       },
@@ -481,9 +535,9 @@ export const skillsHandlers: GatewayRequestHandlers = {
       respond,
       context,
       validate: validateSkillsProposalActionParams,
-      run: (parsedParams, resolved) =>
+      run: async (parsedParams, resolved) =>
         applySkillProposal({
-          workspaceDir: resolved.workspaceDir,
+          workspaceDir: await resolveProposalActionWorkspaceDir(resolved, parsedParams.proposalId),
           config: resolved.cfg,
           proposalId: parsedParams.proposalId,
           reason: parsedParams.reason,
@@ -497,9 +551,9 @@ export const skillsHandlers: GatewayRequestHandlers = {
       respond,
       context,
       validate: validateSkillsProposalActionParams,
-      run: (parsedParams, resolved) =>
+      run: async (parsedParams, resolved) =>
         rejectSkillProposal({
-          workspaceDir: resolved.workspaceDir,
+          workspaceDir: await resolveProposalActionWorkspaceDir(resolved, parsedParams.proposalId),
           proposalId: parsedParams.proposalId,
           reason: parsedParams.reason,
         }),
@@ -512,9 +566,9 @@ export const skillsHandlers: GatewayRequestHandlers = {
       respond,
       context,
       validate: validateSkillsProposalActionParams,
-      run: (parsedParams, resolved) =>
+      run: async (parsedParams, resolved) =>
         quarantineSkillProposal({
-          workspaceDir: resolved.workspaceDir,
+          workspaceDir: await resolveProposalActionWorkspaceDir(resolved, parsedParams.proposalId),
           proposalId: parsedParams.proposalId,
           reason: parsedParams.reason,
         }),

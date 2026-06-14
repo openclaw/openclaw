@@ -5531,15 +5531,19 @@ public struct SkillsDetailResult: Codable, Sendable {
 
 public struct SkillsProposalsListParams: Codable, Sendable {
     public let agentid: String?
+    public let scope: AnyCodable?
 
     public init(
-        agentid: String? = nil)
+        agentid: String? = nil,
+        scope: AnyCodable?)
     {
         self.agentid = agentid
+        self.scope = scope
     }
 
     private enum CodingKeys: String, CodingKey {
         case agentid = "agentId"
+        case scope
     }
 }
 
@@ -5567,18 +5571,22 @@ public struct SkillsProposalsListResult: Codable, Sendable {
 
 public struct SkillsProposalInspectParams: Codable, Sendable {
     public let agentid: String?
+    public let scope: AnyCodable?
     public let proposalid: String
 
     public init(
         agentid: String? = nil,
+        scope: AnyCodable?,
         proposalid: String)
     {
         self.agentid = agentid
+        self.scope = scope
         self.proposalid = proposalid
     }
 
     private enum CodingKeys: String, CodingKey {
         case agentid = "agentId"
+        case scope
         case proposalid = "proposalId"
     }
 }
@@ -5721,6 +5729,7 @@ public struct SkillsProposalReviseParams: Codable, Sendable {
 
 public struct SkillsProposalRequestRevisionParams: Codable, Sendable {
     public let agentid: String?
+    public let scope: AnyCodable?
     public let targetagentid: String?
     public let proposalid: String
     public let instructions: String
@@ -5730,6 +5739,7 @@ public struct SkillsProposalRequestRevisionParams: Codable, Sendable {
 
     public init(
         agentid: String? = nil,
+        scope: AnyCodable?,
         targetagentid: String?,
         proposalid: String,
         instructions: String,
@@ -5738,6 +5748,7 @@ public struct SkillsProposalRequestRevisionParams: Codable, Sendable {
         idempotencykey: String)
     {
         self.agentid = agentid
+        self.scope = scope
         self.targetagentid = targetagentid
         self.proposalid = proposalid
         self.instructions = instructions
@@ -5748,6 +5759,7 @@ public struct SkillsProposalRequestRevisionParams: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case agentid = "agentId"
+        case scope
         case targetagentid = "targetAgentId"
         case proposalid = "proposalId"
         case instructions
@@ -5777,21 +5789,25 @@ public struct SkillsProposalRequestRevisionResult: Codable, Sendable {
 
 public struct SkillsProposalActionParams: Codable, Sendable {
     public let agentid: String?
+    public let scope: AnyCodable?
     public let proposalid: String
     public let reason: String?
 
     public init(
         agentid: String? = nil,
+        scope: AnyCodable?,
         proposalid: String,
         reason: String?)
     {
         self.agentid = agentid
+        self.scope = scope
         self.proposalid = proposalid
         self.reason = reason
     }
 
     private enum CodingKeys: String, CodingKey {
         case agentid = "agentId"
+        case scope
         case proposalid = "proposalId"
         case reason
     }

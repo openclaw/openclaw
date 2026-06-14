@@ -453,6 +453,11 @@ export const th: TranslationMap = {
       useCurrentChat: "ใช้แชทปัจจุบัน",
       useCurrentChatAria: "ใช้แชทปัจจุบันสำหรับคำขอแก้ไข",
       useCurrentChatTooltip: "ส่งคำขอแก้ไขไปยังเซสชันแชทปัจจุบันแทนเซสชัน workshop ของข้อเสนอ",
+      scopeAria: "Proposal visibility scope",
+      scopeGlobal: "Global",
+      scopeGlobalTooltip: "Show proposals from every agent workspace.",
+      scopeAgent: "Selected agent",
+      scopeAgentTooltip: "Show only proposals for the selected agent.",
     },
   },
   activity: {

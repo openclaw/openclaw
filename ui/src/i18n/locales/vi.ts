@@ -457,6 +457,11 @@ export const vi: TranslationMap = {
       useCurrentChatAria: "Dùng cuộc trò chuyện hiện tại cho yêu cầu chỉnh sửa",
       useCurrentChatTooltip:
         "Gửi yêu cầu chỉnh sửa đến phiên trò chuyện hiện tại thay vì phiên workshop của đề xuất.",
+      scopeAria: "Proposal visibility scope",
+      scopeGlobal: "Global",
+      scopeGlobalTooltip: "Show proposals from every agent workspace.",
+      scopeAgent: "Selected agent",
+      scopeAgentTooltip: "Show only proposals for the selected agent.",
     },
   },
   activity: {

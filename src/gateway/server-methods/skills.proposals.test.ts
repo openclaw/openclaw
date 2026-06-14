@@ -18,6 +18,8 @@ let stateDir = "";
 const mocks = vi.hoisted(() => ({
   chatSend: vi.fn(),
   workspaceDir: "",
+  workspaceDirs: [] as string[],
+  workspaceAgentIds: {} as Record<string, string>,
 }));
 
 vi.mock("../../config/config.js", () => ({
@@ -30,6 +32,12 @@ vi.mock("../../agents/agent-scope.js", () => ({
   listAgentIds: () => ["main"],
   resolveDefaultAgentId: () => "main",
   resolveAgentWorkspaceDir: () => mocks.workspaceDir,
+  resolveAgentIdByWorkspacePath: (_cfg: unknown, workspacePath: string) =>
+    mocks.workspaceAgentIds[workspacePath],
+}));
+
+vi.mock("../../agents/workspace-dirs.js", () => ({
+  listAgentWorkspaceDirs: () => mocks.workspaceDirs,
 }));
 
 vi.mock("../../skills/lifecycle/clawhub.js", () => ({
@@ -79,6 +87,7 @@ describe("skills proposal gateway handlers", () => {
       respond(true, { runId: "run-skill-workshop-revision", status: "started" }, undefined);
     });
     mocks.workspaceDir = await tempDirs.make("openclaw-skills-proposals-gateway-");
+    mocks.workspaceAgentIds = {};
     stateDir = testState.stateDir;
   });
 
@@ -200,6 +209,79 @@ describe("skills proposal gateway handlers", () => {
     ]);
   });
 
+  it("lists, inspects, and applies across workspaces in global scope", async () => {
+    const firstWorkspaceDir = mocks.workspaceDir;
+    const first = await callHandler("skills.proposals.create", {
+      name: "Global First Skill",
+      description: "First global proposal",
+      content: "# Global First\n",
+    });
+    expect(first.ok).toBe(true);
+    const firstCreated = first.response as { record: { id: string } };
+
+    const secondWorkspaceDir = await tempDirs.make("openclaw-skills-proposals-gateway-global-");
+    mocks.workspaceDir = secondWorkspaceDir;
+    const second = await callHandler("skills.proposals.create", {
+      name: "Global Second Skill",
+      description: "Second global proposal",
+      content: "# Global Second\n",
+    });
+    expect(second.ok).toBe(true);
+    const secondCreated = second.response as { record: { id: string } };
+
+    // Both agent workspaces participate in global resolution.
+    mocks.workspaceDirs = [firstWorkspaceDir, secondWorkspaceDir];
+
+    // Agent scope only sees the currently resolved workspace...
+    const agentScoped = await callHandler("skills.proposals.list", {});
+    expect((agentScoped.response as { proposals: Array<{ id: string }> }).proposals).toEqual([
+      expect.objectContaining({ id: secondCreated.record.id }),
+    ]);
+
+    // ...global scope spans every workspace.
+    const globalList = await callHandler("skills.proposals.list", { scope: "global" });
+    expect(globalList.ok).toBe(true);
+    const globalIds = (globalList.response as { proposals: Array<{ id: string }> }).proposals
+      .map((proposal) => proposal.id)
+      .toSorted();
+    expect(globalIds).toEqual([firstCreated.record.id, secondCreated.record.id].toSorted());
+
+    // A proposal hidden from the resolved agent workspace is still inspectable in global scope.
+    const globalInspect = await callHandler("skills.proposals.inspect", {
+      scope: "global",
+      proposalId: firstCreated.record.id,
+    });
+    expect(globalInspect.ok).toBe(true);
+    expect((globalInspect.response as { record: { id: string } }).record.id).toBe(
+      firstCreated.record.id,
+    );
+
+    // Applying in global scope writes into the proposal's own workspace, not the resolved one.
+    const globalApply = await callHandler("skills.proposals.apply", {
+      scope: "global",
+      proposalId: firstCreated.record.id,
+    });
+    expect(globalApply.ok).toBe(true);
+    await expect(
+      fs.readFile(path.join(firstWorkspaceDir, "skills", "global-first-skill", "SKILL.md"), "utf8"),
+    ).resolves.toContain("Global First");
+
+    mocks.workspaceDir = firstWorkspaceDir;
+  });
+
+  it("fails fast when a global-scope action cannot resolve an owning workspace", async () => {
+    // Only the resolved agent workspace participates; an unknown proposal id
+    // maps to no owning workspace, so a global-scope action must error rather
+    // than silently target the resolved (default) workspace.
+    mocks.workspaceDirs = [mocks.workspaceDir];
+    const apply = await callHandler("skills.proposals.apply", {
+      scope: "global",
+      proposalId: "missing-proposal-id",
+    });
+    expect(apply.ok).toBe(false);
+    expect((apply.error as { code?: string }).code).toBe("INVALID_REQUEST");
+  });
+
   it("rejects invalid params before touching workshop state", async () => {
     const result = await callHandler("skills.proposals.create", {
       name: "Missing Content",
@@ -254,6 +336,60 @@ describe("skills proposal gateway handlers", () => {
     expect(String(forwarded.params?.systemProvenanceReceipt)).not.toContain(
       "Make the support files 5",
     );
+  });
+
+  it("routes global-scope revisions to the proposal's owning workspace and agent", async () => {
+    // A proposal created in a second agent workspace is invisible from the
+    // default ("main") workspace. A global-scope revision must resolve the
+    // owning workspace/agent from the proposal id and hand off to that agent,
+    // instead of failing against (or routing to) the default workspace.
+    const defaultWorkspaceDir = mocks.workspaceDir;
+    const ownerWorkspaceDir = await tempDirs.make("openclaw-skills-proposals-gateway-owner-");
+    mocks.workspaceDir = ownerWorkspaceDir;
+    const create = await callHandler("skills.proposals.create", {
+      name: "Owner Workspace Skill",
+      description: "Lives in a non-default workspace",
+      content: "# Owner Workspace Skill\n",
+    });
+    expect(create.ok).toBe(true);
+    const created = create.response as { record: { id: string } };
+
+    // Resolve back to the default workspace; only global scope can reach the
+    // owner workspace, which maps to the "owner" agent.
+    mocks.workspaceDir = defaultWorkspaceDir;
+    mocks.workspaceDirs = [defaultWorkspaceDir, ownerWorkspaceDir];
+    mocks.workspaceAgentIds = { [ownerWorkspaceDir]: "owner" };
+    mocks.chatSend.mockClear();
+
+    const result = await callHandler("skills.proposals.requestRevision", {
+      scope: "global",
+      proposalId: created.record.id,
+      instructions: "Tighten the owner workspace skill",
+      sessionKey: "agent:owner:session:skill-workshop",
+      targetAgentId: "selected-chat-agent",
+      idempotencyKey: "revision-run-global",
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      response: { runId: "run-skill-workshop-revision", status: "started" },
+    });
+    expect(mocks.chatSend).toHaveBeenCalledTimes(1);
+    const forwarded = mocks.chatSend.mock.calls[0]?.[0] as {
+      params?: Record<string, unknown>;
+    };
+    // Global scope must ignore a selected-chat targetAgentId and target the
+    // resolved owning agent ("owner"), not the default ("main") or selected chat agent.
+    expect(forwarded.params).toMatchObject({
+      agentId: "owner",
+      sessionKey: "agent:owner:session:skill-workshop",
+      idempotencyKey: "revision-run-global",
+    });
+    expect(String(forwarded.params?.systemProvenanceReceipt)).toContain(
+      `Revise Skill Workshop proposal \`${created.record.id}\``,
+    );
+
+    mocks.workspaceDir = defaultWorkspaceDir;
   });
 
   it("does not start revision chat turns for non-pending proposals", async () => {

@@ -454,6 +454,11 @@ export const en: TranslationMap = {
       useCurrentChatAria: "Use current chat for revision requests",
       useCurrentChatTooltip:
         "Send revision requests to the current chat session instead of the proposal's workshop session.",
+      scopeAria: "Proposal visibility scope",
+      scopeGlobal: "Global",
+      scopeGlobalTooltip: "Show proposals from every agent workspace.",
+      scopeAgent: "Selected agent",
+      scopeAgentTooltip: "Show only proposals for the selected agent.",
     },
   },
   activity: {

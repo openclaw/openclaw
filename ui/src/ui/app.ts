@@ -45,8 +45,10 @@ import { initNativeBridge } from "./app-native-bridge.ts";
 import { createChatSession as createChatSessionInternal } from "./app-render.helpers.ts";
 import {
   loadSkillWorkshopMode,
+  loadSkillWorkshopScope,
   loadSkillWorkshopUseCurrentChatForRevisions,
   renderApp,
+  syncSkillWorkshopScopeAgentId,
 } from "./app-render.ts";
 import {
   exportLogs as exportLogsInternal,
@@ -653,6 +655,8 @@ export class OpenClawApp extends LitElement {
   @state() skillWorkshopQueueWidth = 360;
   @state() skillWorkshopMode: SkillWorkshopState["skillWorkshopMode"] = loadSkillWorkshopMode();
   @state() skillWorkshopUseCurrentChatForRevisions = loadSkillWorkshopUseCurrentChatForRevisions();
+  @state() skillWorkshopScope: SkillWorkshopState["skillWorkshopScope"] = loadSkillWorkshopScope();
+  @state() skillWorkshopScopeAgentId: string | null = null;
 
   @state() healthLoading = false;
   @state() healthResult: HealthSummary | null = null;
@@ -852,6 +856,14 @@ export class OpenClawApp extends LitElement {
 
   protected override updated(changed: Map<PropertyKey, unknown>) {
     handleUpdated(this as unknown as Parameters<typeof handleUpdated>[0], changed);
+    // Keep the Skill Workshop agent-scope target aligned with the visible nav
+    // selection from a lifecycle hook rather than during render, so an "Agent"
+    // scope query and the highlighted agent agree without mutating state mid-render.
+    if (this.tab === "skillWorkshop" && (changed.has("tab") || changed.has("sessionKey"))) {
+      syncSkillWorkshopScopeAgentId(
+        this as unknown as Parameters<typeof syncSkillWorkshopScopeAgentId>[0],
+      );
+    }
     // Some render callbacks assign tab directly while preparing nested panel state.
     if (changed.has("tab") && this.tab !== "chat" && this.chatMobileControlsOpen) {
       this.setChatMobileControlsOpen(false);

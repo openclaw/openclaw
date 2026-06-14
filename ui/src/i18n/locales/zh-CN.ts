@@ -452,6 +452,11 @@ export const zh_CN: TranslationMap = {
       useCurrentChat: "使用当前聊天",
       useCurrentChatAria: "将当前聊天用于修订请求",
       useCurrentChatTooltip: "将修订请求发送到当前聊天会话，而不是提案的工作坊会话。",
+      scopeAria: "Proposal visibility scope",
+      scopeGlobal: "Global",
+      scopeGlobalTooltip: "Show proposals from every agent workspace.",
+      scopeAgent: "Selected agent",
+      scopeAgentTooltip: "Show only proposals for the selected agent.",
     },
   },
   activity: {

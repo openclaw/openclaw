@@ -5,10 +5,32 @@ import type {
   SkillWorkshopActionNotice,
   SkillWorkshopMode,
   SkillWorkshopProposal,
+  SkillWorkshopScope,
   SkillWorkshopStatusFilter,
 } from "../views/skill-workshop.ts";
 
 const SKILL_WORKSHOP_NOTICE_MS = 2800;
+
+/**
+ * Builds the agent-scoping params for proposal RPCs from the active scope
+ * toggle. Global scope asks the gateway to span every agent workspace; agent
+ * scope pins the nav-selected agent so the list matches the visible selection.
+ *
+ * Agent scope requires a concrete agent id. If the nav selection has not
+ * resolved one yet (e.g. first paint with a persisted "agent" scope), fall back
+ * to global scope rather than sending empty params, which the gateway would
+ * otherwise silently default-route to a single (default) agent workspace and
+ * show the wrong slice.
+ */
+function skillWorkshopScopeParams(
+  state: SkillWorkshopState,
+): { scope: "global" } | { agentId: string } {
+  if (state.skillWorkshopScope === "global") {
+    return { scope: "global" };
+  }
+  const agentId = state.skillWorkshopScopeAgentId?.trim();
+  return agentId ? { agentId } : { scope: "global" };
+}
 
 type SkillProposalStatus = "pending" | "applied" | "rejected" | "quarantined" | "stale";
 type SkillProposalKind = "create" | "update";
@@ -94,6 +116,8 @@ export type SkillWorkshopState = {
   skillWorkshopQueueWidth: number;
   skillWorkshopMode: SkillWorkshopMode;
   skillWorkshopUseCurrentChatForRevisions: boolean;
+  skillWorkshopScope: SkillWorkshopScope;
+  skillWorkshopScopeAgentId: string | null;
 };
 
 function getErrorMessage(err: unknown): string {
@@ -297,7 +321,10 @@ export async function loadSkillWorkshopProposals(
   state.skillWorkshopLoading = true;
   state.skillWorkshopError = null;
   try {
-    const result = await state.client.request<SkillProposalManifest>("skills.proposals.list", {});
+    const result = await state.client.request<SkillProposalManifest>(
+      "skills.proposals.list",
+      skillWorkshopScopeParams(state),
+    );
     const previousByKey = new Map(
       state.skillWorkshopProposals.map((proposal) => [proposal.key, proposal]),
     );
@@ -338,6 +365,7 @@ export async function loadSkillWorkshopProposalDetail(
       "skills.proposals.inspect",
       {
         proposalId,
+        ...skillWorkshopScopeParams(state),
       },
     );
     mergeProposal(state, proposalFromInspect(result, existing));
@@ -375,7 +403,7 @@ export async function runSkillWorkshopLifecycleAction(
   state.skillWorkshopError = null;
   try {
     const method = action === "apply" ? "skills.proposals.apply" : "skills.proposals.reject";
-    await state.client.request(method, { proposalId });
+    await state.client.request(method, { proposalId, ...skillWorkshopScopeParams(state) });
     await refreshAfterMutation(state, proposalId);
     const updated = state.skillWorkshopProposals.find((proposal) => proposal.key === proposalId);
     showActionNotice(state, updated ?? previous, action === "apply" ? "Applied" : "Rejected");

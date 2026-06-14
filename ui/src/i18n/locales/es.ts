@@ -457,6 +457,11 @@ export const es: TranslationMap = {
       useCurrentChatAria: "Usar el chat actual para las solicitudes de revisión",
       useCurrentChatTooltip:
         "Enviar las solicitudes de revisión a la sesión de chat actual en lugar de la sesión de workshop de la propuesta.",
+      scopeAria: "Proposal visibility scope",
+      scopeGlobal: "Global",
+      scopeGlobalTooltip: "Show proposals from every agent workspace.",
+      scopeAgent: "Selected agent",
+      scopeAgentTooltip: "Show only proposals for the selected agent.",
     },
   },
   activity: {

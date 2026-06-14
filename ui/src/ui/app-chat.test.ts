@@ -2435,6 +2435,55 @@ describe("handleSendChat", () => {
     expect(userMessage.content).toEqual([{ type: "text", text: "Make the support files 5" }]);
   });
 
+  it("omits selected chat target routing for global Skill Workshop revision drafts", async () => {
+    const sent = createDeferred<unknown>();
+    const request = vi.fn((method: string) => {
+      if (method === "skills.proposals.requestRevision") {
+        return sent.promise;
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      sessionKey: "global",
+    });
+    (host as ChatHost & { assistantAgentId?: string }).assistantAgentId = "selected-chat-agent";
+    (host as ChatHost & { currentSessionId?: string }).currentSessionId = "session-selected";
+
+    const send = handleSendChat(host, "Revise with owner routing", {
+      restoreDraft: true,
+      skillWorkshopRevision: {
+        proposalId: "originless-global-proposal-20260616-abc123",
+        scope: "global",
+      },
+    });
+    await Promise.resolve();
+
+    const payload = findRequestPayload(
+      request as unknown as MockCallSource,
+      "skills.proposals.requestRevision",
+      "global revision request payload",
+    );
+    expect(payload).toMatchObject({
+      proposalId: "originless-global-proposal-20260616-abc123",
+      scope: "global",
+      instructions: "Revise with owner routing",
+      sessionKey: "global",
+      sessionId: "session-selected",
+    });
+    expect(payload).not.toHaveProperty("targetAgentId");
+    expect(payload).not.toHaveProperty("agentId");
+
+    sent.resolve({ runId: host.chatQueue[0]?.sendRunId, status: "started" });
+    await send;
+
+    expect(host.chatQueue).toStrictEqual([]);
+    expect(host.chatMessages[0]).toMatchObject({
+      role: "user",
+      content: [{ type: "text", text: "Revise with owner routing" }],
+    });
+  });
+
   it("treats slash-like Skill Workshop revision drafts as revision instructions", async () => {
     const sent = createDeferred<unknown>();
     const request = vi.fn((method: string) => {

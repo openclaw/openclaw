@@ -938,6 +938,48 @@
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent);
 }
 
+.sw-scope-switch {
+  display: inline-flex;
+  align-items: center;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px;
+  gap: 2px;
+}
+
+.sw-scope-switch__opt {
+  display: inline-flex;
+  align-items: center;
+  background: transparent;
+  border: none;
+  padding: 6px 14px;
+  border-radius: 999px;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--muted);
+  cursor: pointer;
+  transition:
+    color 160ms ease,
+    background 160ms ease;
+  white-space: nowrap;
+}
+
+.sw-scope-switch__opt:hover {
+  color: var(--text);
+}
+
+.sw-scope-switch__opt.is-active {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, var(--bg-elevated));
+}
+
+.sw-scope-switch__opt:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
 .sw-mode-switch {
   position: relative;
   display: inline-grid;

@@ -454,6 +454,11 @@ export const ko: TranslationMap = {
       useCurrentChat: "현재 채팅 사용",
       useCurrentChatAria: "수정 요청에 현재 채팅 사용",
       useCurrentChatTooltip: "수정 요청을 제안의 워크숍 세션 대신 현재 채팅 세션으로 보냅니다.",
+      scopeAria: "Proposal visibility scope",
+      scopeGlobal: "Global",
+      scopeGlobalTooltip: "Show proposals from every agent workspace.",
+      scopeAgent: "Selected agent",
+      scopeAgentTooltip: "Show only proposals for the selected agent.",
     },
   },
   activity: {

@@ -474,6 +474,9 @@ export async function refreshActiveTab(host: SettingsHost, opts?: { chatStartup?
         await loadSkills(app);
         break;
       case "skillWorkshop":
+        // Keep agent-scope queries aligned with the visible nav selection so an
+        // "Agent" scope refresh targets the same agent the user is viewing.
+        app.skillWorkshopScopeAgentId = resolveDreamingAgentIdForSession(host);
         await loadSkillWorkshopProposals(app, { force: true });
         break;
       case "agents":

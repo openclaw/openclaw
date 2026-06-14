@@ -180,9 +180,11 @@ function normalizeSkillWorkshopRevision(
     return undefined;
   }
   const agentId = normalizeOptionalString(entry.agentId);
+  const scope = entry.scope === "global" ? "global" : undefined;
   return {
     proposalId,
     ...(agentId ? { agentId: normalizeAgentId(agentId) } : {}),
+    ...(scope ? { scope } : {}),
   };
 }
 

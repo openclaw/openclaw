@@ -456,6 +456,11 @@ export const id: TranslationMap = {
       useCurrentChatAria: "Gunakan obrolan saat ini untuk permintaan revisi",
       useCurrentChatTooltip:
         "Kirim permintaan revisi ke sesi obrolan saat ini alih-alih sesi workshop proposal.",
+      scopeAria: "Proposal visibility scope",
+      scopeGlobal: "Global",
+      scopeGlobalTooltip: "Show proposals from every agent workspace.",
+      scopeAgent: "Selected agent",
+      scopeAgentTooltip: "Show only proposals for the selected agent.",
     },
   },
   activity: {

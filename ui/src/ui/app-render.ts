@@ -133,6 +133,7 @@ import {
 } from "./controllers/sessions.ts";
 import {
   countSkillWorkshopProposals,
+  loadSkillWorkshopProposals,
   requestSkillWorkshopRevision,
   runSkillWorkshopLifecycleAction,
   selectSkillWorkshopProposal,
@@ -233,6 +234,39 @@ function runUiTask<Args extends unknown[]>(
 const SKILL_WORKSHOP_MODE_KEY = "openclaw:control-ui:skill-workshop-mode:v1";
 const SKILL_WORKSHOP_CURRENT_CHAT_REVISIONS_KEY =
   "openclaw:control-ui:skill-workshop-current-chat-revisions:v1";
+const SKILL_WORKSHOP_SCOPE_KEY = "openclaw:control-ui:skill-workshop-scope:v1";
+
+export function loadSkillWorkshopScope(): "global" | "agent" {
+  try {
+    const raw = getSafeLocalStorage()?.getItem(SKILL_WORKSHOP_SCOPE_KEY);
+    return raw === "agent" ? "agent" : "global";
+  } catch {
+    return "global";
+  }
+}
+
+/**
+ * Keeps the workshop's agent-scope target in sync with the nav selection so an
+ * "Agent" scope query and the highlighted agent always agree.
+ */
+export function syncSkillWorkshopScopeAgentId(state: AppViewState): void {
+  state.skillWorkshopScopeAgentId = resolveSidebarSelectedAgentId(state);
+}
+
+function setSkillWorkshopScope(state: AppViewState, scope: "global" | "agent"): void {
+  if (state.skillWorkshopScope === scope) {
+    return;
+  }
+  state.skillWorkshopScope = scope;
+  syncSkillWorkshopScopeAgentId(state);
+  try {
+    getSafeLocalStorage()?.setItem(SKILL_WORKSHOP_SCOPE_KEY, scope);
+  } catch {
+    // Scope persistence is a convenience; the in-memory switch still works.
+  }
+  state.skillWorkshopLoaded = false;
+  void loadSkillWorkshopProposals(state, { force: true });
+}
 
 export function loadSkillWorkshopMode(): "board" | "today" {
   try {
@@ -274,8 +308,38 @@ function setSkillWorkshopMode(state: AppViewState, mode: "board" | "today"): voi
 
 function renderSkillWorkshopHeaderControls(state: AppViewState) {
   const useCurrentChatLabel = t("skillWorkshop.header.useCurrentChat");
+  // The agent-scope target is synced from a lifecycle hook (see app.ts
+  // `updated`), not here, so this render stays free of state mutation.
+  const scope = state.skillWorkshopScope;
   return html`
     <div class="sw-header-controls">
+      <div
+        class="sw-scope-switch"
+        role="radiogroup"
+        aria-label=${t("skillWorkshop.header.scopeAria")}
+        data-scope=${scope}
+      >
+        <button
+          type="button"
+          class="sw-scope-switch__opt ${scope === "global" ? "is-active" : ""}"
+          role="radio"
+          aria-checked=${scope === "global" ? "true" : "false"}
+          title=${t("skillWorkshop.header.scopeGlobalTooltip")}
+          @click=${() => setSkillWorkshopScope(state, "global")}
+        >
+          ${t("skillWorkshop.header.scopeGlobal")}
+        </button>
+        <button
+          type="button"
+          class="sw-scope-switch__opt ${scope === "agent" ? "is-active" : ""}"
+          role="radio"
+          aria-checked=${scope === "agent" ? "true" : "false"}
+          title=${t("skillWorkshop.header.scopeAgentTooltip")}
+          @click=${() => setSkillWorkshopScope(state, "agent")}
+        >
+          ${t("skillWorkshop.header.scopeAgent")}
+        </button>
+      </div>
       <label
         class="sw-revision-session-toggle"
         title=${t("skillWorkshop.header.useCurrentChatTooltip")}
@@ -429,12 +493,16 @@ async function sendSkillWorkshopRevisionRequest(
     await switchChatSessionAndWait(state, sessionKey);
   }
   const proposalAgentId = proposal.origin?.agentId?.trim();
+  // When the proposal's owning agent is known, pin it directly. Otherwise fall
+  // back to global scope so the gateway resolves the owning workspace from the
+  // proposal id itself, rather than silently defaulting a cross-workspace
+  // (e.g. gateway-created, origin-less) proposal to the selected/default agent.
+  const revision = proposalAgentId
+    ? { proposalId: proposal.key, agentId: proposalAgentId }
+    : { proposalId: proposal.key, scope: "global" as const };
   await state.handleSendChat(instructions, {
     restoreDraft: true,
-    skillWorkshopRevision: {
-      proposalId: proposal.key,
-      ...(proposalAgentId ? { agentId: proposalAgentId } : {}),
-    },
+    skillWorkshopRevision: revision,
   });
 }
 

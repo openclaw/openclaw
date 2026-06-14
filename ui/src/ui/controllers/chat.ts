@@ -985,16 +985,20 @@ export async function requestSkillWorkshopRevisionChatSend(
     runId: string;
     sessionKey?: string;
     agentId?: string;
+    scope?: "global";
     targetAgentId?: string;
   },
 ): Promise<ChatSendAck> {
   const routing = resolveChatSendRouting(state, {
     sessionKey: params.sessionKey,
-    agentId: params.targetAgentId,
+    agentId: params.scope === "global" ? undefined : params.targetAgentId,
   });
   const payload = await state.client!.request("skills.proposals.requestRevision", {
     ...(params.agentId ? { agentId: normalizeAgentId(params.agentId) } : {}),
-    ...(routing.selectedAgentId ? { targetAgentId: routing.selectedAgentId } : {}),
+    ...(params.scope ? { scope: params.scope } : {}),
+    ...(params.scope !== "global" && routing.selectedAgentId
+      ? { targetAgentId: routing.selectedAgentId }
+      : {}),
     proposalId: params.proposalId,
     instructions: params.instructions,
     sessionKey: routing.sessionKey,

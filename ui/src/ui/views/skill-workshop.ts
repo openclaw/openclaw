@@ -42,6 +42,8 @@ export type SkillWorkshopProposal = {
 export type SkillWorkshopStatusFilter = "all" | SkillWorkshopProposalStatus;
 export type SkillWorkshopAction = "apply" | "revise" | "reject";
 export type SkillWorkshopMode = "board" | "today";
+/** Proposal visibility scope: every agent workspace vs. the selected agent. */
+export type SkillWorkshopScope = "global" | "agent";
 
 export type SkillWorkshopActionBusy = {
   key: string;

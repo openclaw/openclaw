@@ -1906,6 +1906,35 @@ describe("sendChatMessage", () => {
     });
   });
 
+  it("does not override global Skill Workshop revision owner routing with the selected chat agent", async () => {
+    const request = vi.fn().mockResolvedValue({ runId: "run-revision", status: "started" });
+    const state = createState({
+      sessionKey: "global",
+      currentSessionId: "session-visible",
+      assistantAgentId: "selected-chat-agent",
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const result = await requestSkillWorkshopRevisionChatSend(state, {
+      proposalId: "originless-global-proposal-20260616-abc123",
+      scope: "global",
+      targetAgentId: "selected-chat-agent",
+      instructions: "Revise with owner routing",
+      runId: "run-revision",
+    });
+
+    expect(result).toEqual({ runId: "run-revision", status: "started" });
+    expect(request).toHaveBeenCalledWith("skills.proposals.requestRevision", {
+      scope: "global",
+      proposalId: "originless-global-proposal-20260616-abc123",
+      instructions: "Revise with owner routing",
+      sessionKey: "global",
+      sessionId: "session-visible",
+      idempotencyKey: "run-revision",
+    });
+  });
+
   it("adopts the run id and terminal status from the chat.send ack", async () => {
     const request = vi.fn().mockResolvedValue({ runId: "gateway-complete-run", status: "ok" });
     const state = createState({
