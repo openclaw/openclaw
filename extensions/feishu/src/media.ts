@@ -241,12 +241,16 @@ function extractFeishuDownloadMetadata(response: FeishuDownloadResponse): {
     responseWithOptionalFields.data?.mime_type;
 
   const disposition = readHeaderValue(headers, "content-disposition");
-  const fileName =
+  const rawFileName =
     (disposition ? decodeDispositionFileName(disposition) : undefined) ??
     responseWithOptionalFields.file_name ??
     responseWithOptionalFields.fileName ??
     responseWithOptionalFields.data?.file_name ??
     responseWithOptionalFields.data?.fileName;
+
+  const fileName = rawFileName
+    ? recoverUtf8FileNameFromLatin1Header(rawFileName)
+    : undefined;
 
   return { contentType, fileName };
 }
