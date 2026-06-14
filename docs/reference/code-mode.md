@@ -20,7 +20,7 @@ different `exec` contracts:
 
 - Codex Code Mode is enabled for Codex app-server threads unless restricted
   tool policy disables native code mode. It runs in the Codex coding harness,
-  where the model writes raw JavaScript or TypeScript source through an `exec` contract.
+  where the model writes raw JavaScript source through an `exec` contract.
 - OpenClaw code mode is disabled unless `tools.codeMode.enabled: true` is
   configured. It runs in the OpenClaw generic agent runtime, where the model
   writes JavaScript or TypeScript programs through an `exec.code` contract.
@@ -37,7 +37,7 @@ tool catalog, and the normal OpenClaw tool executor.
 | Owner                      | OpenClaw generic agent runtime                                                          | Codex app-server runtime                                                                    |
 | Default state              | Off unless `tools.codeMode.enabled: true`                                               | On for Codex app-server threads unless native code mode is restricted or disabled           |
 | Guest runtime              | `quickjs-wasi`                                                                          | Codex native coding harness                                                                 |
-| Model-visible `exec` input | `exec.code` (and `exec.command` as an alias) with JavaScript or TypeScript              | `exec` with raw JavaScript or TypeScript source code                                        |
+| Model-visible `exec` input | `exec.code` (and `exec.command` as an alias) with JavaScript or TypeScript              | `exec` with raw JavaScript source code                                                      |
 | Visible tool surface       | `exec` and `wait`, plus the hidden OpenClaw tool catalog behind guest helpers           | Codex-native code mode plus Codex-native dynamic tool surfaces                              |
 | Policy path                | Nested calls still run through normal OpenClaw tools, hooks, approvals, auth, and audit | Native Codex thread/tool policy, with OpenClaw bridging selected app-server and hook events |
 | Stability                  | Experimental OpenClaw feature                                                           | Stable Codex harness surface                                                                |
