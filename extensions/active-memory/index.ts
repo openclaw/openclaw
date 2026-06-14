@@ -1736,38 +1736,17 @@ function extractActiveMemorySearchDebugFromSessionRecord(
   };
 }
 
-function extractTerminalMemorySearchResultFromSessionRecord(
-  value: unknown,
-): TerminalMemorySearchResult | undefined {
+function extractToolResultNameFromSessionRecord(value: unknown): string | undefined {
   const record = asRecord(value);
   const nestedMessage = asRecord(record?.message);
-  const topLevelMessage =
-    record?.role === "toolResult" ||
-    record?.toolName === "memory_search" ||
-    record?.toolName === "memory_recall"
-      ? record
-      : undefined;
+  const topLevelMessage = record?.role === "toolResult" ? record : undefined;
   const message = nestedMessage ?? topLevelMessage;
   if (!message) {
     return undefined;
   }
   const role = normalizeOptionalString(message.role);
   const toolName = normalizeOptionalString(message.toolName);
-  if (role !== "toolResult" || (toolName !== "memory_search" && toolName !== "memory_recall")) {
-    return undefined;
-  }
-  const details = asRecord(message.details);
-  const debug = extractActiveMemorySearchDebugFromSessionRecord(value);
-  const disabled = details?.disabled === true;
-  const unavailable = disabled || Boolean(debug?.error) || Boolean(details?.error);
-  if (unavailable) {
-    return {
-      status: "unavailable",
-      hasUsableMemoryResult: false,
-      searchDebug: debug,
-    };
-  }
-  return undefined;
+  return role === "toolResult" ? toolName : undefined;
 }
 
 function hasUnavailableMemoryResultInSessionRecord(
@@ -1794,6 +1773,38 @@ function hasUnavailableMemoryResultInSessionRecord(
     return true;
   }
   return readStructuredMemoryFailureFromContent(message.content) === true;
+}
+
+function hasTerminalUnavailableMemoryResultInSessionRecord(
+  value: unknown,
+  toolsAllow: readonly string[],
+): boolean {
+  const record = asRecord(value);
+  const nestedMessage = asRecord(record?.message);
+  const topLevelMessage = record?.role === "toolResult" ? record : undefined;
+  const message = nestedMessage ?? topLevelMessage;
+  if (!message || normalizeOptionalString(message.role) !== "toolResult") {
+    return false;
+  }
+  const toolName = normalizeOptionalString(message.toolName);
+  if (!toolName || !toolsAllow.includes(toolName)) {
+    return false;
+  }
+  const details = asRecord(message.details);
+  if (details?.disabled === true || details?.unavailable === true) {
+    return true;
+  }
+  const status = normalizeOptionalString(details?.status)
+    ?.toLowerCase()
+    .replace(/[\s-]+/g, "_");
+  if (status === "disabled" || status === "unavailable") {
+    return true;
+  }
+  if (toolName !== "memory_search" && toolName !== "memory_recall") {
+    return false;
+  }
+  const debug = extractActiveMemorySearchDebugFromSessionRecord(value);
+  return Boolean(debug?.error) || Boolean(details?.error);
 }
 
 async function resolveActiveMemoryHookWithDeadline<T>(params: {
@@ -1978,22 +1989,41 @@ async function readTerminalMemorySearchResult(
   limits?: TranscriptReadLimits,
   toolsAllow?: readonly string[],
 ): Promise<TerminalMemorySearchResult | undefined> {
-  let found: TerminalMemorySearchResult | undefined;
+  // memory_get consumes a path discovered by another tool; it is not an
+  // independent fallback that should delay terminal unavailability.
+  const recallPathNames = new Set(toolsAllow?.filter((toolName) => toolName !== "memory_get"));
+  if (recallPathNames.size === 0) {
+    return undefined;
+  }
+  const unavailablePathNames = new Set<string>();
   let hasUsableMemoryResult = false;
+  let searchDebug: ActiveMemorySearchDebug | undefined;
   await streamBoundedTranscriptJsonl({
     sessionFile,
     limits,
     onRecord: (record) => {
       hasUsableMemoryResult ||= hasUsableMemoryResultInSessionRecord(record, toolsAllow);
-      const result = extractTerminalMemorySearchResultFromSessionRecord(record);
-      if (result) {
-        found = { ...result, hasUsableMemoryResult };
-        return true;
+      searchDebug = extractActiveMemorySearchDebugFromSessionRecord(record) ?? searchDebug;
+      const toolName = extractToolResultNameFromSessionRecord(record);
+      if (!toolName || !recallPathNames.has(toolName)) {
+        return false;
+      }
+      if (hasTerminalUnavailableMemoryResultInSessionRecord(record, toolsAllow ?? [])) {
+        unavailablePathNames.add(toolName);
+      } else {
+        unavailablePathNames.delete(toolName);
       }
       return false;
     },
   });
-  return found;
+  if (unavailablePathNames.size !== recallPathNames.size) {
+    return undefined;
+  }
+  return {
+    status: "unavailable",
+    hasUsableMemoryResult,
+    searchDebug,
+  };
 }
 
 function watchTerminalMemorySearchResult(params: {

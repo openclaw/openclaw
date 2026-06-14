@@ -3967,7 +3967,7 @@ describe("active-memory plugin", () => {
     expectLinesNotToContain(lines, "timeout_partial");
   });
 
-  it("uses successful configured custom-tool output as recall evidence", async () => {
+  it("waits for configured custom-tool evidence after memory_search fails", async () => {
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
     api.pluginConfig = {
@@ -3987,6 +3987,25 @@ describe("active-memory plugin", () => {
         {
           message: {
             role: "toolResult",
+            toolName: "memory_search",
+            details: { disabled: true, error: "embedding request failed" },
+          },
+        },
+      ]);
+      await new Promise((resolve) => {
+        setTimeout(resolve, 75);
+      });
+      await writeTranscriptJsonl(params.sessionFile, [
+        {
+          message: {
+            role: "toolResult",
+            toolName: "memory_search",
+            details: { disabled: true, error: "embedding request failed" },
+          },
+        },
+        {
+          message: {
+            role: "toolResult",
             toolName: "memory_lookup_custom",
             details: {
               persistedDetailsTruncated: true,
@@ -4001,11 +4020,54 @@ describe("active-memory plugin", () => {
             ],
           },
         },
+      ]);
+      return { payloads: [{ text: "User usually orders ramen." }] };
+    });
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what food do i usually order? custom evidence", messages: [] },
+      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+    );
+
+    expectPrependContextContains(result, "User usually orders ramen.");
+    expectLinesToContain(getActiveMemoryLines(sessionKey), "Active Memory: status=ok");
+  });
+
+  it("allows a configured custom tool to succeed after a failed attempt", async () => {
+    testing.setMinimumTimeoutMsForTests(1);
+    testing.setSetupGraceTimeoutMsForTests(0);
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: 1_000,
+      toolsAllow: ["memory_lookup_custom"],
+      logging: true,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    const sessionKey = "agent:main:custom-tool-retry";
+    hoisted.sessionStore[sessionKey] = {
+      sessionId: "s-custom-tool-retry",
+      updatedAt: 0,
+    };
+    const failedResult = {
+      message: {
+        role: "toolResult",
+        toolName: "memory_lookup_custom",
+        details: { status: "failed", error: "query was too broad" },
+      },
+    };
+    runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
+      await writeTranscriptJsonl(params.sessionFile, [failedResult]);
+      await new Promise((resolve) => {
+        setTimeout(resolve, 75);
+      });
+      await writeTranscriptJsonl(params.sessionFile, [
+        failedResult,
         {
           message: {
             role: "toolResult",
-            toolName: "memory_search",
-            details: { disabled: true, error: "embedding request failed" },
+            toolName: "memory_lookup_custom",
+            details: { status: "success", results: [{ text: "User usually orders ramen." }] },
+            content: [{ type: "text", text: "User usually orders ramen." }],
           },
         },
       ]);
@@ -4013,7 +4075,7 @@ describe("active-memory plugin", () => {
     });
 
     const result = await hooks.before_prompt_build(
-      { prompt: "what food do i usually order? custom evidence", messages: [] },
+      { prompt: "what food do i usually order? custom retry", messages: [] },
       { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
     );
 
