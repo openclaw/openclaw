@@ -93,6 +93,11 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     parentDefaultHelp: true,
   },
   {
+    name: "context",
+    description: "Inspect session context usage",
+    hasSubcommands: true,
+  },
+  {
     name: "dns",
     description: "DNS helpers for wide-area discovery (Tailscale + CoreDNS)",
     hasSubcommands: true,
