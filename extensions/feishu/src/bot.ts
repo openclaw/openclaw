@@ -62,7 +62,7 @@ import {
 } from "./policy.js";
 import { resolveFeishuReasoningPreviewEnabled } from "./reasoning-preview.js";
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
-import { getFeishuRuntime } from "./runtime.js";
+import { getFeishuRuntime, getOptionalFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu, listFeishuThreadMessages, sendMessageFeishu } from "./send.js";
 export type { FeishuBotAddedEvent, FeishuMessageEvent } from "./event-types.js";
 import type { FeishuMessageEvent } from "./event-types.js";
@@ -829,7 +829,8 @@ export async function handleFeishuMessage(params: {
       directAuthorization?.shouldComputeCommandAuthorized ?? shouldComputeCommandAuthorized;
     let effectiveCfg = cfg;
     if (isDirect) {
-      const currentCfg = getFeishuRuntime().config.current() as ClawdbotConfig;
+      const currentCfg =
+        (getOptionalFeishuRuntime()?.config.current() as ClawdbotConfig | undefined) ?? cfg;
       if (currentCfg !== effectiveCfg) {
         const currentAuthorization = await resolveDirectAuthorization(currentCfg, true);
         if (currentAuthorization.ingress.ingress.admission !== "dispatch") {
@@ -884,43 +885,45 @@ export async function handleFeishuMessage(params: {
     // Refresh a binding written after this request snapshot, or create the DM's
     // dynamic agent when the current account policy enables it.
     if (!isGroup && route.matchedBy === "default") {
-      const runtimeLocal = getFeishuRuntime();
-      const result = await maybeCreateDynamicAgent({
-        cfg: effectiveCfg,
-        runtime: runtimeLocal,
-        accountId: account.accountId,
-        senderOpenId: ctx.senderOpenId,
-        canCreateForConfig: async (candidateCfg) => {
-          const authorization = await resolveDirectAuthorization(candidateCfg, false);
-          return authorization.ingress.ingress.admission === "dispatch";
-        },
-        log: (msg) => log(msg),
-      });
-      if (result.created || result.updatedCfg !== effectiveCfg) {
-        const refreshedAuthorization = await resolveDirectAuthorization(result.updatedCfg, false);
-        if (refreshedAuthorization.ingress.ingress.admission !== "dispatch") {
-          log(
-            `feishu[${account.accountId}]: current policy rejected stale DM from ${ctx.senderOpenId} ` +
-              `before adopting refreshed dynamic route (dmPolicy=${refreshedAuthorization.dmPolicy})`,
-          );
-          return;
-        }
-        effectiveCfg = result.updatedCfg;
-        effectiveDmPolicy = refreshedAuthorization.dmPolicy;
-        effectiveConfigAllowFrom = refreshedAuthorization.configAllowFrom;
-        effectiveDmIngress = refreshedAuthorization.ingress;
-        effectiveShouldComputeCommandAuthorized =
-          refreshedAuthorization.shouldComputeCommandAuthorized;
-        route = core.channel.routing.resolveAgentRoute({
-          cfg: result.updatedCfg,
-          channel: "feishu",
+      const runtimeLocal = getOptionalFeishuRuntime();
+      if (runtimeLocal) {
+        const result = await maybeCreateDynamicAgent({
+          cfg: effectiveCfg,
+          runtime: runtimeLocal,
           accountId: account.accountId,
-          peer: { kind: "direct", id: ctx.senderOpenId },
+          senderOpenId: ctx.senderOpenId,
+          canCreateForConfig: async (candidateCfg) => {
+            const authorization = await resolveDirectAuthorization(candidateCfg, false);
+            return authorization.ingress.ingress.admission === "dispatch";
+          },
+          log: (msg) => log(msg),
         });
-        if (result.created) {
-          log(
-            `feishu[${account.accountId}]: dynamic agent created, new route: ${route.sessionKey}`,
-          );
+        if (result.created || result.updatedCfg !== effectiveCfg) {
+          const refreshedAuthorization = await resolveDirectAuthorization(result.updatedCfg, false);
+          if (refreshedAuthorization.ingress.ingress.admission !== "dispatch") {
+            log(
+              `feishu[${account.accountId}]: current policy rejected stale DM from ${ctx.senderOpenId} ` +
+                `before adopting refreshed dynamic route (dmPolicy=${refreshedAuthorization.dmPolicy})`,
+            );
+            return;
+          }
+          effectiveCfg = result.updatedCfg;
+          effectiveDmPolicy = refreshedAuthorization.dmPolicy;
+          effectiveConfigAllowFrom = refreshedAuthorization.configAllowFrom;
+          effectiveDmIngress = refreshedAuthorization.ingress;
+          effectiveShouldComputeCommandAuthorized =
+            refreshedAuthorization.shouldComputeCommandAuthorized;
+          route = core.channel.routing.resolveAgentRoute({
+            cfg: result.updatedCfg,
+            channel: "feishu",
+            accountId: account.accountId,
+            peer: { kind: "direct", id: ctx.senderOpenId },
+          });
+          if (result.created) {
+            log(
+              `feishu[${account.accountId}]: dynamic agent created, new route: ${route.sessionKey}`,
+            );
+          }
         }
       }
     }

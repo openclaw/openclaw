@@ -5,7 +5,7 @@ import {
   releaseFeishuMessageProcessing,
   tryBeginFeishuMessageProcessing,
 } from "./processing-claims.js";
-import { getFeishuRuntime } from "./runtime.js";
+import { getOptionalFeishuRuntime } from "./runtime.js";
 
 // Persistent TTL: 24 hours — survives restarts & WebSocket reconnects.
 const DEDUP_TTL_MS = 24 * 60 * 60 * 1000;
@@ -39,7 +39,11 @@ function openDedupStore(namespace: string): PluginStateSyncKeyedStore<FeishuDedu
   if (cached) {
     return cached;
   }
-  const store = getFeishuRuntime().state.openSyncKeyedStore<FeishuDedupStoreEntry>({
+  const runtime = getOptionalFeishuRuntime();
+  if (!runtime) {
+    throw new Error("Feishu runtime not initialized — cannot open dedup store");
+  }
+  const store = runtime.state.openSyncKeyedStore<FeishuDedupStoreEntry>({
     namespace: stateNamespace,
     maxEntries: STORE_MAX_ENTRIES,
     defaultTtlMs: DEDUP_TTL_MS,

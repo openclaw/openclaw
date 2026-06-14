@@ -17,7 +17,7 @@ import {
   type FeishuDriveCommentNoticeEvent,
 } from "./monitor.comment.js";
 import { resolveFeishuDmIngressAccess } from "./policy.js";
-import { getFeishuRuntime } from "./runtime.js";
+import { getFeishuRuntime, getOptionalFeishuRuntime } from "./runtime.js";
 
 type HandleFeishuCommentEventParams = {
   cfg: ClawdbotConfig;
@@ -53,8 +53,12 @@ export async function handleFeishuCommentEvent(
   params: HandleFeishuCommentEventParams,
 ): Promise<void> {
   const account = resolveFeishuRuntimeAccount({ cfg: params.cfg, accountId: params.accountId });
-  const core = getFeishuRuntime();
   const log = params.runtime?.log ?? console.log;
+  const core = getOptionalFeishuRuntime();
+  if (!core) {
+    log("feishu: runtime not initialized — skipping comment event");
+    return;
+  }
   const error = params.runtime?.error ?? console.error;
   const runtime = (params.runtime ?? { log, error }) as RuntimeEnv;
 

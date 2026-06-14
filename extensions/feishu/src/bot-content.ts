@@ -6,7 +6,7 @@ import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { saveMessageResourceFeishu } from "./media.js";
 import { isFeishuBroadcastMention } from "./mention.js";
 import { parsePostContent } from "./post.js";
-import { getFeishuRuntime } from "./runtime.js";
+import { getOptionalFeishuRuntime } from "./runtime.js";
 import type { FeishuChatType, FeishuMediaInfo } from "./types.js";
 
 type FeishuMention = {
@@ -342,7 +342,10 @@ async function resolveSavedFeishuMedia(params: {
   if ("saved" in params.result) {
     return params.result.saved;
   }
-  const core = getFeishuRuntime();
+  const core = getOptionalFeishuRuntime();
+  if (!core) {
+    throw new Error("Feishu runtime not initialized — cannot resolve media");
+  }
   const contentType =
     params.result.contentType ?? (await core.media.detectMime({ buffer: params.result.buffer }));
   return await core.channel.media.saveMediaBuffer(

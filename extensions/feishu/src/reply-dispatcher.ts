@@ -22,7 +22,7 @@ import {
   type ReplyPayload,
   type RuntimeEnv,
 } from "./reply-dispatcher-runtime-api.js";
-import { getFeishuRuntime } from "./runtime.js";
+import { getOptionalFeishuRuntime } from "./runtime.js";
 import { sendMessageFeishu, sendStructuredCardFeishu, type CardHeaderConfig } from "./send.js";
 import { FeishuStreamingSession, mergeStreamingText } from "./streaming-card.js";
 import { resolveReceiveIdType } from "./targets.js";
@@ -136,7 +136,10 @@ type CreateFeishuReplyDispatcherParams = {
 };
 
 export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherParams) {
-  const core = getFeishuRuntime();
+  const core = getOptionalFeishuRuntime();
+  if (!core) {
+    throw new Error("Feishu runtime not initialized — cannot create reply dispatcher");
+  }
   const {
     cfg,
     agentId,
