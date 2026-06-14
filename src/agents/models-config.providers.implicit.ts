@@ -73,18 +73,19 @@ type ImplicitProviderContext = ImplicitProviderParams & {
   resolveProviderAuth: ProviderAuthResolver;
 };
 
-function resolveLiveProviderCatalogTimeoutMs(env: NodeJS.ProcessEnv): number | null {
+const DEFAULT_PROVIDER_CATALOG_TIMEOUT_MS = 15_000;
+
+function resolveProviderCatalogTimeoutMs(env: NodeJS.ProcessEnv): number {
   const live =
     env.OPENCLAW_LIVE_TEST === "1" || env.OPENCLAW_LIVE_GATEWAY === "1" || env.LIVE === "1";
-  if (!live) {
-    return null;
-  }
-  const raw = env.OPENCLAW_LIVE_PROVIDER_DISCOVERY_TIMEOUT_MS?.trim();
+  const raw = live ? env.OPENCLAW_LIVE_PROVIDER_DISCOVERY_TIMEOUT_MS?.trim() : undefined;
   if (!raw) {
-    return 15_000;
+    return DEFAULT_PROVIDER_CATALOG_TIMEOUT_MS;
   }
   const parsed = Number(raw);
-  return /^[+]?\d+$/.test(raw) && Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 15_000;
+  return /^[+]?\d+$/.test(raw) && Number.isSafeInteger(parsed) && parsed > 0
+    ? parsed
+    : DEFAULT_PROVIDER_CATALOG_TIMEOUT_MS;
 }
 
 function resolveProviderDiscoveryFilter(params: {
@@ -425,7 +426,7 @@ async function resolvePluginImplicitProviders(
           resolveProviderApiKey: resolveCatalogProviderApiKey,
           resolveProviderAuth: (providerId, options) =>
             ctx.resolveProviderAuth(providerId?.trim() || provider.id, options),
-          timeoutMs: ctx.providerDiscoveryTimeoutMs ?? resolveLiveProviderCatalogTimeoutMs(ctx.env),
+          timeoutMs: ctx.providerDiscoveryTimeoutMs ?? resolveProviderCatalogTimeoutMs(ctx.env),
         });
     if (!result && !useStaticCatalog && provider.staticCatalog) {
       result = await runProviderStaticCatalog({
