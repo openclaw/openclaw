@@ -5696,7 +5696,7 @@ describe("active-memory plugin", () => {
     expect(config.agents).toEqual(["main", "support"]);
   });
 
-  it("defaults an empty active-memory agent allowlist to all configured agents", () => {
+  it("preserves an empty active-memory agent allowlist", () => {
     const config = testing.normalizePluginConfig(
       {
         agents: [],
@@ -5707,12 +5707,12 @@ describe("active-memory plugin", () => {
         },
       },
     );
-    expect(config.agents).toEqual(["main", "support"]);
+    expect(config.agents).toEqual([]);
   });
 
   it("defaults to the implicit main agent when no agent list is configured", () => {
     expect(testing.normalizePluginConfig({}).agents).toEqual(["main"]);
-    expect(testing.normalizePluginConfig({ agents: [] }).agents).toEqual(["main"]);
+    expect(testing.normalizePluginConfig({ agents: [] }).agents).toEqual([]);
   });
 
   it("keeps an explicit active-memory agent allowlist", () => {
