@@ -252,7 +252,8 @@ export {
  * Resolves gateway bind host with fallback strategy.
  *
  * Modes:
- * - loopback: 127.0.0.1 (rarely fails, but handled gracefully)
+ * - loopback: 127.0.0.1 (explicit user choice; no preflight fallback so the
+ *   downstream runtime guard never silently observes a non-loopback host).
  * - lan: always 0.0.0.0 (no fallback)
  * - tailnet: Tailnet IPv4 if available, else loopback
  * - auto: 0.0.0.0 inside containers (Docker/Podman/K8s); loopback otherwise
@@ -267,11 +268,17 @@ export async function resolveGatewayBindHost(
   const mode = bind ?? "loopback";
 
   if (mode === "loopback") {
-    // 127.0.0.1 rarely fails, but handle gracefully
-    if (await canBindToHost("127.0.0.1")) {
-      return "127.0.0.1";
-    }
-    return "0.0.0.0"; // extreme fallback
+    // Honor the operator's explicit `bind: "loopback"` choice unconditionally:
+    // returning `127.0.0.1` keeps the Gateway local-only as documented and as
+    // the downstream runtime guard in `resolveGatewayRuntimeConfig` requires
+    // (#65619). The previous best-effort preflight to `127.0.0.1` could fail
+    // intermittently on macOS (port temporarily held, IPv4/IPv6 dual-stack
+    // quirks, etc.) and then silently fall back to `0.0.0.0`, which the
+    // runtime guard then rejects with `gateway bind=loopback resolved to
+    // non-loopback host 0.0.0.0` and refuses to start. The OS itself returns
+    // a clear bind error if `127.0.0.1` is truly unbindable, which is the
+    // correct surface for that rare condition.
+    return "127.0.0.1";
   }
 
   if (mode === "tailnet") {
