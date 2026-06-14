@@ -125,8 +125,14 @@ export function scanEmptyAllowlistPolicyWarnings(
           typeof (channelConfig as Record<string, unknown>)[k] === "string",
       );
 
+    // When the `default` account is present, the top-level config is also
+    // an active account (not just a parent/fallback).
+    const hasDefaultAccount =
+      accounts && "default" in accounts && !isDisabledRecord(accounts["default"]);
+
     const allAccountsHaveOwnAllowFrom =
       !topLevelHasCredentials &&
+      !hasDefaultAccount &&
       accounts &&
       Object.keys(accounts).length > 0 &&
       (() => {
