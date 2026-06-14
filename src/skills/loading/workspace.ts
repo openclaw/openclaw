@@ -13,7 +13,7 @@ import { walkDirectorySync } from "../../infra/fs-safe.js";
 import { resolveOsHomeDir } from "../../infra/home-dir.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { CONFIG_DIR, resolveHomeDir, resolveUserPath } from "../../utils.js";
+import { CONFIG_DIR, resolveConfigDir, resolveUserPath } from "../../utils.js";
 import {
   resolveEffectiveAgentSkillFilter,
   resolveEffectiveAgentSkillsLimits,
@@ -41,12 +41,11 @@ const SKILL_SOURCE_ORIGIN_RELATIVE_PATH = path.join(".openclaw", "source-origin.
 const MAX_SKILL_SOURCE_ORIGIN_BYTES = 16 * 1024;
 
 /**
- * Replace the user's home directory prefix with `~` in skill file paths
- * to reduce system prompt token usage. Models understand `~` expansion,
- * and the read tool resolves `~` to the home directory.
+ * Replace OS home directory prefixes with `~` in skill file paths to
+ * reduce system prompt token usage while matching host file-tool expansion.
  *
  * Example: `/Users/alice/.bun/.../skills/github/SKILL.md`
- *       → `~/.bun/.../skills/github/SKILL.md`
+ * → `~/.bun/.../skills/github/SKILL.md`
  *
  * Saves ~5–6 tokens per skill path × N skills ≈ 400–600 tokens total.
  */
@@ -63,7 +62,7 @@ function resolveNativeUserHomeDir(): string | undefined {
 }
 
 function resolveCompactHomePrefixes(): string[] {
-  const homes = [resolveHomeDir(), resolveUserHomeDir(), resolveNativeUserHomeDir()].filter(
+  const homes = [resolveUserHomeDir(), resolveNativeUserHomeDir()].filter(
     (home): home is string => Boolean(home),
   );
   const resolvedHomes = homes.map((home) => path.resolve(home));
@@ -78,10 +77,24 @@ function compactSkillPaths(skills: Skill[]): Skill[] {
   if (homes.length === 0) {
     return skills;
   }
+  const preservedRoots = resolvePreservedPromptSkillPathRoots();
   return skills.map((s) => ({
     ...s,
-    filePath: compactHomePath(s.filePath, homes),
+    filePath: shouldPreservePromptSkillPath(s.filePath, preservedRoots)
+      ? s.filePath
+      : compactHomePath(s.filePath, homes),
   }));
+}
+
+function resolvePreservedPromptSkillPathRoots(): string[] {
+  const configDir = path.resolve(resolveConfigDir());
+  const realConfigDir = tryRealpath(configDir);
+  return uniqueStrings([configDir, ...(realConfigDir ? [realConfigDir] : [])]);
+}
+
+function shouldPreservePromptSkillPath(filePath: string, roots: readonly string[]): boolean {
+  const resolvedFilePath = path.resolve(filePath);
+  return roots.some((root) => resolvedFilePath === root || isPathInside(root, resolvedFilePath));
 }
 
 function compactHomePath(filePath: string, homes: readonly string[]): string {
