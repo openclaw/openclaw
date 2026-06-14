@@ -4,8 +4,12 @@ import {
   deliverWithFinalizableLivePreviewAdapter,
 } from "openclaw/plugin-sdk/channel-outbound";
 import {
-  formatChannelProgressDraftLineForEntry,
+  buildChannelProgressDraftLineForEntry,
+  formatChannelProgressDraftText,
+  mergeChannelProgressDraftLine,
+  resolveChannelProgressDraftMaxLines,
   resolveChannelStreamingPreviewToolProgress,
+  type ChannelProgressDraftLine,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { isLoopbackHost } from "openclaw/plugin-sdk/gateway-runtime";
 import { createClaimableDedupe, type ClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
@@ -38,7 +42,7 @@ import {
   type MattermostPost,
   type MattermostUser,
 } from "./client.js";
-import { buildMattermostToolStatusText, createMattermostDraftStream } from "./draft-stream.js";
+import { buildMattermostProgressLine, createMattermostDraftStream } from "./draft-stream.js";
 import {
   computeInteractionCallbackUrl,
   createMattermostInteractionHandler,
@@ -1682,6 +1686,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             })
           : createDisabledMattermostDraftStream();
         let lastPartialText = "";
+        let progressLines: ChannelProgressDraftLine[] = [];
         const previewState: MattermostDraftPreviewState = {
           finalizedViaPreviewPost: false,
         };
@@ -1738,6 +1743,29 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           }
           lastPartialText = cleaned;
           draftStream.update(cleaned);
+        };
+
+        const pushProgressLine = (line: ChannelProgressDraftLine | undefined) => {
+          if (!line) {
+            return;
+          }
+          const maxLines = resolveChannelProgressDraftMaxLines(account.config);
+          const next = mergeChannelProgressDraftLine(progressLines, line, { maxLines });
+          if (next === progressLines) {
+            return;
+          }
+          progressLines = next;
+          const rendered = formatChannelProgressDraftText({
+            entry: account.config,
+            lines: progressLines,
+          });
+          if (rendered) {
+            draftStream.update(rendered);
+          }
+        };
+
+        const resetProgressLines = () => {
+          progressLines = [];
         };
 
         const { dispatcher, replyOptions, markDispatchIdle, markRunComplete } =
@@ -1893,9 +1921,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                           },
                           onAssistantMessageStart: () => {
                             lastPartialText = "";
+                            resetProgressLines();
                           },
                           onReasoningEnd: () => {
                             lastPartialText = "";
+                            resetProgressLines();
                           },
                           onReasoningStream: async () => {
                             if (!lastPartialText) {
@@ -1906,8 +1936,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                             if (!draftToolProgressEnabled) {
                               return;
                             }
-                            draftStream.update(
-                              buildMattermostToolStatusText({
+                            pushProgressLine(
+                              buildMattermostProgressLine({
                                 ...payloadValue,
                                 config: account.config,
                               }),
@@ -1917,9 +1947,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                             if (!draftToolProgressEnabled) {
                               return;
                             }
-                            const progressText = formatChannelProgressDraftLineForEntry(
-                              account.config,
-                              {
+                            pushProgressLine(
+                              buildChannelProgressDraftLineForEntry(account.config, {
                                 event: "item",
                                 itemId: payloadLocal.itemId,
                                 itemKind: payloadLocal.kind,
@@ -1930,11 +1959,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                                 summary: payloadLocal.summary,
                                 progressText: payloadLocal.progressText,
                                 meta: payloadLocal.meta,
-                              },
+                              }),
                             );
-                            if (progressText) {
-                              draftStream.update(progressText);
-                            }
                           },
                         },
                       }),
