@@ -79,7 +79,7 @@ async function packageRootExists(packageRoot: string): Promise<boolean> {
 }
 
 function isMissingPathError(error: unknown): boolean {
-  return ["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "");
+  return ["ENOENT", "ENOTDIR", "not-found"].includes((error as NodeJS.ErrnoException).code ?? "");
 }
 
 type LocalPackageOverrideTargetProbe =
@@ -289,6 +289,7 @@ async function publishLocalOverrideTarget(params: {
   packageFs: LocalOverridePackageRoot;
   sourcePath: string;
   relativePath: string;
+  onPublished?: () => void;
 }): Promise<void> {
   await assertLocalOverrideMutationTopology({
     packageRoot: params.packageFs.rootDir,
@@ -305,12 +306,12 @@ async function publishLocalOverrideTarget(params: {
     sourceAbsolutePath,
     resolveSafePackagePath(params.packageFs.rootDir, params.relativePath),
   );
+  params.onPublished?.();
   await assertLocalOverrideMutationTopology({
     packageRoot: params.packageFs.rootDir,
     realPackageRoot: params.packageFs.rootReal,
     relativePath: params.relativePath,
   });
-  await params.packageFs.remove(params.sourcePath);
 }
 
 async function restoreMovedLocalOverrideTarget(params: {
@@ -323,39 +324,34 @@ async function restoreMovedLocalOverrideTarget(params: {
     sourcePath: params.movedPath,
     relativePath: params.relativePath,
   });
+  await params.packageFs.remove(params.movedPath);
+}
+
+async function removeLocalOverrideCleanupPath(
+  packageFs: LocalOverridePackageRoot,
+  relativePath: string,
+): Promise<void> {
+  try {
+    await packageFs.remove(relativePath);
+  } catch (error) {
+    if (!isMissingPathError(error)) {
+      throw error;
+    }
+  }
 }
 
 async function moveExpectedLocalOverrideTarget(params: {
   packageFs: LocalOverridePackageRoot;
   relativePath: string;
   expected: PackageDistContentInventoryEntry;
-  allowHardlinks?: boolean;
 }): Promise<{ movedPath: string; content: Buffer; mode: number }> {
   const movedPath = createLocalOverrideMutationPath(params.relativePath, "previous");
   let targetMoved = false;
   try {
-    if (params.allowHardlinks) {
-      await assertLocalOverrideMutationTopology({
-        packageRoot: params.packageFs.rootDir,
-        realPackageRoot: params.packageFs.rootReal,
-        relativePath: params.relativePath,
-      });
-      await fs.rename(
-        resolveSafePackagePath(params.packageFs.rootDir, params.relativePath),
-        resolveSafePackagePath(params.packageFs.rootDir, movedPath),
-      );
-      targetMoved = true;
-      await assertLocalOverrideMutationTopology({
-        packageRoot: params.packageFs.rootDir,
-        realPackageRoot: params.packageFs.rootReal,
-        relativePath: movedPath,
-      });
-    } else {
-      await params.packageFs.move(params.relativePath, movedPath);
-      targetMoved = true;
-    }
+    await params.packageFs.move(params.relativePath, movedPath);
+    targetMoved = true;
     const moved = await params.packageFs.read(movedPath, {
-      hardlinks: params.allowHardlinks ? "allow" : "reject",
+      hardlinks: "reject",
       maxBytes: Number.POSITIVE_INFINITY,
       symlinks: "reject",
     });
@@ -387,9 +383,11 @@ async function replaceLocalOverrideTarget(params: {
   mode?: number;
   expected?: PackageDistContentInventoryEntry;
   backupPath?: string;
-}): Promise<void> {
+  onCommitted?: (cleanupPaths: string[]) => void;
+}): Promise<string[]> {
   const temporaryPath = createLocalOverrideMutationPath(params.relativePath, "next");
   let backupWritten = false;
+  let committed = false;
   let movedPath: string | undefined;
   try {
     await params.packageFs.copyIn(temporaryPath, params.sourcePath, {
@@ -426,17 +424,19 @@ async function replaceLocalOverrideTarget(params: {
       });
       backupWritten = true;
     }
+    const cleanupPaths = [temporaryPath, ...(movedPath ? [movedPath] : [])];
     await publishLocalOverrideTarget({
       packageFs: params.packageFs,
       sourcePath: temporaryPath,
       relativePath: params.relativePath,
+      onPublished: () => {
+        committed = true;
+        params.onCommitted?.(cleanupPaths);
+      },
     });
-    if (movedPath) {
-      await params.packageFs.remove(movedPath);
-      movedPath = undefined;
-    }
+    return cleanupPaths;
   } catch (error) {
-    if (movedPath) {
+    if (movedPath && !committed) {
       const restored = await restoreMovedLocalOverrideTarget({
         packageFs: params.packageFs,
         movedPath,
@@ -450,7 +450,9 @@ async function replaceLocalOverrideTarget(params: {
     }
     throw error;
   } finally {
-    await params.packageFs.remove(temporaryPath).catch(() => undefined);
+    if (!committed) {
+      await removeLocalOverrideCleanupPath(params.packageFs, temporaryPath).catch(() => undefined);
+    }
   }
 }
 
@@ -464,7 +466,6 @@ async function deleteLocalOverrideTarget(params: {
     packageFs: params.packageFs,
     relativePath: params.relativePath,
     expected: params.expected,
-    allowHardlinks: true,
   });
   let backupWritten = false;
   try {
@@ -801,7 +802,7 @@ async function preflightLocalOverrides(params: {
       conflicts.push({ path: change.path, reason: "target-changed" });
       continue;
     }
-    if (targetProbe.hardlinked && change.kind !== "deleted") {
+    if (targetProbe.hardlinked) {
       conflicts.push({ path: change.path, reason: "target-hardlinked" });
       continue;
     }
@@ -966,16 +967,32 @@ export async function applyLocalPackageOverrides(params: {
     plan: params.plan,
   });
   const conflictPaths = new Set(conflicts.map((conflict) => conflict.path));
-  const changesToApply = params.plan.changes.filter((change) => !conflictPaths.has(change.path));
-  if (changesToApply.length === 0 && conflicts.length > 0) {
+  const changesToApply: LocalPackageOverrideChange[] = [];
+  for (const change of params.plan.changes) {
+    if (conflictPaths.has(change.path)) {
+      continue;
+    }
+    if (
+      change.kind === "deleted" &&
+      (await probeLocalOverrideTarget(resolveSafePackagePath(params.packageRoot, change.path)))
+        .status === "missing"
+    ) {
+      continue;
+    }
+    changesToApply.push(change);
+  }
+  if (changesToApply.length === 0) {
     return {
       ...params.plan.result,
-      status: "conflict",
+      status: conflicts.length > 0 ? "conflict" : "applied",
       applied: 0,
       conflicts,
-      warnings: [
-        "Local OpenClaw changes were preserved but not reapplied because the update changed the same file(s).",
-      ],
+      warnings:
+        conflicts.length > 0
+          ? [
+              "Local OpenClaw changes were preserved but not reapplied because the update changed the same file(s).",
+            ]
+          : [],
     };
   }
 
@@ -985,6 +1002,7 @@ export async function applyLocalPackageOverrides(params: {
     applied?: PackageDistContentInventoryEntry;
     backupPath?: string;
     backupMode?: number;
+    cleanupPaths?: string[];
   }> = [];
   let applied = 0;
   let preserveRollbackDir = false;
@@ -1018,19 +1036,28 @@ export async function applyLocalPackageOverrides(params: {
           sourcePath: change.savedPath,
           mode: change.mode,
         });
-        await replaceLocalOverrideTarget({
+        const cleanupPaths = await replaceLocalOverrideTarget({
           packageFs,
           relativePath: change.path,
           sourcePath: change.savedPath,
           mode: change.mode,
           expected: change.kind === "modified" ? change.baseline : undefined,
           backupPath: change.kind === "modified" ? backupPath : undefined,
+          onCommitted: (committedCleanupPaths) => {
+            rollbackEntries.push({
+              path: change.path,
+              applied: appliedEntry,
+              cleanupPaths: committedCleanupPaths,
+              ...(change.kind === "modified"
+                ? { backupPath, backupMode: change.baseline?.mode }
+                : {}),
+            });
+          },
         });
-        rollbackEntries.push({
-          path: change.path,
-          applied: appliedEntry,
-          ...(change.kind === "modified" ? { backupPath, backupMode: change.baseline?.mode } : {}),
-        });
+        while (cleanupPaths.length > 0) {
+          await removeLocalOverrideCleanupPath(packageFs, cleanupPaths[0]);
+          cleanupPaths.shift();
+        }
       }
       if (change.kind === "deleted") {
         rollbackEntries.push({ path: change.path, backupPath, backupMode: change.baseline?.mode });
@@ -1045,6 +1072,15 @@ export async function applyLocalPackageOverrides(params: {
       rollbackFailures.set(relativePath, messages);
     };
     for (const entry of rollbackEntries.toReversed()) {
+      if (entry.cleanupPaths && packageFs) {
+        for (const cleanupPath of entry.cleanupPaths) {
+          try {
+            await removeLocalOverrideCleanupPath(packageFs, cleanupPath);
+          } catch (error) {
+            recordRollbackFailure(entry.path, "remove mutation backup", error);
+          }
+        }
+      }
       let removeError: unknown;
       if (entry.applied && packageFs && rollbackDir) {
         try {
@@ -1063,12 +1099,15 @@ export async function applyLocalPackageOverrides(params: {
       }
       if (entry.backupPath && packageFs) {
         try {
-          await replaceLocalOverrideTarget({
+          const cleanupPaths = await replaceLocalOverrideTarget({
             packageFs,
             relativePath: entry.path,
             sourcePath: entry.backupPath,
             mode: entry.backupMode,
           });
+          for (const cleanupPath of cleanupPaths) {
+            await removeLocalOverrideCleanupPath(packageFs, cleanupPath);
+          }
         } catch (error) {
           recordRollbackFailure(entry.path, "restore original target", error);
         }

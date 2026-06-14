@@ -562,21 +562,19 @@ describe("runGlobalPackageUpdateSteps", () => {
       expect(plan).not.toBeNull();
       await writePackageRoot(packageRoot, "2.0.0");
 
-      const realRename = fs.rename.bind(fs);
       let targetChanged = false;
-      const renameSpy = vi
-        .spyOn(fs, "rename")
-        .mockImplementation(async (...args: Parameters<typeof fs.rename>) => {
+      __setFsSafeTestHooksForTest({
+        beforeRootFallbackMutation: async (operation, targetPath) => {
           if (
             !targetChanged &&
-            String(args[0]) === indexPath &&
-            path.basename(String(args[1])).startsWith(".openclaw-override-previous-")
+            operation === "move" &&
+            path.basename(targetPath).startsWith(".openclaw-override-previous-")
           ) {
             targetChanged = true;
             await fs.writeFile(indexPath, "export const concurrent = true;\n", "utf8");
           }
-          return await realRename(...args);
-        });
+        },
+      });
 
       try {
         const result = await applyLocalPackageOverrides({
@@ -597,7 +595,7 @@ describe("runGlobalPackageUpdateSteps", () => {
           ),
         ).toEqual([]);
       } finally {
-        renameSpy.mockRestore();
+        __setFsSafeTestHooksForTest(undefined);
       }
     });
   });
@@ -623,23 +621,20 @@ describe("runGlobalPackageUpdateSteps", () => {
           await fs.mkdir(outsideRoot);
           await fs.writeFile(outsideIndexPath, "export const outside = true;\n", "utf8");
 
-          const realRename = fs.rename.bind(fs);
           let topologyChanged = false;
-          const renameSpy = vi
-            .spyOn(fs, "rename")
-            .mockImplementation(async (...args: Parameters<typeof fs.rename>) => {
-              const result = await realRename(...args);
+          __setFsSafeTestHooksForTest({
+            beforeRootFallbackMutation: async (operation, targetPath) => {
               if (
                 !topologyChanged &&
-                String(args[0]) === indexPath &&
-                path.basename(String(args[1])).startsWith(".openclaw-override-previous-")
+                operation === "move" &&
+                path.basename(targetPath).startsWith(".openclaw-override-previous-")
               ) {
                 topologyChanged = true;
-                await realRename(distPath, preservedDistPath);
+                await fs.rename(distPath, preservedDistPath);
                 await fs.symlink(outsideRoot, distPath, "dir");
               }
-              return result;
-            });
+            },
+          });
 
           try {
             const result = await applyLocalPackageOverrides({
@@ -654,18 +649,45 @@ describe("runGlobalPackageUpdateSteps", () => {
             await expect(fs.readFile(outsideIndexPath, "utf8")).resolves.toBe(
               "export const outside = true;\n",
             );
-            expect(
-              (await fs.readdir(preservedDistPath)).some((entry) =>
-                entry.startsWith(".openclaw-override-previous-"),
-              ),
-            ).toBe(true);
+            await expect(
+              fs.readFile(path.join(preservedDistPath, "index.js"), "utf8"),
+            ).resolves.toBe("export {};\n");
           } finally {
-            renameSpy.mockRestore();
+            __setFsSafeTestHooksForTest(undefined);
           }
         },
       );
     },
   );
+
+  it("treats deletions already satisfied by the updated package as a no-op", async () => {
+    await withTempDir(
+      { prefix: "openclaw-package-update-local-deleted-upstream-" },
+      async (base) => {
+        const packageRoot = path.join(base, "package");
+        const indexPath = path.join(packageRoot, "dist", "index.js");
+        await writePackageRoot(packageRoot, "1.0.0");
+        await fs.rm(indexPath);
+
+        const plan = await captureLocalPackageOverrides({ packageRoot });
+        expect(plan).not.toBeNull();
+        await writePackageRoot(packageRoot, "2.0.0");
+        await fs.rm(indexPath);
+        await writePackageDistInventory(packageRoot);
+
+        const result = await applyLocalPackageOverrides({
+          packageRoot,
+          plan,
+          reapply: true,
+        });
+
+        expect(result.status).toBe("applied");
+        expect(result.applied).toBe(0);
+        expect(result.conflicts).toEqual([]);
+        await expectPathMissing(indexPath);
+      },
+    );
+  });
 
   it.runIf(process.platform !== "win32")(
     "reapplies overrides when Windows reports synthetic installed modes",
@@ -1480,7 +1502,7 @@ describe("runGlobalPackageUpdateSteps", () => {
   );
 
   it.runIf(process.platform !== "win32")(
-    "reapplies deleted overrides by unlinking hardlinked updated files",
+    "preserves deleted overrides when updated files are hardlinked",
     async () => {
       await withTempDir(
         { prefix: "openclaw-package-update-local-hardlink-delete-" },
@@ -1488,9 +1510,10 @@ describe("runGlobalPackageUpdateSteps", () => {
           const prefix = path.join(base, "prefix");
           const globalRoot = path.join(prefix, "lib", "node_modules");
           const packageRoot = path.join(globalRoot, "openclaw");
+          const indexPath = path.join(packageRoot, "dist", "index.js");
           const stagedCache = path.join(base, "cache", "staged");
           await writePackageRoot(packageRoot, "1.0.0");
-          await fs.rm(path.join(packageRoot, "dist", "index.js"));
+          await fs.rm(indexPath);
 
           const result = await runGlobalPackageUpdateSteps({
             installTarget: createNpmTarget(globalRoot),
@@ -1520,10 +1543,12 @@ describe("runGlobalPackageUpdateSteps", () => {
           });
 
           expect(result.failedStep).toBeNull();
-          expect(result.localOverrides?.status).toBe("applied");
-          expect(result.localOverrides?.applied).toBe(1);
-          expect(result.localOverrides?.conflicts).toEqual([]);
-          await expectPathMissing(path.join(packageRoot, "dist", "index.js"));
+          expect(result.localOverrides?.status).toBe("conflict");
+          expect(result.localOverrides?.applied).toBe(0);
+          expect(result.localOverrides?.conflicts).toEqual([
+            { path: "dist/index.js", reason: "target-hardlinked" },
+          ]);
+          await expect(fs.readFile(indexPath, "utf8")).resolves.toBe("export {};\n");
           await expect(
             fs.readFile(path.join(stagedCache, "openclaw-index.js"), "utf8"),
           ).resolves.toBe("export {};\n");
@@ -1533,7 +1558,7 @@ describe("runGlobalPackageUpdateSteps", () => {
   );
 
   it.runIf(process.platform !== "win32")(
-    "reapplies groups containing only deleted hardlinked overrides",
+    "preserves groups containing only deleted hardlinked overrides",
     async () => {
       await withTempDir(
         { prefix: "openclaw-package-update-local-hardlink-delete-group-" },
@@ -1582,11 +1607,14 @@ describe("runGlobalPackageUpdateSteps", () => {
           });
 
           expect(result.failedStep).toBeNull();
-          expect(result.localOverrides?.status).toBe("applied");
-          expect(result.localOverrides?.applied).toBe(2);
-          expect(result.localOverrides?.conflicts).toEqual([]);
-          await expectPathMissing(indexPath);
-          await expectPathMissing(aliasPath);
+          expect(result.localOverrides?.status).toBe("conflict");
+          expect(result.localOverrides?.applied).toBe(0);
+          expect(result.localOverrides?.conflicts).toEqual([
+            { path: "dist/index-alias.js", reason: "target-hardlinked" },
+            { path: "dist/index.js", reason: "target-hardlinked" },
+          ]);
+          await expect(fs.readFile(indexPath, "utf8")).resolves.toBe("export {};\n");
+          await expect(fs.readFile(aliasPath, "utf8")).resolves.toBe("export {};\n");
         },
       );
     },
@@ -1646,7 +1674,7 @@ describe("runGlobalPackageUpdateSteps", () => {
           expect(result.localOverrides?.applied).toBe(0);
           expect(result.localOverrides?.conflicts).toEqual([
             { path: "dist/index-alias.js", reason: "target-hardlinked" },
-            { path: "dist/index.js", reason: "target-changed" },
+            { path: "dist/index.js", reason: "target-hardlinked" },
           ]);
           await expect(fs.readFile(indexPath, "utf8")).resolves.toBe("export {};\n");
           await expect(fs.readFile(aliasPath, "utf8")).resolves.toBe("export {};\n");
@@ -3524,6 +3552,54 @@ describe("runGlobalPackageUpdateSteps", () => {
       });
     },
   );
+
+  it("rolls back published replacements when post-publish cleanup fails", async () => {
+    await withTempDir({ prefix: "openclaw-package-update-local-cleanup-fail-" }, async (base) => {
+      const packageRoot = path.join(base, "package");
+      const indexPath = path.join(packageRoot, "dist", "index.js");
+      await writePackageRoot(packageRoot, "1.0.0");
+      await fs.writeFile(indexPath, "export const local = true;\n", "utf8");
+
+      const plan = await captureLocalPackageOverrides({ packageRoot });
+      expect(plan).not.toBeNull();
+      await writePackageRoot(packageRoot, "2.0.0");
+
+      let cleanupFailed = false;
+      __setFsSafeTestHooksForTest({
+        beforeRootFallbackMutation: (operation, targetPath) => {
+          if (
+            !cleanupFailed &&
+            operation === "remove" &&
+            targetPath.includes(`${path.sep}.openclaw-override-previous-`)
+          ) {
+            cleanupFailed = true;
+            throw createFsError("EACCES", "post-publish cleanup failed");
+          }
+        },
+      });
+
+      try {
+        const result = await applyLocalPackageOverrides({
+          packageRoot,
+          plan,
+          reapply: true,
+        });
+
+        expect(cleanupFailed).toBe(true);
+        expect(result.status).toBe("error");
+        expect(result.applied).toBe(0);
+        expect(result.conflicts).toEqual([{ path: "dist/index.js", reason: "apply-failed" }]);
+        await expect(fs.readFile(indexPath, "utf8")).resolves.toBe("export {};\n");
+        expect(
+          (await fs.readdir(path.dirname(indexPath))).filter((entry) =>
+            entry.startsWith(".openclaw-override-"),
+          ),
+        ).toEqual([]);
+      } finally {
+        __setFsSafeTestHooksForTest(undefined);
+      }
+    });
+  });
 
   it("reports and preserves rollback data when reapply rollback is incomplete", async () => {
     await withTempDir({ prefix: "openclaw-package-update-local-rollback-fail-" }, async (base) => {
