@@ -89,6 +89,7 @@ export function finalizeInboundContext<T extends Record<string, unknown>>(
   normalized.ThreadStarterBody = normalizeTextField(normalized.ThreadStarterBody);
   normalized.ThreadHistoryBody = normalizeTextField(normalized.ThreadHistoryBody);
   normalized.GroupSystemPrompt = normalizeTrustedTextField(normalized.GroupSystemPrompt);
+  normalized.TrustedSenderPrincipal = normalizeTrustedTextField(normalized.TrustedSenderPrincipal);
   if (Array.isArray(normalized.UntrustedContext)) {
     const normalizedUntrusted = normalized.UntrustedContext.map((entry) =>
       sanitizeInboundSystemTags(normalizeInboundTextNewlines(entry)),
