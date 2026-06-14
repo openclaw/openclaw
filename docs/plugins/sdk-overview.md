@@ -181,10 +181,12 @@ The pin-from-here **mirror dispatcher** and **echo-admission** registries
 (`registerChannelMirrorDispatcher` / `registerChannelEchoAdmission` and their
 `unregister*` pairs) are **not** part of the public plugin SDK. They are global,
 last-wins registries keyed by caller-provided `(channel, accountId)` strings
-with no per-plugin ownership enforcement, so they live on the repo-local
-`openclaw/plugin-sdk/channel-outbound-internal` subpath used by in-repo channel
-extensions only (it is excluded from the public export map). They will be
-promoted to a public, owner-scoped registrar only with maintainer sign-off.
+with no per-plugin ownership enforcement, so they are kept off the public
+`channel-outbound` contract on a dedicated `openclaw/plugin-sdk/channel-outbound-internal`
+subpath. It is tracked in `plugin-sdk-deprecated-public-subpaths.json` — resolvable
+by bundled extensions but flagged as a bundled-maintenance seam, **not** a
+recommended contract for new third-party plugins. They will be promoted to a
+stable, owner-scoped public registrar only with maintainer sign-off.
 
 ### Host hooks for workflow plugins
 

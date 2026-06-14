@@ -1,7 +1,6 @@
 [
   "agent-runtime-test-contracts",
   "channel-contract-testing",
-  "channel-outbound-internal",
   "channel-target-testing",
   "channel-test-helpers",
   "codex-native-task-runtime",

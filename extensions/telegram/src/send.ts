@@ -17,14 +17,8 @@ import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { buildTypingThreadParams } from "./bot/helpers.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { splitTelegramCaption } from "./caption.js";
-import { asTelegramClientFetch, createTelegramClientFetch } from "./client-fetch.js";
 import { resolveTelegramClientOptions } from "./client-options.js";
-import { resolveTelegramTransport } from "./fetch.js";
-import {
-  renderTelegramHtmlText,
-  splitTelegramHtmlChunks,
-  telegramHtmlToPlainTextFallback,
-} from "./format.js";
+import { renderTelegramHtmlText, telegramHtmlToPlainTextFallback } from "./format.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
 import {
   isRecoverableTelegramNetworkError,
