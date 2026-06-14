@@ -54,6 +54,9 @@ const MODEL_CAPACITY_ERROR_USER_MESSAGE =
 const OVERLOADED_ERROR_USER_MESSAGE =
   "The AI service is temporarily overloaded. Please try again in a moment.";
 const TOOL_CALLS_OMITTED_PLACEHOLDER_LINE_RE = /^[ \t]*\[tool calls omitted\][ \t]*$/i;
+const TRUNCATION_SENTINEL_LINE_RE = /^[ \t]*(?:…|\.\.\.)\s*\(?truncated\)?\s*(?:…|\.\.\.)?[ \t]*$/i;
+const TRUNCATION_LIMIT_NOTICE_LINE_RE =
+  /^[ \t]*\[\.\.\.[ \t]+\d+[ \t]+more characters truncated[^\]]*\][ \t]*$/i;
 const ERROR_PREFIX_RE =
   /^(?:error|(?:[a-z][\w-]*\s+)?api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|codex\s*error|request failed|failed|exception)(?:\s+\d{3})?[:\s-]+/i;
 const CONTEXT_OVERFLOW_ERROR_HEAD_RE =
@@ -361,6 +364,22 @@ function stripToolCallsOmittedPlaceholderLines(text: string): string {
   return result;
 }
 
+function stripTruncationSentinelLines(text: string): string {
+  let result = "";
+  let start = 0;
+  while (start < text.length) {
+    const newlineIndex = text.indexOf("\n", start);
+    const end = newlineIndex === -1 ? text.length : newlineIndex + 1;
+    const chunk = text.slice(start, end);
+    const line = chunk.endsWith("\n") ? chunk.slice(0, -1).replace(/\r$/, "") : chunk;
+    if (!TRUNCATION_SENTINEL_LINE_RE.test(line) && !TRUNCATION_LIMIT_NOTICE_LINE_RE.test(line)) {
+      result += chunk;
+    }
+    start = end;
+  }
+  return result;
+}
+
 function collapseConsecutiveDuplicateBlocks(text: string): string {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -419,9 +438,10 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
   // It is internal scaffolding, so drop standalone placeholder lines before delivery
   // while preserving ordinary inline mentions a user may be discussing.
   const withoutPlaceholder = stripToolCallsOmittedPlaceholderLines(withoutToolCallXml);
+  const withoutTruncationSentinels = stripTruncationSentinelLines(withoutPlaceholder);
   const withoutInternalTraceLines = errorContext
-    ? stripAssistantInternalTraceLines(withoutPlaceholder)
-    : withoutPlaceholder;
+    ? stripAssistantInternalTraceLines(withoutTruncationSentinels)
+    : withoutTruncationSentinels;
   const withoutToolCallBlocks = stripPlainTextToolCallBlocks(
     stripLegacyBracketToolCallBlocks(withoutInternalTraceLines),
   );

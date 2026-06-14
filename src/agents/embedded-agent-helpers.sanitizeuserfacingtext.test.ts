@@ -244,6 +244,39 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText("A\n[tool calls omitted]\n[tool calls omitted]\nB")).toBe("A\nB");
   });
 
+  it("strips standalone truncation sentinel lines (Unicode ellipsis)", () => {
+    expect(sanitizeUserFacingText("…(truncated)…")).toBe("");
+    expect(sanitizeUserFacingText("Hello\n…(truncated)…\nWorld")).toBe("Hello\nWorld");
+    expect(sanitizeUserFacingText("  …(truncated)…\t")).toBe("");
+  });
+
+  it("strips standalone truncation sentinel lines (ASCII dots)", () => {
+    expect(sanitizeUserFacingText("...(truncated)...")).toBe("");
+    expect(sanitizeUserFacingText("Result\n...(truncated)...")).toBe("Result\n");
+    expect(sanitizeUserFacingText("...(truncated)...\nMore text")).toBe("More text");
+  });
+
+  it("strips truncation sentinel with space variant", () => {
+    expect(sanitizeUserFacingText("... (truncated)")).toBe("");
+    expect(sanitizeUserFacingText("Output\n... (truncated)\nExtra")).toBe("Output\nExtra");
+  });
+
+  it("strips context-limit truncation notice lines", () => {
+    expect(sanitizeUserFacingText("[... 5 more characters truncated]")).toBe("");
+    expect(
+      sanitizeUserFacingText(
+        "Text\n[... 12 more characters truncated; rerun with narrower args if needed]\nMore",
+      ),
+    ).toBe("Text\nMore");
+  });
+
+  it("preserves ordinary inline ellipsis that are not truncation sentinels", () => {
+    expect(sanitizeUserFacingText("I think... therefore I am")).toBe("I think... therefore I am");
+    expect(sanitizeUserFacingText("The text was truncated by the system")).toBe(
+      "The text was truncated by the system",
+    );
+  });
+
   it("strips legacy uppercase TOOL_CALL blocks before user-facing delivery", () => {
     const input = [
       "Before",
