@@ -69,7 +69,7 @@ function createDiscordAcpPlugin(overrides?: {
           return { conversationId, matchPriority: 2 };
         }
         if (parentConversationId && compiledBinding.conversationId === parentConversationId) {
-          return { conversationId: parentConversationId, matchPriority: 1 };
+          return { conversationId, parentConversationId, matchPriority: 1 };
         }
         return null;
       },
@@ -191,6 +191,58 @@ describe("configured binding registry", () => {
       channel: "discord",
       accountId: "default",
       conversationId: "1479098716916023408",
+    });
+
+    expect(resolved).toBeNull();
+  });
+
+  it("assigns distinct session keys to different threads under the same parent channel", () => {
+    const plugin = createDiscordAcpPlugin();
+    getChannelPluginMock.mockReturnValue(plugin);
+    const parentChannelId = "1479098716916023408";
+
+    const thread1 = bindingRegistry.resolveConfiguredBindingRecord({
+      cfg: createConfig() as never,
+      channel: "discord",
+      accountId: "default",
+      conversationId: "1111111111111111111",
+      parentConversationId: parentChannelId,
+    });
+
+    const thread2 = bindingRegistry.resolveConfiguredBindingRecord({
+      cfg: createConfig() as never,
+      channel: "discord",
+      accountId: "default",
+      conversationId: "2222222222222222222",
+      parentConversationId: parentChannelId,
+    });
+
+    expect(thread1?.record.targetSessionKey).not.toBe(thread2?.record.targetSessionKey);
+    expect(thread1?.record.conversation).toMatchObject({
+      conversationId: "1111111111111111111",
+      parentConversationId: parentChannelId,
+    });
+    expect(thread2?.record.conversation).toMatchObject({
+      conversationId: "2222222222222222222",
+      parentConversationId: parentChannelId,
+    });
+  });
+
+  it("returns null for per-thread session keys via reverse lookup", () => {
+    const plugin = createDiscordAcpPlugin();
+    getChannelPluginMock.mockReturnValue(plugin);
+    const threadSessionKey = buildConfiguredAcpSessionKey({
+      channel: "discord",
+      accountId: "default",
+      conversationId: "1111111111111111111",
+      agentId: "codex",
+      mode: "persistent",
+      backend: "acpx",
+    });
+
+    const resolved = bindingRegistry.resolveConfiguredBindingRecordBySessionKey({
+      cfg: createConfig() as never,
+      sessionKey: threadSessionKey,
     });
 
     expect(resolved).toBeNull();
