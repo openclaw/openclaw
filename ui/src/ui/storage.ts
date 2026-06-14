@@ -383,7 +383,14 @@ export function saveLocalAssistantIdentity(next: LocalAssistantIdentity, agentId
   const key = localAssistantIdentityKey(agentId);
   try {
     if (!next.avatar) {
-      storage?.removeItem(key);
+      // When clearing a scoped agent avatar, store null explicitly to prevent
+      // fallback to the global key. Only remove the key entirely for the global
+      // (no agentId) case to preserve backward compatibility.
+      if (agentId) {
+        storage?.setItem(key, JSON.stringify({ avatar: null }));
+      } else {
+        storage?.removeItem(key);
+      }
       return;
     }
     storage?.setItem(key, JSON.stringify({ avatar: next.avatar }));
