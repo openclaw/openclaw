@@ -98,6 +98,7 @@ export function scanEmptyAllowlistPolicyWarnings(
     // warning if every enabled account has its own populated allowlist.
     // This preserves DM warnings and channel extra-warning hooks.
     if (hasAccounts) {
+      // Check if every enabled account has its own groupAllowFrom or allowFrom
       const allAccountsCovered = Object.values(accounts).every((account) => {
         if (!account || typeof account !== "object") {
           return false;
@@ -114,6 +115,19 @@ export function scanEmptyAllowlistPolicyWarnings(
         return hasGroupAllowFrom || hasAllowFrom;
       });
 
+      // Check if there's an implicit default account (e.g. Telegram with botToken/tokenFile)
+      // that is not explicitly listed in accounts
+      const hasImplicitDefaultAccount =
+        channelName === "telegram" &&
+        (channelConfig.botToken || channelConfig.tokenFile || channelConfig.token);
+      const hasExplicitDefaultAccount = accounts.default !== undefined;
+
+      // Only skip the groupAllowFrom warning if:
+      // 1. All explicit accounts are covered, AND
+      // 2. There's no implicit default account that isn't covered
+      const shouldSkipGroupWarning =
+        allAccountsCovered && !(hasImplicitDefaultAccount && !hasExplicitDefaultAccount);
+
       // Always check the top-level config (preserves DM warnings and hooks)
       // but pass a flag to skip the groupAllowFrom warning if covered
       checkAccount(
@@ -121,7 +135,7 @@ export function scanEmptyAllowlistPolicyWarnings(
         `channels.${channelName}`,
         channelName,
         undefined,
-        allAccountsCovered,
+        shouldSkipGroupWarning,
       );
     } else {
       checkAccount(channelConfig, `channels.${channelName}`, channelName);
