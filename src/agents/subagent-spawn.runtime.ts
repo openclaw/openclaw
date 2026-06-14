@@ -8,7 +8,12 @@ export {
   DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
 } from "../config/agent-limits.js";
 export { getRuntimeConfig } from "../config/config.js";
-export { loadSessionStore, mergeSessionEntry, updateSessionStore } from "../config/sessions.js";
+export {
+  loadSessionStore,
+  mergeSessionEntry,
+  resolveStorePath,
+  updateSessionStore,
+} from "../config/sessions.js";
 export {
   forkSessionFromParent,
   resolveParentForkDecision,
@@ -30,6 +35,7 @@ export {
 export { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 export { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 export {
+  deliveryContextFromSession,
   mergeDeliveryContext,
   normalizeDeliveryContext,
 } from "../utils/delivery-context.shared.js";
