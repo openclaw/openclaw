@@ -96,6 +96,7 @@ type CodexConversationStartParams = {
   workspaceDir?: string;
   agentDir?: string;
   sessionKey?: string;
+  agentId?: string;
   threadId?: string;
   model?: string;
   modelProvider?: string;
@@ -215,6 +216,7 @@ export async function startCodexConversationThread(
     sessionFile: params.sessionFile,
     workspaceDir,
     ...(agentDir ? { agentDir } : {}),
+    agentId: params.agentId,
   });
 }
 
@@ -244,6 +246,7 @@ export async function handleCodexConversationInboundClaim(
       : resolveCodexNativeExecutionBlock({
           config: options.config,
           sessionKey: event.sessionKey ?? ctx.sessionKey,
+          agentId: data.agentId,
           surface: "Codex app-server conversation binding",
         });
   if (nativeExecutionBlock) {

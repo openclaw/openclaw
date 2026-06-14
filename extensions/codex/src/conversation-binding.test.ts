@@ -568,6 +568,59 @@ describe("codex conversation binding", () => {
     expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
   });
 
+  it("blocks bound Codex app-server turns when the binding agent uses node exec without a session key", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({ schemaVersion: 1, threadId: "thread-1", cwd: tempDir }),
+    );
+
+    const result = await handleCodexConversationInboundClaim(
+      {
+        content: "continue the task",
+        channel: "discord",
+        isGroup: true,
+        commandAuthorized: true,
+      },
+      {
+        channelId: "discord",
+        pluginBinding: {
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: tempDir,
+          channel: "discord",
+          accountId: "default",
+          conversationId: "channel-1",
+          boundAt: Date.now(),
+          data: {
+            kind: "codex-app-server-session",
+            version: 1,
+            sessionFile,
+            workspaceDir: tempDir,
+            agentId: "bot-a",
+          },
+        },
+      },
+      {
+        config: {
+          tools: { exec: { host: "gateway" } },
+          agents: {
+            list: [
+              {
+                id: "bot-a",
+                tools: { exec: { host: "node", node: "worker-1" } },
+              },
+            ],
+          },
+        } as never,
+      },
+    );
+
+    expect(result?.handled).toBe(true);
+    expect(result?.reply?.text).toContain("OpenClaw exec host=node is active");
+    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
+  });
+
   it("blocks bound Codex CLI node turns when the current OpenClaw session is sandboxed", async () => {
     const resumeCodexCliSessionOnNode = vi.fn();
 
