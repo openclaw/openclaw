@@ -968,6 +968,62 @@ describe("Integration: saveSessionStore with pruning", () => {
     expect(loaded).toHaveProperty("session-50");
   });
 
+  it("saveSessionStore skips preserve providers below the entry maintenance high-water mark", async () => {
+    const now = Date.now();
+    const preserveProvider = vi.fn(() => ["protected-session"]);
+    const unregister = registerSessionMaintenancePreserveKeysProvider(preserveProvider);
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "365d",
+          maxEntries: 500,
+        },
+      },
+    });
+
+    try {
+      await saveSessionStore(storePath, {
+        "session-1": makeEntry(now),
+        "session-2": makeEntry(now - 1),
+      });
+
+      expect(preserveProvider).not.toHaveBeenCalled();
+      const loaded = loadSessionStore(storePath, { skipCache: true });
+      expect(Object.keys(loaded)).toHaveLength(2);
+    } finally {
+      unregister();
+    }
+  });
+
+  it("saveSessionStore calls preserve providers when entry maintenance runs", async () => {
+    const now = Date.now();
+    const preserveProvider = vi.fn(() => ["session-0"]);
+    const unregister = registerSessionMaintenancePreserveKeysProvider(preserveProvider);
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "365d",
+          maxEntries: 1,
+        },
+      },
+    });
+
+    try {
+      await saveSessionStore(storePath, {
+        "session-0": makeEntry(now),
+        "session-1": makeEntry(now - 1),
+      });
+
+      expect(preserveProvider).toHaveBeenCalledTimes(1);
+      const loaded = loadSessionStore(storePath, { skipCache: true });
+      expect(loaded).toHaveProperty("session-0");
+    } finally {
+      unregister();
+    }
+  });
+
   it("loadSessionStore honors configured maxEntries without an explicit override", async () => {
     mockLoadConfig.mockReturnValue({
       session: {

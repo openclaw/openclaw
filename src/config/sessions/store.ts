@@ -505,6 +505,16 @@ function sessionEntriesHaveSameSerializedForm(
   return previous !== undefined && JSON.stringify(previous) === JSON.stringify(next);
 }
 
+function hasStaleSessionEntry(
+  store: Record<string, SessionEntry>,
+  maxAgeMs: number,
+): boolean {
+  const cutoffMs = Date.now() - maxAgeMs;
+  return Object.values(store).some(
+    (entry) => entry?.updatedAt != null && entry.updatedAt < cutoffMs,
+  );
+}
+
 async function saveSessionStoreUnlocked(
   storePath: string,
   store: Record<string, SessionEntry>,
@@ -564,15 +574,25 @@ async function saveSessionStoreUnlocked(
         diskBudget,
       });
     } else {
-      const preserveSessionKeys = collectSessionMaintenancePreserveKeys([opts?.activeSessionKey]);
+      let preserveSessionKeys: Set<string> | undefined;
+      const getPreserveSessionKeys = () => {
+        preserveSessionKeys ??= collectSessionMaintenancePreserveKeys([opts?.activeSessionKey]);
+        return preserveSessionKeys;
+      };
       // Prune stale entries and cap total count before serializing.
       const removedSessionFiles = new Map<string, string | undefined>();
-      const pruned = pruneStaleEntries(store, maintenance.pruneAfterMs, {
-        onPruned: ({ entry }) => {
-          rememberRemovedSessionFile(removedSessionFiles, entry);
-        },
-        preserveKeys: preserveSessionKeys,
-      });
+      const shouldRunPruneMaintenance =
+        forceMaintenance ||
+        shouldRunEntryMaintenance ||
+        hasStaleSessionEntry(store, maintenance.pruneAfterMs);
+      const pruned = shouldRunPruneMaintenance
+        ? pruneStaleEntries(store, maintenance.pruneAfterMs, {
+            onPruned: ({ entry }) => {
+              rememberRemovedSessionFile(removedSessionFiles, entry);
+            },
+            preserveKeys: getPreserveSessionKeys(),
+          })
+        : 0;
       const countAfterPrune = Object.keys(store).length;
       const shouldRunCapMaintenance =
         forceMaintenance ||
@@ -585,7 +605,7 @@ async function saveSessionStoreUnlocked(
             onCapped: ({ entry }) => {
               rememberRemovedSessionFile(removedSessionFiles, entry);
             },
-            preserveKeys: preserveSessionKeys,
+            preserveKeys: getPreserveSessionKeys(),
           })
         : 0;
       const archivedDirs = new Set<string>();
@@ -636,7 +656,7 @@ async function saveSessionStoreUnlocked(
         store,
         storePath,
         activeSessionKey: opts?.activeSessionKey,
-        preserveKeys: preserveSessionKeys,
+        preserveKeys: maintenance.maxDiskBytes != null ? getPreserveSessionKeys() : undefined,
         maintenance,
         warnOnly: false,
         log,
