@@ -163,7 +163,7 @@ describe("parseCliProfileArgs", () => {
     ]);
   });
 
-  it("preserves arbitrary qa run --profile values for the command parser", () => {
+  it("parses arbitrary qa run --profile values as root profiles", () => {
     const res = parseCliProfileArgs([
       "node",
       "openclaw",
@@ -177,20 +177,11 @@ describe("parseCliProfileArgs", () => {
     if (!res.ok) {
       throw new Error(res.error);
     }
-    expect(res.profile).toBeNull();
-    expect(res.argv).toEqual([
-      "node",
-      "openclaw",
-      "qa",
-      "run",
-      "--profile",
-      "work",
-      "--output",
-      "qa-report.md",
-    ]);
+    expect(res.profile).toBe("work");
+    expect(res.argv).toEqual(["node", "openclaw", "qa", "run", "--output", "qa-report.md"]);
   });
 
-  it("preserves arbitrary qa run --profile= values for the command parser", () => {
+  it("parses arbitrary qa run --profile= values as root profiles", () => {
     const res = parseCliProfileArgs([
       "node",
       "openclaw",
@@ -203,16 +194,8 @@ describe("parseCliProfileArgs", () => {
     if (!res.ok) {
       throw new Error(res.error);
     }
-    expect(res.profile).toBeNull();
-    expect(res.argv).toEqual([
-      "node",
-      "openclaw",
-      "qa",
-      "run",
-      "--profile=work",
-      "--output",
-      "qa-report.md",
-    ]);
+    expect(res.profile).toBe("work");
+    expect(res.argv).toEqual(["node", "openclaw", "qa", "run", "--output", "qa-report.md"]);
   });
 
   it("still parses root --profile before qa run", () => {

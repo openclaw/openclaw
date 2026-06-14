@@ -5,7 +5,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { isValueToken } from "../infra/cli-root-options.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import { isValidProfileName } from "./profile-utils.js";
@@ -16,7 +15,11 @@ type CliProfileParseResult =
   | { ok: true; profile: string | null; argv: string[] }
   | { ok: false; error: string };
 
-function isCommandLocalProfileOption(out: string[]): boolean {
+// `qa run --profile` reuses the root flag spelling only for these taxonomy profiles.
+// Other values remain root OpenClaw profiles so existing self-check invocations keep working.
+const QA_RUN_PROFILE_IDS = new Set(["smoke-ci", "release"]);
+
+function isCommandLocalProfileOption(out: string[], value: string | null | undefined): boolean {
   const [primary, secondary] = resolveCliArgvInvocation(out).commandPath;
   if (primary !== "qa") {
     return false;
@@ -24,7 +27,7 @@ function isCommandLocalProfileOption(out: string[]): boolean {
   if (secondary === "matrix") {
     return true;
   }
-  return secondary === "run";
+  return secondary === "run" && typeof value === "string" && QA_RUN_PROFILE_IDS.has(value);
 }
 
 export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
@@ -47,19 +50,18 @@ export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
     }
 
     if (arg === "--profile" || arg.startsWith("--profile=")) {
-      if (isCommandLocalProfileOption(out)) {
+      const next = args[index + 1];
+      const { value, consumedNext } = takeCliRootOptionValue(arg, next);
+      if (isCommandLocalProfileOption(out, value)) {
         out.push(arg);
-        if (arg === "--profile" && isValueToken(args[index + 1])) {
-          out.push(args[index + 1]);
-          return { kind: "handled", consumedNext: true };
+        if (consumedNext) {
+          out.push(next);
         }
-        return { kind: "handled" };
+        return { kind: "handled", consumedNext };
       }
       if (sawDev) {
         return { kind: "error", error: "Cannot combine --dev with --profile" };
       }
-      const next = args[index + 1];
-      const { value, consumedNext } = takeCliRootOptionValue(arg, next);
       if (!value) {
         return { kind: "error", error: "--profile requires a value" };
       }
