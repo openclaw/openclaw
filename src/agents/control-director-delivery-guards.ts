@@ -1,5 +1,7 @@
 import type {
   SessionControlDirectorGuardAuditEntry,
+  SessionControlDirectorJudgeCompletionApproval,
+  SessionControlDirectorJudgeCompletionGate,
   SessionControlDirectorLivenessAuditEntry,
   SessionControlDirectorMissionLedgerEntry,
   SessionEntry,
@@ -10,6 +12,7 @@ import { enqueueSystemEvent } from "../infra/system-events.js";
 import { persistSessionEntry as persistSessionEntryBase } from "./command/attempt-execution.shared.js";
 import {
   applyControlDirectorFinalOutputGuard,
+  applyControlDirectorJudgeCompletionGate,
   applyControlDirectorLivenessWatchdog,
   isControlDirectorAgentId,
   summarizeControlDirectorMissionFinalText,
@@ -17,6 +20,8 @@ import {
   type ControlDirectorFinalOutputGuardAudit,
   type ControlDirectorFinalOutputGuardResult,
   type ControlDirectorGuardablePayload,
+  type ControlDirectorJudgeCompletionApproval,
+  type ControlDirectorJudgeCompletionGateResult,
   type ControlDirectorLivenessWatchdogAudit,
   type ControlDirectorLivenessWatchdogResult,
   type ControlDirectorMissionSummary,
@@ -44,6 +49,7 @@ export type ControlDirectorDeliveryGuardResult<T extends ControlDirectorGuardabl
   continuationQueued: boolean;
   guardActions: string[];
   watchdogActions: string[];
+  judgeCompletionGate?: SessionControlDirectorJudgeCompletionGate;
 };
 
 function buildSessionControlDirectorGuardAuditEntry(params: {
@@ -219,6 +225,8 @@ function buildSessionControlDirectorMissionLedgerEntry(params: {
   summary: ControlDirectorMissionSummary;
   continuationCount: number;
   continuationQueued: boolean;
+  judgeCompletionApproval?: SessionControlDirectorJudgeCompletionApproval | undefined;
+  judgeCompletionGate?: SessionControlDirectorJudgeCompletionGate | undefined;
   guardActions: string[];
   watchdogActions: string[];
   existing?: SessionControlDirectorMissionLedgerEntry | undefined;
@@ -243,6 +251,10 @@ function buildSessionControlDirectorMissionLedgerEntry(params: {
     ...(params.summary.criticality !== undefined
       ? { criticality: params.summary.criticality }
       : {}),
+    ...(params.judgeCompletionApproval
+      ? { judgeCompletionApproval: params.judgeCompletionApproval }
+      : {}),
+    ...(params.judgeCompletionGate ? { judgeCompletionGate: params.judgeCompletionGate } : {}),
     ...(params.guardActions.length > 0 ? { guardActions: params.guardActions } : {}),
     ...(params.watchdogActions.length > 0 ? { watchdogActions: params.watchdogActions } : {}),
   };
@@ -255,6 +267,8 @@ async function recordControlDirectorMissionLedger(
     summary: ControlDirectorMissionSummary;
     continuationCount: number;
     continuationQueued: boolean;
+    judgeCompletionApproval?: SessionControlDirectorJudgeCompletionApproval | undefined;
+    judgeCompletionGate?: SessionControlDirectorJudgeCompletionGate | undefined;
     guardActions: string[];
     watchdogActions: string[];
   },
@@ -276,6 +290,8 @@ async function recordControlDirectorMissionLedger(
     summary: params.summary,
     continuationCount: params.continuationCount,
     continuationQueued: params.continuationQueued,
+    judgeCompletionApproval: params.judgeCompletionApproval,
+    judgeCompletionGate: params.judgeCompletionGate,
     guardActions: params.guardActions,
     watchdogActions: params.watchdogActions,
     existing,
@@ -289,6 +305,9 @@ async function recordControlDirectorMissionLedger(
   const next: SessionEntry = {
     ...entry,
     controlDirectorMissionLedger: nextLedger,
+    ...(params.judgeCompletionApproval
+      ? { controlDirectorJudgeCompletionApproval: params.judgeCompletionApproval }
+      : {}),
     updatedAt: ledgerEntry.updatedAt,
   };
   await persistControlDirectorSessionEntry({
@@ -306,6 +325,72 @@ async function recordControlDirectorMissionLedger(
     });
   }
   return next;
+}
+
+function toSessionJudgeCompletionApproval(
+  approval: ControlDirectorJudgeCompletionApproval | undefined | null,
+): SessionControlDirectorJudgeCompletionApproval | undefined {
+  if (!approval) {
+    return undefined;
+  }
+  return {
+    judgeStatus: approval.judgeStatus,
+    ...(approval.judgeVerdict ? { judgeVerdict: approval.judgeVerdict } : {}),
+    ...(approval.judgeRunId ? { judgeRunId: approval.judgeRunId } : {}),
+    missionId: approval.missionId,
+    ...(approval.approvedClaimHash ? { approvedClaimHash: approval.approvedClaimHash } : {}),
+    ...(approval.evidenceSummary ? { evidenceSummary: approval.evidenceSummary } : {}),
+    ...(approval.scope ? { scope: approval.scope } : {}),
+    ...(approval.approvedAt ? { approvedAt: approval.approvedAt } : {}),
+    ...(approval.missingAcceptanceCriteria?.length
+      ? { missingAcceptanceCriteria: approval.missingAcceptanceCriteria }
+      : {}),
+  };
+}
+
+function resolveControlDirectorJudgeCompletionApproval(params: {
+  explicit?: ControlDirectorJudgeCompletionApproval | undefined;
+  sessionEntry?: SessionEntry | undefined;
+  missionSeed?: { existing?: SessionControlDirectorMissionLedgerEntry | undefined } | undefined;
+  missionId: string;
+}): ControlDirectorJudgeCompletionApproval | undefined {
+  const candidates = [
+    params.explicit,
+    params.sessionEntry?.controlDirectorJudgeCompletionApproval,
+    params.missionSeed?.existing?.judgeCompletionApproval,
+  ];
+  return candidates.find((candidate): candidate is ControlDirectorJudgeCompletionApproval =>
+    Boolean(candidate && candidate.missionId === params.missionId),
+  );
+}
+
+function summarizeJudgeCompletionGate(params: {
+  gate: ControlDirectorJudgeCompletionGateResult<ControlDirectorGuardablePayload>;
+  originalComplete: boolean;
+}): SessionControlDirectorJudgeCompletionGate {
+  if (!params.originalComplete) {
+    return {
+      status: "not_required",
+      reason: "Final Control Director status was not complete.",
+    };
+  }
+  if (!params.gate.audit) {
+    return {
+      status: "approved",
+      reason: "Judge approved this exact mission completion claim.",
+      ...(params.gate.expectedClaimHash
+        ? { expectedClaimHash: params.gate.expectedClaimHash }
+        : {}),
+      ...(params.gate.approval?.judgeRunId ? { judgeRunId: params.gate.approval.judgeRunId } : {}),
+    };
+  }
+  return {
+    status: "blocked",
+    reason: "Judge approval is missing or invalid for this exact mission completion claim.",
+    ...(params.gate.expectedClaimHash ? { expectedClaimHash: params.gate.expectedClaimHash } : {}),
+    ...(params.gate.approval?.judgeRunId ? { judgeRunId: params.gate.approval.judgeRunId } : {}),
+    missing: params.gate.audit.missing,
+  };
 }
 
 function queueControlDirectorContinuation(params: {
@@ -345,6 +430,7 @@ export async function applyControlDirectorDeliveryGuards<T extends ControlDirect
     externalAbort?: boolean | undefined;
     safeToContinue?: boolean | undefined;
     queueContinuation?: boolean | undefined;
+    judgeCompletionApproval?: ControlDirectorJudgeCompletionApproval | undefined;
   },
 ): Promise<ControlDirectorDeliveryGuardResult<T>> {
   const agentId = params.agentId ?? undefined;
@@ -446,9 +532,39 @@ export async function applyControlDirectorDeliveryGuards<T extends ControlDirect
     }
   }
 
-  const finalPayloads = shouldApplyLivenessBeforeFinalGuard
+  let finalPayloads = shouldApplyLivenessBeforeFinalGuard
     ? controlDirectorGuardedFinalOutput.payloads
     : livenessGuardedFinalOutput.payloads;
+  const judgeApproval = resolveControlDirectorJudgeCompletionApproval({
+    explicit: params.judgeCompletionApproval,
+    sessionEntry,
+    missionSeed,
+    missionId: missionSeed.missionId,
+  });
+  const finalPayloadTextBeforeJudge = collectControlDirectorPayloadText(finalPayloads);
+  const originalCompleteBeforeJudge =
+    summarizeControlDirectorMissionFinalText(finalPayloadTextBeforeJudge).finalStatus ===
+    "complete";
+  const judgeCompletionGate = applyControlDirectorJudgeCompletionGate({
+    agentId,
+    payloads: finalPayloads,
+    missionId: missionSeed.missionId,
+    requestBody: params.requestBody,
+    approval: judgeApproval,
+  });
+  finalPayloads = judgeCompletionGate.payloads;
+  if (judgeCompletionGate.audit) {
+    sessionEntry =
+      (await recordControlDirectorGuardAudit({
+        audit: judgeCompletionGate.audit,
+        runId: params.runId,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        sessionEntry,
+        sessionStore: params.sessionStore,
+        storePath: params.storePath,
+      })) ?? sessionEntry;
+  }
   const continuationQueued =
     params.queueContinuation === false || !agentId
       ? false
@@ -459,12 +575,22 @@ export async function applyControlDirectorDeliveryGuards<T extends ControlDirect
           missionId: missionSeed.missionId,
         });
   const finalPayloadText = collectControlDirectorPayloadText(finalPayloads);
-  const guardActions = controlDirectorGuardedFinalOutput.audit
-    ? [controlDirectorGuardedFinalOutput.audit.action]
-    : [];
+  const guardActions = [
+    ...(controlDirectorGuardedFinalOutput.audit
+      ? [controlDirectorGuardedFinalOutput.audit.action]
+      : []),
+    ...(judgeCompletionGate.audit ? [judgeCompletionGate.audit.action] : []),
+  ];
   const watchdogActions = livenessGuardedFinalOutput.audit
     ? [`${livenessGuardedFinalOutput.audit.action}${continuationQueued ? ":queued" : ""}`]
     : [];
+  const judgeGateSummary =
+    isControlDirectorAgentId(agentId) && finalPayloadText
+      ? summarizeJudgeCompletionGate({
+          gate: judgeCompletionGate,
+          originalComplete: originalCompleteBeforeJudge,
+        })
+      : undefined;
   if (isControlDirectorAgentId(agentId) && finalPayloadText) {
     sessionEntry =
       (await recordControlDirectorMissionLedger({
@@ -481,6 +607,8 @@ export async function applyControlDirectorDeliveryGuards<T extends ControlDirect
           ? livenessGuardedFinalOutput.continuation.nextContinuationCount
           : missionSeed.continuationCount,
         continuationQueued: livenessGuardedFinalOutput.continuation.shouldQueue,
+        judgeCompletionApproval: toSessionJudgeCompletionApproval(judgeCompletionGate.approval),
+        judgeCompletionGate: judgeGateSummary,
         guardActions,
         watchdogActions,
       })) ?? sessionEntry;
@@ -494,5 +622,6 @@ export async function applyControlDirectorDeliveryGuards<T extends ControlDirect
     continuationQueued,
     guardActions,
     watchdogActions,
+    ...(judgeGateSummary ? { judgeCompletionGate: judgeGateSummary } : {}),
   };
 }

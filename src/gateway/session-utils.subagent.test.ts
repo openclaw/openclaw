@@ -140,9 +140,26 @@ describe("listSessionsFromStore subagent metadata", () => {
             nextBuildGap: "queued continuation must verify evidence",
             completionGrade: 7,
             criticality: 10,
+            judgeCompletionGate: {
+              status: "blocked",
+              reason:
+                "Judge approval is missing or invalid for this exact mission completion claim.",
+              expectedClaimHash: "claim-hash-1",
+              missing: ["Judge approval metadata"],
+            },
             watchdogActions: ["queued_safe_continuation:queued"],
           },
         ],
+        controlDirectorJudgeCompletionApproval: {
+          judgeStatus: "approved",
+          judgeVerdict: "APPROVE",
+          judgeRunId: "judge-run-1",
+          missionId: "control-director:run-control-director-liveness",
+          approvedClaimHash: "claim-hash-1",
+          evidenceSummary: "verified remote proof",
+          scope: "Control Director completion",
+          approvedAt: 123,
+        },
       } as SessionEntry,
     });
 
@@ -158,8 +175,20 @@ describe("listSessionsFromStore subagent metadata", () => {
         missionId: "control-director:run-control-director-liveness",
         status: "continuation_queued",
         continuationCount: 1,
+        judgeCompletionGate: expect.objectContaining({
+          status: "blocked",
+          expectedClaimHash: "claim-hash-1",
+        }),
       }),
     ]);
+    expect(row.controlDirectorJudgeCompletionApproval).toEqual(
+      expect.objectContaining({
+        judgeStatus: "approved",
+        judgeVerdict: "APPROVE",
+        judgeRunId: "judge-run-1",
+        approvedClaimHash: "claim-hash-1",
+      }),
+    );
   });
 
   test("searches channel-derived display names before row enrichment", () => {

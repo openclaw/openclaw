@@ -186,6 +186,25 @@ function detectControlDirectorRuntimeFinalOutputGuard() {
   }
 }
 
+function detectControlDirectorJudgeCompletionGate() {
+  try {
+    const contractSource = fs.readFileSync(CONTROL_DIRECTOR_CONTRACT_SOURCE, "utf8");
+    const deliveryGuardSource = fs.readFileSync(
+      path.join(REPO_ROOT, "src/agents/control-director-delivery-guards.ts"),
+      "utf8",
+    );
+    return (
+      contractSource.includes("applyControlDirectorJudgeCompletionGate") &&
+      contractSource.includes("buildControlDirectorJudgeClaimHash") &&
+      contractSource.includes("blocked_missing_judge_approval") &&
+      deliveryGuardSource.includes("applyControlDirectorJudgeCompletionGate") &&
+      deliveryGuardSource.includes("judgeCompletionGate")
+    );
+  } catch {
+    return false;
+  }
+}
+
 function readOllamaEnvFromLaunchctl() {
   const uid = typeof process.getuid === "function" ? process.getuid() : null;
   if (uid === null) {
@@ -341,6 +360,14 @@ export function buildControlDirectorReadinessScorecard(params) {
       "runtime-final-output-guard",
       "Control Director runtime final-output guard is wired",
       params.runtimeFinalOutputGuard === true,
+      true,
+    ),
+  );
+  facts.push(
+    fact(
+      "runtime-judge-completion-gate",
+      "Control Director runtime Judge-approved completion gate is wired",
+      params.runtimeJudgeCompletionGate === true,
       true,
     ),
   );
@@ -543,6 +570,7 @@ export async function main(argv = process.argv.slice(2)) {
     completionEvidencePolicy: detectControlDirectorCompletionEvidencePolicy(),
     explicitStatusPolicy: detectControlDirectorExplicitStatusPolicy(),
     runtimeFinalOutputGuard: detectControlDirectorRuntimeFinalOutputGuard(),
+    runtimeJudgeCompletionGate: detectControlDirectorJudgeCompletionGate(),
   });
   if (args.json) {
     console.log(JSON.stringify(scorecard, null, 2));

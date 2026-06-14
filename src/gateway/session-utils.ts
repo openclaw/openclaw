@@ -1950,6 +1950,7 @@ export function buildGatewaySessionRow(params: {
     controlDirectorGuardAudit: entry?.controlDirectorGuardAudit,
     controlDirectorLivenessAudit: entry?.controlDirectorLivenessAudit,
     controlDirectorMissionLedger: entry?.controlDirectorMissionLedger,
+    controlDirectorJudgeCompletionApproval: entry?.controlDirectorJudgeCompletionApproval,
     pluginExtensions: pluginExtensions.length > 0 ? pluginExtensions : undefined,
   };
 }

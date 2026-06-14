@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   applyControlDirectorFinalOutputGuard,
+  applyControlDirectorJudgeCompletionGate,
   applyControlDirectorLivenessWatchdog,
+  buildControlDirectorJudgeClaimHash,
   buildControlDirectorSystemPromptSection,
   decideControlDirectorContinuation,
   evaluateControlDirectorResponse,
@@ -16,6 +18,7 @@ describe("Control Director contract", () => {
     expect(section).toContain("Control Director Operating Contract");
     expect(section).toContain("numeric `/10` values");
     expect(section).toContain("exact response format");
+    expect(section).toContain("requires Judge approval");
     expect(buildControlDirectorSystemPromptSection("builder")).toEqual([]);
   });
 
@@ -164,6 +167,152 @@ describe("Control Director contract", () => {
     });
 
     expect(guarded).toEqual({ payloads: [{ text }], changed: false });
+  });
+
+  it("blocks Control Director complete reports without Judge approval", () => {
+    const text = [
+      "Completion Grade: 10/10",
+      "Criticality: 10/10",
+      "Verified evidence: pnpm build passed and smoke returned status=200.",
+      "Next build gap: No critical Control Director gap detected.",
+      "Status: complete",
+    ].join("\n");
+
+    const guarded = applyControlDirectorJudgeCompletionGate({
+      agentId: "main",
+      payloads: [{ text }],
+      missionId: "control-director:run-judge-required",
+      requestBody: "Ship it.",
+    });
+
+    expect(guarded.changed).toBe(true);
+    expect(guarded.audit).toMatchObject({
+      action: "blocked_missing_judge_approval",
+      originalStatus: "complete",
+      nextStatus: "blocked",
+      missing: ["Judge approval metadata"],
+      payloadsChecked: 1,
+      payloadsRewritten: 1,
+    });
+    expect(guarded.payloads[0]?.text).toContain("Judge completion gate blocked");
+    expect(guarded.payloads[0]?.text).toContain("Verified state: completion was not delivered");
+    expect(guarded.payloads[0]?.text).toContain("Status: blocked");
+  });
+
+  it("allows Control Director complete reports with matching Judge approval", () => {
+    const missionId = "control-director:run-judge-approved";
+    const requestBody = "Complete the implementation.";
+    const text = [
+      "Completion Grade: 10/10",
+      "Criticality: 10/10",
+      "Verified evidence: pnpm check:changed passed and remote proof passed.",
+      "Next build gap: none.",
+      "Status: complete",
+    ].join("\n");
+    const evidenceSummary = summarizeControlDirectorMissionFinalText(text).verifiedEvidenceSummary;
+    const approvedClaimHash = buildControlDirectorJudgeClaimHash({
+      missionId,
+      requestBody,
+      finalText: text,
+      evidenceSummary,
+    });
+
+    const guarded = applyControlDirectorJudgeCompletionGate({
+      agentId: "main",
+      payloads: [{ text }],
+      missionId,
+      requestBody,
+      approval: {
+        judgeStatus: "approved",
+        judgeVerdict: "APPROVE",
+        judgeRunId: "judge-run-1",
+        missionId,
+        approvedClaimHash,
+        evidenceSummary,
+        scope: "Control Director completion for run-judge-approved",
+        approvedAt: 123,
+      },
+    });
+
+    expect(guarded).toEqual({
+      payloads: [{ text }],
+      changed: false,
+      expectedClaimHash: approvedClaimHash,
+      approval: expect.objectContaining({
+        judgeStatus: "approved",
+        judgeVerdict: "APPROVE",
+        judgeRunId: "judge-run-1",
+      }),
+    });
+  });
+
+  it("blocks stale, rejected, or incomplete Judge approvals", () => {
+    const text = [
+      "Completion Grade: 10/10",
+      "Criticality: 10/10",
+      "Verified evidence: local proof passed.",
+      "Next build gap: none.",
+      "Status: complete",
+    ].join("\n");
+
+    const guarded = applyControlDirectorJudgeCompletionGate({
+      agentId: "main",
+      payloads: [{ text }],
+      missionId: "control-director:current",
+      requestBody: "Finish this.",
+      approval: {
+        judgeStatus: "rejected",
+        judgeVerdict: "REQUEST_MORE_EVIDENCE",
+        judgeRunId: "judge-run-old",
+        missionId: "control-director:previous",
+        approvedClaimHash: "stale",
+        evidenceSummary: "",
+        scope: "",
+        approvedAt: 0,
+        missingAcceptanceCriteria: ["remote proof"],
+      },
+    });
+
+    expect(guarded.changed).toBe(true);
+    expect(guarded.audit).toMatchObject({
+      action: "blocked_invalid_judge_approval",
+      originalStatus: "complete",
+      nextStatus: "blocked",
+    });
+    expect(guarded.audit?.missing).toEqual(
+      expect.arrayContaining([
+        "Judge status approved (actual: rejected)",
+        "Judge verdict APPROVE (actual: REQUEST_MORE_EVIDENCE)",
+        "matching mission id",
+        "matching approved claim hash",
+        "Judge evidence summary",
+        "Judge approval scope",
+        "Judge approval timestamp",
+        "zero missing acceptance criteria (remote proof)",
+      ]),
+    );
+  });
+
+  it("does not require Judge approval for non-Control-Director agents or blocked reports", () => {
+    const completePayloads = [{ text: "Status: complete" }];
+    expect(
+      applyControlDirectorJudgeCompletionGate({
+        agentId: "builder",
+        payloads: completePayloads,
+        missionId: "builder:run",
+        requestBody: "done",
+      }),
+    ).toEqual({ payloads: completePayloads, changed: false });
+
+    const blockedPayloads = [{ text: "Verified state: blocked.\nStatus: blocked" }];
+    expect(
+      applyControlDirectorJudgeCompletionGate({
+        agentId: "main",
+        payloads: blockedPayloads,
+        missionId: "control-director:blocked",
+        requestBody: "done",
+      }),
+    ).toEqual({ payloads: blockedPayloads, changed: false, approval: undefined });
   });
 
   it("repairs missing Control Director report fields without changing truthful blocked status", () => {

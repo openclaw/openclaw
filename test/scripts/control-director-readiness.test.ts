@@ -74,6 +74,7 @@ describe("control-director-readiness", () => {
       completionEvidencePolicy: true,
       explicitStatusPolicy: true,
       runtimeFinalOutputGuard: true,
+      runtimeJudgeCompletionGate: true,
     });
 
     expect(scorecard.productionReady).toBe(true);
@@ -100,6 +101,7 @@ describe("control-director-readiness", () => {
       completionEvidencePolicy: true,
       explicitStatusPolicy: true,
       runtimeFinalOutputGuard: true,
+      runtimeJudgeCompletionGate: true,
     });
 
     expect(scorecard.productionReady).toBe(false);
@@ -126,6 +128,7 @@ describe("control-director-readiness", () => {
       completionEvidencePolicy: true,
       explicitStatusPolicy: true,
       runtimeFinalOutputGuard: true,
+      runtimeJudgeCompletionGate: true,
     });
 
     expect(scorecard.productionReady).toBe(false);
@@ -153,6 +156,7 @@ describe("control-director-readiness", () => {
       completionEvidencePolicy: true,
       explicitStatusPolicy: true,
       runtimeFinalOutputGuard: true,
+      runtimeJudgeCompletionGate: true,
     });
 
     expect(scorecard.productionReady).toBe(false);
@@ -180,6 +184,7 @@ describe("control-director-readiness", () => {
       completionEvidencePolicy: false,
       explicitStatusPolicy: true,
       runtimeFinalOutputGuard: true,
+      runtimeJudgeCompletionGate: true,
     });
 
     expect(scorecard.productionReady).toBe(false);
@@ -207,6 +212,7 @@ describe("control-director-readiness", () => {
       completionEvidencePolicy: true,
       explicitStatusPolicy: false,
       runtimeFinalOutputGuard: true,
+      runtimeJudgeCompletionGate: true,
     });
 
     expect(scorecard.productionReady).toBe(false);
@@ -234,11 +240,40 @@ describe("control-director-readiness", () => {
       completionEvidencePolicy: true,
       explicitStatusPolicy: true,
       runtimeFinalOutputGuard: false,
+      runtimeJudgeCompletionGate: true,
     });
 
     expect(scorecard.productionReady).toBe(false);
     expect(scorecard.failedCritical).toContain(
       "Control Director runtime final-output guard is wired",
+    );
+  });
+
+  it("flags a missing runtime Judge completion gate as a critical readiness gap", () => {
+    const scorecard = buildControlDirectorReadinessScorecard({
+      config: createConfig(),
+      ollamaModels: new Map([
+        ["openclaw-control-qwen36-27b:latest", { digest: "same" }],
+        ["qwen3.6:27b-q8_0", { digest: "same" }],
+        ["openclaw-control-qwen25-32b:latest", { digest: "fallback" }],
+      ]),
+      ollamaEnv: {
+        OLLAMA_FLASH_ATTENTION: "1",
+        OLLAMA_KV_CACHE_TYPE: "q8_0",
+        OLLAMA_NUM_PARALLEL: "1",
+      },
+      ollamaPrimaryChatSmoke: { ok: true, detail: "status=200" },
+      thinkingEscalationPolicy: true,
+      continueUntilCompletePolicy: true,
+      completionEvidencePolicy: true,
+      explicitStatusPolicy: true,
+      runtimeFinalOutputGuard: true,
+      runtimeJudgeCompletionGate: false,
+    });
+
+    expect(scorecard.productionReady).toBe(false);
+    expect(scorecard.failedCritical).toContain(
+      "Control Director runtime Judge-approved completion gate is wired",
     );
   });
 
@@ -265,6 +300,7 @@ describe("control-director-readiness", () => {
       completionEvidencePolicy: true,
       explicitStatusPolicy: true,
       runtimeFinalOutputGuard: true,
+      runtimeJudgeCompletionGate: true,
     });
 
     expect(scorecard.productionReady).toBe(false);

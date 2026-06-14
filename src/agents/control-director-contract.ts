@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 export const CONTROL_DIRECTOR_AGENT_IDS = ["main", "control-director"] as const;
 
 export const CONTROL_DIRECTOR_PRIMARY_PROVIDER = "ollama";
@@ -39,7 +41,9 @@ export type ControlDirectorGuardablePayload = {
 
 export type ControlDirectorFinalOutputGuardAction =
   | "rewrote_unsupported_complete"
-  | "repaired_missing_required_fields";
+  | "repaired_missing_required_fields"
+  | "blocked_missing_judge_approval"
+  | "blocked_invalid_judge_approval";
 
 export type ControlDirectorFinalOutputGuardAudit = {
   action: ControlDirectorFinalOutputGuardAction;
@@ -53,6 +57,26 @@ export type ControlDirectorFinalOutputGuardAudit = {
 export type ControlDirectorFinalOutputGuardResult<T extends ControlDirectorGuardablePayload> = {
   payloads: T[];
   changed: boolean;
+  audit?: ControlDirectorFinalOutputGuardAudit;
+};
+
+export type ControlDirectorJudgeCompletionApproval = {
+  judgeStatus: "pending" | "approved" | "rejected" | "invalid";
+  judgeVerdict?: string;
+  judgeRunId?: string;
+  missionId: string;
+  approvedClaimHash?: string;
+  evidenceSummary?: string;
+  scope?: string;
+  approvedAt?: number;
+  missingAcceptanceCriteria?: string[];
+};
+
+export type ControlDirectorJudgeCompletionGateResult<T extends ControlDirectorGuardablePayload> = {
+  payloads: T[];
+  changed: boolean;
+  expectedClaimHash?: string;
+  approval?: ControlDirectorJudgeCompletionApproval;
   audit?: ControlDirectorFinalOutputGuardAudit;
 };
 
@@ -261,6 +285,7 @@ export function buildControlDirectorSystemPromptSection(
     "Continue until the requested task is complete, a real blocker is proven, or user input is genuinely required.",
     "Before saying a task is finished, verify the requested outcome with concrete evidence such as source inspection, config proof, runtime status, tests, smoke output, or command results when feasible.",
     "A completion claim must include the concrete evidence used to verify it; if that evidence is missing, report `Status: blocked` or `Status: needs_user_input` instead of `Status: complete`.",
+    "A `Status: complete` claim also requires Judge approval for this exact mission, final answer, and evidence. If Judge approval is missing, invalid, stale, or scope-mismatched, report `Status: blocked` instead.",
     "If work is incomplete, do not call it complete. State the exact blocker or the next build gap and the smallest action that would close it.",
     "When the user asks for Completion Grade, Criticality, verified state, or next build gap, include those fields in every response until the user changes that reporting requirement.",
     "When reporting Completion Grade or Criticality, use numeric `/10` values unless the user explicitly asks for another scale.",
@@ -761,6 +786,183 @@ function buildControlDirectorRepairedReportText(params: {
     "Criticality: 10/10",
     `Status: ${params.nextStatus}`,
   ].join("\n");
+}
+
+function normalizeControlDirectorClaimPart(value: string | undefined | null): string {
+  return (value ?? "").replace(/\s+/gu, " ").trim();
+}
+
+function stableControlDirectorStringList(values: readonly string[] | undefined): string[] {
+  return [
+    ...new Set((values ?? []).map(normalizeControlDirectorClaimPart).filter(Boolean)),
+  ].toSorted();
+}
+
+export function buildControlDirectorJudgeClaimHash(params: {
+  missionId: string;
+  requestBody: string;
+  finalText: string;
+  evidenceSummary: string;
+  artifactIds?: readonly string[] | undefined;
+  commandEvidence?: readonly string[] | undefined;
+}): string {
+  const stablePayload = {
+    artifactIds: stableControlDirectorStringList(params.artifactIds),
+    commandEvidence: stableControlDirectorStringList(params.commandEvidence),
+    evidenceSummary: normalizeControlDirectorClaimPart(params.evidenceSummary),
+    finalText: normalizeControlDirectorClaimPart(params.finalText),
+    missionId: normalizeControlDirectorClaimPart(params.missionId),
+    requestBody: normalizeControlDirectorClaimPart(params.requestBody),
+  };
+  return createHash("sha256").update(JSON.stringify(stablePayload)).digest("hex");
+}
+
+export function evaluateControlDirectorJudgeCompletionApproval(params: {
+  missionId: string;
+  requestBody: string;
+  finalText: string;
+  evidenceSummary: string;
+  approval?: ControlDirectorJudgeCompletionApproval | null | undefined;
+}): {
+  approved: boolean;
+  expectedClaimHash: string;
+  missing: string[];
+  reason: string;
+} {
+  const expectedClaimHash = buildControlDirectorJudgeClaimHash({
+    missionId: params.missionId,
+    requestBody: params.requestBody,
+    finalText: params.finalText,
+    evidenceSummary: params.evidenceSummary,
+  });
+  const approval = params.approval;
+  const missing: string[] = [];
+  if (!approval) {
+    missing.push("Judge approval metadata");
+  } else {
+    if (approval.judgeStatus !== "approved") {
+      missing.push(`Judge status approved (actual: ${approval.judgeStatus})`);
+    }
+    if (approval.judgeVerdict !== "APPROVE") {
+      missing.push(`Judge verdict APPROVE (actual: ${approval.judgeVerdict ?? "missing"})`);
+    }
+    if (!approval.judgeRunId?.trim()) {
+      missing.push("Judge run id");
+    }
+    if (approval.missionId !== params.missionId) {
+      missing.push("matching mission id");
+    }
+    if (approval.approvedClaimHash !== expectedClaimHash) {
+      missing.push("matching approved claim hash");
+    }
+    if (!approval.evidenceSummary?.trim()) {
+      missing.push("Judge evidence summary");
+    }
+    if (!approval.scope?.trim()) {
+      missing.push("Judge approval scope");
+    }
+    if (!approval.approvedAt || !Number.isFinite(approval.approvedAt)) {
+      missing.push("Judge approval timestamp");
+    }
+    if ((approval.missingAcceptanceCriteria ?? []).length > 0) {
+      missing.push(
+        `zero missing acceptance criteria (${approval.missingAcceptanceCriteria?.join(", ")})`,
+      );
+    }
+  }
+  return {
+    approved: missing.length === 0,
+    expectedClaimHash,
+    missing,
+    reason:
+      missing.length > 0
+        ? `Missing or invalid Judge approval: ${formatControlDirectorMissing(missing)}.`
+        : "Judge approved this exact mission completion claim.",
+  };
+}
+
+function buildControlDirectorJudgeBlockedCompletionText(params: {
+  originalText: string;
+  evaluation: ReturnType<typeof evaluateControlDirectorJudgeCompletionApproval>;
+}): string {
+  return [
+    "Control Director Judge completion gate blocked an unapproved completion claim.",
+    "",
+    "Verified state: completion was not delivered because Judge approval is missing or invalid.",
+    `Original response summary: ${summarizeControlDirectorOriginalText(params.originalText)}`,
+    `Next build gap: obtain Judge APPROVE verdict for this exact mission and evidence. Missing: ${formatControlDirectorMissing(params.evaluation.missing)}.`,
+    "Completion Grade: 9/10",
+    "Criticality: 10/10",
+    "Status: blocked",
+  ].join("\n");
+}
+
+export function applyControlDirectorJudgeCompletionGate<
+  T extends ControlDirectorGuardablePayload,
+>(params: {
+  agentId?: string | undefined | null;
+  payloads: readonly T[] | undefined;
+  missionId: string;
+  requestBody: string;
+  approval?: ControlDirectorJudgeCompletionApproval | null | undefined;
+}): ControlDirectorJudgeCompletionGateResult<T> {
+  const payloads = [...(params.payloads ?? [])];
+  if (!isControlDirectorAgentId(params.agentId) || payloads.length === 0) {
+    return { payloads, changed: false, approval: params.approval ?? undefined };
+  }
+
+  let payloadsRewritten = 0;
+  let expectedClaimHash: string | undefined;
+  let firstAudit:
+    | Omit<ControlDirectorFinalOutputGuardAudit, "payloadsChecked" | "payloadsRewritten">
+    | undefined;
+  const guardedPayloads = payloads.map((payload) => {
+    const text = typeof payload.text === "string" ? payload.text : "";
+    if (parseControlDirectorFinalStatus(text) !== "complete") {
+      return payload;
+    }
+    const summary = summarizeControlDirectorMissionFinalText(text);
+    const evaluation = evaluateControlDirectorJudgeCompletionApproval({
+      missionId: params.missionId,
+      requestBody: params.requestBody,
+      finalText: text,
+      evidenceSummary: summary.verifiedEvidenceSummary,
+      approval: params.approval,
+    });
+    expectedClaimHash ??= evaluation.expectedClaimHash;
+    if (evaluation.approved) {
+      return payload;
+    }
+    payloadsRewritten += 1;
+    firstAudit ??= {
+      action: params.approval ? "blocked_invalid_judge_approval" : "blocked_missing_judge_approval",
+      originalStatus: "complete",
+      nextStatus: "blocked",
+      missing: evaluation.missing,
+    };
+    return {
+      ...payload,
+      text: buildControlDirectorJudgeBlockedCompletionText({
+        originalText: text,
+        evaluation,
+      }),
+    };
+  });
+
+  return {
+    payloads: guardedPayloads,
+    changed: payloadsRewritten > 0,
+    ...(expectedClaimHash ? { expectedClaimHash } : {}),
+    approval: params.approval ?? undefined,
+    audit:
+      payloadsRewritten > 0 && firstAudit
+        ? {
+            ...firstAudit,
+            payloadsChecked: payloads.length,
+            payloadsRewritten,
+          }
+        : undefined,
+  };
 }
 
 function guardControlDirectorFinalText(text: string): {

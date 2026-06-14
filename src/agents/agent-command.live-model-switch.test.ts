@@ -828,6 +828,91 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     ]);
   });
 
+  it("blocks verified Control Director complete output when Judge approval is missing", async () => {
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          model: { primary: "ollama/openclaw-control-qwen36-27b:latest" },
+        },
+      },
+    };
+    const sessionEntry = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+    };
+    const sessionStore: Record<string, typeof sessionEntry & Record<string, unknown>> = {
+      "agent:main": sessionEntry,
+    };
+    state.sessionEntryMock = sessionEntry;
+    state.sessionStoreMock = sessionStore;
+    state.storePathMock = "/tmp/session-store.json";
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      const result = await params.run(params.provider, params.model);
+      return {
+        result,
+        provider: params.provider,
+        model: params.model,
+        attempts: [],
+      };
+    });
+    state.runAgentAttemptMock.mockResolvedValue({
+      payloads: [
+        {
+          text: [
+            "Completion Grade: 10/10",
+            "Criticality: 10/10",
+            "Verified evidence: local tests passed and remote proof passed.",
+            "Next build gap: none.",
+            "Status: complete",
+          ].join("\n"),
+        },
+      ],
+      meta: {
+        durationMs: 100,
+        aborted: false,
+        stopReason: "end_turn",
+        agentMeta: { provider: "ollama", model: "openclaw-control-qwen36-27b:latest" },
+      },
+    });
+
+    await agentCommand({
+      message: "Implement the plan and verify completion.",
+      to: "+1234567890",
+      senderIsOwner: true,
+      agentId: "main",
+      runId: "run-control-judge-required",
+    });
+
+    const deliveryArg = state.deliverAgentCommandResultMock.mock.calls[0]?.[0] as
+      | { payloads?: Array<{ text?: string }> }
+      | undefined;
+    expect(deliveryArg?.payloads?.[0]?.text).toContain("Judge completion gate blocked");
+    expect(deliveryArg?.payloads?.[0]?.text).toContain("Status: blocked");
+    expect(sessionStore["agent:main"]?.controlDirectorGuardAudit).toEqual([
+      expect.objectContaining({
+        runId: "run-control-judge-required",
+        action: "blocked_missing_judge_approval",
+        originalStatus: "complete",
+        nextStatus: "blocked",
+        missing: ["Judge approval metadata"],
+      }),
+    ]);
+    expect(sessionStore["agent:main"]?.controlDirectorMissionLedger).toEqual([
+      expect.objectContaining({
+        missionId: "control-director:run-control-judge-required",
+        runId: "run-control-judge-required",
+        status: "blocked",
+        finalStatus: "blocked",
+        guardActions: ["blocked_missing_judge_approval"],
+        judgeCompletionGate: expect.objectContaining({
+          status: "blocked",
+          missing: ["Judge approval metadata"],
+        }),
+      }),
+    ]);
+  });
+
   it("synthesizes a visible Control Director liveness response and queues one safe continuation", async () => {
     state.runtimeConfigMock = {
       agents: {

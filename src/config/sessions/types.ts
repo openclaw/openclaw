@@ -163,7 +163,11 @@ export type SessionJudgeGuardAuditEntry = {
 export type SessionControlDirectorGuardAuditEntry = {
   ts: number;
   runId?: string;
-  action: "rewrote_unsupported_complete" | "repaired_missing_required_fields";
+  action:
+    | "rewrote_unsupported_complete"
+    | "repaired_missing_required_fields"
+    | "blocked_missing_judge_approval"
+    | "blocked_invalid_judge_approval";
   originalStatus?: "complete" | "blocked" | "needs_user_input" | null;
   nextStatus: "complete" | "blocked" | "needs_user_input";
   missing: string[];
@@ -189,6 +193,26 @@ export type SessionControlDirectorLivenessAuditEntry = {
   payloadsSynthesized: number;
 };
 
+export type SessionControlDirectorJudgeCompletionApproval = {
+  judgeStatus: "pending" | "approved" | "rejected" | "invalid";
+  judgeVerdict?: string;
+  judgeRunId?: string;
+  missionId: string;
+  approvedClaimHash?: string;
+  evidenceSummary?: string;
+  scope?: string;
+  approvedAt?: number;
+  missingAcceptanceCriteria?: string[];
+};
+
+export type SessionControlDirectorJudgeCompletionGate = {
+  status: "approved" | "blocked" | "not_required";
+  reason: string;
+  expectedClaimHash?: string;
+  judgeRunId?: string;
+  missing?: string[];
+};
+
 export type SessionControlDirectorMissionLedgerEntry = {
   missionId: string;
   runId?: string;
@@ -202,6 +226,8 @@ export type SessionControlDirectorMissionLedgerEntry = {
   nextBuildGap?: string;
   completionGrade?: number;
   criticality?: number;
+  judgeCompletionApproval?: SessionControlDirectorJudgeCompletionApproval;
+  judgeCompletionGate?: SessionControlDirectorJudgeCompletionGate;
   guardActions?: string[];
   watchdogActions?: string[];
 };
@@ -285,6 +311,8 @@ export type SessionEntry = {
   controlDirectorLivenessAudit?: SessionControlDirectorLivenessAuditEntry[];
   /** Capped mission ledger for Control Director run status, proof, and continuation state. */
   controlDirectorMissionLedger?: SessionControlDirectorMissionLedgerEntry[];
+  /** Latest Judge approval that can authorize a Control Director complete claim. */
+  controlDirectorJudgeCompletionApproval?: SessionControlDirectorJudgeCompletionApproval;
   /** Quota cascade protection and state-aware failover status. */
   quotaSuspension?: QuotaSuspension;
   /** Timestamp (ms) when the current sessionId first became active. */
