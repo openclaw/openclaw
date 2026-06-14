@@ -704,6 +704,8 @@ async function agentViaGatewayCommand(
             timeout: timeoutSeconds,
             lane: opts.lane,
             extraSystemPrompt: opts.extraSystemPrompt,
+            cleanupBundleMcpOnRunEnd: true,
+            cleanupCliLiveSessionOnRunEnd: true,
             idempotencyKey,
           },
           expectFinal: true,

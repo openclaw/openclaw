@@ -740,6 +740,57 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared.ctxPayload.GroupSpace).toBe("T1");
   });
 
+  it("drops OAuth-like DM codes while the Slack auth broker lock is active", async () => {
+    const { dir } = storeFixture.makeTmpStorePath();
+    const lockDir = `${dir}/lock`;
+    fs.mkdirSync(lockDir);
+    const previousLockDir = process.env.OPENCLAW_SLACK_AUTH_BROKER_LOCK_DIR;
+    process.env.OPENCLAW_SLACK_AUTH_BROKER_LOCK_DIR = lockDir;
+
+    try {
+      const prepared = await prepareWithDefaultCtx(
+        createSlackMessage({
+          text: "AOWEAgTQqbJLm0vU3W5I2N8lKrOYaqhBuWP2iSX2gurnQUbJ#sRXZFMJdWdujLv5QJWNpyQRZD8ZdfrwX64M4rJ7JXb0",
+        }),
+      );
+
+      expect(prepared).toBeNull();
+      expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    } finally {
+      if (previousLockDir === undefined) {
+        delete process.env.OPENCLAW_SLACK_AUTH_BROKER_LOCK_DIR;
+      } else {
+        process.env.OPENCLAW_SLACK_AUTH_BROKER_LOCK_DIR = previousLockDir;
+      }
+    }
+  });
+
+  it("keeps OAuth-like DM text when no Slack auth broker lock is active", async () => {
+    const { dir } = storeFixture.makeTmpStorePath();
+    const lockDir = `${dir}/missing-lock`;
+    const previousLockDir = process.env.OPENCLAW_SLACK_AUTH_BROKER_LOCK_DIR;
+    process.env.OPENCLAW_SLACK_AUTH_BROKER_LOCK_DIR = lockDir;
+
+    try {
+      const prepared = await prepareWithDefaultCtx(
+        createSlackMessage({
+          text: "AOWEAgTQqbJLm0vU3W5I2N8lKrOYaqhBuWP2iSX2gurnQUbJ#sRXZFMJdWdujLv5QJWNpyQRZD8ZdfrwX64M4rJ7JXb0",
+        }),
+      );
+
+      assertPrepared(prepared);
+      expect(prepared.ctxPayload.RawBody).toContain(
+        "AOWEAgTQqbJLm0vU3W5I2N8lKrOYaqhBuWP2iSX2gurnQUbJ#",
+      );
+    } finally {
+      if (previousLockDir === undefined) {
+        delete process.env.OPENCLAW_SLACK_AUTH_BROKER_LOCK_DIR;
+      } else {
+        process.env.OPENCLAW_SLACK_AUTH_BROKER_LOCK_DIR = previousLockDir;
+      }
+    }
+  });
+
   it("does not enable Slack status reactions when the message timestamp is missing", async () => {
     const slackCtx = createInboundSlackCtx({
       cfg: {
@@ -3008,6 +3059,161 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       );
       expect(prepared.ctxPayload.MessageThreadId).toBeUndefined();
       expect(prepared.ctxPayload.ReplyToId).toBe(rootTs);
+    }
+  });
+
+  it("hydrates contextual DM follow-ups from agent-hub linked history", async () => {
+    const { storePath } = storeFixture.makeTmpStorePath();
+    const cfg = {
+      session: { store: storePath },
+      channels: {
+        slack: {
+          enabled: true,
+          dmHistoryLimit: 2,
+          replyToMode: "all",
+          replyToModeByChatType: { direct: "off" },
+        },
+      },
+    } as OpenClawConfig;
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "slack",
+      accountId: "default",
+      teamId: "T1",
+      peer: { kind: "direct", id: "U1" },
+    });
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({ [route.sessionKey]: { updatedAt: Date.now() } }, null, 2),
+    );
+
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: "slack-history-test",
+            result: {
+              structuredContent: {
+                messages: [
+                  { text: "memory timeout is fixed", bot_id: "B1", ts: "399.000" },
+                  { text: "retry the agent hub history path", user: "U1", ts: "398.000" },
+                  { text: "check the vm logs too", user: "U1", ts: "397.000" },
+                ],
+                dag_context: {
+                  related_nodes: [{ id: "task:slack-history" }],
+                  archive_context: [{ ts: "396.000", text: "older archive context" }],
+                },
+              },
+            },
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+    );
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    try {
+      const slackCtx = createInboundSlackCtx({ cfg });
+      slackCtx.resolveUserName = async (id: string) => ({
+        name: id === "U1" ? "Alice" : "Jarvis",
+      });
+
+      const prepared = await prepareMessageWith(
+        slackCtx,
+        createSlackAccount({
+          dmHistoryLimit: 2,
+          replyToMode: "all",
+          replyToModeByChatType: { direct: "off" },
+        }),
+        createSlackMessage({
+          text: "what were we working on",
+          ts: "400.000",
+        }),
+      );
+
+      expect(prepared).toBeTruthy();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("[Agent Hub linked context]");
+      expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("check the vm logs too");
+      expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("retry the agent hub history path");
+      expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("memory timeout is fixed");
+      expect(prepared!.ctxPayload.ThreadHistoryBody).not.toContain("what were we working on");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("falls back to live Slack history when agent-hub linked retrieval is unavailable", async () => {
+    const { storePath } = storeFixture.makeTmpStorePath();
+    const cfg = {
+      session: { store: storePath },
+      channels: {
+        slack: {
+          enabled: true,
+          dmHistoryLimit: 2,
+          replyToMode: "all",
+          replyToModeByChatType: { direct: "off" },
+        },
+      },
+    } as OpenClawConfig;
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "slack",
+      accountId: "default",
+      teamId: "T1",
+      peer: { kind: "direct", id: "U1" },
+    });
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({ [route.sessionKey]: { updatedAt: Date.now() } }, null, 2),
+    );
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async () => {
+      throw new Error("gateway unavailable");
+    }) as typeof fetch;
+
+    try {
+      const history = vi.fn().mockResolvedValueOnce({
+        messages: [
+          { text: "memory timeout is fixed", bot_id: "B1", ts: "399.000" },
+          { text: "retry the agent hub history path", user: "U1", ts: "398.000" },
+          { text: "what were we working on", user: "U1", ts: "400.000" },
+        ],
+        response_metadata: { next_cursor: "" },
+      });
+      const slackCtx = createInboundSlackCtx({
+        cfg,
+        appClient: { conversations: { history } } as unknown as App["client"],
+      });
+      slackCtx.resolveUserName = async (id: string) => ({
+        name: id === "U1" ? "Alice" : "Jarvis",
+      });
+
+      const prepared = await prepareMessageWith(
+        slackCtx,
+        createSlackAccount({
+          dmHistoryLimit: 2,
+          replyToMode: "all",
+          replyToModeByChatType: { direct: "off" },
+        }),
+        createSlackMessage({
+          text: "what were we working on",
+          ts: "400.000",
+        }),
+      );
+
+      expect(prepared).toBeTruthy();
+      expect(history).toHaveBeenCalledTimes(1);
+      expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("retry the agent hub history path");
+      expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("memory timeout is fixed");
+      expect(prepared!.ctxPayload.ThreadHistoryBody).not.toContain("[Agent Hub linked context]");
+    } finally {
+      globalThis.fetch = originalFetch;
     }
   });
 });

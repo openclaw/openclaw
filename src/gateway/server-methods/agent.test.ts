@@ -2422,7 +2422,7 @@ describe("gateway agent handler", () => {
     expectStringFieldContains(error, "message", "invalid agent params");
   });
 
-  it("forwards one-shot bundle MCP cleanup from agent RPC into the runner", async () => {
+  it("forwards one-shot CLI cleanup from agent RPC into the runner", async () => {
     primeMainAgentRun();
     mocks.agentCommand.mockClear();
 
@@ -2431,10 +2431,12 @@ describe("gateway agent handler", () => {
       sessionKey: "agent:main:subagent:cleanup-probe",
       idempotencyKey: "test-idem-agent-cleanup-bundle-mcp",
       cleanupBundleMcpOnRunEnd: true,
+      cleanupCliLiveSessionOnRunEnd: true,
     });
 
     const call = await waitForAgentCommandCall();
     expect(call.cleanupBundleMcpOnRunEnd).toBe(true);
+    expect(call.cleanupCliLiveSessionOnRunEnd).toBe(true);
   });
 
   it.each(

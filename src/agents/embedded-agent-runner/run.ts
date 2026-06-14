@@ -1865,6 +1865,7 @@ async function runEmbeddedAgentInternal(
             bootstrapContextRunKind: params.bootstrapContextRunKind,
             jobId: params.jobId,
             toolsAllow: params.toolsAllow,
+            cleanupBundleMcpOnRunEnd: params.cleanupBundleMcpOnRunEnd,
             disableMessageTool: params.disableMessageTool,
             forceMessageTool: params.forceMessageTool,
             enableHeartbeatTool: params.enableHeartbeatTool,

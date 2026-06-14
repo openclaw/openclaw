@@ -18,11 +18,11 @@ function resolveCommand(command: string): string {
   });
 }
 
-export type ChildAdapter = SpawnProcessAdapter<NodeJS.Signals | null>;
-
 function isServiceManagedRuntime(): boolean {
   return Boolean(process.env.OPENCLAW_SERVICE_MARKER?.trim());
 }
+
+export type ChildAdapter = SpawnProcessAdapter<NodeJS.Signals | null>;
 
 export async function createChildAdapter(params: {
   argv: string[];
@@ -41,9 +41,9 @@ export async function createChildAdapter(params: {
 
   const stdinMode = params.stdinMode ?? (params.input !== undefined ? "pipe-closed" : "inherit");
 
-  // In service-managed mode keep children attached so systemd/launchd can
-  // stop the full process tree reliably. Outside service mode preserve the
-  // existing POSIX detached behavior.
+  // Always use detached process groups on non-Windows platforms so that
+  // process tree termination signals can target the entire process group
+  // and prevent orphaned descendant processes.
   const useDetached = process.platform !== "win32" && !isServiceManagedRuntime();
 
   const options: SpawnOptions = {

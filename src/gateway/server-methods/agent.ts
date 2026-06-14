@@ -1117,6 +1117,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       timeout?: number;
       bestEffortDeliver?: boolean;
       cleanupBundleMcpOnRunEnd?: boolean;
+      cleanupCliLiveSessionOnRunEnd?: boolean;
       label?: string;
       inputProvenance?: InputProvenance;
       workspaceDir?: string;
@@ -2769,6 +2770,7 @@ export const agentHandlers: GatewayRequestHandlers = {
                   internalEvents: request.internalEvents,
                 }),
               cleanupBundleMcpOnRunEnd: request.cleanupBundleMcpOnRunEnd,
+              cleanupCliLiveSessionOnRunEnd: request.cleanupCliLiveSessionOnRunEnd,
               abortSignal: activeRunAbort.controller.signal,
               lifecycleGeneration,
               onActiveModelSelected: ({ provider }) => {

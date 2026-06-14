@@ -1,6 +1,7 @@
 node_modules
 **/node_modules/
 .env
+.mcp.json
 docker-compose.override.yml
 docker-compose.extra.yml
 docker-compose.sandbox.yml
@@ -258,3 +259,6 @@ extensions/diffs-language-pack/assets/viewer-runtime.js
 /.opengrep-out/
 /.crabbox-artifacts
 .comux*
+
+# Tool-emitted MCP config backups
+.mcp.json.bak*
