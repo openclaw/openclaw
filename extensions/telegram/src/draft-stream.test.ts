@@ -704,6 +704,38 @@ describe("createTelegramDraftStream", () => {
     expect(api.sendMessage).not.toHaveBeenCalled();
   });
 
+  it("falls back to message previews when rich previews are unsupported", async () => {
+    const api = createMockDraftApi();
+    api.raw.sendRichMessage.mockRejectedValueOnce(
+      Object.assign(new Error("Call to 'sendRichMessage' failed! (404: Not Found)"), {
+        error_code: 404,
+      }),
+    );
+    const warn = vi.fn();
+    const stream = createTelegramDraftStream({
+      api: api as unknown as Bot["api"],
+      chatId: 123,
+      richMessages: true,
+      warn,
+      renderText: (text) => ({ text: `<i>${text}</i>`, richMessage: { html: `<i>${text}</i>` } }),
+    });
+
+    stream.update("hello");
+    await stream.flush();
+    stream.update("hello again");
+    await stream.flush();
+
+    expect(api.raw.sendRichMessage).toHaveBeenCalledTimes(1);
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "<i>hello</i>", { parse_mode: "HTML" });
+    expect(api.raw.editMessageText).not.toHaveBeenCalled();
+    expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "<i>hello again</i>", {
+      parse_mode: "HTML",
+    });
+    expect(warn).toHaveBeenCalledWith(
+      "telegram rich stream preview unavailable; retrying with message preview: Call to 'sendRichMessage' failed! (404: Not Found)",
+    );
+  });
+
   it("clamps rich previews to the block limit", async () => {
     const api = createMockDraftApi();
     const text = Array.from({ length: 501 }, (_, index) => `paragraph ${index}`).join("\n\n");

@@ -6,7 +6,11 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withTelegramApiErrorLogging } from "../api-logging.js";
 import { markdownToTelegramHtml } from "../format.js";
-import { isSafeToRetrySendError, isTelegramRateLimitError } from "../network-errors.js";
+import {
+  isSafeToRetrySendError,
+  isTelegramRateLimitError,
+  isTelegramRichMethodUnavailableError,
+} from "../network-errors.js";
 import {
   buildTelegramSendParams,
   getTelegramNativeQuoteReplyMessageId,
@@ -121,28 +125,6 @@ export async function sendTelegramText(
     silent: opts?.silent,
   });
   const textMode = opts?.textMode ?? "markdown";
-  if (opts?.richMessages === true) {
-    const richMessage = buildTelegramRichMessage(text, textMode, {
-      skipEntityDetection: opts.linkPreview === false,
-      tableMode: opts.tableMode,
-    });
-    const res = await sendTelegramWithThreadFallback({
-      operation: "sendRichMessage",
-      runtime,
-      thread: opts.thread,
-      requestParams: toTelegramRichMessageContextParams(baseParams),
-      removeNativeQuoteParam: removeTelegramRichNativeQuoteParam,
-      send: (effectiveParams) =>
-        getTelegramRichRawApi(bot.api).sendRichMessage({
-          chat_id: chatId,
-          rich_message: richMessage,
-          ...(opts.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
-          ...effectiveParams,
-        }),
-    });
-    runtime.log?.(`telegram sendRichMessage ok chat=${chatId} message=${res.message_id}`);
-    return res.message_id;
-  }
   // Add link_preview_options when link preview is disabled.
   const linkPreviewEnabled = opts?.linkPreview ?? true;
   const linkPreviewOptions = linkPreviewEnabled ? undefined : { is_disabled: true };
@@ -165,43 +147,81 @@ export async function sendTelegramText(
     runtime.log?.(`telegram sendMessage ok chat=${chatId} message=${res.message_id} (plain)`);
     return res.message_id;
   };
-
-  // Markdown can render to empty HTML for syntax-only chunks; recover with plain text.
-  if (!htmlText.trim()) {
-    if (!hasFallbackText) {
-      throw new Error("telegram sendMessage failed: empty formatted text and empty plain fallback");
-    }
-    return await sendPlainFallback();
-  }
-  try {
-    const res = await sendTelegramWithThreadFallback({
-      operation: "sendMessage",
-      runtime,
-      thread: opts?.thread,
-      requestParams: baseParams,
-      shouldLog: (err) => {
-        const errText = formatErrorMessage(err);
-        return !PARSE_ERR_RE.test(errText) && !EMPTY_TEXT_ERR_RE.test(errText);
-      },
-      send: (effectiveParams) =>
-        bot.api.sendMessage(chatId, htmlText, {
-          parse_mode: "HTML",
-          ...(linkPreviewOptions ? { link_preview_options: linkPreviewOptions } : {}),
-          ...(opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
-          ...effectiveParams,
-        }),
-    });
-    runtime.log?.(`telegram sendMessage ok chat=${chatId} message=${res.message_id}`);
-    return res.message_id;
-  } catch (err) {
-    const errText = formatErrorMessage(err);
-    if (PARSE_ERR_RE.test(errText) || EMPTY_TEXT_ERR_RE.test(errText)) {
+  const sendFormattedFallback = async () => {
+    // Markdown can render to empty HTML for syntax-only chunks; recover with plain text.
+    if (!htmlText.trim()) {
       if (!hasFallbackText) {
-        throw err;
+        throw new Error(
+          "telegram sendMessage failed: empty formatted text and empty plain fallback",
+        );
       }
-      runtime.log?.(`telegram formatted send failed; retrying without formatting: ${errText}`);
       return await sendPlainFallback();
     }
-    throw err;
+    try {
+      const res = await sendTelegramWithThreadFallback({
+        operation: "sendMessage",
+        runtime,
+        thread: opts?.thread,
+        requestParams: baseParams,
+        shouldLog: (err) => {
+          const errText = formatErrorMessage(err);
+          return !PARSE_ERR_RE.test(errText) && !EMPTY_TEXT_ERR_RE.test(errText);
+        },
+        send: (effectiveParams) =>
+          bot.api.sendMessage(chatId, htmlText, {
+            parse_mode: "HTML",
+            ...(linkPreviewOptions ? { link_preview_options: linkPreviewOptions } : {}),
+            ...(opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
+            ...effectiveParams,
+          }),
+      });
+      runtime.log?.(`telegram sendMessage ok chat=${chatId} message=${res.message_id}`);
+      return res.message_id;
+    } catch (err) {
+      const errText = formatErrorMessage(err);
+      if (PARSE_ERR_RE.test(errText) || EMPTY_TEXT_ERR_RE.test(errText)) {
+        if (!hasFallbackText) {
+          throw err;
+        }
+        runtime.log?.(`telegram formatted send failed; retrying without formatting: ${errText}`);
+        return await sendPlainFallback();
+      }
+      throw err;
+    }
+  };
+  if (opts?.richMessages === true) {
+    const richMessage = buildTelegramRichMessage(text, textMode, {
+      skipEntityDetection: opts.linkPreview === false,
+      tableMode: opts.tableMode,
+    });
+    try {
+      const res = await sendTelegramWithThreadFallback({
+        operation: "sendRichMessage",
+        runtime,
+        thread: opts.thread,
+        requestParams: toTelegramRichMessageContextParams(baseParams),
+        removeNativeQuoteParam: removeTelegramRichNativeQuoteParam,
+        send: (effectiveParams) =>
+          getTelegramRichRawApi(bot.api).sendRichMessage({
+            chat_id: chatId,
+            rich_message: richMessage,
+            ...(opts.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
+            ...effectiveParams,
+          }),
+      });
+      runtime.log?.(`telegram sendRichMessage ok chat=${chatId} message=${res.message_id}`);
+      return res.message_id;
+    } catch (err) {
+      if (!isTelegramRichMethodUnavailableError(err)) {
+        throw err;
+      }
+      runtime.log?.(
+        `telegram sendRichMessage unavailable; retrying via sendMessage: ${formatErrorMessage(
+          err,
+        )}`,
+      );
+      return await sendFormattedFallback();
+    }
   }
+  return await sendFormattedFallback();
 }

@@ -13,6 +13,7 @@ import {
   isTelegramClientRejection,
   isTelegramMessageNotModifiedError,
   isTelegramRateLimitError,
+  isTelegramRichMethodUnavailableError,
   readTelegramRetryAfterMs,
 } from "./network-errors.js";
 import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
@@ -231,18 +232,12 @@ export function createTelegramDraftStream(params: {
   let previewRevision = 0;
   let generation = 0;
   let deliveredTextOffset = 0;
+  let richPreviewUnavailable = false;
   type PreviewSendParams = {
     preview: TelegramDraftPreview;
     sendGeneration: number;
   };
-  const sendRenderedMessage = async (preview: TelegramDraftPreview) => {
-    if (richMessages) {
-      return await getTelegramRichRawApi(params.api).sendRichMessage({
-        chat_id: chatId,
-        rich_message: preview.richMessage ?? buildTelegramRichMarkdown(preview.text),
-        ...richMessageParams,
-      });
-    }
+  const sendLegacyRenderedMessage = async (preview: TelegramDraftPreview) => {
     const transportPreview = normalizeTelegramDraftTransportPreview(preview);
     const sendPlain = async () =>
       await params.api.sendMessage(chatId, transportPreview.plainText, sendMessageParams);
@@ -261,6 +256,32 @@ export function createTelegramDraftStream(params: {
       return await sendPlain();
     }
   };
+  const sendRenderedMessage = async (preview: TelegramDraftPreview) => {
+    if (richMessages) {
+      if (richPreviewUnavailable) {
+        return await sendLegacyRenderedMessage(preview);
+      }
+      try {
+        return await getTelegramRichRawApi(params.api).sendRichMessage({
+          chat_id: chatId,
+          rich_message: preview.richMessage ?? buildTelegramRichMarkdown(preview.text),
+          ...richMessageParams,
+        });
+      } catch (err) {
+        if (!isTelegramRichMethodUnavailableError(err)) {
+          throw err;
+        }
+        richPreviewUnavailable = true;
+        params.warn?.(
+          `telegram rich stream preview unavailable; retrying with message preview: ${formatErrorMessage(
+            err,
+          )}`,
+        );
+        return await sendLegacyRenderedMessage(preview);
+      }
+    }
+    return await sendLegacyRenderedMessage(preview);
+  };
   const sendMessageTransportPreview = async ({
     preview,
     sendGeneration,
@@ -268,11 +289,54 @@ export function createTelegramDraftStream(params: {
     if (typeof streamMessageId === "number") {
       streamVisibleSinceMs ??= Date.now();
       if (richMessages) {
-        await getTelegramRichRawApi(params.api).editMessageText({
-          chat_id: chatId,
-          message_id: streamMessageId,
-          rich_message: preview.richMessage ?? buildTelegramRichMarkdown(preview.text),
-        });
+        if (richPreviewUnavailable) {
+          if (transportPreview.parseMode === "HTML") {
+            try {
+              await params.api.editMessageText(chatId, streamMessageId, transportPreview.text, {
+                parse_mode: "HTML" as const,
+              });
+            } catch (err) {
+              if (!isTelegramHtmlParseError(err)) {
+                throw err;
+              }
+              await params.api.editMessageText(chatId, streamMessageId, transportPreview.plainText);
+            }
+          } else {
+            await params.api.editMessageText(chatId, streamMessageId, transportPreview.text);
+          }
+          return true;
+        }
+        try {
+          await getTelegramRichRawApi(params.api).editMessageText({
+            chat_id: chatId,
+            message_id: streamMessageId,
+            rich_message: preview.richMessage ?? buildTelegramRichMarkdown(preview.text),
+          });
+        } catch (err) {
+          if (!isTelegramRichMethodUnavailableError(err)) {
+            throw err;
+          }
+          richPreviewUnavailable = true;
+          params.warn?.(
+            `telegram rich stream preview edit unavailable; retrying with message preview: ${formatErrorMessage(
+              err,
+            )}`,
+          );
+          if (transportPreview.parseMode === "HTML") {
+            try {
+              await params.api.editMessageText(chatId, streamMessageId, transportPreview.text, {
+                parse_mode: "HTML" as const,
+              });
+            } catch (htmlErr) {
+              if (!isTelegramHtmlParseError(htmlErr)) {
+                throw htmlErr;
+              }
+              await params.api.editMessageText(chatId, streamMessageId, transportPreview.plainText);
+            }
+          } else {
+            await params.api.editMessageText(chatId, streamMessageId, transportPreview.text);
+          }
+        }
         return true;
       }
       const transportPreview = normalizeTelegramDraftTransportPreview(preview);

@@ -956,6 +956,46 @@ describe("sendMessageTelegram", () => {
     expect(richMessage?.html).toContain("<table>");
   });
 
+  it("falls back to sendMessage when rich text send is unsupported", async () => {
+    botRawApi.sendRichMessage.mockRejectedValueOnce(
+      Object.assign(new Error("Call to 'sendRichMessage' failed! (404: Not Found)"), {
+        error_code: 404,
+      }),
+    );
+    botApi.sendMessage.mockResolvedValue({ message_id: 46, chat: { id: "123" } });
+
+    await sendMessageTelegram("123", "hi **boss**", {
+      cfg: { channels: { telegram: { richMessages: true, linkPreview: false } } },
+      token: "tok",
+    });
+
+    expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
+    expect(botApi.sendMessage).toHaveBeenCalledWith("123", "hi <b>boss</b>", {
+      link_preview_options: { is_disabled: true },
+      parse_mode: "HTML",
+    });
+  });
+
+  it("does not fall back from ambiguous rich text send network errors", async () => {
+    botRawApi.sendRichMessage.mockRejectedValueOnce(
+      Object.assign(new Error("Network request for 'sendRichMessage' failed!"), {
+        name: "HttpError",
+        error: Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }),
+      }),
+    );
+    botApi.sendMessage.mockResolvedValue({ message_id: 46, chat: { id: "123" } });
+
+    await expect(
+      sendMessageTelegram("123", "hi **boss**", {
+        cfg: { channels: { telegram: { richMessages: true } } },
+        token: "tok",
+      }),
+    ).rejects.toThrow("Network request");
+
+    expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
+    expect(botApi.sendMessage).not.toHaveBeenCalled();
+  });
+
   it.each([
     {
       name: "list",
@@ -3514,6 +3554,30 @@ describe("editMessageTelegram", () => {
       parse_mode: "HTML",
     });
     expect(botRawApi.editMessageText).not.toHaveBeenCalled();
+  });
+
+  it("falls back to text edit when rich edit is unsupported", async () => {
+    botRawApi.editMessageText.mockRejectedValueOnce(
+      Object.assign(
+        new Error("Call to 'editMessageText' failed! (400: Bad Request: method not found)"),
+        {
+          error_code: 400,
+        },
+      ),
+    );
+    botApi.editMessageText.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
+
+    await editMessageTelegram("123", 1, "**edited**", {
+      token: "tok",
+      cfg: { channels: { telegram: { richMessages: true } } },
+      linkPreview: false,
+    });
+
+    expect(botRawApi.editMessageText).toHaveBeenCalledTimes(1);
+    expect(botApi.editMessageText).toHaveBeenCalledWith("123", 1, "<b>edited</b>", {
+      link_preview_options: { is_disabled: true },
+      parse_mode: "HTML",
+    });
   });
 
   it("edits complex text as formatted HTML", async () => {

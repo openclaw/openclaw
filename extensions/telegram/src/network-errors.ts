@@ -291,6 +291,19 @@ export function isTelegramEditTargetMissingError(err: unknown): boolean {
   return EDIT_TARGET_MISSING_RE.test(formatErrorMessage(err));
 }
 
+const RICH_METHOD_UNAVAILABLE_RE =
+  /Telegram rich messages require grammY api\.raw|does not expose sendRichMessage|Call to ['"]?sendRichMessage['"]? failed!\s*\((?:404|400):|sendRichMessage.*(?:method not found|not found|unsupported|unknown method)|(?:404|400):\s*(?:Not Found|Bad Request: method not found)/i;
+
+/** True when the configured Telegram Bot API surface lacks rich-message methods. */
+export function isTelegramRichMethodUnavailableError(err: unknown): boolean {
+  for (const candidate of collectTelegramErrorCandidates(err)) {
+    if (RICH_METHOD_UNAVAILABLE_RE.test(formatErrorMessage(candidate))) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** Returns true for HTTP 4xx client errors (Telegram explicitly rejected, not applied). */
 export function isTelegramClientRejection(err: unknown): boolean {
   return hasTelegramErrorCode(err, (code) => code >= 400 && code < 500);
