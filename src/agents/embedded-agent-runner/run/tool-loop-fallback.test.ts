@@ -262,6 +262,35 @@ describe("tool-loop terminal fallback", () => {
     });
   });
 
+  it("applies safe text maxChars after adding the prefix", () => {
+    const resolution = resolveToolLoopAbortFallback({
+      observations: [
+        {
+          toolName: "status",
+          argsHash: "current",
+          resultHash: "result-1",
+          resultText: "healthy",
+          terminalResultFallback: {
+            mode: "safe_text",
+            prefix: "P".repeat(100),
+            maxChars: 20,
+          },
+        },
+        {
+          toolName: "status",
+          argsHash: "current",
+          resultHash: "blocked",
+          blockedReason: "tool-loop",
+        },
+      ],
+    });
+
+    expect(resolution).toEqual({
+      toolName: "status",
+      payload: { text: `${"P".repeat(5)}\n...[truncated]` },
+    });
+  });
+
   it("redacts tool-declared safe text fallbacks centrally", () => {
     const resolution = resolveToolLoopAbortFallback({
       observations: [

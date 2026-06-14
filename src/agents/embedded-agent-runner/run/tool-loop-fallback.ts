@@ -309,17 +309,16 @@ function resolveSafeTextFallback(params: {
   fallback: Extract<AgentToolTerminalResultFallback, { mode: "safe_text" }>;
   successfulObservations: readonly ToolLoopObservation[];
 }): ReplyPayload | undefined {
-  const latestText = normalizeToolResultTextForFallback(
-    params.successfulObservations.findLast((observation) =>
-      normalizeToolResultTextForFallback(observation.resultText, params.fallback.maxChars),
-    )?.resultText,
-    params.fallback.maxChars,
-  );
-  if (!latestText) {
+  const latestResultText = params.successfulObservations.findLast((observation) =>
+    normalizeToolResultTextForFallback(observation.resultText),
+  )?.resultText;
+  if (!latestResultText) {
     return undefined;
   }
   const prefix = normalizeOptionalString(params.fallback.prefix);
-  return { text: prefix ? `${prefix}\n${latestText}` : latestText };
+  const text = prefix ? `${prefix}\n${latestResultText}` : latestResultText;
+  const normalizedText = normalizeToolResultTextForFallback(text, params.fallback.maxChars);
+  return normalizedText ? { text: normalizedText } : undefined;
 }
 
 function resolveStructuredSummaryFallback(params: {

@@ -271,7 +271,7 @@ function hasSuccessfulSourceReplyDelivery(params: {
 }
 
 function hasFallbackSuppressingSideEffectDelivery(params: {
-  directlySentBlockKeys?: Set<string>;
+  directlySentBlockPayloads?: ReplyPayload[];
   messagingToolSentTexts?: string[];
   messagingToolSentMediaUrls?: string[];
   messagingToolSentTargets?: unknown[];
@@ -280,7 +280,7 @@ function hasFallbackSuppressingSideEffectDelivery(params: {
   committedMessagingToolSourceReplyDelivery?: boolean;
 }): boolean {
   return (
-    (params.directlySentBlockKeys?.size ?? 0) > 0 ||
+    hasSuccessfulDirectBlockReplyDelivery(params.directlySentBlockPayloads) ||
     hasNonEmptyStringArray(params.messagingToolSentTexts) ||
     hasNonEmptyStringArray(params.messagingToolSentMediaUrls) ||
     hasVisibleMessagingTargetDeliveryEvidence(params.messagingToolSentTargets) ||
@@ -1978,7 +1978,7 @@ export async function runReplyAgent(params: {
       runResult.didDeliverSourceReplyViaMessageTool === true ||
       hasVisibleAgentPayload({ payloads: runResult.messagingToolSourceReplyPayloads });
     const fallbackSuppressingSideEffectDelivery = hasFallbackSuppressingSideEffectDelivery({
-      directlySentBlockKeys,
+      directlySentBlockPayloads,
       messagingToolSentTexts: runResult.messagingToolSentTexts,
       messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
       messagingToolSentTargets: runResult.messagingToolSentTargets,
