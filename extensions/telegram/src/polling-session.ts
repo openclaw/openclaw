@@ -917,10 +917,12 @@ export class TelegramPollingSession {
       activeSpooledUpdateHandlersByLane.get(handler.handlerKey) === activeHandler
     ) {
       this.opts.log(
-        `[telegram][diag] timed out spooled update ${handler.updateId} did not stop within ${formatDurationPrecise(this.#spooledUpdateHandlerAbortGraceMs)} after reply abort; keeping lane ${handler.laneKey} guarded.`,
+        `[telegram][diag] timed out spooled update ${handler.updateId} did not stop within ${formatDurationPrecise(this.#spooledUpdateHandlerAbortGraceMs)} after reply abort; releasing lane ${handler.laneKey} and restarting isolated ingress so later updates can drain.`,
       );
+      activeSpooledUpdateHandlersByLane.delete(handler.handlerKey);
+      this.#spooledUpdateHandlerKeys.delete(handler.handlerKey);
       this.#status.notePollingError(message);
-      return { handlerKey: handler.handlerKey, restart: false };
+      return { handlerKey: handler.handlerKey, restart: true };
     }
     if (activeSpooledUpdateHandlersByLane.get(handler.handlerKey) === activeHandler) {
       activeSpooledUpdateHandlersByLane.delete(handler.handlerKey);
