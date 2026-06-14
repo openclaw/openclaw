@@ -25,6 +25,7 @@ import {
 import { resolveSlackChannelConfig } from "./channel-config.js";
 import { inferSlackChannelType } from "./channel-type.js";
 import { normalizeSlackChannelType, type SlackMonitorContext } from "./context.js";
+import { authorizeSlackMemberPolicy } from "./member-policy.js";
 
 type SlackChannelMembersCacheEntry = {
   expiresAtMs: number;
@@ -489,6 +490,11 @@ export async function authorizeSlackSystemEventSender(params: {
   const senderId = params.senderId?.trim();
   if (!senderId) {
     return { allowed: false, reason: "missing-sender" };
+  }
+
+  const memberPolicy = await authorizeSlackMemberPolicy({ ctx: params.ctx, senderId });
+  if (!memberPolicy.allowed) {
+    return { allowed: false, reason: `member-policy-${memberPolicy.reason}` };
   }
 
   const expectedSenderId = params.expectedSenderId?.trim();

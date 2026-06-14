@@ -40,6 +40,7 @@ export type {
   SignalReactionNotificationMode,
   SlackAccountConfig,
   SlackChannelConfig,
+  SlackMemberPolicyConfig,
   SlackReactionNotificationMode,
   SlackSlashCommandConfig,
   TelegramAccountConfig,
