@@ -314,6 +314,10 @@ function createChatSessionPickerRequestParams(
   if (search) {
     params.search = search;
   }
+  const agentId = resolveChatAgentFilterId(state, state.sessionKey)?.trim();
+  if (agentId) {
+    params.agentId = agentId;
+  }
   return params;
 }
 
