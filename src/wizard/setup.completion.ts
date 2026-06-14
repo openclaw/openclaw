@@ -1,6 +1,5 @@
 // Setup completion helpers render completion instructions after onboarding.
 import os from "node:os";
-import path from "node:path";
 import { resolveCliName } from "../cli/cli-name.js";
 import {
   formatCompletionReloadCommand,
@@ -12,7 +11,6 @@ import {
   checkShellCompletionStatus,
   ensureCompletionCacheExists,
 } from "../commands/doctor-completion.js";
-import { pathExists } from "../utils.js";
 import { t } from "./i18n/index.js";
 import type { WizardPrompter } from "./prompts.js";
 import type { WizardFlow } from "./setup.types.js";
@@ -24,19 +22,21 @@ type CompletionDeps = {
   installCompletion: (shell: string, yes: boolean, binName?: string) => Promise<void>;
 };
 
-async function resolveProfileHint(shell: ShellCompletionStatus["shell"]): Promise<string> {
+// Resolve the actual install target via the shared candidate resolver so the
+// hint reflects ZDOTDIR/XDG_CONFIG_HOME redirects instead of hardcoded `~`
+// paths the shell may not read (#63069). POSIX shells get the `~`-shortened
+// form for readability; PowerShell keeps the absolute path because users paste
+// the value verbatim into `. '...'`.
+function resolveProfileHint(shell: ShellCompletionStatus["shell"]): string {
+  const resolved = resolveCompletionProfilePath(shell);
+  if (shell === "powershell") {
+    return resolved;
+  }
   const home = process.env.HOME || os.homedir();
-  if (shell === "zsh") {
-    return "~/.zshrc";
+  if (home && (resolved === home || resolved.startsWith(`${home}/`) || resolved.startsWith(`${home}\\`))) {
+    return `~${resolved.slice(home.length)}`;
   }
-  if (shell === "bash") {
-    const bashrc = path.join(home, ".bashrc");
-    return (await pathExists(bashrc)) ? "~/.bashrc" : "~/.bash_profile";
-  }
-  if (shell === "fish") {
-    return "~/.config/fish/config.fish";
-  }
-  return resolveCompletionProfilePath("powershell");
+  return resolved;
 }
 
 function formatReloadHint(shell: ShellCompletionStatus["shell"], profileHint: string): string {
@@ -109,7 +109,7 @@ export async function setupWizardShellCompletion(params: {
     // Install to shell profile
     await deps.installCompletion(completionStatus.shell, true, cliName);
 
-    const profileHint = await resolveProfileHint(completionStatus.shell);
+    const profileHint = resolveProfileHint(completionStatus.shell);
     await params.prompter.note(
       t("wizard.completion.installed", {
         reloadHint: formatReloadHint(completionStatus.shell, profileHint),
