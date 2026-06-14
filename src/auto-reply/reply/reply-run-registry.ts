@@ -55,9 +55,18 @@ export type ReplyOperation = {
   readonly routeThreadId?: string | number;
   readonly abortSignal: AbortSignal;
   readonly resetTriggered: boolean;
+  /**
+   * True when this operation was admitted to recover a terminal session (a
+   * leftover failed/timeout/killed run). Concurrent visible turns reading the
+   * same terminal store snapshot must NOT force-clear such an operation: it is a
+   * sibling recovery already in flight, not the proven stale leftover.
+   */
+  readonly terminalRecovery: boolean;
   readonly phase: ReplyOperationPhase;
   readonly result: ReplyOperationResult | null;
   setPhase(next: "queued" | "preflight_compacting" | "memory_flushing" | "running"): void;
+  /** Mark this operation as an in-flight terminal-session recovery. */
+  markTerminalRecovery(): void;
   updateSessionId(nextSessionId: string): void;
   attachBackend(handle: ReplyBackendHandle): void;
   detachBackend(handle: ReplyBackendHandle): void;
@@ -251,6 +260,7 @@ export function createReplyOperation(params: {
   let phase: ReplyOperationPhase = "queued";
   let result: ReplyOperationResult | null = null;
   let stateCleared = false;
+  let terminalRecovery = false;
 
   const clearState = () => {
     if (stateCleared) {
@@ -313,6 +323,9 @@ export function createReplyOperation(params: {
     get resetTriggered() {
       return params.resetTriggered;
     },
+    get terminalRecovery() {
+      return terminalRecovery;
+    },
     get phase() {
       return phase;
     },
@@ -324,6 +337,9 @@ export function createReplyOperation(params: {
         return;
       }
       phase = next;
+    },
+    markTerminalRecovery() {
+      terminalRecovery = true;
     },
     updateSessionId(nextSessionId) {
       if (result) {
