@@ -108,4 +108,25 @@ describe("doctor empty allowlist policy scan", () => {
     // No warnings should be emitted because every account has its own populated groupAllowFrom.
     expect(warnings).toEqual([]);
   });
+
+  it("does not warn on top-level groupAllowFrom when every account has allowFrom fallback", () => {
+    const warnings = scanEmptyAllowlistPolicyWarnings(
+      {
+        channels: {
+          telegram: {
+            groupPolicy: "allowlist",
+            groupAllowFrom: [],
+            accounts: {
+              default: { allowFrom: ["user-123"] },
+              work: { allowFrom: ["user-456"] },
+            },
+          },
+        },
+      },
+      { doctorFixCommand: "openclaw doctor --fix" },
+    );
+
+    // No warnings should be emitted because every account has its own populated allowFrom.
+    expect(warnings).toEqual([]);
+  });
 });

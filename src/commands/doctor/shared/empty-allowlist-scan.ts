@@ -96,17 +96,21 @@ export function scanEmptyAllowlistPolicyWarnings(
     // real account. Check the top-level config but skip the groupAllowFrom
     // warning if every account has its own populated groupAllowFrom.
     if (hasAccounts) {
-      // Check if every account has its own groupAllowFrom
-      const allAccountsHaveGroupAllowFrom = Object.values(accounts).every((account) => {
+      // Check if every account has its own groupAllowFrom or allowFrom
+      const allAccountsCovered = Object.values(accounts).every((account) => {
         if (!account || typeof account !== "object") {
           return false;
         }
         const acc = account as DoctorAccountRecord;
         const groupAllowFrom = acc.groupAllowFrom as DoctorAllowFromList | undefined;
-        return groupAllowFrom && Array.isArray(groupAllowFrom) && groupAllowFrom.length > 0;
+        const allowFrom = acc.allowFrom as DoctorAllowFromList | undefined;
+        const hasGroupAllowFrom =
+          groupAllowFrom && Array.isArray(groupAllowFrom) && groupAllowFrom.length > 0;
+        const hasAllowFrom = allowFrom && Array.isArray(allowFrom) && allowFrom.length > 0;
+        return hasGroupAllowFrom || hasAllowFrom;
       });
 
-      if (allAccountsHaveGroupAllowFrom) {
+      if (allAccountsCovered) {
         // Skip the top-level check entirely — every account covers the policy
         // Skip to accounts below
       } else {
