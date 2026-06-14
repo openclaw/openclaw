@@ -1,3 +1,4 @@
+// CI changed scope tests cover script detection of changed files and lanes.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -5,28 +6,43 @@ import path from "node:path";
 import { bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
 
-const { detectChangedScope, detectInstallSmokeScope, detectNodeFastScope, listChangedPaths } =
-  (await import("../../scripts/ci-changed-scope.mjs")) as unknown as {
-    detectChangedScope: (paths: string[]) => {
-      runNode: boolean;
-      runMacos: boolean;
-      runAndroid: boolean;
-      runWindows: boolean;
-      runSkillsPython: boolean;
-      runChangedSmoke: boolean;
-      runControlUiI18n: boolean;
-    };
-    detectInstallSmokeScope: (paths: string[]) => {
-      runFastInstallSmoke: boolean;
-      runFullInstallSmoke: boolean;
-    };
-    detectNodeFastScope: (paths: string[]) => {
-      runFastOnly: boolean;
-      runPluginContracts: boolean;
-      runCiRouting: boolean;
-    };
-    listChangedPaths: (base: string, head?: string) => string[];
+const {
+  detectChangedScope,
+  detectInstallSmokeScope,
+  detectNodeFastScope,
+  listChangedPaths,
+  parseArgs,
+} = (await import("../../scripts/ci-changed-scope.mjs")) as unknown as {
+  detectChangedScope: (paths: string[]) => {
+    runNode: boolean;
+    runMacos: boolean;
+    runAndroid: boolean;
+    runWindows: boolean;
+    runSkillsPython: boolean;
+    runChangedSmoke: boolean;
+    runControlUiI18n: boolean;
   };
+  detectInstallSmokeScope: (paths: string[]) => {
+    runFastInstallSmoke: boolean;
+    runFullInstallSmoke: boolean;
+  };
+  detectNodeFastScope: (paths: string[]) => {
+    runFastOnly: boolean;
+    runPluginContracts: boolean;
+    runCiRouting: boolean;
+  };
+  listChangedPaths: (
+    base: string,
+    head?: string,
+    cwd?: string,
+    preferMergeHeadFirstParent?: boolean,
+  ) => string[];
+  parseArgs: (argv: string[]) => {
+    base: string;
+    head: string;
+    mergeHeadFirstParent: boolean;
+  };
+};
 
 const markerPaths: string[] = [];
 const tempDirs: string[] = [];
@@ -55,6 +71,58 @@ function parseGitHubOutput(output: string): Record<string, string> {
   }
   return parsed;
 }
+
+function git(repoDir: string, args: string[]): string {
+  return execFileSync("git", args, { cwd: repoDir, encoding: "utf8" }).trim();
+}
+
+function writeRepoFile(repoDir: string, filePath: string, contents: string): void {
+  const absolutePath = path.join(repoDir, filePath);
+  fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
+  fs.writeFileSync(absolutePath, contents, "utf8");
+}
+
+function createSyntheticMergeRepo(prefix: string): { repoDir: string; staleBase: string } {
+  const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  tempDirs.push(repoDir);
+
+  git(repoDir, ["init", "-b", "main"]);
+  git(repoDir, ["config", "user.email", "ci@example.invalid"]);
+  git(repoDir, ["config", "user.name", "CI"]);
+  writeRepoFile(repoDir, "README.md", "base\n");
+  git(repoDir, ["add", "."]);
+  git(repoDir, ["commit", "-m", "base"]);
+  const staleBase = git(repoDir, ["rev-parse", "HEAD"]);
+
+  git(repoDir, ["switch", "-c", "feature"]);
+  writeRepoFile(repoDir, "src/pr.ts", "export const pr = true;\n");
+  git(repoDir, ["add", "."]);
+  git(repoDir, ["commit", "-m", "feature"]);
+
+  git(repoDir, ["switch", "main"]);
+  writeRepoFile(repoDir, "src/main-only.ts", "export const mainOnly = true;\n");
+  git(repoDir, ["add", "."]);
+  git(repoDir, ["commit", "-m", "main only"]);
+  git(repoDir, ["merge", "--no-ff", "feature", "-m", "synthetic merge"]);
+
+  return { repoDir, staleBase };
+}
+
+describe("parseArgs", () => {
+  it("parses CI diff refs", () => {
+    expect(parseArgs(["--base", "origin/main", "--head", "HEAD"])).toEqual({
+      base: "origin/main",
+      head: "HEAD",
+      mergeHeadFirstParent: false,
+    });
+  });
+
+  it("rejects missing CI diff refs", () => {
+    expect(() => parseArgs(["--base", "--head", "HEAD"])).toThrow("--base requires a value");
+    expect(() => parseArgs(["--head"])).toThrow("--head requires a value");
+    expect(() => parseArgs(["--base", ""])).toThrow("--base requires a value");
+  });
+});
 
 describe("detectChangedScope", () => {
   it("fails safe when no paths are provided", () => {
@@ -650,6 +718,22 @@ describe("detectChangedScope", () => {
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toContain(injectedBase);
     expect(fs.existsSync(markerPath)).toBe(false);
+  });
+
+  it("uses the merge commit first parent instead of a stale PR payload base", () => {
+    const { repoDir, staleBase } = createSyntheticMergeRepo("openclaw-ci-scope-merge-");
+
+    expect(
+      execFileSync("git", ["diff", "--name-only", staleBase, "HEAD"], {
+        cwd: repoDir,
+        encoding: "utf8",
+      })
+        .trim()
+        .split("\n")
+        .toSorted(),
+    ).toEqual(["src/main-only.ts", "src/pr.ts"]);
+
+    expect(listChangedPaths(staleBase, "HEAD", repoDir, true)).toEqual(["src/pr.ts"]);
   });
 
   it("keeps direct CLI preflight empty diffs as no-op scope", () => {

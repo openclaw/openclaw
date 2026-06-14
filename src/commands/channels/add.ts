@@ -1,3 +1,4 @@
+// Implements guided and non-interactive `openclaw channels add` account setup.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { getBundledChannelSetupPlugin } from "../../channels/plugins/bundled.js";
@@ -67,8 +68,8 @@ async function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | nul
           }),
       )
     : await import("../../channels/plugins/catalog.js").then(
-        ({ listChannelPluginCatalogEntries }) =>
-          listChannelPluginCatalogEntries({ excludeWorkspace: true }),
+        ({ listRawChannelPluginCatalogEntries }) =>
+          listRawChannelPluginCatalogEntries({ excludeWorkspace: true }),
       );
   return entries.find((entry) => {
     if (normalizeOptionalLowercaseString(entry.id) === trimmed) {
@@ -124,6 +125,7 @@ function buildChannelSetupInput(opts: ChannelsAddOptions): ChannelSetupInput {
   return input as ChannelSetupInput;
 }
 
+/** Add or configure a channel account, using the wizard when no concrete flags are supplied. */
 export async function channelsAddCommand(
   opts: ChannelsAddOptions,
   runtime: RuntimeEnv = defaultRuntime,

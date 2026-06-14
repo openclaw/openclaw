@@ -1,8 +1,10 @@
+// Model picker tests cover catalog rows, provider metadata, backend defaults, and prompt choices.
 import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/model-catalog-types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { WizardMultiSelectParams, WizardPrompter } from "../wizard/prompts.js";
 import {
   applyModelAllowlist,
   applyModelFallbacksFromSelection,
@@ -900,6 +902,52 @@ describe("promptDefaultModel", () => {
     ]);
   });
 
+  it("preselects the first live provider row when keep-current is disabled", async () => {
+    loadPreferredProviderPickerCatalog.mockResolvedValue([
+      {
+        provider: "nvidia",
+        id: "z-ai/glm-5.1",
+        name: "GLM 5.1",
+      },
+      {
+        provider: "nvidia",
+        id: "nvidia/nemotron-3-super-120b-a12b",
+        name: "NVIDIA Nemotron 3 Super 120B",
+      },
+    ]);
+    const select = vi.fn(async (params) => params.initialValue as never);
+    const prompter = makePrompter({ select });
+    const config = {
+      agents: {
+        defaults: {
+          model: "nvidia/nemotron-3-ultra-550b-a55b",
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await promptDefaultModel({
+      config,
+      prompter,
+      allowKeep: false,
+      includeManual: false,
+      ignoreAllowlist: true,
+      preferredProvider: "nvidia",
+      browseCatalogOnDemand: true,
+    });
+
+    expect(result.model).toBe("nvidia/z-ai/glm-5.1");
+    expect(pickerParams(select as MockCallSource).initialValue).toBe("nvidia/z-ai/glm-5.1");
+    expect(optionValues(pickerOptions(select as MockCallSource))).toEqual([
+      "nvidia/z-ai/glm-5.1",
+      "nvidia/nemotron-3-super-120b-a12b",
+      "nvidia/nemotron-3-ultra-550b-a55b",
+    ]);
+    expect(
+      requireOption(pickerOptions(select as MockCallSource), "nvidia/nemotron-3-ultra-550b-a55b")
+        .hint,
+    ).toBe("current (not in catalog)");
+  });
+
   it("keeps on-demand NVIDIA vendor labels single-prefixed after browsing", async () => {
     loadPreferredProviderPickerCatalog.mockResolvedValue([
       {
@@ -1422,6 +1470,64 @@ describe("promptModelAllowlist", () => {
 
     const options = pickerOptions(multiselect as MockCallSource);
     expect(optionValues(options)).toEqual(["openai/gpt-5.5", "openai/gpt-5.4-mini"]);
+  });
+
+  it("includes stale configured preferred provider models in the scoped cleanup", async () => {
+    loadModelCatalog.mockResolvedValue([
+      {
+        provider: "openrouter",
+        id: "meta-llama/llama-3.3-70b:free",
+        name: "Llama 3.3 70B",
+      },
+      {
+        provider: "openai",
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+      },
+    ]);
+
+    const activeModel = "openrouter/meta-llama/llama-3.3-70b:free";
+    const staleModel = "openrouter/elephant-alpha";
+    const multiselect = vi.fn(async (params: WizardMultiSelectParams) =>
+      params.options.map((option) => option.value).filter((value) => value === activeModel),
+    );
+    const prompter = makePrompter({
+      multiselect: multiselect as unknown as WizardPrompter["multiselect"],
+    });
+    const config = {
+      agents: {
+        defaults: {
+          models: {
+            [activeModel]: { alias: "llama" },
+            [staleModel]: { alias: "elephant" },
+            "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await promptModelAllowlist({
+      config,
+      prompter,
+      preferredProvider: "openrouter",
+    });
+
+    const options = pickerOptions(multiselect as MockCallSource);
+    expect(optionValues(options)).toEqual([activeModel, staleModel]);
+    expect(requireOption(options, staleModel).hint).toBe("configured (not in catalog)");
+    expect(multiselect.mock.calls[0]?.[0]?.initialValues).toEqual([activeModel, staleModel]);
+    expect(result).toEqual({
+      models: [activeModel],
+      scopeKeys: [activeModel, staleModel],
+    });
+
+    const next = applyModelAllowlist(config, result.models ?? [], {
+      scopeKeys: result.scopeKeys,
+    });
+    expect(next.agents?.defaults?.models).toEqual({
+      [activeModel]: { alias: "llama" },
+      "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
+    });
   });
 
   it("shows configured preferred provider models when the catalog has no entries", async () => {

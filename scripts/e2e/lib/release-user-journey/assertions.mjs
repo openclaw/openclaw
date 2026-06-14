@@ -1,3 +1,4 @@
+// Assertions for release user-journey E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,29 +9,103 @@ import {
 import { readBoundedResponseText as readBoundedResponseTextWithLimit } from "../bounded-response-text.mjs";
 import { applyMockOpenAiModelConfig } from "../fixtures/mock-openai-config.mjs";
 import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
+import { readTextFileTail } from "../text-file-utils.mjs";
+
+const SCAN_CHUNK_BYTES = 64 * 1024;
+const SCAN_CARRY_CHARS = 256;
+const ERROR_DETAIL_TAIL_BYTES = 16 * 1024;
+const JSON_ARTIFACT_MAX_BYTES = 2 * 1024 * 1024;
 
 function clickClackHttpTimeoutMs() {
-  return readPositiveInt(process.env.OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS, 5000);
+  return readPositiveInt(
+    process.env.OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS,
+    5000,
+    "OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS",
+  );
 }
 
 function clickClackHttpBodyMaxBytes() {
   return readPositiveInt(
     process.env.OPENCLAW_RELEASE_USER_JOURNEY_HTTP_BODY_MAX_BYTES,
     1024 * 1024,
+    "OPENCLAW_RELEASE_USER_JOURNEY_HTTP_BODY_MAX_BYTES",
   );
 }
 
-function readJson(file) {
-  return JSON.parse(fs.readFileSync(file, "utf8"));
+function readJson(file, maxBytes = JSON_ARTIFACT_MAX_BYTES) {
+  const stat = fs.statSync(file);
+  if (!stat.isFile()) {
+    throw new Error(`${file} is not a file`);
+  }
+  if (stat.size > maxBytes) {
+    throw new Error(
+      `JSON artifact exceeded ${maxBytes} bytes: ${file} (${stat.size} bytes). Tail: ${readTextFileTail(
+        file,
+        ERROR_DETAIL_TAIL_BYTES,
+      )}`,
+    );
+  }
+  const text = fs.readFileSync(file, "utf8");
+  const bytes = Buffer.byteLength(text, "utf8");
+  if (bytes > maxBytes) {
+    throw new Error(
+      `JSON artifact exceeded ${maxBytes} bytes: ${file} (${bytes} bytes). Tail: ${readTextFileTail(
+        file,
+        ERROR_DETAIL_TAIL_BYTES,
+      )}`,
+    );
+  }
+  return JSON.parse(text);
 }
 
-function readPositiveInt(raw, fallback) {
+function readPositiveInt(raw, fallback, label) {
   const text = String(raw ?? "").trim();
-  if (!/^\d+$/u.test(text)) {
+  if (!text) {
     return fallback;
   }
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${label} must be a positive integer. Got: ${JSON.stringify(text)}`);
+  }
   const parsed = Number(text);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${label} must be a positive integer. Got: ${JSON.stringify(text)}`);
+  }
+  return parsed;
+}
+
+function fileContainsText(file, needle) {
+  let stat;
+  try {
+    stat = fs.statSync(file);
+  } catch {
+    return false;
+  }
+  if (!stat.isFile() || stat.size <= 0) {
+    return false;
+  }
+
+  const fd = fs.openSync(file, "r");
+  try {
+    const buffer = Buffer.alloc(Math.min(SCAN_CHUNK_BYTES, stat.size));
+    let carry = "";
+    let offset = 0;
+    while (offset < stat.size) {
+      const bytesToRead = Math.min(buffer.length, stat.size - offset);
+      const bytesRead = fs.readSync(fd, buffer, 0, bytesToRead, offset);
+      if (bytesRead <= 0) {
+        break;
+      }
+      offset += bytesRead;
+      const text = carry + buffer.subarray(0, bytesRead).toString("utf8");
+      if (text.includes(needle)) {
+        return true;
+      }
+      carry = text.slice(-Math.max(SCAN_CARRY_CHARS, needle.length - 1));
+    }
+    return false;
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 async function withClickClackFixtureResponse(url, init, consume, options = {}) {
@@ -134,8 +209,10 @@ function assertAgentTurn() {
 function assertFileContains() {
   const file = process.argv[3];
   const needle = process.argv[4];
-  const raw = fs.readFileSync(file, "utf8");
-  assert(raw.includes(needle), `${file} did not contain ${needle}. Output: ${raw}`);
+  assert(
+    fileContainsText(file, needle),
+    `${file} did not contain ${needle}. Output tail: ${readTextFileTail(file, ERROR_DETAIL_TAIL_BYTES)}`,
+  );
 }
 
 function rememberPluginInstallPath() {

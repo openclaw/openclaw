@@ -1,3 +1,5 @@
+// Gateway auth-token source conflict detector.
+// Warns when local env auth can diverge from managed gateway config auth.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeSecretInputString, resolveSecretInputRef } from "../config/types.secrets.js";
@@ -5,6 +7,8 @@ import { normalizeSecretInputString, resolveSecretInputRef } from "../config/typ
 const GATEWAY_ENV_TOKEN = "OPENCLAW_GATEWAY_TOKEN";
 const GATEWAY_SERVICE_KIND = "gateway";
 
+// Doctor/startup warning shape for shells where OPENCLAW_GATEWAY_TOKEN would
+// make direct clients use a different token than the managed gateway service.
 export type GatewayAuthTokenSourceConflict = {
   checkId: "gateway.env_token_overrides_config";
   title: string;
@@ -14,6 +18,7 @@ export type GatewayAuthTokenSourceConflict = {
   diagnostic: string;
 };
 
+/** Returns a warning when env token precedence can diverge from configured gateway auth. */
 export function resolveGatewayAuthTokenSourceConflict(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -24,6 +29,8 @@ export function resolveGatewayAuthTokenSourceConflict(params: {
   }
 
   if (params.env.OPENCLAW_SERVICE_KIND?.trim() === GATEWAY_SERVICE_KIND) {
+    // The managed gateway process intentionally uses its service env. The
+    // warning is for client shells where env precedence can surprise users.
     return null;
   }
 

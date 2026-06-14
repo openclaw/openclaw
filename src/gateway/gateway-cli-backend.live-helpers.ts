@@ -1,3 +1,5 @@
+// CLI backend live helpers prepare workspace/bootstrap fixtures and gateway
+// clients for live CLI backend model/runtime tests.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -60,6 +62,14 @@ export type CliBackendLiveEnvSnapshot = {
   minimalGateway?: string;
   anthropicApiKey?: string;
   anthropicApiKeyOld?: string;
+};
+
+export const CLI_BACKEND_LIVE_PROVIDER_SKIP_ENV = "OPENCLAW_LIVE_CLI_BACKEND_ALLOW_PROVIDER_SKIP";
+export const CLI_BACKEND_LIVE_ADVISORY_ENV = "OPENCLAW_LIVE_CLI_BACKEND_ADVISORY";
+
+export type CliBackendLiveProviderSkipDecision = {
+  action: "fail" | "skip";
+  message: string;
 };
 
 function normalizeCliRuntimeModelTarget(raw: string | undefined): string | undefined {
@@ -201,6 +211,54 @@ export function shouldRunCliModelSwitchProbe(providerId: string, modelRef: strin
   return typeof resolveCliModelSwitchProbeTarget(providerId, modelRef) === "string";
 }
 
+export function shouldAllowCliBackendLiveProviderSkip(
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  return (
+    isTruthyEnvValue(env[CLI_BACKEND_LIVE_PROVIDER_SKIP_ENV]) &&
+    isTruthyEnvValue(env[CLI_BACKEND_LIVE_ADVISORY_ENV])
+  );
+}
+
+export function resolveCliBackendLiveProviderSkipDecision(params: {
+  allowProviderSkip: boolean;
+  label: string;
+  providerId: string;
+  reasonLabel: string;
+}): CliBackendLiveProviderSkipDecision {
+  const message = `${params.label} for provider "${params.providerId}" was blocked by ${params.reasonLabel}.`;
+  if (params.allowProviderSkip) {
+    return { action: "skip", message };
+  }
+  return {
+    action: "fail",
+    message:
+      `${message} Set ${CLI_BACKEND_LIVE_ADVISORY_ENV}=1 and ` +
+      `${CLI_BACKEND_LIVE_PROVIDER_SKIP_ENV}=1 only for advisory live probes.`,
+  };
+}
+
+export function isCliBackendLiveTimeoutPayload(payload: unknown): boolean {
+  return (
+    typeof payload === "object" &&
+    payload !== null &&
+    (payload as { status?: unknown }).status === "timeout"
+  );
+}
+
+export function shouldRetryCliBackendLiveTimeout(params: {
+  attempt: number;
+  maxAttempts: number;
+  payload: unknown;
+  providerId: string;
+}): boolean {
+  return (
+    params.providerId === "codex-cli" &&
+    params.attempt < params.maxAttempts &&
+    isCliBackendLiveTimeoutPayload(params.payload)
+  );
+}
+
 export function matchesCliBackendReply(text: string, expected: string): boolean {
   const normalized = text.trim();
   const target = expected.trim();
@@ -317,6 +375,7 @@ export async function connectTestGatewayClient(params: {
   clientDisplayName?: string | null;
   requestTimeoutMs?: number;
   tickWatchTimeoutMs?: number;
+  waitForEventLoopReady?: boolean;
   onEvent?: (evt: EventFrame) => void;
   onRetry?: (attempt: number, error: Error) => void;
 }): Promise<GatewayClient> {
@@ -358,6 +417,7 @@ async function connectClientOnce(params: {
   clientDisplayName?: string | null;
   requestTimeoutMs?: number;
   tickWatchTimeoutMs?: number;
+  waitForEventLoopReady?: boolean;
   onEvent?: (evt: EventFrame) => void;
 }): Promise<GatewayClient> {
   return await new Promise<GatewayClient>((resolve, reject) => {
@@ -413,10 +473,17 @@ async function connectClientOnce(params: {
       params.timeoutMs,
     );
     connectTimeout.unref();
-    void startGatewayClientWhenEventLoopReady(client, {
-      timeoutMs: params.timeoutMs,
-      signal: abortStart.signal,
-    }).then(
+    const startPromise =
+      params.waitForEventLoopReady === false
+        ? Promise.resolve().then(() => {
+            client.start();
+            return { ready: true, aborted: false };
+          })
+        : startGatewayClientWhenEventLoopReady(client, {
+            timeoutMs: params.timeoutMs,
+            signal: abortStart.signal,
+          });
+    void startPromise.then(
       (readiness) => {
         if (!readiness.ready && !readiness.aborted) {
           finish({ error: new Error("gateway event loop readiness timeout") });

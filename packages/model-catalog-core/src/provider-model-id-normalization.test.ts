@@ -1,3 +1,4 @@
+// Model Catalog Core tests cover provider model id normalization behavior.
 import { describe, expect, it } from "vitest";
 import {
   collectManifestModelIdNormalizationPolicies,
@@ -34,6 +35,9 @@ describe("provider model id policy normalization", () => {
         "openrouter/google/gemini-3-pro-preview",
       ),
     ).toBe("openrouter/google/gemini-3.1-pro-preview");
+    expect(
+      normalizeConfiguredProviderCatalogModelId("openrouter", "openrouter/google/gemma-4-26b"),
+    ).toBe("openrouter/google/gemma-4-26b-a4b-it");
   });
 
   it("normalizes native Anthropic catalog refs without retaining the provider prefix", () => {

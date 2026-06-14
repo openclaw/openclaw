@@ -1,3 +1,8 @@
+/**
+ * Auth profile API-key/OAuth runtime resolver.
+ * Converts selected auth profiles into provider API keys, refreshes OAuth
+ * credentials, resolves SecretRefs, and maintains runtime store snapshots.
+ */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -25,6 +30,7 @@ import {
   readManagedExternalCliCredential,
 } from "./external-cli-sync.js";
 import { createOAuthManager, OAuthManagerRefreshError } from "./oauth-manager.js";
+import { OAuthRefreshFailureError } from "./oauth-refresh-failure.js";
 import { assertNoOAuthSecretRefPolicyViolations } from "./policy.js";
 import { clearLastGoodProfileWithLock } from "./profiles.js";
 import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
@@ -157,6 +163,7 @@ function extractErrorMessage(error: unknown): string {
   return formatErrorMessage(error);
 }
 
+/** Detect provider errors caused by single-use OAuth refresh token races. */
 export function isRefreshTokenReusedError(error: unknown): boolean {
   const message = normalizeLowercaseStringOrEmpty(extractErrorMessage(error));
   return (
@@ -201,6 +208,7 @@ async function refreshOAuthCredential(
   return result?.newCredentials ?? null;
 }
 
+/** Refresh one OAuth credential and merge provider-returned token fields. */
 export async function refreshOAuthCredentialForRuntime(params: {
   credential: OAuthCredential;
 }): Promise<OAuthCredential | null> {
@@ -233,6 +241,7 @@ const oauthManager = createOAuthManager({
   isRefreshTokenReusedError,
 });
 
+/** Clear in-process OAuth refresh queues between isolated tests. */
 export function resetOAuthRefreshQueuesForTest(): void {
   oauthManager.resetRefreshQueuesForTest();
 }
@@ -327,6 +336,7 @@ async function resolveProfileSecretString(params: {
   return normalizeOptionalSecretInput(resolvedValue);
 }
 
+/** Resolve a selected auth profile into the provider API key string. */
 export async function resolveApiKeyForProfile(
   params: ResolveApiKeyForProfileParams,
 ): Promise<ResolveApiKeyForProfileResult | null> {
@@ -495,11 +505,13 @@ export async function resolveApiKeyForProfile(
       provider: cred.provider,
       profileId,
     });
-    throw new Error(
-      `OAuth token refresh failed for ${cred.provider}: ${message}. ` +
+    throw new OAuthRefreshFailureError({
+      provider: cred.provider,
+      message:
+        `OAuth token refresh failed for ${cred.provider}: ${message}. ` +
         "Please try again or re-authenticate." +
         (hint ? `\n\n${hint}` : ""),
-      { cause: error },
-    );
+      cause: error,
+    });
   }
 }

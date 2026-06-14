@@ -1,3 +1,4 @@
+// Tests reset hook emission and cleanup around reset commands.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as bootstrapCache from "../../agents/bootstrap-cache.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -208,9 +209,16 @@ describe("handleCommands reset hooks", () => {
   });
 
   it("uses gateway session reset for bound ACP sessions", async () => {
+    resetMocks.resetConfiguredBindingTargetInPlace.mockResolvedValue({
+      ok: true,
+      sessionKey: "agent:claude:acp:binding:discord:default:9373ab192b2317f4",
+      sessionId: "session-after-acp-reset",
+      storePath: "/tmp/claude-sessions.json",
+    });
     resetMocks.resolveBoundAcpThreadSessionKey.mockReturnValue(
       "agent:claude:acp:binding:discord:default:9373ab192b2317f4",
     );
+    const onSessionPrepared = vi.fn();
     const params = buildResetParams(
       "/reset",
       {
@@ -223,6 +231,7 @@ describe("handleCommands reset hooks", () => {
         CommandSource: "native",
       },
     );
+    params.opts = { onSessionPrepared } as never;
 
     const result = await maybeHandleResetCommand(params);
 
@@ -244,6 +253,11 @@ describe("handleCommands reset hooks", () => {
     });
     expect(triggerInternalHookMock).not.toHaveBeenCalled();
     expect(params.command.resetHookTriggered).toBe(true);
+    expect(onSessionPrepared).toHaveBeenCalledWith({
+      sessionKey: "agent:claude:acp:binding:discord:default:9373ab192b2317f4",
+      sessionId: "session-after-acp-reset",
+      storePath: "/tmp/claude-sessions.json",
+    });
   });
 
   it("keeps tail dispatch after a bound ACP reset", async () => {

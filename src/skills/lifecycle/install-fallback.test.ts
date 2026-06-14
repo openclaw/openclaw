@@ -1,3 +1,4 @@
+// Install fallback tests cover alternate skill install paths when primary paths fail.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -15,7 +16,7 @@ vi.mock("../../process/exec.js", () => ({
 }));
 
 vi.mock("../../plugins/install-security-scan.js", () => ({
-  scanSkillInstallSource: vi.fn(async () => undefined),
+  evaluateSkillInstallPolicy: vi.fn(async () => undefined),
 }));
 
 vi.mock("../loading/workspace.js", () => ({

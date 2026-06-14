@@ -1,3 +1,6 @@
+/**
+ * Coordinates provider auth, profile rotation, and runtime auth refresh.
+ */
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import type { Model } from "../../../llm/types.js";
@@ -7,6 +10,7 @@ import {
   isProfileInCooldown,
   resolveProfilesUnavailableReason,
 } from "../../auth-profiles.js";
+import { formatAuthProfileFailureMessage } from "../../auth-profiles/failure-copy.js";
 import {
   classifyFailoverReason,
   isFailoverErrorMessage,
@@ -15,13 +19,13 @@ import {
 import { FailoverError, resolveFailoverStatus } from "../../failover-error.js";
 import { shouldAllowCooldownProbeForReason } from "../../failover-policy.js";
 import {
-  formatMissingAuthError,
   getApiKeyForModel,
+  MissingProviderAuthError,
   type ResolvedProviderAuth,
 } from "../../model-auth.js";
 import {
-  resolveProviderRequestConfig,
-  sanitizeRuntimeProviderRequestOverrides,
+  applyPreparedRuntimeAuthToModel,
+  type ModelProviderRequestTransportOverrides,
 } from "../../provider-request-config.js";
 import { clampRuntimeAuthRefreshDelayMs } from "../../runtime-auth-refresh.js";
 import {
@@ -44,6 +48,11 @@ type LogLike = {
   warn(message: string): void;
 };
 
+/**
+ * Coordinates auth profile selection, runtime auth preparation/refresh, and
+ * profile failover for one embedded run. State is injected through accessors so
+ * the runner can keep provider/model/auth snapshots in sync across retries.
+ */
 export function createEmbeddedRunAuthController(params: {
   config: RunEmbeddedAgentParams["config"];
   agentDir: string;
@@ -79,39 +88,22 @@ export function createEmbeddedRunAuthController(params: {
     runtimeModel: Model;
     preparedAuth: {
       baseUrl?: string;
-      request?: Parameters<typeof resolveProviderRequestConfig>[0]["request"];
+      request?: ModelProviderRequestTransportOverrides;
     };
   }): void => {
-    if (!paramsForApply.preparedAuth.baseUrl && !paramsForApply.preparedAuth.request) {
+    const runtimeModel = applyPreparedRuntimeAuthToModel(
+      paramsForApply.runtimeModel,
+      paramsForApply.preparedAuth,
+    );
+    if (runtimeModel === paramsForApply.runtimeModel) {
       return;
     }
-    const runtimeRequestConfig = resolveProviderRequestConfig({
-      provider: paramsForApply.runtimeModel.provider,
-      api: paramsForApply.runtimeModel.api,
-      baseUrl: paramsForApply.preparedAuth.baseUrl ?? paramsForApply.runtimeModel.baseUrl,
-      providerHeaders:
-        paramsForApply.runtimeModel.headers &&
-        typeof paramsForApply.runtimeModel.headers === "object"
-          ? paramsForApply.runtimeModel.headers
-          : undefined,
-      request: sanitizeRuntimeProviderRequestOverrides(paramsForApply.preparedAuth.request),
-      capability: "llm",
-      transport: "stream",
-    });
-    params.setRuntimeModel({
-      ...paramsForApply.runtimeModel,
-      ...(paramsForApply.preparedAuth.baseUrl
-        ? { baseUrl: paramsForApply.preparedAuth.baseUrl }
-        : {}),
-      ...(runtimeRequestConfig.headers ? { headers: runtimeRequestConfig.headers } : {}),
-    });
-    params.setEffectiveModel({
-      ...params.getEffectiveModel(),
-      ...(paramsForApply.preparedAuth.baseUrl
-        ? { baseUrl: paramsForApply.preparedAuth.baseUrl }
-        : {}),
-      ...(runtimeRequestConfig.headers ? { headers: runtimeRequestConfig.headers } : {}),
-    });
+    // Runtime auth plugins may override baseUrl and safe request auth headers,
+    // while the shared applier strips privileged transport knobs.
+    params.setRuntimeModel(runtimeModel);
+    params.setEffectiveModel(
+      applyPreparedRuntimeAuthToModel(params.getEffectiveModel(), paramsForApply.preparedAuth),
+    );
   };
 
   const hasRefreshableRuntimeAuth = () =>
@@ -170,6 +162,8 @@ export function createEmbeddedRunAuthController(params: {
       await runtimeAuthState.refreshInFlight;
       return;
     }
+    // Generation/profile/source checks below discard refreshes that complete
+    // after another profile or credential has already become active.
     const refreshGeneration = runtimeAuthState.generation;
     const refreshProfileId = runtimeAuthState.profileId;
     const refreshPromise: Promise<void> = (async () => {
@@ -324,22 +318,32 @@ export function createEmbeddedRunAuthController(params: {
   }): never => {
     const provider = params.getProvider();
     const modelId = params.getModelId();
-    const fallbackMessage = `No available auth profile for ${provider} (all in cooldown or unavailable).`;
-    const message =
+    const messageForReason =
       failoverParams.message?.trim() ||
-      (failoverParams.error ? formatErrorMessage(failoverParams.error).trim() : "") ||
-      fallbackMessage;
+      (failoverParams.error ? formatErrorMessage(failoverParams.error).trim() : "");
     const reason = resolveAuthProfileFailoverReason({
       allInCooldown: failoverParams.allInCooldown,
-      message,
+      message: messageForReason,
       profileIds: params.profileCandidates,
     });
+    const message =
+      failoverParams.message?.trim() ||
+      formatAuthProfileFailureMessage({
+        reason,
+        provider,
+        allInCooldown: failoverParams.allInCooldown,
+        cause: failoverParams.error,
+        config: params.config,
+        workspaceDir: params.workspaceDir,
+        env: process.env,
+      });
     if (params.fallbackConfigured) {
       throw new FailoverError(message, {
         reason,
         provider,
         model: modelId,
         status: resolveFailoverStatus(reason),
+        authProfileFailure: { allInCooldown: failoverParams.allInCooldown },
         cause: failoverParams.error,
       });
     }
@@ -368,7 +372,7 @@ export function createEmbeddedRunAuthController(params: {
     if (!apiKeyInfo.apiKey) {
       if (apiKeyInfo.mode !== "aws-sdk") {
         const runtimeModel = params.getRuntimeModel();
-        throw new Error(formatMissingAuthError(apiKeyInfo, runtimeModel.provider));
+        throw new MissingProviderAuthError(runtimeModel.provider, apiKeyInfo);
       }
       // AWS SDK auth via IMDS / instance role / ECS task role: no explicit API
       // key is available but the SDK default credential chain can resolve

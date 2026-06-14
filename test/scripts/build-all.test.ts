@@ -1,8 +1,9 @@
+// Build All tests cover build all script behavior.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   BUILD_ALL_PROFILES,
   BUILD_ALL_PROFILE_STEP_ENV,
@@ -12,6 +13,7 @@ import {
   formatBuildAllTimingSummary,
   parseBuildAllArgs,
   resolveBuildAllStepCacheState,
+  resolveBuildAllStepCacheStampState,
   resolveBuildAllStep,
   resolveBuildAllSteps,
   restoreBuildAllStepCacheOutputs,
@@ -35,7 +37,8 @@ function withBuildCacheFixture(
       label: string;
       cache: {
         inputs: string[];
-        outputs: string[];
+        outputs: Array<string | { path: string; extensions?: string[]; recursive?: boolean }>;
+        restore?: "always";
       };
     };
   }) => void,
@@ -169,6 +172,12 @@ describe("resolveBuildAllStep", () => {
     expect(step.cache?.inputs).toEqual(expect.arrayContaining(["packages/memory-host-sdk/src"]));
     expect(step.cache?.inputs).toEqual(expect.arrayContaining(["npm-shrinkwrap.json"]));
     expect(step.cache?.outputs).toEqual(expect.arrayContaining(["dist/plugin-sdk/packages"]));
+  });
+
+  it("keeps export-html build output aligned with runtime template lookup", () => {
+    const step = getBuildAllStep("copy-export-html-templates");
+
+    expect(step.cache?.outputs).toEqual(["dist/export-html"]);
   });
 });
 
@@ -399,9 +408,27 @@ describe("resolveBuildAllSteps", () => {
     expect(step.cache).toBeUndefined();
   });
 
-  it("does not cache plugin-sdk entry shims over compiled JS", () => {
+  it("caches plugin-sdk entry declarations without restoring compiled JS", () => {
     const step = getBuildAllStep("write-plugin-sdk-entry-dts");
-    expect(step.cache).toBeUndefined();
+    expect(step.cache?.env).toEqual(["OPENCLAW_BUILD_PRIVATE_QA"]);
+    expect(step.cache?.inputs).toEqual(
+      expect.arrayContaining([
+        "scripts/write-plugin-sdk-entry-dts.ts",
+        "scripts/lib/plugin-sdk-entrypoints.json",
+        "src/plugin-sdk",
+        "packages/model-catalog-core/src",
+      ]),
+    );
+    expect(step.cache?.outputs).toEqual(
+      expect.arrayContaining([
+        { path: "dist/plugin-sdk", extensions: [".d.ts"], recursive: false },
+        "dist/plugin-sdk/webhook-path.js",
+        "dist/plugin-sdk/.boundary-entry-shims.stamp",
+        "packages/plugin-sdk/dist/src/plugin-sdk/provider-entry.d.ts",
+      ]),
+    );
+    expect(step.cache?.outputs).not.toContain("dist/plugin-sdk");
+    expect(step.cache?.restore).toBe("always");
   });
 
   it("does not cache hook metadata over compiled hook handlers", () => {
@@ -512,6 +539,49 @@ describe("resolveBuildAllStepCacheState", () => {
     });
   });
 
+  it("reuses the pre-run input signature when stamping successful cacheable steps", () => {
+    withBuildCacheFixture(({ rootDir, step }) => {
+      const cacheState = resolveBuildAllStepCacheState(step, { rootDir });
+      const readSpy = vi.spyOn(fs, "readFileSync");
+
+      try {
+        const stampState = resolveBuildAllStepCacheStampState(step, cacheState, { rootDir });
+        writeBuildAllStepCacheStamp(step, stampState, { rootDir });
+
+        expect(readSpy).not.toHaveBeenCalled();
+        expect(stampState.signature).toBe(cacheState.signature);
+        expect(stampState.relativeOutputFiles).toEqual(["dist/output.js"]);
+      } finally {
+        readSpy.mockRestore();
+      }
+    });
+  });
+
+  it("marks cacheable steps stale when a tracked env input changes", () => {
+    withBuildCacheFixture(({ rootDir, step }) => {
+      const envStep = {
+        ...step,
+        cache: {
+          ...step.cache,
+          env: ["OPENCLAW_BUILD_PRIVATE_QA"],
+        },
+      };
+      const cacheState = resolveBuildAllStepCacheState(envStep, {
+        rootDir,
+        env: { OPENCLAW_BUILD_PRIVATE_QA: "0" },
+      });
+      writeBuildAllStepCacheStamp(envStep, cacheState, { rootDir });
+
+      const stale = resolveBuildAllStepCacheState(envStep, {
+        rootDir,
+        env: { OPENCLAW_BUILD_PRIVATE_QA: "1" },
+      });
+      expect(stale.cacheable).toBe(true);
+      expect(stale.fresh).toBe(false);
+      expect(stale.reason).toBe("stale");
+    });
+  });
+
   it("restores cached outputs when generated files were removed", () => {
     withBuildCacheFixture(({ rootDir, outputPath, step }) => {
       const cacheState = resolveBuildAllStepCacheState(step, { rootDir });
@@ -550,6 +620,54 @@ describe("resolveBuildAllStepCacheState", () => {
       });
       expect(restoreBuildAllStepCacheOutputs(restorable, { rootDir })).toBe(true);
       expect(fs.readFileSync(outputPath, "utf8")).toBe("output");
+    });
+  });
+
+  it("restores cached outputs over existing outputs for always-restore steps", () => {
+    withBuildCacheFixture(({ rootDir, outputPath, step }) => {
+      const alwaysRestoreStep = {
+        ...step,
+        cache: {
+          ...step.cache,
+          restore: "always" as const,
+        },
+      };
+      const cacheState = resolveBuildAllStepCacheState(alwaysRestoreStep, { rootDir });
+      writeBuildAllStepCacheStamp(alwaysRestoreStep, cacheState, { rootDir });
+      fs.writeFileSync(outputPath, "overwritten by earlier build step");
+
+      const restorable = resolveBuildAllStepCacheState(alwaysRestoreStep, { rootDir });
+      expect(restorable.cacheable).toBe(true);
+      expect(restorable.fresh).toBe(true);
+      expect(restorable.reason).toBe("fresh-cache");
+      expect(restorable.outputFiles).toBe(1);
+      expect(restorable.restorable).toBe(true);
+      expect(restorable.relativeOutputFiles).toEqual(["dist/output.js"]);
+      expect(restorable.stampedOutputs).toEqual(["dist/output.js"]);
+
+      expect(restoreBuildAllStepCacheOutputs(restorable, { rootDir })).toBe(true);
+      expect(fs.readFileSync(outputPath, "utf8")).toBe("output");
+    });
+  });
+
+  it("can cache only direct directory files for generated flat outputs", () => {
+    withBuildCacheFixture(({ rootDir, step }) => {
+      const nestedPath = path.join(rootDir, "dist/nested/output.d.ts");
+      fs.mkdirSync(path.dirname(nestedPath), { recursive: true });
+      fs.writeFileSync(path.join(rootDir, "dist/output.js"), "ignored");
+      fs.writeFileSync(path.join(rootDir, "dist/output.d.ts"), "flat");
+      fs.writeFileSync(nestedPath, "nested");
+
+      const flatOnlyStep = {
+        ...step,
+        cache: {
+          ...step.cache,
+          outputs: [{ path: "dist", extensions: [".d.ts"], recursive: false }],
+        },
+      };
+
+      const cacheState = resolveBuildAllStepCacheState(flatOnlyStep, { rootDir });
+      expect(cacheState.relativeOutputFiles).toEqual(["dist/output.d.ts"]);
     });
   });
 });

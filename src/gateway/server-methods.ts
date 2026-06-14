@@ -1,3 +1,5 @@
+// Gateway method registry aggregator wires core and plugin RPC descriptors to
+// lazy-loaded handler families, role checks, scopes, and control-plane budgets.
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import {
   gatewayStartupUnavailableDetails,
@@ -155,6 +157,10 @@ const loadSendHandlers = lazyHandlerModule(
   () => import("./server-methods/send.js"),
   (module) => module.sendHandlers,
 );
+const loadSessionsFilesHandlers = lazyHandlerModule(
+  () => import("./server-methods/sessions-files.js"),
+  (module) => module.sessionsFilesHandlers,
+);
 const loadSessionsHandlers = lazyHandlerModule(
   () => import("./server-methods/sessions.js"),
   (module) => module.sessionsHandlers,
@@ -277,7 +283,15 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadChannelsHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: ["chat.history", "chat.message.get", "chat.abort", "chat.send", "chat.inject"],
+    methods: [
+      "chat.history",
+      "chat.startup",
+      "chat.metadata",
+      "chat.message.get",
+      "chat.abort",
+      "chat.send",
+      "chat.inject",
+    ],
     loadHandlers: loadChatHandlers,
   }),
   ...createLazyCoreHandlers({
@@ -444,6 +458,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "skills.proposals.create",
       "skills.proposals.update",
       "skills.proposals.revise",
+      "skills.proposals.requestRevision",
       "skills.proposals.apply",
       "skills.proposals.reject",
       "skills.proposals.quarantine",
@@ -563,6 +578,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: ["artifacts.list", "artifacts.get", "artifacts.download"],
     loadHandlers: loadArtifactsHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["sessions.files.list", "sessions.files.get"],
+    loadHandlers: loadSessionsFilesHandlers,
   }),
 };
 

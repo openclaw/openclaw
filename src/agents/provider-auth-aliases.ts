@@ -1,3 +1,8 @@
+/**
+ * Provider auth alias resolution.
+ * Maps deprecated and plugin-defined provider IDs to canonical credential
+ * providers, with trusted workspace plugin handling and process-stable caching.
+ */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
@@ -12,6 +17,7 @@ import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 
+/** Inputs that control plugin metadata and trust scope for auth alias lookup. */
 export type ProviderAuthAliasLookupParams = {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -51,6 +57,7 @@ function buildProviderAuthAliasMapCacheKey(
   });
 }
 
+/** Clear provider auth alias cache for tests that mutate plugin metadata. */
 export function resetProviderAuthAliasMapCacheForTest(): void {
   providerAuthAliasMapCache = new WeakMap<NodeJS.ProcessEnv, Map<string, Record<string, string>>>();
 }
@@ -108,6 +115,7 @@ function setPreferredAlias(params: {
   }
 }
 
+/** Resolve canonical auth provider aliases from plugin metadata. */
 export function resolveProviderAuthAliasMap(
   params?: ProviderAuthAliasLookupParams,
 ): Record<string, string> {
@@ -116,6 +124,8 @@ export function resolveProviderAuthAliasMap(
   let cacheKey: string | undefined;
   let envCache: Map<string, Record<string, string>> | undefined;
   if (!params?.metadataSnapshot) {
+    // Plugin metadata is process-stable for a control-plane fingerprint, so
+    // cache per env object without hiding explicit test snapshots.
     cacheKey = buildProviderAuthAliasMapCacheKey(params, env);
     envCache = providerAuthAliasMapCache.get(env);
     if (!envCache) {
@@ -195,6 +205,7 @@ export function resolveProviderAuthAliasMap(
   return aliases;
 }
 
+/** Resolve the provider ID that should be used for credential lookup. */
 export function resolveProviderIdForAuth(
   provider: string,
   params?: ProviderAuthAliasLookupParams,

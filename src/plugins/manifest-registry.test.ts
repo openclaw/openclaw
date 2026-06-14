@@ -1,10 +1,14 @@
+// Verifies plugin manifest registry construction and lookups.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { collectChannelSchemaMetadata } from "../config/channel-config-metadata.js";
 import { collectBundledChannelConfigs } from "./bundled-channel-config-metadata.js";
 import type { PluginCandidate } from "./discovery.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import {
+  __testing as manifestRegistryTesting,
+  loadPluginManifestRegistry,
+} from "./manifest-registry.js";
 import type { OpenClawPackageManifest } from "./manifest.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
@@ -693,6 +697,38 @@ describe("loadPluginManifestRegistry", () => {
     });
 
     expect(registry.plugins[0]?.trustedOfficialInstall).toBe(true);
+  });
+
+  it("marks official diagnostics-otel config paths trusted when the install record matches", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "diagnostics-otel", configSchema: { type: "object" } });
+
+    const registry = loadPluginManifestRegistry({
+      installRecords: {
+        "diagnostics-otel": {
+          source: "npm",
+          spec: "@openclaw/diagnostics-otel",
+          installPath: dir,
+          resolvedName: "@openclaw/diagnostics-otel",
+          resolvedVersion: "2026.5.18",
+          resolvedSpec: "@openclaw/diagnostics-otel@2026.5.18",
+        },
+      },
+      candidates: [
+        createPluginCandidate({
+          idHint: "diagnostics-otel",
+          rootDir: dir,
+          packageName: "@openclaw/diagnostics-otel",
+          origin: "config",
+        }),
+      ],
+    });
+
+    expect(registry.plugins).toHaveLength(1);
+    expectRecordFields(registry.plugins[0], "plugin", {
+      origin: "config",
+      trustedOfficialInstall: true,
+    });
   });
 
   it("preserves trusted official installs when a config path selects the installed package", () => {
@@ -1981,6 +2017,46 @@ describe("loadPluginManifestRegistry", () => {
 
     expect(registry.plugins[0]?.contracts).toEqual({
       externalAuthProviders: ["acme-ai"],
+    });
+  });
+
+  it("preserves host-trusted plugin contracts from plugin manifests", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "workflow-harness",
+      contracts: {
+        agentToolResultMiddleware: ["openclaw", "codex"],
+        trustedToolPolicies: ["workflow-budget"],
+      },
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "workflow-harness",
+      rootDir: dir,
+      origin: "workspace",
+    });
+
+    expect(registry.plugins[0]?.contracts).toEqual({
+      agentToolResultMiddleware: ["openclaw", "codex"],
+      trustedToolPolicies: ["workflow-budget"],
+    });
+  });
+
+  it("preserves host-trusted plugin contracts from catalog overlays", () => {
+    const contracts = manifestRegistryTesting.mergeManifestContracts(
+      {
+        agentToolResultMiddleware: ["openclaw"],
+      },
+      {
+        agentToolResultMiddleware: ["codex"],
+        trustedToolPolicies: ["workflow-budget"],
+      },
+    );
+
+    expect(contracts).toEqual({
+      agentToolResultMiddleware: ["openclaw", "codex"],
+      trustedToolPolicies: ["workflow-budget"],
     });
   });
 

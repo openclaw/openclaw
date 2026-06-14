@@ -1,3 +1,6 @@
+/**
+ * Tests for usage-report gateway methods and aggregation responses.
+ */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 
@@ -34,6 +37,15 @@ import { testApi, usageHandlers } from "./usage.js";
 
 describe("gateway usage helpers", () => {
   const dayMs = 24 * 60 * 60 * 1000;
+
+  function expectUtcDateRange(
+    range: ReturnType<typeof testApi.parseDateRange>,
+    startDate: string,
+    endDate: string,
+  ) {
+    expect(range.startMs).toBe(testApi.parseDateToMs(startDate));
+    expect(range.endMs).toBe(testApi.parseDateToMs(endDate)! + dayMs - 1);
+  }
 
   beforeEach(() => {
     testApi.costUsageCache.clear();
@@ -72,8 +84,7 @@ describe("gateway usage helpers", () => {
 
   it("parseDateRange uses explicit start/end as UTC when mode is missing (backward compatible)", () => {
     const range = testApi.parseDateRange({ startDate: "2026-02-01", endDate: "2026-02-02" });
-    expect(range.startMs).toBe(Date.UTC(2026, 1, 1));
-    expect(range.endMs).toBe(Date.UTC(2026, 1, 2) + dayMs - 1);
+    expectUtcDateRange(range, "2026-02-01", "2026-02-02");
   });
 
   it("parseDateRange uses explicit UTC mode", () => {
@@ -82,8 +93,7 @@ describe("gateway usage helpers", () => {
       endDate: "2026-02-02",
       mode: "utc",
     });
-    expect(range.startMs).toBe(Date.UTC(2026, 1, 1));
-    expect(range.endMs).toBe(Date.UTC(2026, 1, 2) + dayMs - 1);
+    expectUtcDateRange(range, "2026-02-01", "2026-02-02");
   });
 
   it("parseDateRange uses specific UTC offset for explicit dates", () => {

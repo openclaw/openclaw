@@ -1,3 +1,5 @@
+// Gateway WebSocket log formatting.
+// Redacts and compacts request/response/event metadata for console diagnostics.
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import chalk from "chalk";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
@@ -9,6 +11,9 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { DEFAULT_WS_SLOW_MS, getGatewayWsLogStyle } from "./ws-logging.js";
 
+/**
+ * WebSocket logging helpers for gateway request, response, and event traffic.
+ */
 const LOG_VALUE_LIMIT = 240;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const WS_LOG_REDACT_OPTIONS = {
@@ -36,6 +41,8 @@ function collectWsRestMeta(meta?: Record<string, unknown>): string[] {
     return restMeta;
   }
   for (const [key, value] of Object.entries(meta)) {
+    // Core frame fields are rendered elsewhere; this loop only emits extra
+    // metadata so logs stay compact and stable.
     if (value === undefined) {
       continue;
     }
@@ -87,10 +94,12 @@ function logWsInfoLine(params: {
   wsLog.info(tokens.join(" "));
 }
 
+/** Returns true when gateway WebSocket logging is enabled for the current console. */
 export function shouldLogWs(): boolean {
   return shouldLogSubsystemToConsole("gateway/ws");
 }
 
+/** Compacts long ids while keeping enough entropy for log correlation. */
 export function shortId(value: string): string {
   const s = value.trim();
   if (UUID_RE.test(s)) {
@@ -102,6 +111,7 @@ export function shortId(value: string): string {
   return `${s.slice(0, 12)}…${s.slice(-4)}`;
 }
 
+/** Formats and redacts arbitrary values before they are written to gateway logs. */
 export function formatForLog(value: unknown): string {
   try {
     if (value instanceof Error) {
@@ -187,6 +197,7 @@ function compactPreview(input: string, maxLen = 160): string {
   return `${oneLine.slice(0, Math.max(0, maxLen - 1))}…`;
 }
 
+/** Extracts small, non-sensitive fields from agent event payloads for WS logs. */
 export function summarizeAgentEventForWsLog(payload: unknown): Record<string, unknown> {
   if (!payload || typeof payload !== "object") {
     return {};

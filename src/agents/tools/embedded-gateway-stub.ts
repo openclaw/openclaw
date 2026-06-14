@@ -1,3 +1,8 @@
+/**
+ * Embedded-mode Gateway method stub.
+ *
+ * Implements only the Gateway calls needed by session tools and rejects unsupported methods.
+ */
 import type {
   SessionsListParams,
   SessionsResolveParams,
@@ -82,6 +87,7 @@ let runtimeMod: EmbeddedGatewayRuntime | undefined;
 
 async function getRuntime(): Promise<EmbeddedGatewayRuntime> {
   if (!runtimeMod) {
+    // Lazy import keeps embedded tools cheap and gives tests a single mock boundary.
     runtimeMod = (await import("./embedded-gateway-stub.runtime.js")) as EmbeddedGatewayRuntime;
   }
   return runtimeMod;
@@ -156,6 +162,7 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
             mode: "recent",
             maxMessages: max,
             maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
+            allowResetArchiveFallback: true,
           },
         )
       : [];
@@ -168,6 +175,7 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
 
   const effectiveMaxChars = rt.resolveEffectiveChatHistoryMaxChars(cfg);
 
+  // Mirror Gateway chat.history trimming so embedded mode has the same byte ceilings.
   const normalized = rt.augmentChatHistoryWithCanvasBlocks(
     rt.projectRecentChatDisplayMessages(rawMessages, {
       maxChars: effectiveMaxChars,
@@ -193,6 +201,7 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
   };
 }
 
+/** Creates a local callGateway replacement for supported session methods. */
 export function createEmbeddedCallGateway(): EmbeddedCallGateway {
   return async <T = Record<string, unknown>>(opts: CallGatewayOptions): Promise<T> => {
     const method = opts.method?.trim();

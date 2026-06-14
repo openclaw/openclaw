@@ -1,3 +1,6 @@
+/**
+ * Runs model and image fallback chains across provider/model candidates.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import {
@@ -72,6 +75,7 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "./model-selection-resolve.js";
+import { isAgentRunRestartAbortReason } from "./run-termination.js";
 import { resolveSessionSuspensionReason, suspendSession } from "./session-suspension.js";
 
 const log = createSubsystemLogger("model-fallback");
@@ -204,6 +208,9 @@ function isTerminalAbort(signal: AbortSignal | undefined): boolean {
   const reason = signal.reason;
   if (!(reason instanceof Error)) {
     return false;
+  }
+  if (isAgentRunRestartAbortReason(reason)) {
+    return true;
   }
   if (reason.name === "TimeoutError") {
     return true;
@@ -439,18 +446,18 @@ function isCliAgentRuntime(runtime: string | undefined, cfg: OpenClawConfig | un
   return isCliRuntimeAlias(normalized) || isCliProvider(normalized, cfg);
 }
 
-async function assertModelFallbackCandidateHarnessAvailable(
+async function resolveModelFallbackCandidateHarnessAuthPrecheck(
   params: ModelFallbackRuntimeContext & ModelCandidate,
-): Promise<void> {
+): Promise<{ skipsProviderAuthCooldown: boolean }> {
   if (!params.cfg) {
-    return;
+    return { skipsProviderAuthCooldown: false };
   }
   const agentHarnessRuntimeOverride = params.resolveAgentHarnessRuntimeOverride?.(
     params.provider,
     params.model,
   );
   if (isCliProvider(params.provider, params.cfg)) {
-    return;
+    return { skipsProviderAuthCooldown: false };
   }
   const agentRuntimeOverride = normalizeOptionalAgentRuntimeId(agentHarnessRuntimeOverride);
   const harnessPolicy = resolveAgentHarnessPolicy({
@@ -469,28 +476,25 @@ async function assertModelFallbackCandidateHarnessAvailable(
       ? "model"
       : harnessPolicy.runtimeSource;
   if (isCliAgentRuntime(agentRuntime, params.cfg)) {
-    return;
+    return { skipsProviderAuthCooldown: false };
   }
-  if (
-    agentRuntime === "auto" ||
-    agentRuntime === "openclaw" ||
-    (agentRuntime === "codex" && agentRuntimeSource === "implicit")
-  ) {
-    return;
+  if (agentRuntime === "openclaw") {
+    return { skipsProviderAuthCooldown: false };
+  }
+  if (agentRuntime === "auto" || (agentRuntime === "codex" && agentRuntimeSource === "implicit")) {
+    return { skipsProviderAuthCooldown: false };
   }
   await params.prepareAgentHarnessRuntime?.({
     provider: params.provider,
     model: params.model,
     agentHarnessRuntimeOverride,
   });
-  if (
-    agentRuntime !== "auto" &&
-    agentRuntime !== "openclaw" &&
-    !(agentRuntime === "codex" && agentRuntimeSource === "implicit") &&
-    !getRegisteredAgentHarness(agentRuntime)
-  ) {
+  if (!getRegisteredAgentHarness(agentRuntime)) {
     throw new MissingAgentHarnessError(agentRuntime);
   }
+  // Explicit non-Codex plugin harnesses own transport/auth; stale OpenClaw
+  // provider cooldowns must not block the harness before it starts.
+  return { skipsProviderAuthCooldown: agentRuntime !== "codex" };
 }
 
 function resolveCandidateAttemptError(
@@ -1060,12 +1064,22 @@ function shouldProbePrimaryDuringCooldown(params: {
   profileIds: string[];
   model: string;
 }): boolean {
-  if (!params.isPrimary || !params.hasFallbackCandidates) {
+  if (!params.isPrimary) {
     return false;
   }
 
   if (!isProbeThrottleOpen(params.now, params.throttleKey)) {
     return false;
+  }
+
+  // A single-provider primary has no fallback chain to prefer, so every open
+  // throttle slot is a recovery probe: "is the primary callable yet?" is a
+  // recovery question independent of fallback configuration. Without this, a
+  // fallbacks:[] setup that hits a rate/subscription cap stays suspended until
+  // the provider-reported reset (which can be days out) even though the rolling
+  // cap usually recovers earlier. See #90702.
+  if (!params.hasFallbackCandidates) {
+    return true;
   }
 
   const soonest = params.authRuntime.getSoonestCooldownExpiry(params.authStore, params.profileIds, {
@@ -1163,15 +1177,11 @@ function resolveCooldownDecision(params: {
   }
 
   // Billing is semi-persistent: the user may fix their balance, or a transient
-  // 402 might have been misclassified. Probe single-provider setups on the
-  // standard throttle so they can recover without a restart; when fallbacks
-  // exist, only probe near cooldown expiry so the fallback chain stays preferred.
+  // 402 might have been misclassified. shouldProbe already re-probes
+  // single-provider setups on the throttle (no fallback chain to prefer) and
+  // multi-fallback setups near cooldown expiry, so both recover without a restart.
   if (inferredReason === "billing") {
-    const shouldProbeSingleProviderBilling =
-      params.isPrimary &&
-      !params.hasFallbackCandidates &&
-      isProbeThrottleOpen(params.now, params.probeThrottleKey);
-    if (params.isPrimary && (shouldProbe || shouldProbeSingleProviderBilling)) {
+    if (params.isPrimary && shouldProbe) {
       return { type: "attempt", reason: inferredReason, markProbe: true };
     }
     return {
@@ -1275,7 +1285,7 @@ export async function runWithModelFallback<T>(
 
   for (let i = 0; i < candidates.length; i += 1) {
     const candidate = candidates[i];
-    await assertModelFallbackCandidateHarnessAvailable({
+    const candidateHarnessAuth = await resolveModelFallbackCandidateHarnessAuthPrecheck({
       cfg: params.cfg,
       agentId: params.agentId,
       sessionKey: params.sessionKey,
@@ -1342,7 +1352,7 @@ export async function runWithModelFallback<T>(
     let runOptions: ModelFallbackRunOptions | undefined;
     let attemptedDuringCooldown = false;
     let transientProbeProviderForAttempt: string | null = null;
-    if (authRuntime && authStore) {
+    if (authRuntime && authStore && !candidateHarnessAuth.skipsProviderAuthCooldown) {
       const profileIds = authRuntime.resolveAuthProfileOrder({
         cfg: params.cfg,
         store: authStore,

@@ -1,3 +1,4 @@
+// Tests media-only get-reply runs and sandboxed media attachment handling.
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -370,6 +371,52 @@ describe("runPreparedReply media-only handling", () => {
     expect(resolveThinkingCatalog).toHaveBeenCalledOnce();
     const call = requireRunReplyAgentCall();
     expect(call.followupRun.run.thinkLevel).toBe("off");
+  });
+
+  it("does not persist turn-local thinking fallback over a stored session override", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-thinking",
+      sessionFile: "/tmp/session-thinking.jsonl",
+      thinkingLevel: "high",
+      updatedAt: 1,
+    };
+    const sessionStore: Record<string, SessionEntry> = {
+      "session-key": sessionEntry,
+    };
+
+    await runPreparedReply(
+      baseParams({
+        provider: "openai",
+        model: "chat-latest",
+        resolvedThinkLevel: "high",
+        sessionEntry,
+        sessionStore,
+        storePath: "/tmp/openclaw-sessions.json",
+        modelState: {
+          resolveDefaultThinkingLevel: async () => "high",
+          resolveThinkingCatalog: async () => [
+            {
+              provider: "openai",
+              id: "chat-latest",
+              reasoning: false,
+            },
+          ],
+          allowedModelCatalog: [
+            {
+              provider: "openai",
+              id: "chat-latest",
+              name: "Chat Latest",
+            },
+          ],
+        } as never,
+      }),
+    );
+
+    const call = requireRunReplyAgentCall();
+    expect(call.followupRun.run.thinkLevel).toBe("off");
+    expect(sessionEntry.thinkingLevel).toBe("high");
+    expect(sessionStore["session-key"]?.thinkingLevel).toBe("high");
+    expect(updateSessionStore).not.toHaveBeenCalled();
   });
 
   it("keeps empty-assistant silence disabled for direct runs by default", async () => {
@@ -1004,6 +1051,37 @@ describe("runPreparedReply media-only handling", () => {
     });
     expect(call.followupRun.userTurnTranscriptRecorder?.message).not.toHaveProperty("MediaPath");
     expect(call.followupRun.userTurnTranscriptRecorder?.message).not.toHaveProperty("MediaPaths");
+  });
+
+  it("normalizes second-based inbound timestamps before preparing user turns", async () => {
+    await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "timestamped followup",
+          RawBody: "timestamped followup",
+          CommandBody: "timestamped followup",
+          OriginatingChannel: "whatsapp",
+          OriginatingTo: "+15550001",
+          ChatType: "direct",
+          Timestamp: 1_710_000_000,
+        },
+        sessionCtx: {
+          Body: "timestamped followup",
+          BodyStripped: "timestamped followup",
+          Provider: "whatsapp",
+          OriginatingChannel: "whatsapp",
+          OriginatingTo: "+15550001",
+          ChatType: "direct",
+        },
+      }),
+    );
+
+    const call = requireRunReplyAgentCall();
+    expect(call.followupRun.userTurnTranscriptRecorder?.message).toMatchObject({
+      role: "user",
+      content: "timestamped followup",
+      timestamp: 1_710_000_000_000,
+    });
   });
 
   it("does not rehydrate current MediaPaths after image understanding enriched the prompt", async () => {
@@ -1652,6 +1730,7 @@ describe("runPreparedReply media-only handling", () => {
       async () => await authPromise.then(() => undefined),
     );
     vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
+    const onSessionPrepared = vi.fn();
 
     const runPromise = runPreparedReply(
       baseParams({
@@ -1659,6 +1738,8 @@ describe("runPreparedReply media-only handling", () => {
         sessionId: "session-before-rotation",
         sessionEntry: sessionStore["session-key"],
         sessionStore,
+        storePath: "/tmp/sessions.json",
+        opts: { onSessionPrepared } as never,
       }),
     );
 
@@ -1690,6 +1771,11 @@ describe("runPreparedReply media-only handling", () => {
     await expect(runPromise).resolves.toEqual({ text: "ok" });
     const call = requireLastRunReplyAgentCall();
     expect(call?.followupRun.run.sessionId).toBe("session-after-rotation");
+    expect(onSessionPrepared).toHaveBeenLastCalledWith({
+      sessionKey: "session-key",
+      sessionId: "session-after-rotation",
+      storePath: "/tmp/sessions.json",
+    });
   });
   it("reports still shutting down when a new owner appears after waiting", async () => {
     vi.useFakeTimers();
@@ -1893,6 +1979,7 @@ describe("runPreparedReply media-only handling", () => {
           Surface: "telegram",
           ChatType: "group",
           InboundEventKind: "room_event",
+          MediaType: "audio/ogg",
           MessageSid: "35676",
           SenderName: "Keśava",
         },
@@ -1905,6 +1992,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.prompt).toBe("[OpenClaw room event]");
     expect(call?.followupRun.transcriptPrompt).toBe("");
     expect(call?.followupRun.currentInboundEventKind).toBe("room_event");
+    expect(call?.followupRun.currentInboundAudio).toBe(true);
     expect(call?.followupRun.run.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(call?.followupRun.run.suppressNextUserMessagePersistence).toBe(true);
     expect(call?.followupRun.currentInboundContext?.text).toContain(
@@ -2348,6 +2436,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(groupContextParams?.sessionCtx?.Surface).toBe("discord");
     expect(groupContextParams?.sessionCtx?.ChatType).toBe("channel");
     expect(groupContextParams?.sessionCtx?.GroupChannel).toBe("#ops");
+    expect(call?.followupRun.run.chatType).toBe("channel");
     expect(call?.followupRun.run.extraSystemPromptStatic).toBe("group:discord:channel:#ops");
   });
 
@@ -2546,6 +2635,108 @@ describe("runPreparedReply media-only handling", () => {
     const call = requireRunReplyAgentCall();
     expect(call?.followupRun.originatingAccountId).toBe("work");
     expect(call?.followupRun.originatingReplyToId).toBe("reply-24680");
+  });
+
+  it("captures the effective reply policy for queued Slack runs", async () => {
+    await runPreparedReply(
+      baseParams({
+        cfg: {
+          session: {},
+          channels: { slack: { replyToMode: "off" } },
+          agents: { defaults: {} },
+        },
+        ctx: {
+          Body: "",
+          RawBody: "",
+          CommandBody: "",
+          ThreadHistoryBody: "Earlier message in this thread",
+          Provider: "slack",
+          OriginatingChannel: undefined,
+          OriginatingTo: "C123",
+          ChatType: "group",
+        },
+        sessionCtx: {
+          Body: "",
+          BodyStripped: "",
+          ThreadHistoryBody: "Earlier message in this thread",
+          MediaPath: "/tmp/input.png",
+          Provider: "slack",
+          ChatType: "group",
+          OriginatingChannel: "slack",
+          OriginatingTo: "C123",
+          ReplyToId: "101.001",
+        },
+      }),
+    );
+
+    const call = requireRunReplyAgentCall();
+    expect(call?.followupRun.originatingReplyToId).toBe("101.001");
+    expect(call?.followupRun.originatingReplyToMode).toBe("off");
+  });
+
+  it("captures queued reply policy from hydrated system-event session context", async () => {
+    await runPreparedReply(
+      baseParams({
+        cfg: {
+          session: {},
+          channels: {
+            slack: {
+              replyToMode: "all",
+              replyToModeByChatType: { direct: "off" },
+            },
+          },
+          agents: { defaults: {} },
+        },
+        opts: { isHeartbeat: true },
+        ctx: {
+          Body: "scheduled wake",
+          RawBody: "scheduled wake",
+          CommandBody: "scheduled wake",
+          Provider: "cron-event",
+          SessionKey: "agent:main:slack:direct:U1",
+          OriginatingChannel: "slack",
+          OriginatingTo: "user:U1",
+        },
+        sessionCtx: {
+          Body: "scheduled wake",
+          BodyStripped: "scheduled wake",
+          Provider: "cron-event",
+          OriginatingChannel: "slack",
+          OriginatingTo: "user:U1",
+        },
+        sessionEntry: {
+          sessionId: "session-1",
+          updatedAt: 1,
+          chatType: "direct",
+          channel: "matrix",
+          lastChannel: "slack",
+          lastTo: "user:U1",
+          lastAccountId: "work",
+          deliveryContext: {
+            channel: "slack",
+            to: "user:U1",
+            accountId: "work",
+          },
+          origin: {
+            provider: "matrix",
+            surface: "matrix",
+            chatType: "direct",
+            to: "room:origin",
+            accountId: "origin",
+          },
+        } as SessionEntry,
+      }),
+    );
+
+    const call = requireRunReplyAgentCall();
+    expect(call?.followupRun.originatingChannel).toBe("slack");
+    expect(call?.followupRun.originatingTo).toBe("user:U1");
+    expect(call?.followupRun.originatingAccountId).toBe("work");
+    expect(call?.followupRun.originatingChatType).toBe("direct");
+    expect(call?.followupRun.originatingReplyToMode).toBe("off");
+    expect(call?.followupRun.run.messageProvider).toBe("slack");
+    expect(call?.followupRun.run.agentAccountId).toBe("work");
+    expect(call?.followupRun.run.chatType).toBe("direct");
   });
 
   it("uses transport thread metadata for followup originatingThreadId", async () => {

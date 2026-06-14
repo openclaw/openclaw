@@ -1,6 +1,7 @@
+// Openrouter tests cover music generation provider plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { expectExplicitMusicGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenRouterMusicGenerationProvider } from "./music-generation-provider.js";
 
 const {
@@ -74,12 +75,33 @@ function postRequest(): Record<string, unknown> {
   return request as Record<string, unknown>;
 }
 
+function resetOpenRouterMusicMocks() {
+  assertOkOrThrowHttpErrorMock.mockResolvedValue(undefined);
+  postJsonRequestMock.mockReset();
+  resolveApiKeyForProviderMock.mockResolvedValue({
+    apiKey: "openrouter-key",
+    source: "env",
+    mode: "api-key",
+  });
+  resolveProviderHttpRequestConfigMock.mockImplementation((params: Record<string, unknown>) => ({
+    baseUrl: params.baseUrl ?? params.defaultBaseUrl,
+    allowPrivateNetwork: false,
+    headers: new Headers(params.defaultHeaders as HeadersInit | undefined),
+    dispatcherPolicy: undefined,
+  }));
+}
+
 describe("openrouter music generation provider", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+    resetOpenRouterMusicMocks();
+  });
+
   afterEach(() => {
-    assertOkOrThrowHttpErrorMock.mockClear();
-    postJsonRequestMock.mockReset();
-    resolveApiKeyForProviderMock.mockClear();
-    resolveProviderHttpRequestConfigMock.mockClear();
+    resetOpenRouterMusicMocks();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it("declares explicit mode capabilities", () => {
@@ -208,6 +230,8 @@ describe("openrouter music generation provider", () => {
   });
 
   it("caps oversized OpenRouter music stream timeouts", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
       postJsonRequestMock.mockResolvedValue({
@@ -231,6 +255,7 @@ describe("openrouter music generation provider", () => {
       expect(streamTimeoutMs).toBeLessThanOrEqual(MAX_TIMER_TIMEOUT_MS);
     } finally {
       timeoutSpy.mockRestore();
+      vi.useRealTimers();
     }
   });
 

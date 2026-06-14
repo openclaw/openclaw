@@ -1,3 +1,5 @@
+// Gateway live agent probe helpers.
+// Builds prompts and verification helpers for live image and cron probe tests.
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { promisify } from "node:util";
@@ -9,6 +11,8 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 
 const execFileAsync = promisify(execFile);
 const LIVE_CRON_PROBE_DELAY_SECONDS = 7 * 24 * 60 * 60;
+const OPENCLAW_CLI_GATEWAY_TIMEOUT_MS = 30_000;
+const OPENCLAW_CLI_CHILD_TIMEOUT_MS = OPENCLAW_CLI_GATEWAY_TIMEOUT_MS + 45_000;
 
 type CronListCliResult = {
   jobs?: Array<{
@@ -31,11 +35,13 @@ type LiveCronProbeSpec = {
   argsJson: string;
 };
 
+/** Return true for live agents that expose Claude-style MCP tool names. */
 export function isClaudeLikeLiveAgent(raw: string): boolean {
   const normalized = normalizeOptionalLowercaseString(raw);
   return normalized === "claude" || normalized === "claude-cli";
 }
 
+/** Assert the live image probe answered with the expected cat description. */
 export function assertLiveImageProbeReply(text: string): void {
   const normalized = normalizeOptionalLowercaseString(text);
   if (normalized !== "cat" && !/(^|[^a-z])cat[.!?`'")\]]*$/.test(normalized ?? "")) {
@@ -43,6 +49,7 @@ export function assertLiveImageProbeReply(text: string): void {
   }
 }
 
+/** Resolve whether a live image probe should run for this agent/override. */
 export function shouldRunLiveImageProbe(params: { agent: string; override?: string }): boolean {
   const override = params.override?.trim();
   if (override) {
@@ -135,10 +142,13 @@ export async function runOpenClawCliJson<T>(args: string[], env: NodeJS.ProcessE
   delete childEnv.VITEST_MODE;
   delete childEnv.VITEST_POOL_ID;
   delete childEnv.VITEST_WORKER_ID;
-  const { stdout, stderr } = await execFileAsync(process.execPath, ["openclaw.mjs", ...args], {
+  const cliArgs = args.includes("--timeout")
+    ? args
+    : [...args, "--timeout", String(OPENCLAW_CLI_GATEWAY_TIMEOUT_MS)];
+  const { stdout, stderr } = await execFileAsync(process.execPath, ["openclaw.mjs", ...cliArgs], {
     cwd: process.cwd(),
     env: childEnv,
-    timeout: 30_000,
+    timeout: OPENCLAW_CLI_CHILD_TIMEOUT_MS,
     maxBuffer: 1024 * 1024,
   });
   const trimmed = stdout.trim();

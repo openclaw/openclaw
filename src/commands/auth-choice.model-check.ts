@@ -1,3 +1,4 @@
+// Post-selection model/auth sanity checks shown during onboarding and agent setup.
 import { ensureAuthProfileStore, listProfilesForProvider } from "../agents/auth-profiles.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
@@ -8,9 +9,9 @@ import {
   listOpenAIAuthProfileProvidersForAgentRuntime,
   openAIProviderUsesCodexRuntimeByDefault,
 } from "../agents/openai-routing.js";
+import { buildProviderAuthRecoveryHint } from "../agents/provider-auth-recovery-hint.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { buildProviderAuthRecoveryHint } from "./provider-auth-guidance.js";
 
 function resolveAuthProviderCandidates(params: {
   config: OpenClawConfig;
@@ -67,6 +68,7 @@ function hasProfileForProvider(params: {
   });
 }
 
+/** Warn when the selected default model is unknown or has no usable credentials. */
 export async function warnIfModelConfigLooksOff(
   config: OpenClawConfig,
   prompter: WizardPrompter,

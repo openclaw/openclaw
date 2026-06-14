@@ -1,7 +1,11 @@
+// Codex tests cover dynamic tool build plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  embeddedAgentLog,
+  type EmbeddedRunAttemptParams,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   addSandboxShellDynamicToolsIfAvailable,
@@ -11,6 +15,7 @@ import {
   includeForcedCodexDynamicToolAllow,
   resetOpenClawCodingToolsFactoryForTests,
   resolveOpenClawCodingToolsSessionKeys,
+  resolveCodexMessageToolProvider,
   setOpenClawCodingToolsFactoryForTests,
   shouldEnableCodexAppServerNativeToolSurface,
   shouldForceMessageTool,
@@ -18,6 +23,8 @@ import {
 import {
   filterCodexDynamicTools,
   resolveCodexDynamicToolsLoading,
+  resolveCodexDynamicToolsLoadingForModel,
+  shouldUseDirectCodexDynamicToolsForModel,
 } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import { createCodexTestModel } from "./test-support.js";
@@ -126,6 +133,15 @@ describe("Codex app-server dynamic tool build", () => {
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
+  it("uses the message tool channel before a differing ingress provider", () => {
+    expect(
+      resolveCodexMessageToolProvider({
+        messageChannel: "discord",
+        messageProvider: "discord-voice",
+      }),
+    ).toBe("discord");
+  });
+
   it("filters Codex-native dynamic tools from app-server tool exposure", () => {
     const tools = [
       "read",
@@ -179,6 +195,22 @@ describe("Codex app-server dynamic tool build", () => {
     expect(resolveCodexDynamicToolsLoading({}, privateQaCodexEnv)).toBe("direct");
   });
 
+  it("uses direct dynamic tools for OpenAI nano models without tool_search support", () => {
+    const tools = [createRuntimeDynamicTool("message"), createRuntimeDynamicTool("web_search")];
+    const toolBridge = createCodexDynamicToolBridge({
+      tools,
+      signal: new AbortController().signal,
+      loading: resolveCodexDynamicToolsLoadingForModel({}, "openai/gpt-5.4-nano"),
+    });
+
+    expect(shouldUseDirectCodexDynamicToolsForModel("gpt-5.4-nano")).toBe(true);
+    expect(resolveCodexDynamicToolsLoadingForModel({}, "gpt-5.4-nano")).toBe("direct");
+    expect(resolveCodexDynamicToolsLoadingForModel({}, "gpt-5.5")).toBe("searchable");
+    const webSearch = toolBridge.specs.find((tool) => tool.name === "web_search");
+    expect(webSearch).not.toHaveProperty("deferLoading");
+    expect(webSearch).not.toHaveProperty("namespace");
+  });
+
   it("quarantines unreadable tool entries before Codex-specific filtering", async () => {
     const messageTool = createRuntimeDynamicTool("message");
     const sourceTools = new Proxy([messageTool] as RuntimeDynamicToolForTest[], {
@@ -203,6 +235,38 @@ describe("Codex app-server dynamic tool build", () => {
     params.runtimePlan = createCodexRuntimePlanFixture();
 
     await expect(buildDynamicToolsForTest(params, workspaceDir)).resolves.toEqual([messageTool]);
+  });
+
+  it("quarantines non-object plugin schemas before Codex-specific filtering", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const messageTool = createRuntimeDynamicTool("message");
+    const brokenTool = {
+      ...createRuntimeDynamicTool("dofbot_move_angles"),
+      parameters: { type: "array", items: { type: "number" } },
+    };
+    setOpenClawCodingToolsFactoryForTests(() => [brokenTool, messageTool]);
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+
+    await expect(buildDynamicToolsForTest(params, workspaceDir)).resolves.toEqual([messageTool]);
+    expect(warn).toHaveBeenCalledWith(
+      "codex app-server quarantined 1 unsupported runtime tool schema before dynamic tool registration",
+      expect.objectContaining({
+        runId: "run-1",
+        sessionId: "session-1",
+        diagnostics: [
+          {
+            index: 0,
+            tool: "dofbot_move_angles",
+            violations: ['dofbot_move_angles.parameters.type must be "object"'],
+            violationCount: 1,
+          },
+        ],
+      }),
+    );
   });
 
   it("limits Codex memory flush runs to managed read and write tools", async () => {
@@ -493,6 +557,28 @@ describe("Codex app-server dynamic tool build", () => {
     expect((factoryOptions[0] as { authProfileStore?: unknown }).authProfileStore).toBe(
       authProfileStore,
     );
+  });
+
+  it("passes native and routable channel targets into Codex dynamic tools", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.currentChannelId = "D123";
+    params.currentMessagingTarget = "user:U123";
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    const factoryOptions: unknown[] = [];
+    setOpenClawCodingToolsFactoryForTests((options) => {
+      factoryOptions.push(options);
+      return [];
+    });
+
+    await buildDynamicToolsForTest(params, workspaceDir, { sandbox: null as never });
+
+    expect(factoryOptions[0]).toMatchObject({
+      currentChannelId: "D123",
+      currentMessagingTarget: "user:U123",
+    });
   });
 
   it("passes runtime config into Codex exec dynamic tool construction", async () => {
