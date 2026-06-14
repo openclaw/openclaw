@@ -40,6 +40,10 @@ import {
   type CodexPluginActivationResult,
 } from "../app-server/plugin-activation.js";
 import { buildCodexPluginAppCacheKey } from "../app-server/plugin-app-cache-key.js";
+import {
+  findOpenAiCuratedPluginSummary,
+  type CodexPluginRuntimeRequest,
+} from "../app-server/plugin-inventory.js";
 import type { v2 } from "../app-server/protocol.js";
 import { requestCodexAppServerJson } from "../app-server/request.js";
 import {
@@ -204,19 +208,18 @@ async function applyCodexPluginInstallItem(
   try {
     const appCacheKey = await buildTargetCodexPluginAppCacheKey(ctx);
     const appServer = resolveTargetCodexAppServer(ctx);
+    const targets = resolveCodexMigrationTargets(ctx);
     const result = await ensureCodexPluginActivation({
       identity: policy,
       installEvenIfActive: true,
-      request: async (method, requestParams) =>
-        await requestTargetCodexAppServerJson({
-          method,
-          requestParams,
-          timeoutMs: 60_000,
-          startOptions: appServer.start,
-          agentDir: resolveCodexMigrationTargets(ctx).agentDir,
-          config: ctx.config,
-          isolated: false,
-        }),
+      request: createTargetCodexPluginActivationRequest({
+        policy,
+        timeoutMs: 60_000,
+        startOptions: appServer.start,
+        agentDir: targets.agentDir,
+        config: ctx.config,
+        isolated: false,
+      }),
       appCache: defaultCodexAppInventoryCache,
       appCacheKey,
     });
@@ -307,7 +310,7 @@ function resolveTargetCodexAppServer(ctx: MigrationProviderContext) {
   });
 }
 
-async function requestTargetCodexAppServerJson(params: {
+type TargetCodexAppServerRequestParams = {
   method: string;
   requestParams?: unknown;
   timeoutMs: number;
@@ -315,24 +318,48 @@ async function requestTargetCodexAppServerJson(params: {
   agentDir: string;
   config: MigrationProviderContext["config"];
   isolated?: boolean;
-}): Promise<unknown> {
-  if (params.method !== "plugin/list") {
-    return await requestCodexAppServerJson(params);
-  }
+};
 
+function createTargetCodexPluginActivationRequest(params: {
+  policy: ResolvedCodexPluginPolicy;
+  timeoutMs: number;
+  startOptions: ReturnType<typeof resolveTargetCodexAppServer>["start"];
+  agentDir: string;
+  config: MigrationProviderContext["config"];
+  isolated?: boolean;
+}): CodexPluginRuntimeRequest {
+  return async (method, requestParams) => {
+    const request: TargetCodexAppServerRequestParams = {
+      method,
+      requestParams,
+      timeoutMs: params.timeoutMs,
+      startOptions: params.startOptions,
+      agentDir: params.agentDir,
+      config: params.config,
+      isolated: params.isolated,
+    };
+    if (method !== "plugin/list") {
+      return await requestCodexAppServerJson(request);
+    }
+    return await requestTargetCodexPluginList(request, params.policy);
+  };
+}
+
+async function requestTargetCodexPluginList(
+  params: TargetCodexAppServerRequestParams,
+  policy: ResolvedCodexPluginPolicy,
+): Promise<unknown> {
   const deadline = Date.now() + params.timeoutMs;
   const discoveryTimeoutMs = targetCodexMarketplaceDiscoveryTimeoutMs();
   const discoveryDeadline = Math.min(deadline, Date.now() + discoveryTimeoutMs);
   let lastResponse: unknown;
-  let attempt = 0;
   do {
-    attempt += 1;
     const remainingMs = Math.max(1, discoveryDeadline - Date.now());
     lastResponse = await requestCodexAppServerJson({
       ...params,
       timeoutMs: remainingMs,
     });
-    if (hasOpenAiCuratedMarketplace(lastResponse)) {
+    if (hasRequestedOpenAiCuratedPlugin(lastResponse, policy.pluginName)) {
       return lastResponse;
     }
     if (Date.now() >= discoveryDeadline) {
@@ -348,19 +375,19 @@ async function requestTargetCodexAppServerJson(params: {
   return lastResponse;
 }
 
-function hasOpenAiCuratedMarketplace(response: unknown): boolean {
-  if (!response || typeof response !== "object" || !("marketplaces" in response)) {
+function hasRequestedOpenAiCuratedPlugin(response: unknown, pluginName: string): boolean {
+  if (!isCodexPluginListResponse(response)) {
     return false;
   }
-  const marketplaces = (response as { marketplaces?: unknown }).marketplaces;
+  return findOpenAiCuratedPluginSummary(response, pluginName) !== undefined;
+}
+
+function isCodexPluginListResponse(response: unknown): response is v2.PluginListResponse {
   return (
-    Array.isArray(marketplaces) &&
-    marketplaces.some(
-      (marketplace) =>
-        marketplace &&
-        typeof marketplace === "object" &&
-        (marketplace as { name?: unknown }).name === CODEX_PLUGINS_MARKETPLACE_NAME,
-    )
+    !!response &&
+    typeof response === "object" &&
+    "marketplaces" in response &&
+    Array.isArray((response as { marketplaces?: unknown }).marketplaces)
   );
 }
 

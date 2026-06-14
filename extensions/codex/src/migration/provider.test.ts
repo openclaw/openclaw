@@ -1440,43 +1440,24 @@ describe("buildCodexMigrationProvider", () => {
       },
       agents: { defaults: { workspace: fixture.workspaceDir } },
     } as MigrationProviderContext["config"];
-    let targetPluginListCalls = 0;
-    let targetPluginListCallsAtInstall = 0;
-    appServerRequest.mockImplementation(
-      async ({ method, agentDir }: { method: string; agentDir?: string }) => {
-        const isTarget = typeof agentDir === "string";
-        if (method === "plugin/list" && !isTarget) {
-          return pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]);
-        }
-        if (method === "plugin/list" && isTarget) {
-          targetPluginListCalls += 1;
-          if (targetPluginListCalls === 1) {
-            return { marketplaces: [], marketplaceLoadErrors: [], featuredPluginIds: [] };
-          }
-          return pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]);
-        }
-        if (method === "plugin/read") {
-          return pluginRead("google-calendar");
-        }
-        if (method === "plugin/install") {
-          targetPluginListCallsAtInstall = targetPluginListCalls;
-          return { authPolicy: "ON_USE", appsNeedingAuth: [] } satisfies v2.PluginInstallResponse;
-        }
-        if (method === "skills/list") {
-          return { data: [] } satisfies v2.SkillsListResponse;
-        }
-        if (method === "hooks/list") {
-          return { data: [] } satisfies v2.HooksListResponse;
-        }
-        if (method === "config/mcpServer/reload") {
-          return {};
-        }
-        if (method === "app/list") {
-          return appsList([]);
-        }
-        throw new Error(`unexpected request ${method}`);
-      },
-    );
+    const loadedTargetPlugin = pluginList([
+      pluginSummary("google-calendar", { installed: true, enabled: true }),
+    ]);
+    appServerRequest
+      .mockResolvedValueOnce(
+        pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]),
+      )
+      .mockResolvedValueOnce(pluginRead("google-calendar"))
+      .mockResolvedValueOnce(loadedTargetPlugin)
+      .mockResolvedValueOnce({
+        authPolicy: "ON_USE",
+        appsNeedingAuth: [],
+      } satisfies v2.PluginInstallResponse)
+      .mockResolvedValueOnce(loadedTargetPlugin)
+      .mockResolvedValueOnce({ data: [] } satisfies v2.SkillsListResponse)
+      .mockResolvedValueOnce({ data: [] } satisfies v2.HooksListResponse)
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce(appsList([]));
     const provider = buildCodexMigrationProvider({
       runtime: createConfigRuntime(configState),
     });
@@ -1491,10 +1472,8 @@ describe("buildCodexMigrationProvider", () => {
       }),
     );
 
-    const installCall = appServerRequest.mock.calls.find(
-      ([arg]) => (arg as { method?: string }).method === "plugin/install",
-    )?.[0] as Record<string, unknown>;
-    expect(targetPluginListCallsAtInstall).toBe(2);
+    expect(appServerRequest).toHaveBeenCalledTimes(9);
+    const installCall = mockCallArg(appServerRequest, 3) as Record<string, unknown>;
     expectRecordFields(installCall, {
       method: "plugin/install",
       requestParams: {
@@ -1532,6 +1511,60 @@ describe("buildCodexMigrationProvider", () => {
     expect(configState.plugins?.entries?.codex?.config?.codexPlugins).not.toHaveProperty("*");
   });
 
+  it("waits for target curated plugin entries after the marketplace appears", async () => {
+    vi.stubEnv("OPENCLAW_CODEX_MIGRATION_PLUGIN_LIST_TIMEOUT_MS", "600");
+    const fixture = await createCodexFixture();
+    const configState: MigrationProviderContext["config"] = {
+      agents: { defaults: { workspace: fixture.workspaceDir } },
+    } as MigrationProviderContext["config"];
+    const loadedTargetPlugin = pluginList([
+      pluginSummary("openai-curated/google-calendar", {
+        name: "Google Calendar",
+        installed: true,
+        enabled: true,
+      }),
+    ]);
+    appServerRequest
+      .mockResolvedValueOnce(
+        pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]),
+      )
+      .mockResolvedValueOnce(pluginRead("google-calendar"))
+      .mockResolvedValueOnce(pluginList([]))
+      .mockResolvedValueOnce(loadedTargetPlugin)
+      .mockResolvedValueOnce({
+        authPolicy: "ON_USE",
+        appsNeedingAuth: [],
+      } satisfies v2.PluginInstallResponse)
+      .mockResolvedValueOnce(loadedTargetPlugin)
+      .mockResolvedValueOnce({ data: [] } satisfies v2.SkillsListResponse)
+      .mockResolvedValueOnce({ data: [] } satisfies v2.HooksListResponse)
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce(appsList([]));
+    const provider = buildCodexMigrationProvider({
+      runtime: createConfigRuntime(configState),
+    });
+
+    const result = await provider.apply(
+      makeContext({
+        source: fixture.codexHome,
+        stateDir: fixture.stateDir,
+        workspaceDir: fixture.workspaceDir,
+        config: configState,
+      }),
+    );
+
+    expect(appServerRequest).toHaveBeenCalledTimes(10);
+    expect(
+      appServerRequest.mock.calls
+        .slice(2, 5)
+        .map(([request]) => (request as { method?: string }).method),
+    ).toEqual(["plugin/list", "plugin/list", "plugin/install"]);
+    expectRecordFields(findItem(result.items, "plugin:google-calendar"), {
+      status: "migrated",
+      reason: "already active",
+    });
+  });
+
   it("leaves selected Codex plugins as warnings when target curated plugins never load", async () => {
     vi.stubEnv("OPENCLAW_CODEX_MIGRATION_PLUGIN_LIST_TIMEOUT_MS", "1");
     const fixture = await createCodexFixture();
@@ -1548,11 +1581,7 @@ describe("buildCodexMigrationProvider", () => {
           return pluginRead("google-calendar");
         }
         if (method === "plugin/list" && isTarget) {
-          return {
-            marketplaces: [],
-            marketplaceLoadErrors: [],
-            featuredPluginIds: [],
-          } satisfies v2.PluginListResponse;
+          return pluginList([]);
         }
         if (method === "skills/list") {
           return { data: [] } satisfies v2.SkillsListResponse;
@@ -1591,7 +1620,7 @@ describe("buildCodexMigrationProvider", () => {
       kind: "plugin",
       action: "install",
       status: "warning",
-      reason: "marketplace_missing",
+      reason: "plugin_missing",
     });
     expect(result.warnings).toContain(
       "Some Codex plugins could not be migrated. Run `openclaw migrate codex` after onboarding.",
