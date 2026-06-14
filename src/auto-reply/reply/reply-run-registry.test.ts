@@ -206,7 +206,82 @@ describe("reply run registry", () => {
     });
   });
 
-  it("releases a hung delivery barrier after the settle timeout", async () => {
+  it("keeps follow-up admission blocked until slow delivery settles", async () => {
+    vi.useFakeTimers();
+    try {
+      const operation = createReplyOperation({
+        sessionKey: "agent:main:main",
+        sessionId: "hung-session",
+        resetTriggered: false,
+      });
+      let releaseBarrier: () => void = () => {};
+      const barrier = new Promise<void>((resolve) => {
+        releaseBarrier = resolve;
+      });
+      const afterClear = vi.fn();
+      runAfterReplyOperationClear(operation, afterClear);
+      operation.completeWithAfterClearBarrier(barrier, 35 * 60_000);
+
+      await vi.advanceTimersByTimeAsync(REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS);
+      expect(afterClear).not.toHaveBeenCalled();
+      expect(() =>
+        createReplyOperation({
+          sessionKey: "agent:main:main",
+          sessionId: "blocked-session",
+          resetTriggered: false,
+          respectFollowupAdmissionBarrier: true,
+        }),
+      ).toThrow("Reply follow-up admission is blocked");
+
+      releaseBarrier();
+      await barrier;
+      await vi.waitFor(() => {
+        expect(afterClear).toHaveBeenCalledWith("hung-session");
+      });
+      const next = createReplyOperation({
+        sessionKey: "agent:main:main",
+        sessionId: "next-session",
+        resetTriggered: false,
+        respectFollowupAdmissionBarrier: true,
+      });
+      next.complete();
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
+  it("extends a hung delivery barrier only while bounded owner work remains active", async () => {
+    vi.useFakeTimers();
+    try {
+      const operation = createReplyOperation({
+        sessionKey: "agent:main:main",
+        sessionId: "active-owner-session",
+        resetTriggered: false,
+      });
+      let ownerActive = true;
+      const afterClear = vi.fn();
+      runAfterReplyOperationClear(operation, afterClear);
+      operation.completeWithAfterClearBarrier(new Promise<void>(() => {}), {
+        maxTimeoutMs: REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS * 3,
+        shouldExtend: () => ownerActive,
+      });
+
+      await vi.advanceTimersByTimeAsync(REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS);
+      expect(afterClear).not.toHaveBeenCalled();
+
+      ownerActive = false;
+      await vi.advanceTimersByTimeAsync(REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS);
+      await vi.waitFor(() => {
+        expect(afterClear).toHaveBeenCalledWith("active-owner-session");
+      });
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
+  it("eventually releases a permanently hung delivery barrier at the default timeout", async () => {
     vi.useFakeTimers();
     try {
       const operation = createReplyOperation({

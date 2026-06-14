@@ -7,6 +7,7 @@ import {
 } from "../../logging/diagnostic-run-activity.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { resolveTimerTimeoutMs } from "../../shared/number-coercion.js";
+import type { ReplyFollowupAdmissionBarrierTimeoutPolicy } from "./reply-dispatcher.types.js";
 
 export type ReplyRunKey = string;
 
@@ -76,7 +77,10 @@ export type ReplyOperation = {
    * Clear active-run state immediately, but delay registered after-clear work
    * until delivery or another external barrier settles.
    */
-  completeWithAfterClearBarrier(barrier: PromiseLike<unknown>): void;
+  completeWithAfterClearBarrier(
+    barrier: PromiseLike<unknown>,
+    timeout?: number | ReplyFollowupAdmissionBarrierTimeoutPolicy,
+  ): void;
   fail(code: Exclude<ReplyOperationFailureCode, "aborted_by_user">, cause?: unknown): void;
   abortByUser(): void;
   abortForRestart(): void;
@@ -252,12 +256,14 @@ function registerFollowupAdmissionBarrier(
   sessionKey: string,
   sessionId: string,
   barrier: PromiseLike<unknown>,
+  timeout: number | ReplyFollowupAdmissionBarrierTimeoutPolicy = REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
 ): ReplyRunFollowupAdmissionBarrier {
   const barriersByKey = replyRunState.followupAdmissionBarriersByKey;
   const previous = barriersByKey.get(sessionKey)?.settled;
-  // A hung transport must not permanently poison follow-up admission.
+  // Owners may extend this for bounded retry envelopes; all barriers retain a failsafe.
   const current = new Promise<void>((resolve) => {
     let settled = false;
+    let timer: ReturnType<typeof setTimeout>;
     const finish = () => {
       if (settled) {
         return;
@@ -266,8 +272,39 @@ function registerFollowupAdmissionBarrier(
       clearTimeout(timer);
       resolve();
     };
-    const timer = setTimeout(finish, REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS);
-    timer.unref?.();
+    const schedule = (delayMs: number, callback: () => void) => {
+      timer = setTimeout(callback, delayMs);
+      timer.unref?.();
+    };
+    if (typeof timeout === "number") {
+      schedule(resolveTimerTimeoutMs(timeout, REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS), finish);
+    } else {
+      const startedAt = Date.now();
+      const maxTimeoutMs = resolveTimerTimeoutMs(
+        timeout.maxTimeoutMs,
+        REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
+      );
+      const checkOwnerActivity = () => {
+        const remainingMs = maxTimeoutMs - (Date.now() - startedAt);
+        if (remainingMs <= 0) {
+          finish();
+          return;
+        }
+        let shouldExtend = false;
+        try {
+          shouldExtend = timeout.shouldExtend();
+        } catch {
+          finish();
+          return;
+        }
+        if (!shouldExtend) {
+          finish();
+          return;
+        }
+        schedule(Math.min(REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS, remainingMs), checkOwnerActivity);
+      };
+      schedule(Math.min(REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS, maxTimeoutMs), checkOwnerActivity);
+    }
     void Promise.resolve(barrier).then(finish, finish);
   });
   const settled = previous ? Promise.all([previous, current]).then(() => undefined) : current;
@@ -355,13 +392,21 @@ export function createReplyOperation(params: {
   let stateCleared = false;
   let retainFailureUntilComplete = false;
 
-  const clearState = (afterClearBarrier?: PromiseLike<unknown>) => {
+  const clearState = (
+    afterClearBarrier?: PromiseLike<unknown>,
+    followupAdmissionBarrierTimeout?: number | ReplyFollowupAdmissionBarrierTimeoutPolicy,
+  ) => {
     if (stateCleared) {
       return;
     }
     stateCleared = true;
     const registeredBarrier = afterClearBarrier
-      ? registerFollowupAdmissionBarrier(sessionKey, currentSessionId, afterClearBarrier)
+      ? registerFollowupAdmissionBarrier(
+          sessionKey,
+          currentSessionId,
+          afterClearBarrier,
+          followupAdmissionBarrierTimeout,
+        )
       : undefined;
     updateFollowupAdmissionSessionId(sessionKey, currentSessionId);
     markReplyRunDiagnosticWorkEnded({ sessionKey, sessionId: currentSessionId });
@@ -499,12 +544,12 @@ export function createReplyOperation(params: {
       runAfterReplyOperationClear(operation, afterClear);
       operation.complete();
     },
-    completeWithAfterClearBarrier(barrier) {
+    completeWithAfterClearBarrier(barrier, timeoutMs) {
       if (!result) {
         result = { kind: "completed" };
         phase = "completed";
       }
-      clearState(barrier);
+      clearState(barrier, timeoutMs);
     },
     fail(code, cause) {
       if (!result) {

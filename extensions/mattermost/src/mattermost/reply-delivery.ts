@@ -6,7 +6,15 @@ import {
   isReasoningReplyPayload,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import type {
+  ReplyDispatchKind,
+  ReplyFollowupAdmissionBarrierTimeoutPolicy,
+  ReplyPayload,
+} from "openclaw/plugin-sdk/reply-runtime";
+import {
+  resolveMattermostReplyDeliveryBarrierTimeoutMs,
+  type CreateDmChannelRetryOptions,
+} from "./client.js";
 
 type MarkdownTableMode = Parameters<PluginRuntime["channel"]["text"]["convertMarkdownTables"]>[1];
 
@@ -19,8 +27,59 @@ type SendMattermostMessage = (
     mediaUrl?: string;
     mediaLocalRoots?: readonly string[];
     replyToId?: string;
+    onDmChannelResolution?: (resolution: PromiseLike<unknown>) => void;
   },
 ) => Promise<unknown>;
+
+export function createMattermostReplyDeliveryBarrier(params: {
+  isDirect: boolean;
+  dmRetryOptions?: CreateDmChannelRetryOptions;
+}) {
+  let activeDmChannelResolutions = 0;
+  let failedDmChannelResolution = false;
+  let queuedDeliveryCount = 0;
+  let settledDeliveryCount = 0;
+  return {
+    trackDmChannelResolution(resolution: PromiseLike<unknown>) {
+      activeDmChannelResolutions += 1;
+      void Promise.resolve(resolution).then(
+        () => {
+          activeDmChannelResolutions -= 1;
+          failedDmChannelResolution = false;
+        },
+        () => {
+          activeDmChannelResolutions -= 1;
+          failedDmChannelResolution = true;
+        },
+      );
+    },
+    markDeliverySettled() {
+      settledDeliveryCount += 1;
+    },
+    resolveTimeoutPolicy(context: {
+      queuedCounts: Readonly<Record<ReplyDispatchKind, number>>;
+      humanDelayBudgetMs: number;
+    }): ReplyFollowupAdmissionBarrierTimeoutPolicy | undefined {
+      const { queuedCounts } = context;
+      queuedDeliveryCount = Object.values(queuedCounts).reduce((sum, count) => sum + count, 0);
+      const maxTimeoutMs = resolveMattermostReplyDeliveryBarrierTimeoutMs({
+        isDirect: params.isDirect,
+        dmRetryOptions: params.dmRetryOptions,
+        queuedCounts,
+        humanDelayBudgetMs: context.humanDelayBudgetMs,
+      });
+      if (maxTimeoutMs === undefined) {
+        return undefined;
+      }
+      return {
+        maxTimeoutMs,
+        shouldExtend: () =>
+          activeDmChannelResolutions > 0 ||
+          (failedDmChannelResolution && settledDeliveryCount < queuedDeliveryCount),
+      };
+    },
+  };
+}
 
 /**
  * Result of `deliverMattermostReplyPayload`. Callers in `monitor.ts` use this
@@ -41,6 +100,7 @@ export async function deliverMattermostReplyPayload(params: {
   textLimit: number;
   tableMode: MarkdownTableMode;
   sendMessage: SendMattermostMessage;
+  onDmChannelResolution?: (resolution: PromiseLike<unknown>) => void;
 }): Promise<MattermostReplyDeliveryOutcome> {
   if (isReasoningReplyPayload(params.payload)) {
     return "reasoning_skipped";
@@ -67,6 +127,9 @@ export async function deliverMattermostReplyPayload(params: {
         cfg: params.cfg,
         accountId: params.accountId,
         replyToId: params.replyToId,
+        ...(params.onDmChannelResolution
+          ? { onDmChannelResolution: params.onDmChannelResolution }
+          : {}),
       });
     },
     sendMedia: async ({ mediaUrl, caption }) => {
@@ -76,6 +139,9 @@ export async function deliverMattermostReplyPayload(params: {
         mediaUrl,
         mediaLocalRoots,
         replyToId: params.replyToId,
+        ...(params.onDmChannelResolution
+          ? { onDmChannelResolution: params.onDmChannelResolution }
+          : {}),
       });
     },
   });
