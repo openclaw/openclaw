@@ -1,5 +1,9 @@
 // Qqbot tests cover outbound dispatch plugin behavior.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { sendMedia, sendText } from "../messaging/outbound.js";
 import type { InboundContext } from "./inbound-context.js";
 import { dispatchOutbound } from "./outbound-dispatch.js";
 import type { GatewayAccount, GatewayPluginRuntime } from "./types.js";
@@ -214,6 +218,63 @@ describe("dispatchOutbound", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("uploads local media from scoped outbound media roots", async () => {
+    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-scoped-media-"));
+    try {
+      const filePath = path.join(tmpRoot, "report.docx");
+      await fs.writeFile(filePath, Buffer.from("report"));
+      const realFilePath = await fs.realpath(filePath);
+
+      const result = await sendMedia({
+        to: "qqbot:c2c:user-openid",
+        text: "",
+        mediaUrl: filePath,
+        accountId: "qq-main",
+        account,
+        mediaAccess: { localRoots: [tmpRoot] },
+      });
+
+      expect(result.error).toBeUndefined();
+      expect(sendMediaMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "file",
+          source: { localPath: realFilePath },
+          target: { id: "user-openid", type: "c2c" },
+        }),
+      );
+    } finally {
+      await fs.rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("uploads qqmedia text tags from scoped outbound media roots", async () => {
+    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-scoped-media-"));
+    try {
+      const filePath = path.join(tmpRoot, "tagged-report.docx");
+      await fs.writeFile(filePath, Buffer.from("report"));
+      const realFilePath = await fs.realpath(filePath);
+
+      const result = await sendText({
+        to: "qqbot:c2c:user-openid",
+        text: `<qqmedia>${filePath}</qqmedia>`,
+        accountId: "qq-main",
+        account,
+        mediaAccess: { localRoots: [tmpRoot] },
+      });
+
+      expect(result.error).toBeUndefined();
+      expect(sendMediaMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "file",
+          source: { localPath: realFilePath },
+          target: { id: "user-openid", type: "c2c" },
+        }),
+      );
+    } finally {
+      await fs.rm(tmpRoot, { recursive: true, force: true });
+    }
   });
 
   it("keeps waiting past 300s when a slow provider timeout is configured", async () => {

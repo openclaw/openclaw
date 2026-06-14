@@ -198,7 +198,13 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
 
     debugLog(`[qqbot] sendText: Send queue: ${sendQueue.map((item) => item.type).join(" -> ")}`);
 
-    const mediaTarget = buildMediaTarget({ to, account, replyToId });
+    const mediaTarget = buildMediaTarget({
+      to,
+      account,
+      replyToId,
+      mediaAccess: ctx.mediaAccess,
+      mediaLocalRoots: ctx.mediaLocalRoots,
+    });
     let lastResult: OutboundResult = { channel: "qqbot" };
 
     for (const item of sendQueue) {
@@ -244,6 +250,8 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
             accountId: account.accountId,
             replyToId,
             account,
+            mediaAccess: ctx.mediaAccess,
+            mediaLocalRoots: ctx.mediaLocalRoots,
           });
         }
       } catch (err) {
@@ -317,15 +325,21 @@ export async function sendMedia(ctx: MediaOutboundContext): Promise<OutboundResu
     return { channel: "qqbot", error: "mediaUrl is required for sendMedia" };
   }
 
+  const target = buildMediaTarget({
+    to,
+    account,
+    replyToId,
+    mediaAccess: ctx.mediaAccess,
+    mediaLocalRoots: ctx.mediaLocalRoots,
+  });
   const resolvedMediaPath = resolveOutboundMediaPath(ctx.mediaUrl, "media", {
     allowMissingLocalPath: true,
+    extraLocalRoots: target.mediaLocalRoots ? [...target.mediaLocalRoots] : undefined,
   });
   if (!resolvedMediaPath.ok) {
     return { channel: "qqbot", error: resolvedMediaPath.error };
   }
   const mediaUrl = resolvedMediaPath.mediaPath;
-
-  const target = buildMediaTarget({ to, account, replyToId });
 
   if (isAudioFile(mediaUrl, mimeType)) {
     const formats =
