@@ -12,11 +12,13 @@ OpenClaw memory reranker plugin that proxies to a Cohere-compatible /v1/rerank e
 ## Distribution
 
 - Package: `@openclaw/memory-external-reranker`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub
 
 ## Surface
 
 contracts: memoryRerankers, tools
+
+<!-- openclaw-plugin-reference:manual-start -->
 
 ## Configuration
 
@@ -27,3 +29,9 @@ Configure the plugin in `plugins.memory-external-reranker`.
 - `allowPrivateNetwork`: required when the provider base URL is localhost or a private IP
 
 See [External reranker](/plugins/reference/external-reranker#private-or-localhost-endpoints) for examples.
+
+<!-- openclaw-plugin-reference:manual-end -->
+
+## Related docs
+
+- [memory-external-reranker](/plugins/memory-external-reranker)
