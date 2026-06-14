@@ -1,27 +1,12 @@
 /**
  * File encoding auto-detection for the session read tool.
  *
- * Delegates to the shared Windows codepage decoder on Windows and falls back
- * through the same codepage priority list on other platforms so that legacy
- * text files (GBK, Big5, etc.) are readable everywhere.
+ * On win32, delegates to the shared Windows codepage decoder so legacy text
+ * files (GBK, Big5, etc.) are decoded with the active console codepage.
+ * On other platforms, preserves the original UTF-8-only behavior.
  */
 import { Buffer } from "node:buffer";
-import {
-  decodeWindowsOutputBuffer,
-  WINDOWS_CODEPAGE_ENCODING_MAP,
-} from "../../../infra/windows-encoding.js";
-
-// Fallback encoding priority for non-Windows platforms, ordered by prevalence
-// of legacy file encodings.  Uses the same encoding labels as the shared
-// WINDOWS_CODEPAGE_ENCODING_MAP so there is a single source of truth.
-const LEGACY_ENCODING_PRIORITY: readonly string[] = [
-  WINDOWS_CODEPAGE_ENCODING_MAP[936],   // gbk
-  WINDOWS_CODEPAGE_ENCODING_MAP[950],   // big5
-  WINDOWS_CODEPAGE_ENCODING_MAP[932],   // shift_jis
-  WINDOWS_CODEPAGE_ENCODING_MAP[949],   // euc-kr
-  WINDOWS_CODEPAGE_ENCODING_MAP[54936], // gb18030
-  WINDOWS_CODEPAGE_ENCODING_MAP[1252],  // windows-1252
-];
+import { decodeWindowsOutputBuffer } from "../../../infra/windows-encoding.js";
 
 const UTF8_BOM = Buffer.from([0xef, 0xbb, 0xbf]);
 const UTF16LE_BOM = Buffer.from([0xff, 0xfe]);
@@ -72,9 +57,10 @@ function decodeStrictUtf8(buffer: Buffer): string | null {
 }
 
 /**
- * Decodes a file buffer using the same encoding policy as the rest of the
- * codebase: BOM-prefixed → strict UTF-8 → Windows active codepage (on win32)
- * or the shared codepage priority list (other platforms).
+ * Decodes a file buffer.  On win32, falls back to the active console codepage
+ * (GBK, Big5, Shift_JIS, etc.) via the shared `decodeWindowsOutputBuffer`.
+ * On other platforms, preserves the original UTF-8-only behavior so that
+ * legacy encodings are not silently mis-decoded.
  */
 export function decodeFileBuffer(buffer: Buffer): string {
   if (buffer.length === 0) {
@@ -88,27 +74,18 @@ export function decodeFileBuffer(buffer: Buffer): string {
     return new TextDecoder(bomEncoding).decode(body);
   }
 
-  // 2. Strict UTF-8 (valid for the vast majority of files)
+  // 2. Strict UTF-8 — valid for the vast majority of files
   const strictUtf8 = decodeStrictUtf8(buffer);
   if (strictUtf8 !== null) {
     return strictUtf8;
   }
 
-  // 3. On win32, delegate to the shared Windows codepage decoder which uses
-  //    the active console codepage (GBK, Big5, Shift_JIS, etc.).
+  // 3. On win32, delegate to the shared Windows codepage decoder which
+  //    uses the active console codepage (resolved once via chcp).
   if (process.platform === "win32") {
     return decodeWindowsOutputBuffer({ buffer });
   }
 
-  // 4. Non-Windows: try each codepage from the shared map in priority order.
-  for (const encoding of LEGACY_ENCODING_PRIORITY) {
-    try {
-      return new TextDecoder(encoding).decode(buffer);
-    } catch {
-      continue;
-    }
-  }
-
-  // 5. Final fallback: lenient UTF-8 (original behavior).
+  // 4. Final fallback: lenient UTF-8 (original behavior, no guessing).
   return buffer.toString("utf-8");
 }

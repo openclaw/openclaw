@@ -2,7 +2,7 @@
 import { spawnSync } from "node:child_process";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
-export const WINDOWS_CODEPAGE_ENCODING_MAP: Record<number, string> = {
+const WINDOWS_CODEPAGE_ENCODING_MAP: Record<number, string> = {
   65001: "utf-8",
   54936: "gb18030",
   936: "gbk",

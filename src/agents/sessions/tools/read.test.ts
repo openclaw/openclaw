@@ -103,8 +103,9 @@ describe("read tool", () => {
   });
 
   describe("encoding auto-detection (decodeFileBuffer)", () => {
-    it("decodes GBK-encoded Chinese text", () => {
-      // GBK encoding: "Chinese" = \xd6\xd0\xce\xc4 (2 bytes per character)
+    const gbkUnitTest = process.platform === "win32" ? it : it.skip;
+    gbkUnitTest("decodes GBK-encoded Chinese text (win32 codepage)", () => {
+      // GBK encoding: 中文 = \xd6\xd0\xce\xc4 (2 bytes per character)
       const gbkBuffer = Buffer.from([0xd6, 0xd0, 0xce, 0xc4, 0x0a, 0x63, 0x6f, 0x64, 0x65]);
       const result = decodeFileBuffer(gbkBuffer);
       expect(result).toBe("中文\ncode");
@@ -148,8 +149,9 @@ describe("read tool", () => {
       expect(result).toBe("");
     });
 
-    it("decodes mixed GBK content read through tool", async () => {
-      // GBK bytes for "file" (\xce\xc4\xbc\xfe) followed by newline and ASCII
+    const gbkPlatformTest = process.platform === "win32" ? it : it.skip;
+    gbkPlatformTest("decodes GBK content via active console codepage (win32)", async () => {
+      // GBK bytes for 文件 followed by newline and ASCII
       const gbkBuffer = Buffer.from([
         0xce, 0xc4, 0xbc, 0xfe, 0x0a, 0x73, 0x65, 0x63, 0x6f, 0x6e, 0x64,
       ]);
@@ -170,6 +172,18 @@ describe("read tool", () => {
       );
 
       expect(textContent(result)).toBe("文件\nsecond");
+    });
+
+    const nonWin32 = process.platform !== "win32" ? it : it.skip;
+    nonWin32("preserves lenient UTF-8 fallback on non-Windows (no encoding guess)", async () => {
+      // Verify that on non-Windows, invalid UTF-8 still falls back to lenient
+      // UTF-8 — we do not guess legacy encodings to avoid silent corruption.
+      const gbkBuffer = Buffer.from([
+        0xce, 0xc4, 0xbc, 0xfe, 0x0a, 0x73, 0x65, 0x63, 0x6f, 0x6e, 0x64,
+      ]);
+      const result = decodeFileBuffer(gbkBuffer);
+      // Lenient UTF-8 produces replacement characters, not Chinese text.
+      expect(result).not.toBe("文件\nsecond");
     });
   });
 });
