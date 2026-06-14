@@ -1,10 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
-import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { pathExists } from "../utils.js";
 import { formatErrorMessage } from "./errors.js";
+import { root as openFsRoot } from "./fs-safe.js";
 import {
   collectPackageDistInventory,
   isLegacyContentInventoryCompatVersion,
@@ -236,6 +236,21 @@ async function hashFileSha256(filePath: string): Promise<string> {
   return createHash("sha256").update(content).digest("hex");
 }
 
+async function buildLocalOverrideInventoryEntry(params: {
+  relativePath: string;
+  sourcePath: string;
+  mode?: number;
+}): Promise<PackageDistContentInventoryEntry> {
+  const content = await fs.readFile(params.sourcePath);
+  const stats = await fs.stat(params.sourcePath);
+  return {
+    path: params.relativePath,
+    sha256: createHash("sha256").update(content).digest("hex"),
+    mode: params.mode ?? normalizeFileMode(stats.mode),
+    size: content.length,
+  };
+}
+
 function normalizeFileMode(mode: number): number {
   return mode & 0o777;
 }
@@ -248,72 +263,230 @@ async function copyFileWithMode(source: string, destination: string, mode?: numb
   }
 }
 
-async function ensureLocalOverrideTargetParent(params: {
-  packageRoot: string;
-  realPackageRoot: string;
+type LocalOverridePackageRoot = Awaited<ReturnType<typeof openFsRoot>>;
+
+function createLocalOverrideMutationPath(relativePath: string, label: string): string {
+  const normalized = normalizeDistPath(relativePath);
+  return path.posix.join(
+    path.posix.dirname(normalized),
+    `.openclaw-override-${label}-${randomUUID()}.tmp`,
+  );
+}
+
+async function writeRollbackBackup(params: {
+  backupPath: string;
+  content: Buffer;
+  mode: number;
+}): Promise<void> {
+  await fs.mkdir(path.dirname(params.backupPath), { recursive: true });
+  await fs.writeFile(params.backupPath, params.content);
+  if (process.platform !== "win32") {
+    await fs.chmod(params.backupPath, params.mode);
+  }
+}
+
+async function publishLocalOverrideTarget(params: {
+  packageFs: LocalOverridePackageRoot;
+  sourcePath: string;
   relativePath: string;
 }): Promise<void> {
-  const parentSegments = path.posix.dirname(normalizeDistPath(params.relativePath)).split("/");
-  let currentPath = params.packageRoot;
-  for (const segment of parentSegments) {
-    currentPath = path.join(currentPath, segment);
-    try {
-      const stats = await fs.lstat(currentPath);
-      if (!stats.isDirectory() || stats.isSymbolicLink()) {
-        throw new Error(`unsafe local override parent: ${params.relativePath}`);
-      }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw error;
-      }
-      await assertLocalOverrideMutationTopology(params);
-      await fs.mkdir(currentPath);
+  await assertLocalOverrideMutationTopology({
+    packageRoot: params.packageFs.rootDir,
+    realPackageRoot: params.packageFs.rootReal,
+    relativePath: params.sourcePath,
+  });
+  await assertLocalOverrideMutationTopology({
+    packageRoot: params.packageFs.rootDir,
+    realPackageRoot: params.packageFs.rootReal,
+    relativePath: params.relativePath,
+  });
+  const sourceAbsolutePath = resolveSafePackagePath(params.packageFs.rootDir, params.sourcePath);
+  await fs.link(
+    sourceAbsolutePath,
+    resolveSafePackagePath(params.packageFs.rootDir, params.relativePath),
+  );
+  await assertLocalOverrideMutationTopology({
+    packageRoot: params.packageFs.rootDir,
+    realPackageRoot: params.packageFs.rootReal,
+    relativePath: params.relativePath,
+  });
+  await params.packageFs.remove(params.sourcePath);
+}
+
+async function restoreMovedLocalOverrideTarget(params: {
+  packageFs: LocalOverridePackageRoot;
+  movedPath: string;
+  relativePath: string;
+}): Promise<void> {
+  await publishLocalOverrideTarget({
+    packageFs: params.packageFs,
+    sourcePath: params.movedPath,
+    relativePath: params.relativePath,
+  });
+}
+
+async function moveExpectedLocalOverrideTarget(params: {
+  packageFs: LocalOverridePackageRoot;
+  relativePath: string;
+  expected: PackageDistContentInventoryEntry;
+  allowHardlinks?: boolean;
+}): Promise<{ movedPath: string; content: Buffer; mode: number }> {
+  const movedPath = createLocalOverrideMutationPath(params.relativePath, "previous");
+  let targetMoved = false;
+  try {
+    if (params.allowHardlinks) {
+      await assertLocalOverrideMutationTopology({
+        packageRoot: params.packageFs.rootDir,
+        realPackageRoot: params.packageFs.rootReal,
+        relativePath: params.relativePath,
+      });
+      await fs.rename(
+        resolveSafePackagePath(params.packageFs.rootDir, params.relativePath),
+        resolveSafePackagePath(params.packageFs.rootDir, movedPath),
+      );
+      targetMoved = true;
+      await assertLocalOverrideMutationTopology({
+        packageRoot: params.packageFs.rootDir,
+        realPackageRoot: params.packageFs.rootReal,
+        relativePath: movedPath,
+      });
+    } else {
+      await params.packageFs.move(params.relativePath, movedPath);
+      targetMoved = true;
     }
-    await assertLocalOverrideMutationTopology(params);
+    const moved = await params.packageFs.read(movedPath, {
+      hardlinks: params.allowHardlinks ? "allow" : "reject",
+      maxBytes: Number.POSITIVE_INFINITY,
+      symlinks: "reject",
+    });
+    const mode = normalizeFileMode(moved.stat.mode);
+    const sha256 = createHash("sha256").update(moved.buffer).digest("hex");
+    if (
+      sha256 !== params.expected.sha256 ||
+      (process.platform !== "win32" && mode !== normalizeFileMode(params.expected.mode))
+    ) {
+      throw new Error(`local override target changed during mutation: ${params.relativePath}`);
+    }
+    return { movedPath, content: moved.buffer, mode };
+  } catch (error) {
+    if (targetMoved) {
+      await restoreMovedLocalOverrideTarget({
+        packageFs: params.packageFs,
+        movedPath,
+        relativePath: params.relativePath,
+      }).catch(() => undefined);
+    }
+    throw error;
   }
 }
 
 async function replaceLocalOverrideTarget(params: {
-  packageRoot: string;
-  realPackageRoot: string;
+  packageFs: LocalOverridePackageRoot;
   relativePath: string;
   sourcePath: string;
   mode?: number;
+  expected?: PackageDistContentInventoryEntry;
+  backupPath?: string;
 }): Promise<void> {
-  await ensureLocalOverrideTargetParent(params);
-  const targetPath = resolveSafePackagePath(params.packageRoot, params.relativePath);
-  const temporaryPath = path.join(
-    path.dirname(targetPath),
-    `.openclaw-override-${randomUUID()}.tmp`,
-  );
+  const temporaryPath = createLocalOverrideMutationPath(params.relativePath, "next");
+  let backupWritten = false;
+  let movedPath: string | undefined;
   try {
-    await assertLocalOverrideMutationTopology(params);
-    await fs.copyFile(params.sourcePath, temporaryPath, fsConstants.COPYFILE_EXCL);
+    await params.packageFs.copyIn(temporaryPath, params.sourcePath, {
+      maxBytes: Number.POSITIVE_INFINITY,
+      mkdir: true,
+      mode: params.mode,
+      sourceHardlinks: "reject",
+    });
     if (params.mode !== undefined && process.platform !== "win32") {
-      await assertLocalOverrideMutationTopology(params);
-      const temporaryHandle = await fs.open(
-        temporaryPath,
-        fsConstants.O_WRONLY | fsConstants.O_NOFOLLOW,
-      );
+      const temporary = await params.packageFs.open(temporaryPath, {
+        hardlinks: "reject",
+        symlinks: "reject",
+      });
       try {
-        const stats = await temporaryHandle.stat();
-        if (!stats.isFile() || stats.nlink > 1) {
-          throw new Error(`unsafe local override temporary file: ${params.relativePath}`);
-        }
-        await temporaryHandle.chmod(params.mode);
+        await temporary.handle.chmod(params.mode);
       } finally {
-        await temporaryHandle.close();
+        await temporary.handle.close();
       }
     }
-    await assertLocalOverrideMutationTopology(params);
-    await fs.rename(temporaryPath, targetPath);
-  } finally {
-    try {
-      await assertLocalOverrideMutationTopology(params);
-      await fs.rm(temporaryPath, { force: true });
-    } catch {
-      // Best-effort cleanup must not follow a changed package topology.
+    if (params.expected) {
+      if (!params.backupPath) {
+        throw new Error(`missing local override rollback path: ${params.relativePath}`);
+      }
+      const moved = await moveExpectedLocalOverrideTarget({
+        packageFs: params.packageFs,
+        relativePath: params.relativePath,
+        expected: params.expected,
+      });
+      movedPath = moved.movedPath;
+      await writeRollbackBackup({
+        backupPath: params.backupPath,
+        content: moved.content,
+        mode: moved.mode,
+      });
+      backupWritten = true;
     }
+    await publishLocalOverrideTarget({
+      packageFs: params.packageFs,
+      sourcePath: temporaryPath,
+      relativePath: params.relativePath,
+    });
+    if (movedPath) {
+      await params.packageFs.remove(movedPath);
+      movedPath = undefined;
+    }
+  } catch (error) {
+    if (movedPath) {
+      const restored = await restoreMovedLocalOverrideTarget({
+        packageFs: params.packageFs,
+        movedPath,
+        relativePath: params.relativePath,
+      })
+        .then(() => true)
+        .catch(() => false);
+      if (!restored && backupWritten) {
+        await params.packageFs.remove(movedPath).catch(() => undefined);
+      }
+    }
+    throw error;
+  } finally {
+    await params.packageFs.remove(temporaryPath).catch(() => undefined);
+  }
+}
+
+async function deleteLocalOverrideTarget(params: {
+  packageFs: LocalOverridePackageRoot;
+  relativePath: string;
+  expected: PackageDistContentInventoryEntry;
+  backupPath: string;
+}): Promise<void> {
+  const moved = await moveExpectedLocalOverrideTarget({
+    packageFs: params.packageFs,
+    relativePath: params.relativePath,
+    expected: params.expected,
+    allowHardlinks: true,
+  });
+  let backupWritten = false;
+  try {
+    await writeRollbackBackup({
+      backupPath: params.backupPath,
+      content: moved.content,
+      mode: moved.mode,
+    });
+    backupWritten = true;
+    await params.packageFs.remove(moved.movedPath);
+  } catch (error) {
+    const restored = await restoreMovedLocalOverrideTarget({
+      packageFs: params.packageFs,
+      movedPath: moved.movedPath,
+      relativePath: params.relativePath,
+    })
+      .then(() => true)
+      .catch(() => false);
+    if (!restored && backupWritten) {
+      await params.packageFs.remove(moved.movedPath).catch(() => undefined);
+    }
+    throw error;
   }
 }
 
@@ -493,8 +666,13 @@ export async function captureLocalPackageOverrides(params: {
         changes.push({ kind: "deleted", path: entry.path, baseline: entry });
         continue;
       }
+      const currentStats = await fs.lstat(absolutePath);
+      const currentMode = normalizeFileMode(currentStats.mode);
       const currentSha = await hashFileSha256(absolutePath);
-      if (currentSha === entry.sha256) {
+      if (
+        currentSha === entry.sha256 &&
+        (process.platform === "win32" || currentMode === normalizeFileMode(entry.mode))
+      ) {
         continue;
       }
       const payload = await copyOverridePayload({
@@ -802,44 +980,60 @@ export async function applyLocalPackageOverrides(params: {
   }
 
   let rollbackDir: string | null = null;
-  const rollbackEntries: Array<{ path: string; backupPath?: string }> = [];
+  const rollbackEntries: Array<{
+    path: string;
+    applied?: PackageDistContentInventoryEntry;
+    backupPath?: string;
+    backupMode?: number;
+  }> = [];
   let applied = 0;
   let preserveRollbackDir = false;
+  let packageFs: LocalOverridePackageRoot | undefined;
   try {
+    packageFs = await openFsRoot(params.packageRoot, {
+      hardlinks: "reject",
+      mkdir: true,
+      symlinks: "reject",
+    });
     rollbackDir = await fs.mkdtemp(path.join(params.plan.recoveryDir, "rollback-"));
     for (const change of changesToApply) {
-      const targetPath = resolveSafePackagePath(params.packageRoot, change.path);
       const backupPath = path.join(rollbackDir, change.path);
-      await assertLocalOverrideMutationTopology({
-        packageRoot: params.packageRoot,
-        realPackageRoot,
-        relativePath: change.path,
-      });
-      if (await pathExists(targetPath)) {
-        await copyFileWithMode(targetPath, backupPath);
-        rollbackEntries.push({ path: change.path, backupPath });
-      } else {
-        rollbackEntries.push({ path: change.path });
-      }
 
       if (change.kind === "deleted") {
-        await assertLocalOverrideMutationTopology({
-          packageRoot: params.packageRoot,
-          realPackageRoot,
+        if (!change.baseline) {
+          throw new Error(`missing local override baseline for ${change.path}`);
+        }
+        await deleteLocalOverrideTarget({
+          packageFs,
           relativePath: change.path,
+          expected: change.baseline,
+          backupPath,
         });
-        await fs.rm(targetPath, { force: true });
       } else {
         if (!change.savedPath) {
           throw new Error(`missing saved override payload for ${change.path}`);
         }
-        await replaceLocalOverrideTarget({
-          packageRoot: params.packageRoot,
-          realPackageRoot,
+        const appliedEntry = await buildLocalOverrideInventoryEntry({
           relativePath: change.path,
           sourcePath: change.savedPath,
           mode: change.mode,
         });
+        await replaceLocalOverrideTarget({
+          packageFs,
+          relativePath: change.path,
+          sourcePath: change.savedPath,
+          mode: change.mode,
+          expected: change.kind === "modified" ? change.baseline : undefined,
+          backupPath: change.kind === "modified" ? backupPath : undefined,
+        });
+        rollbackEntries.push({
+          path: change.path,
+          applied: appliedEntry,
+          ...(change.kind === "modified" ? { backupPath, backupMode: change.baseline?.mode } : {}),
+        });
+      }
+      if (change.kind === "deleted") {
+        rollbackEntries.push({ path: change.path, backupPath, backupMode: change.baseline?.mode });
       }
       applied += 1;
     }
@@ -851,30 +1045,29 @@ export async function applyLocalPackageOverrides(params: {
       rollbackFailures.set(relativePath, messages);
     };
     for (const entry of rollbackEntries.toReversed()) {
-      const targetPath = resolveSafePackagePath(params.packageRoot, entry.path);
       let removeError: unknown;
-      try {
-        await assertLocalOverrideMutationTopology({
-          packageRoot: params.packageRoot,
-          realPackageRoot,
-          relativePath: entry.path,
-        });
-        await fs.rm(targetPath, { force: true });
-      } catch (error) {
-        if (!isMissingPathError(error)) {
+      if (entry.applied && packageFs && rollbackDir) {
+        try {
+          await deleteLocalOverrideTarget({
+            packageFs,
+            relativePath: entry.path,
+            expected: entry.applied,
+            backupPath: path.join(rollbackDir, "applied", entry.path),
+          });
+        } catch (error) {
           removeError = error;
         }
       }
       if (removeError) {
         recordRollbackFailure(entry.path, "remove partial target", removeError);
       }
-      if (entry.backupPath) {
+      if (entry.backupPath && packageFs) {
         try {
           await replaceLocalOverrideTarget({
-            packageRoot: params.packageRoot,
-            realPackageRoot,
+            packageFs,
             relativePath: entry.path,
             sourcePath: entry.backupPath,
+            mode: entry.backupMode,
           });
         } catch (error) {
           recordRollbackFailure(entry.path, "restore original target", error);
