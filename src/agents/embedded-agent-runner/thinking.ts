@@ -1,7 +1,7 @@
 /**
  * Sanitizes reasoning/thinking blocks for replay and recovery.
  */
-import { formatErrorMessage } from "../../infra/errors.js";
+import { collectErrorGraphCandidates, formatErrorMessage } from "../../infra/errors.js";
 import type { AssistantMessageEvent } from "../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
 import type { AgentMessage, StreamFn } from "../runtime/index.js";
@@ -571,31 +571,20 @@ function shouldRecoverAnthropicThinkingError(
   error: unknown,
   sessionMeta: RecoverySessionMeta,
 ): boolean {
-  // Collect error message candidates from the raw error chain before genericization.
-  // The formatted error may lose provider-level details (e.g. "Invalid signature in
-  // thinking block" is rewritten to "LLM request failed: provider rejected the request
-  // schema or tool payload."), so we also check the original Error message and its
-  // cause chain so that THINKING_BLOCK_ERROR_PATTERN can still match.
-  const candidates: string[] = [];
-  if (typeof error === "object" && error !== null) {
-    const err = error as Record<string, unknown>;
-    if (typeof err.message === "string") {
-      candidates.push(err.message);
-    }
-    // Traverse the cause chain for embedded provider-level details.
-    let cause: unknown = err.cause;
-    while (cause && typeof cause === "object" && cause !== null) {
-      const causeObj = cause as Record<string, unknown>;
-      if (typeof causeObj.message === "string") {
-        candidates.push(causeObj.message);
-      }
-      cause = causeObj.cause;
-    }
-  }
-  candidates.push(formatErrorMessage(error));
-
+  // Provider detail survives genericization in different carriers across the
+  // Anthropic SDK, failover wrapping, and terminal stream messages.
+  const candidates = collectErrorGraphCandidates(error, (current) => [
+    current.cause,
+    current.error,
+    current.rawError,
+    current.errorMessage,
+    current.message,
+  ]);
   for (const candidate of candidates) {
-    if (shouldRecoverAnthropicThinkingErrorMessage(candidate, sessionMeta)) {
+    if (
+      typeof candidate === "string" &&
+      shouldRecoverAnthropicThinkingErrorMessage(candidate, sessionMeta)
+    ) {
       return true;
     }
   }
@@ -624,13 +613,6 @@ function isAssistantMessageErrorEvent(
   return (
     Boolean(event) && typeof event === "object" && (event as { type?: unknown }).type === "error"
   );
-}
-
-function getAssistantMessageErrorText(
-  event: Extract<AssistantMessageEvent, { type: "error" }>,
-): string {
-  const errorMessage = (event.error as { errorMessage?: unknown }).errorMessage;
-  return typeof errorMessage === "string" ? errorMessage : "";
 }
 
 async function notifyRecoveredAnthropicThinking(
@@ -710,12 +692,7 @@ async function pumpStreamWithRecovery(
     const resolved = stream instanceof Promise ? await stream : stream;
     for await (const chunk of resolved as AsyncIterable<unknown>) {
       if (isAssistantMessageErrorEvent(chunk)) {
-        if (
-          shouldRecoverAnthropicThinkingErrorMessage(
-            getAssistantMessageErrorText(chunk),
-            sessionMeta,
-          )
-        ) {
+        if (shouldRecoverAnthropicThinkingError(chunk.error, sessionMeta)) {
           if (yieldedOutput) {
             log.warn(
               `[session-recovery] Anthropic thinking error occurred after streaming began; skipping retry to avoid duplicate chunks: sessionId=${sessionMeta.id}`,
