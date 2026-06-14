@@ -111,12 +111,15 @@ export function scanEmptyAllowlistPolicyWarnings(
       hasAllowFromEntries(channelConfig.groupAllowFrom as DoctorAllowFromList | undefined) ||
       hasAllowFromEntries(channelConfig.allowFrom as DoctorAllowFromList | undefined);
 
+    const hasActiveAccounts =
+      accounts && Object.keys(accounts).some((id) => !isDisabledRecord(accounts[id]));
+
     checkAccount(
       channelConfig,
       `channels.${channelName}`,
       channelName,
       undefined,
-      accounts && Object.keys(accounts).length > 0 && !parentHasOwnAllowFrom ? true : undefined,
+      hasActiveAccounts && !parentHasOwnAllowFrom ? true : undefined,
     );
 
     if (!accounts) {

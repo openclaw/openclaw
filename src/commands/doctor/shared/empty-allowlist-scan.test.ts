@@ -110,9 +110,9 @@ describe("doctor empty allowlist policy scan", () => {
     expect(warnings.filter((w) => w.includes("group messages")).length).toBe(0);
   });
 
-  it("still warns when top-level has own groupAllowFrom even with sub-accounts", () => {
-    // The top-level has its own populated groupAllowFrom — it IS an active
-    // account alongside the sub-accounts. Warning must still fire.
+  it("does not warn when top-level has own populated groupAllowFrom with sub-accounts", () => {
+    // The top-level has its own groupAllowFrom entries — it has an effective
+    // allowlist, so no "empty" warning should fire for the parent scope.
     const warnings = scanEmptyAllowlistPolicyWarnings(
       {
         channels: {
@@ -127,7 +127,7 @@ describe("doctor empty allowlist policy scan", () => {
       },
       { doctorFixCommand: "openclaw doctor --fix" },
     );
-    expect(warnings.some((w) => w.includes("group messages"))).toBe(true);
+    expect(warnings.filter((w) => w.includes("group messages")).length).toBe(0);
   });
 
   it("still warns on empty top-level groupAllowFrom when no accounts are configured", () => {
