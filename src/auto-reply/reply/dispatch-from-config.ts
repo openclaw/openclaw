@@ -1659,6 +1659,15 @@ export async function dispatchReplyFromConfig(
     const normalizeReplyMediaPayloadPaths = await getNormalizeReplyMediaPaths();
     return await normalizeReplyMediaPayloadPaths(payload);
   };
+  const toTrustedMediaOnlyPayload = (payload: ReplyPayload): ReplyPayload => {
+    const parts = resolveSendableOutboundReplyParts(payload);
+    return {
+      mediaUrls: parts.mediaUrls,
+      mediaUrl: parts.mediaUrls[0],
+      audioAsVoice: payload.audioAsVoice || undefined,
+      trustedLocalMedia: true,
+    };
+  };
 
   const routeReplyToOriginating = async (
     payload: ReplyPayload,
@@ -3169,6 +3178,57 @@ export async function dispatchReplyFromConfig(
                 // Buffered commentary preceded this block; deliver it first.
                 await flushPendingCommentaryProgress();
                 if (suppressDelivery) {
+                  // message_tool_only suppresses ordinary source text, but
+                  // trusted block TTS is new local media and must still reach
+                  // the channel as media-only content.
+                  if (payload.isReasoning === true || isReplyPayloadStatusNotice(payload)) {
+                    return;
+                  }
+                  const deliverTrustedMediaOnly = async (
+                    candidatePayload: ReplyPayload,
+                  ): Promise<boolean> => {
+                    const normalizedPayload = await normalizeReplyMediaPayload(candidatePayload);
+                    if (isDispatchOperationAborted()) {
+                      return true;
+                    }
+                    const normalizedParts = resolveSendableOutboundReplyParts(normalizedPayload);
+                    if (normalizedPayload.trustedLocalMedia !== true || !normalizedParts.hasMedia) {
+                      return false;
+                    }
+                    const mediaOnlyPayload = toTrustedMediaOnlyPayload(normalizedPayload);
+                    if (shouldRouteToOriginating) {
+                      await sendPayloadAsync(
+                        mediaOnlyPayload,
+                        context?.abortSignal,
+                        false,
+                        "block",
+                      );
+                    } else {
+                      markInboundDedupeReplayUnsafe();
+                      const delivered = dispatcher.sendBlockReply(mediaOnlyPayload);
+                      if (delivered) {
+                        hasPendingDirectBlockReplyDelivery = true;
+                      }
+                    }
+                    return true;
+                  };
+                  if (await deliverTrustedMediaOnly(payload)) {
+                    return;
+                  }
+                  if (!payload.text?.trim()) {
+                    return;
+                  }
+                  const ttsPayload = await maybeApplyTtsToReplyPayload({
+                    payload,
+                    cfg,
+                    channel: deliveryChannel,
+                    kind: "block",
+                    inboundAudio,
+                    ttsAuto: sessionTtsAuto,
+                    agentId: sessionAgentId,
+                    accountId: replyRoute.accountId,
+                  });
+                  await deliverTrustedMediaOnly(ttsPayload);
                   return;
                 }
                 // Suppress reasoning payloads — channels using this generic dispatch
@@ -3333,15 +3393,31 @@ export async function dispatchReplyFromConfig(
     let finalDeliveryFailed = false;
     // Explicit command turns (native or authorized text-slash like /compact) are
     // user-initiated, so a marked terminal reply for the command bypasses
-    // room_event suppression. Ambient marked notices (no CommandTurn) stay
-    // suppressed in room_event. sendPolicy: deny still suppresses everything.
-    // Uses the same helper as the source-reply visibility policy so the bypass
-    // and the policy stay aligned.
-    const shouldDeliverDespiteSourceReplySuppression = (reply: ReplyPayload) =>
-      suppressAutomaticSourceDelivery &&
-      !sendPolicyDenied &&
-      getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression === true &&
-      (ctx.InboundEventKind !== "room_event" || explicitCommandTurnCtx);
+    // room_event suppression as-is. Ambient marked notices (no CommandTurn) stay
+    // suppressed in room_event. Trusted local TTS media can bypass
+    // message_tool_only suppression only after stripping private text.
+    type SourceReplySuppressionBypass = "none" | "deliver-as-is" | "trusted-media-only";
+    const resolveSourceReplySuppressionBypass = (
+      reply: ReplyPayload,
+    ): SourceReplySuppressionBypass => {
+      if (!suppressAutomaticSourceDelivery || sendPolicyDenied) {
+        return "none";
+      }
+      if (
+        getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression === true &&
+        (ctx.InboundEventKind !== "room_event" || explicitCommandTurnCtx)
+      ) {
+        return "deliver-as-is";
+      }
+      if (
+        sourceReplyDeliveryMode === "message_tool_only" &&
+        reply.trustedLocalMedia === true &&
+        resolveSendableOutboundReplyParts(reply).hasMedia
+      ) {
+        return "trusted-media-only";
+      }
+      return "none";
+    };
     for (const [replyIndex, reply] of replies.entries()) {
       throwIfDispatchOperationAborted();
       // Suppress reasoning payloads from channel delivery — channels using this
@@ -3349,7 +3425,8 @@ export async function dispatchReplyFromConfig(
       if (reply.isReasoning === true) {
         continue;
       }
-      if (suppressDelivery && !shouldDeliverDespiteSourceReplySuppression(reply)) {
+      const sourceReplySuppressionBypass = resolveSourceReplySuppressionBypass(reply);
+      if (suppressDelivery && sourceReplySuppressionBypass === "none") {
         if (hasOutboundReplyContent(reply, { trimText: true })) {
           logVerbose(
             [
@@ -3367,7 +3444,13 @@ export async function dispatchReplyFromConfig(
         continue;
       }
       attemptedFinalDelivery = true;
-      const finalReply = await sendFinalPayload(reply, { deliveryId: String(replyIndex) });
+      const deliveryReply =
+        sourceReplySuppressionBypass === "trusted-media-only"
+          ? toTrustedMediaOnlyPayload(reply)
+          : reply;
+      const finalReply = await sendFinalPayload(deliveryReply, {
+        deliveryId: String(replyIndex),
+      });
       queuedFinal = finalReply.queuedFinal || queuedFinal;
       routedFinalCount += finalReply.routedFinalCount;
       if (!finalReply.queuedFinal && finalReply.routedFinalCount === 0) {

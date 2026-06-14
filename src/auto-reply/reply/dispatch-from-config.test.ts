@@ -609,6 +609,9 @@ const automaticDirectReplyConfig = {
     visibleReplies: "automatic",
   },
 } as const satisfies OpenClawConfig;
+const blockTtsConfig = {
+  messages: { tts: { enabled: true, mode: "all" } },
+} as const satisfies OpenClawConfig;
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
 let dispatchFromConfigTesting: typeof import("./dispatch-from-config.js").testing;
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
@@ -8919,6 +8922,261 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     }
   });
 
+  it("delivers trusted block TTS media as media-only under message-tool-only suppression", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    ttsMocks.maybeApplyTtsToPayload.mockImplementationOnce(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as { kind?: string; payload: ReplyPayload };
+      expect(params.kind).toBe("block");
+      return {
+        ...params.payload,
+        mediaUrl: "/tmp/openclaw-media/block-tts.ogg",
+        mediaUrls: ["/tmp/openclaw-media/block-tts.ogg"],
+        audioAsVoice: true,
+        trustedLocalMedia: true,
+      };
+    });
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onBlockReply?.({ text: "private block answer" });
+      return undefined;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        ChatType: "group",
+        InboundEventKind: "room_event",
+        SessionKey: "test:session",
+      }),
+      cfg: blockTtsConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    });
+
+    expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(dispatcher.sendBlockReply).toHaveBeenCalledTimes(1);
+    const deliveredPayload = (dispatcher.sendBlockReply as ReturnType<typeof vi.fn>).mock
+      .calls[0]?.[0] as ReplyPayload | undefined;
+    expect(deliveredPayload).toEqual({
+      mediaUrl: "/tmp/openclaw-media/block-tts.ogg",
+      mediaUrls: ["/tmp/openclaw-media/block-tts.ogg"],
+      audioAsVoice: true,
+      trustedLocalMedia: true,
+    });
+    expect(deliveredPayload).not.toHaveProperty("text");
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("delivers trusted media-only block payloads under message-tool-only suppression", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const dispatcher = createDispatcher();
+    const ttsCallsBefore = ttsMocks.maybeApplyTtsToPayload.mock.calls.length;
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onBlockReply?.({
+        mediaUrl: "/tmp/openclaw-media/pending-tts.ogg",
+        mediaUrls: ["/tmp/openclaw-media/pending-tts.ogg"],
+        audioAsVoice: true,
+        trustedLocalMedia: true,
+      });
+      return undefined;
+    });
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        ChatType: "group",
+        InboundEventKind: "room_event",
+        SessionKey: "test:session",
+      }),
+      cfg: blockTtsConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledTimes(ttsCallsBefore);
+    expect(dispatcher.sendBlockReply).toHaveBeenCalledTimes(1);
+    expect((dispatcher.sendBlockReply as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toEqual({
+      mediaUrl: "/tmp/openclaw-media/pending-tts.ogg",
+      mediaUrls: ["/tmp/openclaw-media/pending-tts.ogg"],
+      audioAsVoice: true,
+      trustedLocalMedia: true,
+    });
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("keeps ordinary block text, reasoning, and status suppressed in message-tool-only mode", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onBlockReply?.({ text: "ordinary block text" });
+      await opts?.onBlockReply?.({ text: "reasoning block", isReasoning: true });
+      await opts?.onBlockReply?.({ text: "status block", isStatusNotice: true });
+      return undefined;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        ChatType: "group",
+        InboundEventKind: "room_event",
+        SessionKey: "test:session",
+      }),
+      cfg: blockTtsConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    });
+
+    expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("strips text from trusted block TTS media before bypass delivery", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    ttsMocks.maybeApplyTtsToPayload.mockImplementationOnce(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as { payload: ReplyPayload };
+      return {
+        ...params.payload,
+        text: "private synthesized block text",
+        mediaUrls: ["/tmp/openclaw-media/private-block.ogg"],
+        trustedLocalMedia: true,
+      };
+    });
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onBlockReply?.({ text: "private block answer" });
+      return undefined;
+    });
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        ChatType: "group",
+        InboundEventKind: "room_event",
+        SessionKey: "test:session",
+      }),
+      cfg: blockTtsConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    });
+
+    const deliveredPayload = (dispatcher.sendBlockReply as ReturnType<typeof vi.fn>).mock
+      .calls[0]?.[0] as ReplyPayload | undefined;
+    expect(deliveredPayload).toMatchObject({
+      mediaUrl: "/tmp/openclaw-media/private-block.ogg",
+      mediaUrls: ["/tmp/openclaw-media/private-block.ogg"],
+      trustedLocalMedia: true,
+    });
+    expect(deliveredPayload).not.toHaveProperty("text");
+    expect(
+      JSON.stringify((dispatcher.sendBlockReply as ReturnType<typeof vi.fn>).mock.calls),
+    ).not.toContain("private synthesized block text");
+  });
+
+  it("keeps untrusted block media suppressed in message-tool-only mode", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    ttsMocks.maybeApplyTtsToPayload.mockImplementationOnce(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as { payload: ReplyPayload };
+      return {
+        ...params.payload,
+        mediaUrls: ["/tmp/openclaw-media/untrusted-block.ogg"],
+      };
+    });
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onBlockReply?.({ text: "block answer" });
+      return undefined;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        ChatType: "group",
+        InboundEventKind: "room_event",
+        SessionKey: "test:session",
+      }),
+      cfg: blockTtsConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    });
+
+    expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("keeps untrusted media-only block payloads suppressed in message-tool-only mode", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const dispatcher = createDispatcher();
+    const ttsCallsBefore = ttsMocks.maybeApplyTtsToPayload.mock.calls.length;
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onBlockReply?.({
+        mediaUrl: "/tmp/openclaw-media/untrusted-pending.ogg",
+        mediaUrls: ["/tmp/openclaw-media/untrusted-pending.ogg"],
+        audioAsVoice: true,
+      });
+      return undefined;
+    });
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        ChatType: "group",
+        InboundEventKind: "room_event",
+        SessionKey: "test:session",
+      }),
+      cfg: blockTtsConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledTimes(ttsCallsBefore);
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
   it("treats message-tool-only observed delivery as visible for fallback eligibility", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
@@ -9344,6 +9602,124 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(replyResolver).toHaveBeenCalledTimes(1);
     expect(result.queuedFinal).toBe(true);
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(commandReply);
+  });
+
+  it("delivers trusted local media-only payloads in room events under message-tool-only suppression", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const dispatcher = createDispatcher();
+    const trustedMediaReply = {
+      mediaUrl: "/tmp/tts-audio.opus",
+      mediaUrls: ["/tmp/tts-audio.opus"],
+      audioAsVoice: true,
+      trustedLocalMedia: true,
+    } satisfies ReplyPayload;
+    const replyResolver = vi.fn(async () => trustedMediaReply);
+    const ctx = buildTestCtx({
+      ChatType: "group",
+      InboundEventKind: "room_event",
+      SessionKey: "test:session",
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(result.queuedFinal).toBe(true);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(trustedMediaReply);
+  });
+
+  it("strips text from trusted final media before bypass delivery in message-tool-only mode", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const dispatcher = createDispatcher();
+    const trustedTextAndMediaReply = {
+      text: "private final text",
+      mediaUrl: "/tmp/tts-final.opus",
+      mediaUrls: ["/tmp/tts-final.opus"],
+      audioAsVoice: true,
+      trustedLocalMedia: true,
+    } satisfies ReplyPayload;
+    const replyResolver = vi.fn(async () => trustedTextAndMediaReply);
+    const ctx = buildTestCtx({
+      ChatType: "group",
+      InboundEventKind: "room_event",
+      SessionKey: "test:session",
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(result.queuedFinal).toBe(true);
+    const deliveredPayload = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock
+      .calls[0]?.[0] as ReplyPayload | undefined;
+    expect(deliveredPayload).toEqual({
+      mediaUrl: "/tmp/tts-final.opus",
+      mediaUrls: ["/tmp/tts-final.opus"],
+      audioAsVoice: true,
+      trustedLocalMedia: true,
+    });
+    expect(deliveredPayload).not.toHaveProperty("text");
+    expect(
+      JSON.stringify((dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock.calls),
+    ).not.toContain("private final text");
+  });
+
+  it("keeps untrusted media-only payloads suppressed in room events under message-tool-only mode", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const dispatcher = createDispatcher();
+    const untrustedMediaReply = {
+      mediaUrl: "https://example.com/generated.png",
+      mediaUrls: ["https://example.com/generated.png"],
+    } satisfies ReplyPayload;
+    const replyResolver = vi.fn(async () => untrustedMediaReply);
+    const ctx = buildTestCtx({
+      ChatType: "group",
+      InboundEventKind: "room_event",
+      SessionKey: "test:session",
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(result.queuedFinal).toBe(false);
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
   it("mirrors internal source reply payloads into the active transcript", async () => {
