@@ -220,4 +220,83 @@ describe("buildSystemPromptReport", () => {
     });
     expect(report.tools.entries[0]?.schemaHash).toMatch(/^[a-f0-9]{64}$/u);
   });
+
+  it("keeps reporting when tool metadata getters throw", () => {
+    const file = makeBootstrapFile({ path: "/tmp/workspace/AGENTS.md" });
+    const tool = {
+      get name() {
+        throw new Error("name exploded");
+      },
+      get description() {
+        throw new Error("description exploded");
+      },
+      get label() {
+        throw new Error("label exploded");
+      },
+      get parameters() {
+        throw new Error("parameters exploded");
+      },
+    };
+
+    const report = buildSystemPromptReport({
+      source: "run",
+      generatedAt: 0,
+      bootstrapMaxChars: 20_000,
+      systemPrompt: "system",
+      bootstrapFiles: [file],
+      injectedFiles: [],
+      skillsPrompt: "",
+      tools: [tool] as never,
+    });
+
+    expect(report.tools.entries[0]).toMatchObject({
+      name: "(unknown)",
+      summaryChars: 0,
+      schemaChars: 0,
+      propertiesCount: null,
+    });
+    expect(report.tools.entries[0]?.summaryHash).toBe(
+      "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    );
+  });
+
+  it("keeps reporting when schema properties cannot be inspected", () => {
+    const file = makeBootstrapFile({ path: "/tmp/workspace/AGENTS.md" });
+    const hostileProperties = new Proxy(
+      {},
+      {
+        ownKeys() {
+          throw new Error("properties exploded");
+        },
+      },
+    );
+    const schema = {
+      type: "object",
+      properties: hostileProperties,
+    };
+
+    const report = buildSystemPromptReport({
+      source: "run",
+      generatedAt: 0,
+      bootstrapMaxChars: 20_000,
+      systemPrompt: "system",
+      bootstrapFiles: [file],
+      injectedFiles: [],
+      skillsPrompt: "",
+      tools: [
+        {
+          name: "hostile_schema",
+          description: "Hostile schema",
+          parameters: schema,
+        },
+      ] as never,
+    });
+
+    expect(report.tools.entries[0]).toMatchObject({
+      name: "hostile_schema",
+      schemaChars: 0,
+      propertiesCount: null,
+    });
+    expect(report.tools.entries[0]?.schemaHash).toMatch(/^[a-f0-9]{64}$/u);
+  });
 });
