@@ -1170,6 +1170,7 @@ function resolveHeartbeatRunPrompt(params: {
   dueTasks: HeartbeatTask[];
   heartbeatFileContent?: string;
   useHeartbeatResponseTool: boolean;
+  commitmentOnly?: boolean;
 }): HeartbeatPromptResolution {
   const pendingEventEntries = params.preflight.pendingEventEntries;
   const cronEvents = pendingEventEntries
@@ -1193,6 +1194,19 @@ function resolveHeartbeatRunPrompt(params: {
     useHeartbeatResponseTool: false,
   });
   const hasDueCommitments = Boolean(commitmentPrompt);
+
+  if (params.commitmentOnly) {
+    return {
+      prompt: commitmentPrompt
+        ? appendHeartbeatFileDirectives(commitmentPrompt, params.heartbeatFileContent)
+        : null,
+      hasExecCompletion: false,
+      hasRelayableExecCompletion: false,
+      hasCronEvents: false,
+      hasDueCommitments,
+      usesHeartbeatResponseTool: false,
+    };
+  }
 
   if (params.preflight.tasks && params.preflight.tasks.length > 0) {
     const dueTasks = params.dueTasks;
@@ -1301,6 +1315,7 @@ export async function runHeartbeatOnce(opts: {
   intent?: HeartbeatWakeIntent;
   reason?: string;
   deps?: HeartbeatDeps;
+  commitmentOnly?: boolean;
 }): Promise<HeartbeatRunResult> {
   const cfg = opts.cfg ?? getRuntimeConfig();
   const explicitAgentId = typeof opts.agentId === "string" ? opts.agentId.trim() : "";
@@ -1440,7 +1455,9 @@ export async function runHeartbeatOnce(opts: {
   }
 
   const previousUpdatedAt = entry?.updatedAt;
-  const dueHeartbeatTasks = resolveDueHeartbeatTasks(preflight, startedAt);
+  const dueHeartbeatTasks = opts.commitmentOnly
+    ? []
+    : resolveDueHeartbeatTasks(preflight, startedAt);
 
   // When isolatedSession is enabled, create a fresh session via the same
   // pattern as cron sessionTarget: "isolated". This gives the heartbeat
@@ -1536,6 +1553,7 @@ export async function runHeartbeatOnce(opts: {
     dueTasks: dueHeartbeatTasks,
     heartbeatFileContent: preflight.heartbeatFileContent,
     useHeartbeatResponseTool: useHeartbeatResponseToolPrompt,
+    ...(opts.commitmentOnly ? { commitmentOnly: true } : {}),
   });
   const dueCommitmentIds = hasDueCommitments
     ? preflight.dueCommitments.map((commitment) => commitment.id)
@@ -1545,6 +1563,10 @@ export async function runHeartbeatOnce(opts: {
     hasExecCompletion,
     hasCronEvents,
   });
+  const shouldRunCommitmentsAfterTaskTurn =
+    dueHeartbeatTasks.length > 0 &&
+    preflight.dueCommitments.length > 0 &&
+    canHeartbeatDeliverCommitments(heartbeat);
 
   // If no tasks are due, skip heartbeat entirely
   if (prompt === null) {
@@ -1633,7 +1655,7 @@ export async function runHeartbeatOnce(opts: {
   }
   // Update task last run times AFTER successful heartbeat completion
   const updateTaskTimestamps = async () => {
-    if (!preflight.tasks || preflight.tasks.length === 0) {
+    if (opts.commitmentOnly || !preflight.tasks || preflight.tasks.length === 0) {
       return;
     }
     const tasks = preflight.tasks;
@@ -1667,6 +1689,25 @@ export async function runHeartbeatOnce(opts: {
       return;
     }
     consumeSelectedSystemEventEntries(sessionKey, inspectedSystemEventsToConsume);
+  };
+  const runCommitmentsAfterTaskTurn = async (): Promise<HeartbeatRunResult | undefined> => {
+    if (!shouldRunCommitmentsAfterTaskTurn) {
+      return undefined;
+    }
+    const commitmentResult = await runHeartbeatOnce({
+      cfg,
+      agentId,
+      heartbeat,
+      reason: "commitment",
+      sessionKey,
+      commitmentOnly: true,
+      deps: opts.deps,
+    });
+    return commitmentResult.status === "failed" ? commitmentResult : undefined;
+  };
+  const finishRanHeartbeatTurn = async (): Promise<HeartbeatRunResult> => {
+    const commitmentResult = await runCommitmentsAfterTaskTurn();
+    return commitmentResult ?? { status: "ran", durationMs: Date.now() - startedAt };
   };
 
   const ctx = {
@@ -1833,7 +1874,7 @@ export async function runHeartbeatOnce(opts: {
       });
       await updateTaskTimestamps();
       consumeInspectedSystemEvents();
-      return { status: "ran", durationMs: Date.now() - startedAt };
+      return await finishRanHeartbeatTurn();
     }
 
     if (!heartbeatToolResponse && (!replyPayload || !hasOutboundReplyContent(replyPayload))) {
@@ -1861,7 +1902,7 @@ export async function runHeartbeatOnce(opts: {
       });
       await updateTaskTimestamps();
       consumeInspectedSystemEvents();
-      return { status: "ran", durationMs: Date.now() - startedAt };
+      return await finishRanHeartbeatTurn();
     }
 
     const normalized = heartbeatToolResponse
@@ -1919,7 +1960,7 @@ export async function runHeartbeatOnce(opts: {
       });
       await updateTaskTimestamps();
       consumeInspectedSystemEvents();
-      return { status: "ran", durationMs: Date.now() - startedAt };
+      return await finishRanHeartbeatTurn();
     }
 
     const mediaUrls =
@@ -1965,7 +2006,7 @@ export async function runHeartbeatOnce(opts: {
       });
       await updateTaskTimestamps();
       consumeInspectedSystemEvents();
-      return { status: "ran", durationMs: Date.now() - startedAt };
+      return await finishRanHeartbeatTurn();
     }
 
     // Reasoning payloads are text-only; any attachments stay on the main reply.
@@ -1987,7 +2028,7 @@ export async function runHeartbeatOnce(opts: {
       });
       await updateTaskTimestamps();
       consumeInspectedSystemEvents();
-      return { status: "ran", durationMs: Date.now() - startedAt };
+      return await finishRanHeartbeatTurn();
     }
 
     if (!visibility.showAlerts) {
@@ -2008,7 +2049,7 @@ export async function runHeartbeatOnce(opts: {
         indicatorType: visibility.useIndicator ? resolveIndicatorType("sent") : undefined,
       });
       consumeInspectedSystemEvents();
-      return { status: "ran", durationMs: Date.now() - startedAt };
+      return await finishRanHeartbeatTurn();
     }
 
     const deliveryAccountId = delivery.accountId;
@@ -2106,7 +2147,7 @@ export async function runHeartbeatOnce(opts: {
     });
     await updateTaskTimestamps();
     consumeInspectedSystemEvents();
-    return { status: "ran", durationMs: Date.now() - startedAt };
+    return await finishRanHeartbeatTurn();
   } catch (err) {
     const reason = formatErrorMessage(err);
     emitHeartbeatEvent({
@@ -2494,11 +2535,6 @@ export function startHeartbeatRunner(opts: {
         advanceAgentSchedule(agent, now, reason);
         let agentRan = res.status === "ran";
 
-        const defaultSessionKey = resolveHeartbeatSession(
-          state.cfg,
-          agent.agentId,
-          agent.heartbeat,
-        ).sessionKey;
         const dueSessionKeys = canHeartbeatDeliverCommitments(agent.heartbeat)
           ? await listDueCommitmentSessionKeys({
               cfg: state.cfg,
@@ -2508,9 +2544,6 @@ export function startHeartbeatRunner(opts: {
             })
           : [];
         for (const dueSessionKey of dueSessionKeys) {
-          if (dueSessionKey === defaultSessionKey) {
-            continue;
-          }
           let commitmentRes: HeartbeatRunResult;
           try {
             commitmentRes = await runOnce({
@@ -2519,6 +2552,7 @@ export function startHeartbeatRunner(opts: {
               heartbeat: agent.heartbeat,
               reason: "commitment",
               sessionKey: dueSessionKey,
+              commitmentOnly: true,
               deps: { runtime: state.runtime },
             });
           } catch (err) {
