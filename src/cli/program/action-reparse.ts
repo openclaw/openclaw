@@ -12,19 +12,31 @@ function buildFallbackArgv(program: Command, actionCommand: Command | undefined)
     : [...parentOptionArgs, ...actionArgsList];
 }
 
+function findRootCommand(cmd: Command): Command {
+  let current: Command = cmd;
+  while (current.parent) {
+    current = current.parent;
+  }
+  return current;
+}
+
 /** Rebuild argv from Commander action args and re-run parsing after lazy registration. */
 export async function reparseProgramFromActionArgs(
   program: Command,
   actionArgs: unknown[],
 ): Promise<void> {
   const actionCommand = actionArgs.at(-1) as Command | undefined;
-  const root = actionCommand?.parent ?? program;
-  const rawArgs = (root as Command & { rawArgs?: string[] }).rawArgs;
+  // Use the true root program for argv reconstruction and parsing.
+  // For nested lazy commands (e.g. workspaces → audit), `program` is a sub-command
+  // whose rawArgs is cleared by Commander's restoreStateBeforeParse(). Only the
+  // root program retains the rawArgs set by _prepareUserArgs.
+  const rootProgram = findRootCommand(actionCommand ?? program);
+  const rawArgs = (rootProgram as Command & { rawArgs?: string[] }).rawArgs;
   const fallbackArgv = buildFallbackArgv(program, actionCommand);
   const parseArgv = buildParseArgv({
-    programName: program.name(),
+    programName: rootProgram.name(),
     rawArgs,
     fallbackArgv,
   });
-  await program.parseAsync(parseArgv);
+  await rootProgram.parseAsync(parseArgv);
 }

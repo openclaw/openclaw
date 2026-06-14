@@ -493,6 +493,21 @@ export const ko: TranslationMap = {
       minutes: "{minutes}m {seconds}s",
     },
   },
+  logsView: {
+    title: "Logs",
+    subtitle: "Gateway file logs (JSONL).",
+    exportButton: "Export {label}",
+    exportLabels: {
+      filtered: "filtered",
+      visible: "visible",
+    },
+    filter: "Filter",
+    searchPlaceholder: "Search logs",
+    autoFollow: "Auto-follow",
+    file: "File: {file}",
+    truncated: "Log output truncated; showing latest chunk.",
+    empty: "No log entries.",
+  },
   workboard: {
     disabledHelpStart: "Workboard가 비활성화되어 있습니다. 활성화하려면",
     enableConfigKey: "plugins.entries.workboard.enabled = true",
@@ -611,6 +626,7 @@ export const ko: TranslationMap = {
     labelsPlaceholder: "ui, docs",
     searchPlaceholder: "카드 검색",
     allPriorities: "모든 우선순위",
+    hideEmptyColumns: "Hide empty columns",
     emptyColumn: "여기에 작업을 놓으세요",
     lifecycleUnlinked: "세션 없음",
     lifecycleUnlinkedDetail: "세션을 시작하거나 연결하세요",
@@ -1336,6 +1352,17 @@ export const ko: TranslationMap = {
     },
     toolCards: {
       toolError: "도구 오류",
+    },
+    workspaceFiles: {
+      label: "Workspace files",
+      expand: "Expand workspace files",
+      collapse: "Collapse workspace files",
+      workspace: "Workspace",
+      files: "Files",
+      refresh: "Refresh files",
+      loading: "Loading files…",
+      empty: "No workspace files",
+      missing: "Missing",
     },
   },
   languages: {

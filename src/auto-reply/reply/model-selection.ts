@@ -57,6 +57,8 @@ type ModelSelectionState = {
   /** Default reasoning level from model capability: "on" if model has reasoning, else "off". */
   resolveDefaultReasoningLevel: () => Promise<"on" | "off">;
   needsModelCatalog: boolean;
+  modelContextWindow?: number;
+  modelContextTokens?: number;
 };
 
 /** Creates minimal model-selection state for fast test mode. */
@@ -76,6 +78,8 @@ export function createFastTestModelSelectionState(params: {
     resolveDefaultThinkingLevel: async () => params.agentCfg?.thinkingDefault as ThinkLevel,
     resolveDefaultReasoningLevel: async () => "off",
     needsModelCatalog: false,
+    modelContextWindow: undefined,
+    modelContextTokens: undefined,
   };
 }
 
@@ -564,6 +568,11 @@ export async function createModelSelectionState(params: {
     });
     return defaultReasoningLevel;
   };
+  const selectedCatalogEntry = findSelectedCatalogEntry({
+    catalog: modelCatalog ?? allowedModelCatalog,
+    provider,
+    model,
+  });
 
   return {
     provider,
@@ -576,6 +585,8 @@ export async function createModelSelectionState(params: {
     resolveDefaultThinkingLevel,
     resolveDefaultReasoningLevel,
     needsModelCatalog,
+    modelContextWindow: selectedCatalogEntry?.contextWindow,
+    modelContextTokens: selectedCatalogEntry?.contextTokens,
   };
 }
 
@@ -585,11 +596,15 @@ export function resolveContextTokens(params: {
   agentCfg: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> | undefined;
   provider: string;
   model: string;
+  modelContextWindow?: number;
+  modelContextTokens?: number;
 }): number {
   const modelContextTokens = resolveContextTokensForModel({
     cfg: params.cfg,
     provider: params.provider,
     model: params.model,
+    modelContextWindow: params.modelContextWindow,
+    modelContextTokens: params.modelContextTokens,
     allowAsyncLoad: false,
   });
   const agentContextTokens =

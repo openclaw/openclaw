@@ -15,8 +15,15 @@ import {
   readTelegramRetryAfterMs,
 } from "./network-errors.js";
 import { normalizeTelegramReplyToMessageId } from "./outbound-params.js";
+import {
+  buildTelegramRichMarkdown,
+  TELEGRAM_RICH_TEXT_LIMIT,
+  getTelegramRichRawApi,
+  type TelegramInputRichMessage,
+  type TelegramSendRichMessageParams,
+} from "./rich-message.js";
 
-const TELEGRAM_STREAM_MAX_CHARS = 4096;
+const TELEGRAM_STREAM_MAX_CHARS = TELEGRAM_RICH_TEXT_LIMIT;
 const DEFAULT_THROTTLE_MS = 1000;
 // Retryable preview failures keep the latest text pending for the next throttle
 // tick; cap consecutive misses so a persistent outage stops the preview instead
@@ -47,13 +54,12 @@ export type TelegramDraftStream = {
 
 type TelegramDraftPreview = {
   text: string;
-  parseMode?: "HTML";
+  richMessage: TelegramInputRichMessage;
 };
 
 type SupersededTelegramPreview = {
   messageId: number;
   textSnapshot: string;
-  parseMode?: "HTML";
   visibleSinceMs?: number;
   retain?: boolean;
 };
@@ -63,7 +69,13 @@ function renderTelegramDraftPreview(
   renderText: ((text: string) => TelegramDraftPreview) | undefined,
 ): TelegramDraftPreview {
   const trimmed = text.trimEnd();
-  return renderText?.(trimmed) ?? { text: trimmed };
+  return (
+    renderText?.(trimmed) ?? { text: trimmed, richMessage: buildTelegramRichMarkdown(trimmed) }
+  );
+}
+
+function telegramDraftPreviewKey(preview: TelegramDraftPreview): string {
+  return JSON.stringify(preview.richMessage);
 }
 
 function findTelegramDraftChunkLength(
@@ -112,14 +124,16 @@ export function createTelegramDraftStream(params: {
   const chatId = params.chatId;
   const threadParams = buildTelegramThreadParams(params.thread);
   const replyToMessageId = normalizeTelegramReplyToMessageId(params.replyToMessageId);
-  const replyParams =
+  const richReplyParams: Omit<TelegramSendRichMessageParams, "chat_id" | "rich_message"> =
     replyToMessageId != null
       ? {
           ...threadParams,
-          reply_to_message_id: replyToMessageId,
-          allow_sending_without_reply: true,
+          reply_parameters: {
+            message_id: replyToMessageId,
+            allow_sending_without_reply: true,
+          },
         }
-      : threadParams;
+      : (threadParams ?? {});
 
   const streamState = { stopped: false, final: false };
   let messageSendAttempted = false;
@@ -127,53 +141,42 @@ export function createTelegramDraftStream(params: {
   let consecutivePreviewFailures = 0;
   let streamMessageId: number | undefined;
   let streamVisibleSinceMs: number | undefined;
-  let lastSentText = "";
+  let lastSentPreviewKey = "";
   let lastDeliveredText = "";
   let lastRequestedText = "";
-  let lastSentParseMode: "HTML" | undefined;
   let previewRevision = 0;
   let generation = 0;
   let deliveredTextOffset = 0;
   type PreviewSendParams = {
-    renderedText: string;
-    renderedParseMode: "HTML" | undefined;
+    preview: TelegramDraftPreview;
     sendGeneration: number;
   };
-  const sendRenderedMessage = async (sendArgs: {
-    renderedText: string;
-    renderedParseMode: "HTML" | undefined;
-  }) => {
-    const sendParams = sendArgs.renderedParseMode
-      ? {
-          ...replyParams,
-          parse_mode: sendArgs.renderedParseMode,
-        }
-      : replyParams;
-    return await params.api.sendMessage(chatId, sendArgs.renderedText, sendParams);
+  const sendRenderedMessage = async (preview: TelegramDraftPreview) => {
+    const richRawApi = getTelegramRichRawApi(params.api);
+    return await richRawApi.sendRichMessage({
+      chat_id: chatId,
+      rich_message: preview.richMessage,
+      ...richReplyParams,
+    });
   };
   const sendMessageTransportPreview = async ({
-    renderedText,
-    renderedParseMode,
+    preview,
     sendGeneration,
   }: PreviewSendParams): Promise<boolean> => {
     if (typeof streamMessageId === "number") {
       streamVisibleSinceMs ??= Date.now();
-      if (renderedParseMode) {
-        await params.api.editMessageText(chatId, streamMessageId, renderedText, {
-          parse_mode: renderedParseMode,
-        });
-      } else {
-        await params.api.editMessageText(chatId, streamMessageId, renderedText);
-      }
+      const richRawApi = getTelegramRichRawApi(params.api);
+      await richRawApi.editMessageText({
+        chat_id: chatId,
+        message_id: streamMessageId,
+        rich_message: preview.richMessage,
+      });
       return true;
     }
     messageSendAttempted = true;
     let sent: Awaited<ReturnType<typeof sendRenderedMessage>>;
     try {
-      sent = await sendRenderedMessage({
-        renderedText,
-        renderedParseMode,
-      });
+      sent = await sendRenderedMessage(preview);
     } catch (err) {
       if (isSafeToRetrySendError(err) || isTelegramClientRejection(err)) {
         messageSendAttempted = false;
@@ -191,8 +194,7 @@ export function createTelegramDraftStream(params: {
     if (sendGeneration !== generation) {
       params.onSupersededPreview?.({
         messageId: normalizedMessageId,
-        textSnapshot: renderedText,
-        parseMode: renderedParseMode,
+        textSnapshot: preview.text,
         visibleSinceMs,
         retain: true,
       });
@@ -230,7 +232,8 @@ export function createTelegramDraftStream(params: {
     }
     const rendered = renderTelegramDraftPreview(currentText, params.renderText);
     const renderedText = rendered.text.trimEnd();
-    const renderedParseMode = rendered.parseMode;
+    const renderedPreview = { ...rendered, text: renderedText };
+    const renderedPreviewKey = telegramDraftPreviewKey(renderedPreview);
     if (!renderedText) {
       return false;
     }
@@ -246,8 +249,7 @@ export function createTelegramDraftStream(params: {
       }
       if (lastDeliveredText.length > deliveredTextOffset) {
         const supersededMessageId = streamMessageId;
-        const supersededTextSnapshot = lastSentText;
-        const supersededParseMode = lastSentParseMode;
+        const supersededTextSnapshot = lastDeliveredText.slice(deliveredTextOffset);
         const supersededVisibleSinceMs = streamVisibleSinceMs;
         deliveredTextOffset = lastDeliveredText.length;
         resetStreamToNewMessage({ keepFinal: true, keepPending: true, resetOffset: false });
@@ -255,7 +257,6 @@ export function createTelegramDraftStream(params: {
           params.onSupersededPreview?.({
             messageId: supersededMessageId,
             textSnapshot: supersededTextSnapshot,
-            parseMode: supersededParseMode,
             visibleSinceMs: supersededVisibleSinceMs,
             retain: true,
           });
@@ -273,7 +274,7 @@ export function createTelegramDraftStream(params: {
       }
       return stopOversizedPreview(renderedText);
     }
-    if (renderedText === lastSentText && renderedParseMode === lastSentParseMode) {
+    if (renderedPreviewKey === lastSentPreviewKey) {
       return true;
     }
     const sendGeneration = generation;
@@ -284,14 +285,11 @@ export function createTelegramDraftStream(params: {
       }
     }
 
-    const previousSentText = lastSentText;
-    const previousSentParseMode = lastSentParseMode;
-    lastSentText = renderedText;
-    lastSentParseMode = renderedParseMode;
+    const previousSentPreviewKey = lastSentPreviewKey;
+    lastSentPreviewKey = renderedPreviewKey;
     try {
       const sent = await sendMessageTransportPreview({
-        renderedText,
-        renderedParseMode,
+        preview: renderedPreview,
         sendGeneration,
       });
       if (sent) {
@@ -310,8 +308,7 @@ export function createTelegramDraftStream(params: {
         return true;
       }
       // Roll back the dedupe snapshot so the retried tick is not skipped as a no-op.
-      lastSentText = previousSentText;
-      lastSentParseMode = previousSentParseMode;
+      lastSentPreviewKey = previousSentPreviewKey;
       // Flood control is always retryable: Telegram rejected the call outright.
       // Beyond that, edits retry on any transient network error (re-editing the
       // same content is idempotent) while an unsent first preview retries only
@@ -379,8 +376,7 @@ export function createTelegramDraftStream(params: {
     messageSendAttempted = false;
     streamMessageId = undefined;
     streamVisibleSinceMs = undefined;
-    lastSentText = "";
-    lastSentParseMode = undefined;
+    lastSentPreviewKey = "";
     if (options?.resetOffset !== false) {
       deliveredTextOffset = 0;
       lastRequestedText = "";

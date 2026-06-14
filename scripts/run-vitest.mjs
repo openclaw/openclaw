@@ -25,19 +25,31 @@ export const DEFAULT_VITEST_NO_OUTPUT_TIMEOUT_MS = 120_000;
 export const DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS = 30_000;
 /** Longer watchdog timeout for known long-running Vitest configs. */
 export const DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS = 300_000;
+/** Extra-long watchdog timeout for broad configs that can stay silent on macOS. */
+export const DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS = 2_400_000;
 const VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS";
 const VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS";
 const UI_VITEST_CONFIG = "test/vitest/vitest.ui.config.ts";
 const UNIT_UI_VITEST_CONFIG = "test/vitest/vitest.unit-ui.config.ts";
 const TOOLING_DOCKER_VITEST_CONFIG = "test/vitest/vitest.tooling-docker.config.ts";
 const TOOLING_VITEST_CONFIG = "test/vitest/vitest.tooling.config.ts";
+const GATEWAY_CORE_VITEST_CONFIG = "test/vitest/vitest.gateway-core.config.ts";
 const GATEWAY_VITEST_CONFIG = "test/vitest/vitest.gateway.config.ts";
-const LONG_RUNNING_VITEST_CONFIGS = new Set([
-  "test/vitest/vitest.e2e.config.ts",
-  GATEWAY_VITEST_CONFIG,
-  "test/vitest/vitest.ui-e2e.config.ts",
-  "test/vitest/vitest.full-agentic.config.ts",
-  "test/vitest/vitest.full-core-contracts.config.ts",
+const VITEST_CONFIG_NO_OUTPUT_TIMEOUT_MS = new Map([
+  ["test/vitest/vitest.e2e.config.ts", DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS],
+  [GATEWAY_VITEST_CONFIG, DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS],
+  ["test/vitest/vitest.ui-e2e.config.ts", DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS],
+  ["test/vitest/vitest.full-agentic.config.ts", DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS],
+  [
+    "test/vitest/vitest.full-core-contracts.config.ts",
+    DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS,
+  ],
+  [
+    "test/vitest/vitest.contracts-plugin.config.ts",
+    DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS,
+  ],
+  ["test/vitest/vitest.infra.config.ts", DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS],
+  [GATEWAY_CORE_VITEST_CONFIG, DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS],
 ]);
 const TOOLING_EXCLUDED_TESTS = new Set([
   ...boundaryTestFiles,
@@ -362,10 +374,9 @@ export function resolveRunVitestSpawnEnv(env = process.env, argv = []) {
  */
 export function resolveDefaultVitestNoOutputTimeoutMs(argv = []) {
   const config = resolveVitestConfigArg(argv);
-  if (config !== null && isLongRunningVitestConfig(config)) {
-    return DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS;
-  }
-  return DEFAULT_VITEST_NO_OUTPUT_TIMEOUT_MS;
+  return config === null
+    ? DEFAULT_VITEST_NO_OUTPUT_TIMEOUT_MS
+    : (resolveVitestConfigNoOutputTimeoutMs(config) ?? DEFAULT_VITEST_NO_OUTPUT_TIMEOUT_MS);
 }
 
 function resolveVitestConfigArg(argv) {
@@ -384,14 +395,14 @@ function resolveVitestConfigArg(argv) {
   return null;
 }
 
-function isLongRunningVitestConfig(config) {
+function resolveVitestConfigNoOutputTimeoutMs(config) {
   const normalized = path.normalize(config).replaceAll(path.sep, "/").replace(/^\.\//u, "");
-  for (const candidate of LONG_RUNNING_VITEST_CONFIGS) {
+  for (const [candidate, timeoutMs] of VITEST_CONFIG_NO_OUTPUT_TIMEOUT_MS) {
     if (normalized === candidate || normalized.endsWith(`/${candidate}`)) {
-      return true;
+      return timeoutMs;
     }
   }
-  return false;
+  return null;
 }
 
 /**

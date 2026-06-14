@@ -496,6 +496,21 @@ export const nl: TranslationMap = {
       minutes: "{minutes}m {seconds}s",
     },
   },
+  logsView: {
+    title: "Logs",
+    subtitle: "Gateway file logs (JSONL).",
+    exportButton: "Export {label}",
+    exportLabels: {
+      filtered: "filtered",
+      visible: "visible",
+    },
+    filter: "Filter",
+    searchPlaceholder: "Search logs",
+    autoFollow: "Auto-follow",
+    file: "File: {file}",
+    truncated: "Log output truncated; showing latest chunk.",
+    empty: "No log entries.",
+  },
   workboard: {
     disabledHelpStart: "Workboard is uitgeschakeld. Schakel",
     enableConfigKey: "plugins.entries.workboard.enabled = true",
@@ -614,6 +629,7 @@ export const nl: TranslationMap = {
     labelsPlaceholder: "ui, docs",
     searchPlaceholder: "Kaarten zoeken",
     allPriorities: "Alle prioriteiten",
+    hideEmptyColumns: "Hide empty columns",
     emptyColumn: "Sleep werk hierheen",
     lifecycleUnlinked: "Geen sessie",
     lifecycleUnlinkedDetail: "Start of koppel een sessie",
@@ -1348,6 +1364,17 @@ export const nl: TranslationMap = {
     },
     toolCards: {
       toolError: "Toolfout",
+    },
+    workspaceFiles: {
+      label: "Workspace files",
+      expand: "Expand workspace files",
+      collapse: "Collapse workspace files",
+      workspace: "Workspace",
+      files: "Files",
+      refresh: "Refresh files",
+      loading: "Loading files…",
+      empty: "No workspace files",
+      missing: "Missing",
     },
   },
   languages: {

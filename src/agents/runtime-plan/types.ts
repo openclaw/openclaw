@@ -300,6 +300,7 @@ export type AgentRuntimeTranscriptPolicy = {
   sanitizeMode: "full" | "images-only";
   sanitizeToolCallIds: boolean;
   toolCallIdMode?: AgentRuntimeToolCallIdMode;
+  duplicateToolCallIdStyle?: "openai";
   preserveNativeAnthropicToolUseIds: boolean;
   repairToolUseResultPairing: boolean;
   preserveSignatures: boolean;
