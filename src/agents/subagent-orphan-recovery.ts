@@ -24,6 +24,7 @@ import { readSessionMessagesAsync } from "../gateway/session-utils.fs.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveInternalSessionEffectsTranscriptPath } from "./internal-session-effects.js";
+import { isLiveUnendedSubagentRun } from "./subagent-run-liveness.js";
 import {
   evaluateSubagentRecoveryGate,
   markSubagentRecoveryAttempt,
@@ -249,6 +250,32 @@ export async function recoverOrphanedSubagentSessions(params: {
 
         // Check if this session was aborted by the restart
         if (!entry.abortedLastRun) {
+          result.skipped++;
+          continue;
+        }
+
+        // If the run is stale per the existing subagent-run liveness policy,
+        // finalize it instead of attempting automatic recovery. This prevents
+        // resurrecting long-abandoned subagent runs after a gateway restart.
+        // We finalize inline (not via failedRuns) so the parent is notified
+        // immediately rather than waiting for scheduleOrphanRecovery retries.
+        if (!isLiveUnendedSubagentRun(runRecord, now)) {
+          log.warn(
+            `skipping orphan recovery for ${childSessionKey}: subagent run is stale (startedAt=${runRecord.startedAt})`,
+          );
+          try {
+            await finalizeInterruptedSubagentRun({
+              runId,
+              childSessionKey,
+              error:
+                "Subagent run was orphaned past the run-liveness window and " +
+                "could not be automatically recovered. Please retry.",
+            });
+          } catch (finalizeErr) {
+            log.warn(
+              `failed to finalize stale orphaned subagent run ${runId}: ${String(finalizeErr)}`,
+            );
+          }
           result.skipped++;
           continue;
         }
