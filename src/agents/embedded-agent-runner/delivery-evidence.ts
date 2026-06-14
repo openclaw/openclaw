@@ -367,21 +367,7 @@ export function getMessagingToolResultContentDeliveryState(
       if (!receipt) {
         continue;
       }
-      const status = readLowercaseString(receipt.status);
-      const deliveryStatus =
-        readLowercaseString(receipt.deliveryStatus) ?? readLowercaseString(receipt.delivery_status);
-      const hasExplicitSuccess =
-        receipt.ok === true ||
-        receipt.success === true ||
-        status === "ok" ||
-        status === "partial_failed" ||
-        deliveryStatus === "sent" ||
-        deliveryStatus === "partial_failed" ||
-        deliveryStatus === "delivered" ||
-        deliveryStatus === "success" ||
-        deliveryStatus === "succeeded" ||
-        deliveryStatus === "completed";
-      if (hasExplicitSuccess && hasCommittedMessagingToolResultDetails(receipt)) {
+      if (hasCommittedMessagingToolResultDetails(receipt)) {
         sawCommittedReceipt = true;
         continue;
       }

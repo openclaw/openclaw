@@ -2,6 +2,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
+  getMessagingToolResultContentDeliveryState,
   hasCommittedMessagingToolDeliveryEvidence,
   hasCommittedMessagingToolResultDetails,
   hasSideEffectProgressEvidence,
@@ -6147,6 +6148,25 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     ).toBe(true);
   });
 
+  it("treats a message-id-only JSON content receipt as committed delivery", () => {
+    expect(
+      getMessagingToolResultContentDeliveryState({
+        content: [{ type: "text", text: JSON.stringify({ messageId: "message-1" }) }],
+      }),
+    ).toBe("committed");
+  });
+
+  it.each(["error", "timeout", "timed_out", "blocked"])(
+    "does not treat a JSON content receipt with %s status and a message id as committed",
+    (status) => {
+      expect(
+        getMessagingToolResultContentDeliveryState({
+          content: [{ type: "text", text: JSON.stringify({ status, messageId: "message-1" }) }],
+        }),
+      ).toBe("non_delivery");
+    },
+  );
+
   it.each(["error", "timeout", "timed_out", "blocked"])(
     "does not treat a messaging result with %s status and a message id as committed",
     (status) => {
@@ -7236,6 +7256,10 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     "Could you send me a plan for deleting old backups?",
     "Could you plan deleting old backups?",
     "Can you outline a plan for migration?",
+    "Could you help me plan deleting old backups?",
+    "Can you help me decide whether to delete old backups?",
+    "Please help me plan deleting old backups.",
+    "Please help me decide whether to delete old backups.",
   ])("does not retry when the user explicitly asked only for a plan: %s", (prompt) => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "openai",

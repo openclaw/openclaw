@@ -648,6 +648,32 @@ describe("before_tool_call loop detection behavior", () => {
     expect(onToolOutcome.mock.calls.at(-1)?.[0]).not.toHaveProperty("didSendViaMessagingTool");
   });
 
+  it("marks a message-id-only content receipt as delivered", async () => {
+    const onToolOutcome = vi.fn();
+    const execute = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: '{"messageId":"message-1"}' }],
+      details: undefined,
+    });
+    const tool = createWrappedTool("message", execute, {
+      ...enabledLoopDetectionContext,
+      runId: "run-message-id-only-content-receipt",
+      onToolOutcome,
+    });
+
+    await expectUnblockedToolExecution(tool, "message-id-only-content-receipt", {
+      action: "send",
+      to: "channel:123",
+      content: "delivered",
+    });
+
+    expect(onToolOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "message",
+        didSendViaMessagingTool: true,
+      }),
+    );
+  });
+
   it.each([
     ["plugin success status", { success: true, status: "success" }],
     ["nested plugin completion status", { ok: true, result: { status: "completed" } }],

@@ -2053,7 +2053,7 @@ describe("messaging tool media URL tracking", () => {
     });
   });
 
-  it("commits plugin message sends with delivery receipts in text content", async () => {
+  it("commits plugin message sends with message-id-only receipts in text content", async () => {
     const { ctx } = createTestContext();
 
     await handleToolExecutionStart(ctx, {
@@ -2077,7 +2077,6 @@ describe("messaging tool media URL tracking", () => {
           {
             type: "text",
             text: JSON.stringify({
-              ok: true,
               channel: "mattermost",
               messageId: "message-1",
               channelId: "channel-mattermost",

@@ -172,9 +172,9 @@ const ACTIONABLE_PROMPT_DIRECTIVE_RE =
 const ACTIONABLE_PROMPT_POLITE_DIRECTIVE_RE =
   /\bplease\s+(?:check|inspect|look(?:\s+into|\s+at)?|read|write|edit|update|fix|investigate|debug|run|search|find|implement|add|remove|refactor|explain|summari(?:s|z)e|analy(?:s|z)e|review|tell|show|make|restart|deploy|prepare|generate|start|launch|send|monitor|set|load|hit|ask|wire|channel)\b/i;
 const ACTIONABLE_PROMPT_GENERIC_POLITE_REQUEST_RE =
-  /^\s*(?:(?:hey|hi|hello)\b[\s,!:-]*)?please\s+(?!(?:(?:be|wait|say|reply|respond|answer|acknowledg(?:e|ement)|confirm|keep|remember|note|consider|advise|recommend|let|do\s+not|don['’]t|not|never|avoid|refrain)\b|take\s+care\b|have\s+(?:a\s+)?(?:good|great|nice|wonderful)\b))[a-z][a-z'-]*\b/i;
+  /^\s*(?:(?:hey|hi|hello)\b[\s,!:-]*)?please\s+(?:commit|upload|build|delete|create|move|rename|copy|install|uninstall|enable|disable|configure|reset|archive|cancel|stop|test|verify|ship)\b/i;
 const ACTIONABLE_PROMPT_REQUEST_RE =
-  /\b(?:can|could|would|will)\s+you\b|\b(?:help|tell|show)\s+me\b|\bwalk me through\b/i;
+  /\b(?:(?:can|could|would|will)\s+you(?:\s+please)?|help\s+me(?:\s+please)?)\s+(?:check|inspect|look(?:\s+into|\s+at)?|read|write|edit|update|fix|investigate|debug|run|search|find|implement|add|remove|delete|create|move|rename|copy|install|uninstall|enable|disable|configure|reset|archive|cancel|stop|test|verify|review|commit|upload|build|explain|summari(?:s|z)e|analy(?:s|z)e|tell|show|restart|deploy|ship|prepare|generate|start|launch|send|monitor|set|load|hit|ask|wire|channel)\b/i;
 const ACTIONABLE_PROMPT_FIRST_PERSON_REQUEST_RE =
   /\b(?:i|we)\s+(?:need|want|would like)\s+you(?:\s+to)?\b/i;
 const NON_AUTHORIZING_NEGATED_ACTION_REQUEST_RE =
