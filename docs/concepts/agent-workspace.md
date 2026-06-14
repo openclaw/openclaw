@@ -93,10 +93,23 @@ These are the standard files OpenClaw expects inside the workspace:
   <Accordion title="skills/ - workspace skills (optional)">
     Workspace-specific skills. Highest-precedence skill location for that workspace. Overrides project agent skills, personal agent skills, managed skills, bundled skills, and `skills.load.extraDirs` when names collide.
   </Accordion>
+  <Accordion title="capabilities/ - workspace capability descriptors (optional)">
+    Markdown descriptors for local integrations, bridge queues, task flows, ACP delegation paths, and durable operating procedures. They are guidance only; they do not grant tool access or change Gateway policy. See [Workspace capabilities](/concepts/workspace-capabilities).
+  </Accordion>
   <Accordion title="canvas/ - Canvas UI files (optional)">
     Canvas UI files for node displays (for example `canvas/index.html`).
   </Accordion>
 </AccordionGroup>
+
+## Workspace capability discovery
+
+A workspace can contain many files, but agents do not read every file on every session. To make your local integrations (like a Windows bridge or a specific mail flow) discoverable, follow the **Discovery Convention**:
+
+1. **Keep a central index:** Create `capabilities/index.md` and list each available capability with its purpose and entry point.
+2. **Link from the bootstrap:** Mention the index in `AGENTS.md` or `TOOLS.md` (e.g., "Check `capabilities/index.md` for local bridge details").
+3. **Read-only first:** Capabilities should be inspected via read-only tools (like `ls` or `read_file`) before taking any action.
+
+This allows agents to autonomously find alternative ways to complete a task (like using a Windows bridge) before concluding that a task is unsupported. See [Workspace capabilities](/concepts/workspace-capabilities) for the full convention.
 
 <Note>
 If any bootstrap file is missing, OpenClaw injects a "missing file" marker into the session and continues. Large bootstrap files are truncated when injected; adjust limits with `agents.defaults.bootstrapMaxChars` (default: 20000) and `agents.defaults.bootstrapTotalMaxChars` (default: 60000). `openclaw setup` can recreate missing defaults without overwriting existing files.
