@@ -88,4 +88,46 @@ describe("tool schema runtime diagnostics", () => {
       },
     );
   });
+
+  it("sanitizes provider diagnostic logs without reading poisoned tool names", () => {
+    const poisonedTool = {};
+    Object.defineProperty(poisonedTool, "name", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin tool name getter exploded");
+      },
+    });
+    mocks.inspectProviderToolSchemasWithPlugin.mockReturnValueOnce([
+      {
+        toolName: "fuzzplugin_\u001B[31mmove\nangles",
+        toolIndex: 0,
+        violations: ["fuzzplugin_\u001B[31mmove\nangles.parameters\nmust be object"],
+      },
+    ]);
+
+    expect(() =>
+      logProviderToolSchemaDiagnostics({
+        provider: "example\u001B[31m\nprovider",
+        tools: [poisonedTool] as never,
+      }),
+    ).not.toThrow();
+
+    expect(mocks.log.warn).toHaveBeenCalledWith(
+      "provider tool schema diagnostics: 1 tool for exampleprovider: fuzzplugin_moveangles (1 violation)",
+      {
+        provider: "exampleprovider",
+        toolCount: 1,
+        diagnosticCount: 1,
+        tools: ["0:tool[0]"],
+        diagnostics: [
+          {
+            index: 0,
+            tool: "fuzzplugin_moveangles",
+            violations: ["fuzzplugin_moveangles.parametersmust be object"],
+            violationCount: 1,
+          },
+        ],
+      },
+    );
+  });
 });
