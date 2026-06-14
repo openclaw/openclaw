@@ -20,15 +20,19 @@ contracts: memoryRerankers
 
 ## Configuration
 
-Configure the plugin under `plugins.memory-external-reranker`:
+Configure the plugin under `plugins.entries.memory-external-reranker.config`:
 
 ```json
 {
   "plugins": {
-    "memory-external-reranker": {
-      "provider": "llamacpp",
-      "model": "qwen3-reranker",
-      "endpointPath": "/v1/rerank"
+    "entries": {
+      "memory-external-reranker": {
+        "config": {
+          "provider": "llamacpp",
+          "model": "qwen3-reranker",
+          "endpointPath": "/v1/rerank"
+        }
+      }
     }
   }
 }
@@ -43,10 +47,14 @@ in explicitly:
 ```json
 {
   "plugins": {
-    "memory-external-reranker": {
-      "provider": "llamacpp",
-      "model": "qwen3-reranker",
-      "allowPrivateNetwork": true
+    "entries": {
+      "memory-external-reranker": {
+        "config": {
+          "provider": "llamacpp",
+          "model": "qwen3-reranker",
+          "allowPrivateNetwork": true
+        }
+      }
     }
   }
 }

@@ -22,7 +22,7 @@ contracts: memoryRerankers, tools
 
 ## Configuration
 
-Configure the plugin in `plugins.memory-external-reranker`.
+Configure the plugin in `plugins.entries.memory-external-reranker.config`.
 
 - `provider`: provider key in `models.providers`
 - `model`: reranker model ID sent to `/v1/rerank`
