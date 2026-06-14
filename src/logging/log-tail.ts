@@ -87,15 +87,18 @@ async function readLogSlice(params: {
 
   if (cursor != null) {
     if (cursor > size) {
-      // File rotated or shrank since the previous cursor; restart near the end.
+      // The file shrank below the previously-returned cursor, so the log was
+      // rotated or truncated and the cursor is no longer meaningful.
       reset = true;
       start = Math.max(0, size - maxBytes);
       truncated = start > 0;
     } else {
       start = cursor;
       if (size - start > maxBytes) {
-        // Cursor is valid but too stale; cap reads and tell the caller state was reset.
-        reset = true;
+        // The file grew faster than --max-bytes between polls. The cursor is
+        // still valid (we are reading forward from it), but we have to skip
+        // bytes to fit the budget; the caller should report this as a tail
+        // truncation, not a rotation.
         truncated = true;
         start = Math.max(0, size - maxBytes);
       }
