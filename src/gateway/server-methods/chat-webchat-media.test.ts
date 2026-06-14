@@ -22,9 +22,9 @@ describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
     tmpDir = undefined;
   });
 
-  function writeAudioFixture(bytes = [0xff, 0xfb, 0x90, 0x00]) {
+  function writeAudioFixture(bytes = [0xff, 0xfb, 0x90, 0x00], fileName = "clip.mp3") {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-webchat-audio-"));
-    const audioPath = path.join(tmpDir, "clip.mp3");
+    const audioPath = path.join(tmpDir, fileName);
     fs.writeFileSync(audioPath, Buffer.from(bytes));
     return { audioPath, localRoot: tmpDir };
   }
@@ -47,6 +47,28 @@ describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
       url: fs.realpathSync(audioPath),
       kind: "audio",
       label: "clip.mp3",
+      mimeType: "audio/mpeg",
+    });
+  });
+
+  it("exposes a local M2A file as MPEG audio for webchat attachments", async () => {
+    const { audioPath, localRoot } = writeAudioFixture([0xff, 0xfb, 0x90, 0x00], "clip.m2a");
+
+    const blocks = await buildWebchatAudioContentBlocksFromReplyPayloads(
+      [{ mediaUrl: audioPath, trustedLocalMedia: true }],
+      { localRoots: [localRoot] },
+    );
+
+    expect(blocks).toHaveLength(1);
+    const block = blocks[0] as {
+      type?: string;
+      attachment?: { url?: string; kind?: string; label?: string; mimeType?: string };
+    };
+    expect(block.type).toBe("attachment");
+    expect(block.attachment).toEqual({
+      url: fs.realpathSync(audioPath),
+      kind: "audio",
+      label: "clip.m2a",
       mimeType: "audio/mpeg",
     });
   });

@@ -29,6 +29,7 @@ const ALLOWED_WEBCHAT_DATA_IMAGE_MEDIA_TYPES = new Set([
 const MIME_BY_EXT: Record<string, string> = {
   ".aac": "audio/aac",
   ".m4a": "audio/mp4",
+  ".m2a": "audio/mpeg",
   ".mp3": "audio/mpeg",
   ".oga": "audio/ogg",
   ".ogg": "audio/ogg",

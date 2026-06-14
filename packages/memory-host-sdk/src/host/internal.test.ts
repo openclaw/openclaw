@@ -124,6 +124,7 @@ describe("memory host SDK package internals", () => {
     fsSync.mkdirSync(extraDir, { recursive: true });
     fsSync.writeFileSync(path.join(extraDir, "note.md"), "# Note");
     fsSync.writeFileSync(path.join(extraDir, "diagram.png"), Buffer.from("png"));
+    fsSync.writeFileSync(path.join(extraDir, "voice.m2a"), Buffer.from("audio"));
     fsSync.writeFileSync(path.join(extraDir, "ignore.txt"), "ignored");
 
     const files = await listMemoryFiles(
@@ -136,6 +137,7 @@ describe("memory host SDK package internals", () => {
       "MEMORY.md",
       path.join("extra", "diagram.png"),
       path.join("extra", "note.md"),
+      path.join("extra", "voice.m2a"),
     ]);
   });
 
@@ -148,11 +150,14 @@ describe("memory host SDK package internals", () => {
     const tmpDir = getTmpDir();
     const notePath = path.join(tmpDir, "note.md");
     const imagePath = path.join(tmpDir, "diagram.png");
+    const audioPath = path.join(tmpDir, "voice.m2a");
     fsSync.writeFileSync(notePath, "hello", "utf-8");
     fsSync.writeFileSync(imagePath, Buffer.from("png"));
+    fsSync.writeFileSync(audioPath, Buffer.from("audio"));
 
     const note = await buildFileEntry(notePath, tmpDir);
     const image = await buildFileEntry(imagePath, tmpDir, multimodal);
+    const audio = await buildFileEntry(audioPath, tmpDir, multimodal);
 
     const noteEntry = expectFileEntry(note);
     expect(noteEntry.path).toBe("note.md");
@@ -163,6 +168,12 @@ describe("memory host SDK package internals", () => {
     expect(imageEntry.modality).toBe("image");
     expect(imageEntry.mimeType).toBe("image/png");
     expect(imageEntry.contentText).toBe("Image file: diagram.png");
+    const audioEntry = expectFileEntry(audio);
+    expect(audioEntry.path).toBe("voice.m2a");
+    expect(audioEntry.kind).toBe("multimodal");
+    expect(audioEntry.modality).toBe("audio");
+    expect(audioEntry.mimeType).toBe("audio/mpeg");
+    expect(audioEntry.contentText).toBe("Audio file: voice.m2a");
   });
 
   it("retries transient markdown reads while building file entries", async () => {
