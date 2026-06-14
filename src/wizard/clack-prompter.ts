@@ -29,9 +29,11 @@ import { WizardCancelledError } from "./prompts.js";
 
 // Clack-backed WizardPrompter implementation for interactive CLI setup. It
 // converts the generic wizard prompt contract into styled Clack prompts.
-function guardCancel<T>(value: T | symbol): T {
+function guardCancel<T>(value: T | symbol, options?: { signal?: AbortSignal }): T {
   if (isCancel(value)) {
-    cancel(stylePromptTitle("Setup cancelled.") ?? "Setup cancelled.");
+    if (!options?.signal?.aborted) {
+      cancel(stylePromptTitle("Setup cancelled.") ?? "Setup cancelled.");
+    }
     throw new WizardCancelledError();
   }
   return value;
@@ -133,7 +135,9 @@ export function createClackPrompter(): WizardPrompter {
           await password({
             message: stylePromptMessage(params.message),
             validate: validate ? (value) => validate(value ?? "") : undefined,
+            signal: params.signal,
           }),
+          { signal: params.signal },
         );
       }
       return guardCancel(
@@ -142,7 +146,9 @@ export function createClackPrompter(): WizardPrompter {
           initialValue: params.initialValue,
           placeholder: params.placeholder,
           validate: validate ? (value) => validate(value ?? "") : undefined,
+          signal: params.signal,
         }),
+        { signal: params.signal },
       );
     },
     confirm: async (params) =>

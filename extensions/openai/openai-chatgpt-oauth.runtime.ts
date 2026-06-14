@@ -197,7 +197,7 @@ function rewriteOpenAICodexOAuthError(error: unknown): Error {
 
 function createManualCodeInputHandler(params: {
   isRemote: boolean;
-  onPrompt: (prompt: { message: string }) => Promise<string>;
+  onPrompt: (prompt: { message: string; signal?: AbortSignal }) => Promise<string>;
   runtime: ProviderAuthContext["runtime"];
   updateProgress: (message: string) => void;
   stopProgress: (message?: string) => void;
@@ -205,7 +205,20 @@ function createManualCodeInputHandler(params: {
   hasBrowserAuthStarted: () => boolean;
 }): (() => Promise<string>) | undefined {
   let manualFallbackPromise: Promise<string> | undefined;
-  const promptForManualCode = () => params.onPrompt({ message: manualInputPromptMessage });
+  let manualPromptAbort: AbortController | undefined;
+  const abortManualPrompt = () => manualPromptAbort?.abort();
+  params.waitForLoginToSettle.then(abortManualPrompt, abortManualPrompt);
+  const promptForManualCode = () => {
+    const controller = new AbortController();
+    manualPromptAbort = controller;
+    return params
+      .onPrompt({ message: manualInputPromptMessage, signal: controller.signal })
+      .finally(() => {
+        if (manualPromptAbort === controller) {
+          manualPromptAbort = undefined;
+        }
+      });
+  };
   if (params.isRemote) {
     return async () => {
       manualFallbackPromise ??= promptForManualCode();
