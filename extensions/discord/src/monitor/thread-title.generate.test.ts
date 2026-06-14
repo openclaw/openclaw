@@ -41,6 +41,7 @@ beforeEach(() => {
     model: {
       provider: "anthropic",
       id: "claude-sonnet-4-6",
+      maxTokens: 64_000,
     },
     auth: {
       apiKey: "sk-test",
@@ -75,6 +76,7 @@ describe("generateThreadTitle", () => {
       model: {
         provider: "openrouter",
         id: "anthropic/claude-sonnet-4-5",
+        maxTokens: 64_000,
       },
       auth: {
         apiKey: "sk-openrouter",
@@ -158,6 +160,7 @@ describe("generateThreadTitle", () => {
   it("builds contextual prompt and forwards completion options", async () => {
     const now = 1_700_000_000_000;
     const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     let result: string | null;
     try {
       result = await generateThreadTitle({
@@ -187,11 +190,40 @@ describe("generateThreadTitle", () => {
       ],
     });
     expect(completionArgs.options).toEqual({
-      maxTokens: 512,
+      maxTokens: 4_096,
       signal: completionArgs.options?.signal,
     });
     expect(completionArgs.options?.signal).toBeInstanceOf(AbortSignal);
     expect(completionArgs.options).not.toHaveProperty("temperature");
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 60_000);
+  });
+
+  it("clamps completion budget to the selected model output cap", async () => {
+    prepareSimpleCompletionModelForAgentMock.mockResolvedValueOnce({
+      selection: {
+        provider: "anthropic",
+        modelId: "claude-haiku-4-5",
+        agentDir: "/tmp/openclaw-agent",
+      },
+      model: {
+        provider: "anthropic",
+        id: "claude-haiku-4-5",
+        maxTokens: 1_024,
+      },
+      auth: {
+        apiKey: "sk-test",
+        source: "env:TEST_API_KEY",
+        mode: "api-key",
+      },
+    } as Awaited<ReturnType<typeof agentRuntimeModule.prepareSimpleCompletionModelForAgent>>);
+
+    await generateThreadTitle({
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
+      agentId: "main",
+      messageText: "Need a generated title.",
+    });
+
+    expect(firstCompletionArgs().options?.maxTokens).toBe(1_024);
   });
 
   it("returns null when completion throws", async () => {

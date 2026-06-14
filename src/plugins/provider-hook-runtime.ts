@@ -448,3 +448,18 @@ export function wrapProviderStreamFn(params: {
     ensureProviderRuntimePluginHandle(params).plugin?.wrapStreamFn?.(params.context) ?? undefined
   );
 }
+
+export function wrapProviderSimpleCompletionStreamFn(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  runtimeHandle?: ProviderRuntimePluginHandle;
+  context: ProviderWrapStreamFnContext;
+}) {
+  return (
+    ensureProviderRuntimePluginHandle(params).plugin?.wrapSimpleCompletionStreamFn?.(
+      params.context,
+    ) ?? undefined
+  );
+}

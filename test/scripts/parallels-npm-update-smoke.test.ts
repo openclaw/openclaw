@@ -6,12 +6,14 @@ import { afterEach, describe, expect, it } from "vitest";
 import { runWindowsBackgroundPowerShell } from "../../scripts/e2e/parallels/guest-transports.ts";
 import { run as hostCommandRun } from "../../scripts/e2e/parallels/host-command.ts";
 import {
+  linuxUpdateScript,
   macosUpdateScript,
   windowsUpdateScript,
 } from "../../scripts/e2e/parallels/npm-update-scripts.ts";
 import {
   freshLaneTimeoutMs,
   NpmUpdateSmoke,
+  parseArgs,
   spawnLoggedCommand,
 } from "../../scripts/e2e/parallels/npm-update-smoke.ts";
 import type { HostServer, Platform } from "../../scripts/e2e/parallels/types.ts";
@@ -69,6 +71,17 @@ afterEach(() => {
 });
 
 describe("parallels npm update smoke", () => {
+  it("accepts one prepared tarball target for update and fresh install", () => {
+    expect(parseArgs(["--target-tarball", "/tmp/openclaw-candidate.tgz"])).toMatchObject({
+      targetTarball: "/tmp/openclaw-candidate.tgz",
+      updateTarget: "",
+      freshTargetSpec: undefined,
+    });
+    expect(() =>
+      parseArgs(["--target-tarball", "/tmp/openclaw-candidate.tgz", "--update-target", "beta"]),
+    ).toThrow("--target-tarball cannot be combined");
+  });
+
   it("stops the host artifact server when the wrapper fails mid-run", async () => {
     let stopCalls = 0;
     const server: HostServer = {
@@ -119,6 +132,18 @@ describe("parallels npm update smoke", () => {
     expect(script).toContain("freshTargetStatus");
   });
 
+  it("host-serves a prepared candidate tarball for both proof phases", () => {
+    const script = readFileSync(SCRIPT_PATH, "utf8");
+
+    expect(script).toContain("--target-tarball <path>");
+    expect(script).toContain('label: "prepared candidate tgz"');
+    expect(script).toContain("await copyFile(this.targetTarballPath, hostedTarballPath)");
+    expect(script).toContain("dir: this.tgzDir");
+    expect(script).toContain("this.updateTargetEffective = targetUrl");
+    expect(script).toContain("this.freshTargetSpec = targetUrl");
+    expect(script).toContain("this.updateExpectedNeedle = this.targetTarballVersion");
+  });
+
   it("guards beta validation against cross-version harness checkouts", () => {
     const script = readFileSync(SCRIPT_PATH, "utf8");
 
@@ -158,6 +183,29 @@ describe("parallels npm update smoke", () => {
     expect(updateBlock).toContain("appendFileSync(logPath, text");
     expect(updateBlock).toContain("run: ({ signal }) => fn({ append, logPath, signal })");
     expect(updateBlock).not.toContain("log += text");
+  });
+
+  it("bounds POSIX guest failure logs", () => {
+    const scripts = [
+      macosUpdateScript({
+        auth: TEST_AUTH,
+        expectedNeedle: "2026.5.3-beta.2",
+        updateTarget: "2026.5.3-beta.2",
+      }),
+      linuxUpdateScript({
+        auth: TEST_AUTH,
+        expectedNeedle: "2026.5.3-beta.2",
+        updateTarget: "2026.5.3-beta.2",
+      }),
+    ].join("\n");
+
+    expect(scripts).toContain("print_log_tail()");
+    expect(scripts).toContain("OPENCLAW_PARALLELS_NPM_UPDATE_LOG_TAIL_BYTES");
+    expect(scripts).toContain('print_log_tail "$output_file"');
+    expect(scripts).toContain("print_log_tail /tmp/openclaw-parallels-macos-gateway.log >&2");
+    expect(scripts).toContain("print_log_tail /tmp/openclaw-parallels-linux-gateway.log >&2");
+    expect(scripts).not.toContain('cat "$output_file"');
+    expect(scripts).not.toContain("cat /tmp/openclaw-parallels-");
   });
 
   it("streams fresh lane logs instead of retaining them in memory", async () => {

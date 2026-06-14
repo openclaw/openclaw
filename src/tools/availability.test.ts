@@ -235,4 +235,24 @@ describe("evaluateToolAvailability", () => {
       }).map((entry) => entry.reason),
     ).toEqual(["auth-missing", "env-missing", "config-missing", "plugin-disabled"]);
   });
+
+  it("surfaces an unsupported-signal sibling even when another anyOf branch is available", () => {
+    const descriptor: ToolDescriptor = {
+      ...baseDescriptor,
+      availability: {
+        anyOf: [
+          { kind: "auth", providerId: "openai" },
+          // Empty allOf is a malformed descriptor; its unsupported-signal must not be masked.
+          { allOf: [] },
+        ],
+      },
+    };
+
+    expect(
+      evaluateToolAvailability({
+        descriptor,
+        context: { authProviderIds: new Set(["openai"]) },
+      }).map((entry) => entry.reason),
+    ).toEqual(["unsupported-signal"]);
+  });
 });

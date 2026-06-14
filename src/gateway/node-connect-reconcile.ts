@@ -30,6 +30,7 @@ export type NodeConnectPairingReconcileResult = {
   declaredPermissions?: Record<string, boolean>;
   effectivePermissions?: Record<string, boolean>;
   pendingPairing?: RequestNodePairingResult;
+  shouldClearPendingPairings?: boolean;
 };
 
 function resolveApprovedReconnectCommands(params: {
@@ -221,5 +222,6 @@ export async function reconcileNodePairingOnConnect(params: {
     effectiveCommands: declared,
     declaredPermissions,
     effectivePermissions: declaredPermissions,
+    shouldClearPendingPairings: true,
   };
 }

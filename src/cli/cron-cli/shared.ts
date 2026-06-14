@@ -18,9 +18,50 @@ import {
   isOffsetlessIsoDateTime,
   parseOffsetlessIsoDateTimeInTimeZone,
 } from "../../infra/format-time/parse-offsetless-zoned-datetime.js";
+import { formatTimestamp } from "../../logging/timestamps.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { callGatewayFromCli } from "../gateway-rpc.js";
+
+export function parseCronCommandArgv(value: unknown): string[] | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error("--command-argv must be a JSON array of strings");
+  }
+  if (
+    !Array.isArray(parsed) ||
+    parsed.length === 0 ||
+    parsed.some((entry) => typeof entry !== "string" || entry.length === 0)
+  ) {
+    throw new Error("--command-argv must be a non-empty JSON array of non-empty strings");
+  }
+  return parsed;
+}
+
+export function parseCronCommandEnv(values: unknown): Record<string, string> | undefined {
+  const rawValues = Array.isArray(values) ? values : typeof values === "string" ? [values] : [];
+  if (rawValues.length === 0) {
+    return undefined;
+  }
+  const env: Record<string, string> = {};
+  for (const raw of rawValues) {
+    if (typeof raw !== "string") {
+      throw new Error("--command-env must be KEY=VALUE");
+    }
+    const idx = raw.indexOf("=");
+    const key = idx > 0 ? raw.slice(0, idx).trim() : "";
+    if (!key) {
+      throw new Error("--command-env must be KEY=VALUE");
+    }
+    env[key] = raw.slice(idx + 1);
+  }
+  return env;
+}
 
 export const getCronChannelOptions = () => {
   // Keep help truthful even before the plugin registry is bootstrapped.
@@ -30,7 +71,19 @@ export const getCronChannelOptions = () => {
   return pluginIds.length > 0 ? ["last", ...pluginIds].join("|") : "last|<channel-id>";
 };
 
-function addCronRunCauseFields(value: unknown): unknown {
+function toLocalIsoTime(value: unknown): string | undefined {
+  return typeof value === "number" && Number.isFinite(value)
+    ? formatTimestamp(new Date(value), { style: "long" })
+    : undefined;
+}
+
+/**
+ * CLI-only display enrichment for `cron runs` history entries: adds a short
+ * `cause` alias for `errorReason` plus readable local-offset ISO mirrors of the
+ * numeric timestamps (matching the diagnostic log `time` format). Stored data
+ * and the gateway protocol stay unchanged; raw numeric fields are preserved.
+ */
+function enrichCronRunEntriesForDisplay(value: unknown): unknown {
   if (!value || typeof value !== "object") {
     return value;
   }
@@ -44,17 +97,33 @@ function addCronRunCauseFields(value: unknown): unknown {
       return entry;
     }
     const item = entry as Record<string, unknown>;
-    if (item.action !== "finished" || typeof item.errorReason !== "string") {
+    if (item.action !== "finished") {
       return item;
     }
-    const cause = item.errorReason.trim();
-    return cause ? Object.assign({}, item, { cause }) : item;
+    const extra: Record<string, unknown> = {};
+    const cause = typeof item.errorReason === "string" ? item.errorReason.trim() : "";
+    if (cause) {
+      extra.cause = cause;
+    }
+    const tsIso = toLocalIsoTime(item.ts);
+    if (tsIso) {
+      extra.tsIso = tsIso;
+    }
+    const runAtIso = toLocalIsoTime(item.runAtMs);
+    if (runAtIso) {
+      extra.runAtIso = runAtIso;
+    }
+    const nextRunAtIso = toLocalIsoTime(item.nextRunAtMs);
+    if (nextRunAtIso) {
+      extra.nextRunAtIso = nextRunAtIso;
+    }
+    return Object.keys(extra).length > 0 ? Object.assign({}, item, extra) : item;
   });
   return { ...record, entries: nextEntries };
 }
 
 export function printCronJson(value: unknown) {
-  defaultRuntime.writeJson(addCronRunCauseFields(value));
+  defaultRuntime.writeJson(enrichCronRunEntriesForDisplay(value));
 }
 
 /**
@@ -107,11 +176,15 @@ export async function warnIfCronSchedulerDisabled(opts: GatewayRpcOpts) {
     const res = (await callGatewayFromCli("cron.status", opts, {})) as {
       enabled?: boolean;
       storePath?: string;
+      storage?: string;
+      sqlitePath?: string;
     };
     if (res?.enabled === true) {
       return;
     }
-    const store = typeof res?.storePath === "string" ? res.storePath : "";
+    const store = typeof res?.sqlitePath === "string" ? res.sqlitePath
+      : typeof res?.storePath === "string" ? res.storePath
+      : "";
     defaultRuntime.error(
       [
         "warning: cron scheduler is disabled in the Gateway; jobs are saved but will not run automatically.",
@@ -150,7 +223,13 @@ export function parseDurationMs(input: string): number | null {
           : unit === "h"
             ? 3_600_000
             : 86_400_000;
-  return Math.floor(n * factor);
+  const result = Math.floor(n * factor);
+  if (!Number.isFinite(result)) {
+    // A finite mantissa can still overflow to Infinity for a large unit (e.g. a long
+    // pure-digit string with "d"); reject it instead of returning Infinity ms.
+    return null;
+  }
+  return result;
 }
 
 export function parseCronStaggerMs(params: {

@@ -194,6 +194,48 @@ describe("message action capability checks", () => {
     ).toHaveProperty("components");
   });
 
+  it("keeps contributed schema properties optional so only action stays required", () => {
+    const contributingPlugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({
+        id: "demo-contrib",
+        label: "Demo Contrib",
+        capabilities: { chatTypes: ["direct", "group"] },
+        config: {
+          listAccountIds: () => ["default"],
+        },
+      }),
+      actions: {
+        describeMessageTool: () => ({
+          actions: ["send"],
+          schema: {
+            properties: {
+              // Non-optional TypeBox schema: plugin forgot Type.Optional.
+              components: Type.Array(Type.String()),
+              // Cloning strips typebox's non-enumerable `~optional` marker;
+              // mirrors serialized/external plugin contributions.
+              chatRef: structuredClone(Type.Optional(Type.String())),
+              media: Type.Optional(Type.String()),
+            },
+          },
+        }),
+      },
+    };
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "demo-contrib", source: "test", plugin: contributingPlugin },
+      ]),
+    );
+
+    const properties = resolveChannelMessageToolSchemaProperties({
+      cfg: {} as OpenClawConfig,
+      channel: "demo-contrib",
+    });
+    // Regression: required leakage made every message tool call fail validation
+    // with "must have required properties chatRef, media, ...".
+    const toolSchema = Type.Object({ action: Type.String(), ...properties });
+    expect(toolSchema.required).toEqual(["action"]);
+  });
+
   it("filters only actions that depend on current-channel-only schema", () => {
     const scopedSchemaPlugin: ChannelPlugin = {
       ...createChannelTestPluginBase({

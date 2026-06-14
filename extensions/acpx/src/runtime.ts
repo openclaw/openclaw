@@ -198,6 +198,16 @@ function readOpenClawLeaseIdFromRecord(record: unknown): string | undefined {
   return typeof openclawLeaseId === "string" ? openclawLeaseId.trim() || undefined : undefined;
 }
 
+function readOpenClawGatewayInstanceIdFromRecord(record: unknown): string | undefined {
+  if (typeof record !== "object" || record === null) {
+    return undefined;
+  }
+  const { openclawGatewayInstanceId } = record as { openclawGatewayInstanceId?: unknown };
+  return typeof openclawGatewayInstanceId === "string"
+    ? openclawGatewayInstanceId.trim() || undefined
+    : undefined;
+}
+
 function extractGeneratedWrapperPath(command: string | undefined): string {
   const parts = splitCommandParts(command ?? "");
   return (
@@ -319,6 +329,7 @@ const OPENCLAW_BRIDGE_EXECUTABLE = "openclaw";
 const OPENCLAW_BRIDGE_SUBCOMMAND = "acp";
 const CODEX_ACP_AGENT_ID = "codex";
 const CODEX_ACP_OPENCLAW_PREFIX = "openai/";
+const CLAUDE_ACP_OPENCLAW_PREFIX = "anthropic/";
 const CODEX_ACP_REASONING_EFFORTS = new Set(["low", "medium", "high", "xhigh"]);
 const CODEX_ACP_THINKING_ALIASES = new Map<string, string | undefined>([
   ["off", undefined],
@@ -552,6 +563,17 @@ function codexAcpSessionModelId(override: CodexAcpModelOverride): string {
   return override.reasoningEffort
     ? `${override.model}/${override.reasoningEffort}`
     : override.model;
+}
+
+function normalizeClaudeAcpModelOverride(rawModel: string | undefined): string | undefined {
+  const raw = rawModel?.trim();
+  if (!raw) {
+    return undefined;
+  }
+  if (!raw.toLowerCase().startsWith(CLAUDE_ACP_OPENCLAW_PREFIX)) {
+    return raw;
+  }
+  return raw.slice(CLAUDE_ACP_OPENCLAW_PREFIX.length).trim() || undefined;
 }
 
 function withAcpxSessionOptions(input: OpenClawRuntimeEnsureInput): AcpxDelegateEnsureInput {
@@ -906,9 +928,12 @@ export class AcpxRuntime implements AcpRuntime {
     if (!rootPid || !rootCommand) {
       return;
     }
+    const expectedGatewayInstanceId = readOpenClawGatewayInstanceIdFromRecord(record);
     await cleanupOpenClawOwnedAcpxProcessTree({
       rootPid,
       rootCommand,
+      ...(leaseId ? { expectedLeaseId: leaseId } : {}),
+      ...(expectedGatewayInstanceId ? { expectedGatewayInstanceId } : {}),
       wrapperRoot: this.wrapperRoot,
       deps: this.processCleanupDeps,
     });
@@ -935,10 +960,14 @@ export class AcpxRuntime implements AcpRuntime {
       agentRegistry: this.agentRegistry,
     });
     const delegate = this.resolveDelegateForCommand(command);
+    const claudeModelOverride = isClaudeAcpCommand(command)
+      ? normalizeClaudeAcpModelOverride(input.model)
+      : undefined;
     const codexModelOverride =
       normalizeAgentName(input.agent) === CODEX_ACP_AGENT_ID && isCodexAcpCommand(command)
         ? normalizeCodexAcpModelOverride(input.model, input.thinking)
         : undefined;
+    const ensureInput = claudeModelOverride ? { ...input, model: claudeModelOverride } : input;
     const stableLaunchCommand =
       codexModelOverride && command
         ? appendCodexAcpConfigOverrides(command, codexModelOverride)
@@ -953,20 +982,20 @@ export class AcpxRuntime implements AcpRuntime {
 
     if (!codexModelOverride) {
       return await this.runWithLaunchLease({
-        sessionKey: input.sessionKey,
+        sessionKey: ensureInput.sessionKey,
         command: stableLaunchCommand,
         enabled: shouldStartWithLease,
         run: () =>
           this.withCodexWrapperDiagnostics({
             command: stableLaunchCommand,
             fallbackCode: "ACP_SESSION_INIT_FAILED",
-            run: () => delegate.ensureSession(withAcpxSessionOptions(input)),
+            run: () => delegate.ensureSession(withAcpxSessionOptions(ensureInput)),
           }),
       });
     }
 
     const normalizedInput = {
-      ...input,
+      ...ensureInput,
       ...(codexAcpSessionModelId(codexModelOverride)
         ? { model: codexAcpSessionModelId(codexModelOverride) }
         : {}),
@@ -1195,6 +1224,13 @@ export class AcpxRuntime implements AcpRuntime {
         }
       }
     }
+    if (isClaudeAcpCommand(command) && key === "model") {
+      await delegate.setConfigOption({
+        ...input,
+        value: normalizeClaudeAcpModelOverride(input.value) ?? input.value,
+      });
+      return;
+    }
     await delegate.setConfigOption(input);
   }
 
@@ -1247,6 +1283,7 @@ export const testing = {
   codexAcpSessionModelId,
   isClaudeAcpCommand,
   isCodexAcpCommand,
+  normalizeClaudeAcpModelOverride,
   normalizeCodexAcpModelOverride,
 };
 

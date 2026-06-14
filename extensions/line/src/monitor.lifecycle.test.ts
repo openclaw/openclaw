@@ -173,9 +173,13 @@ describe("monitorLineProvider lifecycle", () => {
       .mockImplementation(() => innerLineWebhookHandlerMock);
     unregisterHttpMock.mockReset();
     registerWebhookTargetWithPluginRouteMock.mockReset().mockImplementation((params) => {
-      const key = params.target.path.startsWith("/")
+      const withLeadingSlash = params.target.path.startsWith("/")
         ? params.target.path
         : `/${params.target.path}`;
+      const key =
+        withLeadingSlash.length > 1 && withLeadingSlash.endsWith("/")
+          ? withLeadingSlash.slice(0, -1)
+          : withLeadingSlash;
       const normalizedTarget = { ...params.target, path: key };
       const existing = params.targetsByPath.get(key) ?? [];
       params.targetsByPath.set(key, [...existing, normalizedTarget]);
@@ -351,6 +355,39 @@ describe("monitorLineProvider lifecycle", () => {
 
     firstMonitor.stop();
     secondMonitor.stop();
+  });
+
+  it("dispatches a signed POST to a configured trailing-slash webhook path", async () => {
+    const monitor = await monitorLineProvider({
+      channelAccessToken: "token",
+      channelSecret: "secret", // pragma: allowlist secret
+      webhookPath: "/line/webhook/",
+      accountId: "default",
+      config: {} as OpenClawConfig,
+      runtime: {} as RuntimeEnv,
+    });
+
+    const registration = requireWebhookRegistration();
+    expect(registration.target.path).toBe("/line/webhook");
+
+    const route = requireRegisteredRoute();
+    const payload = JSON.stringify({ events: [{ type: "message" }] });
+    const signature = crypto.createHmac("SHA256", "secret").update(payload).digest("base64");
+    const req = Object.assign(createMockIncomingRequest([payload]), {
+      method: "POST",
+      headers: { "x-line-signature": signature },
+    }) as unknown as IncomingMessage;
+    const res = createRouteResponse();
+
+    await route.handler(req, res);
+
+    const bot = createLineBotMock.mock.results[0]?.value as {
+      handleWebhook: ReturnType<typeof vi.fn>;
+    };
+    expect(res.statusCode).toBe(200);
+    expect(bot.handleWebhook).toHaveBeenCalledTimes(1);
+
+    monitor.stop();
   });
 
   it("acknowledges shared-path POST requests before matched event processing completes", async () => {

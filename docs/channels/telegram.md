@@ -311,7 +311,6 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     - direct chats: preview message + `editMessageText`
     - groups/topics: preview message + `editMessageText`
-    - direct-chat tool progress: optional native `sendMessageDraft` status preview when enabled and supported
 
     Requirement:
 
@@ -320,28 +319,9 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     - `streaming.preview.toolProgress` controls whether tool/progress updates reuse the same edited preview message (default: `true` when preview streaming is active)
     - `streaming.preview.commandText` controls command/exec detail inside those tool-progress lines: `raw` (default, preserves released behavior) or `status` (tool label only)
     - `streaming.progress.commentary` (default: `false`) opts into assistant commentary/preamble text in the temporary progress draft
-    - legacy `channels.telegram.streamMode` and boolean `streaming` values are detected; run `openclaw doctor --fix` to migrate them to `channels.telegram.streaming.mode`
+    - legacy `channels.telegram.streamMode`, boolean `streaming` values, and retired native draft preview keys are detected; run `openclaw doctor --fix` to migrate them to current streaming config
 
     Tool-progress preview updates are the short status lines shown while tools run, for example command execution, file reads, planning updates, patch summaries, or Codex preamble/commentary text in Codex app-server mode. Telegram keeps these enabled by default to match released OpenClaw behavior from `v2026.4.22` and later.
-
-    Direct chats can use native Telegram drafts for these tool-progress lines without persisting tool chatter into chat history. Native drafts stop before answer text starts; final answers stay on the normal persistent delivery path. This lane is off by default and should be gated to trusted DM IDs first:
-
-    ```json
-    {
-      "channels": {
-        "telegram": {
-          "streaming": {
-            "mode": "partial",
-            "preview": {
-              "toolProgress": true,
-              "nativeToolProgress": true,
-              "nativeToolProgressAllowFrom": ["123456789"]
-            }
-          }
-        }
-      }
-    }
-    ```
 
     To keep the edited preview for answer text but hide tool-progress lines, set:
 
@@ -420,14 +400,16 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
   </Accordion>
 
-  <Accordion title="Formatting and HTML fallback">
-    Outbound text uses Telegram `parse_mode: "HTML"`.
+  <Accordion title="Rich message formatting">
+    Outbound text uses Telegram rich messages.
 
-    - Markdown-ish text is rendered to Telegram-safe HTML.
-    - Supported Telegram HTML tags are preserved; unsupported HTML is escaped.
-    - If Telegram rejects parsed HTML, OpenClaw retries as plain text.
+    - Markdown text is sent as rich Markdown without converting it to HTML.
+    - Explicit HTML payloads are sent as rich HTML.
+    - Media captions still use Telegram HTML captions because rich messages do not replace captions.
 
-    Link previews are enabled by default and can be disabled with `channels.telegram.linkPreview: false`.
+    Long rich text is split automatically across Telegram's rich text and rich block limits. Tables over Telegram's column limit are sent as code blocks.
+
+    Link previews are enabled by default. `channels.telegram.linkPreview: false` skips automatic entity detection for rich text.
 
   </Accordion>
 

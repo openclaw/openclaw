@@ -6,6 +6,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { sanitizeInlineImageBase64 } from "@openclaw/media-core/inline-image-data-url";
 import { replaceFileAtomic } from "../infra/replace-file.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { makeMissingToolResult } from "./session-transcript-repair.js";
@@ -18,6 +19,7 @@ import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-
  * message do not reject the transcript.
  */
 export const BLANK_USER_FALLBACK_TEXT = "(continue)";
+export const CORRUPTED_IMAGE_FALLBACK_TEXT = "[image omitted: corrupted base64 payload]";
 
 type RepairReport = {
   repaired: boolean;
@@ -25,6 +27,7 @@ type RepairReport = {
   rewrittenAssistantMessages?: number;
   droppedBlankUserMessages?: number;
   rewrittenUserMessages?: number;
+  removedCorruptedImageBlocks?: number;
   insertedToolResults?: number;
   backupPath?: string;
   reason?: string;
@@ -102,6 +105,75 @@ function rewriteAssistantEntryWithEmptyContent(entry: SessionMessageEntry): Sess
   };
 }
 
+function isImageMimeType(value: unknown): value is string {
+  return typeof value === "string" && /^image\//iu.test(value.trim());
+}
+
+function containsNonAscii(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    if (value.charCodeAt(index) > 0x7f) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isCorruptedImageContentBlock(block: unknown): boolean {
+  if (!block || typeof block !== "object" || Array.isArray(block)) {
+    return false;
+  }
+  const record = block as {
+    type?: unknown;
+    data?: unknown;
+    mimeType?: unknown;
+    mediaType?: unknown;
+    media_type?: unknown;
+  };
+  if (record.type !== "image" || typeof record.data !== "string") {
+    return false;
+  }
+  const mimeType = [record.mimeType, record.mediaType, record.media_type].find(isImageMimeType);
+  if (!mimeType) {
+    return false;
+  }
+  return (
+    containsNonAscii(record.data) ||
+    sanitizeInlineImageBase64({ base64: record.data, mimeType }) === undefined
+  );
+}
+
+function repairEntryWithCorruptedImageBlocks(entry: SessionMessageEntry): {
+  entry: SessionMessageEntry;
+  removedCorruptedImageBlocks: number;
+} {
+  const content = entry.message.content;
+  if (!Array.isArray(content)) {
+    return { entry, removedCorruptedImageBlocks: 0 };
+  }
+
+  let removedCorruptedImageBlocks = 0;
+  const nextContent = content.map((block) => {
+    if (!isCorruptedImageContentBlock(block)) {
+      return block;
+    }
+    removedCorruptedImageBlocks += 1;
+    return { type: "text", text: CORRUPTED_IMAGE_FALLBACK_TEXT };
+  });
+  if (removedCorruptedImageBlocks === 0) {
+    return { entry, removedCorruptedImageBlocks: 0 };
+  }
+  return {
+    entry: {
+      ...entry,
+      message: {
+        ...entry.message,
+        content: nextContent,
+      },
+    },
+    removedCorruptedImageBlocks,
+  };
+}
+
 type UserEntryRepair =
   | { kind: "drop" }
   | { kind: "rewrite"; entry: SessionMessageEntry }
@@ -175,6 +247,7 @@ function buildRepairSummaryParts(params: {
   rewrittenAssistantMessages: number;
   droppedBlankUserMessages: number;
   rewrittenUserMessages: number;
+  removedCorruptedImageBlocks: number;
   insertedToolResults: number;
 }): string {
   const parts: string[] = [];
@@ -189,6 +262,9 @@ function buildRepairSummaryParts(params: {
   }
   if (params.rewrittenUserMessages > 0) {
     parts.push(`rewrote ${params.rewrittenUserMessages} user message(s)`);
+  }
+  if (params.removedCorruptedImageBlocks > 0) {
+    parts.push(`removed ${params.removedCorruptedImageBlocks} corrupted image block(s)`);
   }
   if (params.insertedToolResults > 0) {
     parts.push(`inserted ${params.insertedToolResults} missing tool result(s)`);
@@ -325,6 +401,7 @@ export async function repairSessionFileIfNeeded(params: {
   let rewrittenAssistantMessages = 0;
   let droppedBlankUserMessages = 0;
   let rewrittenUserMessages = 0;
+  let removedCorruptedImageBlocks = 0;
   let insertedToolResults;
 
   for (const line of lines) {
@@ -347,14 +424,28 @@ export async function repairSessionFileIfNeeded(params: {
         rewrittenAssistantMessages += 1;
         continue;
       }
+      let entryForUserRepair = entry;
       if (
         entry &&
         typeof entry === "object" &&
         (entry as { type?: unknown }).type === "message" &&
-        typeof (entry as { message?: unknown }).message === "object" &&
-        ((entry as { message: { role?: unknown } }).message?.role ?? undefined) === "user"
+        typeof (entry as { message?: unknown }).message === "object"
       ) {
-        const repairedUser = repairUserEntryWithBlankTextContent(entry as SessionMessageEntry);
+        const imageRepair = repairEntryWithCorruptedImageBlocks(entry as SessionMessageEntry);
+        entryForUserRepair = imageRepair.entry;
+        removedCorruptedImageBlocks += imageRepair.removedCorruptedImageBlocks;
+      }
+      if (
+        entryForUserRepair &&
+        typeof entryForUserRepair === "object" &&
+        (entryForUserRepair as { type?: unknown }).type === "message" &&
+        typeof (entryForUserRepair as { message?: unknown }).message === "object" &&
+        ((entryForUserRepair as { message: { role?: unknown } }).message?.role ?? undefined) ===
+          "user"
+      ) {
+        const repairedUser = repairUserEntryWithBlankTextContent(
+          entryForUserRepair as SessionMessageEntry,
+        );
         if (repairedUser.kind === "drop") {
           droppedBlankUserMessages += 1;
           continue;
@@ -365,7 +456,7 @@ export async function repairSessionFileIfNeeded(params: {
           continue;
         }
       }
-      entries.push(entry);
+      entries.push(entryForUserRepair);
     } catch {
       droppedLines += 1;
     }
@@ -386,7 +477,8 @@ export async function repairSessionFileIfNeeded(params: {
     droppedLines === 0 &&
     rewrittenAssistantMessages === 0 &&
     droppedBlankUserMessages === 0 &&
-    rewrittenUserMessages === 0
+    rewrittenUserMessages === 0 &&
+    removedCorruptedImageBlocks === 0
   ) {
     const repairedToolResults = insertMissingCodeModeToolResults(entries);
     insertedToolResults = repairedToolResults.insertedToolResults;
@@ -432,6 +524,7 @@ export async function repairSessionFileIfNeeded(params: {
       rewrittenAssistantMessages,
       droppedBlankUserMessages,
       rewrittenUserMessages,
+      removedCorruptedImageBlocks,
       reason: `repair failed: ${err instanceof Error ? err.message : "unknown error"}`,
     };
   }
@@ -442,6 +535,7 @@ export async function repairSessionFileIfNeeded(params: {
       rewrittenAssistantMessages,
       droppedBlankUserMessages,
       rewrittenUserMessages,
+      removedCorruptedImageBlocks,
       insertedToolResults,
     })} (${path.basename(sessionFile)})`,
   );
@@ -451,6 +545,7 @@ export async function repairSessionFileIfNeeded(params: {
     rewrittenAssistantMessages,
     droppedBlankUserMessages,
     rewrittenUserMessages,
+    removedCorruptedImageBlocks,
     insertedToolResults,
     ...(retainedBackupPath ? { backupPath: retainedBackupPath } : {}),
   };

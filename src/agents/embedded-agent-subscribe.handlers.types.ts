@@ -151,6 +151,7 @@ export type EmbeddedAgentSubscribeState = {
   yielded?: boolean;
   timeoutPhase?: AgentRunTimeoutPhase;
   providerStarted?: boolean;
+  terminalAborted?: boolean;
   hadDeterministicSideEffect?: boolean;
   pendingEventChain: Promise<void> | null;
 
@@ -160,6 +161,7 @@ export type EmbeddedAgentSubscribeState = {
   heartbeatToolResponse?: HeartbeatToolResponse;
   messagingToolSentMediaUrls: string[];
   messagingToolSourceReplyPayloads: MessagingToolSourceReplyPayload[];
+  messageToolOnlySourceReplyDelivered: boolean;
   pendingMessagingTexts: Map<string, string>;
   pendingMessagingTargets: Map<string, MessagingToolSend>;
   successfulCronAdds: number;
@@ -235,6 +237,7 @@ export type EmbeddedAgentSubscribeContext = {
     chunkerHasBuffered: boolean;
   }) => void;
   trimMessagingToolSent: () => void;
+  consumeToolSendReceipt: (toolCallId: string) => unknown;
   ensureCompactionPromise: () => void;
   noteCompactionRetry: () => void;
   resolveCompactionRetry: () => void;
@@ -269,12 +272,22 @@ type ToolHandlerParams = Pick<
   | "onAgentEvent"
   | "onExecutionPhase"
   | "onHeartbeatToolResponse"
+  | "onAgentToolResult"
   | "onToolResult"
+  | "config"
+  | "messageChannel"
   | "sessionKey"
+  | "currentChannelId"
+  | "currentMessagingTarget"
+  | "currentThreadId"
+  | "currentMessageId"
+  | "replyToMode"
+  | "hasRepliedRef"
   | "sessionId"
   | "agentId"
   | "toolResultFormat"
   | "toolProgressDetail"
+  | "sourceReplyDeliveryMode"
 >;
 
 type ToolHandlerState = Pick<
@@ -301,6 +314,7 @@ type ToolHandlerState = Pick<
   | "messagingToolSentTextsNormalized"
   | "messagingToolSentMediaUrls"
   | "messagingToolSourceReplyPayloads"
+  | "messageToolOnlySourceReplyDelivered"
   | "messagingToolSentTargets"
   | "heartbeatToolResponse"
   | "successfulCronAdds"
@@ -321,6 +335,7 @@ export type ToolHandlerContext = {
   emitToolSummary: (toolName?: string, meta?: string) => void;
   emitToolOutput: (toolName?: string, meta?: string, output?: string, result?: unknown) => void;
   trimMessagingToolSent: () => void;
+  consumeToolSendReceipt?: (toolCallId: string) => unknown;
 };
 
 export type EmbeddedAgentSubscribeEvent =
