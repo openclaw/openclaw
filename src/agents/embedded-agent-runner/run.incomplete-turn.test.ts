@@ -1225,6 +1225,99 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(retryInstruction).toBeNull();
   });
 
+  it.each([
+    [
+      "post-tool known-safe",
+      "[cron:daily-summary] Prepare a short daily summary",
+      {
+        assistantTexts: ["Now let me get the details on the most significant items."],
+        toolMetas: [{ toolName: "search" }, { toolName: "read" }],
+      },
+    ],
+    [
+      "no-tool lookup",
+      "What is the current public status?",
+      { assistantTexts: ["Hold on — let me look that up."] },
+    ],
+  ])("retries replay-safe action promises: %s", (_name, prompt, attempt) => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "ollama",
+      modelId: "local-test-model",
+      prompt,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult(attempt),
+    });
+
+    expect(retryInstruction).toContain("Act now");
+  });
+
+  it.each([
+    [
+      "side effect",
+      "[cron:daily-summary] Prepare a short daily summary",
+      {
+        assistantTexts: ["Now let me send the finished report."],
+        toolMetas: [{ toolName: "message", meta: "target=conversation" }],
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: ["partial report"],
+      },
+    ],
+    [
+      "active lifecycle",
+      "What is the current public status?",
+      {
+        assistantTexts: ["Hold on — let me look that up."],
+        itemLifecycle: { startedCount: 1, completedCount: 0, activeCount: 1 },
+      },
+    ],
+    [
+      "later completed answer",
+      "What is the current public status?",
+      {
+        assistantTexts: ["Hold on — let me look that up.", "The current public status is active."],
+        toolMetas: [{ toolName: "external_page_read" }],
+      },
+    ],
+    [
+      "same-message answer",
+      "What is the current public status?",
+      { assistantTexts: ["Hold on — let me look that up. The current public status is active."] },
+    ],
+    [
+      "colon answer",
+      "What is the current public status?",
+      { assistantTexts: ["Let me check: the current public status is active."] },
+    ],
+    [
+      "unclassified tool",
+      "[cron:daily-summary] Prepare a short daily summary",
+      {
+        assistantTexts: ["Now let me get the report details."],
+        toolMetas: [{ toolName: "vendor_widget" }],
+      },
+    ],
+    [
+      "lookup-like plugin name",
+      "[cron:daily-summary] Prepare a short daily summary",
+      {
+        assistantTexts: ["Now let me get the report details."],
+        toolMetas: [{ toolName: "search_index_rebuild" }],
+      },
+    ],
+  ])("does not retry action promises after %s", (_name, prompt, attempt) => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "ollama",
+      modelId: "local-test-model",
+      prompt,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult(attempt),
+    });
+
+    expect(retryInstruction).toBeNull();
+  });
+
   it("does not retry planning-only detection after an item has started", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "openai",

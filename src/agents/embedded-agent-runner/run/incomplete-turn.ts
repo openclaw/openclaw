@@ -134,6 +134,11 @@ const SINGLE_ACTION_MULTI_STEP_PROMISE_RE =
   /\bi(?:'ll| will)\b(?=[^.!?]{0,160}\b(?:next|then|after(?:wards)?|once)\b)/i;
 const SINGLE_ACTION_RESULT_STYLE_RE =
   /\b(?:i(?:'ll| will)\s+(?:summarize|explain|share|show|report|describe|clarify|answer|recap)(?:\s+\w+){0,4}\s*:|(?:here(?:'s| is)|summary|result|answer|findings?|root cause)\s*:)/i;
+const POST_TOOL_DETAIL_CONTINUATION_RE =
+  /^\s*(?:now\s+)?(?:let me|i(?:'ll| will)|i(?:'m| am)\s+going to)\b[^.!?\n]{0,120}\b(?:get|fetch|grab|open|check|look(?:\s+up|\s+at)?|pull|retrieve)\b[^.!?\n]{0,120}\b(?:details?|sources?|results?|pages?|urls?|links?|brief|report)\b[^.!?\n]*[.!?]?\s*$/i;
+const LOOKUP_PROMISE_ONLY_RE =
+  /^\s*(?:hold on|one sec(?:ond)?|let me|i(?:'ll| will)|i(?:'m| am)\s+going to)\b[^.!?\n]{0,100}\b(?:look (?:that|this|it)?\s*up|search(?:\s+(?:for|the web))?|check(?:\s+(?:that|this|it|the current|latest))?)\b[^.!?\n]*[.!?]?\s*$/i;
+const ACTION_PROMISE_ASSERTIVE_CLAUSE_RE = /[:;]|\b(?:is|are|was|were|has|have)\b/i;
 const SINGLE_ACTION_RETRY_SAFE_TOOL_NAMES = new Set([
   "read",
   "search",
@@ -857,6 +862,10 @@ function isLikelyActionableUserPrompt(text: string): boolean {
   return ACTIONABLE_PROMPT_DIRECTIVE_RE.test(trimmed) || ACTIONABLE_PROMPT_REQUEST_RE.test(trimmed);
 }
 
+function isLikelyAutomationPrompt(text: string): boolean {
+  return /^\s*\[(?:cron:[^\]]+|OpenClaw heartbeat poll)\]/i.test(text.trim());
+}
+
 /** Builds the fast-path execution instruction for short approval prompts like "go ahead". */
 export function resolveAckExecutionFastPathInstruction(params: {
   provider?: string;
@@ -940,6 +949,17 @@ function hasSingleRetrySafeNonPlanTool(toolMetas?: PlanningOnlyAttempt["toolMeta
   );
 }
 
+function hasOnlyReplaySafeActionPromiseToolActivity(
+  toolMetas?: PlanningOnlyAttempt["toolMetas"],
+): boolean {
+  return normalizePlanningToolMetas(toolMetas)
+    .filter((entry) => entry.toolName !== "update_plan")
+    .every((entry) => {
+      const toolName = normalizeLowercaseStringOrEmpty(entry.toolName);
+      return toolName.length > 0 && SINGLE_ACTION_RETRY_SAFE_TOOL_NAMES.has(toolName);
+    });
+}
+
 /**
  * Treat a turn with exactly one non-plan tool call plus visible "I'll do X
  * next" prose as effectively planning-only from the user's perspective. This
@@ -964,6 +984,39 @@ function isSingleActionThenNarrativePattern(params: {
   return (
     SINGLE_ACTION_EXPLICIT_CONTINUATION_RE.test(text) ||
     SINGLE_ACTION_MULTI_STEP_PROMISE_RE.test(text)
+  );
+}
+
+function isActionPromiseOnlyPattern(assistantTexts?: readonly string[]): boolean {
+  const text =
+    (assistantTexts ?? [])
+      .toReversed()
+      .find((entry) => entry.trim())
+      ?.trim() ?? "";
+  if (!text || text.length > PLANNING_ONLY_MAX_VISIBLE_TEXT) {
+    return false;
+  }
+  if (SINGLE_ACTION_RESULT_STYLE_RE.test(text) || PLANNING_ONLY_COMPLETION_RE.test(text)) {
+    return false;
+  }
+  if (ACTION_PROMISE_ASSERTIVE_CLAUSE_RE.test(text)) {
+    return false;
+  }
+  return POST_TOOL_DETAIL_CONTINUATION_RE.test(text) || LOOKUP_PROMISE_ONLY_RE.test(text);
+}
+
+function hasCompletedReplaySafeLifecycle(attempt: PlanningOnlyAttempt): boolean {
+  const lifecycle = attempt.itemLifecycle;
+  if (!lifecycle) {
+    return true;
+  }
+  if (lifecycle.activeCount > 0) {
+    return false;
+  }
+  const completedToolMetaCount = normalizePlanningToolMetas(attempt.toolMetas).length;
+  return (
+    lifecycle.startedCount <= lifecycle.completedCount &&
+    lifecycle.startedCount <= completedToolMetaCount
   );
 }
 
@@ -995,15 +1048,26 @@ export function resolvePlanningOnlyRetryInstruction(params: {
     toolMetas: params.attempt.toolMetas,
     assistantTexts: params.attempt.assistantTexts,
   });
+  const actionPromiseOnly = isActionPromiseOnlyPattern(params.attempt.assistantTexts);
   const allowSingleActionRetryBypass =
     singleActionNarrative && hasSingleRetrySafeNonPlanTool(params.attempt.toolMetas);
+  const allowActionPromiseRetryBypass =
+    actionPromiseOnly &&
+    !resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects &&
+    hasOnlyReplaySafeActionPromiseToolActivity(params.attempt.toolMetas) &&
+    hasCompletedReplaySafeLifecycle(params.attempt);
+  const planningOnlyGuardApplies = shouldApplyPlanningOnlyRetryGuard({
+    provider: params.provider,
+    modelId: params.modelId,
+    executionContract: params.executionContract,
+  });
+  const promptRequiresAction =
+    typeof params.prompt !== "string" ||
+    isLikelyActionableUserPrompt(params.prompt) ||
+    isLikelyAutomationPrompt(params.prompt);
   if (
-    !shouldApplyPlanningOnlyRetryGuard({
-      provider: params.provider,
-      modelId: params.modelId,
-      executionContract: params.executionContract,
-    }) ||
-    (typeof params.prompt === "string" && !isLikelyActionableUserPrompt(params.prompt)) ||
+    (!planningOnlyGuardApplies && !allowActionPromiseRetryBypass) ||
+    !promptRequiresAction ||
     params.aborted ||
     params.timedOut ||
     params.attempt.clientToolCalls ||
@@ -1011,9 +1075,12 @@ export function resolvePlanningOnlyRetryInstruction(params: {
     params.attempt.didSendDeterministicApprovalPrompt ||
     hasMessagingToolDeliveryEvidence(params.attempt) ||
     params.attempt.lastToolError ||
-    (hasNonPlanToolActivity(params.attempt.toolMetas) && !allowSingleActionRetryBypass) ||
+    (hasNonPlanToolActivity(params.attempt.toolMetas) &&
+      !allowSingleActionRetryBypass &&
+      !allowActionPromiseRetryBypass) ||
     ((params.attempt.itemLifecycle?.startedCount ?? 0) > planOnlyToolMetaCount &&
-      !allowSingleActionRetryBypass) ||
+      !allowSingleActionRetryBypass &&
+      !allowActionPromiseRetryBypass) ||
     resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects
   ) {
     return null;
@@ -1035,6 +1102,7 @@ export function resolvePlanningOnlyRetryInstruction(params: {
   if (
     !hasStructuredPlanningFormat &&
     !singleActionNarrative &&
+    !actionPromiseOnly &&
     !PLANNING_ONLY_ACTION_VERB_RE.test(text)
   ) {
     return null;
