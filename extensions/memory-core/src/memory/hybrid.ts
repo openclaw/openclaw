@@ -71,7 +71,7 @@ async function runReranker(
   adapter: RerankerAdapter,
   sorted: HybridMergedResult[],
   lambda: number,
-): Promise<HybridMergedResult[]> {
+): Promise<HybridMergedResult[] | null> {
   const reranked = await adapter(
     sorted.map((r) => ({ id: rerankerKey(r), score: r.score, content: r.snippet })),
     lambda,
@@ -84,7 +84,7 @@ async function runReranker(
       out.push(original);
     }
   }
-  return out;
+  return out.length > 0 ? out : null;
 }
 
 export async function mergeHybridResults(params: {
@@ -182,14 +182,20 @@ export async function mergeHybridResults(params: {
     const lambda = params.mmr.lambda ?? 0.7;
     if (params.reranker) {
       try {
-        return await runReranker(params.reranker, sorted, lambda);
+        const reranked = await runReranker(params.reranker, sorted, lambda);
+        if (reranked) {
+          return reranked;
+        }
       } catch {
         // primary failed; fall through to fallback
       }
     }
     if (params.fallbackReranker) {
       try {
-        return await runReranker(params.fallbackReranker, sorted, lambda);
+        const reranked = await runReranker(params.fallbackReranker, sorted, lambda);
+        if (reranked) {
+          return reranked;
+        }
       } catch {
         return sorted;
       }

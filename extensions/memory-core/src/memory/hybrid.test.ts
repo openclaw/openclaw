@@ -392,5 +392,83 @@ describe("memory hybrid helpers", () => {
       expect(merged[0]?.path).toBe("memory/a.md");
       expect(merged[1]?.path).toBe("memory/b.md");
     });
+
+    it("reranker returning empty or invalid rerank results falls back to score order", async () => {
+      const emptyReranker = vi.fn(
+        async () => [] as Array<{ id: string; score: number; content: string }>,
+      );
+      const invalidIdReranker = vi.fn(
+        async () =>
+          [
+            { id: "missing-a", score: 1, content: "missing-a" },
+            { id: "missing-b", score: 0.5, content: "missing-b" },
+          ] as Array<{ id: string; score: number; content: string }>,
+      );
+
+      const emptyFallback = await mergeHybridResults({
+        vectorWeight: 0.7,
+        textWeight: 0.3,
+        vector: [
+          {
+            id: "a",
+            path: "memory/a.md",
+            startLine: 1,
+            endLine: 2,
+            source: "memory",
+            snippet: "vec-a",
+            vectorScore: 0.9,
+          },
+          {
+            id: "b",
+            path: "memory/b.md",
+            startLine: 3,
+            endLine: 4,
+            source: "memory",
+            snippet: "vec-b",
+            vectorScore: 0.8,
+          },
+        ],
+        keyword: [],
+        mmr: { enabled: true, lambda: 0.7, provider: "memory-mmr", fallback: "none" },
+        reranker: emptyReranker,
+      });
+
+      const invalidFallback = await mergeHybridResults({
+        vectorWeight: 0.7,
+        textWeight: 0.3,
+        vector: [
+          {
+            id: "a",
+            path: "memory/a.md",
+            startLine: 1,
+            endLine: 2,
+            source: "memory",
+            snippet: "vec-a",
+            vectorScore: 0.9,
+          },
+          {
+            id: "b",
+            path: "memory/b.md",
+            startLine: 3,
+            endLine: 4,
+            source: "memory",
+            snippet: "vec-b",
+            vectorScore: 0.8,
+          },
+        ],
+        keyword: [],
+        mmr: { enabled: true, lambda: 0.7, provider: "memory-mmr", fallback: "none" },
+        reranker: invalidIdReranker,
+      });
+
+      expect(emptyReranker).toHaveBeenCalledTimes(1);
+      expect(invalidIdReranker).toHaveBeenCalledTimes(1);
+      expect(emptyFallback).toHaveLength(2);
+      expect(invalidFallback).toHaveLength(2);
+      expect(emptyFallback[0]?.path).toBe("memory/a.md");
+      expect(emptyFallback[1]?.path).toBe("memory/b.md");
+      expect(invalidFallback[0]?.path).toBe("memory/a.md");
+      expect(invalidFallback[1]?.path).toBe("memory/b.md");
+    });
   });
 });
