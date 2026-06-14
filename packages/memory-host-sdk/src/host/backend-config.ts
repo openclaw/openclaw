@@ -439,8 +439,12 @@ export function resolveMemoryBackendConfig(params: {
   ];
 
   const rawCommand = qmdCfg?.command?.trim() || "qmd";
-  const parsedCommand = splitShellArgs(rawCommand);
-  const command = parsedCommand?.[0] || rawCommand.split(/\s+/)[0] || "qmd";
+  // Windows absolute paths (e.g. C:\Users\bin\qmd.exe or C:/Users/bin/qmd.exe)
+  // must not pass through splitShellArgs, which treats backslashes as POSIX
+  // escape characters and mangles the drive-letter path.
+  const isWindowsAbsPath = /^[A-Za-z]:[\\/]/.test(rawCommand);
+  const parsedCommand = isWindowsAbsPath ? null : splitShellArgs(rawCommand);
+  const command = parsedCommand?.[0] || (isWindowsAbsPath ? rawCommand : rawCommand.split(/\s+/)[0]) || "qmd";
   const resolved: ResolvedQmdConfig = {
     command,
     mcporter: resolveMcporterConfig(qmdCfg?.mcporter),
