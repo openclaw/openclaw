@@ -30,6 +30,39 @@ describe("buildProviderToolCompatFamilyHooks", () => {
     return normalized[0]?.parameters;
   }
 
+  function makeUnreadableParameterTool() {
+    const tool = {
+      name: "broken_tool",
+      description: "",
+      parameters: {},
+    };
+    Object.defineProperty(tool, "parameters", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin parameters getter exploded");
+      },
+    });
+    return tool;
+  }
+
+  function makeUnreadableNestedSchemaTool() {
+    const tool = {
+      name: "nested_broken_tool",
+      description: "",
+      parameters: {
+        type: "object",
+        properties: {},
+      },
+    };
+    Object.defineProperty(tool.parameters, "properties", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin properties getter exploded");
+      },
+    });
+    return tool;
+  }
+
   it("covers the tool compat family matrix", () => {
     const cases = [
       {
@@ -55,6 +88,85 @@ describe("buildProviderToolCompatFamilyHooks", () => {
       expect(hooks.normalizeToolSchemas).toBe(testCase.normalizeToolSchemas);
       expect(hooks.inspectToolSchemas).toBe(testCase.inspectToolSchemas);
     }
+  });
+
+  it("skips unreadable tool schemas while normalizing provider compat families", () => {
+    const broken = makeUnreadableParameterTool();
+    const nestedBroken = makeUnreadableNestedSchemaTool();
+    const healthy = {
+      name: "healthy_tool",
+      description: "",
+      parameters: {
+        type: "object",
+        properties: {
+          mode: {
+            anyOf: [{ const: "a", type: "string" }, { const: "b", type: "string" }],
+          },
+        },
+      },
+    };
+
+    const hooks = buildProviderToolCompatFamilyHooks("deepseek");
+    const normalized = hooks.normalizeToolSchemas({
+      provider: "deepseek",
+      modelId: "deepseek-v4-pro",
+      modelApi: "openai-completions",
+      model: {
+        provider: "deepseek",
+        api: "openai-completions",
+        id: "deepseek-v4-pro",
+      } as never,
+      tools: [broken, nestedBroken, healthy] as never,
+    });
+
+    expect(normalized[0]).toBe(broken);
+    expect(normalized[1]).toBe(nestedBroken);
+    expect(normalized[2]?.parameters).toEqual({
+      type: "object",
+      properties: {
+        mode: {
+          type: "string",
+          enum: ["a", "b"],
+        },
+      },
+    });
+  });
+
+  it("reports provider schema diagnostics without crashing on unreadable tools", () => {
+    const broken = makeUnreadableParameterTool();
+    const nestedBroken = makeUnreadableNestedSchemaTool();
+    const healthy = {
+      name: "healthy_tool",
+      description: "",
+      parameters: {
+        type: "object",
+        properties: {
+          nested: { anyOf: [{ type: "string" }, { type: "number" }] },
+        },
+      },
+    };
+
+    const hooks = buildProviderToolCompatFamilyHooks("deepseek");
+
+    expect(
+      hooks.inspectToolSchemas({
+        provider: "deepseek",
+        modelId: "deepseek-v4-pro",
+        modelApi: "openai-completions",
+        model: {
+          provider: "deepseek",
+          api: "openai-completions",
+          id: "deepseek-v4-pro",
+        } as never,
+        tools: [broken, nestedBroken, healthy] as never,
+      }),
+    ).toEqual([
+      {
+        toolName: "healthy_tool",
+        toolIndex: 2,
+        violations: ["healthy_tool.parameters.properties.nested.anyOf"],
+      },
+    ]);
   });
 
   it("normalizes canonical OpenAI Codex Responses tool schemas", () => {
