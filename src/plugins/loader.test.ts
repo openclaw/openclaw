@@ -3935,6 +3935,55 @@ module.exports = { id: "throws-after-import", register() {} };`,
     ).toBe(true);
   });
 
+  it("skips plugin tools with unreadable direct names during registration", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "unreadable-tool-name",
+      filename: "unreadable-tool-name.cjs",
+      body: `module.exports = {
+        id: "unreadable-tool-name",
+        register(api) {
+          api.registerTool({
+            get name() {
+              throw new Error("plugin tool name exploded");
+            },
+            description: "Broken tool",
+            parameters: {},
+            execute: async () => ({ content: [{ type: "text", text: "broken" }] }),
+          });
+          api.registerTool({
+            name: "healthy_tool",
+            description: "Healthy tool",
+            parameters: {},
+            execute: async () => ({ content: [{ type: "text", text: "ok" }] }),
+          });
+        },
+      };`,
+    });
+    updatePluginManifest(plugin, { contracts: { tools: ["healthy_tool"] } });
+
+    const registry = loadOpenClawPlugins({
+      activate: false,
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["unreadable-tool-name"],
+        },
+      },
+    });
+
+    expect(registry.tools.flatMap((entry) => entry.names)).toEqual(["healthy_tool"]);
+    expect(
+      registry.diagnostics.some(
+        (entry) =>
+          entry.pluginId === "unreadable-tool-name" &&
+          entry.message === "plugin tool registration failed: unreadable tool name",
+      ),
+    ).toBe(true);
+  });
+
   it("caches non-activating snapshots without restoring global side effects", () => {
     useNoBundledPlugins();
     clearPluginCommands();
