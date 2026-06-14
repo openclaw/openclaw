@@ -6,6 +6,7 @@ import path from "node:path";
 import type { MemoryEmbeddingProbeResult } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   resolveMemoryDreamingConfig,
+  resolveMemoryLightDreamingConfig,
   resolveMemoryRemDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
@@ -223,12 +224,26 @@ async function createHistoricalRemHarnessWorkspace(params: {
 
 function formatDreamingSummary(cfg: OpenClawConfig): string {
   const pluginConfig = resolveMemoryPluginConfig(cfg);
-  const dreaming = resolveShortTermPromotionDreamingConfig({ pluginConfig, cfg });
-  if (!dreaming.enabled) {
+  const deep = resolveShortTermPromotionDreamingConfig({ pluginConfig, cfg });
+  const light = resolveMemoryLightDreamingConfig({ pluginConfig, cfg });
+  const deepOn = deep.enabled;
+  const lightOn = light.enabled;
+  if (!deepOn && !lightOn) {
     return "off";
   }
-  const timezone = dreaming.timezone ? ` (${dreaming.timezone})` : "";
-  return `${dreaming.cron}${timezone} · limit=${dreaming.limit} · minScore=${dreaming.minScore} · minRecallCount=${dreaming.minRecallCount} · minUniqueQueries=${dreaming.minUniqueQueries} · recencyHalfLifeDays=${dreaming.recencyHalfLifeDays} · maxAgeDays=${dreaming.maxAgeDays ?? "none"} · maxPromotedSnippetTokens=${dreaming.maxPromotedSnippetTokens}`;
+  const timezone = deep.timezone ? ` (${deep.timezone})` : "";
+  const parts: string[] = [];
+  if (lightOn) {
+    parts.push(`light=on`);
+  } else {
+    parts.push(`light=off`);
+  }
+  if (deepOn) {
+    parts.push(`deep=on · cron=${deep.cron}${timezone} · limit=${deep.limit} · minScore=${deep.minScore}`);
+  } else {
+    parts.push(`deep=off`);
+  }
+  return parts.join(" · ");
 }
 
 function formatAuditCounts(audit: ShortTermAuditSummary): string {
