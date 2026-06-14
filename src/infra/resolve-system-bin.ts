@@ -74,6 +74,9 @@ function buildWindowsTrustedDirs(): readonly string[] {
   const dirs: string[] = [];
   const { systemRoot } = getWindowsInstallRoots();
   dirs.push(path.win32.join(systemRoot, "System32"));
+  // Windows ships its built-in OpenSSH client in this System32 subdirectory;
+  // ssh.exe is not directly under System32, so it needs its own trusted entry.
+  dirs.push(path.win32.join(systemRoot, "System32", "OpenSSH"));
   dirs.push(path.win32.join(systemRoot, "SysWOW64"));
   dirs.push(path.win32.join(systemRoot, "System32", "WindowsPowerShell", "v1.0"));
 

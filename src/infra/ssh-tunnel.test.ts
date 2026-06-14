@@ -1,6 +1,13 @@
-// Covers SSH target parsing.
-import { describe, expect, it } from "vitest";
-import { parseSshTarget } from "./ssh-tunnel.js";
+// Covers SSH target parsing and the trusted ssh client resolution guard.
+import { describe, expect, it, vi } from "vitest";
+import { resolveSystemBin } from "./resolve-system-bin.js";
+import { parseSshTarget, startSshPortForward } from "./ssh-tunnel.js";
+
+vi.mock("./resolve-system-bin.js", () => ({
+  resolveSystemBin: vi.fn(() => "/usr/bin/ssh"),
+}));
+
+const resolveSystemBinMock = vi.mocked(resolveSystemBin);
 
 describe("parseSshTarget", () => {
   it("parses user@host:port targets", () => {
@@ -28,5 +35,20 @@ describe("parseSshTarget", () => {
     expect(parseSshTarget("-V")).toBeNull();
     expect(parseSshTarget("me@-badhost")).toBeNull();
     expect(parseSshTarget("-oProxyCommand=echo")).toBeNull();
+  });
+});
+
+describe("startSshPortForward", () => {
+  it("fails closed with a clear diagnostic when no trusted ssh client is found", async () => {
+    resolveSystemBinMock.mockReturnValueOnce(null);
+
+    await expect(
+      startSshPortForward({
+        target: "me@example.com",
+        localPortPreferred: 12345,
+        remotePort: 8080,
+        timeoutMs: 100,
+      }),
+    ).rejects.toThrow(/no trusted SSH client found/);
   });
 });
