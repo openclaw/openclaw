@@ -638,6 +638,12 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
       accountId?: string;
       threadId?: string | number;
     };
+    completionDirectOrigin?: {
+      channel?: string;
+      to?: string;
+      accountId?: string;
+      threadId?: string | number;
+    };
   }) {
     const callGateway = createGatewayMock();
     let activityChecks = 0;
@@ -677,6 +683,7 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
       triggerMessage: "child done",
       steerMessage: "child done",
       requesterOrigin: params.requesterOrigin,
+      completionDirectOrigin: params.completionDirectOrigin,
       requesterIsSubagent: false,
       expectsCompletionMessage: false,
       directIdempotencyKey: "announce-no-external-route",
@@ -729,6 +736,31 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
     });
 
     expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it("preserves the requester external route when the completion origin is internal", async () => {
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);
+    await deliverSteeredAnnouncement({
+      queueEmbeddedAgentMessageWithOutcome,
+      completionDirectOrigin: {
+        channel: "webchat",
+        to: "session:child-completion",
+        accountId: "webchat-account",
+      },
+      requesterOrigin: {
+        channel: "slack",
+        to: "channel:C123",
+        accountId: "acct-1",
+        threadId: "171.222",
+      },
+    });
+
+    const options = mockCallArg(queueEmbeddedAgentMessageWithOutcome, 0, 2);
+    expect(options.inputProvenance).toEqual({
+      kind: "inter_session",
+      sourceChannel: "webchat",
+      sourceTool: "subagent_announce",
+    });
   });
 
   it.each(["followup", "collect", "interrupt"] as const)(
@@ -785,6 +817,11 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
         debounceMs: 0,
         waitForTranscriptCommit: true,
         deliveryTimeoutMs: 120_000,
+        inputProvenance: {
+          kind: "inter_session",
+          sourceChannel: "webchat",
+          sourceTool: "subagent_announce",
+        },
       },
     );
     expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenNthCalledWith(
@@ -795,6 +832,11 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
         steeringMode: "all",
         debounceMs: 0,
         deliveryTimeoutMs: 120_000,
+        inputProvenance: {
+          kind: "inter_session",
+          sourceChannel: "webchat",
+          sourceTool: "subagent_announce",
+        },
       },
     );
   });
@@ -1085,6 +1127,11 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         debounceMs: 500,
         waitForTranscriptCommit: true,
         deliveryTimeoutMs: 120_000,
+        inputProvenance: {
+          kind: "inter_session",
+          sourceChannel: "webchat",
+          sourceTool: "subagent_announce",
+        },
       },
     );
     expect(callGateway).not.toHaveBeenCalled();
@@ -2092,6 +2139,11 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         deliveryTimeoutMs: 120_000,
         steeringMode: "all",
         waitForTranscriptCommit: true,
+        inputProvenance: {
+          kind: "inter_session",
+          sourceChannel: "webchat",
+          sourceTool: "subagent_announce",
+        },
       },
     );
     expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenNthCalledWith(
@@ -2102,6 +2154,11 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         debounceMs: 500,
         deliveryTimeoutMs: 120_000,
         steeringMode: "all",
+        inputProvenance: {
+          kind: "inter_session",
+          sourceChannel: "webchat",
+          sourceTool: "subagent_announce",
+        },
       },
     );
     expect(sendMessage).not.toHaveBeenCalled();
@@ -2331,6 +2388,11 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         debounceMs: 500,
         waitForTranscriptCommit: true,
         deliveryTimeoutMs: 10,
+        inputProvenance: {
+          kind: "inter_session",
+          sourceChannel: "webchat",
+          sourceTool: "subagent_announce",
+        },
       },
     );
     expect(callGateway).toHaveBeenCalledTimes(1);
@@ -3939,6 +4001,11 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         debounceMs: 500,
         waitForTranscriptCommit: true,
         deliveryTimeoutMs: 120_000,
+        inputProvenance: {
+          kind: "inter_session",
+          sourceChannel: "webchat",
+          sourceTool: "video_generate",
+        },
       },
     );
     expect(callGateway).not.toHaveBeenCalled();

@@ -24,6 +24,7 @@ import { defaultRuntime } from "../runtime.js";
 import {
   isAgentMediatedCompletionSourceTool,
   shouldPreserveUserFacingSessionStateForInputProvenance,
+  type InputProvenance,
 } from "../sessions/input-provenance.js";
 import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
 import { isCronRunSessionKey, isCronSessionKey } from "../sessions/session-key-utils.js";
@@ -597,6 +598,7 @@ export function loadSessionEntryByKey(sessionKey: string) {
 
 async function maybeSteerSubagentAnnounce(params: {
   deliveryTimeoutMs?: number;
+  inputProvenance?: InputProvenance;
   requesterSessionKey: string;
   steerMessage: string;
   signal?: AbortSignal;
@@ -626,6 +628,7 @@ async function maybeSteerSubagentAnnounce(params: {
   // Queue modes such as followup/collect apply to user prompts, not this path.
   const queueOptions: EmbeddedAgentQueueMessageOptions = {
     deliveryTimeoutMs: params.deliveryTimeoutMs,
+    ...(params.inputProvenance ? { inputProvenance: params.inputProvenance } : {}),
     steeringMode: "all",
     ...(queueSettings.debounceMs !== undefined ? { debounceMs: queueSettings.debounceMs } : {}),
     waitForTranscriptCommit: true,
@@ -1348,8 +1351,15 @@ async function sendSubagentAnnounceDirectly(params: {
       requesterActivity.sessionId &&
       requesterActivity.isActive
     ) {
+      const wakeInputProvenance: InputProvenance = {
+        kind: "inter_session",
+        ...(params.sourceSessionKey ? { sourceSessionKey: params.sourceSessionKey } : {}),
+        sourceChannel: params.sourceChannel ?? INTERNAL_MESSAGE_CHANNEL,
+        sourceTool: params.sourceTool ?? "subagent_announce",
+      };
       const wakeOptions: EmbeddedAgentQueueMessageOptions = {
         deliveryTimeoutMs: announceTimeoutMs,
+        inputProvenance: wakeInputProvenance,
         steeringMode: "all",
         ...(completionSourceReplyDeliveryMode
           ? { sourceReplyDeliveryMode: completionSourceReplyDeliveryMode }
@@ -1684,6 +1694,12 @@ export async function deliverSubagentAnnouncement(params: {
         deliveryTimeoutMs: resolveSubagentAnnounceTimeoutMs(
           subagentAnnounceDeliveryDeps.getRuntimeConfig(),
         ),
+        inputProvenance: {
+          kind: "inter_session",
+          ...(params.sourceSessionKey ? { sourceSessionKey: params.sourceSessionKey } : {}),
+          sourceChannel: params.sourceChannel ?? INTERNAL_MESSAGE_CHANNEL,
+          sourceTool: params.sourceTool ?? "subagent_announce",
+        },
         requesterSessionKey: params.requesterSessionKey,
         steerMessage: params.steerMessage,
         signal: params.signal,

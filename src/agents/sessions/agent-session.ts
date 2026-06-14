@@ -32,6 +32,10 @@ import type {
   TextContent,
 } from "../../llm/types.js";
 import { isContextOverflow } from "../../llm/utils/overflow.js";
+import {
+  applyInputProvenanceToUserMessage,
+  type InputProvenance,
+} from "../../sessions/input-provenance.js";
 import type {
   Agent,
   AgentEvent,
@@ -189,6 +193,10 @@ export type AgentSessionEvent =
 /** Listener function for agent session events */
 export type AgentSessionEventListener = (event: AgentSessionEvent) => void;
 export type AgentSessionWriteLockRunner = <T>(run: () => Promise<T> | T) => Promise<T>;
+export type AgentSessionSteerOptions = {
+  images?: ImageContent[];
+  inputProvenance?: InputProvenance;
+};
 
 // ============================================================================
 // Types
@@ -1149,7 +1157,10 @@ export class AgentSession {
         if (options.streamingBehavior === "followUp") {
           await this.queueFollowUp(expandedText, currentImages);
         } else {
-          await this.queueSteer(expandedText, currentImages);
+          await this.queueSteer(
+            expandedText,
+            currentImages ? { images: currentImages } : undefined,
+          );
         }
         preflightResult?.(true);
         return;
@@ -1322,7 +1333,10 @@ export class AgentSession {
    * @param images Optional image attachments to include with the message
    * @throws Error if text is an extension command
    */
-  async steer(text: string, images?: ImageContent[]): Promise<void> {
+  async steer(
+    text: string,
+    imagesOrOptions?: ImageContent[] | AgentSessionSteerOptions,
+  ): Promise<void> {
     // Check for extension commands (cannot be queued)
     if (text.startsWith("/")) {
       this.throwIfExtensionCommand(text);
@@ -1332,7 +1346,8 @@ export class AgentSession {
     let expandedText = this.expandSkillCommand(text);
     expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
 
-    await this.queueSteer(expandedText, images);
+    const options = Array.isArray(imagesOrOptions) ? { images: imagesOrOptions } : imagesOrOptions;
+    await this.queueSteer(expandedText, options);
   }
 
   /**
@@ -1358,18 +1373,23 @@ export class AgentSession {
   /**
    * Internal: Queue a steering message (already expanded, no extension command check).
    */
-  private async queueSteer(text: string, images?: ImageContent[]): Promise<void> {
+  private async queueSteer(text: string, options?: AgentSessionSteerOptions): Promise<void> {
     this.steeringMessages.push(text);
     this.emitQueueUpdate();
     const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
-    if (images) {
-      content.push(...images);
+    if (options?.images) {
+      content.push(...options.images);
     }
-    this.agent.steer({
-      role: "user",
-      content,
-      timestamp: Date.now(),
-    });
+    this.agent.steer(
+      applyInputProvenanceToUserMessage(
+        {
+          role: "user",
+          content,
+          timestamp: Date.now(),
+        },
+        options?.inputProvenance,
+      ),
+    );
   }
 
   /**
