@@ -134,6 +134,18 @@ observation-only.
 - **`before_dispatch`** - inspect or rewrite an outbound dispatch before channel handoff
 - **`reply_dispatch`** - participate in the final reply-dispatch pipeline
 
+For chat-path hooks such as `before_dispatch`, being installable or inspectable is not enough on its own. The Gateway only imports plugins into the messaging runtime when startup planning selects them. Hook-only or non-capability plugins should declare startup intent explicitly with manifest activation metadata, typically `activation.onCapabilities: ["hook"]`, or through explicit hook-policy config that causes the plugin to load for the active Gateway surface. Do not rely on `activation.onChannels` alone for hook-only startup; configured-channel ownership is separate from hook runtime loading.
+
+```json
+{
+  "id": "example-hook-plugin",
+  "activation": {
+    "onCapabilities": ["hook"]
+  },
+  "capabilities": ["hook"]
+}
+```
+
 **Sessions and compaction**
 
 - `session_start` / `session_end` - track session lifecycle boundaries. The event's `reason` is one of `new`, `reset`, `idle`, `daily`, `compaction`, `deleted`, `shutdown`, `restart`, or `unknown`. The `shutdown` and `restart` values fire from the gateway shutdown finalizer when the process is stopped or restarted while sessions are still active, so downstream plugins (such as memory or transcript stores) can finalize ghost rows that would otherwise be left in an open state across restarts. The finalizer is bounded so a slow plugin cannot block SIGTERM/SIGINT.
