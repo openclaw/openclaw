@@ -8,15 +8,19 @@ import {
   ensureDir,
   requireNodeSqlite,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  acquireMemoryReindexLock,
+  tryAcquireMemoryReindexLock,
+  type MemoryReindexLockHandle,
+} from "./manager-reindex-lock.js";
 
 // Hard-killed safe reindexes cannot run JS cleanup on their temp DB triplet.
 // Startup only removes old sibling triplets so another live process can still
 // own a young temp DB without losing its in-flight rebuild.
-const reindexTempFileMinAgeMs = 10 * 60_000;
 const reindexTempFileWithoutLockMinAgeMs = 24 * 60 * 60_000;
 const reindexTempUuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const memoryIndexFileSuffixes = ["", "-wal", "-shm"] as const;
-const reindexTempEntrySuffixes = [".lock", "-wal", "-shm", ""] as const;
+const reindexTempEntrySuffixes = ["-wal", "-shm", ""] as const;
 
 function resolveReindexTempBaseName(dbBaseName: string, entryName: string): string | undefined {
   for (const suffix of reindexTempEntrySuffixes) {
@@ -36,28 +40,6 @@ function resolveReindexTempBaseName(dbBaseName: string, entryName: string): stri
   return undefined;
 }
 
-function readReindexTempLockPid(lockPath: string): number | undefined {
-  try {
-    const parsed: unknown = JSON.parse(fs.readFileSync(lockPath, "utf8"));
-    if (!parsed || typeof parsed !== "object" || !("pid" in parsed)) {
-      return undefined;
-    }
-    const pid = (parsed as { pid?: unknown }).pid;
-    return typeof pid === "number" && Number.isInteger(pid) && pid > 0 ? pid : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function isProcessDefinitelyDead(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return false;
-  } catch (err) {
-    return (err as NodeJS.ErrnoException).code === "ESRCH";
-  }
-}
-
 function isRegularFile(filePath: string): boolean {
   try {
     return fs.statSync(filePath).isFile();
@@ -66,7 +48,7 @@ function isRegularFile(filePath: string): boolean {
   }
 }
 
-function cleanupAgedReindexTempFiles(dbPath: string, nowMs = Date.now()): void {
+export function cleanupAgedMemoryReindexTempFiles(dbPath: string, nowMs = Date.now()): void {
   // A missing live database can be the brief Windows swap window. Never delete
   // the only complete temp candidate while the canonical path is absent.
   if (!isRegularFile(dbPath)) {
@@ -74,66 +56,127 @@ function cleanupAgedReindexTempFiles(dbPath: string, nowMs = Date.now()): void {
   }
   const dir = path.dirname(dbPath);
   const dbBaseName = path.basename(dbPath);
-  const tempBaseNames = new Set<string>();
-  let entries: fs.Dirent[];
+  let reindexLock: MemoryReindexLockHandle | undefined;
   try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
+    reindexLock = tryAcquireMemoryReindexLock(dbPath);
   } catch {
+    // Startup cleanup is best effort; the actual reindex path acquires the same
+    // lock strictly before it creates or publishes a replacement database.
     return;
   }
-  for (const entry of entries) {
-    if (!entry.isFile()) {
-      continue;
-    }
-    const tempBaseName = resolveReindexTempBaseName(dbBaseName, entry.name);
-    if (tempBaseName) {
-      tempBaseNames.add(tempBaseName);
-    }
+  if (!reindexLock) {
+    return;
   }
-
-  for (const tempBaseName of tempBaseNames) {
-    if (!isRegularFile(dbPath)) {
+  try {
+    const tempBaseNames = new Set<string>();
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
       return;
     }
-    const lockPath = path.join(dir, `${tempBaseName}.lock`);
-    const lockPid = readReindexTempLockPid(lockPath);
-    // Cleanup is destructive, so an uncertain owner state is treated as live.
-    if (lockPid && !isProcessDefinitelyDead(lockPid)) {
-      continue;
-    }
-    const filePaths = [
-      ...memoryIndexFileSuffixes.map((suffix) => path.join(dir, `${tempBaseName}${suffix}`)),
-      lockPath,
-    ];
-    const stats: fs.Stats[] = [];
-    let hasUnknownFileState = false;
-    for (const filePath of filePaths) {
-      try {
-        stats.push(fs.statSync(filePath));
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-          hasUnknownFileState = true;
-          break;
-        }
+    for (const entry of entries) {
+      if (!entry.isFile()) {
+        continue;
+      }
+      const tempBaseName = resolveReindexTempBaseName(dbBaseName, entry.name);
+      if (tempBaseName) {
+        tempBaseNames.add(tempBaseName);
       }
     }
-    if (hasUnknownFileState) {
-      continue;
+
+    for (const tempBaseName of tempBaseNames) {
+      if (!isRegularFile(dbPath)) {
+        return;
+      }
+      const filePaths = memoryIndexFileSuffixes.map((suffix) =>
+        path.join(dir, `${tempBaseName}${suffix}`),
+      );
+      const stats: fs.Stats[] = [];
+      let hasUnknownFileState = false;
+      for (const filePath of filePaths) {
+        try {
+          stats.push(fs.statSync(filePath));
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+            hasUnknownFileState = true;
+            break;
+          }
+        }
+      }
+      if (hasUnknownFileState || stats.length === 0) {
+        continue;
+      }
+      const newestMtimeMs = Math.max(...stats.map((stat) => stat.mtimeMs));
+      if (nowMs - newestMtimeMs < reindexTempFileWithoutLockMinAgeMs) {
+        continue;
+      }
+      for (const filePath of filePaths) {
+        try {
+          fs.rmSync(filePath, { force: true });
+        } catch {}
+      }
     }
-    if (stats.length === 0) {
-      continue;
-    }
-    const newestMtimeMs = Math.max(...stats.map((stat) => stat.mtimeMs));
-    const minAgeMs = lockPid ? reindexTempFileMinAgeMs : reindexTempFileWithoutLockMinAgeMs;
-    if (nowMs - newestMtimeMs < minAgeMs) {
-      continue;
-    }
-    for (const filePath of filePaths) {
-      try {
-        fs.rmSync(filePath, { force: true });
-      } catch {}
-    }
+  } finally {
+    try {
+      reindexLock.release();
+    } catch {}
   }
+}
+
+function openConfiguredMemoryDatabaseAtPath(dbPath: string, allowExtension: boolean): DatabaseSync {
+  const { DatabaseSync } = requireNodeSqlite();
+  const db = new DatabaseSync(dbPath, { allowExtension });
+  configureMemorySqliteWalMaintenance(db, { databasePath: dbPath });
+  // busy_timeout is per-connection and resets to 0 on restart.
+  // Set it on every open so concurrent processes retry instead of
+  // failing immediately with SQLITE_BUSY.
+  db.exec("PRAGMA busy_timeout = 5000");
+  return db;
+}
+
+type ExistingMemoryDatabaseOpenResult =
+  | { status: "opened"; db: DatabaseSync }
+  | { status: "missing"; cause: unknown };
+
+function isMemoryDatabaseMissingError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return message.includes("unable to open database file") || message.includes("SQLITE_CANTOPEN");
+}
+
+function tryOpenExistingMemoryDatabaseAtPath(
+  dbPath: string,
+  allowExtension: boolean,
+): ExistingMemoryDatabaseOpenResult {
+  const { DatabaseSync } = requireNodeSqlite();
+  let probe: DatabaseSync;
+  try {
+    probe = new DatabaseSync(dbPath, { readOnly: true });
+  } catch (err) {
+    if (isMemoryDatabaseMissingError(err)) {
+      return { status: "missing", cause: err };
+    }
+    throw err;
+  }
+
+  // Keep the read-only handle open until the read-write handle exists. On
+  // Windows this prevents a safe reindex from creating an absent-path window.
+  let db: DatabaseSync;
+  try {
+    db = openConfiguredMemoryDatabaseAtPath(dbPath, allowExtension);
+  } catch (err) {
+    try {
+      probe.close();
+    } catch {}
+    throw err;
+  }
+  try {
+    probe.close();
+  } catch (err) {
+    closeMemoryDatabase(db);
+    throw err;
+  }
+  return { status: "opened", db };
 }
 
 export function openMemoryDatabaseAtPath(
@@ -143,35 +186,49 @@ export function openMemoryDatabaseAtPath(
 ): DatabaseSync {
   const dir = path.dirname(dbPath);
   ensureDir(dir);
-  cleanupAgedReindexTempFiles(dbPath);
-  const { DatabaseSync } = requireNodeSqlite();
-  // When allowCreate is false, probe with readOnly first.
-  // DatabaseSync auto-creates the file in read-write mode, which
-  // produces an empty database with schema but no meta row when the
-  // file is momentarily absent during an index swap. readOnly: true
-  // throws SQLITE_CANTOPEN when the file does not exist, preventing
-  // the auto-create race.
-  if (!allowCreate) {
-    try {
-      const probe = new DatabaseSync(dbPath, { readOnly: true });
-      probe.close();
-    } catch (err) {
-      const msg = (err as Error).message ?? "";
-      if (msg.includes("unable to open database file") || msg.includes("SQLITE_CANTOPEN")) {
-        throw new Error(
-          `Memory database not found at ${dbPath}; refusing to auto-create an empty database during an index swap window.`,
-          { cause: err },
-        );
-      }
-    }
+  cleanupAgedMemoryReindexTempFiles(dbPath);
+  const existing = tryOpenExistingMemoryDatabaseAtPath(dbPath, allowExtension);
+  if (existing.status === "opened") {
+    return existing.db;
   }
-  const db = new DatabaseSync(dbPath, { allowExtension });
-  configureMemorySqliteWalMaintenance(db, { databasePath: dbPath });
-  // busy_timeout is per-connection and resets to 0 on restart.
-  // Set it on every open so concurrent processes retry instead of
-  // failing immediately with SQLITE_BUSY.
-  db.exec("PRAGMA busy_timeout = 5000");
+  if (!allowCreate) {
+    throw new Error(
+      `Memory database not found at ${dbPath}; refusing to auto-create an empty database during an index swap window.`,
+      { cause: existing.cause },
+    );
+  }
+
+  // A missing canonical path can be an initial create or the Windows swap
+  // window. Only the safe-reindex owner may create or publish during that gap.
+  const openLock = acquireMemoryReindexLock(dbPath);
+  let db: DatabaseSync;
+  try {
+    const lockedExisting = tryOpenExistingMemoryDatabaseAtPath(dbPath, allowExtension);
+    db =
+      lockedExisting.status === "opened"
+        ? lockedExisting.db
+        : openConfiguredMemoryDatabaseAtPath(dbPath, allowExtension);
+  } catch (err) {
+    try {
+      openLock.release();
+    } catch {}
+    throw err;
+  }
+  try {
+    openLock.release();
+  } catch (err) {
+    closeMemoryDatabase(db);
+    throw err;
+  }
   return db;
+}
+
+export function openMemoryReindexTempDatabaseAtPath(
+  dbPath: string,
+  allowExtension: boolean,
+): DatabaseSync {
+  ensureDir(path.dirname(dbPath));
+  return openConfiguredMemoryDatabaseAtPath(dbPath, allowExtension);
 }
 
 export function closeMemoryDatabase(db: DatabaseSync): void {

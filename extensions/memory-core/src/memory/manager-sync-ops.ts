@@ -46,7 +46,12 @@ import {
   type EmbeddingProviderRuntime,
 } from "./embeddings.js";
 import { removeMemoryIndexFiles, runMemoryAtomicReindex } from "./manager-atomic-reindex.js";
-import { closeMemoryDatabase, openMemoryDatabaseAtPath } from "./manager-db.js";
+import {
+  cleanupAgedMemoryReindexTempFiles,
+  closeMemoryDatabase,
+  openMemoryDatabaseAtPath,
+  openMemoryReindexTempDatabaseAtPath,
+} from "./manager-db.js";
 import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import {
   applyMemoryFallbackProviderState,
@@ -54,6 +59,7 @@ import {
   resolveFallbackCurrentProviderId,
   type MemoryProviderLifecycleState,
 } from "./manager-provider-state.js";
+import { acquireMemoryReindexLock, type MemoryReindexLockHandle } from "./manager-reindex-lock.js";
 import {
   resolveConfiguredScopeHash,
   resolveConfiguredSourcesForMeta,
@@ -2381,9 +2387,9 @@ export abstract class MemoryManagerSyncOps {
 
     const dbPath = resolveUserPath(this.settings.store.path);
     const tempDbPath = `${dbPath}.tmp-${randomUUID()}`;
-    const tempLockPath = `${tempDbPath}.lock`;
 
     const originalDb = this.db;
+    let reindexLock: MemoryReindexLockHandle | undefined;
     let tempDb: DatabaseSync | undefined;
     let tempDbClosed = false;
     let originalDbClosed = false;
@@ -2421,12 +2427,9 @@ export abstract class MemoryManagerSyncOps {
     let publishedIndex = false;
 
     try {
-      fsSync.mkdirSync(path.dirname(tempLockPath), { recursive: true });
-      fsSync.writeFileSync(
-        tempLockPath,
-        JSON.stringify({ pid: process.pid, createdAt: Date.now() }),
-      );
-      tempDb = openMemoryDatabaseAtPath(tempDbPath, this.settings.store.vector.enabled);
+      cleanupAgedMemoryReindexTempFiles(dbPath);
+      reindexLock = acquireMemoryReindexLock(dbPath);
+      tempDb = openMemoryReindexTempDatabaseAtPath(tempDbPath, this.settings.store.vector.enabled);
       const openedTempDb = tempDb;
       this.db = openedTempDb;
       this.embeddingCacheMirrorDb = originalDb;
@@ -2551,8 +2554,10 @@ export abstract class MemoryManagerSyncOps {
       throw err;
     } finally {
       try {
-        await fs.rm(tempLockPath, { force: true });
-      } catch {}
+        reindexLock?.release();
+      } catch (err) {
+        log.warn(`failed to release memory reindex lock for ${dbPath}: ${formatErrorMessage(err)}`);
+      }
     }
   }
 
