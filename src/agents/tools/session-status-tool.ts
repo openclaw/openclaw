@@ -602,6 +602,7 @@ export function createSessionStatusTool(opts?: {
         requestedKeyRaw = opts?.runSessionKey ?? currentSessionAlias;
       }
       const requestedKeyInput = requestedKeyRaw?.trim() ?? "";
+      const effectiveRequesterLookupKey = effectiveRequesterKey.trim();
       let resolvedViaSessionId = false;
       let resolvedViaImplicitCurrentFallback = false;
       if (!requestedKeyRaw?.trim()) {
@@ -700,6 +701,17 @@ export function createSessionStatusTool(opts?: {
         }
       }
 
+      if (!resolved && requestedKeyRaw === "current" && effectiveRequesterLookupKey) {
+        resolved = resolveSessionEntry({
+          store,
+          keyRaw: effectiveRequesterLookupKey,
+          alias,
+          mainKey,
+          requesterInternalKey: storeScopedRequesterKey,
+          includeAliasFallback: false,
+        });
+      }
+
       if (!resolved && requestedKeyRaw === "current") {
         resolved = resolveSessionEntry({
           store,
@@ -732,12 +744,15 @@ export function createSessionStatusTool(opts?: {
       }
 
       if (!resolved) {
+        const runSessionFallbackKey = opts?.runSessionKey?.trim();
         const fallback = resolveImplicitCurrentSessionFallback({
           allowFallback: isSemanticCurrentRequest || requestedKeyParam === undefined,
           fallbackKey:
-            (isSemanticCurrentRequest || isImplicitRunSessionStatus) && opts?.runSessionKey
-              ? opts.runSessionKey
-              : storeScopedRequesterKey,
+            (isSemanticCurrentRequest || isImplicitRunSessionStatus) && runSessionFallbackKey
+              ? runSessionFallbackKey
+              : isSemanticCurrentRequest
+                ? effectiveRequesterLookupKey
+                : storeScopedRequesterKey,
         });
         if (fallback) {
           resolved = fallback;
