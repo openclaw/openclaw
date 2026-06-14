@@ -206,6 +206,19 @@ function hasConfiguredStartupChannel(params: {
   );
 }
 
+function hasExplicitConfiguredStartupChannel(params: {
+  plugin: InstalledPluginIndexRecord;
+  config: OpenClawConfig;
+  manifestLookup: ManifestRegistryLookup;
+}): boolean {
+  return listManifestChannelIds(params.manifestLookup, params.plugin.pluginId).some((channelId) =>
+    hasExplicitChannelConfig({
+      config: params.config,
+      channelId,
+    }),
+  );
+}
+
 type ManifestRegistryLookup = ReadonlyMap<string, PluginManifestRecord>;
 
 function createManifestRegistryLookup(
@@ -1746,14 +1759,13 @@ function canStartConfiguredChannelPlugin(params: {
   if (params.pluginsConfig.entries[params.plugin.pluginId]?.enabled === false) {
     return false;
   }
+  const explicitConfiguredChannel = hasExplicitConfiguredStartupChannel({
+    plugin: params.plugin,
+    config: params.activationSource.rootConfig ?? params.config,
+    manifestLookup: params.manifestLookup,
+  });
   const explicitBundledChannelConfig =
-    params.plugin.origin === "bundled" &&
-    listManifestChannelIds(params.manifestLookup, params.plugin.pluginId).some((channelId) =>
-      hasExplicitChannelConfig({
-        config: params.activationSource.rootConfig ?? params.config,
-        channelId,
-      }),
-    );
+    params.plugin.origin === "bundled" && explicitConfiguredChannel;
   if (
     params.pluginsConfig.allow.length > 0 &&
     !params.pluginsConfig.allow.includes(params.plugin.pluginId) &&
@@ -1772,7 +1784,10 @@ function canStartConfiguredChannelPlugin(params: {
     enabledByDefault: isPluginEnabledByDefaultForPlatform(params.plugin, params.platform),
     activationSource: params.activationSource,
   });
-  return activationState.enabled && activationState.explicitlyEnabled;
+  const trustedByChannelConfig =
+    (params.plugin.origin === "global" || params.plugin.origin === "config") &&
+    explicitConfiguredChannel;
+  return activationState.enabled && (activationState.explicitlyEnabled || trustedByChannelConfig);
 }
 
 export function resolveChannelPluginIds(params: {

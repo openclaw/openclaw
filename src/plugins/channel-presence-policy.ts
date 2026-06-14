@@ -120,6 +120,20 @@ function recordDeclaresChannel(record: PluginManifestRecord, channelId: string):
   );
 }
 
+function hasExplicitOwnedChannelConfig(params: {
+  plugin: PluginManifestRecord;
+  rootConfig: OpenClawConfig;
+  channelId: string;
+}): boolean {
+  return (
+    recordDeclaresChannel(params.plugin, params.channelId) &&
+    hasExplicitChannelConfig({
+      config: params.rootConfig,
+      channelId: params.channelId,
+    })
+  );
+}
+
 function listManifestEnvConfiguredChannelSignals(params: {
   records: readonly PluginManifestRecord[];
   activationSourceConfig?: OpenClawConfig;
@@ -208,11 +222,21 @@ function isChannelPluginEligibleForScopedOwnership(params: {
   if (isBundledManifestOwner(params.plugin)) {
     return true;
   }
-  if (params.plugin.origin === "global" || params.plugin.origin === "config") {
-    return hasExplicitManifestOwnerTrust({
+  const explicitOwnedChannelConfig =
+    params.channelId !== undefined &&
+    hasExplicitOwnedChannelConfig({
       plugin: params.plugin,
-      normalizedConfig: params.normalizedConfig,
+      rootConfig: params.rootConfig,
+      channelId: params.channelId,
     });
+  if (params.plugin.origin === "global" || params.plugin.origin === "config") {
+    return (
+      explicitOwnedChannelConfig ||
+      hasExplicitManifestOwnerTrust({
+        plugin: params.plugin,
+        normalizedConfig: params.normalizedConfig,
+      })
+    );
   }
   return isActivatedManifestOwner({
     plugin: params.plugin,
@@ -249,11 +273,18 @@ function evaluateEffectiveChannelPlugin(params: {
   }
 
   if (!isBundledManifestOwner(params.plugin)) {
+    const explicitOwnedChannelConfig = hasExplicitOwnedChannelConfig({
+      plugin: params.plugin,
+      rootConfig: params.activationSource.rootConfig ?? params.config,
+      channelId: params.channelId,
+    });
     if (params.plugin.origin === "global" || params.plugin.origin === "config") {
-      const trusted = hasExplicitManifestOwnerTrust({
-        plugin: params.plugin,
-        normalizedConfig: params.normalizedConfig,
-      });
+      const trusted =
+        explicitOwnedChannelConfig ||
+        hasExplicitManifestOwnerTrust({
+          plugin: params.plugin,
+          normalizedConfig: params.normalizedConfig,
+        });
       return trusted
         ? { effective: true, pluginId: params.plugin.id }
         : {
