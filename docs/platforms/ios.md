@@ -14,6 +14,7 @@ Availability: internal preview. The iOS app is not publicly distributed yet.
 There is currently no official public App Store listing for the OpenClaw iOS app.
 
 If you were looking for the app in the App Store:
+
 - the official iOS app is still internal-preview only
 - public App Store clones or similarly named apps are not the official OpenClaw app
 - access currently comes from the OpenClaw team (for example via internal preview / TestFlight-style distribution), not from a public store search
