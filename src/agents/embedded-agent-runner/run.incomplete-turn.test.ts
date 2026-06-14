@@ -7647,6 +7647,26 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
     expect(retryInstruction).toBeNull();
   });
+
+  it.each([
+    "I will not delete production data.",
+    "I won't delete production data.",
+    "I refuse to delete production data.",
+    "I decline to delete production data.",
+  ])("does not retry explicit refusal %s", (assistantText) => {
+    const attempt = makeAttemptResult({ assistantTexts: [assistantText] });
+    const params = {
+      provider: "openai",
+      modelId: "gpt-5.4",
+      prompt: "Please delete production data.",
+      aborted: false,
+      timedOut: false,
+      attempt,
+    };
+
+    expect(resolvePlanningOnlyRetryInstruction(params)).toBeNull();
+    expect(resolvePlanningOnlyBlockedPayloadText(params)).toBeNull();
+  });
 });
 
 describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
@@ -7742,6 +7762,29 @@ describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
 
   it("retries after one completed replay-safe tool and progress placeholder", () => {
     const attempt = makeAttemptWithTools(["read"], "Working on it.");
+
+    expect(
+      resolvePlanningOnlyRetryInstruction({
+        ...openaiParams,
+        prompt: "Please inspect the code and report the result.",
+        aborted: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
+    expect(
+      resolvePlanningOnlyBlockedPayloadText({
+        ...openaiParams,
+        prompt: "Please inspect the code and report the result.",
+        aborted: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toBeNull();
+  });
+
+  it("retries after one completed replay-safe tool and acknowledgement placeholder", () => {
+    const attempt = makeAttemptWithTools(["read"], "Got it.");
 
     expect(
       resolvePlanningOnlyRetryInstruction({

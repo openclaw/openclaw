@@ -161,7 +161,7 @@ const PLANNING_ONLY_PROGRESS_CLAIM_RE =
 const PLANNING_ONLY_PROGRESS_RESULT_RE =
   /^(?:i(?:'m| am)\s+)?(?:checking|running|working|inspecting|reading|searching|looking|debugging|testing|verifying|investigating|reviewing|fetching|probing|monitoring)\b(?:\s*:|\s+(?:normally|smoothly|well|fine|healthy|successfully|as expected|idle|ready|available|unavailable|complete|completed|finished|failed|blocked|version\s+v?\d[\w.-]*\b|\d+\b|no\b|none\b)|(?![^.!?\n]{0,160}\b(?:if|whether)\b)[^.!?\n]{1,160}\b(?:returned|showed|reported|revealed|produced|found|requires?\b[^.!?\n]{0,100}\b(?:is|are)\s+unavailable)\b)/i;
 const PLANNING_ONLY_COMPLETION_RE =
-  /\b(?:done|finished|implemented|updated|fixed|changed|ran|verified|found|here(?:'s| is) what|blocked by|the blocker is|can't|cannot)\b/i;
+  /\b(?:done|finished|implemented|updated|fixed|changed|ran|verified|found|here(?:'s| is) what|blocked by|the blocker is|can't|cannot|won't|will not|wouldn't|would not|refus(?:e|ed|ing)|declin(?:e|ed|ing))\b/i;
 const PLANNING_ONLY_HEADING_RE = /^(?:plan|steps?|next steps?)\s*:/i;
 const PLANNING_ONLY_BULLET_RE = /^(?:[-*•]\s+|\d+[.)]\s+)/u;
 const PLANNING_ONLY_MAX_VISIBLE_TEXT = 700;
@@ -1146,6 +1146,15 @@ function isPlanningOnlyProgressClaim(text: string): boolean {
   return PLANNING_ONLY_PROGRESS_CLAIM_RE.test(text) && !PLANNING_ONLY_PROGRESS_RESULT_RE.test(text);
 }
 
+function isPlanningOnlyNonFinalPlaceholder(text: string): boolean {
+  return (
+    isPlanningOnlyProgressClaim(text) ||
+    PLANNING_ONLY_SHORT_PLACEHOLDER_RE.test(text) ||
+    PLANNING_ONLY_WAIT_PLACEHOLDER_RE.test(text) ||
+    PLANNING_ONLY_ACK_PLACEHOLDER_RE.test(text)
+  );
+}
+
 function hasExplicitAdvisoryFollowUpAction(text: string): boolean {
   const actionableText = stripNonAuthorizingUserPromptExcerpts(text);
   if (EXPLICIT_ADVISORY_FOLLOW_UP_ACTION_RE.test(actionableText)) {
@@ -1307,7 +1316,7 @@ function hasCompletedRetrySafeNonPlanToolActivity(
   }
   if (
     nonPlanTools.length === 1 &&
-    !isPlanningOnlyProgressClaim(
+    !isPlanningOnlyNonFinalPlaceholder(
       normalizePlanningOnlyClassifierText((attempt.assistantTexts ?? []).join("\n\n").trim()),
     )
   ) {
