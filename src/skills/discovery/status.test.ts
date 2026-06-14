@@ -283,6 +283,7 @@ describe("buildWorkspaceSkillStatus", () => {
         primaryEnv: undefined,
         emoji: undefined,
         homepage: undefined,
+        sourceUrl: undefined,
         always: false,
         disabled: false,
         blockedByAllowlist: false,

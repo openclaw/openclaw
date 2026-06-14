@@ -23,6 +23,8 @@ export type OpenClawSkillMetadata = {
   primaryEnv?: string;
   emoji?: string;
   homepage?: string;
+  /** URL to the skill's source code repository (e.g. GitHub). */
+  sourceUrl?: string;
   os?: string[];
   requires?: {
     bins?: string[];
