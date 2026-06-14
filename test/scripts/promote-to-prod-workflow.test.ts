@@ -90,6 +90,9 @@ describe("promote-to-prod workflow", () => {
       'request_id="promote-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-prod-dry-run"',
     );
     expect(dryRunCatalog.run).toContain("displayTitle == env.EXPECTED_TITLE");
+    expect(dryRunCatalog.run).toContain(".databaseId as $candidate_run_id");
+    expect(dryRunCatalog.run).toContain("index($candidate_run_id)");
+    expect(dryRunCatalog.run).not.toContain("index(.databaseId)");
     expect(dryRunCatalog.run).toContain('grep -Fx "$expected_title"');
     expect(dryRunCatalog.run).toContain("dry_run=true");
 
@@ -97,6 +100,9 @@ describe("promote-to-prod workflow", () => {
       'request_id="promote-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-prod"',
     );
     expect(realSync.run).toContain("displayTitle == env.EXPECTED_TITLE");
+    expect(realSync.run).toContain(".databaseId as $candidate_run_id");
+    expect(realSync.run).toContain("index($candidate_run_id)");
+    expect(realSync.run).not.toContain("index(.databaseId)");
     expect(realSync.run).toContain('grep -Fx "$expected_title"');
     expect(realSync.run).toContain("dry_run=false");
   });
