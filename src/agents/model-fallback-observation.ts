@@ -16,6 +16,74 @@ export function isModelFallbackDecisionLogEnabled(): boolean {
   return decisionLog.isEnabled("warn");
 }
 
+// ── Log coalescer for repeated auth-class fallback decisions ──────────
+// When a provider token expires, the fallback loop can call
+// logModelFallbackDecision dozens of times per second with identical
+// (decision, provider, reason) tuples.  This module-level coalescer
+// suppresses consecutive duplicates within a sliding window and reports
+// the suppressed count once the window expires or the key changes.
+
+const LOG_COALESCE_WINDOW_MS = 30_000;
+const MAX_COALESCE_ENTRIES = 100;
+
+type CoalesceEntry = {
+  lastLoggedAt: number;
+  suppressed: number;
+};
+
+const coalesceState = new Map<string, CoalesceEntry>();
+
+function buildCoalesceKey(
+  decision: string,
+  provider: string,
+  reason: string,
+  nextProvider?: string,
+  nextModel?: string,
+): string {
+  return `${decision}:${provider}:${reason}:${nextProvider ?? ""}:${nextModel ?? ""}`;
+}
+
+function pruneCoalesceState(now: number): void {
+  for (const [key, entry] of coalesceState) {
+    if (now - entry.lastLoggedAt > LOG_COALESCE_WINDOW_MS * 2) {
+      coalesceState.delete(key);
+    }
+  }
+}
+
+function resolveCoalesceState(
+  key: string,
+  now: number,
+):
+  | { suppressed: number; shouldLog: true; isFirstAfterSuppress: boolean }
+  | { suppressed: number; shouldLog: false } {
+  const entry = coalesceState.get(key);
+  if (entry && now - entry.lastLoggedAt < LOG_COALESCE_WINDOW_MS) {
+    entry.suppressed += 1;
+    return { suppressed: entry.suppressed, shouldLog: false };
+  }
+  const suppressed = entry?.suppressed ?? 0;
+  if (entry) {
+    // window expired — flush the old entry
+    coalesceState.delete(key);
+  }
+  // enforce bounded size
+  if (coalesceState.size >= MAX_COALESCE_ENTRIES) {
+    pruneCoalesceState(now);
+  }
+  coalesceState.set(key, { lastLoggedAt: now, suppressed: 0 });
+  return {
+    suppressed,
+    shouldLog: true,
+    isFirstAfterSuppress: suppressed > 0,
+  };
+}
+
+/** Exported for tests only — reset coalescer state between test cases. */
+export function resetFallbackLogCoalesceStateForTest(): void {
+  coalesceState.clear();
+}
+
 function buildErrorObservationFields(error?: string): {
   errorPreview?: string;
   errorHash?: string;
@@ -158,6 +226,32 @@ export function logModelFallbackDecision(
     ? ` providerErrorType=${sanitizeForLog(observedError.providerErrorType)}`
     : "";
   const detailSuffix = detailText ? ` detail=${sanitizeForLog(detailText)}` : "";
+
+  // Coalesce repeated auth-class fallback failures to prevent log spam.
+  // Only candidate_failed and skip_candidate are eligible for coalescing;
+  // candidate_succeeded and probe_cooldown_candidate always pass through.
+  const eligibleForCoalesce =
+    params.decision === "candidate_failed" || params.decision === "skip_candidate";
+  const coalesceKey = eligibleForCoalesce
+    ? buildCoalesceKey(
+        params.decision,
+        params.candidate.provider,
+        reasonText,
+        params.nextCandidate?.provider,
+        params.nextCandidate?.model,
+      )
+    : undefined;
+  const coalesceResult = coalesceKey ? resolveCoalesceState(coalesceKey, Date.now()) : undefined;
+
+  if (coalesceResult && !coalesceResult.shouldLog) {
+    return fallbackStepFields;
+  }
+
+  const suppressedSuffix =
+    coalesceResult?.isFirstAfterSuppress && coalesceResult.suppressed > 0
+      ? ` (${coalesceResult.suppressed} duplicates suppressed in last ${LOG_COALESCE_WINDOW_MS / 1000}s)`
+      : "";
+
   decisionLog.warn("model fallback decision", {
     event: "model_fallback_decision",
     tags: ["error_handling", "model_fallback", params.decision],
@@ -193,7 +287,8 @@ export function logModelFallbackDecision(
     })),
     consoleMessage:
       `model fallback decision: decision=${params.decision} requested=${sanitizeForLog(params.requestedProvider)}/${sanitizeForLog(params.requestedModel)} ` +
-      `candidate=${sanitizeForLog(params.candidate.provider)}/${sanitizeForLog(params.candidate.model)} reason=${reasonText}${providerErrorTypeSuffix} next=${nextText}${detailSuffix}`,
+      `candidate=${sanitizeForLog(params.candidate.provider)}/${sanitizeForLog(params.candidate.model)} reason=${reasonText}${providerErrorTypeSuffix} next=${nextText}${detailSuffix}${suppressedSuffix}`,
+    suppressedDuplicateCount: coalesceResult?.suppressed || undefined,
   });
   return fallbackStepFields;
 }
