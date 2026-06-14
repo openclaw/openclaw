@@ -879,6 +879,10 @@ export const registerTelegramHandlers = ({
         commandAuthorized: commandGate.authorized,
       },
     });
+    // If ingest is explicitly enabled, break out of media download skip
+    if ((topicConfig?.ingest ?? groupConfig?.ingest) === true) {
+      return false;
+    }
     if (mentionDecision.shouldSkip) {
       logger.info({ chatId, reason: "no-mention" }, "skipping group media before download");
       return true;
