@@ -816,6 +816,27 @@ function inferOllamaSchemaType(schema: Record<string, unknown>): string | undefi
   return undefined;
 }
 
+function readOllamaSchemaEntries(
+  schema: Record<string, unknown>,
+): Array<[string, unknown]> | undefined {
+  try {
+    return Object.entries(schema);
+  } catch {
+    return undefined;
+  }
+}
+
+function readOllamaSchemaArray(schema: unknown): unknown[] | undefined {
+  if (!Array.isArray(schema)) {
+    return undefined;
+  }
+  try {
+    return Array.from(schema);
+  } catch {
+    return undefined;
+  }
+}
+
 function normalizeOllamaToolSchema(schema: unknown, isRoot = false): Record<string, unknown> {
   if (!isRecord(schema)) {
     return {
@@ -824,25 +845,39 @@ function normalizeOllamaToolSchema(schema: unknown, isRoot = false): Record<stri
     };
   }
 
+  const entries = readOllamaSchemaEntries(schema);
+  if (!entries) {
+    return {
+      type: "object",
+      properties: {},
+    };
+  }
+
   const normalized: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(schema)) {
+  for (const [key, value] of entries) {
     if (key === "properties" && isRecord(value)) {
-      normalized.properties = Object.fromEntries(
-        Object.entries(value).map(([propertyName, propertySchema]) => [
-          propertyName,
-          normalizeOllamaToolSchema(propertySchema),
-        ]),
-      );
+      const propertyEntries = readOllamaSchemaEntries(value);
+      normalized.properties = {};
+      if (propertyEntries) {
+        for (const [propertyName, propertySchema] of propertyEntries) {
+          (normalized.properties as Record<string, unknown>)[propertyName] =
+            normalizeOllamaToolSchema(propertySchema);
+        }
+      }
       continue;
     }
     if (key === "items") {
-      normalized.items = Array.isArray(value)
-        ? value.map((entry) => normalizeOllamaToolSchema(entry))
+      const items = readOllamaSchemaArray(value);
+      normalized.items = items
+        ? items.map((entry) => normalizeOllamaToolSchema(entry))
         : normalizeOllamaToolSchema(value);
       continue;
     }
-    if ((key === "anyOf" || key === "oneOf" || key === "allOf") && Array.isArray(value)) {
-      normalized[key] = value.map((entry) => normalizeOllamaToolSchema(entry));
+    if (key === "anyOf" || key === "oneOf" || key === "allOf") {
+      const variants = readOllamaSchemaArray(value);
+      if (variants) {
+        normalized[key] = variants.map((entry) => normalizeOllamaToolSchema(entry));
+      }
       continue;
     }
     normalized[key] = value;

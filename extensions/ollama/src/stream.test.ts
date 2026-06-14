@@ -259,6 +259,84 @@ describe("createOllamaStreamFn thinking events", () => {
     });
   });
 
+  it("degrades unreadable tool schemas instead of aborting request construction", async () => {
+    const unreadableRootSchema = new Proxy(
+      { type: "object", properties: {} },
+      {
+        ownKeys() {
+          throw new Error("ollama root schema ownKeys exploded");
+        },
+      },
+    );
+    const unreadableProperties = new Proxy(
+      { query: { type: "string" } },
+      {
+        ownKeys() {
+          throw new Error("ollama properties ownKeys exploded");
+        },
+      },
+    );
+    const unreadableVariants = new Proxy([{ type: "string" }], {
+      get(target, property, receiver) {
+        if (property === Symbol.iterator) {
+          throw new Error("ollama variants iterator exploded");
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+
+    const events = await streamOllamaEvents([makeOllamaResponse({ content: "ok" })], {}, {
+      messages: [{ role: "user", content: "test" }],
+      tools: [
+        {
+          name: "root_schema_tool",
+          description: "Root schema fallback",
+          parameters: unreadableRootSchema,
+        },
+        {
+          name: "nested_schema_tool",
+          description: "Nested schema fallback",
+          parameters: {
+            type: "object",
+            properties: unreadableProperties,
+            anyOf: unreadableVariants,
+          },
+        },
+      ],
+    } as never);
+
+    expect(events.map((event) => event.type)).not.toContain("error");
+    const request = fetchWithSsrFGuardMock.mock.calls.at(-1)?.[0] as {
+      init: { body: string };
+    };
+    const body = JSON.parse(request.init.body) as {
+      tools: Array<{
+        function: {
+          name: string;
+          parameters: Record<string, unknown>;
+        };
+      }>;
+    };
+    expect(body.tools).toEqual([
+      {
+        type: "function",
+        function: {
+          name: "root_schema_tool",
+          description: "Root schema fallback",
+          parameters: { type: "object", properties: {} },
+        },
+      },
+      {
+        type: "function",
+        function: {
+          name: "nested_schema_tool",
+          description: "Nested schema fallback",
+          parameters: { type: "object", properties: {} },
+        },
+      },
+    ]);
+  });
+
   it("promotes standalone bracketed local-model tool text to a structured tool call", async () => {
     const rawToolText = [
       "[mempalace_mempalace_search]",
