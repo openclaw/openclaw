@@ -1185,6 +1185,37 @@ describe("runSetupWizard", () => {
     expect(matchingQuickStartNotes.length).toBeGreaterThan(0);
   });
 
+  it("shows an upfront ETA timeline before setup choices", async () => {
+    const note: WizardPrompter["note"] = vi.fn(async () => {});
+    const prompter = buildWizardPrompter({ note });
+    const runtime = createRuntime();
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        authChoice: "skip",
+        installDaemon: false,
+        skipProviders: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      runtime,
+      prompter,
+    );
+
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("plan for up to ~40 minutes"),
+      "Setup timeline",
+    );
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("Typical timeline:"),
+      "Setup timeline",
+    );
+  });
+
   it("localizes the quickstart summary", async () => {
     const previousPort = process.env.OPENCLAW_GATEWAY_PORT;
     const previousLocale = process.env.OPENCLAW_LOCALE;
