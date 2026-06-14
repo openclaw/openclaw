@@ -1,0 +1,69 @@
+name: ClawHub Plugin Docs Dispatch
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/plugins/**"
+      - "docs/tools/creating-skills.md"
+      - "docs/tools/plugin.md"
+      - "docs/tools/skills.md"
+      - "docs/docs.json"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: clawhub-plugin-docs-dispatch-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      HAS_CLAWSWEEPER_APP_PRIVATE_KEY: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY != '' }}
+      CLAWSWEEPER_APP_CLIENT_ID: Iv23liOECG0slfuhz093
+
+    steps:
+      - name: Create ClawHub dispatch token
+        id: token
+        if: ${{ env.HAS_CLAWSWEEPER_APP_PRIVATE_KEY == 'true' }}
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
+        with:
+          client-id: ${{ env.CLAWSWEEPER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
+          owner: openclaw
+          repositories: clawhub
+          permission-contents: write
+
+      - name: Dispatch exact OpenClaw revision to ClawHub
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          SOURCE_BEFORE_SHA: ${{ github.event.before }}
+          SOURCE_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$GH_TOKEN" ]]; then
+            echo "::error::ClawHub docs dispatch credential is not configured."
+            exit 1
+          fi
+          payload="$(
+            jq -nc \
+              --arg source_sha "$SOURCE_SHA" \
+              --arg source_before_sha "$SOURCE_BEFORE_SHA" \
+              --arg source_run_url "$SOURCE_RUN_URL" \
+              '{
+                event_type: "openclaw-plugin-docs-updated",
+                client_payload: {
+                  source_sha: $source_sha,
+                  source_before_sha: $source_before_sha,
+                  source_run_url: $source_run_url
+                }
+              }'
+          )"
+          gh api repos/openclaw/clawhub/dispatches \
+            --method POST \
+            --input - <<< "$payload"
