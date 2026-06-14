@@ -30,6 +30,7 @@ function requireApprovalsBaseHash(
   params: unknown,
   snapshot: ExecApprovalsSnapshot,
   respond: RespondFn,
+  getMethod = "exec.approvals.get",
 ): boolean {
   // Approval allowlists are admin-editable state. Require the caller's last
   // observed hash before writing so stale UI tabs cannot overwrite changes.
@@ -42,7 +43,7 @@ function requireApprovalsBaseHash(
       undefined,
       errorShape(
         ErrorCodes.INVALID_REQUEST,
-        "exec approvals base hash unavailable; re-run exec.approvals.get and retry",
+        `exec approvals base hash unavailable; re-run ${getMethod} and retry`,
       ),
     );
     return false;
@@ -54,7 +55,7 @@ function requireApprovalsBaseHash(
       undefined,
       errorShape(
         ErrorCodes.INVALID_REQUEST,
-        "exec approvals base hash required; re-run exec.approvals.get and retry",
+        `exec approvals base hash required; re-run ${getMethod} and retry`,
       ),
     );
     return false;
@@ -65,7 +66,7 @@ function requireApprovalsBaseHash(
       undefined,
       errorShape(
         ErrorCodes.INVALID_REQUEST,
-        "exec approvals changed since last load; re-run exec.approvals.get and retry",
+        `exec approvals changed since last load; re-run ${getMethod} and retry`,
       ),
     );
     return false;
@@ -89,6 +90,44 @@ function toExecApprovalsPayload(snapshot: ExecApprovalsSnapshot) {
     exists: snapshot.exists,
     hash: snapshot.hash,
     file: redactExecApprovals(snapshot.file),
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readNodeExecApprovalsPayload(response: {
+  payload?: unknown;
+  payloadJSON?: string | null;
+}): unknown {
+  return response.payloadJSON ? safeParseJson(response.payloadJSON) : response.payload;
+}
+
+function toNodeExecApprovalsSnapshot(payload: unknown): ExecApprovalsSnapshot | null {
+  if (!isRecord(payload)) {
+    return null;
+  }
+  const payloadHash =
+    typeof payload.hash === "string"
+      ? payload.hash
+      : typeof payload.baseHash === "string"
+        ? payload.baseHash
+        : "";
+  const exists = typeof payload.exists === "boolean" ? payload.exists : Boolean(payloadHash);
+  if (!exists && !("exists" in payload)) {
+    return null;
+  }
+  const path = typeof payload.path === "string" && payload.path.trim() ? payload.path : "<node>";
+  const file: ExecApprovalsFile = isRecord(payload.file)
+    ? (payload.file as ExecApprovalsFile)
+    : { version: 1 };
+  return {
+    path,
+    exists,
+    raw: null,
+    file,
+    hash: payloadHash,
   };
 }
 
@@ -169,24 +208,64 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
       commandParams: () => ({}),
       // Node invocations can return structured payloads or JSON strings
       // depending on the transport; normalize before echoing the RPC response.
-      readPayload: (res) => (res.payloadJSON ? safeParseJson(res.payloadJSON) : res.payload),
+      readPayload: readNodeExecApprovalsPayload,
     });
   },
   "exec.approvals.node.set": async ({ params, respond, context }) => {
-    await respondWithExecApprovalsNodePayload({
-      method: "exec.approvals.node.set",
-      rawParams: params,
-      validate: validateExecApprovalsNodeSetParams,
-      context,
-      respond,
-      command: "system.execApprovals.set",
-      commandParams: (parsedParams) => ({
-        file: parsedParams.file,
-        baseHash: parsedParams.baseHash,
-      }),
+    if (
+      !assertValidParams(
+        params,
+        validateExecApprovalsNodeSetParams,
+        "exec.approvals.node.set",
+        respond,
+      )
+    ) {
+      return;
+    }
+    const parsedParams = params;
+    const nodeId = parsedParams.nodeId.trim();
+    if (!nodeId) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
+      return;
+    }
+    await respondUnavailableOnThrow(respond, async () => {
+      const getResponse = await context.nodeRegistry.invoke({
+        nodeId,
+        command: "system.execApprovals.get",
+        params: {},
+      });
+      if (!respondUnavailableOnNodeInvokeError(respond, getResponse)) {
+        return;
+      }
+      const snapshot = toNodeExecApprovalsSnapshot(readNodeExecApprovalsPayload(getResponse));
+      if (!snapshot) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.UNAVAILABLE,
+            "node exec approvals snapshot unavailable; re-run exec.approvals.node.get and retry",
+          ),
+        );
+        return;
+      }
+      if (!requireApprovalsBaseHash(params, snapshot, respond, "exec.approvals.node.get")) {
+        return;
+      }
+      const setResponse = await context.nodeRegistry.invoke({
+        nodeId,
+        command: "system.execApprovals.set",
+        params: {
+          file: parsedParams.file,
+          baseHash: parsedParams.baseHash,
+        },
+      });
+      if (!respondUnavailableOnNodeInvokeError(respond, setResponse)) {
+        return;
+      }
       // node.set returns JSON on the command channel; keep the gateway response
       // shape aligned with local exec.approvals.set.
-      readPayload: (res) => safeParseJson(res.payloadJSON ?? null),
+      respond(true, safeParseJson(setResponse.payloadJSON ?? null), undefined);
     });
   },
 };
