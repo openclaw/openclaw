@@ -2,7 +2,12 @@
 const SETTINGS_KEY_PREFIX = "openclaw.control.settings.v1:";
 const LEGACY_SETTINGS_KEY = "openclaw.control.settings.v1";
 const LOCAL_USER_IDENTITY_KEY = "openclaw.control.user.v1";
-const LOCAL_ASSISTANT_IDENTITY_KEY = "openclaw.control.assistant.v1";
+const LOCAL_ASSISTANT_IDENTITY_KEY_PREFIX = "openclaw.control.assistant.v1";
+
+function localAssistantIdentityKey(agentId?: string): string {
+  const id = agentId?.trim();
+  return id ? `${LOCAL_ASSISTANT_IDENTITY_KEY_PREFIX}:${id}` : LOCAL_ASSISTANT_IDENTITY_KEY_PREFIX;
+}
 const LEGACY_TOKEN_SESSION_KEY = "openclaw.control.token.v1";
 const TOKEN_SESSION_KEY_PREFIX = "openclaw.control.token.v1:";
 const MAX_SCOPED_SESSION_ENTRIES = 10;
@@ -350,11 +355,20 @@ export function saveLocalUserIdentity(next: LocalUserIdentity) {
 
 export type LocalAssistantIdentity = { avatar: string | null };
 
-export function loadLocalAssistantIdentity(): LocalAssistantIdentity {
+export function loadLocalAssistantIdentity(agentId?: string): LocalAssistantIdentity {
   const storage = getSafeLocalStorage();
+  const key = localAssistantIdentityKey(agentId);
   try {
-    const raw = storage?.getItem(LOCAL_ASSISTANT_IDENTITY_KEY);
+    const raw = storage?.getItem(key);
     if (!raw) {
+      // Fall back to global key for backward compatibility
+      if (agentId) {
+        const globalRaw = storage?.getItem(localAssistantIdentityKey());
+        if (globalRaw) {
+          const parsed = JSON.parse(globalRaw) as Partial<LocalAssistantIdentity>;
+          return { avatar: typeof parsed.avatar === "string" ? parsed.avatar : null };
+        }
+      }
       return { avatar: null };
     }
     const parsed = JSON.parse(raw) as Partial<LocalAssistantIdentity>;
@@ -364,14 +378,22 @@ export function loadLocalAssistantIdentity(): LocalAssistantIdentity {
   }
 }
 
-export function saveLocalAssistantIdentity(next: LocalAssistantIdentity) {
+export function saveLocalAssistantIdentity(next: LocalAssistantIdentity, agentId?: string) {
   const storage = getSafeLocalStorage();
+  const key = localAssistantIdentityKey(agentId);
   try {
     if (!next.avatar) {
-      storage?.removeItem(LOCAL_ASSISTANT_IDENTITY_KEY);
+      // When clearing a scoped agent avatar, store null explicitly to prevent
+      // fallback to the global key. Only remove the key entirely for the global
+      // (no agentId) case to preserve backward compatibility.
+      if (agentId) {
+        storage?.setItem(key, JSON.stringify({ avatar: null }));
+      } else {
+        storage?.removeItem(key);
+      }
       return;
     }
-    storage?.setItem(LOCAL_ASSISTANT_IDENTITY_KEY, JSON.stringify({ avatar: next.avatar }));
+    storage?.setItem(key, JSON.stringify({ avatar: next.avatar }));
   } catch {
     // best-effort — quota exceeded or security restrictions should not
     // prevent in-memory identity updates from being applied

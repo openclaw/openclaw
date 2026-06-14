@@ -96,4 +96,59 @@ describe("setAssistantAvatarOverride", () => {
     expect(state.assistantAvatarReason).toBeNull();
     expect(loadLocalAssistantIdentity().avatar).toBeNull();
   });
+
+  it("scopes avatar storage per agent ID (regression #90890)", () => {
+    const mainState: Parameters<typeof setAssistantAvatarOverride>[0] = {
+      assistantAgentId: "main",
+    };
+    const workerState: Parameters<typeof setAssistantAvatarOverride>[0] = {
+      assistantAgentId: "worker",
+    };
+
+    setAssistantAvatarOverride(mainState, "data:image/png;base64,bWFpbg==");
+    setAssistantAvatarOverride(workerState, "data:image/png;base64,d29ya2Vy");
+
+    // Each agent should have its own avatar.
+    expect(loadLocalAssistantIdentity("main").avatar).toBe("data:image/png;base64,bWFpbg==");
+    expect(loadLocalAssistantIdentity("worker").avatar).toBe("data:image/png;base64,d29ya2Vy");
+
+    // Clearing one agent should not affect the other.
+    setAssistantAvatarOverride(mainState, null);
+    expect(loadLocalAssistantIdentity("main").avatar).toBeNull();
+    expect(loadLocalAssistantIdentity("worker").avatar).toBe("data:image/png;base64,d29ya2Vy");
+  });
+
+  it("falls back to global key when agent-specific key is not set", () => {
+    // Set a global avatar (no agent ID).
+    setAssistantAvatarOverride({}, "data:image/png;base64,Z2xvYmFs");
+
+    // An agent with no specific avatar should fall back to the global key.
+    expect(loadLocalAssistantIdentity("new-agent").avatar).toBe("data:image/png;base64,Z2xvYmFs");
+  });
+
+  it("handles legacy global key after scoped clear (upgrade scenario)", () => {
+    // Simulate legacy state: global avatar exists from before the scoping fix.
+    setAssistantAvatarOverride({}, "data:image/png;base64,bGVnYWN5");
+
+    // Agent "main" should see the legacy global avatar.
+    expect(loadLocalAssistantIdentity("main").avatar).toBe("data:image/png;base64,bGVnYWN5");
+
+    // Set a scoped avatar for "main".
+    const mainState: Parameters<typeof setAssistantAvatarOverride>[0] = {
+      assistantAgentId: "main",
+    };
+    setAssistantAvatarOverride(mainState, "data:image/png;base64,c2NvcGVk");
+    expect(loadLocalAssistantIdentity("main").avatar).toBe("data:image/png;base64,c2NvcGVk");
+
+    // Clear the scoped avatar for "main".
+    setAssistantAvatarOverride(mainState, null);
+    expect(loadLocalAssistantIdentity("main").avatar).toBeNull();
+
+    // The legacy global avatar should still be available for other agents.
+    expect(loadLocalAssistantIdentity("other-agent").avatar).toBe("data:image/png;base64,bGVnYWN5");
+
+    // After clearing scoped, "main" should NOT fall back to global
+    // (the scoped key exists with null value, which blocks fallback).
+    expect(loadLocalAssistantIdentity("main").avatar).toBeNull();
+  });
 });
