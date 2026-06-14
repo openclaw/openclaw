@@ -497,6 +497,21 @@ export const fr: TranslationMap = {
       minutes: "{minutes}m {seconds}s",
     },
   },
+  logsView: {
+    title: "Logs",
+    subtitle: "Gateway file logs (JSONL).",
+    exportButton: "Export {label}",
+    exportLabels: {
+      filtered: "filtered",
+      visible: "visible",
+    },
+    filter: "Filter",
+    searchPlaceholder: "Search logs",
+    autoFollow: "Auto-follow",
+    file: "File: {file}",
+    truncated: "Log output truncated; showing latest chunk.",
+    empty: "No log entries.",
+  },
   workboard: {
     disabledHelpStart: "Le tableau de travail est désactivé. Activez",
     enableConfigKey: "plugins.entries.workboard.enabled = true",
@@ -615,6 +630,7 @@ export const fr: TranslationMap = {
     labelsPlaceholder: "ui, docs",
     searchPlaceholder: "Rechercher des cartes",
     allPriorities: "Toutes les priorités",
+    hideEmptyColumns: "Hide empty columns",
     emptyColumn: "Déposez le travail ici",
     lifecycleUnlinked: "Aucune session",
     lifecycleUnlinkedDetail: "Démarrer ou lier une session",
@@ -1357,6 +1373,17 @@ export const fr: TranslationMap = {
     },
     toolCards: {
       toolError: "Erreur de l’outil",
+    },
+    workspaceFiles: {
+      label: "Workspace files",
+      expand: "Expand workspace files",
+      collapse: "Collapse workspace files",
+      workspace: "Workspace",
+      files: "Files",
+      refresh: "Refresh files",
+      loading: "Loading files…",
+      empty: "No workspace files",
+      missing: "Missing",
     },
   },
   languages: {

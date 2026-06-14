@@ -17,6 +17,7 @@ import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
+import { getAgentRunContext } from "../../infra/agent-events.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { readSessionTranscriptIndex } from "../session-transcript-index.fs.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -4646,6 +4647,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(response?.[1]).toBeUndefined();
     expect(response?.[2]?.code).toBe(ErrorCodes.INVALID_REQUEST);
     expect(response?.[2]?.message).toContain("attachment broken.png: invalid base64 content");
+    expect(getAgentRunContext("idem-chat-send-attachment-parse-stack")).toBeUndefined();
     const parseLogCall = (context.logGateway.error as unknown as ReturnType<typeof vi.fn>).mock
       .calls[0] as [string, Record<string, string>] | undefined;
     expect(parseLogCall?.[0]).toBe("chat.send attachment parse/stage failed");

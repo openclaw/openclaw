@@ -491,6 +491,21 @@ export const zh_CN: TranslationMap = {
       minutes: "{minutes}m {seconds}s",
     },
   },
+  logsView: {
+    title: "Logs",
+    subtitle: "Gateway file logs (JSONL).",
+    exportButton: "Export {label}",
+    exportLabels: {
+      filtered: "filtered",
+      visible: "visible",
+    },
+    filter: "Filter",
+    searchPlaceholder: "Search logs",
+    autoFollow: "Auto-follow",
+    file: "File: {file}",
+    truncated: "Log output truncated; showing latest chunk.",
+    empty: "No log entries.",
+  },
   workboard: {
     disabledHelpStart: "Workboard 已禁用。启用",
     enableConfigKey: "plugins.entries.workboard.enabled = true",
@@ -609,6 +624,7 @@ export const zh_CN: TranslationMap = {
     labelsPlaceholder: "ui, docs",
     searchPlaceholder: "搜索卡片",
     allPriorities: "所有优先级",
+    hideEmptyColumns: "Hide empty columns",
     emptyColumn: "将工作拖放到此处",
     lifecycleUnlinked: "无会话",
     lifecycleUnlinkedDetail: "启动或关联会话",
@@ -1308,6 +1324,17 @@ export const zh_CN: TranslationMap = {
     },
     toolCards: {
       toolError: "工具错误",
+    },
+    workspaceFiles: {
+      label: "Workspace files",
+      expand: "Expand workspace files",
+      collapse: "Collapse workspace files",
+      workspace: "Workspace",
+      files: "Files",
+      refresh: "Refresh files",
+      loading: "Loading files…",
+      empty: "No workspace files",
+      missing: "Missing",
     },
   },
   languages: {

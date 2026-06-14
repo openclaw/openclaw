@@ -73,6 +73,12 @@ let listTelegramSpooledUpdateClaims: typeof import("./telegram-ingress-spool.js"
 let listTelegramSpooledUpdates: typeof import("./telegram-ingress-spool.js").listTelegramSpooledUpdates;
 let recoverStaleTelegramSpooledUpdateClaims: typeof import("./telegram-ingress-spool.js").recoverStaleTelegramSpooledUpdateClaims;
 let writeTelegramSpooledUpdate: typeof import("./telegram-ingress-spool.js").writeTelegramSpooledUpdate;
+let createTelegramSpooledReplayDeferredParticipant: typeof import("./bot-processing-outcome.js").createTelegramSpooledReplayDeferredParticipant;
+let TelegramMessageDispatchReplayForgetError: typeof import("./message-dispatch-dedupe.js").TelegramMessageDispatchReplayForgetError;
+type TelegramMessageProcessingResult =
+  import("./bot-processing-outcome.js").TelegramMessageProcessingResult;
+type TelegramSpooledReplayDeferredParticipant =
+  import("./bot-processing-outcome.js").TelegramSpooledReplayDeferredParticipant;
 let beginTelegramReplyFence: typeof import("./telegram-reply-fence.js").beginTelegramReplyFence;
 let buildTelegramReplyFenceLaneKey: typeof import("./telegram-reply-fence.js").buildTelegramReplyFenceLaneKey;
 let endTelegramReplyFence: typeof import("./telegram-reply-fence.js").endTelegramReplyFence;
@@ -612,6 +618,9 @@ describe("TelegramPollingSession", () => {
       recoverStaleTelegramSpooledUpdateClaims,
       writeTelegramSpooledUpdate,
     } = await import("./telegram-ingress-spool.js"));
+    ({ createTelegramSpooledReplayDeferredParticipant } =
+      await import("./bot-processing-outcome.js"));
+    ({ TelegramMessageDispatchReplayForgetError } = await import("./message-dispatch-dedupe.js"));
     ({
       beginTelegramReplyFence,
       buildTelegramReplyFenceLaneKey,
@@ -1336,6 +1345,187 @@ describe("TelegramPollingSession", () => {
       await vi.waitFor(() => expect(events).toEqual(["topic10:first", "topic11"]));
       expect(await pendingUpdateIds(tempDir, "all")).toEqual([42, 44]);
       expectLogIncludes(log, "spooled update 42 failed; keeping for retry");
+      abort.abort();
+      stopWorker();
+      await runPromise;
+    });
+  });
+
+  it("holds buffered spooled claims until deferred processing settles without blocking same-lane buffering", async () => {
+    await withTempSpool(async (tempDir) => {
+      const abort = new AbortController();
+      const participants: TelegramSpooledReplayDeferredParticipant[] = [];
+      const events: string[] = [];
+      await writeSpooledTestUpdates(tempDir, [
+        topicUpdate(42, 10, "first buffered topic 10 turn"),
+        topicUpdate(43, 10, "second buffered topic 10 turn"),
+      ]);
+
+      const { runPromise, stopWorker } = startIsolatedIngressSession({
+        abort,
+        spoolDir: tempDir,
+        drainIntervalMs: 10,
+        handleUpdate: async (update) => {
+          events.push(`topic10:${update.update_id}`);
+          const participant = createTelegramSpooledReplayDeferredParticipant(
+            `test-buffer:${update.update_id}`,
+          );
+          if (!participant) {
+            throw new Error("expected spooled replay participant");
+          }
+          participants.push(participant);
+        },
+      });
+
+      await vi.waitFor(() => expect(events).toEqual(["topic10:42", "topic10:43"]));
+      await vi.waitFor(async () =>
+        expect(
+          (await listTelegramSpooledUpdateClaims({ spoolDir: tempDir })).map(
+            (claim) => claim.updateId,
+          ),
+        ).toEqual([42, 43]),
+      );
+      expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
+
+      const completed: TelegramMessageProcessingResult = { kind: "completed" };
+      for (const participant of participants) {
+        participant.settle(completed);
+      }
+      await vi.waitFor(async () =>
+        expect(await listTelegramSpooledUpdateClaims({ spoolDir: tempDir })).toEqual([]),
+      );
+      expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
+      abort.abort();
+      stopWorker();
+      await runPromise;
+    });
+  });
+
+  it("releases buffered spooled claims for retry when deferred processing fails", async () => {
+    await withTempSpool(async (tempDir) => {
+      const abort = new AbortController();
+      const log = vi.fn();
+      const participants: TelegramSpooledReplayDeferredParticipant[] = [];
+      await writeSpooledTestUpdates(tempDir, [topicUpdate(42, 10, "buffered failure")]);
+
+      const { runPromise, stopWorker } = startIsolatedIngressSession({
+        abort,
+        spoolDir: tempDir,
+        log,
+        drainIntervalMs: 10,
+        handleUpdate: async (update) => {
+          const participant = createTelegramSpooledReplayDeferredParticipant(
+            `test-buffer:${update.update_id}`,
+          );
+          if (!participant) {
+            throw new Error("expected spooled replay participant");
+          }
+          participants.push(participant);
+        },
+      });
+
+      await vi.waitFor(() => expect(participants).toHaveLength(1));
+      await vi.waitFor(async () =>
+        expect(
+          (await listTelegramSpooledUpdateClaims({ spoolDir: tempDir })).map(
+            (claim) => claim.updateId,
+          ),
+        ).toEqual([42]),
+      );
+
+      abort.abort();
+      participants[0]?.settle({
+        kind: "failed-retryable",
+        error: new Error("buffered dispatch failed"),
+      });
+      await vi.waitFor(async () => expect(await pendingUpdateIds(tempDir, "all")).toEqual([42]));
+      expect(await listTelegramSpooledUpdateClaims({ spoolDir: tempDir })).toEqual([]);
+      expectLogIncludes(log, "spooled update 42 failed; keeping for retry");
+      stopWorker();
+      await runPromise;
+    });
+  });
+
+  it("dead-letters buffered spooled claims when dispatch dedupe rollback fails", async () => {
+    await withTempSpool(async (tempDir) => {
+      const abort = new AbortController();
+      const log = vi.fn();
+      const participants: TelegramSpooledReplayDeferredParticipant[] = [];
+      const events: string[] = [];
+      let attempts = 0;
+      await writeSpooledTestUpdates(tempDir, [topicUpdate(42, 10, "buffered rollback failure")]);
+
+      const { runPromise, stopWorker } = startIsolatedIngressSession({
+        abort,
+        spoolDir: tempDir,
+        log,
+        drainIntervalMs: 10,
+        handleUpdate: async (update) => {
+          attempts += 1;
+          if (attempts === 1) {
+            events.push(`dispatch:${update.update_id}`);
+            const participant = createTelegramSpooledReplayDeferredParticipant(
+              `test-buffer:${update.update_id}`,
+            );
+            if (!participant) {
+              throw new Error("expected spooled replay participant");
+            }
+            participants.push(participant);
+            return;
+          }
+          events.push(`duplicate-skip:${update.update_id}`);
+        },
+      });
+
+      await vi.waitFor(() => expect(participants).toHaveLength(1));
+      participants[0]?.settle({
+        kind: "failed-retryable",
+        error: new TelegramMessageDispatchReplayForgetError([{ key: "committed-dispatch-key" }]),
+      });
+
+      await vi.waitFor(async () => expect(await failedUpdateIds(tempDir)).toEqual([42]));
+      expect(events).toEqual(["dispatch:42"]);
+      expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
+      expect(await listTelegramSpooledUpdateClaims({ spoolDir: tempDir })).toEqual([]);
+      expectLogIncludes(log, "non-retryable dispatch-dedupe-rollback-failed");
+      expectLogExcludes(log, "spooled update 42 failed; keeping for retry");
+
+      abort.abort();
+      stopWorker();
+      await runPromise;
+    });
+  });
+
+  it("fails buffered spooled claims instead of requeueing when deferred processing times out", async () => {
+    await withTempSpool(async (tempDir) => {
+      const abort = new AbortController();
+      const log = vi.fn();
+      const participants: TelegramSpooledReplayDeferredParticipant[] = [];
+      await writeSpooledTestUpdates(tempDir, [topicUpdate(42, 10, "buffered timeout")]);
+
+      const { runPromise, stopWorker } = startIsolatedIngressSession({
+        abort,
+        spoolDir: tempDir,
+        log,
+        drainIntervalMs: 10,
+        spooledUpdateHandlerTimeoutMs: 20,
+        handleUpdate: async (update) => {
+          const participant = createTelegramSpooledReplayDeferredParticipant(
+            `test-buffer:${update.update_id}`,
+          );
+          if (!participant) {
+            throw new Error("expected spooled replay participant");
+          }
+          participants.push(participant);
+        },
+      });
+
+      await vi.waitFor(() => expect(participants).toHaveLength(1));
+      await vi.waitFor(async () => expect(await failedUpdateIds(tempDir)).toEqual([42]));
+      expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
+      expect(await listTelegramSpooledUpdateClaims({ spoolDir: tempDir })).toEqual([]);
+      expectLogIncludes(log, "buffered processing timed out behind update 42");
+      expectLogExcludes(log, "spooled update 42 failed; keeping for retry");
       abort.abort();
       stopWorker();
       await runPromise;

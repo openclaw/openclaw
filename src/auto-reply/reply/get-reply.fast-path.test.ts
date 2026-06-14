@@ -222,6 +222,34 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expectResolvedTelegramTimezone(mocks.resolveReplyDirectives);
   });
 
+  it("reports the prepared session binding after session bootstrap", async () => {
+    vi.stubEnv("OPENCLAW_ALLOW_SLOW_REPLY_TESTS", "1");
+    mocks.initSessionState.mockResolvedValue(
+      createGetReplySessionState({
+        sessionKey: "agent:main:slack:channel:C123",
+        sessionId: "rotated-session",
+        storePath: "/tmp/custom-sessions.json",
+      }),
+    );
+    const onSessionPrepared = vi.fn();
+
+    await getReplyFromConfig(
+      buildGetReplyCtx({
+        Provider: "slack",
+        Surface: "slack",
+        SessionKey: "agent:main:slack:channel:C123",
+      }),
+      { onSessionPrepared } as never,
+      {} as OpenClawConfig,
+    );
+
+    expect(onSessionPrepared).toHaveBeenCalledWith({
+      sessionKey: "agent:main:slack:channel:C123",
+      sessionId: "rotated-session",
+      storePath: "/tmp/custom-sessions.json",
+    });
+  });
+
   it("marks configs through withFastReplyConfig()", async () => {
     const cfg = withFastReplyConfig({ session: { store: "/tmp/sessions.json" } } as OpenClawConfig);
 

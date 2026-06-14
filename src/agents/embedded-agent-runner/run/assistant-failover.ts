@@ -110,6 +110,10 @@ function resolveShortWindowRateLimitRetry(
   return retryAfterSeconds !== null ? { retryAfterSeconds } : {};
 }
 
+export function isShortWindowRateLimitMessage(message: string | undefined): boolean {
+  return resolveShortWindowRateLimitRetry(message) !== null;
+}
+
 /**
  * Applies an assistant-stage failover decision and returns the next run action.
  * It owns auth-profile rotation, overload/rate-limit escalation, same-model
