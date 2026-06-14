@@ -28,7 +28,10 @@ import {
   asOptionalRecord as asRecord,
   normalizeLowercaseStringOrEmpty,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import {
+  MESSAGE_TOOL_DELIVERY_HINTS,
+  truncateUtf16Safe,
+} from "openclaw/plugin-sdk/text-utility-runtime";
 import { Type } from "typebox";
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
 import {
@@ -721,10 +724,6 @@ const INBOUND_META_SENTINEL_LINE_RE = new RegExp(
   "m",
 );
 
-const MESSAGE_TOOL_DELIVERY_HINTS = [
-  "Delivery: to send a message, use the `message` tool.",
-  "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
-] as const;
 const MESSAGE_TOOL_DELIVERY_HINT_RE = new RegExp(
   `^\\s*(?:${MESSAGE_TOOL_DELIVERY_HINTS.map((hint) =>
     hint.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
