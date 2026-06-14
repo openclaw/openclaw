@@ -455,6 +455,7 @@ import {
 import { detectAndLoadPromptImages } from "./images.js";
 import {
   buildAttemptReplayMetadata,
+  hasAttemptTerminalState,
   resolveSilentToolResultReplyPayload,
   shouldTreatEmptyAssistantReplyAsSilent,
 } from "./incomplete-turn.js";
@@ -3485,6 +3486,7 @@ export async function runEmbeddedAttempt(
         getMessagingToolSourceReplyPayloads,
         getHeartbeatToolResponse,
         getPendingToolMediaReply,
+        hasToolMediaBlockReply,
         getVisibleBlockReplyCount,
         getSuccessfulCronAdds,
         getReplayState,
@@ -5275,6 +5277,26 @@ export async function runEmbeddedAttempt(
       const didSendDeterministicApprovalPromptNow = didSendDeterministicApprovalPrompt();
       const lastToolError = getLastToolError?.();
       const heartbeatToolResponse = getHeartbeatToolResponse();
+      const hasToolMediaBlockReplyNow = hasToolMediaBlockReply();
+      const hasTerminalOutput = hasAttemptTerminalState({
+        clientToolCalls: completedClientToolCallsForAttempt,
+        yieldDetected,
+        didSendDeterministicApprovalPrompt: didSendDeterministicApprovalPromptNow,
+        heartbeatToolResponse,
+        lastToolError,
+        toolMediaUrls: pendingToolMediaReply?.mediaUrls,
+        toolAudioAsVoice: pendingToolMediaReply?.audioAsVoice,
+        toolTrustedLocalMedia: pendingToolMediaReply?.trustedLocalMedia,
+        hasToolMediaBlockReply: hasToolMediaBlockReplyNow,
+        didDeliverSourceReplyViaMessageTool,
+        messagingToolSourceReplyPayloads,
+        messagingToolSentTexts: getMessagingToolSentTexts(),
+        messagingToolSentMediaUrls: getMessagingToolSentMediaUrls(),
+        messagingToolSentTargets: getMessagingToolSentTargets(),
+        acceptedSessionSpawns,
+        successfulCronAdds: getSuccessfulCronAdds(),
+        toolMetas: toolMetasNormalized,
+      });
       const pendingToolMediaPayloadCount = hasVisiblePendingToolMediaReply(pendingToolMediaReply)
         ? 1
         : 0;
@@ -5358,6 +5380,7 @@ export async function runEmbeddedAttempt(
         silentExpected: params.silentExpected,
         emptyAssistantReplyIsSilent,
         lastAssistantStopReason: lastAssistant?.stopReason,
+        hasTerminalOutput,
       });
       trajectoryRecorder?.recordEvent("model.completed", {
         aborted,
@@ -5458,6 +5481,7 @@ export async function runEmbeddedAttempt(
         toolMediaUrls: pendingToolMediaReply?.mediaUrls,
         toolAudioAsVoice: pendingToolMediaReply?.audioAsVoice,
         toolTrustedLocalMedia: pendingToolMediaReply?.trustedLocalMedia,
+        hasToolMediaBlockReply: hasToolMediaBlockReplyNow,
         successfulCronAdds: getSuccessfulCronAdds(),
         cloudCodeAssistFormatError: Boolean(
           lastAssistant?.errorMessage && isCloudCodeAssistFormatError(lastAssistant.errorMessage),
