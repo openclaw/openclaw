@@ -386,7 +386,7 @@ The external reranker plugin handles its own model fallbacks by trying alternate
   models: {
     providers: {
       cohere: {
-        baseUrl: "https://api.cohere.ai/v1",
+        baseUrl: "https://api.cohere.ai",
         apiKey: { source: "env", provider: "default", id: "COHERE_API_KEY" },
         models: [
           { id: "rerank-english-v3.0", name: "Cohere Rerank English v3.0", input: ["text"] },
