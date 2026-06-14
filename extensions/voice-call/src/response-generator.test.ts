@@ -227,7 +227,7 @@ describe("generateVoiceResponse", () => {
     const { runtime, runEmbeddedAgent, patchSessionEntry, sessionStore } = createAgentRuntime([
       { text: '{"spoken":"Pinned model works."}' },
     ]);
-    sessionStore["voice:15550001111"] = {
+    sessionStore["agent:main:voice:15550001111"] = {
       sessionId: "existing-session",
       updatedAt: 100,
       model: "old-model",
@@ -251,7 +251,7 @@ describe("generateVoiceResponse", () => {
     });
 
     expect(result.text).toBe("Pinned model works.");
-    const pinnedSessionEntry = sessionStore["voice:15550001111"];
+    const pinnedSessionEntry = sessionStore["agent:main:voice:15550001111"];
     expect(pinnedSessionEntry?.providerOverride).toBe("openai");
     expect(pinnedSessionEntry?.modelOverride).toBe("gpt-4.1-nano");
     expect(pinnedSessionEntry?.modelOverrideSource).toBe("auto");
@@ -265,14 +265,14 @@ describe("generateVoiceResponse", () => {
     );
     expect(patchSessionEntryCall[0]).toMatchObject({
       storePath: "/tmp/openclaw/main/sessions.json",
-      sessionKey: "voice:15550001111",
+      sessionKey: "agent:main:voice:15550001111",
       replaceEntry: true,
     });
     expect((patchSessionEntryCall[0] as { update?: unknown }).update).toBeTypeOf("function");
     const args = requireEmbeddedAgentArgs(runEmbeddedAgent);
     expect(args.provider).toBe("openai");
     expect(args.model).toBe("gpt-4.1-nano");
-    expect(args.sessionKey).toBe("voice:15550001111");
+    expect(args.sessionKey).toBe("agent:main:voice:15550001111");
   });
 
   it("uses the persisted per-call session key for classic responses", async () => {
@@ -332,7 +332,7 @@ describe("generateVoiceResponse", () => {
     expect(resolveAgentDir).toHaveBeenCalledWith(coreConfig, "main");
     expect(resolveAgentWorkspaceDir).toHaveBeenCalledWith(coreConfig, "main");
     expect(resolveAgentIdentity).toHaveBeenCalledWith(coreConfig, "main");
-    const defaultSessionEntry = sessionStore["voice:15550001111"];
+    const defaultSessionEntry = sessionStore["agent:main:voice:15550001111"];
     if (!defaultSessionEntry) {
       throw new Error("Expected default voice session entry");
     }
@@ -346,6 +346,7 @@ describe("generateVoiceResponse", () => {
     const args = requireEmbeddedAgentArgs(runEmbeddedAgent);
     expect(args.agentDir).toBe("/tmp/openclaw/agents/main");
     expect(args.agentId).toBe("main");
+    expect(args.sessionKey).toBe("agent:main:voice:15550001111");
     expect(args.sandboxSessionKey).toBe("agent:main:voice:15550001111");
     expect(args.workspaceDir).toBe("/tmp/openclaw/workspace/main");
     expect(args.sessionFile).toBe("/tmp/openclaw/main/sessions/session.jsonl");
@@ -382,7 +383,7 @@ describe("generateVoiceResponse", () => {
     expect(resolveAgentDir).toHaveBeenCalledWith(coreConfig, "voice");
     expect(resolveAgentWorkspaceDir).toHaveBeenCalledWith(coreConfig, "voice");
     expect(resolveAgentIdentity).toHaveBeenCalledWith(coreConfig, "voice");
-    const voiceSessionEntry = sessionStore["voice:15550001111"];
+    const voiceSessionEntry = sessionStore["agent:voice:voice:15550001111"];
     if (!voiceSessionEntry) {
       throw new Error("Expected routed voice session entry");
     }
@@ -396,6 +397,7 @@ describe("generateVoiceResponse", () => {
     const args = requireEmbeddedAgentArgs(runEmbeddedAgent);
     expect(args.agentDir).toBe("/tmp/openclaw/agents/voice");
     expect(args.agentId).toBe("voice");
+    expect(args.sessionKey).toBe("agent:voice:voice:15550001111");
     expect(args.sandboxSessionKey).toBe("agent:voice:voice:15550001111");
     expect(args.workspaceDir).toBe("/tmp/openclaw/workspace/voice");
     expect(args.sessionFile).toBe("/tmp/openclaw/voice/sessions/session.jsonl");
