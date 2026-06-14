@@ -620,6 +620,15 @@ export async function handleControlUiAssistantMediaRequest(
     }
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Content-Length", String(opened.stat.size));
+    try {
+      const filename = path.basename(localPath);
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${encodeURIComponent(filename)}"; filename*=UTF-8''${encodeURIComponent(filename)}`,
+      );
+    } catch {
+      // filename extraction failure should not block the media response
+    }
     const stream = opened.handle.createReadStream({ start: 0, autoClose: false });
     const finishClose = () => {
       void closeOpenedHandle();
