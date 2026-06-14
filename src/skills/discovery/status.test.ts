@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { readLocalSkillCardContentSync } from "../lifecycle/clawhub.js";
 import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
 import type { SkillEntry } from "../types.js";
-import { buildWorkspaceSkillStatus } from "./status.js";
+import { buildWorkspaceSkillStatus, lintSkillRoots } from "./status.js";
 
 type SkillStatus = ReturnType<typeof buildWorkspaceSkillStatus>["skills"][number];
 
@@ -583,6 +583,96 @@ describe("buildWorkspaceSkillStatus", () => {
       commandVisible: false,
     });
     expect(bundledBlocked.blockedByAllowlist).toBe(true);
+  });
+});
+
+describe("lintSkillRoots", () => {
+  it("reports a skill missing description in the failed-to-load report", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-lint-"));
+    try {
+      const skillDir = path.join(root, "broken");
+      await fs.mkdir(skillDir, { recursive: true });
+      await fs.writeFile(
+        path.join(skillDir, "SKILL.md"),
+        "---\nname: broken\n---\n\nBody.\n",
+        "utf8",
+      );
+
+      const report = lintSkillRoots([root]);
+
+      expect(report.failures).toHaveLength(1);
+      const failure = report.failures[0];
+      expect(failure.reason).toBe("missing-required-field");
+      if (failure.reason === "missing-required-field") {
+        expect(failure.field).toBe("description");
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports a malformed SKILL.md nested inside a skill group", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-lint-"));
+    try {
+      const nestedDir = path.join(root, "group", "broken");
+      await fs.mkdir(nestedDir, { recursive: true });
+      await fs.writeFile(path.join(nestedDir, "SKILL.md"), "---\nname: broken\n---\n", "utf8");
+
+      const report = lintSkillRoots([root]);
+
+      expect(report.failures).toHaveLength(1);
+      expect(report.failures[0].filePath).toBe(path.join(nestedDir, "SKILL.md"));
+      expect(report.failures[0].reason).toBe("missing-required-field");
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("flags malformed YAML that the permissive parser would otherwise accept", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-lint-"));
+    try {
+      const skillDir = path.join(root, "bad-yaml");
+      await fs.mkdir(skillDir, { recursive: true });
+      // Unterminated flow sequence: the line parser extracts a value, strict YAML rejects it.
+      await fs.writeFile(
+        path.join(skillDir, "SKILL.md"),
+        "---\nname: bad-yaml\ndescription: [unterminated\n---\n\nBody.\n",
+        "utf8",
+      );
+
+      const report = lintSkillRoots([root]);
+
+      expect(report.failures).toHaveLength(1);
+      expect(report.failures[0].reason).toBe("parse-error");
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("follows a directory symlink into a malformed skill, matching runtime discovery", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-lint-"));
+    try {
+      // A real skill group outside the scanned subtree, linked in via a directory symlink.
+      const realGroup = path.join(root, "real-group");
+      const brokenDir = path.join(realGroup, "broken");
+      await fs.mkdir(brokenDir, { recursive: true });
+      await fs.writeFile(path.join(brokenDir, "SKILL.md"), "---\nname: broken\n---\n", "utf8");
+
+      const linkedGroup = path.join(root, "linked");
+      try {
+        await fs.symlink(realGroup, linkedGroup, "dir");
+      } catch {
+        return; // Platform without symlink support (e.g. restricted Windows): skip.
+      }
+
+      // Lint only the symlinked path; runtime would follow it, so lint must too.
+      const report = lintSkillRoots([linkedGroup]);
+
+      expect(report.failures).toHaveLength(1);
+      expect(report.failures[0].reason).toBe("missing-required-field");
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 });
 

@@ -54,6 +54,10 @@ openclaw skills info <name> --agent <id>
 openclaw skills check
 openclaw skills check --agent <id>
 openclaw skills check --json
+openclaw skills lint
+openclaw skills lint <path>
+openclaw skills lint --json
+openclaw skills lint --agent <id>
 openclaw skills workshop propose-create --name "qa-check" --description "QA checklist" --proposal ./PROPOSAL.md
 openclaw skills workshop propose-update qa-check --proposal ./PROPOSAL.md
 openclaw skills workshop list
@@ -120,6 +124,15 @@ Notes:
   fingerprint.
 - `check --agent <id>` checks the selected agent's workspace and reports which
   ready skills are actually visible to that agent's prompt or command surface.
+- `lint` reports `SKILL.md` directories that fail to load instead of dropping
+  them silently, naming the reason: malformed YAML frontmatter or a missing
+  required field (`name`/`description`). It scans recursively, following the same
+  nested skill-group directories and directory symlinks as runtime discovery.
+- `lint [<path>]` lints the given path; with no path it lints the workspace
+  `skills/` directory and the shared managed skills directory.
+- `lint --json` prints the machine-readable failure report; `lint --agent <id>`
+  selects the agent workspace. The command exits non-zero when any skill fails
+  to load, so it is suitable for CI checks on a skills directory.
 - `list` is the default action when no subcommand is provided.
 - `list`, `info`, and `check` write their rendered output to stdout. With
   `--json`, that means the machine-readable payload stays on stdout for pipes
