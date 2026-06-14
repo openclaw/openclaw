@@ -2351,6 +2351,82 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(JSON.stringify(assistantUpdates[0]?.message)).toContain("Command result with TTS.");
   });
 
+  it("folds block-only non-agent command replies into the final WebChat message", async () => {
+    createTranscriptFixture("openclaw-chat-send-command-block-final-");
+    mockState.dispatchedReplies = [
+      {
+        kind: "block",
+        payload: {
+          text: [
+            "Trajectory exports can include prompts, model messages, tool schemas, tool results, runtime events, and local paths.",
+            "Trajectory bundle: requested `openclaw sessions export-trajectory` through exec approval. Approve once to create the bundle; do not use allow-all for trajectory exports.",
+          ].join("\n"),
+        },
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-command-block",
+      message: "/export-trajectory bundle",
+    });
+
+    const text = extractFirstTextBlock(payload);
+    expect(text).toContain("Trajectory exports can include");
+    expect(text).toContain("through exec approval");
+    expect(text).toContain("Approve once");
+  });
+
+  it("keeps slash-command block text when the final payload only adds media", async () => {
+    const transcriptDir = createTranscriptFixture("openclaw-chat-send-command-block-media-final-");
+    const audioPath = path.join(transcriptDir, "tts.mp3");
+    fs.writeFileSync(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    mockState.config = {
+      agents: {
+        defaults: {
+          workspace: transcriptDir,
+        },
+      },
+    };
+    mockState.dispatchedReplies = [
+      {
+        kind: "block",
+        payload: { text: "Trajectory exports can include prompts." },
+      },
+      {
+        kind: "final",
+        payload: {
+          mediaUrl: audioPath,
+          mediaUrls: [audioPath],
+          trustedLocalMedia: true,
+          audioAsVoice: true,
+        },
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-command-block-media",
+      message: "/export-trajectory bundle",
+    });
+
+    const content = getMessageContent(payload);
+    expect(content[0]).toEqual({ type: "text", text: "Trajectory exports can include prompts." });
+    expect(content[1]).toEqual({
+      type: "attachment",
+      attachment: expect.objectContaining({
+        kind: "audio",
+        label: "tts.mp3",
+      }),
+    });
+  });
+
   it("renders image reply payloads as assistant image content instead of MEDIA text", async () => {
     createTranscriptFixture("openclaw-chat-send-agent-image-");
     mockState.finalPayload = {

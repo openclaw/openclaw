@@ -3939,11 +3939,27 @@ export const chatHandlers: GatewayRequestHandlers = {
                   });
                 } else {
                   await persistGatewayUserTurnTranscriptBestEffort();
+                  const finalPayloadEntries = deliveredReplies.filter(
+                    (entryItem) => entryItem.kind === "final",
+                  );
+                  const isInternalTextCommandTurn =
+                    ctx.Provider === INTERNAL_MESSAGE_CHANNEL && ctx.CommandSource === "text";
+                  const finalPayloadsHaveVisibleText = finalPayloadEntries.some(
+                    (entryItem) =>
+                      typeof entryItem.payload.text === "string" &&
+                      entryItem.payload.text.trim().length > 0,
+                  );
+                  const commandBlockPayloadEntries =
+                    isInternalTextCommandTurn && !finalPayloadsHaveVisibleText
+                      ? deliveredReplies.filter((entryItem) => entryItem.kind === "block")
+                      : [];
+                  // WebChat slash-command replies can enqueue block text without starting an agent run.
+                  // Fold those blocks into the final message, while leaving plugin/ACP-owned blocks alone.
                   const rawFinalPayloads = appendedWebchatAgentMedia
                     ? []
-                    : deliveredReplies
-                        .filter((entryItem) => entryItem.kind === "final")
-                        .map((entryCandidate) => entryCandidate.payload);
+                    : [...commandBlockPayloadEntries, ...finalPayloadEntries].map(
+                        (entryCandidate) => entryCandidate.payload,
+                      );
                   const finalPayloads = await normalizeWebchatReplyMediaPathsForDisplay({
                     cfg,
                     sessionKey,
