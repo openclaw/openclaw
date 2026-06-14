@@ -505,7 +505,7 @@ export function renderQaScenarioMatchesMarkdownReport(params: {
     lines.push(`  - surface: ${match.surfaces.join(", ")}`);
     lines.push(
       match.executionKind === "flow"
-        ? "  - execution: qa-flow"
+        ? "  - execution: flow"
         : `  - execution: ${match.executionKind} ${match.executionPath ?? "missing"}`,
     );
     lines.push(`  - coverage IDs: ${match.coverageIds.join(", ") || "none"}`);

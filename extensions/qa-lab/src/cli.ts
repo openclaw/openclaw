@@ -436,7 +436,7 @@ export function registerQaLabCli(program: Command) {
     );
 
   qa.command("coverage")
-    .description("Print the markdown QA coverage inventory")
+    .description("Print the YAML QA coverage inventory")
     .option("--repo-root <path>", "Repository root to target when writing --output")
     .option("--output <path>", "Write the coverage inventory to this path")
     .option("--json", "Print JSON instead of Markdown", false)
