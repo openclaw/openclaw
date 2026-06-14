@@ -17,22 +17,76 @@ function normalizePluginRegistryAliasKey(value: string): string {
   return normalizePluginRegistryAlias(value).toLowerCase();
 }
 
-function collectObjectKeys(value: Record<string, unknown> | undefined): readonly string[] {
-  return value ? Object.keys(value) : [];
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function readPluginManifestString(read: () => unknown): string | undefined {
+  try {
+    const value = read();
+    return typeof value === "string" ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readPluginManifestStringArray(read: () => unknown): readonly string[] {
+  try {
+    const value = read();
+    if (!Array.isArray(value)) {
+      return [];
+    }
+    return value.filter((entry): entry is string => typeof entry === "string");
+  } catch {
+    return [];
+  }
+}
+
+function readPluginManifestArray(read: () => unknown): readonly unknown[] {
+  try {
+    const value = read();
+    return Array.isArray(value) ? value : [];
+  } catch {
+    return [];
+  }
+}
+
+function collectObjectKeys(read: () => unknown): readonly string[] {
+  try {
+    const value = read();
+    return isRecord(value) ? Object.keys(value) : [];
+  } catch {
+    return [];
+  }
+}
+
+function readSetupProviderIds(plugin: PluginManifestRecord): readonly string[] {
+  return readPluginManifestArray(() => plugin.setup?.providers).flatMap((provider) => {
+    if (!isRecord(provider)) {
+      return [];
+    }
+    const providerId = readPluginManifestString(() => provider.id);
+    return providerId ? [providerId] : [];
+  });
+}
+
+function readPluginId(plugin: PluginManifestRecord): string | undefined {
+  return readPluginManifestString(() => plugin.id);
 }
 
 function listPluginRegistryNormalizerAliases(plugin: PluginManifestRecord): readonly string[] {
+  const pluginId = readPluginId(plugin);
   return [
-    plugin.id,
-    ...(plugin.providers ?? []),
-    ...(plugin.channels ?? []),
-    ...(plugin.setup?.providers?.map((provider) => provider.id) ?? []),
-    ...(plugin.cliBackends ?? []),
-    ...(plugin.setup?.cliBackends ?? []),
-    ...collectObjectKeys(plugin.modelCatalog?.providers),
-    ...collectObjectKeys(plugin.modelCatalog?.aliases),
-    ...collectObjectKeys(plugin.providerAuthAliases),
-    ...(plugin.legacyPluginIds ?? []),
+    ...(pluginId ? [pluginId] : []),
+    ...readPluginManifestStringArray(() => plugin.providers),
+    ...readPluginManifestStringArray(() => plugin.channels),
+    ...readSetupProviderIds(plugin),
+    ...readPluginManifestStringArray(() => plugin.cliBackends),
+    ...readPluginManifestStringArray(() => plugin.setup?.cliBackends),
+    ...collectObjectKeys(() => plugin.modelCatalog?.providers),
+    ...collectObjectKeys(() => plugin.modelCatalog?.aliases),
+    ...collectObjectKeys(() => plugin.providerAuthAliases),
+    ...readPluginManifestStringArray(() => plugin.legacyPluginIds),
   ];
 }
 
@@ -59,13 +113,17 @@ export function createPluginRegistryIdNormalizer(
       includeDisabled: true,
     });
   for (const plugin of [...registry.plugins].toSorted((left, right) =>
-    left.id.localeCompare(right.id),
+    (readPluginId(left) ?? "").localeCompare(readPluginId(right) ?? ""),
   )) {
-    const pluginId = normalizePluginRegistryAlias(plugin.id);
+    const rawPluginId = readPluginId(plugin);
+    if (!rawPluginId) {
+      continue;
+    }
+    const pluginId = normalizePluginRegistryAlias(rawPluginId);
     if (!pluginId) {
       continue;
     }
-    aliases.set(normalizePluginRegistryAliasKey(pluginId), plugin.id);
+    aliases.set(normalizePluginRegistryAliasKey(pluginId), rawPluginId);
     for (const alias of listPluginRegistryNormalizerAliases(plugin)) {
       const normalizedAlias = normalizePluginRegistryAlias(alias);
       const normalizedAliasKey = normalizePluginRegistryAliasKey(alias);
