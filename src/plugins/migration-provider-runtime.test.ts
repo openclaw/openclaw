@@ -166,6 +166,53 @@ describe("migration provider runtime", () => {
     });
   });
 
+  it("standalone-loads disabled installed/external migration providers through compat config", () => {
+    mocks.loadPluginRegistrySnapshot.mockReturnValue(
+      createMockPluginIndex([
+        {
+          pluginId: "disabled-migration",
+          origin: "installed",
+          enabled: false,
+        },
+      ]),
+    );
+    mocks.loadPluginManifestRegistry.mockImplementation(() => ({
+      diagnostics: [],
+      plugins: [
+        {
+          id: "disabled-migration",
+          origin: "installed",
+          contracts: { migrationProviders: ["disabled-import"] },
+        },
+      ],
+    }));
+
+    ensureStandaloneMigrationProviderRegistryLoaded({
+      cfg: { plugins: { enabled: false } } as OpenClawConfig,
+    });
+
+    const standaloneParams = requireMockCallArg(
+      mocks.ensureStandaloneRuntimePluginRegistryLoaded,
+      "ensureStandaloneRuntimePluginRegistryLoaded",
+    ) as {
+      surface?: unknown;
+      requiredPluginIds?: unknown;
+      loadOptions?: {
+        activate?: unknown;
+        onlyPluginIds?: unknown;
+        config?: OpenClawConfig;
+      };
+    };
+    expect(standaloneParams.surface).toBe("active");
+    expect(standaloneParams.requiredPluginIds).toEqual(["disabled-migration"]);
+    expect(standaloneParams.loadOptions?.activate).toBe(false);
+    expect(standaloneParams.loadOptions?.onlyPluginIds).toEqual(["disabled-migration"]);
+    expect(standaloneParams.loadOptions?.config?.plugins?.enabled).toBe(true);
+    expect(standaloneParams.loadOptions?.config?.plugins?.entries).toEqual({
+      "disabled-migration": { enabled: true },
+    });
+  });
+
   it("loads configured external migration-provider plugins from manifest contracts", () => {
     const cfg = {
       plugins: { entries: { "external-migration": { enabled: true } } },
@@ -246,7 +293,7 @@ describe("migration provider runtime", () => {
     expect(manifestParams.includeDisabled).toBe(true);
     expect(mocks.resolveRuntimePluginRegistry).toHaveBeenNthCalledWith(1);
     expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
-      onlyPluginIds: ["external-migration"],
+      onlyPluginIds: ["disabled-external-migration", "external-migration"],
     });
   });
 
@@ -370,5 +417,46 @@ describe("migration provider runtime", () => {
       "active-import",
       "external-import",
     ]);
+  });
+
+  it("resolves disabled installed migration providers from manifest contracts", () => {
+    const provider = createMigrationProvider("disabled-import");
+    const active = createEmptyPluginRegistry();
+    const loaded = createEmptyPluginRegistry();
+    loaded.migrationProviders.push({
+      pluginId: "disabled-migration",
+      pluginName: "Disabled Migration",
+      source: "test",
+      provider,
+    } as never);
+    mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
+      params === undefined ? active : loaded,
+    );
+    mocks.loadPluginRegistrySnapshot.mockReturnValue(
+      createMockPluginIndex([
+        {
+          pluginId: "disabled-migration",
+          origin: "installed",
+          enabled: false,
+        },
+      ]),
+    );
+    mocks.loadPluginManifestRegistry.mockImplementation(() => ({
+      diagnostics: [],
+      plugins: [
+        {
+          id: "disabled-migration",
+          origin: "installed",
+          contracts: { migrationProviders: ["disabled-import"] },
+        },
+      ],
+    }));
+
+    const resolved = resolvePluginMigrationProvider({ providerId: "disabled-import" });
+
+    expect(resolved).toBe(provider);
+    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
+      onlyPluginIds: ["disabled-migration"],
+    });
   });
 });
