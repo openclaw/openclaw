@@ -207,7 +207,7 @@ export function createFeishuMessageReceiveHandler({
         accountId,
         processingClaimHeld: true,
       });
-    if (canBypassActiveSequentialQueue(sequentialKey) && enqueue.has(sequentialKey)) {
+    if (canBypassActiveSequentialQueue(sequentialKey) && enqueue.isRunning(sequentialKey)) {
       void task().catch((err: unknown) => {
         releaseFeishuMessageProcessing(resolveFeishuMessageDedupeKey(event), accountId);
         error(`feishu[${accountId}]: concurrent follow-up dispatch failed: ${String(err)}`);

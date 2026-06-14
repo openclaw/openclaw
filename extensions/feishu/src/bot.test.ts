@@ -4300,6 +4300,63 @@ describe("createFeishuMessageReceiveHandler", () => {
     await firstPromise;
   });
 
+  it("keeps same-tick ordinary same-chat events ordered until the first task starts", async () => {
+    const firstStarted = createDeferred();
+    const firstCanFinish = createDeferred();
+    const calls: string[] = [];
+    const handleMessage = vi.fn(
+      async ({ event }: { event?: FeishuMessageEvent; processingClaimHeld?: boolean }) => {
+        const messageId = event?.message.message_id;
+        if (messageId) {
+          calls.push(messageId);
+        }
+        if (messageId === "msg-same-tick-first") {
+          firstStarted.resolve();
+          await firstCanFinish.promise;
+        }
+      },
+    );
+    const core = {
+      channel: createReceiveHandlerChannelRuntime(),
+    } as unknown as PluginRuntime;
+    const handler = createFeishuMessageReceiveHandler({
+      cfg: { channels: { feishu: { dmPolicy: "open" } } } as ClawdbotConfig,
+      channelRuntime: core.channel,
+      accountId: "receive-same-tick-followup",
+      chatHistories: new Map(),
+      handleMessage,
+      resolveDebounceText: ({ event }) => JSON.parse(event.message.content).text,
+      hasProcessedMessage: vi.fn(async () => false),
+      recordProcessedMessage: vi.fn(async () => true),
+    });
+
+    const firstPromise = handler(
+      createReceiveTextEvent({
+        messageId: "msg-same-tick-first",
+        text: "start a queued run",
+      }),
+    );
+    const secondPromise = handler(
+      createReceiveTextEvent({
+        messageId: "msg-same-tick-second",
+        text: "arrives before the first task starts",
+      }),
+    );
+
+    expect(handleMessage).not.toHaveBeenCalled();
+    await firstStarted.promise;
+    expect(calls).toEqual(["msg-same-tick-first"]);
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(calls).toEqual(["msg-same-tick-first"]);
+
+    firstCanFinish.resolve();
+    await Promise.all([firstPromise, secondPromise]);
+
+    expect(calls).toEqual(["msg-same-tick-first", "msg-same-tick-second"]);
+  });
+
   it.each([
     { label: "control", suffix: "control", text: "/stop" },
     { label: "btw", suffix: "btw", text: "/btw keep this in order" },
