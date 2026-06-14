@@ -2125,6 +2125,41 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
   });
 
+  it("does not synthesize a Discord guard after non-status block streaming and empty final", async () => {
+    const onBlockReply = vi.fn();
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      await params.onBlockReply?.({ text: "streamed answer" });
+      return {
+        payloads: [{ text: "NO_REPLY" }],
+        meta: { stopReason: "stop" },
+      };
+    });
+
+    const { run } = createMinimalRun({
+      opts: { onBlockReply },
+      runOverrides: {
+        messageProvider: "discord",
+        sourceReplyDeliveryMode: "message_tool_only",
+        allowEmptyAssistantReplyAsSilent: true,
+      },
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:chan",
+        ChatType: "channel",
+        WasMentioned: true,
+        MessageSid: "1503645939964055592",
+      },
+      blockStreamingEnabled: true,
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "streamed answer" }),
+      expect.anything(),
+    );
+  });
+
   it("surfaces the Discord guard for non-message-tool-only tool progress followed by an empty final", async () => {
     const onBlockReply = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {

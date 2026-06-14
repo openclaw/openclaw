@@ -2136,7 +2136,10 @@ export async function runReplyAgent(params: {
         // visible reply evidence. Tool/progress chatter, global text arrays,
         // and target-only records are activity, not proof that the current
         // route/thread received the final/status answer.
-        hasVisibleReplyEvidence: hasMessageToolOnlyCurrentSourceVisibleReplyEvidence,
+        hasVisibleReplyEvidence:
+          hasMessageToolOnlyCurrentSourceVisibleReplyEvidence ||
+          (followupRun.run.sourceReplyDeliveryMode === "message_tool_only" &&
+            hasVisibleBlockProgress),
         hasPotentialResponseActivity: hasMessageToolOnlyResponseActivity,
         hasSubstantiveFinalPayload: hasMessageToolOnlySubstantiveFinalPayload(payloadArray),
       });
