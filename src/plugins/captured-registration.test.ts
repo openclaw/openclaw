@@ -107,6 +107,128 @@ describe("captured plugin registration", () => {
     expect(captured.api.registerMemoryEmbeddingProvider).toBeTypeOf("function");
   });
 
+  it("skips unreadable CLI descriptor rows while preserving healthy captured commands", () => {
+    const captured = capturePluginRegistration({
+      register(api) {
+        const descriptors = [
+          {
+            name: "unreadable-row",
+            description: "Unreadable row",
+            hasSubcommands: false,
+          },
+          {
+            get name() {
+              throw new Error("captured cli descriptor name exploded");
+            },
+            description: "Bad descriptor name",
+            hasSubcommands: false,
+          },
+          {
+            name: "bad-description",
+            get description() {
+              throw new Error("captured cli descriptor description exploded");
+            },
+            hasSubcommands: false,
+          },
+          {
+            name: "bad-subcommands",
+            description: "Bad subcommand marker",
+            get hasSubcommands() {
+              throw new Error("captured cli descriptor subcommands exploded");
+            },
+          },
+          {
+            name: "healthy-captured",
+            description: "Healthy captured CLI",
+            hasSubcommands: true,
+          },
+        ];
+        Object.defineProperty(descriptors, "0", {
+          get() {
+            throw new Error("captured cli descriptor row exploded");
+          },
+        });
+        api.registerCli(() => {}, { descriptors });
+      },
+    });
+
+    expect(captured.cliRegistrars).toHaveLength(1);
+    expect(captured.cliRegistrars[0]?.commands).toEqual(["healthy-captured"]);
+    expect(captured.cliRegistrars[0]?.descriptors).toEqual([
+      {
+        name: "healthy-captured",
+        description: "Healthy captured CLI",
+        hasSubcommands: true,
+      },
+    ]);
+  });
+
+  it("rejects unreadable captured CLI parent paths instead of shortening command roots", () => {
+    const captured = capturePluginRegistration({
+      register(api) {
+        const parentPath = ["nodes"];
+        Object.defineProperty(parentPath, "0", {
+          get() {
+            throw new Error("captured cli parent path exploded");
+          },
+        });
+        api.registerCli(() => {}, {
+          parentPath,
+          descriptors: [
+            {
+              name: "healthy-node",
+              description: "Healthy node CLI",
+              hasSubcommands: true,
+            },
+          ],
+        });
+      },
+    });
+
+    expect(captured.cliRegistrars).toEqual([]);
+  });
+
+  it("skips sparse captured CLI metadata slots without stringifying holes", () => {
+    const captured = capturePluginRegistration({
+      register(api) {
+        const parentPath = ["nodes"];
+        delete parentPath[0];
+        const commands = ["missing", "healthy-command"];
+        delete commands[0];
+        const descriptors = [
+          {
+            name: "missing-descriptor",
+            description: "Missing descriptor",
+            hasSubcommands: false,
+          },
+          {
+            name: "healthy-descriptor",
+            description: "Healthy descriptor",
+            hasSubcommands: true,
+          },
+        ];
+        delete descriptors[0];
+
+        api.registerCli(() => {}, {
+          parentPath,
+          commands,
+          descriptors,
+        });
+      },
+    });
+
+    expect(captured.cliRegistrars).toHaveLength(1);
+    expect(captured.cliRegistrars[0]?.parentPath).toEqual([]);
+    expect(captured.cliRegistrars[0]?.commands).toEqual(["healthy-command", "healthy-descriptor"]);
+    expect(captured.cliRegistrars[0]?.descriptors).toEqual([
+      {
+        name: "healthy-descriptor",
+        description: "Healthy descriptor",
+        hasSubcommands: true,
+      },
+    ]);
+  });
+
   it("returns synthetic scheduled-turn ids independent of human-readable names", async () => {
     let scheduleSessionTurn: OpenClawPluginApi["scheduleSessionTurn"] | undefined;
     let registerSessionSchedulerJob: OpenClawPluginApi["registerSessionSchedulerJob"] | undefined;
