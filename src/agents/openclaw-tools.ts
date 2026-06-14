@@ -27,7 +27,6 @@ import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js
 import {
   isToolExplicitlyAllowedByFactoryPolicy,
   mergeFactoryPolicyList,
-  resolveImageToolFactoryAvailable,
   resolveOptionalMediaToolFactoryPlan,
 } from "./openclaw-tools.media-factory-plan.js";
 import { applyNodesToolWorkspaceGuard } from "./openclaw-tools.nodes-workspace-guard.js";
@@ -218,8 +217,11 @@ export function createOpenClawTools(
     options?.sandboxRoot && options?.sandboxFsBridge
       ? { root: options.sandboxRoot, bridge: options.sandboxFsBridge }
       : undefined;
+  const mediaToolConfig = availabilityConfig ?? resolvedConfig;
   const optionalMediaTools = resolveOptionalMediaToolFactoryPlan({
-    config: availabilityConfig ?? resolvedConfig,
+    config: mediaToolConfig,
+    agentDir: options?.agentDir,
+    modelHasVision: options?.modelHasVision,
     workspaceDir,
     authStore: options?.authProfileStore,
     toolAllowlist: options?.pluginToolAllowlist,
@@ -243,15 +245,9 @@ export function createOpenClawTools(
     options?.currentMessageId === undefined ? undefined : String(options.currentMessageId),
   );
   const imageToolAgentDir = options?.agentDir;
-  const imageTool = resolveImageToolFactoryAvailable({
-    config: availabilityConfig ?? resolvedConfig,
-    agentDir: imageToolAgentDir,
-    workspaceDir,
-    modelHasVision: options?.modelHasVision,
-    authStore: options?.authProfileStore,
-  })
+  const imageTool = optionalMediaTools.image
     ? createImageTool({
-        config: availabilityConfig ?? options?.config,
+        config: mediaToolConfig,
         agentDir: imageToolAgentDir!,
         authProfileStore: options?.authProfileStore,
         workspaceDir,
@@ -267,7 +263,7 @@ export function createOpenClawTools(
   options?.recordToolPrepStage?.("openclaw-tools:image-tool");
   const imageGenerateTool = optionalMediaTools.imageGenerate
     ? createImageGenerateTool({
-        config: options?.config,
+        config: mediaToolConfig,
         agentDir: options?.agentDir,
         authProfileStore: options?.authProfileStore,
         agentSessionKey: mediaGenerationAgentSessionKey,
@@ -276,12 +272,13 @@ export function createOpenClawTools(
         sandbox,
         fsPolicy: options?.fsPolicy,
         onAsyncTaskStarted: mediaGenerationAsyncStartCallback,
+        availabilityResolved: true,
       })
     : null;
   options?.recordToolPrepStage?.("openclaw-tools:image-generate-tool");
   const videoGenerateTool = optionalMediaTools.videoGenerate
     ? createVideoGenerateTool({
-        config: options?.config,
+        config: mediaToolConfig,
         agentDir: options?.agentDir,
         authProfileStore: options?.authProfileStore,
         agentSessionKey: mediaGenerationAgentSessionKey,
@@ -290,12 +287,13 @@ export function createOpenClawTools(
         sandbox,
         fsPolicy: options?.fsPolicy,
         onAsyncTaskStarted: mediaGenerationAsyncStartCallback,
+        availabilityResolved: true,
       })
     : null;
   options?.recordToolPrepStage?.("openclaw-tools:video-generate-tool");
   const musicGenerateTool = optionalMediaTools.musicGenerate
     ? createMusicGenerateTool({
-        config: options?.config,
+        config: mediaToolConfig,
         agentDir: options?.agentDir,
         authProfileStore: options?.authProfileStore,
         agentSessionKey: mediaGenerationAgentSessionKey,
@@ -304,13 +302,14 @@ export function createOpenClawTools(
         sandbox,
         fsPolicy: options?.fsPolicy,
         onAsyncTaskStarted: mediaGenerationAsyncStartCallback,
+        availabilityResolved: true,
       })
     : null;
   options?.recordToolPrepStage?.("openclaw-tools:music-generate-tool");
   const pdfTool =
     optionalMediaTools.pdf && options?.agentDir?.trim()
       ? createPdfTool({
-          config: options?.config,
+          config: mediaToolConfig,
           agentDir: options.agentDir,
           authProfileStore: options?.authProfileStore,
           workspaceDir,

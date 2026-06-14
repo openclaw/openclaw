@@ -347,6 +347,14 @@ describe("createImageGenerateTool", () => {
     expect(createImageGenerateTool({ config: {} })).toBeNull();
   });
 
+  it("skips registration availability checks when the caller already resolved them", () => {
+    stubImageGenerationProviders();
+
+    expect(createImageGenerateTool({ config: {}, availabilityResolved: true })?.name).toBe(
+      "image_generate",
+    );
+  });
+
   it("tells agents how to request transparent OpenAI backgrounds", () => {
     vi.stubEnv("OPENAI_API_KEY", "openai-key");
     stubImageGenerationProviders();
