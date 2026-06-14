@@ -34,6 +34,8 @@ import {
 } from "../infra/exec-safe-bin-runtime-policy.js";
 import { listRiskyConfiguredSafeBins } from "../infra/exec-safe-bin-semantics.js";
 import { normalizeTrustedSafeBinDirs } from "../infra/exec-safe-bin-trust.js";
+import type { PluginSecurityAuditCollectorRegistration } from "../plugins/registry-types.js";
+import type { OpenClawPluginSecurityAuditCollector } from "../plugins/types.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { collectDeepCodeSafetyFindings } from "./audit-deep-code-safety.js";
 import { collectDeepProbeFindings } from "./audit-deep-probe-findings.js";
@@ -463,6 +465,44 @@ export function collectGatewayConfigFindings(
   });
 }
 
+type ReadablePluginSecurityAuditCollector = {
+  pluginId: string;
+  collector: OpenClawPluginSecurityAuditCollector;
+};
+
+function readPluginSecurityAuditCollector(
+  entry: PluginSecurityAuditCollectorRegistration,
+): ReadablePluginSecurityAuditCollector | null {
+  let collector: OpenClawPluginSecurityAuditCollector;
+  try {
+    collector = entry.collector;
+  } catch {
+    return null;
+  }
+  if (typeof collector !== "function") {
+    return null;
+  }
+  let pluginId = "unknown";
+  try {
+    pluginId = normalizeOptionalString(entry.pluginId) ?? "unknown";
+  } catch {
+    // Keep the collector runnable; the warning can fall back to an unknown owner.
+  }
+  return { pluginId, collector };
+}
+
+function createPluginSecurityAuditCollectorFailureFinding(params: {
+  pluginId: string;
+  err: unknown;
+}): SecurityAuditFinding {
+  return {
+    checkId: `plugins.${params.pluginId}.security_audit_failed`,
+    severity: "warn",
+    title: "Plugin security audit collector failed",
+    detail: `${params.pluginId}: ${String(params.err)}`,
+  };
+}
+
 export async function collectPluginSecurityAuditFindings(
   context: AuditExecutionContext,
 ): Promise<SecurityAuditFinding[]> {
@@ -532,8 +572,17 @@ export async function collectPluginSecurityAuditFindings(
   }
   const collectorResults = await Promise.all(
     collectors.map(async (entry) => {
+      const readable = readPluginSecurityAuditCollector(entry);
+      if (!readable) {
+        return [
+          createPluginSecurityAuditCollectorFailureFinding({
+            pluginId: "unknown",
+            err: new Error("plugin security audit collector metadata was unreadable"),
+          }),
+        ];
+      }
       try {
-        return await entry.collector({
+        return await readable.collector({
           config: context.cfg,
           sourceConfig: context.sourceConfig,
           env: context.env,
@@ -542,12 +591,7 @@ export async function collectPluginSecurityAuditFindings(
         });
       } catch (err) {
         return [
-          {
-            checkId: `plugins.${entry.pluginId}.security_audit_failed`,
-            severity: "warn" as const,
-            title: "Plugin security audit collector failed",
-            detail: `${entry.pluginId}: ${String(err)}`,
-          },
+          createPluginSecurityAuditCollectorFailureFinding({ pluginId: readable.pluginId, err }),
         ];
       }
     }),

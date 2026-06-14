@@ -175,6 +175,53 @@ describe("security audit read-only plugin scope", () => {
     expect(loadPluginMetadataRegistrySnapshotMock).not.toHaveBeenCalled();
   });
 
+  it("keeps healthy plugin security collectors after unreadable failure metadata", async () => {
+    const healthyFinding = {
+      checkId: "plugins.healthy.audit",
+      severity: "warn" as const,
+      title: "Healthy plugin audit",
+      detail: "healthy collector still ran",
+    };
+    getActivePluginRegistryMock.mockReturnValue({
+      securityAuditCollectors: [
+        Object.defineProperty(
+          {
+            collector() {
+              throw new Error("security audit collector exploded");
+            },
+            source: "test",
+          },
+          "pluginId",
+          {
+            get() {
+              throw new Error("security audit collector plugin id getter exploded");
+            },
+          },
+        ),
+        {
+          pluginId: "healthy",
+          collector: () => [healthyFinding],
+          source: "test",
+        },
+      ],
+    });
+
+    const findings = await collectPluginSecurityAuditFindings(
+      createAuditContext({
+        sourceConfig: {},
+        plugins: [],
+      }),
+    );
+
+    expect(findings).toContainEqual(healthyFinding);
+    expect(findings).toContainEqual({
+      checkId: "plugins.unknown.security_audit_failed",
+      severity: "warn",
+      title: "Plugin security audit collector failed",
+      detail: "unknown: Error: security audit collector exploded",
+    });
+  });
+
   it("keeps plain security audit off plugin collector runtime discovery by default", async () => {
     const sourceConfig = {
       plugins: {
