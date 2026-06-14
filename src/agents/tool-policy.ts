@@ -9,6 +9,7 @@ import { IMPLICIT_ALLOW_ALL_FROM_ALSO_ALLOW } from "./sandbox-tool-policy.js";
 import { expandToolGroups, normalizeToolList, normalizeToolName } from "./tool-policy-shared.js";
 export {
   couldNormalizeToolNamePrefixToAllowedTool,
+  expandToolDenyList,
   expandToolGroups,
   normalizeToolList,
   normalizeToolName,

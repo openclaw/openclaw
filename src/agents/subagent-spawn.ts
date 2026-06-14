@@ -180,6 +180,7 @@ export type SpawnSubagentParams = {
   context?: SpawnSubagentContextMode;
   lightContext?: boolean;
   expectsCompletionMessage?: boolean;
+  requiresOutputCaptureGate?: boolean;
   attachments?: Array<{
     name: string;
     content: string;
@@ -1669,6 +1670,7 @@ export async function spawnSubagentDirect(
       workspaceDir: spawnedMetadata.workspaceDir,
       runTimeoutSeconds,
       expectsCompletionMessage: shouldAnnounceCompletion,
+      requiresOutputCaptureGate: params.requiresOutputCaptureGate === true,
       spawnMode,
       attachmentsDir: attachmentAbsDir,
       attachmentsRootDir: attachmentRootDir,

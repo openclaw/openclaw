@@ -7,6 +7,8 @@ import {
   CRON_TOOL_DISPLAY_SUMMARY,
   EXEC_TOOL_DISPLAY_SUMMARY,
   PROCESS_TOOL_DISPLAY_SUMMARY,
+  SESSIONS_DELEGATE_BATCH_TOOL_DISPLAY_SUMMARY,
+  SESSIONS_DELEGATE_TOOL_DISPLAY_SUMMARY,
   SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY,
   SESSIONS_LIST_TOOL_DISPLAY_SUMMARY,
   SESSIONS_SEND_TOOL_DISPLAY_SUMMARY,
@@ -42,6 +44,12 @@ type CoreToolDefinition = {
   profiles: ToolProfileId[];
   includeInOpenClawGroup?: boolean;
 };
+
+export const SESSION_DELEGATION_TOOL_IDS = [
+  "sessions_spawn",
+  "sessions_delegate",
+  "sessions_delegate_batch",
+] as const;
 
 const CORE_TOOL_SECTION_ORDER: Array<{ id: string; label: string }> = [
   { id: "fs", label: "Files" },
@@ -176,6 +184,22 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     id: "sessions_spawn",
     label: "sessions_spawn",
     description: SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY,
+    sectionId: "sessions",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "sessions_delegate",
+    label: "sessions_delegate",
+    description: SESSIONS_DELEGATE_TOOL_DISPLAY_SUMMARY,
+    sectionId: "sessions",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "sessions_delegate_batch",
+    label: "sessions_delegate_batch",
+    description: SESSIONS_DELEGATE_BATCH_TOOL_DISPLAY_SUMMARY,
     sectionId: "sessions",
     profiles: ["coding"],
     includeInOpenClawGroup: true,

@@ -434,9 +434,9 @@ final answer, the correct follow-up is the exact silent token
 ### Tool policy by depth
 
 - Role and control scope are written into session metadata at spawn time. That keeps flat or restored session keys from accidentally regaining orchestrator privileges.
-- **Depth 1 (orchestrator, when `maxSpawnDepth >= 2`):** gets `sessions_spawn`, `subagents`, `sessions_list`, `sessions_history` so it can spawn children and inspect their status. Other session/system tools remain denied.
+- **Depth 1 (orchestrator, when `maxSpawnDepth >= 2`):** gets `sessions_spawn`, `sessions_delegate`, `sessions_delegate_batch`, `subagents`, `sessions_list`, `sessions_history` so it can spawn children and inspect their status. Other session/system tools remain denied.
 - **Depth 1 (leaf, when `maxSpawnDepth == 1`):** no session tools (current default behavior).
-- **Depth 2 (leaf worker):** no session tools — `sessions_spawn` is always denied at depth 2. Cannot spawn further children.
+- **Depth 2 (leaf worker):** no session orchestration tools -- `sessions_spawn`, `sessions_delegate`, and `sessions_delegate_batch` are always denied at depth 2. Cannot spawn further children.
 
 ### Per-agent spawn limit
 
@@ -544,8 +544,9 @@ message tool, session tools, and system tools**:
 is not a raw transcript dump.
 
 When `maxSpawnDepth >= 2`, depth-1 orchestrator sub-agents additionally
-receive `sessions_spawn`, `subagents`, `sessions_list`, and
-`sessions_history` so they can manage their children.
+receive `sessions_spawn`, `sessions_delegate`, `sessions_delegate_batch`,
+`subagents`, `sessions_list`, and `sessions_history` so they can manage their
+children.
 
 ### Override via config
 

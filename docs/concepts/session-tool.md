@@ -12,19 +12,22 @@ orchestrate sub-agents.
 
 ## Available tools
 
-| Tool               | What it does                                                                |
-| ------------------ | --------------------------------------------------------------------------- |
-| `sessions_list`    | List sessions with optional filters (kind, label, agent, recency, preview)  |
-| `sessions_history` | Read the transcript of a specific session                                   |
-| `sessions_send`    | Send a message to another session and optionally wait                       |
-| `sessions_spawn`   | Spawn an isolated sub-agent session for background work                     |
-| `sessions_yield`   | End the current turn and wait for follow-up sub-agent results               |
-| `subagents`        | List spawned sub-agent status for this session                              |
-| `session_status`   | Show a `/status`-style card and optionally set a per-session model override |
+| Tool                      | What it does                                                                |
+| ------------------------- | --------------------------------------------------------------------------- |
+| `sessions_list`           | List sessions with optional filters (kind, label, agent, recency, preview)  |
+| `sessions_history`        | Read the transcript of a specific session                                   |
+| `sessions_send`           | Send a message to another session and optionally wait                       |
+| `sessions_spawn`          | Spawn an isolated sub-agent session for background work                     |
+| `sessions_delegate`       | Spawn a one-shot sub-agent session and return its final reply inline        |
+| `sessions_delegate_batch` | Spawn multiple one-shot sub-agent sessions and return their replies inline  |
+| `sessions_yield`          | End the current turn and wait for follow-up sub-agent results               |
+| `subagents`               | List spawned sub-agent status for this session                              |
+| `session_status`          | Show a `/status`-style card and optionally set a per-session model override |
 
 These tools are still subject to the active tool profile and allow/deny
 policy. `tools.profile: "coding"` includes the full session orchestration
-set, including `sessions_spawn`, `sessions_yield`, and `subagents`.
+set, including `sessions_spawn`, `sessions_delegate`,
+`sessions_delegate_batch`, `sessions_yield`, and `subagents`.
 `tools.profile: "messaging"` includes cross-session messaging tools
 (`sessions_list`, `sessions_history`, `sessions_send`, `session_status`) but
 does not include sub-agent spawning. To keep a messaging profile and still
@@ -42,6 +45,10 @@ allow native delegation, add:
 Group, provider, sandbox, and per-agent policies can still remove those tools
 after the profile stage. Use `/tools` from the affected session to inspect the
 effective tool list.
+
+For compatibility, a deny policy entry for `sessions_spawn` also blocks
+`sessions_delegate` and `sessions_delegate_batch`, because all three create
+child sessions.
 
 ## Listing and reading sessions
 
@@ -149,6 +156,11 @@ It is always non-blocking -- it returns immediately with a `runId` and
 child session's first visible `[Subagent Task]` message, while the system
 prompt carries only sub-agent runtime rules and routing context.
 
+`sessions_delegate` uses the same child-session boundary for one-shot work, but
+waits for the child and returns the final reply inline. `sessions_delegate_batch`
+does the same for multiple one-shot tasks. Both tools create child sessions and
+are controlled by the same delegation deny semantics as `sessions_spawn`.
+
 Key options:
 
 - `runtime: "subagent"` (default) or `"acp"` for external harness agents.
@@ -162,9 +174,9 @@ Key options:
 
 Default leaf sub-agents do not get session tools. When
 `maxSpawnDepth >= 2`, depth-1 orchestrator sub-agents additionally receive
-`sessions_spawn`, `subagents`, `sessions_list`, and `sessions_history` so they
-can manage their own children. Leaf runs still do not get recursive
-orchestration tools.
+`sessions_spawn`, `sessions_delegate`, `sessions_delegate_batch`, `subagents`,
+`sessions_list`, and `sessions_history` so they can manage their own children.
+Leaf runs still do not get recursive orchestration tools.
 
 After completion, an announce step posts the result to the requester's channel.
 Completion delivery preserves bound thread/topic routing when available, and if
