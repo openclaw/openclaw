@@ -304,9 +304,10 @@ export async function getStatusSummary(
       ...configModelContext,
       contextTokensOverride: cfg.agents?.defaults?.contextTokens,
       fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
-      // Keep `status`/`status --json` startup read-only. These summary lookups
-      // use offline static catalogs but never start live provider discovery.
-      allowAsyncLoad: false,
+      // Context lookup is synchronous for status rendering; async cache warming
+      // fires in the background if the discovery cache hasn't been loaded yet.
+      // This makes provider-qualified context tokens available for all models
+      // discovered from the catalog, not just those in config.
     }) ?? DEFAULT_CONTEXT_TOKENS;
 
   const storeCache = new Map<string, Record<string, SessionEntry | undefined>>();
@@ -369,7 +370,6 @@ export async function getStatusSummary(
             ...modelContext,
             contextTokensOverride: entry?.contextTokens,
             fallbackContextTokens: configContextTokens ?? undefined,
-            allowAsyncLoad: false,
           }) ?? null;
         const total = resolveSessionTotalTokens(entry);
         const totalTokensFresh =
