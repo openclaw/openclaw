@@ -23,16 +23,19 @@ const PRERELEASE_VERSION_PATTERN =
  * Resolves acceptable changelog headings for a package version.
  */
 export function resolvePackageChangelogVersions(packageVersion) {
-  const match = RELEASE_VERSION_PATTERN.exec(packageVersion);
+  // Semver build metadata (e.g. 2026.6.6+jm) does not change release identity;
+  // changelog sections are keyed by the base version.
+  const baseVersion = packageVersion.split("+", 1)[0];
+  const match = RELEASE_VERSION_PATTERN.exec(baseVersion);
   if (!match) {
     throw new Error(
       `Unsupported OpenClaw package version for changelog packaging: ${packageVersion}`,
     );
   }
-  if (PRERELEASE_VERSION_PATTERN.test(packageVersion)) {
-    return [packageVersion, match[1], UNRELEASED_HEADING];
+  if (PRERELEASE_VERSION_PATTERN.test(baseVersion)) {
+    return [baseVersion, match[1], UNRELEASED_HEADING];
   }
-  return [packageVersion];
+  return [baseVersion];
 }
 
 function splitLines(content) {
