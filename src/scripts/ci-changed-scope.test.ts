@@ -368,6 +368,24 @@ describe("detectChangedScope", () => {
       runChangedSmoke: false,
       runControlUiI18n: false,
     });
+    expect(detectChangedScope(["scripts/windows-cmd-helpers.mjs"])).toEqual({
+      runNode: true,
+      runMacos: false,
+      runAndroid: false,
+      runWindows: true,
+      runSkillsPython: false,
+      runChangedSmoke: false,
+      runControlUiI18n: false,
+    });
+    expect(detectChangedScope(["scripts/windows-cmd-helpers.d.mts"])).toEqual({
+      runNode: true,
+      runMacos: false,
+      runAndroid: false,
+      runWindows: true,
+      runSkillsPython: false,
+      runChangedSmoke: false,
+      runControlUiI18n: false,
+    });
     expect(detectChangedScope(["scripts/lib/format-generated-module.mjs"])).toEqual({
       runNode: true,
       runMacos: false,
@@ -378,6 +396,15 @@ describe("detectChangedScope", () => {
       runControlUiI18n: false,
     });
     expect(detectChangedScope(["test/scripts/format-generated-module.test.ts"])).toEqual({
+      runNode: true,
+      runMacos: false,
+      runAndroid: false,
+      runWindows: true,
+      runSkillsPython: false,
+      runChangedSmoke: false,
+      runControlUiI18n: false,
+    });
+    expect(detectChangedScope(["test/scripts/install-ps1.test.ts"])).toEqual({
       runNode: true,
       runMacos: false,
       runAndroid: false,

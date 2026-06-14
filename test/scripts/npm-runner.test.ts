@@ -68,19 +68,20 @@ describe("resolveNpmRunner", () => {
   it("wraps an adjacent npm.cmd via cmd.exe without enabling shell mode", () => {
     const execPath = "C:\\nodejs\\node.exe";
     const npmCmdPath = path.win32.resolve(path.win32.dirname(execPath), "npm.cmd");
+    const tabbedFlagValue = "--tag=nightly\tbeta";
 
     const runner = resolveNpmRunner({
       comSpec: "C:\\Windows\\System32\\cmd.exe",
       execPath,
       env: {},
       existsSync: (candidate) => candidate === npmCmdPath,
-      npmArgs: ["install", "--omit=dev"],
+      npmArgs: ["install", "--omit=dev", tabbedFlagValue],
       platform: "win32",
     });
 
     expect(runner).toEqual({
       command: "C:\\Windows\\System32\\cmd.exe",
-      args: ["/d", "/s", "/c", `${npmCmdPath} install --omit=dev`],
+      args: ["/d", "/s", "/c", `${npmCmdPath} install --omit=dev "${tabbedFlagValue}"`],
       shell: false,
       windowsVerbatimArguments: true,
     });

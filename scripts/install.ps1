@@ -360,16 +360,23 @@ function Install-Node {
 
         # Refresh PATH
         $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
-        Write-Host "[OK] Node.js installed via Chocolatey" -ForegroundColor Green
-        return $true
+        if (Check-Node) {
+            Write-Host "[OK] Node.js installed via Chocolatey" -ForegroundColor Green
+            return $true
+        }
+        Write-Host "[!] Chocolatey did not make Node.js available in this shell" -ForegroundColor Yellow
     }
 
     # Try Scoop
     if (Get-Command scoop -ErrorAction SilentlyContinue) {
         Write-Host "  Using Scoop..." -ForegroundColor Gray
         scoop install nodejs-lts
-        Write-Host "[OK] Node.js installed via Scoop" -ForegroundColor Green
-        return $true
+        $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+        if (Check-Node) {
+            Write-Host "[OK] Node.js installed via Scoop" -ForegroundColor Green
+            return $true
+        }
+        Write-Host "[!] Scoop did not make Node.js available in this shell" -ForegroundColor Yellow
     }
 
     try {
@@ -614,6 +621,22 @@ function Ensure-Git {
     Write-Host "Install Git for Windows manually, then re-run this installer:" -ForegroundColor Yellow
     Write-Host "  https://git-scm.com/download/win" -ForegroundColor Cyan
     return $false
+}
+
+function Invoke-GitQuietForInstall {
+    param([string[]]$Arguments)
+
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $output = @(& git @Arguments 2>$null)
+        return [pscustomobject]@{
+            ExitCode = $LASTEXITCODE
+            Output = $output
+        }
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
 }
 
 function Get-OpenClawCommandPath {
@@ -1228,17 +1251,26 @@ function Install-OpenClawFromGit {
     Write-Host "[*] Installing OpenClaw from GitHub ($repoUrl)..." -ForegroundColor Yellow
 
     if (-not (Test-Path $RepoDir)) {
-        git clone $repoUrl $RepoDir
+        $cloneResult = Invoke-GitQuietForInstall -Arguments @("clone", $repoUrl, $RepoDir)
+        if ($cloneResult.ExitCode -ne 0) {
+            Write-Host "[!] Git clone failed for the checkout" -ForegroundColor Red
+            return $false
+        }
     }
 
     if (-not $SkipUpdate) {
-        # PowerShell 7+ surfaces native-command stderr as terminating errors when
-        # $ErrorActionPreference=Stop, so git's normal "From <url>" progress line
-        # would abort the script. Swallow failures here — pull is best-effort.
-        $dirty = $null
-        try { $dirty = git -C $RepoDir status --porcelain 2>$null } catch {}
-        if (-not $dirty) {
-            try { git -C $RepoDir pull --rebase 2>$null } catch {}
+        $statusResult = Invoke-GitQuietForInstall -Arguments @("-C", $RepoDir, "status", "--porcelain")
+        if ($statusResult.ExitCode -ne 0) {
+            Write-Host "[!] Could not inspect the Git checkout" -ForegroundColor Red
+            return $false
+        }
+
+        if ($statusResult.Output.Count -eq 0) {
+            $pullResult = Invoke-GitQuietForInstall -Arguments @("-C", $RepoDir, "pull", "--rebase")
+            if ($pullResult.ExitCode -ne 0) {
+                Write-Host "[!] Git pull failed for the checkout" -ForegroundColor Red
+                return $false
+            }
         } else {
             Write-Host "[!] Repo is dirty; skipping git pull" -ForegroundColor Yellow
         }
@@ -1294,8 +1326,10 @@ function Install-OpenClawFromGit {
             Write-Host "[!] pnpm install failed for the Git checkout" -ForegroundColor Red
             return $false
         }
-        if (-not (& $pnpmCommand ui:build)) {
-            Write-Host "[!] UI build failed; continuing (CLI may still work)" -ForegroundColor Yellow
+        & $pnpmCommand ui:build
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "[!] UI build failed for the Git checkout" -ForegroundColor Red
+            return $false
         }
         $env:NODE_OPTIONS = Resolve-NodeOptionsWithMinOldSpace -NodeOptions $prevNodeOptions -MinOldSpaceMb 8192
         & $pnpmCommand build

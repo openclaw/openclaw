@@ -71,7 +71,9 @@ src/a.ts: src/a.ts
       unexpected: ["src/new.ts"],
       stale: ["src/old.ts"],
       duplicateAllowedCount: 0,
+      duplicateOptionalAllowedCount: 0,
       allowlistIsSorted: true,
+      optionalAllowlistIsSorted: true,
     });
   });
 
@@ -87,6 +89,8 @@ src/a.ts: src/a.ts
       allowed: ["src/a.ts"],
       allowlistIsSorted: true,
       duplicateAllowedCount: 0,
+      duplicateOptionalAllowedCount: 0,
+      optionalAllowlistIsSorted: true,
       unexpected: [],
       stale: [],
     });
@@ -97,6 +101,8 @@ src/a.ts: src/a.ts
       allowed: ["src/a.ts"],
       allowlistIsSorted: true,
       duplicateAllowedCount: 0,
+      duplicateOptionalAllowedCount: 0,
+      optionalAllowlistIsSorted: true,
       unexpected: [],
       stale: [],
     });
@@ -109,6 +115,8 @@ src/a.ts: src/a.ts
         allowed: ["src/a.ts"],
         allowlistIsSorted: true,
         duplicateAllowedCount: 0,
+        duplicateOptionalAllowedCount: 0,
+        optionalAllowlistIsSorted: true,
         stale: [],
         unexpected: [],
       },
@@ -125,8 +133,32 @@ src/a.ts: src/a.ts
       allowed: ["src/a.ts", "src/b.ts"],
       allowlistIsSorted: false,
       duplicateAllowedCount: 0,
+      duplicateOptionalAllowedCount: 0,
+      optionalAllowlistIsSorted: true,
       stale: [],
       unexpected: [],
+    });
+  });
+
+  it("rejects noisy optional allowlist entries", () => {
+    expect(
+      compareUnusedFilesToAllowlist(["src/a.ts"], ["src/a.ts"], ["src/z.ts", "src/z.ts"]),
+    ).toMatchObject({
+      duplicateOptionalAllowedCount: 1,
+      optionalAllowlistIsSorted: false,
+    });
+
+    expect(
+      checkUnusedFiles(
+        "Unused files (1)\nsrc/a.ts: src/a.ts\n",
+        ["src/a.ts"],
+        ["src/z.ts", "src/z.ts"],
+      ),
+    ).toMatchObject({
+      ok: false,
+      message: expect.stringContaining(
+        "deadcode optional unused-file allowlist contains 1 duplicate entry.",
+      ),
     });
   });
 

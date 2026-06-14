@@ -104,8 +104,13 @@ export function compareUnusedFilesToAllowlist(
     unexpected: actual.filter((file) => !allowedOrOptionalSet.has(file)),
     stale: allowed.filter((file) => !actualSet.has(file)),
     duplicateAllowedCount: allowlistFiles.length - new Set(allowlistFiles).size,
+    duplicateOptionalAllowedCount:
+      optionalAllowlistFiles.length - new Set(optionalAllowlistFiles).size,
     allowlistIsSorted:
       JSON.stringify(allowlistFiles.map(normalizeRepoPath)) === JSON.stringify(allowed),
+    optionalAllowlistIsSorted:
+      JSON.stringify(optionalAllowlistFiles.map(normalizeRepoPath)) ===
+      JSON.stringify(optionalAllowed),
   };
 }
 
@@ -122,6 +127,16 @@ export function formatUnusedFileComparison(comparison) {
       `deadcode unused-file allowlist contains ${comparison.duplicateAllowedCount} duplicate entr${
         comparison.duplicateAllowedCount === 1 ? "y" : "ies"
       }.`,
+    );
+  }
+  if (!comparison.optionalAllowlistIsSorted) {
+    lines.push("deadcode optional unused-file allowlist is not sorted.");
+  }
+  if (comparison.duplicateOptionalAllowedCount > 0) {
+    lines.push(
+      `deadcode optional unused-file allowlist contains ${
+        comparison.duplicateOptionalAllowedCount
+      } duplicate entr${comparison.duplicateOptionalAllowedCount === 1 ? "y" : "ies"}.`,
     );
   }
   if (comparison.unexpected.length > 0) {
@@ -323,6 +338,8 @@ export function checkUnusedFiles(
     ok:
       comparison.allowlistIsSorted &&
       comparison.duplicateAllowedCount === 0 &&
+      comparison.optionalAllowlistIsSorted &&
+      comparison.duplicateOptionalAllowedCount === 0 &&
       comparison.unexpected.length === 0 &&
       comparison.stale.length === 0,
     comparison,

@@ -2188,7 +2188,7 @@ checkout_git_openclaw_ref() {
         run_quiet_step "Fetching requested version" git -C "$repo_dir" fetch --no-tags origin main
         run_quiet_step "Checking out main" git -C "$repo_dir" checkout main
         if [[ "$GIT_UPDATE" == "1" ]]; then
-            run_quiet_step "Updating repository" git -C "$repo_dir" pull --rebase --no-tags || true
+            run_quiet_step "Updating repository" git -C "$repo_dir" pull --rebase --no-tags || return 1
         fi
         return 0
     fi
@@ -2197,7 +2197,7 @@ checkout_git_openclaw_ref() {
         run_quiet_step "Fetching requested version" git -C "$repo_dir" fetch --no-tags origin "refs/heads/${ref}:refs/remotes/origin/${ref}"
         run_quiet_step "Checking out ${ref}" git -C "$repo_dir" checkout -B "$ref" "origin/$ref"
         if [[ "$GIT_UPDATE" == "1" ]]; then
-            run_quiet_step "Updating repository" git -C "$repo_dir" pull --rebase --no-tags || true
+            run_quiet_step "Updating repository" git -C "$repo_dir" pull --rebase --no-tags || return 1
         fi
         return 0
     fi
@@ -2656,9 +2656,7 @@ install_openclaw_from_git() {
     install_lockfile_flag="$(git_install_lockfile_flag "$repo_dir" "$git_ref")"
     CI="${CI:-true}" run_quiet_step "Installing dependencies" run_pnpm -C "$repo_dir" install "$install_lockfile_flag"
 
-    if ! run_quiet_step "Building UI" run_pnpm -C "$repo_dir" ui:build; then
-        ui_warn "UI build failed; continuing (CLI may still work)"
-    fi
+    run_quiet_step "Building UI" run_pnpm -C "$repo_dir" ui:build || return 1
     run_quiet_step "Building OpenClaw" run_pnpm -C "$repo_dir" build
 
     ensure_user_local_bin_on_path

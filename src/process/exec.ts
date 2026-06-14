@@ -20,6 +20,7 @@ import { resolveWindowsCommandShim } from "./windows-command.js";
 const execFileAsync = promisify(execFile);
 
 const WINDOWS_UNSAFE_CMD_CHARS_RE = /[&|<>^%\r\n]/;
+const WINDOWS_CMD_QUOTE_CHARS_RE = /[\s"]/u;
 
 function isWindowsBatchCommand(resolvedCommand: string): boolean {
   if (process.platform !== "win32") {
@@ -38,7 +39,7 @@ function escapeForCmdExe(arg: string): string {
     );
   }
   // Quote when needed; double inner quotes for cmd parsing.
-  if (!arg.includes(" ") && !arg.includes('"')) {
+  if (!WINDOWS_CMD_QUOTE_CHARS_RE.test(arg)) {
     return arg;
   }
   return `"${arg.replace(/"/g, '""')}"`;
@@ -460,11 +461,7 @@ export async function runCommandWithTimeout(
       } else {
         killIssuedByAbort = true;
       }
-      if (
-        killProcessTree &&
-        typeof child.pid === "number" &&
-        child.pid > 0
-      ) {
+      if (killProcessTree && typeof child.pid === "number" && child.pid > 0) {
         if (process.platform === "win32") {
           try {
             spawn("taskkill", ["/PID", String(child.pid), "/T"], {

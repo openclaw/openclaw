@@ -1189,6 +1189,11 @@ export function assertChannelAccountRunning(payload) {
     ? payload.channelAccounts[CHANNEL_ID]
     : [];
   const account = accounts.find((entry) => entry?.accountId === CHANNEL_ACCOUNT_ID);
+  if (payload?.channelDefaultAccountId?.[CHANNEL_ID] !== CHANNEL_ACCOUNT_ID) {
+    throw new Error(
+      `Kitchen Sink channel default account mismatch: ${boundedJsonPreview(payload)}`,
+    );
+  }
   if (!account) {
     const accountIds = accounts.map((entry) => entry?.accountId).filter(isNonEmptyString);
     throw new Error(
@@ -2076,6 +2081,7 @@ export async function main() {
   const keepTmp = process.env.OPENCLAW_KITCHEN_SINK_KEEP_TMP === "1";
   let failed = false;
   let child;
+  let teardownError = null;
 
   const processSamples = [];
   const commandSamples = [];
@@ -2288,12 +2294,25 @@ export async function main() {
     if (sampleTimer) {
       clearInterval(sampleTimer);
     }
-    await stopGateway(child);
+    try {
+      await stopGateway(child);
+    } catch (error) {
+      if (!failed) {
+        teardownError = error;
+      } else {
+        console.error(`Kitchen Sink RPC gateway teardown failed: ${error.stack || error}`);
+      }
+    }
     if (!failed && !keepTmp) {
       await cleanupKitchenSinkEnv(root, { throwOnFailure: true });
     } else if (failed || keepTmp) {
       console.error(`Kitchen Sink RPC temp root preserved: ${root}`);
     }
+  }
+  if (teardownError) {
+    throw teardownError instanceof Error
+      ? teardownError
+      : new Error(boundedJsonPreview(teardownError));
   }
 }
 

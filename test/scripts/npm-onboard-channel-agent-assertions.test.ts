@@ -16,10 +16,14 @@ function nodeOptionsWithoutExperimentalWarnings(): string {
     : [current, disableExperimentalWarning].filter(Boolean).join(" ");
 }
 
-function writeConfig(home: string, channels: Record<string, unknown>): void {
+function writeConfigPayload(home: string, payload: Record<string, unknown>): void {
   const configDir = path.join(home, ".openclaw");
   fs.mkdirSync(configDir, { recursive: true });
-  fs.writeFileSync(path.join(configDir, "openclaw.json"), JSON.stringify({ channels }));
+  fs.writeFileSync(path.join(configDir, "openclaw.json"), JSON.stringify(payload));
+}
+
+function writeConfig(home: string, channels: Record<string, unknown>): void {
+  writeConfigPayload(home, { channels });
 }
 
 function writeOnboardConfig(home: string): void {
@@ -57,6 +61,65 @@ function writeAuthProfileStoreSqlite(agentDir: string, store: unknown): void {
   } finally {
     db.close();
   }
+}
+
+function writePluginInstallIndex(home: string, installRecords: Record<string, unknown>): void {
+  const dbPath = path.join(home, ".openclaw", "state", "openclaw.sqlite");
+  fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+  const db = new DatabaseSync(dbPath);
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS installed_plugin_index (
+        index_key TEXT NOT NULL PRIMARY KEY,
+        version INTEGER NOT NULL,
+        host_contract_version TEXT NOT NULL,
+        compat_registry_version TEXT NOT NULL,
+        migration_version INTEGER NOT NULL,
+        policy_hash TEXT NOT NULL,
+        generated_at_ms INTEGER NOT NULL,
+        refresh_reason TEXT,
+        install_records_json TEXT NOT NULL,
+        plugins_json TEXT NOT NULL,
+        diagnostics_json TEXT NOT NULL,
+        warning TEXT,
+        updated_at_ms INTEGER NOT NULL
+      );
+    `);
+    db.prepare(
+      `
+        INSERT INTO installed_plugin_index (
+          index_key, version, host_contract_version, compat_registry_version,
+          migration_version, policy_hash, generated_at_ms, refresh_reason,
+          install_records_json, plugins_json, diagnostics_json, warning, updated_at_ms
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+    ).run(
+      "installed-plugin-index",
+      1,
+      "test",
+      "test",
+      1,
+      "test",
+      Date.now(),
+      "test",
+      JSON.stringify(installRecords),
+      JSON.stringify([]),
+      JSON.stringify([]),
+      "test",
+      Date.now(),
+    );
+  } finally {
+    db.close();
+  }
+}
+
+function writeLegacyPluginInstallIndex(
+  home: string,
+  installRecords: Record<string, unknown>,
+): void {
+  const legacyPath = path.join(home, ".openclaw", "plugins", "installs.json");
+  fs.mkdirSync(path.dirname(legacyPath), { recursive: true });
+  fs.writeFileSync(legacyPath, JSON.stringify({ installRecords }));
 }
 
 function runAssert(home: string, channel: string, ...tokens: string[]) {
@@ -101,6 +164,21 @@ function runStatusAssert(channel: string, channelsStatus: unknown, statusText: s
   } finally {
     fs.rmSync(tempDir, { force: true, recursive: true });
   }
+}
+
+function runExternalInstallRecordAssert(home: string, channel: string) {
+  return spawnSync(
+    process.execPath,
+    [assertionsPath, "assert-external-channel-install-record", channel],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        HOME: home,
+        NODE_OPTIONS: nodeOptionsWithoutExperimentalWarnings(),
+      },
+    },
+  );
 }
 
 describe("npm onboard channel agent assertions", () => {
@@ -214,6 +292,129 @@ describe("npm onboard channel agent assertions", () => {
 
       expect(result.status).not.toBe(0);
       expect(result.stderr).toContain("telegram config did not persist botToken");
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it("validates external channel install records in the installed index", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-assertions-"));
+    const installPath = path.join(
+      tempDir,
+      ".openclaw",
+      "npm",
+      "projects",
+      "discord-project",
+      "node_modules",
+      "@openclaw",
+      "discord",
+    );
+    try {
+      writeConfig(tempDir, {
+        discord: { enabled: true, token: "discord-token" },
+      });
+      fs.mkdirSync(installPath, { recursive: true });
+      fs.writeFileSync(
+        path.join(installPath, "package.json"),
+        JSON.stringify({ name: "@openclaw/discord" }),
+      );
+      writePluginInstallIndex(tempDir, {
+        discord: {
+          source: "npm",
+          spec: "@openclaw/discord@2026.5.1",
+          installPath,
+        },
+      });
+
+      const result = runExternalInstallRecordAssert(tempDir, "discord");
+
+      expect(result.status).toBe(0);
+      expect(result.stderr).toBe("");
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects external channel install records left in transient config", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-assertions-"));
+    const installPath = path.join(
+      tempDir,
+      ".openclaw",
+      "npm",
+      "projects",
+      "slack-project",
+      "node_modules",
+      "@openclaw",
+      "slack",
+    );
+    try {
+      writeConfigPayload(tempDir, {
+        channels: {
+          slack: { enabled: true, botToken: "xoxb-token", appToken: "xapp-token" },
+        },
+        plugins: {
+          installs: {
+            slack: { source: "npm", spec: "@openclaw/slack" },
+          },
+        },
+      });
+      fs.mkdirSync(installPath, { recursive: true });
+      fs.writeFileSync(
+        path.join(installPath, "package.json"),
+        JSON.stringify({ name: "@openclaw/slack" }),
+      );
+      writePluginInstallIndex(tempDir, {
+        slack: {
+          source: "npm",
+          spec: "@openclaw/slack@2026.5.1",
+          installPath,
+        },
+      });
+
+      const result = runExternalInstallRecordAssert(tempDir, "slack");
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(
+        "slack transient plugin install record was not moved to installed index",
+      );
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects legacy external channel install records without the SQLite installed index", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-assertions-"));
+    const installPath = path.join(
+      tempDir,
+      ".openclaw",
+      "npm",
+      "projects",
+      "discord-project",
+      "node_modules",
+      "@openclaw",
+      "discord",
+    );
+    try {
+      writeConfig(tempDir, {
+        discord: { enabled: true, token: "discord-token" },
+      });
+      fs.mkdirSync(installPath, { recursive: true });
+      fs.writeFileSync(
+        path.join(installPath, "package.json"),
+        JSON.stringify({ name: "@openclaw/discord" }),
+      );
+      writeLegacyPluginInstallIndex(tempDir, {
+        discord: {
+          source: "npm",
+          spec: "@openclaw/discord@2026.5.1",
+          installPath,
+        },
+      });
+
+      const result = runExternalInstallRecordAssert(tempDir, "discord");
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("discord SQLite installed plugin index is missing");
     } finally {
       fs.rmSync(tempDir, { force: true, recursive: true });
     }

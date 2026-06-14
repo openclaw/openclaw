@@ -8,6 +8,7 @@ import {
 } from "../agent-turn-output.mjs";
 import { assertOpenAiEnvAuthProfileStore } from "../auth-profile-store-assertions.mjs";
 import { applyMockOpenAiModelConfig } from "../fixtures/mock-openai-config.mjs";
+import { readSqlitePluginIndex } from "../plugin-index-sqlite.mjs";
 
 const command = process.argv[2];
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
@@ -29,6 +30,11 @@ const statusSectionTitles = new Set([
   "health",
   "usage",
 ]);
+
+const externalChannelPackages = {
+  discord: "@openclaw/discord",
+  slack: "@openclaw/slack",
+};
 
 function normalizedStatusHeading(line) {
   return stripAnsi(line)
@@ -193,6 +199,52 @@ function assertChannelConfig() {
   }
 }
 
+function resolveHomePath(value) {
+  return String(value || "").replace(/^~(?=$|\/)/u, process.env.HOME);
+}
+
+function assertExternalChannelInstallRecord() {
+  const channel = process.argv[3];
+  const expectedPackage = externalChannelPackages[channel];
+  if (!expectedPackage) {
+    throw new Error(`external install-record assertion does not support channel: ${channel}`);
+  }
+
+  const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
+  const cfg = readJson(configPath);
+  if (cfg.plugins?.installs?.[channel]) {
+    throw new Error(`${channel} transient plugin install record was not moved to installed index`);
+  }
+
+  const sqliteIndex = readSqlitePluginIndex();
+  if (!sqliteIndex.installRecords) {
+    throw new Error(`${channel} SQLite installed plugin index is missing`);
+  }
+  const record = sqliteIndex.installRecords[channel];
+  if (!record) {
+    throw new Error(`${channel} install record missing from installed index`);
+  }
+  if (record.source !== "npm") {
+    throw new Error(`${channel} install record source changed: ${record.source}`);
+  }
+  const spec = String(record.spec ?? record.resolvedSpec ?? "");
+  if (!spec.startsWith(expectedPackage)) {
+    throw new Error(`${channel} install record spec changed: ${spec}`);
+  }
+  const installPath = resolveHomePath(record.installPath);
+  if (!installPath || !fs.existsSync(installPath)) {
+    throw new Error(`${channel} install path missing on disk: ${installPath}`);
+  }
+  const packageJsonPath = path.join(installPath, "package.json");
+  if (!fs.existsSync(packageJsonPath)) {
+    throw new Error(`${channel} package.json missing at install path: ${installPath}`);
+  }
+  const packageJson = readJson(packageJsonPath);
+  if (packageJson.name !== expectedPackage) {
+    throw new Error(`${channel} package name changed: ${packageJson.name}`);
+  }
+}
+
 function assertStatusSurfaces() {
   const channel = process.argv[3];
   const channelsStatusPath = process.argv[4];
@@ -233,6 +285,7 @@ const commands = {
   "configure-mock-model": configureMockModel,
   "assert-mock-model-config": assertMockModelConfig,
   "assert-channel-config": assertChannelConfig,
+  "assert-external-channel-install-record": assertExternalChannelInstallRecord,
   "assert-status-surfaces": assertStatusSurfaces,
   "assert-agent-turn": assertAgentTurn,
 };
