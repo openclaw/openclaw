@@ -17,6 +17,7 @@ import {
 } from "../utils/string-normalize.js";
 import { filterInternalMarkers } from "../utils/text-parsing.js";
 import { decodeMediaPath } from "./decode-media-path.js";
+import type { OutboundMediaAccessContext } from "./outbound-types.js";
 import {
   sendText as senderSendText,
   sendMedia as senderSendMedia,
@@ -28,7 +29,7 @@ import {
 // ---- Injected dependency interfaces ----
 
 /** Media target context — describes where to send media. */
-interface MediaTargetContext {
+interface MediaTargetContext extends OutboundMediaAccessContext {
   targetType: "c2c" | "group" | "channel" | "dm";
   targetId: string;
   account: GatewayAccount;
@@ -53,14 +54,16 @@ interface MediaSender {
   ): Promise<MediaSendResult>;
   sendVideoMsg(target: MediaTargetContext, videoPath: string): Promise<MediaSendResult>;
   sendDocument(target: MediaTargetContext, filePath: string): Promise<MediaSendResult>;
-  sendMedia(opts: {
-    to: string;
-    text: string;
-    mediaUrl: string;
-    accountId: string;
-    replyToId: string;
-    account: GatewayAccount;
-  }): Promise<MediaSendResult>;
+  sendMedia(
+    opts: {
+      to: string;
+      text: string;
+      mediaUrl: string;
+      accountId: string;
+      replyToId: string;
+      account: GatewayAccount;
+    } & OutboundMediaAccessContext,
+  ): Promise<MediaSendResult>;
 }
 
 /** Delivery dependencies — injected when calling parseAndSendMediaTags / sendPlainReply. */
@@ -85,7 +88,7 @@ interface DeliverEventContext {
   msgIdx?: string;
 }
 
-interface DeliverAccountContext {
+interface DeliverAccountContext extends OutboundMediaAccessContext {
   account: GatewayAccount;
   qualifiedTarget: string;
   log?: {
@@ -105,8 +108,9 @@ type ConsumeQuoteRefFn = () => string | undefined;
 
 function resolveMediaTargetContext(
   event: DeliverEventContext,
-  account: GatewayAccount,
+  actx: DeliverAccountContext,
 ): MediaTargetContext {
+  const { account } = actx;
   return {
     targetType:
       event.type === "c2c"
@@ -126,6 +130,9 @@ function resolveMediaTargetContext(
             : event.channelId!,
     account,
     replyToId: event.messageId,
+    ...(actx.mediaAccess ? { mediaAccess: actx.mediaAccess } : {}),
+    ...(actx.mediaLocalRoots ? { mediaLocalRoots: actx.mediaLocalRoots } : {}),
+    ...(actx.mediaReadFile ? { mediaReadFile: actx.mediaReadFile } : {}),
   };
 }
 
@@ -135,6 +142,9 @@ async function autoMediaBatch(params: {
   replyToId: string;
   mediaUrls: string[];
   mediaSender: MediaSender;
+  mediaAccess?: OutboundMediaAccessContext["mediaAccess"];
+  mediaLocalRoots?: OutboundMediaAccessContext["mediaLocalRoots"];
+  mediaReadFile?: OutboundMediaAccessContext["mediaReadFile"];
   log?: DeliverAccountContext["log"];
   onResultError: (mediaUrl: string, error: string) => string;
   onThrownError: (mediaUrl: string, error: string) => string;
@@ -149,6 +159,9 @@ async function autoMediaBatch(params: {
         accountId: params.account.accountId,
         replyToId: params.replyToId,
         account: params.account,
+        mediaAccess: params.mediaAccess,
+        mediaLocalRoots: params.mediaLocalRoots,
+        mediaReadFile: params.mediaReadFile,
       });
       if (result.error) {
         params.log?.error(params.onResultError(mediaUrl, result.error));
@@ -443,7 +456,7 @@ export async function parseAndSendMediaTags(
 
   log?.debug?.(`Send queue: ${sendQueue.map((item) => item.type).join(" -> ")}`);
 
-  const mediaTarget = resolveMediaTargetContext(event, account);
+  const mediaTarget = resolveMediaTargetContext(event, actx);
 
   for (const item of sendQueue) {
     if (item.type === "text") {
@@ -480,6 +493,9 @@ export async function parseAndSendMediaTags(
             accountId: account.accountId,
             replyToId: event.messageId,
             account,
+            mediaAccess: actx.mediaAccess,
+            mediaLocalRoots: actx.mediaLocalRoots,
+            mediaReadFile: actx.mediaReadFile,
           }),
         log,
         onError: (error) => `sendMedia(auto) error: ${error}`,
@@ -629,6 +645,9 @@ export async function sendPlainReply(
       replyToId: event.messageId,
       mediaUrls: localMediaToSend,
       mediaSender: deps.mediaSender,
+      mediaAccess: actx.mediaAccess,
+      mediaLocalRoots: actx.mediaLocalRoots,
+      mediaReadFile: actx.mediaReadFile,
       log,
       onSuccess: (mediaPath) => `Sent local media: ${mediaPath}`,
       onResultError: (mediaPath, error) => `sendMedia(auto) error for ${mediaPath}: ${error}`,
@@ -647,6 +666,9 @@ export async function sendPlainReply(
       replyToId: event.messageId,
       mediaUrls: toolMediaUrls,
       mediaSender: deps.mediaSender,
+      mediaAccess: actx.mediaAccess,
+      mediaLocalRoots: actx.mediaLocalRoots,
+      mediaReadFile: actx.mediaReadFile,
       log,
       onSuccess: (mediaUrl) => `Forwarded tool media: ${mediaUrl.slice(0, 80)}...`,
       onResultError: (_mediaUrl, error) => `Tool media forward error: ${error}`,
@@ -796,7 +818,7 @@ async function sendPlainTextReply(
 ): Promise<void> {
   const { account, log } = actx;
 
-  const imgMediaTarget = resolveMediaTargetContext(event, account);
+  const imgMediaTarget = resolveMediaTargetContext(event, actx);
 
   let result = textWithoutImages;
   for (const m of mdMatches) {

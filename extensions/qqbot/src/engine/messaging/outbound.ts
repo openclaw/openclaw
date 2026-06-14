@@ -204,6 +204,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
       replyToId,
       mediaAccess: ctx.mediaAccess,
       mediaLocalRoots: ctx.mediaLocalRoots,
+      mediaReadFile: ctx.mediaReadFile,
     });
     let lastResult: OutboundResult = { channel: "qqbot" };
 
@@ -252,6 +253,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
             account,
             mediaAccess: ctx.mediaAccess,
             mediaLocalRoots: ctx.mediaLocalRoots,
+            mediaReadFile: ctx.mediaReadFile,
           });
         }
       } catch (err) {
@@ -331,11 +333,16 @@ export async function sendMedia(ctx: MediaOutboundContext): Promise<OutboundResu
     replyToId,
     mediaAccess: ctx.mediaAccess,
     mediaLocalRoots: ctx.mediaLocalRoots,
+    mediaReadFile: ctx.mediaReadFile,
   });
-  const resolvedMediaPath = resolveOutboundMediaPath(ctx.mediaUrl, "media", {
-    allowMissingLocalPath: true,
-    extraLocalRoots: target.mediaLocalRoots ? [...target.mediaLocalRoots] : undefined,
-  });
+  const shouldResolveLocalMediaPath = !ctx.mediaAccess?.readFile && !ctx.mediaReadFile;
+  const resolvedMediaPath = shouldResolveLocalMediaPath
+    ? resolveOutboundMediaPath(ctx.mediaUrl, "media", {
+        allowMissingLocalPath: true,
+        extraLocalRoots: target.mediaLocalRoots ? [...target.mediaLocalRoots] : undefined,
+        workspaceDir: target.mediaAccess?.workspaceDir,
+      })
+    : { ok: true as const, mediaPath: ctx.mediaUrl };
   if (!resolvedMediaPath.ok) {
     return { channel: "qqbot", error: resolvedMediaPath.error };
   }

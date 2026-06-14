@@ -6,8 +6,10 @@ export type OutboundMediaAccessContext = {
   mediaAccess?: {
     localRoots?: readonly string[];
     workspaceDir?: string;
+    readFile?: (filePath: string) => Promise<Buffer>;
   };
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
 };
 
 export interface OutboundContext extends OutboundMediaAccessContext {

@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { sendMedia, sendText } from "../messaging/outbound.js";
+import { sendMedia, sendText, setOutboundAudioPort } from "../messaging/outbound.js";
 import type { InboundContext } from "./inbound-context.js";
 import { dispatchOutbound } from "./outbound-dispatch.js";
 import type { GatewayAccount, GatewayPluginRuntime } from "./types.js";
@@ -214,6 +214,16 @@ function makeRuntime(params: {
 describe("dispatchOutbound", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    setOutboundAudioPort({
+      audioFileToSilkBase64: audioFileToSilkBase64Mock,
+      isAudioFile: (pathOrUrl) => /\.(wav|mp3|ogg|silk)$/i.test(pathOrUrl),
+      shouldTranscodeVoice: () => true,
+      waitForFile: vi.fn(async (filePath: string) => {
+        await fs.mkdir(path.dirname(filePath), { recursive: true });
+        await fs.writeFile(filePath, Buffer.from("voice"));
+        return 128;
+      }),
+    });
   });
 
   afterEach(() => {
@@ -265,6 +275,245 @@ describe("dispatchOutbound", () => {
       });
 
       expect(result.error).toBeUndefined();
+      expect(sendMediaMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "file",
+          source: { localPath: realFilePath },
+          target: { id: "user-openid", type: "c2c" },
+        }),
+      );
+    } finally {
+      await fs.rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("loads scoped media through host read callbacks", async () => {
+    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-host-read-"));
+    try {
+      const mediaPath = path.join(tmpRoot, "host-report.txt");
+      const mediaReadFile = vi.fn(async () => Buffer.from("host report"));
+
+      const result = await sendMedia({
+        to: "qqbot:c2c:user-openid",
+        text: "",
+        mediaUrl: "host-report.txt",
+        accountId: "qq-main",
+        account,
+        mediaAccess: { localRoots: [tmpRoot], workspaceDir: tmpRoot, readFile: mediaReadFile },
+      });
+
+      expect(result.error).toBeUndefined();
+      expect(mediaReadFile).toHaveBeenCalledWith(mediaPath);
+      expect(sendMediaMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "file",
+          source: expect.objectContaining({
+            buffer: Buffer.from("host report"),
+            fileName: "host-report.txt",
+          }),
+          target: { id: "user-openid", type: "c2c" },
+        }),
+      );
+    } finally {
+      await fs.rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves relative media paths from the scoped outbound media workspace", async () => {
+    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-scoped-workspace-"));
+    try {
+      const filePath = path.join(tmpRoot, "relative-report.docx");
+      await fs.writeFile(filePath, Buffer.from("report"));
+      const realFilePath = await fs.realpath(filePath);
+
+      const result = await sendMedia({
+        to: "qqbot:c2c:user-openid",
+        text: "",
+        mediaUrl: "relative-report.docx",
+        accountId: "qq-main",
+        account,
+        mediaAccess: { localRoots: [tmpRoot], workspaceDir: tmpRoot },
+      });
+
+      expect(result.error).toBeUndefined();
+      expect(sendMediaMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "file",
+          source: { localPath: realFilePath },
+          target: { id: "user-openid", type: "c2c" },
+        }),
+      );
+    } finally {
+      await fs.rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("lets missing voice files inside scoped outbound roots reach the voice wait path", async () => {
+    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-scoped-voice-"));
+    try {
+      const missingVoicePath = path.join(tmpRoot, "pending.wav");
+      const runtime = makeRuntime({
+        onDeliver: async (deliver) => {
+          await deliver({ text: `<qqvoice>${missingVoicePath}</qqvoice>` }, { kind: "block" });
+        },
+      });
+
+      await dispatchOutbound(
+        makeInbound({
+          route: { sessionKey: "qqbot:c2c:user-openid", accountId: "qq-main", agentId: "agent-1" },
+        }),
+        {
+          runtime,
+          cfg: { agents: { list: [{ id: "agent-1", workspace: tmpRoot }] } },
+          account,
+        },
+      );
+
+      expect(audioFileToSilkBase64Mock).toHaveBeenCalledWith(missingVoicePath, undefined);
+    } finally {
+      await fs.rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("threads agent scoped media roots through gateway qqmedia block replies", async () => {
+    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-agent-root-"));
+    try {
+      const filePath = path.join(tmpRoot, "gateway-report.docx");
+      await fs.writeFile(filePath, Buffer.from("report"));
+      const realFilePath = await fs.realpath(filePath);
+      const runtime = makeRuntime({
+        onDeliver: async (deliver) => {
+          await deliver({ text: `<qqmedia>${filePath}</qqmedia>` }, { kind: "block" });
+        },
+      });
+
+      await dispatchOutbound(
+        makeInbound({
+          route: { sessionKey: "qqbot:c2c:user-openid", accountId: "qq-main", agentId: "agent-1" },
+        }),
+        {
+          runtime,
+          cfg: { agents: { list: [{ id: "agent-1", workspace: tmpRoot }] } },
+          account,
+        },
+      );
+
+      expect(sendMediaMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "file",
+          source: { localPath: realFilePath },
+          target: { id: "user-openid", type: "c2c" },
+        }),
+      );
+    } finally {
+      await fs.rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("threads agent scoped media roots through gateway tool media forwarding", async () => {
+    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-tool-root-"));
+    try {
+      const filePath = path.join(tmpRoot, "tool-report.docx");
+      await fs.writeFile(filePath, Buffer.from("report"));
+      const realFilePath = await fs.realpath(filePath);
+      const runtime = makeRuntime({
+        onDispatch: async ({ deliver }) => {
+          await deliver({ text: "final answer" }, { kind: "block" });
+          await deliver({ mediaUrl: filePath }, { kind: "tool" });
+        },
+      });
+
+      await dispatchOutbound(
+        makeInbound({
+          route: { sessionKey: "qqbot:c2c:user-openid", accountId: "qq-main", agentId: "agent-1" },
+        }),
+        {
+          runtime,
+          cfg: { agents: { list: [{ id: "agent-1", workspace: tmpRoot }] } },
+          account,
+        },
+      );
+
+      expect(sendMediaMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "file",
+          source: { localPath: realFilePath },
+          target: { id: "user-openid", type: "c2c" },
+        }),
+      );
+    } finally {
+      await fs.rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("threads agent scoped media roots through gateway QQBOT_PAYLOAD replies", async () => {
+    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-payload-root-"));
+    try {
+      const filePath = path.join(tmpRoot, "payload-report.pdf");
+      await fs.writeFile(filePath, Buffer.from("report"));
+      const realFilePath = await fs.realpath(filePath);
+      const runtime = makeRuntime({
+        onDeliver: async (deliver) => {
+          await deliver(
+            {
+              text: `QQBOT_PAYLOAD:${JSON.stringify({
+                type: "media",
+                mediaType: "file",
+                source: "file",
+                path: filePath,
+              })}`,
+            },
+            { kind: "block" },
+          );
+        },
+      });
+
+      await dispatchOutbound(
+        makeInbound({
+          route: { sessionKey: "qqbot:c2c:user-openid", accountId: "qq-main", agentId: "agent-1" },
+        }),
+        {
+          runtime,
+          cfg: { agents: { list: [{ id: "agent-1", workspace: tmpRoot }] } },
+          account,
+        },
+      );
+
+      expect(sendMediaMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "file",
+          source: { localPath: realFilePath },
+          target: { id: "user-openid", type: "c2c" },
+        }),
+      );
+    } finally {
+      await fs.rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("threads agent scoped media roots through official C2C streaming media tags", async () => {
+    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-stream-root-"));
+    try {
+      const filePath = path.join(tmpRoot, "stream-report.docx");
+      await fs.writeFile(filePath, Buffer.from("report"));
+      const realFilePath = await fs.realpath(filePath);
+      const runtime = makeRuntime({
+        onDeliver: async (deliver) => {
+          await deliver({ text: `<qqmedia>${filePath}</qqmedia>` }, { kind: "block" });
+        },
+      });
+
+      await dispatchOutbound(
+        makeInbound({
+          route: { sessionKey: "qqbot:c2c:user-openid", accountId: "qq-main", agentId: "agent-1" },
+        }),
+        {
+          runtime,
+          cfg: { agents: { list: [{ id: "agent-1", workspace: tmpRoot }] } },
+          account: { ...account, config: { streaming: true } },
+        },
+      );
+
       expect(sendMediaMock).toHaveBeenCalledWith(
         expect.objectContaining({
           kind: "file",
