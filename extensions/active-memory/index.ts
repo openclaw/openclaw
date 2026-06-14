@@ -1740,6 +1740,54 @@ function extractTerminalMemorySearchResultFromSessionRecord(
   return undefined;
 }
 
+function hasUnavailableMemoryResultInSessionRecord(
+  value: unknown,
+  toolsAllow: readonly string[] = [
+    ...DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW,
+    ...LANCEDB_ACTIVE_MEMORY_TOOLS_ALLOW,
+  ],
+): boolean {
+  const record = asRecord(value);
+  const nestedMessage = asRecord(record?.message);
+  const topLevelMessage = record?.role === "toolResult" ? record : undefined;
+  const message = nestedMessage ?? topLevelMessage;
+  if (!message || normalizeOptionalString(message.role) !== "toolResult") {
+    return false;
+  }
+  const toolName = normalizeOptionalString(message.toolName);
+  if (!toolName || !toolsAllow.includes(toolName)) {
+    return false;
+  }
+  const details = asRecord(message.details);
+  const unavailable =
+    message.isError === true ||
+    details?.disabled === true ||
+    details?.unavailable === true ||
+    details?.success === false ||
+    Boolean(details?.error);
+  if (unavailable || details?.persistedDetailsTruncated !== true) {
+    return unavailable;
+  }
+  const content = extractTextContent(message.content);
+  try {
+    const parsed = asRecord(JSON.parse(content));
+    if (parsed) {
+      const hasFailureFields = ["disabled", "unavailable", "success", "error"].some(
+        (key) => key in parsed,
+      );
+      if (hasFailureFields) {
+        return (
+          parsed.disabled === true ||
+          parsed.unavailable === true ||
+          parsed.success === false ||
+          Boolean(parsed.error)
+        );
+      }
+    }
+  } catch {}
+  return false;
+}
+
 function hasUsableMemoryResultInSessionRecord(
   value: unknown,
   toolsAllow: readonly string[] = [
@@ -1882,8 +1930,9 @@ async function readActiveMemoryTranscriptState(
       if (debug) {
         searchDebug = debug;
       }
-      hasUnavailableMemorySearchResult ||= Boolean(
-        extractTerminalMemorySearchResultFromSessionRecord(record),
+      hasUnavailableMemorySearchResult ||= hasUnavailableMemoryResultInSessionRecord(
+        record,
+        toolsAllow,
       );
       hasUsableMemoryResult ||= hasUsableMemoryResultInSessionRecord(record, toolsAllow);
     },
@@ -2195,6 +2244,7 @@ async function buildTimeoutRecallResult(params: {
   searchDebug?: ActiveMemorySearchDebug;
   hasUnavailableMemorySearchResult?: boolean;
   subagentPromise?: Promise<RecallSubagentResult>;
+  toolsAllow: readonly string[];
 }): Promise<ActiveRecallResult> {
   const subagentPartialData = params.rawReply
     ? { settled: true as const }
@@ -2208,7 +2258,7 @@ async function buildTimeoutRecallResult(params: {
     params.maxSummaryChars,
   );
   const transcriptState = params.sessionFile
-    ? await readActiveMemoryTranscriptState(params.sessionFile)
+    ? await readActiveMemoryTranscriptState(params.sessionFile, undefined, params.toolsAllow)
     : undefined;
   const searchDebug =
     params.searchDebug ?? subagentPartialData.searchDebug ?? transcriptState?.searchDebug;
@@ -2833,7 +2883,11 @@ async function runRecallSubagent(params: {
   } catch (error) {
     if (params.abortSignal?.aborted) {
       const partialReply = await readPartialAssistantText(activeSessionFile);
-      const transcriptState = await readActiveMemoryTranscriptState(activeSessionFile);
+      const transcriptState = await readActiveMemoryTranscriptState(
+        activeSessionFile,
+        undefined,
+        params.config.toolsAllow,
+      );
       attachPartialTimeoutData(
         error,
         partialReply,
@@ -3028,6 +3082,7 @@ async function maybeResolveActiveRecall(params: {
             maxSummaryChars: params.config.maxSummaryChars,
             sessionFile,
             subagentPromise,
+            toolsAllow: params.config.toolsAllow,
           });
       if (params.config.logging) {
         params.api.logger.info?.(
@@ -3113,6 +3168,7 @@ async function maybeResolveActiveRecall(params: {
         rawReply: partialTimeoutData.rawReply,
         searchDebug: partialTimeoutData.searchDebug,
         hasUnavailableMemorySearchResult: partialTimeoutData.hasUnavailableMemorySearchResult,
+        toolsAllow: params.config.toolsAllow,
       });
       if (params.config.logging) {
         params.api.logger.info?.(

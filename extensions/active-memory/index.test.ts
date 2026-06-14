@@ -3689,6 +3689,72 @@ describe("active-memory plugin", () => {
     await lateWriteDone;
   });
 
+  it("does not recover a timeout partial after a configured custom memory tool fails", async () => {
+    testing.setMinimumTimeoutMsForTests(1);
+    testing.setSetupGraceTimeoutMsForTests(0);
+    testing.setTimeoutPartialDataGraceMsForTests(100);
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: 250,
+      toolsAllow: ["memory_lookup_custom"],
+      logging: true,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    const sessionKey = "agent:main:custom-tool-timeout-failure";
+    hoisted.sessionStore[sessionKey] = {
+      sessionId: "s-custom-tool-timeout-failure",
+      updatedAt: 0,
+    };
+    runEmbeddedAgent.mockImplementationOnce(
+      async (params: { sessionFile: string; abortSignal?: AbortSignal }) => {
+        await new Promise<void>((resolve) => {
+          if (params.abortSignal?.aborted) {
+            resolve();
+            return;
+          }
+          params.abortSignal?.addEventListener("abort", () => resolve(), { once: true });
+        });
+        await writeTranscriptJsonl(params.sessionFile, [
+          {
+            message: {
+              role: "toolResult",
+              toolName: "memory_lookup_custom",
+              details: {
+                persistedDetailsTruncated: true,
+                success: false,
+                error: "upstream unavailable",
+                originalDetailKeys: ["error", "payload"],
+              },
+              content: [
+                {
+                  type: "text",
+                  text: '{"payload":"failure details omitted after persistence cap"}',
+                },
+              ],
+            },
+          },
+          {
+            message: {
+              role: "assistant",
+              content: "This custom-tool failure must not become recalled context.",
+            },
+          },
+        ]);
+        return { payloads: [] };
+      },
+    );
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what food do i usually order? custom timeout failure", messages: [] },
+      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+    );
+
+    expect(result).toBeUndefined();
+    const lines = getActiveMemoryLines(sessionKey);
+    expectLinesToContain(lines, "Active Memory: status=timeout");
+    expectLinesNotToContain(lines, "timeout_partial");
+  });
+
   it("uses successful configured custom-tool output as recall evidence", async () => {
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
@@ -3710,8 +3776,17 @@ describe("active-memory plugin", () => {
           message: {
             role: "toolResult",
             toolName: "memory_lookup_custom",
-            details: { results: [{ text: "User usually orders ramen." }] },
-            content: [{ type: "text", text: "User usually orders ramen." }],
+            details: {
+              persistedDetailsTruncated: true,
+              success: true,
+              originalDetailKeys: ["success", "results"],
+            },
+            content: [
+              {
+                type: "text",
+                text: '{"results":[{"text":"User usually orders ramen."}]}',
+              },
+            ],
           },
         },
         {
@@ -3936,7 +4011,7 @@ describe("active-memory plugin", () => {
     );
   });
 
-  it("does not treat memory_get misses as terminal recall results", async () => {
+  it("does not fast-fail memory_get misses but rejects ungrounded completed output", async () => {
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
     api.pluginConfig = {
@@ -3974,7 +4049,8 @@ describe("active-memory plugin", () => {
       },
     );
 
-    expect(result?.prependContext).toContain("User usually orders ramen after late flights.");
+    expect(result).toBeUndefined();
+    expectLinesToContain(getActiveMemoryLines("agent:main:memory-get-miss"), "status=unavailable");
   });
 
   it("returns undefined instead of throwing when an unexpected error escapes prompt building", async () => {
