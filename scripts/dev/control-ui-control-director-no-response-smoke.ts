@@ -213,6 +213,32 @@ function formatLogs(stdout: string[], stderr: string[]): string {
   )}`;
 }
 
+function ensureControlUiBuild(): void {
+  const existingNodeOptions = process.env.NODE_OPTIONS?.trim();
+  const nodeOptions = existingNodeOptions?.includes("--max-old-space-size=")
+    ? existingNodeOptions
+    : [existingNodeOptions, "--max-old-space-size=6144"].filter(Boolean).join(" ");
+  const result = spawnSync("pnpm", ["ui:build"], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      ...(nodeOptions ? { NODE_OPTIONS: nodeOptions } : {}),
+    },
+    encoding: "utf8",
+    maxBuffer: 1024 * 1024 * 20,
+  });
+  if (result.status === 0) {
+    return;
+  }
+  const stdout = redactSmokeSecrets(result.stdout || "");
+  const stderr = redactSmokeSecrets(result.stderr || "");
+  throw new Error(
+    `Control UI build failed before no-response smoke (status=${result.status ?? "signal"}, signal=${
+      result.signal ?? "none"
+    }).\n--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}`,
+  );
+}
+
 function hasArrayEntries(value: unknown): boolean {
   return Array.isArray(value) && value.length > 0;
 }
@@ -830,6 +856,8 @@ async function runSmoke() {
       )}`,
     );
   }
+
+  ensureControlUiBuild();
 
   const { chromium } = await import("playwright");
   const executablePath = await resolveBrowserExecutable(chromium.executablePath());
