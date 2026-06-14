@@ -104,7 +104,7 @@ function resolveBundledInstallRecoveryMetadata(
 }
 
 function resolveOfficialExternalInstallRecoveryMetadata(
-  request: Pick<PluginInstallRequestContext, "rawSpec" | "normalizedSpec" | "marketplace">,
+  request: Pick<PluginInstallRequestContext, "rawSpec" | "marketplace">,
 ): {
   pluginId?: string;
   allowInvalidConfigRecovery?: boolean;
@@ -112,18 +112,19 @@ function resolveOfficialExternalInstallRecoveryMetadata(
   if (request.marketplace) {
     return {};
   }
+  if (request.rawSpec.trim().startsWith("file:")) {
+    return {};
+  }
+  if (fs.existsSync(resolveUserPath(request.rawSpec))) {
+    return {};
+  }
   const rawNpmPrefixSpec = parseNpmPrefixSpec(request.rawSpec);
-  const normalizedNpmPrefixSpec = parseNpmPrefixSpec(request.normalizedSpec);
   const values = new Set(
     normalizeStringEntries([
       request.rawSpec,
-      request.normalizedSpec,
       rawNpmPrefixSpec ?? "",
-      normalizedNpmPrefixSpec ?? "",
       parseRegistryNpmSpec(request.rawSpec)?.name ?? "",
-      parseRegistryNpmSpec(request.normalizedSpec)?.name ?? "",
       rawNpmPrefixSpec ? parseRegistryNpmSpec(rawNpmPrefixSpec)?.name : "",
-      normalizedNpmPrefixSpec ? parseRegistryNpmSpec(normalizedNpmPrefixSpec)?.name : "",
     ]),
   );
   if (values.size === 0) {
@@ -219,7 +220,6 @@ export function resolvePluginInstallRequestContext(params: {
   });
   const officialRecovered = resolveOfficialExternalInstallRecoveryMetadata({
     rawSpec: params.rawSpec,
-    normalizedSpec,
     marketplace: params.marketplace,
   });
   const recovered =

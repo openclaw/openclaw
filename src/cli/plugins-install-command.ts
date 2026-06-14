@@ -3,9 +3,9 @@ import fs from "node:fs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { theme } from "../../packages/terminal-core/src/theme.js";
-import { collectChannelDoctorStaleConfigMutations } from "../commands/doctor/shared/channel-doctor.js";
 import { assertConfigWriteAllowedInCurrentMode, readConfigFileSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { installHooksFromNpmSpec, installHooksFromPath } from "../hooks/install.js";
 import { resolveArchiveKind } from "../infra/archive.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub.js";
@@ -22,6 +22,7 @@ import {
   installPluginFromNpmSpec,
   installPluginFromPath,
 } from "../plugins/install.js";
+import { loadInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
 import {
   installPluginFromMarketplace,
   resolveMarketplaceInstallShortcut,
@@ -493,6 +494,8 @@ function isTerminalPluginInstallFailure(code?: string): boolean {
 function isAllowedPluginRecoveryIssue(
   issue: { path?: string; message?: string },
   request: PluginInstallRequestContext,
+  installRecords: Record<string, PluginInstallRecord>,
+  env: NodeJS.ProcessEnv = process.env,
 ): boolean {
   const pluginId = request.bundledPluginId?.trim();
   if (!pluginId) {
@@ -503,10 +506,7 @@ function isAllowedPluginRecoveryIssue(
       issue.message === `unknown channel id: ${pluginId}`) ||
     (issue.path === "plugins.load.paths" &&
       typeof issue.message === "string" &&
-      issue.message.includes("plugin path not found")) ||
-    (issue.path === "plugins" &&
-      typeof issue.message === "string" &&
-      issue.message.includes("requires compiled runtime output")) ||
+      isMissingPluginLoadPathForInstallRecord({ issue, installRecords, pluginId, env })) ||
     (issue.path === `plugins.entries.${pluginId}` &&
       typeof issue.message === "string" &&
       issue.message.includes("requires compiled runtime output")) ||
@@ -522,6 +522,21 @@ function buildInvalidPluginInstallConfigError(message: string): Error {
   return error;
 }
 
+function hasConfigInclude(value: unknown): boolean {
+  if (Array.isArray(value)) {
+    return value.some((child) => hasConfigInclude(child));
+  }
+  if (!isRecord(value)) {
+    return false;
+  }
+  if (Object.hasOwn(value, "$include")) {
+    return true;
+  }
+  return Object.values(value).some((child) => hasConfigInclude(child));
+}
+
+const ENV_VAR_REFERENCE_RE = /\$\{[A-Z_][A-Z0-9_]*\}/;
+
 function extractMissingPluginLoadPath(issue: { path?: string; message?: string }): string | null {
   if (issue.path !== "plugins.load.paths" || typeof issue.message !== "string") {
     return null;
@@ -533,6 +548,105 @@ function extractMissingPluginLoadPath(issue: { path?: string; message?: string }
   }
   const value = issue.message.slice(markerIndex + marker.length).trim();
   return value || null;
+}
+
+function resolvePluginInstallRecordPaths(params: {
+  installRecords: Record<string, PluginInstallRecord>;
+  pluginId: string;
+  env: NodeJS.ProcessEnv;
+}): Set<string> {
+  const install = params.installRecords[params.pluginId];
+  const paths = new Set<string>();
+  for (const value of [install?.installPath, install?.sourcePath]) {
+    if (typeof value === "string" && value.trim()) {
+      paths.add(resolveUserPath(value, params.env));
+    }
+  }
+  return paths;
+}
+
+function isMissingPluginLoadPathForInstallRecord(params: {
+  issue: { path?: string; message?: string };
+  installRecords: Record<string, PluginInstallRecord>;
+  pluginId: string;
+  env: NodeJS.ProcessEnv;
+}): boolean {
+  const missingPath = extractMissingPluginLoadPath(params.issue);
+  if (!missingPath) {
+    return false;
+  }
+  return resolvePluginInstallRecordPaths(params).has(resolveUserPath(missingPath, params.env));
+}
+
+function readPluginLoadPathEntries(cfg: unknown): unknown[] | undefined {
+  if (!isRecord(cfg) || !isRecord(cfg.plugins) || !isRecord(cfg.plugins.load)) {
+    return undefined;
+  }
+  const paths = cfg.plugins.load.paths;
+  return Array.isArray(paths) ? paths : undefined;
+}
+
+function arrayHasEnvRef(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.some((entry) => typeof entry === "string" && ENV_VAR_REFERENCE_RE.test(entry))
+  );
+}
+
+function hasAuthoredPluginPolicyEnvRefs(params: {
+  authoredConfig: unknown;
+  resolvedConfig: OpenClawConfig;
+  pluginId: string;
+}): boolean {
+  if (!isRecord(params.authoredConfig) || !isRecord(params.authoredConfig.plugins)) {
+    return false;
+  }
+  const resolvedPlugins = params.resolvedConfig.plugins;
+  const allowWillChange =
+    Array.isArray(resolvedPlugins?.allow) &&
+    resolvedPlugins.allow.length > 0 &&
+    !resolvedPlugins.allow.includes(params.pluginId);
+  if (allowWillChange && arrayHasEnvRef(params.authoredConfig.plugins.allow)) {
+    return true;
+  }
+  const denyWillChange =
+    Array.isArray(resolvedPlugins?.deny) && resolvedPlugins.deny.includes(params.pluginId);
+  return denyWillChange && arrayHasEnvRef(params.authoredConfig.plugins.deny);
+}
+
+function wouldMoveAuthoredEnvPluginLoadPath(params: {
+  cfg: OpenClawConfig;
+  issues: readonly { path?: string; message?: string }[];
+  authoredConfig: unknown;
+  env: NodeJS.ProcessEnv;
+}): boolean {
+  const missingPaths = new Set(
+    params.issues
+      .map(extractMissingPluginLoadPath)
+      .filter((value): value is string => Boolean(value))
+      .map((value) => resolveUserPath(value, params.env)),
+  );
+  const paths = params.cfg.plugins?.load?.paths;
+  const authoredPaths = readPluginLoadPathEntries(params.authoredConfig);
+  if (missingPaths.size === 0 || !Array.isArray(paths) || !Array.isArray(authoredPaths)) {
+    return false;
+  }
+  let removedBefore = false;
+  for (const [index, entry] of paths.entries()) {
+    if (typeof entry === "string" && missingPaths.has(resolveUserPath(entry, params.env))) {
+      removedBefore = true;
+      continue;
+    }
+    const authoredEntry = authoredPaths[index];
+    if (
+      removedBefore &&
+      typeof authoredEntry === "string" &&
+      ENV_VAR_REFERENCE_RE.test(authoredEntry)
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function removeMissingPluginLoadPaths(
@@ -583,21 +697,54 @@ async function loadConfigFromSnapshotForInstall(
       "Config file could not be parsed; run `openclaw doctor` to repair it.",
     );
   }
+  const pluginId = request.bundledPluginId?.trim() ?? "";
+  const pluginLabel = pluginId || "the requested plugin";
+  if (hasConfigInclude(snapshot.parsed)) {
+    throw buildInvalidPluginInstallConfigError(
+      `Config invalid outside the plugin recovery path for ${pluginLabel}; run \`openclaw doctor --fix\` before reinstalling it.`,
+    );
+  }
+  if (
+    hasAuthoredPluginPolicyEnvRefs({
+      authoredConfig: snapshot.parsed,
+      resolvedConfig: snapshot.config,
+      pluginId,
+    })
+  ) {
+    throw buildInvalidPluginInstallConfigError(
+      `Config invalid outside the plugin recovery path for ${pluginLabel}; run \`openclaw doctor --fix\` before reinstalling it.`,
+    );
+  }
+  const persistedInstallRecords = await tracePluginLifecyclePhaseAsync(
+    "install records load",
+    () => loadInstalledPluginIndexInstallRecords(),
+    { command: "install" },
+  );
+  const installRecords = {
+    ...snapshot.config.plugins?.installs,
+    ...persistedInstallRecords,
+  };
   if (
     snapshot.legacyIssues.length > 0 ||
     snapshot.issues.length === 0 ||
-    snapshot.issues.some((issue) => !isAllowedPluginRecoveryIssue(issue, request))
+    snapshot.issues.some((issue) => !isAllowedPluginRecoveryIssue(issue, request, installRecords))
   ) {
-    const pluginLabel = request.bundledPluginId ?? "the requested plugin";
     throw buildInvalidPluginInstallConfigError(
       `Config invalid outside the plugin recovery path for ${pluginLabel}; run \`openclaw doctor --fix\` before reinstalling it.`,
     );
   }
   let nextConfig = snapshot.config;
-  for (const mutation of await collectChannelDoctorStaleConfigMutations(snapshot.config, {
-    env: process.env,
-  })) {
-    nextConfig = mutation.config;
+  if (
+    wouldMoveAuthoredEnvPluginLoadPath({
+      cfg: nextConfig,
+      issues: snapshot.issues,
+      authoredConfig: snapshot.parsed,
+      env: process.env,
+    })
+  ) {
+    throw buildInvalidPluginInstallConfigError(
+      `Config invalid outside the plugin recovery path for ${pluginLabel}; run \`openclaw doctor --fix\` before reinstalling it.`,
+    );
   }
   nextConfig = removeMissingPluginLoadPaths(nextConfig, snapshot.issues, process.env);
   return {
