@@ -3,6 +3,15 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
+import {
+  claimAgentRunContext,
+  getAgentEventLifecycleGeneration,
+  getAgentRunContext,
+  resetAgentRunContextForTest,
+  rotateAgentEventLifecycleGeneration,
+  withAgentRunLifecycleGeneration,
+} from "../../infra/agent-events.js";
 import type { AgentHarness } from "../harness/types.js";
 import type { AgentInternalEvent } from "../internal-events.js";
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
@@ -805,6 +814,156 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     const attemptParams = mockCallArg(mockedRunEmbeddedAttempt) as EmbeddedRunAttemptParams;
     expect(attemptParams?.runtimePlan).toBe(runtimePlan);
     expect(attemptParams?.internalEvents).toBe(internalEvents);
+  });
+
+  it("keeps an explicitly captured lifecycle generation across the embedded attempt", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      runId: "run-before-restart",
+      lifecycleGeneration,
+    });
+
+    expectMockCallFields(mockedRunEmbeddedAttempt, {
+      lifecycleGeneration,
+    });
+  });
+
+  it("rebinds preserved queued work to the current lifecycle generation", async () => {
+    resetAgentRunContextForTest();
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+    let enqueueCount = 0;
+    let runQueuedTask: (() => void) | undefined;
+    const onExecutionStarted = vi.fn();
+    const runPromise = runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      runId: "queued-across-restart",
+      trigger: "user",
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      onExecutionStarted,
+      enqueue: async (task) => {
+        enqueueCount += 1;
+        if (enqueueCount === 1) {
+          return await task();
+        }
+        return await new Promise((resolve, reject) => {
+          runQueuedTask = () => {
+            void Promise.resolve().then(task).then(resolve, reject);
+          };
+        });
+      },
+    });
+    await vi.waitFor(() => expect(runQueuedTask).toBeTypeOf("function"));
+
+    const currentLifecycleGeneration = rotateAgentEventLifecycleGeneration();
+    runQueuedTask?.();
+    await runPromise;
+
+    expectMockCallFields(mockedRunEmbeddedAttempt, {
+      lifecycleGeneration: currentLifecycleGeneration,
+    });
+    expect(getAgentRunContext("queued-across-restart")).toEqual(
+      expect.objectContaining({
+        lifecycleGeneration: currentLifecycleGeneration,
+      }),
+    );
+    expect(onExecutionStarted).toHaveBeenCalledWith({
+      lifecycleGeneration: currentLifecycleGeneration,
+    });
+    resetAgentRunContextForTest();
+  });
+
+  it("rejects background work queued across lifecycle rotation", async () => {
+    resetAgentRunContextForTest();
+    let enqueueCount = 0;
+    let runQueuedTask: (() => void) | undefined;
+    const runPromise = runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      runId: "background-queued-across-restart",
+      trigger: "cron",
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      enqueue: async (task) => {
+        enqueueCount += 1;
+        if (enqueueCount === 1) {
+          return await task();
+        }
+        return await new Promise((resolve, reject) => {
+          runQueuedTask = () => {
+            void Promise.resolve().then(task).then(resolve, reject);
+          };
+        });
+      },
+    });
+    await vi.waitFor(() => expect(runQueuedTask).toBeTypeOf("function"));
+
+    rotateAgentEventLifecycleGeneration();
+    runQueuedTask?.();
+
+    await expect(runPromise).rejects.toMatchObject({
+      name: "AbortError",
+      message: "Agent run belongs to a stale gateway lifecycle",
+    });
+    expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
+    expect(getAgentRunContext("background-queued-across-restart")).toBeUndefined();
+  });
+
+  it("does not claim a rebound generation after queued work was aborted", async () => {
+    resetAgentRunContextForTest();
+    let enqueueCount = 0;
+    let runQueuedTask: (() => void) | undefined;
+    const abortController = new AbortController();
+    const onExecutionStarted = vi.fn();
+    const runPromise = runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      runId: "aborted-queued-across-restart",
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      abortSignal: abortController.signal,
+      onExecutionStarted,
+      enqueue: async (task) => {
+        enqueueCount += 1;
+        if (enqueueCount === 1) {
+          return await task();
+        }
+        return await new Promise((resolve, reject) => {
+          runQueuedTask = () => {
+            void Promise.resolve().then(task).then(resolve, reject);
+          };
+        });
+      },
+    });
+    await vi.waitFor(() => expect(runQueuedTask).toBeTypeOf("function"));
+
+    const runResult = runPromise.catch((error: unknown) => error);
+    rotateAgentEventLifecycleGeneration();
+    abortController.abort();
+    runQueuedTask?.();
+
+    await expect(runResult).resolves.toMatchObject({ name: "AbortError" });
+    expect(onExecutionStarted).not.toHaveBeenCalled();
+    expect(getAgentRunContext("aborted-queued-across-restart")).toBeUndefined();
+  });
+
+  it("rejects stale descendants admitted after lifecycle rotation", async () => {
+    resetAgentRunContextForTest();
+    const preRestartGeneration = getAgentEventLifecycleGeneration();
+    rotateAgentEventLifecycleGeneration();
+
+    const runPromise = withAgentRunLifecycleGeneration(preRestartGeneration, () =>
+      runEmbeddedAgent({
+        ...overflowBaseRunParams,
+        runId: "stale-descendant",
+        enqueue: async (task) => await task(),
+      }),
+    );
+
+    await expect(runPromise).rejects.toMatchObject({
+      name: "AbortError",
+      message: "Agent run belongs to a stale gateway lifecycle",
+    });
+    expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
+    expect(getAgentRunContext("stale-descendant")).toBeUndefined();
   });
 
   it("marks user-triggered session queue work as foreground", async () => {
@@ -2207,20 +2366,71 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       }),
     );
 
-    await runEmbeddedAgent(overflowBaseRunParams);
+    const replyOperation = createReplyOperation({
+      sessionKey: "test-key",
+      sessionId: "test-session",
+      resetTriggered: false,
+    });
+    const onSessionIdChanged = vi.fn();
+    replyOperation.setPhase("running");
+    try {
+      await runEmbeddedAgent({
+        ...overflowBaseRunParams,
+        replyOperation,
+        onSessionIdChanged,
+      });
 
-    expectMockCallFields(
-      mockedRunEmbeddedAttempt,
-      {
+      expectMockCallFields(
+        mockedRunEmbeddedAttempt,
+        {
+          sessionId: "rotated-session",
+          sessionFile: "/tmp/rotated-session.json",
+        },
+        1,
+      );
+      expectMockCallFields(mockedRunContextEngineMaintenance, {
         sessionId: "rotated-session",
         sessionFile: "/tmp/rotated-session.json",
-      },
-      1,
-    );
-    expectMockCallFields(mockedRunContextEngineMaintenance, {
-      sessionId: "rotated-session",
-      sessionFile: "/tmp/rotated-session.json",
+      });
+      expect(replyOperation.sessionId).toBe("rotated-session");
+      expect(onSessionIdChanged).toHaveBeenCalledWith("rotated-session");
+    } finally {
+      replyOperation.complete();
+    }
+  });
+
+  it("does not let an old execution rotate a newer same-id run context", async () => {
+    resetAgentRunContextForTest();
+    const currentLifecycleGeneration = rotateAgentEventLifecycleGeneration();
+    claimAgentRunContext("shared-run", {
+      sessionKey: "new-session-key",
+      sessionId: "new-session",
+      lifecycleGeneration: currentLifecycleGeneration,
     });
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        promptError: null,
+        sessionIdUsed: "old-rotated-session",
+      }),
+    );
+
+    await expect(
+      runEmbeddedAgent({
+        ...overflowBaseRunParams,
+        runId: "shared-run",
+        lifecycleGeneration: "pre-restart",
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+
+    expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
+    expect(getAgentRunContext("shared-run")).toEqual(
+      expect.objectContaining({
+        sessionKey: "new-session-key",
+        sessionId: "new-session",
+        lifecycleGeneration: currentLifecycleGeneration,
+      }),
+    );
+    resetAgentRunContextForTest();
   });
 
   it("guards thrown engine-owned overflow compaction attempts", async () => {

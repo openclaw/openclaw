@@ -353,6 +353,14 @@ export type PluginHookLlmOutputEvent = {
     cacheWrite?: number;
     total?: number;
   };
+  /**
+   * Requested reasoning/think effort for this call (provider think level, e.g.
+   * "off" | "low" | "medium" | "high"). Lets a passive footer show the mode the
+   * user is actually running without re-deriving it.
+   */
+  reasoningEffort?: string;
+  /** Whether fast mode was active for this call. */
+  fastMode?: boolean;
 };
 
 export type PluginHookAgentEndEvent = {
@@ -494,12 +502,84 @@ export type PluginHookReplyDispatchResult = {
   counts: Record<ReplyDispatchKind, number>;
 };
 
+/**
+ * Per-turn execution state for the outbound reply, available to every harness
+ * (embedded, CLI, Codex app-server) — sourced from the unified `runResult.meta`
+ * at dispatch, not from the harness-specific `llm_output` hook. Lets a plugin
+ * render a passive per-response footer without re-deriving run state.
+ */
+export type PluginHookReplyUsageState = {
+  provider?: string;
+  model?: string;
+  /** Resolved provider/model ref actually used (keeps the provider prefix). */
+  resolvedRef?: string;
+  /** Requested reasoning/think effort (e.g. "off" | "low" | "medium" | "high"). */
+  reasoningEffort?: string;
+  fastMode?: boolean;
+  /** True when a model fallback was used for this turn. */
+  fallbackUsed?: boolean;
+  /** Owning agent + session for this reply. */
+  agentId?: string;
+  sessionId?: string;
+  /** Chat surface kind (e.g. "direct" | "group"). */
+  chatType?: string;
+  /** Credential mode the turn ran under (e.g. "oauth" | "api_key"). */
+  authMode?: string;
+  /** Session model-override source, when a non-default model was pinned. */
+  overrideSource?: string;
+  /** Provider/model ref requested for the turn (vs resolvedRef actually used). */
+  requested?: string;
+  /** Estimated cost of this turn in USD, when a cost table is configured. */
+  turnUsd?: number;
+  /** Wall-clock duration of the turn in milliseconds. */
+  durationMs?: number;
+  /** Owning agent's configured identity (name/emoji/avatar), when set. */
+  identity?: { name?: string; emoji?: string; avatar?: string };
+  compactionCount?: number;
+  /** Effective context-token budget after model/config/agent caps. */
+  contextTokenBudget?: number;
+  /**
+   * Actual context-window occupancy at the END of the turn — the final model
+   * call's prompt tokens, NOT the per-turn aggregate. This is the value
+   * `context.used_tokens` / `context.pct_used` must use: the aggregate prompt
+   * total over a multi-call tool loop overstates occupancy (often beyond the
+   * window). Absent on harnesses that don't report it (the contract then falls
+   * back to the aggregate prompt total, which is correct for single-call turns).
+   */
+  contextUsedTokens?: number;
+  usage?: {
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+    total?: number;
+  };
+  /**
+   * Usage from the FINAL model call of the turn only — vs `usage`, which is the
+   * turn aggregate summed across every tool-loop call. Lets a footer render the
+   * last exchange's i/o + cache instead of the whole turn. Absent on harnesses
+   * that don't report per-call usage.
+   */
+  lastUsage?: {
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+    total?: number;
+  };
+};
+
 export type PluginHookReplyPayloadSendingEvent = {
   payload: PluginHookReplyPayload;
   kind: ReplyDispatchKind;
   channel?: string;
   sessionKey?: string;
   runId?: string;
+  /**
+   * Per-turn usage snapshot for live dispatcher delivery. Absent on durable
+   * delivery/replay paths, and whenever no exact run correlation is available.
+   */
+  usageState?: PluginHookReplyUsageState;
 };
 
 export type PluginHookReplyPayload = Omit<ReplyPayload, "trustedLocalMedia">;

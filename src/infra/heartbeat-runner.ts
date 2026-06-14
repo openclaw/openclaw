@@ -1559,6 +1559,7 @@ export async function runHeartbeatOnce(opts: {
   }
 
   let runSessionKey = sessionKey;
+  let outboundPolicySessionKey: string | undefined;
   if (useIsolatedSession) {
     const configuredSession = resolveHeartbeatSession(cfg, agentId, heartbeat);
     // Collapse only the repeated `:heartbeat` suffixes introduced by wake-triggered
@@ -1628,6 +1629,7 @@ export async function runHeartbeatOnce(opts: {
       }
     }
     runSessionKey = isolatedSessionKey;
+    outboundPolicySessionKey = isolatedBaseSessionKey;
   }
   // Update task last run times AFTER successful heartbeat completion
   const updateTaskTimestamps = async () => {
@@ -1707,7 +1709,8 @@ export async function runHeartbeatOnce(opts: {
   const outboundSession = buildOutboundSessionContext({
     cfg,
     agentId,
-    sessionKey,
+    sessionKey: runSessionKey,
+    policySessionKey: outboundPolicySessionKey,
   });
   const canAttemptHeartbeatOk = Boolean(
     !hasDueCommitments && visibility.showOk && delivery.channel !== "none" && delivery.to,
@@ -2057,15 +2060,20 @@ export async function runHeartbeatOnce(opts: {
     if (send.status === "failed" || send.status === "partial_failed") {
       throw send.error;
     }
-    await markCommitmentsStatus({
-      cfg,
-      ids: dueCommitmentIds,
-      status: shouldSkipMain ? "dismissed" : "sent",
-      nowMs: startedAt,
-    });
+    const visibleSendSucceeded = send.status === "sent";
+    // Suppressed durable sends committed no visible channel message. Keep due
+    // commitments and heartbeat dedupe state active so a later heartbeat can retry.
+    if (shouldSkipMain || visibleSendSucceeded) {
+      await markCommitmentsStatus({
+        cfg,
+        ids: dueCommitmentIds,
+        status: shouldSkipMain ? "dismissed" : "sent",
+        nowMs: startedAt,
+      });
+    }
 
     // Record last delivered heartbeat payload for dedupe.
-    if (!shouldSkipMain && normalized.text.trim()) {
+    if (visibleSendSucceeded && !shouldSkipMain && normalized.text.trim()) {
       await updateSessionStore(storePath, (store) => {
         const current = store[sessionKey];
         if (!current) {
@@ -2079,17 +2087,22 @@ export async function runHeartbeatOnce(opts: {
       });
     }
 
-    const sentStatus = deliveredAgentRunFailure ? "failed" : "sent";
+    const eventStatus = deliveredAgentRunFailure
+      ? "failed"
+      : visibleSendSucceeded
+        ? "sent"
+        : "skipped";
     emitHeartbeatEvent({
-      status: sentStatus,
+      status: eventStatus,
       to: delivery.to,
       ...(deliveredAgentRunFailure ? { reason: "agent-runner-failure" } : {}),
+      ...(!deliveredAgentRunFailure && !visibleSendSucceeded ? { reason: send.reason } : {}),
       preview: previewText?.slice(0, 200),
       durationMs: Date.now() - startedAt,
       hasMedia: mediaUrls.length > 0,
       channel: delivery.channel,
       accountId: delivery.accountId,
-      indicatorType: visibility.useIndicator ? resolveIndicatorType(sentStatus) : undefined,
+      indicatorType: visibility.useIndicator ? resolveIndicatorType(eventStatus) : undefined,
     });
     await updateTaskTimestamps();
     consumeInspectedSystemEvents();

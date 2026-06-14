@@ -494,6 +494,21 @@ export const id: TranslationMap = {
       minutes: "{minutes}m {seconds}dtk",
     },
   },
+  logsView: {
+    title: "Logs",
+    subtitle: "Gateway file logs (JSONL).",
+    exportButton: "Export {label}",
+    exportLabels: {
+      filtered: "filtered",
+      visible: "visible",
+    },
+    filter: "Filter",
+    searchPlaceholder: "Search logs",
+    autoFollow: "Auto-follow",
+    file: "File: {file}",
+    truncated: "Log output truncated; showing latest chunk.",
+    empty: "No log entries.",
+  },
   workboard: {
     disabledHelpStart: "Workboard dinonaktifkan. Aktifkan",
     enableConfigKey: "plugins.entries.workboard.enabled = true",
@@ -612,6 +627,7 @@ export const id: TranslationMap = {
     labelsPlaceholder: "ui, docs",
     searchPlaceholder: "Cari kartu",
     allPriorities: "Semua prioritas",
+    hideEmptyColumns: "Hide empty columns",
     emptyColumn: "Letakkan pekerjaan di sini",
     lifecycleUnlinked: "Tidak ada sesi",
     lifecycleUnlinkedDetail: "Mulai atau tautkan sesi",
@@ -1343,6 +1359,17 @@ export const id: TranslationMap = {
     },
     toolCards: {
       toolError: "Kesalahan tool",
+    },
+    workspaceFiles: {
+      label: "Workspace files",
+      expand: "Expand workspace files",
+      collapse: "Collapse workspace files",
+      workspace: "Workspace",
+      files: "Files",
+      refresh: "Refresh files",
+      loading: "Loading files…",
+      empty: "No workspace files",
+      missing: "Missing",
     },
   },
   languages: {

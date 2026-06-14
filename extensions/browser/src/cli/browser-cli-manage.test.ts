@@ -461,4 +461,24 @@ describe("browser manage output", () => {
     expect(output).toContain("OK gateway: browser control endpoint reachable");
     expect(output).toContain("OK tabs: 1 visible, use tab reference t1");
   });
+
+  it("prints a readable browser doctor failure when gateway auth SecretRefs are unavailable", async () => {
+    const error = Object.assign(new Error("gateway.auth.password unavailable"), {
+      code: "GATEWAY_SECRET_REF_UNAVAILABLE",
+      name: "GatewaySecretRefUnavailableError",
+    });
+    getBrowserManageCallBrowserRequestMock().mockRejectedValueOnce(error);
+
+    const program = createBrowserManageProgram();
+    await expect(program.parseAsync(["browser", "doctor"], { from: "user" })).rejects.toThrow(
+      "__exit__:1",
+    );
+
+    const output = lastRuntimeLog();
+    expect(output).toContain(
+      "FAIL gateway: Gateway auth SecretRef is unavailable in this command path",
+    );
+    expect(output).toContain("OPENCLAW_GATEWAY_TOKEN");
+    expect(output).not.toContain("GatewaySecretRefUnavailableError");
+  });
 });
