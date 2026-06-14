@@ -96,7 +96,7 @@ export function resolveOpenClawCodingToolsSessionKeys(
   };
 }
 
-/** Returns the channel provider used when constructing the Codex message tool. */
+/** Returns the canonical channel used for Codex message routing and receipts. */
 export function resolveCodexMessageToolProvider(
   params: Pick<EmbeddedRunAttemptParams, "messageChannel" | "messageProvider">,
 ): string | undefined {
@@ -217,6 +217,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     },
     sandbox: input.sandbox,
     messageProvider: resolveCodexMessageToolProvider(params),
+    toolPolicyMessageProvider: params.messageProvider ?? params.messageChannel,
     agentAccountId: params.agentAccountId,
     messageTo: params.messageTo,
     messageThreadId: params.messageThreadId,
