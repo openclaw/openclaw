@@ -182,10 +182,19 @@ describe("codex media understanding provider", () => {
 
   it("runs image understanding through a bounded Codex app-server turn", async () => {
     const { client, requests } = createFakeClient();
-    const clientFactory = vi.fn(async (_startOptions, _authProfileId, _agentDir) => client);
+    const clientFactory = vi.fn(
+      async (_startOptions, _authProfileId, _agentDir, _config) => client,
+    );
     const provider = buildCodexMediaUnderstandingProvider({
       clientFactory,
     });
+    const cfg = {
+      auth: {
+        order: {
+          openai: ["openai:work"],
+        },
+      },
+    };
 
     const result = await provider.describeImage?.({
       buffer: Buffer.from("image-bytes"),
@@ -195,7 +204,7 @@ describe("codex media understanding provider", () => {
       model: "gpt-5.4",
       prompt: "Describe briefly.",
       timeoutMs: 30_000,
-      cfg: {},
+      cfg,
       agentDir: "/tmp/openclaw-agent",
     });
 
@@ -209,6 +218,7 @@ describe("codex media understanding provider", () => {
       expect.any(Object),
       undefined,
       "/tmp/openclaw-agent",
+      cfg,
     );
     expect(requests[1]?.params).toEqual({
       model: "gpt-5.4",
@@ -240,6 +250,28 @@ describe("codex media understanding provider", () => {
       model: "gpt-5.4",
       effort: "low",
     });
+  });
+
+  it("treats a blank agent directory as absent when starting the app-server", async () => {
+    const { client, requests } = createFakeClient();
+    const clientFactory = vi.fn(async () => client);
+    const provider = buildCodexMediaUnderstandingProvider({ clientFactory });
+    const cfg = {};
+
+    await provider.describeImage?.({
+      buffer: Buffer.from("image-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      provider: "codex",
+      model: "gpt-5.4",
+      timeoutMs: 30_000,
+      cfg,
+      agentDir: " ",
+    });
+
+    expect(clientFactory).toHaveBeenCalledWith(expect.any(Object), undefined, undefined, cfg);
+    expect(requests[1]?.params).toEqual(expect.objectContaining({ cwd: process.cwd() }));
+    expect(requests[2]?.params).toEqual(expect.objectContaining({ cwd: process.cwd() }));
   });
 
   it("clamps oversized image understanding turn timeouts", async () => {
