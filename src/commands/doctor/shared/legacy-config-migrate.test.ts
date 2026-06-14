@@ -1858,6 +1858,56 @@ describe("legacy migrate MCP server type aliases", () => {
   });
 });
 
+describe("legacy migrate MCP blocked stdio env keys", () => {
+  it("removes blocked env keys from command-bearing servers and preserves benign keys", () => {
+    const res = migrateLegacyConfigForTest({
+      mcp: {
+        servers: {
+          pytools: {
+            command: "/srv/venv/bin/python",
+            args: ["server.py"],
+            env: {
+              PYTHONPATH: "/srv/workspace",
+              NODE_OPTIONS: "--require=./evil.js",
+              PYTHONUNBUFFERED: "1",
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toStrictEqual([
+      "Removed mcp.servers.pytools.env.PYTHONPATH (blocked for stdio startup safety; set it on the gateway host process instead).",
+      "Removed mcp.servers.pytools.env.NODE_OPTIONS (blocked for stdio startup safety; set it on the gateway host process instead).",
+    ]);
+    expect(res.config?.mcp?.servers?.pytools).toEqual({
+      command: "/srv/venv/bin/python",
+      args: ["server.py"],
+      env: { PYTHONUNBUFFERED: "1" },
+    });
+  });
+
+  it("leaves non-stdio servers and benign env keys untouched", () => {
+    const res = migrateLegacyConfigForTest({
+      mcp: {
+        servers: {
+          remote: {
+            url: "https://example.com/mcp",
+            env: { PYTHONPATH: "/srv/workspace" },
+          },
+          docs: {
+            command: "docs-mcp",
+            env: { PATH: "/srv/bin", SAFE_VALUE: "ok" },
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toStrictEqual([]);
+    expect(res.config).toBeNull();
+  });
+});
+
 describe("legacy migrate x_search auth", () => {
   it("moves only legacy x_search auth into plugin-owned xai config", () => {
     const res = migrateLegacyConfigForTest({

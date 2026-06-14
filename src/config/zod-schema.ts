@@ -4,6 +4,7 @@ import {
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
+import { listBlockedMcpStdioEnvKeys } from "../agents/mcp-config-shared.js";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -445,7 +446,21 @@ const McpServerSchema = z
       .strict()
       .optional(),
   })
-  .catchall(z.unknown());
+  .catchall(z.unknown())
+  .superRefine((server, ctx) => {
+    // Stdio env keys that can alter interpreter startup are rejected as a
+    // configuration error (docs/cli/mcp.md) instead of saved-then-dropped.
+    if (typeof server.command !== "string" || server.command.trim().length === 0) {
+      return;
+    }
+    for (const key of listBlockedMcpStdioEnvKeys(server.env)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["env", key],
+        message: `env "${key}" is blocked for stdio startup safety; set it on the gateway host process instead of the MCP server env block`,
+      });
+    }
+  });
 
 const McpConfigSchema = z
   .object({

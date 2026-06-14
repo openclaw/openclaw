@@ -1,4 +1,5 @@
 // Normalizes MCP server config for runtime launch and validation.
+import { listBlockedMcpStdioEnvKeys } from "../agents/mcp-config-shared.js";
 import { isRecord } from "../utils.js";
 import { readSourceConfigSnapshot } from "./io.js";
 import {
@@ -135,6 +136,23 @@ export async function updateConfiguredMcpServerTools(params: {
   };
 }
 
+/**
+ * Returns a write-blocking error when a stdio server config carries env keys
+ * the startup safety policy would drop at launch (docs/cli/mcp.md promises a
+ * configuration error for these instead of a save-then-warn).
+ */
+function findBlockedStdioEnvError(server: Record<string, unknown>): string | undefined {
+  if (typeof server.command !== "string" || server.command.trim().length === 0) {
+    return undefined;
+  }
+  const blocked = listBlockedMcpStdioEnvKeys(server.env);
+  if (blocked.length === 0) {
+    return undefined;
+  }
+  const keys = blocked.map((key) => `"${key}"`).join(", ");
+  return `MCP env ${keys} ${blocked.length === 1 ? "is" : "are"} blocked for stdio startup safety. Remove ${blocked.length === 1 ? "it" : "them"} from the server env block or set ${blocked.length === 1 ? "it" : "them"} on the gateway host process instead.`;
+}
+
 export async function updateConfiguredMcpServer(params: {
   name: string;
   update: (server: Record<string, unknown>) => Record<string, unknown>;
@@ -161,6 +179,10 @@ export async function updateConfiguredMcpServer(params: {
   const next = structuredClone(loaded.config);
   const servers = normalizeConfiguredMcpServers(next.mcp?.servers);
   servers[name] = canonicalizeConfiguredMcpServer(params.update({ ...servers[name] }));
+  const blockedEnvError = findBlockedStdioEnvError(servers[name]);
+  if (blockedEnvError) {
+    return { ok: false, path: loaded.path, error: blockedEnvError };
+  }
   next.mcp = {
     ...next.mcp,
     servers,
@@ -208,6 +230,10 @@ export async function setConfiguredMcpServer(params: {
   const next = structuredClone(loaded.config);
   const servers = normalizeConfiguredMcpServers(next.mcp?.servers);
   servers[name] = canonicalizeConfiguredMcpServer(params.server);
+  const blockedEnvError = findBlockedStdioEnvError(servers[name]);
+  if (blockedEnvError) {
+    return { ok: false, path: loaded.path, error: blockedEnvError };
+  }
   next.mcp = {
     ...next.mcp,
     servers,

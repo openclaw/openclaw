@@ -51,6 +51,17 @@ type ResolvedMcpTransportConfig = ResolvedStdioMcpTransportConfig | ResolvedHttp
 const DEFAULT_CONNECTION_TIMEOUT_MS = 30_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
 
+// Write boundaries reject blocked stdio env keys, but configs edited by hand
+// or written by older builds can still carry them. The resolver runs on every
+// transport resolution (status, probe, each spawn), so warn once per
+// server+key per process instead of flooding the gateway journal.
+const warnedDroppedMcpEnvKeys = new Set<string>();
+
+/** Clears the per-process dropped-env warning dedupe state (test hook). */
+export function resetDroppedMcpEnvWarningsForTests(): void {
+  warnedDroppedMcpEnvKeys.clear();
+}
+
 function getPositiveNumber(rawServer: unknown, keys: readonly string[]): number | undefined {
   if (!rawServer || typeof rawServer !== "object") {
     return undefined;
@@ -206,6 +217,11 @@ export function resolveMcpTransportConfig(
   const effectiveTransport = requestedTransport || requestedTransportAlias;
   const stdioLaunch = resolveStdioMcpServerLaunchConfig(rawServer, {
     onDroppedEnv: (key) => {
+      const dedupeKey = `${logServerName}\u0000${key}`;
+      if (warnedDroppedMcpEnvKeys.has(dedupeKey)) {
+        return;
+      }
+      warnedDroppedMcpEnvKeys.add(dedupeKey);
       logWarn(
         `bundle-mcp: server "${logServerName}": env "${sanitizeForLog(key)}" is blocked for stdio startup safety and was ignored.`,
       );

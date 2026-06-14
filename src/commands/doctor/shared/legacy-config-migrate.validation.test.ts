@@ -190,4 +190,37 @@ describe("legacy config migrate validation", () => {
       'Set tools.profile to "full" so tools.allow controls explicit configured-section grants directly.',
     ]);
   });
+
+  it("returns valid config after removing blocked stdio MCP env keys", () => {
+    // Configs saved by released builds (≤ v2026.6.6) can carry blocked stdio
+    // env keys that now fail schema validation; doctor --fix must repair them
+    // into a fully valid config.
+    const res = migrateLegacyConfig({
+      mcp: {
+        servers: {
+          pytools: {
+            command: "/srv/venv/bin/python",
+            args: ["server.py"],
+            env: { PYTHONPATH: "/srv/workspace", PYTHONUNBUFFERED: "1" },
+          },
+          remote: {
+            url: "https://example.com/mcp",
+          },
+        },
+      },
+    });
+
+    expect(res.partiallyValid).toBeUndefined();
+    expect(res.changes).toStrictEqual([
+      "Removed mcp.servers.pytools.env.PYTHONPATH (blocked for stdio startup safety; set it on the gateway host process instead).",
+    ]);
+    expect(res.config?.mcp?.servers?.pytools).toEqual({
+      command: "/srv/venv/bin/python",
+      args: ["server.py"],
+      env: { PYTHONUNBUFFERED: "1" },
+    });
+    expect(res.config?.mcp?.servers?.remote).toEqual({
+      url: "https://example.com/mcp",
+    });
+  });
 });

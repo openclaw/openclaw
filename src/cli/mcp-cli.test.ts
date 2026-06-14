@@ -116,6 +116,28 @@ describe("mcp cli", () => {
     });
   });
 
+  it("rejects mcp set when stdio env keys are blocked by startup safety", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async () => {
+      const workspaceDir = await createWorkspace();
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+
+      await expect(
+        runMcpCommand([
+          "mcp",
+          "set",
+          "pytools",
+          '{"command":"/srv/venv/bin/python","args":["server.py"],"env":{"PYTHONPATH":"/srv/workspace"}}',
+        ]),
+      ).rejects.toThrow("__exit__:1");
+      expect(lastErrorLine()).toBe(
+        'MCP env "PYTHONPATH" is blocked for stdio startup safety. Remove it from the server env block or set it on the gateway host process instead.',
+      );
+
+      mockError.mockClear();
+      await expect(runMcpCommand(["mcp", "show", "pytools"])).rejects.toThrow("__exit__:1");
+    });
+  });
+
   it("adds a configured MCP server from flags without replacing operator knobs", async () => {
     await withTempHome("openclaw-cli-mcp-home-", async () => {
       const workspaceDir = await createWorkspace();
