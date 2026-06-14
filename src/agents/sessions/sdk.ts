@@ -12,7 +12,12 @@ import { clampThinkingLevel } from "../../llm/model-utils.js";
 import { streamSimple } from "../../llm/stream.js";
 import type { Message, Model } from "../../llm/types.js";
 import { getAgentDir } from "../config.js";
-import { Agent, type AgentMessage, type ThinkingLevel } from "../runtime/index.js";
+import {
+  Agent,
+  type AgentMessage,
+  type AgentOptions,
+  type ThinkingLevel,
+} from "../runtime/index.js";
 import { AgentSession, type AgentSessionWriteLockRunner } from "./agent-session.js";
 import { formatNoModelsAvailableMessage } from "./auth-guidance.js";
 import { AuthStorage } from "./auth-storage.js";
@@ -103,6 +108,8 @@ export interface CreateAgentSessionOptions {
   tools?: string[];
   /** Custom tools to register (in addition to built-in tools). */
   customTools?: ToolDefinition[];
+  /** Hydrate an authorized tool deferred out of the current provider-visible tool set. */
+  resolveDeferredTool?: AgentOptions["resolveDeferredTool"];
 
   /** Resource loader. When omitted, DefaultResourceLoader is used. */
   resourceLoader?: ResourceLoader;
@@ -454,6 +461,7 @@ export async function createAgentSession(
       }
       return runner.emitContext(messages);
     },
+    resolveDeferredTool: options.resolveDeferredTool,
     steeringMode: settingsManager.getSteeringMode(),
     followUpMode: settingsManager.getFollowUpMode(),
     transport: settingsManager.getTransport(),

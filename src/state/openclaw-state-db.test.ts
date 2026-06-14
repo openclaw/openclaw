@@ -1,4 +1,5 @@
 // OpenClaw state database tests cover state DB migrations and persistence.
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -404,6 +405,77 @@ describe("openclaw state database", () => {
     expect(second.db.isOpen).toBe(true);
     expect(openOpenClawStateDatabase({ path: firstPath })).toBe(first);
     expect(readSqliteNumberPragma(first.db, "user_version")).toBe(1);
+  });
+
+  it("keys explicit relative paths by resolved database pathname", () => {
+    const moduleUrl = new URL("./openclaw-state-db.ts", import.meta.url).href;
+    const output = execFileSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "--input-type=module",
+        "-e",
+        `
+          import fs from "node:fs";
+          import os from "node:os";
+          import path from "node:path";
+          import {
+            closeOpenClawStateDatabaseForTest,
+            openOpenClawStateDatabase,
+          } from ${JSON.stringify(moduleUrl)};
+
+          const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-state-db-relative-"));
+          const firstDir = path.join(root, "first");
+          const secondDir = path.join(root, "second");
+          fs.mkdirSync(firstDir);
+          fs.mkdirSync(secondDir);
+          const previousCwd = process.cwd();
+          try {
+            process.chdir(firstDir);
+            const firstPath = path.resolve("state.sqlite");
+            const first = openOpenClawStateDatabase({ path: "state.sqlite" });
+            first.db
+              .prepare("INSERT INTO diagnostic_events (scope, event_key, payload_json, created_at) VALUES (?, ?, ?, ?)")
+              .run("relative-path", "first", "{}", 1);
+
+            process.chdir(secondDir);
+            const secondPath = path.resolve("state.sqlite");
+            const second = openOpenClawStateDatabase({ path: "state.sqlite" });
+            second.db
+              .prepare("INSERT INTO diagnostic_events (scope, event_key, payload_json, created_at) VALUES (?, ?, ?, ?)")
+              .run("relative-path", "second", "{}", 2);
+
+            console.log(JSON.stringify({
+              sameHandle: first === second,
+              firstPath,
+              secondPath,
+              firstFileExists: fs.existsSync(path.join(firstDir, "state.sqlite")),
+              secondFileExists: fs.existsSync(path.join(secondDir, "state.sqlite")),
+              firstRows: first.db.prepare("SELECT event_key FROM diagnostic_events WHERE scope = ?").all("relative-path"),
+              secondRows: second.db.prepare("SELECT event_key FROM diagnostic_events WHERE scope = ?").all("relative-path"),
+            }));
+          } finally {
+            process.chdir(previousCwd);
+            closeOpenClawStateDatabaseForTest();
+          }
+        `,
+      ],
+      { encoding: "utf8" },
+    );
+    const result = JSON.parse(output) as {
+      firstFileExists: boolean;
+      firstRows: Array<{ event_key: string }>;
+      sameHandle: boolean;
+      secondFileExists: boolean;
+      secondRows: Array<{ event_key: string }>;
+    };
+
+    expect(result.sameHandle).toBe(false);
+    expect(result.firstFileExists).toBe(true);
+    expect(result.secondFileExists).toBe(true);
+    expect(result.firstRows).toEqual([{ event_key: "first" }]);
+    expect(result.secondRows).toEqual([{ event_key: "second" }]);
   });
 
   it("uses savepoints for nested write transaction rollback", () => {

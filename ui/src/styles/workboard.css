@@ -758,7 +758,11 @@
 
 .workboard-card--health-highlight {
   --workboard-health-highlight-color: var(--accent);
-  border-color: color-mix(in srgb, var(--workboard-health-highlight-color) 70%, var(--border-strong));
+  border-color: color-mix(
+    in srgb,
+    var(--workboard-health-highlight-color) 70%,
+    var(--border-strong)
+  );
   box-shadow:
     0 0 0 1px color-mix(in srgb, var(--workboard-health-highlight-color) 42%, transparent),
     0 0 0 4px color-mix(in srgb, var(--workboard-health-highlight-color) 14%, transparent),
