@@ -1575,6 +1575,39 @@ export const registerTelegramHandlers = ({
       }).isAuthorizedSender;
     }
 
+    // If the group is explicitly configured with groupPolicy: "open", treat the
+    // callback the same way native commands do and authorize it without requiring
+    // account-level groupAllowFrom entries. Fixes issue #92655.
+    if (isGroup) {
+      const policyAccess = evaluateTelegramGroupPolicyAccess({
+        isGroup,
+        chatId,
+        cfg: cfgLocal,
+        telegramCfg,
+        topicConfig: context.topicConfig,
+        groupConfig: context.groupConfig,
+        effectiveGroupAllow: context.effectiveGroupAllow,
+        senderId,
+        senderUsername,
+        resolveGroupPolicy,
+        enforcePolicy: true,
+        useTopicAndGroupOverrides: true,
+        enforceAllowlistAuthorization: false,
+        allowEmptyAllowlistEntries: true,
+        requireSenderForAllowlistAuthorization: true,
+        checkChatAllowlist: true,
+      });
+      if (!policyAccess.allowed) {
+        logVerbose(
+          `Blocked telegram model callback from ${senderId || "unknown"} (${policyAccess.reason})`,
+        );
+        return false;
+      }
+      if (policyAccess.groupPolicy === "open") {
+        return true;
+      }
+    }
+
     const expandedDmAllowFrom = await expandTelegramAllowFromWithAccessGroups({
       cfg: cfgLocal,
       allowFrom: dmAllowFrom,
