@@ -1582,7 +1582,14 @@ describe("messaging tool media URL tracking", () => {
                   ? { to: args.to, threadImplicit: true }
                   : null,
               extractToolSendResult: ({ result }: { result: unknown }) => {
-                const details = (result as { details?: { toolSend?: unknown } })?.details;
+                const providerResult = result as {
+                  status?: string;
+                  details?: { redacted?: boolean; toolSend?: unknown };
+                };
+                if (providerResult.status !== "sent" || providerResult.details?.redacted !== true) {
+                  return null;
+                }
+                const details = providerResult.details;
                 return (details?.toolSend as { to: string; threadId?: string } | undefined) ?? null;
               },
             },
@@ -1592,6 +1599,14 @@ describe("messaging tool media URL tracking", () => {
       ]),
     );
     const { ctx } = createTestContext();
+    ctx.consumeToolSendReceipt = () => ({
+      details: {
+        toolSend: {
+          to: "channel:resolved-id",
+          threadId: "root-1",
+        },
+      },
+    });
 
     await handleToolExecutionStart(ctx, {
       type: "tool_execution_start",
@@ -1610,12 +1625,8 @@ describe("messaging tool media URL tracking", () => {
       toolCallId: "tool-mattermost-name",
       isError: false,
       result: {
-        details: {
-          toolSend: {
-            to: "channel:resolved-id",
-            threadId: "root-1",
-          },
-        },
+        status: "sent",
+        details: { redacted: true },
       },
     });
 

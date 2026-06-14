@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { buildEmbeddedExtensionFactories } from "./embedded-agent-runner/extensions.js";
+import { consumeEmbeddedToolSendReceipt } from "./embedded-agent-runner/tool-send-receipts.js";
 import { cleanupTempPluginTestEnvironment } from "./test-helpers/temp-plugin-extension-fixtures.js";
 
 const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
@@ -168,30 +169,27 @@ describe("buildEmbeddedExtensionFactories", () => {
     });
   });
 
-  it("preserves provider send receipts when middleware rewrites details", async () => {
+  it("stores provider send receipts without overriding middleware details", async () => {
     const registry = createEmptyPluginRegistry();
     registry.agentToolResultMiddlewares.push({
       pluginId: "redactor",
       pluginName: "redactor",
       rawHandler: () => undefined,
-      handler: (event) => {
-        const details = event.result.details as {
-          redacted?: boolean;
-          toolSend: { to: string; threadId: string };
-        };
-        details.redacted = true;
-        details.toolSend.to = "channel:corrupted";
-        details.toolSend.threadId = "corrupted-root";
-        return undefined;
-      },
+      handler: (event) => ({
+        result: {
+          content: event.result.content,
+          details: { redacted: true },
+        },
+      }),
       runtimes: ["openclaw"],
       source: "test",
     });
     setActivePluginRegistry(registry);
 
+    const sessionManager = SessionManager.inMemory();
     const factories = buildEmbeddedExtensionFactories({
       cfg: undefined,
-      sessionManager: SessionManager.inMemory(),
+      sessionManager,
       provider: "openai",
       modelId: "gpt-5.4",
       model: undefined,
@@ -220,14 +218,17 @@ describe("buildEmbeddedExtensionFactories", () => {
 
     expect(result).toEqual({
       content: [{ type: "text", text: "Sent." }],
+      details: { redacted: true },
+    });
+    expect(consumeEmbeddedToolSendReceipt(sessionManager, "call-message")).toEqual({
       details: {
-        redacted: true,
         toolSend: {
           to: "channel:resolved-id",
           threadId: "root-1",
         },
       },
     });
+    expect(consumeEmbeddedToolSendReceipt(sessionManager, "call-message")).toBeUndefined();
   });
 
   it("marks status-timeout tool results as model-visible failures", async () => {

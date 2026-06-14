@@ -293,6 +293,20 @@ function readToolResultDetailsRecord(result: unknown): Record<string, unknown> |
   return readRecordField(asOptionalObjectRecord(result)?.details);
 }
 
+function applyToolSendReceiptForExtraction(result: unknown, receiptResult: unknown): unknown {
+  const toolSend = readToolResultDetailsRecord(receiptResult)?.toolSend;
+  if (toolSend === undefined) {
+    return result;
+  }
+  return {
+    ...readRecordField(result),
+    details: {
+      ...readToolResultDetailsRecord(result),
+      toolSend,
+    },
+  };
+}
+
 function isAsyncStartedToolResult(result: unknown): boolean {
   const details = readToolResultDetailsRecord(result);
   return details?.async === true && details.status === "started";
@@ -1177,6 +1191,7 @@ export async function handleToolExecutionEnd(
   const runId = ctx.params.runId;
   const isError = evt.isError;
   const result = evt.result;
+  const toolSendReceiptResult = ctx.consumeToolSendReceipt?.(toolCallId);
   const observerIsError = isError || isToolResultError(result);
   const sanitizedResult = sanitizeToolResult(result);
   const approvalUnavailable =
@@ -1286,7 +1301,8 @@ export async function handleToolExecutionEnd(
   if (pendingTarget) {
     ctx.state.pendingMessagingTargets.delete(toolCallId);
     if (!isToolError) {
-      const confirmedTarget = extractMessagingToolSendResult(pendingTarget, result);
+      const extractionResult = applyToolSendReceiptForExtraction(result, toolSendReceiptResult);
+      const confirmedTarget = extractMessagingToolSendResult(pendingTarget, extractionResult);
       ctx.state.messagingToolSentTargets.push({
         ...confirmedTarget,
         ...(pendingText ? { text: pendingText } : {}),
