@@ -132,6 +132,31 @@ describe("doctor empty allowlist policy scan", () => {
     expect(warnings.some((w) => w.includes("group messages"))).toBe(true);
   });
 
+  it("still warns when the default account is present even if named accounts have own allowFrom", () => {
+    // When the `default` account exists, the top-level is also an active
+    // account (not just a parent). The parent warning must still fire.
+    const warnings = scanEmptyAllowlistPolicyWarnings(
+      {
+        channels: {
+          telegram: {
+            groupPolicy: "allowlist",
+            groupAllowFrom: [],
+            accounts: {
+              default: {
+                groupAllowFrom: ["@defaultUser"],
+              },
+              bot1: {
+                groupAllowFrom: ["@alice"],
+              },
+            },
+          },
+        },
+      },
+      { doctorFixCommand: "openclaw doctor --fix" },
+    );
+    expect(warnings.some((w) => w.includes("group messages"))).toBe(true);
+  });
+
   it("still warns when a root default account coexists with named accounts and lacks its own allowFrom", () => {
     // Regression: the root `default` account IS an active account, not just
     // a parent/fallback. If it doesn't have its own groupAllowFrom, the

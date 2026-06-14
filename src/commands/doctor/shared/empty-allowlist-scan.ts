@@ -104,7 +104,13 @@ export function scanEmptyAllowlistPolicyWarnings(
     // empty groupAllowFrom is an unused parent/fallback and should not
     // trigger a warning.  If any account lacks its own list and relies on
     // the top-level, the warning is still legitimate.
+    // When the `default` account is present, the top-level config is also an
+    // active account (not just a parent/fallback). Preserve warnings for it.
+    const hasDefaultAccount =
+      accounts && "default" in accounts && !isDisabledRecord(accounts["default"]);
+
     const allAccountsHaveOwnAllowFrom =
+      !hasDefaultAccount &&
       accounts &&
       Object.keys(accounts).length > 0 &&
       (() => {
