@@ -5,7 +5,6 @@ import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import {
   createOpenAIAttributionHeadersWrapper,
-  createOpenAICompatibleCompletionsThinkingOffWrapper,
   createOpenAICompletionsStrictMessageKeysWrapper,
   createOpenAICompletionsToolsCompatWrapper,
   createOpenAIThinkingLevelWrapper,
@@ -43,27 +42,6 @@ const openaiModel = {
   provider: "openai",
   id: "gpt-5.2",
 } as Model<"openai-responses">;
-
-const lmstudioBinaryModel = {
-  api: "openai-completions",
-  provider: "lmstudio",
-  id: "google/gemma-4-26b-a4b-qat",
-  baseUrl: "http://127.0.0.1:1234/v1",
-  reasoning: true,
-  compat: {
-    supportsReasoningEffort: true,
-    supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
-    reasoningEffortMap: { off: "none", none: "none", adaptive: "xhigh", max: "xhigh" },
-  },
-} as unknown as Model<"openai-completions">;
-
-const lmstudioBareModel = {
-  api: "openai-completions",
-  provider: "lmstudio",
-  id: "qwen3-8b-instruct",
-  baseUrl: "http://127.0.0.1:1234/v1",
-  reasoning: true,
-} as unknown as Model<"openai-completions">;
 
 describe("createOpenAICompletionsToolsCompatWrapper", () => {
   it("strips tools fields when OpenAI-compatible models disable tool support", () => {
@@ -500,47 +478,6 @@ describe("createOpenAICompletionsStrictMessageKeysWrapper", () => {
       { role: "assistant", content: "calling tool" },
       { role: "tool", content: "tool result" },
     ]);
-  });
-});
-
-describe("createOpenAICompatibleCompletionsThinkingOffWrapper", () => {
-  it("maps completions reasoning_effort to the model's disabled value when thinkingLevel is off", () => {
-    const { baseStreamFn, payloads } = createPayloadCapture({
-      initialReasoningEffort: "high",
-    });
-    const wrapped = createOpenAICompatibleCompletionsThinkingOffWrapper(baseStreamFn, "off");
-    void wrapped(lmstudioBinaryModel, { messages: [] }, {});
-
-    expect(payloads[0]?.reasoning_effort).toBe("none");
-  });
-
-  it("drops completions reasoning_effort when thinkingLevel is off and the model has no disabled effort", () => {
-    const { baseStreamFn, payloads } = createPayloadCapture({
-      initialReasoningEffort: "high",
-    });
-    const wrapped = createOpenAICompatibleCompletionsThinkingOffWrapper(baseStreamFn, "off");
-    void wrapped(lmstudioBareModel, { messages: [] }, {});
-
-    expect(payloads[0]).not.toHaveProperty("reasoning_effort");
-  });
-
-  it("does not add completions reasoning_effort when thinkingLevel is off and none was sent", () => {
-    const { baseStreamFn, payloads } = createPayloadCapture();
-    const wrapped = createOpenAICompatibleCompletionsThinkingOffWrapper(baseStreamFn, "off");
-    void wrapped(lmstudioBinaryModel, { messages: [] }, {});
-
-    expect(payloads[0]).not.toHaveProperty("reasoning_effort");
-    expect(payloads[0]).not.toHaveProperty("reasoning");
-  });
-
-  it("leaves enabled thinking levels unchanged", () => {
-    const { baseStreamFn, payloads } = createPayloadCapture({
-      initialReasoningEffort: "high",
-    });
-    const wrapped = createOpenAICompatibleCompletionsThinkingOffWrapper(baseStreamFn, "high");
-    void wrapped(lmstudioBinaryModel, { messages: [] }, {});
-
-    expect(payloads[0]?.reasoning_effort).toBe("high");
   });
 });
 

@@ -6,6 +6,7 @@ import { VERSION } from "../version.js";
 import {
   composeProviderStreamWrappers as composeProviderStreamWrappersShared,
   createMoonshotThinkingWrapper as createMoonshotThinkingWrapperShared,
+  createOpenAICompatibleCompletionsThinkingOffWrapper as createOpenAICompatibleCompletionsThinkingOffWrapperShared,
   createPlainTextToolCallCompatWrapper as createPlainTextToolCallCompatWrapperShared,
   createToolStreamWrapper as createToolStreamWrapperShared,
 } from "./provider-stream-shared.js";
@@ -13,6 +14,7 @@ import {
   buildProviderStreamFamilyHooks,
   composeProviderStreamWrappers,
   createMoonshotThinkingWrapper,
+  createOpenAICompatibleCompletionsThinkingOffWrapper,
   createPlainTextToolCallCompatWrapper,
   createToolStreamWrapper,
   GOOGLE_THINKING_STREAM_HOOKS,
@@ -100,6 +102,9 @@ describe("composeProviderStreamWrappers", () => {
 
   it("re-exports shared helper wrappers", () => {
     expect(createMoonshotThinkingWrapper).toBe(createMoonshotThinkingWrapperShared);
+    expect(createOpenAICompatibleCompletionsThinkingOffWrapper).toBe(
+      createOpenAICompatibleCompletionsThinkingOffWrapperShared,
+    );
     expect(createPlainTextToolCallCompatWrapper).toBe(createPlainTextToolCallCompatWrapperShared);
     expect(createToolStreamWrapper).toBe(createToolStreamWrapperShared);
   });

@@ -34,6 +34,7 @@ export {
   composeProviderStreamWrappers,
   createAnthropicThinkingPrefillPayloadWrapper,
   createMoonshotThinkingWrapper,
+  createOpenAICompatibleCompletionsThinkingOffWrapper,
   createPlainTextToolCallCompatWrapper,
   createToolStreamWrapper,
   createZaiToolStreamWrapper,
@@ -200,7 +201,6 @@ export { createMinimaxFastModeWrapper } from "../llm/providers/stream-wrappers/m
 export {
   createOpenAIAttributionHeadersWrapper,
   createCodexNativeWebSearchWrapper,
-  createOpenAICompatibleCompletionsThinkingOffWrapper,
   createOpenAIDefaultTransportWrapper,
   createOpenAIFastModeWrapper,
   createOpenAIReasoningCompatibilityWrapper,

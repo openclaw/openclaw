@@ -12,7 +12,6 @@ import {
   flattenCompletionMessagesToStringContent,
   stripCompletionMessagesToRoleContent,
 } from "../../../agents/openai-completions-string-content.js";
-import { resolveOpenAIReasoningEffortMap } from "../../../agents/openai-reasoning-compat.js";
 import { resolveOpenAIReasoningEffortForModel } from "../../../agents/openai-reasoning-effort.js";
 import {
   applyOpenAIResponsesPayloadPolicy,
@@ -301,55 +300,6 @@ function resolveOpenAIThinkingPayloadEffort(params: {
       effort: "low",
     }) ?? mapped
   );
-}
-
-// The completions transport resolves reasoning_effort from request options before
-// wrappers run, so thinking "off" must rewrite that field too: map it to the model's
-// disabled effort, or drop it when the model has none. Deleting only the responses-style
-// `reasoning` object leaves self-hosted binary-thinking models running with thinking on.
-function suppressCompletionsReasoningEffortForThinkingOff(
-  model: { provider?: unknown; id?: unknown; baseUrl?: unknown; api?: unknown; compat?: unknown },
-  payloadObj: Record<string, unknown>,
-): void {
-  if (!("reasoning_effort" in payloadObj)) {
-    return;
-  }
-  const disabled = resolveOpenAIReasoningEffortForModel({
-    model,
-    effort: mapThinkingLevelToReasoningEffort("off"),
-    fallbackMap: resolveOpenAIReasoningEffortMap({
-      provider: typeof model.provider === "string" ? model.provider : null,
-      id: typeof model.id === "string" ? model.id : null,
-      compat: model.compat,
-    }),
-  });
-  if (disabled) {
-    payloadObj.reasoning_effort = disabled;
-  } else {
-    delete payloadObj.reasoning_effort;
-  }
-}
-
-/**
- * Applies explicit disabled-thinking intent to OpenAI-compatible Chat
- * Completions payloads without changing enabled reasoning levels.
- */
-export function createOpenAICompatibleCompletionsThinkingOffWrapper(
-  baseStreamFn: StreamFn | undefined,
-  thinkingLevel?: ThinkLevel,
-): StreamFn {
-  const underlying = baseStreamFn ?? streamSimple;
-  if (thinkingLevel !== "off") {
-    return underlying;
-  }
-  return (model, context, options) => {
-    if (model.api !== "openai-completions") {
-      return underlying(model, context, options);
-    }
-    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
-      suppressCompletionsReasoningEffortForThinkingOff(model, payloadObj);
-    });
-  };
 }
 
 function raiseMinimalReasoningForResponsesWebSearchPayload(params: {
