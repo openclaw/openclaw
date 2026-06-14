@@ -16,6 +16,7 @@ export const WIKI_RELATED_END_MARKER = "<!-- openclaw:wiki:related:end -->";
 export type WikiPageKind = (typeof WIKI_PAGE_KINDS)[number];
 
 type ParsedWikiMarkdown = {
+  hasFrontmatter: boolean;
   frontmatter: Record<string, unknown>;
   body: string;
 };
@@ -75,6 +76,7 @@ export type WikiPageSummary = {
   relativePath: string;
   kind: WikiPageKind;
   title: string;
+  hasFrontmatter: boolean;
   id?: string;
   pageType?: string;
   entityType?: string;
@@ -93,6 +95,7 @@ export type WikiPageSummary = {
   notEnoughFor: string[];
   sourceType?: string;
   provenanceMode?: string;
+  importedSourceBody?: "bridge" | "unsafe-local";
   sourcePath?: string;
   bridgeRelativePath?: string;
   bridgeWorkspaceDir?: string;
@@ -167,10 +170,11 @@ export function createWikiPageFilename(stem: string, extension = ".md"): string 
 export function parseWikiMarkdown(content: string): ParsedWikiMarkdown {
   const match = content.match(FRONTMATTER_PATTERN);
   if (!match) {
-    return { frontmatter: {}, body: content };
+    return { hasFrontmatter: false, frontmatter: {}, body: content };
   }
   const parsed = YAML.parse(match[1]) as unknown;
   return {
+    hasFrontmatter: true,
     frontmatter:
       parsed && typeof parsed === "object" && !Array.isArray(parsed)
         ? (parsed as Record<string, unknown>)
@@ -398,6 +402,23 @@ function extractWikiLinks(markdown: string, sourceRelativePath: string): string[
   return links;
 }
 
+function detectImportedSourceBody(markdown: string): "bridge" | "unsafe-local" | undefined {
+  const normalized = markdown.replace(/\r\n?/g, "\n");
+  if (
+    /^## Bridge Source\s*$/mu.test(normalized) ||
+    /^sourceType:\s*memory-bridge(?:-events)?\s*$/mu.test(normalized)
+  ) {
+    return "bridge";
+  }
+  if (
+    /^## Unsafe Local Source\s*$/mu.test(normalized) ||
+    /^(?:sourceType:\s*memory-unsafe-local|provenanceMode:\s*unsafe-local)\s*$/mu.test(normalized)
+  ) {
+    return "unsafe-local";
+  }
+  return undefined;
+}
+
 export function formatWikiLink(params: {
   renderMode: "native" | "obsidian";
   relativePath: string;
@@ -457,12 +478,16 @@ export function toWikiPageSummary(params: {
     (typeof parsed.frontmatter.title === "string" && parsed.frontmatter.title.trim()) ||
     extractTitleFromMarkdown(parsed.body) ||
     path.basename(params.relativePath, ".md");
+  const importedSourceBody = parsed.hasFrontmatter
+    ? undefined
+    : detectImportedSourceBody(params.raw);
 
   return {
     absolutePath: params.absolutePath,
     relativePath: params.relativePath.split(path.sep).join("/"),
     kind,
     title,
+    hasFrontmatter: parsed.hasFrontmatter,
     id: normalizeOptionalString(parsed.frontmatter.id),
     pageType: normalizeOptionalString(parsed.frontmatter.pageType),
     entityType: normalizeOptionalString(parsed.frontmatter.entityType),
@@ -485,6 +510,7 @@ export function toWikiPageSummary(params: {
     notEnoughFor: normalizeSingleOrTrimmedStringList(parsed.frontmatter.notEnoughFor),
     sourceType: normalizeOptionalString(parsed.frontmatter.sourceType),
     provenanceMode: normalizeOptionalString(parsed.frontmatter.provenanceMode),
+    ...(importedSourceBody ? { importedSourceBody } : {}),
     sourcePath: normalizeOptionalString(parsed.frontmatter.sourcePath),
     bridgeRelativePath: normalizeOptionalString(parsed.frontmatter.bridgeRelativePath),
     bridgeWorkspaceDir: normalizeOptionalString(parsed.frontmatter.bridgeWorkspaceDir),

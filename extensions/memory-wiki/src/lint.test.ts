@@ -8,6 +8,16 @@ import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const { createVault } = createMemoryWikiTestHarness();
 
+function issueCodesForPath(
+  result: Awaited<ReturnType<typeof lintMemoryWikiVault>>,
+  pagePath: string,
+): string[] {
+  return result.issues
+    .filter((issue) => issue.path === pagePath)
+    .map((issue) => issue.code)
+    .toSorted();
+}
+
 describe("lintMemoryWikiVault", () => {
   it("accepts native markdown links that include the relative .md target", async () => {
     const { rootDir, config } = await createVault({
@@ -49,6 +59,71 @@ describe("lintMemoryWikiVault", () => {
     const result = await lintMemoryWikiVault(config);
 
     expect(result.issues.map((issue) => issue.code)).not.toContain("broken-wikilink");
+  });
+
+  it("accepts unmanaged raw markdown source pages without page frontmatter", async () => {
+    const { rootDir, config } = await createVault({
+      prefix: "memory-wiki-lint-raw-sources-",
+    });
+    await fs.mkdir(path.join(rootDir, "sources"), { recursive: true });
+    await fs.writeFile(
+      path.join(rootDir, "sources", "raw-alpha.md"),
+      "# Raw Alpha Source\n\nRaw source notes stay usable as source evidence.\n",
+      "utf8",
+    );
+
+    const result = await lintMemoryWikiVault(config);
+
+    const rawIssueCodes = issueCodesForPath(result, "sources/raw-alpha.md");
+    expect(rawIssueCodes).not.toContain("missing-id");
+    expect(rawIssueCodes).not.toContain("missing-page-type");
+    expect(
+      result.issuesByCategory.structure.filter((issue) => issue.path === "sources/raw-alpha.md"),
+    ).toHaveLength(0);
+  });
+
+  it("keeps malformed imported source bodies visible to structure lint", async () => {
+    const { rootDir, config } = await createVault({
+      prefix: "memory-wiki-lint-malformed-imports-",
+    });
+    await fs.mkdir(path.join(rootDir, "sources"), { recursive: true });
+    await fs.writeFile(
+      path.join(rootDir, "sources", "bridge-alpha.md"),
+      [
+        "# Memory Bridge: Alpha",
+        "",
+        "## Bridge Source",
+        "- Workspace: `/tmp/workspace`",
+        "- Relative path: `MEMORY.md`",
+        "",
+        "## Content",
+        "alpha bridge body",
+      ].join("\n"),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "sources", "unsafe-alpha.md"),
+      [
+        "# Unsafe Local Import: alpha.md",
+        "",
+        "## Unsafe Local Source",
+        "- Configured path: `/tmp/private`",
+        "- Relative path: `alpha.md`",
+        "",
+        "## Content",
+        "alpha unsafe-local body",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const result = await lintMemoryWikiVault(config);
+
+    expect(issueCodesForPath(result, "sources/bridge-alpha.md")).toEqual(
+      expect.arrayContaining(["missing-id", "missing-page-type"]),
+    );
+    expect(issueCodesForPath(result, "sources/unsafe-alpha.md")).toEqual(
+      expect.arrayContaining(["missing-id", "missing-page-type"]),
+    );
   });
 
   it("detects duplicate ids, provenance gaps, contradictions, and open questions", async () => {

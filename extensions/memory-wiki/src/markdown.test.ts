@@ -50,6 +50,45 @@ describe("slugifyWikiSegment", () => {
 });
 
 describe("toWikiPageSummary", () => {
+  it("marks raw and imported source body metadata", () => {
+    const rawSource = toWikiPageSummary({
+      absolutePath: "/tmp/wiki/sources/raw-alpha.md",
+      relativePath: "sources/raw-alpha.md",
+      raw: "# Raw Alpha Source\n\nRaw source notes.\n",
+    });
+    const bridgeSource = toWikiPageSummary({
+      absolutePath: "/tmp/wiki/sources/bridge-alpha.md",
+      relativePath: "sources/bridge-alpha.md",
+      raw: "# Memory Bridge: Alpha\n\n## Bridge Source\n\n## Content\nalpha\n",
+    });
+    const unsafeLocalSource = toWikiPageSummary({
+      absolutePath: "/tmp/wiki/sources/unsafe-alpha.md",
+      relativePath: "sources/unsafe-alpha.md",
+      raw: "# Unsafe Local Import: alpha.md\n\n## Unsafe Local Source\n\n## Content\nalpha\n",
+    });
+    const structuredSource = toWikiPageSummary({
+      absolutePath: "/tmp/wiki/sources/structured-alpha.md",
+      relativePath: "sources/structured-alpha.md",
+      raw: renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          id: "source.alpha",
+          title: "Alpha Source",
+        },
+        body: "# Alpha Source\n",
+      }),
+    });
+
+    expect(rawSource?.hasFrontmatter).toBe(false);
+    expect(rawSource?.importedSourceBody).toBeUndefined();
+    expect(bridgeSource?.hasFrontmatter).toBe(false);
+    expect(bridgeSource?.importedSourceBody).toBe("bridge");
+    expect(unsafeLocalSource?.hasFrontmatter).toBe(false);
+    expect(unsafeLocalSource?.importedSourceBody).toBe("unsafe-local");
+    expect(structuredSource?.hasFrontmatter).toBe(true);
+    expect(structuredSource?.importedSourceBody).toBeUndefined();
+  });
+
   it("normalizes agent-facing people wiki metadata", () => {
     const raw = renderWikiMarkdown({
       frontmatter: {

@@ -51,6 +51,10 @@ function toExpectedPageType(page: WikiPageSummary): string {
   return page.kind;
 }
 
+function isUnmanagedRawSourcePage(page: WikiPageSummary): boolean {
+  return page.kind === "source" && !page.hasFrontmatter && !page.importedSourceBody;
+}
+
 function collectBrokenLinkIssues(pages: WikiPageSummary[]): MemoryWikiLintIssue[] {
   const validTargets = new Set<string>();
   for (const page of pages) {
@@ -83,14 +87,18 @@ function collectPageIssues(pages: WikiPageSummary[]): MemoryWikiLintIssue[] {
   const claimHealth = collectWikiClaimHealth(pages);
 
   for (const page of pages) {
+    const requiresStructuredPageMetadata = !isUnmanagedRawSourcePage(page);
+
     if (!page.id) {
-      issues.push({
-        severity: "error",
-        category: "structure",
-        code: "missing-id",
-        path: page.relativePath,
-        message: "Missing `id` frontmatter.",
-      });
+      if (requiresStructuredPageMetadata) {
+        issues.push({
+          severity: "error",
+          category: "structure",
+          code: "missing-id",
+          path: page.relativePath,
+          message: "Missing `id` frontmatter.",
+        });
+      }
     } else {
       const current = pagesById.get(page.id) ?? [];
       current.push(page);
@@ -98,13 +106,15 @@ function collectPageIssues(pages: WikiPageSummary[]): MemoryWikiLintIssue[] {
     }
 
     if (!page.pageType) {
-      issues.push({
-        severity: "error",
-        category: "structure",
-        code: "missing-page-type",
-        path: page.relativePath,
-        message: "Missing `pageType` frontmatter.",
-      });
+      if (requiresStructuredPageMetadata) {
+        issues.push({
+          severity: "error",
+          category: "structure",
+          code: "missing-page-type",
+          path: page.relativePath,
+          message: "Missing `pageType` frontmatter.",
+        });
+      }
     } else if (page.pageType !== toExpectedPageType(page)) {
       issues.push({
         severity: "error",
