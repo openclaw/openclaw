@@ -1,5 +1,5 @@
 ---
-summary: "Create and update workspace skills through Skill Workshop review"
+summary: "Create and update writable user-owned skills through Skill Workshop review"
 read_when:
   - You want the agent to create or update a skill from chat
   - You need to review, apply, reject, or quarantine a generated skill draft
@@ -8,16 +8,18 @@ title: "Skill Workshop"
 sidebarTitle: "Skill Workshop"
 ---
 
-Skill Workshop is OpenClaw's governed path for creating and updating workspace
-skills.
+Skill Workshop is OpenClaw's governed path for creating and updating writable
+user-owned skills.
 
 Agents and operators do not write active `SKILL.md` files directly through this
 path. They create a **proposal** first. A proposal is a pending draft containing
 the proposed skill content, target binding, scanner state, hashes, support-file
 metadata, and rollback metadata. It becomes a live skill only when applied.
 
-Skill Workshop writes workspace skills only. It does not mutate bundled,
-plugin, ClawHub, extra-root, managed, personal-agent, or system skills.
+Skill Workshop writes writable user-owned skills only: workspace skills and
+shared OpenClaw-managed skills under the user's OpenClaw skills directory. It
+does not mutate bundled, plugin, ClawHub, extra-root, personal-agent, system, or
+other dependency-owned skills.
 
 ## How it works
 
@@ -25,8 +27,8 @@ plugin, ClawHub, extra-root, managed, personal-agent, or system skills.
   `SKILL.md`.
 - **Apply is the only live write:** create, update, and revise do not change
   active skills.
-- **Workspace scoped:** creates target the workspace `skills/` root. Updates
-  are allowed only for writable workspace skills.
+- **User-owned scoped:** creates target the workspace `skills/` root. Updates
+  are allowed only for writable user-owned skills.
 - **No clobber:** create fails if the target skill already exists.
 - **Hash bound:** update proposals bind to the current target hash and become
   stale if the live skill changes before apply.
@@ -59,7 +61,7 @@ Create:
 Make a skill called morning-catchup that runs my Monday inbox routine.
 ```
 
-Update an existing workspace skill:
+Update an existing writable user-owned skill:
 
 ```text
 Update trip-planning to also check seat maps before booking.
@@ -88,7 +90,7 @@ openclaw skills workshop propose-create \
   --proposal ./PROPOSAL.md
 ```
 
-Create an update proposal for an existing workspace skill:
+Create an update proposal for an existing writable user-owned skill:
 
 ```bash
 openclaw skills workshop propose-update trip-planning --proposal ./PROPOSAL.md

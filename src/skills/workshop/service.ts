@@ -3,6 +3,7 @@ import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readLocalFileSafely, root, walkDirectory } from "../../infra/fs-safe.js";
+import { CONFIG_DIR } from "../../utils.js";
 import { normalizeSkillIndexName } from "../discovery/skill-index.js";
 import {
   buildWorkspaceSkillStatus,
@@ -72,7 +73,11 @@ type SkillProposalScopeOptions = {
   workspaceDir?: string;
 };
 
-const WRITABLE_WORKSPACE_SOURCES = new Set(["openclaw-workspace", "agents-skills-project"]);
+const WRITABLE_WORKSPACE_SOURCES = new Set([
+  "openclaw-workspace",
+  "agents-skills-project",
+  "openclaw-managed",
+]);
 const MAX_PROPOSAL_DRAFT_BYTES = 1024 * 1024;
 const MAX_PROPOSAL_DIRECTORY_ENTRIES = MAX_PROPOSAL_SUPPORT_FILES * 4;
 const MAX_SKILL_PROPOSAL_DESCRIPTION_BYTES = 160;
@@ -312,6 +317,7 @@ export async function proposeUpdateSkill(
   const status = buildWorkspaceSkillStatus(input.workspaceDir, {
     config: input.config,
     agentId: input.agentId,
+    managedSkillsDir: resolveManagedSkillsDir(),
   });
   const targetSkill = resolveSkillStatusEntry(status.skills, skillName);
   if (!targetSkill) {
@@ -384,8 +390,7 @@ export async function reviseSkillProposal(
   const config = resolveSkillWorkshopConfig(input.config);
   return await withPendingSkillProposalMutation(input, "revised", async (read) => {
     const { record } = read;
-    assertInsideWorkspace(input.workspaceDir, record.target.skillFile, "skill file");
-    assertInsideWorkspace(input.workspaceDir, record.target.skillDir, "skill directory");
+    assertWritableProposalTarget(input.workspaceDir, record);
 
     if (record.kind === "create") {
       const currentContent = await readWorkspaceSkillFile(record.target.skillFile);
@@ -529,9 +534,9 @@ export async function applySkillProposal(
       throw new Error("Proposal scan failed; proposal was quarantined.");
     }
 
-    assertInsideWorkspace(input.workspaceDir, record.target.skillFile, "skill file");
-    assertInsideWorkspace(input.workspaceDir, record.target.skillDir, "skill directory");
+    assertWritableProposalTarget(input.workspaceDir, record);
     const workshopConfig = resolveSkillWorkshopConfig(input.config);
+    const writeRootDir = resolveProposalWriteRootDir(input.workspaceDir, record);
     const symlinkPolicy = {
       allowWrites: workshopConfig.allowSymlinkTargetWrites,
       allowedTargetRealPaths: workshopConfig.allowSymlinkTargetWrites
@@ -539,7 +544,7 @@ export async function applySkillProposal(
         : [],
     };
     await assertWorkspaceSkillWriteTarget({
-      workspaceDir: input.workspaceDir,
+      workspaceDir: writeRootDir,
       filePath: record.target.skillFile,
       symlinkPolicy,
     });
@@ -562,7 +567,7 @@ export async function applySkillProposal(
 
     const skillContent = stripProposalFrontmatterForSkill(content);
     await writeWorkspaceSkill({
-      workspaceDir: input.workspaceDir,
+      workspaceDir: writeRootDir,
       skillDir: record.target.skillDir,
       skillFile: record.target.skillFile,
       content: skillContent,
@@ -905,8 +910,7 @@ async function hydrateProposalSupportFiles(
 
 function isProposalInWorkspace(record: SkillProposalRecord, workspaceDir: string): boolean {
   try {
-    assertInsideWorkspace(workspaceDir, record.target.skillFile, "skill file");
-    assertInsideWorkspace(workspaceDir, record.target.skillDir, "skill directory");
+    assertWritableProposalTarget(workspaceDir, record);
     return true;
   } catch {
     return false;
@@ -958,11 +962,38 @@ function assertWritableSkillTarget(workspaceDir: string, skill: SkillStatusEntry
   if (!WRITABLE_WORKSPACE_SOURCES.has(skill.source)) {
     throw new Error(`Skill source is not writable by Skill Workshop: ${skill.source}`);
   }
-  assertInsideWorkspace(workspaceDir, skill.filePath, "skill file");
-  assertInsideWorkspace(workspaceDir, skill.baseDir, "skill directory");
+  if (skill.source === "openclaw-managed") {
+    assertInsideManagedSkillsDir(skill.filePath, "skill file");
+    assertInsideManagedSkillsDir(skill.baseDir, "skill directory");
+  } else {
+    assertInsideWorkspace(workspaceDir, skill.filePath, "skill file");
+    assertInsideWorkspace(workspaceDir, skill.baseDir, "skill directory");
+  }
   if (path.basename(skill.filePath) !== "SKILL.md") {
     throw new Error("Skill Workshop can only update SKILL.md targets.");
   }
+}
+
+function assertWritableProposalTarget(workspaceDir: string, record: SkillProposalRecord): void {
+  if (record.target.source === "openclaw-managed") {
+    assertInsideManagedSkillsDir(record.target.skillFile, "skill file");
+    assertInsideManagedSkillsDir(record.target.skillDir, "skill directory");
+    return;
+  }
+  assertInsideWorkspace(workspaceDir, record.target.skillFile, "skill file");
+  assertInsideWorkspace(workspaceDir, record.target.skillDir, "skill directory");
+}
+
+function resolveProposalWriteRootDir(workspaceDir: string, record: SkillProposalRecord): string {
+  return record.target.source === "openclaw-managed" ? resolveManagedSkillsDir() : workspaceDir;
+}
+
+function assertInsideManagedSkillsDir(targetPath: string, label: string): void {
+  assertInsideWorkspace(resolveManagedSkillsDir(), targetPath, label);
+}
+
+function resolveManagedSkillsDir(): string {
+  return path.resolve(CONFIG_DIR, "skills");
 }
 
 function normalizeRequired(value: string, label: string): string {
