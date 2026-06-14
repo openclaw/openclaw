@@ -16,6 +16,13 @@ The external reranker plugin lets you replace mmr in memorySearch:hybrid and pro
 
 Install route: npm; ClawHub (`@openclaw/memory-external-reranker`).
 
+<Warning>
+  This plugin sends the user query and candidate memory snippets to the configured provider
+  endpoint, and may attach the provider API key from `models.providers.<id>.apiKey`. Treat the
+  endpoint as operator-approved egress: review redaction, logging, retention, SSRF/private-network
+  policy, and credential handling before enabling it.
+</Warning>
+
 <CardGroup cols={2}>
   <Card title="Memory rerankers" href="/concepts/memory-rerankers">
     Conceptual overview of reranking in OpenClaw memory search.

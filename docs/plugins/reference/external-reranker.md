@@ -46,6 +46,12 @@ Runtime URL join behavior: OpenClaw sends requests to
 already ends with `/v1`, set `endpointPath` to `/rerank` (or remove `/v1` from
 the provider `baseUrl`) to avoid `/v1/v1/rerank`.
 
+<Warning>
+  The reranker forwards the user query and candidate memory snippets to the configured endpoint
+  and can include the provider API key. Review egress, logging, retention, redaction, and
+  SSRF/private-network policy before treating this as an approved deployment.
+</Warning>
+
 ### Private or localhost endpoints
 
 If `models.providers.<provider>.baseUrl` points to localhost or a private IP
