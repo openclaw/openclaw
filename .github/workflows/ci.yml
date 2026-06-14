@@ -1358,6 +1358,8 @@ jobs:
           - check_name: check-additional-boundaries-bcd
             group: boundaries
             boundary_shard: 2/4,3/4,4/4
+          - check_name: check-session-accessor-boundary
+            group: session-accessor-boundary
           - check_name: check-additional-extension-channels
             group: extension-channels
           - check_name: check-additional-extension-bundled
@@ -1503,6 +1505,9 @@ jobs:
           case "$ADDITIONAL_CHECK_GROUP" in
             boundaries)
               node scripts/run-additional-boundary-checks.mjs
+              ;;
+            session-accessor-boundary)
+              run_check "lint:tmp:session-accessor-boundary" pnpm run lint:tmp:session-accessor-boundary
               ;;
             extension-channels)
               run_check "lint:extensions:channels" pnpm run lint:extensions:channels
