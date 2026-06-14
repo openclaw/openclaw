@@ -269,6 +269,14 @@ function getValidator(schema: Tool["parameters"]): ReturnType<typeof Compile> {
   return validator;
 }
 
+function formatUnknownError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function invalidParameterSchemaError(toolName: string, error: unknown): Error {
+  return new Error(`Invalid parameter schema for tool "${toolName}": ${formatUnknownError(error)}`);
+}
+
 function formatValidationPath(error: TLocalizedValidationError): string {
   if (error.keyword === "required") {
     const requiredProperty = (error.params as { requiredProperties?: string[] })
@@ -294,13 +302,36 @@ export function validateToolCall(tools: Tool[], toolCall: ToolCall): unknown {
 /** Validates tool arguments against TypeBox or plain JSON-schema parameters. */
 export function validateToolArguments(tool: Tool, toolCall: ToolCall): unknown {
   const args = structuredClone(toolCall.arguments);
-  Value.Convert(tool.parameters, args);
+  try {
+    Value.Convert(tool.parameters, args);
+  } catch (error) {
+    throw invalidParameterSchemaError(tool.name, error);
+  }
 
-  const validator = getValidator(tool.parameters);
-  if (!hasTypeBoxMetadata(tool.parameters) && isJsonSchemaObject(tool.parameters)) {
+  let validator: ReturnType<typeof Compile>;
+  try {
+    validator = getValidator(tool.parameters);
+  } catch (error) {
+    throw invalidParameterSchemaError(tool.name, error);
+  }
+
+  let shouldCoercePlainJsonSchema: boolean;
+  try {
+    shouldCoercePlainJsonSchema =
+      !hasTypeBoxMetadata(tool.parameters) && isJsonSchemaObject(tool.parameters);
+  } catch (error) {
+    throw invalidParameterSchemaError(tool.name, error);
+  }
+
+  if (shouldCoercePlainJsonSchema) {
     // TypeBox Value.Convert is intentionally conservative for plain JSON schemas;
     // mirror the provider-facing coercions so model-emitted string numbers validate.
-    const coerced = coerceWithJsonSchema(args, tool.parameters);
+    let coerced: unknown;
+    try {
+      coerced = coerceWithJsonSchema(args, tool.parameters);
+    } catch (error) {
+      throw invalidParameterSchemaError(tool.name, error);
+    }
     if (coerced !== args) {
       if (isRecord(args) && isRecord(coerced)) {
         for (const key of Object.keys(args)) {
@@ -308,20 +339,33 @@ export function validateToolArguments(tool: Tool, toolCall: ToolCall): unknown {
         }
         Object.assign(args, coerced);
       } else {
-        return validator.Check(coerced) ? coerced : args;
+        try {
+          return validator.Check(coerced) ? coerced : args;
+        } catch (error) {
+          throw invalidParameterSchemaError(tool.name, error);
+        }
       }
     }
   }
 
-  if (validator.Check(args)) {
-    return args;
+  try {
+    if (validator.Check(args)) {
+      return args;
+    }
+  } catch (error) {
+    throw invalidParameterSchemaError(tool.name, error);
   }
 
-  const errors =
-    validator
-      .Errors(args)
-      .map((error) => `  - ${formatValidationPath(error)}: ${error.message}`)
-      .join("\n") || "Unknown validation error";
+  let errors: string;
+  try {
+    errors =
+      validator
+        .Errors(args)
+        .map((error) => `  - ${formatValidationPath(error)}: ${error.message}`)
+        .join("\n") || "Unknown validation error";
+  } catch (error) {
+    throw invalidParameterSchemaError(tool.name, error);
+  }
 
   throw new Error(
     `Validation failed for tool "${toolCall.name}":\n${errors}\n\nReceived arguments:\n${JSON.stringify(toolCall.arguments, null, 2)}`,
