@@ -261,14 +261,33 @@ export async function recoverOrphanedSubagentSessions(params: {
           const staleAgeSeconds = Math.round(
             (now - (runRecord.startedAt ?? runRecord.createdAt ?? now)) / 1000,
           );
-          void finalizeInterruptedSubagentRun({
-            runId,
-            childSessionKey,
-            error: `stale aborted subagent run not resumed (${staleAgeSeconds}s old, exceeds stale-run window)`,
-          }).catch((err: unknown) => {
-            log.warn(`finalize stale run ${runId}: ${String(err)}`);
-          });
-          result.skipped++;
+          const staleError = `stale aborted subagent run not resumed (${staleAgeSeconds}s old, exceeds stale-run window)`;
+          try {
+            const updated = await finalizeInterruptedSubagentRun({
+              runId,
+              childSessionKey,
+              error: staleError,
+            });
+            if (updated === 0) {
+              result.failed++;
+              result.failedRuns.push({
+                runId,
+                childSessionKey,
+                error: staleError,
+              });
+            } else {
+              result.skipped++;
+            }
+          } catch (err: unknown) {
+            const error = formatErrorMessage(err);
+            log.warn(`finalize stale run ${runId}: ${error}`);
+            result.failed++;
+            result.failedRuns.push({
+              runId,
+              childSessionKey,
+              error,
+            });
+          }
           continue;
         }
 
