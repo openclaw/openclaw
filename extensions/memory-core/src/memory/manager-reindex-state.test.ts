@@ -1,5 +1,6 @@
 // Memory Core tests cover manager reindex state plugin behavior.
-import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { DEFAULT_LOCAL_MODEL } from "openclaw/plugin-sdk/memory-core-host-embedding-registry";
+import { hashText, type MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it } from "vitest";
 import {
   resolveConfiguredScopeHash,
@@ -53,6 +54,10 @@ function createIdentityParams(
   };
 }
 
+function localProviderKey(model: string): string {
+  return hashText(JSON.stringify({ provider: "local", model }));
+}
+
 describe("memory reindex state", () => {
   it("marks identity dirty when the embedding model changes", () => {
     expect(
@@ -103,6 +108,54 @@ describe("memory reindex state", () => {
         }),
       ),
     ).toEqual({ status: "valid" });
+  });
+
+  it("accepts local default model identity across hf uri and downloaded gguf path formats", () => {
+    const downloadedModelPath = `/home/user/.cache/openclaw/models/${DEFAULT_LOCAL_MODEL.split("/").at(-1)}`;
+
+    for (const [indexedModel, currentModel] of [
+      [DEFAULT_LOCAL_MODEL, downloadedModelPath],
+      [downloadedModelPath, DEFAULT_LOCAL_MODEL],
+    ]) {
+      expect(
+        resolveMemoryIndexIdentityState(
+          createIdentityParams({
+            provider: { id: "local", model: currentModel },
+            providerKey: localProviderKey(currentModel),
+            meta: createMeta({
+              provider: "local",
+              model: indexedModel,
+              providerKey: localProviderKey(indexedModel),
+              vectorDims: 768,
+            }),
+            vectorReady: true,
+          }),
+        ),
+      ).toEqual({ status: "valid" });
+    }
+  });
+
+  it("keeps local model identity strict for a different gguf path", () => {
+    const differentModelPath = "/home/user/models/other-embedding-model.gguf";
+
+    expect(
+      resolveMemoryIndexIdentityState(
+        createIdentityParams({
+          provider: { id: "local", model: differentModelPath },
+          providerKey: localProviderKey(differentModelPath),
+          meta: createMeta({
+            provider: "local",
+            model: DEFAULT_LOCAL_MODEL,
+            providerKey: localProviderKey(DEFAULT_LOCAL_MODEL),
+            vectorDims: 768,
+          }),
+          vectorReady: true,
+        }),
+      ),
+    ).toEqual({
+      status: "mismatched",
+      reason: `index was built for model ${DEFAULT_LOCAL_MODEL}, expected ${differentModelPath}`,
+    });
   });
 
   it("does not mark identity dirty for vector dimensions before chunks exist", () => {

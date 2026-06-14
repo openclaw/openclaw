@@ -17,7 +17,10 @@ import { splitSourceWideEmbeddingChunks } from "./manager-embedding-ops.js";
 import { LOCAL_EMBEDDING_WORKER_ERROR_CODES } from "./manager-local-worker-errors.js";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
 import { closeMemoryIndexManagersForAgent, EMBEDDING_PROBE_CACHE_TTL_MS } from "./manager.js";
-import { registerBuiltInMemoryEmbeddingProviders } from "./provider-adapters.js";
+import {
+  DEFAULT_LOCAL_MODEL,
+  registerBuiltInMemoryEmbeddingProviders,
+} from "./provider-adapters.js";
 
 // This suite performs real sqlite/media indexing and can exceed the global
 // timeout when it shares a packed CI extension shard.
@@ -96,7 +99,8 @@ vi.mock("./embeddings.js", () => {
         options.provider === "fallback-provider" ||
         options.provider === "batch-test" ||
         options.provider === "batch-wide-test" ||
-        options.provider === "ollama"
+        options.provider === "ollama" ||
+        options.provider === "local"
           ? options.provider
           : "mock";
       const model = options.model ?? "mock-embed";
@@ -747,6 +751,49 @@ describe("memory index", () => {
         status: "mismatched",
         reason: "index was built for model old-embed, expected new-embed",
       });
+    } finally {
+      await nextManager.close?.();
+    }
+  });
+
+  it("keeps local default model index usable when config moves from hf uri to downloaded gguf path", async () => {
+    const dbPath = path.join(workspaceDir, "index-local-default-model-path-upgrade.sqlite");
+    const downloadedModelPath = path.join(
+      workspaceDir,
+      "models",
+      path.basename(DEFAULT_LOCAL_MODEL),
+    );
+    const oldCfg = createCfg({
+      storePath: dbPath,
+      provider: "local",
+      model: DEFAULT_LOCAL_MODEL,
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const oldManager = await getFreshManager(oldCfg);
+    await oldManager.sync({ reason: "test", force: true });
+    await oldManager.close?.();
+
+    const nextCfg = createCfg({
+      storePath: dbPath,
+      provider: "local",
+      model: downloadedModelPath,
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const statusManager = await getFreshManager(nextCfg, "status");
+    try {
+      expect(statusManager.status().dirty).toBe(false);
+      expect(statusManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+    } finally {
+      await statusManager.close?.();
+    }
+
+    const nextManager = await getFreshManager(nextCfg);
+    try {
+      const results = await nextManager.search("zebra");
+
+      expect(results.length).toBeGreaterThan(0);
+      expect(results[0]?.path).toContain("memory/2026-01-12.md");
+      expect(nextManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
     } finally {
       await nextManager.close?.();
     }
