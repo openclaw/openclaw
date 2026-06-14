@@ -40,6 +40,9 @@ data class ChatSessionEntry(
   val key: String,
   val updatedAtMs: Long?,
   val displayName: String? = null,
+  val totalTokens: Long? = null,
+  val totalTokensFresh: Boolean? = null,
+  val contextTokens: Long? = null,
 )
 
 /**
@@ -50,6 +53,7 @@ data class ChatHistory(
   val sessionId: String?,
   val thinkingLevel: String?,
   val messages: List<ChatMessage>,
+  val sessionInfo: ChatSessionEntry? = null,
 )
 
 /**

@@ -332,6 +332,17 @@ class ChatController(
         if (payloadJson.isNullOrBlank()) return
         handleChatEvent(payloadJson)
       }
+      "sessions.changed" -> {
+        if (payloadJson.isNullOrBlank()) {
+          scope.launch { fetchSessions(limit = _sessions.value.size.takeIf { it > 0 } ?: 100) }
+        } else {
+          handleSessionsChangedEvent(payloadJson)
+        }
+      }
+      "session.message" -> {
+        if (payloadJson.isNullOrBlank()) return
+        handleSessionMessageEvent(payloadJson)
+      }
       "agent" -> {
         if (payloadJson.isNullOrBlank()) return
         handleAgentEvent(payloadJson)
@@ -353,6 +364,7 @@ class ChatController(
         )
       if (!isCurrentHistoryLoad(sessionKey, _sessionKey.value, generation, historyLoadGeneration.get())) return
       val history = parseHistory(historyJson, sessionKey = sessionKey, previousMessages = _messages.value)
+      updateSessionFromHistory(history)
       prunePersistedOptimisticMessages(history.messages)
       _messages.value = mergeOptimisticMessages(incoming = history.messages, optimistic = optimisticMessagesByRunId.values)
       _sessionId.value = history.sessionId
@@ -457,6 +469,7 @@ class ChatController(
                 sessionKey = currentSessionKey,
                 previousMessages = _messages.value,
               )
+            updateSessionFromHistory(history)
             prunePersistedOptimisticMessages(history.messages)
             _messages.value = mergeOptimisticMessages(incoming = history.messages, optimistic = optimisticMessagesByRunId.values)
             _sessionId.value = history.sessionId
@@ -469,6 +482,28 @@ class ChatController(
           }
         }
       }
+    }
+  }
+
+  private fun handleSessionsChangedEvent(payloadJson: String) {
+    val payload = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return
+    if (payload["reason"].asStringOrNull() == "delete") {
+      removeSessionEntry(payload["sessionKey"].asStringOrNull() ?: payload["key"].asStringOrNull())
+      return
+    }
+    val entry = payload["session"].asObjectOrNull()?.let(::parseSessionEntry) ?: parseSessionEntry(payload)
+    if (entry != null) {
+      upsertSessionEntry(entry)
+    } else {
+      scope.launch { fetchSessions(limit = _sessions.value.size.takeIf { it > 0 } ?: 100) }
+    }
+  }
+
+  private fun handleSessionMessageEvent(payloadJson: String) {
+    val payload = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return
+    val entry = payload["session"].asObjectOrNull()?.let(::parseSessionEntry) ?: parseSessionEntry(payload)
+    if (entry != null) {
+      upsertSessionEntry(entry)
     }
   }
 
@@ -600,6 +635,7 @@ class ChatController(
     val root = json.parseToJsonElement(historyJson).asObjectOrNull() ?: return ChatHistory(sessionKey, null, null, emptyList())
     val sid = root["sessionId"].asStringOrNull()
     val thinkingLevel = root["thinkingLevel"].asStringOrNull()
+    val sessionInfo = root["sessionInfo"].asObjectOrNull()?.let { parseSessionEntry(it, fallbackKey = sessionKey) }
     val array = root["messages"].asArrayOrNull() ?: JsonArray(emptyList())
 
     val messages =
@@ -622,21 +658,68 @@ class ChatController(
       sessionId = sid,
       thinkingLevel = thinkingLevel,
       messages = reconcileMessageIds(previous = previousMessages, incoming = messages),
+      sessionInfo = sessionInfo,
     )
   }
 
   private fun parseSessions(jsonString: String): List<ChatSessionEntry> {
     val root = json.parseToJsonElement(jsonString).asObjectOrNull() ?: return emptyList()
     val sessions = root["sessions"].asArrayOrNull() ?: return emptyList()
-    return sessions.mapNotNull { item ->
-      val obj = item.asObjectOrNull() ?: return@mapNotNull null
-      val key = obj["key"].asStringOrNull()?.trim().orEmpty()
-      if (key.isEmpty()) return@mapNotNull null
-      val updatedAt = obj["updatedAt"].asLongOrNull()
-      val displayName = obj["displayName"].asStringOrNull()?.trim()
-      ChatSessionEntry(key = key, updatedAtMs = updatedAt, displayName = displayName)
-    }
+    return sessions.mapNotNull { item -> parseSessionEntry(item.asObjectOrNull()) }
   }
+
+  private fun parseSessionEntry(
+    obj: JsonObject?,
+    fallbackKey: String? = null,
+  ): ChatSessionEntry? {
+    if (obj == null) return null
+    val key =
+      obj["key"].asStringOrNull()?.trim().orEmpty()
+        .ifEmpty { obj["sessionKey"].asStringOrNull()?.trim().orEmpty() }
+        .ifEmpty { fallbackKey?.trim().orEmpty() }
+    if (key.isEmpty()) return null
+    return ChatSessionEntry(
+      key = key,
+      updatedAtMs = obj["updatedAt"].asLongOrNull(),
+      displayName = obj["displayName"].asStringOrNull()?.trim(),
+      totalTokens = obj["totalTokens"].asLongOrNull(),
+      totalTokensFresh = obj["totalTokensFresh"].asBooleanOrNull(),
+      contextTokens = obj["contextTokens"].asLongOrNull(),
+    )
+  }
+
+  private fun updateSessionFromHistory(history: ChatHistory) {
+    val info = history.sessionInfo ?: return
+    upsertSessionEntry(info)
+  }
+
+  private fun upsertSessionEntry(entry: ChatSessionEntry) {
+    val current = _sessions.value
+    val index = current.indexOfFirst { it.key == entry.key }
+    _sessions.value =
+      if (index >= 0) {
+        current.toMutableList().also { it[index] = mergeSessionEntry(it[index], entry) }
+      } else {
+        listOf(entry) + current
+      }
+  }
+
+  private fun removeSessionEntry(sessionKey: String?) {
+    val key = sessionKey?.trim()?.takeIf { it.isNotEmpty() } ?: return
+    _sessions.value = _sessions.value.filterNot { it.key == key }
+  }
+
+  private fun mergeSessionEntry(
+    existing: ChatSessionEntry,
+    next: ChatSessionEntry,
+  ): ChatSessionEntry =
+    existing.copy(
+      updatedAtMs = next.updatedAtMs ?: existing.updatedAtMs,
+      displayName = next.displayName ?: existing.displayName,
+      totalTokens = next.totalTokens ?: existing.totalTokens,
+      totalTokensFresh = next.totalTokensFresh ?: existing.totalTokensFresh,
+      contextTokens = next.contextTokens ?: existing.contextTokens,
+    )
 
   private fun parseRunId(resJson: String): String? =
     try {
@@ -855,5 +938,11 @@ private fun JsonElement?.asStringOrNull(): String? =
 private fun JsonElement?.asLongOrNull(): Long? =
   when (this) {
     is JsonPrimitive -> content.toLongOrNull()
+    else -> null
+  }
+
+private fun JsonElement?.asBooleanOrNull(): Boolean? =
+  when (this) {
+    is JsonPrimitive -> content.toBooleanStrictOrNull()
     else -> null
   }
