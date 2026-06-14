@@ -41,6 +41,7 @@ import {
   isDiscordRealtimeVoiceMode,
   resolveDiscordVoiceMode,
 } from "./realtime.js";
+import { primeVoiceReceive } from "./receive-prime.js";
 import {
   analyzeVoiceReceiveError,
   createVoiceReceiveRecoveryState,
@@ -845,6 +846,24 @@ export class DiscordVoiceManager {
     connection.on(voiceSdk.VoiceConnectionStatus.Disconnected, disconnectedHandler);
     connection.on(voiceSdk.VoiceConnectionStatus.Destroyed, destroyedHandler);
     player.on("error", playerErrorHandler);
+
+    // Receive priming. A connection that only ever *receives* never transmits,
+    // so @discordjs/voice never sends an op-5 Speaking opcode and Discord's SFU
+    // withholds all inbound audio (live-confirmed 2026-06-05: botSentSpeaking=false,
+    // audio=0, ssrcMap=[] for the whole capture window). Transmit one short Opus
+    // silence burst through the subscribed player so the bot announces op-5
+    // Speaking and the SFU begins forwarding participant media + Speaking opcodes.
+    // The burst (~240ms) clears to Idle long before a human utterance, so it never
+    // trips the player-Playing capture gate. Best-effort: failure is non-fatal.
+    // See specs/discord-voice-receive-debug-2026-05-31.md.
+    primeVoiceReceive({
+      player: player as unknown as Parameters<typeof primeVoiceReceive>[0]["player"],
+      voiceSdk: voiceSdk as unknown as Parameters<typeof primeVoiceReceive>[0]["voiceSdk"],
+      guildId,
+      channelId,
+      log: (message) => logger.info(`discord voice: ${message}`),
+      onWarn: (message) => logger.warn(message),
+    });
 
     this.sessions.set(guildId, entry);
     this.fatalAutoJoinFailures.delete(formatAutoJoinFailureKey({ guildId, channelId }));
