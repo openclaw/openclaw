@@ -372,6 +372,7 @@ export async function buildTelegramInboundContextPayload(params: {
       name: senderName,
       username: senderUsername || undefined,
       id: senderId || undefined,
+      isBot: msg.from?.is_bot === true,
     },
     previousTimestamp,
     envelope: envelopeOptions,
