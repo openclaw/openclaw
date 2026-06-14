@@ -66,6 +66,10 @@ type VoiceProviderContractKey =
   | "speechProviders"
   | "realtimeTranscriptionProviders"
   | "realtimeVoiceProviders";
+type ProviderContractKey =
+  | GenerationProviderContractKey
+  | VoiceProviderContractKey
+  | "webSearchProviders";
 type ConfiguredGenerationProviderIds = Record<GenerationProviderContractKey, ReadonlySet<string>>;
 type ConfiguredVoiceProviderIds = Record<VoiceProviderContractKey, ReadonlySet<string>>;
 const CORE_BUILT_IN_MODEL_APIS = new Set([
@@ -283,7 +287,7 @@ function manifestOwnsConfiguredSpeechProvider(params: {
   if (params.configuredSpeechProviderIds.size === 0) {
     return false;
   }
-  return (params.manifest?.contracts?.speechProviders ?? []).some((providerId) => {
+  return readManifestProviderContractIds(params.manifest, "speechProviders").some((providerId) => {
     const normalized = normalizeConfiguredSpeechProviderIdForStartup(providerId);
     return normalized ? params.configuredSpeechProviderIds.has(normalized) : false;
   });
@@ -305,10 +309,27 @@ function manifestOwnsConfiguredWebSearchProvider(params: {
   if (params.configuredWebSearchProviderIds.size === 0) {
     return false;
   }
-  return (params.manifest?.contracts?.webSearchProviders ?? []).some((providerId) => {
-    const normalized = normalizeOptionalLowercaseString(providerId);
-    return normalized ? params.configuredWebSearchProviderIds.has(normalized) : false;
-  });
+  return readManifestProviderContractIds(params.manifest, "webSearchProviders").some(
+    (providerId) => {
+      const normalized = normalizeOptionalLowercaseString(providerId);
+      return normalized ? params.configuredWebSearchProviderIds.has(normalized) : false;
+    },
+  );
+}
+
+function readManifestProviderContractIds(
+  manifest: PluginManifestRecord | undefined,
+  contractKey: ProviderContractKey,
+): readonly string[] {
+  try {
+    const providerIds = manifest?.contracts?.[contractKey];
+    if (!Array.isArray(providerIds)) {
+      return [];
+    }
+    return providerIds.filter((providerId): providerId is string => typeof providerId === "string");
+  } catch {
+    return [];
+  }
 }
 
 function listModelProviderRefs(value: unknown): string[] {
@@ -1184,7 +1205,7 @@ function manifestOwnsConfiguredGenerationProvider(params: {
       continue;
     }
     if (
-      (params.manifest?.contracts?.[contractKey] ?? []).some((providerId) => {
+      readManifestProviderContractIds(params.manifest, contractKey).some((providerId) => {
         const normalized = normalizeOptionalLowercaseString(providerId);
         return normalized ? configuredProviderIds.has(normalized) : false;
       })
@@ -1209,7 +1230,7 @@ function manifestOwnsConfiguredVoiceProvider(params: {
       continue;
     }
     if (
-      (params.manifest?.contracts?.[contractKey] ?? []).some((providerId) => {
+      readManifestProviderContractIds(params.manifest, contractKey).some((providerId) => {
         const normalized = normalizeOptionalLowercaseString(providerId);
         return normalized ? configuredProviderIds.has(normalized) : false;
       })
