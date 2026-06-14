@@ -165,24 +165,75 @@ async function waitForPath(filePath: string, timeoutMs = 60_000): Promise<void> 
   throw new Error(`timed out waiting for ${filePath}`);
 }
 
-async function waitForChatFinalText(params: {
+function extractAssistantTexts(messages: unknown[]): string[] {
+  const texts: string[] = [];
+  for (const entry of messages) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    if ((entry as { role?: unknown }).role !== "assistant") {
+      continue;
+    }
+    const text = extractFirstTextBlock(entry);
+    if (typeof text === "string" && text.trim().length > 0) {
+      texts.push(text);
+    }
+  }
+  return texts;
+}
+
+function formatAssistantTextPreview(texts: string[], maxChars = 800): string {
+  const combined = texts.join("\n\n").trim();
+  if (!combined) {
+    return "<none>";
+  }
+  return combined.length > maxChars ? `${combined.slice(0, maxChars)}...` : combined;
+}
+
+async function waitForTrajectoryExportInstructionText(params: {
+  client: GatewayClient;
   events: EventFrame[];
+  expectedText: string;
   runId: string;
+  sessionKey: string;
   timeoutMs: number;
 }): Promise<string> {
   const deadline = Date.now() + params.timeoutMs;
+  let lastAssistantTexts: string[] = [];
   while (Date.now() < deadline) {
-    const text = params.events
+    const eventText = params.events
       .map((event) => extractChatFinalText(event, params.runId))
       .find(Boolean);
-    if (text) {
-      return text;
+    if (eventText) {
+      return eventText;
+    }
+    const sessionEventText = params.events
+      .map((event) => extractChatFinalTextForSession(event, params.sessionKey))
+      .find((text) => text?.includes(params.expectedText));
+    if (sessionEventText) {
+      return sessionEventText;
+    }
+    const history: { messages?: unknown[] } = await params.client.request(
+      "chat.history",
+      {
+        sessionKey: params.sessionKey,
+        limit: 24,
+      },
+      { timeoutMs: 10_000 },
+    );
+    lastAssistantTexts = extractAssistantTexts(history.messages ?? []);
+    const historyText = lastAssistantTexts.find((text) => text.includes(params.expectedText));
+    if (historyText) {
+      return historyText;
     }
     await new Promise((resolve) => {
-      setTimeout(resolve, 50);
+      setTimeout(resolve, 500);
     });
   }
-  throw new Error(`timed out waiting for chat final for ${params.runId}`);
+  throw new Error(
+    `timed out waiting for trajectory export instruction text for ${params.runId}; ` +
+      `events=${params.events.length}; assistantTexts=${formatAssistantTextPreview(lastAssistantTexts)}`,
+  );
 }
 
 function extractChatFinalText(event: EventFrame, runId: string): string | undefined {
@@ -197,6 +248,25 @@ function extractChatFinalText(event: EventFrame, runId: string): string | undefi
   if (record.runId !== runId || record.state !== "final") {
     return undefined;
   }
+  return extractChatFinalRecordText(record);
+}
+
+function extractChatFinalTextForSession(event: EventFrame, sessionKey: string): string | undefined {
+  if (event.event !== "chat") {
+    return undefined;
+  }
+  const payload = event.payload;
+  if (!payload || typeof payload !== "object") {
+    return undefined;
+  }
+  const record = payload as Record<string, unknown>;
+  if (record.sessionKey !== sessionKey || record.state !== "final") {
+    return undefined;
+  }
+  return extractChatFinalRecordText(record);
+}
+
+function extractChatFinalRecordText(record: Record<string, unknown>): string | undefined {
   const message = record.message;
   if (!message || typeof message !== "object") {
     return undefined;
@@ -377,9 +447,12 @@ describeLive("gateway live trajectory export", () => {
       const finalText =
         typeof exportResponse?.message === "object"
           ? extractFirstTextBlock(exportResponse.message)
-          : await waitForChatFinalText({
+          : await waitForTrajectoryExportInstructionText({
+              client,
               events: gatewayEvents,
+              expectedText: "Trajectory exports can include",
               runId: exportRunId,
+              sessionKey,
               timeoutMs: 60_000,
             });
       expect(finalText).toContain("Trajectory exports can include");
