@@ -30,14 +30,26 @@ The provider includes:
 | `opencode-go/glm-5.1`           | GLM-5.1               |
 | `opencode-go/kimi-k2.5`         | Kimi K2.5             |
 | `opencode-go/kimi-k2.6`         | Kimi K2.6 (3x limits) |
+| `opencode-go/kimi-k2.7-code`    | Kimi K2.7 Code        |
 | `opencode-go/deepseek-v4-pro`   | DeepSeek V4 Pro       |
 | `opencode-go/deepseek-v4-flash` | DeepSeek V4 Flash     |
+| `opencode-go/hy3-preview`       | HY3 Preview           |
 | `opencode-go/mimo-v2-omni`      | MiMo V2 Omni          |
+| `opencode-go/mimo-v2.5`         | MiMo V2.5             |
+| `opencode-go/mimo-v2.5-pro`     | MiMo V2.5 Pro         |
 | `opencode-go/mimo-v2-pro`       | MiMo V2 Pro           |
 | `opencode-go/minimax-m2.5`      | MiniMax M2.5          |
 | `opencode-go/minimax-m2.7`      | MiniMax M2.7          |
+| `opencode-go/minimax-m3`        | MiniMax M3            |
 | `opencode-go/qwen3.5-plus`      | Qwen3.5 Plus          |
+| `opencode-go/qwen3.7-max`       | Qwen3.7 Max           |
+| `opencode-go/qwen3.7-plus`      | Qwen3.7 Plus          |
 | `opencode-go/qwen3.6-plus`      | Qwen3.6 Plus          |
+
+MiniMax M3 uses a 512K-token context window and supports text, image, and video.
+Qwen3.7 Max, Qwen3.7 Plus, and Qwen3.6 Plus all use 1M-token context windows.
+Qwen3.7 Plus and Qwen3.6 Plus use split pricing at 256K tokens; the first tier is
+shown in the table above.
 
 ## Getting started
 

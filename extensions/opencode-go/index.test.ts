@@ -89,6 +89,7 @@ describe("opencode-go provider plugin", () => {
       "hy3-preview",
       "kimi-k2.5",
       "kimi-k2.6",
+      "kimi-k2.7-code",
       "mimo-v2-omni",
       "mimo-v2.5",
       "mimo-v2-pro",
@@ -142,8 +143,9 @@ describe("opencode-go provider plugin", () => {
     const minimaxM3 = requireMapEntry(models, "minimax-m3");
     expect(minimaxM3.api).toBe("anthropic-messages");
     expect(minimaxM3.baseUrl).toBe("https://opencode.ai/zen/go");
+    expect(minimaxM3.input).toEqual(["text", "image"]);
     expect(minimaxM3.reasoning).toBe(true);
-    expect(minimaxM3.contextWindow).toBe(204_800);
+    expect(minimaxM3.contextWindow).toBe(512_000);
     expect(minimaxM3.maxTokens).toBe(131_072);
 
     const mimoPro = requireMapEntry(models, "mimo-v2.5-pro");
@@ -171,9 +173,33 @@ describe("opencode-go provider plugin", () => {
       thinkingFormat: "qwen",
     });
 
-    const qwenPlus = requireMapEntry(models, "qwen3.6-plus");
-    expect(qwenPlus.api).toBe("anthropic-messages");
-    expect(qwenPlus.baseUrl).toBe("https://opencode.ai/zen/go");
+    const qwen36Plus = requireMapEntry(models, "qwen3.6-plus");
+    expect(qwen36Plus.api).toBe("anthropic-messages");
+    expect(qwen36Plus.baseUrl).toBe("https://opencode.ai/zen/go");
+    expect(qwen36Plus.contextWindow).toBe(1_000_000);
+    expect(qwen36Plus.maxTokens).toBe(65_536);
+    expect(qwen36Plus.cost).toMatchObject({
+      input: 0.5,
+      output: 3,
+      cacheRead: 0.05,
+      cacheWrite: 0.625,
+      tieredPricing: [
+        {
+          input: 0.5,
+          output: 3,
+          cacheRead: 0.05,
+          cacheWrite: 0.625,
+          range: [0, 256_000],
+        },
+        {
+          input: 2,
+          output: 6,
+          cacheRead: 0.2,
+          cacheWrite: 2.5,
+          range: [256_000],
+        },
+      ],
+    });
 
     const qwen37Plus = requireMapEntry(models, "qwen3.7-plus");
     expect(qwen37Plus.api).toBe("anthropic-messages");
@@ -187,6 +213,22 @@ describe("opencode-go provider plugin", () => {
       output: 1.6,
       cacheRead: 0.04,
       cacheWrite: 0.5,
+      tieredPricing: [
+        {
+          input: 0.4,
+          output: 1.6,
+          cacheRead: 0.04,
+          cacheWrite: 0.5,
+          range: [0, 256_000],
+        },
+        {
+          input: 1.2,
+          output: 4.8,
+          cacheRead: 0.12,
+          cacheWrite: 1.5,
+          range: [256_000],
+        },
+      ],
     });
 
     const dynamicModel = requireRecord(

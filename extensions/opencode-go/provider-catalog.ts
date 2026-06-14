@@ -15,7 +15,43 @@ const PROVIDER_ID = "opencode-go";
 
 const OPENCODE_GO_OPENAI_BASE_URL = "https://opencode.ai/zen/go/v1";
 const OPENCODE_GO_ANTHROPIC_BASE_URL = "https://opencode.ai/zen/go";
-const OPENCODE_GO_KIMI_NO_REASONING_MODEL_IDS = new Set(["kimi-k2.5", "kimi-k2.6"]);
+const OPENCODE_GO_KIMI_NO_REASONING_MODEL_IDS = new Set([
+  "kimi-k2.5",
+  "kimi-k2.6",
+  "kimi-k2.7-code",
+]);
+const OPENCODE_GO_QWEN3_7_PLUS_TIERED_PRICING = [
+  {
+    input: 0.4,
+    output: 1.6,
+    cacheRead: 0.04,
+    cacheWrite: 0.5,
+    range: [0, 256_000] as [number, number],
+  },
+  {
+    input: 1.2,
+    output: 4.8,
+    cacheRead: 0.12,
+    cacheWrite: 1.5,
+    range: [256_000] as [number],
+  },
+];
+const OPENCODE_GO_QWEN3_6_PLUS_TIERED_PRICING = [
+  {
+    input: 0.5,
+    output: 3,
+    cacheRead: 0.05,
+    cacheWrite: 0.625,
+    range: [0, 256_000] as [number, number],
+  },
+  {
+    input: 2,
+    output: 6,
+    cacheRead: 0.2,
+    cacheWrite: 2.5,
+    range: [256_000] as [number],
+  },
+];
 const OPENCODE_GO_MODELS_ENDPOINT = "https://opencode.ai/zen/go/v1/models";
 const OPENCODE_GO_MODELS_TIMEOUT_MS = 5_000;
 const OPENCODE_GO_MODELS_CACHE_TTL_MS = 60_000;
@@ -24,7 +60,7 @@ type OpencodeGoModelDefinition = ModelDefinitionConfig & {
   provider: typeof PROVIDER_ID;
   api: NonNullable<ModelDefinitionConfig["api"]>;
   baseUrl: string;
-  input: Array<"text" | "image">;
+  input: Array<"text" | "image" | "video">;
 };
 
 const OPENCODE_GO_MODELS = (
@@ -40,7 +76,7 @@ const OPENCODE_GO_MODELS = (
       cost: {
         input: 1.74,
         output: 3.48,
-        cacheRead: 0.145,
+        cacheRead: 0.0145,
         cacheWrite: 0,
       },
       contextWindow: 1_000_000,
@@ -62,7 +98,7 @@ const OPENCODE_GO_MODELS = (
       cost: {
         input: 0.14,
         output: 0.28,
-        cacheRead: 0.028,
+        cacheRead: 0.0028,
         cacheWrite: 0,
       },
       contextWindow: 1_000_000,
@@ -159,6 +195,23 @@ const OPENCODE_GO_MODELS = (
       maxTokens: 65_536,
     },
     {
+      id: "kimi-k2.7-code",
+      name: "Kimi K2.7 Code",
+      api: "openai-completions",
+      provider: PROVIDER_ID,
+      baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
+      reasoning: true,
+      input: ["text", "image"],
+      cost: {
+        input: 0.95,
+        output: 4,
+        cacheRead: 0.19,
+        cacheWrite: 0,
+      },
+      contextWindow: 262_144,
+      maxTokens: 65_536,
+    },
+    {
       id: "mimo-v2-omni",
       name: "MiMo V2 Omni",
       api: "openai-completions",
@@ -184,9 +237,9 @@ const OPENCODE_GO_MODELS = (
       reasoning: true,
       input: ["text", "image"],
       cost: {
-        input: 0.4,
-        output: 2,
-        cacheRead: 0.08,
+        input: 0.14,
+        output: 0.28,
+        cacheRead: 0.0028,
         cacheWrite: 0,
       },
       contextWindow: 1_000_000,
@@ -218,9 +271,9 @@ const OPENCODE_GO_MODELS = (
       reasoning: true,
       input: ["text"],
       cost: {
-        input: 1,
-        output: 3,
-        cacheRead: 0.2,
+        input: 1.74,
+        output: 3.48,
+        cacheRead: 0.0145,
         cacheWrite: 0,
       },
       contextWindow: 1_048_576,
@@ -237,7 +290,7 @@ const OPENCODE_GO_MODELS = (
       cost: {
         input: 0.3,
         output: 1.2,
-        cacheRead: 0.03,
+        cacheRead: 0.06,
         cacheWrite: 0.375,
       },
       contextWindow: 204_800,
@@ -267,14 +320,14 @@ const OPENCODE_GO_MODELS = (
       provider: PROVIDER_ID,
       baseUrl: OPENCODE_GO_ANTHROPIC_BASE_URL,
       reasoning: true,
-      input: ["text"],
+      input: ["text", "image"],
       cost: {
-        input: 0.6,
-        output: 2.4,
-        cacheRead: 0.12,
-        cacheWrite: 0.75,
+        input: 0.9,
+        output: 3.6,
+        cacheRead: 0.18,
+        cacheWrite: 0,
       },
-      contextWindow: 204_800,
+      contextWindow: 512_000,
       maxTokens: 131_072,
     },
     {
@@ -327,6 +380,7 @@ const OPENCODE_GO_MODELS = (
         output: 1.6,
         cacheRead: 0.04,
         cacheWrite: 0.5,
+        tieredPricing: [...OPENCODE_GO_QWEN3_7_PLUS_TIERED_PRICING],
       },
       contextWindow: 1_000_000,
       maxTokens: 65_536,
@@ -345,8 +399,9 @@ const OPENCODE_GO_MODELS = (
         output: 3,
         cacheRead: 0.05,
         cacheWrite: 0.625,
+        tieredPricing: [...OPENCODE_GO_QWEN3_6_PLUS_TIERED_PRICING],
       },
-      contextWindow: 262_144,
+      contextWindow: 1_000_000,
       maxTokens: 65_536,
     },
   ] satisfies OpencodeGoModelDefinition[]
@@ -409,7 +464,9 @@ export function listOpencodeGoModelCatalogEntries(): ModelCatalogEntry[] {
 
 export function resolveOpencodeGoModel(modelId: string): ProviderRuntimeModel | undefined {
   const normalizedModelId = modelId.trim().toLowerCase();
-  return OPENCODE_GO_MODELS.find((model) => model.id === normalizedModelId);
+  return OPENCODE_GO_MODELS.find((model) => model.id === normalizedModelId) as
+    | ProviderRuntimeModel
+    | undefined;
 }
 
 export function isOpencodeGoKimiNoReasoningModelId(modelId: unknown): boolean {
