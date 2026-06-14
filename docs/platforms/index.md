@@ -24,6 +24,10 @@ Linux-compatible Gateway runtime.
 - Windows: [Windows](/platforms/windows)
 - Linux: [Linux](/platforms/linux)
 
+## Hardware
+
+- ClawBox (Jetson appliance): [ClawBox](/platforms/clawbox)
+
 ## VPS and hosting
 
 - VPS hub: [VPS hosting](/vps)
