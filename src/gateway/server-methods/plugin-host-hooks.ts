@@ -28,6 +28,30 @@ function formatSessionActionPayloadSchemaErrors(errors: JsonSchemaValidationErro
   return errors.map((error) => error.text).join("; ");
 }
 
+function projectControlUiDescriptor(entry: {
+  descriptor: unknown;
+  pluginId: unknown;
+  pluginName?: unknown;
+}): Record<string, unknown> | undefined {
+  try {
+    if (!isRecord(entry.descriptor)) {
+      return undefined;
+    }
+    const pluginId = normalizeOptionalString(entry.pluginId);
+    if (!pluginId) {
+      return undefined;
+    }
+    return Object.assign({}, entry.descriptor, {
+      pluginId,
+      pluginName: normalizeOptionalString(entry.pluginName),
+    });
+  } catch {
+    // Control UI descriptors are plugin-owned metadata. A single bad row
+    // should not prevent operators from seeing healthy plugin UI surfaces.
+    return undefined;
+  }
+}
+
 /** Ensures plugin action result extension fields stay JSON-compatible on the wire. */
 function validatePluginSessionActionJsonFields(
   result: Record<string, unknown>,
@@ -54,12 +78,10 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const descriptors = (getActivePluginRegistry()?.controlUiDescriptors ?? []).map((entry) =>
-      Object.assign({}, entry.descriptor, {
-        pluginId: entry.pluginId,
-        pluginName: entry.pluginName,
-      }),
-    );
+    const descriptors = (getActivePluginRegistry()?.controlUiDescriptors ?? []).flatMap((entry) => {
+      const descriptor = projectControlUiDescriptor(entry);
+      return descriptor ? [descriptor] : [];
+    });
     respond(true, { ok: true, descriptors }, undefined);
   },
   "plugins.sessionAction": async ({ params, client, respond }) => {
