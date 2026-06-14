@@ -87,6 +87,22 @@ function isImageContentBlock(block: { type: string }): block is ImageContent {
   return block.type === "image";
 }
 
+function isDashScopeEndpoint(model: Model<"openai-completions">): boolean {
+  const provider = model.provider?.toLowerCase() ?? "";
+  const baseUrl = model.baseUrl?.toLowerCase() ?? "";
+  return (
+    provider.includes("dashscope") ||
+    provider === "qwen" ||
+    provider === "qwen-dashscope" ||
+    baseUrl.includes("dashscope.aliyuncs.com")
+  );
+}
+
+type DashScopeImageContentPart = {
+  type: "image";
+  image: string;
+};
+
 export interface OpenAICompletionsOptions extends StreamOptions {
   toolChoice?: OpenAICompletionsToolChoice;
   reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
@@ -969,6 +985,7 @@ export function convertMessages(
           content: sanitizeSurrogates(msg.content),
         });
       } else {
+        const useDashScopeFormat = isDashScopeEndpoint(model);
         const content: ChatCompletionContentPart[] = msg.content.map(
           (item): ChatCompletionContentPart => {
             if (item.type === "text") {
@@ -976,6 +993,12 @@ export function convertMessages(
                 type: "text",
                 text: sanitizeSurrogates(item.text),
               } satisfies ChatCompletionContentPartText;
+            }
+            if (useDashScopeFormat) {
+              return {
+                type: "image",
+                image: `data:${item.mimeType};base64,${item.data}`,
+              } as unknown as ChatCompletionContentPart;
             }
             return {
               type: "image_url",
@@ -1098,7 +1121,10 @@ export function convertMessages(
       }
       params.push(assistantMsg);
     } else if (msg.role === "toolResult") {
-      const imageBlocks: Array<{ type: "image_url"; image_url: { url: string } }> = [];
+      const useDashScopeFormat = isDashScopeEndpoint(model);
+      const imageBlocks: Array<
+        { type: "image_url"; image_url: { url: string } } | { type: "image"; image: string }
+      > = [];
       let j = i;
 
       for (; j < transformedMessages.length && transformedMessages[j].role === "toolResult"; j++) {
@@ -1127,12 +1153,19 @@ export function convertMessages(
         if (hasImages && model.input.includes("image")) {
           for (const block of toolMsg.content) {
             if (isImageContentBlock(block)) {
-              imageBlocks.push({
-                type: "image_url",
-                image_url: {
-                  url: `data:${block.mimeType};base64,${block.data}`,
-                },
-              });
+              if (useDashScopeFormat) {
+                imageBlocks.push({
+                  type: "image",
+                  image: `data:${block.mimeType};base64,${block.data}`,
+                });
+              } else {
+                imageBlocks.push({
+                  type: "image_url",
+                  image_url: {
+                    url: `data:${block.mimeType};base64,${block.data}`,
+                  },
+                });
+              }
             }
           }
         }
@@ -1156,8 +1189,8 @@ export function convertMessages(
               text: "Attached image(s) from tool result:",
             },
             ...imageBlocks,
-          ],
-        });
+          ] as ChatCompletionContentPart[],
+        } as ChatCompletionMessageParam);
         lastRole = "user";
       } else {
         lastRole = "toolResult";
